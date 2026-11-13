@@ -135,7 +135,7 @@ struct AttemptCore {
   /// The live child's pid: the login process, then the readback process. A kill from outside the driver — a click
   /// that replaces the attempt, or the server stop — signals it.
   child_pid: Option<u32>,
-  /// Resolves to the approval link, or fails with the 502 body. Every click of this start awaits it.
+  /// The link watch of this start: the approval link, or the 502 body. Every click of this start awaits it.
   link: watch::Sender<LinkState>,
   approval_url_matcher: Regex,
   user_code_matcher: Option<Regex>,
@@ -265,8 +265,8 @@ enum Slot {
   Started { link: watch::Receiver<LinkState>, replaced: Option<Arc<Mutex<AttemptCore>>> },
 }
 
-/// Join the login's start in progress, or register a new attempt in its slot. The check and the registration share one
-/// lock hold, so two clicks that arrive together cannot both start a process.
+/// The click's slot: the login's start in progress to join, or a new attempt registered in its slot. The check and the
+/// registration share one lock hold, so two clicks that arrive together cannot both start a process.
 fn claim_slot(login: &BrowserLoginConfig) -> Slot {
   let mut live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
   if let Some(entry) = live.get(&login.name).filter(|entry| matches!(&*entry.link.borrow(), LinkState::Pending)) {
@@ -323,7 +323,7 @@ pub async fn stop_all() {
   }
 }
 
-/// Run one attempt from its start to its recorded outcome. A driver whose run fails ends the attempt too.
+/// One attempt, from its start to its recorded outcome. A driver whose run fails ends the attempt too.
 async fn drive(core: Arc<Mutex<AttemptCore>>) {
   if let Err(error) = run_attempt(&core).await {
     let login = core.lock().expect("the attempt record lock is never poisoned").login.name.clone();
@@ -332,7 +332,7 @@ async fn drive(core: Arc<Mutex<AttemptCore>>) {
   }
 }
 
-/// Spawn the login, read its output for the approval link, and hold the attempt to its outcome.
+/// The attempt's run, from the spawned login to its outcome, with the output read for the approval link.
 async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   let login = core.lock().expect("the attempt record lock is never poisoned").login.clone();
   let (mut child, mut output) = match spawn_login(&login) {
@@ -419,7 +419,7 @@ fn with_user_code(link: String, user_code: Option<&str>) -> String {
   format!("{link}{separator}user_code={user_code}")
 }
 
-/// Read the login's output to its end and wait for it to exit, within the hold limit; then read back.
+/// The login's output drained to its end and its exit awaited, within the hold limit; then the readback.
 async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut LoginReader) -> io::Result<()> {
   let login_exit =
     match tokio::time::timeout(Duration::from_secs(HOLD_LIMIT_SEC), drain_and_wait(core, child, output)).await {
@@ -452,7 +452,7 @@ async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut Lo
   read_back(core).await
 }
 
-/// Read the output to its end, then take the exit code.
+/// The output read to its end and the child's exit code.
 async fn drain_and_wait(
   core: &Arc<Mutex<AttemptCore>>,
   child: &mut Child,
@@ -462,7 +462,7 @@ async fn drain_and_wait(
   Ok(exit_code(child.wait().await?))
 }
 
-/// Run the readback command and record APPROVED or READBACK_FAILED on its exit.
+/// The readback: its command's run, and APPROVED or READBACK_FAILED recorded on its exit.
 async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   core.lock().expect("the attempt record lock is never poisoned").phase = Phase::ReadingBack;
   let readback_command = core.lock().expect("the attempt record lock is never poisoned").login.readback_command.clone();
@@ -503,7 +503,7 @@ async fn read_line(core: &Arc<Mutex<AttemptCore>>, output: &mut LoginReader) -> 
   Ok(Some(line))
 }
 
-/// Start *argv* without a shell, in the server's environment, with stdin on /dev/null and output merged.
+/// A child running *argv* without a shell, in the server's environment, with stdin on /dev/null and output merged.
 fn spawn(argv: &[String]) -> io::Result<Child> {
   let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
   let mut command = tokio::process::Command::new(program);
@@ -521,8 +521,8 @@ fn spawn(argv: &[String]) -> io::Result<Child> {
   command.spawn()
 }
 
-/// Start the login command. `use_pty` runs it under a pseudo-terminal in a new session; every other entry keeps
-/// stdin on /dev/null with stdout and stderr merged on a pipe.
+/// The started login command and its output reader. `use_pty` runs it under a pseudo-terminal in a new session; every
+/// other entry keeps stdin on /dev/null with stdout and stderr merged on a pipe.
 fn spawn_login(login: &BrowserLoginConfig) -> io::Result<(Child, LoginReader)> {
   let enter_after = login.enter_after_pattern.as_deref();
   if login.use_pty {
@@ -584,7 +584,7 @@ impl LoginReader {
     }
   }
 
-  /// Write one newline to the terminal when the output first matches the enter pattern.
+  /// One newline written to the terminal when the output first matches the enter pattern.
   async fn answer_enter_prompt(&mut self) -> io::Result<()> {
     let Some(pattern) = &self.enter_after else { return Ok(()) };
     if self.entered || !pattern.is_match(&String::from_utf8_lossy(&self.seen)) {
@@ -607,7 +607,7 @@ enum OutputSource {
 }
 
 impl OutputSource {
-  /// Write *bytes* to the login's terminal. A pipe carries no terminal, and validation makes
+  /// *bytes* written to the login's terminal. A pipe carries no terminal, and validation makes
   /// `enter_after_pattern` require `use_pty`, so no entry asks a pipe to answer.
   async fn write_terminal(&self, bytes: &[u8]) -> io::Result<()> {
     match self {
@@ -632,7 +632,7 @@ struct PtyMaster {
 }
 
 impl PtyMaster {
-  /// Take the master, whose reads and writes the async wrapper drives without blocking.
+  /// The master in its async wrapper, whose reads and writes the wrapper drives without blocking.
   fn new(fd: OwnedFd) -> io::Result<Arc<PtyMaster>> {
     let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
     if flags == -1 {
@@ -686,7 +686,7 @@ impl PtyMaster {
   }
 }
 
-/// Start *argv* under a pseudo-terminal of its own session, so ssh reads keyboard-interactive answers from
+/// A child running *argv* under a pseudo-terminal of its own session, so ssh reads keyboard-interactive answers from
 /// `/dev/tty` on that terminal instead of on the server's own.
 fn spawn_pty(argv: &[String]) -> io::Result<(Child, Arc<PtyMaster>)> {
   let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
@@ -759,7 +759,7 @@ fn text_of(bytes: &[u8]) -> String {
   String::from_utf8_lossy(bytes).trim_end_matches(['\r', '\n']).to_string()
 }
 
-/// Wait for a captured child: `(exit code, output)`. Past the limit it is killed, and its output
+/// A captured child's `(exit code, output)`. Past the limit it is killed, and its output
 /// drained to the pipe's end.
 async fn finish_capture(mut child: Child, limit: Duration) -> io::Result<(i32, String)> {
   let mut stdout = child.stdout.take().expect("the captured child pipes its merged output");
@@ -789,7 +789,7 @@ fn failure_text(exit_code: i32, output: &VecDeque<String>) -> String {
   lines.join("\n")
 }
 
-/// Record a start failure and fail the clicks waiting on the link with *body*.
+/// A start failure recorded, and the clicks waiting on the link failed with *body*.
 fn fail_start(core: &Arc<Mutex<AttemptCore>>, body: String) {
   let (name, login_exit) = {
     let state = core.lock().expect("the attempt record lock is never poisoned");
@@ -811,7 +811,7 @@ fn abandon(core: &Arc<Mutex<AttemptCore>>) {
   }
 }
 
-/// Record *outcome*, kill the live child if one runs, and release the login's live slot.
+/// *outcome* recorded on the attempt, with the live child killed if one runs and the login's live slot released.
 ///
 /// An attempt that already ended keeps its record: a newer click ends a live attempt as REPLACED, and the replaced
 /// process's own exit then has nothing left to record.
@@ -848,7 +848,7 @@ fn end(core: &Arc<Mutex<AttemptCore>>, outcome: Outcome) {
   );
 }
 
-/// Record the live child's pid, so a kill from outside the driver can reach it.
+/// The live child's pid recorded, so a kill from outside the driver can reach it.
 fn record_child(core: &Arc<Mutex<AttemptCore>>, pid: Option<u32>) {
   core.lock().expect("the attempt record lock is never poisoned").child_pid = pid;
 }
@@ -905,7 +905,7 @@ mod tests {
     path.to_str().expect("the temp path is UTF-8").to_string()
   }
 
-  /// Wait until `check` holds, within a bounded wait, so a driver that never reaches its outcome fails the test.
+  /// The wait until `check` holds, bounded so a driver that never reaches its outcome fails the test.
   async fn until(check: impl Fn() -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while !check() {

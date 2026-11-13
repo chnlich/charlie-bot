@@ -27,8 +27,8 @@ pub struct BrowserLoginConfig {
   pub approval_url_pattern: String,
   /// The argv of a check that exits 0 while the login is valid. Its output shows on the page.
   pub readback_command: Vec<String>,
-  /// Run `login_command` under a pseudo-terminal in a new session, so ssh reads keyboard-interactive answers from
-  /// `/dev/tty` on that terminal rather than on the server's own terminal.
+  /// Whether `login_command` runs under a pseudo-terminal in a new session; ssh then reads keyboard-interactive
+  /// answers from `/dev/tty` on that terminal rather than on the server's own terminal.
   #[serde(default)]
   pub use_pty: bool,
   /// A regex. Its first match in the login output writes one newline to the terminal. Requires `use_pty`.
@@ -59,13 +59,13 @@ pub fn section() -> ConfigSection {
   ConfigSection { key: "host_auth", legacy_keys: &[], parse: parse_section, dump: dump_section }
 }
 
-/// Render the section as its model dumps it (`charliebot config get host_auth`).
+/// The section rendered as its model dumps it (`charliebot config get host_auth`).
 fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
   let settings = value.downcast_ref::<HostAuthConfig>().ok_or("the host_auth section holds an unexpected value")?;
   serde_json::to_value(settings).map_err(|error| error.to_string())
 }
 
-/// Parse the section and check the field rules its entries carry.
+/// The parsed section, with the field rules its entries carry checked.
 fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
   let settings: HostAuthConfig = serde_yaml::from_value(raw.clone()).map_err(|error| format!("host_auth: {error}"))?;
   validate(&settings).map_err(|error| format!("host_auth: {error}"))?;

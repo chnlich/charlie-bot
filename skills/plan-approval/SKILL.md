@@ -22,6 +22,7 @@ user-invocable: false
   Its Waiting on you items stay in its own session, so the user answers them there.
 
 ## The principle
+
 Action Boundaries in `prompts/master.md` and the host's resident memory entries in `$CHARLIEBOT_HOME/memory` set the
 approval boundary of each step.
 The user takes off each high-consequence step before it runs.
@@ -199,6 +200,7 @@ always pass.
 The gate judges the chain alone; its definitions live in rust/crates/runtime/store/src/task_tree.rs (`is_read_only_exempt` and the delegation refusals).
 
 ## Execution
+
 - Classify each step by Action Boundaries in `prompts/master.md` and the host's resident memory entries before it runs.
 - When a high-consequence step waits for a take off, list it as one Waiting on you item, and continue independent
   work in the same turn.

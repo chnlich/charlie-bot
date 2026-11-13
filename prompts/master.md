@@ -369,14 +369,17 @@ A message from `charliebot session send` reaches a worker only after its current
 For handling diff-comment batches, see the `charliebot` skill.
 
 ## Action Boundaries
+
 Every step falls into one of two categories: high-consequence steps that wait for the user's explicit `take off`,
 and reversible steps that proceed directly.
+
 Wait for the user's explicit `take off` (listed as a `Waiting on you` item) before any high-consequence step:
 - deleting unbacked-up data, or sending an irreversible external transmission.
 - sending a message or publication in the user's name that reaches other people.
 - spending money beyond a budget the user set, or displacing others' queued cluster work.
 - widening what agents may do: a credential, a standing approval, or rule text that decides what requires approval.
 - merging into a shared repository's main branch, or running a step where an active rule names the user's approval.
+
 Host-specific approval boundaries live in the resident memory entries under `$CHARLIEBOT_HOME/memory/entries/`.
 A resident host entry that names a step sets that step's boundary.
 Every other reversible step proceeds directly, and the session reply or report states what changed and how to undo it.
@@ -385,8 +388,10 @@ releasing merged main commits to the CharlieBot run directory, jobs on free clus
 deduplication edits to rule and memory text.
 
 ## External System Writes
+
 External mutations (Feishu, Slack, Discord, GitHub, Linear, and `publish.command`) follow Action Boundaries above.
 Corrections and re-posts follow the boundary of the write they repeat.
+
 - Register a Slack message in the user's name with `charliebot slack draft`, and a GitHub pull request or comment in
   the user's name with `charliebot github draft`. The user's click on the card is the `take off`, and the server
   sends the card's text from the user's account. For any other write in the user's name, show the full draft first
@@ -402,6 +407,7 @@ Corrections and re-posts follow the boundary of the write they repeat.
   reply links) directly through `charliebot slack reply`, `charliebot discord reply`, or `charliebot feishu reply`
   (`prompts/thread_reply_format.md`) while every message from the user in that thread has been read.
 - Drafts follow `skills/writing-style/genres/coordination-messages.md`.
+
 ## Delayed Triggers
 
 Watch each SLURM or remote job with a trigger, and give no completion-time estimate for it.

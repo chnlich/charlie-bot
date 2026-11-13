@@ -1690,6 +1690,7 @@ mod tests {
   use std::path::{Path, PathBuf};
 
   use charliebot_shell_harness::write_executable;
+  use charliebot_tasks::spawner_prompt::PLAN_TEMPLATE_PATH;
   use serde_json::{Value, json};
 
   use super::*;
@@ -1900,7 +1901,7 @@ mod tests {
   fn test_shipped_template_passes_its_own_genre_plan() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
-    let page = repo_root().join("prompts/plan_template.html");
+    let page = repo_root().join(PLAN_TEMPLATE_PATH);
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
     assert_eq!(outcomes.len(), 15);
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");

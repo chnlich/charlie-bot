@@ -24,6 +24,10 @@ const SECTION_MARKER_SUFFIX: &str = " -->";
 /// The worker contract under the checkout's `prompts/`: the file every worker-template reader loads.
 pub const WORKER_PROMPT_PATH: &str = "prompts/worker.md";
 
+/// The canonical plan template under the checkout's `prompts/`: the template the verify contract names, and the
+/// template a plan page carries flattened into its own `<style>` block.
+pub const PLAN_TEMPLATE_PATH: &str = "prompts/plan_template.html";
+
 /// The extraction name a failed worker-template read reports: it names the commit a stale checkout predates. The
 /// prompt-body reads of `WORKER_PROMPT_PATH` pass it, so their failure text names one extraction.
 pub const WORKER_PROMPT_EXTRACTION: &str = "worker-prompt";
@@ -339,7 +343,7 @@ pub fn substitute_tokens(template: &str, tokens: &Tokens) -> String {
 
 /// The tokens of `verify.md`: the expected result trailer and the canonical plan template's path (`verify_contract_tokens`).
 pub fn verify_contract_tokens(repo: &Path) -> anyhow::Result<Tokens> {
-  let template = resolve_path(&repo.join("prompts/plan_template.html"))?;
+  let template = resolve_path(&repo.join(PLAN_TEMPLATE_PATH))?;
   Ok(vec![
     ("{{result_trailer_expected}}", verify_trailer::verify_result_trailer_expected()),
     ("{{canonical_template_path}}", template.display().to_string()),
@@ -403,7 +407,7 @@ mod tests {
       .expect("canonical template path token")
       .1
       .as_str();
-    assert_eq!(actual, repo.path().join("prompts/plan_template.html").display().to_string());
+    assert_eq!(actual, repo.path().join(PLAN_TEMPLATE_PATH).display().to_string());
     assert!(Path::new(actual).is_absolute());
   }
 

@@ -11,7 +11,7 @@ use charliebot_core::config::{CREDENTIALS_FILENAME, SESSIONS_DIR_NAME};
 use charliebot_core::home::OPENCODE_DIR_NAME;
 use charliebot_store::run_records::THREADS_DIR_NAME;
 
-use crate::config::{ResticSettings, read_password_file};
+use crate::config::ResticSettings;
 
 /// The retention policy every run applies after its snapshot: three daily snapshots plus the last snapshot of each
 /// week within 15 days, relative to the newest snapshot.
@@ -50,72 +50,77 @@ pub fn restic_program() -> anyhow::Result<PathBuf> {
   bail!("restic is not on PATH")
 }
 
-/// The restic executable, after a preflight that asserts restic on PATH, a readable password file and a reachable
-/// repository. Nothing here writes a snapshot.
-pub fn preflight(settings: &ResticSettings) -> anyhow::Result<PathBuf> {
-  let program = restic_program()?;
-  read_password_file(settings)?;
-  let output = restic(settings, &program)
-    .arg("cat")
-    .arg("config")
-    .arg("--no-cache")
-    .output()
-    .with_context(|| format!("running {}", program.display()))?;
-  checked(output, &format!("opening the restic repository {}", settings.repository))?;
-  Ok(program)
-}
-
-/// A preflight, then `restic backup` with [`exclude_patterns`], then the retention pass.
-pub fn run_backup(settings: &ResticSettings, home: &Path) -> anyhow::Result<()> {
-  let program = preflight(settings)?;
-  let mut command = restic(settings, &program);
-  command.arg("backup").arg(home);
-  for pattern in exclude_patterns(home) {
-    command.arg("--exclude").arg(pattern);
+impl ResticSettings {
+  /// The restic executable, after a preflight that asserts restic on PATH, a readable password file and a reachable
+  /// repository. Nothing here writes a snapshot.
+  pub fn preflight(&self) -> anyhow::Result<PathBuf> {
+    let program = restic_program()?;
+    self.check_password_file()?;
+    let output = self
+      .command(&program)
+      .arg("cat")
+      .arg("config")
+      .arg("--no-cache")
+      .output()
+      .with_context(|| format!("running {}", program.display()))?;
+    checked(output, &format!("opening the restic repository {}", self.repository))?;
+    Ok(program)
   }
-  checked(command.output().with_context(|| format!("running {}", program.display()))?, "restic backup")?;
-  tracing::info!(repository = %settings.repository, "backup_snapshot_created");
-  forget(settings)
-}
 
-/// The retention pass: forget by [`RETENTION_ARGS`] and prune the repository.
-pub fn forget(settings: &ResticSettings) -> anyhow::Result<()> {
-  let program = restic_program()?;
-  let mut command = restic(settings, &program);
-  command.arg("forget").args(RETENTION_ARGS);
-  checked(command.output().with_context(|| format!("running {}", program.display()))?, "restic forget")?;
-  tracing::info!(repository = %settings.repository, "backup_retention_applied");
-  Ok(())
-}
-
-/// A preflight, then `restic restore` of `snapshot` into the empty directory `target`. The selection is the snapshot's
-/// subtree of `home`, so the target holds the home's contents rather than the home path.
-pub fn restore(settings: &ResticSettings, home: &Path, snapshot: &str, target: &Path) -> anyhow::Result<()> {
-  let program = preflight(settings)?;
-  if !target.is_dir() {
-    bail!("the restore target {} is not a directory", target.display());
+  /// A preflight, then `restic backup` with [`exclude_patterns`], then the retention pass.
+  pub fn backup(&self, home: &Path) -> anyhow::Result<()> {
+    let program = self.preflight()?;
+    let mut command = self.command(&program);
+    command.arg("backup").arg(home);
+    for pattern in exclude_patterns(home) {
+      command.arg("--exclude").arg(pattern);
+    }
+    checked(command.output().with_context(|| format!("running {}", program.display()))?, "restic backup")?;
+    tracing::info!(repository = %self.repository, "backup_snapshot_created");
+    self.forget()
   }
-  let mut entries = fs::read_dir(target).with_context(|| format!("reading the restore target {}", target.display()))?;
-  if entries.next().is_some() {
-    bail!("the restore target {} is not empty", target.display());
-  }
-  let selection = format!("{snapshot}:{}", home.display());
-  let output = restic(settings, &program)
-    .arg("restore")
-    .arg(&selection)
-    .arg("--target")
-    .arg(target)
-    .output()
-    .with_context(|| format!("running {}", program.display()))?;
-  checked(output, "restic restore")?;
-  Ok(())
-}
 
-/// A restic command against the configured repository, authenticated by its password file.
-fn restic(settings: &ResticSettings, program: &Path) -> Command {
-  let mut command = Command::new(program);
-  command.arg("--repo").arg(&settings.repository).arg("--password-file").arg(&settings.password_file);
-  command
+  /// The retention pass: forget by [`RETENTION_ARGS`] and prune the repository.
+  pub fn forget(&self) -> anyhow::Result<()> {
+    let program = restic_program()?;
+    let mut command = self.command(&program);
+    command.arg("forget").args(RETENTION_ARGS);
+    checked(command.output().with_context(|| format!("running {}", program.display()))?, "restic forget")?;
+    tracing::info!(repository = %self.repository, "backup_retention_applied");
+    Ok(())
+  }
+
+  /// A preflight, then `restic restore` of `snapshot` into the empty directory `target`. The selection is the
+  /// snapshot's subtree of `home`, so the target holds the home's contents rather than the home path.
+  pub fn restore(&self, home: &Path, snapshot: &str, target: &Path) -> anyhow::Result<()> {
+    let program = self.preflight()?;
+    if !target.is_dir() {
+      bail!("the restore target {} is not a directory", target.display());
+    }
+    let mut entries =
+      fs::read_dir(target).with_context(|| format!("reading the restore target {}", target.display()))?;
+    if entries.next().is_some() {
+      bail!("the restore target {} is not empty", target.display());
+    }
+    let selection = format!("{snapshot}:{}", home.display());
+    let output = self
+      .command(&program)
+      .arg("restore")
+      .arg(&selection)
+      .arg("--target")
+      .arg(target)
+      .output()
+      .with_context(|| format!("running {}", program.display()))?;
+    checked(output, "restic restore")?;
+    Ok(())
+  }
+
+  /// A restic command against the configured repository, authenticated by its password file.
+  fn command(&self, program: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.arg("--repo").arg(&self.repository).arg("--password-file").arg(&self.password_file);
+    command
+  }
 }
 
 /// The output of a restic call, or the reason restic gave for failing.

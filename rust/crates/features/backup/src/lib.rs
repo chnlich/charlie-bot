@@ -32,7 +32,7 @@ fn run_backup(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'
 fn run_snapshot(features: &FeatureContext) -> anyhow::Result<String> {
   let cfg = features.config.get()?;
   let settings = cfg.section::<config::BackupConfig>(config::NAME).settings(&cfg.charliebot_home)?;
-  backup::run_backup(&settings, &cfg.charliebot_home)?;
+  settings.backup(&cfg.charliebot_home)?;
   Ok(format!("restic backup of {} to {} completed", cfg.charliebot_home.display(), settings.repository))
 }
 

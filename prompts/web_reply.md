@@ -40,7 +40,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - The server reminds the session once when a turn ends without either command.
 - A child session keeps its own progress in its own **Now**.
 - When a child session reports progress that changes this session's next milestone, set the new **Now**.
-- When the user resolves a Waiting on you item, remove the item in the same turn.
+- Before the end-of-turn status command, reconcile every Waiting on you item with the evidence and rules read this turn.
+  Keep only decisions, actions or reviews that still need the user; rewrite changed items and remove resolved ones.
 - When the session's goal is delivered and no Waiting on you item remains, archive your task as
   prompts/task_manager.md says. The user's next message reopens the task.
 

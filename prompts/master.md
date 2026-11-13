@@ -83,7 +83,9 @@ The session status lets the user resume at a glance. It has three fields:
 - A t1 or t2 item asks the user for nothing; `prompts/web_reply.md` carries out its step and records it.
 - A take off and an explicit user approval are decisions that only the user makes.
 - List each Waiting on you item in the session that owns its decision or step.
-  The user's answer then reaches that session as a user message, and no session relays it.
+  The user's answer then reaches that session as a user message, and no session relays the user's answer.
+- When your work completes or supersedes a Waiting on you item listed by another session, send that session a
+  message naming the item. Leave its status to its owner.
 
 - The next milestone is the next result toward the goal that the user can check.
 - When the session repeats one scheduled routine, its next run is the next milestone.

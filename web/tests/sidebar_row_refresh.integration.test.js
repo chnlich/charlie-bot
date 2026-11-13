@@ -20,7 +20,7 @@ const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 // One open page on the Workspace view. `painted` names the sessions the sidebar paints as rows.
-function buildPage({painted = [], filter = 'all'} = {}) {
+function buildPage({painted = [], filter = 'all', partial = true} = {}) {
   const listeners = new Map();
   const nav = createElement();
   nav.scrollTop = 0;
@@ -52,6 +52,8 @@ function buildPage({painted = [], filter = 'all'} = {}) {
   const context = {
     SESSION_ID: 'session-a',
     SESSION_NAME: 'Session A',
+    // The page carries only its first screen of sidebar rows unless the caller says it painted them all.
+    INITIAL_SESSIONS: {$screen: {partial}},
     eventCursor: 0,
     STATIC_ASSET_VERSION: 'stub-asset-version',
     currentFilter: 'all',
@@ -365,6 +367,14 @@ test('the status poll names the rows the page holds, so the answer carries those
   vm.runInContext('pollSessionStatus()', page.context);
   assert.deepEqual(page.urlsStarting('/api/sessions/status').slice(1), ['/api/sessions/status?ids=session-a,session-b'],
       'a search names its rows by ids, since its rows are not the Workspace list');
+});
+
+test('a page that painted its whole view names the filter alone', async () => {
+  const page = buildPage({painted: ['session-a', 'session-b'], partial: false});
+
+  vm.runInContext('pollSessionStatus()', page.context);
+  assert.deepEqual(page.urlsStarting('/api/sessions/status'), ['/api/sessions/status?filter=all'],
+      'every row the page holds rides in the filter answer, so it names no ids');
 });
 
 test('a status poll falls back to the filter when the held rows outgrow one URL', async () => {

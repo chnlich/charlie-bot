@@ -116,18 +116,32 @@ function statusRequestUrls(path, ids, query = '', since = '') {
 // paint (the open chat, a delegate card's child) travel as ids. The archive view and a search answer their own row
 // sets, so they name every session by id.
 //
-// A page whose rows fit one URL names them and asks for `answer=ids`: the server then answers those rows alone while
-// the filter still names the set membership follows. A first poll of a full home otherwise downloads every row of the
-// view, though the page paints only its first screen.
+// A page that left rows out names the rows it holds, when they fit one URL, and asks for `answer=ids`: the server then
+// answers those rows alone while the filter still names the set membership follows. Its first poll otherwise
+// downloads every row of the view, though the page paints only its first screen. A page that painted its whole view
+// names the filter alone, because that answer carries the rows it holds.
 function sidebarStatusUrls(path, ids, since) {
   if (!sidebarRowsRefreshable()) return statusRequestUrls(path, ids);
   const query = 'filter=' + encodeURIComponent(currentFilter);
-  const named = ids.length ? statusRequestUrls(path, ids, query, since) : [];
-  if (named.length === 1) return [named[0] + '&answer=ids'];
+  if (ids.length && pageLeftRowsOut()) {
+    const named = statusRequestUrls(path, ids, query, since);
+    if (named.length === 1 && named[0].length + ANSWER_QUERY.length <= STATUS_QUERY_MAX_BYTES) {
+      return [named[0] + ANSWER_QUERY];
+    }
+  }
   const painted = new Set(Array.from(document.querySelectorAll('a[id^="session-"]'),
       el => el.id.slice('session-'.length)));
   const unpainted = ids.filter(sid => !painted.has(sid));
   return statusRequestUrls(path, unpainted, query, since);
+}
+
+// The query that asks the server for the rows the request names rather than every row of the filter's set.
+const ANSWER_QUERY = '&answer=ids';
+
+// Whether the page carried only its first screen: the sidebar's `$screen` marks a page that left a group's rows out.
+function pageLeftRowsOut() {
+  return typeof INITIAL_SESSIONS !== 'undefined'
+    && Boolean(INITIAL_SESSIONS && INITIAL_SESSIONS.$screen && INITIAL_SESSIONS.$screen.partial);
 }
 
 // The status answers: the token to send back, the rows that moved, and the ids that left the filter's set.

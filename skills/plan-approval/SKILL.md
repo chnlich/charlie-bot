@@ -30,7 +30,7 @@ design choices included.
 The line's approver answers the reading on each understanding page that waits (Understanding section)
 before any work builds on it.
 A misread request then costs one page, not a built version.
-The approver is the user, or the parent node for a child that the user handed over end to end (`prompts/task_manager.md`).
+The approver is the user, or the parent node for a child under an e2e handover (`prompts/master.md`, `prompts/task_manager.md`).
 The user usually approved that child's reading already on the parent's understanding page.
 The user also gives each explicit user approval that a rule requires.
 The user reviews the digest and the delivered product.
@@ -74,9 +74,9 @@ An understanding page lists the divergences of a request that admits several rea
 - An understanding page waits for its approver only when the estimated work exceeds about one worker-day
   (8 hours of worker time) or its result reaches other people (the reading threshold).
   This applies to root lines and child lines alike.
-- Below the reading threshold, the line proceeds on the recommended reading.
-  Its delivery lists each divergence with the reply that selects the other reading, and the digest records
-  the reading as T2.
+- A page whose approver is the user waits only while no e2e handover covers its reading (`prompts/master.md`).
+- When the page does not wait, the line proceeds on the recommended reading. Its delivery lists each divergence
+  with the reply that selects the other reading. The digest records a reading below the reading threshold as T2.
 - For a departure from the user's stated method, follow the Design section of `prompts/manager_workflows.md`.
 - While the page waits, continue read-only research.
   The plan that follows then starts from read evidence.
@@ -238,6 +238,7 @@ The gate judges the chain alone; its definitions live in rust/crates/runtime/sto
 - At completion or at a blocking failure, account for every approval-object term:
   delivered or deviated. Each deviation is a retroactive Trade-off — approved term,
   what landed, one-line reason — accepted by default or reverted on request; the revert becomes a new delegation.
-- For each reading below the reading threshold and each design choice made on a recommendation, name the
+- For each reading taken on a page that did not wait and each design choice made on a recommendation, name the
   alternative and the reply that switches to it.
-- For each delivered T0 step, state how to undo it. Each T1 and T2 step carries its undo in its digest entry.
+- For each delivered T0 step, name the rule that made it T0 and state how to undo it, or state that nothing undoes
+  it. Each T1 and T2 step carries its undo in its digest entry.

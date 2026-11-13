@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::event_types::{
+  USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
+};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::timefmt;
 use charliebot_registry::Registry;
@@ -394,9 +397,9 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
   };
   let model = model.as_str().ok_or_else(|| anyhow!("master context model is not a string"))?;
   let usage = usage_object(result.get("usage"))?;
-  let input = count(usage, "input_tokens")?;
+  let input = count(usage, USAGE_INPUT_TOKENS)?;
   let cached = count(usage, "cached_tokens")?;
-  let output = count(usage, "output_tokens")?;
+  let output = count(usage, USAGE_OUTPUT_TOKENS)?;
   let mut account = CLC_MASTER_ACCOUNT.to_string();
   for option in &config.backends.options {
     if option.model == model && run_logs_only(option, registry)? {
@@ -462,13 +465,13 @@ fn run_record(
         return Ok(None);
       };
       let usage = usage_object(result.get("usage"))?;
-      let input = count(usage, "input_tokens")?;
+      let input = count(usage, USAGE_INPUT_TOKENS)?;
       let cached = count(usage, "cached_tokens")?;
       (
         input.sub(cached, "native run cached tokens")?,
         Count::Int(0),
         cached,
-        count(usage, "output_tokens")?,
+        count(usage, USAGE_OUTPUT_TOKENS)?,
         RecordKind::Native,
         Vec::new(),
       )
@@ -534,10 +537,10 @@ fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(Count, Count, Count)>>
     seen = true;
     let usage = usage_object(object.get("usage"))?;
     let cached = count(usage, "cached_input_tokens")?;
-    let fresh = count(usage, "input_tokens")?.sub(cached, "Codex cached tokens")?;
+    let fresh = count(usage, USAGE_INPUT_TOKENS)?.sub(cached, "Codex cached tokens")?;
     totals.0 = totals.0.add(fresh, "Codex input tokens")?;
     totals.1 = totals.1.add(cached, "Codex cached tokens")?;
-    totals.2 = totals.2.add(count(usage, "output_tokens")?, "Codex output tokens")?;
+    totals.2 = totals.2.add(count(usage, USAGE_OUTPUT_TOKENS)?, "Codex output tokens")?;
   }
   Ok(seen.then_some(totals))
 }
@@ -633,14 +636,14 @@ fn thread_row_model(
 fn verdict_counts(usage: &Map<String, Value>, verdict: Verdict) -> anyhow::Result<(Count, Count, Count, Count, Count)> {
   match verdict {
     Verdict::CodexRule => {
-      let input = count(usage, "input_tokens")?;
-      let cache_read = count(usage, "cache_read_input_tokens")?;
-      let output = count(usage, "output_tokens")?;
+      let input = count(usage, USAGE_INPUT_TOKENS)?;
+      let cache_read = count(usage, USAGE_CACHE_READ_INPUT_TOKENS)?;
+      let output = count(usage, USAGE_OUTPUT_TOKENS)?;
       Ok((input.sub(cache_read, "thread cached tokens")?, Count::Int(0), cache_read, output, Count::Int(0)))
     }
     Verdict::Native => {
-      let input = count(usage, "input_tokens")?;
-      let output = count(usage, "output_tokens")?;
+      let input = count(usage, USAGE_INPUT_TOKENS)?;
+      let output = count(usage, USAGE_OUTPUT_TOKENS)?;
       Ok((Count::Int(0), Count::Int(0), Count::Int(0), output, input))
     }
     Verdict::Fallback => {
@@ -652,10 +655,10 @@ fn verdict_counts(usage: &Map<String, Value>, verdict: Verdict) -> anyhow::Resul
 
 fn usage_counts(usage: &Map<String, Value>) -> anyhow::Result<(Count, Count, Count, Count)> {
   Ok((
-    count(usage, "input_tokens")?,
-    count(usage, "cache_creation_input_tokens")?,
-    count(usage, "cache_read_input_tokens")?,
-    count(usage, "output_tokens")?,
+    count(usage, USAGE_INPUT_TOKENS)?,
+    count(usage, USAGE_CACHE_CREATION_INPUT_TOKENS)?,
+    count(usage, USAGE_CACHE_READ_INPUT_TOKENS)?,
+    count(usage, USAGE_OUTPUT_TOKENS)?,
   ))
 }
 

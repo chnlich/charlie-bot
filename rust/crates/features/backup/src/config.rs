@@ -57,7 +57,7 @@ pub fn section() -> ConfigSection {
   ConfigSection { key: NAME, legacy_keys: &[], parse: parse_section, dump: dump_section }
 }
 
-/// Render the section as its model dumps it (`charliebot config get backup`).
+/// The section rendered as its model dumps it (`charliebot config get backup`).
 fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
   let settings = value.downcast_ref::<BackupConfig>().ok_or("the backup section holds an unexpected value")?;
   serde_json::to_value(settings).map_err(|error| error.to_string())
@@ -73,7 +73,7 @@ fn expand(value: &str, home: &Path) -> String {
   paths::expanduser(value).replace(DISPLAY_HOME, &home.to_string_lossy())
 }
 
-/// Reads the password file, failing with the path when it is not readable.
+/// The password file, opened and closed to check it is readable; the error names its path when it is not.
 pub fn read_password_file(settings: &ResticSettings) -> anyhow::Result<()> {
   let file = std::fs::File::open(&settings.password_file)
     .with_context(|| format!("backup.password_file {} is not readable", settings.password_file.display()))?;

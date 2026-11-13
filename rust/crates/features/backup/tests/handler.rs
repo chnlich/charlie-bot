@@ -54,7 +54,7 @@ fn features_over(home: &Path) -> Arc<FeatureContext> {
   })
 }
 
-/// Writes `config.yaml` with the given backup section body.
+/// The home's `config.yaml`, written with the given backup section body.
 fn write_backup_config(home: &Path, body: &str) {
   fs::write(home.join(CONFIG_FILENAME), format!("backup:\n{body}\n")).unwrap();
 }

@@ -12,7 +12,7 @@ use charliebot_registry::{Registry, RegistryError};
 use chrono::Utc;
 use futures_util::FutureExt;
 
-/// Register the `disk_sweep` cron handler.
+/// `register`: the scheduled handler `disk_sweep`, which the cron scheduler fires for a task whose `handler` names it.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.scheduled_handler("disk_sweep", run_handler)
 }

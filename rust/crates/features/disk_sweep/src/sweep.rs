@@ -128,7 +128,7 @@ impl SweepReport {
   }
 }
 
-/// Lists or applies one sweep at the supplied time and roots.
+/// One sweep of the supplied roots at the supplied time, listed when `apply` is false and applied when it is true.
 pub async fn run_sweep(roots: SweepRoots, apply: bool, now: DateTime<Utc>) -> Result<SweepReport> {
   let scan_roots = roots.clone();
   let scanned = on_blocking(move || scan(scan_roots, now)).await?;

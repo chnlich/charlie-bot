@@ -1020,6 +1020,8 @@ mod tests {
   #[tokio::test]
   async fn a_successful_host_renewal_moves_the_estimated_expiry() {
     let _serial = SERIAL.lock().await;
+    // The renewal record claims the process-wide round slot, which a poller test's round skips while it is held.
+    let _slot_lock = crate::test_support::round_slot_lock().lock().await;
     let stub = LoginStub::new("renewal-recorded", PRINT_LINK, "echo valid\n");
     let mut login = stub.login.clone();
     login.host = Some("host1".to_string());

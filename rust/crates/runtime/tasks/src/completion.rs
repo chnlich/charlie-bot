@@ -1907,7 +1907,13 @@ impl TaskCompletion {
     let notice_id = control_events::stable_close_blocked_notice_id(session_id, request_id);
     match self
       .dispatcher()?
-      .admit_input(session_id, event_types::SCHEDULED_TRIGGER, &content, ACTOR_SYSTEM, json!({"input_id": notice_id}))
+      .admit_input(
+        session_id,
+        event_types::SCHEDULED_TRIGGER,
+        &content,
+        ACTOR_SYSTEM,
+        json!({(event_types::INPUT_ID): notice_id}),
+      )
       .await
     {
       Ok(_) => self.dispatcher()?.dispatch_pending(session_id).await.map(|_| ()),

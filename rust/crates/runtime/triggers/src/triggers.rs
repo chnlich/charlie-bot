@@ -967,7 +967,7 @@ impl TriggerManager {
   async fn fire_task_tree(&self, trigger: &mut PendingTrigger, message: &str) -> anyhow::Result<()> {
     self.features.store.load_task_meta(&trigger.session_id).await?;
     let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;
-    let fields = json!({ "input_id": trigger.id });
+    let fields = json!({ (event_types::INPUT_ID): trigger.id });
     match dispatcher.admit_input(&trigger.session_id, event_types::SCHEDULED_TRIGGER, message, "system", fields).await {
       Ok(_) => {}
       Err(StoreError::Archived(_)) => {

@@ -40,10 +40,10 @@ pub fn compose_input_prompt(
       },
       event_types::AGENT_MESSAGE => {
         let source = event
-          .get("from_session_name")
+          .get(event_types::FROM_SESSION_NAME)
           .and_then(CompactValue::as_str)
           .filter(|name| !name.is_empty())
-          .or_else(|| event.get("from_session").and_then(CompactValue::as_str).filter(|id| !id.is_empty()))
+          .or_else(|| event.get(event_types::FROM_SESSION).and_then(CompactValue::as_str).filter(|id| !id.is_empty()))
           .unwrap_or("unknown");
         format!("[Message from session {source}] {content}")
       }

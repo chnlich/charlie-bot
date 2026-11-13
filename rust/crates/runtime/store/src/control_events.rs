@@ -26,8 +26,8 @@ pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
   "content",
   "request_id",
   event_types::UPLOADED_FILES,
-  "from_session",
-  "from_session_name",
+  event_types::FROM_SESSION,
+  event_types::FROM_SESSION_NAME,
   event_types::INPUT_MODE,
   "event_index",
 ];

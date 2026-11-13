@@ -305,7 +305,7 @@ impl CronScheduler {
           event_types::SCHEDULED_TRIGGER,
           task.prompt.as_deref().unwrap_or_default(),
           ACTOR_SYSTEM,
-          json!({"input_id": input_id}),
+          json!({(event_types::INPUT_ID): input_id}),
         )
         .await?;
       dispatcher.dispatch_pending(&session.id).await?;

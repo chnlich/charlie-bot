@@ -378,18 +378,12 @@ fn log_read_error(events_path: &Path, error: LogReadError) -> String {
 
 fn utf8_error(bytes: &[u8], error: &std::str::Utf8Error) -> String {
   let start = error.valid_up_to();
-  let (byte, offset, reason) = match error.error_len() {
-    None => (bytes[start], start, "unexpected end of data"),
-    Some(_) => {
-      let start_byte = bytes[start];
-      if is_utf8_start_byte(start_byte) {
-        (bytes[start + 1], start + 1, "invalid continuation byte")
-      } else {
-        (start_byte, start, "invalid start byte")
-      }
-    }
+  let (offset, reason) = match error.error_len() {
+    None => (start, "unexpected end of data"),
+    Some(_) if is_utf8_start_byte(bytes[start]) => (start + 1, "invalid continuation byte"),
+    Some(_) => (start, "invalid start byte"),
   };
-  format!("'utf-8' codec can't decode byte 0x{byte:02x} in position {offset}: {reason}")
+  charliebot_core::json_loads::codec_error_text("utf-8", bytes, offset, offset + 1, reason)
 }
 
 /// A byte that may open a UTF-8 sequence (ASCII or a non-overlong, non-surrogate lead).

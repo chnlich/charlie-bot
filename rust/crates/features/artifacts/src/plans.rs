@@ -316,11 +316,7 @@ fn utf8_error_text(error: &Utf8Error, bytes: &[u8]) -> String {
     }
     None => (bytes.len(), "unexpected end of data"),
   };
-  if end - start == 1 {
-    format!("'utf-8' codec can't decode byte 0x{:02x} in position {start}: {reason}", bytes[start])
-  } else {
-    format!("'utf-8' codec can't decode bytes in position {start}-{}: {reason}", end - 1)
-  }
+  json_loads::codec_error_text("utf-8", bytes, start, end, reason)
 }
 
 /// The repr form of a JSON value: strings quoted, the rest in their value spelling.

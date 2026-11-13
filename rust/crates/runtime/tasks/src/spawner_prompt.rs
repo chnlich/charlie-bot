@@ -11,6 +11,7 @@ use std::io;
 use std::path::Path;
 
 use anyhow::{anyhow, bail};
+use charliebot_core::json_loads::codec_error_text;
 use charliebot_core::text_repr::str_repr;
 use charliebot_store::metadata::{TaskSpec, TaskType};
 
@@ -91,7 +92,7 @@ fn utf8_decode_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
         0xC2..=0xDF => 2,
         0xE0..=0xEF => 3,
         0xF0..=0xF4 => 4,
-        _ => return decode_error(bytes, start, start + 1, "invalid start byte"),
+        _ => return codec_error_text("utf-8", bytes, start, start + 1, "invalid start byte"),
       };
       let invalid_offset = (1..expected_len)
         .find(|offset| bytes.get(start + offset).is_none_or(|byte| !valid_continuation(lead, *offset, *byte)));
@@ -102,7 +103,7 @@ fn utf8_decode_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
     }
     None => (bytes.len(), "unexpected end of data"),
   };
-  decode_error(bytes, start, end, reason)
+  codec_error_text("utf-8", bytes, start, end, reason)
 }
 
 /// Whether this byte is a permitted continuation at this position in the UTF-8 sequence.
@@ -113,14 +114,6 @@ fn valid_continuation(lead: u8, offset: usize, byte: u8) -> bool {
     (0xF0, 1) => (0x90..=0xBF).contains(&byte),
     (0xF4, 1) => (0x80..=0x8F).contains(&byte),
     _ => (0x80..=0xBF).contains(&byte),
-  }
-}
-
-fn decode_error(bytes: &[u8], start: usize, end: usize, reason: &str) -> String {
-  if end - start == 1 {
-    format!("'utf-8' codec can't decode byte 0x{:02x} in position {start}: {reason}", bytes[start])
-  } else {
-    format!("'utf-8' codec can't decode bytes in position {start}-{}: {reason}", end - 1)
   }
 }
 

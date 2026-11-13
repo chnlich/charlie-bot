@@ -45,11 +45,11 @@ function loadVoiceInput() {
 }
 
 function openVoiceInput() {
-  loadVoiceInput().then(toggleVoice).catch((error) => console.error(error));
+  loadVoiceInput().then(() => toggleVoice()).catch((error) => console.error(error));
 }
 
 function toggleVoiceBackend() {
-  loadVoiceInput().then(toggleVoiceBackendMenu).catch((error) => console.error(error));
+  loadVoiceInput().then(() => toggleVoiceBackendMenu()).catch((error) => console.error(error));
 }
 
 // The composer's ⋯ menu entry, created by this package so the core template
@@ -64,7 +64,7 @@ function ensureVoiceBackendEntry() {
   entry.textContent = 'Voice backend';
   entry.onclick = () => {
     overflow.classList.remove('show');
-    loadVoiceInput().then(openVoiceBackendMenu).catch((error) => console.error(error));
+    loadVoiceInput().then(() => openVoiceBackendMenu()).catch((error) => console.error(error));
   };
   overflow.appendChild(entry);
 }

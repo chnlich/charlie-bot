@@ -1,12 +1,19 @@
 // Tests of the open scenario's invocation-level decisions: the CPU rate the sides of one run share, the host
 // interference a repetition names, and the bounded rerun of a repetition the host spoiled. A mistake here leaves
-// the two sides of one run at different CPU speeds, or dresses the host's behaviour as the page's result.
+// the two sides of one run at different CPU speeds, or dresses the host's behaviour as the page's result. The open
+// record folds a tab's reports, across a reload, into the times and the case one open reports.
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 
-import { assetVersionOf, hostInterference, openCpuRecord, runRepetitions } from './open.mjs';
+import { chromeBinary, launchBrowser } from './chrome.mjs';
+import { assetVersionOf, hostInterference, openCpuRecord, openMeasuredTab, openRecord, runRepetitions } from './open.mjs';
 import { LIVE_CPU_TAIL, OPEN } from './profile.mjs';
+import { Tabs, waitFor } from './tabs.mjs';
 
 const DOC_URL = 'https://localhost:8443/?session=open';
 
@@ -109,4 +116,126 @@ test('a repetition that fails any other way is not rerun', async () => {
   }, 1);
   assert.equal(calls, 1);
   assert.deepEqual(reps[0].interferenceReruns, []);
+});
+
+test('a reload inside an open keeps the first navigation as the start', () => {
+  // The first document loads, its socket answers 4409, and the reloaded document shows the newest message 10.6 s
+  // after the first navigation.
+  const record = openRecord([
+    { kind: 'document', timeOrigin: 1000, recordAtStart: null },
+    { kind: 'cause', timeOrigin: 1000, cause: 'stale_asset' },
+    { kind: 'document', timeOrigin: 11000, recordAtStart: null },
+    { kind: 'newest', timeOrigin: 11000, at: 11600 },
+    { kind: 'load', timeOrigin: 11000, loadMs: 700, openCase: 'C' },
+  ]);
+  assert.equal(record.startWall, 1000, 'the open starts at the first navigation');
+  assert.equal(record.newestWall - record.startWall, 10600, 'the reloaded newest message counts from the first navigation');
+  assert.equal(record.loadWall, 11700, 'the open ends with the last document\'s load');
+});
+
+test('the newest message counts at the first document that shows it', () => {
+  const record = openRecord([
+    { kind: 'document', timeOrigin: 1000, recordAtStart: null },
+    { kind: 'newest', timeOrigin: 1000, at: 1900 },
+    { kind: 'cause', timeOrigin: 1000, cause: 'stale_asset' },
+    { kind: 'document', timeOrigin: 11000, recordAtStart: null },
+    { kind: 'newest', timeOrigin: 11000, at: 11600 },
+  ]);
+  assert.equal(record.newestWall, 1900);
+});
+
+test('the open case and the record it starts from come from the first document', () => {
+  // The first document finds the browser's record without this session (case B) and writes the session into it; the
+  // reloaded document reads the record with the session in it, which would name case A.
+  const first = JSON.stringify({ first_open_ms: 1, sessions: { probe: 1 } });
+  const reloaded = JSON.stringify({ first_open_ms: 1, sessions: { probe: 1, target: 9 } });
+  const record = openRecord([
+    { kind: 'document', timeOrigin: 1000, recordAtStart: first },
+    { kind: 'load', timeOrigin: 1000, loadMs: 300, openCase: 'B' },
+    { kind: 'cause', timeOrigin: 1000, cause: 'stale_asset' },
+    { kind: 'document', timeOrigin: 11000, recordAtStart: reloaded },
+    { kind: 'load', timeOrigin: 11000, loadMs: 300, openCase: 'A' },
+  ]);
+  assert.equal(record.openCase, 'B');
+  assert.equal(record.recordAtStart, first);
+});
+
+test('each reload is recorded with its cause, and a reload whose document named none is recorded as null', () => {
+  const once = openRecord([
+    { kind: 'document', timeOrigin: 1000, recordAtStart: null },
+    { kind: 'cause', timeOrigin: 1000, cause: 'stale_asset' },
+    { kind: 'document', timeOrigin: 11000, recordAtStart: null },
+  ]);
+  assert.deepEqual(once.reloadCauses, ['stale_asset']);
+
+  const twice = openRecord([
+    { kind: 'document', timeOrigin: 1000, recordAtStart: null },
+    { kind: 'cause', timeOrigin: 1000, cause: 'stale_asset' },
+    { kind: 'document', timeOrigin: 11000, recordAtStart: null },
+    { kind: 'document', timeOrigin: 21000, recordAtStart: null },
+  ]);
+  assert.deepEqual(twice.reloadCauses, ['stale_asset', null]);
+
+  assert.deepEqual(openRecord([{ kind: 'document', timeOrigin: 1000, recordAtStart: null }]).reloadCauses, []);
+});
+
+// A page that reloads once, the way a stale page does: its first document reports the cause, then reloads. It holds
+// an iframe, as a chat page holds its artifact frames, so a frame's own load must not count as a document.
+const RELOADING_PAGE = `<!doctype html><html><body><iframe srcdoc="<p>frame</p>"></iframe><script>
+if (sessionStorage.getItem('reloaded') === null) {
+  sessionStorage.setItem('reloaded', '1');
+  document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', { detail: { cause: 'stale_asset' } }));
+  location.reload();
+}
+</script></body></html>`;
+
+test('a page reload reports its cause through the binding that outlives it, and a frame adds no document', async () => {
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end(RELOADING_PAGE);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  // The browser sends the page's plain-HTTP requests to the proxy the launch names, with their absolute URLs. This
+  // forward proxy passes each one to the page server.
+  const forward = http.createServer((request, response) => {
+    const upstream = http.request(new URL(request.url), { method: request.method, headers: request.headers }, (answer) => {
+      response.writeHead(answer.statusCode, answer.headers);
+      answer.pipe(response);
+    });
+    upstream.on('error', (error) => response.destroy(error));
+    request.pipe(upstream);
+  });
+  await new Promise((resolve) => forward.listen(0, '127.0.0.1', resolve));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pn-reload-'));
+  let browser = null;
+  try {
+    browser = await launchBrowser({
+      binary: chromeBinary(),
+      proxyPort: forward.address().port,
+      userDataDir: path.join(dir, 'profile'),
+      logPath: path.join(dir, 'chrome.log'),
+      trustedSpki: '',
+    });
+    const tabs = new Tabs({
+      browser, assets: new Map(), accessKey: 'test-key', origin: `http://127.0.0.1:${server.address().port}`, cdn: 'link',
+    });
+    // Three tabs, each with its own session storage, so each reloads once: the cause and the reload repeat.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const tab = await openMeasuredTab(tabs, 'no-such-message');
+      await tabs.navigate(tab, '/');
+      const record = await waitFor(() => {
+        const current = openRecord(tab.reports);
+        return current.loadWall !== null && current.reloadCauses.length > 0 ? current : null;
+      }, 20000, `the reloaded document of attempt ${attempt} to report its load`);
+      assert.deepEqual(record.reloadCauses, ['stale_asset'], `attempt ${attempt}: the reload names its cause and no frame counts`);
+      await tabs.close(tab);
+    }
+  } finally {
+    if (browser !== null) {
+      await browser.shutdown();
+    }
+    forward.close();
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

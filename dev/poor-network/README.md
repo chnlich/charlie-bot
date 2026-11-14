@@ -264,15 +264,17 @@ Conditions, each a fresh browser profile behind a fresh proxy, with the CDN file
 | `reset` | As `held`, but the blackout resets every connection when it starts. The pooled connection of A and B ends there. |
 | `flaps` | Up 5 s, then down 5 s, six times (60 s). Each drop resets every connection, so each recovery reconnects. |
 | `offline` | Chrome's network emulation is offline for the open. The navigation fails at once and the open is not reached. |
-| `release` | A held blackout starts; 2 s in, the server's static asset version changes (the bench appends a comment to the trial tree's served `web/static/js/config.js`, and the version the server answers must move); the open navigates 5 s in, inside the hold. |
+| `release` | A held blackout starts; 2 s in, the server's static asset version changes (the bench appends a comment to the trial tree's served `web/static/js/config.js`, and the version the server answers must move); the open navigates 5 s in, inside the hold. The open's document request waits in the hold and reaches the server after the release. A page that revalidates its document, as main's does, receives the released page in full and does not reload. A page that opens from a stored copy without asking the server is older than the release: when the link returns, its socket closes with 4409 and the page reloads once, inside the open, and the open's time runs from the first navigation through that reload. |
 
 The release open navigates within 10 s of the last read on A's and B's pooled connection. Chrome sends a request on an
 HTTP/2 connection idle that long only after a PING, which the hold leaves unanswered; Chrome then drops the connection
 10 s later and retries on a new one, whose CONNECT the blackout drops. With the open 10 s in, every A and B release
-repetition failed with `net::ERR_TIMED_OUT` 40.2 s after its navigation (rounds 3 and 4), against 30.1 s for C and for
-the reset cells, whose new connection is the first attempt; A held, 1.6 s after the last read, loads. C has no pooled
-connection, so its first attempt falls inside the blackout in every blackout cell, and `C held`, `C reset` and
-`C release` end with `net::ERR_TIMED_OUT` when Chrome's 30 s connect timeout runs out.
+repetition failed with `net::ERR_TIMED_OUT` 40.2 s after its navigation, against 30.1 s for C and for the reset cells,
+whose new connection is the first attempt; A held, 1.6 s after the last read, loads. With the open 5 s in, all 20 A and
+B release repetitions of a main-vs-main bench pair on 00574379c (2026-11-15, five per row on each bench) loaded, each
+with the released page in full (90,803 to 90,805 B on the wire), and the bench that records reloads recorded none. C has
+no pooled connection, so its first attempt falls inside the blackout in every blackout cell, and `C held`, `C reset`
+and `C release` end with `net::ERR_TIMED_OUT` when Chrome's 30 s connect timeout runs out.
 
 The open is `switchTarget` (a session whose bootstrap is the view's 26,592 bytes); B's other session is `probes[0]`.
 The CPU rate is `Emulation.setCPUThrottlingRate`. The cells run in this order: a reference cell (A, link, rate 1), the
@@ -286,18 +288,18 @@ times faster than the modeled link (a 340 KB document at 2.5 s). The other devic
 `stale_asset` load), so it gives no rate. The reference cell's tail median, measured at rate 1 on the same kind of load
 (A, cache-warm, the link), gives the rate: `max(1, live tail / reference tail)`. The run prints both inputs.
 
-The tail holds the parse and the blocking scripts only when the document's bytes arrive together. The reference
-document does: case A's browser holds the page, the server still serves the same page, and the open revalidates the
-copy with a `304` (300 B on the wire, about 324 ms to responseEnd), so the whole page is parsed after responseEnd (an
-83.5 ms tail at rate 1 in an earlier round, rate 3.56). A document that crosses the link in full streams for about
-7.4 s and is parsed while it arrives, so its tail keeps only the last chunk's work: about 10 ms at rate 1, which put the
-rate at 21.68 to 30.31 in six invocations of 2026-11-14 and 11-15. A reference repetition whose document crossed the link
+The tail holds the parse and the blocking scripts only when the document's bytes arrive together. The reference document
+does: case A's browser holds the page, the server still serves the same page, and the open revalidates the copy with a
+`304` (300 B on the wire, about 324 ms to responseEnd), so the whole page is parsed after responseEnd (an 83.5 ms tail
+at rate 1 in an earlier round, rate 3.56). A document that crosses the link in full streams for about 7.4 s and is
+parsed while it arrives, so its tail keeps only the last chunk's work: about 10 ms at rate 1, which put the rate at
+21.68 to 30.31 in six invocations of 2026-11-14 and 11-15. A reference repetition whose document crossed the link
 (`document_transfer_bytes` not below `document_body_bytes`) therefore gives no rate, and the run stops. The one
 revalidated open in the live log of Chao's other device (100.103.185.111, 2026-11-14) had a 282 ms tail, within 5% of
-`LIVE_CPU_TAIL`. On main 00574379c (2026-11-15), every reference document of nine open-scenario invocations on host3
-was a `304`. Eight gave median tails of 78.2 to 87.8 ms and rates of 3.38 to 3.8; the ninth, in a busier window of the
-host, gave tails of 78, 203.8 and 121.9 ms, so its median gave 2.44, and its loads ran two to three times as long as the
-other invocations' loads. At rate 3.8, A link's tail was 309 to 412 ms, against the live 297 ms. A median outlasts slow
+`LIVE_CPU_TAIL`. On main 00574379c (2026-11-15), every reference document of nine open-scenario invocations on host3 was
+a `304`. Eight gave median tails of 78.2 to 87.8 ms and rates of 3.38 to 3.8; the ninth, in a busier window of the host,
+gave tails of 78, 203.8 and 121.9 ms, so its median gave 2.44, and its loads ran two to three times as long as the other
+invocations' loads. At rate 3.8, A link's tail was 309 to 412 ms, against the live 297 ms. A median outlasts slow
 repetitions only while they are fewer than half, so a comparison across invocations pins the rate with
 `--open-cpu-rate`.
 
@@ -333,20 +335,26 @@ cell reruns it under the same bound. In D2 (run 20261115T095852Z) the bench's ow
 3.6 s late in the two B release repetitions. The second open navigated about 8.7 s into the hold and failed with
 `net::ERR_TIMED_OUT` 40.3 s later. Every other load failure stays the repetition's record, as before.
 
-**Measured per repetition.** Times are ms from the page's time origin (navigation start): `newest_message_ms` is when the
-first screen's last message is in the chat, named by its `data-message-id` — the page's own `newest_message_ms`
-definition (`web/features/diag/templates/diag/client-events.js`); a text marker goes stale, because the scenarios before
-the open scenario send turns to the same session. `catchup_ms` is the first `catchup_complete` frame of the page's
-socket, and `load_ms` is the load event. `bytes_to_newest` is the link's bytes (both directions) from the navigation to
-that moment, and `bytes_after_load` the bytes in the 30 s after the load event; the proxy's counters are sampled every
-25 ms. `dcl_ms`, `response_end_ms`, `tail_ms`, `document_transfer_bytes` (the document's bytes on the wire) and
-`document_body_bytes` (its encoded body) come from the page's Navigation Timing, and `mark` is whether the
-not-current mark was in the document at any sample. Each repetition also names what the tab and the page saw:
-`sockets` (the WebSocket opens), `frames` and `frame_types` (the socket frames by type), `requests` (the requests),
-`ws_state` (the client's own socket state), the last console lines and page errors, the requests the host's network
-change dropped (`network_changed`, empty on a clean repetition), and the interference reruns, so a missing time can be
-read against what the page reported. A release repetition records when its open navigated into the hold
-(`openInHoldMs` in the JSON).
+**Measured per repetition.** Times are ms from the tab's first navigation: the first document's time origin. A reload
+inside the open stays part of it. `newest_message_ms` is when the first screen's last message is first in the chat of
+any document of the open, named by its `data-message-id` — the page's own `newest_message_ms` definition
+(`web/features/diag/templates/diag/client-events.js`); a text marker goes stale, because the scenarios before the open
+scenario send turns to the same session. `catchup_ms` is the first `catchup_complete` frame of the page's socket after
+the navigation, and `load_ms` is the load event of the last document, the one whose load ends the open.
+`bytes_to_newest` is the link's bytes (both directions) from the navigation to that moment, and `bytes_after_load` the
+bytes in the 30 s after that load event; the proxy's counters are sampled every 25 ms. `dcl_ms`, `response_end_ms`,
+`tail_ms`, `document_transfer_bytes` (the document's bytes on the wire) and `document_body_bytes` (its encoded body)
+come from the last document's Navigation Timing, and `mark` is whether the not-current mark was in any document of the
+open at any sample. The page reports through a binding that survives a reload, so each top-level document's reports
+reach the bench (the page's frames do not report): `pageCase` and the record the open starts from (`recordAtStart`) are
+the first document's, since the first document is the one that finds the browser's state. `reload_causes` lists each
+reload the open made, one entry per reload, with the cause the reloading document reported (`stale_asset` when the
+server's static asset version moved past the page's), or `null` when the document named none; the reload count is its
+length. Each repetition also names what the tab and the page saw: `sockets` (the WebSocket opens), `frames` and
+`frame_types` (the socket frames by type), `requests` (the requests), `ws_state` (the client's own socket state), the
+last console lines and page errors, the requests the host's network change dropped (`network_changed`, empty on a clean
+repetition), and the interference reruns, so a missing time can be read against what the page reported. A release
+repetition records when its open navigated into the hold (`openInHoldMs` in the JSON).
 
 **The mark's DOM contract (task 3 implements it).** A page marks a stored copy as not current with the attribute
 `data-freshness="not-current"` on one element of its document. The bench watches for that element and reports the
@@ -362,8 +370,8 @@ not compared with the page's own `page_load` numbers in the same run.
 
 **Output.** The JSON's `open` section holds `cpu` (the rate and its inputs), `reference`, and `cells`: each cell's
 `reps`, one object per repetition with the fields above. The table prints one row per cell: the median newest-message
-time, the five values in repetition order, the catch-up median, the bytes to the newest message and after the load, and
-how many repetitions reached the newest message.
+time, the five values in repetition order, the catch-up median, the bytes to the newest message and after the load, how
+many repetitions reached the newest message, and the page reloads across its repetitions.
 
 ## Host requirements
 
@@ -399,7 +407,8 @@ The relay tests are integration tests because they start the relay as a child pr
 them when a change touches this directory. To reproduce them through the remote runner:
 
 ```sh
-dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
+dev/remote-run/run.sh env POOR_NETWORK_CHROME=/path/to/chrome node --test \
+  dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
   dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
   dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/open.test.mjs \
   dev/poor-network/lock.test.mjs
@@ -413,14 +422,16 @@ tunnels when it starts. The front tests read the TLS record sizes the front writ
 report's tests check the calibration gate: it reads the during-refresh holds, not the scored scenario's random-phase
 holds, and only the reference before side's line carries a verdict. The chrome tests check the browser teardown: a
 closed browser fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status
-counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's
-`{token, rows, gone}`.
-The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent from the
-document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches fails
-the step. The open tests check the CPU rate's sharing (a shared rate stands, beside the one the side's own reference
-derives), the reference's document (a reference repetition whose document crossed the link gives no rate) and the host
-interference (a dropped request, a failed navigation or a release open the host pushed past `OPEN.openByMs` names the
-interference; any other load
-failure stays the repetition's own record; a repetition the host spoiled is rerun, bounded, and its reruns recorded).
-The lock tests check that one concurrent side attempt holds the bench lock and the next waits for it, and that the
-bench code names the lock path only in `lock.sh`.
+counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's `{token,
+rows, gone}`. The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent
+from the document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches
+fails the step. The open tests check the CPU rate's sharing (a shared rate stands, beside the one the side's own
+reference derives), the reference's document (a reference repetition whose document crossed the link gives no rate) and
+the host interference (a dropped request, a failed navigation or a release open the host pushed past `OPEN.openByMs`
+names the interference; any other load failure stays the repetition's own record; a repetition the host spoiled is
+rerun, bounded, and its reruns recorded). The open record's tests check that a reload inside an open keeps the first
+navigation as its start, that the newest message counts at the first document that shows it, that the case and its
+starting record come from the first document, and that each reload is recorded with its cause. One of them drives a
+Chrome against a page that reloads once and holds an iframe, through a forward proxy: the cause reaches the tab from the
+reloaded document, and the frame adds no document. The lock tests check that one concurrent side attempt holds the bench
+lock and the next waits for it, and that the bench code names the lock path only in `lock.sh`.

@@ -237,12 +237,9 @@ pub(crate) fn exchange_code(home: &Path, code: &str, endpoints: &Endpoints) -> R
 
 #[cfg(test)]
 mod tests {
-  use std::io::{Read, Write};
-  use std::net::{TcpListener, TcpStream};
   use std::os::unix::fs::PermissionsExt;
-  use std::sync::mpsc::{self, Receiver};
-  use std::thread;
-  use std::time::Duration;
+
+  use charliebot_cli_common::test_support::LoopbackServer;
 
   use super::*;
 
@@ -252,7 +249,6 @@ mod tests {
   const NEW_REFRESH: &str = "synthetic-new-refresh-token";
   const APP_TOKEN: &str = "synthetic-app-token";
   const APP_SECRET: &str = "synthetic-app-secret";
-  const TIMEOUT: Duration = Duration::from_secs(2);
 
   const TABLE: &str = concat!(
     "charliebot:\n  access_key: k\n",
@@ -283,71 +279,29 @@ mod tests {
     }
   }
 
-  /// A local server that answers the scripted responses in order and records every request.
-  struct Stub {
-    base: String,
-    requests: Receiver<Vec<u8>>,
-  }
+  /// The shared loopback server, bound to this command's four endpoints.
+  struct Stub(LoopbackServer);
 
   impl Stub {
     fn start(responses: Vec<(u16, Vec<u8>)>) -> Stub {
-      let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-      let base = format!("http://{}", listener.local_addr().unwrap());
-      let (sender, requests) = mpsc::channel();
-      thread::spawn(move || {
-        for (status, body) in responses {
-          let (mut stream, _) = listener.accept().unwrap();
-          stream.set_nodelay(true).unwrap();
-          sender.send(read_http_request(&mut stream)).unwrap();
-          let response = format!(
-            "HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-          );
-          let _ = stream.write_all(response.as_bytes());
-          let _ = stream.write_all(&body);
-        }
-      });
-      Stub { base, requests }
+      Stub(LoopbackServer::start(responses))
+    }
+
+    fn base(&self) -> &str {
+      self.0.base()
     }
 
     fn endpoints(&self) -> Endpoints {
       Endpoints {
-        authorize_url: format!("{}/authorize", self.base),
-        app_token_url: format!("{}/app-token", self.base),
-        refresh_url: format!("{}/refresh", self.base),
-        exchange_url: format!("{}/exchange", self.base),
+        authorize_url: format!("{}/authorize", self.base()),
+        app_token_url: format!("{}/app-token", self.base()),
+        refresh_url: format!("{}/refresh", self.base()),
+        exchange_url: format!("{}/exchange", self.base()),
       }
     }
 
     fn next(&self) -> String {
-      String::from_utf8(self.requests.recv_timeout(TIMEOUT).unwrap()).unwrap()
-    }
-  }
-
-  fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
-    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 4096];
-    loop {
-      let read = stream.read(&mut buffer).unwrap();
-      if read == 0 {
-        return request;
-      }
-      request.extend_from_slice(&buffer[..read]);
-      let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n").map(|index| index + 4) else {
-        continue;
-      };
-      let head = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
-      let content_length = head
-        .lines()
-        .find_map(|line| {
-          let (name, value) = line.split_once(':')?;
-          name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
-        })
-        .unwrap_or(0);
-      if request.len() >= header_end + content_length {
-        return request;
-      }
+      self.0.next_request()
     }
   }
 
@@ -360,7 +314,7 @@ mod tests {
     let home = credentials_home(TABLE);
     let stub = Stub::start(vec![json_response(json!({"code": 0, "data": {"ok": true}}))]);
 
-    let body = execute_request(home.path(), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap();
+    let body = execute_request(home.path(), &request_args(&format!("{}/api", stub.base())), &stub.endpoints()).unwrap();
     let request = stub.next();
     let lowered = request.to_ascii_lowercase();
 
@@ -376,7 +330,7 @@ mod tests {
     let stub = Stub::start(vec![json_response(json!({"code": 10003, "msg": format!("denied {ACCESS}")}))]);
 
     let error =
-      execute_request(home.path(), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap_err();
+      execute_request(home.path(), &request_args(&format!("{}/api", stub.base())), &stub.endpoints()).unwrap_err();
     let _ = stub.next();
     let text = error_text(&error);
 
@@ -392,7 +346,7 @@ mod tests {
     let stub = Stub::start(vec![(403, br#"{"msg":"denied"}"#.to_vec())]);
 
     let error =
-      execute_request(home.path(), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap_err();
+      execute_request(home.path(), &request_args(&format!("{}/api", stub.base())), &stub.endpoints()).unwrap_err();
     let _ = stub.next();
 
     assert_eq!(error.code, 1);
@@ -420,7 +374,7 @@ mod tests {
       json_response(json!({"code": 0, "data": {"ok": true}})),
     ]);
 
-    let body = execute_request(home.path(), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap();
+    let body = execute_request(home.path(), &request_args(&format!("{}/api", stub.base())), &stub.endpoints()).unwrap();
     let first = stub.next();
     let app_request = stub.next();
     let refresh_request = stub.next();
@@ -463,7 +417,7 @@ mod tests {
       json_response(json!({"code": 0})),
     ]);
 
-    execute_request(home.path(), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap();
+    execute_request(home.path(), &request_args(&format!("{}/api", stub.base())), &stub.endpoints()).unwrap();
     for _ in 0..4 {
       let _ = stub.next();
     }
@@ -482,7 +436,7 @@ mod tests {
     ]);
 
     let error =
-      execute_request(home.path(), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap_err();
+      execute_request(home.path(), &request_args(&format!("{}/api", stub.base())), &stub.endpoints()).unwrap_err();
     for _ in 0..3 {
       let _ = stub.next();
     }

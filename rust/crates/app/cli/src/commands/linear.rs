@@ -147,10 +147,9 @@ fn redact_key(text: &str, api_key: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::io::{Read, Write};
-  use std::net::{TcpListener, TcpStream};
-  use std::thread;
-  use std::time::Duration;
+  use std::net::TcpListener;
+
+  use charliebot_cli_common::test_support::LoopbackServer;
 
   const API_KEY: &str = "synthetic-linear-key";
   const REQUEST_BODY: &[u8] = br#"{"query":"query { viewer { id } }","variables":{"id":"synthetic-id"}}"#;
@@ -163,54 +162,9 @@ mod tests {
     home
   }
 
-  fn start_stub(status: u16, response_body: Vec<u8>) -> (String, std::sync::mpsc::Receiver<Vec<u8>>) {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let address = listener.local_addr().unwrap();
-    let (sender, receiver) = std::sync::mpsc::channel();
-    thread::spawn(move || {
-      let (mut stream, _) = listener.accept().unwrap();
-      let request = read_http_request(&mut stream);
-      sender.send(request).unwrap();
-      let reason = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        _ => "Response",
-      };
-      let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        response_body.len()
-      );
-      stream.write_all(response.as_bytes()).unwrap();
-      stream.write_all(&response_body).unwrap();
-    });
-    (format!("http://{address}/graphql"), receiver)
-  }
-
-  fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
-    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 4096];
-    loop {
-      let read = stream.read(&mut buffer).unwrap();
-      if read == 0 {
-        return request;
-      }
-      request.extend_from_slice(&buffer[..read]);
-      let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n").map(|index| index + 4) else {
-        continue;
-      };
-      let header_text = String::from_utf8_lossy(&request[..header_end]);
-      let content_length = header_text
-        .lines()
-        .find_map(|line| {
-          let (name, value) = line.split_once(':')?;
-          name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
-        })
-        .unwrap_or(0);
-      if request.len() >= header_end + content_length {
-        return request;
-      }
-    }
+  fn start_stub(status: u16, response_body: Vec<u8>) -> (String, LoopbackServer) {
+    let server = LoopbackServer::start(vec![(status, response_body)]);
+    (format!("{}/graphql", server.base()), server)
   }
 
   fn error_text(error: &CliExit) -> String {
@@ -230,11 +184,10 @@ mod tests {
   fn graphql_posts_the_key_without_bearer_and_returns_the_response_unchanged() {
     let home = credentials_home(Some(API_KEY));
     let response_body = br#"{"data":{"viewer":{"id":"synthetic-id"}}}"#.to_vec();
-    let (endpoint, request_receiver) = start_stub(200, response_body.clone());
+    let (endpoint, server) = start_stub(200, response_body.clone());
 
     let response = execute_graphql(REQUEST_BODY, &endpoint, home.path()).unwrap();
-    let request = request_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-    let request_text = String::from_utf8(request).unwrap();
+    let request_text = server.next_request();
     let lowered = request_text.to_ascii_lowercase();
 
     assert_eq!(response, response_body);
@@ -262,9 +215,9 @@ mod tests {
 
   fn assert_graphql_error(status: u16, response_body: Vec<u8>) {
     let home = credentials_home(Some(API_KEY));
-    let (endpoint, request_receiver) = start_stub(status, response_body);
+    let (endpoint, server) = start_stub(status, response_body);
     let error = execute_graphql(REQUEST_BODY, &endpoint, home.path()).unwrap_err();
-    assert_authorized(&request_receiver.recv_timeout(Duration::from_secs(2)).unwrap());
+    assert_authorized(server.next_request().as_bytes());
     let text = error_text(&error);
     assert_eq!(error.code, 1);
     assert_no_key(&text);

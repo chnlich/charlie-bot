@@ -44,6 +44,7 @@ use charliebot_agents::local_work_guard;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
+use charliebot_core::timefmt::duration_millis;
 use charliebot_core::{config, event_types, home, logging, paths};
 use charliebot_registry::lifespan::{CloseTimings, Lifespan, StartupOutcome, StepTiming};
 use charliebot_registry::startup_timing::StartupClock;
@@ -443,34 +444,34 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bo
   if during_boot {
     tracing::info!(
       boot = true,
-      shutdown_ms = round_ms(shutdown_started.elapsed()),
-      discord_ms = round_ms(step_elapsed(&closes.step_closes, "discord")),
-      ext_usage_ms = round_ms(step_elapsed(&closes.step_closes, "ext_usage")),
-      feishu_ms = round_ms(step_elapsed(&closes.step_closes, "feishu")),
-      host_auth_ms = round_ms(step_elapsed(&closes.step_closes, "host_auth")),
-      merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
-      scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
-      slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
+      shutdown_ms = duration_millis(shutdown_started.elapsed()),
+      discord_ms = duration_millis(step_elapsed(&closes.step_closes, "discord")),
+      ext_usage_ms = duration_millis(step_elapsed(&closes.step_closes, "ext_usage")),
+      feishu_ms = duration_millis(step_elapsed(&closes.step_closes, "feishu")),
+      host_auth_ms = duration_millis(step_elapsed(&closes.step_closes, "host_auth")),
+      merge_pool_ms = duration_millis(step_elapsed(&closes.step_closes, "merge_pool")),
+      scheduler_ms = duration_millis(step_elapsed(&closes.step_closes, "scheduler")),
+      slack_ms = duration_millis(step_elapsed(&closes.step_closes, "slack")),
       // There is no `usage_tally` service, so its timing is zero.
       usage_tally_ms = 0,
-      http_client_ms = round_ms(closes.http_client),
-      ws_close_ms = round_ms(closes.ws_close),
+      http_client_ms = duration_millis(closes.http_client),
+      ws_close_ms = duration_millis(closes.ws_close),
       "charliebot_shutdown"
     );
   } else {
     tracing::info!(
-      shutdown_ms = round_ms(shutdown_started.elapsed()),
-      discord_ms = round_ms(step_elapsed(&closes.step_closes, "discord")),
-      ext_usage_ms = round_ms(step_elapsed(&closes.step_closes, "ext_usage")),
-      feishu_ms = round_ms(step_elapsed(&closes.step_closes, "feishu")),
-      host_auth_ms = round_ms(step_elapsed(&closes.step_closes, "host_auth")),
-      merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
-      scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
-      slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
+      shutdown_ms = duration_millis(shutdown_started.elapsed()),
+      discord_ms = duration_millis(step_elapsed(&closes.step_closes, "discord")),
+      ext_usage_ms = duration_millis(step_elapsed(&closes.step_closes, "ext_usage")),
+      feishu_ms = duration_millis(step_elapsed(&closes.step_closes, "feishu")),
+      host_auth_ms = duration_millis(step_elapsed(&closes.step_closes, "host_auth")),
+      merge_pool_ms = duration_millis(step_elapsed(&closes.step_closes, "merge_pool")),
+      scheduler_ms = duration_millis(step_elapsed(&closes.step_closes, "scheduler")),
+      slack_ms = duration_millis(step_elapsed(&closes.step_closes, "slack")),
       // There is no `usage_tally` service, so its timing is zero.
       usage_tally_ms = 0,
-      http_client_ms = round_ms(closes.http_client),
-      ws_close_ms = round_ms(closes.ws_close),
+      http_client_ms = duration_millis(closes.http_client),
+      ws_close_ms = duration_millis(closes.ws_close),
       "charliebot_shutdown"
     );
   }
@@ -578,11 +579,6 @@ async fn bind(host: &str, port: u16) -> Result<TcpListener, String> {
   TcpListener::bind(address)
     .await
     .map_err(|error| format!("error while attempting to bind on address {address}: {error}"))
-}
-
-/// Milliseconds of a duration, rounded half to even.
-fn round_ms(duration: Duration) -> u64 {
-  (duration.as_secs_f64() * 1000.0).round_ties_even() as u64
 }
 
 /// SIGTERM and SIGINT, installed before startup. A signal during startup stops startup at the next safe point, before

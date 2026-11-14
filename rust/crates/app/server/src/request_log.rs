@@ -18,6 +18,7 @@ use axum::response::Response;
 use bytes::Bytes;
 use charliebot_compat::forwarded::first_address;
 use charliebot_compat::responses::Failure;
+use charliebot_core::timefmt::duration_millis;
 use http_body::{Frame, SizeHint};
 
 use crate::connection::ConnectionInfo;
@@ -36,8 +37,7 @@ struct PendingEvent {
 
 impl Drop for PendingEvent {
   fn drop(&mut self) {
-    // Round half to even.
-    let duration_ms = (self.started.elapsed().as_secs_f64() * 1000.0).round_ties_even() as u64;
+    let duration_ms = duration_millis(self.started.elapsed());
     match &self.error {
       None => tracing::info!(
         method = %self.method,

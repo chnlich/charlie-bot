@@ -277,6 +277,13 @@ function renderNewChildButton(s) {
 // (archived.js's [data-current-group] rewrite included). Only the menu
 // differs. It writes its own markup the way the star does: the frame renderer
 // takes no extra attributes.
+// The gear is the row's one always-visible control on a touch screen, and on a
+// pointer device it shows over the row's hover cover. Its glyph is then the
+// control's only mark, so it takes slate-400: on the open row's blue tint
+// rgb(26, 45, 88) slate-500 draws 2.82:1 and on the hovered row's cover
+// rgb(37, 49, 68) it draws 2.77:1, under the 3:1 floor WCAG 1.4.11 sets for a
+// component; slate-400 draws 5.23:1 and 5.14:1 there and 6.34:1 on the plain
+// row, the tone the row's time line keeps.
 function renderSettingsButton(s, rowMenu) {
   const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';
   return `<button onclick="event.preventDefault(); event.stopPropagation(); sidebarControl('openSessionRowMenu', this, '${s.id}')"
@@ -284,7 +291,7 @@ function renderSettingsButton(s, rowMenu) {
           data-current-group="${s.group ? escapeHtmlAttr(s.group) : ''}"
           data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
           data-profile="${escapeHtmlAttr(s.profile || '')}"${renderSessionMenuAttrs(s)}
-          class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0">
+          class="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-slate-300 transition-opacity flex-shrink-0">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
   </button>`;
 }

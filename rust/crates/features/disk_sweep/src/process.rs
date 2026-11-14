@@ -118,16 +118,26 @@ fn process_paths(proc_root: &Path) -> Result<(ProcessPaths, HashSet<u32>)> {
   Ok((processes, unreadable))
 }
 
+/// The path that a kernel-reported target names: the target without the kernel's ` (deleted)` marker, resolved
+/// through its symlinks. `None` for a relative target, which names no path without the process's own directory.
+fn reported_path(target: &[u8]) -> Option<PathBuf> {
+  let path = PathBuf::from(std::ffi::OsString::from_vec(strip_deleted(target).to_vec()));
+  path.is_absolute().then(|| paths::realpath(&path))
+}
+
+/// `target` without the ` (deleted)` marker that the kernel appends to a proc link and to a mapping pathname once
+/// the file is unlinked. An argument in `cmdline` is the raw argv bytes, so it never carries the marker.
+fn strip_deleted(target: &[u8]) -> &[u8] {
+  target.strip_suffix(b" (deleted)").unwrap_or(target)
+}
+
 fn read_link(path: &Path) -> Result<Option<PathBuf>> {
   let target = match fs::read_link(path) {
     Ok(target) => target,
     Err(error) if process_gone(&error) => return Ok(None),
     Err(error) => return Err(error).with_context(|| format!("reading process link {}", path.display())),
   };
-  let target_bytes = target.as_os_str().as_bytes();
-  let target_bytes = target_bytes.strip_suffix(b" (deleted)").unwrap_or(target_bytes);
-  let target = PathBuf::from(std::ffi::OsString::from_vec(target_bytes.to_vec()));
-  if target.is_absolute() { Ok(Some(paths::realpath(&target))) } else { Ok(None) }
+  Ok(reported_path(target.as_os_str().as_bytes()))
 }
 
 fn maps_paths(path: &Path) -> Result<Vec<PathBuf>> {
@@ -142,10 +152,8 @@ fn maps_paths(path: &Path) -> Result<Vec<PathBuf>> {
     let Some(target) = fields else {
       continue;
     };
-    let target = target.strip_suffix(b" (deleted)").unwrap_or(target);
-    let path = PathBuf::from(std::ffi::OsString::from_vec(target.to_vec()));
-    if path.is_absolute() {
-      result.push(paths::realpath(&path));
+    if let Some(path) = reported_path(target) {
+      result.push(path);
     }
   }
   Ok(result)
@@ -175,7 +183,7 @@ fn cmdline_paths(cmdline: &[u8], cwd: Option<&Path>) -> Vec<PathBuf> {
       values.push(&argument[index + 1..]);
     }
     for value in values {
-      let value = value.strip_suffix(b" (deleted)").unwrap_or(value);
+      let value = strip_deleted(value);
       let value = if value.starts_with(b"~") {
         match std::str::from_utf8(value) {
           Ok(value) => std::ffi::OsString::from(paths::expanduser(value)).into_vec(),

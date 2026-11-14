@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_claude_code::options::CLI_BINARY_KEY;
 use charliebot_core::config::{BackendOption, PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
@@ -26,6 +25,7 @@ use serde_yaml::Mapping;
 
 /// The id of the priority pool that the Auto-style tests of this crate name.
 pub const AUTO_POOL_ID: &str = "auto";
+const SYNTHETIC_LAUNCHER_FIELD: &str = "synthetic_launcher";
 
 /// The priority pool `auto` over `members`, each billed as a subscription, in config order.
 fn auto_pool(members: &[&str]) -> PoolConfig {
@@ -126,7 +126,7 @@ pub fn feature_context_with_launcher_backends(ids: &[&str]) -> (tempfile::TempDi
   let mut entries = vec![("synthetic", Mapping::new())];
   for id in ids {
     let mut fields = Mapping::new();
-    fields.insert(CLI_BINARY_KEY.into(), "/path/to/launcher".into());
+    fields.insert(SYNTHETIC_LAUNCHER_FIELD.into(), "/path/to/launcher".into());
     entries.push((*id, fields));
   }
   feature_context_with_entries(&entries, None)
@@ -345,7 +345,7 @@ fn synthetic_host_alias(fields: &Mapping) -> Result<Option<String>, String> {
 
 /// The synthetic entries name a launcher the way `cc-anthropic-compatible` entries do.
 fn synthetic_cli_binary(fields: &Mapping) -> Result<Option<String>, String> {
-  Ok(fields.get(CLI_BINARY_KEY).and_then(serde_yaml::Value::as_str).map(str::to_string))
+  Ok(fields.get(SYNTHETIC_LAUNCHER_FIELD).and_then(serde_yaml::Value::as_str).map(str::to_string))
 }
 
 /// The host verdicts the stub host readers serve, each with the profile home it belongs to, and each probe the stub

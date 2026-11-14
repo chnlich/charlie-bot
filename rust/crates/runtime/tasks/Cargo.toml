@@ -12,14 +12,13 @@ test-hooks = []
 # The task-execution stack that this crate's integration tests and `charliebot-improve` run against. Off by default;
 # only test dev-dependencies turn it on, so a production build compiles none of the fake backends, scripts or
 # temporary homes.
-test-fixtures = ["charliebot-core/test-support", "dep:charliebot-claude-code", "dep:tempfile", "dep:tower"]
+test-fixtures = ["charliebot-core/test-support", "dep:tempfile", "dep:tower"]
 
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
 charliebot-agents.workspace = true
 charliebot-compat.workspace = true
-charliebot-claude-code = { workspace = true, optional = true }
 charliebot-core.workspace = true
 charliebot-html.workspace = true
 charliebot-registry.workspace = true
@@ -45,6 +44,7 @@ uuid.workspace = true
 charliebot-anthropic-compatible.workspace = true
 charliebot-antigravity.workspace = true
 charliebot-charlie-code.workspace = true
+charliebot-claude-code.workspace = true
 charliebot-codex.workspace = true
 charliebot-devin.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }

@@ -27,7 +27,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-charliebot-claude-code.workspace = true
 charliebot-tasks = { workspace = true, features = ["test-hooks", "test-fixtures"] }
 nix.workspace = true
 tempfile.workspace = true

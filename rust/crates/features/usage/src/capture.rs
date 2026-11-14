@@ -117,7 +117,7 @@ pub(crate) fn capture_into_default_ledger(
 
 /// This host's name, as the ledger keys its capture times.
 pub(crate) fn host_name() -> anyhow::Result<String> {
-  nix::unistd::gethostname()?
+  charliebot_core::hostname::os_name()?
     .into_string()
     .map_err(|hostname| anyhow!("hostname is not valid UTF-8: {}", hostname.to_string_lossy()))
 }

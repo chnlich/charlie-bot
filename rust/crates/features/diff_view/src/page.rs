@@ -46,7 +46,8 @@ async fn diff_viewer(State(features): State<Arc<FeatureContext>>, parts: Parts) 
 }
 
 fn hostname() -> Result<String, Response> {
-  let name = nix::unistd::gethostname().map_err(|error| responses::internal_error("OSError", error.to_string()))?;
+  let name =
+    charliebot_core::hostname::os_name().map_err(|error| responses::internal_error("OSError", error.to_string()))?;
   name.into_string().map_err(|name| {
     responses::internal_error("UnicodeDecodeError", format!("host name is not UTF-8: {}", name.to_string_lossy()))
   })

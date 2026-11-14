@@ -10,6 +10,7 @@
 
 use std::sync::{LazyLock, OnceLock};
 
+use charliebot_core::credentials::API_KEY_FIELD;
 use regex::{Regex, RegexSet};
 
 /// The longest normalized cause line a signature carries, in characters.
@@ -276,7 +277,7 @@ fn is_noise(line: &str) -> bool {
 pub fn redact(text: &str) -> String {
   let mut text = text.to_string();
   let folded = text.to_ascii_lowercase();
-  if !text.is_ascii() || folded.contains("api_key") {
+  if !text.is_ascii() || folded.contains(API_KEY_FIELD) {
     text = API_KEY_REDACTION.replace_all(&text, "$1<redacted>").into_owned();
   }
   if !text.is_ascii() || folded.contains("bearer") {

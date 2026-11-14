@@ -1284,8 +1284,10 @@ const OWNER_TABLE: &[OwnerRow] = &[
 
 /// Plain config keys that the path matcher intentionally does not recognize. These must match an exact string literal
 /// outside their owner so a raw field name cannot return unnoticed.
-const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] =
-  &[OwnerRow { name: "credential", owner: "infra/core", hint: "Use `charliebot_core::config::CREDENTIAL_KEY`." }];
+const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
+  OwnerRow { name: "credential", owner: "infra/core", hint: "Use `charliebot_core::config::CREDENTIAL_KEY`." },
+  OwnerRow { name: "api_key", owner: "infra/core", hint: "Use `charliebot_core::credentials::API_KEY_FIELD`." },
+];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
 /// of them may be writing that output, so the owner rule cannot tell the two apart, and these stay unprotected.

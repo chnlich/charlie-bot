@@ -117,7 +117,7 @@ fn execute_graphql(body: &[u8], endpoint: &str, home: &Path) -> Result<Vec<u8>, 
 fn read_api_key(home: &Path) -> Result<String, CliExit> {
   let path = home.join(config::CREDENTIALS_FILENAME);
   let loaded = credentials::load_credentials(home).map_err(|_| credential_failure(&path))?;
-  loaded.require("linear", "api_key").map_err(|_| credential_failure(&path))
+  loaded.require("linear", credentials::API_KEY_FIELD).map_err(|_| credential_failure(&path))
 }
 
 fn credential_failure(path: &Path) -> CliExit {

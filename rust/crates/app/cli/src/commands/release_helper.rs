@@ -1044,7 +1044,7 @@ fn backend_option(args: &[String]) -> Result<i32, String> {
 fn credential_api_key(credentials_path: &str, section: &str) -> Result<Option<String>, String> {
   let home = Path::new(credentials_path).parent().ok_or_else(|| format!("{credentials_path} has no directory"))?;
   let credentials = credentials::load_credentials(home).map_err(|error| error.to_string())?;
-  Ok(credentials.get(section, "api_key").map(credentials::CredentialValue::value_str))
+  Ok(credentials.get(section, credentials::API_KEY_FIELD).map(credentials::CredentialValue::value_str))
 }
 
 fn credential_key(args: &[String]) -> Result<i32, String> {

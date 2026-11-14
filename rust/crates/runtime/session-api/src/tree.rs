@@ -1,5 +1,7 @@
 //! Revision-bound task-tree pages used by the session listing route.
 
+use std::sync::{Arc, Mutex};
+
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use charliebot_core::text_repr;
@@ -40,6 +42,20 @@ struct TreeCursor {
   i: String,
 }
 
+/// The last page this route rendered, keyed by the store's own page allocation.
+///
+/// The store serves a repeat page as the same `Arc` of rows and rebuilds it when a history moved, so a matching
+/// pointer names the page this body was rendered from. A page is a hundred rows, and the transport deflates every
+/// body it sends: rendering and serializing them again on each repeat request costs more than the identity check that
+/// proves the page still holds.
+struct TreePageBody {
+  rows: Arc<Vec<TaskTreeRow>>,
+  revision: String,
+  body: Vec<u8>,
+}
+
+static TREE_PAGE_BODY: Mutex<Option<TreePageBody>> = Mutex::new(None);
+
 /// Return one revision-bound keyset page from the task tree.
 pub(crate) fn tree_page(
   store: &Store,
@@ -70,17 +86,25 @@ pub(crate) fn tree_page(
     after.as_ref().map(|(time, id)| (*time, id.as_str())),
     limit,
   )?;
+  if let Some(cached) = TREE_PAGE_BODY.lock().expect("tree page body mutex is not poisoned").as_ref()
+    && Arc::ptr_eq(&cached.rows, &page.rows)
+    && cached.revision == revision
+  {
+    return Ok(cached.body.clone());
+  }
   let mut last = None;
   let mut items = Vec::with_capacity(page.rows.len());
-  for row in &page.rows {
+  for row in page.rows.iter() {
     let meta = index.meta(&row.session_id)?;
     last = Some((meta.created_at, meta.id.clone()));
     items.push(session_row(meta, row));
   }
   let next_cursor =
     if page.has_more { last.map(|(created_at, id)| encode_cursor(&revision, created_at, &id)) } else { None };
-  let page = TreePage { items, next_cursor };
-  Ok(serde_json::to_vec(&page).expect("a task-tree page serializes into a buffer"))
+  let body = serde_json::to_vec(&TreePage { items, next_cursor }).expect("a task-tree page serializes into a buffer");
+  *TREE_PAGE_BODY.lock().expect("tree page body mutex is not poisoned") =
+    Some(TreePageBody { rows: Arc::clone(&page.rows), revision, body: body.clone() });
+  Ok(body)
 }
 
 fn session_row<'a>(meta: &'a SessionMetadata, row: &'a TaskTreeRow) -> SessionRow<'a> {
@@ -121,6 +145,22 @@ mod tests {
   use crate::test_support::{create_node, feature_context};
   use charliebot_store::metadata::TaskProfile;
   use serde_json::Value;
+
+  #[tokio::test]
+  async fn a_repeat_tree_page_body_is_rerendered_when_a_row_moves() {
+    let (_home, features) = feature_context();
+    let root = create_node(&features.store, "tree-body-root", None, TaskProfile::Manager).await;
+    let child = create_node(&features.store, "tree-body-child", Some(&root.id), TaskProfile::Manager).await;
+    let body = || tree_page(&features.store, Some(&root.id), true, 100, None).unwrap();
+
+    let first = body();
+    assert_eq!(rendered_page(&first)["items"][0]["task_state"], "open");
+    assert_eq!(body(), first, "a repeat page answers with the body the memo holds");
+
+    features.store.append_chat_event(&child.id, json!({"type": "task_closed", "outcome": "completed"})).await.unwrap();
+    let moved = rendered_page(&body());
+    assert_eq!(moved["items"][0]["task_state"], "completed", "a moved row renders a new body");
+  }
 
   #[tokio::test]
   async fn a_tree_page_builds_one_revision_index_and_visits_each_row_descendant_once() {

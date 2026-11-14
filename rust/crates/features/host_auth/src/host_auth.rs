@@ -223,7 +223,7 @@ fn new_entry(alias: &str, hostname: &str) -> Map<String, Value> {
   entry
 }
 
-/// Rebuild the host list in config order. The config alone decides the set; an existing entry keeps
+/// Rebuild the host list in config order. The config alone decides the set. An existing entry keeps
 /// its history and takes the config's `HostName`.
 fn merge_hosts(state: &mut State, host_list: &[(String, String)]) -> anyhow::Result<()> {
   let mut previous: HashMap<String, Map<String, Value>> = HashMap::new();
@@ -267,7 +267,7 @@ fn due_indices(
   Ok(due)
 }
 
-/// The ssh config's collectable hosts. A missing file holds none; the file is read as UTF-8.
+/// The ssh config's collectable hosts. A missing file holds none. The file is read as UTF-8.
 fn read_config_hosts(path: &Path) -> anyhow::Result<Vec<(String, String)>> {
   match fs::read_to_string(path) {
     Ok(text) => ssh_config::parse_hosts(&text),
@@ -412,7 +412,7 @@ pub async fn record_host_renewal(state_path: &Path, alias: &str, renewed_at: Off
 }
 
 /// The process-wide round slot: a manual round, the poller's tick and the cron gate's write-back never change the state
-/// file together. `claim` takes it without waiting; `wait` waits while a round holds it. The slot is released when the
+/// file together. `claim` takes it without waiting. `wait` waits while a round holds it. The slot is released when the
 /// guard drops, on every path.
 static ROUND_SLOT: Semaphore = Semaphore::const_new(1);
 
@@ -567,7 +567,7 @@ mod tests {
     };
 
     let state = run_round_with(false, &state_path, &config, &probe).await.expect("the round runs");
-    // The held host probed a minute ago is inside its backoff; the new host is always due.
+    // The held host probed a minute ago is inside its backoff. The new host is always due.
     assert_eq!(*probed.lock().expect("the probe log"), ["gpu-box-1"]);
     let hosts = host_entries(&state).expect("the hosts read");
     assert_eq!(hosts[0]["alias"], json!("login-a"));

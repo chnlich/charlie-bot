@@ -94,8 +94,9 @@ function renderUserTextHtml(text) {
     + '</div>';
 }
 
-// A clamp hides text exactly when its content is taller than its box. A message the reader opened stays open, so only a
-// folded clamp is decided; a clamp that left the page is dropped from the observer.
+// A clamp hides text exactly when its content is taller than its box. Only a folded clamp is decided, so opening a
+// message keeps the verdict that showed its control: the resize that unclamping causes re-enters here with the fold
+// open, and the return below leaves data-overflows alone. A clamp that left the page is dropped from the observer.
 function fitUserMessageClamp(clamp, sizes) {
   if (!clamp.isConnected) {
     sizes.unobserve(clamp);
@@ -156,6 +157,7 @@ Chat.wire({
 }, {
   normalizeUserMessage,
   registerInputMode,
+  fitUserMessageClamp,
 });
 
 })();

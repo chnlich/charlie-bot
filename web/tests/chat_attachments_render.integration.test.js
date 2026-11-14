@@ -138,6 +138,33 @@ test('renderUserMessageBubble wraps every text in a fold that starts clamped and
   }
 });
 
+test('the clamp verdict is kept while the message is open, so its control stays', () => {
+  const context = loadChatScript();
+  const sizes = {unobserve() {}};
+  const clampOf = (fold, scrollHeight, clientHeight) => ({
+    isConnected: true,
+    parentElement: fold,
+    scrollHeight,
+    clientHeight,
+  });
+
+  const folded = {dataset: {folded: 'true', overflows: 'false'}};
+  context.Chat.fitUserMessageClamp(clampOf(folded, 880, 200), sizes);
+  assert.equal(folded.dataset.overflows, 'true');
+
+  // Opening the message unclamps it: the observer re-enters with equal heights, and that must not take the
+  // verdict away, because the control that folds the message again depends on it.
+  const open = {dataset: {folded: 'false', overflows: 'true'}};
+  context.Chat.fitUserMessageClamp(clampOf(open, 880, 880), sizes);
+  assert.equal(open.dataset.overflows, 'true');
+
+  const detached = {dataset: {folded: 'true', overflows: 'true'}};
+  let unobserved = false;
+  context.Chat.fitUserMessageClamp({isConnected: false, parentElement: detached}, {unobserve() { unobserved = true; }});
+  assert.equal(detached.dataset.overflows, 'true');
+  assert.equal(unobserved, true);
+});
+
 test('renderUserMessageBubble shows a registered input mode\'s badge, and none for a typed message', () => {
   const context = loadChatScript();
   context.Chat.registerInputMode('voice', '&#127908; Voice');

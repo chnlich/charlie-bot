@@ -6,11 +6,11 @@
 // message, the mic's backend tooltip, and the ⋯ menu entry phones use to pick
 // a backend.
 const VOICE_INPUT_MODE = 'voice';
-// Where the caret's choice lives; the server default backs an unknown or
+// Where the caret's choice lives. The server default backs an unknown or
 // unavailable stored id.
 const VOICE_BACKEND_STORAGE_KEY = 'charliebot-voice-backend';
 // On phones the caret is hidden and the composer's ⋯ menu carries this entry
-// instead; it opens the same menu the caret does.
+// instead. The entry opens the same menu the caret does.
 const VOICE_OVERFLOW_MENU_ID = 'overflow-menu';
 const VOICE_OVERFLOW_ENTRY_ID = 'voice-backend-menu-entry';
 
@@ -18,7 +18,7 @@ const VOICE_OVERFLOW_ENTRY_ID = 'voice-backend-menu-entry';
 // unavailableReason) with the server's VOICE_DEFAULT_BACKEND. The user's pick
 // lives in localStorage.
 function selectedVoiceBackend() {
-  // The stored choice wins while it exists and is configured; an unknown or
+  // The stored choice wins while it exists and is configured. An unknown or
   // unavailable stored id falls back to the server default (a typo there fails
   // config load). The stored id stays put, so a credential that arrives later
   // re-activates it on the next page load.
@@ -36,7 +36,7 @@ function updateVoiceMicTitle() {
 
 // One promise per key: a second click while the module travels joins the first
 // load. The recording module registers the caret's menu and the run handlers.
-// The overlay's rules come first, so the overlay is styled when it appears; a
+// The overlay's rules come first, so the overlay is styled when it appears. A
 // stylesheet that fails still lets the module load.
 function loadVoiceInput() {
   return loadPageStyles('voice', ['/static/features/voice/voice-overlay.css'])
@@ -53,7 +53,7 @@ function toggleVoiceBackend() {
 }
 
 // The composer's ⋯ menu entry, created by this package so the core template
-// names nothing it defines. Opening it closes the ⋯ menu first; it drives the
+// names nothing it defines. Opening it closes the ⋯ menu first. It drives the
 // one backend menu, which belongs to the recording module.
 function ensureVoiceBackendEntry() {
   const overflow = document.getElementById(VOICE_OVERFLOW_MENU_ID);

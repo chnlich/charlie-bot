@@ -2108,10 +2108,6 @@ const UI_TEXT_EXEMPTIONS: &[UiTextExemption] = &[
     file: "rust/crates/runtime/user_text_checks/src/lib.rs",
     reason: "Rule-defined terms a user may write in a reply; the checker reports them to the agent, not the browser.",
   },
-  UiTextExemption {
-    file: "rust/crates/features/taste/src/store.rs",
-    reason: "The default reason stored for a taste row, which a model reads back; no browser shows it.",
-  },
 ];
 
 /// One line of a surface that holds a Han, kana or Hangul letter.

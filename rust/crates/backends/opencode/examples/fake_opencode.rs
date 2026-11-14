@@ -11,8 +11,8 @@
 //! and `run_lines` and `run_exit` script a one-shot run. FAKE_OC_VERSION sets the version that /api/info reports.
 //! Every request is appended to the FAKE_OC_LOG file as one JSON line, tagged with the serving process's pid.
 //!
-//! The loaded locations are the directories a session create, a shell list or a model list named; GET
-//! /api/debug/location lists them and DELETE /api/debug/location unloads one.
+//! The loaded locations are the directories a session create, a shell list or a model list named. GET
+//! /api/debug/location lists them. DELETE /api/debug/location unloads one.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};

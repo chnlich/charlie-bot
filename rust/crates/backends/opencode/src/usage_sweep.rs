@@ -275,7 +275,7 @@ mod tests {
 
   #[test]
   fn vacuum_refuses_past_a_live_writer_without_force() {
-    // A vacuum with a live writer is refused and touches nothing; with force it runs. The writer count skips this
+    // A vacuum with a live writer is refused and touches nothing. With force it runs. The writer count skips this
     // process's own entry.
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");

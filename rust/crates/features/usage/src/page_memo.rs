@@ -48,7 +48,8 @@ struct Entry {
 }
 
 /// The file one ledger path named when the memo opened it. A path that names another file — the ledger deleted and
-/// created again under the running server — holds a ledger the memo's connection does not read, so the memo reopens.
+/// created again under the running server — holds a ledger the memo's connection does not read. The memo reopens its
+/// connection for that path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileId {
   device: u64,

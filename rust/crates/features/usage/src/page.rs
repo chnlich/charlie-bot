@@ -51,7 +51,7 @@ pub fn matches(path: &str) -> bool {
 /// The page's last finished body, kept while the ledger's version and the page's inputs hold their value.
 static PAGE_MEMO: LazyLock<Mutex<PageMemo>> = LazyLock::new(|| Mutex::new(PageMemo::default()));
 
-/// The page from the ledger's rows. The read and the render run off the async runtime, in a blocking thread, and a
+/// The page from the ledger's rows. The read and the render run off the async runtime, in a blocking thread. A
 /// repeat view of the same ledger version answers with the body the memo holds.
 async fn token_usage_viewer(State(features): State<Arc<FeatureContext>>, request: Parts) -> Response {
   let rendered = tokio::task::spawn_blocking(move || view(&features, &request))
@@ -122,8 +122,8 @@ impl From<anyhow::Error> for PageFailure {
 }
 
 /// What `read_ledger` returns: the all-time rows, the last Pacific week and the week before it, each source's native
-/// start, the last capture of this host, the instant of the read with the week it names, the time the read took, and
-/// the config the rows' charlie-bot accounts attribute against.
+/// start, and the last capture of this host. It also carries the instant of the read with the week it names, the time
+/// the read took, and the config the rows' charlie-bot accounts attribute against.
 pub(crate) struct LedgerRead {
   pub now: Timestamp,
   pub week: Week,
@@ -154,8 +154,8 @@ fn read_ledger_at(features: &FeatureContext, now: Timestamp) -> anyhow::Result<L
   Ok(read)
 }
 
-/// The page's read through a ledger connection the caller holds open: the all-time rows, the last Pacific week and the
-/// week before it, each source's native start, and the last capture of this host.
+/// The page's read through a ledger connection the caller holds open. It returns the all-time rows, the last Pacific
+/// week and the week before it, each source's native start, and the last capture of this host.
 fn read_in_ledger(
   ledger: &mut UsageLedger,
   now: Timestamp,

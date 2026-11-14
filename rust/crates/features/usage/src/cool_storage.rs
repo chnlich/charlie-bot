@@ -2,10 +2,10 @@
 //! run with no dry run, no session scope and no vacuum.
 //!
 //! A session is cold when its metadata reads `archived` and its `updated_at` is at least `MIN_IDLE_DAYS` old. The sweep
-//! deletes the raw transport files of cold sessions (an allowlist of names inside two directory shapes), then lets each
-//! registered usage source delete its own store through `UsageSourceImpl::sweep`. A real run first captures this host's
-//! token usage into the usage ledger, and a capture error aborts before any deletion. A path that cannot be read logs
-//! or reads as absent, and the run goes on. Metadata the loader or the cold rule cannot read fails the run.
+//! deletes the raw transport files of cold sessions (an allowlist of names inside two directory shapes). It then lets
+//! each registered usage source delete its own store through `UsageSourceImpl::sweep`. A real run first captures this
+//! host's token usage into the usage ledger, and a capture error aborts before any deletion. A path that cannot be
+//! read logs or reads as absent, and the run goes on. Metadata the loader or the cold rule cannot read fails the run.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -95,7 +95,7 @@ pub fn run_cool_sweep(
     categories.extend(swept.categories);
   }
   // A tracing field name is fixed at compile time, so each category
-  // that the registered sources report has a field here, and a category without one is missing from the log line.
+  // that the registered sources report has a field here. A category without one is missing from the log line.
   tracing::info!(
     dry_run = false,
     session_id = ?scope.session_id,

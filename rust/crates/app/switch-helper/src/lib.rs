@@ -3,9 +3,9 @@
 //!
 //! The switch script runs the `charliebot` binary of the release it reads with (see the script's header). Every
 //! helper prints exactly what the switch compares and exits with the code it branches on. A helper that matched
-//! prints nothing and exits 0; one that did not match exits 1. The nine names each take the arguments the switch
+//! prints nothing and exits 0. One that did not match exits 1. The nine names each take the arguments the switch
 //! passes. `reattach REPO SHA BACKEND_TYPE` is an operator's check of one backend type's re-attachment declaration at
-//! a build; the switch does not call it.
+//! a build. The switch does not call it.
 
 use std::ffi::OsString;
 
@@ -18,7 +18,7 @@ mod process;
 mod scan;
 
 /// Run one switch helper. `--help` exits 0 so that the switch can tell whether a release's binary carries the
-/// subcommand at all; an unknown name is a usage error.
+/// subcommand at all. An unknown name is a usage error.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let Some(name) = args.first().and_then(|argument| argument.to_str()) else {
     return Err(CliExit::usage(common::USAGE));

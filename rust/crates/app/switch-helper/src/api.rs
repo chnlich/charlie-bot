@@ -68,8 +68,8 @@ fn newest_run_values(page: &Value, fields: &[String]) -> Result<Vec<String>, Cli
 }
 
 /// `launch-has LAUNCH_LOG EVENT [KEY=VALUE...]`: exit 0 when a complete line of the log is an EVENT record whose
-/// fields include every KEY=VALUE, and 1 otherwise. The log holds the server's lines in either form `logline` reads;
-/// a line of another event never matches.
+/// fields include every KEY=VALUE, and 1 otherwise. The log holds the server's lines in either form `logline` reads.
+/// A line of another event never matches.
 pub fn launch_has(args: &[OsString]) -> Result<(), CliExit> {
   let (path, event, pairs) = match args {
     [path, event, pairs @ ..] => (path, event, pairs),
@@ -195,7 +195,7 @@ fn run_dir(home: &str, session_id: &str, run_id: &str) -> PathBuf {
 }
 
 /// `run-error HOME SESSION RUN`: the message of the last error event in the run's event log, with its whitespace
-/// collapsed; empty when the run logged no error.
+/// collapsed, and empty when the run logged no error.
 pub fn run_error(args: &[OsString]) -> Result<(), CliExit> {
   let [home, session_id, run_id] = exact::<3>(args)?;
   let path = run_dir(&home, &session_id, &run_id).join(RUN_EVENTS_NAME);
@@ -208,7 +208,7 @@ pub fn run_error(args: &[OsString]) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The last error event's message, with its whitespace collapsed; `None` when no error event exists.
+/// The last error event's message, with its whitespace collapsed, and `None` when no error event exists.
 fn last_error_message(events: &[Value]) -> Option<String> {
   let last = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ERROR))?;
   Some(last.get("message").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "))
@@ -283,7 +283,7 @@ fn first_command(events: &[Value]) -> (String, String) {
   (cwd.unwrap_or_default(), kind.unwrap_or_default().to_string())
 }
 
-/// Keeps the kind of the first tool result it is given; later results change nothing.
+/// Keeps the kind of the first tool result it is given. Later results change nothing.
 fn record_first_result(kind: &mut Option<&'static str>, tool: &str, is_error: bool) {
   if kind.is_none() {
     *kind = Some(match (tool, is_error) {
@@ -299,7 +299,7 @@ fn is_error(result: &Value) -> bool {
   result.get("is_error").is_some_and(text_repr::is_truthy)
 }
 
-/// The content blocks of an event's message; empty when the message holds no list.
+/// The content blocks of an event's message, and empty when the message holds no list.
 fn content_blocks(event: &Value) -> &[Value] {
   event.pointer(event_types::MESSAGE_CONTENT_POINTER).and_then(Value::as_array).map_or(&[], Vec::as_slice)
 }

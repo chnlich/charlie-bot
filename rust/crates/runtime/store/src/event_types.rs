@@ -1,5 +1,6 @@
 //! Chat event values and the live event-log identity shared by store readers.
 
+use std::ffi::{CStr, CString};
 use std::fs;
 use std::os::fd::AsFd;
 use std::path::Path;
@@ -53,6 +54,12 @@ impl FileIdentity {
   /// The read is the same `fstatat` the path form makes. Anchoring it on a directory handle means a
   /// page's hundred identity reads walk only the session's own components, not the home's whole path.
   pub(crate) fn read_at(dir: &impl AsFd, relative: &str) -> StoreResult<Option<Self>> {
+    let path = CString::new(relative).map_err(|_| StoreError::new(format!("{relative}: the path holds a NUL byte")))?;
+    Self::read_at_cstr(dir, &path)
+  }
+
+  /// The identity of the file at `relative`, for a scan that builds its paths in one reused buffer.
+  pub(crate) fn read_at_cstr(dir: &impl AsFd, relative: &CStr) -> StoreResult<Option<Self>> {
     match fstatat(dir, relative, AtFlags::empty()) {
       Ok(stat) => Ok(Some(Self {
         inode: stat.st_ino,
@@ -60,7 +67,7 @@ impl FileIdentity {
         mtime_ns: timefmt::file_time_ns(stat.st_mtime, stat.st_mtime_nsec),
       })),
       Err(Errno::ENOENT) => Ok(None),
-      Err(error) => Err(StoreError::new(format!("{relative}: {error}"))),
+      Err(error) => Err(StoreError::new(format!("{}: {error}", relative.to_string_lossy()))),
     }
   }
 }

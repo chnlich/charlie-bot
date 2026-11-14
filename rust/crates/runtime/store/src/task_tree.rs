@@ -1,6 +1,7 @@
 //! Durable task nodes, fact-derived tree state, and delegation authorization.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::CStr;
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -2299,7 +2300,7 @@ impl Store {
       Ok(dir) => dir,
       Err(error) => return Err(path_error(&sessions_dir, error)),
     };
-    let mut relative = String::with_capacity(96);
+    let mut relative = Vec::with_capacity(96);
     for (name, input) in names.iter().zip(expected) {
       if name != &input.session_id {
         return Ok(false);
@@ -2416,26 +2417,37 @@ struct TreeInputValues {
 /// offset, so both of them are read here: an archive write moves this input too.
 ///
 /// Both reads resolve from the open sessions directory, so a scan over the home walks a session's own components
-/// instead of the home's whole prefix for each file, and `relative` is the one path buffer the scan reuses.
-fn tree_input_values(sessions_dir: &fs::File, session_id: &str, relative: &mut String) -> StoreResult<TreeInputValues> {
+/// instead of the home's whole prefix for each file, and `relative` is the one path buffer the scan reuses: each
+/// path is overwritten in place and ends in the NUL byte the stat call reads, so a session costs no path allocation.
+fn tree_input_values(
+  sessions_dir: &fs::File,
+  session_id: &str,
+  relative: &mut Vec<u8>,
+) -> StoreResult<TreeInputValues> {
   relative.clear();
-  relative.push_str(session_id);
-  relative.push('/');
-  relative.push_str(METADATA_FILE_NAME);
-  let metadata = FileIdentity::read_at(sessions_dir, relative)
+  relative.extend_from_slice(session_id.as_bytes());
+  relative.push(b'/');
+  relative.extend_from_slice(METADATA_FILE_NAME.as_bytes());
+  let metadata = FileIdentity::read_at_cstr(sessions_dir, terminated(relative))
     .ok()
     .flatten()
     .map(|identity| (identity.mtime_ns as i64, identity.size as i64));
   relative.clear();
-  relative.push_str(session_id);
-  relative.push('/');
-  relative.push_str(layout::DATA_DIR_NAME);
-  relative.push('/');
-  relative.push_str(layout::CHAT_EVENTS_FILE_NAME);
-  Ok(TreeInputValues { metadata, history: FileIdentity::read_at(sessions_dir, relative)? })
+  relative.extend_from_slice(session_id.as_bytes());
+  relative.push(b'/');
+  relative.extend_from_slice(layout::DATA_DIR_NAME.as_bytes());
+  relative.push(b'/');
+  relative.extend_from_slice(layout::CHAT_EVENTS_FILE_NAME.as_bytes());
+  Ok(TreeInputValues { metadata, history: FileIdentity::read_at_cstr(sessions_dir, terminated(relative))? })
 }
 
-fn read_tree_input(sessions_dir: &fs::File, session_id: &str, relative: &mut String) -> StoreResult<TreeIndexInput> {
+/// The path buffer as the C string a stat call reads: `path` holds no NUL byte, and this one ends it.
+fn terminated(path: &mut Vec<u8>) -> &CStr {
+  path.push(0);
+  CStr::from_bytes_with_nul(path).expect("a session path holds no NUL byte before its end")
+}
+
+fn read_tree_input(sessions_dir: &fs::File, session_id: &str, relative: &mut Vec<u8>) -> StoreResult<TreeIndexInput> {
   let values = tree_input_values(sessions_dir, session_id, relative)?;
   Ok(TreeIndexInput { session_id: session_id.to_string(), metadata: values.metadata, history: values.history })
 }
@@ -2471,7 +2483,7 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
   };
   // The inputs are read before any session's content, never after it: a write that lands between the two then moves an
   // input past the value recorded here, so the next refresh rebuilds instead of renewing an index of older content.
-  let mut relative = String::with_capacity(96);
+  let mut relative = Vec::with_capacity(96);
   let mut inputs = Vec::with_capacity(names.len());
   for name in &names {
     if should_stop() {

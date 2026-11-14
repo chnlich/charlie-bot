@@ -394,7 +394,10 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   # refspec writes the ref this prefix owns, whatever fetch configuration the
   # clone carries, and --no-write-fetch-head leaves the shared FETCH_HEAD alone.
   main_ref="refs/improve/inflight/${own_prefix//[^A-Za-z0-9._-]/_}"
-  origin_url=$(git -C "$main_root" remote get-url origin) || {
+  # The URL is read as configured, because `git remote get-url` expands a `url.*.insteadOf`
+  # mirror to the path it names, and that path carries no GitHub repository. The fetch below
+  # follows the mirror all the same.
+  origin_url=$(git -C "$main_root" config --get remote.origin.url) || {
     printf 'cannot read the origin of %s\n' "$main_root" >&2
     exit 1
   }

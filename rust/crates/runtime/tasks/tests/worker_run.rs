@@ -35,7 +35,7 @@ use charliebot_tasks::prompts::{LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
 use charliebot_tasks::{cold_read, handoff, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, CLI_BINARY_FIELD, ROTATION_POOL_ID, Scripts, Stack, TOKEN_FIELD, cold_read_body,
+  BACKEND_ID, BACKEND_TYPE, CLI_BINARY_KEY, ROTATION_POOL_ID, Scripts, Stack, TOKEN_FIELD, cold_read_body,
   init_repo_with_origin, last_child_report, post_delegate, result_script, scripted_type, settle_until, synthetic_git,
   synthetic_run, write_sitrep,
 };
@@ -313,7 +313,7 @@ async fn a_repo_work_run_on_a_launcher_backend_prepares_no_worktree_and_names_no
   let mut option = scripts.option(BACKEND_ID, BACKEND_TYPE);
   option
     .type_fields
-    .insert(YamlValue::String(CLI_BINARY_FIELD.to_string()), YamlValue::String("/path/to/launcher".to_string()));
+    .insert(YamlValue::String(CLI_BINARY_KEY.to_string()), YamlValue::String("/path/to/launcher".to_string()));
   let stack = Stack::start_with(vec![option], vec![BACKEND_ID.to_string()]).await?;
   stack.write_access_key()?;
   let process_guard = StackProcessGuard::new(&stack);

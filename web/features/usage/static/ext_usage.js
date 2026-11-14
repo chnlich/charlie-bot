@@ -268,7 +268,7 @@ function _formatCreditsBalance(balance) {
 }
 
 // The metered-credits segment: label + rounded, thousands-grouped remaining
-// balance. Empty windows give it the no-cap marker's place; windows present
+// balance. Empty windows give it the no-cap marker's place. Windows present
 // put it after the buckets and before the state badge.
 function _buildCreditsGroup(row, credits) {
   const group = _el('div', 'flex items-center gap-1.5 text-slate-400');
@@ -284,7 +284,7 @@ function _buildCreditsGroup(row, credits) {
 }
 
 // The plan segment: label + the plan string the provider named. It follows the
-// credits group and the window buckets; the no-cap marker names the plan itself
+// credits group and the window buckets. The no-cap marker names the plan itself
 // when it takes that place.
 function _buildPlanGroup(row, plan) {
   const group = _el('div', 'flex items-center gap-1.5 text-slate-400');
@@ -356,7 +356,7 @@ function _buildRow(key, providerData) {
   row.appendChild(label);
   if (providerData.login_required) {
     // The account pool flagged this login (empty credential store or a failed
-    // refresh); the chat notice names no account, so the directory shows here.
+    // refresh). The chat notice names no account, so the directory shows here.
     const note = _el('span', 'italic text-amber-400');
     note.setAttribute('data-field', 'login-required');
     note.textContent = 're-login needed: ' + providerData.login_required;
@@ -377,7 +377,7 @@ function _buildRow(key, providerData) {
   if (creditsMetered) {
     _buildCreditsGroup(row, providerData.credits);
   }
-  // The no-cap marker already names the plan when it shows; every other row
+  // The no-cap marker already names the plan when it shows. Every other row
   // carries the plan in its own segment.
   if (providerData.plan_type && !noCap) {
     _buildPlanGroup(row, providerData.plan_type);
@@ -431,7 +431,7 @@ function _buildRow(key, providerData) {
 // The collapsed summary's worst reading per account: the maximum utilization
 // across every window the provider reported — scoped windows included — with
 // expired and unknown readings excluded. An account whose readings all lose to
-// those filters shows "—"; the account-level states mirror _buildRow's
+// those filters shows "—". The account-level states mirror _buildRow's
 // short-circuits: pending → loading, error → error, no windows → no cap. A
 // reported plan type follows the reading, so a plan change is visible in the
 // folded strip.
@@ -458,7 +458,7 @@ function _summaryReading(providerData) {
 }
 
 // One segment per provider for the collapsed summary. The account with the
-// highest _summaryReading percentage keeps the segment; a provider without a
+// highest _summaryReading percentage keeps the segment. A provider without a
 // percentage keeps its first account's credit or state reading. Segments run
 // tightest percentage first, then the readings without a percentage in payload
 // order. A segment standing for several accounts carries ×N after its name.
@@ -505,7 +505,7 @@ function _buildSummaryRow(providers) {
   for (const segment of _summarySegments(providers)) {
     if (!first) {
       // The account boundary in the collapsed summary. slate-400 renders 6.0:1 on the
-      // strip; slate-700's 1.48:1 hides the dot and runs two accounts into one phrase.
+      // strip. slate-700's 1.48:1 hides the dot and runs two accounts into one phrase.
       const sep = _el('span', 'text-slate-400');
       sep.textContent = '·';
       row.appendChild(sep);
@@ -566,7 +566,7 @@ function renderExtUsage(data) {
 
 registerWsMessageHandler('ext_usage', renderExtUsage, {advancesCursor: true, sidebar: true});
 
-// The 60s repaint recomputes each countdown and reading age from the clock; an
+// The 60s repaint recomputes each countdown and reading age from the clock. An
 // expiry change arrives with the server's next emit.
 function _refreshResetTimers() {
   for (const entry of _extUsageRows) {
@@ -580,8 +580,8 @@ function _refreshResetTimers() {
 }
 
 function startExtUsage() {
-  // Evaluate the collapsed default exactly once: a recorded preference wins;
-  // a missing or invalid one folds the strip to its summary line at every
+  // Evaluate the collapsed default exactly once: a recorded preference wins.
+  // A missing or invalid one folds the strip to its summary line at every
   // width. The default is never written back to storage.
   const stored = _readCollapsedPreference();
   _extUsageCollapsed = stored !== null ? stored : true;

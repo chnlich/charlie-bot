@@ -129,7 +129,7 @@ async fn list_branches(State(state): State<Arc<GitState>>, Query(query): Query<P
   if repo_path.file_name() == Some(OsStr::new(".git")) {
     repo_path = parent_of(&repo_path);
   }
-  let lines = match branch_lines(&state, &repo_path).await {
+  let lines = match state.branch_lines(&repo_path).await {
     Ok(lines) => lines,
     Err(response) => return response,
   };
@@ -152,7 +152,7 @@ async fn list_branches(State(state): State<Arc<GitState>>, Query(query): Query<P
 
 /// `list_repos`: the discovered repositories as `{"label", "path"}`, sorted by label.
 async fn list_repos(State(state): State<Arc<GitState>>) -> Response {
-  let cfg = match config(&state) {
+  let cfg = match state.config() {
     Ok(cfg) => cfg,
     Err(response) => return response,
   };
@@ -170,7 +170,7 @@ async fn list_repos(State(state): State<Arc<GitState>>) -> Response {
 async fn diff_files(State(state): State<Arc<GitState>>, Query(query): Query<Params>) -> Response {
   let mut errors = Vec::new();
   match take_range(&query, &mut errors) {
-    Some(range) => answer(manifest_answer(&state, &range).await),
+    Some(range) => answer(state.manifest_answer(&range).await),
     None => validation::response(&errors),
   }
 }
@@ -184,7 +184,7 @@ async fn diff_file(State(state): State<Arc<GitState>>, Query(query): Query<Param
   let old_path = params::optional_text(&query, "old_path");
   match (range, path, force) {
     (Some(range), Some(path), Some(force)) => {
-      answer(file_answer(&state, &range, &path, old_path.as_deref(), force).await)
+      answer(state.file_answer(&range, &path, old_path.as_deref(), force).await)
     }
     _ => validation::response(&errors),
   }
@@ -200,7 +200,7 @@ async fn diff_lines(State(state): State<Arc<GitState>>, Query(query): Query<Para
   let end = take(params::uint(&query, "end", 1), &mut errors);
   match (range, path, side, start, end) {
     (Some(range), Some(path), Some(side), Some(start), Some(end)) => {
-      answer(lines_answer(&state, &range, &path, side, start, end).await)
+      answer(state.lines_answer(&range, &path, side, start, end).await)
     }
     _ => validation::response(&errors),
   }
@@ -218,121 +218,116 @@ fn take_range(query: &Params, errors: &mut Vec<validation::FieldError>) -> Optio
   }
 }
 
-async fn manifest_answer(state: &GitState, range: &Range) -> Result<Value, Response> {
-  let cfg = config(state)?;
-  let repo_path = resolve_repo(&range.repo, &cfg, &state.registry)?;
-  let shas = git::resolve_commits(&repo_path, &[range.base.as_str(), range.head.as_str()]).await?;
-  let [base_sha, head_sha] = two_shas(shas)?;
-  let key = ManifestKey {
-    repo: paths::display(&repo_path),
-    base_sha,
-    head_sha: head_sha.clone(),
-    mode: range.mode,
-    attributes: refs::attributes_signature(&repo_path).map_err(io_error)?,
-  };
-  let manifest = match state.manifests.get(&key) {
-    Some(manifest) => manifest,
-    None => {
-      // The range is built from the refs as given, as `diff_files` builds it.
-      let spec = manifest::range_spec(&range.base, &range.head, range.mode);
-      let built = Arc::new(manifest::build(&repo_path, &spec).await?);
-      state.manifests.store(key, Arc::clone(&built));
-      built
+impl GitState {
+  async fn manifest_answer(&self, range: &Range) -> Result<Value, Response> {
+    let cfg = self.config()?;
+    let repo_path = resolve_repo(&range.repo, &cfg, &self.registry)?;
+    let shas = git::resolve_commits(&repo_path, &[range.base.as_str(), range.head.as_str()]).await?;
+    let [base_sha, head_sha] = two_shas(shas)?;
+    let key = ManifestKey {
+      repo: paths::display(&repo_path),
+      base_sha,
+      head_sha: head_sha.clone(),
+      mode: range.mode,
+      attributes: refs::attributes_signature(&repo_path).map_err(io_error)?,
+    };
+    let manifest = match self.manifests.get(&key) {
+      Some(manifest) => manifest,
+      None => {
+        // The range is built from the refs as given, as `diff_files` builds it.
+        let spec = manifest::range_spec(&range.base, &range.head, range.mode);
+        let built = Arc::new(manifest::build(&repo_path, &spec).await?);
+        self.manifests.store(key, Arc::clone(&built));
+        built
+      }
+    };
+    Ok(json!({
+      "files": manifest.rows,
+      "base": range.base,
+      "head": range.head,
+      "head_sha": head_sha,
+      "mode": range.mode,
+      "total_files": manifest.rows.len(),
+      "total_additions": manifest.total_additions,
+      "total_deletions": manifest.total_deletions,
+    }))
+  }
+
+  /// `diff_file`: the diff between the resolved SHAs, restricted to `path` and, for a rename, to `old_path` too. A diff
+  /// above the cap answers `too_large` unless `force` is set.
+  async fn file_answer(
+    &self,
+    range: &Range,
+    path: &str,
+    old_path: Option<&str>,
+    force: bool,
+  ) -> Result<Value, Response> {
+    let cfg = self.config()?;
+    let repo_path = resolve_repo(&range.repo, &cfg, &self.registry)?;
+    let shas = git::resolve_commits(&repo_path, &[range.base.as_str(), range.head.as_str()]).await?;
+    let [base_sha, head_sha] = two_shas(shas)?;
+    // The range runs over the resolved SHAs, so a ref that moves before git starts cannot pair one resolution with
+    // another. Both endpoints of a rename go to git, which keeps the pairing.
+    let spec = manifest::range_spec(&base_sha, &head_sha, range.mode);
+    let mut args = vec!["diff", spec.as_str(), "--"];
+    if let Some(old_path) = old_path.filter(|old_path| !old_path.is_empty()) {
+      args.push(old_path);
     }
-  };
-  Ok(json!({
-    "files": manifest.rows,
-    "base": range.base,
-    "head": range.head,
-    "head_sha": head_sha,
-    "mode": range.mode,
-    "total_files": manifest.rows.len(),
-    "total_additions": manifest.total_additions,
-    "total_deletions": manifest.total_deletions,
-  }))
-}
+    args.push(path);
+    let diff = git::run(&repo_path, &args, DIFF_TIMEOUT, "git diff failed").await?;
+    let size_bytes = diff.len();
+    if !force && size_bytes > self.diff_cap {
+      return Ok(json!({"too_large": true, "size_bytes": size_bytes, "path": path}));
+    }
+    // The two revisions the served diff was built between. A client passes them back to `diff_lines`, whose read
+    // then answers the same file content the hunk headers name even after a ref moves.
+    let head_revision = head_sha.clone();
+    let base_revision =
+      if range.mode == "three-dot" { git::merge_base(&repo_path, &base_sha, &head_sha).await? } else { base_sha };
+    let base_path = old_path.filter(|old_path| !old_path.is_empty()).unwrap_or(path);
+    let base_total = revision_line_count(&repo_path, &base_revision, base_path).await?;
+    let head_total = revision_line_count(&repo_path, &head_revision, path).await?;
+    Ok(json!({
+      "diff": diff,
+      "path": path,
+      "size_bytes": size_bytes,
+      "base_sha": base_revision,
+      "head_sha": head_revision,
+      "base_total": base_total,
+      "head_total": head_total,
+    }))
+  }
 
-/// `diff_file`: the diff between the resolved SHAs, restricted to `path` and, for a rename, to `old_path` too. A diff
-/// above the cap answers `too_large` unless `force` is set.
-async fn file_answer(
-  state: &GitState,
-  range: &Range,
-  path: &str,
-  old_path: Option<&str>,
-  force: bool,
-) -> Result<Value, Response> {
-  let cfg = config(state)?;
-  let repo_path = resolve_repo(&range.repo, &cfg, &state.registry)?;
-  let shas = git::resolve_commits(&repo_path, &[range.base.as_str(), range.head.as_str()]).await?;
-  let [base_sha, head_sha] = two_shas(shas)?;
-  // The range runs over the resolved SHAs, so a ref that moves before git starts cannot pair one resolution with
-  // another. Both endpoints of a rename go to git, which keeps the pairing.
-  let spec = manifest::range_spec(&base_sha, &head_sha, range.mode);
-  let mut args = vec!["diff", spec.as_str(), "--"];
-  if let Some(old_path) = old_path.filter(|old_path| !old_path.is_empty()) {
-    args.push(old_path);
+  /// `diff_lines`: the line span `start..=end` of `path` at the range's base or head revision. An `end` past the
+  /// file's last line answers the lines through the end.
+  async fn lines_answer(&self, range: &Range, path: &str, side: &str, start: i64, end: i64) -> Result<Value, Response> {
+    let cfg = self.config()?;
+    let repo_path = resolve_repo(&range.repo, &cfg, &self.registry)?;
+    let revision = resolved_revision(&repo_path, range, side).await?;
+    let bytes = git::show_bytes(&repo_path, &revision, path).await?.ok_or_else(|| {
+      responses::http_exception_with_detail(StatusCode::NOT_FOUND, &format!("{path} does not exist at {revision}"))
+    })?;
+    if bytes.contains(&0) {
+      return Err(responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &format!("binary file: {path}")));
+    }
+    let text = git::decode(&bytes)?;
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if lines.last() == Some(&"") {
+      lines.pop();
+    }
+    let total = lines.len() as i64;
+    let end = end.min(total);
+    let rows: Vec<Value> = if start <= end {
+      lines[(start - 1) as usize..end as usize]
+        .iter()
+        .enumerate()
+        .map(|(offset, line)| json!({"line": start + offset as i64, "text": line}))
+        .collect()
+    } else {
+      Vec::new()
+    };
+    Ok(json!({"path": path, "side": side, "start": start, "end": end, "total": total, "lines": rows}))
   }
-  args.push(path);
-  let diff = git::run(&repo_path, &args, DIFF_TIMEOUT, "git diff failed").await?;
-  let size_bytes = diff.len();
-  if !force && size_bytes > state.diff_cap {
-    return Ok(json!({"too_large": true, "size_bytes": size_bytes, "path": path}));
-  }
-  // The two revisions the served diff was built between. A client passes them back to `diff_lines`, whose read
-  // then answers the same file content the hunk headers name even after a ref moves.
-  let head_revision = head_sha.clone();
-  let base_revision =
-    if range.mode == "three-dot" { git::merge_base(&repo_path, &base_sha, &head_sha).await? } else { base_sha };
-  let base_path = old_path.filter(|old_path| !old_path.is_empty()).unwrap_or(path);
-  let base_total = revision_line_count(&repo_path, &base_revision, base_path).await?;
-  let head_total = revision_line_count(&repo_path, &head_revision, path).await?;
-  Ok(json!({
-    "diff": diff,
-    "path": path,
-    "size_bytes": size_bytes,
-    "base_sha": base_revision,
-    "head_sha": head_revision,
-    "base_total": base_total,
-    "head_total": head_total,
-  }))
-}
-
-/// `diff_lines`: the line span `start..=end` of `path` at the range's base or head revision. An `end` past the
-/// file's last line answers the lines through the end.
-async fn lines_answer(
-  state: &GitState,
-  range: &Range,
-  path: &str,
-  side: &str,
-  start: i64,
-  end: i64,
-) -> Result<Value, Response> {
-  let cfg = config(state)?;
-  let repo_path = resolve_repo(&range.repo, &cfg, &state.registry)?;
-  let revision = resolved_revision(&repo_path, range, side).await?;
-  let bytes = git::show_bytes(&repo_path, &revision, path).await?.ok_or_else(|| {
-    responses::http_exception_with_detail(StatusCode::NOT_FOUND, &format!("{path} does not exist at {revision}"))
-  })?;
-  if bytes.contains(&0) {
-    return Err(responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &format!("binary file: {path}")));
-  }
-  let text = git::decode(&bytes)?;
-  let mut lines: Vec<&str> = text.split('\n').collect();
-  if lines.last() == Some(&"") {
-    lines.pop();
-  }
-  let total = lines.len() as i64;
-  let end = end.min(total);
-  let rows: Vec<Value> = if start <= end {
-    lines[(start - 1) as usize..end as usize]
-      .iter()
-      .enumerate()
-      .map(|(offset, line)| json!({"line": start + offset as i64, "text": line}))
-      .collect()
-  } else {
-    Vec::new()
-  };
-  Ok(json!({"path": path, "side": side, "start": start, "end": end, "total": total, "lines": rows}))
 }
 
 /// The revision a side's lines come from: the head commit, or for a three-dot range's base side, the merge base
@@ -378,21 +373,23 @@ fn resolve_repo(repo: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Resu
   Ok(repo_path)
 }
 
-/// The repo's listing, re-run only when its ref state moved.
-async fn branch_lines(state: &GitState, repo: &Path) -> Result<Arc<Vec<String>>, Response> {
-  let owned = repo.to_path_buf();
-  let signature = blocking(move || refs::signature(&owned).map_err(io_error)).await?;
-  let key = BranchKey { repo: paths::display(repo), signature };
-  if let Some(lines) = state.branches.get(&key) {
-    return Ok(lines);
+impl GitState {
+  /// The repo's listing, re-run only when its ref state moved.
+  async fn branch_lines(&self, repo: &Path) -> Result<Arc<Vec<String>>, Response> {
+    let owned = repo.to_path_buf();
+    let signature = blocking(move || refs::signature(&owned).map_err(io_error)).await?;
+    let key = BranchKey { repo: paths::display(repo), signature };
+    if let Some(lines) = self.branches.get(&key) {
+      return Ok(lines);
+    }
+    let lines = Arc::new(git::branch_lines(repo).await?);
+    self.branches.store(key, Arc::clone(&lines));
+    Ok(lines)
   }
-  let lines = Arc::new(git::branch_lines(repo).await?);
-  state.branches.store(key, Arc::clone(&lines));
-  Ok(lines)
-}
 
-fn config(state: &GitState) -> Result<Arc<CharlieBotConfig>, Response> {
-  state.config.get().map_err(|error| responses::internal_error("ConfigError", error.to_string()))
+  fn config(&self) -> Result<Arc<CharlieBotConfig>, Response> {
+    self.config.get().map_err(|error| responses::internal_error("ConfigError", error.to_string()))
+  }
 }
 
 fn two_shas(shas: Vec<String>) -> Result<[String; 2], Response> {

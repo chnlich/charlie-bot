@@ -48,11 +48,13 @@ async fn run_raw(repo: &Path, args: &[&str], timeout: Duration) -> Result<RawOut
   Ok(RawOutput { ok: output.status.success(), stdout: output.stdout, stderr })
 }
 
-/// The 500 a nonzero git exit answers with: the stripped stderr, or `failure_detail` when stderr is empty.
-fn failed(output: &RawOutput, failure_detail: &str) -> Response {
-  let detail = output.stderr.trim();
-  let detail = if detail.is_empty() { failure_detail } else { detail };
-  responses::json(StatusCode::INTERNAL_SERVER_ERROR, &json!({"detail": detail}))
+impl RawOutput {
+  /// The 500 a nonzero git exit answers with: the stripped stderr, or `failure_detail` when stderr is empty.
+  fn failed(&self, failure_detail: &str) -> Response {
+    let detail = self.stderr.trim();
+    let detail = if detail.is_empty() { failure_detail } else { detail };
+    responses::json(StatusCode::INTERNAL_SERVER_ERROR, &json!({"detail": detail}))
+  }
 }
 
 /// The stdout of `git <args>` in `repo`. A nonzero exit answers 500 with the stripped stderr, or
@@ -66,7 +68,7 @@ pub(crate) async fn run(
 ) -> Result<String, Response> {
   let output = run_raw(repo, args, timeout).await?;
   if !output.ok {
-    return Err(failed(&output, failure_detail));
+    return Err(output.failed(failure_detail));
   }
   decode(&output.stdout)
 }
@@ -81,7 +83,7 @@ pub(crate) async fn show_bytes(repo: &Path, revision: &str, path: &str) -> Resul
   }
   let output = run_raw(repo, &["show", &spec], READ_TIMEOUT).await?;
   if !output.ok {
-    return Err(failed(&output, "git show failed"));
+    return Err(output.failed("git show failed"));
   }
   Ok(Some(output.stdout))
 }

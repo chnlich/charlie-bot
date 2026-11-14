@@ -52,8 +52,8 @@ fn local_text(moment: OffsetDateTime, format: LocalFormat) -> String {
   }
 }
 
-/// The server zone's offset in seconds and abbreviation at `unix_seconds`, as `localtime_r` reports them;
-/// the abbreviation is the `%Z` field.
+/// The server zone's offset in seconds and abbreviation at `unix_seconds`, as `localtime_r` reports them.
+/// The abbreviation is the `%Z` field.
 fn local_zone(unix_seconds: i64) -> (i32, String) {
   let time = unix_seconds as libc::time_t;
   // SAFETY: `tm` holds integers and pointers only, so the zeroed value is valid, and `localtime_r` fills the whole of

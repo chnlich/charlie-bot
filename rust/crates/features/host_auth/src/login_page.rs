@@ -57,7 +57,7 @@ fn live_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
   }))
 }
 
-/// The last ended attempt; only the two outcomes that ran a readback carry its output.
+/// The last ended attempt. Only the two outcomes that ran a readback carry its output.
 fn last_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
   let outcome = attempt.outcome.context("an ended attempt records its outcome")?;
   let shows_readback = matches!(outcome, Outcome::Approved | Outcome::ReadbackFailed | Outcome::RenewalRecordFailed);

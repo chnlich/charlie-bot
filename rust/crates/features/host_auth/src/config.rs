@@ -1,7 +1,7 @@
 //! The `host_auth:` config section: the browser logins the login page offers.
 //!
 //! A login is a command that prints a device-approval link, plus a readback command that exits 0 while the login is
-//! valid. The operator's host config names them; the repo ships none.
+//! valid. The operator's host config names them. The repo ships none.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -27,8 +27,8 @@ pub struct BrowserLoginConfig {
   pub approval_url_pattern: String,
   /// The argv of a check that exits 0 while the login is valid. Its output shows on the page.
   pub readback_command: Vec<String>,
-  /// Whether `login_command` runs under a pseudo-terminal in a new session; ssh then reads keyboard-interactive
-  /// answers from `/dev/tty` on that terminal rather than on the server's own terminal.
+  /// Whether `login_command` runs under a pseudo-terminal in a new session. When it does, ssh reads
+  /// keyboard-interactive answers from `/dev/tty` on that terminal rather than on the server's own terminal.
   #[serde(default)]
   pub use_pty: bool,
   /// A regex. Its first match in the login output writes one newline to the terminal. Requires `use_pty`.

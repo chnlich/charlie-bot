@@ -11,7 +11,7 @@ use charliebot_core::str_methods;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-/// The overall wait on one ssh subprocess; the kill it ends is what the classifier reads past.
+/// The overall wait on one ssh subprocess. The kill it ends is what the classifier reads past.
 pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 pub const DETAIL_MAX_CHARS: usize = 200;
 

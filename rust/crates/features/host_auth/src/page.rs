@@ -67,7 +67,7 @@ fn context(state: &State, now: OffsetDateTime, logins: &[BrowserLoginConfig]) ->
 }
 
 /// One row for one state entry, with the deadline column's mode resolved. The column counts only for a
-/// host that answers and carries a baseline; a passed deadline stops counting and keeps its baseline.
+/// host that answers and carries a baseline. A passed deadline stops counting and keeps its baseline.
 fn page_row(entry: &Map<String, Value>, now: OffsetDateTime, renewals: &HashMap<&str, &str>) -> anyhow::Result<Value> {
   let alias = entry.get("alias").and_then(Value::as_str).context("a host entry has no string alias")?;
   let status = entry.get("status").and_then(Value::as_str).with_context(|| format!("host {alias} has no status"))?;

@@ -4,7 +4,7 @@
 //!
 //! - A *login* is one `host_auth.browser_logins` entry.
 //! - An *attempt* is one login process started by one click, from the click until its outcome is recorded. The
-//!   readback phase is part of the attempt. A live attempt holds its login's slot; a click that starts a new attempt
+//!   readback phase is part of the attempt. A live attempt holds its login's slot. A click that starts a new attempt
 //!   ends the live one with the outcome REPLACED.
 //! - The *readback* is the login's check command. It exits 0 while the login is valid.
 //!
@@ -108,14 +108,14 @@ pub struct StartFailed(pub String);
 enum LinkState {
   /// The start is still producing the link.
   Pending,
-  /// The link was found; every joined click redirects to it.
+  /// The link was found. Every joined click redirects to it.
   Link(String),
-  /// The start gave no link; the string is the 502 body of the clicks that waited on it.
+  /// The start gave no link. The string is the 502 body of the clicks that waited on it.
   Failed(String),
 }
 
-/// `user_code_of`: the value of the link's first `user_code=` parameter, in the query or the fragment; empty when
-/// none.
+/// `user_code_of`: the value of the link's first `user_code=` parameter, in the query or the fragment. The value is
+/// empty when the link carries no user code.
 pub fn user_code_of(url: &str) -> &str {
   static USER_CODE_PARAM: OnceLock<Regex> = OnceLock::new();
   let pattern = USER_CODE_PARAM
@@ -213,7 +213,7 @@ pub struct AttemptSnapshot {
 }
 
 impl AttemptSnapshot {
-  /// The device code the approval link carries; empty before the link is known.
+  /// The device code the approval link carries. It is empty before the link is known.
   pub fn user_code(&self) -> &str {
     self.approval_url.as_deref().map(user_code_of).unwrap_or("")
   }
@@ -247,7 +247,7 @@ pub fn last_attempt(name: &str) -> Option<AttemptSnapshot> {
   Some(core.lock().expect("the attempt record lock is never poisoned").snapshot())
 }
 
-/// `start_login`: start an attempt of *login* and return its approval link; a click during a start joins that start.
+/// `start_login`: start an attempt of *login* and return its approval link. A click during a start joins that start.
 ///
 /// The attempt is registered before the first await, so a click that arrives while this start waits joins it rather
 /// than starting a second process. Fails with the 502 body when the login gives no link or its state path is invalid.
@@ -311,7 +311,7 @@ async fn await_link(link: &mut watch::Receiver<LinkState>) -> Result<String, Sta
       LinkState::Pending => {}
     }
     if link.changed().await.is_err() {
-      // The sender lives in the attempt record, which the last-attempt map holds forever; a dropped sender means
+      // The sender lives in the attempt record, which the last-attempt map holds forever. A dropped sender means
       // the driver died without resolving the link.
       return Err(StartFailed(ABANDONED_START_BODY.to_string()));
     }
@@ -328,7 +328,7 @@ pub async fn page_readback(login: &BrowserLoginConfig) -> io::Result<(i32, Strin
 /// `stop_all`: end every live attempt by killing its child — the driver's own paths then record each outcome — and
 /// return once every driver finished.
 ///
-/// The kill wakes every await a driver holds, so each driver reaches its recorded outcome; a driver whose spawn has
+/// The kill wakes every await a driver holds, so each driver reaches its recorded outcome. A driver whose spawn has
 /// not yet been recorded keeps its own start timeout as a bound.
 pub async fn stop_all() {
   let entries: Vec<LiveEntry> = {
@@ -393,7 +393,7 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
 }
 
 /// The approval link from the first matching output line, with the login's user code appended when its
-/// `user_code_pattern` matches; `None` when no link prints within the start timeout.
+/// `user_code_pattern` matches. It is `None` when no link prints within the start timeout.
 ///
 /// Once a link prints, the wait continues only for a user code the pattern has yet to capture, and the timeout then
 /// answers the link it already has. The enter prompt is answered as the output arrives, in either wait.
@@ -426,8 +426,8 @@ async fn read_until_link(core: &Arc<Mutex<AttemptCore>>, output: &mut LoginReade
   Ok(link.map(|link| with_user_code(link, user_code.as_deref())))
 }
 
-/// The user code the login's `user_code_pattern` captures from `text`; `None` when the pattern is unset or the
-/// text holds no match.
+/// The user code the login's `user_code_pattern` captures from `text`. It is `None` when the pattern is unset or
+/// the text holds no match.
 fn user_code_in(core: &Arc<Mutex<AttemptCore>>, text: &str) -> Option<String> {
   let state = core.lock().expect("the attempt record lock is never poisoned");
   let matcher = state.user_code_matcher.as_ref()?;
@@ -441,7 +441,7 @@ fn with_user_code(link: String, user_code: Option<&str>) -> String {
   format!("{link}{separator}user_code={user_code}")
 }
 
-/// The login's output drained to its end and its exit awaited, within the hold limit; then the readback.
+/// The login's output drained to its end and its exit awaited, within the hold limit. The readback runs after that.
 async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut LoginReader) -> io::Result<()> {
   let login_exit =
     match tokio::time::timeout(Duration::from_secs(HOLD_LIMIT_SEC), drain_and_wait(core, child, output)).await {
@@ -463,7 +463,7 @@ async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut Lo
     state.login_exit = Some(login_exit);
     state.child_pid = None;
   }
-  // A newer click ends a live attempt as REPLACED while its output drains; that attempt has nothing left to record.
+  // A newer click ends a live attempt as REPLACED while its output drains. That attempt has nothing left to record.
   if core.lock().expect("the attempt record lock is never poisoned").outcome.is_some() {
     return Ok(());
   }
@@ -526,7 +526,7 @@ async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   Ok(())
 }
 
-/// The next output line, appended to the attempt's tail; `None` once the output has ended.
+/// The next output line, appended to the attempt's tail. It is `None` once the output has ended.
 async fn read_line(core: &Arc<Mutex<AttemptCore>>, output: &mut LoginReader) -> io::Result<Option<String>> {
   let Some(line) = output.next_line().await? else { return Ok(None) };
   {
@@ -557,7 +557,7 @@ fn spawn(argv: &[String]) -> io::Result<Child> {
   command.spawn()
 }
 
-/// The started login command and its output reader. `use_pty` runs it under a pseudo-terminal in a new session; every
+/// The started login command and its output reader. `use_pty` runs it under a pseudo-terminal in a new session. Every
 /// other entry keeps stdin on /dev/null with stdout and stderr merged on a pipe.
 fn spawn_login(login: &BrowserLoginConfig) -> io::Result<(Child, LoginReader)> {
   let enter_after = login.enter_after_pattern.as_deref();
@@ -597,7 +597,7 @@ impl LoginReader {
     }
   }
 
-  /// The next output line; the line in progress is returned as the last line when the output ends. Each chunk read
+  /// The next output line. The line in progress is returned as the last line when the output ends. Each chunk read
   /// also answers the enter prompt, which ssh prints without a trailing newline.
   async fn next_line(&mut self) -> io::Result<Option<String>> {
     loop {
@@ -748,8 +748,8 @@ fn spawn_pty(argv: &[String]) -> io::Result<(Child, Arc<PtyMaster>)> {
     });
   }
   let child = command.spawn()?;
-  // The child holds its own copies of the slave; the parent's close with this command, so a master read ends at
-  // the child's exit.
+  // The child holds its own copies of the slave. The parent closes its copies with this command, so a master read
+  // ends at the child's exit.
   Ok((child, master))
 }
 
@@ -829,7 +829,7 @@ fn fail_start(core: &Arc<Mutex<AttemptCore>>, body: String) {
   };
   tracing::warn!(login = %name, login_exit = ?login_exit, "browser_login_start_failed");
   end(core, Outcome::StartFailed);
-  // A click that joined the start awaits the watch; with no click waiting, nobody reads the failure.
+  // A click that joined the start awaits the watch. With no click waiting, nobody reads the failure.
   let _ = core.lock().expect("the attempt record lock is never poisoned").link.send(LinkState::Failed(body));
 }
 

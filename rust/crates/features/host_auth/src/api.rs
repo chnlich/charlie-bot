@@ -103,7 +103,7 @@ async fn host_auth_probe() -> Response {
   see_other()
 }
 
-/// `GET /host-auth/logins`: the browser-login page. Only idle logins run their readback here; no page view starts a
+/// `GET /host-auth/logins`: the browser-login page. Only idle logins run their readback here. No page view starts a
 /// login.
 async fn browser_logins_page(State(features): State<Arc<FeatureContext>>, request: Parts) -> Response {
   let cfg = match features.config.get() {
@@ -144,8 +144,8 @@ async fn browser_logins_page(State(features): State<Arc<FeatureContext>>, reques
   }
 }
 
-/// `POST /api/host-auth/logins/{name}/start`: start the named login and redirect to its approval link; 502 with the
-/// failure body when the login gives none.
+/// `POST /api/host-auth/logins/{name}/start`: start the named login and redirect to its approval link. It answers 502
+/// with the failure body when the login gives none.
 async fn browser_login_start(
   State(features): State<Arc<FeatureContext>>,
   RoutePath(name): RoutePath<String>,

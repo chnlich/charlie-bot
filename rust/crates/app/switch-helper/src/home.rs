@@ -100,7 +100,7 @@ pub(crate) fn reattach(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 /// `outcome HOME SESSION RUN`: the outcome of the last `run_finished` fact for the run, from the session's archive
-/// files and then its live event log; an empty line when no fact names the run.
+/// files and then its live event log. The line is empty when no fact names the run.
 fn outcome(args: &[OsString]) -> Result<(), CliExit> {
   let [home, session_id, run_id] = exact::<3>(args)?;
   let session = config::sessions_dir_in(Path::new(&home)).join(&session_id);

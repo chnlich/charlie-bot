@@ -1,9 +1,9 @@
 //! The `charliebot switch-helper` subcommands: the reads `scripts/switch-server.sh` performs on the profile home, on
 //! a run record and on an API response body.
 //!
-//! The switch script runs the `charliebot` binary of the release it reads with (see the script's header), so every
-//! helper prints exactly what the switch compares and exits with the code it branches on: a helper that matched prints
-//! nothing and exits 0, and one that did not match exits 1. The nine names each take the arguments the switch
+//! The switch script runs the `charliebot` binary of the release it reads with (see the script's header). Every
+//! helper prints exactly what the switch compares and exits with the code it branches on. A helper that matched
+//! prints nothing and exits 0; one that did not match exits 1. The nine names each take the arguments the switch
 //! passes. `reattach REPO SHA BACKEND_TYPE` is an operator's check of one backend type's re-attachment declaration at
 //! a build; the switch does not call it.
 
@@ -33,7 +33,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     "reattach" => home::reattach(rest),
     "json-field" => api::json_field(rest),
     "newest-run-fields" => api::newest_run_fields(rest),
-    // A no-match exits 1 in both cases, but only a bad call prints a diagnostic; the switch calls this helper on a
+    // A no-match exits 1 in both cases, but only a bad call prints a diagnostic. The switch calls this helper on a
     // poll, so a silent no-match keeps the launch log free of errors.
     "launch-has" => api::launch_has(rest),
     "assistant-messages" => api::assistant_messages(rest),

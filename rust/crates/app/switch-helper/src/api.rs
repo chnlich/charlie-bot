@@ -1,6 +1,6 @@
-//! The response-body reads of the switch: one field of an API answer, the newest run's fields, a run-state page, the
-//! assistant-message count of a bootstrap, the delegate request body, a launch log match, a run's error text and a
-//! run's first command.
+//! The response-body reads of the switch. They cover one field of an API answer, the newest run's fields, a run-state
+//! page and the assistant-message count of a bootstrap. The rest read the delegate request body, a launch log match, a
+//! run's error text and a run's first command.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -214,10 +214,10 @@ fn last_error_message(events: &[Value]) -> Option<String> {
   Some(last.get("message").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-/// `run-first-command HOME SESSION RUN`: the run's first command as three fields joined by the unit separator (0x1f):
-/// the cwd of the log's first init event, the kind of its first tool result (see `first_command`), and the run's
-/// backend from its metadata. The log is read under the skip contract, so a line the backend is still writing does
-/// not fail the read; a log not written yet gives empty first two fields.
+/// `run-first-command HOME SESSION RUN`: the run's first command as three fields joined by the unit separator (0x1f).
+/// The fields are the cwd of the log's first init event, the kind of its first tool result (see `first_command`), and
+/// the run's backend from its metadata. The log is read under the skip contract, so a line the backend is still
+/// writing does not fail the read. A log not written yet leaves the first two fields empty.
 pub fn run_first_command(args: &[OsString]) -> Result<(), CliExit> {
   let [home, session_id, run_id] = exact::<3>(args)?;
   let dir = run_dir(&home, &session_id, &run_id);
@@ -239,11 +239,11 @@ pub fn run_first_command(args: &[OsString]) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The cwd of the log's first init event, and the kind of its first tool result: `command-ok` for a Bash command that
-/// did not error, `command-failed` for a Bash command that errored, and `not-command` for any other tool. A tool result
-/// is either a user message's `tool_result` block, which names its tool by the `tool_use_id` of an earlier assistant
-/// `tool_use` block, or a top-level `tool_result` event that names its tool in `tool_name`. Each part is empty while
-/// the log holds no such event.
+/// The cwd of the log's first init event, and the kind of its first tool result. The kinds are `command-ok` for a
+/// Bash command that did not error, `command-failed` for a Bash command that errored, and `not-command` for any other
+/// tool. A tool result is either a user message's `tool_result` block or a top-level `tool_result` event. The block
+/// names its tool by the `tool_use_id` of an earlier assistant `tool_use` block, and the event names its tool in
+/// `tool_name`. Each part is empty while the log holds no such event.
 fn first_command(events: &[Value]) -> (String, String) {
   let mut cwd: Option<String> = None;
   let mut kind: Option<&'static str> = None;

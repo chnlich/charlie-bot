@@ -78,6 +78,7 @@ mod tests {
           log_dir: None,
           cgroup_session_id: None,
           backend_kwargs: serde_json::Map::new(),
+          manager_turn: false,
         },
       )
       .err()

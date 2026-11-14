@@ -131,6 +131,8 @@
           "clc-synthetic-model",
           "--api-base",
           "https://$HOST/v1",
+          "--reset-note",
+          "Read your session memo, memo.md in the working directory, in full before your next action.",
           "--task-file",
           "$TMPROOT/transport/task.md"
         ],
@@ -214,6 +216,8 @@
           "--api-base",
           "https://$HOST/v1",
           "--no-stream",
+          "--reset-note",
+          "Read your session memo, memo.md in the working directory, in full before your next action.",
           "--task-file",
           "$TMPROOT/transport/task.md"
         ],
@@ -249,6 +253,8 @@
           "https://$HOST/v1",
           "--context-window",
           "4096",
+          "--reset-note",
+          "Read your session memo, memo.md in the working directory, in full before your next action.",
           "--task-file",
           "$TMPROOT/transport/task.md"
         ],
@@ -288,6 +294,8 @@
           "1.0",
           "--temperature",
           "1.0",
+          "--reset-note",
+          "Read your session memo, memo.md in the working directory, in full before your next action.",
           "--task-file",
           "$TMPROOT/transport/task.md"
         ],
@@ -322,6 +330,8 @@
           "clc-synthetic-model",
           "--api-base",
           "https://$HOST/v1",
+          "--reset-note",
+          "Read your session memo, memo.md in the working directory, in full before your next action.",
           "--task-file",
           "$TMPROOT/transport/task.md"
         ],

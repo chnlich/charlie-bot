@@ -10,6 +10,7 @@ use charliebot_core::text_repr::float_repr;
 use charliebot_registry::backend::{
   AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, Env, LaunchArgs, Translate, TransportKind,
 };
+use charliebot_store::session_fork::SESSION_MEMO_NOTE;
 use serde_json::Value;
 
 use super::flags;
@@ -41,6 +42,7 @@ pub struct CharlieCodeBackend {
   api_key: Option<String>,
   user_local_bin: String,
   instructions_file: Option<PathBuf>,
+  manager_turn: bool,
   resume_session_id: Option<String>,
   extra_flags: Vec<String>,
   transport_dir: Option<PathBuf>,
@@ -65,6 +67,7 @@ impl CharlieCodeBackend {
       .into_os_string()
       .into_string()
       .map_err(|path| anyhow::anyhow!("the charlie-code binary path is not valid Unicode: {path:?}"))?;
+    let manager_turn = launch.manager_turn;
     Ok(Self {
       bin,
       model: model.to_string(),
@@ -79,6 +82,7 @@ impl CharlieCodeBackend {
       api_key,
       user_local_bin: host.user_local_bin().to_string_lossy().into_owned(),
       instructions_file: launch.instructions_file,
+      manager_turn,
       resume_session_id: launch.resume_session_id.filter(|id| !id.is_empty()),
       extra_flags: launch.extra_flags,
       transport_dir: None,
@@ -133,6 +137,11 @@ impl CharlieCodeBackend {
     }
     if let Some(path) = &self.instructions_file {
       command.extend([flags::INSTRUCTIONS_FILE.to_string(), path_text(path)?]);
+    }
+    // A manager turn's rebuilt context opens with the session memo sentence, so the agent rereads its memo before it
+    // acts in the rebuilt conversation. A worker run carries no memo.
+    if self.manager_turn {
+      command.extend([flags::RESET_NOTE.to_string(), SESSION_MEMO_NOTE.to_string()]);
     }
     command.extend(self.extra_flags.iter().cloned());
     for image in &self.image_paths {
@@ -267,6 +276,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
     };
     let mut backend = backend(root.path(), option("api_base: http://test.invalid/v1\n"), launch);
     backend.prepare_transport(root.path()).unwrap();
@@ -296,6 +306,24 @@ mod tests {
   }
 
   #[test]
+  fn a_manager_turn_passes_the_session_memo_sentence_and_a_worker_run_does_not() {
+    let manager_root = tempfile::tempdir().unwrap();
+    let manager_launch = LaunchArgs { manager_turn: true, ..LaunchArgs::default() };
+    let mut manager = backend(manager_root.path(), option("api_base: http://test.invalid/v1\n"), manager_launch);
+    manager.prepare_transport(manager_root.path()).unwrap();
+    let command = manager.build_command("prompt").unwrap();
+    assert!(command.windows(2).any(|pair| pair[0] == flags::RESET_NOTE && pair[1] == SESSION_MEMO_NOTE), "{command:?}");
+
+    let worker_root = tempfile::tempdir().unwrap();
+    let worker_launch =
+      LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
+    let mut worker = backend(worker_root.path(), option("api_base: http://test.invalid/v1\n"), worker_launch);
+    worker.prepare_transport(worker_root.path()).unwrap();
+    let command = worker.build_command("prompt").unwrap();
+    assert!(!command.iter().any(|argument| argument == flags::RESET_NOTE), "{command:?}");
+  }
+
+  #[test]
   fn an_option_without_an_endpoint_is_refused_before_the_binary_resolves() {
     let root = tempfile::tempdir().unwrap();
     let host =
@@ -314,6 +342,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
     )
     .err()
@@ -339,6 +368,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
     );
     let refusal = text_only.accept_uploads(std::slice::from_ref(&shot)).unwrap_err();
@@ -356,6 +386,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
     );
     accepting.accept_uploads(&[shot, notes]).unwrap();

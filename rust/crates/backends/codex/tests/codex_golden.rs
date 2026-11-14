@@ -684,6 +684,9 @@ fn launch_of(case: &Value) -> LaunchArgs {
     resume_session_id: opt_text(&case["resume_session_id"]),
     instructions_content: opt_text(&case["instructions_content"]),
     instructions_file: opt_text(&case["instructions_file"]).map(PathBuf::from),
+    // A manager turn carries no run instructions file, and a worker run does; the live launch sets this flag on the
+    // manager path.
+    manager_turn: case["instructions_file"].is_null(),
     ..LaunchArgs::default()
   }
 }

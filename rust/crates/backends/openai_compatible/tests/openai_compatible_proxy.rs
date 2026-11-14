@@ -283,6 +283,7 @@ fn the_factory_builds_the_proxy_backend_for_the_server_port() {
         log_dir: None,
         cgroup_session_id: None,
         backend_kwargs: Map::new(),
+        manager_turn: false,
       },
     )
     .unwrap();

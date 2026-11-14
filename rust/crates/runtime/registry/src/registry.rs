@@ -657,6 +657,8 @@ pub struct LaunchArgs {
   pub cgroup_session_id: Option<String>,
   /// The per-process arguments of the launch plan, such as `claude_session_id` or the account directory.
   pub backend_kwargs: Map<String, Value>,
+  /// Whether this launch is a manager turn. The manager path sets it; a worker run and a one-shot call leave it false.
+  pub manager_turn: bool,
 }
 
 /// The factory of the per-process backend of one launch (`factory(option, cfg, **launch_kwargs)`).

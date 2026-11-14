@@ -100,6 +100,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
     });
     let expected: Vec<&str> = vec![
       "/usr/bin/gemini",
@@ -131,6 +132,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       })
       .argv("--watch-pid only local"),
       [
@@ -163,6 +165,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
     })
     .prepare_env(env)
     .unwrap();

@@ -26,5 +26,7 @@ pub const TOP_P: &str = "--top-p";
 pub const TEMPERATURE: &str = "--temperature";
 /// The `--resume` flag: the id of the session to resume.
 pub const RESUME: &str = "--resume";
+/// The sentence the rebuilt-context pointer opens with: a manager turn's session memo sentence.
+pub const RESET_NOTE: &str = "--reset-note";
 /// The `--image` flag: an image path to attach to the prompt.
 pub const IMAGE: &str = "--image";

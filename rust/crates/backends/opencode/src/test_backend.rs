@@ -560,6 +560,7 @@ fn launch_with_instructions(content: Option<&str>, file: Option<PathBuf>, resume
     log_dir: None,
     cgroup_session_id: None,
     backend_kwargs: Map::new(),
+    manager_turn: false,
   }
 }
 
@@ -1492,6 +1493,7 @@ async fn reused_run_directory_sends_only_the_new_prompt() {
     log_dir: Some(directory),
     cgroup_session_id: None,
     backend_kwargs: Map::new(),
+    manager_turn: false,
   };
   let (_, _, first) = harness.start_run("first", launch.clone(), None, vec![], Env::new());
   assert_eq!(first.await.unwrap().unwrap().exit_code, Some(0));
@@ -2088,6 +2090,7 @@ async fn recovered_translator_keeps_the_original_model_after_settings_change() {
     log_dir: Some(directory),
     cgroup_session_id: None,
     backend_kwargs: Map::new(),
+    manager_turn: false,
   };
   let backend = factory.build(Some(&option), &cfg, launch).unwrap();
   let mut translator = backend.translator();

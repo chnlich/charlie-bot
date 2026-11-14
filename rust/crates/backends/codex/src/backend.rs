@@ -48,6 +48,17 @@ fn scan_guard_hook_args() -> [String; 3] {
   ]
 }
 
+/// The `SessionStart` compact hook of a manager turn, given on the command line: Codex compacts on its own, and the
+/// hook puts the session memo sentence at the top of the context the compaction builds. Codex re-attaches no skills, so
+/// the command prints the sentence alone. A worker run carries no memo and keeps no such hook.
+fn session_memo_hook_args() -> [String; 2] {
+  [
+    "--config".to_string(),
+    r#"hooks.SessionStart=[{matcher="compact",hooks=[{type="command",command="charliebot compaction-context --memo-only"}]}]"#
+      .to_string(),
+  ]
+}
+
 /// The `codex exec --json` backend of one launch.
 pub struct CodexBackend {
   model: String,
@@ -60,6 +71,7 @@ pub struct CodexBackend {
   extra_flags: Vec<String>,
   instructions_content: Option<String>,
   instructions_file: Option<PathBuf>,
+  manager_turn: bool,
   resume_session_id: Option<String>,
 }
 
@@ -78,6 +90,7 @@ impl CodexBackend {
       .into_os_string()
       .into_string()
       .map_err(|path| anyhow::anyhow!("the codex binary path is not valid Unicode: {}", Path::new(&path).display()))?;
+    let manager_turn = launch.manager_turn;
     Ok(Self {
       model: model.to_string(),
       codex_bin,
@@ -89,6 +102,7 @@ impl CodexBackend {
       extra_flags: launch.extra_flags,
       instructions_content: launch.instructions_content,
       instructions_file: launch.instructions_file,
+      manager_turn,
       resume_session_id: launch.resume_session_id.filter(|id| !id.is_empty()),
     })
   }
@@ -154,6 +168,9 @@ impl CodexBackend {
       command.push(session_id.clone());
     }
     command.extend(scan_guard_hook_args());
+    if self.manager_turn {
+      command.extend(session_memo_hook_args());
+    }
     command.extend(self.extra_flags.iter().cloned());
     command.push("--".to_string());
     command.push(prompt.to_string());
@@ -367,6 +384,36 @@ mod tests {
     assert_eq!(env["PATH"], "/usr/bin:/home/a/.local/bin");
     prepend_path_dir(&mut env, "/home/a/bin");
     assert_eq!(env["PATH"], "/home/a/bin:/usr/bin:/home/a/.local/bin");
+  }
+
+  /// A manager turn's context names the session memo after a compaction; a worker run carries no memo and no hook.
+  #[test]
+  fn a_manager_turn_installs_the_session_memo_hook_and_a_worker_run_does_not() {
+    let root = tempfile::tempdir().unwrap();
+    let backend = |launch: LaunchArgs| {
+      CodexBackend::from_launch(
+        root.path().join("codex"),
+        Path::new("/synthetic/home/.local/bin"),
+        "gpt-5.5",
+        &CodexOptions::default(),
+        launch,
+        SessionCgroupConfig::disabled(),
+      )
+      .unwrap()
+    };
+
+    let manager_argv =
+      backend(LaunchArgs { manager_turn: true, ..LaunchArgs::default() }).build_command("prompt").unwrap();
+    let hooks: Vec<&String> =
+      manager_argv.iter().filter(|argument| argument.starts_with("hooks.SessionStart=")).collect();
+    assert_eq!(hooks.len(), 1, "{manager_argv:?}");
+    assert!(hooks[0].contains(r#"matcher="compact""#), "{}", hooks[0]);
+    assert!(hooks[0].contains(r#"command="charliebot compaction-context --memo-only""#), "{}", hooks[0]);
+
+    let worker_launch =
+      LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
+    let worker_argv = backend(worker_launch).build_command("prompt").unwrap();
+    assert!(!worker_argv.iter().any(|argument| argument.contains("SessionStart")), "{worker_argv:?}");
   }
 
   #[test]

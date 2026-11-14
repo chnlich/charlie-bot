@@ -24,8 +24,15 @@ use serde_json::Value;
 use wait_timeout::ChildExt;
 
 /// The `charlie-code --help` flags the backend's command carries, so the installed CLI answers to it.
-const CONTRACT_FLAGS: [&str; 6] =
-  [flags::TASK_FILE, flags::JSON, flags::MODEL, flags::API_BASE, flags::RESUME, flags::CONTEXT_WINDOW];
+const CONTRACT_FLAGS: [&str; 7] = [
+  flags::TASK_FILE,
+  flags::JSON,
+  flags::MODEL,
+  flags::API_BASE,
+  flags::RESUME,
+  flags::CONTEXT_WINDOW,
+  flags::RESET_NOTE,
+];
 
 /// The install command both failure lines carry; the `binary-missing` line is the bare command, and the
 /// `binary-broken` line prefixes the reinstall instruction.

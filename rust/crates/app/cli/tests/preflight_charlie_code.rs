@@ -12,7 +12,7 @@ use serde_json::json;
 
 /// The flags a healthy `charlie-code --help` prints, in the order the contract check requires.
 const HELP_TEXT: &str = "usage: charlie-code [--json] [--model MODEL] [--api-base URL] [--resume ID] [--context-window N] \
-   [--task-file PATH] [--timeout-seconds S]";
+   [--task-file PATH] [--timeout-seconds S] [--reset-note TEXT]";
 
 const REINSTALL: &str = "reinstall charlie-code (uv tool install -e ~/workspace/charlie-code)";
 

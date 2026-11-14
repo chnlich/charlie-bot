@@ -530,6 +530,7 @@ impl RunProcess for TurnProcess<'_> {
           resume_session_id,
           log_dir: Some(self.log_dir.clone()),
           cgroup_session_id: Some(metadata.id.clone()),
+          manager_turn: true,
           ..LaunchArgs::default()
         };
         launch_args.backend_kwargs = launch

@@ -282,6 +282,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         backend_kwargs: Map::new(),
+        manager_turn: false,
       },
     )
   }
@@ -299,6 +300,7 @@ mod tests {
         log_dir: Some(root.join("logs")),
         cgroup_session_id: None,
         backend_kwargs: Map::new(),
+        manager_turn: false,
       },
     );
     let mut request = RunRequest::new(
@@ -500,6 +502,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     });
     let expected: Vec<&str> = vec![
       "/usr/bin/agy",
@@ -526,6 +529,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         backend_kwargs: Map::new(),
+        manager_turn: false,
       })
       .argv("--dash-prefixed prompt")[1],
       "--print=--dash-prefixed prompt"
@@ -543,6 +547,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     });
     assert_eq!(
       instructed.argv("do the work")[1],
@@ -567,6 +572,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     })
     .child_env(env);
     assert_eq!(prepared.get("PATH").map(String::as_str), Some("/synthetic/local-bin:/usr/bin"));
@@ -585,6 +591,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     })
     .finish(SUCCESS, "", 0);
     assert_eq!(outcome.guard_error, None);
@@ -621,6 +628,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     })
     .finish(SUCCESS, stderr, 0);
     assert_eq!(outcome.events.len(), 1);
@@ -640,6 +648,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     })
     .finish(r#"{"status":"ERROR","error":"quota exhausted"}"#, "", 0);
     assert_eq!(
@@ -657,6 +666,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     })
     .finish(r#"{"status":"ERROR","error":"bad model"}"#, "", 1);
     assert_eq!(named.events[0]["message"], "agy exited 1: bad model");
@@ -671,6 +681,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     })
     .finish("", "", 137);
     assert_eq!(silent.events[0]["message"], "Antigravity CLI exited with code 137");
@@ -688,6 +699,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     })
     .finish("plain text", "", 0);
     assert!(not_json.guard_error.unwrap().contains("non-json stdout"));
@@ -702,6 +714,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     })
     .finish(r#"{"status":"SUCCESS","response":"x"}"#, "", 0);
     assert!(no_conversation.guard_error.unwrap().contains("conversation_id"));
@@ -716,6 +729,7 @@ mod tests {
       log_dir: None,
       cgroup_session_id: None,
       backend_kwargs: Map::new(),
+      manager_turn: false,
     });
     let mismatch = resumed.finish(SUCCESS, "", 0);
     assert!(mismatch.guard_error.unwrap().contains("conv-abc"));

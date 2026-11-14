@@ -72,6 +72,7 @@ mod tests {
           log_dir: None,
           cgroup_session_id: None,
           backend_kwargs: Map::new(),
+          manager_turn: false,
         },
         limits.clone(),
       ))
@@ -94,6 +95,7 @@ mod tests {
           log_dir: None,
           cgroup_session_id: None,
           backend_kwargs: Map::new(),
+          manager_turn: false,
         },
         limits.clone(),
       ))
@@ -116,6 +118,7 @@ mod tests {
           log_dir: None,
           cgroup_session_id: None,
           backend_kwargs: Map::new(),
+          manager_turn: false,
         },
         limits,
       ))
@@ -141,6 +144,7 @@ mod tests {
         log_dir: None,
         cgroup_session_id: None,
         backend_kwargs: Map::new(),
+        manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
     )

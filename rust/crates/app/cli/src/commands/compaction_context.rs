@@ -4,10 +4,14 @@
 //! before Claude compacted: it scans `sessions/<sid>/data/chat_events.jsonl` for Skill, Read and
 //! Bash tool calls that name a skill directory, reads each skill's current `SKILL.md`, splits the
 //! re-attached text into at most six 9,000-character parts at line ends, and prints the slot's
-//! SessionStart hook JSON. A skill too large to fit is listed in the first part instead of being
-//! partially attached; a skill whose file no longer resolves is reported on stderr as unresolved.
-//! A failure (unreadable log, invalid event JSON, unreadable skill) prints the error line and
-//! exits 1; a slot past the last part prints only the stderr line.
+//! SessionStart hook JSON. The first part opens with the session memo sentence, so the new context
+//! names the memo even when the session read no skill. A skill too large to fit is listed in the
+//! first part instead of being partially attached; a skill whose file no longer resolves is
+//! reported on stderr as unresolved. A failure (unreadable log, invalid event JSON, unreadable
+//! skill) prints the error line and exits 1; a slot past the last part prints only the stderr line.
+//!
+//! `compaction-context --memo-only` prints the memo sentence alone. The Codex backend installs it
+//! as the SessionStart compact hook of a manager turn, which re-attaches no skills.
 //!
 //! The repository's `skills/` directory comes from `CHARLIEBOT_REPO_ROOT`.
 
@@ -28,6 +32,7 @@ use charliebot_core::repo_root;
 use charliebot_core::text_repr::{is_truthy, str_repr};
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
+use charliebot_store::session_fork::SESSION_MEMO_NOTE;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use fancy_regex::Regex;
 use serde_json::{Value, json};
@@ -41,12 +46,15 @@ const MAX_PARTS: usize = claude_launch::COMPACTION_CONTEXT_SLOTS;
 #[derive(Parser)]
 #[command(name = "compaction-context", about = "Restore skills read by a Claude manager session after compaction")]
 struct CompactionContextCli {
-  /// CharlieBot session id
+  /// CharlieBot session id; the skill mode requires it
+  #[arg(long, required_unless_present = "memo_only")]
+  session: Option<String>,
+  /// Part number, from 1 to the installed slot count; the skill mode requires it
+  #[arg(long, required_unless_present = "memo_only", value_parser = clap::value_parser!(i64).range(1..=MAX_PARTS as i64))]
+  slot: Option<i64>,
+  /// Print the session memo sentence alone, with no re-attached skill text
   #[arg(long)]
-  session: String,
-  /// Part number, from 1 to the installed slot count
-  #[arg(long, value_parser = clap::value_parser!(i64).range(1..=MAX_PARTS as i64))]
-  slot: i64,
+  memo_only: bool,
 }
 
 /// One skill read the log records: the skill name, the concrete `.../skills/<name>/SKILL.md` path
@@ -79,8 +87,14 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     Err(error) => error.exit(),
   };
   let cli = CompactionContextCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
-  if let Err(error) = run(&cli.session, cli.slot) {
-    eprintln!("session={} slot={} characters=0 skills=- error={error}", cli.session, cli.slot);
+  if cli.memo_only {
+    print!("{}", json_out::render(&hook_json(SESSION_MEMO_NOTE), None));
+    return Ok(());
+  }
+  let session = cli.session.as_deref().expect("the skill mode requires a session id");
+  let slot = cli.slot.expect("the skill mode requires a slot");
+  if let Err(error) = run(session, slot) {
+    eprintln!("session={session} slot={slot} characters=0 skills=- error={error}");
     std::process::exit(1);
   }
   Ok(())
@@ -699,25 +713,24 @@ fn splitlines_keepends(text: &str) -> Vec<&str> {
   lines
 }
 
-/// The header lines plus every skill's block, packed greedily into at most `MAX_PARTS` parts of at
-/// most `MAX_PART_CHARS` characters, split only at line ends. `None` when a line does not fit a
-/// part.
+/// The memo sentence and every re-attached skill's block, packed greedily into at most `MAX_PARTS` parts of at most
+/// `MAX_PART_CHARS` characters, split only at line ends. `None` when a line does not fit a part.
 fn partition(skills: &[&SkillText], omitted: &[&SkillText]) -> Option<Vec<String>> {
-  if skills.is_empty() && omitted.is_empty() {
-    return Some(Vec::new());
-  }
   let names = if skills.is_empty() {
     "none".to_string()
   } else {
     skills.iter().map(|skill| format!("{} ({})", skill.name, skill.path.display())).collect::<Vec<_>>().join(", ")
   };
-  let mut lines = vec![format!("Re-attached skills: {names}\n")];
-  if !omitted.is_empty() {
-    lines.push("Skills left out because they do not fit:\n".to_string());
-    lines.extend(omitted.iter().map(|skill| format!("- {} ({})\n", skill.name, skill.path.display())));
-  }
-  for skill in skills {
-    lines.extend(splitlines_keepends(&skill_block(skill)).into_iter().map(str::to_string));
+  let mut lines = vec![format!("{SESSION_MEMO_NOTE}\n")];
+  if !skills.is_empty() || !omitted.is_empty() {
+    lines.push(format!("Re-attached skills: {names}\n"));
+    if !omitted.is_empty() {
+      lines.push("Skills left out because they do not fit:\n".to_string());
+      lines.extend(omitted.iter().map(|skill| format!("- {} ({})\n", skill.name, skill.path.display())));
+    }
+    for skill in skills {
+      lines.extend(splitlines_keepends(&skill_block(skill)).into_iter().map(str::to_string));
+    }
   }
 
   let mut parts = vec![String::new()];
@@ -851,6 +864,39 @@ mod tests {
     assert_eq!(skills[2].text, "Read tool text\n");
     assert_eq!(skills[3].path, split_skill);
     assert_eq!(skills[3].text, "Split path text\n");
+  }
+
+  #[test]
+  fn test_memo_only_prints_the_sentence_and_no_skill_text() {
+    let rendered = json_out::render(&hook_json(SESSION_MEMO_NOTE), None);
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+
+    assert_eq!(parsed["hookSpecificOutput"]["hookEventName"], claude_launch::SESSION_START_HOOK_EVENT);
+    assert_eq!(parsed["hookSpecificOutput"]["additionalContext"], SESSION_MEMO_NOTE);
+    assert_eq!(parsed["hookSpecificOutput"].as_object().unwrap().len(), 2);
+    assert!(!rendered.contains("Re-attached skills"), "{rendered}");
+  }
+
+  #[test]
+  fn test_first_part_opens_with_the_memo_sentence_with_a_skill() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("skills").join("one").join("SKILL.md");
+    let skills = [skill_text("one", &path, "Skill text\n")];
+
+    let (parts, _included, _omitted) = context_parts(&skills).unwrap();
+
+    assert!(parts[0].starts_with(&format!("{SESSION_MEMO_NOTE}\n")), "{}", parts[0]);
+    assert!(parts[0].contains("Re-attached skills: one ("));
+    assert_eq!(parts[0].matches(SESSION_MEMO_NOTE).count(), 1);
+  }
+
+  #[test]
+  fn test_first_part_opens_with_the_memo_sentence_without_a_skill() {
+    let (parts, included, omitted) = context_parts(&[]).unwrap();
+
+    assert_eq!(parts, [format!("{SESSION_MEMO_NOTE}\n")]);
+    assert!(included.is_empty());
+    assert!(omitted.is_empty());
   }
 
   #[test]

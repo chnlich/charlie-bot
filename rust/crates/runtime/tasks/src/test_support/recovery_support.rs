@@ -320,8 +320,16 @@ fn register_scripted_backend(registry: &mut Registry) -> Result<(), charliebot_r
     factory: Arc::new(ScriptFactory),
     lifecycle: None,
     translate_fallback: false,
+  })?;
+  // The scripted entries name a launcher the way `cc-anthropic-compatible` entries do, so a test can drive a run
+  // whose process the launcher carries away from this host.
+  registry.backend_cli_binary(BACKEND_TYPE, |fields| {
+    Ok(fields.get(YamlValue::String(CLI_BINARY_FIELD.to_string())).and_then(YamlValue::as_str).map(str::to_string))
   })
 }
+
+/// The option field that marks a scripted entry as a launcher backend, the shape a `cli_binary` gives an entry.
+pub const CLI_BINARY_FIELD: &str = "cli_binary";
 
 /// The recovery stack's registry: the scripted backend type, the synthetic loop controller and the backend pool's
 /// metadata slot (as the server registers it), plus the test's `extra` package when it has one.

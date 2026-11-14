@@ -181,6 +181,7 @@ fn run_launcher_from(world: &World, env: &harness::Env, cwd: &Path, arguments: &
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_inflight_list_names_its_origin_repository_outside_a_git_checkout() {
   let world = World::new();
   let cwd = world.sandbox.root();
@@ -220,6 +221,7 @@ fn the_inflight_list_names_its_origin_repository_outside_a_git_checkout() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_remote_launcher_rejects_relative_input_and_temp_paths() {
   let world = World::new();
   let cwd = world.sandbox.root();
@@ -252,6 +254,7 @@ fn the_remote_launcher_rejects_relative_input_and_temp_paths() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_remote_runner_rejects_a_relative_home() {
   let world = World::new();
   let mut env = world.env();

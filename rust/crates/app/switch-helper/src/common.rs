@@ -53,7 +53,7 @@ pub(crate) fn metadata_read_failure(path: &Path, error: MetadataReadError) -> St
 }
 
 /// The profile home's `config.yaml` as a JSON value. The switch reads the raw file rather than the loaded
-/// `CharlieBotConfig`: the scan reports a backend option whose type no package registers, and the loader refuses such
+/// `CharlieBotConfig`. The scan reports a backend option whose type no package registers, and the loader refuses such
 /// a config instead.
 pub(crate) fn read_config(home: &Path) -> anyhow::Result<Value> {
   Ok(serde_json::to_value(config::read_yaml_document(&home.join(CONFIG_FILENAME))?)?)

@@ -23,9 +23,9 @@ use serde_json::Value;
 use crate::common::{exact, failed, metadata_read_failure, read_config, value_repr};
 use crate::process;
 
-/// Each backend's registration has moved twice: the agents crate held it from 7b680fcbb until the crate grouping at
-/// 03459e0ca, the runtime/agents crate from 03459e0ca until each backend's own crate at d1a07436f, and that crate from
-/// d1a07436f on. A build's tree says which layout it has, so each sha is read in its own.
+/// Each backend's registration has moved twice. The agents crate held it from 7b680fcbb until the crate grouping at
+/// 03459e0ca. The runtime/agents crate held it from 03459e0ca until each backend's own crate at d1a07436f, and that
+/// crate holds it from d1a07436f on. A build's tree says which layout it has, so each sha is read in its own.
 const BACKEND_LAYOUTS: [(&str, &str); 3] = [
   ("rust/crates/charliebot-agents/src/backends", "/mod.rs"),
   ("rust/crates/runtime/agents/src/backends", "/mod.rs"),
@@ -91,12 +91,12 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
   }
   // A loop's controller runs inside the server process; a restart never resumes it (rust/crates/runtime/tasks/src/recovery.rs).
   // The controller's end path saves the terminal status and then removes the session's active lock
-  // (rust/crates/features/improve/src/sequence.rs), and `charliebot improve stop` saves `stopped` while the current
+  // (rust/crates/features/improve/src/sequence.rs). `charliebot improve stop` saves `stopped` while the current
   // iteration still runs, so the saved status is no liveness signal. The active lock is one: the controller holds it
-  // from the loop's reservation until the end path removes it, and it names the loop it belongs to. The named loop's
-  // state carries the controller's server pid, and a pid that no longer runs proves the lock is a leak from an earlier
-  // server lifetime — that leak never blocks. A leak in the same server lifetime, where a loop's end path failed after
-  // the terminal status save and before the lock removal, still blocks: the scan cannot tell it from a live
+  // from the loop's reservation until the end path removes it. It names the loop it belongs to. The named loop's
+  // state carries the controller's server pid. A pid that no longer runs proves the lock is a leak from an earlier
+  // server lifetime — that leak never blocks. A leak in the same server lifetime still blocks: a loop's end path
+  // failed after the terminal status save and before the lock removal. The scan cannot tell it from a live
   // controller, and the operator clears it by hand.
   for session in sorted_directories(&sessions).map_err(failed)? {
     let Some(session_id) = session.file_name().and_then(|name| name.to_str()) else {

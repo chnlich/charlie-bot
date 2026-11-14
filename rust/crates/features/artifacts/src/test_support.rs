@@ -1,5 +1,6 @@
-//! Fixtures for the artifacts tests: a store-backed feature context over a temporary home, with this package registered,
-//! the fake headless Chrome that the renderer and the assertions launch, and the plan page the assertions accept.
+//! Fixtures for the artifacts tests. They include a store-backed feature context over a temporary home, with this
+//! package registered, and the fake headless Chrome that the renderer and the assertions launch. They also include
+//! the plan page the assertions accept.
 
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -37,8 +38,8 @@ pub(crate) fn chrome_program(directory: &Path, steps: Value) -> PathBuf {
 /// the repository-root lookup.
 pub(crate) use charliebot_shell_harness::repo_root;
 
-/// A plan page that passes every plan assertion except the ones its tests break: the genre template's style block
-/// verbatim, six numbered sections, a 4.1 Schema declaration with a dropped-features line, and a footer.
+/// A plan page that passes every plan assertion except the ones its tests break. It has the genre template's style
+/// block verbatim, six numbered sections, a 4.1 Schema declaration with a dropped-features line, and a footer.
 pub(crate) fn plan_page(goal: &str) -> String {
   let template = fs::read_to_string(repo_root().join(PLAN_TEMPLATE_PATH)).unwrap();
   let style_start = template.find("<style>").unwrap();

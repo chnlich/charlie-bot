@@ -1,12 +1,13 @@
 //! Test helper that plays the fake headless Chrome of the artifacts tests.
 //!
 //! Cargo builds this binary once. Each fake is a symlink named `chrome` that points at this binary, next to a
-//! `probe.json` data file. The data file maps the role to its steps, which the helper runs in order: append text to a
-//! file, write text into a file inside the directory that an argument names, write stdout or stderr, sleep, and exit.
+//! `probe.json` data file. The data file maps the role to its steps, which the helper runs in order. The steps append
+//! text to a file, write text into a file inside the directory that an argument names, write stdout or stderr, sleep,
+//! and exit.
 //! A step list that ends without `exit` is an error. The helper reads its role from `argv[0]`. A bare name is resolved
 //! on `PATH`, as the caller's own `exec` resolved it, so the data file is found beside the symlink.
 //!
-//! Tests link fakes to this binary and never write an executable and then run it: a fork in another test thread can
+//! Tests link fakes to this binary and never write an executable and then run it. A fork in another test thread can
 //! hold the written file open for writing, and the exec then fails with ETXTBSY.
 
 use std::collections::HashMap;

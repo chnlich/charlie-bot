@@ -427,11 +427,11 @@ pub(crate) struct ProcessRecord {
   argv: Vec<String>,
 }
 
-/// Whether `process` is a renderer browser that an ended server or CLI left behind: a `chrome` main process (no
-/// `--type=` argument) whose user-data directory is one of the renderer's temp profiles and whose parent is init. Every
-/// other Chrome stays untouched: a Chrome with any other user-data directory, such as a worker's measurement browser,
-/// and a renderer browser whose parent process is still alive, such as the live server's own renderer or a running
-/// CLI's.
+/// Whether `process` is a renderer browser that an ended server or CLI left behind. Such a browser is a `chrome`
+/// main process (no `--type=` argument) whose user-data directory is one of the renderer's temp profiles and whose
+/// parent is init. Every other Chrome stays untouched. That includes a Chrome with a different user-data directory,
+/// such as a worker's measurement browser. It also includes a renderer browser whose parent process is still alive,
+/// such as the live server's own renderer or a running CLI's.
 fn is_orphaned_renderer(process: &ProcessRecord) -> bool {
   process.exe_name == "chrome"
     && process.parent_pid == 1
@@ -515,7 +515,7 @@ fn read_process_record(pid: u32) -> Option<ProcessRecord> {
   Some(ProcessRecord { pid, parent_pid, exe_name, argv })
 }
 
-/// The process group of `pid`, from `/proc/<pid>/stat`: the renderer browser leads its own group, and an older
+/// The process group of `pid`, from `/proc/<pid>/stat`. The renderer browser leads its own group. An older
 /// launcher's browser keeps the ended launcher's group, whose remaining members are its fellow leftovers.
 fn read_process_group(pid: u32) -> anyhow::Result<u32> {
   let stat = fs::read_to_string(format!("/proc/{pid}/stat")).context("the browser's proc stat is unreadable")?;
@@ -575,8 +575,8 @@ fn charliebot_whitespace(character: char) -> bool {
   str_methods::is_whitespace(character)
 }
 
-/// SIGKILL to the process group `group` ids. The renderer's launch makes the browser its own group leader; the group
-/// has members while Chrome's child processes run, and it has none once they are gone, which is not an error.
+/// SIGKILL to the process group `group` ids. The renderer's launch makes the browser its own group leader. The group
+/// has members while Chrome's child processes run. It has none once they are gone, which is not an error.
 fn kill_browser_group(group: u32) -> anyhow::Result<()> {
   let encoded = Pid::from_raw(i32::try_from(group)?);
   match signal::killpg(encoded, Signal::SIGKILL) {

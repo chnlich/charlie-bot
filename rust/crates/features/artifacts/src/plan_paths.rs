@@ -25,8 +25,8 @@ pub fn resolve_plan_file(session_dir: &Path, file: &str) -> (PathBuf, Option<Pat
   (candidate, relative)
 }
 
-/// A child-relative path for an artifact outside the parent session: the path below the sessions directory minus its
-/// session id, or `artifacts/<name>` when the artifact is not under a session.
+/// A child-relative path for an artifact outside the parent session. It is the path below the sessions directory
+/// minus its session id, or `artifacts/<name>` when the artifact is not under a session.
 pub fn fallback_relative_path(session_dir: &Path, candidate: &Path) -> PathBuf {
   let sessions_dir = paths::realpath(session_dir);
   let sessions_dir = sessions_dir.parent().expect("a session directory has a parent");

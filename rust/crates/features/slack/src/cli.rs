@@ -24,6 +24,7 @@ use charliebot_core::{config, home, paths};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
+use crate::api::{ACK_PATH, REPLY_PATH};
 use crate::download;
 use crate::draft_target;
 use crate::token::{self, TokenKind};
@@ -201,17 +202,12 @@ fn credential_failure(kind: TokenKind, path: Option<&Path>) -> CliExit {
 }
 
 fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
-  post_reply("/api/internal/slack/reply", args.session.as_deref(), &args.file, None)
+  post_reply(REPLY_PATH, args.session.as_deref(), &args.file, None)
 }
 
 fn ack(args: &AckArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  let result = client::post(
-    "/api/internal/slack/ack",
-    json!({ "session_id": session_id, "message_ids": args.message_id }),
-    None,
-    &[],
-  )?;
+  let result = client::post(ACK_PATH, json!({ "session_id": session_id, "message_ids": args.message_id }), None, &[])?;
   print!("{}", json_out::render(&result, None));
   Ok(())
 }

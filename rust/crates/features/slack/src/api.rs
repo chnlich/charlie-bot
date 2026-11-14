@@ -18,17 +18,19 @@ use serde_json::{Map, Value, json};
 
 use crate::slack_listener;
 
+/// The two internal route paths. The `cli` verbs build their requests from these names, so a rename here cannot
+/// leave a verb posting to a path the router no longer serves.
+pub(crate) const REPLY_PATH: &str = "/api/internal/slack/reply";
+pub(crate) const ACK_PATH: &str = "/api/internal/slack/ack";
+
 /// The Slack routes mounted under `/api/internal`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new()
-    .route("/api/internal/slack/reply", post_only(reply))
-    .route("/api/internal/slack/ack", post_only(ack))
-    .with_state(Arc::clone(features))
+  Router::new().route(REPLY_PATH, post_only(reply)).route(ACK_PATH, post_only(ack)).with_state(Arc::clone(features))
 }
 
 /// Whether the path is one of the Slack internal routes.
 pub(crate) fn matches(path: &str) -> bool {
-  matches!(path, "/api/internal/slack/reply" | "/api/internal/slack/ack")
+  matches!(path, REPLY_PATH | ACK_PATH)
 }
 
 async fn reply(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {

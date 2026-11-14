@@ -1,9 +1,8 @@
 //! The `storage_cool_sweep_done` event of one real sweep, read through the shared test capture.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use charliebot_claude_code as claude_code;
 use charliebot_claude_code::ClaudeHost;
@@ -11,12 +10,10 @@ use charliebot_claude_code::usage_quota::QuotaHttp;
 use charliebot_codex as codex;
 use charliebot_codex::CodexHost;
 use charliebot_core::paths::realpath;
-use charliebot_core::test_support::EventSink;
+use charliebot_core::test_support::RecordedEvents;
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_usage_page::cool_storage::run_cool_sweep;
-use tracing::Event;
-use tracing::field::{Field, Visit};
 
 thread_local! {
   /// The hosts the test registers its sources with. `register_package` takes a plain function, so the test hands them over here.
@@ -28,26 +25,6 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
   let http = QuotaHttp::from_process().expect("the test HTTP client builds");
   claude_code::register_with_host(registry, claude, http)?;
   codex::register_with_host(registry, &codex_host)
-}
-
-/// Each event the capture records: its field names, and each field's Debug text.
-#[derive(Clone, Default)]
-struct RecordedEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
-
-impl EventSink for RecordedEvents {
-  fn event(&self, event: &Event<'_>) {
-    let mut fields = BTreeMap::new();
-    event.record(&mut FieldText(&mut fields));
-    self.0.lock().expect("the recorder lock").push(fields);
-  }
-}
-
-struct FieldText<'a>(&'a mut BTreeMap<String, String>);
-
-impl Visit for FieldText<'_> {
-  fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-    self.0.insert(field.name().to_string(), format!("{value:?}"));
-  }
 }
 
 #[test]
@@ -83,7 +60,7 @@ fn sweep_done_event_carries_each_field() {
   let _capture = charliebot_core::test_support::install_events(Arc::new(recorded.clone()));
   run_cool_sweep(Arc::clone(&cfg), &registry, now).expect("the sweep runs");
 
-  let events = recorded.0.lock().expect("the recorder lock");
+  let events = recorded.events();
   let done = events
     .iter()
     .find(|fields| fields.get("message").is_some_and(|text| text == "storage_cool_sweep_done"))

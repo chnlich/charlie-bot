@@ -130,7 +130,7 @@ fn gib(bytes: u64) -> f64 {
 }
 
 /// Every session's cold verdict and backend reference. A session whose metadata cannot be read is
-/// skipped; a document that is not a JSON object fails the run.
+/// skipped. A document that is not a JSON object fails the run.
 fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMap<String, SessionFacts>> {
   let mut facts = HashMap::new();
   if !is_dir(sessions_dir) {

@@ -8,7 +8,7 @@ use memchr::memmem;
 use serde_json::Value;
 
 pub fn parse_marker_lines(path: &Path, markers: &[&[u8]]) -> anyhow::Result<Vec<Value>> {
-  // A compressed log reads as its decompressed bytes; the caller still names the plain path that keys the ledger.
+  // A compressed log reads as its decompressed bytes. The caller still names the plain path that keys the ledger.
   let reader = run_logs::open(path)
     .with_context(|| format!("opening {}", path.display()))?
     .ok_or_else(|| anyhow::anyhow!("the log {} is missing", path.display()))?;

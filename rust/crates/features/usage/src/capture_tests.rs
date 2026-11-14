@@ -669,7 +669,7 @@ fn a_rewritten_file_reads_whole() {
 fn backend_page_source_attributes_by_type_prefix_and_master_account() {
   // The attribution reads a registered id's config type first (the type wins over the id's prefix), an off-config
   // id's type prefix next. The master-run account then attributes as CLC through its clc- prefix. The gemini type has
-  // no usage source in this fixture; the agents crate registers the Antigravity and kimi types.
+  // no usage source in this fixture. The agents crate registers the Antigravity and kimi types.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let options = [
@@ -879,7 +879,7 @@ fn codex_p2_signature_rereads_the_unchanged_rollout_once() {
 #[test]
 fn charliebot_capture_rows() {
   // CLC threads plus a CLC master capture give the ledger one row per model. The recorded model names the first
-  // thread's row; the config model and the master's context model merge into the second. An unchanged corpus's
+  // thread's row. The config model and the master's context model merge into the second. An unchanged corpus's
   // second capture writes nothing.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -927,7 +927,7 @@ fn charliebot_capture_rows() {
     ),
     (1, 0, 0, 0, 100, 5)
   );
-  // t2's input is unsplit like t1's; the master's carries no cached reads.
+  // t2's input is unsplit like t1's. The master's carries no cached reads.
   let merged = row(&rows, "charlie-bot", "GLM-5.4-Flash");
   assert_eq!((merged.calls, merged.in_fresh.int(), merged.in_unsplit.int(), merged.output.int()), (2, 300, 200, 6 + 7));
 }
@@ -1015,8 +1015,8 @@ fn charliebot_cc_claude_thread_keeps_the_claude_split() {
 
 #[test]
 fn charliebot_master_counts_its_cached_reads_once() {
-  // A master capture's trailing result carries the run's usage with the cached reads inside the one input field; they
-  // land in cache_read, not in in_fresh beside them.
+  // A master capture's trailing result carries the run's usage with the cached reads inside the one input field.
+  // They land in cache_read, not in in_fresh beside them.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) =
@@ -1470,7 +1470,7 @@ fn capture_usage_covers_every_source_and_zeroes_on_the_second_round() {
 #[test]
 fn a_file_at_its_stored_signature_is_never_read() {
   // A file whose stat pair equals the stored signature skips its source's read() altogether, so an unchanged corpus
-  // costs one stat per file; a file that moved reads again.
+  // costs one stat per file. A file that moved reads again.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);

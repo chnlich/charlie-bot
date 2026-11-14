@@ -316,7 +316,7 @@ fn write_raw_usage(conn: &Connection, rec: &UsageRecord) {
 }
 
 /// The aggregate triggers the pre-fix release shipped: its add arm skipped any (group, day) row that already existed.
-/// Only these two bodies differ from the module's; the three subtract-only bodies are unchanged.
+/// Only these two bodies differ from the module's. The three subtract-only bodies are unchanged.
 const PRE_FIX_INSERT_TRIGGER: &str = r#"
 CREATE TRIGGER usage_agg_after_insert AFTER INSERT ON usage
 BEGIN

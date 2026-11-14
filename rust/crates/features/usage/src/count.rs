@@ -63,7 +63,7 @@ impl Count {
     }
   }
 
-  /// The integer a test expects; a real count fails the assertion that reads it.
+  /// The integer a test expects. A real count fails the assertion that reads it.
   #[cfg(test)]
   pub fn int(self) -> i64 {
     match self {

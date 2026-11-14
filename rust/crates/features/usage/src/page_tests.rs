@@ -524,7 +524,7 @@ async fn page_legend_names_the_cli_sources_without_charlie_bot() {
   let end = start + body[start..].find(']').expect("the legend list closes") + 1;
   let legend: Value = serde_json::from_str(&body[start..end]).expect("the legend is JSON");
   assert_eq!(legend, json!([CC, CODEX, OC, AGY, CLC, "Devin"]));
-  // Every legend entry takes a series colour; a source past the palette would draw no swatch.
+  // Every legend entry takes a series colour. A source past the palette would draw no swatch.
   let colours = body.matches("'var(--series-").count();
   assert_eq!(colours, legend.as_array().expect("the legend is a list").len(), "the page has one colour per source");
   assert!(!body.contains("charlie-bot"), "the page names no charlie-bot source");
@@ -613,7 +613,7 @@ fn last_week_reads_the_same_rows_on_the_table_and_the_aggregate() {
     ],
   );
   let now = at("2026-10-30T20:00:00Z");
-  // The first read backfills the aggregate, so it takes the table pass; the second takes the aggregate.
+  // The first read backfills the aggregate, so it takes the table pass. The second takes the aggregate.
   let table = read_ledger_at(&features, now).expect("the ledger reads");
   let aggregate = read_ledger_at(&features, now).expect("the ledger reads");
   assert_eq!(table.week_rows[0].output, Count::Int(10), "the window starts at its first instant");

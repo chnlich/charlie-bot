@@ -257,6 +257,18 @@
     // -------------------------------------------------------------------------
     // Render
     // -------------------------------------------------------------------------
+    // The payload in its row: the highlighter's indented JSON, one block per line, each padded by
+    // its own depth. A value longer than the row wraps inside the pre, and the wrap continues at
+    // the pre's left edge, where the value reads as a top-level line. The per-line padding
+    // continues it under its own key instead. A string escapes its newlines, so each newline in
+    // this text separates two lines.
+    function payloadHtml(ev) {
+      return syntaxHighlight(ev).split('\n').map((line) => {
+        const spaces = line.match(/^ */)[0].length;
+        return `<div style="padding-left:${spaces}ch">${line.slice(spaces)}</div>`;
+      }).join('');
+    }
+
     function renderEvents(events) {
       const list = document.getElementById('event-list');
       list.innerHTML = '';
@@ -286,7 +298,7 @@
             <span class="event-caret flex-shrink-0" aria-hidden="true">▶</span>
           </button>
           <div class="json-body ${expandAll ? '' : 'hidden'}">
-            <pre class="text-xs bg-slate-800 rounded p-3 overflow-x-auto leading-5">${syntaxHighlight(ev)}</pre>
+            <pre class="text-xs bg-slate-800 rounded p-3 overflow-x-auto leading-5">${payloadHtml(ev)}</pre>
           </div>`;
         // A preview is a tool's input or output, so it enters the row as text and never as markup.
         row.querySelector('.event-preview').textContent = summary;

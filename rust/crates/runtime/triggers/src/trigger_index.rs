@@ -1,15 +1,15 @@
 //! The startup-only index of trigger files a boot proved not pending.
 //!
-//! The recovery trigger walk reads every session's `triggers` directory and opens every trigger file, because only a
-//! file's own content names its status, and a file's status is what decides whether the trigger starts a task. A trigger
-//! that fired or was cancelled never returns to pending, and every status write replaces its file, so a row carrying the
-//! file's `(size, mtime_ns)` serves that file's non-pending status to a later boot without opening it. The boot stats
-//! every trigger file anyway, so the row costs one lookup and saves the read and parse.
+//! The recovery trigger walk reads every session's `triggers` directory and opens every trigger file. Only a file's own
+//! content names its status, and that status decides whether the trigger starts a task. A trigger that fired or was
+//! cancelled never returns to pending, and every status write replaces its file. A row carrying the file's
+//! `(size, mtime_ns)` therefore serves that file's non-pending status to a later boot without opening it. The boot
+//! stats every trigger file anyway, so the row costs one lookup and saves the read and parse.
 //!
-//! A row is used only while the file carries the identity it recorded, so a file rewritten after the row was written is
-//! read as before; a file the index has no row for (a new trigger, or a file that was pending) is read too. A missing,
-//! torn or foreign-version index serves nothing, and the boot reads every trigger file as it did before. The index is
-//! startup-only and is never synced: an unserved row costs one file read, never a wrong status.
+//! A row is used only while the file carries the identity it recorded, so a file rewritten after the row was written
+//! is read as before. A file the index has no row for (a new trigger, or a file that was pending) is read too. A
+//! missing, torn or foreign-version index serves nothing, and the boot reads every trigger file as it did before. The
+//! index is startup-only and is never synced: an unserved row costs one file read, never a wrong status.
 
 use std::collections::HashMap;
 use std::io;
@@ -96,7 +96,7 @@ impl TriggerIndex {
 }
 
 /// Write the rows this boot proved, replacing the previous index. The boot writes the rows of the files it read and
-/// the rows it served, so a file's row survives while its identity holds and disappears when the file does.
+/// the rows it served. A file's row therefore survives while its identity holds and disappears when the file does.
 pub(crate) fn write(home: &Path, rows: &[TriggerIndexRow]) -> io::Result<()> {
   let fields = rows
     .iter()

@@ -40,6 +40,23 @@ fn config_home(sandbox: &Sandbox, api_base: &str) -> PathBuf {
   home
 }
 
+/// The key the credentialed tests' `credentials.yaml` section holds.
+const ENDPOINT_API_KEY: &str = "synthetic-endpoint-key";
+
+/// A scratch home whose option names the `synthetic-endpoint` credential section holding `api_key`.
+fn credentialed_config_home(sandbox: &Sandbox, api_base: &str, api_key: &str) -> PathBuf {
+  let home = config_home(sandbox, api_base);
+  let mut config = std::fs::read_to_string(home.join("config.yaml")).expect("read the scratch config");
+  config.push_str("      credential: synthetic-endpoint\n");
+  std::fs::write(home.join("config.yaml"), config).expect("write the credentialed config");
+  std::fs::write(
+    home.join(charliebot_core::config::CREDENTIALS_FILENAME),
+    format!("synthetic-endpoint:\n  api_key: {api_key}\n"),
+  )
+  .expect("write the scratch credentials");
+  home
+}
+
 /// Runs the command against the sandbox: the stub directory leads a system-only PATH and
 /// `HOME` is the sandbox root, so neither PATH nor `~/.local/bin` holds a stray charlie-code.
 fn run_preflight(sandbox: &Sandbox, home: &Path, backend_id: &str) -> Run {
@@ -63,6 +80,28 @@ fn serve_models(body: &serde_json::Value) -> String {
     let _ = stream.read(&mut request);
     let response =
       format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    let _ = stream.write_all(response.as_bytes());
+  });
+  format!("http://127.0.0.1:{port}/v1")
+}
+
+/// Serves `body` as one JSON `GET` answer only to a request bearing `Bearer key`; any other request gets 401.
+fn serve_models_requiring_key(key: &str, body: &serde_json::Value) -> String {
+  let listener = TcpListener::bind("127.0.0.1:0").expect("bind the loopback endpoint");
+  let port = listener.local_addr().expect("the bound port").port();
+  let expected = format!("authorization: bearer {key}");
+  let body = body.to_string();
+  thread::spawn(move || {
+    let Ok((mut stream, _)) = listener.accept() else { return };
+    let mut request = [0u8; 1024];
+    let read = stream.read(&mut request).unwrap_or(0);
+    let answered = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
+    let (status, payload) =
+      if answered.contains(expected.as_str()) { ("200 OK", body.as_str()) } else { ("401 Unauthorized", "") };
+    let response = format!(
+      "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
+      payload.len()
+    );
     let _ = stream.write_all(response.as_bytes());
   });
   format!("http://127.0.0.1:{port}/v1")
@@ -207,6 +246,62 @@ fn an_endpoint_without_the_model_is_reported() {
     run.stderr,
     format!(
       "model-not-served: {url} lists ['synthetic-other', 'synthetic-second']; fix the model field or the endpoint\n"
+    )
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_credentialed_option_authenticates_the_models_request() {
+  let sandbox = Sandbox::new();
+  stub_charlie_code(&sandbox, &healthy_help_stub());
+  let api_base = serve_models_requiring_key(ENDPOINT_API_KEY, &json!({"data": [{"id": "synthetic-model"}]}));
+  let home = credentialed_config_home(&sandbox, &api_base, ENDPOINT_API_KEY);
+  let run = run_preflight(&sandbox, &home, "synthetic-cc");
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.is_empty(), "{}", run.stderr);
+  assert!(run.stdout.contains("serves synthetic-model"), "{}", run.stdout);
+  assert!(!run.stdout.contains(ENDPOINT_API_KEY), "the key stays out of stdout: {}", run.stdout);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_refused_credential_is_reported_as_an_auth_refusal() {
+  let sandbox = Sandbox::new();
+  stub_charlie_code(&sandbox, &healthy_help_stub());
+  // The stub expects another key, so it refuses the one the option carries.
+  let api_base = serve_models_requiring_key("another-endpoint-key", &json!({"data": [{"id": "synthetic-model"}]}));
+  let home = credentialed_config_home(&sandbox, &api_base, ENDPOINT_API_KEY);
+  let run = run_preflight(&sandbox, &home, "synthetic-cc");
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert_eq!(
+    run.stderr,
+    format!(
+      "auth-refused: {api_base}/models refused the credential (HTTP 401 Unauthorized); \
+       check the api_key in credentials.yaml section 'synthetic-endpoint'\n"
+    )
+  );
+  assert!(!run.stderr.contains(ENDPOINT_API_KEY), "the key stays out of stderr: {}", run.stderr);
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_option_without_a_credential_sends_no_key_and_says_so_on_refusal() {
+  let sandbox = Sandbox::new();
+  stub_charlie_code(&sandbox, &healthy_help_stub());
+  // The stub refuses every request that does not bear its key, so a pass would mean a header was sent.
+  let api_base = serve_models_requiring_key(ENDPOINT_API_KEY, &json!({"data": [{"id": "synthetic-model"}]}));
+  let home = config_home(&sandbox, &api_base);
+  let run = run_preflight(&sandbox, &home, "synthetic-cc");
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert_eq!(
+    run.stderr,
+    format!(
+      "auth-refused: {api_base}/models refused the credential (HTTP 401 Unauthorized); the option names no \
+       credentials.yaml section, so the request carried no key\n"
     )
   );
 }

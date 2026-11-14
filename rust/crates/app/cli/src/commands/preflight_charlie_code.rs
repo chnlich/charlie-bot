@@ -6,6 +6,8 @@
 //!
 //! Each failure prints its line to stderr and exits 1; the `OK:` line goes to stdout and exits 0. The failure
 //! lines are the script's stderr contract, so they stay plain text, not the CLI's shared JSON failure object.
+//! The `/models` request authenticates with the key the backend's child env carries, so a gateway that requires one
+//! passes the model check while a refusal by that credential gets its own `auth-refused` line.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -16,7 +18,6 @@ use charliebot_agents::cli_base::CliHost;
 use charliebot_charlie_code::flags;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::config::BackendOption;
 use charliebot_core::home;
 use charliebot_registry::backend::{BackendFactory, Env, LaunchArgs};
 use clap::Parser;
@@ -118,11 +119,28 @@ fn preflight(backend_id: &str) -> Result<(), String> {
   }
 
   // Mechanism 5: the endpoint serves the configured model.
-  let api_base = parsed_api_base(option).trim_end_matches('/').to_string();
+  let fields = charliebot_charlie_code::options::CharlieCodeOption::from_fields(&option.type_fields)
+    .expect("mechanism 2 built this option, so its fields parse");
+  let api_base = fields.api_base.as_deref().unwrap_or_default().trim_end_matches('/').to_string();
   let url = format!("{api_base}/models");
-  let served_ids = match fetch_served_models(&url) {
+  // The child env carries the key and the proxy the backend's runs use, so the request reaches the endpoint the
+  // same way they do.
+  let credential = fields.credential.as_deref().filter(|section| !section.is_empty());
+  let api_key = child_env.get(charliebot_charlie_code::API_KEY_ENV).map(String::as_str);
+  let proxy_url = fields.proxy_url.as_deref().filter(|proxy| !proxy.is_empty());
+  let no_proxy = child_env.get(charliebot_core::proxy_env::NO_PROXY).map(String::as_str);
+  let served_ids = match fetch_served_models(&url, api_key, proxy_url, no_proxy) {
     Ok(served_ids) => served_ids,
-    Err(error) => return Err(format!("model-not-served: {url} unreachable ({error})")),
+    Err(ServedModelsError::Unreachable(error)) => {
+      return Err(format!("model-not-served: {url} unreachable ({error})"));
+    }
+    Err(ServedModelsError::AuthRefused(status)) => {
+      let checked = match credential {
+        Some(section) => format!("check the api_key in credentials.yaml section '{section}'"),
+        None => "the option names no credentials.yaml section, so the request carried no key".to_string(),
+      };
+      return Err(format!("auth-refused: {url} refused the credential (HTTP {status}); {checked}"));
+    }
   };
   // The litellm provider prefix is stripped at request time; the endpoint serves the bare id.
   let served_model = option.model.split_once('/').map_or(option.model.as_str(), |(_, bare)| bare);
@@ -134,13 +152,6 @@ fn preflight(backend_id: &str) -> Result<(), String> {
 
   println!("OK: {backend_id} -> {} serves {served_model} at {api_base}", bin.display());
   Ok(())
-}
-
-/// The option's endpoint, which mechanism 2's build has already required.
-fn parsed_api_base(option: &BackendOption) -> String {
-  let fields = charliebot_charlie_code::options::CharlieCodeOption::from_fields(&option.type_fields)
-    .expect("mechanism 2 built this option, so its fields parse");
-  fields.api_base.unwrap_or_default()
 }
 
 /// Run `<bin> --help` under the backend's child env with a 60 s budget; the error is a
@@ -177,21 +188,53 @@ fn run_help(bin: &std::path::Path, child_env: &Env) -> Result<String, String> {
   Ok(help_text)
 }
 
-/// The model ids the endpoint's `/models` lists, sorted, under a 15 s budget; any failure of the
-/// request, the body read or the payload shape is an unreachable endpoint.
-fn fetch_served_models(url: &str) -> Result<Vec<String>, String> {
+/// Why the `/models` request failed: the request, the body read or the payload shape was unusable, or the endpoint
+/// refused the credential the option's runs carry.
+enum ServedModelsError {
+  Unreachable(String),
+  AuthRefused(reqwest::StatusCode),
+}
+
+/// The model ids the endpoint's `/models` lists, sorted, under a 15 s budget. `api_key` travels as the bearer
+/// credential when set, and a `proxy_url` routes the request through the backend's proxy with its no-proxy list;
+/// without one, reqwest's default proxy behavior stands.
+fn fetch_served_models(
+  url: &str,
+  api_key: Option<&str>,
+  proxy_url: Option<&str>,
+  no_proxy: Option<&str>,
+) -> Result<Vec<String>, ServedModelsError> {
   charliebot_cli_common::http::ensure_crypto_provider();
-  let runtime =
-    tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|error| error.to_string())?;
+  let runtime = tokio::runtime::Builder::new_current_thread()
+    .enable_all()
+    .build()
+    .map_err(|error| ServedModelsError::Unreachable(error.to_string()))?;
   runtime.block_on(async {
-    let client =
-      reqwest::Client::builder().timeout(Duration::from_secs(15)).build().map_err(|error| error.to_string())?;
-    let response = client.get(url).send().await.map_err(|error| error.to_string())?;
-    let response = response.error_for_status().map_err(|error| error.to_string())?;
-    let body = response.bytes().await.map_err(|error| error.to_string())?;
-    let payload: Value = serde_json::from_slice(&body).map_err(|error| error.to_string())?;
-    let entries =
-      payload.get("data").and_then(Value::as_array).ok_or_else(|| "the payload has no data list".to_string())?;
+    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(15));
+    if let Some(proxy_url) = proxy_url {
+      let proxy = reqwest::Proxy::all(proxy_url)
+        .map_err(|error| ServedModelsError::Unreachable(error.to_string()))?
+        .no_proxy(no_proxy.and_then(reqwest::NoProxy::from_string));
+      builder = builder.proxy(proxy);
+    }
+    let client = builder.build().map_err(|error| ServedModelsError::Unreachable(error.to_string()))?;
+    let mut request = client.get(url);
+    if let Some(api_key) = api_key {
+      request = request.bearer_auth(api_key);
+    }
+    let response = request.send().await.map_err(|error| ServedModelsError::Unreachable(error.to_string()))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+      return Err(ServedModelsError::AuthRefused(status));
+    }
+    let response = response.error_for_status().map_err(|error| ServedModelsError::Unreachable(error.to_string()))?;
+    let body = response.bytes().await.map_err(|error| ServedModelsError::Unreachable(error.to_string()))?;
+    let payload: Value =
+      serde_json::from_slice(&body).map_err(|error| ServedModelsError::Unreachable(error.to_string()))?;
+    let entries = payload
+      .get("data")
+      .and_then(Value::as_array)
+      .ok_or_else(|| ServedModelsError::Unreachable("the payload has no data list".to_string()))?;
     let mut ids: Vec<String> = entries
       .iter()
       .map(|entry| {
@@ -201,7 +244,7 @@ fn fetch_served_models(url: &str) -> Result<Vec<String>, String> {
             Value::String(text) => text.clone(),
             other => other.to_string(),
           })
-          .ok_or_else(|| "a data entry has no id".to_string())
+          .ok_or_else(|| ServedModelsError::Unreachable("a data entry has no id".to_string()))
       })
       .collect::<Result<Vec<_>, _>>()?;
     ids.sort();

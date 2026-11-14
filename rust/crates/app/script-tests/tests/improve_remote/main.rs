@@ -1030,6 +1030,32 @@ fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
 
 #[test]
 #[ignore = "integration"]
+fn a_branch_does_not_claim_a_path_it_restores_to_its_merge_base() {
+  let world = World::new();
+  fs::write(world.repo.join("restored.md"), "base\n").expect("the base file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "add the base file"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  let checkout = world.sandbox.root().join("restored-checkout");
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "-b", "charliebot/restored"]);
+
+  fs::write(checkout.join("restored.md"), "temporary change\n").expect("the temporary change");
+  world.git(&checkout, &["commit", "-q", "-am", "change the file"]);
+  fs::write(checkout.join("restored.md"), "base\n").expect("restore the base contents");
+  world.git(&checkout, &["commit", "-q", "-am", "restore the file"]);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    !lists_path(&run.stdout, "restored.md"),
+    "the branch claims a path that its final tree restores to the merge base:\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
 fn an_unowned_worktree_branch_keeps_all_changed_paths() {
   let world = World::new();
   // The branch changes four paths: two additions and two deletions.

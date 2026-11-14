@@ -82,9 +82,13 @@ list_committed_paths() {
   local root=$1
   local merge_base=$2
   local branch=$3
-  local line sha path id patch_ids log
-  local -a paths=()
-  local -A seen=() carried=() commit_patch_id=()
+  local line sha path id patch_ids log changed_paths
+  local -A carried=() commit_patch_id=()
+
+  if ! changed_paths=$(git -C "$root" diff --name-only "$merge_base" "$branch"); then
+    printf 'cannot read changed paths of %s in %s\n' "$branch" "$root" >&2
+    exit 1
+  fi
 
   if ! patch_ids=$(git -C "$root" log --no-merges -p --format=%H "$merge_base..$branch" | git patch-id --stable); then
     printf 'cannot read the patch ids of %s in %s\n' "$branch" "$root" >&2
@@ -104,20 +108,17 @@ list_committed_paths() {
       if [[ -z ${main_patch_ids[${commit_patch_id["$sha"]:-}]:-} ]]; then
         carried["$line"]=1
       fi
-      if [[ -z ${seen["$line"]:-} ]]; then
-        seen["$line"]=1
-        paths+=("$line")
-      fi
     fi
   done <<<"$log"
 
-  for path in "${paths[@]}"; do
+  while IFS= read -r path; do
+    [[ -n $path ]] || continue
     if [[ -n ${carried["$path"]:-} ]]; then
       printf '%s\t%s\n' "$path" "$branch"
     else
       print_path_claim "$root" "$path" "$branch"
     fi
-  done
+  done <<<"$changed_paths"
 }
 
 # Print the tracked changes from HEAD and every untracked path of one checkout. Uncommitted work
@@ -424,12 +425,12 @@ list_open_pull_requests() {
 # task names a worktree, its claims remain. An open pull request, an open task, or a process keeps every branch path
 # and every dirty path claimed, including paths whose branch version has landed on main.
 #
-# The first pass resolves each live branch's merge base, and the oldest of them bounds the one
+# The first pass resolves each live branch's merge base, and their common ancestor bounds the one
 # shared read of main's patch ids; the second pass classifies each branch's paths against it.
 list_worktree_branches() {
   local -a worktrees=() branches=()
   local -a live_worktrees=() live_branches=() live_bases=()
-  local worktree= branch= line index merge_base oldest_base= oldest_date= base_date base_sha listing
+  local worktree= branch= line index merge_base oldest_base
 
   while IFS= read -r line; do
     case $line in
@@ -465,17 +466,10 @@ list_worktree_branches() {
   done
 
   if (( ${#live_branches[@]} > 0 )); then
-    if ! listing=$(git -C "$main_root" log --no-walk --format='%ct %H' "${live_bases[@]}"); then
-      printf 'cannot read the merge bases of the live branches\n' >&2
+    if ! oldest_base=$(git -C "$main_root" merge-base --octopus "${live_bases[@]}"); then
+      printf 'cannot read a common ancestor of the live branches\n' >&2
       exit 1
     fi
-    while read -r base_date base_sha; do
-      [[ -n $base_sha ]] || continue
-      if [[ -z $oldest_date || $base_date -lt $oldest_date ]]; then
-        oldest_date=$base_date
-        oldest_base=$base_sha
-      fi
-    done <<<"$listing"
     read_main_patch_ids "$main_root" "$oldest_base" "$main_ref"
   fi
 

@@ -32,7 +32,7 @@ pub const SCHEMA: &[OptionField] = &[
 pub struct CharlieCodeOption {
   /// The OpenAI-compatible base URL. The backend refuses an option that has none.
   pub api_base: Option<String>,
-  /// The compaction window in tokens; `None` takes the CLI's default.
+  /// The compaction window in tokens. `None` takes the CLI's default.
   pub context_window: Option<i64>,
   /// The `credentials.yaml` section whose `api_key` the child env carries.
   pub credential: Option<String>,
@@ -40,13 +40,13 @@ pub struct CharlieCodeOption {
   pub proxy_url: Option<String>,
   /// Whether the endpoint accepts image attachments, which are sent as `--image`.
   pub image_input: bool,
-  /// Whether the endpoint streams; `false` emits `--no-stream`.
+  /// Whether the endpoint streams. `false` emits `--no-stream`.
   pub stream: bool,
-  /// The call budget in seconds; `None` takes the CLI's default.
+  /// The call budget in seconds. `None` takes the CLI's default.
   pub timeout_seconds: Option<i64>,
-  /// The nucleus cutoff, in (0, 1]; `None` takes the CLI's default.
+  /// The nucleus cutoff, in (0, 1]. `None` takes the CLI's default.
   pub top_p: Option<f64>,
-  /// The sampling temperature, at least 0; `None` takes the CLI's default.
+  /// The sampling temperature, at least 0. `None` takes the CLI's default.
   pub temperature: Option<f64>,
 }
 
@@ -78,7 +78,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
   CharlieCodeOption::from_fields(fields).map(|_| ())
 }
 
-/// The field's value when the option sets it to a value; a null field reads as absent.
+/// The field's value when the option sets it to a value. A null field reads as absent.
 fn present<'a>(fields: &'a Mapping, name: &str) -> Option<&'a Value> {
   fields.get(name).filter(|value| !value.is_null())
 }

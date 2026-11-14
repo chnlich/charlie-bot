@@ -1,37 +1,14 @@
 //! The startup sweep's scope and its `session_cgroup_sweep_removed` line, read through the shared test capture.
 
-use std::collections::BTreeMap;
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use charliebot_agents::transport::cgroup::{sweep_stale_session_cgroups, use_fake_cgroup_hierarchy};
 use charliebot_core::cgroup::{RETIRED_APP_SLICE, user_slice_dir};
-use charliebot_core::test_support::EventSink;
-use tracing::Event;
-use tracing::field::{Field, Visit};
+use charliebot_core::test_support::RecordedEvents;
 
 const SESSION_ID: &str = "abcd1234-ef56-7890-abcd-ef1234567890";
 const POPULATED_ID: &str = "9f8e7d6c-0000-4000-8000-000000000000";
-
-/// Each event the capture records: each field's name and Debug text.
-#[derive(Clone, Default)]
-struct RecordedEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
-
-impl EventSink for RecordedEvents {
-  fn event(&self, event: &Event<'_>) {
-    let mut fields = BTreeMap::new();
-    event.record(&mut FieldText(&mut fields));
-    self.0.lock().expect("the recorder lock").push(fields);
-  }
-}
-
-struct FieldText<'a>(&'a mut BTreeMap<String, String>);
-
-impl Visit for FieldText<'_> {
-  fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-    self.0.insert(field.name().to_string(), format!("{value:?}"));
-  }
-}
 
 #[test]
 fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
@@ -75,8 +52,8 @@ fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
   assert!(populated.is_dir());
   assert!(other_home.is_dir());
   assert!(non_session.is_dir());
-  let events = recorded.0.lock().expect("the recorder lock");
-  let sweeps: Vec<&BTreeMap<String, String>> = events
+  let events = recorded.events();
+  let sweeps: Vec<_> = events
     .iter()
     .filter(|fields| fields.get("message").is_some_and(|text| text == "session_cgroup_sweep_removed"))
     .collect();

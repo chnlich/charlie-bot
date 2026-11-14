@@ -1,5 +1,5 @@
 //! The tracing capture that every crate's tests share. A test that reads rendered log lines uses [`LogCapture`]; a test
-//! that reads event fields implements [`EventSink`] and installs it with [`install_events`].
+//! that reads event fields installs [`RecordedEvents`], or implements [`EventSink`] itself, with [`install_events`].
 //!
 //! One global subscriber serves every thread and never changes; a capture is a thread-local sink that the subscriber's
 //! fmt writer or event layer consults. A scoped `set_default` per capture would not do: tracing-core 0.1.36 has one
@@ -7,11 +7,13 @@
 //! default alone. A call site first reached on a thread with no subscriber then caches `never` for every thread.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, Once};
 
 use tracing::Event;
 use tracing::Subscriber;
+use tracing::field::{Field, Visit};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
@@ -61,6 +63,33 @@ impl Write for LogCapture {
 pub trait EventSink {
   /// The record of one event.
   fn event(&self, event: &Event<'_>);
+}
+
+/// The events one test thread records: for each event, its field names and each field's Debug text, in arrival order.
+#[derive(Clone, Default)]
+pub struct RecordedEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+
+impl RecordedEvents {
+  /// The events recorded so far, oldest first.
+  pub fn events(&self) -> Vec<BTreeMap<String, String>> {
+    self.0.lock().expect("the recorder lock").clone()
+  }
+}
+
+impl EventSink for RecordedEvents {
+  fn event(&self, event: &Event<'_>) {
+    let mut fields = BTreeMap::new();
+    event.record(&mut FieldText(&mut fields));
+    self.0.lock().expect("the recorder lock").push(fields);
+  }
+}
+
+struct FieldText<'a>(&'a mut BTreeMap<String, String>);
+
+impl Visit for FieldText<'_> {
+  fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+    self.0.insert(field.name().to_string(), format!("{value:?}"));
+  }
 }
 
 /// Routes the current thread's events into `sink` until the returned guard drops.

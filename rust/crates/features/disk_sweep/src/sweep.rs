@@ -115,6 +115,90 @@ impl SweepRow {
     let run = self.owner()?;
     Ok(layout::runs_dir(&sessions_root.join(&run.session_id)).join(&run.id).join("worktree-changes.tar"))
   }
+
+  /// Marks the row skipped with `reason`, dropping the bytes it would have freed.
+  fn mark_skipped(&mut self, reason: &str) {
+    self.action = SweepAction::Skip;
+    self.reason = reason.to_string();
+    self.freed_bytes = 0;
+  }
+
+  /// Records what one worktree inspection says to do with the row: skip it with the inspection's reason, remove it
+  /// outright, or archive its changes and then remove it.
+  fn record_worktree_inspection(&mut self, inspection: &git::WorktreeInspection) {
+    if let Some(reason) = inspection.skip_reason {
+      self.mark_skipped(reason);
+    } else if inspection.status.is_empty() {
+      self.action = SweepAction::Delete;
+      self.reason = "closed-task".to_string();
+    } else {
+      self.action = SweepAction::ArchiveDelete;
+      self.reason = "uncommitted-changes".to_string();
+    }
+  }
+
+  /// The worktree preflight: inspects the row's worktree and records the inspection's verdict.
+  fn worktree_preflight(&mut self) -> Result<()> {
+    self.record_worktree_inspection(&git::inspect_worktree(&self.path)?);
+    Ok(())
+  }
+
+  /// The scratch preflight: skips a directory that is too young or holds an unsaved repository.
+  fn scratch_preflight(&mut self, now: DateTime<Utc>) -> Result<()> {
+    if tree_latest_mtime(&self.path)? >= scratch_cutoff(now) {
+      self.mark_skipped("too-young");
+      return Ok(());
+    }
+    if has_unsaved_repository(&self.path)? {
+      self.mark_skipped("has-unsaved-repo");
+      return Ok(());
+    }
+    Ok(())
+  }
+
+  /// The row prepared for the apply pass: its verdict, the archive of a dirty worktree's changes, and the processes
+  /// that hold its path. `Skip` leaves the row unchanged; the other variants report what to remove.
+  fn prepare_apply(mut self, roots: SweepRoots, now: DateTime<Utc>) -> (Result<PreparedApply>, HashSet<u32>) {
+    let mut unreadable = HashSet::new();
+    let result = (|| -> Result<PreparedApply> {
+      match self.kind {
+        SweepKind::Worktree => {
+          let inspection = git::inspect_worktree(&self.path)?;
+          self.record_worktree_inspection(&inspection);
+          if self.action == SweepAction::Skip {
+            return Ok(PreparedApply::Skip(self));
+          }
+          if self.action == SweepAction::ArchiveDelete {
+            let archive_path = self.archive_path(&roots.sessions_root)?;
+            archive::archive_worktree(&self.path, &archive_path, &inspection.untracked)?;
+            let (used, unreadable_now) = process::in_use_paths(std::slice::from_ref(&self.path), &roots.proc_root)?;
+            unreadable.extend(unreadable_now);
+            if used.contains(&self.path) {
+              self.mark_skipped("in-use");
+              return Ok(PreparedApply::Skip(self));
+            }
+          }
+          Ok(PreparedApply::RemoveWorktree(self))
+        }
+        SweepKind::Scratch => {
+          self.scratch_preflight(now)?;
+          if self.action == SweepAction::Skip {
+            return Ok(PreparedApply::Skip(self));
+          }
+          let (used, unreadable_now) = process::in_use_paths(&[self.path.clone()], &roots.proc_root)?;
+          unreadable.extend(unreadable_now);
+          if used.contains(&self.path) {
+            self.mark_skipped("in-use");
+            return Ok(PreparedApply::Skip(self));
+          }
+          fs::remove_dir_all(&self.path)
+            .with_context(|| format!("removing scratch directory {}", self.path.display()))?;
+          Ok(PreparedApply::ScratchRemoved(self))
+        }
+      }
+    })();
+    (result, unreadable)
+  }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -177,12 +261,12 @@ pub async fn run_sweep(roots: SweepRoots, mode: SweepMode, now: DateTime<Utc>) -
       .await?;
       unreadable.extend(unreadable_now);
       if used {
-        mark_skipped(&mut report.rows[index], "in-use");
+        report.rows[index].mark_skipped("in-use");
         continue;
       }
       let row = report.rows[index].clone();
       let apply_roots = roots.clone();
-      let (prepared, unreadable_now) = on_blocking(move || Ok(prepare_apply(row, apply_roots, now))).await?;
+      let (prepared, unreadable_now) = on_blocking(move || Ok(row.prepare_apply(apply_roots, now))).await?;
       unreadable.extend(unreadable_now);
       match prepared {
         Ok(PreparedApply::Skip(row)) => report.rows[index] = row,
@@ -218,7 +302,7 @@ fn scan(roots: SweepRoots, now: DateTime<Utc>) -> Result<ScanResult> {
       && ((row.kind == SweepKind::Worktree && row.path == worktree_root)
         || (row.kind == SweepKind::Scratch && row.path == resolved_scratch_root))
     {
-      mark_skipped(row, "unsafe-root");
+      row.mark_skipped("unsafe-root");
     }
   }
   let eligible =
@@ -226,12 +310,12 @@ fn scan(roots: SweepRoots, now: DateTime<Utc>) -> Result<ScanResult> {
   let (used, unreadable) = process::in_use_paths(&eligible, &roots.proc_root)?;
   for row in &mut rows {
     if used.contains(&row.path) {
-      mark_skipped(row, "in-use");
+      row.mark_skipped("in-use");
     }
   }
   for row in &mut rows {
     if row.kind == SweepKind::Worktree && row.action != SweepAction::Skip {
-      worktree_preflight(row)?;
+      row.worktree_preflight()?;
     }
   }
   let eligible =
@@ -579,25 +663,6 @@ fn mtime(metadata: &fs::Metadata) -> f64 {
   metadata.mtime() as f64 + metadata.mtime_nsec() as f64 / 1_000_000_000.0
 }
 
-/// Record what one worktree inspection says to do with the row: skip it with the inspection's reason, remove it
-/// outright, or archive its changes and then remove it.
-fn record_worktree_inspection(row: &mut SweepRow, inspection: &git::WorktreeInspection) {
-  if let Some(reason) = inspection.skip_reason {
-    mark_skipped(row, reason);
-  } else if inspection.status.is_empty() {
-    row.action = SweepAction::Delete;
-    row.reason = "closed-task".to_string();
-  } else {
-    row.action = SweepAction::ArchiveDelete;
-    row.reason = "uncommitted-changes".to_string();
-  }
-}
-
-fn worktree_preflight(row: &mut SweepRow) -> Result<()> {
-  record_worktree_inspection(row, &git::inspect_worktree(&row.path)?);
-  Ok(())
-}
-
 fn inode_blocks(paths: &[PathBuf]) -> Result<HashMap<PathBuf, u64>> {
   let mut inodes: HashMap<(u64, u64), (u64, u64, u64, PathBuf)> = HashMap::new();
   for path in paths {
@@ -634,63 +699,10 @@ fn collect_inodes(
   Ok(())
 }
 
-fn prepare_apply(mut row: SweepRow, roots: SweepRoots, now: DateTime<Utc>) -> (Result<PreparedApply>, HashSet<u32>) {
-  let mut unreadable = HashSet::new();
-  let result = (|| -> Result<PreparedApply> {
-    match row.kind {
-      SweepKind::Worktree => {
-        let inspection = git::inspect_worktree(&row.path)?;
-        record_worktree_inspection(&mut row, &inspection);
-        if row.action == SweepAction::Skip {
-          return Ok(PreparedApply::Skip(row));
-        }
-        if row.action == SweepAction::ArchiveDelete {
-          let archive_path = row.archive_path(&roots.sessions_root)?;
-          archive::archive_worktree(&row.path, &archive_path, &inspection.untracked)?;
-          let (used, unreadable_now) = process::in_use_paths(std::slice::from_ref(&row.path), &roots.proc_root)?;
-          unreadable.extend(unreadable_now);
-          if used.contains(&row.path) {
-            mark_skipped(&mut row, "in-use");
-            return Ok(PreparedApply::Skip(row));
-          }
-        }
-        Ok(PreparedApply::RemoveWorktree(row))
-      }
-      SweepKind::Scratch => {
-        scratch_preflight(&mut row, now)?;
-        if row.action == SweepAction::Skip {
-          return Ok(PreparedApply::Skip(row));
-        }
-        let (used, unreadable_now) = process::in_use_paths(&[row.path.clone()], &roots.proc_root)?;
-        unreadable.extend(unreadable_now);
-        if used.contains(&row.path) {
-          mark_skipped(&mut row, "in-use");
-          return Ok(PreparedApply::Skip(row));
-        }
-        fs::remove_dir_all(&row.path).with_context(|| format!("removing scratch directory {}", row.path.display()))?;
-        Ok(PreparedApply::ScratchRemoved(row))
-      }
-    }
-  })();
-  (result, unreadable)
-}
-
 /// The instant a scratch directory must predate to be swept: [`SCRATCH_DAYS`] before `now`, in seconds since the Unix
 /// epoch.
 fn scratch_cutoff(now: DateTime<Utc>) -> f64 {
   now.timestamp() as f64 + now.timestamp_subsec_nanos() as f64 / 1_000_000_000.0 - (SCRATCH_DAYS * 24 * 60 * 60) as f64
-}
-
-fn scratch_preflight(row: &mut SweepRow, now: DateTime<Utc>) -> Result<()> {
-  if tree_latest_mtime(&row.path)? >= scratch_cutoff(now) {
-    mark_skipped(row, "too-young");
-    return Ok(());
-  }
-  if has_unsaved_repository(&row.path)? {
-    mark_skipped(row, "has-unsaved-repo");
-    return Ok(());
-  }
-  Ok(())
 }
 
 enum PreparedApply {
@@ -737,14 +749,8 @@ async fn remove_worktree(row: &SweepRow, roots: &SweepRoots) -> Result<()> {
   Ok(())
 }
 
-fn mark_skipped(row: &mut SweepRow, reason: &str) {
-  row.action = SweepAction::Skip;
-  row.reason = reason.to_string();
-  row.freed_bytes = 0;
-}
-
 fn record_apply_failure(report: &mut SweepReport, index: usize, mut row: SweepRow, reason: String) {
-  mark_skipped(&mut row, "apply-failed");
+  row.mark_skipped("apply-failed");
   report.failures.push(SweepFailure { path: row.path.clone(), reason });
   report.rows[index] = row;
 }

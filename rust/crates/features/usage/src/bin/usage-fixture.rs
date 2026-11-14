@@ -17,7 +17,7 @@ struct FixtureSource {
 
 impl UsageSourceImpl for FixtureSource {
   fn ops(&self) -> UsageOps {
-    UsageOps { logs: true, read: true, live_cli_sessions: self.codex_rule, ..UsageOps::default() }
+    UsageOps { logs: true, read: true, live_cli_sessions: self.codex_rule, quota_accounts: false, sweep: false }
   }
 
   fn logs(&self, _config: &charliebot_core::config::CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
@@ -134,7 +134,11 @@ fn fill_ledger(path: &Path) -> anyhow::Result<()> {
 }
 
 fn capture(home: &Path, ledger_path: &Path) -> anyhow::Result<Value> {
-  let schema = ConfigSchema { backend_types: vec!["charlie-code", "codex", "cc-claude"], ..ConfigSchema::default() };
+  let schema = ConfigSchema {
+    sections: Vec::new(),
+    legacy_keys: Vec::new(),
+    backend_types: vec!["charlie-code", "codex", "cc-claude"],
+  };
   let config = config::load_config(home, &schema)?;
   let mut registry = Registry::new();
   registry.register_package("usage-fixture", register_fixture_sources)?;

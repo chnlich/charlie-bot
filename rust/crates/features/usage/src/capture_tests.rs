@@ -35,7 +35,7 @@ struct External;
 
 impl UsageSourceImpl for External {
   fn ops(&self) -> UsageOps {
-    UsageOps { logs: true, read: true, ..UsageOps::default() }
+    UsageOps { logs: true, read: true, live_cli_sessions: false, quota_accounts: false, sweep: false }
   }
 
   fn logs(&self, config: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
@@ -82,7 +82,7 @@ struct CliStub {
 
 impl UsageSourceImpl for CliStub {
   fn ops(&self) -> UsageOps {
-    UsageOps { logs: true, read: true, live_cli_sessions: self.codex, ..UsageOps::default() }
+    UsageOps { logs: true, read: true, live_cli_sessions: self.codex, quota_accounts: false, sweep: false }
   }
 
   fn logs(&self, config: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
@@ -264,8 +264,11 @@ fn fixture(home: &Path) -> (CharlieBotConfig, Registry) {
 fn fixture_with(home: &Path, options: &str) -> (CharlieBotConfig, Registry) {
   fs::create_dir_all(home).unwrap();
   fs::write(home.join("config.yaml"), format!("{BASE_OPTIONS}{options}")).unwrap();
-  let schema =
-    ConfigSchema { backend_types: vec!["charlie-code", "codex", "cc-claude", "opencode"], ..ConfigSchema::default() };
+  let schema = ConfigSchema {
+    sections: Vec::new(),
+    legacy_keys: Vec::new(),
+    backend_types: vec!["charlie-code", "codex", "cc-claude", "opencode"],
+  };
   let config = config::load_config(home, &schema).unwrap();
   CODEX_ROOT.with(|root| *root.borrow_mut() = Some(home.join("cli/codex")));
   READS.with(|reads| reads.borrow_mut().clear());
@@ -283,7 +286,7 @@ fn claude_fixture(home: &Path) -> (CharlieBotConfig, Registry) {
     format!("backends:\n  options:\n{}", option("claude-main", "cc-claude", "vendor/claude-model")),
   )
   .unwrap();
-  let schema = ConfigSchema { backend_types: vec!["cc-claude"], ..ConfigSchema::default() };
+  let schema = ConfigSchema { sections: Vec::new(), legacy_keys: Vec::new(), backend_types: vec!["cc-claude"] };
   let config = config::load_config(home, &schema).unwrap();
   CODEX_ROOT.with(|root| *root.borrow_mut() = Some(home.join("cli/codex")));
   READS.with(|reads| reads.borrow_mut().clear());
@@ -1227,7 +1230,7 @@ fn capture_runs_attributes_a_pool_sessions_runs_to_the_members_they_ran_on() {
     ),
   )
   .unwrap();
-  let schema = ConfigSchema { backend_types: vec!["charlie-code"], ..ConfigSchema::default() };
+  let schema = ConfigSchema { sections: Vec::new(), legacy_keys: Vec::new(), backend_types: vec!["charlie-code"] };
   let config = config::load_config(&home, &schema).unwrap();
   let mut registry = Registry::new();
   registry.register_package("usage-fixture", register_sources).unwrap();

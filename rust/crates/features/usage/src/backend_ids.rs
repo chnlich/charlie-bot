@@ -70,7 +70,7 @@ mod tests {
     }
     fs::create_dir_all(home).expect("the home directory is created");
     fs::write(home.join(config::CONFIG_FILENAME), yaml).expect("the config is written");
-    let schema = ConfigSchema { backend_types: BACKEND_TYPES.to_vec(), ..ConfigSchema::default() };
+    let schema = ConfigSchema { sections: Vec::new(), legacy_keys: Vec::new(), backend_types: BACKEND_TYPES.to_vec() };
     config::load_config(home, &schema).expect("the config loads")
   }
 

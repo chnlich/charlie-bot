@@ -33,7 +33,8 @@ pub struct SeedReport {
 /// writer the cron API uses.
 ///
 /// [`setup_step`], which `charliebot setup` runs, is this function's only caller. The server startup path
-/// `init_charliebot_home` never calls it, so the server never writes cron config.
+/// `init_charliebot_home` never seeds cron tasks; the server writes cron files when the scheduler auto-binds an
+/// unbound task's session id and when an API caller creates or updates a task.
 pub fn seed_default_cron_tasks(
   cfg: &CharlieBotConfig,
   repo_root: &Path,
@@ -146,7 +147,7 @@ mod tests {
     for prompt in [
       "prompts/cron/memory_curator/memory_selector.md",
       "prompts/cron/memory_curator/memory_reviewer.md",
-      "prompts/cron/proactive_daily/prompt.md",
+      "prompts/cron/proactive_agent/prompt.md",
     ] {
       let path = repo.path().join(prompt);
       fs::create_dir_all(path.parent().expect("the prompt directory")).expect("create the prompt directory");
@@ -169,7 +170,7 @@ mod tests {
     let report = seed_default_cron_tasks(&cfg, repo.path(), false).expect("the first seed");
     assert_eq!(
       report.iter().map(|item| (item.name.as_str(), item.status)).collect::<Vec<_>>(),
-      [("memory-curator", "created"), ("storage-cool", "created"), ("proactive-daily", "created")]
+      [("memory-curator", "created"), ("storage-cool", "created"), ("proactive-agent", "created")]
     );
     let curator = loader::cron_path(&cfg, "memory-curator");
     let body = fs::read_to_string(&curator).expect("the seeded host file");
@@ -178,7 +179,7 @@ mod tests {
     assert!(body.contains("prompt_file: prompts/cron/memory_curator/memory_selector.md"), "{body}");
     // The seeded body carries the entry's `project`, so the scheduler binds the
     // task's session into that group.
-    for name in ["memory-curator", "storage-cool", "proactive-daily"] {
+    for name in ["memory-curator", "storage-cool", "proactive-agent"] {
       let path = loader::cron_path(&cfg, name);
       let body = fs::read_to_string(&path).expect("the seeded host file");
       assert!(body.contains("project: CharlieBot"), "the seeded {name} carries the default entry's project: {body}");
@@ -187,7 +188,7 @@ mod tests {
     let report = seed_default_cron_tasks(&cfg, repo.path(), false).expect("the second seed");
     assert_eq!(
       report.iter().map(|item| (item.name.as_str(), item.status)).collect::<Vec<_>>(),
-      [("memory-curator", "exists"), ("storage-cool", "exists"), ("proactive-daily", "exists")]
+      [("memory-curator", "exists"), ("storage-cool", "exists"), ("proactive-agent", "exists")]
     );
   }
 
@@ -201,7 +202,7 @@ mod tests {
     let report = seed_default_cron_tasks(&cfg, repo.path(), true).expect("the dry run");
     assert_eq!(
       report.iter().map(|item| (item.name.as_str(), item.status)).collect::<Vec<_>>(),
-      [("memory-curator", "would-create"), ("storage-cool", "would-create"), ("proactive-daily", "would-create")]
+      [("memory-curator", "would-create"), ("storage-cool", "would-create"), ("proactive-agent", "would-create")]
     );
     assert!(!loader::cron_dir(&cfg).exists(), "the dry run created no cron.d directory");
   }

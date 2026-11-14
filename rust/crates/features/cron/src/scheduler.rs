@@ -1068,6 +1068,30 @@ mod tests {
     assert_eq!(rebound["session_id"].as_str(), Some(first_id.as_str()));
   }
 
+  /// A file-based task in `mode: master` with no `session_id` loads, and one
+  /// tick auto-binds it: the scheduler creates the manager session, writes the
+  /// id back into the host file, and the node sits open in the task's group.
+  #[tokio::test]
+  async fn tick_binds_task_with_mode_and_no_session_id_after_one_tick() {
+    let (home, features) = feature_context();
+    let path = write_prompted_task(home.path(), "proactive-agent", &json!({"cron":"0 7 * * *","mode":"master"}));
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    scheduler.tick().await.unwrap();
+
+    let bound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let session_id = bound["session_id"].as_str().expect("the task has a session_id after one tick");
+    assert!(!session_id.is_empty());
+    let node = features.store.get_session(session_id).await.unwrap().expect("the bound session exists");
+    assert_eq!(node.profile, TaskProfile::Manager);
+    assert_eq!(node.group.as_deref(), None);
+    assert_eq!(features.store.task_state(session_id).unwrap(), "open");
+
+    // A second tick reuses the written binding instead of creating another node.
+    scheduler.tick().await.unwrap();
+    let rebound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(rebound["session_id"].as_str(), Some(session_id));
+  }
+
   #[tokio::test]
   async fn scheduler_tick_runs_handlers_and_updates_the_shared_session_views() {
     let (home, features) = feature_context();

@@ -1,0 +1,4 @@
+cron: 0 7 * * *
+project: CharlieBot
+prompt_file: prompts/cron/proactive_agent/prompt.md
+mode: master

@@ -4,7 +4,7 @@
 //! feed that log: the `End` column of the remote `sacct` query, the mtime of a `--cmd` launch's exit file, and an
 //! end recorder for a pid-only target. The verify-on-create ssh leaves that recorder on the remote host. Every
 //! readback rides the ssh call that discovers the end, so a wake starts no extra ssh process. This module holds the
-//! remote command segments and the parsing and clock math; `triggers.rs` wires them into the probes.
+//! remote command segments and the parsing and clock math. `triggers.rs` wires them into the probes.
 //!
 //! Clock math, stated once: one readback ssh carries a remote `date +%s.%N` and has a local midpoint
 //! (midway between its start and its end, on the server clock). `offset = remote epoch − local midpoint`, in ms.
@@ -26,7 +26,7 @@ const WATCH_DIR_WORD_PREFIX: &str = "$HOME/charliebot_runs/watch-";
 /// reading. The local and the remote query use the same list.
 pub const SACCT_FORMAT_COLUMNS: [&str; 4] = ["JobID", "State", "ExitCode", "End"];
 
-/// The Slurm states that end a job. A job in one of them has finished, whatever its exit code; the held session's
+/// The Slurm states that end a job. A job in one of them has finished, whatever its exit code. The held session's
 /// remote script checks the same list.
 pub const SLURM_TERMINAL_STATES: [&str; 11] = [
   "COMPLETED",
@@ -84,16 +84,16 @@ pub fn end_source_label(source: Option<EndSource>) -> &'static str {
 pub struct RemoteTargetEnd {
   /// The end instant on the server clock, when the readback produced one.
   pub end_at: Option<OffsetDateTime>,
-  /// Where the end reading came from; set exactly when `end_at` is.
+  /// Where the end reading came from. It is set exactly when `end_at` is.
   pub source: Option<EndSource>,
-  /// Remote clock minus server clock, measured in the ssh that read the end back; set with `end_at`.
+  /// Remote clock minus server clock, measured in the ssh that read the end back. It is set with `end_at`.
   pub clock_offset_ms: Option<i64>,
   /// When the server learned the target had ended.
   pub seen_gone_at: OffsetDateTime,
 }
 
 /// The end instant one finished remote target carries, from a remote end line, the date line of the ssh that read
-/// it, and that ssh's local midpoint. `None` means the readback ran but the clock math failed; the caller logs a
+/// it, and that ssh's local midpoint. `None` means the readback ran but the clock math failed. The caller logs a
 /// warning and fires without an end.
 pub fn reading(
   end_remote_ns: i128,
@@ -258,7 +258,7 @@ pub fn zone_seconds(text: &str) -> Option<i32> {
 
 /// One sacct `End` value, printed in the remote host's local zone, as a remote-clock epoch in ns.
 pub fn sacct_end_remote_ns(end_raw: &str, zone: i32) -> Option<i128> {
-  // The `End` column states no zone; the readback ssh's `date +%z` carries it, so the parsed wall time is taken as
+  // The `End` column states no zone. The readback ssh's `date +%z` carries it, so the parsed wall time is taken as
   // UTC first and shifted by the zone after.
   let local = PrimitiveDateTime::parse(end_raw, SACCT_END_FORMAT).ok()?;
   Some((local.assume_utc() - time::Duration::seconds(i64::from(zone))).unix_timestamp_nanos())

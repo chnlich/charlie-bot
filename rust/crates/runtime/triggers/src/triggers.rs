@@ -195,7 +195,7 @@ const SLURM_ACTIVE_STATES: [&str; 7] =
   ["PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "REQUEUED", "RESIZING", "SUSPENDED"];
 
 /// The Slurm states a held job can report while it waits: a held job stays PENDING, and a job whose launch failed is
-/// requeued and then held. The reason decides the hold; these states keep a held reason on a running job from firing.
+/// requeued and then held. The reason decides the hold. These states keep a held reason on a running job from firing.
 const SLURM_HELD_STATES: [&str; 2] = ["PENDING", "REQUEUED"];
 
 /// The line between the sacct rows and the squeue rows of one probe's output. The remote ssh runs both queries so one
@@ -423,7 +423,7 @@ impl TriggerManager {
     max_wait_seconds: i64,
   ) -> Result<(), String> {
     let probes = targets.iter().map(|target| {
-      // A pid-only target gets its end recorder inside this verify ssh; a `--cmd` target reads its end from the
+      // A pid-only target gets its end recorder inside this verify ssh. A `--cmd` target reads its end from the
       // exit file's mtime instead.
       let recorder =
         (target.exit_file.is_none() && max_wait_seconds > 0).then_some(RecorderStart { trigger_id, max_wait_seconds });
@@ -692,7 +692,7 @@ impl TriggerManager {
   /// Confirm one pid that the held session reported gone, with the same verdict and end-file read the fire path
   /// takes from an interval probe. The ssh is a readback: the held report is only the trigger for it.
   async fn held_readback_pid(&self, target: &RemotePid, trigger_id: &str) -> PidProbeOutcome {
-    // Only a pid-only target has a recorder end file; a `--cmd` target's end is the exit file `remote_finish` reads,
+    // Only a pid-only target has a recorder end file. A `--cmd` target's end is the exit file `remote_finish` reads,
     // so its readback waits for no recorder and stays short.
     let end_file = target.exit_file.is_none().then(|| end_record::end_file_word(trigger_id, target.pid));
     let remote = pid_readback_command(target.pid, end_file.as_deref());
@@ -801,7 +801,7 @@ impl TriggerManager {
   }
 
   /// Read one `--cmd` target's exit file back over ssh: the exit code, the file's mtime as the launch's end
-  /// instant, and the date line that measures the offset. A failure is logged and yields no reading; it never
+  /// instant, and the date line that measures the offset. A failure is logged and yields no reading. It never
   /// delays or blocks the fire.
   async fn remote_exit_read(&self, target: &RemotePid, trigger_id: &str) -> (end_record::ExitRead, Option<i128>) {
     let failed = |read: end_record::ExitRead| (read, None);
@@ -997,7 +997,7 @@ impl TriggerManager {
       self.cancel_undeliverable(&mut fresh, reason).await?;
       return Ok(());
     }
-    // Only a trigger with remote targets gains the end fields; a local or pure-delay trigger keeps its plain line.
+    // Only a trigger with remote targets gains the end fields. A local or pure-delay trigger keeps its plain line.
     let fire_log = has_remote_target(&fresh.watch_targets)
       .then(|| build_fire_log(&fresh, fired_at, &outcome.remote_ends, recovered));
     self.fire_task_tree(&mut fresh, &message).await?;
@@ -1247,7 +1247,7 @@ impl TriggerManager {
               "held_readback_not_dead"
             );
             // The registry dropped this target when it dispatched the end, so a readback that still finds it alive
-            // must put it back; otherwise only the interval probe watches it.
+            // must put it back. Otherwise only the interval probe watches it.
             held.resubscribe(HeldTarget::Pid { host, pid });
           }
         }
@@ -1261,7 +1261,7 @@ impl TriggerManager {
   }
 
   async fn wait_with_sacct(&self, trigger: &PendingTrigger, targets: &[SlurmJob]) -> anyhow::Result<WaitGroupOutcome> {
-    // One wait group per host, in first-seen order; a job id repeated under a host joins its group once.
+    // One wait group per host, in first-seen order. A job id repeated under a host joins its group once.
     let mut groups: Vec<(Option<String>, Vec<i64>, HashSet<i64>)> = Vec::new();
     let mut group_indexes: HashMap<Option<String>, usize> = HashMap::new();
     for target in targets {
@@ -1577,7 +1577,7 @@ struct SlurmRow {
 }
 
 /// The remote-end fields one `trigger_fired` line of a remote-target trigger gains. `end` is set when at least one
-/// remote target recorded an end; `seen_gone_at` is set when the server saw any remote target gone.
+/// remote target recorded an end. `seen_gone_at` is set when the server saw any remote target gone.
 struct FireLog {
   seen_gone_at: Option<time::OffsetDateTime>,
   end: Option<EndFields>,
@@ -1615,7 +1615,7 @@ fn build_fire_log(
 }
 
 /// The `trigger_fired` line of a remote-target trigger. The end-derived fields are absent when no end was
-/// recorded; `seen_gone_at` is absent when the server never saw a remote target gone.
+/// recorded. `seen_gone_at` is absent when the server never saw a remote target gone.
 fn log_remote_fired(trigger: &PendingTrigger, reason: WaitReason, log: &FireLog) {
   let end_source = end_record::end_source_label(log.end.as_ref().map(|end| end.source));
   let wait_s = format!("{:.3}", log.wait_s);
@@ -2146,8 +2146,8 @@ fn read_session_triggers(sessions_dir: &Path, stop: &StartupStop, index: &Trigge
   TriggerWalk { sessions, index_rows, end }
 }
 
-/// One session directory's trigger files, each with its load result; `None` for an entry that is not a directory or
-/// holds no triggers directory.
+/// One session directory's trigger files, each with its load result. `None` names an entry that is not a directory
+/// or holds no triggers directory.
 fn read_one_session_triggers(
   entry: &std::fs::DirEntry,
   index: &TriggerIndex,
@@ -2271,8 +2271,8 @@ fn watch_target(value: &Value) -> anyhow::Result<WatchTarget> {
   })
 }
 
-/// A validated integer field as the 64-bit field it is stored in. The validator reads any integer up to `u64::MAX`;
-/// a value past `i64::MAX` has no stored form.
+/// A validated integer field as the 64-bit field it is stored in. The validator reads any integer up to `u64::MAX`.
+/// A value past `i64::MAX` has no stored form.
 fn integer_field(value: &Value, field: &str) -> anyhow::Result<i64> {
   value[field].as_i64().ok_or_else(|| anyhow!("{field} {} is past the 64-bit integer range", value[field]))
 }
@@ -2783,7 +2783,7 @@ mod tests {
     let dir = tempfile::tempdir().expect("temporary directory");
     for name in ["exit code.txt", "it's done", "quote\"d", "dollar$HOME", "semi;colon"] {
       let path = dir.path().join(name);
-      // The wrapper writes the exit file with `echo`, which ends in a newline; the content line ends there.
+      // The wrapper writes the exit file with `echo`, which ends in a newline. The content line ends there.
       std::fs::write(&path, format!("{name}-status\n")).expect("write exit file");
       let command = end_record::exit_read_command(path.to_str().expect("UTF-8 path")).expect("path has no NUL byte");
       let output = std::process::Command::new("sh").arg("-c").arg(&command).output().expect("sh runs");
@@ -3742,7 +3742,7 @@ mod tests {
 
   #[test]
   fn slurm_probe_reads_rows_and_reasons() {
-    // The remote probe leads with an epoch line and a zone line; the zone reads like a signed integer.
+    // The remote probe leads with an epoch line and a zone line. The zone reads like a signed integer.
     let stdout = "1794574841.298676920\n-0800\n1|PENDING|0:0|Unknown\n2|RUNNING|0:0|\n@@charliebot-squeue@@\n\
                   1|PENDING|JobHeldUser\n@@charliebot-squeue-exit 0@@\n";
     let probe = read_slurm_probe(stdout).expect("the probe parses");

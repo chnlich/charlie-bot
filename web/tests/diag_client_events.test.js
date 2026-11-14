@@ -556,7 +556,7 @@ test('the shell page reports the newest message its first screen renders', () =>
   h.setNavigation({name: PAGE_URL, responseEnd: 1300, domContentLoadedEventEnd: 1400, transferSize: 12600,
     requestStart: 0, responseStart: 300, encodedBodySize: 12500});
   h.advance(400);
-  h.dispatch('charliebot:first-screen-rendered', {sessionId: 'sess-1', newestMessageId: 'm-9'});
+  h.dispatch('charliebot:session-rendered', {sessionId: 'sess-1', messages: [{id: 'm-8'}, {id: 'm-9'}]});
   h.advance(120);
   h.renderMessage('[data-message-id="m-9"]');
   h.notifyMutations();

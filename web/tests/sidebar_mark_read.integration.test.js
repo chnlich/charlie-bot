@@ -122,6 +122,11 @@ function buildOpenSocketPage({unread}) {
         if (!listeners.has(type)) listeners.set(type, []);
         listeners.get(type).push(fn);
       };
+      // The page's charliebot:* seams reach their listeners: a switch's catch-up ends in an event (websocket.js).
+      context.document.dispatchEvent = (event) => {
+        for (const fn of listeners.get(event.type) || []) fn(event);
+        return true;
+      };
       for (const [id, element] of buildSidebarFilterElements()) harness.elements.set(id, element);
       harness.elements.set('session-list', sessionListElement(harness.elements));
     },
@@ -158,7 +163,7 @@ function buildOpenSocketPage({unread}) {
   // calls the release h.held[route] holds.
   function answer(url, opts) {
     const ok = (route, body) => {
-      const response = {ok: true, status: 200, json: async () => body};
+      const response = {ok: true, status: 200, headers: NO_STORED_COPY, json: async () => body};
       if (!(route in h.held)) return Promise.resolve(response);
       return new Promise((resolve) => { h.held[route] = () => resolve(response); });
     };
@@ -327,6 +332,8 @@ test('every unread channel leaves each painted dot equal to the server’s flag'
     page.held.bootstrap();
     delete page.held.bootstrap;
     await switched;
+    // The landed switch's read waits for its catch-up: the replay of session-c ends here.
+    page.context.onSocketCatchupComplete(6);
   });
   assert.equal(page.server.flags.get('session-b'), true, 'the reply the switch left behind stays unread');
   await step('the full list reload', () => page.socket().emitMessage({type: 'session_group_changed'}));

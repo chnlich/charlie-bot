@@ -227,14 +227,14 @@
 
   // The newest message of the page's session is the last message of the first screen the page renders, and its
   // element carries its id. The embedded bootstrap names it here; the offline shell's first screen arrives later, so
-  // renderSessionView announces its newest message (charliebot:first-screen-rendered). The time the element first
+  // renderSessionView announces the messages it renders (charliebot:session-rendered). The time the element first
   // reaches the DOM is the newest message on screen.
   function watchNewestMessage() {
     const messages = SESSION_BOOTSTRAP === null ? [] : SESSION_BOOTSTRAP.messages;
     if (messages.length > 0) watchMessageElement(messages[messages.length - 1].id);
-    document.addEventListener('charliebot:first-screen-rendered', (event) => {
-      const id = event.detail ? event.detail.newestMessageId : null;
-      if (id !== null && id !== undefined) watchMessageElement(id);
+    document.addEventListener('charliebot:session-rendered', (event) => {
+      const rendered = event.detail ? event.detail.messages : null;
+      if (rendered && rendered.length > 0) watchMessageElement(rendered[rendered.length - 1].id);
     });
   }
 

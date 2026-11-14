@@ -101,13 +101,13 @@ function createElement(overrides = {}) {
       this._listeners[type].push(handler);
     },
     setAttribute(name, value) { this[name] = value; },
-    removeAttribute(name) { delete this[name]; },
     getAttribute(name) { return this[name]; },
+    // setAttribute stores every name on the element itself, so a removal clears that entry too; a data- name also
+    // clears its dataset property.
     removeAttribute(name) {
+      delete this[name];
       if (name.startsWith('data-')) {
         delete this.dataset[name.replace(/^data-(.)/, (_, c) => c.toUpperCase())];
-      } else {
-        delete this[name];
       }
     },
     // The one closest use the sidebar bundle makes today reads the row's group

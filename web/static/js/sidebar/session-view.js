@@ -773,7 +773,8 @@ async function openSession(sessionId, fromSessionId) {
   }
 
   // The local unread clear and the row dot repaint at the landed render. The server's read POST waits for the catch-up
-  // (last-state.js), so a superseded or failed open posts none.
+  // (last-state.js), so a superseded or failed open posts none. The read reports the dot the row showed here.
+  const dotShown = ownUnread(sessionId);
   recordUnreadFact(sessionId, false);
   refreshSessionIndicator(sessionId);
   beginCatchUp({
@@ -781,7 +782,7 @@ async function openSession(sessionId, fromSessionId) {
     storedPosition: screen.data.event_count,
     copyBytes: screen.stored ? jsonBytes(screen.data) : null,
     listPending: screen.stored,
-    readPending: true,
+    readDot: dotShown,
   });
 
   // The open socket takes the target's subscription from the bootstrap's event position: the
@@ -834,7 +835,7 @@ async function refetchFirstScreen(open) {
     storedPosition: screen.data.event_count,
     copyBytes: null,
     listPending: open.listPending,
-    readPending: open.readPending,
+    readDot: open.readDot,
   });
   // The page's one socket moves to the network first screen's position: its replay starts there.
   requestSessionSubscription(open.sessionId, screen.data.event_count, null);
@@ -911,14 +912,6 @@ function renderSessionView(data) {
     : null;
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
   Chat.ForYou.applySessionChatView(session, turnEngine ? view : Chat.ForYou.EVERYTHING, turnEngine);
-
-  // The page's own timing names the newest message of the first screen it renders (diag/client-events.js). The
-  // embedded bootstrap names it at load; the offline shell embeds none, so this announcement carries it instead.
-  if (messages.length > 0) {
-    document.dispatchEvent(new CustomEvent('charliebot:first-screen-rendered', {
-      detail: {sessionId: session.id, newestMessageId: messages[messages.length - 1].id ?? null},
-    }));
-  }
 
   if (sessionHasMore) {
     // The mount's own projection may have started the first page already.

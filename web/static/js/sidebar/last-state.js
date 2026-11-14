@@ -16,7 +16,8 @@
 //   socket replay of a copy may not carry more bytes than this (the gap is larger than the first screen);
 // - replayBytes: the replay bytes received so far, across the sockets of this open;
 // - socketPending, listPending: what still has to land before the content is current;
-// - readPending: whether the open posts the session's read once current.
+// - readDot: the dot the row showed when the open landed, which the session's read reports once current; null when
+//   the open posts no read.
 
 const LIST_REFRESH_RETRY_BASE_MS = 1000;
 const LIST_REFRESH_RETRY_MAX_MS = 30000;
@@ -56,7 +57,7 @@ function listStillPending(sessionId) {
 
 // Starts the catch-up of an open. A copy's open also starts the sidebar list refresh. A restart passes
 // the list state it inherits and starts no second refresh, since the first one still runs.
-function beginCatchUp({sessionId, storedPosition, copyBytes, listPending, readPending}) {
+function beginCatchUp({sessionId, storedPosition, copyBytes, listPending, readDot}) {
   if (firstOpenSource === null) firstOpenSource = copyBytes !== null ? 'stored' : 'network';
   catchUp = {
     sessionId,
@@ -65,7 +66,7 @@ function beginCatchUp({sessionId, storedPosition, copyBytes, listPending, readPe
     replayBytes: 0,
     socketPending: true,
     listPending,
-    readPending,
+    readDot,
   };
   setNotCurrent(copyBytes !== null || listPending);
   if (copyBytes !== null && listPending) requestListRefresh(sessionId, 0);
@@ -81,7 +82,7 @@ function noteStoredList() {
       replayBytes: 0,
       socketPending: false,
       listPending: false,
-      readPending: false,
+      readDot: null,
     };
   }
   setNotCurrent(true);
@@ -142,7 +143,8 @@ function finishCatchUp(open) {
   catchUp = null;
   setNotCurrent(false);
   document.dispatchEvent(new CustomEvent('charliebot:page-current', {detail: {sessionId: open.sessionId}}));
-  if (open.readPending) markSessionRead(open.sessionId, null);
+  // The read reports the dot the row showed when the open landed, which the server checks against its own flag.
+  if (open.readDot !== null) markSessionRead(open.sessionId, open.readDot);
 }
 
 // The socket's events reach the owner here: websocket.js dispatches them for the current socket only. A stored

@@ -30,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // and SPA switches share the same renderer without a duplicate /view fetch.
   if (SESSION_ID) {
     renderSessionView(SESSION_BOOTSTRAP);
+    const dotShown = ownUnread(SESSION_ID);
     recordUnreadFact(SESSION_ID, false);
     // The same paint clears the opened row's dot and every ancestor's subtree mark.
     refreshSessionIndicator(SESSION_ID);
@@ -38,7 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
       storedPosition: SESSION_BOOTSTRAP.event_count,
       copyBytes: null,
       listPending: false,
-      readPending: true,
+      readDot: dotShown,
     });
   }
   restoreSidebarFromUrl();

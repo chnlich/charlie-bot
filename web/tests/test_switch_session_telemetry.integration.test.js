@@ -43,6 +43,12 @@ function loadSwitchTelemetry(context) {
     getEntriesByType: (type) => (type === 'resource' ? resourceEntries : []),
   });
   context.PerformanceObserver = undefined;
+  // The package's newest-message watch observes the DOM for each rendered first screen. These switches render no
+  // DOM mutations the harness reports, so the observer only has to exist.
+  context.MutationObserver = class {
+    observe() {}
+    disconnect() {}
+  };
   vm.runInContext(readPackageStatic('features', 'diag', 'client-events.js'), context, {filename: 'client-events.js'});
   return resourceEntries;
 }

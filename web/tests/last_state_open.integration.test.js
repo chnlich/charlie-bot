@@ -38,7 +38,7 @@ function buildOpenHarness() {
     scrollHeight: 100,
     fields: {},
     fetch: (_h, url, opts = {}) => {
-      if (url.endsWith('/read') && opts.method === 'POST') {
+      if (/\/read(\?page_dot=(true|false))?$/.test(url) && opts.method === 'POST') {
         page.readPosts.push(url);
         return Promise.resolve({
           ok: true, status: 200, headers: responseHeaders({stored: false}), json: async () => ({})});
@@ -118,10 +118,10 @@ test('a stored first screen paints its messages before the sidebar list refresh 
   assert.ok(paintedAt < refreshedAt, 'the messages paint before the list refresh is requested');
 });
 
-test('the first screen\'s render announces its newest message for the page\'s own timing', async () => {
+test('the first screen\'s render announces its messages for the page\'s own timing', async () => {
   const {h, page} = buildOpenHarness();
   const announced = [];
-  h.context.document.addEventListener('charliebot:first-screen-rendered', (event) => announced.push(event.detail));
+  h.context.document.addEventListener('charliebot:session-rendered', (event) => announced.push(event.detail));
   const body = bootstrapPayload('session-b', 0, false);
   body.messages = [{id: 9, role: 'assistant', content: 'newest', event_index: 5}];
 
@@ -129,7 +129,7 @@ test('the first screen\'s render announces its newest message for the page\'s ow
 
   assert.equal(announced.length, 1);
   assert.equal(announced[0].sessionId, 'session-b');
-  assert.equal(announced[0].newestMessageId, 9);
+  assert.equal(announced[0].messages[announced[0].messages.length - 1].id, 9);
 });
 
 test('a stored copy shows the mark until catch-up and the list refresh land, then posts the read', async () => {
@@ -150,7 +150,7 @@ test('a stored copy shows the mark until catch-up and the list refresh land, the
   await flush();
 
   assert.deepEqual(markOf(h), {shown: false, state: null});
-  assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read']);
+  assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read?page_dot=false']);
 });
 
 test('a stored position past the session event total discards the copy and fetches the first screen', async () => {
@@ -174,7 +174,7 @@ test('a stored position past the session event total discards the copy and fetch
 
   h.context.onSocketCatchupComplete(6);
   await flush();
-  assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read'], 'the read posts once, after the second catch-up');
+  assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read?page_dot=false'], 'the read posts once, after the second catch-up');
 });
 
 test('a socket replay larger than the stored first screen fetches the first screen', async () => {
@@ -205,7 +205,7 @@ test('a boot with no embedded first screen requests it at once, then reads after
   assert.deepEqual(page.readPosts, [], 'no read before the catch-up');
 
   h.context.onSocketCatchupComplete(6);
-  assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read']);
+  assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read?page_dot=false']);
 });
 
 test('an offline open with no stored copy names the missing copy in the placeholder', async () => {

@@ -379,7 +379,7 @@ impl Harness {
     }
     let text = fs::read_to_string(&self.log_path).unwrap();
     // The fake server appends while the test reads, so the tail can hold an unterminated fragment
-    // of the entry being written; only the newline-terminated lines are whole.
+    // of the entry being written. Only the newline-terminated lines are whole.
     let complete = match text.rfind('\n') {
       Some(end) => &text[..=end],
       None => "",
@@ -680,7 +680,7 @@ async fn claim_is_held_before_start_and_dropped_after_start_failure() {
 #[ignore = "integration"]
 #[test]
 fn process_rss_reads_the_process_own_resident_memory() {
-  // A process that has run only this test holds little resident memory; touch pages so there is
+  // A process that has run only this test holds little resident memory. Touch pages so there is
   // something to read.
   let heap = vec![1_u8; 16 * 1024 * 1024];
   std::hint::black_box(&heap);

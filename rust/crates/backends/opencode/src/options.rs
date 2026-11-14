@@ -70,7 +70,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
 
 /// The config keys that the options' `context_limit` and `extra_body` values add. The keys are
 /// `{"providers": {provider: {"models": {model: {"limit": {"context": n}, "body": {...}}}}}}`, or an empty map when no
-/// option sets either field. Options for one model must agree on each field they both set; a disagreement fails with
+/// option sets either field. Options for one model must agree on each field they both set. A disagreement fails with
 /// both option ids.
 pub fn model_overrides_config(options: &[BackendOption]) -> anyhow::Result<Map<String, JsonValue>> {
   let mut providers = Map::new();
@@ -107,7 +107,7 @@ pub fn model_overrides_config(options: &[BackendOption]) -> anyhow::Result<Map<S
   Ok(config)
 }
 
-/// The record of the first option's value for one field of one model; a later, different value fails naming
+/// The record of the first option's value for one field of one model. A later, different value fails naming
 /// both options.
 fn declare(
   declared: &mut HashMap<(String, String, String), (String, JsonValue)>,

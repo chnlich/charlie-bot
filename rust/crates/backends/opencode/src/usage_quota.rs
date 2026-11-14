@@ -149,7 +149,7 @@ fn read_access_token(db: &std::path::Path) -> anyhow::Result<String> {
 fn parse_usage(data: &Value, fetched_at: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
   let usage =
     data.get("usage").and_then(Value::as_object).ok_or_else(|| anyhow!("OpenCode Go response has no usage object"))?;
-  // The calendar month has no fixed length, so it alone carries a name; the fixed windows are named from their minutes.
+  // The calendar month has no fixed length, so it alone carries a name. The fixed windows are named from their minutes.
   let windows = [("rolling", Some(300)), ("weekly", Some(WEEKLY_WINDOW_MINUTES)), ("monthly", None)];
   let windows = windows
     .into_iter()

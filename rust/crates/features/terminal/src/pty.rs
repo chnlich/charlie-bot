@@ -85,11 +85,21 @@ pub(super) fn tmux_session_name(session_id: &str) -> String {
   format!("charliebot-{session_id}")
 }
 
+/// How `filtered_env` treats the inherited `TERM`.
+#[derive(Clone, Copy)]
+pub(super) enum TermEnv {
+  /// Keep the inherited `TERM`, for a tmux command that never draws on a client.
+  Inherit,
+  /// Replace `TERM` with the client terminal type, so an attached pty draws at the type the client shows.
+  Replace,
+}
+
 // tmux's nested-session guard can reject a client when its reused PTY name matches a dead pane's recorded tty.
 pub(super) fn filtered_env(
   source: impl IntoIterator<Item = (OsString, OsString)>,
-  replace_term: bool,
+  term: TermEnv,
 ) -> Vec<(OsString, OsString)> {
+  let replace_term = matches!(term, TermEnv::Replace);
   let mut env = source
     .into_iter()
     .filter(|(key, _)| {
@@ -103,11 +113,11 @@ pub(super) fn filtered_env(
 }
 
 fn tmux_command_env() -> Vec<(OsString, OsString)> {
-  filtered_env(std::env::vars_os(), false)
+  filtered_env(std::env::vars_os(), TermEnv::Inherit)
 }
 
 fn tmux_pty_env() -> Vec<(OsString, OsString)> {
-  filtered_env(std::env::vars_os(), true)
+  filtered_env(std::env::vars_os(), TermEnv::Replace)
 }
 
 pub(super) fn tmux_binary() -> Result<PathBuf, String> {
@@ -131,7 +141,7 @@ fn os_error(error: &io::Error, path: Option<&Path>) -> String {
   }
 }
 
-pub(super) async fn run_tmux(args: &[String], capture: bool) -> Result<(i32, String), String> {
+pub(super) async fn run_tmux(args: &[String]) -> Result<(i32, String), String> {
   let binary = tmux_binary()?;
   let mut stderr_file = tempfile::tempfile().map_err(|error| os_error(&error, None))?;
   let child_stderr = stderr_file.try_clone().map_err(|error| os_error(&error, None))?;
@@ -143,7 +153,7 @@ pub(super) async fn run_tmux(args: &[String], capture: bool) -> Result<(i32, Str
     .env_clear()
     .envs(tmux_command_env())
     .stdin(Stdio::null())
-    .stdout(if capture { Stdio::piped() } else { Stdio::null() })
+    .stdout(Stdio::piped())
     .stderr(Stdio::from(child_stderr));
   let child = command.spawn().map_err(|error| os_error(&error, Some(&binary)))?;
   let output = child.wait_with_output().await.map_err(|error| os_error(&error, Some(&binary)))?;
@@ -154,7 +164,7 @@ pub(super) async fn run_tmux(args: &[String], capture: bool) -> Result<(i32, Str
   let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
   let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
   let code = proc_status::code_of(output.status).unwrap_or_default();
-  let text = if capture && code == 0 {
+  let text = if code == 0 {
     stdout
   } else if !stderr.is_empty() {
     stderr
@@ -165,7 +175,7 @@ pub(super) async fn run_tmux(args: &[String], capture: bool) -> Result<(i32, Str
 }
 
 pub(super) async fn tmux_session_exists(session_id: &str) -> Result<bool, String> {
-  let (code, _) = run_tmux(&["has-session".into(), "-t".into(), tmux_session_name(session_id)], false).await?;
+  let (code, _) = run_tmux(&["has-session".into(), "-t".into(), tmux_session_name(session_id)]).await?;
   Ok(code == 0)
 }
 
@@ -190,15 +200,12 @@ pub(super) async fn start_tmux_session(
   ];
   args.extend(env_args.iter().cloned());
   args.extend(command_argv.iter().map(|arg| (*arg).to_string()));
-  let (code, stderr) = run_tmux(&args, false).await?;
+  let (code, stderr) = run_tmux(&args).await?;
   if code != 0 {
     return Err(format!("tmux new-session failed for {name}: {}", stderr.trim()));
   }
-  let _ = run_tmux(
-    &["set-option".into(), "-t".into(), name.to_string(), "history-limit".into(), HISTORY_LIMIT.into()],
-    false,
-  )
-  .await?;
+  let _ = run_tmux(&["set-option".into(), "-t".into(), name.to_string(), "history-limit".into(), HISTORY_LIMIT.into()])
+    .await?;
   Ok(())
 }
 

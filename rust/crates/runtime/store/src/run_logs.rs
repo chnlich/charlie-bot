@@ -18,6 +18,9 @@ pub const RAW_LOG_NAME: &str = "agent.raw.ndjson";
 /// The translated event stream of a run.
 pub const RUN_EVENTS_NAME: &str = "events.jsonl";
 
+/// The served backend process's stdout, which the serve transport captures beside the process's stderr.
+pub const AGENT_STDOUT_LOG_NAME: &str = "agent.stdout.log";
+
 /// The suffix of a compressed run log: `events.jsonl` is stored as `events.jsonl.zst`.
 pub const COMPRESSED_SUFFIX: &str = ".zst";
 

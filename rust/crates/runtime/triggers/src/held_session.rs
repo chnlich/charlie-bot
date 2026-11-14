@@ -225,7 +225,7 @@ impl HeldSessions {
   }
 
   /// Watch `targets` for one trigger. The returned watch yields the ends the remote scripts report for them until it
-  /// is dropped; dropping it removes its targets from every host's wait set.
+  /// is dropped. Dropping it removes its targets from every host's wait set.
   pub fn watch(&self, trigger_id: &str, targets: Vec<HeldTarget>) -> HeldWatch {
     let (tx, rx) = mpsc::unbounded_channel();
     let mut state = self.state.lock().expect("held session state is not poisoned");
@@ -308,7 +308,7 @@ impl Drop for HeldWatch {
   }
 }
 
-/// Bring one host's session in line with its watchers. No watcher closes the session; a changed wait set reopens it.
+/// Bring one host's session in line with its watchers. No watcher closes the session. A changed wait set reopens it.
 fn refresh(shared: &Arc<StdMutex<State>>, state: &mut State, host: &str) {
   let terminal_states = state.terminal_states;
   let argv = Arc::clone(&state.argv);
@@ -389,7 +389,7 @@ async fn run_session(
 /// A client that outlived the server would keep its ssh connection, and its command line names the server's
 /// ControlPath, until the remote script ends on its heartbeat. `PR_SET_PDEATHSIG` follows the thread that starts the
 /// child, and the sessions start their clients on runtime worker threads, which live as long as the server. The
-/// parent-death signal is Linux's; elsewhere the child still refuses to start once the server is gone, and an
+/// parent-death signal is Linux's. Elsewhere the child still refuses to start once the server is gone, and an
 /// orphan ends when its channel closes.
 fn die_with_server(command: &mut std::process::Command) {
   let server = std::process::id() as libc::pid_t;
@@ -483,7 +483,7 @@ async fn run_once(
   }
 }
 
-/// Route one line the script printed. A heartbeat is only proof of life; an end goes to the watches that name it.
+/// Route one line the script printed. A heartbeat is only proof of life. An end goes to the watches that name it.
 fn dispatch_line(shared: &StdMutex<State>, host: &str, line: &str) -> Result<(), String> {
   let words = line.split_whitespace().collect::<Vec<_>>();
   match words.as_slice() {

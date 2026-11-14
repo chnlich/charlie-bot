@@ -160,11 +160,15 @@ The Source Check covers every factual claim the user may rely on, including:
 - a derived number, a sum, a ratio, or a difference that the page computes;
 - a current system value, a count, a time, or a status that a system holds now.
 
+It also checks the proposal premises in `source_check_spec.md` for every option and acceptance criterion.
+
 The cold read judges readability, and the source check judges the facts.
 
 - A plan page takes the verify round of the plan-approval skill in place of this check.
-- A page with an open fork is shared only after a separate read-only fact-check worker checks its claims and the page
-  author folds the findings into the page, correcting each claim or labeling it Open.
-- A page without an open fork is shared at once; the same worker starts its check in the turn that shares it, and the
-  author corrects the page in place.
+- An understanding page, a page with an open fork, or a page with a proposed option or acceptance criterion is shared
+  only after a separate read-only fact-check worker checks it and the page author folds the findings into the page.
+  Correct each claim or label it Open.
+  When a premise fails, drop or rewrite the option or acceptance criterion and check the rewritten premises before sharing.
+- Any other page is shared at once; the same worker starts its check in the turn that shares it, and the author corrects
+  the page in place.
 - `source_check_spec.md` in this skill's directory is the task spec for the fact-check worker.

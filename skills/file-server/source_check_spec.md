@@ -20,6 +20,12 @@ The declared terms are every factual claim the page or draft hand-over message s
 The check verifies each claim against its evidence, verifies each cited source location, recomputes each derived number
 from its cited source, and reads each current system value back from the system that holds it.
 
+Check each premise of every proposed option and acceptance criterion:
+- no existing path, or a lighter one, already serves its need;
+- the case it handles occurs in the current system;
+- no earlier user decision of the line rejects it;
+- it fits the known limits of context length, compute, and token cost.
+
 ## Acceptance Tests
 
 - Each declared term has one line in the report.
@@ -27,6 +33,7 @@ from its cited source, and reads each current system value back from the system 
   the line says so.
 - The line for a derived number carries the recomputed value.
 - The line for a current system value carries the value read back and the system it came from.
+- Each premise has one line naming the code, config, or decision record read and saying whether the premise holds.
 
 ## Reviewer Checklist
 

@@ -76,8 +76,11 @@ An understanding page lists the divergences of a request that admits several rea
 - Below the reading threshold, the line proceeds on the recommended reading, and its delivery lists each divergence
   with the reply that selects the other reading.
 - For a departure from the user's stated method, follow the Design section of `prompts/manager_workflows.md`.
-- While the page waits, continue read-only research.
-  The plan that follows then starts from read evidence.
+- Before drafting, read the current system behind each option and acceptance criterion: the code and config it touches,
+  and the earlier user decisions of the line.
+  Check the proposal premises in `skills/file-server/source_check_spec.md` against that evidence.
+  Use this read to judge whether each option and criterion can stand.
+- While the page waits, continue read-only research for the plan.
 - When the approver is the user and the page waits, list the page as one Waiting on you item.
 - When the approver is the parent node and the page waits, send the page's divergences to the parent (Scope section).
   The parent then answers them from the reading that the user approved for the parent's line.

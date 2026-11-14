@@ -25,6 +25,7 @@ use std::str::CharIndices;
 use serde_json::{Map, Value};
 use tracing::Level;
 
+use crate::str_methods;
 use crate::text_repr;
 
 /// The width of the level word inside its brackets, of the location column, and of the event column.
@@ -241,7 +242,7 @@ fn hex_char(chars: &mut CharIndices<'_>, digits: usize) -> Option<char> {
   let mut code = 0;
   for _ in 0..digits {
     let (_, digit) = chars.next()?;
-    code = code * 16 + digit.to_digit(16)?;
+    code = code * 16 + u32::from(str_methods::hex_value(digit)?);
   }
   char::from_u32(code)
 }

@@ -816,6 +816,7 @@ mod differential_tests {
   use std::path::{Path, PathBuf};
   use std::time::{Duration, SystemTime};
 
+  use charliebot_core::str_methods;
   use flate2::read::GzDecoder;
   use serde::{Deserialize, Serialize};
   use serde_json::Value;
@@ -1090,9 +1091,9 @@ mod differential_tests {
       .0
       .iter()
       .map(|pair| {
-        let high = (pair[0] as char).to_digit(16).unwrap();
-        let low = (pair[1] as char).to_digit(16).unwrap();
-        ((high << 4) | low) as u8
+        let high = str_methods::hex_value(char::from(pair[0])).unwrap();
+        let low = str_methods::hex_value(char::from(pair[1])).unwrap();
+        (high << 4) | low
       })
       .collect()
   }

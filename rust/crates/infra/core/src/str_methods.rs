@@ -1,6 +1,6 @@
 //! This module provides string methods on Unicode text. They are `isalnum`, `isdigit`, the decimal value of a
-//! decimal digit, `isspace`, `strip()`, `split()` with its single-space collapse, the first-n and from-n slices,
-//! the code point count, and the newline translation of a text-mode read.
+//! decimal digit, the value of a hex digit, `isspace`, `strip()`, `split()` with its single-space collapse, the
+//! first-n and from-n slices, the code point count, and the newline translation of a text-mode read.
 
 use std::sync::LazyLock;
 
@@ -142,6 +142,14 @@ pub fn decimal_value(character: char) -> Option<u8> {
   DECIMAL_ZEROES.iter().find_map(|&zero| (zero..zero + 10).contains(&code_point).then(|| (code_point - zero) as u8))
 }
 
+/// The value that the hex digit `character` names, or `None` when it names no digit.
+///
+/// The accepted set is ASCII `0-9`, `a-f` and `A-F`: the digits that a `%XX` escape, a `\xNN` escape and a JSON
+/// `\uXXXX` escape carry. Uppercase and lowercase name the same value.
+pub fn hex_value(character: char) -> Option<u8> {
+  character.to_digit(16).map(|value| value as u8)
+}
+
 pub fn is_whitespace(character: char) -> bool {
   matches!(
     character,
@@ -235,6 +243,16 @@ mod tests {
     assert_eq!(decimal_value('٣'), Some(3));
     assert!(is_digit('٣'));
     assert!(!is_digit('⅓'));
+  }
+
+  #[test]
+  fn hex_value_accepts_only_ascii_hex_digits() {
+    assert_eq!(hex_value('0'), Some(0));
+    assert_eq!(hex_value('9'), Some(9));
+    assert_eq!(hex_value('a'), Some(10));
+    assert_eq!(hex_value('F'), Some(15));
+    assert_eq!(hex_value('g'), None);
+    assert_eq!(hex_value('٣'), None);
   }
 
   #[test]

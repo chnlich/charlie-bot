@@ -155,9 +155,9 @@ fn decode_hex(value: &str) -> Vec<u8> {
     .0
     .iter()
     .map(|pair| {
-      let high = (pair[0] as char).to_digit(16).unwrap();
-      let low = (pair[1] as char).to_digit(16).unwrap();
-      ((high << 4) | low) as u8
+      let high = charliebot_core::str_methods::hex_value(char::from(pair[0])).unwrap();
+      let low = charliebot_core::str_methods::hex_value(char::from(pair[1])).unwrap();
+      (high << 4) | low
     })
     .collect()
 }

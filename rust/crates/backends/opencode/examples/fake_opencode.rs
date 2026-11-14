@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use charliebot_core::str_methods;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::tcp::OwnedWriteHalf;
@@ -419,9 +420,9 @@ fn unquote(text: &str) -> String {
 /// The byte that two hex digits name, or `None` when either digit is not one.
 fn hex_byte(digits: &[u8]) -> Option<u8> {
   let [high, low] = digits else { return None };
-  let high = (*high as char).to_digit(16)?;
-  let low = (*low as char).to_digit(16)?;
-  Some((high * 16 + low) as u8)
+  let high = str_methods::hex_value(char::from(*high))?;
+  let low = str_methods::hex_value(char::from(*low))?;
+  Some((high << 4) | low)
 }
 
 #[tokio::main(flavor = "current_thread")]

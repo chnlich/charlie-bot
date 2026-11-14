@@ -15,6 +15,8 @@ use std::sync::LazyLock;
 use regex::bytes::Regex;
 use serde_json::{Map, Number, Value};
 
+use crate::str_methods;
+
 /// The integer forms serde_json reads differently from the scanner, so a body holding one goes to the scanner. A run
 /// of 19 digits: serde_json reads an integer past 64 bits as a float, where the scanner gives an int that [`Value`]
 /// cannot hold. A negative one past `i64::MIN` likewise gives an int that [`Value`] cannot hold. An integer `-0`:
@@ -174,7 +176,7 @@ fn format_error(message: &str, text: &[u32], pos: usize) -> String {
 /// A scanner holding bytes and one holding code points read the same digits here.
 pub fn hex4<T: Copy + Into<u32>>(digits: &[T]) -> Option<u32> {
   digits.iter().try_fold(0u32, |code, &digit| {
-    let value = char::from_u32(digit.into())?.to_digit(16)?;
+    let value = u32::from(str_methods::hex_value(char::from_u32(digit.into())?)?);
     Some((code << 4) | value)
   })
 }

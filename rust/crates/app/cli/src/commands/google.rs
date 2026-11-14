@@ -18,6 +18,7 @@ use charliebot_core::config;
 use charliebot_core::credentials::write_credentials;
 use charliebot_core::home;
 use charliebot_core::paths;
+use charliebot_core::str_methods;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 use serde_yaml::{Mapping, Value as Yaml};
@@ -688,21 +689,16 @@ fn urlsplit_query(url: &str) -> Result<Vec<(String, String)>, ()> {
 
 /// `+` becomes a space, then `%XX` bytes decode as UTF-8 with undecodable bytes replaced.
 fn unquote_plus(text: &str) -> String {
-  fn hex_digit(byte: u8) -> Option<u8> {
-    match byte {
-      b'0'..=b'9' => Some(byte - b'0'),
-      b'a'..=b'f' => Some(byte - b'a' + 10),
-      b'A'..=b'F' => Some(byte - b'A' + 10),
-      _ => None,
-    }
-  }
   let source = text.as_bytes();
   let mut bytes = Vec::with_capacity(source.len());
   let mut index = 0;
   while index < source.len() {
     match source[index] {
       b'+' => bytes.push(b' '),
-      b'%' if index + 2 < source.len() => match (hex_digit(source[index + 1]), hex_digit(source[index + 2])) {
+      b'%' if index + 2 < source.len() => match (
+        str_methods::hex_value(char::from(source[index + 1])),
+        str_methods::hex_value(char::from(source[index + 2])),
+      ) {
         (Some(high), Some(low)) => {
           bytes.push(high * 16 + low);
           index += 2;

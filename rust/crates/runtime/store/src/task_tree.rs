@@ -2276,13 +2276,13 @@ impl Store {
       return false;
     }
     let mut entry = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
-    if let Some(entry) = entry.as_mut()
-      && entry.generation == generation
-      && Arc::ptr_eq(&entry.index, &cached)
-    {
-      entry.built_at = Instant::now();
+    match entry.as_mut() {
+      Some(entry) if entry.generation == generation && Arc::ptr_eq(&entry.index, &cached) => {
+        entry.built_at = Instant::now();
+        true
+      }
+      _ => false,
     }
-    true
   }
 
   /// Every input the tree index reads, sorted by session id, as the home holds them now.
@@ -2307,11 +2307,7 @@ impl Store {
     names.sort();
     let mut inputs = Vec::with_capacity(names.len());
     for name in names {
-      let input = read_tree_input(self, &name)?;
-      // A directory without a readable metadata file carries nothing into the index, so it is no input of it.
-      if input.metadata.is_some() {
-        inputs.push(input);
-      }
+      inputs.push(read_tree_input(self, &name)?);
     }
     Ok(inputs)
   }
@@ -2387,7 +2383,9 @@ impl Store {
 /// The input one session contributes to the tree index: its metadata file's `(mtime_ns, size)` and its live
 /// history's identity.
 ///
-/// A missing metadata file is `None`, as is a session without a live history; the index then holds nothing for it.
+/// A missing metadata file is `None`, as is a session without a live history. The index also reads the session's
+/// archive segments, and those move only in the write that replaces the live log and raises the metadata's archive
+/// offset, so both of them are read here: an archive write moves this input too.
 fn read_tree_input(store: &Store, session_id: &str) -> StoreResult<TreeIndexInput> {
   use std::os::unix::fs::MetadataExt;
   let metadata = fs::metadata(store.metadata_path(session_id)).ok().map(|metadata| {
@@ -2421,6 +2419,15 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     names.push(name);
   }
   names.sort();
+  // The inputs are read before any session's content, never after it: a write that lands between the two then moves an
+  // input past the value recorded here, so the next refresh rebuilds instead of renewing an index of older content.
+  let mut inputs = Vec::with_capacity(names.len());
+  for name in &names {
+    if should_stop() {
+      return Ok(None);
+    }
+    inputs.push(read_tree_input(store, name)?);
+  }
   // `fresh_cached_metas` uses the same per-entry stat check the listing build uses and returns shared metadata. The
   // index owns Arcs, so cached metadata incurs no deep clone while building or serving the index.
   let Some(mut cached) = store.fresh_cached_metas_until(should_stop)? else {
@@ -2463,18 +2470,8 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     derived_archived_ids: Arc::new(Vec::new()),
     archive_by_id: HashMap::new(),
     build_id: store.next_tree_index_build_id.fetch_add(1, Ordering::Relaxed),
-    inputs: Vec::new(),
+    inputs,
   };
-  // The inputs this build read, for a later refresh to compare against the home on disk.
-  let mut inputs: Vec<TreeIndexInput> = Vec::with_capacity(index.metas.len());
-  for name in index.metas.keys() {
-    if should_stop() {
-      return Ok(None);
-    }
-    inputs.push(read_tree_input(store, name)?);
-  }
-  inputs.sort_by(|left, right| left.session_id.cmp(&right.session_id));
-  index.inputs = inputs;
   let mut memo = HashMap::new();
   let mut structural = Vec::with_capacity(index.metas.len());
   let mut derived_archived_ids = Vec::new();

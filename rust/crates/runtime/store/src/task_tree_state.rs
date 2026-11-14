@@ -409,8 +409,9 @@ pub(crate) struct TreeIndex {
 /// What one session contributes to the tree index: the two files the index's metadata and task state come from.
 ///
 /// The metadata file carries the parent, the profile, the status and the archive offset; the live history's identity
-/// carries the newest lifecycle fact. A build reads nothing else of a session, so equal inputs on every session mean an
-/// equal index.
+/// carries the newest lifecycle fact, and the archive segments the state walk reads behind it. The archive segments
+/// move only in the write that replaces the live log and raises the archive offset, so both of them are read here. Equal
+/// inputs on every session mean an equal index.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TreeIndexInput {
   pub(crate) session_id: String,

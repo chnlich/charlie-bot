@@ -2,7 +2,6 @@ use std::ffi::{CString, OsStr, OsString};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -115,16 +114,8 @@ pub(super) fn tmux_binary() -> Result<PathBuf, String> {
   let Some(path) = std::env::var_os("PATH") else {
     return Err("tmux binary not found on PATH — install tmux".to_string());
   };
-  for directory in std::env::split_paths(&path) {
-    let candidate = directory.join("tmux");
-    if let Ok(metadata) = std::fs::metadata(&candidate)
-      && metadata.is_file()
-      && metadata.permissions().mode() & 0o111 != 0
-    {
-      return Ok(candidate);
-    }
-  }
-  Err("tmux binary not found on PATH — install tmux".to_string())
+  charliebot_core::paths::executable_on_path("tmux", &path)
+    .ok_or_else(|| "tmux binary not found on PATH — install tmux".to_string())
 }
 
 fn os_error(error: &io::Error, path: Option<&Path>) -> String {

@@ -1,12 +1,14 @@
-//! Path resolution: `expanduser`, the non-strict `realpath`, and the `PATH` a process without one searches.
+//! Path resolution: `expanduser`, the non-strict `realpath`, the `PATH` a process without one searches, and the
+//! executable a `PATH` value names.
 //!
 //! The home resolution, the fence's containment check and the static-file containment check all
 //! compare paths these two functions produce. Those checks therefore follow POSIX path resolution step
 //! for step, not `std::fs::canonicalize`, which fails on a missing tail.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// The search path a process without a `PATH` variable uses: the glibc default executable path.
@@ -136,6 +138,23 @@ pub fn name(path: &str) -> &str {
   path.rsplit('/').find(|part| !part.is_empty() && *part != ".").unwrap_or("")
 }
 
+/// Whether `metadata` describes a regular file with an execute bit for someone. A directory never does.
+pub fn metadata_is_executable(metadata: &std::fs::Metadata) -> bool {
+  metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+}
+
+/// Whether `path` is a regular file with an execute bit for someone. A symlink is judged by its target, and a path
+/// that does not stat is no executable.
+pub fn is_executable(path: &Path) -> bool {
+  std::fs::metadata(path).is_ok_and(|metadata| metadata_is_executable(&metadata))
+}
+
+/// The first executable `name` on `search_path`, a `PATH` value: its entries are searched in order, and an entry
+/// that holds no executable — or that cannot be read — is skipped.
+pub fn executable_on_path(name: &str, search_path: &OsStr) -> Option<PathBuf> {
+  std::env::split_paths(search_path).map(|directory| directory.join(name)).find(|candidate| is_executable(candidate))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -170,5 +189,28 @@ mod tests {
     assert_eq!(name("."), "");
     assert_eq!(name("/"), "");
     assert_eq!(name(""), "");
+  }
+
+  #[test]
+  fn executable_on_path_skips_a_directory_and_a_file_without_an_execute_bit() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::create_dir(first.join("tool")).unwrap();
+    std::fs::write(second.join("tool"), "#!/bin/sh\n").unwrap();
+    let search = std::env::join_paths([&first, &second]).unwrap();
+
+    assert_eq!(executable_on_path("tool", &search), None);
+    assert!(!is_executable(&first.join("tool")));
+    assert!(!is_executable(&second.join("missing")));
+
+    let mut permissions = std::fs::metadata(second.join("tool")).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(second.join("tool"), permissions).unwrap();
+
+    assert_eq!(executable_on_path("tool", &search), Some(second.join("tool")));
+    assert!(is_executable(&second.join("tool")));
   }
 }

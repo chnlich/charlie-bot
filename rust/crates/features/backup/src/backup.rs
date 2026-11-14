@@ -2,7 +2,6 @@
 //! retention policy.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -38,16 +37,7 @@ pub fn exclude_patterns(home: &Path) -> Vec<String> {
 /// The restic executable on PATH.
 pub fn restic_program() -> anyhow::Result<PathBuf> {
   let path = std::env::var_os("PATH").ok_or_else(|| anyhow!("PATH is unset, so restic cannot be found"))?;
-  for directory in std::env::split_paths(&path) {
-    let candidate = directory.join("restic");
-    if let Ok(metadata) = fs::metadata(&candidate)
-      && metadata.is_file()
-      && metadata.permissions().mode() & 0o111 != 0
-    {
-      return Ok(candidate);
-    }
-  }
-  bail!("restic is not on PATH")
+  charliebot_core::paths::executable_on_path("restic", &path).ok_or_else(|| anyhow!("restic is not on PATH"))
 }
 
 impl ResticSettings {

@@ -60,7 +60,10 @@ fail() {
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly SCRIPT_DIR=$script_dir
-readonly PROFILE_HOME=${CHARLIEBOT_HOME:-$HOME/.charliebot}
+readonly HOME_DIR=${HOME:-}
+[[ $HOME_DIR == /* ]] || fail 1 'HOME must be an absolute path'
+readonly PROFILE_HOME=${CHARLIEBOT_HOME:-$HOME_DIR/.charliebot}
+[[ $PROFILE_HOME == /* ]] || fail 1 'CHARLIEBOT_HOME must be an absolute path'
 readonly CRON_DIR="$PROFILE_HOME/config.d/cron.d"
 readonly REMOTE_HOST=${IMPROVE_REMOTE_HOST:-}
 readonly SESSION_ID=${CHARLIEBOT_SESSION_ID:-}
@@ -96,7 +99,8 @@ if is_cron_session_turn; then
 fi
 
 # ---------- 2. A round ----------
-[[ -n ${HOME:-} ]] || fail 1 'HOME is not set, so the evidence copy has no target'
+readonly TEMP_ROOT=${TMPDIR:-/tmp}
+[[ $TEMP_ROOT == /* ]] || fail 1 'TMPDIR must be an absolute path'
 [[ -n $REMOTE_HOST ]] || fail 1 'IMPROVE_REMOTE_HOST is not set; it names the improve host in host config'
 [[ -n $SESSION_ID ]] || fail 6 'CHARLIEBOT_SESSION_ID is not set, so the round has no direction'
 
@@ -133,11 +137,11 @@ resolve_direction() {
 # only what is still missing; a tree that is already complete costs one listing.
 copy_evidence() {
   local limit=$1
-  local local_evidence="$HOME/improve/$direction/evidence"
+  local local_evidence="$HOME_DIR/improve/$direction/evidence"
   mkdir -p -- "$local_evidence"
   local remote_evidence='$HOME/improve/'"$direction"'/evidence'
   local work
-  work=$(mktemp -d "${TMPDIR:-/tmp}/improve-evidence.XXXXXXXX") || fail 1 'cannot make the evidence copy directory'
+  work=$(mktemp -d "$TEMP_ROOT/improve-evidence.XXXXXXXX") || fail 1 'cannot make the evidence copy directory'
   local status=0
   set +e
   timeout --kill-after=5 "$limit" bash -c '
@@ -194,7 +198,7 @@ fi
 
 # ---------- 5. Send ----------
 launch_id=$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM
-payload_parent=${TMPDIR:-/tmp}
+payload_parent=$TEMP_ROOT
 payload=$(mktemp -d "$payload_parent/improve-launch.XXXXXXXX") || fail 1 'cannot make the launch directory'
 cleanup_payload() {
   [[ $payload == "$payload_parent"/improve-launch.* ]] && rm -rf -- "$payload"
@@ -215,6 +219,7 @@ for argument in "$@"; do
   fi
 done
 [[ -n $instructions ]] || fail 1 'the command names no --append-system-prompt-file, so the round has no instructions file'
+[[ $instructions == /* ]] || fail 1 'the instructions file path must be absolute'
 [[ -f $instructions ]] || fail 1 "the instructions file is missing: $instructions"
 cp -- "$instructions" "$payload/instructions.md"
 # Each host path maps to the name of its copy in the launch directory; the runner prefixes the

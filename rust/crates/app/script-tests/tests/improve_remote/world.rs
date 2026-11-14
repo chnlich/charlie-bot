@@ -216,11 +216,32 @@ if [[ -z ${FAKE_GH_PRS:-} || ! -r $FAKE_GH_PRS ]]; then
 fi
 case " $* " in
   *" pr list "*)
+    if [[ -n ${FAKE_GH_REPO:-} && " $* " != *" --repo $FAKE_GH_REPO "* ]]; then
+      printf 'stub gh: pull request list did not name the expected repository\n' >&2
+      exit 91
+    fi
     while IFS=$'\t' read -r number head file; do
       printf '%s\t%s\n' "$number" "$head"
     done <"$FAKE_GH_PRS"
     ;;
   *" api "*)
+    if [[ -n ${FAKE_GH_REPO:-} ]]; then
+      arguments=("$@")
+      hostname=
+      route=
+      for ((index = 0; index < ${#arguments[@]}; index++)); do
+        if [[ ${arguments[index]} == --hostname ]]; then
+          hostname=${arguments[index + 1]}
+        elif [[ ${arguments[index]} == repos/* ]]; then
+          route=${arguments[index]}
+        fi
+      done
+      repository=${FAKE_GH_REPO#*/}
+      if [[ $hostname != ${FAKE_GH_HOST:-} || $route != "repos/$repository/"* ]]; then
+        printf 'stub gh: pull request files request did not name the expected repository\n' >&2
+        exit 92
+      fi
+    fi
     if [[ ${FAKE_GH_FAIL_FILES:-0} == 1 ]]; then
       exit 1
     fi

@@ -273,9 +273,37 @@ worktree_has_live_claimant() {
   esac
 }
 
+# Parse a Git remote URL into the hostname, owner and repository that the GitHub CLI accepts.
+parse_github_origin() {
+  local origin=$1 authority path
+  case $origin in
+    https://*/* | http://*/* | ssh://*/* | git://*/*)
+      authority=${origin#*://}
+      [[ $authority == */* ]] || return 1
+      gh_hostname=${authority%%/*}
+      gh_hostname=${gh_hostname##*@}
+      path=${authority#*/}
+      ;;
+    *@*:*)
+      gh_hostname=${origin%%:*}
+      gh_hostname=${gh_hostname##*@}
+      path=${origin#*:}
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  path=${path%.git}
+  [[ $gh_hostname =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  [[ $path =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]] || return 1
+  gh_repository_path="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+  gh_repository="$gh_hostname/$gh_repository_path"
+}
+
 list_open_pull_requests() {
   local pull_requests number head files
-  pull_requests=$(gh pr list --state open --limit 200 --json number,headRefName \
+  pull_requests=$(gh pr list --repo "$gh_repository" --state open --limit 200 --json number,headRefName \
     --jq '.[] | [.number, .headRefName] | @tsv') || {
     printf 'cannot read the open pull request condition\n' >&2
     exit 1
@@ -286,7 +314,8 @@ list_open_pull_requests() {
       continue
     fi
     open_pr_branches["$head"]=1
-    files=$(gh api --paginate "repos/{owner}/{repo}/pulls/$number/files" --jq '.[].filename') || {
+    files=$(gh api --hostname "$gh_hostname" --paginate "repos/$gh_repository_path/pulls/$number/files" \
+      --jq '.[].filename') || {
       printf 'cannot read the open pull request condition for PR %s\n' "$number" >&2
       exit 1
     }
@@ -356,6 +385,11 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   common_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
   main_root=$(dirname "$common_dir")
 
+  if [[ -n ${CHARLIEBOT_HOME:-} && $CHARLIEBOT_HOME != /* ]]; then
+    printf 'cannot read the task-owner condition: CHARLIEBOT_HOME must be an absolute path\n' >&2
+    exit 1
+  fi
+
   # Fetch origin/main before any branch is compared against it. The explicit
   # refspec writes the ref this prefix owns, whatever fetch configuration the
   # clone carries, and --no-write-fetch-head leaves the shared FETCH_HEAD alone.
@@ -364,6 +398,10 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
     printf 'cannot read the origin of %s\n' "$main_root" >&2
     exit 1
   }
+  if ! parse_github_origin "$origin_url"; then
+    printf 'cannot parse the origin of %s as a GitHub repository\n' "$main_root" >&2
+    exit 1
+  fi
   # The fetch names the URL instead of the remote, because a named remote's fetch
   # also updates the remote's tracking ref, and that update is the shared write
   # this fetch must not make.

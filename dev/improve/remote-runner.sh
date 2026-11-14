@@ -76,7 +76,8 @@ if [[ $mode != prepare ]]; then
   [[ $direction =~ ^[a-z][a-z0-9_]*$ ]] || fail 1 "not an improve direction: $direction"
 fi
 
-readonly HOME_DIR=$HOME
+readonly HOME_DIR=${HOME:-}
+[[ $HOME_DIR == /* ]] || fail 1 'HOME must be an absolute path'
 readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
 readonly ROUND_HOME="$HOME_DIR/improve/home"
 readonly RUNNER_ROOT="$HOME_DIR/improve/runner"
@@ -307,7 +308,8 @@ ensure_cli() {
   if [[ ! -x $cli || ! -x $sandbox || ! -x $mock_home ]]; then
     if [[ ! -d $checkout/.git ]]; then
       origin=$(cat -- "$LAUNCH_DIR/origin")
-      git clone --quiet -- "$origin" "$checkout" || fail 1 "cannot clone the runner's checkout: $checkout"
+      git -C "$HOME_DIR" clone --quiet -- "$origin" "$checkout" \
+        || fail 1 "cannot clone the runner's checkout: $checkout"
     fi
     git -C "$checkout" fetch --quiet origin "$commit" || fail 1 "cannot fetch commit $commit into $checkout"
     git -C "$checkout" -c advice.detachedHead=false checkout --quiet --detach "$commit" \

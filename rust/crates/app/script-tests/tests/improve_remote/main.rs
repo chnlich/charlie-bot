@@ -10,6 +10,7 @@ mod world;
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -164,6 +165,127 @@ fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
   assert_eq!(run.code, 3, "{}", run.describe());
   assert!(world.ssh_arguments().contains("\ntrue\n"), "the preflight did not reach ssh:\n{}", world.ssh_arguments());
   assert!(!world.node_claude_ran(), "the round ran on this host");
+}
+
+const GIT_WITH_GITHUB_ORIGIN: &str = r#"
+if [[ $# -eq 5 && $1 == -C && $3 == remote && $4 == get-url && $5 == origin ]]; then
+  [[ ${FAKE_GIT_FAIL_ORIGIN:-0} == 0 ]] || exit 1
+  printf '%s\n' "$FAKE_GIT_ORIGIN"
+  exit 0
+fi
+arguments=("$@")
+for index in "${!arguments[@]}"; do
+  if [[ ${arguments[index]} == "$FAKE_GIT_ORIGIN" ]]; then
+    arguments[index]=$FAKE_GIT_LOCAL_ORIGIN
+  fi
+done
+exec "$FAKE_REAL_GIT" "${arguments[@]}"
+"#;
+
+/// Runs the in-flight list from `cwd`.
+fn run_inflight_list_from(world: &World, env: &harness::Env, cwd: &Path) -> harness::Run {
+  let mut command = harness::command("bash", env);
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/").current_dir(cwd);
+  harness::run(&mut command)
+}
+
+fn run_launcher_from(world: &World, env: &harness::Env, cwd: &Path, arguments: &[String]) -> harness::Run {
+  let mut command = harness::command("bash", env);
+  command.arg(world.launcher()).args(arguments).current_dir(cwd);
+  harness::run(&mut command)
+}
+
+#[test]
+fn the_inflight_list_names_its_origin_repository_outside_a_git_checkout() {
+  let world = World::new();
+  let cwd = world.sandbox.root();
+  assert!(!cwd.join(".git").exists(), "the test working directory is a git checkout");
+
+  let pull_requests = world.sandbox.root().join("open-pull-requests.tsv");
+  fs::write(&pull_requests, "12\tcharliebot/task-open\tpr-only.md\n").expect("the open pull requests");
+  let real_git = std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set"))
+    .map(|directory| directory.join("git"))
+    .find(|path| path.is_file())
+    .expect("git is on PATH");
+  world.sandbox.stub("git", GIT_WITH_GITHUB_ORIGIN);
+
+  let mut env = world.env();
+  env.remove("GH_REPO");
+  env.insert("FAKE_GH_PRS".to_string(), pull_requests.display().to_string());
+  env.insert("FAKE_GH_REPO".to_string(), "github.com/fixture-owner/fixture-repo".to_string());
+  env.insert("FAKE_GH_HOST".to_string(), "github.com".to_string());
+  env.insert("FAKE_GIT_ORIGIN".to_string(), "https://github.com/fixture-owner/fixture-repo.git".to_string());
+  env.insert("FAKE_GIT_LOCAL_ORIGIN".to_string(), world.other_direction_origin("runtime").display().to_string());
+  env.insert("FAKE_REAL_GIT".to_string(), real_git.display().to_string());
+
+  let run = run_inflight_list_from(&world, &env, cwd);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(run.stdout, "pr-only.md\n", "{}", run.describe());
+
+  let mut unparseable_origin = env.clone();
+  unparseable_origin.insert("FAKE_GIT_ORIGIN".to_string(), "not-a-github-origin".to_string());
+  let run = run_inflight_list_from(&world, &unparseable_origin, cwd);
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("cannot parse the origin"), "{}", run.describe());
+
+  let mut unreadable_origin = env;
+  unreadable_origin.insert("FAKE_GIT_FAIL_ORIGIN".to_string(), "1".to_string());
+  let run = run_inflight_list_from(&world, &unreadable_origin, cwd);
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("cannot read the origin"), "{}", run.describe());
+
+  let mut relative_profile_home = unreadable_origin;
+  relative_profile_home.insert("CHARLIEBOT_HOME".to_string(), "profile".to_string());
+  let run = run_inflight_list_from(&world, &relative_profile_home, cwd);
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("CHARLIEBOT_HOME must be an absolute path"), "{}", run.describe());
+}
+
+#[test]
+fn the_remote_launcher_rejects_relative_input_and_temp_paths() {
+  let world = World::new();
+  let cwd = world.sandbox.root();
+
+  let mut arguments = world.claude_arguments();
+  let instructions = arguments
+    .iter()
+    .position(|argument| argument == "--append-system-prompt-file")
+    .expect("the launcher arguments name the instructions file");
+  arguments[instructions + 1] = "harness_instructions.md".to_string();
+  let env = world.env();
+  let run = run_launcher_from(&world, &env, cwd, &arguments);
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("the instructions file path must be absolute"), "{}", run.describe());
+
+  let mut env = world.env();
+  env.insert("TMPDIR".to_string(), "relative-temp".to_string());
+  let arguments = world.claude_arguments();
+  let run = run_launcher_from(&world, &env, cwd, &arguments);
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("TMPDIR must be an absolute path"), "{}", run.describe());
+
+  for (name, path) in [("HOME", "relative-home"), ("CHARLIEBOT_HOME", "relative-profile")] {
+    let mut env = world.env();
+    env.insert(name.to_string(), path.to_string());
+    let run = run_launcher_from(&world, &env, cwd, &arguments);
+    assert_ne!(run.code, 0, "{}", run.describe());
+    assert!(run.stderr.contains(&format!("{name} must be an absolute path")), "{}", run.describe());
+  }
+}
+
+#[test]
+fn the_remote_runner_rejects_a_relative_home() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("HOME".to_string(), "relative-home".to_string());
+  let mut command = harness::command("bash", &env);
+  command.arg(world.repo.join("dev/improve/remote-runner.sh")).args(["--prepare", "launch-id"]);
+
+  let run = harness::run(&mut command);
+
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(run.stderr.contains("HOME must be an absolute path"), "{}", run.describe());
 }
 
 #[test]

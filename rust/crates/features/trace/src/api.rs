@@ -18,7 +18,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::Templating;
 use serde_json::{Value, json};
 
-use crate::merge::{self, BuildFailure, BuildMode};
+use crate::merge::{self, ArtifactShape, BuildFailure, BuildMode};
 
 const VIEWER_PATH: &str = "/perfetto";
 const MERGED_PATH: &str = "/perfetto/merged";
@@ -121,12 +121,12 @@ async fn perfetto_merged(
     query.iter().filter(|(name, _)| name == "trace").map(|(_, value)| PathBuf::from(value)).collect();
   let dir = last_value(&query, "dir").map(str::to_string);
   let pattern = last_value(&query, "pattern").unwrap_or(DEFAULT_PATTERN).to_string();
-  let slim = match last_value(&query, "slim") {
+  let shape = match last_value(&query, "slim") {
     Some(value) => match validation::parse_bool(validation::Source::Query, "slim", value) {
-      Ok(value) => value,
+      Ok(value) => ArtifactShape::from(value),
       Err(error) => return validation::response(&[*error]),
     },
-    None => false,
+    None => ArtifactShape::Full,
   };
   if traces.is_empty() && dir.is_none() {
     return json_error(StatusCode::BAD_REQUEST, "Provide at least one trace path with 'trace' or 'dir'.");
@@ -141,17 +141,22 @@ async fn perfetto_merged(
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
 
-  let mode = if resolved_paths.len() == 1 && !slim { BuildMode::DirectPass } else { BuildMode::Merge };
-  match merge::cached_build(features, resolved_paths.clone(), slim, mode).await {
+  let mode =
+    if resolved_paths.len() == 1 && shape == ArtifactShape::Full { BuildMode::DirectPass } else { BuildMode::Merge };
+  match merge::cached_build(features, resolved_paths.clone(), shape, mode).await {
     Ok(cache_path) => serve_cached_trace(&cache_path, &headers),
     Err(error) => {
       tracing::error!(
         paths = ?resolved_paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
-        slim,
+        shape = ?shape,
         detail = %error.message(),
         "perfetto_merge_failed"
       );
-      let detail = if mode == BuildMode::Merge && resolved_paths.len() == 1 && slim && !error.is_not_a_trace() {
+      let detail = if mode == BuildMode::Merge
+        && resolved_paths.len() == 1
+        && shape == ArtifactShape::Slim
+        && !error.is_not_a_trace()
+      {
         format!("merged-trace build failed: {}", error.message())
       } else {
         error.message().to_string()

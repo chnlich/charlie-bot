@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use charliebot_core::git::object_exists_args;
+use charliebot_core::git::{ancestry_args, object_exists_args};
 use charliebot_core::text_repr;
 use ignore::WalkBuilder;
 use tokio::process::Command;
@@ -527,12 +527,8 @@ pub async fn resolve_base_branch(
       // still refuses: is-ancestor answers in exit codes (0 behind, 1 not an ancestor),
       // so the raw process is read directly — a _git_stdout failure folds every non-zero
       // code into one boolean.
-      let merge_base = git_proc_bytes(
-        repo_path,
-        &["merge-base", "--is-ancestor", &local_sha, &remote_sha],
-        SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
-      )
-      .await;
+      let merge_base =
+        git_proc_bytes(repo_path, &ancestry_args(&local_sha, &remote_sha), SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await;
       let merge_base = match merge_base {
         Ok(proc) => proc,
         Err(_) => {
@@ -1071,10 +1067,8 @@ pub async fn git_verify_commit_landed(repo_path: &Path, branch: &str, commit: &s
     }
   }
   let commit_object = format!("{commit}^{{commit}}");
-  let checks: [(&str, Vec<&str>); 2] = [
-    ("existence", object_exists_args(&commit_object).to_vec()),
-    ("ancestry", vec!["merge-base", "--is-ancestor", commit, branch]),
-  ];
+  let checks: [(&str, Vec<&str>); 2] =
+    [("existence", object_exists_args(&commit_object).to_vec()), ("ancestry", ancestry_args(commit, branch).to_vec())];
   for (label, args) in checks {
     match git_c_proc_bytes(repo_path, &args, SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
       Ok(proc) if proc.returncode == 0 => {}

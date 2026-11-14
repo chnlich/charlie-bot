@@ -6,6 +6,7 @@ use std::process::Command;
 
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_core::git::ancestry_args;
 use charliebot_core::{home, paths, str_methods, text_repr};
 use clap::{Args, Parser, Subcommand};
 
@@ -235,7 +236,7 @@ fn open_proposal(memory_dir: &Path) -> ProposalResult<Vec<(String, String)>> {
   if ahead == 0 {
     git(&worktree, &["merge", "--ff-only", &base])?;
   } else {
-    let ancestry = run_git(memory_dir, &["merge-base", "--is-ancestor", &base, PROPOSAL_BRANCH])?;
+    let ancestry = run_git(memory_dir, &ancestry_args(&base, PROPOSAL_BRANCH))?;
     if !ancestry.success {
       let worktree_status = run_git(&worktree, &["status", "--porcelain"])?;
       if !worktree_status.stdout.trim().is_empty() {
@@ -490,11 +491,11 @@ fn land(memory_dir: &Path, sha: &str) -> ProposalResult<Vec<(String, String)>> {
     return Err(ProposalError::Refusal(format!("'{sha}' does not resolve to a commit in {}", memory_dir.display())));
   }
   let commit_sha = resolved.stdout.trim();
-  let on_proposal = run_git(memory_dir, &["merge-base", "--is-ancestor", commit_sha, PROPOSAL_BRANCH])?;
+  let on_proposal = run_git(memory_dir, &ancestry_args(commit_sha, PROPOSAL_BRANCH))?;
   if !on_proposal.success {
     return Err(ProposalError::Refusal(format!("'{sha}' is not on the '{PROPOSAL_BRANCH}' branch")));
   }
-  let base_is_ancestor = run_git(memory_dir, &["merge-base", "--is-ancestor", &base, commit_sha])?;
+  let base_is_ancestor = run_git(memory_dir, &ancestry_args(&base, commit_sha))?;
   if !base_is_ancestor.success {
     return Err(ProposalError::Refusal(format!(
       "{base} is not an ancestor of '{sha}'; the land would move the branch backwards"

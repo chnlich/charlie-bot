@@ -25,6 +25,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use charliebot_core::git::ancestry_args;
 use charliebot_store::layout;
 use charliebot_store::metadata::read_session_metadata;
 use charliebot_store::run_records::{self, RunRecord};
@@ -454,9 +455,7 @@ async fn abort_rebase(worktree: &Path) {
 /// The one rebase step: a rebase onto the base tip only when the tip is not already an ancestor,
 /// so an unchanged head keeps its sha and its clocks.
 async fn rebase_onto_base(worktree: &Path, base_ref: &str) -> anyhow::Result<RebaseStep> {
-  let ancestor =
-    git::git_stdout(worktree, &["merge-base", "--is-ancestor", base_ref, "HEAD"], GIT_READ_TIMEOUT, "git merge-base")
-      .await;
+  let ancestor = git::git_stdout(worktree, &ancestry_args(base_ref, "HEAD"), GIT_READ_TIMEOUT, "git merge-base").await;
   match ancestor {
     (true, _, _) => return Ok(RebaseStep::UpToDate),
     (false, _, err) if merge_base_unknown(&err) => {}
@@ -646,20 +645,15 @@ async fn verify_base_moved(
   let tip = git::git_rev_parse(worktree, &base_ref)
     .await
     .ok_or_else(|| anyhow::anyhow!("{base_ref} does not resolve in {}", worktree.display()))?;
-  let advanced = git::git_stdout(
-    worktree,
-    &["merge-base", "--is-ancestor", push_base_sha, &tip],
-    GIT_READ_TIMEOUT,
-    "git merge-base",
-  )
-  .await;
+  let advanced =
+    git::git_stdout(worktree, &ancestry_args(push_base_sha, &tip), GIT_READ_TIMEOUT, "git merge-base").await;
   match advanced {
     (true, _, _) => {}
     (false, _, err) if merge_base_unknown(&err) => return Ok(None),
     (false, _, err) => anyhow::bail!("git merge-base --is-ancestor {push_base_sha} {tip} failed: {err}"),
   }
   let pushed_sha_is_ancestor =
-    git::git_stdout(worktree, &["merge-base", "--is-ancestor", &tip, sha], GIT_READ_TIMEOUT, "git merge-base").await;
+    git::git_stdout(worktree, &ancestry_args(&tip, sha), GIT_READ_TIMEOUT, "git merge-base").await;
   match pushed_sha_is_ancestor {
     (true, _, _) => Ok(None),
     (false, _, err) if merge_base_unknown(&err) => Ok(Some(tip)),

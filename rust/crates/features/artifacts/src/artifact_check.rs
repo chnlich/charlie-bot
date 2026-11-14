@@ -799,8 +799,8 @@ fn ancestor_with_class(nodes: &[Element], element: usize, up_to: Option<usize>, 
   false
 }
 
-/// The `li` lines of one fork that no folded `details` holds and no `div.demo` holds: the options the page shows at
-/// open, with the lists and menus a demo draws left out of the option count.
+/// The `li` lines of one fork that no folded `details` holds and no `div.demo` holds. These are the options the page
+/// shows at open, with the lists and menus a demo draws left out of the option count.
 fn visible_option_lines(nodes: &[Element], fork: usize) -> Vec<usize> {
   find(nodes, fork, "li", &[])
     .into_iter()

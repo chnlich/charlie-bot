@@ -1,6 +1,6 @@
-//! `web/features/artifacts`: the `publish:` config section, the session plan registry with its routes and its four verbs
-//! `present`, `amend`, `approve` and `close`, its sidebar contribution, the artifact file view, and the `plan` and
-//! `artifact check` subcommands.
+//! `web/features/artifacts` holds the `publish:` config section and the artifact file view. It holds the session
+//! plan registry with its routes and its four verbs `present`, `amend`, `approve` and `close`, and its sidebar
+//! contribution. It holds the `plan` and `artifact check` subcommands.
 
 mod api;
 pub mod artifact_check;

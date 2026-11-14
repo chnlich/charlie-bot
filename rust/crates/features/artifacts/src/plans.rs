@@ -1,5 +1,5 @@
-//! The plan registry's read side: the derived state of a plan, the projection of a
-//! registry to the schema it persists and emits, and the tolerant read of a session's `plans.json`.
+//! The plan registry's read side holds the derived state of a plan and the projection of a
+//! registry to the schema it persists and emits. It also holds the tolerant read of a session's `plans.json`.
 //!
 //! The tolerant read is the one reader of `plans.json` for the plan listing and the sidebar. A corrupt file becomes
 //! error entries. A few failures escape the read as exceptions: a `plans` value that is not iterable, and a

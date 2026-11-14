@@ -1,8 +1,8 @@
 //! The `charliebot artifact` verbs.
 //!
 //! `check` runs a genre's mechanical assertions, prints one line per outcome, and — once every assertion passed and
-//! `--assertions-only` was not given — runs the cold read. The cold read follows the session's profile: a manager
-//! session delegates a cold-read child over `/api/internal/delegate` and prints the started line; a worker session or
+//! `--assertions-only` was not given — runs the cold read. The cold read follows the session's profile. A manager
+//! session delegates a cold-read child over `/api/internal/delegate` and prints the started line. A worker session or
 //! one with no session identity runs the probe in the foreground and prints the report body. A `waiting` page has no
 //! cold read here: `web status set` runs it with the item, so `check` refuses that genre without `--assertions-only`.
 //! `wrap` assembles a genre page and can pre-render its math.
@@ -60,8 +60,8 @@ struct CheckArgs {
   assertions_only: bool,
 }
 
-/// The process inputs a check reads besides its arguments: the profile home, the cwd that may name a session, the
-/// server-written session variable, and the checkout whose `prompts/` the assertions and the probe read.
+/// The process inputs a check reads besides its arguments. These are the profile home, the cwd that may name a
+/// session, the server-written session variable, and the checkout whose `prompts/` the assertions and the probe read.
 struct CheckInputs {
   pub home: PathBuf,
   pub cwd: PathBuf,

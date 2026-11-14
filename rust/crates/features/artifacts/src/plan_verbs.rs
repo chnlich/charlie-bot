@@ -1,6 +1,7 @@
 //! The plan verbs `present`, `amend`, `approve` and `close`.
-//! Each verb changes one session's `plans.json` under the session's lock: it loads the registry, changes the plans, saves
-//! the registry and marks the sidebar dirty, then broadcasts `plan_updated` after the lock is released. `present` and
+//! Each verb changes one session's `plans.json` under the session's lock. It loads the registry, changes the plans,
+//! saves the registry and marks the sidebar dirty. Then it broadcasts `plan_updated` after the lock is released.
+//! `present` and
 //! `amend` also check the page with the plan assertion set before they bind it. The reads and the projection belong to
 //! `plans`; the check belongs to `artifact_check`.
 

@@ -956,6 +956,51 @@ async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result
 
 #[tokio::test]
 #[ignore = "integration"]
+async fn kept_worktree_releases_its_branch_at_task_end() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start_with(
+    vec![script_option("fake", &result_script("implemented")), script_option("fake2", &result_script("review ok"))],
+    vec!["fake".to_string(), "fake2".to_string()],
+  )
+  .await?;
+  set_access_key(&stack)?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let mut task = implement_task("add marker", Some(&repo.repo));
+  task.keep_worktree = true;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(task)).await?;
+  stack.dispatch.set_executor(None);
+  let guard = ProcessGroupGuard::new();
+  queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
+  let work = stack.store().read_run_sync(&worker.id, "run-work")?.context("work run is recorded")?;
+  let worktree = PathBuf::from(work.worktree_path.as_deref().context("work run has a worktree")?);
+  let branch = work.branch_name.clone().context("work run has a branch")?;
+  let commit = git(&worktree, &["rev-parse", "HEAD"])?;
+  let status = git(&worktree, &["status", "--porcelain"])?;
+  let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
+  wait_for_task_state(&stack, &worker.id, "completed").await?;
+  wait_for_detached_head(&worktree).await?;
+
+  assert!(worktree.is_dir(), "a kept worktree stays in place");
+  assert_eq!(git(&worktree, &["rev-parse", "HEAD"])?, commit);
+  assert_eq!(git(&worktree, &["status", "--porcelain"])?, status);
+  git(&repo.repo, &["branch", "-f", &branch, "main"])?;
+  Ok(())
+}
+
+/// Waits until the worktree's HEAD is detached, which task-end cleanup does after the task closes.
+async fn wait_for_detached_head(worktree: &Path) -> anyhow::Result<()> {
+  let deadline = Instant::now() + TEST_DEADLINE;
+  while git(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])? != "HEAD" {
+    anyhow::ensure!(Instant::now() < deadline, "kept worktree {} stayed on its branch", worktree.display());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+  }
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
 async fn repo_less_implement_delivers_after_review_passes() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option("fake", &result_script("implemented")), script_option("fake2", &result_script("review ok"))],

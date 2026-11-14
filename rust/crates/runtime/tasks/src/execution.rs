@@ -2258,9 +2258,14 @@ impl TaskExecutionAdapter {
 
   async fn cleanup_worktree_if_delivered(&self, session_id: &str, run: &RunRecord) -> anyhow::Result<()> {
     let Some(meta) = self.features.store.load_meta(session_id).await? else { return Ok(()) };
-    if meta.task.as_ref().is_some_and(|task| task.keep_worktree)
-      || self.features.store.task_state(session_id)? != "completed"
-    {
+    if meta.task.as_ref().is_some_and(|task| task.keep_worktree) {
+      // The worktree stays for the process that needs it; its branch is released so other checkouts can use it.
+      if let Some(worktree_path) = run.worktree_path.as_deref() {
+        git::git_detach_kept_worktree(Path::new(worktree_path), &run.id).await;
+      }
+      return Ok(());
+    }
+    if self.features.store.task_state(session_id)? != "completed" {
       return Ok(());
     }
     let fields = Map::from_iter([("run_id".to_string(), json!(run.id)), ("session".to_string(), json!(session_id))]);

@@ -1024,6 +1024,26 @@ pub async fn git_worktree_prune(repo_path: &str, thread_id: &str) {
   }
 }
 
+/// Detach a kept worktree's HEAD at the commit it holds, so its branch is free for other checkouts.
+///
+/// The commit and the files stay as they are. A failed detach is logged as `kept_worktree_detach_failed` with the
+/// worktree path and git's error; it changes no task outcome.
+pub async fn git_detach_kept_worktree(wt_path: &Path, owner_id: &str) {
+  let error = match git_proc_bytes(wt_path, &["checkout", "--detach"], SUBPROCESS_GIT_READ_TIMEOUT_ASYNC).await {
+    Ok(proc) if proc.returncode == 0 => return,
+    Ok(proc) => trimmed(&proc.stderr),
+    Err(GitProcError::TimedOut) => "git checkout --detach timed out".to_string(),
+    Err(GitProcError::Spawn(error)) => error.to_string(),
+  };
+  tracing::error!(
+    target: "charliebot_tasks",
+    thread_id = owner_id,
+    worktree = %wt_path.display(),
+    error = %error,
+    "kept_worktree_detach_failed"
+  );
+}
+
 /// Run `git fetch <remote> <branch>`; returns `(success, stderr)`.
 async fn git_fetch(repo_path: &Path, remote: &str, branch: &str) -> (bool, String) {
   let (ok, _, err) = git_remote(repo_path, &["fetch", remote, branch], "git fetch").await;

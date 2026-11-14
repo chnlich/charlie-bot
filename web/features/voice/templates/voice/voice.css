@@ -1,18 +1,23 @@
 /* The ⋯ menu's voice backend entry: on phones the caret beside the mic is hidden
    and this entry, added by voice-events.js, opens the backend menu. On wider
-   screens the caret and its menu carry it, and the entry takes no space. */
+   screens the caret and its menu carry it, and the entry takes no space.
+
+   The entry's fill is the menu's own slate-800, so its border is the only mark of
+   the control and holds the 3:1 floor WCAG 1.4.11 sets for one. slate-600 draws
+   1.93:1 on that fill; slate-500 draws 3.07:1 at rest and slate-400 draws 5.71:1
+   under the pointer, the tones the composer's other controls keep. */
 #voice-backend-menu-entry {
   display: none;
   align-items: center;
   padding: 0.625rem 0.75rem;
-  border: 1px solid #475569;
+  border: 1px solid #64748b;
   border-radius: 0.75rem;
   background: #1e293b;
   color: #e2e8f0;
   font-size: 0.875rem;
   white-space: nowrap;
 }
-#voice-backend-menu-entry:hover { border-color: #64748b; }
+#voice-backend-menu-entry:hover { border-color: #94a3b8; }
 
 /* The microphone and its backend caret are one split control. The microphone keeps its left rounding and
    drops its right border; the caret starts at the microphone's right edge and spans its height. The caret's

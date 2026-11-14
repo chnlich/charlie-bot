@@ -37,6 +37,27 @@ pub(super) enum BuildMode {
   Merge,
 }
 
+/// The artifact a merge writes: every event, or the slim artifact with the instant events dropped and only each
+/// event's `stream` argument kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ArtifactShape {
+  Full,
+  Slim,
+}
+
+impl From<bool> for ArtifactShape {
+  /// The shape the `slim` query value and the golden fixtures name: `true` is the slim artifact.
+  fn from(value: bool) -> Self {
+    if value { ArtifactShape::Slim } else { ArtifactShape::Full }
+  }
+}
+
+impl ArtifactShape {
+  fn is_slim(self) -> bool {
+    matches!(self, ArtifactShape::Slim)
+  }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum BuildFailure {
   NotATrace(String),
@@ -68,7 +89,7 @@ struct BuildPlan {
   cache_dir: PathBuf,
   cache_path: PathBuf,
   paths: Vec<PathBuf>,
-  slim: bool,
+  shape: ArtifactShape,
   mode: BuildMode,
 }
 
@@ -85,14 +106,14 @@ fn runtime() -> Arc<MergeRuntime> {
 pub(super) async fn cached_build(
   features: Arc<FeatureContext>,
   paths: Vec<PathBuf>,
-  slim: bool,
+  shape: ArtifactShape,
   mode: BuildMode,
 ) -> Result<PathBuf, BuildFailure> {
   let cache_mode = match mode {
     BuildMode::DirectPass => DIRECT_MODE,
     BuildMode::Merge => MERGE_MODE,
   };
-  let key = merge_cache_key(&paths, slim, cache_mode)?;
+  let key = merge_cache_key(&paths, shape, cache_mode)?;
   let cfg = features.config.get().map_err(|error| BuildFailure::Failed(error.to_string()))?;
   let cache_dir = cfg.charliebot_home.join("cache").join("perfetto_merge");
   fs::create_dir_all(&cache_dir).map_err(io_failure)?;
@@ -102,7 +123,7 @@ pub(super) async fn cached_build(
     return Ok(cache_path);
   }
 
-  let plan = BuildPlan { cache_dir, cache_path: cache_path.clone(), paths, slim, mode };
+  let plan = BuildPlan { cache_dir, cache_path: cache_path.clone(), paths, shape, mode };
   let runtime = runtime();
   let receiver = {
     let mut flights = runtime.flights.lock().await;
@@ -156,7 +177,7 @@ fn build_cached(plan: &BuildPlan) -> FlightResult {
   let temp_path_buf = temp_path.to_path_buf();
   let built = match plan.mode {
     BuildMode::DirectPass => direct_pass(&plan.paths[0], &temp_path_buf),
-    BuildMode::Merge => merge_artifact(&plan.paths, &temp_path_buf, plan.slim),
+    BuildMode::Merge => merge_artifact(&plan.paths, &temp_path_buf, plan.shape),
   };
   if let Err(error) = built {
     drop(temp_path);
@@ -167,10 +188,11 @@ fn build_cached(plan: &BuildPlan) -> FlightResult {
   Ok(plan.cache_path.clone())
 }
 
-fn merge_cache_key(paths: &[PathBuf], slim: bool, mode: &str) -> Result<String, BuildFailure> {
+fn merge_cache_key(paths: &[PathBuf], shape: ArtifactShape, mode: &str) -> Result<String, BuildFailure> {
   #[derive(Serialize)]
   struct CacheKeyPayload<'a> {
     paths: Vec<(String, u64, i64)>,
+    /// The shape as the recorded Python build wrote it: `true` is the slim artifact.
     slim: bool,
     mode: &'a str,
   }
@@ -184,7 +206,7 @@ fn merge_cache_key(paths: &[PathBuf], slim: bool, mode: &str) -> Result<String, 
       timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64,
     ));
   }
-  let payload = CacheKeyPayload { paths: path_rows, slim, mode };
+  let payload = CacheKeyPayload { paths: path_rows, slim: shape.is_slim(), mode };
   let mut encoded = Vec::new();
   let mut serializer = serde_json::Serializer::with_formatter(&mut encoded, AsciiFormatter);
   payload.serialize(&mut serializer).map_err(|error| BuildFailure::Failed(error.to_string()))?;
@@ -259,8 +281,8 @@ fn direct_pass(path: &Path, out_path: &Path) -> Result<(), BuildFailure> {
   gzip_bytes(&source, out_path)
 }
 
-fn merge_artifact(paths: &[PathBuf], out_path: &Path, slim: bool) -> Result<(), BuildFailure> {
-  let document = if paths.len() == 1 { merge_traces(paths, slim)? } else { build_multi_trace_merge(paths, slim)? };
+fn merge_artifact(paths: &[PathBuf], out_path: &Path, shape: ArtifactShape) -> Result<(), BuildFailure> {
+  let document = if paths.len() == 1 { merge_traces(paths, shape)? } else { build_multi_trace_merge(paths, shape)? };
   gzip_bytes(&document, out_path)
 }
 
@@ -287,7 +309,7 @@ fn trace_events_or_raise<'a>(document: &'a Value, path: &Path) -> Result<&'a Vec
   }
 }
 
-fn merge_traces(paths: &[PathBuf], slim: bool) -> Result<Vec<u8>, BuildFailure> {
+fn merge_traces(paths: &[PathBuf], shape: ArtifactShape) -> Result<Vec<u8>, BuildFailure> {
   let mut output = Vec::new();
   output.extend_from_slice(b"{\"traceEvents\":[");
   let mut batcher = EventBatcher::new(&mut output);
@@ -298,13 +320,13 @@ fn merge_traces(paths: &[PathBuf], slim: bool) -> Result<Vec<u8>, BuildFailure> 
     flow_seq.start_trace();
     let source = fs::read(path).map_err(io_failure)?;
     let document = parse_document(&source)?;
-    merge_one_trace(&document, path, file_index, &mut batcher, &mut tid_seq, &mut flow_seq, slim)?;
+    merge_one_trace(&document, path, file_index, &mut batcher, &mut tid_seq, &mut flow_seq, shape)?;
   }
   output.extend_from_slice(b"]}");
   Ok(output)
 }
 
-fn build_multi_trace_merge(paths: &[PathBuf], slim: bool) -> Result<Vec<u8>, BuildFailure> {
+fn build_multi_trace_merge(paths: &[PathBuf], shape: ArtifactShape) -> Result<Vec<u8>, BuildFailure> {
   let mut output = Vec::new();
   output.extend_from_slice(b"{\"traceEvents\":[");
   let mut emitted_any = false;
@@ -317,7 +339,7 @@ fn build_multi_trace_merge(paths: &[PathBuf], slim: bool) -> Result<Vec<u8>, Bui
     let mut flow_seq = IdSequencer::new(start);
     let source = fs::read(path).map_err(io_failure)?;
     let document = parse_document(&source)?;
-    match merge_one_trace(&document, path, file_index, &mut batcher, &mut tid_seq, &mut flow_seq, slim) {
+    match merge_one_trace(&document, path, file_index, &mut batcher, &mut tid_seq, &mut flow_seq, shape) {
       Ok(()) => {
         if !fragment.is_empty() {
           if emitted_any {
@@ -403,7 +425,7 @@ fn merge_one_trace(
   batcher: &mut EventBatcher<'_>,
   tid_seq: &mut IdSequencer,
   flow_seq: &mut IdSequencer,
-  slim: bool,
+  shape: ArtifactShape,
 ) -> Result<(), BuildFailure> {
   let events = trace_events_or_raise(document, path)?;
   let rank_label = rank_label(path);
@@ -433,10 +455,12 @@ fn merge_one_trace(
       return Err(attribute_failure(original, "get"));
     };
     let remap_flow_id = matches!(event.get("ph").and_then(Value::as_str), Some("s" | "t" | "f"));
-    if walk_drops(&event, event.get("ph").unwrap_or(&Value::Null), slim)? {
+    if walk_drops(&event, event.get("ph").unwrap_or(&Value::Null), shape)? {
       continue;
     }
-    if slim && let Some(Value::Object(args)) = event.get("args") {
+    if shape.is_slim()
+      && let Some(Value::Object(args)) = event.get("args")
+    {
       let stream = args.get("stream").cloned();
       match stream {
         Some(value) => {
@@ -525,7 +549,7 @@ fn collect_pid_labels(events: &[Value]) -> Result<(PidLabelOrder, PidLabelLookup
   Ok((ordered, labels))
 }
 
-fn walk_drops(event: &Map<String, Value>, phase: &Value, slim: bool) -> Result<bool, BuildFailure> {
+fn walk_drops(event: &Map<String, Value>, phase: &Value, shape: ArtifactShape) -> Result<bool, BuildFailure> {
   if phase.as_str() == Some("M") {
     let name = event.get("name").unwrap_or(&Value::Null);
     if is_truthy(name) {
@@ -535,7 +559,7 @@ fn walk_drops(event: &Map<String, Value>, phase: &Value, slim: bool) -> Result<b
       }
     }
   }
-  Ok(slim && event.get("cat").and_then(Value::as_str) == Some("cpu_instant_event"))
+  Ok(shape.is_slim() && event.get("cat").and_then(Value::as_str) == Some("cpu_instant_event"))
 }
 
 fn rank_label(path: &Path) -> String {
@@ -780,7 +804,7 @@ mod tests {
       &trace,
       r#"{"deviceProperties":[{"gpu":0}],"traceEvents":[{"ph":"M","name":"process_labels","pid":7,"args":{"labels":"GPU 2"}},{"ph":"X","pid":7,"tid":"4","name":"span","args":{"stream":2,"large":true}},{"ph":"s","pid":7,"tid":4,"id":"f","cat":"cpu_instant_event","name":"flow"}]}"#,
     );
-    let merged = merge_traces(std::slice::from_ref(&trace), true).unwrap();
+    let merged = merge_traces(std::slice::from_ref(&trace), ArtifactShape::Slim).unwrap();
     let result: Value = serde_json::from_slice(&merged).unwrap();
     let events = result["traceEvents"].as_array().unwrap();
     assert_eq!(events[0]["name"], "thread_name");
@@ -798,9 +822,9 @@ mod tests {
     let sidecar = directory.path().join("analysis.json");
     write_trace(&trace, "{\"traceEvents\":[{\"ph\":\"X\",\"pid\":1,\"tid\":1}]}");
     write_trace(&sidecar, "{\"analysis\":[]}");
-    let merged = build_multi_trace_merge(&[trace.clone(), sidecar.clone()], false).unwrap();
+    let merged = build_multi_trace_merge(&[trace.clone(), sidecar.clone()], ArtifactShape::Full).unwrap();
     assert!(String::from_utf8(merged).unwrap().contains("thread_name"));
-    let failure = build_multi_trace_merge(std::slice::from_ref(&sidecar), false).unwrap_err();
+    let failure = build_multi_trace_merge(std::slice::from_ref(&sidecar), ArtifactShape::Full).unwrap_err();
     assert_eq!(
       failure.message(),
       format!("multi-trace merge rejected every member as a non-Chrome-JSON trace: {}", sidecar.display())
@@ -827,14 +851,14 @@ mod differential_tests {
 
   const FIXED_MTIME_NS: u64 = 1_700_000_000_123_456_789;
 
-  fn actual_artifact(builder: &str, paths: &[PathBuf], slim: bool, output: &Path) -> Result<Vec<u8>, String> {
+  fn actual_artifact(builder: &str, paths: &[PathBuf], shape: ArtifactShape, output: &Path) -> Result<Vec<u8>, String> {
     match builder {
       "merge" => {
-        let document = merge_traces(paths, slim).map_err(|error| error.message().to_string())?;
+        let document = merge_traces(paths, shape).map_err(|error| error.message().to_string())?;
         gzip_bytes(&document, output).map_err(|error| error.message().to_string())?;
       }
       "multi" => {
-        let document = build_multi_trace_merge(paths, slim).map_err(|error| error.message().to_string())?;
+        let document = build_multi_trace_merge(paths, shape).map_err(|error| error.message().to_string())?;
         gzip_bytes(&document, output).map_err(|error| error.message().to_string())?;
       }
       "direct" => direct_pass(&paths[0], output).map_err(|error| error.message().to_string())?,
@@ -937,7 +961,16 @@ mod differential_tests {
     let mut batcher = EventBatcher::new(&mut output);
     let mut tid_seq = IdSequencer::new(1);
     let mut flow_seq = IdSequencer::new(1);
-    merge_one_trace(&document, Path::new("rank513.json"), 0, &mut batcher, &mut tid_seq, &mut flow_seq, false).unwrap();
+    merge_one_trace(
+      &document,
+      Path::new("rank513.json"),
+      0,
+      &mut batcher,
+      &mut tid_seq,
+      &mut flow_seq,
+      ArtifactShape::Full,
+    )
+    .unwrap();
 
     let fragment = String::from_utf8(output).unwrap();
     let events: Vec<Value> = serde_json::from_str(&format!("[{fragment}]")).unwrap();
@@ -997,7 +1030,9 @@ mod differential_tests {
         builders
           .iter()
           .map(|&builder| {
-            scope.spawn(move || check_builder(builder, case, case_paths, case.slim, output_dir, corpus_root))
+            scope.spawn(move || {
+              check_builder(builder, case, case_paths, ArtifactShape::from(case.slim), output_dir, corpus_root)
+            })
           })
           .collect::<Vec<_>>()
           .into_iter()
@@ -1012,8 +1047,8 @@ mod differential_tests {
       for mode in ["gzip", "merge"] {
         let key: Value = serde_json::from_str(case.cache_keys[mode].get()).unwrap();
         assert_eq!(key["recorded_python_key"], "$SHA256(paths, slim, mode)");
-        let expected = cache_key(&key, root.path(), case.slim, mode);
-        match merge_cache_key(&paths, case.slim, mode) {
+        let expected = cache_key(&key, root.path(), ArtifactShape::from(case.slim), mode);
+        match merge_cache_key(&paths, ArtifactShape::from(case.slim), mode) {
           Ok(actual) if actual == expected => {}
           Ok(actual) => differences.push(format!("cache key differs for {name}/{mode}: {actual} != {expected}")),
           Err(error) => differences.push(format!("cache key failed for {name}/{mode}: {}", error.message())),
@@ -1028,14 +1063,14 @@ mod differential_tests {
     builder: &str,
     case: &GoldenCase<'_>,
     paths: &[PathBuf],
-    slim: bool,
+    shape: ArtifactShape,
     output: &Path,
     root: &Path,
   ) -> Vec<String> {
     let name = case.name;
     let reference = &case.references[builder];
     let artifact = output.join(format!("{builder}.json.gz"));
-    let actual = actual_artifact(builder, paths, slim, &artifact);
+    let actual = actual_artifact(builder, paths, shape, &artifact);
     let mut differences = Vec::new();
     if let Some(expected_error) = reference.error {
       match actual {
@@ -1065,7 +1100,7 @@ mod differential_tests {
     differences
   }
 
-  fn cache_key(reference: &Value, root: &Path, slim: bool, mode: &str) -> String {
+  fn cache_key(reference: &Value, root: &Path, shape: ArtifactShape, mode: &str) -> String {
     let paths = reference["paths"]
       .as_array()
       .unwrap()
@@ -1076,7 +1111,7 @@ mod differential_tests {
         (path.to_string_lossy().into_owned(), entry["size"].as_u64().unwrap(), FIXED_MTIME_NS as i64)
       })
       .collect();
-    let payload = CacheKey { paths, slim, mode };
+    let payload = CacheKey { paths, slim: shape.is_slim(), mode };
     format!("{:x}", Sha256::digest(serde_json::to_vec(&payload).unwrap()))
   }
 

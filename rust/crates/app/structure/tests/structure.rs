@@ -1317,6 +1317,16 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "api_key", owner: "infra/core", hint: "Use `charliebot_core::credentials::API_KEY_FIELD`." },
 ];
 
+/// Response detail sentences that one crate owns. The routes that answer with one read the owner's const, so a reworded
+/// detail reaches every route at once. Each row matches its sentence whole: a sentence splits on no separator that the
+/// name rules could match.
+const PHRASE_OWNER_TABLE: &[OwnerRow] = &[OwnerRow {
+  name: "Session not found",
+  owner: "runtime/store",
+  hint: "Use `charliebot_store::SESSION_NOT_FOUND_DETAIL`; every route that answers a missing session reads its detail \
+         from there.",
+}];
+
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
 /// of them may be writing that output, so the owner rule cannot tell the two apart, and these stay unprotected.
 const EXTERNAL_EVENT_NAMES: [&str; 16] = [
@@ -1408,15 +1418,17 @@ impl Site {
   }
 }
 
-/// Every production literal of the workspace that holds no whitespace, sorted by file and line.
-fn production_sites(workspace: &Workspace) -> Vec<Site> {
+/// Every production literal of the workspace that `keep` selects, sorted by file and line. A literal that holds no
+/// whitespace is a name, which the name rules read; one that holds whitespace is a sentence, which only an exact
+/// literal phrase table reads.
+fn production_sites(workspace: &Workspace, keep: fn(&str) -> bool) -> Vec<Site> {
   let mut sites = Vec::new();
   for item in &workspace.crates {
     for target in &item.targets {
       for module in target.modules.values() {
         let file = rel(&workspace.root, &module.file);
         for literal in &module.literals {
-          if !literal.value.contains(char::is_whitespace) {
+          if keep(&literal.value) {
             sites.push(Site {
               krate: item.key().to_string(),
               file: file.clone(),
@@ -1504,12 +1516,15 @@ fn parameters_as_empty(path: &str) -> String {
 }
 
 /// The owner rule's failures: each owner row's name spelled outside its owner, and each spelling class's name spelled
-/// in two or more crates. Path and segment names use `spells`; plain config keys use exact literal matching. Both rules
-/// read the string literals of each production module; a literal with whitespace is prose and names nothing.
+/// in two or more crates. Path and segment names use `spells`; plain config keys and detail sentences use exact literal
+/// matching. The name rules read each production literal that holds no whitespace, and the phrase table reads the
+/// sentences, which the name rules treat as prose.
 fn owner_failures(workspace: &Workspace, rows: &[OwnerRow], classes: &[SpellingClass]) -> Vec<String> {
-  let sites = production_sites(workspace);
+  let sites = production_sites(workspace, |value| !value.contains(char::is_whitespace));
+  let phrases = production_sites(workspace, |value| value.contains(char::is_whitespace));
   let mut failures = owner_row_failures(&sites, rows, spells);
   failures.extend(owner_row_failures(&sites, EXACT_LITERAL_OWNER_TABLE, matches_exact_literal));
+  failures.extend(owner_row_failures(&phrases, PHRASE_OWNER_TABLE, matches_exact_literal));
   for class in classes {
     let mut by_name: BTreeMap<String, Vec<&Site>> = BTreeMap::new();
     for site in &sites {

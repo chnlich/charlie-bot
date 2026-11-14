@@ -26,7 +26,7 @@ use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{
   self, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus, WatchTarget, fresh_uuid,
 };
-use charliebot_store::{StoreError, layout};
+use charliebot_store::{SESSION_NOT_FOUND_DETAIL, StoreError, layout};
 use futures_util::future::join_all;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -2300,7 +2300,7 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
   let session_id = payload["session_id"].as_str().expect("validated string field");
   match features.store.get_session(session_id).await {
     Ok(Some(_)) => {}
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   }
   let request = match schedule_request(&payload) {
@@ -4239,7 +4239,7 @@ mod tests {
     )
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert_eq!(response_json(response).await["detail"], "Session not found");
+    assert_eq!(response_json(response).await["detail"], SESSION_NOT_FOUND_DETAIL);
   }
 
   #[tokio::test]

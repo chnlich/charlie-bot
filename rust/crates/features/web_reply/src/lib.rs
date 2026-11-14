@@ -145,6 +145,7 @@ fn matches(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_store::SESSION_NOT_FOUND_DETAIL;
   use http::{Method, StatusCode};
   use serde_json::json;
 
@@ -180,7 +181,7 @@ mod tests {
     assert_eq!(body, json!({"posted": true, "chars": 10, "over_budget": false}));
 
     let (status, body) = home.send(Method::POST, reply, Some(json!({"session_id": "no-such", "text": "x"}))).await;
-    assert_eq!((status, body), (StatusCode::NOT_FOUND, json!({"detail": "Session not found"})));
+    assert_eq!((status, body), (StatusCode::NOT_FOUND, json!({"detail": SESSION_NOT_FOUND_DETAIL})));
 
     let (status, body) = home.send(Method::POST, reply, Some(json!({"session_id": sid, "text": " "}))).await;
     assert_eq!((status, body), (StatusCode::UNPROCESSABLE_ENTITY, json!({"detail": "Reply text is empty"})));

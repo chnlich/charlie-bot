@@ -728,7 +728,7 @@ mod tests {
     let (status, detail) = answer(response).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(detail, json!({"detail": "Session not found"}));
+    assert_eq!(detail, json!({"detail": SESSION_NOT_FOUND_DETAIL}));
   }
 
   #[tokio::test]

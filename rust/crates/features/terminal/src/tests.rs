@@ -158,11 +158,11 @@ fn tmux_environment_filters_session_identity_and_tmux_client_state() {
     (OsString::from("CHARLIEBOT_SESSION_ID"), OsString::from("stale-session")),
     (OsString::from("TERM"), OsString::from("screen-256color")),
   ];
-  let command_env = pty::filtered_env(source.clone(), false);
+  let command_env = pty::filtered_env(source.clone(), pty::TermEnv::Inherit);
   assert!(command_env.iter().all(|(key, _)| key != OsStr::new("TMUX")));
   assert!(command_env.iter().all(|(key, _)| key != OsStr::new("CHARLIEBOT_SESSION_ID")));
 
-  let attach_env = pty::filtered_env(source, true);
+  let attach_env = pty::filtered_env(source, pty::TermEnv::Replace);
   assert!(attach_env.iter().all(|(key, _)| key != OsStr::new("CHARLIEBOT_SESSION_ID")));
   assert!(attach_env.iter().all(|(key, _)| key != OsStr::new("TMUX")));
   assert!(attach_env.iter().any(|(key, value)| key == OsStr::new("TERM") && value == "xterm-256color"));
@@ -183,7 +183,7 @@ fn the_terminal_shell_environment_resolves_the_operators_gh() {
     (OsString::from("GH_TOKEN"), OsString::from("operator-token")),
   ];
 
-  let shell_env = pty::filtered_env(source, false);
+  let shell_env = pty::filtered_env(source, pty::TermEnv::Inherit);
 
   let vars: std::collections::HashMap<&OsStr, &OsStr> =
     shell_env.iter().map(|(key, value)| (key.as_os_str(), value.as_os_str())).collect();
@@ -242,18 +242,15 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   terminal::ensure_terminal_session(pty::Grid::default()).await.unwrap();
   terminal::ensure_terminal_session(pty::Grid::default()).await.unwrap();
 
-  let (code, sessions) =
-    pty::run_tmux(&["list-sessions".into(), "-F".into(), "#{session_name}".into()], true).await.unwrap();
+  let (code, sessions) = pty::run_tmux(&["list-sessions".into(), "-F".into(), "#{session_name}".into()]).await.unwrap();
   assert_eq!(code, 0);
   assert_eq!(sessions.lines().collect::<Vec<_>>(), [session_name.as_str()]);
   let (code, history) =
-    pty::run_tmux(&["show-option".into(), "-t".into(), session_name.clone(), "history-limit".into()], true)
-      .await
-      .unwrap();
+    pty::run_tmux(&["show-option".into(), "-t".into(), session_name.clone(), "history-limit".into()]).await.unwrap();
   assert_eq!(code, 0);
   assert!(history.contains("50000"));
   let (code, pane_env) =
-    pty::run_tmux(&["show-environment".into(), "-t".into(), session_name.clone(), "CHARLIEBOT_HOME".into()], true)
+    pty::run_tmux(&["show-environment".into(), "-t".into(), session_name.clone(), "CHARLIEBOT_HOME".into()])
       .await
       .unwrap();
   assert_eq!(code, 0);
@@ -261,10 +258,13 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   // The pane's process can change directory after tmux acknowledges new-session.
   let (code, cwd) = tokio::time::timeout(Duration::from_secs(2), async {
     loop {
-      let (code, cwd) = pty::run_tmux(
-        &["display-message".into(), "-p".into(), "-t".into(), session_name.clone(), "#{pane_current_path}".into()],
-        true,
-      )
+      let (code, cwd) = pty::run_tmux(&[
+        "display-message".into(),
+        "-p".into(),
+        "-t".into(),
+        session_name.clone(),
+        "#{pane_current_path}".into(),
+      ])
       .await
       .unwrap();
       if code != 0 || cwd.trim() == home_dir.to_string_lossy() {
@@ -308,7 +308,7 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   let output = receive_until(&mut socket, "40 120").await;
   assert!(output.contains("40 120"));
 
-  let (code, _) = pty::run_tmux(&["kill-server".into()], false).await.unwrap();
+  let (code, _) = pty::run_tmux(&["kill-server".into()]).await.unwrap();
   assert_eq!(code, 0);
   assert!(receive_frame_until_exit(&mut socket).await);
   send_frame(&mut socket, json!({"type": "pty_input", "data": ""})).await;

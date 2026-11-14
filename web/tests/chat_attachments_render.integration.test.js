@@ -130,8 +130,39 @@ test('renderUserMessageBubble wraps every text in a fold that starts clamped and
     const html = context.renderUserMessageBubble(text, null, null, null);
     assert.match(html, /<div class="user-msg-fold" data-folded="true" data-overflows="false">/);
     assert.match(html, /<div class="user-msg-clamp whitespace-pre-wrap">/);
-    assert.match(html, /<button type="button" class="user-msg-more"/);
+    // The fold's one control opens the clamp and folds it again: both labels ride in it, and styles.css picks
+    // the one naming the next action from data-folded.
+    assert.match(html, /<button type="button" class="user-msg-more" aria-expanded="false"/);
+    assert.match(html, /class="user-msg-more-label"/);
+    assert.match(html, /class="user-msg-less-label"/);
   }
+});
+
+test('the clamp verdict is kept while the message is open, so its control stays', () => {
+  const context = loadChatScript();
+  const sizes = {unobserve() {}};
+  const clampOf = (fold, scrollHeight, clientHeight) => ({
+    isConnected: true,
+    parentElement: fold,
+    scrollHeight,
+    clientHeight,
+  });
+
+  const folded = {dataset: {folded: 'true', overflows: 'false'}};
+  context.Chat.fitUserMessageClamp(clampOf(folded, 880, 200), sizes);
+  assert.equal(folded.dataset.overflows, 'true');
+
+  // Opening the message unclamps it: the observer re-enters with equal heights, and that must not take the
+  // verdict away, because the control that folds the message again depends on it.
+  const open = {dataset: {folded: 'false', overflows: 'true'}};
+  context.Chat.fitUserMessageClamp(clampOf(open, 880, 880), sizes);
+  assert.equal(open.dataset.overflows, 'true');
+
+  const detached = {dataset: {folded: 'true', overflows: 'true'}};
+  let unobserved = false;
+  context.Chat.fitUserMessageClamp({isConnected: false, parentElement: detached}, {unobserve() { unobserved = true; }});
+  assert.equal(detached.dataset.overflows, 'true');
+  assert.equal(unobserved, true);
 });
 
 test('renderUserMessageBubble shows a registered input mode\'s badge, and none for a typed message', () => {

@@ -79,19 +79,24 @@ function registerInputMode(mode, badgeHtml) {
   inputModeBadges.set(mode, badgeHtml);
 }
 
-// A user text folds by its rendered height. The clamp (styles.css, .user-msg-clamp) shows its first ten lines, and the
-// Show full text control shows only while the clamp hides some of the text. Every text starts clamped and undecided,
-// and the observer below decides it once it is laid out.
+// A user text folds by its rendered height. The clamp (styles.css, .user-msg-clamp) shows its first ten lines while
+// data-folded is "true", and the one control shows whenever the clamp hides some of the text: it opens the clamp and
+// folds it again, the way the child report's control does. Every text starts clamped and undecided, and the observer
+// below decides it once it is laid out.
 function renderUserTextHtml(text) {
   return '<div class="user-msg-fold" data-folded="true" data-overflows="false">'
     + `<div class="user-msg-clamp whitespace-pre-wrap">${escapeHtml(text)}</div>`
-    + `<button type="button" class="user-msg-more"`
-      + ` onclick="this.closest('.user-msg-fold').dataset.folded='false'">Show full text</button>`
+    + `<button type="button" class="user-msg-more" aria-expanded="false"`
+      + ` onclick="const fold=this.closest('.user-msg-fold');const open=fold.dataset.folded==='true';`
+      + `fold.dataset.folded=String(!open);this.setAttribute('aria-expanded',String(open))">`
+      + '<span class="user-msg-more-label">Show full text</span>'
+      + '<span class="user-msg-less-label">Show less</span></button>'
     + '</div>';
 }
 
-// A clamp hides text exactly when its content is taller than its box. A message the reader opened stays open, so only a
-// folded clamp is decided; a clamp that left the page is dropped from the observer.
+// A clamp hides text exactly when its content is taller than its box. Only a folded clamp is decided, so opening a
+// message keeps the verdict that showed its control: the resize that unclamping causes re-enters here with the fold
+// open, and the return below leaves data-overflows alone. A clamp that left the page is dropped from the observer.
 function fitUserMessageClamp(clamp, sizes) {
   if (!clamp.isConnected) {
     sizes.unobserve(clamp);
@@ -152,6 +157,7 @@ Chat.wire({
 }, {
   normalizeUserMessage,
   registerInputMode,
+  fitUserMessageClamp,
 });
 
 })();

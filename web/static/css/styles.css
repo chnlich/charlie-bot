@@ -479,10 +479,13 @@ body { overscroll-behavior: none; }
 .child-report-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(110, 231, 183, 0.75); }
 .child-report-toggle:hover { color: #a7f3d0; text-decoration: underline; }
 /* A user text folds by its rendered height (chat/attachments.js, fitUserMessageClamp). The clamp shows ten
-   lines, and the control appears only while the clamp hides some of the text. */
+   lines while data-folded is "true", and the control appears whenever the clamp hides some of the text: it
+   opens the clamp and folds it again, and its label names the next action. */
 .user-msg-fold[data-folded="true"] .user-msg-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; line-clamp: 10; overflow: hidden; }
 .user-msg-more { display: none; margin-top: 0.4rem; padding: 0.2rem 0.7rem; font-size: 0.72rem; font-weight: 600; color: #eff6ff; background: rgba(15, 23, 42, 0.28); border: 1px solid rgba(191, 219, 254, 0.45); border-radius: 9999px; cursor: pointer; }
-.user-msg-fold[data-folded="true"][data-overflows="true"] .user-msg-more { display: block; }
+.user-msg-fold[data-overflows="true"] .user-msg-more { display: block; }
+.user-msg-fold[data-folded="true"] .user-msg-less-label,
+.user-msg-fold[data-folded="false"] .user-msg-more-label { display: none; }
 .user-msg-more:hover { background: rgba(15, 23, 42, 0.5); }
 /* The pill draws its boundary rgba(191,219,254,.45) over its own slate-900/28 fill on the blue-600
    bubble: 1.57:1 against the bubble and 2.27:1 against the fill, under the 3:1 floor for a control

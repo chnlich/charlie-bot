@@ -98,6 +98,9 @@ impl Store {
       Arc::make_mut(&mut cached.events).push(Arc::new(compact.clone()));
       lock(&self.run_facts_memo, "run facts memo mutex").refresh_events(&cached.identity, Arc::clone(&cached.events));
     }
+    let kind = compact.get("type").and_then(CompactValue::as_str);
+    drop(cache);
+    self.note_tree_state_event(kind);
     Ok(compact)
   }
 

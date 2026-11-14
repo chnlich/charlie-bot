@@ -470,6 +470,9 @@ pub(crate) struct CachedTreeIndex {
   /// directory's names, and a renewal that finds the names and inputs hold moves it to the identity it read. A
   /// matching identity means the names cannot have moved, so the renewal compares the sessions' inputs alone.
   pub(crate) sessions_dir: Option<FileIdentity>,
+  /// The first input the next renewal compares: each renewal reads the next slice of the build's inputs, and the
+  /// cursor wraps once a sweep has compared every session's inputs.
+  pub(crate) sweep_cursor: usize,
 }
 
 pub(crate) struct CachedTaskStateTail {

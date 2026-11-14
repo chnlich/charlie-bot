@@ -11,7 +11,7 @@ use std::io;
 use std::path::Path;
 
 use anyhow::{anyhow, bail};
-use charliebot_core::json_loads::codec_error_text;
+use charliebot_core::json_loads::{UTF8_CODEC, codec_error_text};
 use charliebot_core::str_methods::universal_newlines;
 use charliebot_core::text_repr::str_repr;
 use charliebot_store::metadata::{TaskSpec, TaskType};
@@ -90,7 +90,7 @@ fn utf8_decode_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
         0xC2..=0xDF => 2,
         0xE0..=0xEF => 3,
         0xF0..=0xF4 => 4,
-        _ => return codec_error_text("utf-8", bytes, start, start + 1, "invalid start byte"),
+        _ => return codec_error_text(UTF8_CODEC, bytes, start, start + 1, "invalid start byte"),
       };
       let invalid_offset = (1..expected_len)
         .find(|offset| bytes.get(start + offset).is_none_or(|byte| !valid_continuation(lead, *offset, *byte)));
@@ -101,7 +101,7 @@ fn utf8_decode_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
     }
     None => (bytes.len(), "unexpected end of data"),
   };
-  codec_error_text("utf-8", bytes, start, end, reason)
+  codec_error_text(UTF8_CODEC, bytes, start, end, reason)
 }
 
 /// Whether this byte is a permitted continuation at this position in the UTF-8 sequence.

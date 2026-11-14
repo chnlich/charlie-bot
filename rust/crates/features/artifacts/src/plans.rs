@@ -315,7 +315,7 @@ fn utf8_error_text(error: &Utf8Error, bytes: &[u8]) -> String {
     }
     None => (bytes.len(), "unexpected end of data"),
   };
-  json_loads::codec_error_text("utf-8", bytes, start, end, reason)
+  json_loads::codec_error_text(json_loads::UTF8_CODEC, bytes, start, end, reason)
 }
 
 /// The repr form of a JSON value: strings quoted, the rest in their value spelling.

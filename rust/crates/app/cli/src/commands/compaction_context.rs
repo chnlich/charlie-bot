@@ -26,6 +26,7 @@ use charliebot_cli_common::json_out;
 use charliebot_core::config;
 use charliebot_core::event_types::{ASSISTANT, READ_TOOL, SKILL_TOOL, TOOL_INPUT_FILE_PATH, TOOL_USE};
 use charliebot_core::home;
+use charliebot_core::json_loads::{UTF8_CODEC, codec_error_text};
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_regex;
 use charliebot_core::repo_root;
@@ -385,7 +386,7 @@ fn utf8_error(bytes: &[u8], error: &std::str::Utf8Error) -> String {
     Some(_) if is_utf8_start_byte(bytes[start]) => (start + 1, "invalid continuation byte"),
     Some(_) => (start, "invalid start byte"),
   };
-  charliebot_core::json_loads::codec_error_text("utf-8", bytes, offset, offset + 1, reason)
+  codec_error_text(UTF8_CODEC, bytes, offset, offset + 1, reason)
 }
 
 /// A byte that may open a UTF-8 sequence (ASCII or a non-overlong, non-surrogate lead).

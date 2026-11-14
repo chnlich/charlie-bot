@@ -43,14 +43,11 @@
 
     /* The type badge's own text sets its width: user draws 41 px, assistant 77 px, master_done 91 px
        and assistant_error 120 px, and a row that lets each badge keep its own width starts its time
-       and preview at a different x per type. Above 768 px the badge takes the column the widest
-       badge of the loaded rows sets (renderEvents writes --event-type-col), so every row starts its
-       time and preview at one x whatever types the log holds. Below 768 px it keeps its content
-       width: the phone's preview runs to the row's right edge, and a fixed column there would take
-       characters from every preview. */
-    @media (min-width: 769px) {
-      .event-type { min-width: var(--event-type-col, 0); }
-    }
+       at a different x per type. The badge takes the column the widest badge of the loaded rows sets
+       (renderEvents writes --event-type-col), so every row starts its time at one x whatever types
+       the log holds. A desk row starts its preview after that time too; a phone lays the preview on
+       a line of its own across the row, so the column takes no characters from it. */
+    .event-type { min-width: var(--event-type-col, 0); }
 
     /* A phone cannot fit the row on one line: the index, the type and the time take about 200 of the
        row's 358 px, which leaves a preview there about 20 characters long, and the rows of one type

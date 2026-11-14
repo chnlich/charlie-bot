@@ -560,7 +560,7 @@ fn run_session_ids(objects: &[Value], metadata: &Map<String, Value>) -> anyhow::
   Ok(ids)
 }
 
-/// The usage source one backend id attributes to, or `None` when it has none: a
+/// The usage source one backend id attributes to, or `None` when it has none. A
 /// registered id reads its config type, and an id that left the config reads the id prefix its source registers.
 pub(crate) fn backend_source<'a>(
   backend: &str,
@@ -634,7 +634,7 @@ fn thread_row_model(
 
 /// A thread result's (in_fresh, cache_write, cache_read, output, in_unsplit), split by the backend's verdict. The
 /// capture reads all four keys but adds or binds only the ones the verdict keeps, so a value under a dropped key cannot
-/// fail the capture, and only the kept keys are read here.
+/// fail the capture. Only the kept keys are read here.
 fn verdict_counts(usage: &Map<String, Value>, verdict: Verdict) -> anyhow::Result<(Count, Count, Count, Count, Count)> {
   match verdict {
     Verdict::CodexRule => {
@@ -702,7 +702,7 @@ fn number_count(number: &serde_json::Number) -> anyhow::Result<Count> {
   }
 }
 
-/// The TEXT column's value under `key`: a falsy value is "", a string is itself,
+/// The TEXT column's value under `key`. A falsy value is "", a string is itself,
 /// and `true` or a number binds as the INTEGER or REAL that the column stores as text. A list or map fails the bind.
 fn text_value(object: &Map<String, Value>, key: &str) -> anyhow::Result<SqlValue> {
   match object.get(key) {

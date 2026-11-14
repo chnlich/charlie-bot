@@ -2,8 +2,8 @@
 //! whose response was lost.
 //!
 //! A connect-phase failure retries with bounded exponential backoff inside a total budget. A
-//! sent-but-lost request is never re-issued: the call's readback, when it has one, answers; else
-//! the CLI reports `outcome_unknown`. An explicit server rejection (status >= 400) carries the
+//! sent-but-lost request is never re-issued: the call's readback, when it has one, answers.
+//! Otherwise the CLI reports `outcome_unknown`. An explicit server rejection (status >= 400) carries the
 //! response's `detail`, the version-skew `hint`, and the command's status-to-exit-code mapping.
 
 use std::time::Duration;
@@ -29,7 +29,7 @@ pub struct WallClock {
 }
 
 impl WallClock {
-  /// The process clock with no start yet; the first read anchors the scale.
+  /// The process clock with no start yet. The first read anchors the scale.
   fn new() -> Self {
     Self { start: std::sync::OnceLock::new() }
   }
@@ -37,7 +37,7 @@ impl WallClock {
 
 impl Clock for WallClock {
   fn now(&self) -> f64 {
-    // The first read anchors the scale; the loop only ever reads differences.
+    // The first read anchors the scale. The loop only ever reads differences.
     self.start.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
   }
 
@@ -167,8 +167,9 @@ fn build_url(base_url: &str, endpoint: &str, params: Option<&[(String, String)]>
   }
 }
 
-/// The exit for a server rejection: the `detail` when the body carries one, else
-/// `HTTP <status> <reason>`; the version-skew hint when a skew shows; the command's mapped exit code.
+/// The exit for a server rejection. The message is the `detail` when the body carries one, else
+/// `HTTP <status> <reason>`. The version-skew hint joins it when a skew shows. The command's mapped
+/// status selects the code.
 fn rejection_exit(
   response: &WireResponse,
   ctx: &CallContext,

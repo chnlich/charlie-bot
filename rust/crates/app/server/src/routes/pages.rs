@@ -366,6 +366,7 @@ fn chat_page(
     "index.html",
     context,
     PageRuntime::Index { cfg, auth_enabled, sidebar_text: initial_sessions_json, bootstrap_text },
+    StatusCode::OK,
   )
 }
 
@@ -404,6 +405,7 @@ async fn home_page(State(state): State<Arc<AppState>>, request: Parts) -> Respon
     "home.html",
     json!({"destinations": destinations, "services": services}),
     PageRuntime::Home,
+    StatusCode::OK,
   )
   .await
 }
@@ -415,10 +417,12 @@ async fn events_viewer(
 ) -> Response {
   let session = match state.features.store.get_session(&session_id).await {
     Ok(Some(session)) => session,
-    Ok(None) | Err(StoreError::NotFound(_)) => return session_not_found(),
+    Ok(None) | Err(StoreError::NotFound(_)) => {
+      return render_events_unavailable(state, request, session_id, StatusCode::NOT_FOUND, "missing").await;
+    }
     Err(error) => {
       tracing::error!(session_id, error = %error, "get_session_failed");
-      return responses::json(StatusCode::INTERNAL_SERVER_ERROR, &json!({"detail": "Failed to load session"}));
+      return render_events_unavailable(state, request, session_id, StatusCode::INTERNAL_SERVER_ERROR, "failed").await;
     }
   };
   let session = state.features.store.session_metadata_value(&session);
@@ -427,7 +431,21 @@ async fn events_viewer(
     "session_id": session_id,
     "events_url": route::fill(session_routes::SESSION_EVENTS_JSONL_PATH, &[session_id.as_str()]),
   });
-  render_page(state, request, "events_viewer.html", context, PageRuntime::Events).await
+  render_page(state, request, "events_viewer.html", context, PageRuntime::Events, StatusCode::OK).await
+}
+
+/// The events page's answer for a session it cannot show: the page keeps its top bar and states the outcome in its own
+/// words, so a page request never answers with the API's JSON. `reason` is the template's word for the outcome, so the
+/// page names the reader's next step instead of the store's failure.
+async fn render_events_unavailable(
+  state: Arc<AppState>,
+  request: Parts,
+  session_id: String,
+  status: StatusCode,
+  reason: &'static str,
+) -> Response {
+  let context = json!({"unavailable": reason, "session_id": session_id});
+  render_page(state, request, "events_viewer.html", context, PageRuntime::Events, status).await
 }
 
 enum PageRuntime {
@@ -461,10 +479,12 @@ async fn render_page(
   name: &'static str,
   context: Value,
   runtime: PageRuntime,
+  status: StatusCode,
 ) -> Response {
-  let rendered = tokio::task::spawn_blocking(move || render_page_blocking(&state, &request, name, context, runtime))
-    .await
-    .expect("rendering a page does not panic");
+  let rendered =
+    tokio::task::spawn_blocking(move || render_page_blocking(&state, &request, name, context, runtime, status))
+      .await
+      .expect("rendering a page does not panic");
   match rendered {
     Ok(response) => response,
     Err(error) => responses::internal_error(&error.kind, error.detail),
@@ -479,6 +499,7 @@ fn render_page_blocking(
   name: &'static str,
   mut context: Value,
   runtime: PageRuntime,
+  status: StatusCode,
 ) -> Result<Response, Failure> {
   let encoding = PageEncoding::for_request(&request.headers);
   let templating =
@@ -503,7 +524,7 @@ fn render_page_blocking(
     .render_page_template(&state.features, name, &context, request)
     .map_err(|error| failure(error.kind(), error))?;
   let (body, compressed) = page_body(name, &template_html, &runtime, encoding)?;
-  Ok(page_response(body, compressed))
+  Ok(page_response(body, compressed, status))
 }
 
 /// The finished body of a page, with its compressed form when the client asked for one.
@@ -527,13 +548,13 @@ fn page_body(
   )
 }
 
-/// Wrap a finished page body in the response, with its compressed form when one is given.
+/// Wrap a finished page body in the response at `status`, with its compressed form when one is given.
 ///
 /// For a body at or above the transport's minimum size, the compressed form travels with its own headers here
 /// instead of under the transport gzip; the transport passes a response that already sets `Content-Encoding`
 /// through untouched.
-fn page_response(body: Bytes, compressed: Option<PageCompressed>) -> Response {
-  let mut builder = Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE, "text/html; charset=utf-8");
+fn page_response(body: Bytes, compressed: Option<PageCompressed>, status: StatusCode) -> Response {
+  let mut builder = Response::builder().status(status).header(header::CONTENT_TYPE, "text/html; charset=utf-8");
   let served = match compressed {
     Some(compressed) => {
       builder = builder
@@ -586,10 +607,6 @@ fn session_query(request: &Parts) -> Option<String> {
 
 fn decode_query_component(value: &str) -> String {
   percent_decode_str(&value.replace('+', " ")).decode_utf8_lossy().into_owned()
-}
-
-fn session_not_found() -> Response {
-  responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Session not found"}))
 }
 
 fn hostname() -> Result<String, Failure> {
@@ -865,7 +882,7 @@ mod tests {
   async fn a_gzip_client_gets_the_compressed_page_with_the_transport_headers() {
     let html = page_html();
     let compressed = PageCompressed { encoding: "gzip", bytes: Bytes::from(gzip_level_one(html.as_bytes())) };
-    let (parts, body) = page_response(Bytes::from(html.clone()), Some(compressed)).into_parts();
+    let (parts, body) = page_response(Bytes::from(html.clone()), Some(compressed), StatusCode::OK).into_parts();
     let headers = parts.headers;
     assert_eq!(headers[header::CONTENT_ENCODING], "gzip");
     assert_eq!(headers[header::VARY], "Accept-Encoding");
@@ -885,7 +902,7 @@ mod tests {
       encoding: "zstd",
       bytes: Bytes::from(charliebot_compat::compression::zstd_memoized_body(html.as_bytes())),
     };
-    let (parts, body) = page_response(Bytes::from(html.clone()), Some(compressed)).into_parts();
+    let (parts, body) = page_response(Bytes::from(html.clone()), Some(compressed), StatusCode::OK).into_parts();
     let headers = parts.headers;
     assert_eq!(headers[header::CONTENT_ENCODING], "zstd");
     assert_eq!(headers[header::VARY], "Accept-Encoding");
@@ -942,11 +959,17 @@ mod tests {
   #[tokio::test]
   async fn an_identity_client_gets_the_page_uncompressed() {
     let html = page_html();
-    let (parts, body) = page_response(Bytes::from(html.clone()), None).into_parts();
+    let (parts, body) = page_response(Bytes::from(html.clone()), None, StatusCode::OK).into_parts();
     let headers = parts.headers;
     assert!(headers.get(header::CONTENT_ENCODING).is_none());
     let served = body.collect().await.expect("a page body collects").to_bytes();
     assert_eq!(headers[header::CONTENT_LENGTH].to_str().expect("a length header is text"), served.len().to_string());
     assert_eq!(served, Bytes::from(html));
+  }
+
+  #[test]
+  fn a_page_response_carries_the_status_its_caller_names() {
+    let response = page_response(Bytes::from(page_html()), None, StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
   }
 }

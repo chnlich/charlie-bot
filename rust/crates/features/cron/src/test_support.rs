@@ -119,6 +119,18 @@ pub fn feature_context_with_host_backends(hosts: &[(&str, &str)]) -> (tempfile::
   feature_context_with_entries(&host_entries(hosts), None)
 }
 
+/// A feature context whose extra synthetic backend entries each name a launcher through `cli_binary`, as a
+/// `cc-anthropic-compatible` entry does. The plain `synthetic` entry stays, so the other fixtures' ids still resolve.
+pub fn feature_context_with_launcher_backends(ids: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  let mut entries = vec![("synthetic", Mapping::new())];
+  for id in ids {
+    let mut fields = Mapping::new();
+    fields.insert("cli_binary".into(), "/path/to/launcher".into());
+    entries.push((*id, fields));
+  }
+  feature_context_with_entries(&entries, None)
+}
+
 /// A feature context with the same host-naming entries as [`feature_context_with_host_backends`] and the priority pool
 /// `auto` over `members`, each a configured option.
 pub fn feature_context_with_auto_host_backends(
@@ -321,12 +333,18 @@ fn register_test_backend(registry: &mut Registry) -> Result<(), RegistryError> {
     lifecycle: None,
     translate_fallback: false,
   })?;
-  registry.backend_host_alias("synthetic", synthetic_host_alias)
+  registry.backend_host_alias("synthetic", synthetic_host_alias)?;
+  registry.backend_cli_binary("synthetic", synthetic_cli_binary)
 }
 
 /// The synthetic entries name a host the way `cc-anthropic-compatible` entries do.
 fn synthetic_host_alias(fields: &Mapping) -> Result<Option<String>, String> {
   Ok(fields.get("host_auth_alias").and_then(serde_yaml::Value::as_str).map(str::to_string))
+}
+
+/// The synthetic entries name a launcher the way `cc-anthropic-compatible` entries do.
+fn synthetic_cli_binary(fields: &Mapping) -> Result<Option<String>, String> {
+  Ok(fields.get("cli_binary").and_then(serde_yaml::Value::as_str).map(str::to_string))
 }
 
 /// The host verdicts the stub host readers serve, each with the profile home it belongs to, and each probe the stub

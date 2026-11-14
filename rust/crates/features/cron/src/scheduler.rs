@@ -964,7 +964,8 @@ mod tests {
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{
     AUTO_POOL_ID, FakeGit, GIT_PROGRAM_LOCK, auto_manager, child_manager, feature_context, feature_context_with_auto,
-    feature_context_with_host_backends, host_probe_count, manager, set_host_login, write_prompted_task, write_task,
+    feature_context_with_host_backends, feature_context_with_launcher_backends, host_probe_count, manager,
+    set_host_login, write_prompted_task, write_task,
   };
   use charliebot_registry::registry::HostLogin;
   use charliebot_tasks::test_support::process_guard::ProcessGroupGuard;
@@ -2017,6 +2018,38 @@ mod tests {
     let launch = launch_text(&features, &leaf_id, &run);
     assert!(launch.contains("Synthetic scheduled work"), "{launch}");
     assert!(!launch.contains(&worktree_dir), "{launch}");
+  }
+
+  /// A repo fire on a backend whose entry names a launcher runs where the launcher decides. The server prepares no
+  /// worktree for it and its brief names none: a worktree path here would be a place that is absent where the run
+  /// executes, and the round's protocol on the launcher's host owns the working place.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_repo_fire_on_a_launcher_backend_prepares_no_worktree_and_names_none() {
+    let _git_lock = GIT_PROGRAM_LOCK.lock().await;
+    let git = FakeGit::install();
+    let (_home, features) = feature_context_with_launcher_backends(&["synthetic-launch"]);
+    install_execution(&features).await;
+    let checkout_home = tempfile::tempdir().unwrap();
+    let repo = checkout_home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let node = manager(&features, "synthetic-launcher-node").await.unwrap();
+    let task = ScheduledTaskConfig {
+      backend: Some("synthetic-launch".to_string()),
+      ..worker_task("synthetic-launcher-task", &node.id, Some(&repo))
+    };
+
+    let (leaf_id, run) = fire_and_settle(&features, task, true).await;
+
+    assert_eq!(run.kind, RunKind::Work);
+    assert_eq!(run.worktree_path, None, "a launcher-backend run prepares no worktree");
+    assert_eq!(run.branch_name, None, "a launcher-backend run starts no branch");
+    let worktree_dir = features.config.get().unwrap().paths.worktree_dir.clone();
+    let launch = launch_text(&features, &leaf_id, &run);
+    assert!(launch.contains("Synthetic scheduled work"), "{launch}");
+    assert!(!launch.contains(&worktree_dir), "{launch}");
+    assert!(!launch.contains("charliebot/task-"), "{launch}");
+    assert!(git.calls().is_empty(), "the launch prepares no worktree: {:?}", git.calls());
   }
 
   /// A handler task bound to a fresh manager node, its yaml rewritten with the binding.

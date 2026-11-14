@@ -39,7 +39,8 @@ pub(super) fn matches(path: &str) -> bool {
 
 async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>, uri: Uri, request: Parts) -> Response {
   let query = query_pairs(uri.query());
-  let traces: Vec<String> = query.iter().filter(|(name, _)| name == "trace").map(|(_, value)| value.clone()).collect();
+  let traces: Vec<String> =
+    query.iter().filter(|(name, value)| name == "trace" && !value.is_empty()).map(|(_, value)| value.clone()).collect();
   let dir = last_value(&query, "dir").map(str::to_string);
   let pattern = last_value(&query, "pattern").unwrap_or(DEFAULT_PATTERN).to_string();
   let title = last_value(&query, "title").map(str::to_string);
@@ -64,7 +65,7 @@ async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>,
     }
   }
   if inputs.is_empty() {
-    return json_error(StatusCode::BAD_REQUEST, "No trace files specified. Provide 'trace' or 'dir' query params.");
+    return render_perfetto_empty(&features, &request);
   }
 
   let all_local = inputs.clone();
@@ -184,6 +185,24 @@ fn render_perfetto(features: &FeatureContext, context: &Value, request: &Parts) 
   templating
     .render_page(features, "perfetto.html", context, request)
     .map_err(|error| (error.kind().to_string(), error.to_string()))
+}
+
+/// The viewer with no trace selected: a page answer stays a page, so the page's own words say how
+/// to open it rather than an API error's JSON standing in for the document.
+fn render_perfetto_empty(features: &FeatureContext, request: &Parts) -> Response {
+  let context = json!({
+    "empty": true,
+    "title": "Trace viewer",
+    "trace_url": "",
+    "warn": null,
+    "merge_count": 0,
+    "is_merge": false,
+    "is_direct_pass": false,
+  });
+  match render_perfetto(features, &context, request) {
+    Ok(response) => response,
+    Err((kind, detail)) => responses::internal_error(&kind, detail),
+  }
 }
 
 fn trace_input(value: &str) -> (String, Option<PathBuf>) {

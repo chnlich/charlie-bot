@@ -1127,5 +1127,5 @@ function copyCode(btn) {
     requestIdleCallback(function() {
       hljs.highlightAuto('Some prose line here.\n\n```\nconst x = 1;\n```\n\nMore prose follows.\n');
     }, { timeout: 2000 });
-  });
+  }, { once: true });
 })();

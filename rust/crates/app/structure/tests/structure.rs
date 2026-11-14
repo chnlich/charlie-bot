@@ -68,7 +68,7 @@ struct Crate {
 }
 
 struct Target {
-  /// `crate` for the crate's root target; `<kind>.<name>` for every other target.
+  /// `crate` for the crate's root target. The other targets are `<kind>.<name>`.
   label: String,
   root: bool,
   modules: BTreeMap<Vec<String>, Module>,
@@ -86,15 +86,15 @@ struct Module {
   macro_paths: Vec<PathRecord>,
   /// Identifiers the module's own code names, outside `use` declarations.
   idents: BTreeSet<String>,
-  /// The string literals of the module's production code; empty for a test module.
+  /// The string literals of the module's production code. It is empty for a test module.
   literals: Vec<Literal>,
-  /// The `include_str!` calls of the module's production code; empty for a test module.
+  /// The `include_str!` calls of the module's production code. It is empty for a test module.
   embeds: Vec<Embed>,
-  /// The production functions of the module's own items; empty for a test module.
+  /// The production functions of the module's own items. It is empty for a test module.
   functions: Vec<FunctionRecord>,
-  /// The production statics of the module's own items and macro invocations; empty for a test module.
+  /// The production statics of the module's own items and macro invocations. It is empty for a test module.
   statics: Vec<StaticRecord>,
-  /// The production `use` items that import a process-environment writer; empty for a test module.
+  /// The production `use` items that import a process-environment writer. It is empty for a test module.
   environment_uses: Vec<EnvironmentUse>,
 }
 
@@ -217,7 +217,7 @@ fn target_metas(package: &serde_json::Value) -> Vec<TargetMeta> {
   metas
 }
 
-/// The lib is the root target; a crate without a lib uses its main bin. Every other target is prefixed by its kind.
+/// The lib is the root target. A crate without a lib uses its main bin. Every other target is prefixed by its kind.
 fn root_target_index(metas: &[TargetMeta]) -> Option<usize> {
   if let Some(index) = metas.iter().position(|meta| meta.kind == "lib") {
     return Some(index);
@@ -361,7 +361,7 @@ impl Builder<'_> {
 
 /// The group of a crate directory relative to the workspace root: `crates/<group>/<name>`.
 ///
-/// `infra/<name>`, `runtime/<name>` and `app/<name>` map to `infra`, `runtime` and `app`; `backends/<name>` and
+/// `infra/<name>`, `runtime/<name>` and `app/<name>` map to `infra`, `runtime` and `app`. `backends/<name>` and
 /// `features/<name>` map to `backends.<name>` and `features.<name>`. Any other directory yields None.
 fn group_of_dir(dir_rel: &str) -> Option<String> {
   let parts: Vec<&str> = dir_rel.split('/').collect();
@@ -375,11 +375,11 @@ fn group_of_dir(dir_rel: &str) -> Option<String> {
   }
 }
 
-/// The groups `group` may import besides itself; None for app, which may import every group.
+/// The groups `group` may import besides itself. It is None for app, which may import every group.
 ///
-/// infra imports infra only; runtime adds infra. A backend or a feature adds runtime and infra, plus
-/// `backends.claude_code` for the backends in `BACKEND_VARIANTS` and `features.chat_threads` for the ones in
-/// `CHAT_CHANNELS`.
+/// The infra group imports infra only. The runtime group adds infra. A backend or a feature adds runtime and
+/// infra, plus `backends.claude_code` for the backends in `BACKEND_VARIANTS` and `features.chat_threads` for the
+/// ones in `CHAT_CHANNELS`.
 fn allowed_groups(group: &str) -> Option<BTreeSet<String>> {
   let (kind, name) = match group.split_once('.') {
     Some((kind, name)) => (kind, name),
@@ -531,7 +531,7 @@ fn stale_layer_failures(workspace: &Workspace) -> Vec<String> {
 const MAX_RESOLVE_DEPTH: usize = 32;
 
 impl Crate {
-  /// The crate's directory under `rust/crates`, such as `infra/core`; the owner table names crates this way.
+  /// The crate's directory under `rust/crates`, such as `infra/core`. The owner table names crates this way.
   fn key(&self) -> &str {
     self.dir_rel.strip_prefix("crates/").unwrap_or(&self.dir_rel)
   }
@@ -1384,7 +1384,7 @@ fn event_name_rows(workspace: &'static Workspace) -> Vec<OwnerRow> {
 }
 
 /// A class of names that one crate must hold. A production literal that `name_of` maps to a name counts toward the
-/// crates that spell that name; a name spelled in two or more crates fails.
+/// crates that spell that name. A name spelled in two or more crates fails.
 struct SpellingClass {
   name_of: fn(&Site) -> Option<String>,
   hint: &'static str,
@@ -1425,7 +1425,7 @@ impl Site {
 }
 
 /// Every production literal of the workspace that `keep` selects, sorted by file and line. A literal that holds no
-/// whitespace is a name, which the name rules read; one that holds whitespace is a sentence, which only an exact
+/// whitespace is a name, which the name rules read. One that holds whitespace is a sentence, which only an exact
 /// literal phrase table reads.
 fn production_sites(workspace: &Workspace, keep: fn(&str) -> bool) -> Vec<Site> {
   let mut sites = Vec::new();
@@ -1522,8 +1522,9 @@ fn parameters_as_empty(path: &str) -> String {
 }
 
 /// The owner rule's failures: each owner row's name spelled outside its owner, and each spelling class's name spelled
-/// in two or more crates. Path and segment names use `spells`; plain config keys and detail sentences use exact literal
-/// matching. The name rules read each production literal that holds no whitespace, and the phrase table reads the
+/// in two or more crates. Path and segment names use `spells`. Plain config keys and detail sentences use exact
+/// literal matching. The name rules read each production literal that holds no whitespace, and the phrase table
+/// reads the sentences, which the name rules treat as prose.
 /// sentences, which the name rules treat as prose.
 fn owner_failures(workspace: &Workspace, rows: &[OwnerRow], classes: &[SpellingClass]) -> Vec<String> {
   let sites = production_sites(workspace, |value| !value.contains(char::is_whitespace));
@@ -2697,8 +2698,8 @@ fn the_checks_find_each_break() {
   );
 }
 
-/// The owner rule on a synthetic workspace. The owner crate spells its names; the writer crate spells them outside it,
-/// and spells one environment name that the reader crate also spells. Each break fails with its sites and its hint.
+/// The owner rule on a synthetic workspace. The owner crate spells its names. The writer crate spells them outside
+/// it, and spells one environment name that the reader crate also spells. Each break fails with its sites and its hint.
 /// Each form the rule allows passes: an owner literal, a named const, a JSON key, prose, and a `#[cfg(test)]` item.
 /// A route path that holds a layout name and a test target also pass. Each line number below is the line of the
 /// fixture text.
@@ -2935,7 +2936,7 @@ pub const SPELLED: &str = "backends.thing";
 
 /// The event names of `event_types.rs` become owner rows with no table edit. The derived set holds the values with
 /// `_`, but not the names the backend output formats also use, nor any single word. A writer crate spelling the
-/// protected name fails with its `file:line` and hint; its spellings of the unprotected ones pass.
+/// protected name fails with its `file:line` and hint. Its spellings of the unprotected ones pass.
 #[test]
 #[ignore = "integration"]
 fn the_event_names_of_event_types_are_protected() {
@@ -3696,7 +3697,7 @@ fn is_path_constructor(path: &syn::Path) -> bool {
   }
 }
 
-/// The attributes of an item. Syn keeps them on each variant; a variant it adds later fails here, not silently.
+/// The attributes of an item. Syn keeps them on each variant. A variant that Syn adds later fails here, not silently.
 fn item_attrs(item: &Item) -> &[Attribute] {
   match item {
     Item::Const(node) => &node.attrs,
@@ -3719,7 +3720,7 @@ fn item_attrs(item: &Item) -> &[Attribute] {
   }
 }
 
-/// The attributes of an impl item; see `item_attrs`.
+/// The attributes of an impl item. See `item_attrs`.
 fn impl_item_attrs(item: &ImplItem) -> &[Attribute] {
   match item {
     ImplItem::Const(node) => &node.attrs,
@@ -3731,7 +3732,7 @@ fn impl_item_attrs(item: &ImplItem) -> &[Attribute] {
   }
 }
 
-/// The attributes of an expression; see `item_attrs`. A statement's attributes sit on its expression.
+/// The attributes of an expression. See `item_attrs`. A statement's attributes sit on its expression.
 fn expr_attrs(expr: &Expr) -> &[Attribute] {
   match expr {
     Expr::Array(node) => &node.attrs,

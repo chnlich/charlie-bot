@@ -3612,10 +3612,14 @@ pub(crate) mod tests {
     assert!(Arc::ptr_eq(&first, &stale), "a read past the TTL serves the snapshot instead of walking the home");
 
     // The home holds every input the build read, so the refresh renews the index's age and walks nothing.
-    for _ in 0..30 {
-      std::thread::sleep(Duration::from_millis(10));
-      assert!(Arc::ptr_eq(&store.tree_index().unwrap(), &first), "the index that no input moved stays the index");
+    for _ in 0..200 {
+      if !store.tree_index_refresh_running.load(Ordering::Acquire) {
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(1));
     }
+    assert!(!store.tree_index_refresh_running.load(Ordering::Acquire), "the refresh ends");
+    assert!(Arc::ptr_eq(&store.tree_index().unwrap(), &first), "the index that no input moved stays the index");
     assert_eq!(store.task_tree_index_build_count(), 1, "no walk runs over a home nothing moved in");
   }
 

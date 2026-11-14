@@ -81,6 +81,14 @@
   cursor: pointer;
 }
 .turn-row:hover { background: rgba(30, 41, 59, 0.85); border-color: rgba(148, 163, 184, 0.45); color: #cbd5e1; }
+/* The folded turn controls draw their boundary translucently over the message list's slate-900:
+   rgba(100,116,139,.28) on the row renders 1.37:1 and rgba(100,116,139,.35) on the fold bar 1.51:1,
+   under the 3:1 floor WCAG 1.4.11 sets for a control boundary. Both fills composite to the list's own
+   slate-900, so the boundary is the only mark that the row or the bar opens. slate-500 draws 3.75:1
+   there at rest and slate-400 draws 6.96:1 under the pointer; on the hover fills they draw 3.19:1 and
+   5.92:1. */
+.turn-row, .turn-fold-bar { border-color: #64748b; }
+.turn-row:hover, .turn-fold-bar:hover { border-color: #94a3b8; }
 /* A row with no conclusion drops the column, so the title takes its width. */
 .turn-row-no-conclusion .turn-row-conclusion { display: none; }
 .turn-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -476,3 +484,8 @@ body { overscroll-behavior: none; }
 .user-msg-more { display: none; margin-top: 0.4rem; padding: 0.2rem 0.7rem; font-size: 0.72rem; font-weight: 600; color: #eff6ff; background: rgba(15, 23, 42, 0.28); border: 1px solid rgba(191, 219, 254, 0.45); border-radius: 9999px; cursor: pointer; }
 .user-msg-fold[data-folded="true"][data-overflows="true"] .user-msg-more { display: block; }
 .user-msg-more:hover { background: rgba(15, 23, 42, 0.5); }
+/* The pill draws its boundary rgba(191,219,254,.45) over its own slate-900/28 fill on the blue-600
+   bubble: 1.57:1 against the bubble and 2.27:1 against the fill, under the 3:1 floor for a control
+   boundary. blue-200 draws 3.64:1 against the bubble and 5.27:1 against the fill, and 7.10:1 on the
+   hover fill; the label keeps blue-50 at 6.88:1 on the fill. */
+.user-msg-more { border-color: #bfdbfe; }

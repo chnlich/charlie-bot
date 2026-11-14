@@ -71,7 +71,9 @@
        2.36:1 on the slate-900 row; the header's labels drew slate-500, 3.42:1 on slate-850, and
        the filter's placeholder drew slate-600 on slate-800, 1.93:1. slate-400 renders 6.96:1,
        6.34:1 and 5.71:1 on those backgrounds, above the 4.5:1 floor for 12px text. The type
-       badges keep their own colours, with every one of them at or above that floor. */
+       badges keep their own colours, with every one of them at or above that floor. The no-result
+       and loading lines draw the page's own slate-900, where slate-500 is 3.75:1 under the floor
+       for their 14px text, so they take this tone too. */
 
     /* The type filter's border-slate-700 outline draws rgb(51, 65, 85), 1.72:1 on the slate-900 bar and
        under the 3:1 boundary floor WCAG 1.4.11 sets for a control. Its slate-800 fill differs from the
@@ -219,7 +221,7 @@
   </div>
 
   <!-- Loading / error states -->
-  <div id="loading" class="flex items-center justify-center py-16 text-slate-500 text-sm gap-2">
+  <div id="loading" class="flex items-center justify-center py-16 text-slate-400 text-sm gap-2">
     <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
@@ -227,7 +229,7 @@
     Loading events…
   </div>
   <div id="error-msg" class="hidden text-center py-16 text-red-400 text-sm"></div>
-  <div id="empty-msg" class="hidden text-center py-16 text-slate-500 text-sm">No events found.</div>
+  <div id="empty-msg" class="hidden text-center py-16 text-slate-400 text-sm">No events found.</div>
 
   <script>{% include 'partials/json-highlight.js' %}</script>
   <script>
@@ -334,12 +336,16 @@
       }).join('');
     }
 
-    function renderEvents(events) {
+    function renderEvents(events, query) {
       const list = document.getElementById('event-list');
       list.innerHTML = '';
 
       if (!events.length) {
-        document.getElementById('empty-msg').classList.remove('hidden');
+        // The message names the cause. Under a filter the log keeps its events and the filter holds
+        // them back, so "No events found." would read the log itself as empty.
+        const msg = document.getElementById('empty-msg');
+        msg.textContent = query ? `No events match "${query}".` : 'No events found.';
+        msg.classList.remove('hidden');
         return;
       }
       document.getElementById('empty-msg').classList.add('hidden');
@@ -391,21 +397,26 @@
       list.style.setProperty('--event-type-col', `${widestType}px`);
     }
 
-    // The header count names the rows on screen: the filter's result, and the
-    // singular noun for a lone event. While earlier events remain unloaded, the
-    // count says that it covers the loaded part of the log.
-    function updateEventCount(count) {
-      const loaded = windowStart > 0 ? ' loaded' : '';
-      document.getElementById('event-count').textContent = `${count}${loaded} ${count === 1 ? 'event' : 'events'}`;
+    // The header count names the rows on screen and the singular noun for a lone event. Under a
+    // filter it reads the matches against the events loaded, so a reader learns how much of the log
+    // the filter hid. Without one it counts the loaded events, and "loaded" says that earlier
+    // events remain unloaded.
+    function updateEventCount(matches, loaded, query) {
+      const noun = loaded === 1 ? 'event' : 'events';
+      const text = query
+        ? `${matches} of ${loaded} ${noun}`
+        : `${loaded}${windowStart > 0 ? ' loaded' : ''} ${noun}`;
+      document.getElementById('event-count').textContent = text;
     }
 
     function filterEvents() {
-      const q = document.getElementById('type-filter').value.trim().toLowerCase();
+      const query = document.getElementById('type-filter').value.trim();
+      const q = query.toLowerCase();
       const filtered = q
         ? allEvents.filter(ev => (ev.type || '').toLowerCase().includes(q))
         : allEvents;
-      renderEvents(filtered);
-      updateEventCount(filtered.length);
+      renderEvents(filtered, query);
+      updateEventCount(filtered.length, allEvents.length, query);
       applyExpandAll();
     }
 

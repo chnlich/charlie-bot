@@ -73,13 +73,14 @@ The runner names that directory in `IMPROVE_LAUNCH_DIR`:
 
 The launcher runs `dev/improve/inflight-files.sh improve/<direction>/` on this host, because the other lines' worktrees exist only there.
 The runner also adds the files that the other directions' clones change on the remote host, because those clones are standalone repositories that the launcher cannot see.
-The list names live work only, and every source of it — this host's worktrees and the remote clones included — follows one contract.
-An open pull request claims its files.
+The list names live work only, and every source of it — this host's worktrees and the remote clones included — follows one contract: a source claims paths only while live work holds them.
+An open pull request claims its files, whichever checkout holds its branch.
 A worktree claims its committed paths since its merge base and its uncommitted and untracked paths while a task's record names it and that task is open, or while a process runs in the worktree.
 A worktree that no record names claims its paths, because operator work carries no record.
 A worktree whose owning task is closed and whose branch has no open pull request names no path, whether its branch landed or not; the worktree stays on disk.
 A task owns a worktree when the task store names its path, a run record under `data/runs/` or a task record under `threads/`, and the owning session's event history, not a run's end, decides whether that task is open.
-A record that cannot be read stops the list with an error naming the condition.
+A clone holds one checkout, so its claim is the work of the branch that checkout carries: the checked-out branch's committed paths since its merge base and the clone's uncommitted and untracked paths are claimed while that direction's round runs — the runner's own round state, or a process in the clone, is the live signal — and a branch that the checkout does not carry claims no path; the branch stays in the clone, and its open pull request, when one exists, is already on the list through the pull-request source.
+A clone or record that cannot be read stops the list with an error naming the condition.
 The runner's own checkout names nothing at all.
 Both computations fetch `origin/main` before they compare a branch against it, because a stale ref would make merged work look live.
 The fetch goes into a ref the reading side owns, `refs/improve/inflight/<direction>` in each clone and `refs/improve/inflight/<branch prefix>` in this host's main checkout, and never into `refs/remotes/origin/main` or `FETCH_HEAD`: the directions start in a burst, so concurrent launches, rounds and operators fetch those shared refs themselves.

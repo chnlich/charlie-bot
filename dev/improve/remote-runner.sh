@@ -181,32 +181,40 @@ rewrite_command() {
 }
 
 # The other directions' clones are standalone repositories, so the host list cannot see their worktrees. The
-# sourced in-flight rule supplies the same claimant and path functions. No record names these remote clone paths,
-# so each clone enters the rule as an unrecorded worktree and keeps its branch and dirty paths.
+# sourced in-flight rule supplies the same claimant and path functions, and each clone enters it as a checkout
+# whose state the task store cannot name: the scanned direction's own round decides it. A clone holds one
+# checkout, so its claim is the work of the branch that checkout carries — the checked-out branch's committed
+# paths and the clone's dirty paths, while that round runs or a process runs in the clone. A branch the checkout
+# does not carry claims no path, and its open pull request, when one exists, is already on the launcher's list.
 other_inflight_files() {
   source "$LAUNCH_DIR/inflight-files.sh"
-  local clone other branch merge_base main_ref origin_url current_branch
+  local clone other merge_base main_ref origin_url current_branch
   main_ref="refs/improve/inflight/$direction"
   for clone in "$HOME_DIR"/improve/*/charlie-bot; do
     [[ -d $clone ]] || continue
     [[ $clone == "$RUNNER_ROOT/charlie-bot" ]] && continue
     other=$(basename -- "$(dirname -- "$clone")")
     [[ $other == "$direction" ]] && continue
-    mark_worktree_unrecorded "$clone"
+    if ! current_branch=$(git -C "$clone" symbolic-ref --quiet --short HEAD); then
+      current_branch=detached
+    fi
+    if round_is_live "$other"; then
+      mark_worktree_state "$clone" open
+    else
+      mark_worktree_state "$clone" closed
+    fi
     origin_url=$(git -C "$clone" remote get-url origin) || fail 1 "cannot read the origin of $clone"
     git -C "$clone" fetch --quiet --no-tags --no-write-fetch-head "$origin_url" \
       +refs/heads/main:"$main_ref" || fail 1 "cannot fetch origin/main in $clone"
-    while IFS= read -r branch; do
-      if merge_base=$(git -C "$clone" merge-base "$main_ref" "$branch" 2>/dev/null); then
-        if worktree_has_live_claimant "$clone" "$branch"; then
-          list_committed_paths "$clone" "$merge_base" "$branch"
+    if [[ $current_branch != detached ]]; then
+      if merge_base=$(git -C "$clone" merge-base "$main_ref" "$current_branch" 2>/dev/null); then
+        if worktree_has_live_claimant "$clone" "$current_branch"; then
+          list_committed_paths "$clone" "$merge_base" "$current_branch"
         fi
       else
-        printf 'improve runner: skip branch %s in %s: no merge base with origin/main\n' "$branch" "$clone" >&2
+        printf 'improve runner: skip branch %s in %s: no merge base with origin/main\n' \
+          "$current_branch" "$clone" >&2
       fi
-    done < <(git -C "$clone" for-each-ref --format='%(refname:short)' refs/heads/)
-    if ! current_branch=$(git -C "$clone" symbolic-ref --quiet --short HEAD); then
-      current_branch=detached
     fi
     if git -C "$clone" merge-base "$main_ref" HEAD >/dev/null 2>&1; then
       if worktree_has_live_claimant "$clone" "$current_branch"; then
@@ -234,7 +242,8 @@ check_clone() {
     || fail 4 "the direction clone's origin does not point at charlie-bot: ${origin:-no origin}"
 }
 
-# Whether a live round of this direction holds the scope.
+# Whether a live round of one direction holds its scope. The clone scan calls this for the other
+# directions, and the start below calls it for its own.
 #
 # The evidence is the round's own: its leader, the `--in-scope` bash that the systemd-run call
 # below starts from the round's launch directory, and that launch directory, which the wrapper
@@ -243,6 +252,7 @@ check_clone() {
 # decides here. The wrapper counts too: between the scope's start and the leader's first moment it
 # is the round's only process, and a second fire of the direction must refuse it, not stop it.
 round_is_live() {
+  local live_direction=$1
   local proc launch_dir
   local -a arguments=()
   for proc in /proc/[0-9]*/cmdline; do
@@ -256,11 +266,11 @@ round_is_live() {
     [[ ${arguments[1]} == "$HOME_DIR"/improve/launch/*/remote-runner.sh ]] || continue
     case ${arguments[2]} in
       # The leader: bash <launch dir>/remote-runner.sh --in-scope <launch id> <direction>.
-      --in-scope) [[ ${arguments[4]} == "$direction" ]] || continue ;;
+      --in-scope) [[ ${arguments[4]} == "$live_direction" ]] || continue ;;
       # The --prepare form holds no direction and starts no scope.
       --prepare) continue ;;
       # The wrapper: bash <launch dir>/remote-runner.sh <launch id> <direction> <CLI commit>.
-      *) [[ ${arguments[3]} == "$direction" ]] || continue ;;
+      *) [[ ${arguments[3]} == "$live_direction" ]] || continue ;;
     esac
     launch_dir=$(dirname -- "${arguments[1]}")
     [[ -d $launch_dir ]] || continue
@@ -457,7 +467,7 @@ if systemctl --user is-failed --quiet "improve-$direction.scope"; then
   systemctl --user reset-failed "improve-$direction.scope"
   printf '%s cleared the failed scope improve-%s.scope\n' "$STDERR_PREFIX" "$direction" >&2
 elif systemctl --user is-active --quiet "improve-$direction.scope"; then
-  if round_is_live; then
+  if round_is_live "$direction"; then
     fail 5 "the previous round still runs: unit improve-$direction.scope exists"
   fi
   cgroup=$(systemctl --user show --property=ControlGroup --value "improve-$direction.scope" 2>/dev/null) || cgroup=

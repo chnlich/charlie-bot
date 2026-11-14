@@ -752,9 +752,31 @@ fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
   );
 }
 
+/// A fake live round of `direction`: a leader whose command line the runner's round state reads, beside the
+/// launch directory that command line names. The caller stops the leader after the run.
+fn spawn_live_round(world: &World, direction: &str) -> std::process::Child {
+  let launch_id = "20261103T120000Z-9-900";
+  let launch = world.remote_home.join("improve/launch").join(launch_id);
+  fs::create_dir_all(&launch).expect("the live round's launch directory");
+  fs::write(launch.join("remote-runner.sh"), "#!/usr/bin/env bash\nsleep 30\n").expect("the leader script");
+  let mut env = harness::Env::new();
+  env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+  let mut command = harness::command("bash", &env);
+  command.arg(launch.join("remote-runner.sh")).args(["--in-scope", launch_id, direction]);
+  harness::spawn(&mut command)
+}
+
+/// Stops a leader that [`spawn_live_round`] started: the children first, since a lone kill of the
+/// bash that started them leaves them running.
+fn stop_live_round(leader: &mut std::process::Child) {
+  let _ = std::process::Command::new("pkill").args(["-KILL", "-P", &leader.id().to_string()]).status();
+  leader.kill().expect("stop the fake round's leader");
+  let _ = leader.wait();
+}
+
 #[test]
 #[ignore = "integration"]
-fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
+fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   let world = World::new();
   // A standalone clone of another direction, like the host worker's five clones on the remote host.
   let clone = world.other_direction_clone("ux");
@@ -762,8 +784,8 @@ fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
   fs::write(clone.join("dropped.md"), "old\n").expect("the dropped fixture file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "add the dropped file"]);
-  // The committed change rides a topic branch, as a round's branch does, and it touches the old
-  // path beside the live one.
+  // The committed change rides the checked-out topic branch, as a round's branch does, and it
+  // touches the old path beside the live one.
   world.git(&clone, &["switch", "-q", "-c", "improve/ux/topic"]);
   fs::write(clone.join("committed.md"), "topic\n").expect("the committed fixture file");
   fs::write(clone.join("dropped.md"), "topic\n").expect("the dropped path's topic change");
@@ -779,15 +801,19 @@ fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
   fs::write(clone.join("base.md"), "changed\n").expect("the uncommitted change");
   fs::write(clone.join("dropped.md"), "uncommitted\n").expect("the dropped path's uncommitted change");
   fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
+  // The ux round is running while this perf round builds its list, as a burst's rounds do.
+  let mut leader = spawn_live_round(&world, "ux");
 
   let run = world.run(&world.env());
+
+  stop_live_round(&mut leader);
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   for changed in ["committed.md", "base.md", "dropped.md", "untracked.md"] {
     assert!(
       list.lines().any(|line| line == changed),
-      "the in-flight list misses the {changed} change of the ux clone:\n{list}"
+      "the in-flight list misses the {changed} change of the running ux round's clone:\n{list}"
     );
   }
 }
@@ -960,38 +986,39 @@ fn an_unowned_rebased_branch_keeps_its_committed_path() {
 
 #[test]
 #[ignore = "integration"]
-fn an_unowned_other_directions_clone_keeps_a_landed_branch_path() {
+fn an_idle_clones_branches_name_no_path_and_the_branch_stays() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");
-  // The topic lands on the remote's main as a squash merge, but no task names the clone.
-  world.git(&clone, &["switch", "-q", "-c", "improve/ux/stale"]);
-  fs::write(clone.join("stale.md"), "landed\n").expect("the landed topic's file");
+  // The checked-out branch of a round that ended, with its committed, uncommitted and untracked
+  // paths still in the checkout, as the host leaves a finished clone.
+  world.git(&clone, &["switch", "-q", "-c", "improve/ux/ended"]);
+  fs::write(clone.join("committed.md"), "topic\n").expect("the committed file");
   world.git(&clone, &["add", "-A"]);
-  world.git(&clone, &["commit", "-q", "-m", "synthetic stale topic"]);
-  world.git(&clone, &["push", "-q", "origin", "improve/ux/stale"]);
-  let landing = world.sandbox.dir("landing/ux");
-  let origin = world.other_direction_origin("ux").display().to_string();
-  world.git(&world.sandbox.dir("landing"), &["clone", "-q", &origin, "ux"]);
-  world.git(&landing, &["merge", "-q", "--squash", "origin/improve/ux/stale"]);
-  world.git(&landing, &["commit", "-q", "-m", "land the stale topic"]);
-  world.git(&landing, &["push", "-q", "origin", "main"]);
-  // The clone's origin/main still points behind the merge, as a stale checkout's does.
-  let behind = world.git(&clone, &["rev-parse", "HEAD~1"]);
-  world.git(&clone, &["update-ref", "refs/remotes/origin/main", &behind]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic ended topic"]);
+  fs::write(clone.join("dirty.md"), "changed\n").expect("the uncommitted change");
+  fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
+  // An older round's branch that no checkout carries.
+  world.git(&clone, &["switch", "-q", "main"]);
+  world.git(&clone, &["switch", "-q", "-c", "improve/ux/old"]);
+  fs::write(clone.join("old.md"), "old\n").expect("the old branch's file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic old topic"]);
+  world.git(&clone, &["switch", "-q", "improve/ux/ended"]);
 
   let run = world.run(&world.env());
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  assert!(list.trim().is_empty(), "the idle clone still claims paths without a running round:\n{list}");
   assert!(
-    list.lines().any(|line| line == "stale.md"),
-    "the unowned clone drops a committed path after main lands it:\n{list}"
+    !world.git(&clone, &["branch", "--list", "improve/ux/old"]).trim().is_empty(),
+    "the old branch left the clone"
   );
 }
 
 #[test]
 #[ignore = "integration"]
-fn an_unowned_other_directions_branch_keeps_all_changed_paths() {
+fn a_running_rounds_clone_keeps_all_changed_paths() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");
   // The topic adds two files and deletes `base.md`, which origin/main never drops.
@@ -1011,14 +1038,51 @@ fn an_unowned_other_directions_branch_keeps_all_changed_paths() {
   fs::write(landing.join("landed.md"), "landed\nand moved on\n").expect("the later change");
   world.git(&landing, &["commit", "-q", "-am", "move the landed file on"]);
   world.git(&landing, &["push", "-q", "origin", "main"]);
+  // The ux round is running while this perf round builds its list.
+  let mut leader = spawn_live_round(&world, "ux");
 
   let run = world.run(&world.env());
 
+  stop_live_round(&mut leader);
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   let mut listed: Vec<&str> = list.lines().collect();
   listed.sort_unstable();
-  assert_eq!(listed, ["base.md", "landed.md", "unlanded.md"], "the unowned clone loses a changed path:\n{list}");
+  assert_eq!(listed, ["base.md", "landed.md", "unlanded.md"], "the live clone loses a changed path:\n{list}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_process_in_another_directions_clone_keeps_its_checked_out_branchs_paths() {
+  let world = World::new();
+  let clone = world.other_direction_clone("ux");
+  world.git(&clone, &["switch", "-q", "-c", "improve/ux/live"]);
+  fs::write(clone.join("committed.md"), "topic\n").expect("the committed file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic live topic"]);
+  fs::write(clone.join("dirty.md"), "changed\n").expect("the uncommitted change");
+  // No ux round runs, but a process works in the clone, as a round's worker does.
+  let mut process = std::process::Command::new("bash")
+    .arg("-c")
+    .arg("exec sleep 30")
+    .current_dir(&clone)
+    .spawn()
+    .expect("the clone process");
+  let cwd = format!("/proc/{}/cwd", process.id());
+  assert!(
+    wait_until(Duration::from_secs(5), || fs::read_link(&cwd).is_ok_and(|target| target == clone)),
+    "the clone process did not enter the clone"
+  );
+
+  let run = world.run(&world.env());
+
+  process.kill().expect("stop the clone process");
+  process.wait().expect("reap the clone process");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  for named in ["committed.md", "dirty.md"] {
+    assert!(list.lines().any(|line| line == named), "the in-flight list drops the process-held path {named}:\n{list}");
+  }
 }
 
 #[test]
@@ -1266,14 +1330,10 @@ fn another_clones_locked_origin_main_ref_does_not_stop_the_rounds_in_flight_read
   let run = world.run(&world.env());
 
   assert_eq!(run.code, 0, "{}", run.describe());
+  // The clone's checked-out topic branch claims nothing: no ux round runs, so the read reaches
+  // only the fetch, which the locked ref must not stop.
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  let mut listed: Vec<&str> = list.lines().collect();
-  listed.sort_unstable();
-  assert_eq!(
-    listed,
-    ["base.md", "committed.md", "untracked.md"],
-    "the in-flight list is not the ux clone's files:\n{list}"
-  );
+  assert!(list.trim().is_empty(), "the locked clone still claimed paths:\n{list}");
   assert!(
     !clone.join(".git/FETCH_HEAD").exists(),
     "the runner wrote the clone's shared FETCH_HEAD:\n{}",

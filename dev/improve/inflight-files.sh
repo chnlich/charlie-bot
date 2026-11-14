@@ -123,11 +123,12 @@ task_store_state() {
 declare -A task_state_by_worktree=()
 declare -A open_pr_branches=()
 
-# Register a checkout that no task-store record names: the contract's unrecorded case, whose paths stay claimed
-# without a store read. The improve runner's clone scan uses it for the directions' standalone clones, which live
-# on the remote host beside no profile home.
-mark_worktree_unrecorded() {
-  task_state_by_worktree["$1"]=no_task
+# Register a checkout whose owner the task store cannot name, together with the state its claims follow in the
+# store's two states. The improve runner's clone scan resolves the state outside the store, from the scanned
+# direction's own round: open while that round runs, closed when it does not, and the claimant rule's process
+# check then decides.
+mark_worktree_state() {
+  task_state_by_worktree["$1"]=$2
 }
 
 # Resolve each candidate worktree to the task sessions whose records name it, then read each task's current state

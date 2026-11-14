@@ -3,7 +3,7 @@
 //!
 //! Each request past the version probe is appended to `calls.log` beside the program, as "METHOD PATH". At startup it
 //! logs a recovery line for each live run record when it adopts runs, and a line for each live run that names the
-//! run; then it logs `server_ready`. Every log line comes from `logline::render`, as the server writes its lines.
+//! run. Then it logs `server_ready`. Every log line comes from `logline::render`, as the server writes its lines.
 
 use std::collections::HashMap;
 use std::env;
@@ -56,7 +56,7 @@ static PROBE_CANCEL: LazyLock<Regex> =
 #[derive(Deserialize)]
 struct Behavior {
   check_config: String,
-  /// A file under CHARLIEBOT_REPO_ROOT that `--check-config` requires, as the agent gh wrapper is; empty requires none.
+  /// A file under CHARLIEBOT_REPO_ROOT that `--check-config` requires, as the agent gh wrapper is. Empty requires none.
   check_config_requires: String,
   adopt: bool,
   run_state: String,
@@ -75,14 +75,14 @@ struct Behavior {
   /// The first tool result written to the delegated run's event log: `none`, `ok` (a Bash command that did not error),
   /// `failed` (a Bash command that errored) or `not-command` (another tool).
   first_command: String,
-  /// A top-level key appended to config.yaml when the server starts, as an edit another session makes during a switch;
-  /// empty appends nothing.
+  /// A top-level key appended to config.yaml when the server starts, as an edit another session makes during a switch.
+  /// Empty appends nothing.
   adds_config_key: String,
-  /// Whether the server gets to `server_ready`; `false` exits before it listens.
+  /// Whether the server gets to `server_ready`. `false` exits before it listens.
   reaches_ready: bool,
-  /// A top-level key that `--check-config` refuses when config.yaml names it; empty refuses nothing.
+  /// A top-level key that `--check-config` refuses when config.yaml names it. Empty refuses nothing.
   refuses_config_key: String,
-  /// The probe run's error event, written to its event log as the server writes a launch failure; empty writes none.
+  /// The probe run's error event, written to its event log as the server writes a launch failure. Empty writes none.
   probe_error: String,
 }
 
@@ -339,7 +339,7 @@ impl Server {
   }
 
   /// The probe session's runs. The archive step's listing stalls once `archive_runs_delay_after` listings have been
-  /// answered fast; the stall happens outside the lock, so the other requests still answer.
+  /// answered fast. The stall happens outside the lock, so the other requests still answer.
   fn run_listing(&self, path: &str) -> (u16, Value) {
     let newest_first = path.contains("order=desc");
     if !newest_first {

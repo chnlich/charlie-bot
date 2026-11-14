@@ -202,7 +202,7 @@ fn test_a_holder_that_is_killed_leaves_the_lock_free_for_the_next_release() {
 #[ignore = "integration"]
 fn test_a_failed_stage_exits_1_names_the_stage_and_installs_nothing() {
   let world = World::new();
-  // The units stage reloads the user manager; a refused reload fails it.
+  // The units stage reloads the user manager. A refused reload fails it.
   world.sandbox.stub("systemctl", r#"case "$*" in *show-environment*) exit 0 ;; *) exit 1 ;; esac"#);
 
   let run = world.release(&world.on_main);
@@ -495,7 +495,7 @@ fn test_a_re_released_old_commit_counts_as_the_newest_install() {
   let world = World::new();
   ten_fixture_versions(&world);
   // The commit is dated 2001 and has no release directory, as after a prune deleted it. A prune that sorted by commit
-  // date would delete it first; its install time is now, so it stays.
+  // date would delete it first. Its install time is now, so it stays.
   let mut env = world.env.clone();
   env.insert("GIT_AUTHOR_DATE".to_string(), "2001-02-03T04:05:06Z".to_string());
   env.insert("GIT_COMMITTER_DATE".to_string(), "2001-02-03T04:05:06Z".to_string());
@@ -516,7 +516,7 @@ fn test_a_re_released_old_commit_counts_as_the_newest_install() {
   }
 }
 
-/// The calls a stub recorded, one line per invocation; a stub that never ran left no file.
+/// The calls a stub recorded, one line per invocation. A stub that never ran left no file.
 fn recorded_calls(calls: &Path) -> String {
   fs::read_to_string(calls).unwrap_or_default()
 }

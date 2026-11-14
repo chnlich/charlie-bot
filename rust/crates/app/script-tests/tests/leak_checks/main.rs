@@ -339,7 +339,7 @@ fn a_push_updates_the_bare_repository() {
 fn a_tilde_profile_home_names_the_pattern_file_under_home() {
   let sandbox = Sandbox::new();
   let (mut env, gh_log, _home) = post(&sandbox);
-  // The server's home rule expands a leading `~` to HOME; the pattern file sits at `<root>/charliebot-home`.
+  // The server's home rule expands a leading `~` to HOME. The pattern file sits at `<root>/charliebot-home`.
   env.insert("CHARLIEBOT_HOME".to_string(), "~/charliebot-home".to_string());
   let body = body_file(&sandbox, "body.md", &format!("## Evidence\nthe {PATTERN_TERM} value\n"));
   let mut command = harness::command("bash", &env);

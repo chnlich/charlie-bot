@@ -2,14 +2,14 @@
 //!
 //! A remote watch that fires logs when its job ended (the new fields of the `trigger_fired` line). Three sources
 //! feed that log: the `End` column of the remote `sacct` query, the mtime of a `--cmd` launch's exit file, and an
-//! end recorder that the verify-on-create ssh leaves on the remote host for a pid-only target. Every readback
-//! rides the ssh call that discovers the end, so a wake starts no extra ssh process. This module holds the remote
-//! command segments and the parsing and clock math; `triggers.rs` wires them into the probes.
+//! end recorder for a pid-only target. The verify-on-create ssh leaves that recorder on the remote host. Every
+//! readback rides the ssh call that discovers the end, so a wake starts no extra ssh process. This module holds the
+//! remote command segments and the parsing and clock math; `triggers.rs` wires them into the probes.
 //!
 //! Clock math, stated once: one readback ssh carries a remote `date +%s.%N` and has a local midpoint
 //! (midway between its start and its end, on the server clock). `offset = remote epoch − local midpoint`, in ms.
 //! An end instant recorded on the remote clock converts to the server clock as `end_server = end_remote − offset`.
-//! The remote end line always names the remote clock: the recorder and `date -r` print `date +%s.%N`, and the
+//! The remote end line always names the remote clock. The recorder and `date -r` print `date +%s.%N`, and the
 //! sacct `End` column states the remote host's local zone, which the readback ssh also prints.
 
 use std::time::SystemTime;

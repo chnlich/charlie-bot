@@ -476,8 +476,8 @@ impl TriggerManager {
       ids.sort_unstable();
       for job_id in ids {
         let key = slurm_label(Some(host), job_id);
-        // A held job is already stuck at registration: name Slurm's hold reason so the caller learns it now instead of
-        // reading a plain PENDING as a job that will start on its own.
+        // A held job is already stuck at registration. Name Slurm's hold reason so the caller learns it now, instead
+        // of reading a plain PENDING as a job that will start on its own.
         let state = match reading.states.get(&job_id) {
           Some(row) => {
             let state_key = row.state.split_whitespace().next().unwrap_or_default();
@@ -547,7 +547,7 @@ impl TriggerManager {
     let stop = self.features.startup.stop();
     let sessions_dir = self.features.store.config().sessions_dir();
     let home = self.features.store.config().charliebot_home.clone();
-    // A file this index proves not pending needs no read: its row is served only while the file keeps the identity the
+    // A file this index proves not pending needs no read. Its row is served only while the file keeps the identity the
     // row recorded, and a file whose status changed was rewritten since.
     let index = TriggerIndex::read(&home);
     let walk_stop = stop.clone();
@@ -727,8 +727,8 @@ impl TriggerManager {
 
   /// Run one Slurm probe, locally or over ssh, and read the job states and pending reasons it answers. The query
   /// pairs the sacct row that decides a finish with the squeue reason that decides a hold, because sacct reports no
-  /// pending reason. The remote ssh also prints the clock and zone lines that convert a terminal row's `End` column,
-  /// so a remote end readback measures its offset in the ssh that read the end back.
+  /// pending reason. The remote ssh also prints the clock and zone lines that convert a terminal row's `End` column.
+  /// A remote end readback therefore measures its offset in the ssh that read the end back.
   async fn probe_sacct(
     &self,
     job_ids: &[i64],
@@ -837,7 +837,7 @@ impl TriggerManager {
   }
 
   /// The label and the end reading one remote target carries once a probe saw it gone. The reading rides the ssh
-  /// calls that already exist: a pid-only target's end file is read by the DEAD probe itself, and a `--cmd`
+  /// calls that already exist. A pid-only target's end file is read by the DEAD probe itself, and a `--cmd`
   /// target's mtime by the exit read it pays anyway. A readback failure logs a warning naming the trigger and
   /// leaves the fire untouched.
   async fn remote_finish(
@@ -1381,7 +1381,7 @@ impl TriggerManager {
             break;
           }
           // A job the readback could not settle stays in the wait, and the registry dropped it when it dispatched
-          // the end, so the watch takes it back; otherwise only the interval probe watches it.
+          // the end, so the watch takes it back. Otherwise only the interval probe watches it.
           if let (Some(host), true) = (host, remaining.contains(&job_id)) {
             session_watch.resubscribe(HeldTarget::Slurm { host: host.to_string(), job_id });
           }
@@ -1392,7 +1392,7 @@ impl TriggerManager {
     Ok(outcome)
   }
 
-  /// Apply one Slurm probe reading to the jobs a wait still watches: a terminal row finishes its job with the end
+  /// Apply one Slurm probe reading to the jobs a wait still watches. A terminal row finishes its job with the end
   /// reading the same ssh answered, a held job is reported as needing attention, and every other job stays. Returns
   /// the jobs that still wait.
   fn settle_sacct(
@@ -1483,7 +1483,7 @@ impl TriggerManager {
   }
 }
 
-/// Why a trigger's wait ended: every watched target finished, a `--cmd` watch ended without exit 0, a watched Slurm
+/// Why a trigger's wait ended. Every watched target finished, a `--cmd` watch ended without exit 0, a watched Slurm
 /// job is held and will not start on its own, or the deadline came first.
 ///
 /// `Display` writes the words that `fire_reason` carries in the trigger file.
@@ -1516,8 +1516,8 @@ struct WaitOutcome {
   remote_ends: Vec<RemoteTargetEnd>,
 }
 
-/// One Slurm wait group's answer: what it settled, what it still waits on, the held jobs that end the wait, the
-/// remote ends it recorded, and whether a settled `--cmd` target ended without exit 0.
+/// One Slurm wait group's answer: what it settled, what it still waits on, the held jobs that end the wait, and the
+/// remote ends it recorded. It also names whether a settled `--cmd` target ended without exit 0.
 #[derive(Default)]
 struct WaitGroupOutcome {
   finished: Vec<String>,
@@ -1539,8 +1539,9 @@ fn failed_watch_end(exit_file: Option<&str>, code: Option<&str>) -> bool {
   exit_file.is_some() && code != Some("0")
 }
 
-/// One Slurm probe's answer: the sacct rows and squeue pending reasons the fire decision reads, plus the clock and
-/// zone lines that convert a terminal row's `End` column, and the readback ssh's local midpoint.
+/// One Slurm probe's answer. It carries the sacct rows and squeue pending reasons the fire decision reads, plus the
+/// clock and zone lines that convert a terminal row's `End` column. It also carries the readback ssh's local
+/// midpoint.
 struct SacctReading {
   states: HashMap<i64, SlurmRow>,
   reasons: HashMap<i64, String>,
@@ -1593,7 +1594,7 @@ struct EndFields {
   clock_offset_ms: i64,
 }
 
-/// Select one trigger's fire log from its remote end readings: the latest recorded end wins, and a job that ended
+/// Select one trigger's fire log from its remote end readings. The latest recorded end wins, and a job that ended
 /// before the trigger was created lags from the creation instead.
 fn build_fire_log(
   trigger: &PendingTrigger,
@@ -1708,7 +1709,7 @@ fn pid_probe_command(target: &RemotePid, recorder: Option<&RecorderStart<'_>>, e
 
 /// The remote command that reads back a pid the held session reported gone. It carries the same `kill -0` verdict
 /// and, for a pid-only target, reads the end file the recorder writes. The recorder polls the pid on its own clock,
-/// so the file can trail the held report by about a second; the read waits up to three seconds for it. The two
+/// so the file can trail the held report by about a second. The read waits up to three seconds for it. The two
 /// tagged dates bracket that wait, so the offset math keeps the ssh's own midpoint. A `--cmd` target has no recorder
 /// file, because its end is the exit file `remote_finish` reads, so its readback carries the verdict alone.
 fn pid_readback_command(pid: i64, end_file: Option<&str>) -> String {
@@ -1906,7 +1907,7 @@ fn read_slurm_probe(stdout: &str) -> Result<SlurmProbe, String> {
         continue;
       }
       // A remote probe leads with the epoch line that carries a decimal and the zone line that reads like a signed
-      // integer; neither is a job row, and a job row names four columns.
+      // integer. Neither is a job row, and a job row names four columns.
       if line.split('|').next().is_some_and(|first| first.parse::<i64>().is_err()) || is_zone_line(line) {
         continue;
       }
@@ -2078,8 +2079,8 @@ fn unsettled_target_labels(targets: &[WatchTarget], finished: &[String], held: &
   labels
 }
 
-/// The per-session trigger-recovery time over which the boot logs, so a slow boot names the session whose trigger
-/// files it waited on without growing the log on a healthy one.
+/// The per-session trigger-recovery time over which the boot logs. A boot slower than it names the session whose
+/// trigger files it waited on, without growing the log on a healthy one.
 const SLOW_TRIGGER_RECOVERY_MS: u64 = 1000;
 
 /// Logs one session's trigger read that took [`SLOW_TRIGGER_RECOVERY_MS`] or more. One line per slow session: the time
@@ -3400,7 +3401,7 @@ mod tests {
     let end = timeout(Duration::from_secs(20), first.recv()).await.expect("the first watch reports the end");
     assert_eq!(end, HeldEnd::Pid { host: "synthetic-host".to_string(), pid: gone_pid });
     // A second wait names the pid the running script already reported. Only a reopened session can report it again,
-    // because the running script dropped the pid from its watch set; reusing it leaves this wait to the interval
+    // because the running script dropped the pid from its watch set. Reusing it leaves this wait to the interval
     // probe, an hour away.
     let mut second = manager.held.watch("synthetic-held-late", vec![held_pid(gone_pid)]);
     let end = timeout(Duration::from_secs(20), second.recv()).await.expect("the reopened session reports the end");
@@ -4783,7 +4784,7 @@ mod tests {
     panic!("the trigger_fired line for {trigger_id} never appeared; captured:\n{}", log.text());
   }
 
-  /// A scripted pid-only wake, end to end: the verify ssh starts the end recorder, the probes wake on the
+  /// A scripted pid-only wake, end to end. The verify ssh starts the end recorder, the probes wake on the
   /// ALIVE→DEAD transition, and the DEAD probe reads the end file back in the same ssh.
   #[tokio::test]
   #[ignore = "integration"]

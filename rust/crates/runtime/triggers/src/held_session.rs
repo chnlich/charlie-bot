@@ -1,16 +1,16 @@
 //! The held remote session: one ssh session per remote host that a pending remote wait watches.
 //!
 //! The session runs a POSIX sh script on the host. The script checks every watched pid each second and every
-//! watched Slurm job each ten seconds, prints `END pid <pid> <epoch.ns>` or `END slurm <jobid> <state>` when a
+//! watched Slurm job each ten seconds. It prints `END pid <pid> <epoch.ns>` or `END slurm <jobid> <state>` when a
 //! target ends, and prints `HB` every thirty seconds. A waiter subscribes to the ends of its own targets and runs
 //! its readback when one arrives. The interval probes in `triggers.rs` keep running alongside, so whichever path
 //! reports the end first wakes the trigger, and the fire path is idempotent per trigger.
 //!
-//! The session holds the ssh child of its host. A change to the host's wait set reopens the session, so the new
-//! script checks every target on its first pass and an end inside the reopen gap is still reported. Silence for
-//! longer than the silence limit kills the child, and every session that ends reconnects after a pause.
+//! The session holds the ssh child of its host. A change to the host's wait set reopens the session. The new
+//! script then checks every target on its first pass, so an end inside the reopen gap is still reported. Silence
+//! for longer than the silence limit kills the child, and every session that ends reconnects after a pause.
 //!
-//! The switch `USE_REMOTE_HELD_SESSION` turns the module off: unset or `1` opens sessions, `0` or `false` (any
+//! The switch `USE_REMOTE_HELD_SESSION` turns the module off. Unset or `1` opens sessions, `0` or `false` (any
 //! case) leaves every watch inert, and the waiter then runs the interval probes alone.
 
 use std::collections::{BTreeMap, BTreeSet};

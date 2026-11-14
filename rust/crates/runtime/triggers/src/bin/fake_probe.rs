@@ -1,16 +1,16 @@
 //! Test helper that plays the probe programs of the trigger tests.
 //!
 //! Cargo builds this binary once. Each fake program is a symlink named for
-//! its role (for example `fake-ssh`) that points at this binary, next to a
-//! `probe.json` data file that states the behavior of every role. The helper
-//! reads its role from `argv[0]`, looks the role up in the data file, writes
-//! the stated stdout and stderr, and exits with the stated code.
+//! its role (for example `fake-ssh`) that points at this binary. A
+//! `probe.json` data file next to it states the behavior of every role. The
+//! helper reads its role from `argv[0]`, looks the role up in the data file,
+//! writes the stated stdout and stderr, and exits with the stated code.
 //!
 //! A role's behavior is either one static answer (the fields `stdout`,
-//! `stderr`, `exit`) or a `sequence` of such answers: each invocation
+//! `stderr`, `exit`) or a `sequence` of such answers. Each invocation
 //! consumes the next entry and, past the end, repeats the last. Every
 //! invocation appends one JSON array of its argv to `<role>.argv.jsonl` and
-//! leaves its one-based invocation index in `<role>.calls`, so a test reads
+//! leaves its one-based invocation index in `<role>.calls`. A test reads
 //! back how many processes ran and with what remote command.
 
 use std::fs;

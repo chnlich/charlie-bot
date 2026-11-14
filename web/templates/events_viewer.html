@@ -257,15 +257,16 @@
     // -------------------------------------------------------------------------
     // Render
     // -------------------------------------------------------------------------
-    // The payload in its row: the highlighter's indented JSON, one block per line, each padded by
-    // its own depth. A value longer than the row wraps inside the pre, and the wrap continues at
-    // the pre's left edge, where the value reads as a top-level line. The per-line padding
-    // continues it under its own key instead. A string escapes its newlines, so each newline in
-    // this text separates two lines.
+    // The payload in its row: the highlighter's indented JSON, one block per line, offset by the
+    // line's own depth. A value longer than the row wraps inside the pre, and the wrap continued
+    // at the pre's left edge, where it read as a top-level line; the offset continues it under
+    // its own key. The line keeps its leading spaces, so a copied payload keeps its indentation,
+    // and the negative text-indent pulls the first line back over the space the padding already
+    // holds. A string escapes its newlines, so each newline in this text separates two lines.
     function payloadHtml(ev) {
       return syntaxHighlight(ev).split('\n').map((line) => {
         const spaces = line.match(/^ */)[0].length;
-        return `<div style="padding-left:${spaces}ch">${line.slice(spaces)}</div>`;
+        return `<div style="padding-left:${spaces}ch;text-indent:-${spaces}ch">${line}</div>`;
       }).join('');
     }
 

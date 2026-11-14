@@ -125,8 +125,8 @@ fn reported_path(target: &[u8]) -> Option<PathBuf> {
   path.is_absolute().then(|| paths::realpath(&path))
 }
 
-/// `target` without the ` (deleted)` marker that the kernel appends to a link, a mapping or a command line once its
-/// file is unlinked.
+/// `target` without the ` (deleted)` marker that the kernel appends to a proc link and to a mapping pathname once
+/// the file is unlinked. An argument in `cmdline` is the raw argv bytes, so it never carries the marker.
 fn strip_deleted(target: &[u8]) -> &[u8] {
   target.strip_suffix(b" (deleted)").unwrap_or(target)
 }

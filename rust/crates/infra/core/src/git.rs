@@ -1,5 +1,5 @@
 //! Git facts the server shares: the reads it makes in the repository root, the arguments of the object-existence
-//! probe, and the name of the quarantine directory beside the worktrees.
+//! probe and of the merge-base queries, and the name of the quarantine directory beside the worktrees.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -60,6 +60,18 @@ pub fn object_exists_args(spec: &str) -> [&str; 3] {
   ["cat-file", "-e", spec]
 }
 
+/// The arguments that name the merge base of `base` and `head`: `git merge-base <base> <head>`.
+pub fn merge_base_args<'a>(base: &'a str, head: &'a str) -> [&'a str; 3] {
+  ["merge-base", base, head]
+}
+
+/// The arguments that test whether `ancestor` is reachable from `descendant`: `git merge-base --is-ancestor
+/// <ancestor> <descendant>`. The test prints nothing and answers in its exit status: 0 when the ancestor is
+/// reachable, 1 when it is not.
+pub fn ancestry_args<'a>(ancestor: &'a str, descendant: &'a str) -> [&'a str; 4] {
+  ["merge-base", "--is-ancestor", ancestor, descendant]
+}
+
 #[cfg(test)]
 mod tests {
   use std::process::Command;
@@ -69,6 +81,16 @@ mod tests {
   #[test]
   fn the_object_probe_is_cat_file_with_the_existence_flag() {
     assert_eq!(object_exists_args("HEAD^{commit}"), ["cat-file", "-e", "HEAD^{commit}"]);
+  }
+
+  #[test]
+  fn the_merge_base_args_name_the_two_commits() {
+    assert_eq!(merge_base_args("origin/main", "HEAD"), ["merge-base", "origin/main", "HEAD"]);
+  }
+
+  #[test]
+  fn the_ancestry_args_carry_the_is_ancestor_flag() {
+    assert_eq!(ancestry_args("origin/main", "HEAD"), ["merge-base", "--is-ancestor", "origin/main", "HEAD"]);
   }
 
   /// A repository with one empty commit, made by the git CLI that the server runs.

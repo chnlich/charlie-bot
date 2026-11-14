@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::response::Response;
 use charliebot_compat::responses;
-use charliebot_core::git::object_exists_args;
+use charliebot_core::git::{merge_base_args, object_exists_args};
 use charliebot_core::str_methods::universal_newlines;
 use http::StatusCode;
 use serde_json::json;
@@ -134,7 +134,7 @@ pub(crate) async fn resolve_commits(repo: &Path, refs: &[&str]) -> Result<Vec<St
 
 /// The merge base of two commits, the revision a three-dot range's base side diffs against.
 pub(crate) async fn merge_base(repo: &Path, base: &str, head: &str) -> Result<String, Response> {
-  let stdout = run(repo, &["merge-base", base, head], READ_TIMEOUT, "git merge-base failed").await?;
+  let stdout = run(repo, &merge_base_args(base, head), READ_TIMEOUT, "git merge-base failed").await?;
   Ok(stdout.trim().to_string())
 }
 

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use charliebot_core::credentials::REDACTED;
-use charliebot_core::headers::{AUTHORIZATION, bearer_value};
+use charliebot_core::headers::{AUTHORIZATION, CONTENT_TYPE, bearer_value};
 use clap::Args;
 use serde_json::json;
 
@@ -77,9 +77,9 @@ impl RequestArgs {
       }
       headers.push((name.to_string(), value.to_string()));
     }
-    let has_content_type = headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+    let has_content_type = headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(CONTENT_TYPE));
     if self.json.is_some() && !has_content_type {
-      headers.push(("Content-Type".to_string(), "application/json".to_string()));
+      headers.push((CONTENT_TYPE.to_string(), "application/json".to_string()));
     }
     Ok(headers)
   }

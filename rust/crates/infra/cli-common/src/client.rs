@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use charliebot_core::headers::CONTENT_TYPE;
 use serde_json::{Map, Value, json};
 
 use crate::exit::CliExit;
@@ -84,7 +85,7 @@ pub fn call_api(
   });
   let mut headers = ctx.headers.clone();
   if body.is_some() {
-    headers.push(("Content-Type".to_string(), "application/json".to_string()));
+    headers.push((CONTENT_TYPE.to_string(), "application/json".to_string()));
   }
   let deadline = clock.now() + ctx.connect_total_timeout;
   let mut attempt: u32 = 0;

@@ -16,6 +16,7 @@ use charliebot_cli_common::request::{self, Request, RequestArgs};
 use charliebot_cli_common::urlencode::urlencode;
 use charliebot_core::config;
 use charliebot_core::credentials::write_credentials;
+use charliebot_core::headers::CONTENT_TYPE;
 use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_core::str_methods;
@@ -632,7 +633,7 @@ fn add_account(
     ("redirect_uri".to_string(), REDIRECT_URI.to_string()),
   ]);
   let exchange = Request::new(reqwest::Method::POST, &endpoints.token_url)
-    .header("Content-Type", "application/x-www-form-urlencoded")
+    .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
     .body(form.into_bytes());
   let client = request::HttpClient::new()?;
   let payload = open_json(&client, &exchange, "Google authorization-code exchange", &[&client_secret, &code])?;
@@ -1198,7 +1199,7 @@ fn mint_access_token(
     ("grant_type".to_string(), "refresh_token".to_string()),
   ]);
   let request = Request::new(reqwest::Method::POST, token_url)
-    .header("Content-Type", "application/x-www-form-urlencoded")
+    .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
     .body(form.into_bytes());
   let payload = open_json(client, &request, "Google token refresh", &[&refresh_token, &client_secret])?;
   required_response_string(&payload, "access_token", "Google token refresh")

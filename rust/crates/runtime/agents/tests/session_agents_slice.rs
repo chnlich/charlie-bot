@@ -7,11 +7,10 @@ use std::path::{Path, PathBuf};
 
 use charliebot_agents::transport::cgroup::{SessionCgroupConfig, use_fake_cgroup_hierarchy};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_one_shot, spawn_with_setup};
-use charliebot_core::cgroup::user_slice_dir;
+use charliebot_core::cgroup::{AGENTS_SLICE, user_slice_dir};
 
 const PARENT_ID: &str = "11112222-3333-4444-5555-666677778888";
 const CHILD_ID: &str = "99998888-7777-6666-5555-444433332222";
-const AGENTS_SLICE: &str = "charliebot-agents.slice";
 const CHILD_CGROUP: &str = "charliebot-sess-99998888";
 
 /// A delegated base with the agents' leaf slice.

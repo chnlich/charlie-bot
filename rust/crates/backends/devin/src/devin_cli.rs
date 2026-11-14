@@ -229,7 +229,7 @@ mod tests {
   use charliebot_agents::runner::{AgentRunner, RunOutcome, RunRequest};
   use charliebot_agents::transport::cgroup::{SessionCgroupConfig, use_fake_cgroup_hierarchy};
   use charliebot_agents::transport::final_stdout;
-  use charliebot_core::cgroup::user_slice_dir;
+  use charliebot_core::cgroup::{AGENTS_SLICE, user_slice_dir};
   use charliebot_registry::Registry;
   use serde_json::Map;
 
@@ -238,7 +238,6 @@ mod tests {
   const FIXTURE: &str = include_str!("../tests/fixtures/export.json");
   const ANSWER: &str = "The number is 41.";
   const SESSION_ID: &str = "devin-session-7f3a";
-  const AGENTS_SLICE: &str = "charliebot-agents.slice";
 
   fn backend(launch: LaunchArgs) -> DevinBackend {
     DevinBackend::from_launch("/synthetic/bin/devin".to_string(), "swe-2-test", launch)

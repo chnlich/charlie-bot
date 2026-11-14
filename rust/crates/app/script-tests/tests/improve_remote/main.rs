@@ -25,6 +25,11 @@ fn stderr(run: &harness::Run) -> String {
   run.stderr.clone()
 }
 
+/// Whether the list names `path`, bare or with the branch that carries it.
+fn lists_path(list: &str, path: &str) -> bool {
+  list.lines().any(|line| line == path || line.starts_with(&format!("{path}\t")))
+}
+
 /// Waits for `condition` to hold, at most `limit`.
 fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
   let start = Instant::now();
@@ -199,7 +204,7 @@ fn the_inflight_list_names_its_origin_repository_outside_a_git_checkout() {
   let run = run_inflight_list_from(&world, &env, cwd);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert_eq!(run.stdout, "pr-only.md\n", "{}", run.describe());
+  assert_eq!(run.stdout, "pr-only.md\tcharliebot/task-open\n", "{}", run.describe());
 
   // An origin that names no GitHub repository stops the list with an error naming the condition.
   world.git(&world.repo, &["remote", "set-url", "origin", "not-a-github-origin"]);
@@ -912,10 +917,17 @@ fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  for changed in ["committed.md", "base.md", "dropped.md", "untracked.md"] {
+  // Every path the running ux round's clone holds prints with its branch: the committed paths
+  // carry unmerged commits, and the uncommitted and untracked paths are uncommitted work.
+  for carried in [
+    "committed.md\timprove/ux/topic",
+    "base.md\timprove/ux/topic",
+    "dropped.md\timprove/ux/topic",
+    "untracked.md\timprove/ux/topic",
+  ] {
     assert!(
-      list.lines().any(|line| line == changed),
-      "the in-flight list misses the {changed} change of the running ux round's clone:\n{list}"
+      list.lines().any(|line| line == carried),
+      "the in-flight list misses the {carried} change of the running ux round's clone:\n{list}"
     );
   }
 }
@@ -934,7 +946,7 @@ fn an_open_pull_requests_files_appear_in_the_in_flight_list() {
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   assert!(
-    list.lines().any(|line| line == "pr-only.md"),
+    list.lines().any(|line| line == "pr-only.md\tcharliebot/task-open"),
     "the in-flight list misses an open pull request's file:\n{list}"
   );
 }
@@ -1011,7 +1023,7 @@ fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   assert!(
-    list.lines().any(|line| line == "shared.md"),
+    list.lines().any(|line| line == "shared.md\tcharliebot/unlanded"),
     "the in-flight list misses an unlanded branch's file that origin/main changed:\n{list}"
   );
 }
@@ -1053,9 +1065,16 @@ fn an_unowned_worktree_branch_keeps_all_changed_paths() {
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   let mut listed: Vec<&str> = list.lines().collect();
   listed.sort_unstable();
+  // The branch's one commit carries an unmerged patch, so all four paths it touches print with the
+  // branch that carries them.
   assert_eq!(
     listed,
-    ["base.md", "landed.md", "together.md", "unlanded.md"],
+    [
+      "base.md\tcharliebot/partial",
+      "landed.md\tcharliebot/partial",
+      "together.md\tcharliebot/partial",
+      "unlanded.md\tcharliebot/partial"
+    ],
     "the unowned branch loses a changed path:\n{list}"
   );
 }
@@ -1083,7 +1102,12 @@ fn an_unowned_rebased_branch_keeps_its_committed_path() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  assert!(list.lines().any(|line| line == "rebased.md"), "the unowned worktree drops its committed path:\n{list}");
+  // Main's resolved commit is not the branch's patch, so the branch still carries an unmerged
+  // commit for the path, and the path prints with that branch.
+  assert!(
+    list.lines().any(|line| line == "rebased.md\tcharliebot/rebased"),
+    "the unowned worktree drops its committed path:\n{list}"
+  );
 }
 
 #[test]
@@ -1150,7 +1174,11 @@ fn a_running_rounds_clone_keeps_all_changed_paths() {
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   let mut listed: Vec<&str> = list.lines().collect();
   listed.sort_unstable();
-  assert_eq!(listed, ["base.md", "landed.md", "unlanded.md"], "the live clone loses a changed path:\n{list}");
+  assert_eq!(
+    listed,
+    ["base.md\timprove/ux/partial", "landed.md\timprove/ux/partial", "unlanded.md\timprove/ux/partial"],
+    "the live clone loses a changed path:\n{list}"
+  );
 }
 
 #[test]
@@ -1182,7 +1210,7 @@ fn a_process_in_another_directions_clone_keeps_its_checked_out_branchs_paths() {
   process.wait().expect("reap the clone process");
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  for named in ["committed.md", "dirty.md"] {
+  for named in ["committed.md\timprove/ux/live", "dirty.md\timprove/ux/live"] {
     assert!(list.lines().any(|line| line == named), "the in-flight list drops the process-held path {named}:\n{list}");
   }
 }
@@ -1474,7 +1502,7 @@ fn a_locked_origin_main_ref_does_not_stop_the_launchers_in_flight_list() {
   let run = harness::run(&mut command);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["locked.md", "dirty.md"] {
+  for listed in ["locked.md\tcharliebot/locked", "dirty.md\tcharliebot/locked"] {
     assert!(run.stdout.lines().any(|line| line == listed), "the in-flight list misses {listed}:\n{}", run.describe());
   }
   assert!(!fetch_head.exists(), "the launcher's in-flight list wrote the shared FETCH_HEAD");
@@ -1516,11 +1544,18 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   // No task names this worktree, so its committed and dirty paths stay alongside the open pull request's file.
+  // Each path prints with the branch that carries it: the branch commit is unmerged, the dirty and
+  // untracked paths are uncommitted work, and the pull request's head branch carries its file.
   let mut listed: Vec<&str> = run.stdout.lines().collect();
   listed.sort_unstable();
   assert_eq!(
     listed,
-    ["fresh.md", "live.md", "old.md", "pr-only.md"],
+    [
+      "fresh.md\tcharliebot/renamed",
+      "live.md\tcharliebot/renamed",
+      "old.md\tcharliebot/renamed",
+      "pr-only.md\tcharliebot/task-open"
+    ],
     "the in-flight list drops a path from an unowned worktree:\n{}",
     run.describe()
   );
@@ -1622,7 +1657,7 @@ fn an_open_task_keeps_an_unlanded_worktrees_paths_claimed_after_its_run_ends() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md", "dirty.md"] {
+  for listed in ["topic.md\tcharliebot/open-task", "dirty.md\tcharliebot/open-task"] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the open task's path {listed} after its run ended:\n{}",
@@ -1644,7 +1679,7 @@ fn a_closed_task_without_other_claimants_drops_an_unlanded_worktrees_paths() {
   assert_eq!(run.code, 0, "{}", run.describe());
   for listed in ["topic.md", "dirty.md"] {
     assert!(
-      !run.stdout.lines().any(|line| line == listed),
+      !lists_path(&run.stdout, listed),
       "the in-flight list keeps the closed task's path {listed}:\n{}",
       run.describe()
     );
@@ -1664,7 +1699,7 @@ fn a_closed_task_drops_a_landed_worktrees_paths() {
   assert_eq!(run.code, 0, "{}", run.describe());
   for listed in ["topic.md", "staged.md", "untracked.md"] {
     assert!(
-      !run.stdout.lines().any(|line| line == listed),
+      !lists_path(&run.stdout, listed),
       "the in-flight list keeps the closed landed task's path {listed}:\n{}",
       run.describe()
     );
@@ -1686,7 +1721,8 @@ fn an_open_pull_request_keeps_a_closed_tasks_worktree_paths_claimed() {
   let run = run_inflight_list_with_env(&world, &env);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md", "dirty.md", "pr-only.md"] {
+  for listed in ["topic.md\tcharliebot/closed-pr", "dirty.md\tcharliebot/closed-pr", "pr-only.md\tcharliebot/closed-pr"]
+  {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the open pull request does not keep its worktree path {listed}:\n{}",
@@ -1704,7 +1740,12 @@ fn a_worktree_without_a_task_name_keeps_its_committed_and_uncommitted_paths() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md", "staged.md", "untracked.md"] {
+  // The topic commit is patch-equivalent on main, so the committed path prints bare; the same
+  // path's uncommitted change, the staged path and the untracked path print with the branch that
+  // carries them.
+  for listed in
+    ["topic.md", "topic.md\tcharliebot/no-task", "staged.md\tcharliebot/no-task", "untracked.md\tcharliebot/no-task"]
+  {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the unowned worktree path {listed}:\n{}",
@@ -1737,7 +1778,7 @@ fn a_process_in_a_closed_tasks_worktree_keeps_its_paths_claimed() {
   process.kill().expect("stop the worktree process");
   process.wait().expect("reap the worktree process");
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md", "dirty.md"] {
+  for listed in ["topic.md\tcharliebot/with-process", "dirty.md\tcharliebot/with-process"] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the process-held worktree path {listed}:\n{}",
@@ -1780,7 +1821,7 @@ fn a_closed_owning_sessions_task_record_drops_an_unlanded_worktrees_paths() {
   assert_eq!(run.code, 0, "{}", run.describe());
   for listed in ["topic.md", "dirty.md"] {
     assert!(
-      !run.stdout.lines().any(|line| line == listed),
+      !lists_path(&run.stdout, listed),
       "the in-flight list keeps the closed task record's path {listed}:\n{}",
       run.describe()
     );
@@ -1798,7 +1839,7 @@ fn an_open_owning_sessions_task_record_keeps_the_worktree_paths_claimed() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md", "dirty.md"] {
+  for listed in ["topic.md\tcharliebot/open-record", "dirty.md\tcharliebot/open-record"] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list drops the open task record's path {listed}:\n{}",
@@ -1828,7 +1869,7 @@ fn a_launch_record_naming_the_worktree_claims_nothing() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md", "dirty.md"] {
+  for listed in ["topic.md\tcharliebot/launch-record", "dirty.md\tcharliebot/launch-record"] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
       "the in-flight list dropped the launch-record worktree path {listed}:\n{}",

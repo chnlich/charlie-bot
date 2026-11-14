@@ -5,8 +5,14 @@
 #
 # Print one repository-relative path per line: open pull request files, and the
 # committed and uncommitted paths of each worktree branch with a live claimant.
-# An open pull request for the branch, a process in its worktree, or an open
-# owning task keeps those paths claimed. A worktree no task names also keeps its
+# Work a branch carries prints `path<TAB>branch`: uncommitted work prints with
+# the branch of its dirty worktree, work with an unmerged commit prints with
+# that commit's branch, and an open pull request's files print with its head
+# branch. A path whose only branch commits are patch-equivalent on main prints
+# bare when the fetched main tree holds it, so a squash-landed or rebased path
+# reads as landed work, not as that branch's live work. An open pull request
+# for the branch, a process in its worktree, or an open owning task keeps those
+# paths claimed. A worktree no task names also keeps its
 # claims. A task owns the worktree when a record of the task store names that
 # path, a run record under `data/runs/` or a task record under `threads/`; the
 # task store's event history, not a run's end, decides whether that task is
@@ -30,19 +36,102 @@
 # script only reads: it writes no branch, worktree or pull request.
 set -euo pipefail
 
-# Print every path changed by one branch since its merge base.
+# The patch ids of main's commits, shared by every branch this run classifies. Reading them once
+# per run keeps one pass over main's history instead of one per branch.
+declare -A main_patch_ids=()
+
+# Read the patch ids of main's commits since base into the shared map. `git patch-id` prints
+# `<id> <commit>` per patch; the ids alone decide equivalence.
+read_main_patch_ids() {
+  local root=$1
+  local base=$2
+  local ref=$3
+  local ids id commit
+  if ! ids=$(git -C "$root" log --no-merges -p --format=%H "$base..$ref" | git patch-id --stable); then
+    printf 'cannot read the patch ids of %s in %s\n' "$ref" "$root" >&2
+    exit 1
+  fi
+  main_patch_ids=()
+  while read -r id commit; do
+    [[ -n $id ]] || continue
+    main_patch_ids["$id"]=1
+  done <<<"$ids"
+}
+
+# Print one path in the list's form for work no unmerged commit carries: bare when the fetched
+# main tree holds it, with the branch when the tree does not. The caller fetched the main ref into
+# $main_ref.
+print_path_claim() {
+  local root=$1
+  local path=$2
+  local branch=$3
+  if git -C "$root" rev-parse --verify --quiet "$main_ref:$path" >/dev/null; then
+    printf '%s\n' "$path"
+  else
+    printf '%s\t%s\n' "$path" "$branch"
+  fi
+}
+
+# Print every path changed by one branch since its merge base, in the list's form. A commit whose
+# patch id the shared main map holds is patch-equivalent on main; a commit whose id the map does
+# not hold is an unmerged commit, and every path it touches prints with the branch. A path whose
+# only branch commits are patch-equivalent prints bare when the fetched main tree holds it, and
+# with the branch when a later main commit removed it. read_main_patch_ids must have run for a
+# base at or before this branch's merge base.
 list_committed_paths() {
   local root=$1
   local merge_base=$2
   local branch=$3
-  git -C "$root" diff --name-only "$merge_base" "$branch"
+  local line sha path id patch_ids log
+  local -a paths=()
+  local -A seen=() carried=() commit_patch_id=()
+
+  if ! patch_ids=$(git -C "$root" log --no-merges -p --format=%H "$merge_base..$branch" | git patch-id --stable); then
+    printf 'cannot read the patch ids of %s in %s\n' "$branch" "$root" >&2
+    exit 1
+  fi
+  while read -r id sha; do
+    [[ -n $id && -n $sha ]] || continue
+    commit_patch_id["$sha"]="$id"
+  done <<<"$patch_ids"
+
+  log=$(git -C "$root" log --format=$'\001%H' --name-only "$merge_base..$branch")
+  sha=
+  while IFS= read -r line; do
+    if [[ $line == $'\001'* ]]; then
+      sha=${line:1}
+    elif [[ -n $line && -n $sha ]]; then
+      if [[ -z ${main_patch_ids[${commit_patch_id["$sha"]:-}]:-} ]]; then
+        carried["$line"]=1
+      fi
+      if [[ -z ${seen["$line"]:-} ]]; then
+        seen["$line"]=1
+        paths+=("$line")
+      fi
+    fi
+  done <<<"$log"
+
+  for path in "${paths[@]}"; do
+    if [[ -n ${carried["$path"]:-} ]]; then
+      printf '%s\t%s\n' "$path" "$branch"
+    else
+      print_path_claim "$root" "$path" "$branch"
+    fi
+  done
 }
 
-# Print the tracked changes from HEAD and every untracked path of one checkout.
+# Print the tracked changes from HEAD and every untracked path of one checkout. Uncommitted work
+# is on no branch's main comparison, so each path prints with the branch that carries the
+# checkout's dirty work.
 list_dirty_paths() {
   local worktree=$1
-  git -C "$worktree" diff --name-only HEAD
-  git -C "$worktree" ls-files --others --exclude-standard
+  local branch=$2
+  local path listing
+  listing=$(git -C "$worktree" diff --name-only HEAD; git -C "$worktree" ls-files --others --exclude-standard)
+  while IFS= read -r path; do
+    [[ -n $path ]] || continue
+    printf '%s\t%s\n' "$path" "$branch"
+  done <<<"$listing"
 }
 
 # Print whether a process runs in one worktree: yes when its working directory is the worktree or a path inside it,
@@ -320,19 +409,27 @@ list_open_pull_requests() {
       exit 1
     }
     if [[ -n $files ]]; then
-      printf '%s\n' "$files"
+      while IFS= read -r file; do
+        [[ -n $file ]] || continue
+        printf '%s\t%s\n' "$file" "$head"
+      done <<<"$files"
     fi
   done <<<"$pull_requests"
 }
 
-# Print the committed and uncommitted paths of each worktree whose claimant keeps it live.
+# Print the committed and uncommitted paths of each worktree whose claimant keeps it live, in the
+# list's form: carried work with the branch that carries it, landed work bare.
 #
 # Run metadata maps a worktree path to its task session. The session's current event history owns its state; when no
 # task names a worktree, its claims remain. An open pull request, an open task, or a process keeps every branch path
 # and every dirty path claimed, including paths whose branch version has landed on main.
+#
+# The first pass resolves each live branch's merge base, and the oldest of them bounds the one
+# shared read of main's patch ids; the second pass classifies each branch's paths against it.
 list_worktree_branches() {
   local -a worktrees=() branches=()
-  local worktree= branch= line index merge_base
+  local -a live_worktrees=() live_branches=() live_bases=()
+  local worktree= branch= line index merge_base oldest_base= oldest_date= base_date base_sha listing
 
   while IFS= read -r line; do
     case $line in
@@ -361,10 +458,33 @@ list_worktree_branches() {
       continue
     fi
     if worktree_has_live_claimant "$worktree" "$branch"; then
-      list_committed_paths "$main_root" "$merge_base" "$branch"
-      if [[ -d $worktree ]]; then
-        list_dirty_paths "$worktree"
+      live_worktrees+=("$worktree")
+      live_branches+=("$branch")
+      live_bases+=("$merge_base")
+    fi
+  done
+
+  if (( ${#live_branches[@]} > 0 )); then
+    if ! listing=$(git -C "$main_root" log --no-walk --format='%ct %H' "${live_bases[@]}"); then
+      printf 'cannot read the merge bases of the live branches\n' >&2
+      exit 1
+    fi
+    while read -r base_date base_sha; do
+      [[ -n $base_sha ]] || continue
+      if [[ -z $oldest_date || $base_date -lt $oldest_date ]]; then
+        oldest_date=$base_date
+        oldest_base=$base_sha
       fi
+    done <<<"$listing"
+    read_main_patch_ids "$main_root" "$oldest_base" "$main_ref"
+  fi
+
+  for index in "${!live_branches[@]}"; do
+    worktree=${live_worktrees[index]}
+    branch=${live_branches[index]}
+    list_committed_paths "$main_root" "${live_bases[index]}" "$branch"
+    if [[ -d $worktree ]]; then
+      list_dirty_paths "$worktree" "$branch"
     fi
   done
 }

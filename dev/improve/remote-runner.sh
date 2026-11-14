@@ -185,8 +185,9 @@ rewrite_command() {
 # sourced in-flight rule supplies the same claimant and path functions, and each clone enters it as a checkout
 # whose state the task store cannot name: the scanned direction's own round decides it. A clone holds one
 # checkout, so its claim is the work of the branch that checkout carries — the checked-out branch's committed
-# paths and the clone's dirty paths, while that round runs or a process runs in the clone. A branch the checkout
-# does not carry claims no path, and its open pull request, when one exists, is already on the launcher's list.
+# paths and the clone's dirty paths, while that round runs or a process runs in the clone, each printed in the
+# list's form against the main ref this scan fetched into the clone. A branch the checkout does not carry claims
+# no path, and its open pull request, when one exists, is already on the launcher's list.
 other_inflight_files() {
   source "$LAUNCH_DIR/inflight-files.sh"
   local clone other merge_base main_ref origin_url current_branch
@@ -210,6 +211,7 @@ other_inflight_files() {
     if [[ $current_branch != detached ]]; then
       if merge_base=$(git -C "$clone" merge-base "$main_ref" "$current_branch" 2>/dev/null); then
         if worktree_has_live_claimant "$clone" "$current_branch"; then
+          read_main_patch_ids "$clone" "$merge_base" "$main_ref"
           list_committed_paths "$clone" "$merge_base" "$current_branch"
         fi
       else
@@ -219,7 +221,7 @@ other_inflight_files() {
     fi
     if git -C "$clone" merge-base "$main_ref" HEAD >/dev/null 2>&1; then
       if worktree_has_live_claimant "$clone" "$current_branch"; then
-        list_dirty_paths "$clone"
+        list_dirty_paths "$clone" "$current_branch"
       fi
     else
       printf 'improve runner: skip worktree %s: no merge base with origin/main\n' "$clone" >&2

@@ -86,6 +86,7 @@ Both computations fetch `origin/main` before they compare a branch against it, b
 The fetch goes into a ref the reading side owns, `refs/improve/inflight/<direction>` in each clone and `refs/improve/inflight/<branch prefix>` in this host's main checkout, and never into `refs/remotes/origin/main` or `FETCH_HEAD`: the directions start in a burst, so concurrent launches, rounds and operators fetch those shared refs themselves.
 Pick a topic whose files the list does not name.
 A file that another branch changes would force that branch to resolve our conflict.
+The list prints work a branch carries as `path<TAB>branch` — uncommitted work with the dirty worktree's branch, work with an unmerged commit with that commit's branch, an open pull request's files with its head branch — and a path whose only branch commits are patch-equivalent on main bare, when the fetched main tree holds it; read a branch-carried path as work that branch holds, not as a stale name.
 
 List the closed pull requests of this direction and read each `improve-abandoned:` comment:
 

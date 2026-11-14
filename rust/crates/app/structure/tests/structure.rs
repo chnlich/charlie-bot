@@ -1525,7 +1525,6 @@ fn parameters_as_empty(path: &str) -> String {
 /// in two or more crates. Path and segment names use `spells`. Plain config keys and detail sentences use exact
 /// literal matching. The name rules read each production literal that holds no whitespace, and the phrase table
 /// reads the sentences, which the name rules treat as prose.
-/// sentences, which the name rules treat as prose.
 fn owner_failures(workspace: &Workspace, rows: &[OwnerRow], classes: &[SpellingClass]) -> Vec<String> {
   let sites = production_sites(workspace, |value| !value.contains(char::is_whitespace));
   let phrases = production_sites(workspace, |value| value.contains(char::is_whitespace));

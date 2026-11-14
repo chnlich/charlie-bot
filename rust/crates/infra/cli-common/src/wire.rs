@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-/// One internal-API method; no CLI path uses another.
+/// One internal-API method. No CLI path uses another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
   Get,

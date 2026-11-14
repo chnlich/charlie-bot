@@ -22,10 +22,10 @@ pub const READ_LIMIT_DEFAULT: i64 = 50;
 /// The reply verb's arguments: the file that holds the text, and the session.
 #[derive(Args)]
 pub struct ReplyArgs {
-  /// File holding the reply text; - reads stdin
+  /// File holding the reply text. `-` reads stdin.
   #[arg(long)]
   pub file: String,
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
+  /// Session ID (optional). Taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment.
   #[arg(long)]
   pub session: Option<String>,
 }

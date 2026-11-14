@@ -14,5 +14,5 @@ pub const HTTP_VERSION_SKEW_TIMEOUT: Duration = Duration::from_secs(2);
 pub const SUBPROCESS_GIT_SHA_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Total budget for a CLI to retry a request whose connection never got established
-/// (server down or restarting); exponential backoff inside.
+/// (server down or restarting). Exponential backoff runs inside it.
 pub const CLI_CONNECT_TOTAL_TIMEOUT: Duration = Duration::from_secs(60);

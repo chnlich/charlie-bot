@@ -7,6 +7,9 @@
 /// The `Authorization` header name. A request names its bearer credential in this header.
 pub const AUTHORIZATION: &str = "Authorization";
 
+/// The `Content-Type` header name. A request announces its body's media type in this header.
+pub const CONTENT_TYPE: &str = "Content-Type";
+
 /// The prefix of the bearer credential in an `Authorization` header value: `Bearer` and one space.
 pub const BEARER_PREFIX: &str = "Bearer ";
 

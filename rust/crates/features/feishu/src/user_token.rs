@@ -9,6 +9,7 @@ use charliebot_cli_common::request::{self, Request, RequestArgs};
 use charliebot_cli_common::urlencode::urlencode;
 use charliebot_core::config;
 use charliebot_core::credentials::{self, Credentials};
+use charliebot_core::headers::CONTENT_TYPE;
 use charliebot_core::home;
 use charliebot_core::paths;
 use serde_json::{Value, json};
@@ -135,7 +136,7 @@ fn refresh(
   let redactions = [app_secret.as_str(), current_refresh.as_str(), app_token.as_str()];
   let body = json!({"grant_type": "refresh_token", "refresh_token": current_refresh}).to_string();
   let request = Request::new(reqwest::Method::POST, &endpoints.refresh_url)
-    .header("Content-Type", "application/json")
+    .header(CONTENT_TYPE, "application/json")
     .bearer(&app_token)
     .body(body.into_bytes());
   let payload = open_json(&request, "Feishu token refresh", &redactions, client)?;
@@ -154,7 +155,7 @@ fn app_access_token(
 ) -> Result<String, CliExit> {
   let body = json!({"app_id": app_id, "app_secret": app_secret}).to_string();
   let request = Request::new(reqwest::Method::POST, &endpoints.app_token_url)
-    .header("Content-Type", "application/json")
+    .header(CONTENT_TYPE, "application/json")
     .body(body.into_bytes());
   let payload = open_json(&request, "Feishu app token", redactions, client)?;
   string_field(&payload, "app_access_token", "Feishu app token")
@@ -226,7 +227,7 @@ pub(crate) fn exchange_code(home: &Path, code: &str, endpoints: &Endpoints) -> R
   let redactions = [app_secret.as_str(), app_token.as_str(), code];
   let body = json!({"grant_type": "authorization_code", "code": code}).to_string();
   let request = Request::new(reqwest::Method::POST, &endpoints.exchange_url)
-    .header("Content-Type", "application/json")
+    .header(CONTENT_TYPE, "application/json")
     .bearer(&app_token)
     .body(body.into_bytes());
   let payload = open_json(&request, "Feishu code exchange", &redactions, &client)?;

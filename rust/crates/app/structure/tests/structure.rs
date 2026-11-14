@@ -1308,6 +1308,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
   OwnerRow { name: "Glob", owner: "infra/core", hint: "Use `charliebot_core::event_types::GLOB_TOOL`." },
   OwnerRow { name: "Grep", owner: "infra/core", hint: "Use `charliebot_core::event_types::GREP_TOOL`." },
+  OwnerRow {
+    name: "Content-Type",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::headers::CONTENT_TYPE`; the Google, Feishu and Devin token requests and the CLI's \
+           request builders write the name.",
+  },
 ];
 
 /// Plain config keys that the path matcher intentionally does not recognize. These must match an exact string literal

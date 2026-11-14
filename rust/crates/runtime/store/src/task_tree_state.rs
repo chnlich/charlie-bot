@@ -401,6 +401,21 @@ pub(crate) struct TreeIndex {
   pub(crate) archive_by_id: HashMap<String, bool>,
   /// Identifies this build, so a reader can tell one index apart from a later build that carries the same revision.
   pub(crate) build_id: u64,
+  /// Every input this build read, sorted by session id: the session directories, their metadata files and their
+  /// live histories. A refresh that reads the same inputs serves this index instead of building it again.
+  pub(crate) inputs: Vec<TreeIndexInput>,
+}
+
+/// What one session contributes to the tree index: the two files the index's metadata and task state come from.
+///
+/// The metadata file carries the parent, the profile, the status and the archive offset; the live history's identity
+/// carries the newest lifecycle fact. A build reads nothing else of a session, so equal inputs on every session mean an
+/// equal index.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TreeIndexInput {
+  pub(crate) session_id: String,
+  pub(crate) metadata: Option<(i64, i64)>,
+  pub(crate) history: Option<FileIdentity>,
 }
 
 /// The most ancestors one chain walk follows before it reports the chain as overlong.

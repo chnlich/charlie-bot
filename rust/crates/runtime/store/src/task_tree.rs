@@ -32,7 +32,7 @@ use crate::task_reparent;
 pub(crate) use crate::task_tree_state::IdentityStage;
 pub(crate) use crate::task_tree_state::{
   CachedActivity, CachedNodeFacts, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex,
-  CachedTreePage, EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex,
+  CachedTreePage, EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex, TreeIndexInput,
 };
 pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity, TaskTreeRow};
 use crate::task_tree_state::{
@@ -2220,8 +2220,12 @@ impl Store {
     let _ = self.tree_index_self.set(Arc::downgrade(self));
   }
 
-  /// Start one background rebuild of a stale task-tree index, or report that one already runs or that the store has
-  /// no handle to rebuild itself through.
+  /// Start one background refresh of a stale task-tree index, or report that one already runs or that the store has
+  /// no handle to refresh itself through.
+  ///
+  /// The refresh reads every session's inputs first, and serves the index it holds when they all still hold the
+  /// values the build read. A walk over a production-sized home costs far more than reading those inputs, so a home
+  /// that nothing moved keeps its index and only its age is renewed.
   ///
   /// False means the caller must build synchronously: the store has no handle, or its thread could not start. A
   /// build that started is discarded when the tree generation moved while it ran, exactly as a synchronous build's
@@ -2234,6 +2238,9 @@ impl Store {
     let generation = self.task_tree_generation.load(Ordering::Acquire);
     let spawned = std::thread::Builder::new().name("task-tree-index-refresh".to_string()).spawn(move || {
       let _flight = TreeIndexRefreshFlight(&store.tree_index_refresh_running);
+      if store.renew_stale_tree_index(generation) {
+        return;
+      }
       let mut never_stop = || false;
       let Ok(Some(index)) = build_tree_index_until(&store, &mut never_stop) else { return };
       store.task_tree_index_builds.fetch_add(1, Ordering::Relaxed);
@@ -2248,6 +2255,65 @@ impl Store {
       return false;
     }
     true
+  }
+
+  /// Renew the age of the cached index at `generation` when the home still holds the inputs that build read, and
+  /// report whether it did.
+  ///
+  /// A home whose session directories, metadata files and live histories all hold their values builds the same index,
+  /// so the cached one serves every reader and the walk is skipped. An input that moved, a home that cannot be read
+  /// and a cached index another build replaced all report false, and the caller then builds.
+  fn renew_stale_tree_index(&self, generation: u64) -> bool {
+    let cached = {
+      let cached = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
+      match cached.as_ref() {
+        Some(cached) if cached.generation == generation => Arc::clone(&cached.index),
+        _ => return false,
+      }
+    };
+    let Ok(current) = self.tree_index_inputs() else { return false };
+    if current != cached.inputs {
+      return false;
+    }
+    let mut entry = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
+    if let Some(entry) = entry.as_mut()
+      && entry.generation == generation
+      && Arc::ptr_eq(&entry.index, &cached)
+    {
+      entry.built_at = Instant::now();
+    }
+    true
+  }
+
+  /// Every input the tree index reads, sorted by session id, as the home holds them now.
+  fn tree_index_inputs(&self) -> StoreResult<Vec<TreeIndexInput>> {
+    let sessions_dir = self.cfg.sessions_dir();
+    let entries = match fs::read_dir(&sessions_dir) {
+      Ok(entries) => entries,
+      Err(error) => return Err(path_error(&sessions_dir, error)),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+      let entry = entry.map_err(|error| path_error(&sessions_dir, error))?;
+      if !entry.file_type().map_err(|error| path_error(&entry.path(), error))?.is_dir() {
+        continue;
+      }
+      let name = entry.file_name().to_string_lossy().into_owned();
+      if name.starts_with(".task-") && name.ends_with(".tmp") {
+        continue;
+      }
+      names.push(name);
+    }
+    names.sort();
+    let mut inputs = Vec::with_capacity(names.len());
+    for name in names {
+      let input = read_tree_input(self, &name)?;
+      // A directory without a readable metadata file carries nothing into the index, so it is no input of it.
+      if input.metadata.is_some() {
+        inputs.push(input);
+      }
+    }
+    Ok(inputs)
   }
 
   #[cfg(test)]
@@ -2318,6 +2384,18 @@ impl Store {
   }
 }
 
+/// The input one session contributes to the tree index: its metadata file's `(mtime_ns, size)` and its live
+/// history's identity.
+///
+/// A missing metadata file is `None`, as is a session without a live history; the index then holds nothing for it.
+fn read_tree_input(store: &Store, session_id: &str) -> StoreResult<TreeIndexInput> {
+  use std::os::unix::fs::MetadataExt;
+  let metadata = fs::metadata(store.metadata_path(session_id)).ok().map(|metadata| {
+    (charliebot_core::timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size() as i64)
+  });
+  Ok(TreeIndexInput { session_id: session_id.to_string(), metadata, history: store.history_identity(session_id)? })
+}
+
 fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool) -> StoreResult<Option<TreeIndex>> {
   if should_stop() {
     return Ok(None);
@@ -2385,7 +2463,18 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     derived_archived_ids: Arc::new(Vec::new()),
     archive_by_id: HashMap::new(),
     build_id: store.next_tree_index_build_id.fetch_add(1, Ordering::Relaxed),
+    inputs: Vec::new(),
   };
+  // The inputs this build read, for a later refresh to compare against the home on disk.
+  let mut inputs: Vec<TreeIndexInput> = Vec::with_capacity(index.metas.len());
+  for name in index.metas.keys() {
+    if should_stop() {
+      return Ok(None);
+    }
+    inputs.push(read_tree_input(store, name)?);
+  }
+  inputs.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+  index.inputs = inputs;
   let mut memo = HashMap::new();
   let mut structural = Vec::with_capacity(index.metas.len());
   let mut derived_archived_ids = Vec::new();
@@ -3486,6 +3575,11 @@ pub(crate) mod tests {
     assert_eq!(store.task_tree_index_build_count(), 1);
 
     store.enable_tree_index_background_refresh();
+    // An external edit moves one input of the index: the metadata file another process rewrote.
+    let path = store.metadata_path(&root.id);
+    let mut meta: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    meta["name"] = Value::String("renamed by another process".to_string());
+    fs::write(&path, serde_json::to_string(&meta).unwrap()).unwrap();
     store.expire_tree_index_for_test();
     let stale = store.tree_index().unwrap();
     assert!(Arc::ptr_eq(&first, &stale), "a read past the TTL serves the snapshot instead of walking the home");
@@ -3500,6 +3594,29 @@ pub(crate) mod tests {
     }
     assert!(!Arc::ptr_eq(&refreshed, &first), "the background build publishes the next index");
     assert_eq!(store.task_tree_index_build_count(), 2, "the background build is the second one");
+  }
+
+  #[tokio::test]
+  async fn a_stale_tree_index_whose_inputs_hold_keeps_its_build() {
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let root = create_node(&store, "quiet-root", None, TaskProfile::Manager).await;
+    store.get_session(&root.id).await.unwrap().unwrap();
+    store.invalidate_tree_index();
+    let first = store.tree_index().unwrap();
+    assert_eq!(store.task_tree_index_build_count(), 1);
+
+    store.enable_tree_index_background_refresh();
+    store.expire_tree_index_for_test();
+    let stale = store.tree_index().unwrap();
+    assert!(Arc::ptr_eq(&first, &stale), "a read past the TTL serves the snapshot instead of walking the home");
+
+    // The home holds every input the build read, so the refresh renews the index's age and walks nothing.
+    for _ in 0..30 {
+      std::thread::sleep(Duration::from_millis(10));
+      assert!(Arc::ptr_eq(&store.tree_index().unwrap(), &first), "the index that no input moved stays the index");
+    }
+    assert_eq!(store.task_tree_index_build_count(), 1, "no walk runs over a home nothing moved in");
   }
 
   #[tokio::test]
@@ -4029,6 +4146,7 @@ pub(crate) mod tests {
       derived_archived_ids: Arc::new(Vec::new()),
       archive_by_id: HashMap::new(),
       build_id: 0,
+      inputs: Vec::new(),
     }
   }
 

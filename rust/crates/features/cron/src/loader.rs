@@ -361,6 +361,9 @@ pub fn validate_body(name: &str, mut body: Value, repo: &Path) -> Result<Schedul
   if object.contains_key("prompt") {
     return Err("a cron.d host file must not carry an inline 'prompt'; it holds the path to the prompt source under 'prompt_file', and the loader reads that file on every load".to_string());
   }
+  if object.get("session_id").and_then(Value::as_str).is_some_and(str::is_empty) {
+    object.remove("session_id");
+  }
   resolve_pointer(object, "prompt_file", repo, name)?;
   if let Some(steps) = object.get_mut("steps").and_then(Value::as_array_mut) {
     for step in steps {

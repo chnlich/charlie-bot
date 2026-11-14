@@ -27,6 +27,10 @@ const IDENTITY: [(&str, &str); 4] = [
 
 /// The direction of every test round.
 pub const DIRECTION: &str = "perf";
+/// The GitHub origin of the launcher's checkout, as a live host's checkout names it.
+pub const GITHUB_ORIGIN: &str = "https://github.com/fixture-owner/fixture-repo.git";
+/// The repository that origin names, as the GitHub CLI writes it.
+pub const GITHUB_REPOSITORY: &str = "github.com/fixture-owner/fixture-repo";
 /// A round worker: a child of the cron session, so its id names no cron task file.
 pub const SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
 /// The cron session: the task file binds it as `session_id`, and the round worker calls it its parent.
@@ -317,12 +321,16 @@ impl World {
     git(&sandbox, &git_env, &repo, &["add", "-A"]);
     git(&sandbox, &git_env, &repo, &["commit", "-q", "-m", "synthetic launcher commit"]);
     let commit = git(&sandbox, &git_env, &repo, &["rev-parse", "HEAD"]);
-    // The launcher's checkout fetches origin/main from a local bare repository, as the real checkout fetches from
-    // GitHub. The direction clone names another origin, so a test can tell which one the runner cloned from.
+    // The launcher's checkout names the GitHub repository that a live checkout names, and a
+    // `url.<bare>.insteadOf` rule sends every local fetch and push of it to a bare copy of the repository, so no test
+    // reaches GitHub. `git remote get-url` reports that local copy, which the launcher sends the runner to clone; the
+    // in-flight list reads the URL as configured, so it names the GitHub repository. The direction clone names another
+    // origin, so a test can tell which one the runner cloned from.
     let runtime_origin = sandbox.dir("remotes/runtime.git");
     let runtime_origin_text = runtime_origin.display().to_string();
     git(&sandbox, &git_env, &repo, &["clone", "-q", "--bare", ".", &runtime_origin_text]);
-    git(&sandbox, &git_env, &repo, &["remote", "add", "origin", &runtime_origin_text]);
+    git(&sandbox, &git_env, &repo, &["config", &format!("url.{runtime_origin_text}.insteadOf"), GITHUB_ORIGIN]);
+    git(&sandbox, &git_env, &repo, &["remote", "add", "origin", GITHUB_ORIGIN]);
     git(&sandbox, &git_env, &repo, &["fetch", "-q", "origin"]);
 
     sandbox.stub("gh", GH);

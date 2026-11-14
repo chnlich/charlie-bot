@@ -167,21 +167,6 @@ fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
   assert!(!world.node_claude_ran(), "the round ran on this host");
 }
 
-const GIT_WITH_GITHUB_ORIGIN: &str = r#"
-if [[ $# -eq 5 && $1 == -C && $3 == remote && $4 == get-url && $5 == origin ]]; then
-  [[ ${FAKE_GIT_FAIL_ORIGIN:-0} == 0 ]] || exit 1
-  printf '%s\n' "$FAKE_GIT_ORIGIN"
-  exit 0
-fi
-arguments=("$@")
-for index in "${!arguments[@]}"; do
-  if [[ ${arguments[index]} == "$FAKE_GIT_ORIGIN" ]]; then
-    arguments[index]=$FAKE_GIT_LOCAL_ORIGIN
-  fi
-done
-exec "$FAKE_REAL_GIT" "${arguments[@]}"
-"#;
-
 /// Runs the in-flight list from `cwd`.
 fn run_inflight_list_from(world: &World, env: &harness::Env, cwd: &Path) -> harness::Run {
   let mut command = harness::command("bash", env);
@@ -203,39 +188,31 @@ fn the_inflight_list_names_its_origin_repository_outside_a_git_checkout() {
 
   let pull_requests = world.sandbox.root().join("open-pull-requests.tsv");
   fs::write(&pull_requests, "12\tcharliebot/task-open\tpr-only.md\n").expect("the open pull requests");
-  let real_git = std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set"))
-    .map(|directory| directory.join("git"))
-    .find(|path| path.is_file())
-    .expect("git is on PATH");
-  world.sandbox.stub("git", GIT_WITH_GITHUB_ORIGIN);
 
   let mut env = world.env();
   env.remove("GH_REPO");
   env.insert("FAKE_GH_PRS".to_string(), pull_requests.display().to_string());
-  env.insert("FAKE_GH_REPO".to_string(), "github.com/fixture-owner/fixture-repo".to_string());
+  env.insert("FAKE_GH_REPO".to_string(), world::GITHUB_REPOSITORY.to_string());
   env.insert("FAKE_GH_HOST".to_string(), "github.com".to_string());
-  env.insert("FAKE_GIT_ORIGIN".to_string(), "https://github.com/fixture-owner/fixture-repo.git".to_string());
-  env.insert("FAKE_GIT_LOCAL_ORIGIN".to_string(), world.other_direction_origin("runtime").display().to_string());
-  env.insert("FAKE_REAL_GIT".to_string(), real_git.display().to_string());
 
   let run = run_inflight_list_from(&world, &env, cwd);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   assert_eq!(run.stdout, "pr-only.md\n", "{}", run.describe());
 
-  let mut unparseable_origin = env.clone();
-  unparseable_origin.insert("FAKE_GIT_ORIGIN".to_string(), "not-a-github-origin".to_string());
-  let run = run_inflight_list_from(&world, &unparseable_origin, cwd);
+  // An origin that names no GitHub repository stops the list with an error naming the condition.
+  world.git(&world.repo, &["remote", "set-url", "origin", "not-a-github-origin"]);
+  let run = run_inflight_list_from(&world, &env, cwd);
   assert_ne!(run.code, 0, "{}", run.describe());
   assert!(run.stderr.contains("cannot parse the origin"), "{}", run.describe());
 
-  let mut unreadable_origin = env;
-  unreadable_origin.insert("FAKE_GIT_FAIL_ORIGIN".to_string(), "1".to_string());
-  let run = run_inflight_list_from(&world, &unreadable_origin, cwd);
+  // So does a checkout whose origin cannot be read at all.
+  world.git(&world.repo, &["remote", "remove", "origin"]);
+  let run = run_inflight_list_from(&world, &env, cwd);
   assert_ne!(run.code, 0, "{}", run.describe());
   assert!(run.stderr.contains("cannot read the origin"), "{}", run.describe());
 
-  let mut relative_profile_home = unreadable_origin;
+  let mut relative_profile_home = env;
   relative_profile_home.insert("CHARLIEBOT_HOME".to_string(), "profile".to_string());
   let run = run_inflight_list_from(&world, &relative_profile_home, cwd);
   assert_ne!(run.code, 0, "{}", run.describe());
@@ -1260,16 +1237,15 @@ fn the_runners_own_checkout_contributes_no_files() {
 #[ignore = "integration"]
 fn the_runner_builds_the_round_tools_with_its_own_cargo_home_and_tmpdir_and_the_launchers_origin() {
   let world = World::new();
-  // The commit the runner builds needs a rust/ directory, and its origin is a bare copy of the launcher's repository.
+  // The commit the runner builds needs a rust/ directory, and it reaches the launcher's origin, which the runner
+  // clones from.
   fs::create_dir_all(world.repo.join("rust")).expect("the rust directory");
   fs::write(world.repo.join("rust/Cargo.toml"), "[workspace]\n").expect("the workspace file");
   world.git(&world.repo, &["add", "-A"]);
   world.git(&world.repo, &["commit", "-q", "-m", "synthetic build commit"]);
   let commit = world.git(&world.repo, &["rev-parse", "HEAD"]);
-  let origin = world.sandbox.root().join("origin.git");
-  let origin_text = origin.display().to_string();
-  world.git(&world.repo, &["clone", "-q", "--bare", ".", &origin_text]);
-  world.git(&world.repo, &["remote", "set-url", "origin", &origin_text]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  let origin_text = world.other_direction_origin("runtime").display().to_string();
   let cargo_env = world.sandbox.root().join("cargo-env.txt");
   let mut env = world.env();
   env.insert("FAKE_CARGO_ENV".to_string(), cargo_env.display().to_string());

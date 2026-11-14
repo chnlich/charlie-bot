@@ -33,9 +33,6 @@ Follow a row whose situation matches, and name its id beside the recommendation 
 When the situation differs, state the difference.\n\
 The approval boundary of each step stays as Action Boundaries in `prompts/master.md` set it.";
 
-/// The reason text of a row whose source states no reason.
-pub const UNSTATED_REASON: &str = "未说明";
-
 /// The taste store's directory (`<home>/taste`).
 pub fn taste_dir(cfg: &CharlieBotConfig) -> PathBuf {
   cfg.charliebot_home.join("taste")
@@ -651,7 +648,7 @@ mod tests {
       "options": ["change the code", "write it as a known limitation"],
       "recommended": "change the code",
       "chosen": "write it as a known limitation",
-      "reason": UNSTATED_REASON,
+      "reason": "未说明",
       "source": {"session_id": "sess-1", "url": "/?session=sess-1", "event_id": event_id},
       "supersedes": null
     })

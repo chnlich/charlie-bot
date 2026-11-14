@@ -257,15 +257,22 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The header's events link is the one glyph-only control under the 24 px pointer floor: its 16 px
    icon was the whole box, and no boundary marked the target. The Menu button is glyph-only too on a
    phone, in a 36 px box. The link takes a 24 px box around the glyph and the header's
-   bordered-control surface (index.html). The target is then both large enough and visible. No row,
-   strip or label is added: the header's tallest item still sets its height. On a phone, the box with
-   its margins fills the 2.5rem the tab row reserves. */
+   bordered-control surface (index.html). The box is the control's only mark, so its border holds the
+   3:1 floor: slate-600 draws 2.15:1 on the header's slate-800/50 surface, slate-500 draws 3.42:1 at
+   rest and slate-400 draws 6.34:1 under the pointer. The backend badge beside it keeps slate-600,
+   because it is a label and not a control. No row, strip or label is added: the header's tallest item
+   still sets its height. On a phone, the box with its margins fills the 2.5rem the tab row
+   reserves. */
 main > header > a[title="View JSONL events"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
+  border-color: #64748b;
+}
+main > header > a[title="View JSONL events"]:hover {
+  border-color: #94a3b8;
 }
 @media (max-width: 768px) {
   .input-row { flex-wrap: nowrap; }

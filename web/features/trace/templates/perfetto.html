@@ -1,5 +1,5 @@
 {% include 'partials/prologue.html' %}
-  <title>{{ title or "Trace" }} — Perfetto — CharlieBot</title>
+  <title>{% if empty %}Trace viewer{% else %}{{ title or "Trace" }} — Perfetto{% endif %} — CharlieBot</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0f172a; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; }
@@ -11,10 +11,35 @@
     #topbar .warn { color: #fbbf24; font-size: 13px; }
     #status { display: flex; align-items: center; justify-content: center; flex: 1; font-size: 15px; color: #94a3b8; }
     #status.error { color: #fca5a5; }
+    /* The empty state: with no trace selected, the page states how to open it in its own panel.
+       The panel takes the top of the status area, where the reader's eye starts. */
+    #status.empty { align-items: flex-start; padding: 24px; font-size: 14px; line-height: 1.6; color: #cbd5e1; }
+    #status.empty .panel { max-width: 640px; background: #172033; border: 1px solid #334155; border-radius: 12px; padding: 20px 22px; }
+    #status.empty h1 { font-size: 18px; font-weight: 600; color: #e2e8f0; margin: 0 0 8px; }
+    #status.empty p { margin: 8px 0 0; }
+    #status.empty code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0f172a; border: 1px solid #334155; border-radius: 4px; padding: 1px 5px; font-size: 12.5px; color: #e2e8f0; white-space: nowrap; }
+    #status.empty a { color: #7dd3fc; text-decoration: none; }
+    #status.empty a:hover { text-decoration: underline; }
     #perfetto-iframe { flex: 1; border: none; width: 100%; display: none; }
   </style>
 </head>
 <body>
+{% if empty %}
+  <div id="topbar">
+    <span class="trace-name">Trace viewer</span>
+    <span class="spacer"></span>
+    <a href="/home">Home</a>
+  </div>
+  <div id="status" class="empty">
+    <div class="panel">
+      <h1>No trace is selected.</h1>
+      <p>Open this viewer with <code>?trace=&lt;file&gt;</code> for one trace file, or
+        <code>?dir=&lt;directory&gt;</code> for every <code>.json</code> trace file in a directory.
+        <code>?pattern=&lt;glob&gt;</code> changes the file names a directory matches.</p>
+      <p>The <a href="/absolute_filepath/">file browser</a> lists this host's files.</p>
+    </div>
+  </div>
+{% else %}
   <div id="topbar">
     <span class="trace-name">{{ title }}</span>
     <span class="warn">{{ warn or "" }}</span>
@@ -167,5 +192,6 @@
       loadInIframe(traceBuffer);
     })();
   </script>
+{% endif %}
 </body>
 </html>

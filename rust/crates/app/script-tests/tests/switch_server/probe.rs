@@ -117,7 +117,7 @@ fn test_probe_archive_fails_naming_the_follow_up_run_that_does_not_settle() {
     ("cancel", json!("hangs")),
   ]);
   assert_eq!(run.code, 1, "{}", run.describe());
-  // Refused once; the stop timed out, so there is no second archive.
+  // The archive was refused once. The stop timed out, so there is no second archive.
   assert_eq!(calls.iter().filter(|call| **call == PROBE_ARCHIVE).count(), 1, "{calls:?}");
   assert!(
     stage_line(&run, r"probe: run did not settle within 1s session=probe-session run=nudge-run elapsed=\d+s"),

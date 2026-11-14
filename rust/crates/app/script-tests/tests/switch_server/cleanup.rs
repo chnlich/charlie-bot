@@ -3,7 +3,7 @@
 //! `tests/common/hold.rs` says how a check holds a test process and kills it: the `hold_*` tests here are the ones
 //! the checks start in a second copy of this binary.
 
-// The hold module serves two test binaries; each uses part of it, so the rest is not dead code there.
+// The hold module serves two test binaries. Each uses part of it, so the rest is not dead code there.
 #[path = "../common/hold.rs"]
 #[allow(dead_code)]
 mod hold;
@@ -78,7 +78,7 @@ fn the_pane_server_ends_with_a_killed_test_process() {
 }
 
 /// Started by `the_stand_in_server_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing; the ignore attribute keeps an ordinary run from holding.
+/// `LEAK_CHECK_HOLD` it does nothing. The ignore attribute keeps an ordinary run from holding.
 #[test]
 #[ignore = "held by a kill check in a second copy of this binary"]
 fn hold_a_stand_in_server_subprocess_entry() {
@@ -90,7 +90,7 @@ fn hold_a_stand_in_server_subprocess_entry() {
 }
 
 /// Started by `the_pane_server_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing; the ignore attribute keeps an ordinary run from holding.
+/// `LEAK_CHECK_HOLD` it does nothing. The ignore attribute keeps an ordinary run from holding.
 #[test]
 #[ignore = "held by a kill check in a second copy of this binary"]
 fn hold_a_pane_subprocess_entry() {
@@ -109,7 +109,7 @@ struct Held {
   pids: Vec<u32>,
 }
 
-/// A test process killed with SIGKILL never drops its sandbox, so its root stays on disk; the check removes it.
+/// A test process killed with SIGKILL never drops its sandbox, so its root stays on disk. The check removes it.
 fn remove_killed_test_root(root: &Path) {
   if let Err(error) = fs::remove_dir_all(root) {
     eprintln!("cannot remove the killed test's root {}: {error}", root.display());

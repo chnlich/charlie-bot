@@ -1,7 +1,7 @@
 //! The switch's test world: one runtime clone, home, release root, log directory and private tmux socket under a sandbox
 //! of stub commands. Each test builds its own, so nothing touches ~/.charliebot, ~/charliebot-releases, the default
 //! tmux server or the live port. A release binary is a copy of the fake release server, which answers the switch's
-//! readback and probe routes; the systemd commands are shell stubs.
+//! readback and probe routes. The systemd commands are shell stubs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -154,7 +154,7 @@ impl World {
     git(&git_vars, &clone, &["commit", "-q", "-m", "fake runtime clone"]);
     let pre_sha = git(&git_vars, &clone, &["rev-parse", "HEAD"]);
 
-    // The grouping moves the agents crate under runtime/; the registrations keep their module layout.
+    // The grouping moves the agents crate under runtime/. The registrations keep their module layout.
     for (module, _, _) in BACKENDS_OF_BUILDS {
       remove_registration(&clone, module, Layout::Pre);
     }
@@ -759,7 +759,7 @@ preflight
 
 impl Drop for World {
   fn drop(&mut self) {
-    // The server may never have started, so kill-server can fail; the socket file goes either way.
+    // The server may never have started, so kill-server can fail. The socket file goes either way.
     let mut command = harness::command("tmux", &self.env);
     command.args(["-L", self.socket.as_str(), "kill-server"]).stdout(Stdio::null()).stderr(Stdio::null());
     if let Err(error) = command.status() {

@@ -145,7 +145,7 @@ fn test_switch_passes_the_delegation_on_the_first_command_while_the_run_still_ru
 #[test]
 #[ignore = "integration"]
 fn test_switch_switches_back_when_the_first_tool_result_is_a_failed_command() {
-  // A command that errored is not a pass, even though the run goes on; the check fails at its wait's end.
+  // A command that errored is not a pass, even though the run goes on. The check fails at its wait's end.
   let mut world = World::new();
   let run = switch_to_new_release(&mut world, &[("task_state", json!("running")), ("first_command", json!("failed"))]);
 

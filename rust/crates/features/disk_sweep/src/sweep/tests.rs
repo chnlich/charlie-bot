@@ -614,6 +614,46 @@ async fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
 
 #[tokio::test]
 #[ignore = "integration"]
+async fn test_a_deleted_marker_on_a_process_target_still_protects_a_worktree() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let repo = create_repo(&root.path().join("repo"));
+  let (worktree, branch) = create_worktree(&roots, &repo, "deleted");
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "deleted",
+      worktree: &worktree,
+      repo: &repo,
+      branch: &branch,
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+  let marked = PathBuf::from(format!("{} (deleted)", worktree.join("tracked.txt").display()));
+  fake_process(
+    &roots.proc_root,
+    FakeProcess {
+      pid: "12347",
+      cwd: root.path(),
+      cmdline: b"python\0",
+      exe: Path::new("/bin/sh"),
+      fd_target: &marked,
+      root: Path::new("/"),
+      maps: "",
+    },
+  );
+
+  let report = run(&roots, SweepMode::List, utc("2026-01-20T00:00:00Z")).await;
+  let row = row_by_path(&report, &worktree);
+  assert_eq!(row.reason, "in-use");
+  assert_eq!(row.action, SweepAction::Skip);
+  assert!(worktree.is_dir());
+}
+
+#[tokio::test]
+#[ignore = "integration"]
 async fn test_scratch_age_and_nested_repository_safety() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());

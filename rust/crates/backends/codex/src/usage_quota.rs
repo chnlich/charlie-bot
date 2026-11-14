@@ -30,7 +30,7 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::pricing;
 use super::rollout::{self, token_count_payload, walk_files};
-use super::text::{empty_object, object_or_empty, splitlines, truthy};
+use super::text::{empty_object, is_truthy, object_or_empty, splitlines};
 use super::usage_fields;
 use charliebot_agents::usage_time::utc_isoformat;
 
@@ -320,7 +320,7 @@ fn is_plan_pool_event(event: &Map<String, Value>) -> anyhow::Result<bool> {
   let payload = object_or_empty(event, "payload")?;
   let rate_limits = object_or_empty(payload, "rate_limits")?;
   let limit_id = rate_limits.get("limit_id");
-  Ok(limit_id == Some(&json!("codex")) || !rate_limits.get("limit_name").is_some_and(truthy))
+  Ok(limit_id == Some(&json!("codex")) || !rate_limits.get("limit_name").is_some_and(is_truthy))
 }
 
 /// The newest `token_count` event of a rollout that `matches` accepts. The tail window is read first, and a miss falls
@@ -631,7 +631,7 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
   };
   let payload = match event.get("payload") {
     None => empty_object(),
-    Some(value) if !truthy(value) => empty_object(),
+    Some(value) if !is_truthy(value) => empty_object(),
     Some(Value::Object(payload)) => payload,
     Some(other) => bail!("payload must be an object, got {other}"),
   };
@@ -646,13 +646,13 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
   }
   let info = match payload.get("info") {
     None => empty_object(),
-    Some(value) if !truthy(value) => empty_object(),
+    Some(value) if !is_truthy(value) => empty_object(),
     Some(Value::Object(info)) => info,
     Some(other) => bail!("info must be an object, got {other}"),
   };
   let last = match info.get(usage_fields::LAST_TOKEN_USAGE) {
     None => return Ok(None),
-    Some(value) if !truthy(value) => return Ok(None),
+    Some(value) if !is_truthy(value) => return Ok(None),
     Some(Value::Object(last)) => last,
     Some(other) => bail!("last_token_usage must be an object, got {other}"),
   };

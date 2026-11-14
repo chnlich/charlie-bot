@@ -7,14 +7,13 @@ use std::sync::LazyLock;
 use anyhow::bail;
 use charliebot_core::event_types;
 use charliebot_core::str_methods;
-use charliebot_core::text_repr::value_str;
+use charliebot_core::text_repr::{is_truthy, value_str};
 use charliebot_registry::backend::{AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, Translate, TransportKind};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use charliebot_agents::cli_base::{
   CapturedEvents, SKIP_PERMISSIONS_FLAG, finished, framed_prompt, int_field, prepend_path_dir, strip_google_api_keys,
-  truthy,
 };
 use charliebot_agents::event_builders::{make_error_event, make_result_event, make_text_event};
 
@@ -123,12 +122,12 @@ impl AntigravityBackend {
       let message = ["error", "response"]
         .iter()
         .filter_map(|key| envelope.fields.get(*key))
-        .find(|value| truthy(value))
+        .find(|value| is_truthy(value))
         .map_or_else(|| format!("Antigravity status {}", envelope.status), value_str);
       return finished(vec![make_error_event(&message)], 1, None);
     }
 
-    let Some(conversation_id) = envelope.fields.get("conversation_id").filter(|value| truthy(value)) else {
+    let Some(conversation_id) = envelope.fields.get("conversation_id").filter(|value| is_truthy(value)) else {
       return finished(
         vec![make_error_event("agy SUCCESS envelope missing conversation_id")],
         exit_code,
@@ -222,7 +221,7 @@ fn usage_event(fields: &Map<String, Value>) -> anyhow::Result<Value> {
   let empty = Map::new();
   let usage = match fields.get("usage") {
     None => &empty,
-    Some(value) if !truthy(value) => &empty,
+    Some(value) if !is_truthy(value) => &empty,
     Some(Value::Object(usage)) => usage,
     Some(other) => bail!("antigravity envelope usage must be a JSON object, got {other}"),
   };

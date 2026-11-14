@@ -150,18 +150,6 @@ pub fn strip_google_api_keys(env: &Env) -> Env {
   stripped
 }
 
-/// Truthiness of a JSON value: null, false, zero, and empty strings, arrays and objects are false.
-pub fn truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64().is_none_or(|float| float != 0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
-  }
-}
-
 /// The string field `key` of a JSON object, or `default` when the object lacks it.
 pub fn str_field<'a>(fields: &'a Map<String, Value>, key: &str, default: &'a str) -> anyhow::Result<&'a str> {
   match fields.get(key) {

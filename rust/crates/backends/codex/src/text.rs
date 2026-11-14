@@ -1,11 +1,11 @@
-//! The value helpers the codex code reads: `splitlines` and `truthy`, each re-exported from its one owner.
+//! The value helpers the codex code reads: `splitlines` and `is_truthy`, each re-exported from its one owner.
 
 use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
 
-pub use charliebot_agents::cli_base::truthy;
 pub use charliebot_core::str_methods::splitlines;
+pub use charliebot_core::text_repr::is_truthy;
 
 /// The empty object a missing key falls back to.
 static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
@@ -19,7 +19,7 @@ pub fn empty_object() -> &'static Map<String, Value> {
 pub fn object_or_empty<'a>(map: &'a Map<String, Value>, key: &str) -> anyhow::Result<&'a Map<String, Value>> {
   match map.get(key) {
     None => Ok(&EMPTY_OBJECT),
-    Some(value) if !truthy(value) => Ok(&EMPTY_OBJECT),
+    Some(value) if !is_truthy(value) => Ok(&EMPTY_OBJECT),
     Some(Value::Object(object)) => Ok(object),
     Some(other) => anyhow::bail!("codex {key} must be a JSON object, got {other}"),
   }
@@ -29,7 +29,7 @@ pub fn object_or_empty<'a>(map: &'a Map<String, Value>, key: &str) -> anyhow::Re
 pub fn count_or_zero(map: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
   match map.get(key) {
     None => Ok(0),
-    Some(value) if !truthy(value) => Ok(0),
+    Some(value) if !is_truthy(value) => Ok(0),
     Some(Value::Number(number)) => {
       number.as_i64().ok_or_else(|| anyhow::anyhow!("codex count {key} must be an integer, got {number}"))
     }
@@ -46,15 +46,6 @@ mod tests {
   #[test]
   fn strip_takes_the_information_separators_too() {
     assert_eq!(str_methods::strip("\u{1c} padded \u{a0}"), "padded");
-  }
-
-  #[test]
-  fn truthiness_follows_value_rules() {
-    assert!(!truthy(&json!(0)));
-    assert!(!truthy(&json!("")));
-    assert!(!truthy(&json!([])));
-    assert!(truthy(&json!({"a": 1})));
-    assert!(truthy(&json!(0.5)));
   }
 
   #[test]

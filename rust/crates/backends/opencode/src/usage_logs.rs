@@ -13,7 +13,7 @@ use std::sync::{Arc, LazyLock};
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
-use charliebot_core::text_repr::value_str;
+use charliebot_core::text_repr::{is_truthy, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
@@ -24,7 +24,6 @@ use serde_json::{Map, Value};
 use super::sqlite::open_read_only;
 use super::usage_quota::{OpenCodeQuotaAccount, OpenCodeQuotaState};
 use super::usage_sweep;
-use charliebot_agents::cli_base::truthy;
 use charliebot_agents::usage_time::utc_isoformat;
 
 /// The usage source's name: the ledger's source value and the usage page's card title.
@@ -151,7 +150,7 @@ fn record(message_id: &str, session_id: &str, data: &str) -> anyhow::Result<Opti
   let cache = field(tokens, "cache").and_then(Value::as_object);
   let in_fresh = field(tokens, "input");
   let output = field(tokens, "output");
-  if !(in_fresh.is_some_and(truthy) || output.is_some_and(truthy)) {
+  if !(in_fresh.is_some_and(is_truthy) || output.is_some_and(is_truthy)) {
     return Ok(None);
   }
 
@@ -196,7 +195,9 @@ fn field<'a>(object: Option<&'a Map<String, Value>>, key: &str) -> Option<&'a Va
 /// A text field: a truthy value must be a string, and a falsy or absent one reads as `default`.
 fn text_or(value: Option<&Value>, default: &str) -> anyhow::Result<String> {
   match value {
-    Some(value) if truthy(value) => Ok(value.as_str().with_context(|| format!("{value} is not a string"))?.to_string()),
+    Some(value) if is_truthy(value) => {
+      Ok(value.as_str().with_context(|| format!("{value} is not a string"))?.to_string())
+    }
     _ => Ok(default.to_string()),
   }
 }
@@ -204,7 +205,7 @@ fn text_or(value: Option<&Value>, default: &str) -> anyhow::Result<String> {
 /// A token count: a truthy value must be a JSON integer, and a falsy or absent one reads as 0.
 fn count(value: Option<&Value>) -> anyhow::Result<i64> {
   match value {
-    Some(value) if truthy(value) => value.as_i64().with_context(|| format!("token count {value} is not an integer")),
+    Some(value) if is_truthy(value) => value.as_i64().with_context(|| format!("token count {value} is not an integer")),
     _ => Ok(0),
   }
 }

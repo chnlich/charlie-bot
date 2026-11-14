@@ -13,6 +13,8 @@ use charliebot_cli_common::exit::CliExit;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, json};
 
+use crate::api::{CHECK_PATH, READ_PATH, REPLY_PATH};
+
 #[derive(Parser)]
 #[command(name = "discord", about = "CharlieBot Discord thread verbs")]
 struct DiscordCli {
@@ -55,15 +57,15 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
-  post_reply("/api/internal/discord/reply", args.session.as_deref(), &args.file, None)
+  post_reply(REPLY_PATH, args.session.as_deref(), &args.file, None)
 }
 
 fn read(args: &ReadArgs) -> Result<(), CliExit> {
   let mut extra = Map::new();
   extra.insert("url".to_string(), json!(args.url));
-  post_read("/api/internal/discord/read", args.session.as_deref(), args.limit, Some(extra))
+  post_read(READ_PATH, args.session.as_deref(), args.limit, Some(extra))
 }
 
 fn check() -> Result<(), CliExit> {
-  post_check("/api/internal/discord/check")
+  post_check(CHECK_PATH)
 }

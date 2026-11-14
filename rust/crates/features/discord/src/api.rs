@@ -39,6 +39,12 @@ const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 /// `DiscordCheckRequest`: no fields.
 const CHECK_BODY: BodyModel = BodyModel::required(&[]).forbid_extra();
 
+/// The three internal route paths. The `cli` verbs build their requests from these names, so a rename here cannot
+/// leave a verb posting to a path the router no longer serves.
+pub(crate) const REPLY_PATH: &str = "/api/internal/discord/reply";
+pub(crate) const READ_PATH: &str = "/api/internal/discord/read";
+pub(crate) const CHECK_PATH: &str = "/api/internal/discord/check";
+
 /// The route table on Discord's REST base.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   routes_at(features, BASE_URL)
@@ -47,15 +53,15 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
 /// The route table with the REST base `base_url`; the tests point it at a loopback fake.
 pub fn routes_at(features: &Arc<FeatureContext>, base_url: &str) -> Router {
   Router::new()
-    .route("/api/internal/discord/reply", post_only(post_reply))
-    .route("/api/internal/discord/read", post_only(post_read))
-    .route("/api/internal/discord/check", post_only(post_check))
+    .route(REPLY_PATH, post_only(post_reply))
+    .route(READ_PATH, post_only(post_read))
+    .route(CHECK_PATH, post_only(post_check))
     .with_state(Bot::new(Arc::clone(features), base_url))
 }
 
 /// Whether a path is one of the Discord routes, whatever the method (the trailing-slash redirect asks this).
 pub fn matches(path: &str) -> bool {
-  matches!(path, "/api/internal/discord/reply" | "/api/internal/discord/read" | "/api/internal/discord/check")
+  matches!(path, REPLY_PATH | READ_PATH | CHECK_PATH)
 }
 
 /// `POST /api/internal/discord/reply`: checks the thread is fresh, then posts the text to it.

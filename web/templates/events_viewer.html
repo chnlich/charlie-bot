@@ -37,7 +37,8 @@
     .event-row-head:focus-visible { outline: 2px solid #3b82f6; outline-offset: -2px; }
     .event-caret { color: #94a3b8; font-size: 10px; line-height: 1; transition: transform .15s; }
     .event-row-head[aria-expanded="true"] .event-caret { transform: rotate(90deg); }
-    /* The event's JSON aligns under the type badge: 56 px from the row's left edge, 16 px from its right. */
+    /* Above 768 px the event's JSON aligns under the type badge: 56 px from the row's left edge,
+       16 px from its right. */
     .event-row .json-body { margin: 8px 16px 10px 56px; }
 
     /* The type badge's own text sets its width: user draws 41 px, assistant 77 px, master_done 91 px
@@ -61,6 +62,10 @@
       .event-row-head { flex-wrap: wrap; row-gap: 2px; }
       .event-row-head > .event-caret { order: 1; margin-left: auto; }
       .event-row-head > .event-preview { order: 2; flex: 1 0 100%; }
+      /* The row's reading column on a phone is its 16 px inset, where the preview starts. The
+         payload follows it: the 56 px badge column it clears on a desk sets no column here, and
+         holding it would take 40 px from every payload line. */
+      .event-row .json-body { margin-left: 16px; }
     }
 
     /* A token too long for the line breaks anywhere, so hashes, paths and base64 stay inside the

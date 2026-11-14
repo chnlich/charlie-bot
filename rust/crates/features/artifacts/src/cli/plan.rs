@@ -2,7 +2,7 @@
 //!
 //! Every registering verb resolves the session, posts to `/api/internal/plan/<verb>` with a readback that answers a
 //! sent-but-lost call from the session's own plan registry, and adds the verb's next-step reminder. `diff` and `list`
-//! read the registry through `GET /api/sessions/<sid>/plans`; `diff` then compares the two version files on disk.
+//! read the registry through `GET /api/sessions/<sid>/plans`. `diff` then compares the two version files on disk.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -73,7 +73,7 @@ struct BaseArgs {
 
 #[derive(Args)]
 struct PresentArgs {
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)
+  /// Session ID (optional). Taken from the CHARLIEBOT_SESSION_ID the server writes.
   #[arg(long)]
   session: Option<String>,
   /// Artifact path relative to the session dir
@@ -88,13 +88,13 @@ struct PresentArgs {
 
 #[derive(Args)]
 struct AmendArgs {
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)
+  /// Session ID (optional). Taken from the CHARLIEBOT_SESSION_ID the server writes.
   #[arg(long)]
   session: Option<String>,
   /// Artifact path relative to the session dir
   #[arg(long)]
   file: String,
-  /// One line saying why this version differs from its predecessor; rides on the version record
+  /// One line saying why this version differs from its predecessor. It rides on the version record
   #[arg(long)]
   note: String,
   /// Target plan id (required when ambiguous)
@@ -109,7 +109,7 @@ struct AmendArgs {
 
 #[derive(Args)]
 struct ApproveArgs {
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)
+  /// Session ID (optional). Taken from the CHARLIEBOT_SESSION_ID the server writes.
   #[arg(long)]
   session: Option<String>,
   /// Target plan id (required when ambiguous)
@@ -119,7 +119,7 @@ struct ApproveArgs {
 
 #[derive(Args)]
 struct CloseArgs {
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)
+  /// Session ID (optional). Taken from the CHARLIEBOT_SESSION_ID the server writes.
   #[arg(long)]
   session: Option<String>,
   /// Target plan id
@@ -132,7 +132,7 @@ struct CloseArgs {
 
 #[derive(Args)]
 struct DiffArgs {
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)
+  /// Session ID (optional). Taken from the CHARLIEBOT_SESSION_ID the server writes.
   #[arg(long)]
   session: Option<String>,
   /// Target plan id (required when the session holds several)
@@ -145,7 +145,7 @@ struct DiffArgs {
 
 #[derive(Args)]
 struct ListArgs {
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes)
+  /// Session ID (optional). Taken from the CHARLIEBOT_SESSION_ID the server writes.
   #[arg(long)]
   session: Option<String>,
 }
@@ -262,7 +262,7 @@ fn register(
   Ok(())
 }
 
-/// The registry listing the readbacks match against; a failed GET keeps its own client error.
+/// The registry listing the readbacks match against. A failed GET keeps its own client error.
 fn listing_plans(session_id: &str) -> Result<Option<Vec<Value>>, CliExit> {
   let listing = client::get(&format!("/api/sessions/{session_id}/plans"), None)?;
   Ok(match listing.get("plans") {
@@ -284,7 +284,7 @@ fn same_file(left: Option<&str>, right: Option<&str>) -> bool {
   }
 }
 
-/// The version with the greatest `v`; a plan with no versions is a broken registry.
+/// The version with the greatest `v`. A plan with no versions is a broken registry.
 fn latest_version(plan: &Value) -> &Value {
   plan["versions"]
     .as_array()
@@ -364,7 +364,7 @@ fn build_diff(session_id: &str, args: &DiffArgs, lazy_host: &LazyHost) -> Result
   }))
 }
 
-/// `resolve_diff_plan`: the (plan, predecessor, target) triple; the message names the problem.
+/// `resolve_diff_plan`: the (plan, predecessor, target) triple. The message names the problem.
 fn resolve_diff_plan<'a>(plans: &'a [Value], args: &DiffArgs) -> Result<(&'a Value, &'a Value, &'a Value), String> {
   let plan = match args.plan {
     Some(plan_id) => plans::require_plan(plans, plan_id)?,

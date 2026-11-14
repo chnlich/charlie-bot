@@ -3,7 +3,7 @@
 //! saves the registry and marks the sidebar dirty. Then it broadcasts `plan_updated` after the lock is released.
 //! `present` and
 //! `amend` also check the page with the plan assertion set before they bind it. The reads and the projection belong to
-//! `plans`; the check belongs to `artifact_check`.
+//! `plans`. The check belongs to `artifact_check`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -215,7 +215,7 @@ async fn write_registry(path: PathBuf, session_id: String, registry: Value) -> R
 }
 
 /// The raw registry of a session, unknown keys included. An absent file reads as no plans. Bytes that do not
-/// decode are the `ValueError` the verb answers 400 with; a file that cannot be read escapes as the 500.
+/// decode are the `ValueError` the verb answers 400 with. A file that cannot be read escapes as the 500.
 fn load(path: &Path) -> Result<Value, VerbError> {
   if !plan_paths::exists(path).map_err(|error| escaped(plans::os_escape(&error, path)))? {
     return Ok(json!({"plans": []}));
@@ -334,7 +334,7 @@ fn find_binding_by_file(plans: &[Value], file: &str) -> Result<Option<(Value, Va
   Ok(None)
 }
 
-/// The index of the plan an amend extends. A named plan must be open; with
+/// The index of the plan an amend extends. A named plan must be open. With
 /// no id, the one open lineage is the target.
 fn resolve_target_plan_for_amend(plans: &[Value], plan_id: Option<&Value>) -> Result<usize, VerbError> {
   let Some(plan_id) = plan_id else {

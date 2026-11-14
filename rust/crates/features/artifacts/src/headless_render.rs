@@ -31,7 +31,7 @@ const RENDERER_TEMP_PREFIX: &str = "headless-render-";
 static RENDERER: OnceLock<Mutex<Option<WarmRenderer>>> = OnceLock::new();
 
 /// The page heights that tests fake, keyed by the Chrome path that measures them. Verbs run the assertions on the
-/// blocking pool, so a fake set on the test thread would not reach them; a path is unique to one test's fixture.
+/// blocking pool, so a fake set on the test thread would not reach them. A path is unique to one test's fixture.
 #[cfg(test)]
 static TEST_HEIGHTS: Mutex<Vec<(PathBuf, i32)>> = Mutex::new(Vec::new());
 

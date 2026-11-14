@@ -1149,7 +1149,7 @@ pub fn diff_text(base_html: &str, new_html: &str) -> Result<String, String> {
   Ok(sections.join("\n\n"))
 }
 
-/// The nearest `section`'s heading without its number or revision badge; a leaf outside any section
+/// The nearest `section`'s heading without its number or revision badge. A leaf outside any section
 /// takes the header chip marker for a `span.mtag`, else its tag.
 fn section_label(parser: &Parser, leaf: &Leaf) -> String {
   let mut current = Some(leaf.element);

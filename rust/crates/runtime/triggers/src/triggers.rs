@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 #[cfg(test)]
@@ -1983,12 +1982,9 @@ async fn run_probe_command(argv: Vec<String>, deadline: Option<Duration>, kind: 
 }
 
 fn program_available(program: &str) -> bool {
-  let executable = |path: &Path| {
-    path.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-  };
   let path = Path::new(program);
   if path.components().count() > 1 {
-    return executable(path);
+    return charliebot_core::paths::is_executable(path);
   }
   program_available_on_path(program, std::env::var_os("PATH").as_deref())
 }
@@ -2003,12 +1999,7 @@ fn program_available_on_path(program: &str, paths: Option<&OsStr>) -> bool {
   }
   #[cfg(test)]
   PROGRAM_SEARCHES.fetch_add(1, Ordering::Relaxed);
-  let available = paths.is_some_and(|paths| {
-    std::env::split_paths(paths).any(|directory| {
-      let executable = directory.join(program);
-      executable.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-    })
-  });
+  let available = paths.is_some_and(|paths| charliebot_core::paths::executable_on_path(program, paths).is_some());
   cached.insert(key, available);
   available
 }
@@ -2461,6 +2452,7 @@ fn remaining_until(deadline: UtcDateTime) -> Duration {
 
 #[cfg(test)]
 mod tests {
+  use std::os::unix::fs::PermissionsExt;
   use std::sync::Arc;
 
   use axum::body::{Body, to_bytes};

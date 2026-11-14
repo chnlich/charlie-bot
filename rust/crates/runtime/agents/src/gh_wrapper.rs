@@ -8,8 +8,8 @@
 //! text-carrying GitHub write to the App through the token command named by [`TOKEN_COMMAND_VAR`] (the host config's
 //! `github.app_token_command`) when configured; otherwise every call passes through as the host's personal login.
 
+use std::ffi::OsStr;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -52,7 +52,7 @@ pub fn require_installed(dir: &Path) -> anyhow::Result<()> {
   let script = dir.join("gh");
   let metadata =
     fs::metadata(&script).with_context(|| format!("the agent gh wrapper must exist at {}", script.display()))?;
-  if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+  if !charliebot_core::paths::metadata_is_executable(&metadata) {
     bail!("the agent gh wrapper must be an executable file at {}", script.display());
   }
   Ok(())
@@ -100,11 +100,7 @@ pub fn require_gh_wrapper(env: &mut Env) -> anyhow::Result<()> {
 
 /// The first executable `gh` on a PATH value, or `None` when no entry holds one.
 fn resolve_gh(path: &str) -> Option<PathBuf> {
-  std::env::split_paths(path).map(|dir| dir.join("gh")).find(|candidate| is_executable(candidate))
-}
-
-fn is_executable(path: &Path) -> bool {
-  fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+  charliebot_core::paths::executable_on_path("gh", OsStr::new(path))
 }
 
 fn is_same_file(found: &Path, wrapper: &Path) -> bool {
@@ -114,6 +110,7 @@ fn is_same_file(found: &Path, wrapper: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+  use std::os::unix::fs::PermissionsExt;
   use std::process::Command;
 
   use super::*;

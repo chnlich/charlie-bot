@@ -5,7 +5,7 @@ use std::time::Duration;
 use base64::Engine;
 use charliebot_compat::providers;
 use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16_DEFAULTS};
-use charliebot_core::credentials::{Credentials, REDACTED};
+use charliebot_core::credentials::{API_KEY_FIELD, Credentials, REDACTED};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{self, DEFAULT_JSON};
 use futures_util::future::BoxFuture;
@@ -80,7 +80,7 @@ pub(crate) const BACKENDS: &[BackendSpec] = &[
   BackendSpec {
     id: "gemini",
     label: "Gemini 3.5 Transcribe Live",
-    credential: ("gemini", "api_key"),
+    credential: ("gemini", API_KEY_FIELD),
     live_partials: true,
     kind: BackendKind::Gemini,
     endpoint: providers::gemini_live_transcription_websocket,

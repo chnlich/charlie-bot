@@ -16,6 +16,9 @@ use crate::paths;
 /// error message writes this marker.
 pub const REDACTED: &str = "[redacted]";
 
+/// The key, under a credentials section, that holds the section's API key.
+pub const API_KEY_FIELD: &str = "api_key";
+
 /// One credential value: text, an integer, or a flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialValue {
@@ -83,10 +86,10 @@ impl Credentials {
       return Err(ConfigError(format!("credentials.{section} is not set in {path}")));
     }
     let value = self
-      .get(section, "api_key")
-      .ok_or_else(|| ConfigError(format!("credentials.{section}.api_key is not set in {path}")))?;
+      .get(section, API_KEY_FIELD)
+      .ok_or_else(|| ConfigError(format!("credentials.{section}.{API_KEY_FIELD} is not set in {path}")))?;
     if !value.is_truthy() {
-      return Err(ConfigError(format!("credentials.{section}.api_key is empty in {path}")));
+      return Err(ConfigError(format!("credentials.{section}.{API_KEY_FIELD} is empty in {path}")));
     }
     Ok(value.value_str())
   }

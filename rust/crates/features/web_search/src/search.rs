@@ -1,7 +1,7 @@
 //! The Google search call and its grounding sources: one `generateContent` request with the `google_search` tool,
 //! then one redirect resolution per grounding chunk.
 
-use charliebot_core::credentials::Credentials;
+use charliebot_core::credentials::{API_KEY_FIELD, Credentials};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
 
@@ -61,7 +61,7 @@ pub async fn search(
   query: &str,
 ) -> Result<Search, String> {
   let key = credentials
-    .get("gemini", "api_key")
+    .get("gemini", API_KEY_FIELD)
     .filter(|value| value.is_truthy())
     .map(|value| value.value_str())
     .ok_or_else(|| "web search is not configured: credentials.yaml has no gemini.api_key".to_string())?;

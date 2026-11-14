@@ -462,7 +462,7 @@ fn choose_class<'a>(
   sleep: &mut dyn FnMut(Duration),
 ) -> Result<(&'a str, f64, bool), String> {
   let loaded = credentials::load_credentials(home).map_err(|error| error.to_string())?;
-  let api_key = loaded.require(&rules.credential, "api_key").map_err(|error| error.to_string())?;
+  let api_key = loaded.require(&rules.credential, credentials::API_KEY_FIELD).map_err(|error| error.to_string())?;
   let reply = post(&rules.url, &jev_body(rules, classes, state), &api_key, limits, sleep)?;
   let payload = &reply.payload;
   let probabilities =

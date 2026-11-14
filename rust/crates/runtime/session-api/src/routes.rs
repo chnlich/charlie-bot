@@ -500,32 +500,35 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   // reads the memo instead. The poll still counts toward the periodic self-heal sweep, which moves the generation and
   // so replaces the entry.
   if !force && let Some(body) = get_status_body(&key) {
+    // The self-heal probe is the only reader of a poll's row set, and nine polls in ten begin no probe, so a poll
+    // that begins none builds no rows. The rows a probe poll reads are the ones it read before: the answer's own
+    // rows, or the page corpus a set answer already holds. `poll_begins_probe` counts this poll and reserves its turn,
+    // so the `count_memoized_read` below answers the same poll instead of racing another one for the turn.
     let owned;
-    let sessions: &[Arc<SessionMetadata>] = if answer == StatusAnswer::Named {
-      match fresh_sessions(features, &extra) {
-        Ok(sessions) => {
-          owned = sessions;
-          &owned
-        }
-        Err(error) => return store_error(error),
-      }
-    } else {
-      match &page {
-        Some((rows, _)) => rows.as_slice(),
-        None => {
-          let ids = match &key {
+    let sessions: &[Arc<SessionMetadata>] = match &page {
+      Some((rows, _)) if answer == StatusAnswer::Set => rows.as_slice(),
+      _ if sidebar_state::poll_begins_probe() => {
+        let source = if answer == StatusAnswer::Named {
+          &extra
+        } else {
+          match &key {
             StatusKey::Ids { ids, .. } => ids,
-            StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
-          };
-          match fresh_sessions(features, ids) {
-            Ok(sessions) => {
-              owned = sessions;
-              &owned
-            }
-            Err(error) => return store_error(error),
+            StatusKey::Listing { .. } => unreachable!("a listing poll answers a named or a set answer"),
+          }
+        };
+        match fresh_sessions(features, source) {
+          Ok(sessions) => {
+            owned = sessions;
+            &owned
+          }
+          Err(error) => {
+            sidebar_state::forget_poll_reservation();
+            return store_error(error);
           }
         }
       }
+      Some((rows, _)) => rows.as_slice(),
+      None => &[],
     };
     if let Err(error) = sidebar::count_memoized_read(&features.store, &features.registry, sessions) {
       return store_error(error);

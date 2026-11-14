@@ -201,6 +201,8 @@ draft platform	features.github	github
 plan registry	features.artifacts	plan_registry
 derived waiting items reader	features.cron	derived_waiting_items
 backend host alias	backends.anthropic_compatible	cc-anthropic-compatible
+backend launcher binary	backends.claude_code	cc-claude
+backend launcher binary	backends.anthropic_compatible	cc-anthropic-compatible
 host login reader	features.host_auth	host_logins
 host probe	features.host_auth	host_probe
 fork assertions	features.artifacts	fork_assertions

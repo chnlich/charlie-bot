@@ -175,6 +175,10 @@ pub struct Registry {
   pub(crate) derived_waiting_items: Ledger<OpenWaitingItemsFn>,
   /// The host each backend type's entries log into, keyed by the backend type, which the type's package registers.
   pub(crate) backend_host_aliases: Ledger<BackendHostAliasFn>,
+  /// The launcher binary each backend type's entries name, keyed by the backend type, which the type's package
+  /// registers. A launcher carries the run to the host it decides, so the server prepares no worktree for such an
+  /// entry's runs and their briefs name none.
+  pub(crate) backend_cli_binaries: Ledger<BackendCliBinaryFn>,
   /// The one reader of the host login records, which `features/host_auth` registers.
   pub(crate) host_logins: Ledger<HostLoginsFn>,
   /// The one probe of a host, which `features/host_auth` registers.
@@ -234,6 +238,7 @@ impl Registry {
       plan_registry,
       derived_waiting_items,
       backend_host_aliases,
+      backend_cli_binaries,
       host_logins,
       host_probes,
       fork_assertions,
@@ -295,6 +300,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, plan_registry);
     append_ledger_inventory(&mut inventory, derived_waiting_items);
     append_ledger_inventory(&mut inventory, backend_host_aliases);
+    append_ledger_inventory(&mut inventory, backend_cli_binaries);
     append_ledger_inventory(&mut inventory, host_logins);
     append_ledger_inventory(&mut inventory, host_probes);
     append_ledger_inventory(&mut inventory, fork_assertions);
@@ -552,6 +558,10 @@ pub type OpenWaitingItemsFn = for<'a> fn(&'a FeatureContext) -> BoxFuture<'a, an
 /// The reader of the host that a backend type's entry logs into, from the entry's type-specific keys. The host is
 /// `Some(alias)` for an entry that names one (`host_auth_alias`), and `None` for one that names none.
 pub type BackendHostAliasFn = fn(&serde_yaml::Mapping) -> Result<Option<String>, String>;
+
+/// The reader of the launcher binary that a backend type's entry names, from the entry's type-specific keys. The
+/// binary is `Some(path)` for an entry that names one (`cli_binary`), and `None` for one that names none.
+pub type BackendCliBinaryFn = fn(&serde_yaml::Mapping) -> Result<Option<String>, String>;
 
 /// One probed host's login record as `features/host_auth` keeps it in `host_auth.json`.
 #[derive(Clone, Debug, PartialEq)]
@@ -1451,6 +1461,22 @@ impl Registry {
       .next()
       .copied()
       .ok_or_else(|| anyhow::anyhow!("no package registers the derived Waiting on you reader"))
+  }
+
+  /// The registration of the launcher-binary reader of a backend type (`cli_binary`).
+  pub fn backend_cli_binary(
+    &mut self,
+    backend_type: &'static str,
+    read: BackendCliBinaryFn,
+  ) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.backend_cli_binaries.insert(package, backend_type, read)
+  }
+
+  /// The launcher-binary reader of a backend type, or `None` when the type registered none: its entries name no
+  /// launcher, so their runs run where the server starts them.
+  pub fn backend_cli_binary_reader(&self, backend_type: &str) -> Option<BackendCliBinaryFn> {
+    self.backend_cli_binaries.get(backend_type).copied()
   }
 
   /// The registration of the host alias reader of a backend type (`host_auth_alias`).

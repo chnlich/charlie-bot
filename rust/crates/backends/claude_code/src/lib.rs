@@ -80,6 +80,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     translate_fallback: true,
   })?;
   registry.option_schema("cc-claude", options::SCHEMA)?;
+  registry.backend_cli_binary("cc-claude", options::cli_binary)?;
   // The Auto set reads this member through the same shared observations the pool selects logins from.
   let reading_state = Arc::clone(&state);
   registry.member_reading(

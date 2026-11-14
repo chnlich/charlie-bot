@@ -62,6 +62,7 @@ impl Registry {
       plan_registry: crate::registry::Ledger::new("plan registry"),
       derived_waiting_items: crate::registry::Ledger::new("derived waiting items reader"),
       backend_host_aliases: crate::registry::Ledger::new("backend host alias"),
+      backend_cli_binaries: crate::registry::Ledger::new("backend launcher binary"),
       host_logins: crate::registry::Ledger::new("host login reader"),
       host_probes: crate::registry::Ledger::new("host probe"),
       fork_assertions: crate::registry::Ledger::new("fork assertions"),

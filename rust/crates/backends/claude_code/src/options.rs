@@ -58,3 +58,26 @@ pub(crate) fn fast_mode(fields: &Mapping) -> Result<bool, String> {
     Some(_) => Err("cc-claude option fast_mode must be a boolean".to_string()),
   }
 }
+
+/// The launcher binary an entry names, read through the registry by the run-venue decision. A launcher runs the
+/// entry's process where the launcher decides, so the server prepares no worktree for such an entry's runs.
+pub fn cli_binary(fields: &Mapping) -> Result<Option<String>, String> {
+  optional_text(fields, CLI_BINARY_KEY)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn fields(text: &str) -> Mapping {
+    serde_yaml::from_str(text).expect("the fixture is YAML")
+  }
+
+  #[test]
+  fn cli_binary_parses_through_the_registry_reader() {
+    assert_eq!(cli_binary(&fields("effort: high\n")), Ok(None));
+    assert_eq!(cli_binary(&fields("cli_binary: /path/to/launcher\n")), Ok(Some("/path/to/launcher".to_string())));
+    assert_eq!(cli_binary(&fields("cli_binary: null\n")), Ok(None));
+    assert!(cli_binary(&fields("cli_binary: 42\n")).is_err());
+  }
+}

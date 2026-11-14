@@ -134,6 +134,12 @@ pub fn host_auth_alias(fields: &Mapping) -> Result<Option<String>, String> {
   Ok(CcAnthropicCompatibleOption::from_fields(fields)?.host_auth_alias)
 }
 
+/// The launcher binary an entry names, read through the registry by the run-venue decision. A launcher runs the
+/// entry's process where the launcher decides, so the server prepares no worktree for such an entry's runs.
+pub fn cli_binary(fields: &Mapping) -> Result<Option<String>, String> {
+  Ok(CcAnthropicCompatibleOption::from_fields(fields)?.cli_binary)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -152,5 +158,16 @@ mod tests {
     assert_eq!(host_auth_alias(&fields(&format!("{base}host_auth_alias: null\n"))), Ok(None));
     assert!(host_auth_alias(&fields(&format!("{base}host_auth_alias: ''\n"))).is_err());
     assert!(option_model(&fields(&format!("{base}host: gpu-box-1\n"))).is_err());
+  }
+
+  #[test]
+  fn cli_binary_parses_through_the_registry_reader() {
+    let base = "api_base: https://upstream.example\ncontext_window: 200000\n";
+    assert_eq!(cli_binary(&fields(base)), Ok(None));
+    assert_eq!(
+      cli_binary(&fields(&format!("{base}cli_binary: /path/to/launcher\n"))),
+      Ok(Some("/path/to/launcher".to_string()))
+    );
+    assert!(cli_binary(&fields(&format!("{base}cli_binary: 42\n"))).is_err());
   }
 }

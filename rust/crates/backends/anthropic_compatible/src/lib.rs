@@ -38,5 +38,6 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.option_schema(TYPE_NAME, options::SCHEMA)?;
   registry.backend_reading_limits(TYPE_NAME, CLAUDE_READING_KIND, usage::claude_reading_limits)?;
   registry.backend_host_alias(TYPE_NAME, options::host_auth_alias)?;
+  registry.backend_cli_binary(TYPE_NAME, options::cli_binary)?;
   registry.attribute_backend_type(TYPE_NAME, charliebot_claude_code::USAGE_SOURCE)
 }

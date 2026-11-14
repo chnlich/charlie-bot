@@ -42,13 +42,13 @@
 
     /* The type badge's own text sets its width: user draws 41 px, assistant 77 px, master_done 91 px
        and assistant_error 120 px, and a row that lets each badge keep its own width starts its time
-       and preview at a different x per type. Above 768 px the badge takes the width of the longest
-       type the table names, assistant_error at 15 characters plus its 0.75rem padding, so every row
-       starts its time and preview at one x. Below 768 px it keeps its content width: the phone's
-       preview runs to the row's right edge, and a fixed column there would take characters from
-       every preview. */
+       and preview at a different x per type. Above 768 px the badge takes the column the widest
+       badge of the loaded rows sets (renderEvents writes --event-type-col), so every row starts its
+       time and preview at one x whatever types the log holds. Below 768 px it keeps its content
+       width: the phone's preview runs to the row's right edge, and a fixed column there would take
+       characters from every preview. */
     @media (min-width: 769px) {
-      .event-type { min-width: calc(15ch + 0.75rem); }
+      .event-type { min-width: var(--event-type-col, 0); }
     }
 
     /* A token too long for the line breaks anywhere, so hashes, paths and base64 stay inside the
@@ -325,6 +325,17 @@
 
         list.appendChild(row);
       });
+
+      // The badge's own text sets its width, so each row would start its time and
+      // preview at a different x. The widest badge of this render sets the column
+      // the rest take (the .event-type rule above): the column reads 0 while the
+      // badges are measured at their content width, then the widest returns.
+      list.style.setProperty('--event-type-col', '0');
+      let widestType = 0;
+      for (const badge of list.querySelectorAll('.event-type')) {
+        widestType = Math.max(widestType, badge.getBoundingClientRect().width);
+      }
+      list.style.setProperty('--event-type-col', `${widestType}px`);
     }
 
     // The header count names the rows on screen: the filter's result, and the

@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::Arc;
 
 use charliebot_agents::transport::cgroup::{sweep_stale_session_cgroups, use_fake_cgroup_hierarchy};
-use charliebot_core::cgroup::{RETIRED_APP_SLICE, user_slice_dir};
+use charliebot_core::cgroup::{AGENTS_SLICE, RETIRED_APP_SLICE, user_slice_dir};
 use charliebot_core::test_support::RecordedEvents;
 
 const SESSION_ID: &str = "abcd1234-ef56-7890-abcd-ef1234567890";
@@ -19,7 +19,7 @@ fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
   fs::create_dir(&sessions).unwrap();
   fs::create_dir(sessions.join(SESSION_ID)).unwrap();
   fs::create_dir(sessions.join(POPULATED_ID)).unwrap();
-  let agents_slice = user_slice_dir(base.path(), "charliebot-agents.slice");
+  let agents_slice = user_slice_dir(base.path(), AGENTS_SLICE);
   let repair_slice = user_slice_dir(base.path(), "charliebot-repair.slice");
   let retired_slice = user_slice_dir(base.path(), RETIRED_APP_SLICE);
   for slice in [&agents_slice, &repair_slice, &retired_slice] {

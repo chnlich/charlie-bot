@@ -403,7 +403,6 @@ mod tests {
 
   const SESSION_ID: &str = "abcd1234-ef56-7890-abcd-ef1234567890";
   const CHARLIEBOT_SLICE: &str = "charliebot.slice";
-  const AGENTS_SLICE: &str = "charliebot-agents.slice";
 
   /// The user service directory with the agents' leaf slice, standing in for the delegated cgroup base.
   fn fake_slices() -> tempfile::TempDir {

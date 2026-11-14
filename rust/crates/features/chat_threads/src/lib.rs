@@ -5,6 +5,7 @@
 mod api;
 pub mod backfill;
 pub mod channel_service;
+pub mod listener_connection;
 mod sidebar;
 #[cfg(feature = "test-support")]
 pub mod test_support;

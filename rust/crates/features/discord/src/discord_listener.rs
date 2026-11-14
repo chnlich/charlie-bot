@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_chat_threads::channel_service::ChannelListener;
+use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
 use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform};
 use charliebot_compat::http_client;
 use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Options, Receiver, Sender};
@@ -33,8 +34,6 @@ const DISCORD_NS: Uuid = Uuid::from_u128(0x13667dae_7551_489f_9cf1_d0819d0978e6)
 /// The 👀 reaction: the summon ack, lit at the summon and cleared when the question closes.
 const ACK_EMOJI: &str = "👀";
 const INTENTS: u64 = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
-const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const DM_NOTICE: &str = "Mention me in a server channel.";
 const THREAD_NAME_CHARS: usize = 80;
 const STOP_CLOSE_CODES: &[(u16, &str)] = &[
@@ -466,7 +465,7 @@ async fn run_listener_loop(
   options: Options,
   settings: ws_client::Settings,
 ) -> anyhow::Result<()> {
-  run_listener_loop_with_initial_backoff(features, client, token, options, settings, Duration::from_secs(1)).await
+  run_listener_loop_with_initial_backoff(features, client, token, options, settings, INITIAL_BACKOFF).await
 }
 
 async fn run_listener_loop_with_initial_backoff(
@@ -722,10 +721,6 @@ fn heartbeat_delay(interval: Duration) -> anyhow::Result<Duration> {
   let random = u64::from_ne_bytes(bytes);
   let nanos = ((interval.as_nanos() * u128::from(random)) >> 64) as u64;
   Ok(Duration::from_nanos(nanos))
-}
-
-fn next_backoff(backoff: Duration) -> Duration {
-  backoff.saturating_mul(2).min(MAX_BACKOFF)
 }
 
 fn reconnect_backoff_after_drop(backoff: Duration, saw_ready: bool, initial_backoff: Duration) -> Duration {

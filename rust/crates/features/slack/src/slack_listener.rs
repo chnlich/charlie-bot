@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use charliebot_chat_threads::channel_service::ChannelListener;
+use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
 use charliebot_chat_threads::thread_entry::{
   self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform, ThreadReplyError,
 };
@@ -24,9 +25,6 @@ use crate::thread_contract::SLACK;
 const SLACK_NS: Uuid =
   Uuid::from_bytes([0x1b, 0x4e, 0x28, 0xba, 0x2f, 0xa1, 0x4d, 0x7a, 0x9f, 0x0c, 0x8d, 0x5e, 0x7a, 0x3b, 0x6c, 0x11]);
 const ACCEPTANCE_REACTION: &str = "eyes";
-const MAX_BACKOFF: Duration = Duration::from_secs(30);
-// The websocket close waits one second; the sender is aborted on every session exit.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Return the deterministic session id for a Slack thread.
 pub fn summon_session_id(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
@@ -203,7 +201,7 @@ async fn run_listener_loop(
   client: Arc<SlackClient>,
   ws_settings: ws_client::Settings,
 ) -> Result<()> {
-  run_listener_loop_with_initial_backoff(features, client, ws_settings, Duration::from_secs(1)).await
+  run_listener_loop_with_initial_backoff(features, client, ws_settings, INITIAL_BACKOFF).await
 }
 
 async fn run_listener_loop_with_initial_backoff(
@@ -327,10 +325,6 @@ fn decode_envelope(message: Message) -> Result<Value> {
     Message::Binary(bytes) => serde_json::from_slice(&bytes).context("Socket Mode frame is not JSON"),
     Message::Close(frame) => bail!("Socket Mode closed before the next event: {frame:?}"),
   }
-}
-
-fn next_backoff(backoff: Duration) -> Duration {
-  backoff.saturating_mul(2).min(MAX_BACKOFF)
 }
 
 fn required_text<'a>(event: &'a Value, field: &str) -> Result<&'a str, ThreadReplyError> {
@@ -1005,17 +999,6 @@ mod tests {
     assert!(started.elapsed() < Duration::from_secs(3));
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
-  }
-
-  #[test]
-  fn reconnect_backoff_doubles_and_caps_at_thirty_seconds() {
-    let mut backoff = Duration::from_secs(1);
-    let mut seconds = vec![backoff.as_secs()];
-    for _ in 0..7 {
-      backoff = next_backoff(backoff);
-      seconds.push(backoff.as_secs());
-    }
-    assert_eq!(seconds, [1, 2, 4, 8, 16, 30, 30, 30]);
   }
 
   #[test]

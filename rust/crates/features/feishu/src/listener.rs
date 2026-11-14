@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use charliebot_chat_threads::channel_service::ChannelListener;
+use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
 use charliebot_chat_threads::thread_entry::ThreadAdapter;
 use charliebot_compat::ws_client::{self, Message as WsMessage, Options, Receiver, Sender};
 use charliebot_registry::FeatureContext;
@@ -26,9 +27,6 @@ use crate::event::{self, Drop, Inbound};
 use crate::frame::{Frame, METHOD_DATA, Reassembler, TYPE_EVENT};
 use crate::owners;
 use crate::package::NAME;
-
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
-const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 /// The listener implementation passed to the shared `ChannelService` (`run_listener`).
 pub(crate) struct FeishuListener;
@@ -103,7 +101,7 @@ async fn run_listener_loop(
   let Some(bot_open_id) = preflight(&client).await? else {
     return Ok(());
   };
-  let mut backoff = Duration::from_secs(1);
+  let mut backoff = INITIAL_BACKOFF;
   loop {
     let endpoint = match client.long_connection_endpoint().await {
       Ok(endpoint) => endpoint,
@@ -125,7 +123,7 @@ async fn run_listener_loop(
       }
     };
     tracing::info!(event = "feishu_listener_connected");
-    backoff = Duration::from_secs(1);
+    backoff = INITIAL_BACKOFF;
     let connection = Connection {
       features: Arc::clone(&features),
       client: client.clone(),
@@ -239,10 +237,6 @@ fn service_id_of(url: &str) -> anyhow::Result<i32> {
   value.parse::<i32>().with_context(|| format!("the endpoint service_id is not an integer: {value:?}"))
 }
 
-fn next_backoff(backoff: Duration) -> Duration {
-  backoff.saturating_mul(2).min(MAX_BACKOFF)
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -324,12 +318,6 @@ mod tests {
     let url = "wss://open.feishu.cn/ws/synthetic?device_id=d1&service_id=42";
     assert_eq!(service_id_of(url).unwrap(), 42);
     assert!(service_id_of("wss://open.feishu.cn/ws/synthetic?device_id=d1").is_err());
-  }
-
-  #[test]
-  fn the_backoff_doubles_to_its_cap() {
-    assert_eq!(next_backoff(Duration::from_secs(1)), Duration::from_secs(2));
-    assert_eq!(next_backoff(Duration::from_secs(20)), MAX_BACKOFF);
   }
 
   // The listener takes its own app id: the tenant token cache is keyed by it, so no test reads another test's token.

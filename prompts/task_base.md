@@ -39,7 +39,9 @@ The codebase has a single user. Apply these principles:
     field or flag for each option, counts as the minimal form of that interface, also when the design's own format
     carries it;
   - a safety check at a trust boundary stays in the design, and the comparison picks its smallest workable form; an
-    explicit confirmation before an agent acts on a task outside its own scope is such a check;
+    explicit confirmation is such a check, and its smallest workable form is one flag or field that the caller sets
+    in the call itself, so the boundary refuses each call that lacks it; a confirmation before an agent acts on a
+    task outside its own scope is an explicit confirmation;
   - mechanism complexity, such as fallbacks, retries and multi-layer checks, stays outside this rule.
 - **Repo environment**: use the environment that the repo defines. When a toolchain is missing, escalate it and name
   the defect in the manifest.

@@ -413,6 +413,13 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
     printf 'cannot fetch origin/main in %s\n' "$main_root" >&2
     exit 1
   fi
+  # Name the main tree the claims compare against. The line goes to stderr, so the list on stdout keeps its shape.
+  fetched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  main_commit=$(git -C "$main_root" rev-parse --verify --quiet "$main_ref^{commit}") || {
+    printf 'cannot read %s after the fetch\n' "$main_ref" >&2
+    exit 1
+  }
+  printf 'origin/main fetched %s into %s at %s\n' "$fetched_at" "$main_ref" "$main_commit" >&2
 
   {
     list_open_pull_requests

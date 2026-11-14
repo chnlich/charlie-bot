@@ -39,7 +39,8 @@ pub(super) fn matches(path: &str) -> bool {
 
 async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>, uri: Uri, request: Parts) -> Response {
   let query = query_pairs(uri.query());
-  let traces: Vec<String> = query.iter().filter(|(name, _)| name == "trace").map(|(_, value)| value.clone()).collect();
+  let traces: Vec<String> =
+    query.iter().filter(|(name, value)| name == "trace" && !value.is_empty()).map(|(_, value)| value.clone()).collect();
   let dir = last_value(&query, "dir").map(str::to_string);
   let pattern = last_value(&query, "pattern").unwrap_or(DEFAULT_PATTERN).to_string();
   let title = last_value(&query, "title").map(str::to_string);

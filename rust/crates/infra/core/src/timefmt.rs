@@ -1,7 +1,7 @@
-//! Timestamp renderings the server emits.
+//! Time renderings and conversions the server emits.
 
 use std::sync::LazyLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -101,10 +101,26 @@ pub fn unix_seconds(instant: SystemTime) -> i64 {
   }
 }
 
+/// The whole milliseconds of `duration`, rounded half to even.
+///
+/// Rounding the ends of a sequence of intervals keeps each interval a difference of rounded ends, so the parts sum to
+/// the whole: the server's startup segments sum to its `ready_in_ms`.
+pub fn duration_millis(duration: Duration) -> u64 {
+  (duration.as_secs_f64() * 1000.0).round_ties_even() as u64
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
   use std::time::Duration;
+
+  #[test]
+  fn duration_millis_rounds_half_to_even() {
+    assert_eq!(duration_millis(Duration::from_micros(1_499)), 1);
+    assert_eq!(duration_millis(Duration::from_micros(1_500)), 2);
+    assert_eq!(duration_millis(Duration::from_micros(2_500)), 2);
+    assert_eq!(duration_millis(Duration::from_micros(3_500)), 4);
+  }
 
   #[test]
   fn log_timestamp_of_writes_utc_to_the_millisecond() {

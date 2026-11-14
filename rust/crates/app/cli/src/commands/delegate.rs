@@ -34,8 +34,7 @@ const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
   script-run task. verify forbids both.
   --keep-worktree 1 keeps the worktree after the worker exits and the reviewer merges; pass it when
   the worker launches a long-running process, e.g. a SLURM job, whose WorkDir lives in the
-  worktree. At task end the branch is released: the worktree's HEAD is detached at the same
-  commit, so other checkouts can rebase and push the branch. 0 cleans up.
+  worktree. The branch is released at task end. 0 cleans up.
   --request-id: replay id; the same id returns the original child. Default: derived from the
   request content, so an identical spec re-delegated from the same session returns the existing
   child; pass an explicit id for intentional same-spec siblings.

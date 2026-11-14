@@ -1,5 +1,5 @@
-//! The HTTP header pieces that more than one crate spells: the names, and the bearer value an `Authorization` header
-//! carries.
+//! The HTTP header pieces that more than one crate spells: the names, the media type a form body states, and the
+//! bearer value an `Authorization` header carries.
 //!
 //! A header name compares case-insensitively, but every sender writes the same spelling, so the name lives here once.
 //! The writer of a bearer value and the reader that takes it back from a header share one prefix.
@@ -9,6 +9,10 @@ pub const AUTHORIZATION: &str = "Authorization";
 
 /// The `Content-Type` header name. A request announces its body's media type in this header.
 pub const CONTENT_TYPE: &str = "Content-Type";
+
+/// The media type of a urlencoded form body. A `Content-Type` header carrying it announces name-and-value pairs, which
+/// the request's form reader takes apart.
+pub const FORM_URLENCODED: &str = "application/x-www-form-urlencoded";
 
 /// The prefix of the bearer credential in an `Authorization` header value: `Bearer` and one space.
 pub const BEARER_PREFIX: &str = "Bearer ";

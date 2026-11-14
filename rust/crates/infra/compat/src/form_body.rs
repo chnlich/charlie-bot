@@ -9,6 +9,7 @@ use crate::responses;
 use crate::validation::{self, FieldError, Kind, Loc};
 use axum::body::Body;
 use axum::response::Response;
+use charliebot_core::headers::FORM_URLENCODED;
 use charliebot_core::str_methods;
 use futures_util::StreamExt;
 use http::{HeaderMap, StatusCode, header};
@@ -161,7 +162,7 @@ pub async fn read(headers: &HeaderMap, body: Body) -> Result<FormBody, Box<Respo
     let boundary = last_param(&params, "boundary").ok_or_else(|| starlette_error("Missing boundary in multipart."))?;
     let charset = last_param(&params, "charset").unwrap_or_else(|| charliebot_core::json_loads::UTF8_CODEC.to_string());
     read_multipart(&boundary, &charset, body).await
-  } else if media_type == "application/x-www-form-urlencoded" {
+  } else if media_type == FORM_URLENCODED {
     read_urlencoded(body).await
   } else {
     Ok(FormBody::default())

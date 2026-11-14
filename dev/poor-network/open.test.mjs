@@ -5,10 +5,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { hostInterference, openCpuRecord, runRepetitions } from './open.mjs';
+import { assetVersionOf, hostInterference, openCpuRecord, runRepetitions } from './open.mjs';
 import { LIVE_CPU_TAIL, OPEN } from './profile.mjs';
 
 const DOC_URL = 'https://localhost:8443/?session=open';
+
+test('the asset version is read from the folded declaration the server serves, and from the spaced one', () => {
+  assert.equal(assetVersionOf('<script>const STATIC_ASSET_VERSION="-c648d5b36ecf";</script>'), '-c648d5b36ecf');
+  assert.equal(assetVersionOf('const STATIC_ASSET_VERSION = "v9";\n'), 'v9');
+  assert.throws(() => assetVersionOf('<html></html>'), /carries no STATIC_ASSET_VERSION/);
+});
 
 // A repetition's record, with the fields the decisions read.
 function repOf({ navigationError = null, networkChanged = [] } = {}) {

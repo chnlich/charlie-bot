@@ -166,17 +166,23 @@ function caseFromRecord(recordAtStart, sessionId) {
   return JSON.parse(recordAtStart).sessions[sessionId] === undefined ? 'B' : 'A';
 }
 
+// The asset version a chat page's body declares. The server folds the whitespace of an inlined script, so the
+// declaration arrives as `const STATIC_ASSET_VERSION="…";`, and the match takes either spacing.
+export function assetVersionOf(body) {
+  const match = /const STATIC_ASSET_VERSION\s*=\s*("[^"]*")\s*;/.exec(body);
+  if (match === null) {
+    throw new Error('the chat page carries no STATIC_ASSET_VERSION');
+  }
+  return JSON.parse(match[1]);
+}
+
 // The asset version the server serves to a page of `sessionId`.
 async function assetVersion(api, sessionId) {
   const { status, body } = await api.request('GET', `/?session=${sessionId}`);
   if (status !== 200) {
     throw new Error(`GET the chat page answered ${status}`);
   }
-  const match = /const STATIC_ASSET_VERSION = ("[^"]*");/.exec(body);
-  if (match === null) {
-    throw new Error('the chat page carries no STATIC_ASSET_VERSION');
-  }
-  return JSON.parse(match[1]);
+  return assetVersionOf(body);
 }
 
 // A release: the server's static asset version changes. The bench appends a comment to the served config.js of the

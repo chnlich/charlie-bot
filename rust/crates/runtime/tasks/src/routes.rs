@@ -26,7 +26,7 @@ use charliebot_store::metadata::{
   TASK_TYPE_FIELD, TaskProfile, TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
-use charliebot_store::{CreateTask, StoreError, TaskCaller};
+use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError, TaskCaller};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -320,7 +320,7 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
   };
   let session_meta = match features.store.get_session(&request.session_id).await {
     Ok(Some(meta)) => meta,
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(error) => return task_http_error(error),
   };
 
@@ -629,7 +629,7 @@ async fn send_message(
   };
   match require_session(&features, &session_id).await {
     Ok(true) => {}
-    Ok(false) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Ok(false) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(response) => return *response,
   }
   let caller = match caller::resolve_caller(&parts.headers, &features) {
@@ -787,7 +787,7 @@ async fn session_message(State(features): State<Arc<FeatureContext>>, request: a
   };
   let caller = match features.store.get_session(&request.session_id).await {
     Ok(Some(caller)) => caller,
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(error) => return task_http_error(error),
   };
   match features.store.get_session(&request.target_session_id).await {
@@ -904,7 +904,7 @@ async fn retry_run(
   };
   match require_session(&features, &session_id).await {
     Ok(true) => {}
-    Ok(false) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Ok(false) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(response) => return *response,
   }
   let caller = match caller::resolve_caller(&parts.headers, &features) {
@@ -1683,7 +1683,7 @@ mod tests {
       .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({ "detail": "Session not found" }));
+    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({ "detail": SESSION_NOT_FOUND_DETAIL }));
   }
 
   #[tokio::test]

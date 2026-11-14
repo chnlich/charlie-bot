@@ -1138,7 +1138,7 @@ fn path_error(path: &Path, error: std::io::Error) -> StoreError {
 mod tests {
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::run_records::RunKind;
-  use charliebot_store::{CreateTask, TaskCaller};
+  use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, TaskCaller};
 
   use super::*;
   use crate::test_support::{
@@ -1956,7 +1956,7 @@ backends:
     features.startup.insert(Arc::new(TriggerManager::new(Arc::clone(&features)))).unwrap();
     let (status, body) = pending_triggers_response(&features, "synthetic-missing-session").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body, json!({"detail": "Session not found"}));
+    assert_eq!(body, json!({"detail": SESSION_NOT_FOUND_DETAIL}));
   }
 
   #[test]

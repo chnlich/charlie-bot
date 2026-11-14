@@ -534,7 +534,7 @@ mod tests {
     ] {
       let (status, body) = send(&router, Method::POST, &path.replace(SESSION_ID, "missing-session"), None, None).await;
       assert_eq!(status, StatusCode::NOT_FOUND);
-      assert_eq!(body, json!({"detail": "Session not found"}));
+      assert_eq!(body, json!({"detail": SESSION_NOT_FOUND_DETAIL}));
     }
     let (status, body) =
       send(&router, Method::POST, "/api/sessions/missing-session/group", Some(json!({"group": 1})), None).await;
@@ -550,7 +550,7 @@ mod tests {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body, json!({"detail": "Session not found"}));
+    assert_eq!(body, json!({"detail": SESSION_NOT_FOUND_DETAIL}));
 
     let captured = messages.lock().unwrap().clone();
     for event in

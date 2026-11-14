@@ -308,6 +308,7 @@ mod tests {
 
   use axum::body::{Body, to_bytes};
   use axum::http::{Method, Request, header};
+  use charliebot_store::SESSION_NOT_FOUND_DETAIL;
   use tower::ServiceExt;
 
   use super::*;
@@ -346,7 +347,7 @@ mod tests {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(
       serde_json::from_slice::<Value>(&body).expect("the body is JSON"),
-      json!({"detail": "Session not found"})
+      json!({"detail": SESSION_NOT_FOUND_DETAIL})
     );
   }
 
@@ -521,7 +522,7 @@ mod tests {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body, json!({"detail": "Session not found"}));
+    assert_eq!(body, json!({"detail": SESSION_NOT_FOUND_DETAIL}));
   }
 
   #[tokio::test]
@@ -566,7 +567,7 @@ mod tests {
     let (_home, features) = features();
     let (status, body) = post(&features, "/api/internal/plan/approve", json!({"session_id": "no-such"})).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body, json!({"detail": "Session not found"}));
+    assert_eq!(body, json!({"detail": SESSION_NOT_FOUND_DETAIL}));
   }
 
   #[tokio::test]

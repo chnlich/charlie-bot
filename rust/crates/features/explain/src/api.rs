@@ -181,6 +181,7 @@ mod tests {
 
   use charliebot_agents::backend_availability;
   use charliebot_core::timefmt;
+  use charliebot_store::SESSION_NOT_FOUND_DETAIL;
   use tower::ServiceExt;
 
   use super::*;
@@ -219,7 +220,7 @@ mod tests {
     let (status, body) = send(&home.features, "GET", "/api/sessions/nope/explain/status", None).await;
 
     assert_eq!((post, get, status), (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
-    assert_eq!(body, json!({"detail": "Session not found"}));
+    assert_eq!(body, json!({"detail": SESSION_NOT_FOUND_DETAIL}));
   }
 
   #[tokio::test]

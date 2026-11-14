@@ -9,6 +9,7 @@ use crate::responses;
 use crate::validation::{self, FieldError, Kind, Loc};
 use axum::body::Body;
 use axum::response::Response;
+use charliebot_core::str_methods;
 use futures_util::StreamExt;
 use http::{HeaderMap, StatusCode, header};
 use serde_json::{Value, json};
@@ -264,9 +265,9 @@ fn unquote_ascii(run: &[u8]) -> String {
 }
 
 fn hex_pair(pair: &[u8]) -> Option<u8> {
-  let high = char::from(pair[0]).to_digit(16)?;
-  let low = char::from(pair[1]).to_digit(16)?;
-  Some((high * 16 + low) as u8)
+  let high = str_methods::hex_value(char::from(pair[0]))?;
+  let low = str_methods::hex_value(char::from(pair[1]))?;
+  Some((high << 4) | low)
 }
 
 #[cfg(test)]

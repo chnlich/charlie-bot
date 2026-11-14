@@ -11,6 +11,7 @@ use anyhow::{Context, bail};
 use axum::http::StatusCode;
 use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadMessage, ThreadReplyError};
 use charliebot_core::paths;
+use charliebot_core::str_methods;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -267,8 +268,8 @@ fn decode_topic_page_cursor(token: &str, thread_id: &str) -> Result<TopicPageCur
   }
   let mut bytes = Vec::with_capacity(encoded.len() / 2);
   for pair in encoded.as_bytes().as_chunks::<2>().0 {
-    let high = hex_digit(pair[0]).ok_or_else(invalid_topic_page_token)?;
-    let low = hex_digit(pair[1]).ok_or_else(invalid_topic_page_token)?;
+    let high = str_methods::hex_value(char::from(pair[0])).ok_or_else(invalid_topic_page_token)?;
+    let low = str_methods::hex_value(char::from(pair[1])).ok_or_else(invalid_topic_page_token)?;
     bytes.push((high << 4) | low);
   }
   let cursor: TopicPageCursor = serde_json::from_slice(&bytes).map_err(|_| invalid_topic_page_token())?;
@@ -298,15 +299,6 @@ fn topic_next_page_token(
     token.push(digits[(byte & 0x0f) as usize] as char);
   }
   Ok(Some(token))
-}
-
-fn hex_digit(byte: u8) -> Option<u8> {
-  match byte {
-    b'0'..=b'9' => Some(byte - b'0'),
-    b'a'..=b'f' => Some(byte - b'a' + 10),
-    b'A'..=b'F' => Some(byte - b'A' + 10),
-    _ => None,
-  }
 }
 
 fn invalid_topic_page_token() -> ThreadReplyError {

@@ -39,7 +39,7 @@ pub struct Landing {
 }
 
 /// Decide how to land the work branch once the iteration loop ends. A merge-back with summaries and no stop
-/// fast-forwards `work_branch` onto `base_branch`; when that push fails, the bare branch is pushed for the parent to
+/// fast-forwards `work_branch` onto `base_branch`. When that push fails, the bare branch is pushed for the parent to
 /// land by hand. Otherwise the branch is pushed best-effort.
 pub async fn land_work_branch_after_loop(
   resolved_repo: &Path,

@@ -132,7 +132,7 @@ async fn start_improve_loop(
 }
 
 /// The v2 improve path: the runtime gate, the backend, the loop reservation, the worker child, and the controller task.
-/// A refusal answers with its status; a reservation is released when the child is refused.
+/// A refusal answers with its status. A reservation is released when the child is refused.
 async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequest) -> Result<Value, Refusal> {
   let store = &features.store;
   store.check_task_authorization(&req.session_id).map_err(|error| Box::new(task_http_error(error)))?;

@@ -1,7 +1,7 @@
 //! The `improve` verbs: `start` launches the loop, `stop` stops it.
 //!
 //! `improve start` reads the goal file (and the optional plan file), posts them to
-//! `/api/internal/improve`, and returns immediately; the iteration loop runs on the server. The
+//! `/api/internal/improve`, and returns immediately. The iteration loop runs on the server. The
 //! verb's readback proves a launch whose response was lost: the newest loop directory whose
 //! `goal.md` equals the sent goal, plus that loop's one worker child.
 
@@ -193,7 +193,7 @@ fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>
     response
       .insert(wire::PLAN_PATH.to_string(), json!(loop_dir.join(command::PLAN_FILE).to_string_lossy().into_owned()));
   }
-  // The v2 sequence's one worker child binds by its stable request id; its presence (and only the
+  // The v2 sequence's one worker child binds by its stable request id. Its presence (and only the
   // matching parent's) proves the v2 admission.
   let child = charliebot_store::task_child::find_local_task_child(
     home,

@@ -3,7 +3,7 @@
 //! The loop keeps its state under `sessions/<id>/loops/<loop_id>/` (`goal.md`, re-read at every iteration, the optional
 //! `plan.md`, and `state.json`). Each iteration is one Run on the loop's worker child, `kind = iteration`, with
 //! `sequence_ref = (improve, owner_ref = <loop dir>, position = <n>)`. Each judged iteration is delivered to the parent
-//! as one child report; the loop's end is one final report.
+//! as one child report. The loop's end is one final report.
 //!
 //! The close step closes the child once under `improve:<loop id>:close`. The status is `completed` for a landed
 //! merge-back, `cancelled` for a user stop, and `blocked` when the iterations ran out without proof. It is `failed` for
@@ -294,7 +294,7 @@ struct Progress {
 }
 
 /// The improve sequence on the loop's child. Every iteration launches through the shared adapter and is awaited to
-/// its terminal fact; a failure ends the loop with a final report that names it. The close step runs at every end.
+/// its terminal fact. A failure ends the loop with a final report that names it. The close step runs at every end.
 pub async fn run_improve_sequence(
   spec: &LoopSpec<'_>,
   cfg: &CharlieBotConfig,
@@ -467,7 +467,7 @@ async fn run_loop(
       let (blocker_reason, failed_summary) = iteration_blocker(tree, spec.child_id, &run.id, iteration, &outcome)?;
       let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
       if let Some(pool_id) = state.backend.as_deref().filter(|id| cfg.backends.pool(id).is_some()) {
-        // The adapter's member failure records its member even when the transcript names no blocker text; a
+        // The adapter's member failure records its member even when the transcript names no blocker text. A
         // refusal's transcript names none.
         let member_failure =
           quota_failure.as_ref().filter(|failure| backend_availability::is_recorded_reason(&failure.reason));
@@ -784,7 +784,7 @@ async fn deliver_iteration_report(
 }
 
 /// The loop's worker child, closed once the loop has ended. It returns while the loop can still progress, and when a
-/// launched iteration still owes its terminal fact; that Run's finish runs the step again. A failure is logged and the
+/// launched iteration still owes its terminal fact. That Run's finish runs the step again. A failure is logged and the
 /// child stays open for the next call point.
 pub async fn close_ended_loop_child(tree: &dyn SequenceTree, cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) {
   if let Err(error) = close_ended_loop_child_inner(tree, cfg, session_id, loop_id).await {
@@ -840,7 +840,7 @@ async fn close_ended_loop_child_inner(
   }
   for run in &run_records {
     if run.pid.is_some() && !tree.run_has_terminal_fact(run, &events) {
-      // A launched iteration still owes its terminal fact; its finish runs after_run, which runs this step again.
+      // A launched iteration still owes its terminal fact. Its finish runs after_run, which runs this step again.
       return Ok(());
     }
   }
@@ -1069,7 +1069,7 @@ pub async fn reconcile_interrupted_sequences(
             .await?;
         }
       }
-      // The startup pass is the close step's crash-window repair; it returns by itself for loops still running or busy.
+      // The startup pass is the close step's crash-window repair. It returns by itself for loops still running or busy.
       close_ended_loop_child(tree, cfg, &session_id, loop_id).await;
     }
   }

@@ -1264,6 +1264,24 @@ const OWNER_TABLE: &[OwnerRow] = &[
            under it.",
   },
   OwnerRow {
+    name: "web",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::pages::web_directory` for the frontend root, or its `web_templates_directory` \
+           and `web_static_directory` for the web app's asset directories.",
+  },
+  OwnerRow {
+    name: "templates",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::pages::package_templates_directory` for a page package's template directory, \
+           or `web_templates_directory` for the web app's.",
+  },
+  OwnerRow {
+    name: "static",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::pages::package_static_directory` for a page package's static directory, or \
+           `web_static_directory` for the web app's.",
+  },
+  OwnerRow {
     name: "session_name",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::SESSION_NAME_FIELD`; the voice recordings page's rows carry a session's \

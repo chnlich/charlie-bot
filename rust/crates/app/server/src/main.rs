@@ -47,6 +47,7 @@ use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 use charliebot_core::timefmt::duration_millis;
 use charliebot_core::{config, event_types, home, logging, paths};
 use charliebot_registry::lifespan::{CloseTimings, Lifespan, StartupOutcome, StepTiming};
+use charliebot_registry::pages::web_templates_directory;
 use charliebot_registry::startup_timing::StartupClock;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, Registry, StartupState, StartupStop};
@@ -542,7 +543,7 @@ fn launch_bin_dir_from(argv0: &OsStr, cwd: &Path) -> Result<PathBuf, String> {
 
 /// The home's loaded files, checked against the checkout; any error names the input it concerns.
 fn load_inputs(registry: &Arc<Registry>, repo_root: &RepoRoot) -> Result<StateParts, String> {
-  if !repo_root.path().join("web").join("templates").is_dir() {
+  if !web_templates_directory(repo_root.path()).is_dir() {
     return Err(format!(
       "{REPO_ROOT_ENV}={} holds no web/templates directory; set it to a charlie-bot checkout",
       repo_root.path().display()

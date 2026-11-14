@@ -5,7 +5,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-// The hold module serves two test binaries; each uses part of it, so the rest is not dead code there.
+// The hold module serves two test binaries. Each uses part of it, so the rest is not dead code there.
 #[path = "../common/hold.rs"]
 #[allow(dead_code)]
 mod hold;
@@ -137,7 +137,7 @@ fn the_launcher_group_ends_with_a_killed_test_process() {
 }
 
 /// Started by `the_launcher_group_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing; the ignore attribute keeps an ordinary run from holding.
+/// `LEAK_CHECK_HOLD` it does nothing. The ignore attribute keeps an ordinary run from holding.
 #[test]
 #[ignore = "held by a kill check in a second copy of this binary"]
 fn hold_the_launcher_group_subprocess_entry() {
@@ -160,7 +160,7 @@ fn hold_the_launcher_group_subprocess_entry() {
   thread::sleep(HOLD_WAIT);
 }
 
-/// A test process killed with SIGKILL never drops its sandbox, so its root stays on disk; the check removes it.
+/// A test process killed with SIGKILL never drops its sandbox, so its root stays on disk. The check removes it.
 fn remove_killed_test_root(root: &Path) {
   if let Err(error) = fs::remove_dir_all(root) {
     eprintln!("cannot remove the killed test's root {}: {error}", root.display());

@@ -300,7 +300,7 @@ printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\nCHARLIE_CODE_API_KEY_SHA256=%s\n' \
 exit 0
 "#;
 
-/// The direction of the focused export checks; its TMPDIR name no real direction's round shares.
+/// The direction of the focused export checks. Its TMPDIR name no real direction's round shares.
 const FOCUS_DIRECTION: &str = "focused";
 
 /// Runs the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway variables.
@@ -626,7 +626,7 @@ fn an_approval_prompt_exits_3_inside_five_seconds() {
 #[ignore = "integration"]
 fn the_direction_comes_from_the_worker_session_and_its_task_file() {
   let world = World::new();
-  // A task file of another session comes first in the directory; its direction must not win.
+  // A task file of another session comes first in the directory. Its direction must not win.
   fs::write(
     world.sandbox.dir("profile/config.d/cron.d").join("improve-ux.yaml"),
     "prompt_file: dev/improve/ux.md\nsession_id: 00000000-0000-0000-0000-000000000000\n",
@@ -904,7 +904,7 @@ fn a_running_rounds_clone_adds_its_checked_out_branchs_files_to_the_list() {
   world.git(&clone, &["commit", "-q", "-m", "drop the old name"]);
   world.git(&clone, &["push", "-q", "origin", "main"]);
   world.git(&clone, &["switch", "-q", "improve/ux/topic"]);
-  // The uncommitted change sits in the checkout; the untracked file has no git entry at all.
+  // The uncommitted change sits in the checkout. The untracked file has no git entry at all.
   fs::write(clone.join("base.md"), "changed\n").expect("the uncommitted change");
   fs::write(clone.join("dropped.md"), "uncommitted\n").expect("the dropped path's uncommitted change");
   fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
@@ -1472,7 +1472,7 @@ fn another_clones_locked_origin_main_ref_does_not_stop_the_rounds_in_flight_read
   world.git(&clone, &["commit", "-q", "-m", "advance main"]);
   world.git(&clone, &["push", "-q", "origin", "main"]);
   world.git(&clone, &["switch", "-q", "improve/ux/topic"]);
-  // The uncommitted change sits in the checkout; the untracked file has no git entry at all.
+  // The uncommitted change sits in the checkout. The untracked file has no git entry at all.
   fs::write(clone.join("base.md"), "changed\n").expect("the uncommitted change");
   fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
   // The clone's own origin/main stays behind, so the fetch updates it, and a concurrent writer
@@ -1617,7 +1617,7 @@ fn write_run_record(world: &World, task_id: &str, run_id: &str, worktree: &std::
 }
 
 /// Writes a task record that links one worktree to its owning session, as the store's `threads/`
-/// records do; the session's run records may be gone with the session they belong to.
+/// records do. The session's run records may be gone with the session they belong to.
 fn write_task_record(world: &World, owner_id: &str, thread_id: &str, worktree: &std::path::Path) {
   let record_dir = world.profile_home.join(format!("sessions/{owner_id}/threads/{thread_id}"));
   fs::create_dir_all(&record_dir).expect("the task record directory");
@@ -1766,7 +1766,7 @@ fn a_worktree_without_a_task_name_keeps_its_committed_and_uncommitted_paths() {
   let run = run_inflight_list(&world);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  // The topic commit is patch-equivalent on main, so the committed path prints bare; the same
+  // The topic commit is patch-equivalent on main, so the committed path prints bare. The same
   // path's uncommitted change, the staged path and the untracked path print with the branch that
   // carries them.
   for listed in

@@ -300,7 +300,7 @@ pub struct World {
   pub node_claude_env: PathBuf,
   /// Where the local claude copies its standard input when a test asks for it.
   pub node_claude_stdin: PathBuf,
-  /// The in-memory `$CLAUDE_CONFIG_DIR` of the launcher; it must not reach the round.
+  /// The in-memory `$CLAUDE_CONFIG_DIR` of the launcher. It must not reach the round.
   pub local_config_dir: &'static str,
 }
 
@@ -323,7 +323,7 @@ impl World {
     let commit = git(&sandbox, &git_env, &repo, &["rev-parse", "HEAD"]);
     // The launcher's checkout names the GitHub repository that a live checkout names, and a
     // `url.<bare>.insteadOf` rule sends every local fetch and push of it to a bare copy of the repository, so no test
-    // reaches GitHub. `git remote get-url` reports that local copy, which the launcher sends the runner to clone; the
+    // reaches GitHub. `git remote get-url` reports that local copy, which the launcher sends the runner to clone. The
     // in-flight list reads the URL as configured, so it names the GitHub repository. The direction clone names another
     // origin, so a test can tell which one the runner cloned from.
     let runtime_origin = sandbox.dir("remotes/runtime.git");

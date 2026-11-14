@@ -109,7 +109,7 @@ impl Tally {
 }
 
 /// The page rows, ranked by output then model. Rows group on the casefolded model leaf, so a
-/// spelling one source gives a model merges with the others; versions stay apart. The output ranking is the one the
+/// spelling one source gives a model merges with the others. Versions stay apart. The output ranking is the one the
 /// page's hero, charts and both tables share.
 pub(crate) fn merge(
   rows: &[LedgerRow],

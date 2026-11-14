@@ -222,8 +222,8 @@ fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, P
       };
       for entry in entries {
         let path = log_of(&entry);
-        // The plain path keys the ledger, so compressing a log re-records the same rows under the same key; its
-        // signature comes from the file that holds the bytes now.
+        // The plain path keys the ledger, so compressing a log re-records the same rows under the same key.
+        // Its signature comes from the file that holds the bytes now.
         match run_log_files::stored_metadata(&path) {
           Ok(Some(metadata)) => logs.push((kind, path, metadata)),
           Ok(None) => {}
@@ -259,8 +259,8 @@ fn run_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(PathBuf, fs::Metadata)>>
     };
     for run in runs {
       let path = run.join(RAW_LOG_NAME);
-      // The plain path keys the ledger, so compressing a log re-records the same rows under the same key; its
-      // signature comes from the file that holds the bytes now.
+      // The plain path keys the ledger, so compressing a log re-records the same rows under the same key.
+      // Its signature comes from the file that holds the bytes now.
       match run_log_files::stored_metadata(&path) {
         Ok(Some(metadata)) => logs.push((path, metadata)),
         Ok(None) => {}
@@ -679,7 +679,8 @@ fn empty_object() -> &'static Map<String, Value> {
 }
 
 /// One usage count as the capture reads it: an absent or falsy value is 0, `true` is 1, and a
-/// number keeps its integer or real type. Any other value fails here; the ledger fails where the value is added or bound.
+/// number keeps its integer or real type. Any other value fails here. The ledger fails where the value is added or
+/// bound.
 fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<Count> {
   match object.get(key) {
     None => Ok(Count::Int(0)),

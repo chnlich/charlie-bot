@@ -337,7 +337,7 @@ fn assert_state_eq(expected: &Value, actual: &Value, label: &str) {
   assert_eq!(first_difference(&ordered_state(expected), &ordered_state(actual), "state"), None, "{label}");
 }
 
-/// The ledger query orders `captured_files` by absolute path, which differs by machine; the tree
+/// The ledger query orders `captured_files` by absolute path, which differs by machine. The tree
 /// root is a temporary directory. Rows are therefore compared after sorting the normalized text.
 fn ordered_state(state: &Value) -> Value {
   let mut state = state.clone();

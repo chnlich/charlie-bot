@@ -180,7 +180,7 @@ fn test_live_backend_switch_directions_target_lacks_oc_retired() {
 }
 
 /// Rust builds read each backend's re-attachment declaration from their own source tree, in either layout. The running
-/// and target builds each carry or lack the declaration; a switch reads with the carrying builds only, except that
+/// and target builds each carry or lack the declaration. A switch reads with the carrying builds only, except that
 /// Claude Code re-attaches in every direction.
 fn live_backend_switch_directions(running_carries: bool, target_carries: bool, backend: &str) {
   let mut world = World::new();
@@ -646,7 +646,7 @@ fn test_switch_back_exits_3_without_starting_the_old_release_when_the_old_releas
     "{}",
     world.report(&run)
   );
-  // One launch for the server the test started and one for the new release; the switch back started nothing.
+  // One launch for the server the test started and one for the new release. The switch back started nothing.
   world.assert_server_scope_records(2);
   assert!(world.listener_pids().is_empty(), "a server still listens on port {}", world.port);
 }
@@ -1026,7 +1026,7 @@ fn test_switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended_no_outcome(
 }
 
 /// A run the stop ended passes the switch only on a recorded completion. Any other outcome keeps the new server, exits
-/// 4 and restores nothing; a run with no outcome counts as not completed.
+/// 4 and restores nothing. A run with no outcome counts as not completed.
 fn switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(outcome: Option<&str>) {
   let mut world = World::new();
   world.seed_live_run("run-stopped", Some("claude-opus"));

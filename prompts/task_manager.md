@@ -26,6 +26,9 @@ inherited rules above define your task.
   split by your recommended reading, and ask about it on this node's page only above the reading threshold.
 - Write in each child's first message its approver, what the child decides, what it delivers, and the source user
   message plus e2e handover that covers it. The child's Goal keeps these and its completion conditions.
+  Also write in that message each agreement in force that governs the child's part.
+  A manager child records each such agreement in its own session memo.
+  When such an agreement is set or changed later, send it to that child.
   A child presents its deliverables
   in its own session.
   A child sends this node the messages that Between Agents lists.

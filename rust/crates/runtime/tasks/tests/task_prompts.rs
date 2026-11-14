@@ -286,6 +286,23 @@ fn position(snapshot: &PromptSnapshot, reference: &str) -> usize {
   refs_of(snapshot).iter().position(|source_ref| source_ref == reference).expect("the reference is in the snapshot")
 }
 
+/// The session memo is the session's own file, not a rule source: writing it changes no prompt block and starts no
+/// context reset.
+#[tokio::test]
+#[ignore = "integration"]
+async fn writing_the_session_memo_leaves_the_prompt_hash_unchanged() {
+  let harness = Harness::new();
+  let tree = harness.tree().await;
+  let session_dir = harness.cfg.sessions_dir().join(&tree.root);
+  let before = harness.snapshot_for(&tree.root, "manager_turn").await;
+
+  fs::write(charliebot_store::layout::memo_path(&session_dir), "agreement: the memo holds it\n")
+    .expect("the memo writes");
+  let after = harness.snapshot_for(&tree.root, "manager_turn").await;
+
+  assert_eq!(after.prompt_hash(), before.prompt_hash());
+}
+
 #[tokio::test]
 #[ignore = "integration"]
 async fn manager_template_is_identical_at_every_depth_with_no_pm_load() {

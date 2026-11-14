@@ -21,6 +21,24 @@ resumed model reports having run none of it.
 The full session history stays in `data/chat_events.jsonl` across compactions. Search it before
 acting whenever a detail is missing from context: `charliebot session dialog | rg -i -C3 '<term>'`.
 
+## Session Memo
+
+Your session memo is `memo.md` in your session directory, the working directory of your runs.
+You write it, and you read it.
+The file exists once you record its first entry.
+Record these entries in it:
+- each agreement that the user or your parent session sets in the conversation, with who set it and its source event;
+- each fact that later work in this session needs, with its source.
+When an entry concerns a memory entry, name the memory topic to query and copy none of the entry's text.
+When the setter changes an agreement, replace that agreement's entry.
+The memo then holds no two entries that contradict each other.
+Keep work steps, todo lists, and rules that hold beyond this session out of the memo.
+A context reorganization is any of these events:
+- a compaction, which replaces earlier turns with a summary or a rebuilt-context pointer;
+- a context reset, which starts a fresh conversation;
+- a model or backend switch.
+After each context reorganization, read the whole memo before your next action.
+
 ## Intent First
 
 Read the intent behind each new task before you act on it: the larger context and the higher-level goal, not the literal requested action. When the readings lead to materially different work above the reading threshold, list them on an understanding page, and build after the approver answers a page that waits (see Artifact Genres in prompts/manager_workflows.md and the Understanding section of `skills/plan-approval/SKILL.md`). A misread request then costs one page, not a build. When one reading is clear, or the readings fall below the reading threshold, start the work on the recommended reading without waiting, and list each divergence in the delivery.
@@ -265,6 +283,7 @@ A lead keeps only coordination state and small material in its context: each lat
   The answer then waits for no worker.
 - As a lead, read these items yourself:
   - the user's words and the decisions;
+  - your session memo;
   - the conclusions of your children and the session status;
   - the rule and skill files, and the LESSONS.md entries, that govern your own next step;
   - the approval object of each decision that you make, such as a child's plan page and its verify findings.
@@ -339,9 +358,11 @@ Before you publish host content to a repository with other users, scan it for th
 
 ## Memory
 
-Mid-session facts worth keeping go to `charliebot memory add` as one free-form markdown file
-per capture: first line `# <title>`, body stating the fact to record or the change to propose
-(naming the target entry when proposing one). It writes a staging candidate (never touches
+Facts and rules that hold beyond this session go to `charliebot memory add` as one free-form
+markdown file per capture: first line `# <title>`, body stating the fact to record or the change
+to propose (naming the target entry when proposing one).
+Agreements and facts that hold only in this session go to your session memo (Session Memo).
+It writes a staging candidate (never touches
 `entries/`); labels are assigned at curation.
 On-demand knowledge: `charliebot memory query --topic <topic>` for full text, or `--index` for the
 index only. Admission is judged at curation time with evidence, not mid-session.

@@ -357,6 +357,7 @@ fn withhold_notice(size: usize, left: usize, agent_tool: bool, can_delegate: boo
     The budget does not count these reads of decision material:\n\
     - a child's conclusion, through `charliebot session conclusion --session <child id>`;\n\
     - the user's words, through `charliebot session dialog --from user`;\n\
+    - your session memo, `memo.md` in the session directory;\n\
     - a plan or understanding page through its file under artifacts/, and a rule or skill file read whole."
   )
 }
@@ -409,6 +410,9 @@ fn path_class(path: &str, cwd: Option<&str>) -> Option<&'static str> {
   if approval_resolved_pattern().is_match(&resolved) {
     return Some("approval_object");
   }
+  if is_memo_path(&resolved, cwd) {
+    return Some("session_memo");
+  }
   None
 }
 
@@ -436,9 +440,9 @@ fn bash_class(command: &str, cwd: Option<&str>) -> Option<&'static str> {
     return Some("approval_object");
   }
   let names = resolved_names(command, cwd);
-  if let Some(candidate) = resolved_class(&names) {
+  if let Some(candidate) = resolved_class(&names, cwd) {
     let existing_paths = named_existing_paths(command, cwd);
-    if existing_paths.iter().all(|p| is_decision_path(p)) {
+    if existing_paths.iter().all(|p| is_decision_path(p, cwd)) {
       return Some(candidate);
     }
   }
@@ -561,10 +565,20 @@ fn resolve_token(tok: &str, base: Option<&str>) -> Option<String> {
   Some(posix_path::normpath(&s))
 }
 
-fn is_decision_path(path: &str) -> bool {
+fn is_decision_path(path: &str, cwd: Option<&str>) -> bool {
   approval_resolved_pattern().is_match(path)
     || report_resolved_pattern().is_match(path)
     || rule_path_pattern().is_match(path)
+    || is_memo_path(path, cwd)
+}
+
+/// Whether the path is the session memo: `memo.md` in the session directory, which is the working directory of a
+/// manager turn. A worker run has no memo, and its working directory is a repository or scratch directory.
+fn is_memo_path(path: &str, cwd: Option<&str>) -> bool {
+  let Some(cwd) = cwd else {
+    return false;
+  };
+  resolve_token(path, Some(cwd)).is_some_and(|resolved| Path::new(&resolved) == layout::memo_path(Path::new(cwd)))
 }
 
 fn resolved_names(command: &str, cwd: Option<&str>) -> Vec<String> {
@@ -614,12 +628,15 @@ fn named_existing_paths(command: &str, cwd: Option<&str>) -> Vec<String> {
   out
 }
 
-fn resolved_class(paths: &[String]) -> Option<&'static str> {
+fn resolved_class(paths: &[String], cwd: Option<&str>) -> Option<&'static str> {
   if paths.iter().any(|p| report_resolved_pattern().is_match(p)) {
     return Some("child_conclusion");
   }
   if paths.iter().any(|p| approval_resolved_pattern().is_match(p)) {
     return Some("approval_object");
+  }
+  if paths.iter().any(|p| is_memo_path(p, cwd)) {
+    return Some("session_memo");
   }
   None
 }
@@ -786,7 +803,7 @@ hook_pattern!(session_cmd_pattern, SESSION_CMD);
 hook_pattern!(shell_reader_pattern, SHELL_READERS);
 hook_pattern!(approval_resolved_pattern, r"/artifacts/(plan|understanding)_[^/]*\.html$");
 hook_pattern!(report_resolved_pattern, r"/data/runs/[^/]+/(report|findings)\.md$");
-hook_pattern!(named_pattern, r"((plan|understanding)_[^/]*\.html$|(report|findings)\.md$)");
+hook_pattern!(named_pattern, r"((plan|understanding)_[^/]*\.html$|(report|findings)\.md$|memo\.md$)");
 hook_pattern!(cd_pattern, r"^\s*cd\s+([^\s]+)\s*$");
 hook_pattern!(segment_split_pattern, r"&&|\|\||;|\n|\|");
 hook_pattern!(token_split_pattern, r#"[^\s'"'`|;&<>()=,]+"#);
@@ -1241,6 +1258,32 @@ mod tests {
     }
   }
 
+  /// The session memo is decision material: its read counts nothing, while a `session dialog` read still counts.
+  #[test]
+  fn a_read_of_the_session_memo_counts_nothing_and_a_session_dialog_read_still_counts() {
+    let home = RunHome::new();
+    let session_dir = home.run_dir.ancestors().nth(3).unwrap().to_path_buf();
+    let memo = layout::memo_path(&session_dir);
+    std::fs::write(&memo, "memo\n").unwrap();
+    let cwd = session_dir.to_string_lossy().into_owned();
+
+    for (case, event) in [
+      ("absolute", read_event_with_cwd(&memo.to_string_lossy(), &"m".repeat(20_000), &cwd)),
+      ("relative", read_event_with_cwd("memo.md", &"m".repeat(20_000), &cwd)),
+      ("bash", bash_event_with_cwd("cat memo.md", "m".repeat(20_000), &cwd)),
+    ] {
+      let (result, output) = run_event(&home, &event);
+      result.unwrap();
+      assert!(output.is_empty(), "the {case} memo read is not withheld");
+      assert_eq!(home.state().counted, 0, "the {case} memo read counts nothing");
+    }
+
+    let (result, _output) =
+      run_event(&home, &bash_event_with_cwd("charliebot session dialog --turns 2", "d".repeat(1_000), &cwd));
+    result.unwrap();
+    assert_eq!(home.state().counted, 1_000);
+  }
+
   #[test]
   fn the_write_tools_and_base64_data_count_nothing() {
     let home = RunHome::new();
@@ -1297,6 +1340,7 @@ Output withheld: 20000 characters exceed the 1000 characters left in this turn's
 The budget does not count these reads of decision material:
 - a child's conclusion, through `charliebot session conclusion --session <child id>`;
 - the user's words, through `charliebot session dialog --from user`;
+- your session memo, `memo.md` in the session directory;
 - a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
     assert_eq!(v1_withhold, expected_v1_withhold);
 
@@ -1312,6 +1356,7 @@ Output withheld: 20000 characters exceed the 1000 characters left in this turn's
 The budget does not count these reads of decision material:
 - a child's conclusion, through `charliebot session conclusion --session <child id>`;
 - the user's words, through `charliebot session dialog --from user`;
+- your session memo, `memo.md` in the session directory;
 - a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
     assert_eq!(v2_withhold, expected_v2_withhold);
 
@@ -1327,6 +1372,7 @@ Output withheld: 20000 characters exceed the 1000 characters left in this turn's
 The budget does not count these reads of decision material:
 - a child's conclusion, through `charliebot session conclusion --session <child id>`;
 - the user's words, through `charliebot session dialog --from user`;
+- your session memo, `memo.md` in the session directory;
 - a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
     assert_eq!(v3_withhold, expected_v3_withhold);
 

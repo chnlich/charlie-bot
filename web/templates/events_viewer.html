@@ -51,6 +51,18 @@
       .event-type { min-width: var(--event-type-col, 0); }
     }
 
+    /* A phone cannot fit the row on one line: the index, the type and the time take about 200 of the
+       row's 358 px, which leaves a preview there about 20 characters long, and the rows of one type
+       then read alike. The first line holds the index, the type, the time and the caret at its right
+       end; the second line holds the preview across the row's 16 px inset, where the 120-character
+       preview the script builds reaches the reader. No row, strip or label is added: the row grows
+       one text line, and the screen space goes to the preview the reader scans. */
+    @media (max-width: 768px) {
+      .event-row-head { flex-wrap: wrap; row-gap: 2px; }
+      .event-row-head > .event-caret { order: 1; margin-left: auto; }
+      .event-row-head > .event-preview { order: 2; flex: 1 0 100%; }
+    }
+
     /* A token too long for the line breaks anywhere, so hashes, paths and base64 stay inside the
        page; ordinary words keep their shape and the line breaks at the spaces between them. */
     pre { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -34,7 +34,12 @@ scheduled_tasks:
     timezone: local
     project: CharlieBot
     handler: cool_storage
-  - name: proactive-daily
+  # `mode: master` wakes the task's manager session with the prompt as a
+  # scheduled input, so the session delegates work itself; the scheduler
+  # binds the session on the first tick and writes its `session_id` into the
+  # seeded host file.
+  - name: proactive-agent
     cron: "0 7 * * *"
     project: CharlieBot
-    prompt_file: prompts/cron/proactive_daily/prompt.md
+    prompt_file: prompts/cron/proactive_agent/prompt.md
+    mode: master

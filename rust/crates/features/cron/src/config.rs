@@ -80,9 +80,6 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
   if source_count != 1 {
     return Err("task must have exactly one of 'prompt', 'prompt_file', 'steps', or 'handler'".to_string());
   }
-  if task.mode.is_some() && task.session_id.as_deref().unwrap_or_default().is_empty() {
-    return Err("'mode' requires 'session_id' (mode selects how a bound task fires)".to_string());
-  }
   if task.mode == Some(TaskMode::Master) {
     if task.prompt.as_deref().unwrap_or_default().is_empty() {
       return Err("mode 'master' requires a prompt source ('prompt' or 'prompt_file')".to_string());
@@ -189,4 +186,40 @@ pub fn task_from_value(name: &str, value: serde_json::Value) -> Result<Scheduled
   let parsed = serde_json::from_value::<ScheduledTaskConfig>(body).map_err(|error| error.to_string())?;
   validate_task(&parsed)?;
   Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// A task in `mode: master` with no `session_id` is valid: the scheduler's
+  /// auto-bind creates the task's session on a later tick and writes the id
+  /// back into the host file, and an agent caller of the create API binds its
+  /// own new session at create time.
+  #[test]
+  fn validation_accepts_mode_without_session_id() {
+    let task = ScheduledTaskConfig {
+      name: "proactive-agent".to_string(),
+      cron: "0 7 * * *".to_string(),
+      prompt_file: Some("prompts/cron/proactive_agent/prompt.md".to_string()),
+      repo: None,
+      backend: None,
+      timezone: DEFAULT_TIMEZONE.to_string(),
+      enabled: true,
+      project: Some("CharlieBot".to_string()),
+      allow_failure: false,
+      session_id: None,
+      mode: Some(TaskMode::Master),
+      prompt: Some("Synthetic prompt\n".to_string()),
+      handler: None,
+      steps: None,
+    };
+    validate_task(&task).expect("master mode without session_id validates");
+
+    let worker_task = ScheduledTaskConfig { mode: Some(TaskMode::Worker), ..task.clone() };
+    validate_task(&worker_task).expect("worker mode without session_id validates");
+
+    let empty_session_task = ScheduledTaskConfig { session_id: Some(String::new()), ..task };
+    validate_task(&empty_session_task).expect("an empty session_id counts as unbound");
+  }
 }

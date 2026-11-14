@@ -13,8 +13,8 @@
   },
   "responses": [],
   "expect": {
-    "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Re-attached skills: none\\nSkills left out because they do not fit:\\n- too-large ({root}/home/skills/too-large/SKILL.md)\\n\"}}\n",
-    "stderr": "session=session-overflow slot=1 characters=156 skills=- omitted=too-large unresolved=-\n",
+    "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Read your session memo, memo.md in the working directory, in full before your next action.\\nRe-attached skills: none\\nSkills left out because they do not fit:\\n- too-large ({root}/home/skills/too-large/SKILL.md)\\n\"}}\n",
+    "stderr": "session=session-overflow slot=1 characters=247 skills=- omitted=too-large unresolved=-\n",
     "exit": 0,
     "requests": []
   }

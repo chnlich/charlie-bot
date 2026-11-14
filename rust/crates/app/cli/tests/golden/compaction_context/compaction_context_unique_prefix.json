@@ -13,8 +13,8 @@
   },
   "responses": [],
   "expect": {
-    "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Re-attached skills: unique-one ({root}/home/skills/unique-one/SKILL.md)\\nSkill unique-one ({root}/home/skills/unique-one/SKILL.md), re-attached after compaction:\\nUnique skill body.\\n\"}}\n",
-    "stderr": "session=sess-1 slot=1 characters=256 skills=unique-one omitted=- unresolved=-\n",
+    "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Read your session memo, memo.md in the working directory, in full before your next action.\\nRe-attached skills: unique-one ({root}/home/skills/unique-one/SKILL.md)\\nSkill unique-one ({root}/home/skills/unique-one/SKILL.md), re-attached after compaction:\\nUnique skill body.\\n\"}}\n",
+    "stderr": "session=sess-1 slot=1 characters=347 skills=unique-one omitted=- unresolved=-\n",
     "exit": 0,
     "requests": []
   }

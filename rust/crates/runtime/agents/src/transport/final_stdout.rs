@@ -11,11 +11,12 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::proc_status;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, FinalStdoutOutcome, LaunchArgs};
 use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME, STDOUT_LOG_NAME};
 
-use super::{kill, spawn};
+use super::spawn;
 
 pub const SUPERVISOR_ARG: &str = "--supervise-final-stdout";
 const CONTEXT_NAME: &str = "final_stdout.context.json";
@@ -61,7 +62,7 @@ pub fn supervise(args: &[OsString]) -> anyhow::Result<()> {
     .stdout(stdout)
     .stderr(stderr)
     .status()
-    .map(kill::exit_code)
+    .map(|status| proc_status::code_of(status).expect("an exit status has a code or signal"))
     .map_err(|error| format!("starting supervised agent: {error}"));
   write_json(&directory.join(EXIT_NAME), &status)?;
   status.map(|_| ()).map_err(anyhow::Error::msg)

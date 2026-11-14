@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use charliebot_core::proc_status;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
   AgentBackend, Env, ExitedProbe, LaunchArgs, RetryAfter, ServeTransport, ServeTurnArgs, TransportKind,
@@ -25,7 +26,7 @@ use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
 use crate::transport::final_stdout;
 use crate::transport::follow;
 use crate::transport::identity::{self, ProcessIdentity};
-use crate::transport::kill::{self, exit_code};
+use crate::transport::kill;
 use crate::transport::rotation::rotate_stale_transport;
 use crate::transport::spawn::{self, AgentChild, RawStdin, SpawnSetup, SpawnSpec, read_stderr_tail};
 
@@ -703,7 +704,11 @@ async fn wait_until_stopped_or_terminate(child: &mut AgentChild) -> anyhow::Resu
 }
 
 async fn reap_child(mut child: AgentChild, sender: watch::Sender<Option<Result<i32, String>>>) {
-  let result = child.wait().await.map(exit_code).map_err(|error| error.to_string());
+  let result = child
+    .wait()
+    .await
+    .map(|status| proc_status::code_of(status).expect("an exit status has a code or signal"))
+    .map_err(|error| error.to_string());
   sender.send_replace(Some(result));
 }
 

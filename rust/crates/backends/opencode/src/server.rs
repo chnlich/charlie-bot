@@ -14,6 +14,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, sessions_dir_in};
 use charliebot_core::home;
+use charliebot_core::proc_status;
 use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_core::run_token::{RUN_TOKEN_ENV, SESSION_ID_ENV};
 use charliebot_registry::backend::Env;
@@ -34,7 +35,7 @@ use super::relay::{self, ServerRecord, TurnRecord};
 use charliebot_agents::cli_base::apply_proxy_env;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::identity::read_pid_stat;
-use charliebot_agents::transport::kill::{exit_code, kill_process_group};
+use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{SpawnSetup, SpawnSpec, SpawnedChild, spawn_detached_files};
 use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::read_run_record_file;
@@ -1273,7 +1274,7 @@ impl OpenCodeServer {
     }
     tokio::spawn(async move {
       let code = match child.wait().await {
-        Ok(status) => Ok(exit_code(status)),
+        Ok(status) => Ok(proc_status::code_of(status).expect("an exit status has a code or signal")),
         Err(error) => Err(error.to_string()),
       };
       if exit_tx.send(Some(code)).is_err() {

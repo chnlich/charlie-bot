@@ -83,13 +83,6 @@ where
   result
 }
 
-/// The integer form of an exit status, with a negative signal number for a signal death.
-pub fn exit_code(status: std::process::ExitStatus) -> i32 {
-  use std::os::unix::process::ExitStatusExt;
-
-  status.code().unwrap_or_else(|| -status.signal().expect("an exit status has a code or signal"))
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;

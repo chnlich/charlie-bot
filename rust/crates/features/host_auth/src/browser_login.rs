@@ -19,14 +19,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::process::{ExitStatus, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use charliebot_core::proc_status;
 use regex::Regex;
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncRead, AsyncReadExt, Interest, ReadBuf};
@@ -370,7 +370,7 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
 
   let Some(link) = read_until_link(core, &mut output).await? else {
     child.start_kill().expect("a spawned child that has not been reaped takes the kill");
-    let login_exit = exit_code(child.wait().await?);
+    let login_exit = proc_status::code_of(child.wait().await?).expect("an exit status has a code or a signal");
     let body = {
       let mut state = core.lock().expect("the attempt record lock is never poisoned");
       state.login_exit = Some(login_exit);
@@ -448,7 +448,7 @@ async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut Lo
       Ok(waited) => waited?,
       Err(_elapsed) => {
         child.start_kill().expect("a spawned child that has not been reaped takes the kill");
-        let login_exit = exit_code(child.wait().await?);
+        let login_exit = proc_status::code_of(child.wait().await?).expect("an exit status has a code or a signal");
         {
           let mut state = core.lock().expect("the attempt record lock is never poisoned");
           state.login_exit = Some(login_exit);
@@ -481,7 +481,7 @@ async fn drain_and_wait(
   output: &mut LoginReader,
 ) -> io::Result<i32> {
   while read_line(core, output).await?.is_some() {}
-  Ok(exit_code(child.wait().await?))
+  Ok(proc_status::code_of(child.wait().await?).expect("an exit status has a code or a signal"))
 }
 
 /// The readback: its command's run, and the confirmed renewal baseline recorded after a successful exit.
@@ -810,12 +810,8 @@ async fn finish_capture(mut child: Child, limit: Duration) -> io::Result<(i32, S
     }
   }
   let status = child.wait().await?;
-  Ok((exit_code(status), String::from_utf8_lossy(&output).into_owned()))
-}
-
-/// `proc.returncode`: the exit code, or the negated signal number of a killed process.
-fn exit_code(status: ExitStatus) -> i32 {
-  status.code().or(status.signal().map(|signal| -signal)).expect("an exit status has a code or a signal")
+  let exit_code = proc_status::code_of(status).expect("an exit status has a code or a signal");
+  Ok((exit_code, String::from_utf8_lossy(&output).into_owned()))
 }
 
 /// The 502 body: the exit code, then the last output lines.

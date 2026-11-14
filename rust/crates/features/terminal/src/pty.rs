@@ -10,6 +10,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use charliebot_core::proc_status;
 use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_core::text_repr::{STARLETTE_JSON, is_truthy, json_dumps};
 use nix::errno::Errno;
@@ -126,12 +127,6 @@ pub(super) fn tmux_binary() -> Result<PathBuf, String> {
   Err("tmux binary not found on PATH — install tmux".to_string())
 }
 
-fn exit_code(status: std::process::ExitStatus) -> i32 {
-  use std::os::unix::process::ExitStatusExt;
-
-  status.code().or_else(|| status.signal().map(|signal| -signal)).unwrap_or_default()
-}
-
 fn os_error(error: &io::Error, path: Option<&Path>) -> String {
   let Some(errno) = error.raw_os_error() else {
     return error.to_string();
@@ -167,7 +162,7 @@ pub(super) async fn run_tmux(args: &[String], capture: bool) -> Result<(i32, Str
 
   let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
   let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-  let code = exit_code(output.status);
+  let code = proc_status::code_of(output.status).unwrap_or_default();
   let text = if capture && code == 0 {
     stdout
   } else if !stderr.is_empty() {

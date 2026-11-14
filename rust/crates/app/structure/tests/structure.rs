@@ -1315,6 +1315,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
            request builders write the name.",
   },
   OwnerRow {
+    name: "application/x-www-form-urlencoded",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::headers::FORM_URLENCODED`; the CLI's Google token requests state it, and the \
+           multipart form reader selects the urlencoded parser by it.",
+  },
+  OwnerRow {
     name: "utf-8",
     owner: "infra/core",
     hint: "Use `charliebot_core::json_loads::UTF8_CODEC`; the decode-error texts and the multipart form's charset \

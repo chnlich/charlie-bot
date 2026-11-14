@@ -40,6 +40,17 @@
     /* The event's JSON aligns under the type badge: 56 px from the row's left edge, 16 px from its right. */
     .event-row .json-body { margin: 8px 16px 10px 56px; }
 
+    /* The type badge's own text sets its width: user draws 41 px, assistant 77 px, master_done 91 px
+       and assistant_error 120 px, and a row that lets each badge keep its own width starts its time
+       and preview at a different x per type. Above 768 px the badge takes the column the widest
+       badge of the loaded rows sets (renderEvents writes --event-type-col), so every row starts its
+       time and preview at one x whatever types the log holds. Below 768 px it keeps its content
+       width: the phone's preview runs to the row's right edge, and a fixed column there would take
+       characters from every preview. */
+    @media (min-width: 769px) {
+      .event-type { min-width: var(--event-type-col, 0); }
+    }
+
     /* A token too long for the line breaks anywhere, so hashes, paths and base64 stay inside the
        page; ordinary words keep their shape and the line breaks at the spaces between them. */
     pre { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -293,7 +304,7 @@
         row.innerHTML = `
           <button type="button" class="event-row-head" aria-expanded="${expandAll}">
             <span class="text-xs font-mono text-slate-400 w-8 flex-shrink-0 text-right">${idx + 1}</span>
-            <span class="text-xs px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${badgeCls}">${escapeHtml(type)}</span>
+            <span class="event-type text-xs px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${badgeCls}">${escapeHtml(type)}</span>
             ${time ? `<span class="text-xs text-slate-400 flex-shrink-0 font-mono">${timeText(time)}</span>` : ''}
             <span class="event-preview flex-1 min-w-0 text-xs text-slate-400 truncate"></span>
             <span class="event-caret flex-shrink-0" aria-hidden="true">▶</span>
@@ -314,6 +325,17 @@
 
         list.appendChild(row);
       });
+
+      // The badge's own text sets its width, so each row would start its time and
+      // preview at a different x. The widest badge of this render sets the column
+      // the rest take (the .event-type rule above): the column reads 0 while the
+      // badges are measured at their content width, then the widest returns.
+      list.style.setProperty('--event-type-col', '0');
+      let widestType = 0;
+      for (const badge of list.querySelectorAll('.event-type')) {
+        widestType = Math.max(widestType, badge.getBoundingClientRect().width);
+      }
+      list.style.setProperty('--event-type-col', `${widestType}px`);
     }
 
     // The header count names the rows on screen: the filter's result, and the

@@ -180,7 +180,7 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
     }
   }
 
-  // A refused launch states its cause on the run's error event; a False flag leaves the text patterns to judge.
+  // A refused launch states its cause on the run's error event. A False flag leaves the text patterns to judge.
   if event_type == Some(ERROR) && event.get(charliebot_core::event_types::QUOTA_EXHAUSTED) == Some(&Value::Bool(true)) {
     let message = event.get("message").context("the quota-exhausted error event has no message")?;
     return Ok(Some(format!("launch refused with quota exhausted: {}", value_str(message))));
@@ -206,7 +206,7 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
   )
 }
 
-/// The lowercased text of an optional field; an absent field reads as `None`.
+/// The lowercased text of an optional field. An absent field reads as `None`.
 fn lowered_str(value: Option<&Value>) -> String {
   value_str(value.unwrap_or(&Value::Null)).to_lowercase()
 }

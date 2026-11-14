@@ -223,7 +223,7 @@ pub fn load_loop_state(cfg: &CharlieBotConfig, session_id: &str, loop_id: i64) -
 }
 
 /// The state file of one loop directory as its JSON value, or `None` when the directory holds no state file. The value
-/// is not checked against `ImproveState`, so a state file that does not match it still reads; the readers that need
+/// is not checked against `ImproveState`, so a state file that does not match it still reads. The readers that need
 /// single fields take them from it.
 pub fn read_loop_state_value(loop_dir: &Path) -> anyhow::Result<Option<Value>> {
   let path = loop_dir.join(STATE_FILE);
@@ -314,7 +314,7 @@ fn reserve_loop_dir(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Result<
   }
 }
 
-/// The running loop of a session, if one exists. Loops are read in id order; the first running one wins.
+/// The running loop of a session, if one exists. Loops are read in id order. The first running one wins.
 pub fn find_running_loop(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Result<Option<ImproveState>> {
   let mut ids = state_loop_ids(&loops_dir(cfg, session_id))?;
   ids.sort_unstable();

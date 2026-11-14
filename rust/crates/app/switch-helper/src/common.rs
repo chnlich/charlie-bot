@@ -17,7 +17,7 @@ pub(crate) use charliebot_core::text_repr::value_repr;
 /// The group's usage line, printed for `--help` and for a bad name or argument count.
 pub(crate) const USAGE: &str = "usage: charliebot switch-helper <name> [args...]";
 
-/// Exactly `N` positional arguments, as text; any other count is a usage error.
+/// Exactly `N` positional arguments, as text. Any other count is a usage error.
 pub(crate) fn exact<const N: usize>(args: &[OsString]) -> Result<[String; N], CliExit> {
   let values = args
     .iter()

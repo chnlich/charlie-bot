@@ -89,7 +89,8 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
       }
     }
   }
-  // A loop's controller runs inside the server process; a restart never resumes it (rust/crates/runtime/tasks/src/recovery.rs).
+  // A loop's controller runs inside the server process. A restart never resumes it
+  // (rust/crates/runtime/tasks/src/recovery.rs).
   // The controller's end path saves the terminal status and then removes the session's active lock
   // (rust/crates/features/improve/src/sequence.rs). `charliebot improve stop` saves `stopped` while the current
   // iteration still runs, so the saved status is no liveness signal. The active lock is one: the controller holds it
@@ -171,7 +172,7 @@ fn text_field<'a>(run: &'a Value, name: &str) -> Result<&'a str, CliExit> {
   run.get(name).and_then(Value::as_str).ok_or_else(|| CliExit::error(format!("a run record has no {name}")))
 }
 
-/// The directories under `path` in file-name order; a missing directory holds none.
+/// The directories under `path` in file-name order. A missing directory holds none.
 fn sorted_directories(path: &Path) -> std::io::Result<Vec<PathBuf>> {
   let mut directories = Vec::new();
   let entries = match fs::read_dir(path) {
@@ -189,7 +190,7 @@ fn sorted_directories(path: &Path) -> std::io::Result<Vec<PathBuf>> {
   Ok(directories)
 }
 
-/// One git command in the repository; a spawn failure is an error, a command's own failure is the caller's.
+/// One git command in the repository. A spawn failure is an error. A command's own failure is the caller's.
 fn git(repo: &Path, args: &[&str]) -> Result<Output> {
   Command::new("git").arg("-C").arg(repo).args(args).output().with_context(|| format!("run git {args:?}"))
 }
@@ -203,7 +204,7 @@ struct BackendFiles {
 /// The declared backend types in one build, keyed by type name.
 type BuildRegistrations = HashMap<String, (Option<bool>, String)>;
 
-/// The registration files of one build in the layout its tree has, with each file's sibling sources; or the read error.
+/// The registration files of one build in the layout its tree has, with each file's sibling sources, or the read error.
 fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<BackendFiles>, Option<String>)> {
   for (prefix, suffix) in BACKEND_LAYOUTS {
     let listed = git(repo, &["ls-tree", "-r", "--name-only", sha, prefix])?;

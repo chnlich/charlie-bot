@@ -1,5 +1,5 @@
 //! `home-helper`: the profile-home reads of the switch — the port and key, one run's process liveness, and the
-//! outcome a run recorded. The live-run scan lives in `scan.rs`; the four read the same session layout.
+//! outcome a run recorded. The live-run scan lives in `scan.rs`. The four read the same session layout.
 
 use std::ffi::OsString;
 use std::io::ErrorKind;
@@ -150,7 +150,7 @@ fn wait_for_outcome(
   while !outcome.recorded && Instant::now() < deadline {
     let text = match chat_events::read_universal_text(path) {
       Ok(text) => text,
-      // A line the server is still writing can split a UTF-8 character; the next poll reads the whole line.
+      // A line the server is still writing can split a UTF-8 character. The next poll reads the whole line.
       Err(error) if error.kind() == ErrorKind::InvalidData => {
         thread::sleep(Duration::from_millis(100));
         continue;
@@ -174,7 +174,7 @@ struct Outcome {
 }
 
 impl Outcome {
-  /// Read one event line. A line the live log's own reader skips is not a fact; the skip is logged.
+  /// Read one event line. A line the live log's own reader skips is not a fact. The skip is logged.
   fn read(&mut self, line: &str, number: usize, path: &Path, run_id: &str) {
     match chat_events::decode_line(line.as_bytes()) {
       Ok(event) => {

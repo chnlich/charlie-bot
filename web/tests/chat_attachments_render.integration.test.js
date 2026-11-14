@@ -130,7 +130,11 @@ test('renderUserMessageBubble wraps every text in a fold that starts clamped and
     const html = context.renderUserMessageBubble(text, null, null, null);
     assert.match(html, /<div class="user-msg-fold" data-folded="true" data-overflows="false">/);
     assert.match(html, /<div class="user-msg-clamp whitespace-pre-wrap">/);
-    assert.match(html, /<button type="button" class="user-msg-more"/);
+    // The fold's one control opens the clamp and folds it again: both labels ride in it, and styles.css picks
+    // the one naming the next action from data-folded.
+    assert.match(html, /<button type="button" class="user-msg-more" aria-expanded="false"/);
+    assert.match(html, /class="user-msg-more-label"/);
+    assert.match(html, /class="user-msg-less-label"/);
   }
 });
 

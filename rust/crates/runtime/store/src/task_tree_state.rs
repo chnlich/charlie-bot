@@ -404,9 +404,6 @@ pub(crate) struct TreeIndex {
   /// Every input this build read, sorted by session id: the session directories, their metadata files and their
   /// live histories. A refresh that reads the same inputs serves this index instead of building it again.
   pub(crate) inputs: Vec<TreeIndexInput>,
-  /// The sessions directory's identity at the build, read before its names. A refresh whose stat matches holds the
-  /// same names, so it compares the sessions' inputs alone instead of walking the directory again.
-  pub(crate) sessions_dir: Option<FileIdentity>,
 }
 
 /// What one session contributes to the tree index: the two files the index's metadata and task state come from.
@@ -469,6 +466,10 @@ pub(crate) struct CachedTreeIndex {
   pub(crate) generation: u64,
   pub(crate) built_at: Instant,
   pub(crate) index: Arc<TreeIndex>,
+  /// The sessions directory's identity the renewal's name check last proved: the build reads it before the
+  /// directory's names, and a renewal that finds the names and inputs hold moves it to the identity it read. A
+  /// matching identity means the names cannot have moved, so the renewal compares the sessions' inputs alone.
+  pub(crate) sessions_dir: Option<FileIdentity>,
 }
 
 pub(crate) struct CachedTaskStateTail {

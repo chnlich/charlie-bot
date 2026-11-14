@@ -2196,17 +2196,21 @@ impl Store {
     {
       return Ok(Some(index));
     }
-    let Some(index) = build_tree_index_until(self, should_stop)? else {
+    let Some(built) = build_tree_index_until(self, should_stop)? else {
       return Ok(None);
     };
     if should_stop() {
       return Ok(None);
     }
-    let index = Arc::new(index);
+    let index = Arc::new(built.index);
     self.task_tree_index_builds.fetch_add(1, Ordering::Relaxed);
     if self.task_tree_generation.load(Ordering::Acquire) == generation {
-      *self.task_tree_index.lock().expect("task tree index mutex is not poisoned") =
-        Some(CachedTreeIndex { generation, built_at: Instant::now(), index: Arc::clone(&index) });
+      *self.task_tree_index.lock().expect("task tree index mutex is not poisoned") = Some(CachedTreeIndex {
+        generation,
+        built_at: Instant::now(),
+        index: Arc::clone(&index),
+        sessions_dir: built.sessions_dir,
+      });
     }
     Ok(Some(index))
   }
@@ -2243,13 +2247,17 @@ impl Store {
         return;
       }
       let mut never_stop = || false;
-      let Ok(Some(index)) = build_tree_index_until(&store, &mut never_stop) else { return };
+      let Ok(Some(built)) = build_tree_index_until(&store, &mut never_stop) else { return };
       store.task_tree_index_builds.fetch_add(1, Ordering::Relaxed);
       if store.task_tree_generation.load(Ordering::Acquire) != generation {
         return;
       }
-      *store.task_tree_index.lock().expect("task tree index mutex is not poisoned") =
-        Some(CachedTreeIndex { generation, built_at: Instant::now(), index: Arc::new(index) });
+      *store.task_tree_index.lock().expect("task tree index mutex is not poisoned") = Some(CachedTreeIndex {
+        generation,
+        built_at: Instant::now(),
+        index: Arc::new(built.index),
+        sessions_dir: built.sessions_dir,
+      });
     });
     if spawned.is_err() {
       self.tree_index_refresh_running.store(false, Ordering::Release);
@@ -2265,14 +2273,20 @@ impl Store {
   /// so the cached one serves every reader and the walk is skipped. An input that moved, a home that cannot be read
   /// and a cached index another build replaced all report false, and the caller then builds.
   fn renew_stale_tree_index(&self, generation: u64) -> bool {
-    let cached = {
+    let (cached, recorded_dir) = {
       let cached = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
       match cached.as_ref() {
-        Some(cached) if cached.generation == generation => Arc::clone(&cached.index),
+        Some(cached) if cached.generation == generation => (Arc::clone(&cached.index), cached.sessions_dir),
         _ => return false,
       }
     };
-    let Ok(held) = self.tree_index_inputs_hold(&cached.inputs, cached.sessions_dir.as_ref()) else { return false };
+    let current_dir = match FileIdentity::read(&self.cfg.sessions_dir()) {
+      Ok(identity) => identity,
+      Err(_) => return false,
+    };
+    let Ok(held) = self.tree_index_inputs_hold(&cached.inputs, recorded_dir.as_ref(), current_dir.as_ref()) else {
+      return false;
+    };
     if !held {
       return false;
     }
@@ -2280,6 +2294,9 @@ impl Store {
     match entry.as_mut() {
       Some(entry) if entry.generation == generation && Arc::ptr_eq(&entry.index, &cached) => {
         entry.built_at = Instant::now();
+        // The renewal proved the names and the inputs still match, so the identity it read holds for them: a later
+        // refresh whose stat matches it compares the sessions' inputs alone, even when a rollback moved it since.
+        entry.sessions_dir = current_dir;
         true
       }
       _ => false,
@@ -2292,15 +2309,16 @@ impl Store {
   /// that moved. A quiet home therefore renews without building a second input list.
   ///
   /// The directory walk that reads the session names runs only when the sessions directory's own identity moved from
-  /// the one the build recorded. A session directory that appears or leaves moves that identity, so a match proves
-  /// the recorded names still list the home, and a quiet home compares the sessions' inputs alone.
+  /// the one the renewal last proved. A session directory that appears or leaves moves that identity, so a match
+  /// proves the recorded names still list the home, and a quiet home compares the sessions' inputs alone.
   fn tree_index_inputs_hold(
     &self,
     expected: &[TreeIndexInput],
     recorded_dir: Option<&FileIdentity>,
+    current_dir: Option<&FileIdentity>,
   ) -> StoreResult<bool> {
     let sessions_dir = self.cfg.sessions_dir();
-    if FileIdentity::read(&sessions_dir)?.as_ref() != recorded_dir {
+    if current_dir != recorded_dir {
       let names = session_dir_names(&sessions_dir)?;
       if names.len() != expected.len() {
         return Ok(false);
@@ -2462,7 +2480,16 @@ fn read_tree_input(sessions_dir: &fs::File, session_id: &str, relative: &mut Vec
   Ok(TreeIndexInput { session_id: session_id.to_string(), metadata: values.metadata, history: values.history })
 }
 
-fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool) -> StoreResult<Option<TreeIndex>> {
+/// One completed index walk: the index and the sessions directory's identity, read before its names.
+struct BuiltTreeIndex {
+  index: TreeIndex,
+  sessions_dir: Option<FileIdentity>,
+}
+
+fn build_tree_index_until(
+  store: &Store,
+  should_stop: &mut impl FnMut() -> bool,
+) -> StoreResult<Option<BuiltTreeIndex>> {
   if should_stop() {
     return Ok(None);
   }
@@ -2547,7 +2574,6 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     archive_by_id: HashMap::new(),
     build_id: store.next_tree_index_build_id.fetch_add(1, Ordering::Relaxed),
     inputs,
-    sessions_dir: sessions_dir_identity,
   };
   let mut memo = HashMap::new();
   let mut structural = Vec::with_capacity(index.metas.len());
@@ -2586,7 +2612,7 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
   }
   index.revision = control_events::sha256_hex(&structural.join("\n"));
   index.derived_archived_ids = Arc::new(derived_archived_ids);
-  Ok(Some(index))
+  Ok(Some(BuiltTreeIndex { index, sessions_dir: sessions_dir_identity }))
 }
 
 /// The live-log byte offset that a history identity covers: the walk of that history starts here.
@@ -3796,6 +3822,38 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
+  async fn a_renewal_that_holds_records_the_directory_identity_it_proved() {
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let root = create_node(&store, "identity-root", None, TaskProfile::Manager).await;
+    store.get_session(&root.id).await.unwrap().unwrap();
+    store.invalidate_tree_index();
+    let first = store.tree_index().unwrap();
+    let builds = store.task_tree_index_build_count();
+    store.enable_tree_index_background_refresh();
+
+    // A foreign entry the index never lists moves the sessions directory's identity, while the session names and
+    // their inputs stay as the build read them: the next renewal renews the index instead of rebuilding it.
+    let sessions_dir = store.config().sessions_dir();
+    let foreign = sessions_dir.join("not-a-session");
+    fs::write(&foreign, b"x").unwrap();
+    fs::remove_file(&foreign).unwrap();
+    let moved = FileIdentity::read(&sessions_dir).unwrap();
+
+    store.expire_tree_index_for_test();
+    assert!(Arc::ptr_eq(&store.tree_index().unwrap(), &first), "a read past the TTL serves the snapshot");
+    for _ in 0..200 {
+      if !store.tree_index_refresh_running.load(Ordering::Acquire) {
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(store.task_tree_index_build_count(), builds, "a held input set renews without a rebuild");
+    let recorded = store.task_tree_index.lock().unwrap().as_ref().unwrap().sessions_dir;
+    assert_eq!(recorded, moved, "the renewal records the identity it proved, so the next refresh skips the name walk");
+  }
+
+  #[tokio::test]
   async fn tree_index_build_stops_between_nodes_without_publishing_a_partial_index() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
@@ -4323,7 +4381,6 @@ pub(crate) mod tests {
       archive_by_id: HashMap::new(),
       build_id: 0,
       inputs: Vec::new(),
-      sessions_dir: None,
     }
   }
 

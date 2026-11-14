@@ -1,10 +1,32 @@
 {#- The panel/modal close button of index.html: one home for the button element
     and its X icon, so every close button stays identical. Each call site
-    passes its own click target and title; an empty title renders no attribute.
+    passes its own click target, title and resting classes; an empty title
+    renders no attribute.
     The icon's w-4 h-4 tokens must stay spelled out here: the Tailwind build
-    scans template source text, never macro expansion. -#}
+    scans template source text, never macro expansion.
+
+    A phone's icon buttons carry a 20 px glyph: the header's menu button and
+    the composer's attach and mic do. The composer's take the 44 px box
+    styles.css sets in its 768 px block, and the modal header kept the
+    desktop's 16 px glyph in a 24 px box instead, so the one control of a
+    dialog that fills the phone was the smallest target on the screen. The rule
+    travels in the button's own markup, because the app's Tailwind sheet is
+    built and committed ahead of the page, where a new utility class would
+    paint nothing. The negative margins take the header's own padding, so the
+    row keeps the height the old 24 px box set, the title keeps its line and
+    the X keeps its place at the header's right end.
+    The class is the modal header's own: cb-close already names the
+    concurrency panel's close button in concurrency-badge-panel.css, whose
+    rules would otherwise reach this one and take this one's. -#}
 {% macro close_button(onclick, title, btn_class) -%}
-<button onclick="{{ onclick }}" class="{{ btn_class }}"{% if title %} title="{{ title }}"{% endif %}>
+<style>
+  @media (max-width: 768px) {
+    button.modal-close-btn { display: inline-flex; align-items: center; justify-content: center;
+      min-width: 44px; min-height: 44px; padding: 0; margin: -10px -12px -10px 0; }
+    button.modal-close-btn svg { width: 20px; height: 20px; }
+  }
+</style>
+<button onclick="{{ onclick }}" class="{{ btn_class }} modal-close-btn"{% if title %} title="{{ title }}"{% endif %}>
   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
 </button>
 {%- endmacro %}

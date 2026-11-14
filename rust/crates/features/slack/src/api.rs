@@ -56,25 +56,9 @@ async fn reply(State(features): State<Arc<FeatureContext>>, request: Request<Bod
     Ok(identity) => identity,
     Err(response) => return response,
   };
-  let (request_id, run_started_at) = match identity.claims() {
-    Some(claims) => {
-      let run = match features.store.read_run_sync(&claims.session_id, &claims.run_id) {
-        Ok(Some(run)) => run,
-        Ok(None) => return responses::internal_error("RuntimeError", "verified caller run disappeared".to_string()),
-        Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-      };
-      let started_at = run.started_at.expect("a verified run has a start timestamp").to_isoformat_text();
-      (
-        Some(charliebot_store::control_events::derived_agent_send_request_id(
-          &claims.run_id,
-          "slack reply",
-          &session_id,
-          &text,
-        )),
-        Some(started_at),
-      )
-    }
-    None => (None, None),
+  let (request_id, run_started_at) = match identity.reply_context(&features.store, "slack reply", &session_id, &text) {
+    Ok(context) => context,
+    Err(response) => return response,
   };
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(slack_listener::SlackThreadAdapter::lazy(Arc::clone(&features)));
   let result = execute_reply_with_caller_context(

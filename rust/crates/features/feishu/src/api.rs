@@ -14,7 +14,6 @@ use charliebot_chat_threads::thread_entry::ThreadReplyError;
 use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN};
 use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
-use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
 use charliebot_registry::FeatureContext;
@@ -103,26 +102,11 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
     Ok(identity) => identity,
     Err(response) => return response,
   };
-  let (request_id, run_started_at) = match identity.claims() {
-    Some(claims) => {
-      let run = match bot.features.store.read_run_sync(&claims.session_id, &claims.run_id) {
-        Ok(Some(run)) => run,
-        Ok(None) => return responses::internal_error("RuntimeError", "verified caller run disappeared".to_string()),
-        Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-      };
-      let started_at = run.started_at.expect("a verified run has a start timestamp").to_isoformat_text();
-      (
-        Some(charliebot_store::control_events::derived_agent_send_request_id(
-          &claims.run_id,
-          "feishu reply",
-          &session_id,
-          &text,
-        )),
-        Some(started_at),
-      )
-    }
-    None => (None, None),
-  };
+  let (request_id, run_started_at) =
+    match identity.reply_context(&bot.features.store, "feishu reply", &session_id, &text) {
+      Ok(context) => context,
+      Err(response) => return response,
+    };
   let result =
     adapter::post_reply_with_caller_context(&bot, &session_id, &text, request_id.as_deref(), run_started_at.as_deref())
       .await;

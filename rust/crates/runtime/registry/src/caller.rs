@@ -9,6 +9,7 @@ use axum::response::Response;
 use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
 use charliebot_core::run_token::{self, CALLER_SESSION_HEADER, RunTokenClaims};
+use charliebot_store::{Store, control_events};
 
 use crate::FeatureContext;
 
@@ -39,6 +40,32 @@ impl CallerIdentity {
       Self::Operator { .. } => None,
       Self::Agent { claims } => Some(claims),
     }
+  }
+
+  /// The context of one reply this caller sends: the request id a verified agent's send derives from `verb`,
+  /// `target` and `text`, and the start time of the run it answers.
+  ///
+  /// A replay of the same send carries the same id, so the reply it already posted is found again instead of
+  /// posted twice. The operator caller carries neither value, and the reply path picks its own id and creation
+  /// time.
+  #[allow(clippy::result_large_err)]
+  pub fn reply_context(
+    &self,
+    store: &Store,
+    verb: &str,
+    target: &str,
+    text: &str,
+  ) -> Result<(Option<String>, Option<String>), Response> {
+    let Some(claims) = self.claims() else {
+      return Ok((None, None));
+    };
+    let run = store
+      .read_run_sync(&claims.session_id, &claims.run_id)
+      .map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?
+      .ok_or_else(|| responses::internal_error("RuntimeError", "verified caller run disappeared".to_string()))?;
+    let started_at = run.started_at.expect("a verified run has a start timestamp").to_isoformat_text();
+    let request_id = control_events::derived_agent_send_request_id(&claims.run_id, verb, target, text);
+    Ok((Some(request_id), Some(started_at)))
   }
 }
 
@@ -288,5 +315,34 @@ mod tests {
     assert!(!caller.is_operator());
     assert_eq!(caller.session_id(), Some("session-a"));
     assert_eq!(caller.claims(), Some(&claims));
+  }
+
+  #[tokio::test]
+  async fn an_agent_reply_context_repeats_for_a_replay_and_the_operator_has_none() {
+    let (_home, features) = feature_context(Some(KEY));
+    let claims = claims();
+    register_run(&features, &claims, true).await;
+    let agent = CallerIdentity::Agent { claims: claims.clone() };
+
+    let first = agent.reply_context(&features.store, "slack reply", "session-b", "the answer").unwrap();
+    let replay = agent.reply_context(&features.store, "slack reply", "session-b", "the answer").unwrap();
+    assert_eq!(first, replay, "a replay of one send carries the same request id");
+    let (request_id, started_at) = first;
+    assert!(request_id.as_deref().is_some_and(|request_id| !request_id.is_empty()));
+    let run = features.store.read_run_sync(&claims.session_id, &claims.run_id).unwrap().expect("the registered run");
+    assert_eq!(
+      started_at.as_deref(),
+      Some(run.started_at.expect("the launched run has a start").to_isoformat_text().as_str()),
+      "the reply is created after the run it answers"
+    );
+
+    let next_text = agent.reply_context(&features.store, "slack reply", "session-b", "another answer").unwrap();
+    assert_ne!(next_text.0, request_id, "a different send derives a different request id");
+
+    let operator = CallerIdentity::Operator { session_id: Some("operator-session".into()) };
+    assert_eq!(
+      operator.reply_context(&features.store, "slack reply", "session-b", "the answer").unwrap(),
+      (None, None)
+    );
   }
 }

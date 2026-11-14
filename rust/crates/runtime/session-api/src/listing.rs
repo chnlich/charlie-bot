@@ -559,6 +559,8 @@ impl PageTextSource {
 #[derive(Default)]
 pub struct PageRowsMemo {
   state: Mutex<PageRowsMemoState>,
+  /// The first screen's corpus-shaped parts, which every open session shares.
+  screen: Mutex<Option<FirstScreenShape>>,
   #[cfg(test)]
   renders: std::sync::atomic::AtomicUsize,
 }
@@ -648,7 +650,7 @@ pub(crate) fn page_json_text(
   }
   let screen = match scope {
     PageRowsScope::EveryRow => None,
-    PageRowsScope::FirstScreen { active } => Some(PageFirstScreen::of(page, active)),
+    PageRowsScope::FirstScreen { active } => Some(PageFirstScreen::of(page, active, &memo.screen)),
   };
   let kept_rows: Option<Vec<Arc<SessionMetadata>>> =
     screen.as_ref().map(|screen| screen.kept.iter().map(|&index| Arc::clone(&page.rows[index])).collect());
@@ -774,12 +776,62 @@ pub(crate) struct PageFirstScreen {
 }
 
 impl PageFirstScreen {
-  fn of(page: &PageRows, active: Option<&str>) -> Self {
+  /// The first screen of `page` with `active` kept visible, over the shape `screen` memoizes.
+  ///
+  /// Only the open session's root picks which roots the screen keeps. Every other part — each row's root, each root's
+  /// subtree size and schedule flag, each group's roots and total — follows the corpus alone, so the shape is built
+  /// once while the corpus holds and a page that names another session reads it.
+  fn of(page: &PageRows, active: Option<&str>, screen: &Mutex<Option<FirstScreenShape>>) -> Self {
     let rows = page.rows();
-    let index_of: HashMap<&str, usize> = rows.iter().enumerate().map(|(index, row)| (row.id.as_str(), index)).collect();
+    let mut held = screen.lock().expect("the first-screen memo mutex is not poisoned");
+    if !held.as_mut().is_some_and(|shape| shape.source.holds(page)) {
+      *held = Some(FirstScreenShape::of(page));
+    }
+    let shape = held.as_ref().expect("the shape was built from this page");
+    let active_root = active.and_then(|id| page.index.get(id).copied()).and_then(|index| shape.root_of[index as usize]);
+    let mut kept_roots: Vec<bool> = vec![false; rows.len()];
+    for roots in shape.group_roots.values() {
+      let mut rank = 0;
+      for &root in roots {
+        let root = root as usize;
+        let in_preview = !shape.has_task[root] && rank < SIDEBAR_PREVIEW_LIMIT;
+        if !shape.has_task[root] {
+          rank += 1;
+        }
+        if in_preview || shape.has_task[root] || Some(root as u32) == active_root {
+          kept_roots[root] = true;
+        }
+      }
+    }
+    let kept: Vec<usize> =
+      (0..rows.len()).filter(|&index| shape.root_of[index].is_some_and(|root| kept_roots[root as usize])).collect();
+    Self { partial: kept.len() < rows.len(), kept, counts: shape.counts.clone() }
+  }
+}
+
+/// The first screen's parts that follow the corpus alone, kept while the page's rows and overlays hold.
+///
+/// Building them walked every row: it resolved each row's parent, the subtree of each root and the roots of each
+/// group. A page renders its first screen again whenever the open session changes, so a page request that names
+/// another session paid that walk on every render.
+struct FirstScreenShape {
+  source: PageTextSource,
+  /// Each row's root, or `None` for a row no root reaches.
+  root_of: Vec<Option<u32>>,
+  /// The root rows of each group, in listing order.
+  group_roots: std::collections::BTreeMap<String, Vec<u32>>,
+  /// The row count of each group's trees.
+  counts: std::collections::BTreeMap<String, usize>,
+  /// Whether each row's root carries a schedule task. Only a root's entry is read.
+  has_task: Vec<bool>,
+}
+
+impl FirstScreenShape {
+  fn of(page: &PageRows) -> Self {
+    let rows = page.rows();
     // A row nests under its `task_parent_id` when the page lists that parent, as the sidebar's tree does.
-    let parent: Vec<Option<usize>> =
-      rows.iter().map(|row| row.task_parent_id.as_deref().and_then(|id| index_of.get(id).copied())).collect();
+    let parent: Vec<Option<u32>> =
+      rows.iter().map(|row| row.task_parent_id.as_deref().and_then(|id| page.index.get(id).copied())).collect();
     let group: Vec<&str> = rows.iter().map(|row| row.group.as_deref().unwrap_or("")).collect();
     let has_task: Vec<bool> = rows
       .iter()
@@ -791,55 +843,39 @@ impl PageFirstScreen {
           .is_some_and(|value| !is_falsy(value))
       })
       .collect();
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); rows.len()];
+    let mut children: Vec<Vec<u32>> = vec![Vec::new(); rows.len()];
     for (index, parent) in parent.iter().enumerate() {
       if let Some(parent) = parent {
-        children[*parent].push(index);
+        children[*parent as usize].push(index as u32);
       }
     }
-    let roots: Vec<usize> = (0..rows.len()).filter(|&index| parent[index].is_none()).collect();
+    let roots: Vec<u32> = (0..rows.len()).filter(|&index| parent[index].is_none()).map(|index| index as u32).collect();
     // Each row belongs to the root its parent chain reaches. A row no root reaches stays unowned, and the sidebar
     // does not paint it either: its renderer walks out from the roots.
-    let mut root_of: Vec<Option<usize>> = vec![None; rows.len()];
-    let mut root_sizes: HashMap<usize, usize> = HashMap::new();
+    let mut root_of: Vec<Option<u32>> = vec![None; rows.len()];
+    let mut root_sizes: HashMap<u32, usize> = HashMap::new();
     for &root in &roots {
       let mut size = 0;
       let mut stack = vec![root];
       while let Some(node) = stack.pop() {
-        if root_of[node].is_some() {
+        if root_of[node as usize].is_some() {
           continue;
         }
-        root_of[node] = Some(root);
+        root_of[node as usize] = Some(root);
         size += 1;
-        stack.extend(children[node].iter().copied());
+        stack.extend(children[node as usize].iter().copied());
       }
       root_sizes.insert(root, size);
     }
-    let active_root = active.and_then(|id| index_of.get(id).copied()).and_then(|node| root_of[node]);
-    let mut group_roots: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
+    let mut group_roots: std::collections::BTreeMap<String, Vec<u32>> = std::collections::BTreeMap::new();
     for &root in &roots {
-      group_roots.entry(group[root].to_string()).or_default().push(root);
+      group_roots.entry(group[root as usize].to_string()).or_default().push(root);
     }
-    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    let mut kept_roots: Vec<bool> = vec![false; rows.len()];
-    for (key, roots) in &group_roots {
-      let mut rank = 0;
-      let mut total = 0;
-      for &root in roots {
-        total += root_sizes.get(&root).copied().unwrap_or(0);
-        let in_preview = !has_task[root] && rank < SIDEBAR_PREVIEW_LIMIT;
-        if !has_task[root] {
-          rank += 1;
-        }
-        if in_preview || has_task[root] || Some(root) == active_root {
-          kept_roots[root] = true;
-        }
-      }
-      counts.insert(key.clone(), total);
-    }
-    let kept: Vec<usize> =
-      (0..rows.len()).filter(|&index| root_of[index].is_some_and(|root| kept_roots[root])).collect();
-    Self { partial: kept.len() < rows.len(), kept, counts }
+    let counts = group_roots
+      .iter()
+      .map(|(key, roots)| (key.clone(), roots.iter().map(|root| root_sizes.get(root).copied().unwrap_or(0)).sum()))
+      .collect();
+    Self { source: PageTextSource::of(page), root_of, group_roots, counts, has_task }
   }
 }
 
@@ -1590,7 +1626,8 @@ mod tests {
     rows.push(synthetic_session("keyless-1", None, None));
     let page = synthetic_page(rows, HashMap::new());
 
-    let screen = PageFirstScreen::of(&page, None);
+    let screen_memo = Mutex::new(None);
+    let screen = PageFirstScreen::of(&page, None, &screen_memo);
 
     assert_eq!(
       kept_ids(&screen, &page),
@@ -1612,7 +1649,8 @@ mod tests {
     let sequence_fields = HashMap::from([("plain-7".to_string(), scheduled)]);
     let page = synthetic_page(rows, sequence_fields);
 
-    let screen = PageFirstScreen::of(&page, Some("plain-8"));
+    let screen_memo = Mutex::new(None);
+    let screen = PageFirstScreen::of(&page, Some("plain-8"), &screen_memo);
 
     assert_eq!(
       kept_ids(&screen, &page),
@@ -1620,6 +1658,13 @@ mod tests {
     );
     assert_eq!(screen.counts.get(""), Some(&9));
     assert!(screen.partial);
+    // The shape the first render built follows the corpus, so another open session picks another root from it.
+    let other = PageFirstScreen::of(&page, Some("plain-6"), &screen_memo);
+    assert_eq!(
+      kept_ids(&other, &page),
+      vec!["plain-1", "plain-2", "plain-3", "plain-4", "plain-5", "plain-6", "plain-7"]
+    );
+    assert_eq!(other.counts.get(""), Some(&9));
   }
 
   /// A sidebar with nothing hidden carries every row, and its text says the listing is complete.
@@ -1628,7 +1673,7 @@ mod tests {
     let rows: Vec<SessionMetadata> = (1..=3).map(|n| synthetic_session(&format!("small-{n}"), None, None)).collect();
     let page = synthetic_page(rows, HashMap::new());
 
-    let screen = PageFirstScreen::of(&page, None);
+    let screen = PageFirstScreen::of(&page, None, &Mutex::new(None));
     assert_eq!(kept_ids(&screen, &page), vec!["small-1", "small-2", "small-3"]);
     assert_eq!(screen.counts.get(""), Some(&3));
     assert!(!screen.partial);

@@ -1314,6 +1314,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::headers::CONTENT_TYPE`; the Google, Feishu and Devin token requests and the CLI's \
            request builders write the name.",
   },
+  OwnerRow {
+    name: "utf-8",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::json_loads::UTF8_CODEC`; the decode-error texts and the multipart form's charset \
+           default read it.",
+  },
 ];
 
 /// Plain config keys that the path matcher intentionally does not recognize. These must match an exact string literal

@@ -500,6 +500,9 @@ fn decode(body: &[u8]) -> Result<Vec<u32>, LoadError> {
   }
 }
 
+/// Python's codec name for UTF-8, the name its decode-error text prints and the name a form body decodes under.
+pub const UTF8_CODEC: &str = "utf-8";
+
 /// The decode-error text the readers below report and a text reader outside this module reuses: a one-byte range
 /// names the byte, a longer range names `start-end` (end inclusive). `codec` is Python's codec name, such as `utf-8`.
 pub fn codec_error_text(codec: &str, body: &[u8], start: usize, end: usize, reason: &str) -> String {
@@ -533,17 +536,17 @@ fn decode_utf8(body: &[u8], skip: usize) -> Result<Vec<u32>, LoadError> {
       0xF0 => (4, 0x90, 0xBF),
       0xF1..=0xF3 => (4, 0x80, 0xBF),
       0xF4 => (4, 0x80, 0x8F),
-      _ => return Err(codec_error("utf-8", body, i, i + 1, "invalid start byte")),
+      _ => return Err(codec_error(UTF8_CODEC, body, i, i + 1, "invalid start byte")),
     };
     let mut code = u32::from(lead) & (0x7F >> width);
     for offset in 1..width {
       let position = i + offset;
       let Some(&byte) = body.get(position) else {
-        return Err(codec_error("utf-8", body, i, position, "unexpected end of data"));
+        return Err(codec_error(UTF8_CODEC, body, i, position, "unexpected end of data"));
       };
       let (lower, upper) = if offset == 1 { (low, high) } else { (0x80, 0xBF) };
       if !(lower..=upper).contains(&byte) {
-        return Err(codec_error("utf-8", body, i, position, "invalid continuation byte"));
+        return Err(codec_error(UTF8_CODEC, body, i, position, "invalid continuation byte"));
       }
       code = (code << 6) | u32::from(byte & 0x3F);
     }

@@ -159,7 +159,7 @@ pub async fn read(headers: &HeaderMap, body: Body) -> Result<FormBody, Box<Respo
   let (media_type, params) = parse_options_header(content_type);
   if media_type == "multipart/form-data" {
     let boundary = last_param(&params, "boundary").ok_or_else(|| starlette_error("Missing boundary in multipart."))?;
-    let charset = last_param(&params, "charset").unwrap_or_else(|| "utf-8".to_string());
+    let charset = last_param(&params, "charset").unwrap_or_else(|| charliebot_core::json_loads::UTF8_CODEC.to_string());
     read_multipart(&boundary, &charset, body).await
   } else if media_type == "application/x-www-form-urlencoded" {
     read_urlencoded(body).await

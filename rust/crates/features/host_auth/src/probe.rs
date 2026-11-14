@@ -2,10 +2,10 @@
 //! charliebot-core's batch-mode argv, its output read in full, and the verdict read from that output.
 
 use std::io;
-use std::os::unix::process::ExitStatusExt;
-use std::process::{ExitStatus, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
+use charliebot_core::proc_status;
 use charliebot_core::ssh;
 use charliebot_core::str_methods;
 use tokio::io::AsyncReadExt;
@@ -76,7 +76,8 @@ pub async fn probe_host_fresh(alias: String) -> io::Result<(i32, String)> {
 }
 
 /// Run `argv`, read its stdout and stderr in full, and kill it when it outlives `timeout`. The output read before
-/// the kill is kept. The return code is the exit code, or the negated signal number of a killed process.
+/// the kill is kept. The return code is `proc_status::code_of`'s: the exit code, or a killed process's negated signal
+/// number.
 pub async fn run_probe(argv: &[String], timeout: Duration) -> io::Result<(i32, String)> {
   let (program, arguments) = argv.split_first().expect("an ssh argv names a program");
   let mut child = Command::new(program).args(arguments).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
@@ -93,17 +94,14 @@ pub async fn run_probe(argv: &[String], timeout: Duration) -> io::Result<(i32, S
   };
   let mut output = stdout_read.await.expect("the stdout reader does not panic")?;
   output.extend(stderr_read.await.expect("the stderr reader does not panic")?);
-  Ok((returncode(status), String::from_utf8_lossy(&output).into_owned()))
+  let returncode = proc_status::code_of(status).expect("a process with no exit code ended by a signal");
+  Ok((returncode, String::from_utf8_lossy(&output).into_owned()))
 }
 
 async fn read_to_end<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) -> io::Result<Vec<u8>> {
   let mut buffer = Vec::new();
   pipe.read_to_end(&mut buffer).await?;
   Ok(buffer)
-}
-
-fn returncode(status: ExitStatus) -> i32 {
-  status.code().unwrap_or_else(|| -status.signal().expect("a process with no exit code ended by a signal"))
 }
 
 #[cfg(test)]

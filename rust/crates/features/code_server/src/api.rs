@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{ExitStatus, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,7 @@ use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, validation};
 use charliebot_core::config::{CharlieBotConfig, PathsConfig};
 use charliebot_core::paths;
+use charliebot_core::proc_status;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
@@ -146,7 +147,8 @@ async fn wait_for_listener(child: &mut Child, port: u16) -> Result<(), Response>
     }
     match child.try_wait() {
       Ok(Some(status)) => {
-        tracing::warn!(returncode = return_code(status), "code_server_exited_before_listening");
+        let returncode = proc_status::code_of(status).expect("an exit status has a code or a signal");
+        tracing::warn!(returncode, "code_server_exited_before_listening");
         break;
       }
       Ok(None) => {}
@@ -155,11 +157,6 @@ async fn wait_for_listener(child: &mut Child, port: u16) -> Result<(), Response>
     tokio::time::sleep(POLL_INTERVAL).await;
   }
   Ok(())
-}
-
-/// `Popen.returncode`: the exit code, or the negated signal number for a process that was signalled.
-fn return_code(status: ExitStatus) -> i32 {
-  status.code().or(status.signal().map(|signal| -signal)).expect("an exit status has a code or a signal")
 }
 
 /// A connect to `127.0.0.1:<port>` within 0.2 s succeeds.

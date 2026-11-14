@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::home;
+use charliebot_core::proc_status;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::value_str;
 use charliebot_registry::backend::{
@@ -32,7 +33,7 @@ use charliebot_agents::event_builders;
 use charliebot_agents::runner::EventFn;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
-use charliebot_agents::transport::kill::{exit_code, kill_process_group};
+use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
 use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
 
@@ -1064,7 +1065,11 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   let (exit_tx, mut exit_rx) = watch::channel(None);
   let mut child = spawned.child;
   tokio::spawn(async move {
-    let code = child.wait().await.map(exit_code).map_err(|error| error.to_string());
+    let code = child
+      .wait()
+      .await
+      .map(|status| proc_status::code_of(status).expect("an exit status has a code or signal"))
+      .map_err(|error| error.to_string());
     let _ = exit_tx.send(Some(code));
   });
   let stderr_task = tokio::spawn(async move {

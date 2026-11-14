@@ -27,6 +27,7 @@ pub mod paths;
 pub mod posix_path;
 mod printable_table;
 pub mod proc_identity;
+pub mod proc_status;
 pub mod proxy_env;
 pub mod regex_classes;
 pub mod repo_root;

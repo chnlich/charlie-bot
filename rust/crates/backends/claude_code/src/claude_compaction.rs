@@ -25,6 +25,7 @@ use tokio::time::timeout;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill;
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
+use charliebot_core::proc_status;
 
 use super::{
   DISALLOWED_TOOLS_FLAG, HEADLESS_DISALLOWED_TOOLS, claude_accounts, claude_config, claude_launch, login_dirs,
@@ -497,7 +498,8 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
   let stdout = stdout_reader.await.context("joining compaction stdout reader")??;
   let stderr = stderr_reader.await.context("joining compaction stderr reader")??;
   let after = count_compact_boundaries(&transcript)?;
-  let mut outcome = judge(kill::exit_code(status), &stdout, &baseline, before, after, family);
+  let exit_code = proc_status::code_of(status).expect("an exit status has a code or signal");
+  let mut outcome = judge(exit_code, &stdout, &baseline, before, after, family);
   if !outcome.ok {
     let stderr = String::from_utf8_lossy(&stderr);
     let stderr = stderr.trim();

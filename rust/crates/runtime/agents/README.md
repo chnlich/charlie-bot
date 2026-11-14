@@ -22,7 +22,6 @@ This crate owns the process transport below the agent backends and the launch ma
 - `kill::kill_process_group`, `kill_group_escalating`, `wait_or_kill_group`
 - `kill::terminate_child`
 - `kill::detach`
-- `kill::exit_code`
 - `recovery::TypeLineFilter`, `TypeLineFilter::new`
 - `recovery::parse_raw_lines`, `project_raw_events`, `result_exit_code`
 - `recovery::project_raw_file`, `scan_result_exit`, `raw_completion_time`

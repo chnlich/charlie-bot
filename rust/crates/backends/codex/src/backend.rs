@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
+use charliebot_core::proc_status;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::value_str;
 use charliebot_registry::backend::{
@@ -25,7 +26,7 @@ use charliebot_agents::cli_base::prepend_path_dir;
 use charliebot_agents::gh_wrapper;
 use charliebot_agents::one_shot::{assistant_text, frame_system_prompt};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
-use charliebot_agents::transport::kill::{exit_code, kill_process_group};
+use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{
   AgentChild, AgentPipeReader, SpawnSpec, SpawnedChild, parse_backend_line, spawn_one_shot,
 };
@@ -320,7 +321,8 @@ async fn collect(
     }
   }
   let status = child.wait().await?;
-  Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, exit_code(status)))
+  let exit_code = proc_status::code_of(status).expect("an exit status has a code or signal");
+  Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, exit_code))
 }
 
 /// The child's first bytes of stderr, read to the end so it never blocks on a full pipe.

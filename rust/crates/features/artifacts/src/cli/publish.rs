@@ -9,6 +9,7 @@ use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::paths;
+use charliebot_core::proc_status;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
 use clap::{CommandFactory, FromArgMatches, Parser};
@@ -186,8 +187,7 @@ fn publish_through_command(artifact: &Path, command: &[String], lane_options: &[
     .map_err(|error| CliExit::error(format!("publish.command stderr is not UTF-8: {error}")))?;
   let stderr = stderr.trim();
   if !done.status.success() {
-    use std::os::unix::process::ExitStatusExt;
-    let code = done.status.code().unwrap_or_else(|| -done.status.signal().unwrap_or(1));
+    let code = proc_status::code_of(done.status).unwrap_or(-1);
     return Err(CliExit::error(format!("publish.command exited {code}; stderr: {stderr}")));
   }
   let lines = str_methods::splitlines(&stdout);

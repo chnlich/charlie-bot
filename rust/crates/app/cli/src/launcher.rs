@@ -7,13 +7,13 @@
 
 use std::fs::OpenOptions;
 use std::io::{self, Read};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use charliebot_core::{ssh, text_repr};
+use charliebot_core::{proc_status, ssh, text_repr};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::waitpid;
@@ -163,7 +163,7 @@ pub fn launch_remote(host: &str, cmd: &str, cwd: Option<&str>, launch_id: &str) 
   }
   if !captured.status.success() {
     let stderr = captured.stderr.trim();
-    let code = return_code(captured.status);
+    let code = proc_status::code_of(captured.status).expect("an exit status has a code or a signal");
     return Err(LaunchError::Ssh(format!("ssh to {host} failed (rc={code}): {stderr}")));
   }
   // The last two non-blank lines are the remote home and the PID from `cat` of the PID file after the `$!` write.
@@ -211,7 +211,7 @@ pub fn kill_launch(launch: &Launch) -> Result<(), LaunchError> {
       if captured.timed_out {
         eprintln!("warning: remote kill of {host}:{} timed out; the process group may still run", launch.pid);
       } else if !captured.status.success() && !captured.stderr.to_lowercase().contains("no such process") {
-        let code = return_code(captured.status);
+        let code = proc_status::code_of(captured.status).expect("an exit status has a code or a signal");
         let stderr = captured.stderr.trim();
         eprintln!("warning: remote kill of {host}:{} exited {code}: {stderr}", launch.pid);
       }
@@ -259,11 +259,6 @@ fn drain(mut pipe: impl Read + Send + 'static) -> JoinHandle<io::Result<Vec<u8>>
 fn join_text(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<String> {
   let bytes = reader.join().expect("the pipe reader does not panic")?;
   Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// The exit code, or the negated signal number when a signal ended the process.
-fn return_code(status: ExitStatus) -> i32 {
-  status.code().or_else(|| status.signal().map(|signal| -signal)).expect("an exit status has a code or a signal")
 }
 
 #[cfg(test)]

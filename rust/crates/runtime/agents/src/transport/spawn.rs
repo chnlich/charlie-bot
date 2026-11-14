@@ -1541,7 +1541,9 @@ mod tests {
     let result =
       super::super::kill::wait_or_kill_group(child.wait(), Some(Duration::from_millis(10)), pid, stderr_task).await;
     assert!(result.is_err());
-    assert_eq!(super::super::kill::exit_code(child.wait().await.unwrap()), -libc::SIGKILL);
+    let code =
+      charliebot_core::proc_status::code_of(child.wait().await.unwrap()).expect("an exit status has a code or signal");
+    assert_eq!(code, -libc::SIGKILL);
   }
 
   async fn shell(args: &[&str]) -> AgentChild {

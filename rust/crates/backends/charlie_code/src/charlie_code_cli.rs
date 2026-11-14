@@ -21,7 +21,7 @@ use charliebot_agents::cli_base::{CliHost, apply_proxy_env, image_mime, prepend_
 /// The child env name that carries the configured API key.
 pub const API_KEY_ENV: &str = "CHARLIE_CODE_API_KEY";
 
-/// The file in the transport directory that carries the prompt; the `--task-file` option names it.
+/// The file in the transport directory that carries the prompt. The `--task-file` option names it.
 pub const TASK_FILE_NAME: &str = "task.md";
 
 /// The executable this backend launches. It carries the backend type's name.

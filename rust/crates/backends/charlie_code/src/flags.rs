@@ -12,7 +12,7 @@ pub const MODEL: &str = "--model";
 pub const API_BASE: &str = "--api-base";
 /// The model's context window, in tokens.
 pub const CONTEXT_WINDOW: &str = "--context-window";
-/// The file that carries the task text; the text never rides argv.
+/// The file that carries the task text. The text never rides argv.
 pub const TASK_FILE: &str = "--task-file";
 /// The file that carries the system instructions.
 pub const INSTRUCTIONS_FILE: &str = "--instructions-file";

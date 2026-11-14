@@ -1,5 +1,5 @@
 //! The loopback HTTP server that a test puts in front of the shared client. The test scripts the answers the server
-//! gives; the server records each request it receives, in order, so the test checks the bytes the client sent.
+//! gives. The server records each request it receives, in order, so the test checks the bytes the client sent.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

@@ -10,7 +10,7 @@ use crate::{client, json_out, resolve};
 /// The internal route that registers a draft.
 pub const REGISTER_PATH: &str = "/api/internal/drafts";
 
-/// The registration payload's field names that belong to the draft alone; the session field comes from `crate::fields`.
+/// The registration payload's field names that belong to the draft alone. The session field comes from `crate::fields`.
 /// The `charliebot-drafts` package's register route declares the same names, and its draft events carry them.
 pub const PLATFORM: &str = "platform";
 pub const TARGET: &str = "target";

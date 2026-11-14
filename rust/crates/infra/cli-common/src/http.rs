@@ -46,7 +46,7 @@ async fn send_async(request: &WireRequest) -> Result<WireResponse, TransportErro
 }
 
 /// The classification of a response-head failure. A connect that never established is the retry
-/// class; a connection closed before any status line is a missing-status-line failure.
+/// class. A connection closed before any status line is a missing-status-line failure.
 fn map_response_head_error(error: reqwest::Error) -> TransportError {
   if error.is_connect() {
     return TransportError::ConnectPhase(os_error_message(&error));
@@ -100,7 +100,7 @@ mod tests {
     port
   }
 
-  /// One accept that reads the whole request and closes without an answer; the listener lives
+  /// One accept that reads the whole request and closes without an answer. The listener lives
   /// until the acceptor has served the one connection.
   fn drop_after_request_server() -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();

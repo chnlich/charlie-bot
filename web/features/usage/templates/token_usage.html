@@ -289,7 +289,7 @@ const td = (label, content, cls) => {
   if (content instanceof Node) cell.append(content); else cell.textContent = content;
   return cell;
 };
-// A table of the given headers and cell rows; a cell is text or a node.
+// A table of the given headers and cell rows. A cell is text or a node.
 const table = (cls, headers, body) => {
   const t = el('table', cls), head = el('tr'), tbody = el('tbody');
   for (const h of headers) head.append(el('th', null, h));
@@ -316,7 +316,8 @@ const sourceTable = (segments, columns) => table('data stack', ['Source', ...col
 const accountTable = accounts => table('data stack', ['Account', 'API calls', 'Output', 'Total'],
   accounts.map(a => [a.name, fmt(a.calls), fmt(a.output), fmt(a.total)]));
 
-// A toggle button opens its detail row (or its accounts table); the button carries the state for assistive tech.
+// A toggle button opens its detail row (or its accounts table).
+// The button carries the state for assistive tech.
 const toggler = (label, cls) => {
   const button = el('button', cls, cls === 'tg' ? '▸' : label);
   button.type = 'button';
@@ -359,7 +360,7 @@ if (legend) for (const [slot, name] of LEG) {
   legend.append(k);
 }
 
-// Axis ticks at clean round numbers; the last tick covers max, so no bar overflows.
+// Axis ticks at clean round numbers. The last tick covers max, so no bar overflows.
 function ticks(max) {
   const raw = max / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
   const step = [1,1.5,2,2.5,3,4,5,7.5,10].map(m => m*mag).find(s => s >= raw) || 10*mag;

@@ -42,6 +42,10 @@ use crate::task_tree_state::{
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
+/// The renewals one sweep takes to compare every session's inputs: each renewal reads the next slice of the home,
+/// and a slice that holds renews the cached index's age. A home of any size therefore pays one slice per renewal,
+/// and every session's inputs are compared once per sweep.
+const TREE_INDEX_SWEEP_SLICES: usize = 10;
 
 /// Clears the background-refresh flag however its rebuild ends, so a failed build does not stop every later one.
 struct TreeIndexRefreshFlight<'a>(&'a AtomicBool);
@@ -978,6 +982,19 @@ impl Store {
   pub fn invalidate_tree_index(&self) {
     self.task_tree_generation.fetch_add(1, Ordering::AcqRel);
     self.task_tree_index.lock().expect("task tree index mutex is not poisoned").take();
+  }
+
+  /// Rebuild the cached task index after an appended history event that can move a node's task state.
+  ///
+  /// A build derives `task_state` from the newest of [`LIFECYCLE_STATE_TYPES`] in the session's history, so only an
+  /// append of one of those types can change what a build would produce. Any other event leaves the cached index
+  /// correct, and a busy turn appends them far too often to rebuild the home's index for each.
+  pub(crate) fn note_tree_state_event(&self, event_type: Option<&str>) {
+    if let Some(event_type) = event_type
+      && LIFECYCLE_STATE_TYPES.contains(&event_type)
+    {
+      self.invalidate_tree_index();
+    }
   }
 
   /// Return a node’s task ancestors, nearest first.
@@ -2210,6 +2227,7 @@ impl Store {
         built_at: Instant::now(),
         index: Arc::clone(&index),
         sessions_dir: built.sessions_dir,
+        sweep_cursor: 0,
       });
     }
     Ok(Some(index))
@@ -2257,6 +2275,7 @@ impl Store {
         built_at: Instant::now(),
         index: Arc::new(built.index),
         sessions_dir: built.sessions_dir,
+        sweep_cursor: 0,
       });
     });
     if spawned.is_err() {
@@ -2270,13 +2289,17 @@ impl Store {
   /// report whether it did.
   ///
   /// A home whose session directories, metadata files and live histories all hold their values builds the same index,
-  /// so the cached one serves every reader and the walk is skipped. An input that moved, a home that cannot be read
-  /// and a cached index another build replaced all report false, and the caller then builds.
+  /// so the cached one serves every reader and the walk is skipped. The comparison covers the next slice of the
+  /// home's sessions, so one sweep over [`TREE_INDEX_SWEEP_SLICES`] renewals compares every session's inputs. An input
+  /// that moved, a home that cannot be read and a cached index another build replaced all report false, and the
+  /// caller then builds.
   fn renew_stale_tree_index(&self, generation: u64) -> bool {
-    let (cached, recorded_dir) = {
+    let (cached, recorded_dir, cursor) = {
       let cached = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
       match cached.as_ref() {
-        Some(cached) if cached.generation == generation => (Arc::clone(&cached.index), cached.sessions_dir),
+        Some(cached) if cached.generation == generation => {
+          (Arc::clone(&cached.index), cached.sessions_dir, cached.sweep_cursor)
+        }
         _ => return false,
       }
     };
@@ -2284,12 +2307,14 @@ impl Store {
       Ok(identity) => identity,
       Err(_) => return false,
     };
-    let Ok(held) = self.tree_index_inputs_hold(&cached.inputs, recorded_dir.as_ref(), current_dir.as_ref()) else {
+    let Ok(next_cursor) =
+      self.tree_index_inputs_hold(&cached.inputs, recorded_dir.as_ref(), current_dir.as_ref(), cursor)
+    else {
       return false;
     };
-    if !held {
+    let Some(next_cursor) = next_cursor else {
       return false;
-    }
+    };
     let mut entry = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
     match entry.as_mut() {
       Some(entry) if entry.generation == generation && Arc::ptr_eq(&entry.index, &cached) => {
@@ -2297,16 +2322,19 @@ impl Store {
         // The renewal proved the names and the inputs still match, so the identity it read holds for them: a later
         // refresh whose stat matches it compares the sessions' inputs alone, even when a rollback moved it since.
         entry.sessions_dir = current_dir;
+        entry.sweep_cursor = next_cursor;
         true
       }
       _ => false,
     }
   }
 
-  /// Whether the home still holds every input the index at `expected` was built from, compared in place.
+  /// Whether the home still holds the inputs the index at `expected` was built from, compared from `cursor` on, and
+  /// the cursor the next renewal starts at.
   ///
-  /// The scan reads each session's two identities and compares them against the recorded ones, stopping at the first
-  /// that moved. A quiet home therefore renews without building a second input list.
+  /// The scan reads the next slice of sessions' two identities and compares them against the recorded ones, stopping
+  /// at the first that moved. A slice of a quiet home therefore renews without building a second input list, and the
+  /// cursor it returns resumes the sweep after the slice it read.
   ///
   /// The directory walk that reads the session names runs only when the sessions directory's own identity moved from
   /// the one the renewal last proved. A session directory that appears or leaves moves that identity, so a match
@@ -2316,29 +2344,36 @@ impl Store {
     expected: &[TreeIndexInput],
     recorded_dir: Option<&FileIdentity>,
     current_dir: Option<&FileIdentity>,
-  ) -> StoreResult<bool> {
+    cursor: usize,
+  ) -> StoreResult<Option<usize>> {
     let sessions_dir = self.cfg.sessions_dir();
     if current_dir != recorded_dir {
       let names = session_dir_names(&sessions_dir)?;
       if names.len() != expected.len() {
-        return Ok(false);
+        return Ok(None);
       }
       if names.iter().zip(expected).any(|(name, input)| name != &input.session_id) {
-        return Ok(false);
+        return Ok(None);
       }
+    }
+    if expected.is_empty() {
+      return Ok(Some(0));
     }
     let dir = match fs::File::open(&sessions_dir) {
       Ok(dir) => dir,
       Err(error) => return Err(path_error(&sessions_dir, error)),
     };
+    let start = cursor % expected.len();
+    let slice = expected.len().div_ceil(TREE_INDEX_SWEEP_SLICES).max(1);
+    let end = (start + slice).min(expected.len());
     let mut relative = Vec::with_capacity(96);
-    for input in expected {
+    for input in &expected[start..end] {
       let values = tree_input_values(&dir, &input.session_id, &mut relative)?;
       if values.metadata != input.metadata || values.history != input.history {
-        return Ok(false);
+        return Ok(None);
       }
     }
-    Ok(true)
+    Ok(Some(if end == expected.len() { 0 } else { end }))
   }
 
   #[cfg(test)]
@@ -3721,6 +3756,47 @@ pub(crate) mod tests {
     assert!(!store.tree_index_refresh_running.load(Ordering::Acquire), "the refresh ends");
     assert!(Arc::ptr_eq(&store.tree_index().unwrap(), &first), "the index that no input moved stays the index");
     assert_eq!(store.task_tree_index_build_count(), 1, "no walk runs over a home nothing moved in");
+  }
+
+  #[tokio::test]
+  async fn a_sweep_compares_every_session_within_its_slice_count() {
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let mut nodes = Vec::new();
+    for index in 0..25 {
+      nodes.push(create_node(&store, &format!("sweep-{index:02}"), None, TaskProfile::Manager).await);
+    }
+    for node in &nodes {
+      store.get_session(&node.id).await.unwrap().unwrap();
+    }
+    store.invalidate_tree_index();
+    let first = store.tree_index().unwrap();
+    assert_eq!(store.task_tree_index_build_count(), 1);
+    store.enable_tree_index_background_refresh();
+
+    // An external edit moves the input the sweep reaches last: the index's inputs are sorted by session id, and the
+    // last slice covers the last of them.
+    let last = first.inputs.last().expect("the built index records every session").session_id.clone();
+    let path = store.metadata_path(&last);
+    let mut meta: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    meta["name"] = Value::String("renamed by another process".to_string());
+    fs::write(&path, serde_json::to_string(&meta).unwrap()).unwrap();
+
+    let mut index = Arc::clone(&first);
+    let mut renewals = 0;
+    while renewals < TREE_INDEX_SWEEP_SLICES && Arc::ptr_eq(&index, &first) {
+      store.expire_tree_index_for_test();
+      index = store.tree_index().unwrap();
+      for _ in 0..200 {
+        if !store.tree_index_refresh_running.load(Ordering::Acquire) {
+          break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+      }
+      renewals += 1;
+    }
+    assert!(!Arc::ptr_eq(&index, &first), "a sweep compares the edited session within its slice count");
+    assert_eq!(store.task_tree_index_build_count(), 2, "the moved input rebuilds the index once");
   }
 
   #[tokio::test]

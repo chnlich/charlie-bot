@@ -149,7 +149,7 @@ fn is_application_route(link: &str) -> bool {
     return true;
   }
   let path = link.split(['?', '#']).next().expect("split always yields the full string");
-  path == "/diff" || path == "/api" || path.starts_with("/diff/") || path.starts_with("/api/")
+  file_urls::is_application_route(path)
 }
 
 const PAGE_BLOCK_TAGS: &[&str] =

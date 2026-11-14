@@ -12,8 +12,9 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
 use serde_json::json;
 
-/// The page's path: its router mounts it, its matcher claims it, and the home card links to it.
-pub(crate) const PAGE_PATH: &str = "/diff";
+/// The page's path: its router mounts it, its matcher claims it, and the home card links to it. The file-link
+/// scanners read the same path from its owner in `charliebot_compat::file_urls`.
+pub(crate) const PAGE_PATH: &str = charliebot_compat::file_urls::DIFF_PAGE_PATH;
 
 /// The page's router, with the feature context as its state.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {

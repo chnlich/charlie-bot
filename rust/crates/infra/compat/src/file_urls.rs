@@ -18,6 +18,12 @@ use crate::urlquote::quote_set;
 /// The first file-server mount, without its trailing slash.
 pub const FILE_SERVER_MOUNT: &str = "/absolute_filepath";
 
+/// The diff viewer's page route.
+pub const DIFF_PAGE_PATH: &str = "/diff";
+
+/// The API's route prefix. A path under it names a request, never a host file.
+pub const API_ROUTE_PREFIX: &str = "/api";
+
 /// The retired file-server prefixes, without their trailing slashes.
 const RETIRED_PREFIXES: [&str; 2] = ["/files", "/file"];
 
@@ -434,6 +440,14 @@ fn unsplit(parts: &SplitUrl, path: &str) -> String {
   url
 }
 
+/// Whether a link path names an application route rather than a host file: the diff page, the API, and every path
+/// under either. This crate's link scanner and `charliebot-user-text-checks`'s page-link check read this one answer.
+pub fn is_application_route(path: &str) -> bool {
+  [DIFF_PAGE_PATH, API_ROUTE_PREFIX]
+    .iter()
+    .any(|route| path == *route || path.strip_prefix(route).is_some_and(|rest| rest.starts_with('/')))
+}
+
 /// The host path a Markdown target names: a `~/` path under the user's home, a path under the session directory, or an
 /// absolute path. An absolute path names a file only when its first segment is a directory on this host.
 fn local_path_target(parts: &SplitUrl, context: Option<&ScanContext>) -> io::Result<Option<PathBuf>> {
@@ -441,11 +455,7 @@ fn local_path_target(parts: &SplitUrl, context: Option<&ScanContext>) -> io::Res
   if !parts.scheme.is_empty() || !parts.netloc.is_empty() || path.is_empty() {
     return Ok(None);
   }
-  let app_route = path.starts_with("/?")
-    || path == "/diff"
-    || path == "/api"
-    || path.starts_with("/diff/")
-    || path.starts_with("/api/");
+  let app_route = path.starts_with("/?") || is_application_route(&path);
   if path.starts_with(['?', '#']) || app_route {
     return Ok(None);
   }

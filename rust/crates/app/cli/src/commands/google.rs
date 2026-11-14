@@ -1241,17 +1241,14 @@ fn required_response_string(payload: &Map<String, Value>, key: &str, operation: 
 
 #[cfg(test)]
 mod tests {
-  use std::io::{Read, Write};
-  use std::net::{TcpListener, TcpStream};
-  use std::sync::mpsc::{self, Receiver};
-  use std::thread;
-  use std::time::Duration;
+  use std::net::TcpListener;
+
+  use charliebot_cli_common::test_support::LoopbackServer;
 
   use super::*;
 
   const DEFAULT_TABLE: &str =
     "google:\n  client_id: default-client\n  client_secret: default-secret\n  refresh_token: default-refresh\n";
-  const TIMEOUT: Duration = Duration::from_secs(2);
 
   fn credentials_home(text: &str) -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
@@ -1286,65 +1283,28 @@ mod tests {
     RequestArgs { method: "GET".to_string(), url: url.to_string(), data_file: None, json: None, header: Vec::new() }
   }
 
-  /// A local server that answers the scripted responses in order and records every request.
-  struct Stub {
-    base: String,
-    requests: Receiver<Vec<u8>>,
-  }
+  /// The shared loopback server, bound to this command's two endpoints.
+  struct Stub(LoopbackServer);
 
   impl Stub {
     fn start(responses: Vec<(u16, Vec<u8>)>) -> Stub {
-      let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-      let base = format!("http://{}", listener.local_addr().unwrap());
-      let (sender, requests) = mpsc::channel();
-      thread::spawn(move || {
-        for (status, body) in responses {
-          let (mut stream, _) = listener.accept().unwrap();
-          sender.send(read_http_request(&mut stream)).unwrap();
-          let response = format!(
-            "HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-          );
-          let _ = stream.write_all(response.as_bytes());
-          let _ = stream.write_all(&body);
-        }
-      });
-      Stub { base, requests }
+      Stub(LoopbackServer::start(responses))
+    }
+
+    fn base(&self) -> &str {
+      self.0.base()
     }
 
     fn endpoints(&self) -> Endpoints {
-      Endpoints { token_url: format!("{}/token", self.base), profile_url: format!("{}/profile", self.base) }
+      Endpoints { token_url: format!("{}/token", self.base()), profile_url: format!("{}/profile", self.base()) }
     }
 
     fn next(&self) -> String {
-      String::from_utf8(self.requests.recv_timeout(TIMEOUT).unwrap()).unwrap()
+      self.0.next_request()
     }
-  }
 
-  fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
-    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 4096];
-    loop {
-      let read = stream.read(&mut buffer).unwrap();
-      if read == 0 {
-        return request;
-      }
-      request.extend_from_slice(&buffer[..read]);
-      let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n").map(|index| index + 4) else {
-        continue;
-      };
-      let head = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
-      let content_length = head
-        .lines()
-        .find_map(|line| {
-          let (name, value) = line.split_once(':')?;
-          name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
-        })
-        .unwrap_or(0);
-      if request.len() >= header_end + content_length {
-        return request;
-      }
+    fn no_request(&self) -> bool {
+      self.0.no_request()
     }
   }
 
@@ -1372,7 +1332,8 @@ mod tests {
     let table = table(&home);
     let stub = Stub::start(vec![token_response("default-access"), (200, br#"{"ok":true}"#.to_vec())]);
 
-    let body = execute_request(&table, None, &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap();
+    let body =
+      execute_request(&table, None, &request_args(&format!("{}/api", stub.base())), &stub.endpoints()).unwrap();
     let form = stub.next();
     let api = stub.next();
 
@@ -1392,7 +1353,8 @@ mod tests {
     let table = table(&home);
     let stub = Stub::start(vec![token_response("personal-access"), (200, b"{}".to_vec())]);
 
-    execute_request(&table, Some("personal"), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap();
+    execute_request(&table, Some("personal"), &request_args(&format!("{}/api", stub.base())), &stub.endpoints())
+      .unwrap();
     let form = stub.next();
     let api = stub.next();
 
@@ -1465,7 +1427,7 @@ mod tests {
     let stub = Stub::start(vec![token_response("personal-access"), (200, b"{}".to_vec())]);
 
     let body =
-      execute_request(&table, Some("personal"), &request_args(&format!("{}/api", stub.base)), &stub.endpoints())
+      execute_request(&table, Some("personal"), &request_args(&format!("{}/api", stub.base())), &stub.endpoints())
         .unwrap();
     let form = stub.next();
     let api = stub.next();
@@ -1682,7 +1644,7 @@ mod tests {
     let stub = Stub::start(vec![(401, b"denied".to_vec())]);
 
     let error =
-      execute_request(&table, None, &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap_err();
+      execute_request(&table, None, &request_args(&format!("{}/api", stub.base())), &stub.endpoints()).unwrap_err();
 
     assert_eq!(error.code, 1);
     assert!(error_text(&error).contains("Google token refresh failed: HTTP 401"));
@@ -2284,7 +2246,7 @@ appointments and the tax paperwork of the household";
 
     assert_eq!(error.code, 2);
     assert!(error_text(&error).contains("--owner"));
-    assert!(stub.requests.try_recv().is_err());
+    assert!(stub.no_request());
     assert_eq!(std::fs::read(credentials_path(&home)).unwrap(), original);
     assert!(temporary_files(&home).is_empty());
   }
@@ -2310,7 +2272,7 @@ appointments and the tax paperwork of the household";
     assert!(
       error_text(&error).contains("credentials.google_account_personal sets owner but credentials.google does not")
     );
-    assert!(stub.requests.try_recv().is_err());
+    assert!(stub.no_request());
     assert_eq!(std::fs::read(credentials_path(&home)).unwrap(), original);
   }
 
@@ -2400,7 +2362,7 @@ appointments and the tax paperwork of the household";
 
     assert_eq!(error.code, 2);
     assert!(error_text(&error).contains("person blake has several accounts and none sets primary: true"));
-    assert!(stub.requests.try_recv().is_err());
+    assert!(stub.no_request());
     assert_eq!(std::fs::read(credentials_path(&home)).unwrap(), original);
   }
 }

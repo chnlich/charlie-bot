@@ -23,6 +23,8 @@ pub mod resolve;
 pub mod response;
 pub mod route;
 pub mod skew;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod timeouts;
 pub mod urlencode;
 pub mod wire;

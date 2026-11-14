@@ -18,6 +18,7 @@ use charliebot_core::proc_status;
 use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_core::run_token::{RUN_TOKEN_ENV, SESSION_ID_ENV};
 use charliebot_registry::backend::Env;
+use charliebot_registry::pages::package_directory;
 use futures_util::StreamExt;
 use memchr::memchr;
 use nix::sys::signal::Signal;
@@ -96,7 +97,7 @@ impl OpenCodeHost {
 
   /// The shell hook used by each session command to enter its CharlieBot cgroup.
   pub fn join_script(&self) -> PathBuf {
-    self.repo_root.join("web/backends/opencode/cgroup_join.sh")
+    package_directory(&self.repo_root, "backends.opencode").join("cgroup_join.sh")
   }
 
   pub fn store_dir(&self) -> PathBuf {

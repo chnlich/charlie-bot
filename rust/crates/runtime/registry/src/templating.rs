@@ -38,7 +38,7 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 
 use crate::context::FeatureContext;
-use crate::pages::{self, STATIC_URL_PREFIX, package_directory};
+use crate::pages::{self, STATIC_URL_PREFIX, package_static_directory, package_templates_directory};
 use crate::registry::TemplateGlobalScope;
 use crate::watch::TreeWatch;
 use crate::{inlined_script, inlined_style};
@@ -163,11 +163,11 @@ const PAGE_GZIP_ENTRIES: usize = 8;
 impl Templating {
   /// The engine of `repo_root` for the page packages `packages`, in registration order.
   pub fn new(repo_root: &Path, packages: &[&'static str]) -> Templating {
-    let mut directories = vec![repo_root.join("web").join("templates")];
-    directories.extend(packages.iter().map(|package| package_directory(repo_root, package).join("templates")));
+    let mut directories = vec![pages::web_templates_directory(repo_root)];
+    directories.extend(packages.iter().map(|package| package_templates_directory(repo_root, package)));
     let mut trees = directories.clone();
-    trees.push(repo_root.join("web").join("static"));
-    trees.extend(packages.iter().map(|package| package_directory(repo_root, package).join("static")));
+    trees.push(pages::web_static_directory(repo_root));
+    trees.extend(packages.iter().map(|package| package_static_directory(repo_root, package)));
     let loader = trees.clone();
     Templating {
       repo_root: repo_root.to_path_buf(),
@@ -217,7 +217,7 @@ impl Templating {
         return Ok(state.digest.clone());
       }
     }
-    let static_root = self.repo_root.join("web").join("static");
+    let static_root = pages::web_static_directory(&self.repo_root);
     if !static_root.is_dir() {
       return Ok(String::new());
     }
@@ -225,7 +225,7 @@ impl Templating {
     let mut paths: HashMap<String, PathBuf> = HashMap::new();
     walk_static_tree(&static_root, "", &mut pairs, &mut paths)?;
     for package in &self.packages {
-      let directory = package_directory(&self.repo_root, package).join("static");
+      let directory = package_static_directory(&self.repo_root, package);
       if directory.is_dir() {
         let url_path = package.replace('.', "/");
         walk_static_tree(&directory, &format!("{url_path}/"), &mut pairs, &mut paths)?;
@@ -857,7 +857,7 @@ mod tests {
   #[tokio::test]
   async fn render_page_renders_a_package_template_with_request_and_a_global() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "features.notes").join("templates");
+    let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(
       templates.join("notes.html"),
@@ -886,7 +886,7 @@ mod tests {
   #[tokio::test]
   async fn render_page_substitutes_a_placeholder_and_refuses_a_page_without_it() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "features.notes").join("templates");
+    let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("splice.html"), "const DATA = {{ payload|safe }};").unwrap();
     let mut registry = Registry::new();
@@ -990,7 +990,7 @@ mod tests {
   #[tokio::test]
   async fn a_repeat_render_reuses_the_environment_and_an_edit_takes_effect() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "features.notes").join("templates");
+    let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("repeat.html"), "{{ notes_label() }} one").unwrap();
     let mut registry = Registry::new();
@@ -1019,7 +1019,7 @@ mod tests {
   #[tokio::test]
   async fn a_stable_template_global_is_evaluated_once_per_config_version() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "features.notes").join("templates");
+    let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("counted.html"), "{{ counted_label() }}").unwrap();
     let mut registry = Registry::new();
@@ -1047,7 +1047,7 @@ mod tests {
   #[tokio::test]
   async fn a_live_template_global_is_evaluated_at_every_render() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "features.notes").join("templates");
+    let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("live.html"), "{{ live_label() }}").unwrap();
     let mut registry = Registry::new();
@@ -1071,7 +1071,7 @@ mod tests {
   #[tokio::test]
   async fn a_gzip_page_request_reuses_the_compressed_body_it_kept() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "features.notes").join("templates");
+    let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     let page = "note ".repeat(400);
     fs::write(templates.join("bulk.html"), &page).unwrap();
@@ -1114,7 +1114,7 @@ mod tests {
   #[tokio::test]
   async fn a_page_part_added_on_disk_reaches_the_next_render() {
     let root = tempfile::tempdir().unwrap();
-    let templates = package_directory(root.path(), "features.notes").join("templates");
+    let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(templates.join("notes")).unwrap();
     fs::write(templates.join("parts.html"), "{% for part in page_parts('head') %}{% include part %}{% endfor %}")
       .unwrap();
@@ -1150,7 +1150,7 @@ mod tests {
     fs::write(static_root.join("sub").join("b.css"), "beta").unwrap();
     std::os::unix::fs::symlink(static_root.join("sub"), static_root.join("linked")).unwrap();
     std::os::unix::fs::symlink(static_root.join("missing"), static_root.join("dangling")).unwrap();
-    let package_static = package_directory(root.path(), "features.notes").join("static");
+    let package_static = package_static_directory(root.path(), "features.notes");
     fs::create_dir_all(&package_static).unwrap();
     fs::write(package_static.join("x.txt"), "gamma").unwrap();
     let templating = Templating::new(root.path(), &["features.notes"]);

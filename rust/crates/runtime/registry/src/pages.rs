@@ -19,13 +19,47 @@ pub const PAGE_SLOTS: &[&str] = &[
   "home_notes",
 ];
 
+/// The frontend root under `repo_root`: the web app's own templates and static files sit below it.
+pub const WEB_DIR_NAME: &str = "web";
+
+/// The template directory of the web app and of each page package.
+pub const TEMPLATES_DIR_NAME: &str = "templates";
+
+/// The static file directory of the web app and of each page package.
+pub const STATIC_DIR_NAME: &str = "static";
+
+/// The frontend root of a checkout.
+pub fn web_directory(repo_root: &Path) -> PathBuf {
+  repo_root.join(WEB_DIR_NAME)
+}
+
+/// The web app's template directory.
+pub fn web_templates_directory(repo_root: &Path) -> PathBuf {
+  web_directory(repo_root).join(TEMPLATES_DIR_NAME)
+}
+
+/// The web app's static file directory.
+pub fn web_static_directory(repo_root: &Path) -> PathBuf {
+  web_directory(repo_root).join(STATIC_DIR_NAME)
+}
+
 /// The directory of a dotted page package: `features.<name>` maps to `web/features/<name>` and `backends.<name>` to
 /// `web/backends/<name>` under `repo_root`. Any other first part (the `runtime.*` registrations, whose directories no
 /// checkout carries) maps under `repo_root` unchanged.
 pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
   let under_web = package.starts_with("features.") || package.starts_with("backends.");
-  let root = if under_web { repo_root.join("web") } else { repo_root.to_path_buf() };
+  let root = if under_web { web_directory(repo_root) } else { repo_root.to_path_buf() };
   package.split('.').fold(root, |path, part| path.join(part))
+}
+
+/// The template directory of one dotted page package.
+pub fn package_templates_directory(repo_root: &Path, package: &str) -> PathBuf {
+  package_directory(repo_root, package).join(TEMPLATES_DIR_NAME)
+}
+
+/// The static file directory of one dotted page package.
+pub fn package_static_directory(repo_root: &Path, package: &str) -> PathBuf {
+  package_directory(repo_root, package).join(STATIC_DIR_NAME)
 }
 
 /// The URL prefix of the static route: `web/static` and each page package's `static/` are served below it.
@@ -59,7 +93,7 @@ pub fn page_parts(repo_root: &Path, packages: &[&str], slot: &str) -> Result<Vec
       .filter_map(|package| {
         let name =
           format!("{}/page_{slot}.html", package.rsplit('.').next().expect("rsplit yields at least one piece"));
-        package_directory(repo_root, package).join("templates").join(&name).is_file().then_some(name)
+        package_templates_directory(repo_root, package).join(&name).is_file().then_some(name)
       })
       .collect(),
   )

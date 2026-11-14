@@ -406,8 +406,9 @@ impl Harness {
         .unwrap()
         .map(|entry| {
           let path = entry.unwrap().path();
-          let raw = fs::read_to_string(path.join("agent.raw.ndjson")).unwrap_or_default();
-          let stderr = fs::read_to_string(path.join("agent.stderr.log")).unwrap_or_default();
+          let raw = fs::read_to_string(path.join(charliebot_store::run_records::RAW_LOG_NAME)).unwrap_or_default();
+          let stderr =
+            fs::read_to_string(path.join(charliebot_store::run_records::STDERR_LOG_NAME)).unwrap_or_default();
           format!("{} raw={raw:?} stderr={stderr:?}", path.display())
         })
         .collect::<Vec<_>>();
@@ -1025,9 +1026,9 @@ async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
       let path = entry.unwrap().path();
       format!(
         "raw={:?} stdout={:?} stderr={:?}",
-        fs::read_to_string(path.join("agent.raw.ndjson")).unwrap_or_default(),
-        fs::read_to_string(path.join("agent.stdout.log")).unwrap_or_default(),
-        fs::read_to_string(path.join("agent.stderr.log")).unwrap_or_default()
+        fs::read_to_string(path.join(charliebot_store::run_records::RAW_LOG_NAME)).unwrap_or_default(),
+        fs::read_to_string(path.join(charliebot_store::run_logs::AGENT_STDOUT_LOG_NAME)).unwrap_or_default(),
+        fs::read_to_string(path.join(charliebot_store::run_records::STDERR_LOG_NAME)).unwrap_or_default()
       )
     })
     .collect::<Vec<_>>();

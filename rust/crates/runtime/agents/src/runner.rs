@@ -14,6 +14,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::backend::{
   AgentBackend, Env, ExitedProbe, LaunchArgs, RetryAfter, ServeTransport, ServeTurnArgs, TransportKind,
 };
+use charliebot_store::run_logs::AGENT_STDOUT_LOG_NAME;
 use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -386,8 +387,8 @@ impl AgentRunner {
     Ok(RunOutcome { exit_code, stderr_text, cgroup_exit_report, hang_diagnostics })
   }
 
-  /// The final-stdout transport: stdout is piped and teed to `stdout.log`, stderr streams
-  /// to `stderr.log`, and once the process exits the backend turns the whole output into events.
+  /// The serve transport: the child writes its stdout to `agent.stdout.log` and its stderr to `agent.stderr.log`, and
+  /// the backend reports each event over the serve channel as the turn runs.
   async fn run_serve(
     &self,
     request: RunRequest,
@@ -402,7 +403,7 @@ impl AgentRunner {
     let cursor_path = run_directory.join(charliebot_store::run_records::CURSOR_NAME);
     rotate_stale_transport(run_directory, &raw_path, &stderr_path, &cursor_path)?;
     fs::write(&raw_path, [])?;
-    fs::write(run_directory.join("agent.stdout.log"), [])?;
+    fs::write(run_directory.join(AGENT_STDOUT_LOG_NAME), [])?;
     let custom_process = serve_turn.identity_process(command, run_directory)?;
     let (mut program, mut args) = match custom_process {
       Some(process) => {
@@ -430,7 +431,7 @@ impl AgentRunner {
     );
     let mut spawned = spawn::spawn_detached_files(
       &spec,
-      &run_directory.join("agent.stdout.log"),
+      &run_directory.join(AGENT_STDOUT_LOG_NAME),
       &stderr_path,
       SpawnSetup::ParentSideTurnTree,
     )

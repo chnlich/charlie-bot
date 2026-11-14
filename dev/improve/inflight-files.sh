@@ -7,7 +7,8 @@
 # committed and uncommitted paths of each worktree branch with a live claimant.
 # An open pull request for the branch, a process in its worktree, or an open
 # owning task keeps those paths claimed. A worktree no task names also keeps its
-# claims. A task owns the worktree when its run metadata names that path; the
+# claims. A task owns the worktree when a record of the task store names that
+# path, a run record under `data/runs/` or a task record under `threads/`; the
 # task store's event history, not a run's end, decides whether that task is
 # open. With a closed task, no process, and no open pull request, the worktree
 # claims no path, whether or not its branch landed. A condition that cannot be
@@ -122,8 +123,15 @@ task_store_state() {
 declare -A task_state_by_worktree=()
 declare -A open_pr_branches=()
 
-# Resolve each candidate worktree to the task sessions whose run metadata names it, then read each task's current
-# state from its event history. Run records supply ownership only; their timestamps do not decide whether work is live.
+# Register a checkout that no task-store record names: the contract's unrecorded case, whose paths stay claimed
+# without a store read. The improve runner's clone scan uses it for the directions' standalone clones, which live
+# on the remote host beside no profile home.
+mark_worktree_unrecorded() {
+  task_state_by_worktree["$1"]=no_task
+}
+
+# Resolve each candidate worktree to the task sessions whose records name it, then read each task's current state
+# from its event history. The records supply ownership only; their timestamps do not decide whether work is live.
 read_worktree_task_states() {
   local session_home=$1
   shift
@@ -150,7 +158,12 @@ read_worktree_task_states() {
     candidate_paths["$candidate"]=1
   done
 
-  unreadable=$(find "$sessions" -mindepth 5 -maxdepth 5 -type f -name metadata.json ! -readable -print -quit) || {
+  # The store writes the two records that own a worktree under `data/runs/` and `threads/`; both carry the path as
+  # worktree_path. Other session files name no worktree and stay outside the read, so a file beside the records
+  # that cannot be read does not stop the list.
+  local record_paths=('*/data/runs/*/metadata.json' '*/threads/*/metadata.json')
+  unreadable=$(find "$sessions" -mindepth 4 -maxdepth 5 -type f \
+    \( -path "${record_paths[0]}" -o -path "${record_paths[1]}" \) ! -readable -print -quit) || {
     printf 'cannot read the task-owner condition: cannot list %s\n' "$sessions" >&2
     exit 1
   }
@@ -158,7 +171,8 @@ read_worktree_task_states() {
     printf 'cannot read the task-owner condition: %s is unreadable\n' "$unreadable" >&2
     exit 1
   fi
-  record_list=$(find "$sessions" -mindepth 5 -maxdepth 5 -type f -name metadata.json -print) || {
+  record_list=$(find "$sessions" -mindepth 4 -maxdepth 5 -type f \
+    \( -path "${record_paths[0]}" -o -path "${record_paths[1]}" \) -print) || {
     printf 'cannot read the task-owner condition: cannot list %s\n' "$sessions" >&2
     exit 1
   }
@@ -183,7 +197,7 @@ read_worktree_task_states() {
         print "$worktree\t$task_id\n";
       }
     ' -- "$sessions" "${candidates[@]}"); then
-      printf 'cannot read the task-owner condition: run metadata is unreadable or invalid\n' >&2
+      printf 'cannot read the task-owner condition: a run or task record is unreadable or invalid\n' >&2
       exit 1
     fi
     while IFS=$'\t' read -r worktree task_id; do

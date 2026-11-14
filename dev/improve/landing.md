@@ -73,10 +73,14 @@ The runner names that directory in `IMPROVE_LAUNCH_DIR`:
 
 The launcher runs `dev/improve/inflight-files.sh improve/<direction>/` on this host, because the other lines' worktrees exist only there.
 The runner also adds the files that the other directions' clones change on the remote host, because those clones are standalone repositories that the launcher cannot see.
-The list names live work only: an open pull request, a worktree's uncommitted change, or a committed path whose branch version `origin/main` does not already hold — the branch's version of a path is its blob or its deletion, and a path stays claimed only while that version is missing from `origin/main`'s history since the merge base.
-A path whose removal `origin/main` has landed since the merge base is not named either: main's own deletion is the landed work at that path, so a branch version or an uncommitted change of the old path carries nothing live.
-A squash merge or a rebase that landed one path of a branch therefore leaves that path to `origin/main`, a branch whose commits all landed names no committed path, and the runner's own checkout names nothing at all.
-A worktree whose branch's commits all landed keeps its uncommitted and untracked paths named only while its task run is live: when its branch has landed, no process runs in the worktree, and its task run is closed, the list names none of them, and a worktree no run record names keeps its paths named.
+The list names live work only, and every source of it — this host's worktrees and the remote clones included — follows one contract.
+An open pull request claims its files.
+A worktree claims its committed paths since its merge base and its uncommitted and untracked paths while a task's record names it and that task is open, or while a process runs in the worktree.
+A worktree that no record names claims its paths, because operator work carries no record.
+A worktree whose owning task is closed and whose branch has no open pull request names no path, whether its branch landed or not; the worktree stays on disk.
+A task owns a worktree when the task store names its path, a run record under `data/runs/` or a task record under `threads/`, and the owning session's event history, not a run's end, decides whether that task is open.
+A record that cannot be read stops the list with an error naming the condition.
+The runner's own checkout names nothing at all.
 Both computations fetch `origin/main` before they compare a branch against it, because a stale ref would make merged work look live.
 The fetch goes into a ref the reading side owns, `refs/improve/inflight/<direction>` in each clone and `refs/improve/inflight/<branch prefix>` in this host's main checkout, and never into `refs/remotes/origin/main` or `FETCH_HEAD`: the directions start in a burst, so concurrent launches, rounds and operators fetch those shared refs themselves.
 Pick a topic whose files the list does not name.

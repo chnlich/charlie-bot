@@ -181,8 +181,8 @@ rewrite_command() {
 }
 
 # The other directions' clones are standalone repositories, so the host list cannot see their worktrees. The
-# sourced in-flight rule supplies the same claimant and path functions. No task names these remote clone paths, so
-# each clone keeps its branch and dirty paths under the no-task rule.
+# sourced in-flight rule supplies the same claimant and path functions. No record names these remote clone paths,
+# so each clone enters the rule as an unrecorded worktree and keeps its branch and dirty paths.
 other_inflight_files() {
   source "$LAUNCH_DIR/inflight-files.sh"
   local clone other branch merge_base main_ref origin_url current_branch
@@ -192,7 +192,7 @@ other_inflight_files() {
     [[ $clone == "$RUNNER_ROOT/charlie-bot" ]] && continue
     other=$(basename -- "$(dirname -- "$clone")")
     [[ $other == "$direction" ]] && continue
-    task_state_by_worktree["$clone"]=no_task
+    mark_worktree_unrecorded "$clone"
     origin_url=$(git -C "$clone" remote get-url origin) || fail 1 "cannot read the origin of $clone"
     git -C "$clone" fetch --quiet --no-tags --no-write-fetch-head "$origin_url" \
       +refs/heads/main:"$main_ref" || fail 1 "cannot fetch origin/main in $clone"

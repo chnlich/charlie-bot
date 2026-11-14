@@ -1394,6 +1394,20 @@ fn write_run_record(world: &World, task_id: &str, run_id: &str, worktree: &std::
   fs::write(run_dir.join("metadata.json"), format!("{record:#}\n")).expect("the run record");
 }
 
+/// Writes a task record that links one worktree to its owning session, as the store's `threads/`
+/// records do; the session's run records may be gone with the session they belong to.
+fn write_task_record(world: &World, owner_id: &str, thread_id: &str, worktree: &std::path::Path) {
+  let record_dir = world.profile_home.join(format!("sessions/{owner_id}/threads/{thread_id}"));
+  fs::create_dir_all(&record_dir).expect("the task record directory");
+  let record = serde_json::json!({
+    "id": thread_id,
+    "session_id": owner_id,
+    "status": "completed",
+    "worktree_path": worktree.display().to_string(),
+  });
+  fs::write(record_dir.join("metadata.json"), format!("{record:#}\n")).expect("the task record");
+}
+
 /// One landed branch with dirty, staged and untracked paths, as a task worktree can hold after its commits land.
 fn landed_worktree_with_uncommitted_state(world: &World, name: &str) -> std::path::PathBuf {
   let checkout = world.sandbox.root().join(name);
@@ -1590,4 +1604,74 @@ fn an_unreadable_task_state_stops_the_list_with_an_error() {
     "the in-flight list does not name the unreadable task state:\n{}",
     run.describe()
   );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_closed_owning_sessions_task_record_drops_an_unlanded_worktrees_paths() {
+  let world = World::new();
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "closed-record");
+  write_task_state(&world, "record-owner", false);
+  write_task_record(&world, "record-owner", "thread-closed", &checkout);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "dirty.md"] {
+    assert!(
+      !run.stdout.lines().any(|line| line == listed),
+      "the in-flight list keeps the closed task record's path {listed}:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_open_owning_sessions_task_record_keeps_the_worktree_paths_claimed() {
+  let world = World::new();
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "open-record");
+  write_task_state(&world, "record-owner-open", true);
+  write_task_record(&world, "record-owner-open", "thread-open", &checkout);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "dirty.md"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the in-flight list drops the open task record's path {listed}:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_launch_record_naming_the_worktree_claims_nothing() {
+  let world = World::new();
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "launch-record");
+  write_task_state(&world, "record-owner-launch", false);
+  // A trigger launch record beside the task records that names the worktree as its worktree_path:
+  // the store writes no such field there, and only the run and task records own a worktree, so the
+  // record names no owner and the worktree stays unrecorded.
+  let launch_dir = world.profile_home.join("sessions/record-owner-launch/launches/20261113T000000-abcdef");
+  fs::create_dir_all(&launch_dir).expect("the launch record directory");
+  let record = serde_json::json!({
+    "launch_id": "20261113T000000-abcdef",
+    "cmd": "cargo test",
+    "worktree_path": checkout.display().to_string(),
+  });
+  fs::write(launch_dir.join("metadata.json"), format!("{record:#}\n")).expect("the launch record");
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "dirty.md"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the in-flight list dropped the launch-record worktree path {listed}:\n{}",
+      run.describe()
+    );
+  }
 }

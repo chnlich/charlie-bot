@@ -389,7 +389,8 @@ pub(crate) struct CachedTreePage {
   /// The histories the row pass read, in read order, shared so a hit re-checks them without copying the list.
   pub(crate) ids: Arc<Vec<String>>,
   pub(crate) identity_values: Vec<Option<FileIdentity>>,
-  pub(crate) rows: Vec<TaskTreeRow>,
+  /// The rendered rows, shared so a hit hands the same page out without cloning a row's strings.
+  pub(crate) rows: Arc<Vec<TaskTreeRow>>,
   pub(crate) has_more: bool,
 }
 

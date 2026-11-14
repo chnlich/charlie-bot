@@ -263,8 +263,11 @@ impl PromptScope {
 }
 
 /// One page of a parent's child rows, and whether a further matching row follows them.
+///
+/// The rows are shared: a page the memo serves hands out the same allocation as the pass that rendered it, so the
+/// pointer names the page a repeat request reads.
 pub struct TaskTreePage {
-  pub rows: Vec<TaskTreeRow>,
+  pub rows: Arc<Vec<TaskTreeRow>>,
   pub has_more: bool,
 }
 
@@ -1145,6 +1148,7 @@ impl Store {
     // A run record written during the pass leaves the rows a mix of two verdicts; no memo entry names that page.
     if self.records_generation() == records_generation && !reads.proc_dependent {
       let (ids, identity_values) = reads.identities_read().into_iter().unzip();
+      let rows = Arc::new(rows);
       *self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned") = Some(CachedTreePage {
         build_id,
         records_generation,
@@ -1154,11 +1158,12 @@ impl Store {
         limit,
         ids: Arc::new(ids),
         identity_values,
-        rows: rows.clone(),
+        rows: Arc::clone(&rows),
         has_more,
       });
+      return Ok(TaskTreePage { rows, has_more });
     }
-    Ok(TaskTreePage { rows, has_more })
+    Ok(TaskTreePage { rows: Arc::new(rows), has_more })
   }
 
   /// The child ids a page can return, in order: one more than `limit` names the row that proves `has_more`.
@@ -1204,7 +1209,7 @@ impl Store {
       {
         return Ok(None);
       }
-      (Arc::clone(&memo.ids), memo.identity_values.clone(), memo.rows.clone(), memo.has_more)
+      (Arc::clone(&memo.ids), memo.identity_values.clone(), Arc::clone(&memo.rows), memo.has_more)
     };
     let current = self.history_identities(ids.as_slice())?;
     if current != identity_values {
@@ -5000,7 +5005,7 @@ pub(crate) mod tests {
 
     let reader = Arc::clone(&store);
     let root_id = root.id.clone();
-    let rows = tokio::task::spawn_blocking(move || -> StoreResult<Vec<TaskTreeRow>> {
+    let rows = tokio::task::spawn_blocking(move || -> StoreResult<Arc<Vec<TaskTreeRow>>> {
       let snapshot = reader.task_tree_snapshot()?;
       Ok(reader.task_tree_page(&snapshot, Some(&root_id), true, None, 100)?.rows)
     });

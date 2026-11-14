@@ -282,7 +282,7 @@ function renderNewChildButton(s) {
 // control's only mark, so it takes slate-400: on the open row's blue tint
 // rgb(26, 45, 88) slate-500 draws 2.82:1 and on the hovered row's cover
 // rgb(37, 49, 68) it draws 2.77:1, under the 3:1 floor WCAG 1.4.11 sets for a
-// component; slate-400 draws 5.23:1 and 5.14:1 there and 6.35:1 on the plain
+// component; slate-400 draws 5.23:1 and 5.14:1 there and 6.34:1 on the plain
 // row, the tone the row's time line keeps.
 function renderSettingsButton(s, rowMenu) {
   const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';

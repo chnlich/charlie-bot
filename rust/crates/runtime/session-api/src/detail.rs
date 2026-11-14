@@ -13,6 +13,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use charliebot_compat::compression::gzip_level_one;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
@@ -1052,10 +1053,6 @@ fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Bytes> {
   let mut memo = EVENTS_FILE_GZIP_MEMO.lock().expect("events-file gzip memo mutex is not poisoned");
   memo.put(key, compressed.clone());
   Ok(compressed)
-}
-
-fn gzip_level_one(body: &[u8]) -> Vec<u8> {
-  charliebot_compat::compression::gzip_level_one(body)
 }
 
 fn json_bytes_response(body: Bytes, encoding: Option<&'static str>) -> Response {

@@ -198,11 +198,6 @@ fn new_encoder() -> GzEncoder<Vec<u8>> {
   GzEncoder::new(Vec::new(), Compression::new(COMPRESS_LEVEL))
 }
 
-/// The whole body deflated at once for a response the memo does not keep: the level-1 form, paid per response.
-pub fn gzip_whole(data: &[u8]) -> Vec<u8> {
-  charliebot_compat::compression::gzip_level_one(data)
-}
-
 /// How many compressed bodies the memo holds.
 const MEMO_ENTRIES: usize = 64;
 
@@ -254,7 +249,7 @@ fn compressed_body_with_input_limit(
   }
   let compressed = Bytes::from(match key {
     Some(_) if body.len() <= memo_max_input_bytes => charliebot_compat::compression::gzip_memoized_body(body),
-    _ => gzip_whole(body),
+    _ => charliebot_compat::compression::gzip_level_one(body),
   });
   if let Some(key) = key {
     BODY_MEMO.lock().expect("the gzip body memo mutex is not poisoned").store(key, compressed.clone());

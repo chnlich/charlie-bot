@@ -55,7 +55,7 @@ pub(crate) fn matches(path: &str) -> bool {
   matches!(rest.split_once('/'), Some((session_id, "plans")) if !session_id.is_empty())
 }
 
-/// The plan registry of a session with derived states and read errors. A missing session answers 404; a corrupt
+/// The plan registry of a session with derived states and read errors. A missing session answers 404. A corrupt
 /// registry answers 200 with its error entries.
 async fn list_plans(State(state): State<PlanRoutes>, AxumPath(session_id): AxumPath<String>) -> Response {
   if let Some(response) = require_session(&state.features, &session_id).await {

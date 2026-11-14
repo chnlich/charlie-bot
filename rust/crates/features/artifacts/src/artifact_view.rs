@@ -69,7 +69,7 @@ async fn serve(features: &FeatureContext, request: &Parts, path: &str) -> ViewRe
   let (comment_version, artifact_version) = asset_versions(features)?;
   let metadata =
     features.store.get_session(&session_id).await.map_err(|error| internal_error("RuntimeError", error.to_string()))?;
-  // A page can outlive its session metadata; the comment endpoint reports the missing session on send.
+  // A page can outlive its session metadata. The comment endpoint reports the missing session on send.
   let comment_session_id = metadata.as_ref().map_or(session_id.as_str(), |meta| comment_target(&session_id, meta));
   Ok(Some(html_response(inject_artifact_ui(&html, comment_session_id, &comment_version, &artifact_version))))
 }

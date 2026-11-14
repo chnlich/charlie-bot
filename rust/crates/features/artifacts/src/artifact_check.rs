@@ -40,7 +40,7 @@ const TRACKER_ID_NEARBY: &str = user_text_checks::TRACKER_ID_NEARBY;
 const SESSION_LINKED: &str = user_text_checks::SESSION_LINKED;
 const LINK_RENDERABLE: &str = user_text_checks::LINK_RENDERABLE;
 
-/// The registered genres in the order the parser states them; `waiting` exists only here.
+/// The registered genres in the order the parser states them. `waiting` exists only here.
 pub const ARTIFACT_GENRES: [&str; 6] = ["plan", "understanding", "sitrep", "debug", "explain", "waiting"];
 
 /// The shape and text elements that `explain-figures` counts in an svg figure. A `div.flow` box strip is not a figure.
@@ -289,7 +289,7 @@ pub struct AssertionOutcome {
 struct Element {
   tag: String,
   classes: HashSet<String>,
-  /// Every attribute's raw value; a bare attribute is `None`.
+  /// Every attribute's raw value. A bare attribute is `None`.
   attrs: HashMap<String, Option<String>>,
   parent: Option<usize>,
   children: Vec<Child>,
@@ -318,7 +318,7 @@ struct CodeText {
 type AssertionCheck = for<'a> fn(&Context<'a>) -> anyhow::Result<Vec<AssertionOutcome>>;
 type OrdinalFailure = (usize, Vec<String>, String);
 
-/// Run one genre's assertion set on a blocking thread. `only` narrows the run to the named assertions; `None` runs
+/// Run one genre's assertion set on a blocking thread. `only` narrows the run to the named assertions. `None` runs
 /// the whole set.
 pub async fn run_assertions(
   genre: &str,
@@ -1029,7 +1029,7 @@ fn check_page_height(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
   Ok(vec![outcome(PAGE_HEIGHT, true, detail)])
 }
 
-/// The inner error is a renderer failure; the check reports it as an informational outcome. Any other error,
+/// The inner error is a renderer failure. The check reports it as an informational outcome. Any other error,
 /// such as a probe that cannot be written, propagates and fails the check run.
 fn measure_page_height(chrome_bin: &Path, artifact: &Path) -> anyhow::Result<Result<i32, String>> {
   let probe = artifact
@@ -1389,7 +1389,7 @@ fn check_explain_figures(context: &Context<'_>) -> anyhow::Result<Vec<AssertionO
       .into_iter()
       .filter(|paragraph| !inside_steps.contains(paragraph))
       .collect::<Vec<_>>();
-    // The one p before the first step is the opening paragraph; every other p outside the steps is a failure.
+    // The one p before the first step is the opening paragraph. Every other p outside the steps is a failure.
     let opening = outside.first().is_some_and(|&paragraph| paragraph < first_step);
     let extra = outside.len() - usize::from(opening);
     if extra > 0 {
@@ -1458,7 +1458,7 @@ fn check_fact_anchored(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOut
   if failures.is_empty() { Ok(vec![outcome(FACT_ANCHORED, true, "")]) } else { Ok(failures) }
 }
 
-/// The text carries a Unicode letter or digit; punctuation alone is not a gloss.
+/// The text carries a Unicode letter or digit. Punctuation alone is not a gloss.
 fn has_readable_text(text: &str) -> bool {
   text.chars().any(str_methods::is_alphanumeric)
 }

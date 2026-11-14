@@ -40,7 +40,7 @@ const VERSION_FIELDS: [&str; 6] = ["v", "file", "created_at", "trigger", "base",
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadError {
   pub session_id: String,
-  /// The plan's raw `id`; `null` for a file-level error and for a plan without an id.
+  /// The plan's raw `id`. It is `null` for a file-level error and for a plan without an id.
   pub plan_id: Value,
   pub error: String,
 }

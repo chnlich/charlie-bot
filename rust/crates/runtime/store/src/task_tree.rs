@@ -2246,9 +2246,10 @@ impl Store {
   /// Start one background refresh of a stale task-tree index, or report that one already runs or that the store has
   /// no handle to refresh itself through.
   ///
-  /// The refresh reads every session's inputs first, and serves the index it holds when they all still hold the
-  /// values the build read. A walk over a production-sized home costs far more than reading those inputs, so a home
-  /// that nothing moved keeps its index and only its age is renewed.
+  /// The refresh compares the next slice of the sessions' inputs, and serves the index it holds when the slice still
+  /// holds the values the build read. A walk over a production-sized home costs far more than reading one slice of
+  /// those inputs, so a home that nothing moved keeps its index and only its age is renewed, and one sweep of
+  /// [`TREE_INDEX_SWEEP_SLICES`] renewals compares every session's inputs.
   ///
   /// False means the caller must build synchronously: the store has no handle, or its thread could not start. A
   /// build that started is discarded when the tree generation moved while it ran, exactly as a synchronous build's
@@ -2319,8 +2320,9 @@ impl Store {
     match entry.as_mut() {
       Some(entry) if entry.generation == generation && Arc::ptr_eq(&entry.index, &cached) => {
         entry.built_at = Instant::now();
-        // The renewal proved the names and the inputs still match, so the identity it read holds for them: a later
-        // refresh whose stat matches it compares the sessions' inputs alone, even when a rollback moved it since.
+        // The renewal proved the names and the slice of inputs it read still match, so the identity it read holds for
+        // them: a later refresh whose stat matches it compares the sessions' inputs alone, even when a rollback moved
+        // it since.
         entry.sessions_dir = current_dir;
         entry.sweep_cursor = next_cursor;
         true

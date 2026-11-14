@@ -16,6 +16,7 @@ pub const TRIGGERS_DIR_NAME: &str = "triggers";
 pub const ARCHIVES_DIR_NAME: &str = "archives";
 pub const CHAT_EVENTS_FILE_NAME: &str = "chat_events.jsonl";
 pub const FACT_CHECKPOINT_FILE_NAME: &str = "fact_checkpoint.json";
+pub const MEMO_FILE_NAME: &str = "memo.md";
 
 /// The session's metadata file.
 pub fn metadata_path(session_dir: &Path) -> PathBuf {
@@ -50,6 +51,12 @@ pub fn chat_events_path(session_dir: &Path) -> PathBuf {
 /// The startup-only fact checkpoint of the session's history ([`crate::fact_checkpoint`]).
 pub fn fact_checkpoint_path(session_dir: &Path) -> PathBuf {
   data_dir(session_dir).join(FACT_CHECKPOINT_FILE_NAME)
+}
+
+/// The session's memo file: the agent-owned record of the agreements and facts this session holds. A manager session
+/// keeps one, and the agent reads its whole text after each context reorganization.
+pub fn memo_path(session_dir: &Path) -> PathBuf {
+  session_dir.join(MEMO_FILE_NAME)
 }
 
 /// The directory of the session's legacy threads.

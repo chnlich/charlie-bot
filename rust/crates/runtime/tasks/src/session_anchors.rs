@@ -1,6 +1,6 @@
 //! Native-context reset notes. A manager and a worker each get their own note.
 
-use charliebot_store::session_fork::{HISTORY_LOCATION_NOTE, child_task_list_note};
+use charliebot_store::session_fork::{HISTORY_LOCATION_NOTE, SESSION_MEMO_NOTE, child_task_list_note};
 
 /// The instruction a worker's fresh native conversation follows before it responds.
 const WORKER_INSTRUCTION: &str = concat!(
@@ -36,12 +36,14 @@ pub fn worker_switch_reset_note(reason: &str, task_goal: &str, context: &str) ->
   format!("[Context reset: {reason}. The task is: {task_goal}. {context} {WORKER_INSTRUCTION}]")
 }
 
-/// The manager note: the reason, where the history stays, then the orientation order and a sort.
+/// The manager note: the reason, where the history stays, the session memo sentence, then the orientation order and a
+/// sort.
 fn manager_reset_note(session_id: &str, reason: &str, history: &str) -> String {
   let child_tasks = child_task_list_note(session_id);
   format!(
     "[Context reset: {reason}.\n\
      {history}\n\
+     {SESSION_MEMO_NOTE}\n\
      Before you respond, get oriented from your session status, then your child tasks, then the last two turns.\n\
      {child_tasks}\n\
      `charliebot session dialog --turns 2` prints the last two turns.\n\
@@ -57,7 +59,8 @@ fn manager_reset_note(session_id: &str, reason: &str, history: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::{
-    backend_switch_reset_reason, manager_context_reset_note, manager_switch_reset_note, worker_switch_reset_note,
+    SESSION_MEMO_NOTE, backend_switch_reset_reason, manager_context_reset_note, manager_switch_reset_note,
+    worker_switch_reset_note,
   };
 
   const SESSION_ID: &str = "synthetic-session";
@@ -82,13 +85,25 @@ mod tests {
     }
   }
 
-  /// Orientation runs from the status, to the child tasks, to the last two turns, and then to the sort.
+  /// Orientation runs from the memo sentence, to the status, to the child tasks, to the last two turns, and then to
+  /// the sort.
   #[test]
-  fn manager_reset_note_orients_from_status_then_children_then_turns_then_sorts() {
+  fn manager_reset_note_names_the_memo_then_orients_from_status_then_children_then_turns_then_sorts() {
     let note = manager_context_reset_note(SESSION_ID, "synthetic reason");
-    let positions = ["session status", "session tree --root", "dialog --turns 2", "sort"]
-      .map(|needle| note.find(needle).unwrap_or_else(|| panic!("{needle} is missing from {note}")));
+    let positions =
+      ["memo.md in the working directory", "session status", "session tree --root", "dialog --turns 2", "sort"]
+        .map(|needle| note.find(needle).unwrap_or_else(|| panic!("{needle} is missing from {note}")));
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{positions:?}\n{note}");
+  }
+
+  /// The sentence follows the history location and precedes the status line.
+  #[test]
+  fn manager_reset_note_puts_the_memo_sentence_between_the_history_and_the_status() {
+    let reset = manager_context_reset_note(SESSION_ID, "synthetic reason");
+    let switch = manager_switch_reset_note(SESSION_ID, "synthetic reason", "at /synthetic/log");
+    for note in [reset, switch] {
+      assert!(note.contains(&format!("\n{SESSION_MEMO_NOTE}\nBefore you respond")), "{note}");
+    }
   }
 
   #[test]

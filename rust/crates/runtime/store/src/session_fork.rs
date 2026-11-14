@@ -29,6 +29,11 @@ pub const HISTORY_LOCATION_NOTE: &str = concat!(
   "data/chat_events.jsonl in the working directory."
 );
 
+/// The session memo sentence. Every context reorganization puts it at the top of the new context: the reset and
+/// switch notes, the Claude and Codex compaction hooks, and the CLC rebuilt-context pointer all carry it.
+pub const SESSION_MEMO_NOTE: &str =
+  "Read your session memo, memo.md in the working directory, in full before your next action.";
+
 /// The command that lists `session_id`'s current child tasks. The fork and elone bootstraps and the manager reset
 /// note share it.
 pub fn child_task_list_note(session_id: &str) -> String {

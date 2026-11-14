@@ -137,7 +137,7 @@ pub fn host_auth_alias(fields: &Mapping) -> Result<Option<String>, String> {
 /// The launcher binary an entry names, read through the registry by the run-venue decision. A launcher runs the
 /// entry's process where the launcher decides, so the server prepares no worktree for such an entry's runs.
 pub fn cli_binary(fields: &Mapping) -> Result<Option<String>, String> {
-  Ok(CcAnthropicCompatibleOption::from_fields(fields)?.cli_binary)
+  Ok(CcAnthropicCompatibleOption::from_fields(fields)?.cli_binary.filter(|binary| !binary.is_empty()))
 }
 
 #[cfg(test)]
@@ -168,6 +168,7 @@ mod tests {
       cli_binary(&fields(&format!("{base}cli_binary: /path/to/launcher\n"))),
       Ok(Some("/path/to/launcher".to_string()))
     );
+    assert_eq!(cli_binary(&fields(&format!("{base}cli_binary: ''\n"))), Ok(None));
     assert!(cli_binary(&fields(&format!("{base}cli_binary: 42\n"))).is_err());
   }
 }

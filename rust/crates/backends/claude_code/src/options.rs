@@ -62,7 +62,7 @@ pub(crate) fn fast_mode(fields: &Mapping) -> Result<bool, String> {
 /// The launcher binary an entry names, read through the registry by the run-venue decision. A launcher runs the
 /// entry's process where the launcher decides, so the server prepares no worktree for such an entry's runs.
 pub fn cli_binary(fields: &Mapping) -> Result<Option<String>, String> {
-  optional_text(fields, CLI_BINARY_KEY)
+  optional_text(fields, CLI_BINARY_KEY).map(|binary| binary.filter(|binary| !binary.is_empty()))
 }
 
 #[cfg(test)]
@@ -78,6 +78,7 @@ mod tests {
     assert_eq!(cli_binary(&fields("effort: high\n")), Ok(None));
     assert_eq!(cli_binary(&fields("cli_binary: /path/to/launcher\n")), Ok(Some("/path/to/launcher".to_string())));
     assert_eq!(cli_binary(&fields("cli_binary: null\n")), Ok(None));
+    assert_eq!(cli_binary(&fields("cli_binary: ''\n")), Ok(None));
     assert!(cli_binary(&fields("cli_binary: 42\n")).is_err());
   }
 }

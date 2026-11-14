@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use super::pricing;
-use super::text::{count_or_zero, empty_object, truthy};
+use super::text::{count_or_zero, empty_object, is_truthy};
 use super::usage_fields;
 use charliebot_agents::event_builders::{
   make_error_event, make_result_event, make_system_message_event, make_text_event, make_tool_result_event,
@@ -128,7 +128,9 @@ impl CodexTranslator {
     let item_id = item_key(item)?;
     // Newer codex emits `text`; the older schema carried `content[].text`.
     let full_text = match item.get("text") {
-      Some(value) if truthy(value) => value.as_str().context("codex agent_message text must be a string")?.to_string(),
+      Some(value) if is_truthy(value) => {
+        value.as_str().context("codex agent_message text must be a string")?.to_string()
+      }
       _ => content_text(item)?,
     };
     if full_text.is_empty() {
@@ -149,7 +151,7 @@ impl CodexTranslator {
     }
     // Newer codex emits `text`; the older schema carried the `summary_text` parts of `summary`.
     let mut text = match item.get("text") {
-      Some(value) if truthy(value) => value.as_str().context("codex reasoning text must be a string")?.to_string(),
+      Some(value) if is_truthy(value) => value.as_str().context("codex reasoning text must be a string")?.to_string(),
       _ => String::new(),
     };
     if text.is_empty()
@@ -218,7 +220,7 @@ impl CodexTranslator {
         lines.push(format!("- {} {label}", todo_marker(todo)));
       }
     }
-    let item_id_is_truthy = item.get("id").is_some_and(truthy);
+    let item_id_is_truthy = item.get("id").is_some_and(is_truthy);
     if lines.is_empty() {
       if item_id_is_truthy {
         self.last_todo_text.remove(&item_key(item)?);
@@ -326,7 +328,7 @@ fn mcp_tool_call(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<V
   }
   let server = item.get("server_label").cloned().unwrap_or_else(|| json!(""));
   let tool = item.get("name").cloned().unwrap_or_else(|| json!(""));
-  let tool_name = if truthy(&server) {
+  let tool_name = if is_truthy(&server) {
     format!("mcp:{}/{}", value_str(&server), value_str(&tool))
   } else {
     format!("mcp:{}", value_str(&tool))
@@ -390,7 +392,7 @@ fn error_item(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<Valu
     return Vec::new();
   }
   let message = match item.get("message") {
-    Some(message) if truthy(message) => value_str(message),
+    Some(message) if is_truthy(message) => value_str(message),
     _ => format!("Codex item error with no message. Full event: {}", full_event(event)),
   };
   vec![make_system_message_event(&message)]
@@ -404,10 +406,10 @@ fn failure_message(event_type: &str, event: &Map<String, Value>) -> String {
     Value::Object(error) => error.get("message").cloned().unwrap_or(Value::Null),
     other => Value::String(value_str(other)),
   };
-  if !truthy(&message) {
+  if !is_truthy(&message) {
     message = event.get("message").cloned().unwrap_or(Value::Null);
   }
-  if truthy(&message) {
+  if is_truthy(&message) {
     return value_str(&message);
   }
   format!("Codex {event_type} with no message. Full event: {}", full_event(event))

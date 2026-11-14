@@ -760,9 +760,9 @@ fn error_text(error: Option<&Value>) -> String {
   if let Some(object) = error.as_object() {
     let message = object
       .get("message")
-      .filter(|value| charliebot_agents::cli_base::truthy(value))
+      .filter(|value| charliebot_core::text_repr::is_truthy(value))
       .or_else(|| object.get("data").and_then(Value::as_object).and_then(|data| data.get("message")));
-    if let Some(message) = message.filter(|value| charliebot_agents::cli_base::truthy(value)) {
+    if let Some(message) = message.filter(|value| charliebot_core::text_repr::is_truthy(value)) {
       return value_str(message);
     }
   }

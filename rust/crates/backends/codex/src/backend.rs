@@ -20,7 +20,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 use super::options::CodexOptions;
-use super::text::truthy;
+use super::text::is_truthy;
 use super::translate::CodexTranslator;
 use charliebot_agents::cli_base::prepend_path_dir;
 use charliebot_agents::gh_wrapper;
@@ -304,8 +304,8 @@ async fn collect(
     for translated in translator.translate_event(&event)? {
       match translated.get("type").and_then(Value::as_str) {
         Some(event_types::ERROR) => {
-          let message = translated.get("message").filter(|value| truthy(value)).or(translated.get("content"));
-          if let Some(message) = message.filter(|value| truthy(value))
+          let message = translated.get("message").filter(|value| is_truthy(value)).or(translated.get("content"));
+          if let Some(message) = message.filter(|value| is_truthy(value))
             && structured_error.is_none()
           {
             structured_error = Some(str_methods::strip(&value_str(message)).to_string());

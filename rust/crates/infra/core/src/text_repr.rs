@@ -605,6 +605,15 @@ mod tests {
   use serde_json::json;
 
   #[test]
+  fn truthiness_follows_value_rules() {
+    assert!(!is_truthy(&json!(0)));
+    assert!(!is_truthy(&json!("")));
+    assert!(!is_truthy(&json!([])));
+    assert!(is_truthy(&json!({"a": 1})));
+    assert!(is_truthy(&json!(0.5)));
+  }
+
+  #[test]
   fn float_digits_break_exact_ties_toward_the_even_digit() {
     // 1743746592103460.25 lies exactly between ...460.2 and ...460.3; the even one prints.
     let tie = 1_743_746_592_103_460.0_f64 + 0.25;

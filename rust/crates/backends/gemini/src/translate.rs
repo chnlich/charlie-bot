@@ -3,11 +3,11 @@
 
 use anyhow::bail;
 use charliebot_core::event_types;
-use charliebot_core::text_repr::value_str;
+use charliebot_core::text_repr::{is_truthy, value_str};
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 
-use charliebot_agents::cli_base::{int_field, str_field, truthy};
+use charliebot_agents::cli_base::{int_field, str_field};
 use charliebot_agents::event_builders::{
   make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
 };
@@ -92,7 +92,7 @@ impl GeminiTranslator {
       "user" => Ok(Vec::new()),
       "assistant" => {
         self.text_buffer.push_str(str_field(event, "content", "")?);
-        if event.get("delta").is_some_and(truthy) {
+        if event.get("delta").is_some_and(is_truthy) {
           return Ok(Vec::new());
         }
         Ok(self.flush())

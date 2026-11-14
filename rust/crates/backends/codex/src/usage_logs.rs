@@ -21,7 +21,7 @@ use memchr::{memmem, memrchr};
 use serde_json::{Map, Value};
 
 use super::rollout::{self, SESSION_META, TURN_CONTEXT, token_count_payload, walk_files};
-use super::text::{count_or_zero, object_or_empty, truthy};
+use super::text::{count_or_zero, is_truthy, object_or_empty};
 use super::usage_fields;
 use super::usage_quota::CodexQuotaAccount;
 use super::usage_sweep;
@@ -205,7 +205,7 @@ fn is_context(line: &Map<String, Value>) -> bool {
 /// The truthy `model` a record's payload names, as text.
 fn payload_model(line: &Map<String, Value>) -> anyhow::Result<Option<String>> {
   let payload = object_or_empty(line, "payload")?;
-  Ok(payload.get("model").filter(|model| truthy(model)).map(value_str))
+  Ok(payload.get("model").filter(|model| is_truthy(model)).map(value_str))
 }
 
 /// The `session_id` of a record's payload, as text, when it has one.

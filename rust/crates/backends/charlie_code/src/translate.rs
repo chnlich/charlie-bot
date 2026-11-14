@@ -6,11 +6,11 @@ use std::collections::HashMap;
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::str_methods;
-use charliebot_core::text_repr::{format_g, value_str};
+use charliebot_core::text_repr::{format_g, is_truthy, value_str};
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 
-use charliebot_agents::cli_base::{int_field, required_str, str_field, truthy};
+use charliebot_agents::cli_base::{int_field, required_str, str_field};
 use charliebot_agents::event_builders::{
   make_compact_boundary_event, make_context_reading_event, make_error_event, make_result_event, make_text_event,
   make_tool_result_event, make_tool_use_event,
@@ -86,7 +86,7 @@ impl CharlieCodeTranslator {
   fn command_progress(&self, event: &Map<String, Value>) -> anyhow::Result<Vec<Value>> {
     let id = required_str(event, "id")?;
     let killed = event.get("killed").context("charlie-code command_progress event lacks killed")?;
-    let state = if truthy(killed) { "terminated" } else { "still running" };
+    let state = if is_truthy(killed) { "terminated" } else { "still running" };
     let raw = self.commands_by_id.get(id);
     let suffix = match raw {
       Some(raw) => format!(": {}", command_note(raw)),
@@ -120,7 +120,7 @@ impl Translate for CharlieCodeTranslator {
 fn context_reading(event: &Map<String, Value>) -> anyhow::Result<Value> {
   let model = match event.get("model") {
     Some(Value::String(model)) => model.as_str(),
-    Some(other) if truthy(other) => bail!("charlie-code context model must be a string, got {other}"),
+    Some(other) if is_truthy(other) => bail!("charlie-code context model must be a string, got {other}"),
     _ => "",
   };
   Ok(make_context_reading_event(

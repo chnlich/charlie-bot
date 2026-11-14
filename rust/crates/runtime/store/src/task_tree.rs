@@ -2272,7 +2272,7 @@ impl Store {
         _ => return false,
       }
     };
-    let Ok(held) = self.tree_index_inputs_hold(&cached.inputs) else { return false };
+    let Ok(held) = self.tree_index_inputs_hold(&cached.inputs, cached.sessions_dir.as_ref()) else { return false };
     if !held {
       return false;
     }
@@ -2290,22 +2290,32 @@ impl Store {
   ///
   /// The scan reads each session's two identities and compares them against the recorded ones, stopping at the first
   /// that moved. A quiet home therefore renews without building a second input list.
-  fn tree_index_inputs_hold(&self, expected: &[TreeIndexInput]) -> StoreResult<bool> {
+  ///
+  /// The directory walk that reads the session names runs only when the sessions directory's own identity moved from
+  /// the one the build recorded. A session directory that appears or leaves moves that identity, so a match proves
+  /// the recorded names still list the home, and a quiet home compares the sessions' inputs alone.
+  fn tree_index_inputs_hold(
+    &self,
+    expected: &[TreeIndexInput],
+    recorded_dir: Option<&FileIdentity>,
+  ) -> StoreResult<bool> {
     let sessions_dir = self.cfg.sessions_dir();
-    let names = session_dir_names(&sessions_dir)?;
-    if names.len() != expected.len() {
-      return Ok(false);
+    if FileIdentity::read(&sessions_dir)?.as_ref() != recorded_dir {
+      let names = session_dir_names(&sessions_dir)?;
+      if names.len() != expected.len() {
+        return Ok(false);
+      }
+      if names.iter().zip(expected).any(|(name, input)| name != &input.session_id) {
+        return Ok(false);
+      }
     }
     let dir = match fs::File::open(&sessions_dir) {
       Ok(dir) => dir,
       Err(error) => return Err(path_error(&sessions_dir, error)),
     };
     let mut relative = Vec::with_capacity(96);
-    for (name, input) in names.iter().zip(expected) {
-      if name != &input.session_id {
-        return Ok(false);
-      }
-      let values = tree_input_values(&dir, name, &mut relative)?;
+    for input in expected {
+      let values = tree_input_values(&dir, &input.session_id, &mut relative)?;
       if values.metadata != input.metadata || values.history != input.history {
         return Ok(false);
       }
@@ -2457,6 +2467,9 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     return Ok(None);
   }
   let sessions_dir = store.cfg.sessions_dir();
+  // The directory's identity is read before its names: a session that appears or leaves between the two moves the
+  // identity past the one recorded here, so the next refresh walks the names instead of trusting this build's list.
+  let sessions_dir_identity = FileIdentity::read(&sessions_dir)?;
   let entries = match fs::read_dir(&sessions_dir) {
     Ok(entries) => entries,
     Err(error) => return Err(path_error(&sessions_dir, error)),
@@ -2534,6 +2547,7 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     archive_by_id: HashMap::new(),
     build_id: store.next_tree_index_build_id.fetch_add(1, Ordering::Relaxed),
     inputs,
+    sessions_dir: sessions_dir_identity,
   };
   let mut memo = HashMap::new();
   let mut structural = Vec::with_capacity(index.metas.len());
@@ -3718,6 +3732,70 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
+  async fn a_session_added_behind_the_build_rebuilds_the_stale_index() {
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let root = create_node(&store, "add-root", None, TaskProfile::Manager).await;
+    store.get_session(&root.id).await.unwrap().unwrap();
+    store.invalidate_tree_index();
+    let first = store.tree_index().unwrap();
+    let builds = store.task_tree_index_build_count();
+
+    // Another process creates a session directory the build never read. Its arrival moves the sessions directory's
+    // identity, so the renewal walks the names, finds the one the build lacks and rebuilds.
+    let other = make_store(home.path());
+    let added = create_node(&other, "added-behind-the-build", None, TaskProfile::Manager).await;
+    store.enable_tree_index_background_refresh();
+    store.expire_tree_index_for_test();
+    let stale = store.tree_index().unwrap();
+    assert!(Arc::ptr_eq(&first, &stale), "a read past the TTL serves the snapshot instead of walking the home");
+
+    let mut refreshed = Arc::clone(&first);
+    for _ in 0..200 {
+      refreshed = store.tree_index().unwrap();
+      if !Arc::ptr_eq(&refreshed, &first) {
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!Arc::ptr_eq(&refreshed, &first), "the new session directory earns a rebuild");
+    assert_eq!(store.task_tree_index_build_count(), builds + 1, "the build that lacks the new directory is replaced");
+    assert!(refreshed.metas.contains_key(&added.id), "the rebuilt index holds the session the build never saw");
+  }
+
+  #[tokio::test]
+  async fn a_session_removed_behind_the_build_rebuilds_the_stale_index() {
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let root = create_node(&store, "remove-root", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "remove-child", Some(&root.id), TaskProfile::Manager).await;
+    store.get_session(&child.id).await.unwrap().unwrap();
+    store.invalidate_tree_index();
+    let first = store.tree_index().unwrap();
+    let builds = store.task_tree_index_build_count();
+
+    // Another process removes the child's session directory. Its departure moves the sessions directory's identity,
+    // so the renewal walks the names and finds the list shorter than the build's.
+    fs::remove_dir_all(store.config().sessions_dir().join(&child.id)).unwrap();
+    store.enable_tree_index_background_refresh();
+    store.expire_tree_index_for_test();
+    let stale = store.tree_index().unwrap();
+    assert!(Arc::ptr_eq(&first, &stale), "a read past the TTL serves the snapshot instead of walking the home");
+
+    let mut refreshed = Arc::clone(&first);
+    for _ in 0..200 {
+      refreshed = store.tree_index().unwrap();
+      if !Arc::ptr_eq(&refreshed, &first) {
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!Arc::ptr_eq(&refreshed, &first), "the departed session directory earns a rebuild");
+    assert_eq!(store.task_tree_index_build_count(), builds + 1, "the build that still lists the child is replaced");
+    assert!(!refreshed.metas.contains_key(&child.id), "the rebuilt index drops the session the build still listed");
+  }
+
+  #[tokio::test]
   async fn tree_index_build_stops_between_nodes_without_publishing_a_partial_index() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
@@ -4245,6 +4323,7 @@ pub(crate) mod tests {
       archive_by_id: HashMap::new(),
       build_id: 0,
       inputs: Vec::new(),
+      sessions_dir: None,
     }
   }
 

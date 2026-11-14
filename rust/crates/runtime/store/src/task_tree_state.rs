@@ -404,6 +404,9 @@ pub(crate) struct TreeIndex {
   /// Every input this build read, sorted by session id: the session directories, their metadata files and their
   /// live histories. A refresh that reads the same inputs serves this index instead of building it again.
   pub(crate) inputs: Vec<TreeIndexInput>,
+  /// The sessions directory's identity at the build, read before its names. A refresh whose stat matches holds the
+  /// same names, so it compares the sessions' inputs alone instead of walking the directory again.
+  pub(crate) sessions_dir: Option<FileIdentity>,
 }
 
 /// What one session contributes to the tree index: the two files the index's metadata and task state come from.

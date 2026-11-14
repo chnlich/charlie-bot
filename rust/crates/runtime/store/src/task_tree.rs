@@ -1,6 +1,7 @@
 //! Durable task nodes, fact-derived tree state, and delegation authorization.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::CStr;
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -2271,8 +2272,8 @@ impl Store {
         _ => return false,
       }
     };
-    let Ok(current) = self.tree_index_inputs() else { return false };
-    if current != cached.inputs {
+    let Ok(held) = self.tree_index_inputs_hold(&cached.inputs) else { return false };
+    if !held {
       return false;
     }
     let mut entry = self.task_tree_index.lock().expect("task tree index mutex is not poisoned");
@@ -2285,31 +2286,31 @@ impl Store {
     }
   }
 
-  /// Every input the tree index reads, sorted by session id, as the home holds them now.
-  fn tree_index_inputs(&self) -> StoreResult<Vec<TreeIndexInput>> {
+  /// Whether the home still holds every input the index at `expected` was built from, compared in place.
+  ///
+  /// The scan reads each session's two identities and compares them against the recorded ones, stopping at the first
+  /// that moved. A quiet home therefore renews without building a second input list.
+  fn tree_index_inputs_hold(&self, expected: &[TreeIndexInput]) -> StoreResult<bool> {
     let sessions_dir = self.cfg.sessions_dir();
-    let entries = match fs::read_dir(&sessions_dir) {
-      Ok(entries) => entries,
+    let names = session_dir_names(&sessions_dir)?;
+    if names.len() != expected.len() {
+      return Ok(false);
+    }
+    let dir = match fs::File::open(&sessions_dir) {
+      Ok(dir) => dir,
       Err(error) => return Err(path_error(&sessions_dir, error)),
     };
-    let mut names = Vec::new();
-    for entry in entries {
-      let entry = entry.map_err(|error| path_error(&sessions_dir, error))?;
-      if !entry.file_type().map_err(|error| path_error(&entry.path(), error))?.is_dir() {
-        continue;
+    let mut relative = Vec::with_capacity(96);
+    for (name, input) in names.iter().zip(expected) {
+      if name != &input.session_id {
+        return Ok(false);
       }
-      let name = entry.file_name().to_string_lossy().into_owned();
-      if name.starts_with(".task-") && name.ends_with(".tmp") {
-        continue;
+      let values = tree_input_values(&dir, name, &mut relative)?;
+      if values.metadata != input.metadata || values.history != input.history {
+        return Ok(false);
       }
-      names.push(name);
     }
-    names.sort();
-    let mut inputs = Vec::with_capacity(names.len());
-    for name in names {
-      inputs.push(read_tree_input(self, &name)?);
-    }
-    Ok(inputs)
+    Ok(true)
   }
 
   #[cfg(test)]
@@ -2380,18 +2381,75 @@ impl Store {
   }
 }
 
+/// The session directory names the tree index reads, sorted, as the home holds them now.
+fn session_dir_names(sessions_dir: &Path) -> StoreResult<Vec<String>> {
+  let entries = match fs::read_dir(sessions_dir) {
+    Ok(entries) => entries,
+    Err(error) => return Err(path_error(sessions_dir, error)),
+  };
+  let mut names = Vec::new();
+  for entry in entries {
+    let entry = entry.map_err(|error| path_error(sessions_dir, error))?;
+    if !entry.file_type().map_err(|error| path_error(&entry.path(), error))?.is_dir() {
+      continue;
+    }
+    let name = entry.file_name().to_string_lossy().into_owned();
+    if name.starts_with(".task-") && name.ends_with(".tmp") {
+      continue;
+    }
+    names.push(name);
+  }
+  names.sort();
+  Ok(names)
+}
+
+/// The two values one session contributes to the tree index, read without the id the input list records beside them.
+struct TreeInputValues {
+  metadata: Option<(i64, i64)>,
+  history: Option<FileIdentity>,
+}
+
 /// The input one session contributes to the tree index: its metadata file's `(mtime_ns, size)` and its live
 /// history's identity.
 ///
 /// A missing metadata file is `None`, as is a session without a live history. The index also reads the session's
 /// archive segments, and those move only in the write that replaces the live log and raises the metadata's archive
 /// offset, so both of them are read here: an archive write moves this input too.
-fn read_tree_input(store: &Store, session_id: &str) -> StoreResult<TreeIndexInput> {
-  use std::os::unix::fs::MetadataExt;
-  let metadata = fs::metadata(store.metadata_path(session_id)).ok().map(|metadata| {
-    (charliebot_core::timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size() as i64)
-  });
-  Ok(TreeIndexInput { session_id: session_id.to_string(), metadata, history: store.history_identity(session_id)? })
+///
+/// Both reads resolve from the open sessions directory, so a scan over the home walks a session's own components
+/// instead of the home's whole prefix for each file, and `relative` is the one path buffer the scan reuses: each
+/// path is overwritten in place and ends in the NUL byte the stat call reads, so a session costs no path allocation.
+fn tree_input_values(
+  sessions_dir: &fs::File,
+  session_id: &str,
+  relative: &mut Vec<u8>,
+) -> StoreResult<TreeInputValues> {
+  relative.clear();
+  relative.extend_from_slice(session_id.as_bytes());
+  relative.push(b'/');
+  relative.extend_from_slice(METADATA_FILE_NAME.as_bytes());
+  let metadata = FileIdentity::read_at_cstr(sessions_dir, terminated(relative))
+    .ok()
+    .flatten()
+    .map(|identity| (identity.mtime_ns as i64, identity.size as i64));
+  relative.clear();
+  relative.extend_from_slice(session_id.as_bytes());
+  relative.push(b'/');
+  relative.extend_from_slice(layout::DATA_DIR_NAME.as_bytes());
+  relative.push(b'/');
+  relative.extend_from_slice(layout::CHAT_EVENTS_FILE_NAME.as_bytes());
+  Ok(TreeInputValues { metadata, history: FileIdentity::read_at_cstr(sessions_dir, terminated(relative))? })
+}
+
+/// The path buffer as the C string a stat call reads: `path` holds no NUL byte, and this one ends it.
+fn terminated(path: &mut Vec<u8>) -> &CStr {
+  path.push(0);
+  CStr::from_bytes_with_nul(path).expect("a session path holds no NUL byte before its end")
+}
+
+fn read_tree_input(sessions_dir: &fs::File, session_id: &str, relative: &mut Vec<u8>) -> StoreResult<TreeIndexInput> {
+  let values = tree_input_values(sessions_dir, session_id, relative)?;
+  Ok(TreeIndexInput { session_id: session_id.to_string(), metadata: values.metadata, history: values.history })
 }
 
 fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool) -> StoreResult<Option<TreeIndex>> {
@@ -2419,14 +2477,19 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     names.push(name);
   }
   names.sort();
+  let dir = match fs::File::open(&sessions_dir) {
+    Ok(dir) => dir,
+    Err(error) => return Err(path_error(&sessions_dir, error)),
+  };
   // The inputs are read before any session's content, never after it: a write that lands between the two then moves an
   // input past the value recorded here, so the next refresh rebuilds instead of renewing an index of older content.
+  let mut relative = Vec::with_capacity(96);
   let mut inputs = Vec::with_capacity(names.len());
   for name in &names {
     if should_stop() {
       return Ok(None);
     }
-    inputs.push(read_tree_input(store, name)?);
+    inputs.push(read_tree_input(&dir, name, &mut relative)?);
   }
   // `fresh_cached_metas` uses the same per-entry stat check the listing build uses and returns shared metadata. The
   // index owns Arcs, so cached metadata incurs no deep clone while building or serving the index.
@@ -3618,6 +3681,40 @@ pub(crate) mod tests {
     assert!(!store.tree_index_refresh_running.load(Ordering::Acquire), "the refresh ends");
     assert!(Arc::ptr_eq(&store.tree_index().unwrap(), &first), "the index that no input moved stays the index");
     assert_eq!(store.task_tree_index_build_count(), 1, "no walk runs over a home nothing moved in");
+  }
+
+  #[tokio::test]
+  async fn a_stale_tree_index_whose_live_history_grew_rebuilds() {
+    use std::io::Write;
+
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let root = create_node(&store, "history-root", None, TaskProfile::Manager).await;
+    store.get_session(&root.id).await.unwrap().unwrap();
+    store.invalidate_tree_index();
+    let first = store.tree_index().unwrap();
+    assert_eq!(store.task_tree_index_build_count(), 1);
+
+    store.enable_tree_index_background_refresh();
+    // Another process appended to the live log: the history identity the build read has moved, so the renewal must
+    // refuse the cached index and rebuild it.
+    let mut log = fs::OpenOptions::new().append(true).open(store.chat_events_path(&root.id)).unwrap();
+    log.write_all(b"{\"id\":\"external-append\",\"type\":\"user\",\"content\":\"outside the server\"}\n").unwrap();
+    drop(log);
+    store.expire_tree_index_for_test();
+    let stale = store.tree_index().unwrap();
+    assert!(Arc::ptr_eq(&first, &stale), "a read past the TTL serves the snapshot instead of walking the home");
+
+    let mut refreshed = Arc::clone(&first);
+    for _ in 0..200 {
+      refreshed = store.tree_index().unwrap();
+      if !Arc::ptr_eq(&refreshed, &first) {
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!Arc::ptr_eq(&refreshed, &first), "the background build publishes the next index");
+    assert_eq!(store.task_tree_index_build_count(), 2, "the moved history identity earns the second build");
   }
 
   #[tokio::test]

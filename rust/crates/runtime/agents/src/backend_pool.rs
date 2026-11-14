@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use charliebot_core::config::{BackendOption, CallTarget, CharlieBotConfig, PoolConfig};
+use charliebot_core::event_types::API_ERROR_STATUS;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::text_repr;
 use charliebot_core::timeouts::ROUTER_TIMEOUT_SECONDS;
@@ -396,7 +397,7 @@ pub fn is_temporary_unavailable_error(text: &str) -> bool {
 /// 429 and 5xx fail over, and any other integer or non-integer status does not, without reading the text. A null or
 /// absent status falls back to the text of the result.
 pub fn is_temporary_unavailable_result(event: &Value) -> bool {
-  match event.get("api_error_status") {
+  match event.get(API_ERROR_STATUS) {
     None | Some(Value::Null) => {
       is_temporary_unavailable_error(&event.get("result").map(text_repr::value_str).unwrap_or_default())
     }

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
-  ASSISTANT, MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, TOOL_RESULT, USER,
+  API_ERROR_STATUS, ASSISTANT, MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, TOOL_RESULT, USER,
 };
 use charliebot_registry::backend::{LaunchRefused, LaunchWatch as LaunchWatchTrait, MemberFailure};
 use charliebot_store::metadata::UtcDateTime;
@@ -143,7 +143,7 @@ fn is_lost_login_event(event: &Value) -> bool {
   {
     return false;
   }
-  match event.get("api_error_status") {
+  match event.get(API_ERROR_STATUS) {
     None | Some(Value::Null) => true,
     Some(Value::Number(status)) => status.as_u64() == Some(401),
     Some(_) => false,

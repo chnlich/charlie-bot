@@ -751,18 +751,26 @@ pub fn member_loads_in(store: &Store, pool: &ModelPool) -> anyhow::Result<HashMa
   }
 }
 
-/// The member a session runs on now, for the resolver. A model session resolves to its backend id. A pool session
-/// resolves to its recorded member. A pool with no recorded member or a member it no longer lists is a refusal.
-pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
+/// The refusal of a session whose backend resolves to no `backends.options` entry.
+pub const MISSING_BACKEND_OPTION: &str = "session backend resolution requires a configured backends.options entry";
+
+/// The session's backend id: the one its metadata records, else the config's new-session default.
+///
+/// A config whose `backends.options` names no entry is a refusal, and so is an id that names no option.
+pub fn session_backend_id_or_default(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
   let backend_id = if meta.backend.is_empty() {
-    cfg
-      .backends
-      .new_session_backend()
-      .ok_or_else(|| anyhow!("session backend resolution requires a configured backends.options entry"))?
+    cfg.backends.new_session_backend().ok_or_else(|| anyhow!(MISSING_BACKEND_OPTION))?
   } else {
     meta.backend.clone()
   };
   cfg.backends.check_backend_id(&backend_id).map_err(anyhow::Error::msg)?;
+  Ok(backend_id)
+}
+
+/// The member a session runs on now, for the resolver. A model session resolves to its backend id. A pool session
+/// resolves to its recorded member. A pool with no recorded member or a member it no longer lists is a refusal.
+pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
+  let backend_id = session_backend_id_or_default(cfg, meta)?;
   let Some(pool) = cfg.backends.pool(&backend_id) else { return Ok(backend_id) };
   let member =
     meta.extra(POOL_MEMBER_FIELD).and_then(Value::as_str).filter(|backend_id| !backend_id.is_empty()).ok_or_else(

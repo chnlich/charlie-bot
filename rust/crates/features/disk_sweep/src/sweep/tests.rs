@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
+use charliebot_registry::worktree_removal::WorktreeRemoval;
 use chrono::{DateTime, Utc};
+use futures_util::future::BoxFuture;
 use serde_json::json;
 use tempfile::tempdir;
 use walkdir::WalkDir;
@@ -101,8 +103,30 @@ fn write_owner(roots: &SweepRoots, owner: Owner<'_>) -> PathBuf {
   run
 }
 
+/// The removal the sweep asks for: `git worktree remove --force`, which the task runtime performs in production.
+fn remove_worktree(request: WorktreeRemoval<'_>) -> BoxFuture<'_, Option<String>> {
+  Box::pin(async move {
+    let output = Command::new("git")
+      .args(["worktree", "remove", "--force"])
+      .arg(request.worktree_path)
+      .current_dir(request.repo_path)
+      .output()
+      .expect("the git worktree remove subprocess runs");
+    if output.status.success() {
+      None
+    } else {
+      Some(format!(
+        "{} cleanup failed for {}: {}",
+        request.label,
+        request.worktree_path,
+        String::from_utf8_lossy(&output.stderr).trim()
+      ))
+    }
+  })
+}
+
 async fn run(roots: &SweepRoots, mode: SweepMode, now: DateTime<Utc>) -> super::SweepReport {
-  run_sweep(roots.clone(), mode, now).await.unwrap()
+  run_sweep(roots.clone(), mode, now, remove_worktree).await.unwrap()
 }
 
 fn utc(value: &str) -> DateTime<Utc> {

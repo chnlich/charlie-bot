@@ -208,6 +208,7 @@ host probe	features.host_auth	host_probe
 fork assertions	features.artifacts	fork_assertions
 user dm	features.slack	user_dm
 owner dm	features.slack	owner_dm
+worktree removal	runtime.tasks	worktree_removal
 default_lifecycle	-	charliebot_registry::backend::DefaultLifecycle
 pre-recovery step	runtime.agents	session_cgroups
 pre-recovery step	runtime.agents	backend_pool

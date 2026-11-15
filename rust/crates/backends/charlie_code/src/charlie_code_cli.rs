@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use charliebot_core::paths;
+use charliebot_core::session_memo::SESSION_MEMO_NOTE;
 use charliebot_core::text_repr::float_repr;
 use charliebot_registry::backend::{
   AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, Env, LaunchArgs, Translate, TransportKind,
 };
-use charliebot_store::session_fork::SESSION_MEMO_NOTE;
 use serde_json::Value;
 
 use super::flags;

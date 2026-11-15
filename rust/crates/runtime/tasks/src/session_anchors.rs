@@ -1,6 +1,7 @@
 //! Native-context reset notes. A manager and a worker each get their own note.
 
-use charliebot_store::session_fork::{HISTORY_LOCATION_NOTE, SESSION_MEMO_NOTE, child_task_list_note};
+use charliebot_core::session_memo::SESSION_MEMO_NOTE;
+use charliebot_store::session_fork::{HISTORY_LOCATION_NOTE, child_task_list_note};
 
 /// The instruction a worker's fresh native conversation follows before it responds.
 const WORKER_INSTRUCTION: &str = concat!(

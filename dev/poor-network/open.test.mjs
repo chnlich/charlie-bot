@@ -17,8 +17,8 @@ test('the asset version is read from the folded declaration the server serves, a
 });
 
 // A repetition's record, with the fields the decisions read.
-function repOf({ navigationError = null, networkChanged = [] } = {}) {
-  return { navigationError, networkChanged, newestMs: 20000 };
+function repOf({ navigationError = null, networkChanged = [], openInHoldMs = null } = {}) {
+  return { navigationError, networkChanged, openInHoldMs, newestMs: 20000 };
 }
 
 // A reference repetition whose document is case A's revalidated copy: a 304's headers on the wire for the cached body.
@@ -57,6 +57,13 @@ test('a request the host\'s network change dropped names the interference', () =
 test('a navigation that failed with the network-change error is interference without a request record', () => {
   const cause = hostInterference(repOf({ navigationError: 'net::ERR_NETWORK_CHANGED' }));
   assert.match(cause, /net::ERR_NETWORK_CHANGED/);
+});
+
+test('a release open the bench host pushed late into the hold is interference, an open in place is the page\'s', () => {
+  const late = hostInterference(repOf({ navigationError: 'net::ERR_TIMED_OUT', openInHoldMs: OPEN.openByMs + 700 }));
+  assert.match(late, /bench host stalled/);
+  assert.equal(hostInterference(repOf({ navigationError: 'net::ERR_TIMED_OUT', openInHoldMs: OPEN.openAfterMs + 400 })),
+    null);
 });
 
 test('another load failure stays the repetition\'s own record', () => {

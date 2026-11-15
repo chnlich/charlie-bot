@@ -264,7 +264,15 @@ Conditions, each a fresh browser profile behind a fresh proxy, with the CDN file
 | `reset` | As `held`, but the blackout resets every connection when it starts. The pooled connection of A and B ends there. |
 | `flaps` | Up 5 s, then down 5 s, six times (60 s). Each drop resets every connection, so each recovery reconnects. |
 | `offline` | Chrome's network emulation is offline for the open. The navigation fails at once and the open is not reached. |
-| `release` | A held blackout starts; 5 s in, the server's static asset version changes (the bench appends a comment to the trial tree's served `web/static/js/config.js`, and the version the server answers must move); the open navigates 10 s in, inside the hold. |
+| `release` | A held blackout starts; 2 s in, the server's static asset version changes (the bench appends a comment to the trial tree's served `web/static/js/config.js`, and the version the server answers must move); the open navigates 5 s in, inside the hold. |
+
+The release open navigates within 10 s of the last read on A's and B's pooled connection. Chrome sends a request on an
+HTTP/2 connection idle that long only after a PING, which the hold leaves unanswered; Chrome then drops the connection
+10 s later and retries on a new one, whose CONNECT the blackout drops. With the open 10 s in, every A and B release
+repetition failed with `net::ERR_TIMED_OUT` 40.2 s after its navigation (rounds 3 and 4), against 30.1 s for C and for
+the reset cells, whose new connection is the first attempt; A held, 1.6 s after the last read, loads. C has no pooled
+connection, so its first attempt falls inside the blackout in every blackout cell, and `C held`, `C reset` and
+`C release` end with `net::ERR_TIMED_OUT` when Chrome's 30 s connect timeout runs out.
 
 The open is `switchTarget` (a session whose bootstrap is the view's 26,592 bytes); B's other session is `probes[0]`.
 The CPU rate is `Emulation.setCPUThrottlingRate`. The cells run in this order: a reference cell (A, link, rate 1), the
@@ -319,7 +327,11 @@ treats the machine's network as changed: it drops every connection and fails the
 tab records that error is host interference, not the page's result: the cell reruns it, at most
 `OPEN.interferenceReruns` times, and a repetition that still meets the error at the bound fails the run. Each rerun
 is recorded in the repetition's `interferenceReruns` with its cause, so no interfered repetition enters a median.
-Every other load failure stays the repetition's record, as before.
+A stall of the bench host spoils a release repetition the same way. When the open navigates later than `OPEN.openByMs`
+(8 s) into the hold, its pooled connection has been idle past Chrome's 10 s check, which the cell does not name, and the
+cell reruns it under the same bound. In D2 (run 20261115T095852Z) the bench's own requests to the server came 1.4 s and
+3.6 s late in the two B release repetitions. The second open navigated about 8.7 s into the hold and failed with
+`net::ERR_TIMED_OUT` 40.3 s later. Every other load failure stays the repetition's record, as before.
 
 **Measured per repetition.** Times are ms from the page's time origin (navigation start): `newest_message_ms` is when the
 first screen's last message is in the chat, named by its `data-message-id` — the page's own `newest_message_ms`
@@ -333,7 +345,8 @@ not-current mark was in the document at any sample. Each repetition also names w
 `sockets` (the WebSocket opens), `frames` and `frame_types` (the socket frames by type), `requests` (the requests),
 `ws_state` (the client's own socket state), the last console lines and page errors, the requests the host's network
 change dropped (`network_changed`, empty on a clean repetition), and the interference reruns, so a missing time can be
-read against what the page reported.
+read against what the page reported. A release repetition records when its open navigated into the hold
+(`openInHoldMs` in the JSON).
 
 **The mark's DOM contract (task 3 implements it).** A page marks a stored copy as not current with the attribute
 `data-freshness="not-current"` on one element of its document. The bench watches for that element and reports the
@@ -406,7 +419,8 @@ The tab tests check the switch's row handling against a stub sidebar that keeps 
 document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches fails
 the step. The open tests check the CPU rate's sharing (a shared rate stands, beside the one the side's own reference
 derives), the reference's document (a reference repetition whose document crossed the link gives no rate) and the host
-interference (a dropped request or a failed navigation names the interference; any other load
+interference (a dropped request, a failed navigation or a release open the host pushed past `OPEN.openByMs` names the
+interference; any other load
 failure stays the repetition's own record; a repetition the host spoiled is rerun, bounded, and its reruns recorded).
 The lock tests check that one concurrent side attempt holds the bench lock and the next waits for it, and that the
 bench code names the lock path only in `lock.sh`.

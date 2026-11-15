@@ -85,10 +85,15 @@ export function openCpuRecord(sharedCpuRate, referenceReps) {
   };
 }
 
-// The cause a repetition names when the host's network changed under it, or null when the repetition is a page
-// result. Chrome drops every connection when the host's interfaces change and fails the requests in flight with
-// `net::ERR_NETWORK_CHANGED`, a document cut mid-body included; such a repetition measures the host, not the page.
+// The cause a repetition names when the host spoiled it, or null when the repetition is a page result. Chrome drops
+// every connection when the host's interfaces change and fails the requests in flight with `net::ERR_NETWORK_CHANGED`,
+// a document cut mid-body included. A release open that a stall of the bench host pushed past OPEN.openByMs into the
+// hold meets Chrome's idle check, which the cell does not name. Either repetition measures the host, not the page.
 export function hostInterference(rep) {
+  if (rep.openInHoldMs !== null && rep.openInHoldMs > OPEN.openByMs) {
+    return `the open navigated ${rep.openInHoldMs} ms into the hold, past the ${OPEN.openByMs} ms its pooled ` +
+      'connection allows: the bench host stalled';
+  }
   if (rep.networkChanged.length > 0) {
     const named = rep.networkChanged.slice(0, 3).map((failure) => {
       const url = new URL(failure.url);
@@ -104,7 +109,7 @@ export function hostInterference(rep) {
   return null;
 }
 
-// One cell's repetitions. A repetition the host's network change spoiled is rerun — at most
+// One cell's repetitions. A repetition the host spoiled is rerun — at most
 // OPEN.interferenceReruns times, and each rerun recorded — because it never counts as the page's result; any other
 // failure is the rep's record, as before. A repetition that still meets the interference at the bound fails the run.
 export async function runRepetitions(measure, repetitions, results = []) {
@@ -308,16 +313,25 @@ async function measureOnce(ctx, cell, repetition) {
       await tabs.close(warm);
     }
 
+    let holdStart = null;
     if (cell.condition === 'held' || cell.condition === 'reset') {
       // The condition names the cell; the proxy's modes are hold and reset.
       const mode = cell.condition === 'held' ? 'hold' : 'reset';
       link.proxy.blackout({ seconds: LINK.blackoutSeconds, mode });
       await sleep(OPEN.blackoutLeadMs);
     } else if (cell.condition === 'release') {
+      // The open goes at a fixed time into the hold, however long the release takes to land (profile.mjs names the
+      // bound that time keeps).
+      holdStart = Date.now();
       link.proxy.blackout({ seconds: LINK.blackoutSeconds, mode: 'hold' });
       await sleep(OPEN.releaseAtMs);
       await release(ctx, session.id);
-      await sleep(OPEN.openAfterMs - OPEN.releaseAtMs);
+      const openIn = holdStart + OPEN.openAfterMs - Date.now();
+      if (openIn < 0) {
+        throw new Error(`the release landed ${OPEN.openAfterMs - openIn} ms into the hold, after the open's ` +
+          `${OPEN.openAfterMs} ms`);
+      }
+      await sleep(openIn);
     }
 
     // The newest message the measured open must show: the first screen's last message, fetched now, after the
@@ -422,6 +436,7 @@ async function measureOnce(ctx, cell, repetition) {
         : countersAt(timeline, Math.min(end, loadWallMs + OPEN.postLoadWindowMs)) - countersAt(timeline, loadWallMs),
       markSeen: pageState !== null && pageState.mark !== null,
       pageCase: openCase,
+      openInHoldMs: holdStart === null ? null : navStart - holdStart,
       elapsedMs: end - navStart,
     };
   } finally {

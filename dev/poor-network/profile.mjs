@@ -121,10 +121,19 @@ export const OPEN = Object.freeze({
   // Repeated drops: the link is up for upSeconds, then down for downSeconds, until totalSeconds have passed. Each
   // drop resets every connection, so each recovery reconnects.
   flaps: Object.freeze({upSeconds: 5, downSeconds: 5, totalSeconds: 60}),
-  // The first open after a release: the resource version changes this long after a held blackout starts, and the
-  // open navigates openAfterMs after it, so the open is inside the hold.
-  releaseAtMs: 5000,
-  openAfterMs: 10000,
+  // The first open after a release: the resource version changes releaseAtMs after a held blackout starts, and the
+  // open navigates openAfterMs after the blackout starts, so the open is inside the hold. Chrome sends a request on an
+  // HTTP/2 connection that has read nothing for 10 s only after a PING on it; inside the hold the PING goes unanswered,
+  // Chrome drops the connection 10 s later and retries on a new one, and the blackout drops the new connection's
+  // CONNECT. The open then fails with net::ERR_TIMED_OUT 40 s after it navigates, as every A and B release repetition
+  // did with the open 10 s in. The open therefore navigates well within 10 s of the pooled connection's last read.
+  releaseAtMs: 2000,
+  openAfterMs: 5000,
+  // The latest an open may navigate into the hold. The precontact's last read lands within 0.5 s before the hold
+  // starts, so an open by this time is still inside Chrome's 10 s. An open later than this came after a stall of the
+  // bench host, which spoils the repetition: one D2 repetition navigated 8.7 s in, after a 3.6 s stall, and failed
+  // 40.3 s later.
+  openByMs: 8000,
   // An open that has not shown its newest message or its catch-up by this time is recorded at the cap.
   capMs: 240000,
   // An offline navigation that has not shown the page within this time is recorded as not reached.

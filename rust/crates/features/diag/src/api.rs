@@ -2,12 +2,12 @@
 //! logged as a single `diag_client` line carrying the event's `kind`, its fields and the browser's
 //! `forwarded_for`. No session or state is consulted; the route answers `{"ok": true}`.
 //!
-//! The five kinds and their fields follow plan section 4.1 of the poor-network line: `switch`
-//! carries the switch phases plus the bootstrap's Resource Timing, `send` one message send's
-//! click-to-response and click-to-echo waits, `socket` a disconnect episode and one record per
-//! subscription's catch-up, `page_load` the document's Navigation Timing with the open case, the
-//! first chat render and catch-up, and the page's render-blocking and same-origin resource timings,
-//! and `traffic` one tab's per-minute received bytes by endpoint.
+//! The five kinds and their fields follow plan section 4.1 of the poor-network line. `switch`
+//! carries the switch phases plus the bootstrap's Resource Timing, and `send` carries one message
+//! send's click-to-response and click-to-echo waits. `socket` carries a disconnect episode and one
+//! record per subscription's catch-up. `page_load` carries the document's Navigation Timing with
+//! the open case, the first chat render and catch-up, and the page's render-blocking and
+//! same-origin resource timings. `traffic` carries one tab's per-minute received bytes by endpoint.
 
 use std::sync::Arc;
 
@@ -145,7 +145,7 @@ const SEND_FIELDS: &[Field] = &[
 const SEND_BODY: BodyModel = BodyModel::required(SEND_FIELDS).forbid_extra();
 
 /// The socket body, in two flavors. A disconnect episode runs from the disconnect through the
-/// reconnect to the replay's `catchup_complete`; an episode the page leaves before its replay
+/// reconnect to the replay's `catchup_complete`. An episode the page leaves before its replay
 /// finished sends nulls for the reconnect and catch-up fields. A subscription record reports one
 /// replay's completion — the subscription number, the session it served and its bytes — and sends
 /// nulls for the disconnect fields. The only close cause left is `network`: a switch keeps the
@@ -187,10 +187,10 @@ const SAME_ORIGIN_FIELDS: &[Field] = &[
 ];
 const SAME_ORIGIN_BODY: BodyModel = BodyModel::required(SAME_ORIGIN_FIELDS).forbid_extra();
 
-/// The page-load body: the document's Navigation Timing, once per page load, with the cause the
-/// navigating path announced, the open case and the timings of the first chat render and of the
-/// first catch-up, and the page's render-blocking and same-origin resource timings. The open case
-/// and the content source are null on a page without a session.
+/// The page-load body holds the document's Navigation Timing, once per page load. It carries the
+/// cause the navigating path announced, the open case, and the timings of the first chat render
+/// and the first catch-up. Beside those sit the page's render-blocking and same-origin resource
+/// timings. The open case and the content source are null on a page without a session.
 const PAGE_LOAD_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[EventKind::PageLoad.as_str()])),
   Field::required("response_end_ms", FieldType::Integer).ge(Bound::Int(0)),
@@ -427,7 +427,7 @@ mod tests {
   }
 
   /// The two passes the route runs: the envelope selects the kind, and the kind model validates
-  /// the body itself — the envelope's validated values drop the keys it does not declare, so the
+  /// the body itself. The envelope's validated values drop the keys it does not declare. So the
   /// kind model's errors and values come from the body, not the envelope's stripped object.
   fn validate_event(body: Value) -> Result<Value, Vec<FieldError>> {
     let envelope = validate(body.clone(), &ENVELOPE_BODY)?;

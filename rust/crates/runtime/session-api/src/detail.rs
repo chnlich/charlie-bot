@@ -1800,12 +1800,12 @@ backends:
   async fn the_first_screen_fills_its_message_budget_from_turns_of_many_events() {
     let (_home, features) = feature_context();
     let meta = crate::test_support::create_node(&features.store, "budget-bootstrap", None, TaskProfile::Manager).await;
-    for turn in 1..=60usize {
+    // 45 turns of two events that fold to one message: the budget's count of events folds to 20 messages, so the read
+    // doubles to 80 and stops at the budget, leaving events older than the kept tail.
+    for turn in 1..=45usize {
       let events = [
         json!({"type": "user", "content": fixture_text(turn as u64, 40)}),
         json!({"type": "unrendered_note", "content": "filler"}),
-        json!({"type": "unrendered_note", "content": "filler"}),
-        json!({"type": "master_done"}),
       ];
       for event in events {
         features.store.append_chat_event(&meta.id, event).await.unwrap();

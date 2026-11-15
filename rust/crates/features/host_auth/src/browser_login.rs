@@ -13,8 +13,8 @@
 //!
 //! A login with `use_pty` runs its command under a pseudo-terminal in a new session, so a keyboard-interactive
 //! prompt reaches that terminal rather than the server's. Such a login may name an `enter_after_pattern`, which
-//! writes one newline to the terminal on its first match, and a `user_code_pattern`, whose first capture group is
-//! appended to the approval link as `user_code=`.
+//! writes one newline to the terminal on its first match. It may also name a `user_code_pattern`, whose first
+//! capture group is appended to the approval link as `user_code=`.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -755,7 +755,7 @@ fn spawn_pty(argv: &[String]) -> io::Result<(Child, Arc<PtyMaster>)> {
 
 /// A pseudo-terminal: the master side and the slave the login child owns.
 ///
-/// Both carry close-on-exec: an unrelated fork of this process may hold the descriptors until it execs, and a copy
+/// Both carry close-on-exec. An unrelated fork of this process may hold the descriptors until it execs. A copy
 /// of the slave that survived an exec would keep a master read from ending at the login's exit.
 fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
   let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };

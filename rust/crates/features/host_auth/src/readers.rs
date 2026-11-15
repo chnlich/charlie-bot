@@ -1,5 +1,5 @@
-//! The host readers that other features reach through the registry: the login records the cron gate and the Waiting on
-//! you read consume, and the probe the gate runs before a fire.
+//! The host readers that other features reach through the registry. The cron gate and the Waiting on you read consume
+//! the login records, and the gate runs the probe before a fire.
 
 use std::path::PathBuf;
 

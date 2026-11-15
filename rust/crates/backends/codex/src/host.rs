@@ -14,7 +14,7 @@ pub struct CodexHost {
 }
 
 impl CodexHost {
-  /// The host of the running server. PATH defaults to [`DEFAULT_PATH`] when unset; HOME must be set.
+  /// The host of the running server. PATH defaults to [`DEFAULT_PATH`] when unset. HOME must be set.
   pub fn from_process() -> anyhow::Result<Self> {
     let home = std::env::var("HOME").context("HOME must be set for the codex package")?;
     let path = match std::env::var("PATH") {

@@ -126,7 +126,7 @@ impl CodexTranslator {
       return Ok(Vec::new());
     }
     let item_id = item_key(item)?;
-    // Newer codex emits `text`; the older schema carried `content[].text`.
+    // Newer codex emits `text`. The older schema carried `content[].text`.
     let full_text = match item.get("text") {
       Some(value) if is_truthy(value) => {
         value.as_str().context("codex agent_message text must be a string")?.to_string()
@@ -149,7 +149,7 @@ impl CodexTranslator {
     if text_of(item, "type") != Some("reasoning") {
       return Ok(Vec::new());
     }
-    // Newer codex emits `text`; the older schema carried the `summary_text` parts of `summary`.
+    // Newer codex emits `text`. The older schema carried the `summary_text` parts of `summary`.
     let mut text = match item.get("text") {
       Some(value) if is_truthy(value) => value.as_str().context("codex reasoning text must be a string")?.to_string(),
       _ => String::new(),

@@ -1,5 +1,5 @@
-//! The switch's disk preflight (scripts/switch-server.sh): the bounded wait for a quiet root disk, the error that
-//! names the heaviest readers, and the per-session read records around a switch.
+//! The switch's disk preflight (scripts/switch-server.sh) waits a bounded time for a quiet root disk. Its error
+//! names the heaviest readers. Per-session read records cover the reads around a switch.
 //!
 //! The tests inject the disk-rate sampler by replacing `disk_read_rate_mb`. They read their cgroup and process
 //! accounting from the world's fake cgroup and proc roots, so no test depends on the live disk.

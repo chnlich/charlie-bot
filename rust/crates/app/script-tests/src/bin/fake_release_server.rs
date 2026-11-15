@@ -72,8 +72,9 @@ struct Behavior {
   task_state: String,
   worktree: String,
   task_error: String,
-  /// The first tool result written to the delegated run's event log: `none`, `ok` (a Bash command that did not error),
-  /// `failed` (a Bash command that errored) or `not-command` (another tool).
+  /// The first tool result written to the delegated run's event log.
+  /// Its value is `none`, `ok` (a Bash command that did not error), `failed` (a Bash command that errored) or
+  /// `not-command` (another tool).
   first_command: String,
   /// A top-level key appended to config.yaml when the server starts, as an edit another session makes during a switch.
   /// Empty appends nothing.

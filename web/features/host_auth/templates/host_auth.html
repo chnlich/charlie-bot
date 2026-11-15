@@ -118,7 +118,6 @@
         <th style="width:16%">Status</th>
         <th style="width:21%">Renewal deadline &middot; estimate, upper bound</th>
         <th>Detail and next step</th>
-        <th style="width:11%">Last probe</th>
       </tr>
     </thead>
     <tbody>
@@ -174,7 +173,6 @@
             {% endif %}
           </div>
         </td>
-        <td data-l="Last probe" class="det">{{ h.last_probe or "not yet" }}</td>
       </tr>
       {% endfor %}
     </tbody>

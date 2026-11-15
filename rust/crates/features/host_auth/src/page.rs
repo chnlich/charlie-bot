@@ -76,7 +76,6 @@ fn page_row(entry: &Map<String, Value>, now: OffsetDateTime, renewals: &HashMap<
   let baseline = host_auth::opt_str(entry, "enrolled_observed_at")?;
   let hostname = entry.get("hostname").with_context(|| format!("host {alias} has no hostname"))?;
   let baseline_text = timestamps::local_timestamp(baseline, LocalFormat::DateZone)?;
-  let last_probe = timestamps::local_timestamp(host_auth::opt_str(entry, "last_probe_at")?, LocalFormat::Clock)?;
 
   let mut row = json!({
     "alias": alias,
@@ -89,7 +88,6 @@ fn page_row(entry: &Map<String, Value>, now: OffsetDateTime, renewals: &HashMap<
     "renew_login": if status == STATUS_ROUTER_REJECTED { renewals.get(alias).copied() } else { None },
     "has_url": detail.contains("http"),
     "baseline": baseline_text,
-    "last_probe": last_probe,
     "deadline_kind": "not_applicable",
     "remaining": null,
     "expires": null,

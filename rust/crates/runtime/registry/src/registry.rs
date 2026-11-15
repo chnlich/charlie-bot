@@ -189,6 +189,8 @@ pub struct Registry {
   pub(crate) user_dm: Ledger<UserDmFn>,
   /// The one runner that DMs the host owner, which `features/slack` registers.
   pub(crate) owner_dm: Ledger<OwnerDmFn>,
+  /// The one worktree remover, which `runtime.tasks` registers.
+  pub(crate) worktree_removals: Ledger<WorktreeRemovalFn>,
   /// The lifecycle of a backend type that registered none: one process per run.
   pub(crate) default_lifecycle: Arc<dyn BackendLifecycle>,
   pub(crate) default_lifecycle_name: &'static str,
@@ -244,6 +246,7 @@ impl Registry {
       fork_assertions,
       user_dm,
       owner_dm,
+      worktree_removals,
       default_lifecycle: _,
       default_lifecycle_name,
       pre_recovery_steps,
@@ -306,6 +309,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, fork_assertions);
     append_ledger_inventory(&mut inventory, user_dm);
     append_ledger_inventory(&mut inventory, owner_dm);
+    append_ledger_inventory(&mut inventory, worktree_removals);
     inventory.push(format!("default_lifecycle\t-\t{default_lifecycle_name}"));
     append_ledger_inventory(&mut inventory, pre_recovery_steps);
     append_ledger_inventory(&mut inventory, recovery_steps);
@@ -593,6 +597,9 @@ pub type UserDmFn = for<'a> fn(&'a FeatureContext, &'a str, &'a str) -> BoxFutur
 
 /// The sender of a DM to the host owner (`slack.owner_dm`).
 pub type OwnerDmFn = for<'a> fn(&'a FeatureContext, &'a str) -> BoxFuture<'a, anyhow::Result<String>>;
+
+/// The removal of one finished run's worktree, which `runtime.tasks` registers.
+pub type WorktreeRemovalFn = crate::worktree_removal::WorktreeRemovalFn;
 
 /// The context limits of one reading kind. `declared_window` is `None` when the reading carries the window itself;
 /// `compact_reserve` is `None` when the compaction point is unknown.
@@ -1559,6 +1566,22 @@ impl Registry {
   /// The registered host-owner DM sender; fails when no package registers one.
   pub fn owner_dm_sender(&self) -> anyhow::Result<OwnerDmFn> {
     self.owner_dm.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the owner DM sender"))
+  }
+
+  /// The registration of the worktree remover (`runtime.tasks`).
+  pub fn worktree_removal(&mut self, remove: WorktreeRemovalFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.worktree_removals.insert_single(package, "worktree_removal", remove)
+  }
+
+  /// The registered worktree remover; a server with none fails rather than sweeping a worktree it cannot remove.
+  pub fn worktree_remover(&self) -> anyhow::Result<WorktreeRemovalFn> {
+    self
+      .worktree_removals
+      .values()
+      .next()
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("no package registers the worktree remover"))
   }
 
   /// The registration of a file view (`wiring.register_file_view`).

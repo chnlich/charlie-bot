@@ -835,7 +835,6 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
- "charliebot-tasks",
  "chrono",
  "futures-util",
  "libc",

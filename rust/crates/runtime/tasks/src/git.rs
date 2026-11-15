@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use charliebot_core::git::{ancestry_args, object_exists_args};
 use charliebot_core::text_repr;
+use charliebot_registry::worktree_removal::WorktreeRemoval;
+use futures_util::future::BoxFuture;
 use ignore::WalkBuilder;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -1011,6 +1013,21 @@ pub async fn git_worktree_remove_reporting(
       None
     }
   }
+}
+
+/// The registry hook's removal: [`git_worktree_remove_reporting`] in the form the registry's remover holds.
+pub fn remove_worktree_hook(request: WorktreeRemoval<'_>) -> BoxFuture<'_, Option<String>> {
+  Box::pin(git_worktree_remove_reporting(
+    Some(request.repo_path),
+    Some(request.worktree_path),
+    Some(request.branch_name),
+    request.owner_id,
+    request.worktree_parent,
+    request.log_fields,
+    request.label,
+    request.fail_event,
+    request.remove_failed_event,
+  ))
 }
 
 /// Prune stale worktree refs.

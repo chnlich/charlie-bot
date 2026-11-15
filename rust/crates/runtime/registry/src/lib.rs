@@ -35,6 +35,7 @@ pub mod usage;
 pub mod usage_sweep;
 mod watch;
 pub mod wiring;
+pub mod worktree_removal;
 
 pub use context::{FeatureContext, StartupState, StartupStop, StateError};
 pub use registry::{RegisterFn, Registry, RegistryError, registration_step};

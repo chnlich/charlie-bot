@@ -157,7 +157,7 @@ impl IdleCompaction {
     }
   }
 
-  /// Evaluate a timer at a supplied instant; return the spawned compaction when it qualifies.
+  /// Evaluate a timer at a supplied instant. Return the spawned compaction when it qualifies.
   pub fn fire_at(&self, session_id: &str, now: UtcDateTime) -> anyhow::Result<Option<JoinHandle<()>>> {
     self.fire_at_inner(session_id, now, false)
   }
@@ -526,7 +526,7 @@ pub fn arm_for_round(ctx: IdleArmContext<'_>) -> BoxFuture<'_, anyhow::Result<()
             env: run.env,
             cwd: &run.cwd,
             config_dir: Path::new(&run.config_dir),
-            // The compaction looks the transcript up by the Claude session id; the CharlieBot one stays in
+            // The compaction looks the transcript up by the Claude session id. The CharlieBot one stays in
             // `session_cgroup_id` and the `session` log fields.
             session_id: &cc_session_id,
             family: &run.family,

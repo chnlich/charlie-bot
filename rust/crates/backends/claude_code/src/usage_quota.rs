@@ -69,7 +69,7 @@ static CLI_VERSION: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+").expect("the version pattern is valid"));
 
 /// The HTTP client and the two endpoints the quota accounts call. Production builds it from the environment and the URL
-/// constants; tests point the endpoints at a local server.
+/// constants. Tests point the endpoints at a local server.
 pub struct QuotaHttp {
   client: reqwest::Client,
   usage_url: String,
@@ -220,7 +220,7 @@ impl ClaudeQuotaAccount {
     self.round.lock().expect("the account round is not poisoned").backoff_seconds = 0.0;
   }
 
-  /// One round. The usage is fetched; a 401 renews the token once and retries once; a second 401 or a 429 backs off.
+  /// One round. The usage is fetched. A 401 renews the token once and retries once. A second 401 or a 429 backs off.
   async fn fetch_round(&self) -> anyhow::Result<Option<Map<String, Value>>> {
     if self.in_backoff() {
       return Ok(None);
@@ -593,7 +593,7 @@ async fn probe_cli_version() -> Option<String> {
 }
 
 /// The renewed token's expiry as the millisecond stamp the CLI's file uses. An absolute `expires_at` may be in
-/// seconds; otherwise `expires_in` is relative to now. Nothing reads the stamp back.
+/// seconds. Otherwise `expires_in` is relative to now. Nothing reads the stamp back.
 fn expires_at_ms(token: &Map<String, Value>) -> Option<i64> {
   if let Some(absolute) = token.get("expires_at").and_then(Value::as_f64) {
     return Some(if absolute > 1e11 { absolute as i64 } else { (absolute * 1000.0) as i64 });

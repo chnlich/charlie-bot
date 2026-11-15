@@ -143,7 +143,7 @@ fn add_read_budget_hooks(
       hooks.insert(event.to_string(), entry);
     }
   }
-  // The compaction-context hooks are already in the SessionStart array; the read-budget entry joins
+  // The compaction-context hooks are already in the SessionStart array. The read-budget entry joins
   // them, so one compaction resets the counted total beside the skill re-attachment.
   let hooks = event_hooks.as_object_mut().expect("Claude hook settings are an object");
   let session_start = hooks

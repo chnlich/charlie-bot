@@ -87,9 +87,9 @@ fn headless_command(run_kind: RunKind, enable_subagents: bool) -> Vec<String> {
   ]
 }
 
-/// The `--disallowed-tools` value the headless command carries, for the setup check (`setup_check::setup_step`);
-/// the work run's list with the subagent switch on, which leaves `Agent` allowed. The errors name the flag and
-/// `BASE_COMMAND` in their text.
+/// The `--disallowed-tools` value the headless command carries, for the setup check (`setup_check::setup_step`).
+/// It is the work run's list with the subagent switch on, which leaves `Agent` allowed. The errors name the flag
+/// and `BASE_COMMAND` in their text.
 pub fn base_disallowed_tools() -> Result<String, String> {
   let command = headless_command(RunKind::Work, true);
   let index = command
@@ -219,7 +219,7 @@ pub struct ClaudeCodeBackend {
   instructions_file: Option<PathBuf>,
   midturn_delivery: bool,
   midturn_run_id: Option<String>,
-  /// The CharlieBot run id of this manager turn; the read-budget hook entries name it.
+  /// The CharlieBot run id of this manager turn. The read-budget hook entries name it.
   run_id: Option<String>,
   can_delegate: bool,
 }

@@ -137,7 +137,7 @@ fn walk_jsonl(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 /// One transcript's records and its `<mtime_ns>:<size>` signature, taken before the read.
 ///
 /// The file streams line by line. Only complete lines parse: a trailing fragment without its newline waits for a
-/// later read. A marker line that does not parse is skipped; one that parses to a non-object fails the read.
+/// later read. A marker line that does not parse is skipped. One that parses to a non-object fails the read.
 pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Vec<UsageRecord>)> {
   let metadata = fs::metadata(path).with_context(|| format!("statting {}", path.display()))?;
   let signature = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());

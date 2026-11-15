@@ -25,7 +25,30 @@ pub enum ListingError {
   /// The directory cannot be listed (`PermissionError`): 403.
   PermissionDenied,
   /// Any other failure, such as an I/O error or a name the page cannot encode: 500.
-  Failed { kind: &'static str, detail: String },
+  Failed { kind: FailureKind, detail: String },
+}
+
+/// The exception name a 500's request log line carries in its `error` field. Each name is a Python exception
+/// class, because the log event is the ASGI server's `Exception in ASGI application`.
+#[derive(Debug, Clone, Copy)]
+#[allow(clippy::enum_variant_names)] // Each name is the exception name the log line carries.
+pub enum FailureKind {
+  OSError,
+  UnicodeEncodeError,
+  OverflowError,
+  RuntimeError,
+}
+
+impl FailureKind {
+  /// The exception name the request log's `error` field carries.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::OSError => "OSError",
+      Self::UnicodeEncodeError => "UnicodeEncodeError",
+      Self::OverflowError => "OverflowError",
+      Self::RuntimeError => "RuntimeError",
+    }
+  }
 }
 
 /// One child that `stat` could read.
@@ -46,7 +69,7 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
         ErrorKind::NotADirectory => Ok(None),
         ErrorKind::NotFound => Err(ListingError::Missing),
         ErrorKind::PermissionDenied => Err(ListingError::PermissionDenied),
-        _ => Err(failed("OSError", format!("{}: {error}", dir_path.display()))),
+        _ => Err(failed(FailureKind::OSError, format!("{}: {error}", dir_path.display()))),
       };
     }
   };
@@ -54,8 +77,10 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
   for entry in entries {
     // A child that cannot be stat-ed is skipped, not reported.
     let Ok(metadata) = fs::metadata(entry.path()) else { continue };
-    let name =
-      entry.file_name().into_string().map_err(|name| failed("UnicodeEncodeError", format!("{name:?} is not UTF-8")))?;
+    let name = entry
+      .file_name()
+      .into_string()
+      .map_err(|name| failed(FailureKind::UnicodeEncodeError, format!("{name:?} is not UTF-8")))?;
     children.push(Child {
       name,
       is_dir: metadata.is_dir(),
@@ -79,8 +104,9 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
     rows.push_str(&row(child, base)?);
     rows.push('\n');
   }
-  let display_path =
-    dir_path.to_str().ok_or_else(|| failed("UnicodeEncodeError", "the directory path is not UTF-8".into()))?;
+  let display_path = dir_path
+    .to_str()
+    .ok_or_else(|| failed(FailureKind::UnicodeEncodeError, "the directory path is not UTF-8".into()))?;
   Ok(Some(page(&escape(display_path), &rows)))
 }
 
@@ -148,8 +174,8 @@ fn modified_minute(seconds: f64) -> Result<String, ListingError> {
   } else {
     seconds.trunc()
   };
-  let moment =
-    OffsetDateTime::from_unix_timestamp(whole as i64).map_err(|error| failed("OverflowError", error.to_string()))?;
+  let moment = OffsetDateTime::from_unix_timestamp(whole as i64)
+    .map_err(|error| failed(FailureKind::OverflowError, error.to_string()))?;
   Ok(format!(
     "{:04}-{:02}-{:02} {:02}:{:02}",
     moment.year(),
@@ -170,7 +196,7 @@ fn quote(name: &str) -> String {
   utf8_percent_encode(name, FILENAME_SET).to_string()
 }
 
-fn failed(kind: &'static str, detail: String) -> ListingError {
+fn failed(kind: FailureKind, detail: String) -> ListingError {
   ListingError::Failed { kind, detail }
 }
 

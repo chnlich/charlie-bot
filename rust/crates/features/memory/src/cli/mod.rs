@@ -10,6 +10,7 @@ use std::process;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
 use charliebot_core::{config, credentials, event_types, home, run_token, str_methods};
 use charliebot_store::chat_events::{self, LineRule};
@@ -170,7 +171,7 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
     "id": identity.id,
     "session_id": claims.session_id,
     "pid": identity.pid,
-    "pid_start": identity.pid_start,
+    (PID_START_FIELD): identity.pid_start,
   }))
   .map_err(|error| CliExit::error(error.to_string()))?;
   let events_path = layout::chat_events_path(&session_dir);

@@ -6,6 +6,10 @@ use procfs::process::Process;
 use procfs::{CurrentSI, KernelStats};
 use time::OffsetDateTime;
 
+/// The record field holding a process instance's start tick, which tells a process from an earlier one that held the
+/// same pid. A run record and a fence holder record carry it under this name.
+pub const PID_START_FIELD: &str = "pid_start";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcessStat {
   pub pid_start: String,

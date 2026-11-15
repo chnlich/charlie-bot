@@ -1100,7 +1100,7 @@ fn seed_run(args: &[String]) -> Result<i32, String> {
     "kind": RunKind::ManagerTurn.as_str(),
     "backend": backend,
     "pid": pid,
-    "pid_start": pid_start,
+    (proc_identity::PID_START_FIELD): pid_start,
     "started_at": started_at,
     "ended_at": Value::Null,
   });

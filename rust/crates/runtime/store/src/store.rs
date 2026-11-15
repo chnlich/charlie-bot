@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::{METADATA_FILE_NAME, MetadataFile, MetadataSlot};
+use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::timefmt;
 use lru::LruCache;
 use serde_json::{Map, Value};
@@ -1382,7 +1383,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "started_at",
         "completed_at",
         "pid",
-        "pid_start",
+        PID_START_FIELD,
         "exit_code",
         "branch_name",
         BASE_BRANCH_FIELD,

@@ -155,7 +155,7 @@ pub fn acquire_home_writer_fence(home: &Path, purpose: &str) -> Result<HomeWrite
   };
   let record = json!({
     "pid": holder.pid,
-    "pid_start": holder.pid_start,
+    (proc_identity::PID_START_FIELD): holder.pid_start,
     "started_at": holder.started_at,
     "purpose": holder.purpose,
     "argv": holder.argv,
@@ -190,7 +190,7 @@ pub fn read_fence_holder(home: &Path) -> Option<FenceHolder> {
   let text_field = |raw: &Map<String, Value>, key: &str| raw.get(key).map_or_else(String::new, text_repr::value_str);
   Some(FenceHolder {
     pid,
-    pid_start: raw.get("pid_start").and_then(Value::as_str).map(str::to_string),
+    pid_start: raw.get(proc_identity::PID_START_FIELD).and_then(Value::as_str).map(str::to_string),
     started_at: text_field(&raw, "started_at"),
     purpose: text_field(&raw, "purpose"),
     argv: text_field(&raw, "argv"),

@@ -8,6 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED};
+use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_store::control_events::TASK_SPEC_HASH_FIELD;
 use charliebot_store::layout;
 use charliebot_store::metadata::{
@@ -195,7 +196,7 @@ fn run_record(run: RunRecord) -> Value {
     (OBSERVATION_MODEL): MODEL,
     (OBSERVATION_NATIVE_SESSION_ID): null,
     "pid": run.pid,
-    "pid_start": "12345",
+    (PID_START_FIELD): "12345",
     "started_at": format!("{}Z", run.started_at),
     "ended_at": run.ended_at.as_ref().map(|at| format!("{at}Z")),
     "exit_code": run.ended_at.as_ref().map(|_| 0),
@@ -375,7 +376,7 @@ pub fn attach_live_run(sessions: &Path, session_id: &str, run_id: &str, pid: u32
   let text = fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
   let mut record: Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
   record["pid"] = json!(pid);
-  record["pid_start"] = json!(pid_start);
+  record[PID_START_FIELD] = json!(pid_start);
   record["started_at"] = json!(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
   write_json(&path, &record)
 }

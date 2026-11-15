@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 use anyhow::{Context as _, Result};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
+use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::text_repr;
 use charliebot_improve::command::{active_lock_path_in, loop_dir_in, read_active_lock_loop_id, read_loop_controller};
 use charliebot_store::layout;
@@ -153,7 +154,7 @@ fn backend_types(home: &Path) -> Result<HashMap<String, String>, CliExit> {
 fn live_run(run: &Value, boot: i64) -> Result<Option<(u32, String, Value)>> {
   let (Some(pid), Some(pid_start), Some(started_at)) = (
     run.get("pid").and_then(Value::as_u64),
-    run.get("pid_start").and_then(Value::as_str),
+    run.get(PID_START_FIELD).and_then(Value::as_str),
     run.get("started_at").and_then(Value::as_str),
   ) else {
     return Ok(None);

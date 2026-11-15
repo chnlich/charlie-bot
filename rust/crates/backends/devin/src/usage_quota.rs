@@ -9,13 +9,13 @@ use std::time::Duration;
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling};
 use charliebot_core::headers::CONTENT_TYPE;
+use charliebot_core::utc_datetime::UtcDateTime;
 use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
   PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl, WEEKLY_WINDOW_MINUTES,
   mark_expired_windows, member_reading_from_windows,
 };
-use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};

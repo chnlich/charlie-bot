@@ -45,6 +45,7 @@ pub mod test_support;
 pub mod text_repr;
 pub mod timefmt;
 pub mod timeouts;
+pub mod utc_datetime;
 pub mod web_search;
 
 pub use metadata_slot::{MetadataFile, MetadataSlot, MetadataSlotValidator, SlotField};

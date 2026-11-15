@@ -106,11 +106,18 @@ pub fn zstd_memoized_body(data: &[u8]) -> Vec<u8> {
 /// 1.1 ms; levels 12 and 15 already cost 11.0 and 18.5 ms for the smaller form.
 const ZSTD_HEAD_LEVEL: i32 = 9;
 
-/// The gzip level of a page head, the part of a body that changes with the request.
+/// The gzip level of a page head, the part of a body that a request builds.
 ///
-/// Level 9 costs 1.2 ms on the mock home's chat page head and saves 98 bytes over level 6, which costs 0.72 ms; the
-/// memo levels are 9 too, so a page's two parts deflate alike.
-const GZIP_HEAD_LEVEL: u32 = 9;
+/// A head deflates on every request that builds a body, so its level pays per request, while the bytes it saves reach
+/// a client once per body. On the mock home's 80,772-byte chat page head (version 2) level 9 spends about 0.3 ms more
+/// than level 6 for 87 fewer bytes, so the head takes level 6.
+const GZIP_HEAD_LEVEL: u32 = 6;
+
+/// The gzip level of a page tail: the bytes every body of a page version ends with.
+///
+/// The tail's deflate is built once per page version and appended to every body that version serves, so it takes the
+/// smallest form: on the mock home's 316 KB chat page tail level 9 spends 2.5 ms once for 239 fewer bytes than level 6.
+const GZIP_TAIL_LEVEL: u32 = 9;
 
 /// The ten bytes of a gzip member's header: no name, comment or extra field, no modification time, the best-compression
 /// flag and an unknown operating system.
@@ -137,7 +144,7 @@ impl PageTail {
   pub fn new(tail: &[u8]) -> PageTail {
     let mut crc = Crc::new();
     crc.update(tail);
-    PageTail { tail: tail.to_vec(), deflate: deflate_of(tail, GZIP_HEAD_LEVEL), crc, zstd: None }
+    PageTail { tail: tail.to_vec(), deflate: deflate_of(tail, GZIP_TAIL_LEVEL), crc, zstd: None }
   }
 
   /// Whether this entry holds the forms of `tail`'s bytes.
@@ -291,7 +298,7 @@ mod tests {
     let tail = PageTail::new(PAGE_TAIL.as_bytes());
     let heads: [&[u8]; 2] =
       [b"<html><body>", b"<html><body><article data-session=\"another session with a longer name\">"];
-    let deflate = deflate_of(PAGE_TAIL.as_bytes(), GZIP_HEAD_LEVEL);
+    let deflate = deflate_of(PAGE_TAIL.as_bytes(), GZIP_TAIL_LEVEL);
     for head in heads {
       let member = tail.gzip(head);
       assert!(

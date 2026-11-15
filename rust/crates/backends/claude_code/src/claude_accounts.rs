@@ -1294,7 +1294,7 @@ mod tests {
   fn a_login_without_a_weekly_reading_counts_168_hours() {
     let now = timestamp("2025-01-01T12:00:00Z");
     {
-      // "x" has no weekly reading, so its 30% headroom scores 0.30 over 168 h; "y" has 50% headroom at 10 h
+      // "x" has no weekly reading, so its 30% headroom scores 0.30 over 168 h. "y" has 50% headroom at 10 h
       // and scores 8.4. Without the 168 h value "x" would score at the 0.5 h floor (100.8) and win.
       let (_root, cfg, state) = pool_fixture(&["x", "y"]);
       observe_rate_limit(&state, "x", &window(0.70), Some(now));
@@ -1302,7 +1302,7 @@ mod tests {
       assert_eq!(select_now(&state, &cfg, now), "y");
     }
     {
-      // "x" (30% over 168 h) and "z" (20% over 168 h) tie; "x" carries the most headroom.
+      // "x" (30% over 168 h) and "z" (20% over 168 h) tie. "x" carries the most headroom.
       let (_root, cfg, state) = pool_fixture(&["x", "z"]);
       observe_rate_limit(&state, "x", &window(0.70), Some(now));
       observe_usage_panel(&state, "z", &panel_window(80.0, WEEKLY_WINDOW_MINUTES, "2025-01-08T12:00:00Z"));
@@ -1330,7 +1330,7 @@ mod tests {
     // "a": 50% headroom -> 0.50 * 168 / 24 = 3.50. "b": 51% headroom -> 3.57.
     observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
     observe_usage_panel(&state, "b", &panel_window(49.0, WEEKLY_WINDOW_MINUTES, weekly));
-    // The scores differ by 0.01 per hour, inside the 0.02 band; "b" was read more recently and still wins.
+    // The scores differ by 0.01 per hour, inside the 0.02 band. "b" was read more recently and still wins.
     observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")));
     observe_rate_limit(&state, "b", &window(0.49), Some(timestamp("2025-01-01T11:00:00Z")));
     assert_eq!(select_now(&state, &cfg, now), "b");

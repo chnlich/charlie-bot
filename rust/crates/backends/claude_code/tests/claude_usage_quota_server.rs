@@ -117,7 +117,7 @@ impl Fixture {
     // SAFETY: PATH_LOCK serializes the tests that run a process, and nothing else in this binary reads PATH.
     unsafe { env::set_var("PATH", &self.bin) };
     let result = body();
-    // SAFETY: as above; the lock is still held.
+    // SAFETY: as above. The lock is still held.
     unsafe {
       match previous {
         Some(path) => env::set_var("PATH", path),

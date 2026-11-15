@@ -9,6 +9,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use charliebot_core::int_text;
 use charliebot_core::proc_status;
 use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_core::text_repr::{STARLETTE_JSON, is_truthy, json_dumps};
@@ -567,21 +568,10 @@ fn parse_resize(value: Option<&Value>, default: i128) -> Result<i128, String> {
 }
 
 fn parse_int(value: &str) -> Result<i128, String> {
-  let trimmed = value.trim();
-  let bytes = trimmed.as_bytes();
-  let mut normalized = String::with_capacity(trimmed.len());
-  for (index, byte) in bytes.iter().copied().enumerate() {
-    if byte == b'_' {
-      let digit_before = index > 0 && bytes[index - 1].is_ascii_digit();
-      let digit_after = bytes.get(index + 1).is_some_and(u8::is_ascii_digit);
-      if !digit_before || !digit_after {
-        return Err("value cannot be converted to an integer".to_string());
-      }
-    } else {
-      normalized.push(byte as char);
-    }
-  }
-  normalized.parse::<i128>().map_err(|_| "value cannot be converted to an integer".to_string())
+  let refusal = || "value cannot be converted to an integer".to_string();
+  let (negative, digits) = int_text::int_digits(value).ok_or_else(refusal)?;
+  let magnitude: i128 = digits.parse().map_err(|_| refusal())?;
+  Ok(if negative { -magnitude } else { magnitude })
 }
 
 fn resize_failure_text(error: ResizeFailure) -> String {

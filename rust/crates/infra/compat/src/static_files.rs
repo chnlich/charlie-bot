@@ -16,7 +16,7 @@ use std::sync::{LazyLock, Mutex};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_core::{paths, text_repr, timefmt};
+use charliebot_core::{int_text, paths, text_repr, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
@@ -401,19 +401,11 @@ fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, Ra
   Ok(ranges.into_iter().map(|(start, end)| (start as u64, end as u64)).collect())
 }
 
-/// Parse decimal text: optional sign, digits with single underscores between them.
+/// A range bound: `int(text)` at i128 width, where a value beyond that width is not a bound.
 fn parse_int(text: &str) -> Option<i128> {
-  let text = text.trim();
-  let (negative, digits) = match text.as_bytes().first()? {
-    b'-' => (true, &text[1..]),
-    b'+' => (false, &text[1..]),
-    _ => (false, text),
-  };
-  if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') || digits.contains("__") {
-    return None;
-  }
-  let value: i128 = digits.replace('_', "").parse().ok()?;
-  Some(if negative { -value } else { value })
+  let (negative, digits) = int_text::int_digits(text)?;
+  let magnitude: i128 = digits.parse().ok()?;
+  Some(if negative { -magnitude } else { magnitude })
 }
 
 fn multipart_response(path: &Path, file_headers: &FileHeaders, ranges: &[(u64, u64)], head_only: bool) -> Response {

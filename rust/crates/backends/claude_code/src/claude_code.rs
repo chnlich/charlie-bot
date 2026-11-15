@@ -22,6 +22,7 @@ use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 use charliebot_core::event_types::{self, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL};
 use charliebot_core::headers::AUTHORIZATION;
+use charliebot_core::int_text;
 use charliebot_core::proc_status;
 use charliebot_core::run_token;
 use charliebot_core::subagent::AGENT_TOOL;
@@ -143,30 +144,11 @@ pub fn claude_reading_limits_from(run_kind: RunKind, source: &Env) -> ContextLim
 }
 
 fn parse_positive_integer(raw: &str) -> Option<u64> {
-  let value = raw.trim();
-  let (positive, digits) = match value.strip_prefix('+') {
-    Some(digits) => (true, digits),
-    None => match value.strip_prefix('-') {
-      Some(digits) => (false, digits),
-      None => (true, value),
-    },
-  };
-  let characters = digits.chars().collect::<Vec<_>>();
-  if characters.is_empty()
-    || !characters.iter().enumerate().all(|(index, character)| {
-      character.is_ascii_digit()
-        || (*character == '_'
-          && index > 0
-          && index + 1 < characters.len()
-          && characters[index - 1].is_ascii_digit()
-          && characters[index + 1].is_ascii_digit())
-    })
-    || !positive
-  {
+  let (negative, digits) = int_text::int_digits(raw)?;
+  if negative {
     return None;
   }
-  let normalized = characters.into_iter().filter(|character| *character != '_').collect::<String>();
-  normalized.parse::<u64>().ok().filter(|number| *number > 0)
+  digits.parse::<u64>().ok().filter(|number| *number > 0)
 }
 
 fn warn_unparseable_window(window: &str) {

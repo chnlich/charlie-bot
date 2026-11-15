@@ -15,6 +15,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::config;
+use charliebot_core::int_text;
 use charliebot_core::text_repr;
 use charliebot_core::timefmt;
 use charliebot_store::trigger_files::{LOCAL_PID_KIND, REMOTE_PID_KIND, SLURM_JOB_KIND};
@@ -415,18 +416,9 @@ fn home_dir() -> Result<PathBuf, CliExit> {
   charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))
 }
 
-/// `int(text)` for a flag: surrounding whitespace, an optional sign, and digits with single underscores between them.
+/// `int(text)` for a flag, at i64 width.
 fn parse_int(text: &str) -> Option<i64> {
-  let trimmed = text.trim();
-  let (negative, unsigned) = match trimmed.strip_prefix('-') {
-    Some(rest) => (true, rest),
-    None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-  };
-  let well_placed = !unsigned.starts_with('_') && !unsigned.ends_with('_') && !unsigned.contains("__");
-  let digits: String = unsigned.chars().filter(|c| *c != '_').collect();
-  if !well_placed || digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-    return None;
-  }
+  let (negative, digits) = int_text::int_digits(text)?;
   let magnitude: i64 = digits.parse().ok()?;
   Some(if negative { -magnitude } else { magnitude })
 }

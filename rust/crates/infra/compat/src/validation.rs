@@ -14,6 +14,7 @@
 //! messages (`json_invalid`) are carried unchanged by these kinds.
 
 use axum::response::Response;
+use charliebot_core::int_text;
 use charliebot_core::text_repr;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
@@ -340,43 +341,24 @@ pub fn parse_int(
   i64::try_from(value).map_err(|_| failure(source, name, text, Kind::IntParsing))
 }
 
-/// The lax string-to-int: an optional sign, digits with single underscores between them, and an
-/// optional fraction of plain zeros (`"1.0"` reads as 1, `"1.0_0"` does not). Surrounding whitespace is
-/// ignored. Digits beyond i128 saturate; the caller compares them with an i64 bound, so the comparison stays right.
+/// The lax string-to-int: `int(text)`, and an optional fraction of plain zeros (`"1.0"` reads as 1, `"1.0_0"`
+/// does not). Digits beyond i128 saturate; the caller compares them with an i64 bound, so the comparison stays
+/// right.
 fn lax_int(text: &str) -> Option<i128> {
   let text = text.trim();
-  let (sign, unsigned) = match text.strip_prefix('-') {
-    Some(rest) => (-1, rest),
-    None => (1, text.strip_prefix('+').unwrap_or(text)),
-  };
-  let (whole, fraction) = match unsigned.split_once('.') {
+  let (whole, fraction) = match text.split_once('.') {
     Some((whole, fraction)) => (whole, Some(fraction)),
-    None => (unsigned, None),
+    None => (text, None),
   };
-  let digits = digit_groups(whole)?;
   if let Some(fraction) = fraction
     && (fraction.is_empty() || fraction.bytes().any(|digit| digit != b'0'))
   {
     return None;
   }
+  let (negative, digits) = int_text::int_digits(whole)?;
   let magnitude =
     digits.bytes().fold(0i128, |value, digit| value.saturating_mul(10).saturating_add(i128::from(digit - b'0')));
-  Some(sign * magnitude)
-}
-
-/// The digits of `text` with its underscores removed, when `text` is digit groups joined by single underscores.
-fn digit_groups(text: &str) -> Option<String> {
-  let bytes = text.as_bytes();
-  let valid = match (bytes.first(), bytes.last()) {
-    (Some(first), Some(last)) => {
-      first.is_ascii_digit()
-        && last.is_ascii_digit()
-        && !text.contains("__")
-        && bytes.iter().all(|byte| byte.is_ascii_digit() || *byte == b'_')
-    }
-    _ => false,
-  };
-  valid.then(|| text.replace('_', ""))
+  Some(if negative { -magnitude } else { magnitude })
 }
 
 /// A `bool` parameter's text in lax mode: a case-insensitive word or digit, with no

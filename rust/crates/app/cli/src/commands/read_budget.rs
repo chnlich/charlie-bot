@@ -74,7 +74,7 @@ const RULE_PATH: &str = r"(/skills/|(^|[\s:/])prompts/|SKILL\.md|LESSONS\.md|CLA
 
 /// The file that states a session's effective rules, in its session directory. The markdown files it
 /// names in backticks are the session's own rule files.
-const SESSION_RULES_FILE_NAME: &str = "CLAUDE.md";
+const SESSION_RULES_FILE_NAME: &str = charliebot_registry::backend::CLAUDE_INSTRUCTIONS_FILE_NAME;
 
 /// A backticked markdown path, whose capture is the path.
 const BACKTICKED_MD: &str = r"`([^`\s]+\.md)`";

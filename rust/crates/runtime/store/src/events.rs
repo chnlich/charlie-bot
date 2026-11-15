@@ -721,6 +721,10 @@ impl Store {
   /// whole log: on a 144 MB log the whole-file parse behind [`Self::live_lines_newline_split`] is 386 ms of the
   /// request, and the tail window is 512 KiB. The `\n` split keeps the blank lines the whole-file read keeps, so a
   /// line's index is the same either way.
+  ///
+  /// The count names how many lines the tail holds, so an append between the count and the read would shift which
+  /// lines the window returns. The signature the count was taken under is checked again after the read; a log that
+  /// moved falls back to the whole-file read, whose indices come from the one buffer it reads.
   fn live_tail_lines_newline_split(
     &self,
     session_id: &str,
@@ -734,6 +738,10 @@ impl Store {
     else {
       return Ok(None);
     };
+    let unchanged = file_signature(&path)?.is_some_and(|(_, after)| after == signature);
+    if !unchanged {
+      return Ok(None);
+    }
     #[cfg(test)]
     {
       lock(&self.event_read_caches, "event read cache mutex").live_range_bytes_read += bytes_read;

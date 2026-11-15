@@ -52,13 +52,18 @@
     /* A phone cannot fit the row on one line: the index, the type and the time take about 200 of the
        row's 358 px, which leaves a preview there about 20 characters long, and the rows of one type
        then read alike. The first line holds the index, the type, the time and the caret at its right
-       end; the second line holds the preview across the row's 16 px inset, where the 120-character
-       preview the script builds reaches the reader. No row, strip or label is added: the row grows
-       one text line, and the screen space goes to the preview the reader scans. */
+       end; the second line holds the preview across the row's 16 px inset. One line there carries
+       about 62 Latin characters, so holding the preview to one line cut its text: a 68-character
+       sentence read to "matt…" with 29 px of itself left over, and a 121-character preview showed
+       about 31 of its characters. Two lines carry a 68-character preview whole and 58 of a
+       121-character one, and the box elides at the end of the second. No row, strip or label is
+       added: a preview that fits one line keeps the row's height. */
     @media (max-width: 768px) {
       .event-row-head { flex-wrap: wrap; row-gap: 2px; }
       .event-row-head > .event-caret { order: 1; margin-left: auto; }
-      .event-row-head > .event-preview { order: 2; flex: 1 0 100%; }
+      .event-row-head > .event-preview { order: 2; flex: 1 0 100%; white-space: normal;
+        overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2; line-clamp: 2; }
       /* The row's reading column on a phone is its 16 px inset, where the preview starts. The
          payload follows it: the 56 px badge column it clears on a desk sets no column here, and
          holding it would take 40 px from every payload line. */

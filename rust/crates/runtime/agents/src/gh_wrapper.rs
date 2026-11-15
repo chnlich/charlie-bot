@@ -21,11 +21,9 @@ pub const WRAPPER_REPO_DIR: &str = "rust/crates/runtime/agents/gh_wrapper";
 /// environment without it was not built by the server and carries no wrapper contract.
 pub const WRAPPER_PATH_VAR: &str = "CHARLIEBOT_GH_WRAPPER";
 /// The environment variable that names the App token command the wrapper runs. The spawn path sets it from the live
-/// host config's [`CONFIG_KEY`] (`agent_environment::spawn_base_environment`). When unset, the wrapper uses the host
-/// gh login.
+/// host config's `github.app_token_command` (`agent_environment::spawn_base_environment`). When unset, the wrapper
+/// uses the host gh login.
 pub const TOKEN_COMMAND_VAR: &str = "CHARLIEBOT_GH_APP_TOKEN_CMD";
-/// The host config key that names the App token command.
-pub const CONFIG_KEY: &str = "github.app_token_command";
 
 /// The wrapper directory under `repo_root`.
 pub fn dir_under(repo_root: &Path) -> PathBuf {

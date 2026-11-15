@@ -54,10 +54,12 @@ pub fn expanduser_under(path: &str, home: Option<&Path>) -> Option<PathBuf> {
     _ => return Some(PathBuf::from(path)),
   };
   let home = home?;
-  if under_home.is_empty() {
+  // Every leading slash drops, so a second one cannot turn the tail into an absolute path that leaves `home`.
+  let tail = under_home.trim_start_matches('/');
+  if tail.is_empty() {
     return Some(home.to_path_buf());
   }
-  Some(home.join(&under_home[1..]))
+  Some(home.join(tail))
 }
 
 /// The real path of an absolute path: every symlink resolved.
@@ -208,6 +210,8 @@ mod tests {
     );
     assert_eq!(expanduser_under("~", Some(Path::new("/"))), Some(PathBuf::from("/")));
     assert_eq!(expanduser_under("~/claude", Some(Path::new("/"))), Some(PathBuf::from("/claude")));
+    assert_eq!(expanduser_under("~//cache", Some(home)), Some(PathBuf::from("/synthetic/home/cache")));
+    assert_eq!(expanduser_under("~/", Some(home)), Some(PathBuf::from("/synthetic/home")));
     assert_eq!(expanduser_under("~/.claude-b", None), None);
   }
 

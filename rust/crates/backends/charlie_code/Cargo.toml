@@ -10,7 +10,6 @@ anyhow.workspace = true
 charliebot-agents.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
-charliebot-store.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 tracing.workspace = true

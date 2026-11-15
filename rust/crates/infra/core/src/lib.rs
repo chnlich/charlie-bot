@@ -1,5 +1,6 @@
 //! The CharlieBot server's foundation: profile home, configuration, credentials, the home writer
-//! fence, run tokens, run kinds, structured logging, and the text renderings the wire formats need.
+//! fence, run tokens, run kinds, structured logging, the session memo sentence, and the text renderings the wire
+//! formats need.
 
 pub mod cgroup;
 pub mod config;
@@ -34,6 +35,7 @@ pub mod repo_root;
 pub mod run_kind;
 pub mod run_token;
 pub mod sequence_diff;
+pub mod session_memo;
 pub mod ssh;
 pub mod str_methods;
 pub mod subagent;

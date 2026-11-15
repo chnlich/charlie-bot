@@ -6,12 +6,12 @@
 //! form instead. The level-9 deflator covers a body a memo keeps and serves on every repeat, where
 //! the smaller output reaches every repeat request and is worth a slower one-time deflate.
 //!
-//! A body a memo keeps also has a zstd form, which a client that accepts zstd takes instead: zstd
-//! compresses a page's markup and inline script smaller than gzip does, and the memo pays its slower
+//! A body a memo keeps also has a zstd form, which a client that accepts zstd takes instead. Zstd
+//! compresses a page's markup and inline script smaller than gzip does. The memo pays its slower
 //! compression once per body version.
 //!
 //! A page's body is built per request, but its last substituted value ends near the front of the
-//! document: the scripts and stylesheets after it are the same bytes in every body the page serves.
+//! document. The scripts and stylesheets after it are the same bytes in every body the page serves.
 //! [`PageTail`] keeps the compressed forms of those bytes, so a body pays the deflate of its own head
 //! and copies the tail's form.
 
@@ -72,7 +72,7 @@ pub fn gzip_level_one(data: &[u8]) -> Vec<u8> {
 /// The level-4 gzip form of a large body a response compresses afresh.
 ///
 /// Level 1 keeps the fastest deflate, but its short hash chain misses the long matches of a large body built from
-/// near-identical rows, so its output can run well past the level-9 form's. Level 4 recovers that size for a small
+/// near-identical rows. Its output can then run well past the level-9 form's. Level 4 recovers that size for a small
 /// fraction of the level-9 cost.
 pub fn gzip_level_four(data: &[u8]) -> Vec<u8> {
   compress(data, 4)
@@ -81,8 +81,8 @@ pub fn gzip_level_four(data: &[u8]) -> Vec<u8> {
 /// The level-9 gzip form of a body a memo serves on every repeat request.
 ///
 /// The memo keeps the output, so one body pays the slowest level once and every repeat request reads the smaller
-/// bytes. On the 7,160-session mock home the chat page body falls from 99,596 to 98,326 bytes (1.28%) for 2.2 ms
-/// more of a 5.3 ms deflate, and the compact listing from 172,109 to 169,758 (1.37%).
+/// bytes. On the 7,160-session mock home the chat page body falls from 99,596 to 98,326 bytes (1.28%). That costs
+/// 2.2 ms more of a 5.3 ms deflate. The compact listing falls from 172,109 to 169,758 (1.37%).
 pub fn gzip_memoized_body(data: &[u8]) -> Vec<u8> {
   compress(data, 9)
 }
@@ -90,8 +90,8 @@ pub fn gzip_memoized_body(data: &[u8]) -> Vec<u8> {
 /// The zstd level of a body a memo serves on every repeat request.
 ///
 /// The memo keeps the output, so the one-time compression buys the smaller bytes for every repeat request. Level 19
-/// trades a slower one-time compression for a smaller body: on the 7,160-session mock home the chat page body falls
-/// from 99,974 bytes (gzip level 9) to 86,817 (13.2%) for about 120 ms of a version's first request.
+/// trades a slower one-time compression for a smaller body. On the 7,160-session mock home the chat page body falls
+/// from 99,974 bytes (gzip level 9) to 86,817 (13.2%). That costs about 120 ms of a version's first request.
 pub const ZSTD_MEMOIZED_LEVEL: i32 = 19;
 
 /// The level-19 zstd form of a body a memo serves on every repeat request.
@@ -103,25 +103,25 @@ pub fn zstd_memoized_body(data: &[u8]) -> Vec<u8> {
 ///
 /// The head is deflated on every request that serves it, so its level pays per request. On the mock home's
 /// 80,772-byte chat page head (version 2) level 19 takes 45.9 ms and saves 743 bytes over level 9, which takes
-/// 1.1 ms; levels 12 and 15 already cost 11.0 and 18.5 ms for the smaller form.
+/// 1.1 ms. Levels 12 and 15 already cost 11.0 and 18.5 ms for the smaller form.
 const ZSTD_HEAD_LEVEL: i32 = 9;
 
 /// The gzip level of a page head, the part of a body that a request builds.
 ///
 /// A head deflates on every request that builds a body, so its level pays per request, while the bytes it saves reach
 /// a client once per body. On the mock home's 80,772-byte chat page head (version 2) level 9 spends about 0.3 ms more
-/// than level 6 for 87 fewer bytes, so the head takes level 6.
+/// than level 6 for 87 fewer bytes. The head therefore takes level 6.
 const GZIP_HEAD_LEVEL: u32 = 6;
 
 /// The gzip level of a page tail: the bytes every body of a page version ends with.
 ///
 /// The tail's deflate is built once per page version and appended to every body that version serves, so it takes the
-/// smallest form: on the mock home's 316 KB chat page tail level 9 spends 2.5 ms once for 239 fewer bytes than level 6.
+/// smallest form. On the mock home's 316 KB chat page tail level 9 spends 2.5 ms once for 239 fewer bytes than level 6.
 const GZIP_TAIL_LEVEL: u32 = 9;
 
-/// The ten bytes of a gzip member's header: no name, comment or extra field, no modification time, no compression flag
-/// — a member's head and its tail deflate at different levels, so one flag cannot name both — and an unknown
-/// operating system.
+/// The ten bytes of a gzip member's header: no name, comment or extra field, no modification time, no compression flag,
+/// and an unknown operating system. A member's head and its tail deflate at different levels, so one flag cannot name
+/// both.
 const GZIP_HEADER: [u8; 10] = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
 
 /// The compressed forms of a page's static tail: the bytes a page's bodies end with in common.
@@ -129,9 +129,9 @@ const GZIP_HEADER: [u8; 10] = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0
 /// The tail is the same bytes in every body a page serves, so its deflate is built once and appended to the form of
 /// the head that request built. A gzip member cannot be continued after its end: Chrome and curl stop at the first
 /// member's end and drop the rest. The head's stream therefore ends with a full flush, which resets the deflate
-/// history and ends the block, and the tail's deflate — built from a fresh deflator — decodes after it in the same
+/// history and ends the block. The tail's deflate — built from a fresh deflator — decodes after it in the same
 /// member. A zstd stream carries frames, and a decoder reads the frames in turn, so the tail travels as its own
-/// frame. The boundary costs the matches that crossed it: on the mock home's chat page (version 2) a 371,088-byte
+/// frame. The boundary costs the matches that crossed it. On the mock home's chat page (version 2) a 371,088-byte
 /// body's gzip form grows from 93,988 to 94,881 bytes when the tail splits off.
 pub struct PageTail {
   tail: Vec<u8>,
@@ -203,7 +203,7 @@ fn deflate_of(data: &[u8], level: u32) -> Vec<u8> {
 /// Append `head`'s deflate to `out`, ending it with a full flush so a tail deflates from a fresh history after it.
 ///
 /// A full flush reports `Ok` while its output still fills the chunk, so the flush has completed only when a call
-/// leaves room in the chunk: breaking on the first `Ok` cut the head's stream short at 8 KiB.
+/// leaves room in the chunk. Breaking on the first `Ok` cut the head's stream short at 8 KiB.
 fn deflate_head_into(out: &mut Vec<u8>, head: &[u8]) {
   let mut compressor = Compress::new(DeflateLevel::new(GZIP_HEAD_LEVEL), false);
   let mut chunk = [0u8; 8192];
@@ -294,7 +294,7 @@ mod tests {
 
   #[test]
   fn the_tail_form_does_not_depend_on_the_head_it_follows() {
-    // Two heads of different lengths and bytes: the full flush ends the head's stream, so both members carry the
+    // Two heads of different lengths and bytes. The full flush ends the head's stream, so both members carry the
     // tail's own deflate and each decodes to its head plus the same tail.
     let tail = PageTail::new(PAGE_TAIL.as_bytes());
     let heads: [&[u8]; 2] =

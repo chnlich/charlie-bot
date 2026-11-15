@@ -532,7 +532,7 @@ impl MultipartMachine {
         self.step(byte)
       }
       MultipartState::StartBoundary => {
-        // `opening_index` counts comparison steps against `boundary[index + 2]`, so the name ends at `opening.len()`
+        // `opening_index` counts comparison steps against `boundary[index + 2]`. The name ends at `opening.len()`,
         // and the CRLF that must follow it sits at `opening.len()` and `opening.len() + 1`.
         if self.opening_index == self.opening.len() {
           if byte == b'-' {

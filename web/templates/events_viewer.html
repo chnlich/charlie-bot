@@ -102,8 +102,8 @@
        icon-only download action and the count on its first row. The divider that
        separates Back from the title leaves with the title, so no bare separator
        hangs after Back. The filter bar keeps its label and input on the first row
-       and moves "Expand all" and "Clear" to a second row rather than squeezing
-       that row. */
+       and moves "Expand all", "Clear" and "Load earlier events" to a second row
+       rather than squeezing that row. */
     @media (max-width: 768px) {
       .events-download-label { display: none; }
       .events-filter { flex-wrap: wrap; }
@@ -113,11 +113,14 @@
       .events-topbar .events-back-sep { display: none; }
     }
 
-    /* Pointer targets: the Expand all label keeps a 24 px row around its 16 px box, and Clear is the
-       page's bordered secondary button at 26 px tall, so both clear the 24 px minimum. The two sit
-       12 px apart, where undersized targets would still not. The type filter already stands 26 px
-       tall, so the bar keeps its height. */
+    /* Pointer targets: the Expand all label keeps a 24 px row around its 16 px box, and Clear and
+       Load earlier events are the page's bordered secondary buttons at 26 px tall, so all three
+       clear the 24 px minimum. They sit 12 px apart, where undersized targets would still not. The
+       type filter already stands 26 px tall, so the bar keeps its height. */
     .events-expand { min-height: 24px; }
+    /* The load control joins the filter row, so its label keeps one line there and the row keeps
+       the height the filter and Clear already set. */
+    #load-earlier { white-space: nowrap; }
     #expand-all { width: 16px; height: 16px; }
     /* The Back link's 16 px icon and 14 px text draw a 20 px box, and the header's padding does not
        extend it. The 24 px box gives the page's only way back to the session the pointer floor the
@@ -198,7 +201,9 @@
       {% include 'partials/concurrency_badge.html' %}
     </header>
 
-    <!-- Filter bar -->
+    <!-- Filter bar. The load control rides this row rather than a bar of its own: a bar would spend a
+         row of the page on one button, and this row has room for it at both widths. The bar is
+         sticky, so the control also stays in reach while the list scrolls. -->
     <div class="events-filter border-b border-slate-800 px-4 py-2 flex items-center gap-3 bg-slate-900">
       <label class="text-xs text-slate-400">Filter by type:</label>
       <input id="type-filter"
@@ -211,15 +216,11 @@
       </label>
       <button onclick="clearFilter()"
               class="events-secondary text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">Clear</button>
+      <button id="load-earlier"
+              class="events-secondary hidden text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">
+        Load earlier events
+      </button>
     </div>
-  </div>
-
-  <!-- Earlier events: the page loads the log's tail first, so a large log does not hold the first screen -->
-  <div id="earlier-bar" class="hidden px-4 py-2 border-b border-slate-800">
-    <button id="load-earlier"
-            class="events-secondary text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">
-      Load earlier events
-    </button>
   </div>
 
   <!-- Event list -->
@@ -380,6 +381,7 @@
         const row = document.createElement('div');
         row.className = 'event-row';
         row.dataset.idx = idx;
+        row.dataset.key = eventKey(ev);
 
         const type = ev.type || 'unknown';
         const badgeCls = badgeStyle(type);
@@ -467,6 +469,21 @@
     // -------------------------------------------------------------------------
     // Fetch JSONL
     // -------------------------------------------------------------------------
+    // Every event gets a key for the page's lifetime. A re-render rebuilds each row, and a load moves
+    // every event's place in the list, so the key is what names the same event across a render; a list
+    // position cannot. The key rides beside the event rather than on it: the row shows the event's own
+    // JSON, and a field added to the object would show up there.
+    const eventKeys = new WeakMap();
+    let nextEventKey = 0;
+    function eventKey(ev) {
+      let key = eventKeys.get(ev);
+      if (key === undefined) {
+        key = ++nextEventKey;
+        eventKeys.set(ev, key);
+      }
+      return key;
+    }
+
     function parseEvents(text) {
       return text.split('\n').filter(l => l.trim()).map(line => {
         try {
@@ -484,8 +501,9 @@
       return Number.isFinite(value) && value >= 0 ? value : 0;
     }
 
+    // The load control shows only while the served window leaves earlier events to fetch.
     function updateEarlierBar() {
-      document.getElementById('earlier-bar').classList.toggle('hidden', !(windowStart > 0));
+      document.getElementById('load-earlier').classList.toggle('hidden', !(windowStart > 0));
     }
 
     async function loadEvents() {
@@ -508,10 +526,21 @@
       }
     }
 
-    // Prepend the events before the loaded window. The control stands above the list, so a click on it
-    // comes from the page's top, and the view stays there: the rows just loaded open the list under the
-    // control, earliest first, in the order the list reads. Holding the first row on screen instead would
-    // move the reader down by the whole prepended block and leave the loaded rows above the viewport.
+    // The row the reader is on: the first one whose bottom edge is below the sticky block. It is the
+    // anchor a load keeps in place, because the rows just loaded sit above it.
+    function readerAnchor(list) {
+      const filterBar = document.querySelector('.events-filter');
+      const bottom = filterBar ? filterBar.getBoundingClientRect().bottom : 0;
+      return [...list.querySelectorAll('.event-row')].find((row) => row.getBoundingClientRect().bottom > bottom) || null;
+    }
+
+    // Prepend the events before the loaded window. The control rides the sticky filter row, so a press
+    // can come at any scroll position. The re-render rebuilds every row and the loaded ones push the
+    // rest down, so the anchor row is found again by its key and the page follows its move: the reader
+    // keeps the rows they were reading, and a row that folds its payload on the way takes its own
+    // height with it. At the page's top the move is not followed, because the loaded rows open the list
+    // under the control there, earliest first, in the order the list reads; following it would leave
+    // them above the viewport, where the press would read as nothing.
     async function loadEarlier() {
       if (loadingEarlier || !(windowStart > 0)) return;
       loadingEarlier = true;
@@ -519,15 +548,30 @@
       button.disabled = true;
       button.textContent = 'Loading…';
       const before = windowStart;
+      const list = document.getElementById('event-list');
       try {
         const res = await fetch(EVENTS_URL + '?tail=' + EVENTS_PAGE + '&before=' + before);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
         const earlier = parseEvents(await res.text());
+        // The anchor is read once the rows are about to be replaced, after the fetch: a scroll made
+        // while the request was pending is part of the place a press keeps, not something the
+        // compensation undoes.
+        const anchor = readerAnchor(list);
+        const anchorKey = anchor ? anchor.dataset.key : null;
+        const anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;
+        const scrolled = window.scrollY > 0;
         windowStart = windowStartOf(res);
         allEvents = earlier.concat(allEvents);
         filterEvents();
+        if (scrolled && anchorKey != null) {
+          const again = list.querySelector('.event-row[data-key="' + anchorKey + '"]');
+          if (again) {
+            const moved = again.getBoundingClientRect().top - anchorTop;
+            if (moved) window.scrollBy(0, moved);
+          }
+        }
         document.getElementById('error-msg').classList.add('hidden');
       } catch (err) {
         const errEl = document.getElementById('error-msg');

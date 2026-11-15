@@ -69,7 +69,17 @@ async fn run_one_shell(
   let runner = AgentRunner::new(
     "shell",
     Box::new(ShellBackend::new(script.to_string())),
-    LaunchArgs { log_dir: Some(log_dir), ..LaunchArgs::default() },
+    LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: Some(log_dir),
+      cgroup_session_id: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
+    },
   );
   let mut request = RunRequest::new(
     "prompt".to_string(),

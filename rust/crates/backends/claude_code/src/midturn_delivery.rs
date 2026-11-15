@@ -82,11 +82,18 @@ mod tests {
 
   fn midturn_launch_kwargs(run_id: &str) -> LaunchArgs {
     LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
       backend_kwargs: serde_json::Map::from_iter([
         ("midturn_delivery".to_string(), Value::Bool(true)),
         ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
       ]),
-      ..LaunchArgs::default()
+      manager_turn: false,
     }
   }
 
@@ -171,7 +178,17 @@ mod tests {
     let runner = Arc::new(AgentRunner::new(
       "cc-claude",
       Box::new(backend),
-      LaunchArgs { log_dir: Some(root.path().join("run")), ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: Some(root.path().join("run")),
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     ));
     let run_task = tokio::spawn({
       let runner = Arc::clone(&runner);
@@ -232,12 +249,18 @@ mod tests {
       false,
       None,
       LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
         log_dir: Some(root.join("run")),
+        cgroup_session_id: None,
         backend_kwargs: serde_json::Map::from_iter([
           ("midturn_delivery".to_string(), Value::Bool(true)),
           ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
         ]),
-        ..LaunchArgs::default()
+        manager_turn: false,
       },
       disabled_cgroup(),
     )
@@ -256,7 +279,17 @@ mod tests {
     let runner = AgentRunner::new(
       "cc-claude",
       Box::new(backend),
-      LaunchArgs { log_dir: Some(root.join("run")), ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: Some(root.join("run")),
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     match tokio::time::timeout(Duration::from_secs(30), runner.run(request)).await {
       Ok(outcome) => outcome.unwrap(),

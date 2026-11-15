@@ -112,9 +112,14 @@ fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Arc<Registry>) -
       .iter()
       .map(|value| value.as_str().unwrap().to_string())
       .collect(),
+    buffer_limit: None,
+    instructions_content: None,
     instructions_file,
+    resume_session_id: None,
+    log_dir: None,
+    cgroup_session_id: None,
     backend_kwargs: kwargs,
-    ..LaunchArgs::default()
+    manager_turn: false,
   };
   let backend = backend_types::build_backend(Arc::clone(registry), &option(case), cfg, launch).unwrap().backend;
   let argv = backend.build_command(case["prompt"].as_str().unwrap()).unwrap();

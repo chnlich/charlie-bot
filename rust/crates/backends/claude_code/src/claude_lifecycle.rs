@@ -806,9 +806,15 @@ mod tests {
         false,
         None,
         LaunchArgs {
-          backend_kwargs: launch.backend_kwargs.clone(),
+          extra_flags: Vec::new(),
+          buffer_limit: None,
+          instructions_content: None,
+          instructions_file: None,
+          resume_session_id: None,
+          log_dir: None,
           cgroup_session_id: Some(meta.id.clone()),
-          ..LaunchArgs::default()
+          backend_kwargs: launch.backend_kwargs.clone(),
+          manager_turn: false,
         },
         disabled_cgroup(),
       )

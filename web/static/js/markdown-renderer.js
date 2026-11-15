@@ -1108,24 +1108,10 @@ function copyCode(btn) {
 // this warm in the same timer queue the deferred highlight flush drives.
 // Environments without requestIdleCallback (the render-test vm harnesses)
 // compile each block on first paint.
-//
-// The warm starts only once the page is current (last-state.js dispatches
-// charliebot:page-current when an open's catch-up ends). An idle callback that
-// starts while an open is still in flight holds the main thread — 538 ms on
-// the bench's slowed CPU, starting 33 ms after DOMContentLoaded — while the
-// open's copy answer queues behind it, and the open pays its 1 s paint window
-// to the warm: the bench's A × offline open read its copy answer only after
-// the warm ended. The prose render paints code plain and flushes the highlight
-// after the paint, so the warm costs the open nothing by starting later, and
-// no open can complete before this script runs (markdown-renderer.js loads
-// before last-state.js, which is the only dispatcher).
 (function warmHighlighterAtIdle() {
   if (typeof hljs === 'undefined' || typeof hljs.highlightAuto !== 'function') return;
   if (typeof requestIdleCallback !== 'function') return;
-  if (typeof document !== 'object' || typeof document.addEventListener !== 'function') return;
-  document.addEventListener('charliebot:page-current', function() {
-    requestIdleCallback(function() {
-      hljs.highlightAuto('Some prose line here.\n\n```\nconst x = 1;\n```\n\nMore prose follows.\n');
-    }, { timeout: 2000 });
-  }, { once: true });
+  requestIdleCallback(function() {
+    hljs.highlightAuto('Some prose line here.\n\n```\nconst x = 1;\n```\n\nMore prose follows.\n');
+  }, { timeout: 2000 });
 })();

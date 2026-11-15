@@ -169,10 +169,7 @@ function requestSessionSubscription(sessionId, cursor, report) {
     generation: report ? report.generation : 0,
   };
   if (ws && wsOpen) sendPendingSubscribe();
-  else if (!ws) connectWS();
-  // Otherwise the socket still in its handshake sends it once open. A page the offline shell served
-  // opens its socket here: its boot ran with no session to name, so nothing connected one before the
-  // open path queued this subscribe.
+  // Otherwise the socket still in its handshake sends it once open.
 }
 
 function sendPendingSubscribe() {
@@ -332,9 +329,8 @@ function connectWS() {
       return;
     }
     // A replay's frames are counted into the subscription's byte total until its `catchup_complete`.
-    const frameBytes = replayBytesEncoder.encode(e.data).length;
     if (!replayDone) {
-      replayBytes += frameBytes;
+      replayBytes += replayBytesEncoder.encode(e.data).length;
     }
     // The view accepts only frames of the subscription it took: a switch drops every frame of the
     // session it left from its click until its `subscribed` frame binds the target, and a socket
@@ -343,9 +339,6 @@ function connectWS() {
     // switch the way it does across the socket a network close leaves behind.
     const registered = wsMessageHandlers.get(type);
     if ((viewSubscription === null || boundSession !== SESSION_ID) && !(registered && registered.sidebar)) return;
-    if (!replayDone) {
-      document.dispatchEvent(new CustomEvent('charliebot:client-socket-replay', {detail: {bytes: frameBytes}}));
-    }
     handleWSEvent(data);
   };
 
@@ -407,8 +400,10 @@ function handleCatchupComplete(data) {
 // ---------------------------------------------------------------------------
 // Stale-page reload guard
 // ---------------------------------------------------------------------------
-// The 4409 close asks this page to refresh its stored shell, then reload. The guard caps the automatic reload
-// at one per tab per 60 seconds, so a stale cache cannot turn the close into a reload loop.
+// The 4409 close asks this page to reload, and no-store page responses mean the reload gets the
+// current code. The guard caps the automatic reload at one per tab per 60 seconds. A layer
+// that still serves old HTML (a stale cache in the path) therefore cannot turn the close
+// into a reload loop.
 const STALE_PAGE_RELOAD_KEY = 'charliebot-stale-page-reload-at';
 const STALE_PAGE_RELOAD_GUARD_MS = 60000;
 
@@ -427,10 +422,8 @@ function reloadStalePage() {
   sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(now));
   // The page-load telemetry names this reload's cause on the other side.
   document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'stale_asset'}}));
-  reloadAfterRefreshingShell();
+  location.reload();
 }
-
-document.addEventListener('charliebot:offline-shell-refresh-failed', showStalePageBanner);
 
 function showStalePageBanner() {
   const banner = document.createElement('div');
@@ -443,7 +436,7 @@ function showStalePageBanner() {
     'padding:4px 12px;border-radius:6px;border:none;background:#fca5a5;color:#7f1d1d;' +
     'font-size:13px;font-weight:600;cursor:pointer;';
   button.textContent = 'Reload';
-  button.onclick = () => reloadAfterRefreshingShell();
+  button.onclick = () => location.reload();
   banner.appendChild(button);
   document.body.appendChild(banner);
 }

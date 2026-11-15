@@ -17,8 +17,13 @@ body > .cb-slot { justify-content: flex-end; margin-left: 0; padding: 8px 24px;
 }
 body.dark > .cb-slot { background: rgba(15, 23, 42, .55); border-bottom-color: rgba(148, 163, 184, .25) }
 .cb-anchor { position: relative; display: flex; align-items: center }
+/* The badge's outline is the only mark of its box. The tinted fill differs from the bar behind it by 1.13:1 on
+   a light page and 1.18:1 on the chat header. The 3:1 floor WCAG 1.4.11 sets for a control rules out a
+   translucent hairline: rgba(128, 138, 152, .45) draws 2.00:1 on the chat and events headers, 1.62:1 on a
+   light page's bar and 1.61:1 on the diff page's. #7a8492 draws 4.29:1 on those headers, 3.65:1 on a light
+   page's bar and 3.62:1 on the diff page's. The hover and the open state keep their own fill and ring. */
 .cb-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
-  border: 1px solid rgba(128, 138, 152, .45); background: rgba(128, 138, 152, .12); color: inherit;
+  border: 1px solid #7a8492; background: rgba(128, 138, 152, .12); color: inherit;
   font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap; cursor: pointer }
 .cb-badge:hover { background: rgba(128, 138, 152, .22) }
 /* The open badge's accent draws on the badge's own tinted fill, not on the page behind it.

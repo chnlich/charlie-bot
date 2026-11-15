@@ -33,7 +33,7 @@ pub(crate) fn decode_track(
   let mut samples = Vec::new();
   let mut to_skip = pre_skip;
   while let Some(packet) = format.next_packet().map_err(|error| error.to_string())? {
-    // An empty packet carries no frames; decoding it would conceal a lost packet instead.
+    // An empty packet carries no frames. Decoding it would conceal a lost packet instead.
     if packet.track_id != track_id || packet.data.is_empty() {
       continue;
     }

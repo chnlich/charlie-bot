@@ -362,7 +362,7 @@ test('a run_end separator reads its duration for 0 seconds and no duration for n
 // The loader stands a card node in the For-you list until the module lands; the module adopts that node
 // and paints the summary a render or poll carried before it arrived. These cases run the loader first and
 // then the module in the same context, the order the page meets them.
-function loadThroughDocument({worker = false, noSession = false} = {}) {
+function loadThroughDocument({worker = false} = {}) {
   const rendering = loadChatRendering();
   const loaded = [];
   const context = {
@@ -404,8 +404,7 @@ function loadThroughDocument({worker = false, noSession = false} = {}) {
   // must read a bare reference: a globalThis property would let a wrong read
   // pass here and miss the real page.
   const profile = worker ? 'worker' : 'web';
-  const bootstrap = noSession ? null : {session: {profile}};
-  vm.runInContext('const SESSION_BOOTSTRAP = ' + JSON.stringify(bootstrap) + ';',
+  vm.runInContext('const SESSION_BOOTSTRAP = ' + JSON.stringify({session: {profile}}) + ';',
     context, {filename: 'index.html'});
   assert.equal(context.SESSION_BOOTSTRAP, undefined, 'a top-level const is no globalThis property');
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'templates/js/chat/worker-summary.js'), 'utf8'),
@@ -420,12 +419,6 @@ test('a web session never fetches the card and shows no card node', () => {
   assert.equal(context.Chat.workerSummaryCard(), null);
   context.Chat.applyWorkerSummary(null);
   assert.deepEqual(Array.from(loaded), [], 'no summary means no worker session, so no download');
-  assert.equal(context.Chat.workerSummaryCard(), null);
-});
-
-test('a session-free shell does not fetch the card and shows no card node', () => {
-  const {context, loaded} = loadThroughDocument({noSession: true});
-  assert.deepEqual(Array.from(loaded), []);
   assert.equal(context.Chat.workerSummaryCard(), null);
 });
 

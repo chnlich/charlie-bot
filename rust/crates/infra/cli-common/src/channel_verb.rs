@@ -2,12 +2,13 @@
 //! setup. Each verb resolves the session it needs, POSTs to the channel's endpoint, and prints the readback as one
 //! JSON line.
 
+use charliebot_compat::request_body::{BodyModel, Field, FieldType};
 use clap::Args;
 use serde_json::{Map, Value, json};
 
 use crate::client;
 use crate::exit::CliExit;
-use crate::fields::SESSION_ID;
+use crate::fields::{SESSION_ID, TEXT};
 use crate::files;
 use crate::json_out;
 use crate::resolve;
@@ -18,6 +19,14 @@ pub const READ_LIMIT_MIN: i64 = 1;
 pub const READ_LIMIT_MAX: i64 = 100;
 /// The page size a read takes when the caller names none: the CLI flag's default and the route's fallback.
 pub const READ_LIMIT_DEFAULT: i64 = 50;
+
+/// The reply request's fields: the calling session's id and the reply text.
+pub const REPLY_FIELDS: &[Field] =
+  &[Field::required(SESSION_ID, FieldType::String), Field::required(TEXT, FieldType::String)];
+
+/// The reply request body that `post_reply` builds and a chat channel's internal reply route validates: `REPLY_FIELDS`
+/// and no other field.
+pub const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 
 /// The reply verb's arguments: the file that holds the text, and the session.
 #[derive(Args)]
@@ -41,7 +50,7 @@ pub fn post_reply(
   let text = files::read_reply_text(file_arg)?;
   let mut payload = Map::new();
   payload.insert(SESSION_ID.to_string(), json!(session_id));
-  payload.insert("text".to_string(), json!(text));
+  payload.insert(TEXT.to_string(), json!(text));
   if let Some(extra) = extra {
     payload.extend(extra);
   }

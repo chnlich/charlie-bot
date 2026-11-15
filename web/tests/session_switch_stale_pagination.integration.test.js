@@ -1,9 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
-const NO_STORED_COPY = {get: () => null};
-
 const {bootstrapPayload, buildSwitchFlowHarness, makeSidebarRow} =
   require('./session_context_stub');
 
@@ -61,7 +58,7 @@ function buildHarness(eventsHandler) {
           h.preBootstrap = null;
           pre();
         }
-        return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => BOOTSTRAP[boot[1]]};
+        return {ok: true, status: 200, json: async () => BOOTSTRAP[boot[1]]};
       }
       const page = url.match(/\/api\/sessions\/([^/]+)\/events\?before=(\d+)/);
       if (page) {
@@ -74,12 +71,11 @@ function buildHarness(eventsHandler) {
             entry.reject = reject;
           });
           h.pendingEvents.push(entry);
-          return entry.done.then((payload) => ({
-            ok: true, headers: NO_STORED_COPY, status: 200, json: async () => payload}));
+          return entry.done.then((payload) => ({ok: true, status: 200, json: async () => payload}));
         }
-        return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => out};
+        return {ok: true, status: 200, json: async () => out};
       }
-      return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => ({})};
+      return {ok: true, status: 200, json: async () => ({})};
     },
   });
 }

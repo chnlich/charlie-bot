@@ -40,7 +40,6 @@ function buildHarness({localStorageItems = {}, bootstraps} = {}) {
     ['messages', messages],
     ['header-session-name', headerName],
     ['msg-input', createElement({id: 'msg-input'})],
-    ['freshness-mark', createElement({id: 'freshness-mark'})],
     ['backend-badge', createElement()],
     ['thinking', createElement({className: 'hidden'})],
     ['thinking-time', createElement()],
@@ -75,9 +74,7 @@ function buildHarness({localStorageItems = {}, bootstraps} = {}) {
       return new Promise((resolve) => heldChatPosts.push({body, resolve}));
     }
     const bootstrapMatch = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
-    // A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
-    if (bootstrapMatch) return {ok: true, status: 200, headers: {get: () => null},
-      json: async () => bootstraps_[bootstrapMatch[1]]};
+    if (bootstrapMatch) return {ok: true, status: 200, json: async () => bootstraps_[bootstrapMatch[1]]};
     return {ok: true, status: 200, json: async () => ({})};
   };
   stubPageTimers(context);

@@ -75,6 +75,6 @@
   // while the document is still parsing. Any other session never asks for it.
   // The page declares SESSION_BOOTSTRAP with a top-level const, so a bare
   // reference is what reaches it; a globalThis read would always miss.
-  const session = typeof SESSION_BOOTSTRAP === 'undefined' ? null : SESSION_BOOTSTRAP?.session;
+  const session = typeof SESSION_BOOTSTRAP === 'undefined' ? null : SESSION_BOOTSTRAP.session;
   if (session && session.profile === 'worker') load();
 })();

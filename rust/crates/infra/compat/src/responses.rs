@@ -4,6 +4,7 @@
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
+use charliebot_core::event_types::REQUEST_EXCEPTION_EVENT;
 use http::{HeaderValue, StatusCode, header};
 use percent_encoding::{AsciiSet, utf8_percent_encode};
 use serde_json::{Value, json};
@@ -75,7 +76,7 @@ pub fn redirect(url: &str) -> Response {
 /// The answer to a failed request: 500 `Internal Server Error` as plain text.
 /// The failure rides the response as an extension so the request log names it.
 pub fn internal_error(kind: &str, detail: String) -> Response {
-  tracing::error!(error = kind, detail = %detail, "Exception in ASGI application");
+  tracing::error!(error = kind, detail = %detail, "{}", REQUEST_EXCEPTION_EVENT);
   let mut response = plain_text(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error");
   response.extensions_mut().insert(Failure { kind: kind.to_string(), detail });
   response

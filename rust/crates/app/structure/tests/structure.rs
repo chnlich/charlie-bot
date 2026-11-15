@@ -1341,15 +1341,23 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "api_key", owner: "infra/core", hint: "Use `charliebot_core::credentials::API_KEY_FIELD`." },
 ];
 
-/// Response detail sentences that one crate owns. The routes that answer with one read the owner's const, so a reworded
-/// detail reaches every route at once. Each row matches its sentence whole: a sentence splits on no separator that the
-/// name rules could match.
-const PHRASE_OWNER_TABLE: &[OwnerRow] = &[OwnerRow {
-  name: "Session not found",
-  owner: "runtime/store",
-  hint: "Use `charliebot_store::SESSION_NOT_FOUND_DETAIL`; every route that answers a missing session reads its detail \
-         from there.",
-}];
+/// The phrases that one crate owns: the response detail sentences that a route answers with, and the log event
+/// names a request path writes. A site reads the owner's const, so a reworded phrase reaches every site at once.
+/// Each row matches its phrase whole: a phrase splits on no separator that the name rules could match.
+const PHRASE_OWNER_TABLE: &[OwnerRow] = &[
+  OwnerRow {
+    name: "Session not found",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::SESSION_NOT_FOUND_DETAIL`; every route that answers a missing session reads its \
+           detail from there.",
+  },
+  OwnerRow {
+    name: "Exception in ASGI application",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::event_types::REQUEST_EXCEPTION_EVENT`; every request path that logs an escaped error \
+           names the event there.",
+  },
+];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
 /// of them may be writing that output, so the owner rule cannot tell the two apart, and these stay unprotected.

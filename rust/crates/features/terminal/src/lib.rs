@@ -5,6 +5,7 @@ use std::sync::Arc;
 use axum::extract::ws::WebSocket;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use charliebot_core::event_types::REQUEST_EXCEPTION_EVENT;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
 use charliebot_registry::{Registry, RegistryError};
 use futures_util::future::BoxFuture;
@@ -41,7 +42,7 @@ async fn serve_attachment(socket: WebSocket, grid: pty::Grid) {
     terminal::run_terminal_attachment(socket, grid).await
   };
   if let Err(error) = outcome {
-    tracing::error!(error = %error, "Exception in ASGI application");
+    tracing::error!(error = %error, "{}", REQUEST_EXCEPTION_EVENT);
   }
 }
 

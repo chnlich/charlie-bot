@@ -17,6 +17,7 @@ use charliebot_compat::http_client;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::credentials::API_KEY_FIELD;
+use charliebot_core::event_types::REQUEST_EXCEPTION_EVENT;
 use charliebot_core::headers::bearer_value;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
@@ -248,7 +249,7 @@ impl Relay {
 
   async fn advance(&mut self) {
     if let Err((kind, message)) = self.step().await {
-      tracing::error!(error = %kind, detail = %message, "Exception in ASGI application");
+      tracing::error!(error = %kind, detail = %message, "{}", REQUEST_EXCEPTION_EVENT);
       self.failure = Some(io::Error::other(message));
       self.state = RelayState::Done;
     }

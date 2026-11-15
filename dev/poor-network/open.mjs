@@ -48,20 +48,39 @@ export function cpuRateFrom(liveTailMs, referenceTailMs) {
   return Math.max(1, Math.round((liveTailMs / referenceTailMs) * 100) / 100);
 }
 
+// The CPU tail of a reference repetition: DOMContentLoaded minus responseEnd, the parse and the blocking scripts. The
+// tail holds that work only when the document's bytes arrive together, as the revalidated copy of case A's cached page
+// does (a 304: the page's whole body comes from the cache after one round trip). A document that crosses the link in
+// full is parsed while it arrives, and its tail keeps only the last chunk's work: about 10 ms at rate 1, against 83 ms
+// for the same page from the cache, which once put the rate at 24.55 instead of 3.56. Such a repetition gives no
+// rate, and the run stops.
+export function referenceTail(rep) {
+  const { documentTransferBytes: transfer, documentBodyBytes: body } = rep;
+  if (rep.tailMs === null || transfer === null || body === null || !(transfer < body)) {
+    throw new Error(
+      `reference repetition ${rep.rep} gives no CPU tail: its document arrived ` +
+        `${transfer === null ? 'nowhere' : `with ${transfer} B on the wire for a ${body} B body`}` +
+        `${rep.navigationError === null ? '' : ` (${rep.navigationError})`}, not from case A's cached page`,
+    );
+  }
+  return rep.tailMs;
+}
+
 // The CPU record of an open run: the rate the invocation's cells run at — the shared rate when the invocation
-// passes one, so the sides of one `--side both` run compare at one CPU speed — beside the inputs. `derivedRate` is
-// what this side's own reference tail gives, so a side that ran at the other side's rate shows the gap.
-export function openCpuRecord(sharedCpuRate, referenceTails) {
-  const referenceTail = median(referenceTails);
-  const derivedRate = cpuRateFrom(LIVE_CPU_TAIL.medianMs, referenceTail);
+// passes one, so two sides compare at one CPU speed — beside the inputs. `derivedRate` is what this side's own
+// reference tail gives, so a side that ran at a shared rate shows the gap.
+export function openCpuRecord(sharedCpuRate, referenceReps) {
+  const referenceTails = referenceReps.map(referenceTail);
+  const referenceTailMedian = median(referenceTails);
+  const derivedRate = cpuRateFrom(LIVE_CPU_TAIL.medianMs, referenceTailMedian);
   return {
     rate: sharedCpuRate ?? derivedRate,
     derivedRate,
-    rateSource: sharedCpuRate === null ? "this side's reference cell" : "the before side's reference cell",
+    rateSource: sharedCpuRate === null ? "this side's reference cell" : 'the rate the invocation passed',
     liveTailMs: LIVE_CPU_TAIL.medianMs,
     liveDevice: LIVE_CPU_TAIL.device,
     liveLoads: LIVE_CPU_TAIL.loads,
-    referenceTailMedianMs: referenceTail,
+    referenceTailMedianMs: referenceTailMedian,
     referenceTails,
   };
 }
@@ -350,9 +369,14 @@ async function measureOnce(ctx, cell, repetition) {
     const catchup = tab.frames.find((frame) => frame.type === 'catchup_complete' && frame.at >= navStart) ?? null;
     const loadWallMs = pageState !== null && pageState.load !== null ? loadWall(pageState) : null;
     const newestWall = pageState !== null && pageState.newest !== null ? pageState.newest : null;
-    const responseEnd = navigationError === null
-      ? await tab.evaluate("performance.getEntriesByType('navigation')[0]?.responseEnd ?? null")
+    // The document's Navigation Timing: when its last byte arrived, and how many bytes it moved on the wire against its
+    // body's size. A revalidated copy moves only its 304's headers.
+    const navigation = navigationError === null
+      ? await tab.evaluate("(() => { const entry = performance.getEntriesByType('navigation')[0]; return entry ? " +
+          '{ responseEnd: entry.responseEnd, transferSize: entry.transferSize, encodedBodySize: entry.encodedBodySize } ' +
+          ': null; })()')
       : null;
+    const responseEnd = navigation === null ? null : navigation.responseEnd;
     const openCase = navigationError === null ? await pageOpenCase(tab) : null;
     if (openCase !== null && openCase !== cell.case) {
       throw new Error(`the page of ${cell.id} opened as case ${openCase}, not ${cell.case}`);
@@ -390,6 +414,8 @@ async function measureOnce(ctx, cell, repetition) {
       dclMs,
       responseEndMs: responseEnd,
       tailMs: dclMs === null || responseEnd === null ? null : dclMs - responseEnd,
+      documentTransferBytes: navigation === null ? null : navigation.transferSize,
+      documentBodyBytes: navigation === null ? null : navigation.encodedBodySize,
       bytesToNewest: newestWall === null ? null : countersAt(timeline, newestWall) - countersAt(timeline, navStart),
       bytesAfterLoad: loadWallMs === null
         ? null
@@ -437,11 +463,32 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
   ctx.releases = 0;
   result.releases = 0;
   result.cells = [];
+  // Case A's open revalidates the page its browser cached, and it is a 304 only while the server serves that copy's
+  // entity tag. Two things would move the tag after a warm build, so both are settled here, before any warm build
+  // caches a page:
+  // - The page's sidebar rows carry each session's unread mark, and an opened page marks its session read. The seeded
+  //   sessions start unread, so the warm builds' own reads would change the page's content. The sessions the opens
+  //   read are marked read first.
+  // - The server compresses a chat page whole until a second chat page shares the first one's tail, and as the
+  //   request's head plus the shared tail from then on (`compressed_page` in rust/crates/app/server/src/routes/
+  //   pages.rs). The tag hashes the compressed bytes, so the two forms of one page carry different tags, and a fresh
+  //   trial's first chat page would be the A warm build's. The bench serves both opened sessions' pages first.
+  // Without either step every A open downloads the whole page, and the reference cell gives no CPU tail.
+  const opened = [ctx.sessions.switchTarget, ctx.sessions.probes[0]];
+  for (const session of opened) {
+    await ctx.api.markRead(session.id);
+  }
+  for (const session of opened) {
+    const { status } = await ctx.api.request('GET', `/?session=${session.id}`);
+    if (status !== 200) {
+      throw new Error(`GET the chat page of ${session.id} answered ${status}`);
+    }
+  }
   const warm = { A: await buildWarm(ctx, 'A'), B: await buildWarm(ctx, 'B'), C: await buildWarm(ctx, 'C') };
   const reference = { ...REFERENCE, warmDir: warm[REFERENCE.case] };
   result.reference = reference;
   await runCell(ctx, reference, repetitions);
-  result.cpu = openCpuRecord(sharedCpuRate, reference.reps.map((rep) => rep.tailMs));
+  result.cpu = openCpuRecord(sharedCpuRate, reference.reps);
   const cpuRate = result.cpu.rate;
 
   for (const condition of CONDITIONS.filter((name) => conditions.includes(name))) {

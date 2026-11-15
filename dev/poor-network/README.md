@@ -23,6 +23,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--repetitions N` | Repetitions per scenario (default 5). |
 | `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release`; default all. |
+| `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 
@@ -277,13 +278,40 @@ times faster than the modeled link (a 340 KB document at 2.5 s). The other devic
 `stale_asset` load), so it gives no rate. The reference cell's tail median, measured at rate 1 on the same kind of load
 (A, cache-warm, the link), gives the rate: `max(1, live tail / reference tail)`. The run prints both inputs.
 
+The tail holds the parse and the blocking scripts only when the document's bytes arrive together. The reference
+document does: case A's browser holds the page, the server still serves the same page, and the open revalidates the
+copy with a `304` (300 B on the wire, about 324 ms to responseEnd), so the whole page is parsed after responseEnd (an
+83.5 ms tail at rate 1 in an earlier round, rate 3.56). A document that crosses the link in full streams for about
+7.4 s and is parsed while it arrives, so its tail keeps only the last chunk's work: about 10 ms at rate 1, which put the
+rate at 21.68 to 30.31 in six invocations of 2026-11-14 and 11-15. A reference repetition whose document crossed the link
+(`document_transfer_bytes` not below `document_body_bytes`) therefore gives no rate, and the run stops. The one
+revalidated open in the live log of Chao's other device (100.103.185.111, 2026-11-14) had a 282 ms tail, within 5% of
+`LIVE_CPU_TAIL`. On main 00574379c (2026-11-15), every reference document of nine open-scenario invocations on host3
+was a `304`. Eight gave median tails of 78.2 to 87.8 ms and rates of 3.38 to 3.8; the ninth, in a busier window of the
+host, gave tails of 78, 203.8 and 121.9 ms, so its median gave 2.44, and its loads ran two to three times as long as the
+other invocations' loads. At rate 3.8, A link's tail was 309 to 412 ms, against the live 297 ms. A median outlasts slow
+repetitions only while they are fewer than half, so a comparison across invocations pins the rate with
+`--open-cpu-rate`.
+
+Case A's open is a `304` only while the server still serves the entity tag of the page the warm build cached. Two
+things would move that tag after the warm build, so the open scenario settles both before any warm profile caches a
+page. The page's sidebar rows carry each session's unread mark, and an opened page marks its session read; the bench's
+sessions start unread, so the bench marks read the two sessions its opens read (`switchTarget` and `probes[0]`). The
+server compresses a chat page whole until a second chat page shares the first one's tail, and as the request's head
+plus the shared tail from then on (`compressed_page` in `rust/crates/app/server/src/routes/pages.rs`); the tag hashes
+the compressed bytes, so the same page carries a different tag in each form. The bench therefore requests both
+sessions' pages before the warm builds, so the warm build's copy is already in the second form. A run that measured
+the other scenarios first had settled both; a run of the open scenario alone did not, and every A open downloaded the
+whole page.
+
 The rate models the live device's CPU tail against the bench's reference tail on the same kind of load. Today the
 document size difference is part of it: the live document is about 340 KB against the bench mock home's 151,545 B, so
 the live tail carries more parsing than the reference tail does, and the ratio absorbs the difference. Both sides of
 one `--side both` run at one rate: the before side's reference cell derives it, and the after side runs its cells at
-that rate, so the sides' numbers compare at one CPU speed. Both JSONs record it as `open.cpu.rate`; the after side
-also records `open.cpu.derivedRate`, the rate its own reference tail would have given, so the host's drift between
-the sides stays readable.
+that rate, so the sides' numbers compare at one CPU speed. `--open-cpu-rate RATE` pins the rate for every side of an
+invocation instead, so the sides of two invocations (two benches on one product) compare at one speed. Each JSON
+records the rate its cells ran at as `open.cpu.rate` and the rate its own reference tail gives as
+`open.cpu.derivedRate`, so the host's drift between the sides stays readable.
 
 **Host interference.** A start or stop of a Docker container on the host adds or removes a veth interface, and Chrome
 treats the machine's network as changed: it drops every connection and fails the requests in flight with
@@ -299,7 +327,8 @@ definition (`web/features/diag/templates/diag/client-events.js`); a text marker 
 the open scenario send turns to the same session. `catchup_ms` is the first `catchup_complete` frame of the page's
 socket, and `load_ms` is the load event. `bytes_to_newest` is the link's bytes (both directions) from the navigation to
 that moment, and `bytes_after_load` the bytes in the 30 s after the load event; the proxy's counters are sampled every
-25 ms. `dcl_ms`, `response_end_ms` and `tail_ms` come from the page's Navigation Timing, and `mark` is whether the
+25 ms. `dcl_ms`, `response_end_ms`, `tail_ms`, `document_transfer_bytes` (the document's bytes on the wire) and
+`document_body_bytes` (its encoded body) come from the page's Navigation Timing, and `mark` is whether the
 not-current mark was in the document at any sample. Each repetition also names what the tab and the page saw:
 `sockets` (the WebSocket opens), `frames` and `frame_types` (the socket frames by type), `requests` (the requests),
 `ws_state` (the client's own socket state), the last console lines and page errors, the requests the host's network
@@ -376,7 +405,8 @@ counting against synthetic poll records of both answer shapes: the baseline's wh
 The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent from the
 document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches fails
 the step. The open tests check the CPU rate's sharing (a shared rate stands, beside the one the side's own reference
-derives) and the host interference (a dropped request or a failed navigation names the interference; any other load
+derives), the reference's document (a reference repetition whose document crossed the link gives no rate) and the host
+interference (a dropped request or a failed navigation names the interference; any other load
 failure stays the repetition's own record; a repetition the host spoiled is rerun, bounded, and its reruns recorded).
 The lock tests check that one concurrent side attempt holds the bench lock and the next waits for it, and that the
 bench code names the lock path only in `lock.sh`.

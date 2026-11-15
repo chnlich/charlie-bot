@@ -19,6 +19,9 @@
 # attempt; a side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
 # --open-conditions LIST  the open scenario's cells: any of link,held,reset,flaps,offline,release (default all). The
 #                reference cell always runs, since the CPU rate is derived from it.
+# --open-cpu-rate RATE  every side runs the open scenario's cells at RATE instead of a rate its reference derives, so
+#                sides of separate invocations (two benches on one product) compare at one CPU speed. Each side's JSON
+#                still records the rate its own reference cell derives.
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
@@ -70,6 +73,7 @@ while (($#)); do
     --repetitions) repetitions=${2:?--repetitions needs a value}; shift 2 ;;
     --scenarios) scenarios=${2:?--scenarios needs a value}; shift 2 ;;
     --open-conditions) open_conditions=${2:?--open-conditions needs a value}; shift 2 ;;
+    --open-cpu-rate) open_rate_args=(--open-cpu-rate "${2:?--open-cpu-rate needs a value}"); shift 2 ;;
     --assets-dir) assets_dir=${2:?--assets-dir needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -99,7 +103,7 @@ run_id=$(date -u +%Y%m%dT%H%M%SZ)
 if ((detach)); then
   log="$out_dir/pn-$run_id.log"
   forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions"
-    --scenarios "$scenarios" --open-conditions "$open_conditions")
+    --scenarios "$scenarios" --open-conditions "$open_conditions" ${open_rate_args+"${open_rate_args[@]}"})
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
@@ -259,11 +263,11 @@ if [[ $side == before || $side == both ]]; then
       die 3 "the reference baseline $calibration_reference did not reproduce the switch-during-refresh hold; the proxy does not model the link. The after side did not run."
     fi
   fi
-  # One CPU rate per invocation: the after side's open cells run at the rate the before side's reference cell
-  # derived, so the two sides' numbers compare at one CPU speed. bench.mjs records the rate it ran at beside the
-  # one its own reference would give. The before side has measured (its failure would have stopped above), so its
+  # One CPU rate per invocation: unless --open-cpu-rate pins one, the after side's open cells run at the rate the
+  # before side's reference cell derived, so the two sides' numbers compare at one CPU speed. bench.mjs records the
+  # rate it ran at beside the one its own reference would give. The before side has measured (its failure would have stopped above), so its
   # JSON names the rate whenever the open scenario was selected.
-  if [[ $side == both && ",$scenarios," == *",open,"* ]]; then
+  if [[ $side == both && ",$scenarios," == *",open,"* && ${#open_rate_args[@]} -eq 0 ]]; then
     open_cpu_rate=$(node -e '
       const side = require(process.argv[1]);
       const rate = side.open?.cpu?.rate;

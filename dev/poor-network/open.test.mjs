@@ -21,17 +21,31 @@ function repOf({ navigationError = null, networkChanged = [] } = {}) {
   return { navigationError, networkChanged, newestMs: 20000 };
 }
 
-test('one invocation, one CPU rate: a shared rate stands beside the one this side derives', () => {
-  const tails = [10, 12, 11];
-  const own = openCpuRecord(null, tails);
-  assert.equal(own.rate, own.derivedRate);
-  assert.equal(own.derivedRate, Math.max(1, Math.round((LIVE_CPU_TAIL.medianMs / 11) * 100) / 100));
-  assert.match(own.rateSource, /this side/);
+// A reference repetition whose document is case A's revalidated copy: a 304's headers on the wire for the cached body.
+function referenceRep(rep, tailMs, { documentTransferBytes = 300, documentBodyBytes = 84566 } = {}) {
+  return { rep, navigationError: null, tailMs, documentTransferBytes, documentBodyBytes };
+}
 
-  const shared = openCpuRecord(23.57, tails);
-  assert.equal(shared.rate, 23.57, 'the cells run at the rate the invocation passed');
+test('one invocation, one CPU rate: a shared rate stands beside the one this side derives', () => {
+  const reps = [referenceRep(1, 80), referenceRep(2, 84), referenceRep(3, 82)];
+  const own = openCpuRecord(null, reps);
+  assert.equal(own.rate, own.derivedRate);
+  assert.equal(own.derivedRate, Math.max(1, Math.round((LIVE_CPU_TAIL.medianMs / 82) * 100) / 100));
+  assert.deepEqual(own.referenceTails, [80, 84, 82]);
+
+  const shared = openCpuRecord(3.56, reps);
+  assert.equal(shared.rate, 3.56, 'the cells run at the rate the invocation passed');
   assert.equal(shared.derivedRate, own.derivedRate, 'the gap to this side\'s own rate stays readable');
-  assert.match(shared.rateSource, /before side/);
+  assert.notEqual(shared.rateSource, own.rateSource);
+});
+
+test('a reference document that crossed the link in full gives no CPU rate', () => {
+  // Round 4's reference: the whole 85.6 KB page streamed over 7.4 s, and its 10 ms tail made the rate 24.55.
+  const streamed = referenceRep(2, 10.3, { documentTransferBytes: 85936, documentBodyBytes: 85636 });
+  assert.throws(() => openCpuRecord(null, [referenceRep(1, 80), streamed]), /reference repetition 2 gives no CPU tail/);
+  const failed = { rep: 1, navigationError: 'net::ERR_TIMED_OUT', tailMs: null, documentTransferBytes: null,
+    documentBodyBytes: null };
+  assert.throws(() => openCpuRecord(3.56, [failed]), /net::ERR_TIMED_OUT/);
 });
 
 test('a request the host\'s network change dropped names the interference', () => {

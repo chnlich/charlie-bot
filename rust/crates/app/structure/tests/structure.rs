@@ -1378,6 +1378,12 @@ const PHRASE_OWNER_TABLE: &[OwnerRow] = &[
            detail from there.",
   },
   OwnerRow {
+    name: "session backend resolution requires a configured backends.options entry",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::model_pool::MISSING_BACKEND_OPTION`; every path that resolves a session's backend \
+           reads its refusal there.",
+  },
+  OwnerRow {
     name: "Exception in ASGI application",
     owner: "infra/core",
     hint: "Use `charliebot_core::event_types::REQUEST_EXCEPTION_EVENT`; every request path that logs an escaped error \

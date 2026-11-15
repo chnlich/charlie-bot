@@ -48,7 +48,7 @@ pub const WORKER_USAGE_LINE: &str = concat!(
 
 const KNOWN_FIELDS: &[&str] = &["scope", "topic", "audience", "title"];
 const SCOPES: &[&str] = &["user", "host"];
-const AUDIENCE_ELEMENTS: &[&str] = &["master", "worker"];
+pub(crate) const AUDIENCE_ELEMENTS: &[&str] = &["master", "worker"];
 
 /// A store file violates the entry or topic grammar. The text is the refusal message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -322,6 +322,12 @@ fn load_topics(memory_dir: &Path) -> anyhow::Result<BTreeMap<String, Topic>> {
     return Err(format_error(format!("{}: topics vocabulary file not found", topics_path.display())));
   }
   let text = read_text(&topics_path)?;
+  parse_topics_text(&topics_path, &text).map_err(format_error)
+}
+
+/// The topics named by a vocabulary file's `text`, keyed by topic name. `topics_path` names the file in each
+/// violation message, which is the store's format error and the lint's violation text.
+pub(crate) fn parse_topics_text(topics_path: &Path, text: &str) -> Result<BTreeMap<String, Topic>, String> {
   let mut topics = BTreeMap::new();
   for (index, raw) in text.split('\n').enumerate() {
     if raw.is_empty() {
@@ -329,18 +335,10 @@ fn load_topics(memory_dir: &Path) -> anyhow::Result<BTreeMap<String, Topic>> {
     }
     let lineno = index + 1;
     let Some((name, resident)) = parse_topic_line(raw) else {
-      return Err(format_error(format!(
-        "{}: line {lineno}: malformed topic line: {}",
-        topics_path.display(),
-        str_repr(raw)
-      )));
+      return Err(format!("{}: line {lineno}: malformed topic line: {}", topics_path.display(), str_repr(raw)));
     };
     if topics.contains_key(name) {
-      return Err(format_error(format!(
-        "{}: line {lineno}: duplicate topic {}",
-        topics_path.display(),
-        str_repr(name)
-      )));
+      return Err(format!("{}: line {lineno}: duplicate topic {}", topics_path.display(), str_repr(name)));
     }
     topics.insert(name.to_string(), Topic { name: name.to_string(), resident });
   }
@@ -349,7 +347,7 @@ fn load_topics(memory_dir: &Path) -> anyhow::Result<BTreeMap<String, Topic>> {
 
 /// The semantic violations of one entry against the vocabulary, in the order the validator reports them.
 /// Empty when the entry is valid.
-fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) -> Vec<String> {
+pub(crate) fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) -> Vec<String> {
   let topic_label = entry.topic.as_deref().unwrap_or("?");
   let violation = |message: String| format!("{ENTRIES_DIRNAME}/{topic_label}/{}.md: {message}", entry.slug);
   let mut violations = Vec::new();

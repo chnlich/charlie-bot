@@ -54,7 +54,7 @@ struct QueryArgs {
   #[arg(long, required = true, action = clap::ArgAction::Append)]
   topic: Vec<String>,
   /// Only entries whose audience contains this value.
-  #[arg(long, value_parser = ["master", "worker"])]
+  #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(crate::memory::AUDIENCE_ELEMENTS))]
   audience: Option<String>,
   /// Print index lines only.
   #[arg(long)]

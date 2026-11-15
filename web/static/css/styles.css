@@ -130,8 +130,13 @@
    which renders 6.96:1 on the row, and takes its 10 px glyph plus the row's gap from the title,
    which elides anyway. */
 .turn-row-caret { flex: 0 0 auto; color: #94a3b8; font-size: 0.625rem; line-height: 1; }
+/* A phone sets the conclusion on its own line: at 390 px the tag, the steps and the caret leave the
+   title about 170 px, and a 45% column beside it would cut the question and the answer to a few
+   characters each. The conclusion wraps under the question at the row's width, and its `order`
+   keeps it after the meta so the first line still ends in the steps, the time and the caret. */
 @media (max-width: 820px) {
-  .turn-row-conclusion { display: none; }
+  .turn-row { flex-wrap: wrap; row-gap: 0.1rem; }
+  .turn-row-conclusion { order: 1; flex: 1 0 100%; max-width: 100%; }
 }
 .turn-collapse {
   font-size: 0.6875rem; color: #94a3b8; white-space: nowrap;

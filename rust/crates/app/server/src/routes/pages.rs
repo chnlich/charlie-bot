@@ -12,6 +12,8 @@ use axum::response::Response;
 use bytes::Bytes;
 use charliebot_cli_common::route;
 use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
+use charliebot_compat::mimetypes;
+use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
@@ -635,7 +637,8 @@ fn page_body(
 /// instead of under the transport gzip; the transport passes a response that already sets `Content-Encoding`
 /// through untouched.
 fn page_response(body: Bytes, compressed: Option<PageCompressed>, status: StatusCode) -> Response {
-  let mut builder = Response::builder().status(status).header(header::CONTENT_TYPE, "text/html; charset=utf-8");
+  let mut builder =
+    Response::builder().status(status).header(header::CONTENT_TYPE, mimetypes::with_utf8_charset(TEXT_HTML));
   let served = match compressed {
     Some(compressed) => {
       builder = builder

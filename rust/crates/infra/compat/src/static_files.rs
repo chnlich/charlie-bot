@@ -23,7 +23,7 @@ use md5::{Digest, Md5};
 
 use crate::body_memo::BodyMemo;
 use crate::headers::header_text;
-use crate::mimetypes::MimeTypes;
+use crate::mimetypes::{self, MimeTypes};
 use crate::mimetypes_table::TEXT_PLAIN;
 use crate::responses;
 
@@ -209,7 +209,7 @@ impl FileHeaders {
     let content_type = override_content_type.map_or_else(
       || {
         let guessed = mime_types.guess_type(&paths::display(path)).unwrap_or(TEXT_PLAIN);
-        if guessed.starts_with("text/") { format!("{guessed}; charset=utf-8") } else { guessed.to_string() }
+        mimetypes::with_utf8_charset(guessed)
       },
       str::to_string,
     );
@@ -277,7 +277,7 @@ fn file_response(
         .status(StatusCode::RANGE_NOT_SATISFIABLE)
         .header(header::CONTENT_RANGE, format!("bytes */{}", file_headers.size))
         .header(header::CONTENT_LENGTH, 0)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(header::CONTENT_TYPE, mimetypes::with_utf8_charset(TEXT_PLAIN))
         .body(Body::empty())
         .expect("a 416 response builds");
     }

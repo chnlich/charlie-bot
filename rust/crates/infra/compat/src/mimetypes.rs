@@ -77,6 +77,12 @@ impl MimeTypes {
   }
 }
 
+/// The content type a response serves a text media type with: the type followed by its UTF-8 charset, so
+/// `with_utf8_charset("text/plain")` is `"text/plain; charset=utf-8"`. Every other type passes through unchanged.
+pub fn with_utf8_charset(media_type: &str) -> String {
+  if media_type.starts_with("text/") { format!("{media_type}; charset=utf-8") } else { media_type.to_string() }
+}
+
 /// The extension: the last dot's suffix within the final component, ignoring
 /// the component's leading dots.
 fn splitext(path: &str) -> (String, String) {
@@ -111,6 +117,14 @@ mod tests {
     for (path, expected) in cases {
       assert_eq!(database.guess_type(path), expected, "{path}");
     }
+  }
+
+  #[test]
+  fn a_text_type_names_its_utf8_charset_and_any_other_type_passes_through() {
+    assert_eq!(with_utf8_charset("text/plain"), "text/plain; charset=utf-8");
+    assert_eq!(with_utf8_charset("text/html"), "text/html; charset=utf-8");
+    assert_eq!(with_utf8_charset("application/json"), "application/json");
+    assert_eq!(with_utf8_charset("image/png"), "image/png");
   }
 
   #[test]

@@ -28,6 +28,8 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_memoized_body};
 use charliebot_compat::headers::header_text;
+use charliebot_compat::mimetypes;
+use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::{jinja, responses};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
@@ -679,7 +681,7 @@ fn accepts_gzip(request: &Parts) -> bool {
 fn compressed_html(body: Vec<u8>) -> Response {
   Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+    .header(header::CONTENT_TYPE, mimetypes::with_utf8_charset(TEXT_HTML))
     .header(header::CONTENT_LENGTH, body.len())
     .header(header::CONTENT_ENCODING, "gzip")
     .header(header::VARY, ACCEPT_ENCODING)

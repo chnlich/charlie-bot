@@ -15,7 +15,7 @@ use axum::Router;
 use axum::extract::{Path, Request, State};
 use axum::http::request::Parts;
 use axum::response::Response;
-use charliebot_compat::mimetypes::MimeTypes;
+use charliebot_compat::mimetypes::{self, MimeTypes};
 use charliebot_compat::mimetypes_table::TEXT_PLAIN;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_and_head;
@@ -132,8 +132,7 @@ fn answer_compressed_run_log(fs_path: &FsPath, method: &Method) -> Option<Respon
   }
   let bytes = run_logs::read_bytes(fs_path).ok().flatten()?;
   let guessed = MIME_TYPES.guess_type(&paths::display(fs_path)).unwrap_or(TEXT_PLAIN);
-  let content_type =
-    if guessed.starts_with("text/") { format!("{guessed}; charset=utf-8") } else { guessed.to_string() };
+  let content_type = mimetypes::with_utf8_charset(guessed);
   let size = bytes.len() as u64;
   let body = if method == Method::HEAD { axum::body::Body::empty() } else { axum::body::Body::from(bytes.to_vec()) };
   Response::builder()

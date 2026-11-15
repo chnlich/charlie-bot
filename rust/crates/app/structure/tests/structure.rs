@@ -1088,6 +1088,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "thumbs_up", owner: "runtime/store", hint: "Use `charliebot_store::metadata::THUMBS_UP`." },
   OwnerRow { name: "thumbs_down", owner: "runtime/store", hint: "Use `charliebot_store::metadata::THUMBS_DOWN`." },
   OwnerRow { name: "work_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::WORK_STATE`." },
+  OwnerRow { name: "task_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::TASK_STATE`." },
   OwnerRow { name: "has_unread", owner: "runtime/store", hint: "Use `charliebot_store::metadata::HAS_UNREAD`." },
   OwnerRow {
     name: "has_running_tasks",

@@ -14,7 +14,7 @@ use charliebot_store::ChatEvent;
 use charliebot_store::CompactValue;
 use charliebot_store::aggregator;
 use charliebot_store::control_events;
-use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::metadata::{TASK_STATE, UtcDateTime};
 use charliebot_store::projection::MessageProjection;
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{
@@ -337,7 +337,7 @@ fn delivery_event(
     .unwrap_or_else(|| run_records.last().expect("run records are non-empty"));
   Ok(Some(json!({
     "type": event_types::RUN_DELIVERY,
-    "task_state": task_state,
+    TASK_STATE: task_state,
     "summary": summary,
     "result_refs": close_refs,
     (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
@@ -499,7 +499,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     .unwrap_or_else(|| json!({}));
 
   Ok(json!({
-    "task_state": task_state,
+    TASK_STATE: task_state,
     "closed_at": if closed_at.is_empty() { Value::Null } else { json!(closed_at) },
     "landed": if landed.is_empty() { Value::Null } else { json!(landed) },
     "delivery": delivery,

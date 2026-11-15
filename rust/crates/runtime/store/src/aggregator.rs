@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::hooks::EventRenderer;
 use crate::message_events;
-use crate::metadata::BASE_BRANCH_FIELD;
+use crate::metadata::{BASE_BRANCH_FIELD, TASK_STATE};
 use crate::streaming::{APPEND, LENGTH, THINKING_APPEND, THINKING_LENGTH};
 use crate::tool_rows::{SubagentStatus, ToolRow, ToolRows, Usage, tool_preview};
 use crate::{StoreError, StoreResult};
@@ -845,15 +845,15 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }
     event_types::RUN_DELIVERY => {
       let task_state = event
-        .field("task_state")
+        .field(TASK_STATE)
         .filter(|value| is_truthy(*value))
         .map(EventFields::to_owned_value)
         .unwrap_or_else(|| json!(""));
       json!({
         "role": event_types::RUN_DELIVERY,
         "content": event.field("summary").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-        "task_state": task_state,
-        "completed": event.field("task_state").and_then(EventFields::as_str_field) == Some("completed"),
+        TASK_STATE: task_state,
+        "completed": event.field(TASK_STATE).and_then(EventFields::as_str_field) == Some("completed"),
         "result_refs": event.field("result_refs").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
         "raw_log_ref": event.field("raw_log_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "events_ref": event.field("events_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),

@@ -29,7 +29,7 @@ use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::{
-  ARCHIVE_OFFSET, TASK_PARENT_ID_FIELD, TaskProfile, UtcDateTime, read_session_metadata,
+  ARCHIVE_OFFSET, TASK_PARENT_ID_FIELD, TASK_STATE, TaskProfile, UtcDateTime, read_session_metadata,
 };
 use charliebot_store::{CALLER_SESSION_ID_FIELD, control_events, layout};
 use charliebot_tasks::completion::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, pending_archive_answer};
@@ -580,7 +580,7 @@ fn scan_task_close(events_path: &Path, task_id: &str, request_id: &str) -> Optio
         .unwrap_or_else(|| "completed".to_string());
       return Some(LocalClose::Closed(json!({
         "session_id": task_id,
-        "task_state": outcome,
+        TASK_STATE: outcome,
         CLOSED_EVENT_ID_FIELD: closed_id,
       })));
     }

@@ -182,16 +182,13 @@ function toolInputSummary(toolName, input) {
 }
 
 // A transcript time names the day and the clock time the reader acts on, in the
-// reader's own zone: the shape the sidebar's session rows print (utils.js
-// relativeTime). A reader wondering when a message landed reads the minute; the
-// seconds field and the zone name are needless precision on every bubble, so the
-// events viewer carries the exact instant instead.
+// reader's own zone: the label the sidebar's session rows print (utils.js
+// formatTimeLabel), with the year on an instant outside the current year. A
+// reader wondering when a message landed reads the minute; the seconds field and
+// the zone name are needless precision on every bubble, so the events viewer
+// carries the exact instant instead.
 function formatBubbleTime(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
-  return d.toLocaleString('en-US', {
-    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
-  });
+  return formatTimeLabel(isoStr);
 }
 
 function messageRenderId(msg) {

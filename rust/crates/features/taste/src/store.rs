@@ -91,7 +91,7 @@ pub enum SourceRef {
 }
 
 /// A row's provenance: the session, its link, and the event or plan version inside it. A row that comes
-/// from one comment of a numbered comment batch carries that comment's number in `comment_item`; rows from
+/// from one comment of a numbered comment batch carries that comment's number in `comment_item`. Rows from
 /// other sources carry none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
@@ -215,7 +215,7 @@ impl Store {
   /// The rows of `domain` that were active at `moment`: decided earlier, and no superseding row decided by then.
   ///
   /// This is the replay's as-of view. A cover carries no decision time, so a covered row stays in the view. A retracted
-  /// row read its source wrong, so no moment makes it a precedent; the view leaves it out. The caller excludes the
+  /// row read its source wrong, so no moment makes it a precedent. The view leaves it out. The caller excludes the
   /// held-out row by its own decision time.
   pub fn rows_as_of(&self, domain: &str, moment: OffsetDateTime) -> Vec<&Row> {
     let decided_before =
@@ -240,7 +240,7 @@ impl Store {
   }
 }
 
-/// The store at `taste_dir`. A missing store file is an empty store; a malformed line fails with its number.
+/// The store at `taste_dir`. A missing store file is an empty store. A malformed line fails with its number.
 pub fn load_store(taste_dir: &Path) -> anyhow::Result<Store> {
   let path = taste_dir.join(ROWS_FILENAME);
   let file = match File::open(&path) {

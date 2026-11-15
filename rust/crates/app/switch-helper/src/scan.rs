@@ -258,7 +258,7 @@ fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<BackendFiles>, Opti
   Ok((Vec::new(), None))
 }
 
-/// Reads every backend type registration in build `sha` without checking out or changing its source tree.
+/// Every backend type registration in build `sha`, read without checking out or changing its source tree.
 fn read_build_registrations(repo: &Path, sha: &str) -> Result<Result<BuildRegistrations, String>> {
   let (backends, error) = registration_files(repo, sha)?;
   if let Some(error) = error {
@@ -334,7 +334,7 @@ impl Registrations {
   }
 }
 
-/// Read one build's registration without checking out or changing its source tree.
+/// One build's registration, read without checking out or changing its source tree.
 pub fn read_registration(repo: &Path, sha: &str, backend_type: &str) -> Result<(ReattachState, String)> {
   Registrations::default().lookup(repo, sha, backend_type)
 }

@@ -119,6 +119,7 @@ function fetchFilterListing(filter, {networkOnly}) {
     const stored = isStoredResponse(res);
     return res.json().then(payload => ({
       rows: listingRows(payload, requestSeq).map(row => keepCurrentUnread(row, requestSeq)),
+      listing: listingScreen(payload),
       stored,
     }));
   });
@@ -129,9 +130,9 @@ function keepCurrentUnread(row, requestSeq) {
   return Object.assign({}, row, {has_unread: Sidebar.ownUnread(row.id)});
 }
 
-function paintListing({rows, stored}, filter, options = {}) {
+function paintListing({rows, listing, stored}, filter, options = {}) {
   if (stored) document.dispatchEvent(new CustomEvent('charliebot:stored-list'));
-  renderSessionList(rows, filter, options);
+  renderSessionList(rows, filter, listing ? {...options, listing} : options);
 }
 
 // The sidebar list refresh that proves a copy current (last-state.js): the current view's list from the network,
@@ -240,7 +241,11 @@ function renderSidebarLoadErrors(errors) {
 // row count, and whether the page left rows out. The page leaves a group's rows out once it paints more roots than
 // the preview limit, so the reader's "Show all" fetches them from the listing route.
 function pageScreen() {
-  const screen = INITIAL_SESSIONS && INITIAL_SESSIONS.$screen;
+  return listingScreen(INITIAL_SESSIONS);
+}
+
+function listingScreen(payload) {
+  const screen = payload && payload.$screen;
   return screen && screen.partial ? screen : null;
 }
 

@@ -20,7 +20,7 @@ const { createElement } = require('./dom_element_stub');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 // One chat page whose listing carries `initial`, with the listing route answering `full`.
-function buildContext({initial, full}) {
+function buildContext({initial, full, stored = false}) {
   const fetchRequests = [];
   const nav = createElement();
   const elements = new Map([
@@ -39,7 +39,11 @@ function buildContext({initial, full}) {
   context.document.querySelector = () => null;
   context.fetch = async (url) => {
     fetchRequests.push(url);
-    return {ok: true, json: async () => full};
+    return {
+      ok: true,
+      headers: {get: (name) => (stored && name === 'X-CharlieBot-Stored-At' ? 'stored' : null)},
+      json: async () => full,
+    };
   };
   createChatSidebarContext(context);
   return {context, nav, fetchRequests};
@@ -75,6 +79,24 @@ test('the page paints the rows it carries and Show all fetches the rest', async 
   assert.deepEqual(rowIds(after), ['row-1', 'row-2', 'row-3', 'row-4', 'row-5', 'row-6', 'row-7', 'row-8']);
   assert.match(after, /text-slate-400 ml-auto">8</);
   assert.match(after, />Show less</, 'the group stays expanded after the full listing paints');
+});
+
+test('a stored page listing keeps its first-screen counts and Show all toggle', async () => {
+  const preview = previewRows();
+  const firstScreen = {$screen: {partial: true, counts: {'': 8}}, ...sessionColumns(preview)};
+  const {context, nav, fetchRequests} = buildContext({initial: null, full: firstScreen, stored: true});
+  context.INITIAL_SESSIONS = null;
+
+  context.restoreSidebarFromUrl();
+  await flush();
+  await flush();
+
+  const html = nav.innerHTML;
+  assert.deepEqual(fetchRequests, ['/api/sessions/?compact=1']);
+  assert.deepEqual(rowIds(html), ['row-1', 'row-2', 'row-3', 'row-4', 'row-5']);
+  assert.match(html, /text-slate-400 ml-auto">8</, 'the stored first screen carries the whole group count');
+  assert.match(html, /session-group-limit-toggle/);
+  assert.match(html, />Show all</);
 });
 
 test('a listing the page carries whole paints every row and no toggle', () => {

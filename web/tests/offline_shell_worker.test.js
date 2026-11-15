@@ -168,13 +168,42 @@ test('the first load reaches the network, and a warm shell then answers the navi
   assert.equal(await first.response.text(), '<html><body>shell</body></html>', 'the first load is the network page');
 
   const channel = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
   assert.equal(channel.replies.length, 1, 'the warm answers once');
   assert.equal(channel.replies[0].stored, true, 'the warm reports the stored shell over its channel');
   const second = await answer(h, nav);
   assert.equal(await second.response.text(), '<html><body>shell</body></html>');
   assert.equal(h.state.calls.filter((call) => call.url === SHELL_URL).length, 2,
       'the first load and the warm fetch reached the network; the stored shell answers the second navigation');
+});
+
+test('a warm stores server-rendered copies before it reports success', async () => {
+  const h = harness();
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response('<html><body>shell</body></html>', {status: 200})
+    : new Response('unexpected', {status: 500}));
+  const bootstrap = {event_count: 4, session: {id: SESSION}};
+  const listing = {$encoded: {ids: [SESSION]}, $screen: {partial: false}};
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {
+    data: {
+      type: 'warm',
+      copies: [
+        {url: BOOTSTRAP_URL, body: bootstrap},
+        {url: LIST_URL, body: listing},
+      ],
+    },
+    ports: [channel.port2],
+  }).waits);
+
+  const cache = await h.caches.api.open('last-state-v1');
+  const storedBootstrap = await cache.match(BOOTSTRAP_URL);
+  const storedListing = await cache.match(LIST_URL);
+  assert.deepEqual(await storedBootstrap.json(), bootstrap);
+  assert.ok(storedBootstrap.headers.get(STORED_AT));
+  assert.deepEqual(await storedListing.json(), listing);
+  assert.equal(channel.replies[0].stored, true);
+  assert.deepEqual(h.state.calls.map((call) => call.url), [SHELL_URL], 'seeding uses the page data without a fetch');
 });
 
 test('a shell match that races the cache index settles and answers the stored shell', async (t) => {
@@ -215,9 +244,9 @@ test('a warm that finds the shell stored fetches nothing and reports the shell i
     ? new Response('<html><body>shell</body></html>', {status: 200, headers: {ETag: '"shell"'}})
     : new Response('unexpected', {status: 500}));
   const channel = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
   const again = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [again.port2]}).waits);
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [again.port2]}).waits);
   assert.equal(again.replies.length, 1);
   assert.equal(again.replies[0].stored, true);
   assert.equal(h.state.calls.filter((call) => call.url === SHELL_URL).length, 1,
@@ -228,7 +257,7 @@ test('a warm whose shell fetch fails reports the failure', async () => {
   const h = harness();
   h.state.network = async () => new Response('no', {status: 503});
   const channel = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
   assert.equal(channel.replies.length, 1);
   assert.equal(channel.replies[0].stored, false);
   assert.match(channel.replies[0].error, /503/);
@@ -240,7 +269,7 @@ test('a warm whose shell fetch answers 401 reports no stored shell without an er
   const cache = await h.caches.api.open('last-state-v1');
   await cache.put(BOOTSTRAP_URL, firstScreen('private copy'));
   const channel = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
   assert.equal(channel.replies.length, 1);
   assert.equal(channel.replies[0].stored, false);
   assert.equal('error' in channel.replies[0], false);
@@ -256,7 +285,7 @@ test('a shell file 401 clears copies without storing an incomplete shell', async
   const cache = await h.caches.api.open('last-state-v1');
   await cache.put(BOOTSTRAP_URL, firstScreen('private copy'));
   const channel = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
   assert.equal(channel.replies.length, 1);
   assert.equal(channel.replies[0].stored, false);
   assert.equal('error' in channel.replies[0], false);
@@ -268,7 +297,7 @@ test('the retired form answers no message', async () => {
   const h = harness({enabled: false});
   h.state.network = async () => new Response('unexpected', {status: 200});
   const channel = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
   assert.equal(channel.replies.length, 0, 'a worker the switch retired stores nothing');
   assert.deepEqual(h.state.calls, [], 'a worker the switch retired fetches nothing');
 });
@@ -286,7 +315,7 @@ test('warming stores the shell and the same-origin files it names, and drops the
   const files = h.caches.api;
   await (await files.open('last-state-files')).put(ORIGIN + '/static/old.css', new Response('old'));
   const channel = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
   assert.equal(channel.replies.length, 1);
   assert.equal(channel.replies[0].stored, true);
 

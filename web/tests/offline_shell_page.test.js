@@ -15,12 +15,25 @@ const PAGE_CURRENT = 'charliebot:page-current';
 
 // One page: the events it dispatched, the registration's worker, the messages the active worker got, and
 // the document listeners the script installed. `readyError` rejects `navigator.serviceWorker.ready`.
-function buildPage({serviceWorker = true, readyError = null} = {}) {
+function buildPage({
+  serviceWorker = true,
+  readyError = null,
+  sessionId = null,
+  sessionBootstrap = null,
+  initialSessions = null,
+  initialLoadErrors = [],
+} = {}) {
   const events = [];
   const documentListeners = new Map();
   const windowListeners = new Map();
   const context = {
     console: {error: () => {}},
+    location: {href: 'https://charlie.test/?session='},
+    URL,
+    SESSION_ID: sessionId,
+    SESSION_BOOTSTRAP: sessionBootstrap,
+    INITIAL_SESSIONS: initialSessions,
+    INITIAL_LOAD_ERRORS: initialLoadErrors,
     CustomEvent: class {
       constructor(type, init) {
         this.type = type;
@@ -98,11 +111,50 @@ test('the warm waits for the page-current event, then asks the active worker and
   assert.equal(page.registered()[0].path, WORKER_PATH);
   assert.equal(page.registered()[0].options.scope, '/?session=');
   assert.equal(page.context.postMessage.message.type, 'warm');
+  assert.deepEqual(JSON.parse(JSON.stringify(page.context.postMessage.message.copies)), []);
   assert.equal(page.context.postMessage.transfer.length, 1, 'the reply channel travels with the message');
   page.context.reply({stored: true});
   assert.equal(page.events.length, 1);
   assert.equal(page.events[0].type, 'charliebot:offline-shell-warm');
   assert.equal(page.events[0].detail.stored, true);
+});
+
+test('the warm seeds the server-rendered first screen and sidebar rows', async () => {
+  const bootstrap = {event_count: 4, session: {id: 'session-a'}};
+  const initialSessions = {$encoded: {ids: []}, $screen: {partial: false}};
+  const page = buildPage({
+    sessionId: 'session-a',
+    sessionBootstrap: bootstrap,
+    initialSessions,
+  });
+  page.firePageCurrent();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(JSON.parse(JSON.stringify(page.context.postMessage.message.copies)), [
+    {
+      url: 'https://charlie.test/api/sessions/session-a/bootstrap',
+      body: bootstrap,
+    },
+    {
+      url: 'https://charlie.test/api/sessions/?compact=1',
+      body: initialSessions,
+    },
+  ]);
+});
+
+test('an initial-list error does not seed an empty sidebar copy', async () => {
+  const page = buildPage({
+    sessionId: 'session-a',
+    sessionBootstrap: {event_count: 4, session: {id: 'session-a'}},
+    initialSessions: [],
+    initialLoadErrors: ['listing failed'],
+  });
+  page.firePageCurrent();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const copies = JSON.parse(JSON.stringify(page.context.postMessage.message.copies));
+  assert.equal(copies.length, 1);
+  assert.equal(copies[0].url, 'https://charlie.test/api/sessions/session-a/bootstrap');
 });
 
 test('the registration fetches no worker script before the page is current', () => {
@@ -133,7 +185,7 @@ test('the page-current event tells the active worker the catch-up is complete', 
   // The first open's own report precedes the warm request; its refresh queue is empty, so the worker
   // refreshes nothing. The messages are compared as JSON: the vm context's objects carry another prototype.
   assert.deepEqual(JSON.parse(JSON.stringify(page.context.workerMessages)),
-      [{type: 'catchup-complete'}, {type: 'warm'}]);
+      [{type: 'catchup-complete'}, {type: 'warm', copies: []}]);
   page.context.workerMessages.length = 0;
   page.firePageCurrent();
   await new Promise((resolve) => setImmediate(resolve));

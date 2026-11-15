@@ -235,6 +235,15 @@ async function storeCopy(url, response) {
   if (sessionId !== null) await touchSession(cache, sessionId);
 }
 
+async function storePageCopies(copies) {
+  for (const copy of copies) {
+    const response = new Response(JSON.stringify(copy.body), {
+      headers: {'Content-Type': 'application/json'},
+    });
+    await storeCopy(copy.url, response);
+  }
+}
+
 async function readIndex(cache) {
   const stored = await cache.match(INDEX_KEY);
   return stored ? stored.json() : {sessions: {}, files: []};
@@ -333,7 +342,13 @@ self.addEventListener('message', (event) => {
   const data = event.data || {};
   if (!WORKER_CONFIG.enabled) return;
   if (data.type === 'warm') {
-    event.waitUntil(warmShell(data.refresh === true).then(
+    const warming = data.refresh === true
+      ? warmShell(true)
+      : warmShell().then(async (result) => {
+        if (result.stored) await storePageCopies(data.copies);
+        return result;
+      });
+    event.waitUntil(warming.then(
         (result) => replyTo(event, result),
         (error) => replyTo(event, {stored: false, error: String(error)})));
   } else if (data.type === 'catchup-complete') {

@@ -46,8 +46,27 @@ function warmOfflineShell() {
     }
     const channel = new MessageChannel();
     channel.port1.onmessage = (event) => reportWarm(event.data ?? {});
-    registration.active.postMessage({type: 'warm'}, [channel.port2]);
+    registration.active.postMessage({type: 'warm', copies: offlineShellSeedCopies()}, [channel.port2]);
   }, (err) => reportWarm({error: String(err)}));
+}
+
+// Server-rendered data did not pass through the worker's fetch handler, so seed the same URLs from the page that
+// painted them. The shell's first-screen payload and initial sidebar rows are the offline copies for its next open.
+function offlineShellSeedCopies() {
+  const copies = [];
+  if (SESSION_ID && SESSION_BOOTSTRAP) {
+    copies.push({
+      url: new URL('/api/sessions/' + SESSION_ID + '/bootstrap', location.href).href,
+      body: SESSION_BOOTSTRAP,
+    });
+  }
+  if (INITIAL_SESSIONS !== null && INITIAL_LOAD_ERRORS.length === 0) {
+    copies.push({
+      url: new URL('/api/sessions/?compact=1', location.href).href,
+      body: INITIAL_SESSIONS,
+    });
+  }
+  return copies;
 }
 
 // The page reports its catch-up complete (sidebar/last-state.js): no request of the open is on the link

@@ -201,7 +201,10 @@ pub fn build_task_created_event(
     timestamp,
     [
       ("request_id".to_string(), Value::String(request_id.to_string())),
-      ("task_parent_id".to_string(), task_parent_id.map_or(Value::Null, |value| Value::String(value.to_string()))),
+      (
+        crate::metadata::TASK_PARENT_ID_FIELD.to_string(),
+        task_parent_id.map_or(Value::Null, |value| Value::String(value.to_string())),
+      ),
       (TASK_SPEC_HASH_FIELD.to_string(), task_spec_hash.map_or(Value::Null, |value| Value::String(value.to_string()))),
     ],
   )

@@ -30,7 +30,7 @@ use crate::metadata::{
   HAS_RUNNING_TASKS, HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError, NATIVE_BACKEND, NEXT_TRIGGER_AT,
   PARENT_SESSION_ID, PENDING_TRIGGER_COUNT, REPO_PATH_FIELD, ROUND_RATINGS, RoundRating, SCHEDULE_ALLOW_FAILURE,
   SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_PROJECT, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD,
-  SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_TYPE_FIELD, UtcDateTime, WORK_STATE,
+  SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD, UtcDateTime, WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -1360,7 +1360,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         PARENT_SESSION_ID,
         SUCCESSOR_SESSION_ID,
         SCHEMA_VERSION_FIELD,
-        "task_parent_id",
+        TASK_PARENT_ID_FIELD,
         "profile",
         "task",
         "created_by_event",

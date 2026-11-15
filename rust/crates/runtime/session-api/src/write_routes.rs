@@ -20,8 +20,8 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_TYPE_FIELD, TaskApprover, TaskProfile,
-  TaskSpec, TaskType, WORK_STATE,
+  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
+  TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -70,7 +70,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("backend", FieldType::NullableString),
   Field::optional("session_id", FieldType::NullableString),
   Field::optional("request_id", FieldType::NullableString),
-  Field::optional("task_parent_id", FieldType::NullableString),
+  Field::optional(TASK_PARENT_ID_FIELD, FieldType::NullableString),
   Field::optional("profile", FieldType::NullableLiteral(TaskProfile::NAMES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("group", FieldType::NullableString),
@@ -81,7 +81,7 @@ const CREATE_SESSION: BodyModel = BodyModel::required(CREATE_FIELDS);
 /// `models.PatchSessionTaskRequest`.
 const PATCH_FIELDS: &[Field] = &[
   Field::optional("name", FieldType::NullableString),
-  Field::optional("task_parent_id", FieldType::NullableString),
+  Field::optional(TASK_PARENT_ID_FIELD, FieldType::NullableString),
   Field::optional("profile", FieldType::NullableLiteral(TaskProfile::NAMES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("subtree_prompt", FieldType::NullableString),

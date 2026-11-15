@@ -12,7 +12,8 @@ use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_store::control_events::TASK_SPEC_HASH_FIELD;
 use charliebot_store::layout;
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_TYPE_FIELD,
+  BASE_BRANCH_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_PARENT_ID_FIELD,
+  TASK_TYPE_FIELD,
 };
 use charliebot_store::run_records::{
   OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
@@ -155,7 +156,7 @@ fn session_meta(session_id: &str, case: &Case, index: usize) -> Value {
     (SCHEMA_VERSION_FIELD): 2,
     (HAS_UNREAD): false,
     "starred": false,
-    "task_parent_id": null,
+    (TASK_PARENT_ID_FIELD): null,
     "task": {
       "goal": format!("Recovery check: {}", case.label),
       "acceptance": if worker { json!(["The recovery check passes."]) } else { json!([]) },
@@ -253,7 +254,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
       actor,
       json!({
         "request_id": uid(&format!("{label}/request")),
-        "task_parent_id": null,
+        (TASK_PARENT_ID_FIELD): null,
         (TASK_SPEC_HASH_FIELD): null
       }),
     )];

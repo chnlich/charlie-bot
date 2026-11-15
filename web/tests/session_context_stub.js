@@ -10,10 +10,23 @@ const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModu
 const {createElement, createEscapingElement} = require('./dom_element_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
+// The page loads utils.js ahead of the chat and sidebar modules; the chat's time label is utils.js
+// formatTimeLabel, so the harnesses load it in the same place.
+const UTILS_JS = readStatic('utils.js');
 const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 // The connection layer's request-abort registry; the page loads it before every chat and
 // sidebar module, so the harnesses run it before those too.
 const VIEW_REQUESTS_JS = readStatic('view-requests.js');
+
+// The sandbox's own fixed time forms. utils.js supplies the real ones, and the suites read these fixed strings
+// from the sidebar rows and the trigger tray, so they land again after utils.js runs.
+const SANDBOX_TIME_FORMS = {
+  relativeTime: (txt) => txt,
+  clockTimeHM: () => 'HH:mm',
+  dateClockMDHM: () => 'MM/DD HH:mm',
+  relativeFireIn: () => '(in 0m)',
+  updateRelativeTimes: () => {},
+};
 
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
@@ -103,13 +116,9 @@ function baseSessionContext(overrides = {}) {
     stopThinking: () => {},
     // platform.js's desktop face: the chat status panel reads isMobile and registers its layout callback at load.
     platform: {isMobile: false, onChange() {}},
-    relativeTime: (txt) => txt,
-    // utils.js's trigger clock form; harnesses needing the real one load utils.js
-    // (pending_triggers_tray.test.js does) and its top-level functions overwrite these.
-    clockTimeHM: () => 'HH:mm',
-    dateClockMDHM: () => 'MM/DD HH:mm',
-    relativeFireIn: () => '(in 0m)',
-    updateRelativeTimes: () => {},
+    // markdown-renderer.js's registration seam, which utils.js calls at load.
+    registerChatMathLoader: () => {},
+    ...SANDBOX_TIME_FORMS,
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
     formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
     escapeHtml: (v) => v,
@@ -155,8 +164,11 @@ function baseSessionContext(overrides = {}) {
 // page-timers before the chat and sidebar modules, matching the script order
 // in web/templates/index.html. The chat and sidebar lists are that page's
 // /static/js/chat/ and /static/js/sidebar/ script tags in document order.
-function createChatSidebarContext(context) {
+function createChatSidebarContext(context, options = {}) {
   vm.createContext(context);
+  vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
+  // A suite that reads real time strings keeps utils.js's own forms; the rest read SANDBOX_TIME_FORMS.
+  if (!options.realTimeForms) Object.assign(context, SANDBOX_TIME_FORMS);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
   vm.runInContext(VIEW_REQUESTS_JS, context, {filename: 'view-requests.js'});
   runStaticModules(context, chatModules());

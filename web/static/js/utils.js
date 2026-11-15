@@ -1,12 +1,25 @@
 // ---------------------------------------------------------------------------
-// Relative time formatting
+// The reader's time label
 // ---------------------------------------------------------------------------
-function relativeTime(isoStr) {
+// One label for the instants a reader acts on: "Oct 17, 2:43 PM", and "Oct 17, 2025, 2:43 PM" when the instant
+// falls outside the current year. A home whose sessions span more than a year would otherwise print a session from
+// last October and one from this March in the same shape, and neither would name its year. The year appears only
+// where it tells two instants apart, so a home whose instants share one year reads exactly as it did.
+function formatTimeLabel(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
-  const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const dateOptions = { month: 'short', day: 'numeric' };
+  if (d.getFullYear() !== new Date().getFullYear()) dateOptions.year = 'numeric';
+  const dateStr = d.toLocaleDateString('en-US', dateOptions);
   const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
   return dateStr + ', ' + timeStr;
+}
+
+// The sidebar's rows (groups.js), its status panel and the cron list name their time through this label; the chat
+// bubbles name it through chat/shared.js's formatBubbleTime. Both are this one function, so a row and a bubble
+// state one instant alike.
+function relativeTime(isoStr) {
+  return formatTimeLabel(isoStr);
 }
 
 function updateRelativeTimes() {

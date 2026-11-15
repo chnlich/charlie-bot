@@ -30,6 +30,8 @@ const {readStatic, readPackageStatic, chatModules, runStaticModules} = require('
 function loadPageModules(context) {
   vm.createContext(context);
   vm.runInContext(readStatic('markdown-renderer.js'), context, {filename: 'markdown-renderer.js'});
+  // The page loads utils.js ahead of every chat module; the chat's time label is utils.js formatTimeLabel.
+  vm.runInContext(readStatic('utils.js'), context, {filename: 'utils.js'});
   runStaticModules(context, chatModules());
 }
 

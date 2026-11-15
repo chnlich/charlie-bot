@@ -11,7 +11,6 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
 const {createChatSidebarContext, baseSessionContext} = require('./session_context_stub');
 const {createElement} = require('./dom_element_stub');
 
@@ -71,14 +70,11 @@ function buildTrayContext({elements = new Map(), initialTriggers = null} = {}) {
   context.document.getElementById = (id) => elements.get(id) || null;
   context.document.querySelectorAll = () => [];
 
-  // The page loads utils.js before the chat/sidebar modules (index.html); the
-  // harness mirrors that so the tray's time helpers are the real ones.
-  // markdown-renderer.js lands before utils.js and supplies the math loader's
-  // registration entry; the tray never asks for math.
-  context.registerChatMathLoader = () => {};
+  // The page loads utils.js before the chat/sidebar modules (index.html);
+  // createChatSidebarContext mirrors that, and this suite keeps the real time
+  // helpers it supplies rather than the sandbox's fixed ones.
   vm.createContext(context);
-  vm.runInContext(readStatic('utils.js'), context, {filename: 'utils.js'});
-  createChatSidebarContext(context);
+  createChatSidebarContext(context, {realTimeForms: true});
   // session-view.js's wire exposes the real switchSession; the bell test's
   // stand-in replaces it after load, the same call-time seam the module reads.
   const switchedTo = [];

@@ -92,7 +92,9 @@ impl Store {
     let path = self.chat_events_path(session_id);
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
-    ndjson::append(&path, &event)?;
+    let before = file_signature(&path)?.map(|(_, signature)| signature);
+    let line_bytes = ndjson::append(&path, &event)?;
+    self.record_appended_line_count(&path, before, line_bytes)?;
     let compact = ChatEvent::from_value(&event);
     if let Some(cached) = cache.as_mut() {
       Arc::make_mut(&mut cached.events).push(Arc::new(compact.clone()));
@@ -774,6 +776,41 @@ impl Store {
     Ok(total)
   }
 
+  /// Record the count this append makes, when the count memo holds the count of the file the append grew and the
+  /// append's own line is the whole of the file's growth.
+  ///
+  /// The page's bootstrap counts a session's log lines to name its event count, and the count memo answers only
+  /// while its `(mtime_ns, size)` signature holds. Without this record every bootstrap that follows an append reads
+  /// the whole log again: on the mock home's largest session that read is the page's whole 15-30 ms. The append
+  /// writes one newline-terminated line, and it adds one physical line unless the file's last line had no newline —
+  /// the append then continues that line, and the count is unchanged. `line_bytes` is what the append wrote, so any
+  /// other growth between the two stats means another writer moved the file as well, and the memo is left alone.
+  fn record_appended_line_count(
+    &self,
+    path: &Path,
+    before: Option<FileSignature>,
+    line_bytes: usize,
+  ) -> StoreResult<()> {
+    let Some(before) = before else { return Ok(()) };
+    let Some((held_signature, held_count)) =
+      lock(&self.event_read_caches, "event read cache mutex").count.held(&path.to_path_buf())
+    else {
+      return Ok(());
+    };
+    if held_signature != before {
+      return Ok(());
+    }
+    let Some((_, after)) = file_signature(path)? else { return Ok(()) };
+    if after.size != before.size.saturating_add(line_bytes as u64) {
+      return Ok(());
+    }
+    if !ends_with_newline(path, before.size)? {
+      return Ok(());
+    }
+    lock(&self.event_read_caches, "event read cache mutex").count.record(path.to_path_buf(), after, held_count + 1);
+    Ok(())
+  }
+
   /// Discard the parsed live-log cache after a rewrite.
   pub fn clear_chat_events_cache(&self, session_id: &str) {
     let cache_entry = lock(&self.events_cache, "event cache mutex").get(session_id).cloned();
@@ -1071,6 +1108,21 @@ impl Store {
 /// Take the physical-line slots in `[start, end)`, dropping the slots that parsed to nothing.
 fn slice_live_lines(lines: &[Option<Arc<ChatEvent>>], start: usize, end: usize) -> Vec<ChatEvent> {
   lines.iter().skip(start).take(end.saturating_sub(start)).flatten().map(|event| (**event).clone()).collect()
+}
+
+/// Whether the byte before `size` in `path` ends a line, or the file holds nothing yet.
+///
+/// The count charges one for a final line without a newline, so a line appended after such a line continues it
+/// instead of starting one.
+fn ends_with_newline(path: &Path, size: u64) -> StoreResult<bool> {
+  if size == 0 {
+    return Ok(true);
+  }
+  let mut file = fs::File::open(path).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  file.seek(SeekFrom::Start(size - 1)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  let mut last = [0u8; 1];
+  file.read_exact(&mut last).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  Ok(last[0] == b'\n')
 }
 
 fn file_signature(path: &Path) -> StoreResult<Option<(fs::Metadata, FileSignature)>> {
@@ -2107,6 +2159,87 @@ mod tests {
       let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
       std::io::Write::write_all(&mut file, b"{\"i\": 5}\n").unwrap();
       assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 6);
+    }
+
+    /// A store append carries the count memo to the signature its line makes, so the next count reads no bytes.
+    #[tokio::test]
+    async fn event_count_follows_a_store_append_without_reading_the_log_again() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      let body = "{\"i\": 0}\n{\"i\": 1}\n{\"i\": 2}\n{\"i\": 3}\n{\"i\": 4}\n";
+      std::fs::write(&path, body).unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 5);
+      let counted = store.event_read_caches.lock().unwrap().count_bytes_read;
+      assert_eq!(counted, body.len(), "the first count reads the whole log");
+
+      store.append_chat_event(session_id, serde_json::json!({"type": "user", "content": "next"})).await.unwrap();
+
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 6);
+      assert_eq!(
+        store.event_read_caches.lock().unwrap().count_bytes_read,
+        counted,
+        "the append carried the memo forward, so the count did not read the log again"
+      );
+    }
+
+    /// A memo entry an outside writer moved the log past is not carried forward by a later store append.
+    #[tokio::test]
+    async fn event_count_counts_the_file_after_an_outside_append_and_a_store_append() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      std::fs::write(&path, "{\"i\": 0}\n{\"i\": 1}\n{\"i\": 2}\n{\"i\": 3}\n{\"i\": 4}\n").unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 5);
+      let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+      std::io::Write::write_all(&mut file, b"{\"i\": 5}\n{\"i\": 6}\n").unwrap();
+
+      store.append_chat_event(session_id, serde_json::json!({"type": "user", "content": "next"})).await.unwrap();
+
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 8);
+    }
+
+    /// An appended line after a final line without a newline continues that line, so the count stays put.
+    #[tokio::test]
+    async fn event_count_holds_when_an_append_continues_an_unterminated_line() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      std::fs::write(&path, "{\"i\": 0}\n{\"i\": 1}").unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 2);
+
+      store.append_chat_event(session_id, serde_json::json!({"type": "user", "content": "next"})).await.unwrap();
+
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 2, "the appended line joined the last one");
+    }
+
+    /// A writer that moves the file during the store's append leaves the count memo untended.
+    #[tokio::test]
+    async fn event_count_ignores_a_count_the_append_did_not_wholly_make() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      std::fs::write(&path, "{\"i\": 0}\n{\"i\": 1}\n{\"i\": 2}\n{\"i\": 3}\n{\"i\": 4}\n").unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 5);
+      let before = file_signature(&path).unwrap().unwrap().1;
+      let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+      std::io::Write::write_all(&mut file, b"{\"i\": 5}\n{\"i\": 6}\n").unwrap();
+
+      store.record_appended_line_count(&path, Some(before), 10).unwrap();
+
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 7);
     }
 
     #[test]

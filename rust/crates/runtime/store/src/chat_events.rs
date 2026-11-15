@@ -188,7 +188,7 @@ pub fn session_log_paths(session_dir: &Path) -> io::Result<Vec<PathBuf>> {
 
 /// One chat event appended as a line and synced to disk. The file and its directory are created when absent.
 pub fn append_event(path: &Path, event: &Value) -> StoreResult<()> {
-  ndjson::append(path, event)
+  ndjson::append(path, event).map(|_| ())
 }
 
 /// The first value that `find` maps out of an event, walking the chat-events log at `path` in file order. The read

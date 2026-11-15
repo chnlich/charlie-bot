@@ -5,13 +5,13 @@ const test = require("node:test");
 
 const template = readFileSync(path.join(__dirname, "../features/voice/templates/voice/recordings.html"), "utf8");
 
-test("recent recordings keeps all values in six merged cells", () => {
+test("recent recordings keeps all values in four merged cells", () => {
   const headers = [...template.matchAll(/<th>([^<]*)<\/th>/g)].map((match) => match[1]);
-  assert.deepEqual(headers, ["Recorded", "Peak / RMS", "Input device", "Transcript or failure", "Run", "Playback"]);
+  assert.deepEqual(headers, ["Recorded", "Transcript or failure", "Run / Input device", "Playback / Peak / RMS"]);
 
   const row = template.match(/{% for row in recordings %}\s*<tr>([\s\S]*?)<\/tr>/)?.[1];
   assert.ok(row, "recording row template exists");
-  assert.equal([...row.matchAll(/<td\b/g)].length, 6);
+  assert.equal([...row.matchAll(/<td\b/g)].length, 4);
 
   for (const value of [
     "row.recorded_at",
@@ -35,7 +35,14 @@ test("recent recordings keeps all values in six merged cells", () => {
   }
 
   assert.match(row, /data-l="Recorded"[\s\S]*?row\.session_name[\s\S]*?row\.session_id/);
-  assert.match(row, /data-l="Run"[\s\S]*?row\.backend[\s\S]*?row\.reached[\s\S]*?row\.end/);
-  assert.match(row, /data-l="Playback"[\s\S]*?row\.duration_s[\s\S]*?row\.audio_url/);
-  assert.match(template, /colspan="6"/);
+  assert.match(row, /data-l="Transcript or failure"[\s\S]*?row\.failure[\s\S]*?row\.transcript[\s\S]*?row\.startup_error/);
+  assert.match(
+    row,
+    /data-l="Run \/ Input device"[\s\S]*?row\.backend[\s\S]*?row\.reached[\s\S]*?row\.end[\s\S]*?row\.input_device/,
+  );
+  assert.match(
+    row,
+    /data-l="Playback \/ Peak \/ RMS"[\s\S]*?row\.duration_s[\s\S]*?row\.audio_url[\s\S]*?row\.digital_silence[\s\S]*?row\.peak_dbfs/,
+  );
+  assert.match(template, /colspan="4"/);
 });

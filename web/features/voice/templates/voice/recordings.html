@@ -27,9 +27,11 @@
   .startup .ok { color:#1b7f4d }
   .run .backend { display:block }
   .run .startup { display:block; margin-top:3px }
+  .run .device { display:block; margin-top:3px }
   .playback { display:flex; align-items:center; gap:6px; white-space:nowrap }
   .playback audio { width:130px; flex:none }
   .playback .duration { font-variant-numeric:tabular-nums }
+  .playback + .levels { display:block; margin-top:3px }
   audio { width:180px; height:32px; vertical-align:middle }
   /* Every cell that states a missing value is read, not decoration. On the white card, --mut2 draws
      3.70:1, under the 4.5:1 floor for this 13 px text. The body muted tone draws 5.77:1 there. */
@@ -52,7 +54,7 @@
   <table class="data">
     <thead>
       <tr>
-        <th>Recorded</th><th>Peak / RMS</th><th>Input device</th><th>Transcript or failure</th><th>Run</th><th>Playback</th>
+        <th>Recorded</th><th>Transcript or failure</th><th>Run / Input device</th><th>Playback / Peak / RMS</th>
       </tr>
     </thead>
     <tbody>
@@ -65,16 +67,6 @@
           <span class="id">{{ row.session_id }}</span>
           </span>
         </td>
-        <td data-l="Peak / RMS" class="levels">
-          {% if row.digital_silence %}<span class="fail">digital silence</span>
-          {% elif row.peak_dbfs is not none %}{{ "%.1f"|format(row.peak_dbfs) }} / {{ "%.1f"|format(row.rms_dbfs) }} dBFS
-          {% else %}<span class="none">—</span>{% endif %}
-        </td>
-        <td data-l="Input device">
-          {% if row.input_device %}{{ row.input_device }}
-          {% elif row.startup_error %}<span class="none">—</span>
-          {% else %}<span class="none">not recorded</span>{% endif %}
-        </td>
         <td data-l="Transcript or failure">
           {% if row.failure %}
             <span class="fail"><span class="stage">{{ row.failure.stage }}</span>
@@ -83,7 +75,7 @@
           {% elif row.startup_error %}<span class="fail">{{ row.startup_error }}</span>
           {% else %}<span class="none">no transcript</span>{% endif %}
         </td>
-        <td data-l="Run" class="run">
+        <td data-l="Run / Input device" class="run">
           <span class="backend">{% if row.backend %}<span class="mono">{{ row.backend }}</span>
           {% else %}<span class="none">—</span>{% endif %}</span>
           <span class="startup">
@@ -94,16 +86,26 @@
               {% if row.startup_error %}<br>{{ row.startup_error }}{% endif %}
             {% else %}<span class="none">—</span>{% endif %}
           </span>
+          <span class="device">{% if row.input_device %}{{ row.input_device }}
+          {% elif row.startup_error %}<span class="none">—</span>
+          {% else %}<span class="none">not recorded</span>{% endif %}</span>
         </td>
-        <td data-l="Playback" class="playback">
-          <span class="duration">{% if row.duration_s is not none %}{{ "%.1f"|format(row.duration_s) }} s
-          {% else %}<span class="none">no audio</span>{% endif %}</span>
-          {% if row.audio_url %}<audio controls preload="none" src="{{ row.audio_url }}"></audio>
-          {% else %}<span class="none">no player</span>{% endif %}
+        <td data-l="Playback / Peak / RMS">
+          <span class="playback">
+            <span class="duration">{% if row.duration_s is not none %}{{ "%.1f"|format(row.duration_s) }} s
+            {% else %}<span class="none">no audio</span>{% endif %}</span>
+            {% if row.audio_url %}<audio controls preload="none" src="{{ row.audio_url }}"></audio>
+            {% else %}<span class="none">no player</span>{% endif %}
+          </span>
+          <span class="levels">
+            {% if row.digital_silence %}<span class="fail">digital silence</span>
+            {% elif row.peak_dbfs is not none %}{{ "%.1f"|format(row.peak_dbfs) }} / {{ "%.1f"|format(row.rms_dbfs) }} dBFS
+            {% else %}<span class="none">—</span>{% endif %}
+          </span>
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="none">No recordings yet. Record one with the microphone button.</td></tr>
+      <tr><td colspan="4" class="none">No recordings yet. Record one with the microphone button.</td></tr>
       {% endfor %}
     </tbody>
   </table>

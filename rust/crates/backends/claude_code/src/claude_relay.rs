@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
-  API_ERROR_STATUS, ASSISTANT, MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, TOOL_RESULT, USER,
+  API_ERROR_STATUS, ASSISTANT, MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RATE_LIMIT_RESETS_AT,
+  RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_ALLOWED_WARNING, RATE_LIMIT_STATUS_REJECTED, TOOL_RESULT, USER,
 };
 use charliebot_registry::backend::{LaunchRefused, LaunchWatch as LaunchWatchTrait, MemberFailure};
 use charliebot_store::metadata::UtcDateTime;
@@ -82,12 +83,12 @@ impl LaunchWatchTrait for RelayWatch {
         };
         let moment = claude_accounts::now_or(self.now);
         let reading = claude_accounts::observe_rate_limit(&self.state, &self.label, info, Some(moment));
-        match info.get("status").and_then(Value::as_str) {
-          Some("rejected") => {
+        match info.get(RATE_LIMIT_STATUS).and_then(Value::as_str) {
+          Some(RATE_LIMIT_STATUS_REJECTED) => {
             self.reason = Some(Decision::Rejected);
             self.armed = false;
           }
-          Some("allowed_warning")
+          Some(RATE_LIMIT_STATUS_ALLOWED_WARNING)
             if reading.is_some_and(|reading| reading.utilization >= claude_accounts::WARNING_UTILIZATION)
               && reset_far_enough(info, moment) =>
           {
@@ -151,7 +152,7 @@ fn is_lost_login_event(event: &Value) -> bool {
 }
 
 fn reset_far_enough(info: &Value, now: UtcDateTime) -> bool {
-  let Some(seconds) = info.get("resetsAt").and_then(Value::as_f64) else {
+  let Some(seconds) = info.get(RATE_LIMIT_RESETS_AT).and_then(Value::as_f64) else {
     return true;
   };
   let reset = timestamp(seconds);

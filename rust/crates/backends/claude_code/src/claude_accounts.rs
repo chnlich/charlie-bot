@@ -11,6 +11,7 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, anyhow};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::backend::{MemberFailure, MemberReading, MemberWindow};
 use charliebot_registry::usage::{self, WEEKLY_WINDOW_MINUTES};
@@ -233,14 +234,14 @@ pub fn observe_rate_limit(
       }
     }
   }
-  let rejected = info.get("status").and_then(Value::as_str) == Some("rejected");
+  let rejected = info.get(RATE_LIMIT_STATUS).and_then(Value::as_str) == Some(RATE_LIMIT_STATUS_REJECTED);
   if values.is_empty() && !rejected {
     return None;
   }
   let rejected_until = if rejected {
     Some(
       info
-        .get("resetsAt")
+        .get(RATE_LIMIT_RESETS_AT)
         .and_then(Value::as_f64)
         .map_or_else(|| add_duration(moment, REJECTED_WITHOUT_RESET), unix_seconds),
     )

@@ -929,9 +929,9 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
 
   if event_type == ET::RATE_LIMIT_EVENT {
     let info = event.get(ET::RATE_LIMIT_INFO).cloned().unwrap_or(Value::Null);
-    if info.get("status").and_then(Value::as_str) == Some("rejected") {
-      let rate_type = info.get("rateLimitType").and_then(Value::as_str).unwrap_or("unknown");
-      let resets_at_epoch = info.get("resetsAt");
+    if info.get(ET::RATE_LIMIT_STATUS).and_then(Value::as_str) == Some(ET::RATE_LIMIT_STATUS_REJECTED) {
+      let rate_type = info.get(ET::RATE_LIMIT_TYPE).and_then(Value::as_str).unwrap_or("unknown");
+      let resets_at_epoch = info.get(ET::RATE_LIMIT_RESETS_AT);
       let resets_at = resets_at_of(resets_at_epoch)?;
       let epoch_text = text_repr::value_str(resets_at_epoch.unwrap_or(&Value::Null));
       tracing::warn!(

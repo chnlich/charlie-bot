@@ -140,6 +140,18 @@ pub const TASK_TRIGGERED: &str = "task_triggered";
 pub const THINKING: &str = "thinking";
 pub const RATE_LIMIT_EVENT: &str = "rate_limit_event";
 pub const RATE_LIMIT_INFO: &str = "rate_limit_info";
+/// The `rate_limit_info` field naming the account's state for the window: a rejection, a warning, or an allowed run.
+pub const RATE_LIMIT_STATUS: &str = "status";
+/// The [`RATE_LIMIT_STATUS`] value of a window whose account may not run until the window resets.
+pub const RATE_LIMIT_STATUS_REJECTED: &str = "rejected";
+/// The [`RATE_LIMIT_STATUS`] value of a window near exhaustion that still lets the run continue.
+pub const RATE_LIMIT_STATUS_ALLOWED_WARNING: &str = "allowed_warning";
+/// The `rate_limit_info` field naming the quota window the status came from, such as `five_hour`.
+pub const RATE_LIMIT_TYPE: &str = "rateLimitType";
+/// The `rate_limit_info` field naming the overage status beside the window's own.
+pub const RATE_LIMIT_OVERAGE_STATUS: &str = "overageStatus";
+/// The `rate_limit_info` field holding the epoch seconds a rejected window resets at.
+pub const RATE_LIMIT_RESETS_AT: &str = "resetsAt";
 pub const BACKEND_SWITCHED: &str = "backend_switched";
 pub const QUOTA_FAILOVER: &str = "quota_failover";
 /// The `quota_failover` field naming why the backend changed.

@@ -5,7 +5,8 @@ use std::path::Path;
 use anyhow::Context;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
 use charliebot_core::event_types::{
-  API_ERROR_STATUS, ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RESULT,
+  API_ERROR_STATUS, ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RATE_LIMIT_OVERAGE_STATUS,
+  RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED, RATE_LIMIT_TYPE, RESULT,
 };
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{DEFAULT_JSON, value_str};
@@ -171,11 +172,11 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
   let event_type = event.get("type").and_then(Value::as_str);
   if event_type == Some(RATE_LIMIT_EVENT) {
     let info = event.get(RATE_LIMIT_INFO);
-    let status = lowered_str(info.and_then(|info| info.get("status")));
-    let overage_status = lowered_str(info.and_then(|info| info.get("overageStatus")));
-    if status == "rejected" || overage_status == "rejected" {
+    let status = lowered_str(info.and_then(|info| info.get(RATE_LIMIT_STATUS)));
+    let overage_status = lowered_str(info.and_then(|info| info.get(RATE_LIMIT_OVERAGE_STATUS)));
+    if status == RATE_LIMIT_STATUS_REJECTED || overage_status == RATE_LIMIT_STATUS_REJECTED {
       let rate_type = info
-        .and_then(|info| info.get("rateLimitType"))
+        .and_then(|info| info.get(RATE_LIMIT_TYPE))
         .filter(|value| !is_falsy(value))
         .map_or_else(|| "rate limit".to_string(), value_str);
       return Ok(Some(format!("rate-limit rejection ({rate_type})")));

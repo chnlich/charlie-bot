@@ -11,7 +11,7 @@ use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::channel_service::reply_response;
 use charliebot_chat_threads::thread_entry::ThreadReplyError;
-use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN};
+use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN, REPLY_BODY};
 use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::routing::post_only;
@@ -28,11 +28,6 @@ use crate::fields::MESSAGE_ID;
 
 /// The download kinds the Open API resource endpoint takes.
 const DOWNLOAD_KINDS: &[&str] = &["image", "file"];
-
-/// The reply request's fields: the calling session's id and the reply text.
-const REPLY_FIELDS: &[Field] =
-  &[Field::required(SESSION_ID, FieldType::String), Field::required("text", FieldType::String)];
-const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 
 /// The read request's fields: the calling session, window size, and optional read mode parameters.
 const READ_FIELDS: &[Field] = &[

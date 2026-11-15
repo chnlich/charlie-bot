@@ -752,19 +752,21 @@ const ID_FIELD: &str = "id";
 /// The key under which the page declares which rows its listing covers.
 const FIRST_SCREEN_KEY: &str = "$screen";
 
-/// The roots the sidebar shows per group before the reader asks for the rest.
+/// The roots each group's first screen may carry: the most a sidebar of any window paints.
 ///
-/// The sidebar that renders these rows holds the same limit as `GROUP_SESSION_PREVIEW_LIMIT` in
-/// `web/static/js/sidebar/groups.js`. The server picks the rows the page carries, so both sides hold the number: the
-/// sidebar hides the roots past it, and the page carries no others. A drift costs a row of preview, never a row.
-const SIDEBAR_PREVIEW_LIMIT: usize = 5;
+/// The sidebar fills its own height with rows, so the number it paints follows the window:
+/// `web/static/js/sidebar/groups.js` measures its list and takes the roots that fit, up to
+/// `GROUP_SESSION_PREVIEW_MAX`. The page carries this many roots per group, with their descendants, so a tall
+/// window has rows to paint without another request. A drift leaves spare rows in the page, or paints the rows
+/// the page carries, never a broken row.
+const SIDEBAR_SCREEN_CAPACITY: usize = 20;
 
-/// The rows the chat page's sidebar paints before the reader expands a group, and the rows each group holds.
+/// The rows the chat page's sidebar paints on its first screen, and the rows each group holds.
 ///
-/// The sidebar groups its rows by the session's `group` and paints the first [`SIDEBAR_PREVIEW_LIMIT`] roots of
-/// each group with their descendants. A root with a bound schedule task always shows, and the open session's root
-/// and subtree always show. Every other row is hidden behind the group's "Show all" toggle, so the page does not
-/// carry it: the reader's expansion fetches the full listing.
+/// The sidebar groups its rows by the session's `group` and paints the roots of each group with their descendants
+/// that fit its list, up to [`SIDEBAR_SCREEN_CAPACITY`]. A root with a bound schedule task always shows, and the
+/// open session's root and subtree always show. Every other row is hidden behind the group's "Show all" toggle, so
+/// the page does not carry it: the reader's expansion fetches the full listing.
 ///
 /// A row's group is its root's `group`, so a group's count is the sum of its roots' subtree sizes.
 pub(crate) struct PageFirstScreen {
@@ -795,7 +797,7 @@ impl PageFirstScreen {
       let mut rank = 0;
       for &root in roots {
         let root = root as usize;
-        let in_preview = !shape.has_task[root] && rank < SIDEBAR_PREVIEW_LIMIT;
+        let in_preview = !shape.has_task[root] && rank < SIDEBAR_SCREEN_CAPACITY;
         if !shape.has_task[root] {
           rank += 1;
         }
@@ -1618,11 +1620,12 @@ mod tests {
     screen.kept.iter().map(|&index| page.rows[index].id.as_str()).collect()
   }
 
-  /// The page carries the five roots each group paints with their descendants, and each group's whole row count.
+  /// The page carries the roots a group's first screen may draw with their descendants, and each group's whole row
+  /// count.
   #[test]
   fn the_page_carries_the_roots_each_group_paints_and_each_groups_count() {
     let mut rows: Vec<SessionMetadata> =
-      (1..=6).map(|n| synthetic_session(&format!("grouped-{n}"), Some("g1"), None)).collect();
+      (1..=25).map(|n| synthetic_session(&format!("grouped-{n}"), Some("g1"), None)).collect();
     rows.push(synthetic_session("grouped-1-child", Some("g1"), Some("grouped-1")));
     rows.push(synthetic_session("keyless-1", None, None));
     let page = synthetic_page(rows, HashMap::new());
@@ -1630,11 +1633,11 @@ mod tests {
     let screen_memo = Mutex::new(None);
     let screen = PageFirstScreen::of(&page, None, &screen_memo);
 
-    assert_eq!(
-      kept_ids(&screen, &page),
-      vec!["grouped-1", "grouped-2", "grouped-3", "grouped-4", "grouped-5", "grouped-1-child", "keyless-1"]
-    );
-    assert_eq!(screen.counts.get("g1"), Some(&7));
+    let mut expected: Vec<String> = (1..=20).map(|n| format!("grouped-{n}")).collect();
+    expected.push("grouped-1-child".to_string());
+    expected.push("keyless-1".to_string());
+    assert_eq!(kept_ids(&screen, &page), expected);
+    assert_eq!(screen.counts.get("g1"), Some(&26));
     assert_eq!(screen.counts.get(""), Some(&1));
     assert!(screen.partial);
   }
@@ -1643,29 +1646,30 @@ mod tests {
   #[test]
   fn a_scheduled_root_and_the_open_sessions_tree_stay_past_the_preview() {
     let mut rows: Vec<SessionMetadata> =
-      (1..=8).map(|n| synthetic_session(&format!("plain-{n}"), None, None)).collect();
-    rows.push(synthetic_session("plain-8-child", None, Some("plain-8")));
+      (1..=25).map(|n| synthetic_session(&format!("plain-{n}"), None, None)).collect();
+    rows.push(synthetic_session("plain-24-child", None, Some("plain-24")));
     let mut scheduled = Map::new();
     scheduled.insert(SCHEDULE_TASK.to_string(), json!("nightly"));
-    let sequence_fields = HashMap::from([("plain-7".to_string(), scheduled)]);
+    let sequence_fields = HashMap::from([("plain-23".to_string(), scheduled)]);
     let page = synthetic_page(rows, sequence_fields);
 
     let screen_memo = Mutex::new(None);
-    let screen = PageFirstScreen::of(&page, Some("plain-8"), &screen_memo);
+    let screen = PageFirstScreen::of(&page, Some("plain-24"), &screen_memo);
 
-    assert_eq!(
-      kept_ids(&screen, &page),
-      vec!["plain-1", "plain-2", "plain-3", "plain-4", "plain-5", "plain-7", "plain-8", "plain-8-child"]
-    );
-    assert_eq!(screen.counts.get(""), Some(&9));
+    let mut expected: Vec<String> = (1..=20).map(|n| format!("plain-{n}")).collect();
+    expected.push("plain-23".to_string());
+    expected.push("plain-24".to_string());
+    expected.push("plain-24-child".to_string());
+    assert_eq!(kept_ids(&screen, &page), expected);
+    assert_eq!(screen.counts.get(""), Some(&26));
     assert!(screen.partial);
     // The shape the first render built follows the corpus, so another open session picks another root from it.
-    let other = PageFirstScreen::of(&page, Some("plain-6"), &screen_memo);
-    assert_eq!(
-      kept_ids(&other, &page),
-      vec!["plain-1", "plain-2", "plain-3", "plain-4", "plain-5", "plain-6", "plain-7"]
-    );
-    assert_eq!(other.counts.get(""), Some(&9));
+    let other = PageFirstScreen::of(&page, Some("plain-25"), &screen_memo);
+    let mut other_expected: Vec<String> = (1..=20).map(|n| format!("plain-{n}")).collect();
+    other_expected.push("plain-23".to_string());
+    other_expected.push("plain-25".to_string());
+    assert_eq!(kept_ids(&other, &page), other_expected);
+    assert_eq!(other.counts.get(""), Some(&26));
   }
 
   /// A sidebar with nothing hidden carries every row, and its text says the listing is complete.

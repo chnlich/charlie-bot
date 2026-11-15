@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Sidebar task-tree nesting (groups.js): a child task node renders under its
 // parent row, collapsed by default behind an in-memory expand state. The
-// five-row preview cap counts root rows only, and the registered limit
+// preview limit counts root rows only, and the registered limit
 // exemptions (cron.js's bound roots) show outside it. A worker leaf carries the
 // leaf icon and the archive action alone. The Scheduled tab nests the same way:
 // its cron rows group by project at root level with the worker leaves
@@ -273,7 +273,7 @@ test('the count title names a single direct manager child or multiple children',
   assert.match(rowHtml(nav.innerHTML, 'r1'), /title="2 active child sessions"/);
 });
 
-test('the five-row preview counts root rows only and hides a capped root with its subtree', () => {
+test('the preview counts root rows only and hides a capped root with its subtree', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
   const rows = [];
   for (let i = 1; i <= 6; i++) rows.push(manager(`work-${i}`, null, 20 - i));

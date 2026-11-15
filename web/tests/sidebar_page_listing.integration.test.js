@@ -77,6 +77,44 @@ test('the page paints the rows it carries and Show all fetches the rest', async 
   assert.match(after, />Show less</, 'the group stays expanded after the full listing paints');
 });
 
+test('the preview paints the rows the list height holds and hides the rest behind Show all', () => {
+  const rows = Array.from({length: 20}, (_, index) => makeSessionMeta(`row-${index + 1}`));
+  const initial = {$screen: {partial: true, counts: {'': 20}}, ...sessionColumns(rows)};
+  const {context, nav} = buildContext({initial, full: sessionColumns(rows)});
+  // The sidebar's list measures 600 px: ten 52 px rows once the group's header and the Show all line take theirs.
+  nav.clientHeight = 600;
+
+  context.restoreSidebarFromUrl();
+
+  const html = nav.innerHTML;
+  const toggleAt = html.indexOf('session-group-limit-toggle');
+  assert.ok(toggleAt > 0, 'the rows past the preview hide behind Show all');
+  assert.deepEqual(rowIds(html.slice(0, toggleAt)), rows.slice(0, 10).map((row) => row.id));
+  assert.match(html.slice(toggleAt), /session-group-limit-extra/, 'the rows past the preview stay hidden');
+  assert.equal(html.split('session-group-limit-toggle').length - 1, 1, 'one Show all control stands before its rows');
+});
+
+test('two groups share the list height instead of each taking a screen of it', () => {
+  const first = Array.from({length: 10}, (_, index) => makeSessionMeta(`g1-${index + 1}`, {group: 'g1'}));
+  const second = Array.from({length: 10}, (_, index) => makeSessionMeta(`g2-${index + 1}`, {group: 'g2'}));
+  const rows = first.concat(second);
+  const initial = {$screen: {partial: true, counts: {g1: 10, g2: 10}}, ...sessionColumns(rows)};
+  const {context, nav} = buildContext({initial, full: sessionColumns(rows)});
+  // 600 px holds nine rows across both groups, four each under the five-row floor, so five each.
+  nav.clientHeight = 600;
+
+  context.restoreSidebarFromUrl();
+
+  const html = nav.innerHTML;
+  const firstToggle = html.indexOf('session-group-limit-toggle');
+  assert.ok(firstToggle > 0, 'each group hides the rows past the preview');
+  assert.ok(html.indexOf('id="session-g1-6"') > firstToggle, 'the first group keeps five rows before its toggle');
+  const secondToggle = html.indexOf('session-group-limit-toggle', firstToggle + 1);
+  assert.ok(secondToggle > 0, 'the second group carries its own toggle');
+  const secondGroupRows = html.slice(html.indexOf('id="session-g2-1"'), secondToggle);
+  assert.equal(rowIds(secondGroupRows).length, 5, 'the second group takes the same limit');
+});
+
 test('a listing the page carries whole paints every row and no toggle', () => {
   const rows = previewRows();
   const {context, nav} = buildContext({initial: sessionColumns(rows), full: sessionColumns(rows)});

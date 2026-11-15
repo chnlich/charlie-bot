@@ -206,6 +206,11 @@ pub const STARTUP_SEGMENT_EVENT: &str = "startup_segment";
 /// The log event a request handler writes when its error escapes: the internal-error response, the websocket gate's
 /// refusal and the SSE relay's failed step all log it.
 pub const REQUEST_EXCEPTION_EVENT: &str = "Exception in ASGI application";
+/// The log event of a compaction notice from a run's transcript: the store's compaction handler and the task worker
+/// both log it.
+pub const CC_CONTEXT_COMPACTED_EVENT: &str = "cc_context_compacted";
+/// The log event of a failed compaction notice: the store's compaction handler and the task worker both log it.
+pub const CC_CONTEXT_COMPACT_FAILED_EVENT: &str = "cc_context_compact_failed";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

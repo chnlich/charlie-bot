@@ -73,6 +73,10 @@ pub fn without_comments(markup: &str) -> String {
 /// A comment closes where the browser's tokenizer closes it: `<!-->` closes an empty one, `<!--->` one holding a dash,
 /// and every other comment at its first `-->` or `--!>`. Following only `-->` would read the text between an abrupt
 /// close and the next `-->` as comment, and delete visible markup.
+///
+/// The `--!>` search stops where the `-->` search found its close, because a close beyond it loses the comparison
+/// anyway. A comment then costs the text up to its close, not the rest of the document: an abrupt close is rare
+/// enough that an unbounded search for it reads every remaining byte of a page that inlines its scripts.
 fn comment_end(markup: &str, start: usize) -> Option<usize> {
   let rest = &markup[start + 4..];
   if rest.starts_with('>') {
@@ -81,14 +85,14 @@ fn comment_end(markup: &str, start: usize) -> Option<usize> {
   if rest.starts_with("->") {
     return Some(start + 6);
   }
-  let mut end = None;
-  for (marker, len) in [("-->", 3), ("--!>", 4)] {
-    if let Some(at) = rest.find(marker) {
-      let candidate = start + 4 + at + len;
-      end = Some(end.map_or(candidate, |found: usize| found.min(candidate)));
-    }
+  let close = rest.find("-->");
+  let bounded = close.map_or(rest, |at| &rest[..at]);
+  let abrupt = bounded.find("--!>").map(|at| start + 4 + at + 4);
+  match (close.map(|at| start + 4 + at + 3), abrupt) {
+    (Some(found), Some(abrupt)) => Some(found.min(abrupt)),
+    (Some(found), None) => Some(found),
+    (None, abrupt) => abrupt,
   }
-  end
 }
 
 /// The byte index after the tag that starts at `start`, past its closing `>`. A `>` inside a quoted attribute value
@@ -415,6 +419,12 @@ mod tests {
     assert_eq!(without_comments("<!--><p>keep</p><!-- gone -->"), "<p>keep</p>");
     assert_eq!(without_comments("<!----><p>keep</p><!-- gone -->"), "<p>keep</p>");
     assert_eq!(without_comments("<p>a</p><!-- x --!><p>b</p>"), "<p>a</p><p>b</p>");
+  }
+
+  #[test]
+  fn the_earlier_of_the_two_closes_ends_the_comment() {
+    assert_eq!(without_comments("<p>a</p><!-- x --!> b --><p>c</p>"), "<p>a</p> b --><p>c</p>");
+    assert_eq!(without_comments("<p>a</p><!-- x --> b --!><p>c</p>"), "<p>a</p> b --!><p>c</p>");
   }
 
   #[test]

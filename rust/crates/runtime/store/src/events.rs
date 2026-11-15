@@ -773,44 +773,38 @@ impl Store {
   }
 
   /// Count physical lines through the 64-entry `(mtime_ns, size)` count memo.
+  ///
+  /// A page's first open of a session counts the session's whole log, and the mock home's largest log is 144 MB: the
+  /// read is 30 ms of the open, single-threaded. A log over [`PARALLEL_COUNT_MIN_BYTES`] is counted in contiguous
+  /// ranges at once, one range per core up to [`MAX_COUNT_CORES`], because the count is one sum of newline bytes and
+  /// a range boundary never changes it.
   fn count_chat_event_lines(&self, path: &Path, signature: FileSignature) -> StoreResult<usize> {
     if let Some(count) =
       lock(&self.event_read_caches, "event read cache mutex").count.fresh(&path.to_path_buf(), signature)
     {
       return Ok(count);
     }
-    let mut file = match fs::File::open(path) {
+    let file = match fs::File::open(path) {
       Ok(file) => file,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
       Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
     };
-    let mut chunk = vec![0; 1024 * 1024];
-    let mut total = 0usize;
-    #[cfg(test)]
-    let mut bytes_read = 0usize;
-    let mut last_byte = None;
-    loop {
-      let read = file.read(&mut chunk).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-      if read == 0 {
-        break;
-      }
-      #[cfg(test)]
-      {
-        bytes_read += read;
-      }
-      let bytes = &chunk[..read];
-      total += memchr_iter(b'\n', bytes).count();
-      last_byte = bytes.last().copied();
-    }
-    if last_byte.is_some_and(|byte| byte != b'\n') {
-      total += 1;
-    }
+    let ranges = if signature.size >= PARALLEL_COUNT_MIN_BYTES {
+      let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+      let filled = usize::try_from(signature.size / PARALLEL_COUNT_RANGE_BYTES).unwrap_or(usize::MAX);
+      cores.min(MAX_COUNT_CORES).min(filled).max(1)
+    } else {
+      1
+    };
+    let (total, bytes_read) = count_lines_in_ranges(&file, signature.size, ranges, path)?;
     {
       let mut caches = lock(&self.event_read_caches, "event read cache mutex");
       #[cfg(test)]
       {
         caches.count_bytes_read += bytes_read;
       }
+      #[cfg(not(test))]
+      let _ = bytes_read;
       caches.count.record(path.to_path_buf(), signature, total);
     }
     Ok(total)
@@ -1163,6 +1157,117 @@ fn ends_with_newline(path: &Path, size: u64) -> StoreResult<bool> {
   let mut last = [0u8; 1];
   file.read_exact(&mut last).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   Ok(last[0] == b'\n')
+}
+
+/// The smallest log whose line count is split across the host's cores. A smaller log counts faster than the cores it
+/// would start.
+const PARALLEL_COUNT_MIN_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The fewest bytes one core's range holds, so a log just over the split's size does not start cores it cannot fill.
+const PARALLEL_COUNT_RANGE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The most cores one count uses: past this many the count is bound by memory bandwidth, not by the cores.
+const MAX_COUNT_CORES: usize = 8;
+
+/// The bytes one core counts at a time.
+const COUNT_CHUNK_BYTES: usize = 256 * 1024;
+
+/// The physical line count of the `len`-byte `file`, split across `ranges` contiguous ranges, and the bytes read.
+///
+/// The sum of newline bytes over the ranges is the file's count, because a range boundary never moves a newline. The
+/// file's last byte decides whether an unterminated final line adds one.
+fn count_lines_in_ranges(file: &fs::File, len: u64, ranges: usize, path: &Path) -> StoreResult<(usize, usize)> {
+  if ranges < 2 || len == 0 {
+    return count_lines_in_one_read(file, len, path);
+  }
+  let per = len.div_ceil(u64::try_from(ranges).expect("the range count fits u64"));
+  let counts = std::thread::scope(|scope| {
+    let handles = (0..ranges)
+      .map(|index| {
+        let start = u64::try_from(index).expect("the range index fits u64") * per;
+        let end = (start + per).min(len);
+        scope.spawn(move || count_newlines_in_range(file, start, end))
+      })
+      .collect::<Vec<_>>();
+    handles
+      .into_iter()
+      .map(|handle| handle.join().expect("a count range does not panic"))
+      .collect::<Vec<std::io::Result<(usize, usize)>>>()
+  });
+  let mut total = 0usize;
+  let mut bytes_read = 0usize;
+  for count in counts {
+    let (count, read) = count.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    total += count;
+    bytes_read += read;
+  }
+  if last_byte_of(file, len, path)?.is_some_and(|byte| byte != b'\n') {
+    total += 1;
+  }
+  Ok((total, bytes_read))
+}
+
+/// The newlines in the `start..end` byte range of `file`, and the bytes read.
+fn count_newlines_in_range(file: &fs::File, start: u64, end: u64) -> std::io::Result<(usize, usize)> {
+  use std::os::unix::fs::FileExt;
+
+  let mut chunk = vec![0u8; COUNT_CHUNK_BYTES];
+  let mut position = start;
+  let mut total = 0usize;
+  while position < end {
+    let want =
+      usize::try_from((end - position).min(u64::try_from(COUNT_CHUNK_BYTES).expect("a chunk length fits u64")))
+        .expect("a chunk length fits usize");
+    let read = file.read_at(&mut chunk[..want], position)?;
+    if read == 0 {
+      break;
+    }
+    total += memchr_iter(b'\n', &chunk[..read]).count();
+    position += u64::try_from(read).expect("a read length fits u64");
+  }
+  Ok((total, usize::try_from(position - start).expect("the read range fits usize")))
+}
+
+/// The line count of the whole `len`-byte `file` read into one buffer, and the bytes read.
+fn count_lines_in_one_read(file: &fs::File, len: u64, path: &Path) -> StoreResult<(usize, usize)> {
+  use std::os::unix::fs::FileExt;
+
+  let mut chunk = vec![0u8; 1024 * 1024];
+  let mut total = 0usize;
+  let mut bytes_read = 0usize;
+  let mut last_byte = None;
+  while u64::try_from(bytes_read).expect("a read length fits u64") < len {
+    let remaining = len - u64::try_from(bytes_read).expect("a read length fits u64");
+    let want = usize::try_from(remaining.min(COUNT_CHUNK_BYTES as u64)).expect("a chunk length fits usize");
+    let offset = u64::try_from(bytes_read).expect("a read length fits u64");
+    let read = file
+      .read_at(&mut chunk[..want], offset)
+      .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    if read == 0 {
+      break;
+    }
+    let bytes = &chunk[..read];
+    total += memchr_iter(b'\n', bytes).count();
+    last_byte = bytes.last().copied();
+    bytes_read += read;
+  }
+  if last_byte.is_some_and(|byte| byte != b'\n') {
+    total += 1;
+  }
+  Ok((total, bytes_read))
+}
+
+/// The file's last byte, or `None` when the file is empty.
+fn last_byte_of(file: &fs::File, len: u64, path: &Path) -> StoreResult<Option<u8>> {
+  use std::os::unix::fs::FileExt;
+
+  if len == 0 {
+    return Ok(None);
+  }
+  let mut byte = [0u8; 1];
+  let read =
+    file.read_at(&mut byte, len - 1).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  Ok((read == 1).then_some(byte[0]))
 }
 
 fn file_signature(path: &Path) -> StoreResult<Option<(fs::Metadata, FileSignature)>> {
@@ -2524,6 +2629,31 @@ mod tests {
       std::io::Write::write_all(&mut file, b"{\"i\": 10000}\n").unwrap();
       assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 10_001);
       assert!(store.event_read_caches.lock().unwrap().count_bytes_read > bytes);
+    }
+
+    /// A count split across ranges is the count the whole file gives, for lines that cross every range boundary and
+    /// for a final line without a newline.
+    #[test]
+    fn a_line_count_split_across_ranges_matches_the_whole_file() {
+      let home = tempfile::tempdir().unwrap();
+      let path = home.path().join("events.jsonl");
+      let body: String = (0..10_000).map(|line| format!("{{\"i\": {line}}}\n")).collect();
+      std::fs::write(&path, &body).unwrap();
+      let file = std::fs::File::open(&path).unwrap();
+      let len = u64::try_from(body.len()).unwrap();
+      let whole = count_lines_in_ranges(&file, len, 1, &path).unwrap();
+      assert_eq!(whole, (10_000, body.len()));
+      for ranges in [2, 3, 7, MAX_COUNT_CORES] {
+        assert_eq!(count_lines_in_ranges(&file, len, ranges, &path).unwrap(), whole);
+      }
+
+      let unterminated = format!("{body}{{\"i\": 10000}}");
+      std::fs::write(&path, &unterminated).unwrap();
+      let file = std::fs::File::open(&path).unwrap();
+      let len = u64::try_from(unterminated.len()).unwrap();
+      let expected = (10_001, unterminated.len());
+      assert_eq!(count_lines_in_ranges(&file, len, 1, &path).unwrap(), expected);
+      assert_eq!(count_lines_in_ranges(&file, len, 4, &path).unwrap(), expected);
     }
   }
 }

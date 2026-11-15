@@ -203,6 +203,9 @@ pub const SERVER_READY_EVENT: &str = "server_ready";
 /// One startup segment's log event: the startup clock logs one per segment, and the recovery check's digest drops it
 /// as a timing-only line.
 pub const STARTUP_SEGMENT_EVENT: &str = "startup_segment";
+/// The log event a request handler writes when its error escapes: the internal-error response, the websocket gate's
+/// refusal and the SSE relay's failed step all log it.
+pub const REQUEST_EXCEPTION_EVENT: &str = "Exception in ASGI application";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

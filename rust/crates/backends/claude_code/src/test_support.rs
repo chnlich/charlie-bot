@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::home::CLAUDE_CONFIG_DIR_NAME;
 use charliebot_registry::backend::Env;
 use charliebot_registry::{Registry, RegistryError};
 
@@ -18,7 +19,8 @@ use crate::usage_quota::QuotaHttp;
 use crate::{ClaudeHost, PACKAGE, register_with_host, usage_quota};
 
 pub fn synthetic_host() -> ClaudeHost {
-  ClaudeHost { home: PathBuf::from("/synthetic/home"), claude_config_dir: PathBuf::from("/synthetic/home/.claude") }
+  let home = PathBuf::from("/synthetic/home");
+  ClaudeHost { claude_config_dir: home.join(CLAUDE_CONFIG_DIR_NAME), home }
 }
 
 /// A cached HTTP client for quota tests that do not send requests through its production endpoints.

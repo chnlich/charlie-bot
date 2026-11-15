@@ -906,6 +906,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "backends/charlie_code",
     hint: "Use the `TASK_FILE_NAME` of `backends/charlie_code/src/charlie_code_cli.rs`.",
   },
+  OwnerRow { name: ".claude", owner: "infra/core", hint: "Use `charliebot_core::home::CLAUDE_CONFIG_DIR_NAME`." },
   OwnerRow {
     name: "PreToolUse",
     owner: "backends/claude_code",

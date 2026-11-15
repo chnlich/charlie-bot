@@ -1,21 +1,13 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use bytes::Bytes;
-use charliebot_core::memo::BoundedMemo;
 use serde_json::Value;
 
 use crate::aggregator::MessageAggregator;
 use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::hooks::EventRenderer;
-use crate::lock::lock;
 use crate::message_events;
 use crate::{StoreError, StoreResult};
-
-const PAGE_BODY_CACHE_LIMIT: usize = 4;
-
-/// A page body cache: the serialized body of each of the last `PAGE_BODY_CACHE_LIMIT` pages.
-type PageBodyCache = BoundedMemo<(usize, usize), Bytes>;
 
 /// Memoized, turn-aligned message history for one live session.
 pub struct MessageProjection {
@@ -29,8 +21,6 @@ pub struct MessageProjection {
   pending_draft: Option<Value>,
   history: Vec<Arc<Value>>,
   event_count: usize,
-  page_bodies: Mutex<PageBodyCache>,
-  page_body_gzips: Mutex<PageBodyCache>,
 }
 
 impl MessageProjection {
@@ -51,8 +41,6 @@ impl MessageProjection {
       pending_draft: None,
       history: Vec::new(),
       event_count: event_index_offset,
-      page_bodies: Mutex::new(PageBodyCache::new(PAGE_BODY_CACHE_LIMIT)),
-      page_body_gzips: Mutex::new(PageBodyCache::new(PAGE_BODY_CACHE_LIMIT)),
     };
     projection.ingest(events)?;
     Ok(projection)
@@ -71,8 +59,6 @@ impl MessageProjection {
       pending_draft: None,
       history: Vec::new(),
       event_count: self.event_count,
-      page_bodies: Mutex::new(PageBodyCache::new(PAGE_BODY_CACHE_LIMIT)),
-      page_body_gzips: Mutex::new(PageBodyCache::new(PAGE_BODY_CACHE_LIMIT)),
     };
     copied.ingest(events)?;
     Ok(copied)
@@ -96,27 +82,6 @@ impl MessageProjection {
   /// Return the event count in the global event-index space.
   pub fn event_count(&self) -> usize {
     self.event_count
-  }
-
-  /// Return the cached serialized body for one page. The body is shared: a request hands the cached bytes to its
-  /// response by refcount, so a page of any size costs no copy per request.
-  pub fn cached_page_body(&self, before: usize, limit: usize) -> Option<Bytes> {
-    lock(&self.page_bodies, "page body cache mutex").get(&(before, limit))
-  }
-
-  /// Cache the serialized body for one page.
-  pub fn store_page_body(&self, before: usize, limit: usize, body: Bytes) {
-    lock(&self.page_bodies, "page body cache mutex").store((before, limit), body);
-  }
-
-  /// Return the cached gzip body for one page.
-  pub fn cached_page_body_gzip(&self, before: usize, limit: usize) -> Option<Bytes> {
-    lock(&self.page_body_gzips, "gzip page body cache mutex").get(&(before, limit))
-  }
-
-  /// Cache the gzip body for one page.
-  pub fn store_page_body_gzip(&self, before: usize, limit: usize, body: Bytes) {
-    lock(&self.page_body_gzips, "gzip page body cache mutex").store((before, limit), body);
   }
 
   /// Return event indexes of separator messages in committed-history ordinal space.
@@ -494,23 +459,5 @@ mod tests {
         events_to_messages(&compact_events(&events), 0, HashMap::new()).unwrap()
       );
     }
-  }
-
-  #[test]
-  fn page_body_caches_are_lru_capped_and_reset_on_advance() {
-    let projection = MessageProjection::new(&[], 0, HashMap::new()).unwrap();
-    for before in 0..4 {
-      projection.store_page_body(before, 10, Bytes::from(vec![before as u8]));
-      projection.store_page_body_gzip(before, 10, Bytes::from(vec![before as u8 + 10]));
-    }
-    assert_eq!(projection.cached_page_body(0, 10), Some(Bytes::from_static(&[0])));
-    projection.store_page_body(4, 10, Bytes::from_static(&[4]));
-    assert_eq!(projection.cached_page_body(0, 10), Some(Bytes::from_static(&[0])));
-    assert_eq!(projection.cached_page_body(1, 10), None);
-    assert_eq!(projection.cached_page_body_gzip(1, 10), Some(Bytes::from_static(&[11])));
-
-    let advanced = projection.advanced(&[]).unwrap();
-    assert_eq!(advanced.cached_page_body(0, 10), None);
-    assert_eq!(advanced.cached_page_body_gzip(1, 10), None);
   }
 }

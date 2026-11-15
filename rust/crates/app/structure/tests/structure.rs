@@ -1110,6 +1110,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::SUCCESSOR_SESSION_ID`.",
   },
   OwnerRow {
+    name: "task_parent_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::TASK_PARENT_ID_FIELD`.",
+  },
+  OwnerRow {
     name: "has_pending_trigger",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::HAS_PENDING_TRIGGER`.",

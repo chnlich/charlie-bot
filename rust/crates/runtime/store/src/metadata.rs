@@ -88,6 +88,9 @@ pub const PARENT_SESSION_ID: &str = "parent_session_id";
 /// The session-metadata field holding the id of the session that took over this one's work. The Discord, Feishu and
 /// Slack packages place their metadata fields after it, so it is spelled once, here.
 pub const SUCCESSOR_SESSION_ID: &str = "successor_session_id";
+/// The session-metadata field holding the id of the session that delegated this task. The create and patch requests
+/// and the reparent control event carry the same name, so it is spelled once, here.
+pub const TASK_PARENT_ID_FIELD: &str = "task_parent_id";
 /// The task-spec field saying whether the run keeps its worktree after it ends. The delegate request and the stored
 /// thread record carry the same name, so it is spelled once, here.
 pub const KEEP_WORKTREE_FIELD: &str = "keep_worktree";
@@ -670,7 +673,7 @@ impl SessionMetadata {
     push(&mut declared, PARENT_SESSION_ID, &self.parent_session_id);
     push(&mut declared, SUCCESSOR_SESSION_ID, &self.successor_session_id);
     push(&mut declared, SCHEMA_VERSION_FIELD, &self.schema_version);
-    push(&mut declared, "task_parent_id", &self.task_parent_id);
+    push(&mut declared, TASK_PARENT_ID_FIELD, &self.task_parent_id);
     push(&mut declared, "profile", &self.profile);
     push(&mut declared, "task", &self.task);
     push(&mut declared, "created_by_event", &self.created_by_event);

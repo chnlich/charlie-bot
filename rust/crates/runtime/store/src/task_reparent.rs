@@ -131,7 +131,7 @@ pub(crate) fn reparented_event(
     None,
     [
       ("previous_parent_id".to_string(), json!(previous_parent_id)),
-      ("task_parent_id".to_string(), json!(task_parent_id)),
+      (crate::metadata::TASK_PARENT_ID_FIELD.to_string(), json!(task_parent_id)),
       (CALLER_SESSION_ID_FIELD.to_string(), json!(caller_session_id)),
       ("carried_subtree_prompt".to_string(), carried_subtree_prompt),
     ],

@@ -52,7 +52,7 @@ pub fn find_local_task_child(
   };
   let metadata_matches = metadata.get("id").and_then(Value::as_str) == Some(child_id.as_str())
     && metadata.get("name").and_then(Value::as_str).is_some()
-    && metadata.get("task_parent_id").and_then(Value::as_str) == Some(session_id)
+    && metadata.get(crate::metadata::TASK_PARENT_ID_FIELD).and_then(Value::as_str) == Some(session_id)
     && metadata.get("profile").and_then(Value::as_str) == Some("worker")
     && goal_matches
     && recorded_task_type == task_type;

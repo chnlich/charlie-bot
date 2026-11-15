@@ -28,7 +28,9 @@ use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
-use charliebot_store::metadata::{ARCHIVE_OFFSET, TaskProfile, UtcDateTime, read_session_metadata};
+use charliebot_store::metadata::{
+  ARCHIVE_OFFSET, TASK_PARENT_ID_FIELD, TaskProfile, UtcDateTime, read_session_metadata,
+};
 use charliebot_store::{CALLER_SESSION_ID_FIELD, control_events, layout};
 use charliebot_tasks::completion::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, pending_archive_answer};
 use charliebot_tasks::routes as task_routes;
@@ -307,7 +309,7 @@ fn create(args: &CreateArgs) -> Result<(), CliExit> {
       let text = files::read_required_text_file("--task-file", task_file)?;
       payload.insert("task".to_string(), parse_json("--task-file", &text)?);
     }
-    payload.insert("task_parent_id".to_string(), json!(parent));
+    payload.insert(TASK_PARENT_ID_FIELD.to_string(), json!(parent));
     payload.insert("profile".to_string(), json!(profile));
     payload
       .insert("request_id".to_string(), json!(args.request_id.clone().unwrap_or_else(control_events::new_request_id)));
@@ -485,7 +487,7 @@ fn reparent(args: &ReparentArgs) -> Result<(), CliExit> {
     move || Ok(find_local_task_reparent(&home, &task_id, &parent_id, caller_session_id.as_deref(), sent_at));
   let result = client::patch(
     &route::fill(session_routes::SESSION_PATH, &[args.session_id.as_str()]),
-    json!({ "task_parent_id": args.parent }),
+    json!({ (TASK_PARENT_ID_FIELD): args.parent }),
     Some(Box::new(readback)),
     &[],
   )?;
@@ -613,12 +615,14 @@ fn find_local_task_reparent(
       .and_then(|timestamp| UtcDateTime::parse(timestamp).ok())
       .is_some_and(|timestamp| timestamp >= sent_at);
     if object.get("type").and_then(Value::as_str) == Some(event_types::TASK_REPARENTED)
-      && object.get("task_parent_id").and_then(Value::as_str) == Some(parent_id)
+      && object.get(TASK_PARENT_ID_FIELD).and_then(Value::as_str) == Some(parent_id)
       && object.get(CALLER_SESSION_ID_FIELD).and_then(Value::as_str) == caller_session_id
       && written_after_send
     {
       let event_id = object.get("id").cloned().unwrap_or(Value::Null);
-      return Some(json!({ "session_id": task_id, "task_parent_id": parent_id, "reparented_event_id": event_id }));
+      return Some(
+        json!({ "session_id": task_id, (TASK_PARENT_ID_FIELD): parent_id, "reparented_event_id": event_id }),
+      );
     }
   }
   None

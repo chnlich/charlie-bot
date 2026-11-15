@@ -503,7 +503,7 @@ fn child_workers(args: &[String]) -> Result<i32, String> {
     }
     let metadata =
       metadata::read_metadata_value(&metadata_path).map_err(|error| format!("{}: {error}", metadata_path.display()))?;
-    if metadata.get("task_parent_id").and_then(Value::as_str) != Some(parent_id) {
+    if metadata.get(metadata::TASK_PARENT_ID_FIELD).and_then(Value::as_str) != Some(parent_id) {
       continue;
     }
     if metadata.get("profile").and_then(Value::as_str) != Some("worker") {

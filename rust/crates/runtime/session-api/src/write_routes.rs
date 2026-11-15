@@ -20,8 +20,8 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
-  TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
+  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_STATE,
+  TASK_TYPE_FIELD, TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -465,7 +465,7 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
 fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Response> {
   let mut detail = store.session_metadata_value(meta);
   let object = detail.as_object_mut().expect("session metadata serializes to an object");
-  object.insert("task_state".to_string(), json!("open"));
+  object.insert(TASK_STATE.to_string(), json!("open"));
   if object.get(WORK_STATE).is_none_or(Value::is_null) {
     object.insert(WORK_STATE.to_string(), json!("idle"));
   }

@@ -31,6 +31,7 @@ use serde_json::{Map, Value, json};
 use crate::compact::CompactValue;
 use crate::control_events::sha256_bytes_hex;
 use crate::event_types::{ChatEvent, FileIdentity, SharedChatEvent};
+use crate::metadata::TASK_STATE;
 use crate::run_facts::RunFacts;
 use crate::task_tree_state::{
   EventIdIndex, LineDecoder, LivePromptChanges, NodeFacts, PrefixIndex, TaskFacts, event_id_hash,
@@ -372,7 +373,7 @@ fn task_facts_value(facts: &TaskFacts) -> Value {
     facts.delivered_reports.iter().map(|(child, event)| vec![child.clone(), event.clone()]).collect();
   delivered_reports.sort();
   json!({
-    "task_state": facts.task_state,
+    TASK_STATE: facts.task_state,
     "has_user_request": facts.has_user_request,
     "run_outcomes": run_outcomes,
     "run_outcome_string_none_ids": sorted(&facts.run_outcome_string_none_ids),
@@ -420,7 +421,7 @@ fn task_facts_from_value(value: &Value) -> Option<TaskCheckpointFacts> {
     })
     .collect::<Option<std::collections::HashSet<_>>>()?;
   let facts = TaskFacts {
-    task_state: field("task_state")?.as_str()?.to_string(),
+    task_state: field(TASK_STATE)?.as_str()?.to_string(),
     has_user_request: field("has_user_request")?.as_bool()?,
     run_outcomes,
     run_outcome_string_none_ids: strings_of(field("run_outcome_string_none_ids")?)?.into_iter().collect(),

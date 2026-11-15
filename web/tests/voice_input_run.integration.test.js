@@ -488,6 +488,61 @@ function parseWavHeader(buffer) {
   };
 }
 
+// The capture worklet's resampler runs as its own script inside the module.
+// These tests run that script for real, in a context that stands in for the
+// worklet thread's globals.
+function captureProcessor() {
+  const {context} = buildHarness();
+  const source = vm.runInContext('VOICE_WORKLET_SOURCE', context);
+  let Processor = null;
+  const workletContext = vm.createContext({
+    AudioWorkletProcessor: class {
+      constructor() {
+        this.port = {onmessage: null, postMessage: () => {}};
+      }
+    },
+    registerProcessor: (name, processor) => { Processor = processor; },
+  });
+  vm.runInContext(source, workletContext, {filename: 'voice-capture-worklet.js'});
+  assert.ok(Processor, 'the worklet registers its capture processor');
+  const messages = [];
+  const processor = new Processor({processorOptions: {inputSampleRate: 48000, chunkSamples: 2048}});
+  processor.port.postMessage = (data) => messages.push(data);
+  return {
+    messages,
+    process(channel) { processor.process([[channel]]); },
+    flush() { processor.port.onmessage({data: {type: 'flush', id: 1}}); },
+  };
+}
+
+test('the capture worklet keeps the true 16 kHz rate across input quanta', () => {
+  const worklet = captureProcessor();
+  // One second of 48 kHz input as 375 whole 128-sample quanta.
+  const quantum = new Float32Array(128);
+  for (let index = 0; index < 375; index++) {
+    quantum.fill(index % 2 === 0 ? 0.25 : -0.25);
+    worklet.process(quantum);
+  }
+  worklet.flush();
+  const produced = worklet.messages
+    .filter((message) => message.type === 'pcm')
+    .reduce((total, message) => total + new Int16Array(message.buffer).length, 0);
+  assert.equal(produced, 16000);
+});
+
+test('the capture worklet never stretches a longer stream', () => {
+  const worklet = captureProcessor();
+  const quantum = new Float32Array(128);
+  quantum.fill(0.25);
+  // Ten whole seconds: 3,750 quanta. A per-quantum rounding error compounds.
+  for (let index = 0; index < 3750; index++) worklet.process(quantum);
+  worklet.flush();
+  const produced = worklet.messages
+    .filter((message) => message.type === 'pcm')
+    .reduce((total, message) => total + new Int16Array(message.buffer).length, 0);
+  assert.equal(produced, 160000);
+});
+
 test('arming claims the slot, lights the starting state, and paints the zeroed indicator', async () => {
   const {context, state} = buildHarness();
 

@@ -141,7 +141,11 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
       this.sourcePosition += this.ratio;
     }
 
-    const consumed = Math.floor(this.sourcePosition);
+    // The read position can step past the buffer's end by less than one input
+    // sample; that carry belongs to the next buffer's first sample. Capping the
+    // consumed count at the buffer length keeps it, so the output count stays
+    // the input duration at 16 kHz.
+    const consumed = Math.min(Math.floor(this.sourcePosition), merged.length);
     this.sourceRemainder = merged.slice(consumed);
     this.sourcePosition -= consumed;
   }

@@ -237,7 +237,10 @@ pub(crate) fn encode_line(value: &Value) -> String {
 }
 
 /// Append one JSON line with non-ASCII kept as is, and sync its data to disk.
-pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<()> {
+///
+/// Returns the number of bytes the append wrote, so a caller that keeps a count of the file's lines can check that
+/// its own line is the whole of the file's growth.
+pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<usize> {
   let parent = path.parent().expect("an event-log path has a parent directory");
   fs::create_dir_all(parent).map_err(|error| StoreError::new(format!("{}: {error}", parent.display())))?;
   let mut file = OpenOptions::new()
@@ -248,7 +251,7 @@ pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<()> {
   let line = encode_line(value);
   file.write_all(line.as_bytes()).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   file.sync_data().map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-  Ok(())
+  Ok(line.len())
 }
 
 /// Return the number of physical lines, charging one for a non-newline-terminated final line.

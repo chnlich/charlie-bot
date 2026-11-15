@@ -703,6 +703,7 @@ dependencies = [
  "nix",
  "procfs",
  "regex",
+ "rustls",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -751,7 +752,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "charliebot-agents",
- "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",

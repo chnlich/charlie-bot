@@ -218,7 +218,8 @@ impl UsageFold {
     }
   }
 
-  /// The usage value this fold resolves, through the tier its reading kind selects; `None` before any event arrived.
+  /// The usage value this fold resolves, through the tier its reading kind selects. It is `None` before any event
+  /// arrived.
   fn resolve(
     &self,
     registry: &Registry,
@@ -351,7 +352,7 @@ impl SessionUsage {
     self.resolve_with_facts(session_id, meta, backend_option).map(|(usage, _)| usage)
   }
 
-  /// The event-only tiers for an already-loaded transcript; no backend resolver and no cross-call memo.
+  /// The event-only tiers for an already-loaded transcript. They consult no backend resolver and no cross-call memo.
   pub fn resolve_events_usage<E: EventFields>(
     &self,
     session_id: &str,
@@ -391,7 +392,7 @@ impl SessionUsage {
         .resolve(session_id, meta, events.as_slice())
         .map_err(|error| StoreError::new(format!("usage resolver failed: {error:#}")))?
       {
-        // The resolver reads the context; the session cost is the fold's, whatever the backend.
+        // The resolver reads the context. The session cost is the fold's, whatever the backend.
         fold.attach_cost(&mut usage);
         return Ok((Some(Value::Object(usage)), fold));
       }
@@ -493,7 +494,7 @@ fn initialize(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Resul
 }
 
 /// The session events folded through the source tiers, without a registered backend usage resolver. The owner folds
-/// through [`SessionUsage::resolve_events_usage`]; the tests fold through this shorthand.
+/// through [`SessionUsage::resolve_events_usage`]. The tests fold through this shorthand.
 #[cfg(test)]
 pub fn fold_usage<E: EventFields>(
   events: &[&E],
@@ -850,7 +851,8 @@ mod tests {
 
   #[test]
   fn total_cost_rounds_the_exact_binary_value() {
-    // Rounding to four places gives 0.1235 for 0.12345 and 2.6789 for 2.67895; scaling by 10_000 gets the first wrong.
+    // Rounding to four places gives 0.1235 for 0.12345 and 2.6789 for 2.67895.
+    // Scaling by 10_000 gets the first wrong.
     for (cost, expected) in [(0.12345, 0.1235), (2.67895, 2.6789)] {
       let events = vec![json!({"type": "result", "total_cost_usd": cost})];
       assert_eq!(
@@ -883,7 +885,7 @@ mod tests {
       native_result("native-a", 1.5),
       native_result("native-b", 2.5),
     ];
-    // native-a adds 1.0 and 0.5; native-b adds 2.0 and 0.5.
+    // native-a adds 1.0 and 0.5. native-b adds 2.0 and 0.5.
     assert_eq!(total_cost_of(&events), 4.0);
   }
 
@@ -1149,7 +1151,7 @@ mod tests {
     let mut meta = SessionMetadata::new("synthetic-codex-session", "Synthetic Codex", TaskProfile::Manager);
     meta.backend = "codex-retired-option".to_string();
     meta.cc_session_id = Some(thread_id.to_string());
-    // The thread's running total is the session cost; the resolver supplies the context only.
+    // The thread's running total is the session cost. The resolver supplies the context only.
     write_events(&store, &meta.id, &[native_result(thread_id, 0.42)]);
 
     let first = usage_owner.resolve_session_usage(&meta.id, &meta, None).unwrap().unwrap();

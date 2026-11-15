@@ -3,7 +3,6 @@
 use charliebot_registry::thread_origin;
 use charliebot_store::metadata::SessionMetadata;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::fields::{CHAT_ID, ROOT_ID, TENANT_KEY, THREAD_ID};
 
@@ -29,21 +28,9 @@ pub fn feishu_origin(meta: &SessionMetadata) -> anyhow::Result<Option<FeishuOrig
   thread_origin::read_origin(meta, FEISHU_ORIGIN, "a Feishu origin")
 }
 
-/// The `feishu_origin` slot validator: it checks the value in place. The value is null, or an object whose
-/// `tenant_key`, `chat_id` and `root_id` are strings and whose `thread_id` is a string or absent. Other keys are
-/// dropped.
-///
-/// `valid_origin` in core requires every listed field, which cannot express the optional `thread_id`.
-pub fn valid_origin(value: &mut Value) -> bool {
-  if value.is_null() {
-    return true;
-  }
-  let Some(object) = value.as_object_mut() else { return false };
-  let required = [TENANT_KEY, CHAT_ID, ROOT_ID];
-  let valid = required.iter().all(|name| object.get(*name).is_some_and(Value::is_string))
-    && object.get(THREAD_ID).is_none_or(|thread_id| thread_id.is_null() || thread_id.is_string());
-  if valid {
-    object.retain(|name, _| required.contains(&name.as_str()) || name == THREAD_ID);
-  }
-  valid
-}
+/// The `feishu_origin` slot's required fields: `tenant_key`, `chat_id` and `root_id`.
+pub const ORIGIN_REQUIRED_FIELDS: [&str; 3] = [TENANT_KEY, CHAT_ID, ROOT_ID];
+
+/// The `feishu_origin` slot's optional field: `thread_id`, which is absent until the bot's first reply creates the
+/// thread.
+pub const ORIGIN_OPTIONAL_FIELDS: [&str; 1] = [THREAD_ID];

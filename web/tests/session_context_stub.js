@@ -15,6 +15,13 @@ const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 // sidebar module, so the harnesses run it before those too.
 const VIEW_REQUESTS_JS = readStatic('view-requests.js');
 
+// The right-hand panels' offline mark, as config.js builds it.
+const OFFLINE_PANEL_MARK_HTML = '<span class="inline-flex text-amber-400" title="Offline, loads after reconnect" role="img" ' +
+        'aria-label="Offline, loads after reconnect"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M7 18h10a4 4 0 0 0 .9-7.9A6 6 0 0 0 6.3 9.2 4.5 4.5 0 0 0 7 18z"/>' +
+        '<line x1="3" y1="3" x2="21" y2="21"/></svg></span>';
+
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
   const localStorageData = new Map(Object.entries(overrides.localStorageItems || {}));
@@ -138,6 +145,11 @@ function baseSessionContext(overrides = {}) {
     // config.js before the chat/sidebar modules createChatSidebarContext fans
     // out to.
     JSON_HEADERS: {'Content-Type': 'application/json'},
+    // config.js's freshness labels (sidebar/last-state.js and the panels paint them).
+    NOT_CURRENT_LABEL: 'Not current',
+    NO_LOCAL_COPY_LABEL: 'No local copy',
+    OFFLINE_PANEL_LABEL: 'Offline, loads after reconnect',
+    OFFLINE_PANEL_MARK: OFFLINE_PANEL_MARK_HTML,
     crypto: {randomUUID: () => 'archive-request-id'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
     saveDraftNow: () => {},
@@ -304,6 +316,7 @@ function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweak
     ['header-session-name', createElement({id: 'header-session-name'})],
     ['backend-badge', createElement()],
     ['msg-input', createElement()],
+    ['freshness-mark', createElement({id: 'freshness-mark'})],
     ...rows.map((row) => [row.id, row]),
   ]);
   const h = {messages, elements, ...fields};
@@ -417,6 +430,7 @@ function buildUsageElements() {
 }
 
 module.exports = {
+  OFFLINE_PANEL_MARK: OFFLINE_PANEL_MARK_HTML,
   baseSessionContext,
   buildSidebarIndicatorContext,
   paintListReply,

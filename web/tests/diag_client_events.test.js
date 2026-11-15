@@ -37,7 +37,7 @@ const TAILWIND_ENTRY = {name: TAILWIND_URL, startTime: 320, requestStart: 310, r
 // A harness whose document keeps one listener list per event type, whose fetch
 // records every client-event POST, and whose page-timers registry runs the real
 // page-timers.js so the traffic flush is the timer callback the page runs.
-function buildClientEventsHarness() {
+function buildClientEventsHarness(overrides = {}) {
   const posts = [];            // every client-event POST body
   const postOptions = [];      // every client-event POST's fetch options
   const listeners = new Map();
@@ -90,6 +90,8 @@ function buildClientEventsHarness() {
     SESSION_ID: 'sess-1',
     SESSION_BOOTSTRAP: {messages: [{id: 7}, {id: 8}]},
     OpenedSessions: {openCase: () => 'B'},
+    openContentSource: () => 'network',
+    offlineShellPresent: () => false,
     CSS: {escape: (value) => value},
     performance: {
       now: () => clock - navigationStart,
@@ -122,6 +124,7 @@ function buildClientEventsHarness() {
     clearInterval: () => {},
   };
   context.globalThis = context;
+  Object.assign(context, overrides);
   context.window = {
     addEventListener: (type, listener) => {
       if (!listeners.has(type)) listeners.set(type, []);
@@ -519,9 +522,12 @@ test('a page load reports the newest message, the catch-up, the open case and th
   h.notifyMutations();
   h.advance(1000);
   h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 10});
-  // The catch-up posts its own socket record at once; the page load waits for the load event.
+  // The catch-up posts its own socket record at once; the page is current once the page-current event
+  // lands, and the page load waits for the load event.
   assert.equal(h.posts.length, 1);
   assert.equal(h.posts[0].kind, 'socket');
+  h.dispatch('charliebot:page-current', {sessionId: 'session-a'});
+  assert.equal(h.posts.length, 1, 'the report waits for the load event');
 
   h.dispatch('load');
   assert.equal(h.posts.length, 2);
@@ -541,6 +547,26 @@ test('a page load reports the newest message, the catch-up, the open case and th
     {url: PAGE_URL, request_start_ms: 0, response_start_ms: 300, response_end_ms: 1300, encoded_body_size: 12500},
     {url: TAILWIND_URL, request_start_ms: 310, response_start_ms: 320, response_end_ms: 330, encoded_body_size: 3900},
   ]);
+});
+
+test('the shell page reports the newest message its first screen renders', () => {
+  // The shell embeds no first screen (SESSION_BOOTSTRAP is null): the open path paints one and announces its newest
+  // message, and the report names the time that message reached the DOM.
+  const h = buildClientEventsHarness({SESSION_BOOTSTRAP: null});
+  h.setNavigation({name: PAGE_URL, responseEnd: 1300, domContentLoadedEventEnd: 1400, transferSize: 12600,
+    requestStart: 0, responseStart: 300, encodedBodySize: 12500});
+  h.advance(400);
+  h.dispatch('charliebot:session-rendered', {sessionId: 'sess-1', messages: [{id: 'm-8'}, {id: 'm-9'}]});
+  h.advance(120);
+  h.renderMessage('[data-message-id="m-9"]');
+  h.notifyMutations();
+  h.advance(280);
+  h.dispatch('charliebot:page-current', {sessionId: 'sess-1'});
+  h.dispatch('load');
+
+  const post = h.posts.find((entry) => entry.kind === 'page_load');
+  assert.equal(post.newest_message_ms, 520, 'the newest message\'s first appearance, from navigation start');
+  assert.equal(post.current_ms, 800);
 });
 
 test('a page load whose catch-up never comes reports it as null once the wait passes', () => {
@@ -564,6 +590,8 @@ function openCaseOf(storage, sessionId) {
       setItem: (key, value) => storage.set(key, String(value)),
     },
     SESSION_ID: sessionId,
+    location: {search: ''},
+    URLSearchParams,
     console: {warn: () => {}},
   };
   vm.createContext(context);
@@ -602,6 +630,7 @@ function buildTransportHarness() {
     wsUrlWithToken: (path) => path,
     setTimeout: (fn, ms) => { timers.push({fn, ms}); return timers.length; },
     clearTimeout: () => {},
+    reloadAfterRefreshingShell: () => {},
     document: {
       getElementById: () => null,
       dispatchEvent: (event) => {

@@ -22,7 +22,10 @@ window.fetch = function(url, opts = {}) {
     opts.headers = { ...(opts.headers || {}), 'Authorization': authorization };
   }
   return _origFetch.call(window, url, opts).then(res => {
-    if (res.status === 401) { showAuthOverlay(); }
+    if (res.status === 401) {
+      showAuthOverlay();
+      window.dispatchEvent(new CustomEvent('charliebot:unauthorized'));
+    }
     return res;
   });
 };
@@ -42,6 +45,17 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 // painting alike. index.html loads this file before every consumer; the static
 // #usage-bar markup renders before any script, so its copy stays local there.
 const PROGRESS_BAR_FILL_CLASS = 'h-full rounded-full transition-all duration-300';
+// The page's freshness labels: the not-current mark, the switch placeholder without a copy, and the right-hand
+// panels while the page is offline (sidebar/last-state.js and the panels that paint them).
+const NOT_CURRENT_LABEL = 'Not current';
+const NO_LOCAL_COPY_LABEL = 'No local copy';
+const OFFLINE_PANEL_LABEL = 'Offline, loads after reconnect';
+// The right-hand panels' offline mark: a crossed cloud, named by the label on hover and to assistive tech.
+const OFFLINE_PANEL_MARK = '<span class="inline-flex text-amber-400" title="' + OFFLINE_PANEL_LABEL + '" role="img" ' +
+    'aria-label="' + OFFLINE_PANEL_LABEL + '"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M7 18h10a4 4 0 0 0 .9-7.9A6 6 0 0 0 6.3 9.2 4.5 4.5 0 0 0 7 18z"/>' +
+    '<line x1="3" y1="3" x2="21" y2="21"/></svg></span>';
 
 // WebSocket endpoints take the access key as a 'token' query param: the
 // browser WebSocket API exposes no header channel for the fetch wrapper's

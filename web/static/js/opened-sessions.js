@@ -9,15 +9,17 @@ const OpenedSessions = (function() {
 
   // `openCase` is null when the browser refuses localStorage: the page then reports no case, and the
   // console names the failure.
+  // The session the page opens: the embedded one, or the one the shell's URL names.
+  const sessionId = SESSION_ID !== null ? SESSION_ID : new URLSearchParams(location.search).get('session') || null;
   let openCase = null;
   try {
     const now = Date.now();
     const record = JSON.parse(localStorage.getItem(RECORD_KEY) || 'null');
-    if (SESSION_ID === null) openCase = null;
+    if (sessionId === null) openCase = null;
     else if (record === null) openCase = 'C';
-    else openCase = Object.hasOwn(record.sessions, SESSION_ID) ? 'A' : 'B';
+    else openCase = Object.hasOwn(record.sessions, sessionId) ? 'A' : 'B';
     const next = record === null ? {first_open_ms: now, sessions: {}} : record;
-    if (SESSION_ID !== null) next.sessions[SESSION_ID] = now;
+    if (sessionId !== null) next.sessions[sessionId] = now;
     localStorage.setItem(RECORD_KEY, JSON.stringify(next));
   } catch (error) {
     console.warn('opened-sessions: the open case is not recorded', error);

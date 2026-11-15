@@ -29,8 +29,10 @@ pub const ACCESS_KEY_COOKIE: &str = "charliebot_access_key";
 
 pub const AUTH_STATUS_PATH: &str = "/api/auth/status";
 
-const PUBLIC_PATHS: &[&str] = &["/", AUTH_STATUS_PATH];
+const PUBLIC_PATHS: &[&str] = &["/", AUTH_STATUS_PATH, OFFLINE_SHELL_WORKER_PATH];
 const PUBLIC_PREFIXES: &[&str] = &[STATIC_URL_PREFIX];
+/// The offline shell's worker script, served before the key is presented: the browser fetches it on its own.
+pub const OFFLINE_SHELL_WORKER_PATH: &str = "/offline-shell-worker.js";
 
 /// The self-contained page an unauthenticated browser navigation receives (`login_page.html`).
 const LOGIN_PAGE: &str = include_str!("login_page.html");
@@ -194,6 +196,7 @@ mod tests {
     let cases: Vec<Case> = vec![
       ("/", vec![], Pass),
       ("/api/auth/status", vec![], Pass),
+      ("/offline-shell-worker.js", vec![], Pass),
       ("/static/js/app.js", vec![], Pass),
       ("/static", vec![], JsonUnauthorized),
       ("/api/internal/version", vec![], JsonUnauthorized),

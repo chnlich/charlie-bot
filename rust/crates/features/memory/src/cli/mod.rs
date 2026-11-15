@@ -49,7 +49,7 @@ enum MemoryCommand {
 
 #[derive(Args)]
 struct QueryArgs {
-  /// Topic to match (repeatable); must exist in the vocabulary.
+  /// Topic to match (repeatable). It must exist in the vocabulary.
   #[arg(long, required = true, action = clap::ArgAction::Append)]
   topic: Vec<String>,
   /// Only entries whose audience contains this value.
@@ -68,7 +68,7 @@ struct QueryArgs {
 
 #[derive(Args)]
 struct AddArgs {
-  /// Read the capture body from a file; stdin is used by default.
+  /// Read the capture body from a file. Stdin is used by default.
   #[arg(long)]
   file: Option<PathBuf>,
 }

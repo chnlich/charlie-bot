@@ -132,7 +132,7 @@ fn system_time_seconds(time: SystemTime) -> f64 {
   }
 }
 
-/// An ISO timestamp with an offset parses as RFC 3339; a value without an offset reads as
+/// An ISO timestamp with an offset parses as RFC 3339. A value without an offset reads as
 /// local time.
 fn parse_timestamp(text: &str) -> Option<f64> {
   if let Ok(moment) = DateTime::parse_from_rfc3339(text) {

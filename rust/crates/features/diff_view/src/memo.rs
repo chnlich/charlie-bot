@@ -20,7 +20,7 @@ impl<K: Eq + Hash, V: Clone> LockedMemo<K, V> {
     self.entries.lock().expect("the memo lock is never poisoned").get(key)
   }
 
-  /// Stores `value` under `key` as the most recent entry, then evicts past the limit.
+  /// The newest entry, `value` under `key`. Entries past the limit are evicted.
   pub(crate) fn store(&self, key: K, value: V) {
     self.entries.lock().expect("the memo lock is never poisoned").store(key, value);
   }

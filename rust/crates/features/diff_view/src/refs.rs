@@ -80,14 +80,14 @@ fn git_dirs(repo: &Path) -> io::Result<(PathBuf, PathBuf)> {
   Ok((git_dir, common_dir))
 }
 
-/// Records `path` with its stamp when it exists; `stat` follows symbolic links.
+/// The signature entry for `path` when it exists. `stat` follows symbolic links.
 fn stat_or_skip(path: &Path, sig: &mut Signature) {
   if let Ok(metadata) = std::fs::metadata(path) {
     sig.push((paths::display(path), stamp(&metadata)));
   }
 }
 
-/// Records `root` and every directory under it. Git publishes each ref by renaming a lockfile into
+/// The signature entries for `root` and every directory under it. Git publishes each ref by renaming a lockfile into
 /// its directory, which moves that directory's own stamp, so the directories carry every ref change.
 fn walk_refs_dirs(root: &Path, sig: &mut Signature) {
   for entry in WalkDir::new(root) {

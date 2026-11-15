@@ -25,8 +25,8 @@ struct RawOutput {
   stderr: String,
 }
 
-/// Runs `git <args>` in `repo` and collects its streams. Only a timeout, a spawn failure or undecodable stderr is
-/// this function's error; a nonzero exit lands in `RawOutput.ok`.
+/// The `git <args>` run in `repo`, with its exit status and streams collected. Only a timeout, a spawn failure or
+/// undecodable stderr is this function's error; a nonzero exit lands in `RawOutput.ok`.
 async fn run_raw(repo: &Path, args: &[&str], timeout: Duration) -> Result<RawOutput, Response> {
   let mut command = tokio::process::Command::new("git");
   command

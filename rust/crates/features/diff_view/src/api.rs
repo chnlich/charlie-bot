@@ -206,7 +206,7 @@ async fn diff_lines(State(state): State<Arc<GitState>>, Query(query): Query<Para
   }
 }
 
-/// Reads the four parameters every diff route shares, in declaration order.
+/// The four parameters every diff route shares, read in declaration order.
 fn take_range(query: &Params, errors: &mut Vec<validation::FieldError>) -> Option<Range> {
   let repo = take(params::text(query, "repo"), errors);
   let base = take(params::text(query, "base"), errors);
@@ -411,7 +411,7 @@ fn io_error(error: io::Error) -> Response {
   responses::internal_error("OSError", error.to_string())
 }
 
-/// Runs blocking file work off the event loop, for the listing and the scan.
+/// The off-loop execution of blocking file work, for the listing and the scan.
 async fn blocking<T, F>(work: F) -> Result<T, Response>
 where
   F: FnOnce() -> Result<T, Response> + Send + 'static,

@@ -12,6 +12,19 @@
    monospace CJK ASCII diagrams keep their column grid (wrapped by
    wrapWideChars in markdown-renderer.js). Glyph stays left in its box. */
 .wc2ch { display: inline-block; white-space: pre; width: 2ch; }
+/* A fenced block's code element is the block's scroller: hljs's own `overflow-x: auto` keeps a line
+   wider than the bubble inside it. On a phone the code box is 264 px at 390 px, and a 54-character
+   command line is 408 px there, so the block shows its first 35 characters and cuts the rest at its
+   edge — no ellipsis, no scrollbar and no other sign that the line continues. The chat's tool output
+   already wraps at every width (`whitespace-pre-wrap break-words` in rendering.js); a phone wraps a
+   fenced block the same way, at its spaces, and a token no space separates still breaks, as an
+   inline code span's does. `word-break: normal` keeps the spaces as the break points the inherited
+   break-all would ignore. Above 768 px the block keeps the scroll: there it holds the whole line,
+   and its scrollbar shows. No row, strip or label is added; the block grows the lines the text
+   needs. */
+@media (max-width: 768px) {
+  .prose-msg pre code { white-space: pre-wrap; word-break: normal; overflow-wrap: break-word; }
+}
 /* Code block with header bar */
 .prose-msg .code-block { margin: 0.5rem 0; border-radius: 0.5rem; overflow: hidden; border: 1px solid #30363d; }
 .prose-msg .code-block pre { background: #0d1117; padding: 0.75rem; border-radius: 0; overflow-x: auto; margin: 0; }

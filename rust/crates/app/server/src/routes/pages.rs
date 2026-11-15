@@ -11,7 +11,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts
 use axum::response::Response;
 use bytes::Bytes;
 use charliebot_cli_common::route;
-use charliebot_compat::compression::{gzip_memoized_body, zstd_memoized_body};
+use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
@@ -92,6 +92,8 @@ static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(
 #[derive(Default)]
 struct PageBodyMemo {
   entries: Vec<PageBodyEntry>,
+  /// The compressed forms of each page's static tail, one entry per page, kept while the tail's bytes hold.
+  tails: Vec<PageTailEntry>,
 }
 
 struct PageBodyEntry {
@@ -100,8 +102,15 @@ struct PageBodyEntry {
   sidebar_text: Option<Arc<String>>,
   bootstrap_text: Option<Arc<String>>,
   body: Bytes,
+  /// The bytes this body ends with in common with the page's last body: the tail a page keeps compressed once.
+  tail: Bytes,
   gzip: Option<Bytes>,
   zstd: Option<Bytes>,
+}
+
+struct PageTailEntry {
+  name: &'static str,
+  tail: PageTail,
 }
 
 /// The encoding a page body travels in: the smallest form of the body the request names as acceptable.
@@ -146,24 +155,83 @@ struct PageCompressed {
   bytes: Bytes,
 }
 
-// One form of the body, built once per body version and kept for every repeat request.
-impl PageBodyEntry {
-  fn encoded(&mut self, encoding: PageEncoding, body: &Bytes) -> Bytes {
-    let slot = match encoding {
-      PageEncoding::Gzip => &mut self.gzip,
-      PageEncoding::Zstd => &mut self.zstd,
-      PageEncoding::Identity => unreachable!("an identity page body travels whole"),
-    };
-    slot
-      .get_or_insert_with(|| {
-        Bytes::from(match encoding {
-          PageEncoding::Gzip => gzip_memoized_body(body),
-          PageEncoding::Zstd => zstd_memoized_body(body),
-          PageEncoding::Identity => unreachable!("an identity page body travels whole"),
-        })
-      })
-      .clone()
+/// The shortest tail worth keeping compressed: a smaller one saves less deflate than the memo costs to compare.
+const PAGE_TAIL_MINIMUM: usize = 16 * 1024;
+
+/// The tail `body` shares with the page's last body: the bytes it ends with that the last body ended with too.
+///
+/// A page places every value that changes with the request before its scripts and its trailing markup, so the bytes
+/// after the last of them are the same in every body the page serves. The shared suffix is the longest such run this
+/// body and the last one have, and any run shorter than [`PAGE_TAIL_MINIMUM`] is no tail at all. The memo's kept tail
+/// answers first, because a request that repeats a page's round takes it without a scan.
+fn page_tail(name: &'static str, body: &Bytes, previous: Option<&Bytes>, tails: &[PageTailEntry]) -> Bytes {
+  if let Some(entry) = tails.iter().find(|entry| entry.name == name)
+    && body.ends_with(entry.tail.bytes())
+  {
+    return body.slice(body.len() - entry.tail.len()..);
   }
+  let Some(previous) = previous else { return Bytes::new() };
+  let len = common_suffix_len(previous, body);
+  if len < PAGE_TAIL_MINIMUM { Bytes::new() } else { body.slice(body.len() - len..) }
+}
+
+/// The length of the longest suffix `new` shares with `last`, at most the shorter body's length.
+fn common_suffix_len(last: &[u8], new: &[u8]) -> usize {
+  let max = last.len().min(new.len());
+  let (mut low, mut high) = (0, max);
+  while low < high {
+    let middle = low + (high - low).div_ceil(2);
+    if new[new.len() - middle..] == last[last.len() - middle..] {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  low
+}
+
+/// The compressed form of `body`, whose kept tail is `tail`.
+///
+/// A body without a tail — every page but the chat page, and the first body of each version — deflates whole. A body
+/// with one deflates the head a request built and appends the tail's form from the memo, which the first body with
+/// those tail bytes built.
+fn compressed_page(
+  name: &'static str,
+  body: &Bytes,
+  tail: &Bytes,
+  encoding: PageEncoding,
+  tails: &mut Vec<PageTailEntry>,
+) -> Bytes {
+  if tail.is_empty() {
+    return Bytes::from(match encoding {
+      PageEncoding::Gzip => gzip_memoized_body(body),
+      PageEncoding::Zstd => zstd_memoized_body(body),
+      PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+    });
+  }
+  let head = &body[..body.len() - tail.len()];
+  let held = tails.iter().position(|entry| entry.name == name && entry.tail.holds(tail));
+  let index = match held {
+    Some(index) => index,
+    None => {
+      let entry = PageTailEntry { name, tail: PageTail::new(tail) };
+      match tails.iter().position(|entry| entry.name == name) {
+        Some(index) => {
+          tails[index] = entry;
+          index
+        }
+        None => {
+          tails.push(entry);
+          tails.len() - 1
+        }
+      }
+    }
+  };
+  Bytes::from(match encoding {
+    PageEncoding::Gzip => tails[index].tail.gzip(head),
+    PageEncoding::Zstd => tails[index].tail.zstd(head),
+    PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+  })
 }
 
 /// Whether an optional substituted text still holds its value: both absent, or the same `Arc`.
@@ -197,12 +265,16 @@ impl PageBodyMemo {
       None => {
         let html = templating::substitute_placeholders(name, template_html.as_str().to_string(), substitutions)
           .map_err(|error| failure(error.kind(), error))?;
+        let body = Bytes::from(html);
+        let previous = self.entries.iter().find(|entry| entry.name == name).map(|entry| &entry.body);
+        let tail = page_tail(name, &body, previous, &self.tails);
         let entry = PageBodyEntry {
           name,
           template_html: Arc::clone(template_html),
           sidebar_text: sidebar_text.cloned(),
           bootstrap_text: bootstrap_text.cloned(),
-          body: Bytes::from(html),
+          body,
+          tail,
           gzip: None,
           zstd: None,
         };
@@ -218,10 +290,18 @@ impl PageBodyMemo {
         }
       }
     };
-    let entry = self.entries.get_mut(index).expect("the page body entry matched or was built");
+    let PageBodyMemo { entries, tails } = self;
+    let entry = entries.get_mut(index).expect("the page body entry matched or was built");
     let body = entry.body.clone();
+    let tail = entry.tail.clone();
     let compressed = if encoding != PageEncoding::Identity && body.len() >= gzip::MINIMUM_SIZE {
-      Some(PageCompressed { encoding: encoding.content_encoding(), bytes: entry.encoded(encoding, &body) })
+      let slot = match encoding {
+        PageEncoding::Gzip => &mut entry.gzip,
+        PageEncoding::Zstd => &mut entry.zstd,
+        PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+      };
+      let bytes = slot.get_or_insert_with(|| compressed_page(name, &body, &tail, encoding, tails)).clone();
+      Some(PageCompressed { encoding: encoding.content_encoding(), bytes })
     } else {
       None
     };
@@ -698,6 +778,11 @@ mod tests {
     )
   }
 
+  /// A chat page template whose static scripts carry more than [`PAGE_TAIL_MINIMUM`], as the served page's do.
+  fn tailed_index_template() -> String {
+    format!("{}<script>{}</script>", index_template(), "const tail = 1;".repeat(1600))
+  }
+
   fn substitutions<'a>(sidebar: &'a str, bootstrap: &'a str) -> Vec<(&'static str, &'a str)> {
     vec![(INITIAL_SESSIONS_PLACEHOLDER, sidebar), (SESSION_BOOTSTRAP_PLACEHOLDER, bootstrap)]
   }
@@ -834,6 +919,52 @@ mod tests {
       )
       .unwrap();
     assert!(rebuilt.ends_with(b"{\"messages\":[1]};"), "a new bootstrap text rebuilds the body");
+  }
+
+  #[test]
+  fn every_session_of_a_page_serves_its_one_static_tail_form() {
+    let mut memo = PageBodyMemo::default();
+    let template = Arc::new(tailed_index_template());
+    let sidebar = Arc::new("x".repeat(4096));
+    for bootstrap_text in ["{\"messages\":[]}", "{\"messages\":[1,2,3]}"] {
+      let bootstrap = Arc::new(bootstrap_text.to_string());
+      let (body, compressed) = memo
+        .body(
+          "index.html",
+          &template,
+          &substitutions(sidebar.as_str(), bootstrap.as_str()),
+          Some(&sidebar),
+          Some(&bootstrap),
+          PageEncoding::Gzip,
+        )
+        .unwrap();
+      let body = String::from_utf8(body.to_vec()).unwrap();
+      assert!(body.ends_with("</script>"), "the body carries the template's tail");
+      let gzip = compressed.expect("a gzip client gets a compressed body");
+      assert_eq!(gunzip(&gzip.bytes), body);
+    }
+    assert_eq!(memo.tails.len(), 1, "both bodies take the same tail form, built once");
+    let tail = memo.tails[0].tail.bytes();
+    assert!(tail.len() >= PAGE_TAIL_MINIMUM && tail.ends_with(b"</script>"), "the kept tail is the template's scripts");
+
+    let bootstrap = Arc::new("{\"messages\":[1,2,3]}".to_string());
+    let mut page = |encoding| {
+      memo
+        .body(
+          "index.html",
+          &template,
+          &substitutions(sidebar.as_str(), bootstrap.as_str()),
+          Some(&sidebar),
+          Some(&bootstrap),
+          encoding,
+        )
+        .unwrap()
+    };
+    let (body, _) = page(PageEncoding::Identity);
+    let (_, compressed) = page(PageEncoding::Zstd);
+    let stream = compressed.expect("a zstd client gets a compressed body").bytes;
+    let decoded = zstd::decode_all(stream.as_ref()).expect("a zstd page body decodes");
+    assert_eq!(decoded, body.to_vec(), "the two zstd frames decode to the head and the tail");
   }
 
   #[test]

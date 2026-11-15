@@ -22,6 +22,13 @@
 //! The strip is textual and keeps every other byte. A tag keeps its attributes, which may spell `<!--`; a title or a
 //! text area keeps its text, which is not code; and a `<!--` that never closes keeps the bytes after it, because only
 //! the author knows where that text ends.
+//!
+//! A page inlines the same scripts and stylesheets on every render, so a body the pass has already stripped is
+//! answered from the memo that keys it by its own bytes, and only a body the page did not carry before is stripped.
+
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// The HTML `markup` with its markup comments removed.
 ///
@@ -37,7 +44,9 @@ pub fn without_comments(markup: &str) -> String {
   let mut i = 0;
   while i < bytes.len() {
     if bytes[i] != b'<' {
-      let end = char_end(markup, i);
+      // The run up to the next tag or comment is text the browser reads as it stands, so it moves in one copy
+      // rather than one character at a time.
+      let end = markup[i..].find('<').map_or(markup.len(), |at| i + at);
       out.push_str(&markup[i..end]);
       i = end;
       continue;
@@ -60,7 +69,7 @@ pub fn without_comments(markup: &str) -> String {
     if let Some(name) = raw {
       let close = close_tag_start(markup, i, name);
       let after = if close < markup.len() { tag_end(markup, close) } else { markup.len() };
-      out.push_str(&inline_form(name, &markup[tag_start..end], &markup[i..close]));
+      push_inline_form(&mut out, name, &markup[tag_start..end], &markup[i..close]);
       out.push_str(&markup[close..after]);
       i = after;
     }
@@ -120,28 +129,112 @@ fn tag_end(markup: &str, start: usize) -> usize {
   bytes.len()
 }
 
-/// The end of the character that starts at `start`, so a multi-byte character is copied whole.
-fn char_end(markup: &str, start: usize) -> usize {
-  let mut end = start + 1;
-  while end < markup.len() && !markup.is_char_boundary(end) {
-    end += 1;
-  }
-  end
-}
-
-/// The served form of one raw-text element's content, by the owner of that language's inline form.
+/// The served form of one raw-text element's content, appended to `out`.
 ///
 /// A style element's content is CSS, so it takes the strip its language's owner gives an included file. A script
 /// element whose type is JavaScript takes that owner's strip as well, unless [`regex_may_follow_brace`] says the
 /// minifier could misread it. A script whose type is anything else holds opaque data, and a title, a text area and
 /// the elements the browser takes whole without running them are text the author wrote; each keeps its bytes.
-fn inline_form(name: &str, tag: &str, content: &str) -> String {
+///
+/// A page inlines its scripts and stylesheets from files, so the same bodies come back on every render. Each
+/// language's memo answers a body it has already stripped (see [`ServedForms`]).
+fn push_inline_form(out: &mut String, name: &str, tag: &str, content: &str) {
   match name {
-    "style" => crate::inlined_style::without_comments(content),
-    "script" if javascript_type(tag) && !regex_may_follow_brace(content) => {
-      crate::inlined_script::without_comments(content)
+    "style" => out.push_str(&style_form(content)),
+    "script" if javascript_type(tag) && !regex_may_follow_brace(content) => out.push_str(&script_form(content)),
+    _ => out.push_str(content),
+  }
+}
+
+/// The memoized served forms of the style bodies the pass has read.
+static STYLE_FORMS: LazyLock<Mutex<ServedForms>> = LazyLock::new(|| Mutex::new(ServedForms::default()));
+
+/// The memoized served forms of the script bodies the pass has read.
+static SCRIPT_FORMS: LazyLock<Mutex<ServedForms>> = LazyLock::new(|| Mutex::new(ServedForms::default()));
+
+/// The most source bytes one memo's keys hold.
+///
+/// The three pages' bodies total about 400 KB, and a page's own bodies change with the page, so the budget keeps the
+/// memo at a couple of pages' worth and drops it whole when a page's bodies pass it.
+const SERVED_FORMS_SOURCE_BUDGET: usize = 2 * 1024 * 1024;
+
+/// The served form of each inline body the pass has stripped, keyed by the body's own bytes.
+///
+/// The strip of a page's scripts and stylesheets costs a millisecond, and a page render that names another session
+/// builds the same bodies again. The memo answers those bodies with the form the strip built for exactly their bytes,
+/// so every render after the first copies the form instead of stripping it.
+#[derive(Default)]
+struct ServedForms {
+  entries: HashMap<Box<str>, Arc<str>, BuildHasherDefault<BodyHash>>,
+  bytes: usize,
+}
+
+impl ServedForms {
+  /// The form `strip` builds for `body`, from the memo when it holds this body.
+  fn form(&mut self, body: &str, strip: fn(&str) -> String) -> Arc<str> {
+    if let Some(form) = self.entries.get(body) {
+      return Arc::clone(form);
     }
-    _ => content.to_string(),
+    let form: Arc<str> = Arc::from(strip(body));
+    if body.len() <= SERVED_FORMS_SOURCE_BUDGET {
+      if self.bytes + body.len() > SERVED_FORMS_SOURCE_BUDGET {
+        self.entries.clear();
+        self.bytes = 0;
+      }
+      self.bytes += body.len();
+      self.entries.insert(body.into(), Arc::clone(&form));
+    }
+    form
+  }
+}
+
+fn style_form(content: &str) -> Arc<str> {
+  STYLE_FORMS
+    .lock()
+    .expect("the style forms memo mutex is not poisoned")
+    .form(content, crate::inlined_style::without_comments)
+}
+
+fn script_form(content: &str) -> Arc<str> {
+  SCRIPT_FORMS
+    .lock()
+    .expect("the script forms memo mutex is not poisoned")
+    .form(content, crate::inlined_script::without_comments)
+}
+
+/// A hash of body bytes that costs less than the strip it decides.
+///
+/// The standard hasher would spend about a quarter of the strip's time on a page's scripts, so the memo hashes its
+/// keys with FNV-1a over eight-byte words instead.
+struct BodyHash(u64);
+
+/// The FNV-1a offset basis.
+const BODY_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+/// The FNV-1a prime.
+const BODY_HASH_PRIME: u64 = 0x100_0000_01b3;
+
+impl Default for BodyHash {
+  fn default() -> BodyHash {
+    BodyHash(BODY_HASH_OFFSET)
+  }
+}
+
+impl Hasher for BodyHash {
+  fn finish(&self) -> u64 {
+    self.0
+  }
+
+  fn write(&mut self, bytes: &[u8]) {
+    let mut hash = self.0;
+    let mut words = bytes.chunks_exact(8);
+    for word in &mut words {
+      let value = u64::from_le_bytes(word.try_into().expect("a chunk of eight bytes"));
+      hash = (hash ^ value).wrapping_mul(BODY_HASH_PRIME).rotate_left(29);
+    }
+    for &byte in words.remainder() {
+      hash = (hash ^ u64::from(byte)).wrapping_mul(BODY_HASH_PRIME);
+    }
+    self.0 = hash;
   }
 }
 
@@ -329,7 +422,22 @@ fn close_tag_start(markup: &str, from: usize, name: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-  use super::without_comments;
+  use super::*;
+
+  #[test]
+  fn a_repeat_body_takes_the_form_the_memo_built_for_it() {
+    let body = "const a = 1; // note\nif (a) {\n  run(a);\n}\n";
+    let first = script_form(body);
+    assert_eq!(&*first, "const a=1;\nif(a){\nrun(a);\n}\n");
+    // The same bytes in another buffer are the same body, and the memo answers them with the form it built.
+    let again = script_form(&body.to_owned());
+    assert_eq!(&*again, &*first);
+    // Another body keeps its own form: the memo never answers one body with another's.
+    assert_eq!(&*script_form("const b = 2; // note\n"), "const b=2;\n");
+    assert_eq!(&*script_form(body), &*first);
+    // A stylesheet body is stripped by its own language's owner and held in its own memo.
+    assert_eq!(&*style_form(".a { color: red; }"), ".a{color: red;}");
+  }
 
   #[test]
   fn a_markup_comment_leaves_the_text_and_its_neighbours_keep_every_byte() {

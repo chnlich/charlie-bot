@@ -239,9 +239,9 @@ mod tests {
     path.to_str().expect("the temp path is UTF-8").to_string()
   }
 
-  /// A home whose `host_auth:` section names three logins: one whose command prints the approval link, one whose
-  /// command fails after a line of output, and one renewing `host1` under a pseudo-terminal. The names carry the
-  /// test's prefix, so parallel tests share no record.
+  /// A home whose `host_auth:` section names three logins. One command prints the approval link, one fails after a
+  /// line of output, and one renews `host1` under a pseudo-terminal. The names carry the test's prefix, so parallel
+  /// tests share no record.
   struct Home {
     _dir: TempDir,
     router: Router,

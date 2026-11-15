@@ -1,7 +1,8 @@
-//! The switch's delegation check (delegation_check of scripts/switch-server.sh), run for real against a stand-in
-//! server that answers the delegate, task and archive routes with the behavior each test gives. The check runs on
-//! the test's runtime clone, so the worktree the server makes is a real worktree of it. Each test can then hold the
-//! check to leaving no worktree and no branch behind. The delegation wait and the probe cancel wait are one second.
+//! The switch's delegation check (delegation_check of scripts/switch-server.sh) runs for real against a stand-in
+//! server. That server answers the delegate, task and archive routes with the behavior each test gives. The check
+//! runs on the test's runtime clone, so the worktree the server makes is a real worktree of it. Each test can then
+//! hold the check to leaving no worktree and no branch behind. The delegation wait and the probe cancel wait are
+//! one second.
 
 use std::fs;
 use std::path::PathBuf;

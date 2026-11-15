@@ -321,7 +321,7 @@ impl World {
     git(&sandbox, &git_env, &repo, &["add", "-A"]);
     git(&sandbox, &git_env, &repo, &["commit", "-q", "-m", "synthetic launcher commit"]);
     let commit = git(&sandbox, &git_env, &repo, &["rev-parse", "HEAD"]);
-    // The launcher's checkout names the GitHub repository that a live checkout names, and a
+    // The launcher's checkout names the GitHub repository that a live checkout names. A
     // `url.<bare>.insteadOf` rule sends every local fetch and push of it to a bare copy of the repository, so no test
     // reaches GitHub. `git remote get-url` reports that local copy, which the launcher sends the runner to clone. The
     // in-flight list reads the URL as configured, so it names the GitHub repository. The direction clone names another
@@ -572,8 +572,8 @@ impl World {
     found
   }
 
-  /// A standalone clone of another direction at `improve/<name>/charlie-bot`, cloned from its own bare origin at
-  /// `remotes/<name>.git`, as the host worker's five clones are on the remote host.
+  /// A standalone clone of another direction at `improve/<name>/charlie-bot`. It is cloned from its own bare
+  /// origin at `remotes/<name>.git`, as the host worker's five clones are on the remote host.
   pub fn other_direction_clone(&self, name: &str) -> PathBuf {
     let origin = self.sandbox.dir(&format!("remotes/{name}.git"));
     let origin_text = origin.display().to_string();

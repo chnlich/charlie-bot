@@ -220,7 +220,8 @@ impl Store {
         trigger = ?trigger,
         pre_tokens = ?metadata.get(event_types::COMPACT_PRE_TOKENS),
         post_tokens = ?metadata.get(event_types::COMPACT_POST_TOKENS),
-        "cc_context_compacted"
+        "{}",
+        event_types::CC_CONTEXT_COMPACTED_EVENT
       );
       return self
         .persist_and_broadcast(
@@ -232,7 +233,7 @@ impl Store {
     }
     if subtype == Some("status") && event.get(event_types::COMPACT_RESULT).and_then(Value::as_str) == Some("failed") {
       let error = event.get(event_types::COMPACT_ERROR).cloned().unwrap_or(Value::Null);
-      tracing::info!(session_id, error = ?error, "cc_context_compact_failed");
+      tracing::info!(session_id, error = ?error, "{}", event_types::CC_CONTEXT_COMPACT_FAILED_EVENT);
       return self
         .persist_and_broadcast(session_id, json!({"type": event_types::CONTEXT_COMPACT_FAILED, "error": error}))
         .await

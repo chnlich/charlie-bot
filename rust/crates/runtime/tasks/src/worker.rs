@@ -1032,13 +1032,20 @@ async fn handle_compaction_events(sink: &RunSink, event: &Value) -> anyhow::Resu
         trigger = %trigger,
         pre_tokens = ?metadata.get(ET::COMPACT_PRE_TOKENS),
         post_tokens = ?metadata.get(ET::COMPACT_POST_TOKENS),
-        "cc_context_compacted"
+        "{}",
+        ET::CC_CONTEXT_COMPACTED_EVENT
       );
       sink.persist_and_broadcast(event_builders::make_context_compacted_event(&trigger, Some(metadata), None)).await
     }
     Some("status") if event.get(ET::COMPACT_RESULT).and_then(Value::as_str) == Some("failed") => {
       let error = event.get(ET::COMPACT_ERROR).and_then(Value::as_str);
-      tracing::info!(target: "charliebot_tasks", thread = %sink.channel, error = ?error, "cc_context_compact_failed");
+      tracing::info!(
+        target: "charliebot_tasks",
+        thread = %sink.channel,
+        error = ?error,
+        "{}",
+        ET::CC_CONTEXT_COMPACT_FAILED_EVENT
+      );
       sink.persist_and_broadcast(event_builders::make_context_compact_failed_event(error, None, None)).await
     }
     _ => Ok(()),

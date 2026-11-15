@@ -23,6 +23,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::templating::{self, STATIC_ASSET_VERSION_KEY, Templating};
 use charliebot_session_api::api as session_routes;
 use charliebot_session_api::{detail, listing};
+use charliebot_store::metadata::{RUN_BACKEND, THINKING_SINCE};
 use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::join_all;
 use percent_encoding::percent_decode_str;
@@ -362,7 +363,7 @@ fn chat_page(
           Ok(bootstrap) => {
             let bootstrap_session = bootstrap.session.as_object().expect("a bootstrap session is an object");
             let active = active_session.as_object_mut().expect("session metadata serializes to an object");
-            for name in ["run_backend", "thinking_since"] {
+            for name in [RUN_BACKEND, THINKING_SINCE] {
               if let Some(value) = bootstrap_session.get(name) {
                 active.insert(name.to_string(), value.clone());
               }
@@ -712,7 +713,7 @@ fn active_backend_id<'a>(cfg: &CharlieBotConfig, session: &'a Value, default_bac
     return backend;
   }
   session
-    .get("run_backend")
+    .get(RUN_BACKEND)
     .and_then(Value::as_str)
     .filter(|backend| !backend.is_empty())
     .or(session_backend)

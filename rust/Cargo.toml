@@ -125,7 +125,6 @@ serde_yaml = "0.9"
 shlex = "2"
 sha1 = "0.10"
 sha2 = "0.10"
-shellexpand = { version = "3", default-features = false, features = ["base-0"] }
 subtle = "2"
 symphonia = { version = "0.6", default-features = false, features = ["aac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 syn = { version = "2", features = ["full", "visit"] }

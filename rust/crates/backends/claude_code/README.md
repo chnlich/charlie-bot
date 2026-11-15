@@ -28,7 +28,7 @@ disallow `Agent`, and the setup check reads the work-run list with the switch on
 | `event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED` |
 | `ClaudeCodeFactory` and its `BackendFactory::build` implementation |
 | `options::option_model` |
-| `login_dirs::{CLAUDE_CONFIG_DIR_ENV, default_claude_dir, claude_config_dir, expanduser}` |
+| `login_dirs::{CLAUDE_CONFIG_DIR_ENV, default_claude_dir, claude_config_dir, config_dir_path}` |
 | `claude_code::one_shot_text` implementation |
 | `charliebot_claude_code::AnthropicEndpointBackend`, `AnthropicEndpointBackend::new`, and its `AgentBackend` methods |
 | `charliebot_claude_code::claude_model_env` |

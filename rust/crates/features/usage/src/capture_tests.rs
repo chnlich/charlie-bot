@@ -71,7 +71,7 @@ impl UsageSourceImpl for External {
   }
 }
 
-/// Stands in for a CLI reader: `<home>/cli/<dir>/<file>.json` holds the call records that file would yield, and a
+/// A stand-in for a CLI reader: `<home>/cli/<dir>/<file>.json` holds the call records that file would yield, and a
 /// record with `"fail": true` makes its file fail the capture. The Codex stand-in declares live sessions.
 struct CliStub {
   name: &'static str,
@@ -2154,7 +2154,7 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
 
 const TS_A: &str = "2026-01-10T08:00:00+00:00";
 
-/// Compressing a finished run's raw log keeps the ledger's totals. The capture keys the ledger by the plain path and
+/// A finished run's raw log, compressed, keeps the ledger's totals. The capture keys the ledger by the plain path and
 /// signs it from the file that holds the bytes. It then re-reads the decompressed content into the same rows.
 #[test]
 fn a_compressed_run_log_keeps_the_same_usage_totals() {

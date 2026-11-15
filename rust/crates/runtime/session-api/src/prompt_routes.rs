@@ -19,9 +19,6 @@ use serde_json::{Value, json};
 
 use crate::route_support::store_error;
 
-/// `EMPTY_BACKENDS_OPTIONS_REFUSAL`: a preview refuses a config with no backend.
-const EMPTY_BACKENDS_OPTIONS_REFUSAL: &str = "session backend resolution requires a configured backends.options entry";
-
 /// The prompt route below `/api/sessions`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
@@ -68,7 +65,7 @@ async fn effective_prompt(
   let mut preview_meta = meta.clone();
   if preview_meta.backend.is_empty() {
     let Some(backend) = cfg.backends.new_session_backend() else {
-      return detail(StatusCode::BAD_REQUEST, EMPTY_BACKENDS_OPTIONS_REFUSAL);
+      return detail(StatusCode::BAD_REQUEST, charliebot_agents::model_pool::MISSING_BACKEND_OPTION);
     };
     preview_meta.backend = backend;
   }

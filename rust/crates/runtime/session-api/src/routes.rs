@@ -17,8 +17,8 @@ use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata,
-  UtcDateTime, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, RUN_BACKEND,
+  SessionMetadata, THINKING_SINCE, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state;
 use http::header::HeaderValue;
@@ -310,13 +310,11 @@ fn archived_page_body(
     let mut value = listing::metadata_value(&features.store, &row)?;
     let object = value.as_object_mut().expect("session metadata serializes to an object");
     object.insert(
-      "thinking_since".to_string(),
+      THINKING_SINCE.to_string(),
       features.store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_str())),
     );
-    object.insert(
-      "run_backend".to_string(),
-      listing::run_backend(&features.store, &row)?.map_or(Value::Null, Value::String),
-    );
+    object
+      .insert(RUN_BACKEND.to_string(), listing::run_backend(&features.store, &row)?.map_or(Value::Null, Value::String));
     if !context_only {
       apply_derived_fields(&mut value, &row, status.get(&row.id).map(Arc::as_ref), &features.store, true, true, false);
     }
@@ -611,7 +609,7 @@ fn status_row_payload(
     entry.and_then(|row| row.get(HAS_RUNNING_TASKS)).cloned().unwrap_or(Value::Bool(false)),
   );
   payload.insert(
-    "thinking_since".to_string(),
+    THINKING_SINCE.to_string(),
     features.store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_isoformat_text())),
   );
   payload.insert(
@@ -794,10 +792,8 @@ fn apply_derived_fields(
       derived.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
     );
   }
-  object.insert(
-    "thinking_since".to_string(),
-    store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_str())),
-  );
+  object
+    .insert(THINKING_SINCE.to_string(), store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_str())));
 }
 
 fn fresh_sessions(

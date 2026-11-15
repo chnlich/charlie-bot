@@ -1305,6 +1305,18 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::SESSION_NAME_FIELD`; the voice recordings page's rows carry a session's \
            display name under it.",
   },
+  OwnerRow {
+    name: "thinking_since",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::THINKING_SINCE`; the session listing, the sidebar status row and the \
+           running-changed broadcast carry a live run's thinking start under it.",
+  },
+  OwnerRow {
+    name: "run_backend",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::RUN_BACKEND`; the session listing and the chat page carry the backend a \
+           live run resolved to under it.",
+  },
   OwnerRow { name: "Read", owner: "infra/core", hint: "Use `charliebot_core::event_types::READ_TOOL`." },
   OwnerRow { name: "Write", owner: "infra/core", hint: "Use `charliebot_core::event_types::WRITE_TOOL`." },
   OwnerRow { name: "Edit", owner: "infra/core", hint: "Use `charliebot_core::event_types::EDIT_TOOL`." },
@@ -1376,6 +1388,12 @@ const PHRASE_OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::SESSION_NOT_FOUND_DETAIL`; every route that answers a missing session reads its \
            detail from there.",
+  },
+  OwnerRow {
+    name: "session backend resolution requires a configured backends.options entry",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::model_pool::MISSING_BACKEND_OPTION`; every path that resolves a session's backend \
+           reads its refusal there.",
   },
   OwnerRow {
     name: "Exception in ASGI application",

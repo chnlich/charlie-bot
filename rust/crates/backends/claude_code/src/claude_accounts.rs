@@ -112,7 +112,7 @@ pub fn pool(cfg: &CharlieBotConfig) -> anyhow::Result<Vec<claude_config::ClaudeA
 
 fn expand_account_path(value: &str) -> anyhow::Result<PathBuf> {
   let home = std::env::var("HOME").ok();
-  login_dirs::expanduser(value, home.as_deref())
+  login_dirs::config_dir_path(value, home.as_deref())
 }
 
 pub fn is_pooled(option: &BackendOption, cfg: &CharlieBotConfig) -> bool {

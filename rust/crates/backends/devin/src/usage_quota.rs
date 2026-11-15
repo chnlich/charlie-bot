@@ -79,7 +79,7 @@ impl DevinQuotaAccount {
     let credentials_text = std::fs::read_to_string(&self.credentials_path).context("reading Devin CLI credentials")?;
     let credentials: DevinCredentials =
       toml::from_str(&credentials_text).map_err(|_| anyhow!("parsing Devin CLI credentials failed"))?;
-    charliebot_compat::http_client::ensure_crypto_provider();
+    charliebot_core::tls::ensure_crypto_provider();
     let client = reqwest::Client::builder()
       .timeout(Duration::from_secs(30))
       .build()

@@ -94,7 +94,7 @@ fn value_str(value: Option<&Value>, missing: &str) -> String {
   value.map_or_else(|| missing.to_string(), text_repr::value_str)
 }
 
-/// The text of a string as it is, or of a list of text blocks; `label` names the content in an error.
+/// The text of a string as it is, or of a list of text blocks. `label` names the content in an error.
 fn blocks_to_text(content: &Value, label: &str) -> ValueResult<String> {
   match content {
     Value::String(text) => Ok(text.clone()),
@@ -280,8 +280,8 @@ fn convert_tools(tools: &Value) -> ValueResult<Vec<Value>> {
   Ok(converted)
 }
 
-/// The OpenAI `tool_choice` for an Anthropic one: `auto`, `any` (required), `tool` (a named function) and `none`; any
-/// other type is an error.
+/// The OpenAI `tool_choice` for an Anthropic one: `auto`, `any` (required), `tool` (a named function) and `none`.
+/// Any other type is an error.
 fn convert_tool_choice(choice: &Map<String, Value>) -> ValueResult<Value> {
   match choice.get("type").and_then(Value::as_str) {
     Some("auto") => Ok(json!("auto")),
@@ -295,7 +295,7 @@ fn convert_tool_choice(choice: &Map<String, Value>) -> ValueResult<Value> {
   }
 }
 
-/// The Anthropic stop reason for an OpenAI `finish_reason`; any other value passes through as it is.
+/// The Anthropic stop reason for an OpenAI `finish_reason`. Any other value passes through as it is.
 fn stop_reason(finish_reason: Option<&Value>) -> Value {
   match finish_reason {
     None | Some(Value::Null) => json!("end_turn"),
@@ -438,7 +438,7 @@ impl OpenAiChatStream {
     )]
   }
 
-  /// The Anthropic events one upstream chunk completes; the stream keeps the usage and finish reason that
+  /// The Anthropic events one upstream chunk completes. The stream keeps the usage and finish reason that
   /// `finish_events` reports.
   pub fn events_for_chunk(&mut self, chunk: &Value) -> ValueResult<Vec<Event>> {
     let mut events = Vec::new();
@@ -544,7 +544,7 @@ impl OpenAiChatStream {
   }
 
   /// One streaming tool-call delta applied: the first delta registers the call. The call's block opens at once
-  /// unless Gemini stream rules defer the opening until `extra_content` arrives; earlier arguments stay buffered.
+  /// unless Gemini stream rules defer the opening until `extra_content` arrives. Earlier arguments stay buffered.
   fn tool_delta(&mut self, tool_call: &Value, events: &mut Vec<Event>) -> ValueResult<()> {
     let call_index = match get(tool_call, "index")? {
       None | Some(Value::Null) if self.rules == StreamRules::Gemini => json!(0),

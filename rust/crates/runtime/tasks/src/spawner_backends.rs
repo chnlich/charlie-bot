@@ -104,16 +104,8 @@ pub fn resolve_session_default_backend_model(
 
 /// The backend id a child inherits from its parent when no call target or explicit id applies.
 fn inherited_backend_id(cfg: &CharlieBotConfig, session_meta: &SessionMetadata) -> anyhow::Result<String> {
-  let backend_id = if session_meta.backend.is_empty() {
-    cfg
-      .backends
-      .new_session_backend()
-      .ok_or_else(|| value_error("session backend resolution requires a configured backends.options entry"))?
-  } else {
-    session_meta.backend.clone()
-  };
-  cfg.backends.check_backend_id(&backend_id).map_err(value_error)?;
-  Ok(backend_id)
+  charliebot_agents::model_pool::session_backend_id_or_default(cfg, session_meta)
+    .map_err(|error| value_error(error.to_string()))
 }
 
 /// Resolve the backend id the session's own defaults use for verify's excluded candidate.

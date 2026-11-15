@@ -19,7 +19,7 @@ pub const fn quote_set(safe: &[u8]) -> AsciiSet {
 /// The safe set of one form/query component: `_.-~` stays plain, and every other byte is quoted.
 const QUERY_QUOTE_SET: &AsciiSet = &quote_set(&[]);
 
-/// The quoted form of one form/query text component: a space becomes `+`, and every byte outside ASCII letters,
+/// The quoted form of one form/query text component. A space becomes `+`, and every byte outside ASCII letters,
 /// digits and `_.-~` becomes one uppercase `%XX` pair of its UTF-8 form.
 pub fn quote_plus(text: &str) -> String {
   text.split(' ').map(|part| utf8_percent_encode(part, QUERY_QUOTE_SET).to_string()).collect::<Vec<_>>().join("+")

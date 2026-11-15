@@ -17,6 +17,7 @@ memmap2.workspace = true
 nix.workspace = true
 procfs.workspace = true
 regex.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true

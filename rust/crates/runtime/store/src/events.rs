@@ -379,10 +379,13 @@ impl Store {
             .take(rel_end.saturating_sub(rel_start))
             .map(|event| event.as_ref().clone())
             .collect(),
-          None => {
-            let lines = self.live_lines_newline_split(session_id)?;
-            slice_live_lines(&lines, rel_start, rel_end)
-          }
+          None => match self.live_tail_lines_newline_split(session_id, rel_start)? {
+            Some(lines) => slice_live_lines(&lines, 0, rel_end.saturating_sub(rel_start)),
+            None => {
+              let lines = self.live_lines_newline_split(session_id)?;
+              slice_live_lines(&lines, rel_start, rel_end)
+            }
+          },
         }
       };
       return Ok((events, start > 0));
@@ -711,6 +714,43 @@ impl Store {
     Ok(bytes.split(|byte| *byte == b'\n').map(ndjson::parse_line_compact).map(|event| event.map(Arc::new)).collect())
   }
 
+  /// The live log's physical lines from `first_line` to its end, parsed with one slot per line, or `None` when the
+  /// tail window does not hold them.
+  ///
+  /// The page a reader opens first is the one that ends at the log's end, so reading the tail answers it without the
+  /// whole log: on a 144 MB log the whole-file parse behind [`Self::live_lines_newline_split`] is 386 ms of the
+  /// request, and the tail window is 512 KiB. The `\n` split keeps the blank lines the whole-file read keeps, so a
+  /// line's index is the same either way.
+  ///
+  /// The count names how many lines the tail holds, so an append between the count and the read would shift which
+  /// lines the window returns. The signature the count was taken under is checked again after the read; a log that
+  /// moved falls back to the whole-file read, whose indices come from the one buffer it reads.
+  fn live_tail_lines_newline_split(
+    &self,
+    session_id: &str,
+    first_line: usize,
+  ) -> StoreResult<Option<Vec<Option<Arc<ChatEvent>>>>> {
+    let path = self.chat_events_path(session_id);
+    let Some((metadata, signature)) = file_signature(&path)? else { return Ok(None) };
+    let total = self.count_chat_event_lines(&path, signature)?;
+    let Some((lines, bytes_read)) =
+      read_ndjson_tail_physical_lines(&path, metadata.len(), total.saturating_sub(first_line))?
+    else {
+      return Ok(None);
+    };
+    let unchanged = file_signature(&path)?.is_some_and(|(_, after)| after == signature);
+    if !unchanged {
+      return Ok(None);
+    }
+    #[cfg(test)]
+    {
+      lock(&self.event_read_caches, "event read cache mutex").live_range_bytes_read += bytes_read;
+    }
+    #[cfg(not(test))]
+    let _ = bytes_read;
+    Ok(Some(lines.into_iter().map(|line| ndjson::parse_line_compact(&line).map(Arc::new)).collect()))
+  }
+
   /// Find the first event with `id` in archived and live history.
   pub fn find_event_by_id(&self, session_id: &str, event_id: &str) -> StoreResult<Option<ChatEvent>> {
     Ok(
@@ -733,44 +773,38 @@ impl Store {
   }
 
   /// Count physical lines through the 64-entry `(mtime_ns, size)` count memo.
+  ///
+  /// A page's first open of a session counts the session's whole log, and the mock home's largest log is 144 MB: the
+  /// read is 30 ms of the open, single-threaded. A log over [`PARALLEL_COUNT_MIN_BYTES`] is counted in contiguous
+  /// ranges at once, one range per core up to [`MAX_COUNT_CORES`], because the count is one sum of newline bytes and
+  /// a range boundary never changes it.
   fn count_chat_event_lines(&self, path: &Path, signature: FileSignature) -> StoreResult<usize> {
     if let Some(count) =
       lock(&self.event_read_caches, "event read cache mutex").count.fresh(&path.to_path_buf(), signature)
     {
       return Ok(count);
     }
-    let mut file = match fs::File::open(path) {
+    let file = match fs::File::open(path) {
       Ok(file) => file,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
       Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
     };
-    let mut chunk = vec![0; 1024 * 1024];
-    let mut total = 0usize;
-    #[cfg(test)]
-    let mut bytes_read = 0usize;
-    let mut last_byte = None;
-    loop {
-      let read = file.read(&mut chunk).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-      if read == 0 {
-        break;
-      }
-      #[cfg(test)]
-      {
-        bytes_read += read;
-      }
-      let bytes = &chunk[..read];
-      total += memchr_iter(b'\n', bytes).count();
-      last_byte = bytes.last().copied();
-    }
-    if last_byte.is_some_and(|byte| byte != b'\n') {
-      total += 1;
-    }
+    let ranges = if signature.size >= PARALLEL_COUNT_MIN_BYTES {
+      let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+      let filled = usize::try_from(signature.size / PARALLEL_COUNT_RANGE_BYTES).unwrap_or(usize::MAX);
+      cores.min(MAX_COUNT_CORES).min(filled).max(1)
+    } else {
+      1
+    };
+    let (total, bytes_read) = count_lines_in_ranges(&file, signature.size, ranges, path)?;
     {
       let mut caches = lock(&self.event_read_caches, "event read cache mutex");
       #[cfg(test)]
       {
         caches.count_bytes_read += bytes_read;
       }
+      #[cfg(not(test))]
+      let _ = bytes_read;
       caches.count.record(path.to_path_buf(), signature, total);
     }
     Ok(total)
@@ -1125,6 +1159,117 @@ fn ends_with_newline(path: &Path, size: u64) -> StoreResult<bool> {
   Ok(last[0] == b'\n')
 }
 
+/// The smallest log whose line count is split across the host's cores. A smaller log counts faster than the cores it
+/// would start.
+const PARALLEL_COUNT_MIN_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The fewest bytes one core's range holds, so a log just over the split's size does not start cores it cannot fill.
+const PARALLEL_COUNT_RANGE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The most cores one count uses: past this many the count is bound by memory bandwidth, not by the cores.
+const MAX_COUNT_CORES: usize = 8;
+
+/// The bytes one core counts at a time.
+const COUNT_CHUNK_BYTES: usize = 256 * 1024;
+
+/// The physical line count of the `len`-byte `file`, split across `ranges` contiguous ranges, and the bytes read.
+///
+/// The sum of newline bytes over the ranges is the file's count, because a range boundary never moves a newline. The
+/// file's last byte decides whether an unterminated final line adds one.
+fn count_lines_in_ranges(file: &fs::File, len: u64, ranges: usize, path: &Path) -> StoreResult<(usize, usize)> {
+  if ranges < 2 || len == 0 {
+    return count_lines_in_one_read(file, len, path);
+  }
+  let per = len.div_ceil(u64::try_from(ranges).expect("the range count fits u64"));
+  let counts = std::thread::scope(|scope| {
+    let handles = (0..ranges)
+      .map(|index| {
+        let start = u64::try_from(index).expect("the range index fits u64") * per;
+        let end = (start + per).min(len);
+        scope.spawn(move || count_newlines_in_range(file, start, end))
+      })
+      .collect::<Vec<_>>();
+    handles
+      .into_iter()
+      .map(|handle| handle.join().expect("a count range does not panic"))
+      .collect::<Vec<std::io::Result<(usize, usize)>>>()
+  });
+  let mut total = 0usize;
+  let mut bytes_read = 0usize;
+  for count in counts {
+    let (count, read) = count.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    total += count;
+    bytes_read += read;
+  }
+  if last_byte_of(file, len, path)?.is_some_and(|byte| byte != b'\n') {
+    total += 1;
+  }
+  Ok((total, bytes_read))
+}
+
+/// The newlines in the `start..end` byte range of `file`, and the bytes read.
+fn count_newlines_in_range(file: &fs::File, start: u64, end: u64) -> std::io::Result<(usize, usize)> {
+  use std::os::unix::fs::FileExt;
+
+  let mut chunk = vec![0u8; COUNT_CHUNK_BYTES];
+  let mut position = start;
+  let mut total = 0usize;
+  while position < end {
+    let want =
+      usize::try_from((end - position).min(u64::try_from(COUNT_CHUNK_BYTES).expect("a chunk length fits u64")))
+        .expect("a chunk length fits usize");
+    let read = file.read_at(&mut chunk[..want], position)?;
+    if read == 0 {
+      break;
+    }
+    total += memchr_iter(b'\n', &chunk[..read]).count();
+    position += u64::try_from(read).expect("a read length fits u64");
+  }
+  Ok((total, usize::try_from(position - start).expect("the read range fits usize")))
+}
+
+/// The line count of the whole `len`-byte `file` read into one buffer, and the bytes read.
+fn count_lines_in_one_read(file: &fs::File, len: u64, path: &Path) -> StoreResult<(usize, usize)> {
+  use std::os::unix::fs::FileExt;
+
+  let mut chunk = vec![0u8; 1024 * 1024];
+  let mut total = 0usize;
+  let mut bytes_read = 0usize;
+  let mut last_byte = None;
+  while u64::try_from(bytes_read).expect("a read length fits u64") < len {
+    let remaining = len - u64::try_from(bytes_read).expect("a read length fits u64");
+    let want = usize::try_from(remaining.min(COUNT_CHUNK_BYTES as u64)).expect("a chunk length fits usize");
+    let offset = u64::try_from(bytes_read).expect("a read length fits u64");
+    let read = file
+      .read_at(&mut chunk[..want], offset)
+      .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    if read == 0 {
+      break;
+    }
+    let bytes = &chunk[..read];
+    total += memchr_iter(b'\n', bytes).count();
+    last_byte = bytes.last().copied();
+    bytes_read += read;
+  }
+  if last_byte.is_some_and(|byte| byte != b'\n') {
+    total += 1;
+  }
+  Ok((total, bytes_read))
+}
+
+/// The file's last byte, or `None` when the file is empty.
+fn last_byte_of(file: &fs::File, len: u64, path: &Path) -> StoreResult<Option<u8>> {
+  use std::os::unix::fs::FileExt;
+
+  if len == 0 {
+    return Ok(None);
+  }
+  let mut byte = [0u8; 1];
+  let read =
+    file.read_at(&mut byte, len - 1).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  Ok((read == 1).then_some(byte[0]))
+}
+
 fn file_signature(path: &Path) -> StoreResult<Option<(fs::Metadata, FileSignature)>> {
   match fs::metadata(path) {
     Ok(metadata) => Ok(Some((metadata.clone(), FileSignature::from_metadata(&metadata)))),
@@ -1306,6 +1451,39 @@ fn string_value_after_key(head: &[u8], mut cursor: usize) -> Option<(&[u8], usiz
     return None;
   }
   Some((value, start + end + 1))
+}
+
+/// The last `take` physical lines of a log, split on `\n` only, or `None` when the tail window does not hold them.
+///
+/// The first line of the window is dropped because the window may start inside it; a window that starts on a line
+/// boundary loses one whole line to that rule, which only makes the caller's fallback likelier. A trailing newline
+/// leaves no line of its own, as in the whole-file read.
+fn read_ndjson_tail_physical_lines(
+  path: &Path,
+  file_size: u64,
+  take: usize,
+) -> StoreResult<Option<(Vec<Vec<u8>>, usize)>> {
+  if take == 0 {
+    return Ok(Some((Vec::new(), 0)));
+  }
+  if file_size <= TAIL_WINDOW_SIZE as u64 {
+    return Ok(None);
+  }
+  let mut file = fs::File::open(path).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  file
+    .seek(SeekFrom::Start(file_size - TAIL_WINDOW_SIZE as u64))
+    .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  let mut window = Vec::with_capacity(TAIL_WINDOW_SIZE);
+  file.read_to_end(&mut window).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  let mut lines: Vec<&[u8]> = window.split(|byte| *byte == b'\n').skip(1).collect();
+  if window.ends_with(b"\n") {
+    lines.pop();
+  }
+  if lines.len() < take {
+    return Ok(None);
+  }
+  let bytes_read = window.len();
+  Ok(Some((lines[lines.len() - take..].iter().map(|line| line.to_vec()).collect(), bytes_read)))
 }
 
 fn read_ndjson_tail_lines(path: &Path, file_size: u64, take: usize) -> StoreResult<(Vec<Vec<u8>>, usize)> {
@@ -2074,6 +2252,49 @@ mod tests {
       assert_eq!(ids(&warm_end), vec!["c"]);
     }
 
+    /// A page that ends at the log's end reads the tail window instead of the whole log, and its events match the
+    /// whole-file read's: a blank line, a malformed line and a final line without a newline each keep their index.
+    #[tokio::test]
+    async fn an_unarchived_newest_page_reads_only_the_log_tail() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      let padding = "x".repeat(60);
+      let mut body = String::new();
+      let mut total = 0usize;
+      while body.len() < 2 * TAIL_WINDOW_SIZE {
+        body.push_str(&format!("{{\"id\": \"e{total}\", \"content\": \"{padding}\"}}\n"));
+        total += 1;
+      }
+      body.push_str("{\"id\": \"last-a\"}\n\n{bad\n{\"id\": \"last-b\"}\n{\"id\": \"last-c\"}");
+      total += 5;
+      std::fs::write(&path, &body).unwrap();
+
+      let whole = store.live_lines_newline_split(session_id).unwrap();
+      assert_eq!(whole.len(), total, "physical lines");
+      let want = |start: usize, end: usize| -> Vec<ChatEvent> {
+        whole[start..end].iter().flatten().map(|event| (**event).clone()).collect()
+      };
+      for take in [1usize, 2, 3, 5, 40] {
+        let start = total - take;
+        let (events, has_more) = store.load_chat_events_range(session_id, start, total).unwrap();
+        assert_eq!(ids(&events), ids(&want(start, total)), "tail of {take} slots");
+        assert_eq!(has_more, start > 0);
+      }
+      let read = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read;
+      assert!(read <= 5 * TAIL_WINDOW_SIZE, "the newest pages read {read} bytes of a {} B log", body.len());
+
+      // A range that ends before the log's end keeps the whole-file numbering.
+      let (middle, _) = store.load_chat_events_range(session_id, total - 60, total - 30).unwrap();
+      assert_eq!(ids(&middle), ids(&want(total - 60, total - 30)));
+      // A page at the head is too far from the tail window for the tail read, and still matches.
+      let (head, _) = store.load_chat_events_range(session_id, 0, 3).unwrap();
+      assert_eq!(ids(&head), ids(&want(0, 3)));
+    }
+
     /// `fact_history` composition: the archived count is the total event count minus the live
     /// count. Archive files beyond that count stay unread — one stale archive row beyond the
     /// offset never reaches the facts.
@@ -2408,6 +2629,31 @@ mod tests {
       std::io::Write::write_all(&mut file, b"{\"i\": 10000}\n").unwrap();
       assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 10_001);
       assert!(store.event_read_caches.lock().unwrap().count_bytes_read > bytes);
+    }
+
+    /// A count split across ranges is the count the whole file gives, for lines that cross every range boundary and
+    /// for a final line without a newline.
+    #[test]
+    fn a_line_count_split_across_ranges_matches_the_whole_file() {
+      let home = tempfile::tempdir().unwrap();
+      let path = home.path().join("events.jsonl");
+      let body: String = (0..10_000).map(|line| format!("{{\"i\": {line}}}\n")).collect();
+      std::fs::write(&path, &body).unwrap();
+      let file = std::fs::File::open(&path).unwrap();
+      let len = u64::try_from(body.len()).unwrap();
+      let whole = count_lines_in_ranges(&file, len, 1, &path).unwrap();
+      assert_eq!(whole, (10_000, body.len()));
+      for ranges in [2, 3, 7, MAX_COUNT_CORES] {
+        assert_eq!(count_lines_in_ranges(&file, len, ranges, &path).unwrap(), whole);
+      }
+
+      let unterminated = format!("{body}{{\"i\": 10000}}");
+      std::fs::write(&path, &unterminated).unwrap();
+      let file = std::fs::File::open(&path).unwrap();
+      let len = u64::try_from(unterminated.len()).unwrap();
+      let expected = (10_001, unterminated.len());
+      assert_eq!(count_lines_in_ranges(&file, len, 1, &path).unwrap(), expected);
+      assert_eq!(count_lines_in_ranges(&file, len, 4, &path).unwrap(), expected);
     }
   }
 }

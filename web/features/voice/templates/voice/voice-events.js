@@ -122,6 +122,7 @@ function openVoiceInput() {
     showToast('Voice input failed: ' + message, true);
   };
   const startWhenReady = () => {
+    if (request.cancelled || voiceInputStartPending !== request) return;
     if (request.error) {
       fail(request.error);
       return;
@@ -236,6 +237,7 @@ updateVoiceMicTitle();
 ensureVoiceBackendEntry();
 
 window.addEventListener('pagehide', cancelPendingVoiceInput);
+document.addEventListener('charliebot:session-view-teardown', cancelPendingVoiceInput);
 window.addEventListener('load', () => {
   if (typeof window.requestIdleCallback === 'function') {
     window.requestIdleCallback(() => {

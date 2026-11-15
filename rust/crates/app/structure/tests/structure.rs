@@ -1347,6 +1347,18 @@ const OWNER_TABLE: &[OwnerRow] = &[
 const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "credential", owner: "infra/core", hint: "Use `charliebot_core::config::CREDENTIAL_KEY`." },
   OwnerRow { name: "api_key", owner: "infra/core", hint: "Use `charliebot_core::credentials::API_KEY_FIELD`." },
+  OwnerRow {
+    name: "rateLimitType",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::event_types::RATE_LIMIT_TYPE`; every reader of a `rate_limit_info` object names the \
+           field there.",
+  },
+  OwnerRow {
+    name: "overageStatus",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::event_types::RATE_LIMIT_OVERAGE_STATUS`; every reader of a `rate_limit_info` object \
+           names the field there.",
+  },
 ];
 
 /// The phrases that one crate owns: the response detail sentences that a route answers with, and the log event

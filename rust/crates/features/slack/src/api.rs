@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::thread_entry::{self, ThreadAdapter, ThreadDetail, ThreadReplyError};
+use charliebot_cli_common::channel_verb::REPLY_BODY;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -43,7 +44,7 @@ async fn reply(State(features): State<Arc<FeatureContext>>, request: Request<Bod
     Ok(config) => config,
     Err(error) => return responses::internal_error("ConfigError", error.to_string()),
   };
-  let model = match body.validate(&SLACK_REPLY_BODY) {
+  let model = match body.validate(&REPLY_BODY) {
     Ok(model) => model,
     Err(response) => return *response,
   };
@@ -151,10 +152,6 @@ fn take_string_list(fields: &mut Map<String, Value>, name: &str) -> Vec<String> 
     _ => unreachable!("a validated {name} is a list"),
   }
 }
-
-const SLACK_REPLY_FIELDS: &[Field] =
-  &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
-const SLACK_REPLY_BODY: BodyModel = BodyModel::required(SLACK_REPLY_FIELDS).forbid_extra();
 
 const SLACK_ACK_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("message_ids", FieldType::StringList)];

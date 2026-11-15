@@ -10,7 +10,7 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::channel_service::reply_response;
-use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN};
+use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN, REPLY_BODY};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
@@ -21,11 +21,6 @@ use serde_json::Value;
 use crate::discord_client::BASE_URL;
 use crate::discord_commands;
 use crate::discord_listener::{self, Bot};
-
-/// `DiscordReplyRequest`: the calling session's id and the reply text.
-const REPLY_FIELDS: &[Field] =
-  &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
-const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 
 /// `DiscordReadRequest`: the calling session's id, an optional channel link, and the window size.
 const READ_FIELDS: &[Field] = &[

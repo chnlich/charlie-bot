@@ -179,9 +179,9 @@ pub const USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "cache_creation_input_tokens
 /// The share of the input tokens that the provider served from its cache.
 pub const USAGE_CACHED_INPUT_TOKENS: &str = "cached_input_tokens";
 pub const RESULT_TOTAL_COST_USD: &str = "total_cost_usd";
-/// The status of the API call that a result event's failure came from. The Claude relay states it when a login is
-/// lost or an account is exhausted, and the backend pool's temporary-failure check and the improve loop's blocker
-/// judgment read it.
+/// The HTTP status of the API call behind an event's failure: a Claude Code `result` event and an `assistant`
+/// API-error message both carry it. The Claude relay's lost-login check, the backend pool's temporary-failure check
+/// and the improve loop's blocker judgment read it.
 pub const API_ERROR_STATUS: &str = "api_error_status";
 /// The native session a result event names: the backend's own session id, such as Claude Code's session or a Codex
 /// thread. Its `total_cost_usd` is that session's running total, so the usage fold counts only the increase.

@@ -58,8 +58,9 @@ pub fn ensure_session_cgroup(config: &SessionCgroupConfig, session_id: &str) -> 
       "session cgroup slice {AGENTS_SLICE} cannot enable memory and pids for its children: {error}"
     ))
   })?;
-  // Each weight controller joins the enablement command through its own call, so a refusal names the one that failed;
-  // the kernel takes a repeated `+controller` as a no-op, so the refresh path of an existing session stays valid.
+  // Each weight controller joins the enablement command through its own call, so a refusal names the one that
+  // failed. The kernel takes a repeated `+controller` as a no-op, so the refresh path of an existing session
+  // stays valid.
   if config.enable_cpu_weight {
     enable_weight_controller(&slice_cgroup, &mut desired, "cpu", "server.enable_session_cpu_weight")?;
   }
@@ -148,7 +149,7 @@ fn open_hierarchy(path: &Path) -> io::Result<Hierarchy> {
   #[cfg(any(test, feature = "test-support"))]
   if cfg!(test) || FAKE_HIERARCHY.load(Ordering::Relaxed) {
     // SAFETY: unit tests and the tests that call `use_fake_cgroup_hierarchy` pass a private temporary directory that
-    // stands in for cgroupfs; the server never turns the flag on.
+    // stands in for cgroupfs. The server never turns the flag on.
     return unsafe { Hierarchy::open_for_test(path) };
   }
   Hierarchy::open(path)
@@ -245,7 +246,7 @@ pub fn prepare_session_cgroup(
   Ok(Some(SessionCgroup { events_before: read_memory_events(&path), path, memory_max_mb: config.memory_max_mb }))
 }
 
-/// Move a spawned process into its cgroup and set its OOM priority; failures log their warnings and do not fail
+/// Move a spawned process into its cgroup and set its OOM priority. Failures log their warnings and do not fail
 /// the spawn.
 pub fn move_process_to_cgroup(pid: u32, cgroup: &SessionCgroup) {
   let path = cgroup.path.join(PROCS_FILE_NAME);
@@ -644,7 +645,7 @@ mod tests {
     let root = fake_slices();
     let path = fake_leaf(root.path(), AGENTS_SLICE);
     ensure_session_cgroup(&cgroup_config(root.path(), 64), SESSION_ID).unwrap();
-    // The kernel drops a cgroup's control files with the directory; the fake tree must lose them first.
+    // The kernel drops a cgroup's control files with the directory. The fake tree must lose them first.
     for name in [
       "cgroup.procs",
       "cgroup.threads",

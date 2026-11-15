@@ -2,11 +2,11 @@
 //!
 //! The wrapper script is `rust/crates/runtime/agents/gh_wrapper/gh`, in the directory this module owns.
 //! `agent_environment` puts its directory first on the PATH of every agent process and records the script path in
-//! the environment; the spawn path
+//! the environment. The spawn path
 //! (`AgentRunner.run`) calls [`require_gh_wrapper`] once after the backend's own environment edits, moves the wrapper
 //! directory back to the front and refuses a process whose PATH resolves `gh` anywhere else. The script sends each
 //! text-carrying GitHub write to the App through the token command named by [`TOKEN_COMMAND_VAR`] (the host config's
-//! `github.app_token_command`) when configured; otherwise every call passes through as the host's personal login.
+//! `github.app_token_command`) when configured. Otherwise every call passes through as the host's personal login.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -17,11 +17,11 @@ use charliebot_registry::backend::Env;
 
 /// The repository directory that holds the wrapper script.
 pub const WRAPPER_REPO_DIR: &str = "rust/crates/runtime/agents/gh_wrapper";
-/// The environment variable that names the wrapper script for the spawn check. `agent_environment` sets it; an
+/// The environment variable that names the wrapper script for the spawn check. `agent_environment` sets it. An
 /// environment without it was not built by the server and carries no wrapper contract.
 pub const WRAPPER_PATH_VAR: &str = "CHARLIEBOT_GH_WRAPPER";
 /// The environment variable that names the App token command the wrapper runs. The spawn path sets it from the live
-/// host config's [`CONFIG_KEY`] (`agent_environment::spawn_base_environment`); when unset, the wrapper uses the host
+/// host config's [`CONFIG_KEY`] (`agent_environment::spawn_base_environment`). When unset, the wrapper uses the host
 /// gh login.
 pub const TOKEN_COMMAND_VAR: &str = "CHARLIEBOT_GH_APP_TOKEN_CMD";
 /// The host config key that names the App token command.
@@ -343,7 +343,7 @@ esac
     String::from_utf8(output.stdout.clone()).unwrap()
   }
 
-  /// Claude Code's Haiku environment leaves PATH as built; Codex prepends its local bin. Both go through the same
+  /// Claude Code's Haiku environment leaves PATH as built. Codex prepends its local bin. Both go through the same
   /// runner spawn check before invoking `gh`.
   #[test]
   #[ignore = "integration"]

@@ -2,9 +2,9 @@
 //! The recorded reference (`fixtures/cli_backends_golden.json`) holds every section's recorded answer over the
 //! synthetic inputs built here. The test fails with every section that differs.
 //!
-//! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases); the translator
-//! streams of gemini and charlie-code (2); and the antigravity finish cases, each run through the `AgentRunner`
-//! final-stdout path over a fake `agy` (11 cases).
+//! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases). The translator
+//! streams of gemini and charlie-code come next (2). The antigravity finish cases follow, each run through the
+//! `AgentRunner` final-stdout path over a fake `agy` (11 cases).
 
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -751,7 +751,7 @@ fn launch_of(case: &Value) -> LaunchArgs {
     resume_session_id: opt_text(&case["resume_session_id"]),
     instructions_content: opt_text(&case["instructions_content"]),
     instructions_file: opt_text(&case["instructions_file"]).map(PathBuf::from),
-    // A manager turn carries no run instructions file, and a worker run does; the live launch sets this flag on the
+    // A manager turn carries no run instructions file, and a worker run does. The live launch sets this flag on the
     // manager path.
     manager_turn: case["instructions_file"].is_null(),
     backend_kwargs,

@@ -55,7 +55,7 @@ pub struct RunRequest {
   pub session_id: Option<String>,
   pub cgroup_config: SessionCgroupConfig,
   pub on_spawn: Option<OnSpawnFn>,
-  /// Executable that implements the capture supervisor entry point; None uses the running server executable.
+  /// Executable that implements the capture supervisor entry point. None uses the running server executable.
   pub final_stdout_supervisor: Option<PathBuf>,
   child_waits_for_spawn_callback: bool,
   pub on_event: EventFn,
@@ -1081,8 +1081,8 @@ mod tests {
     });
   }
 
-  /// Wait up to a second for a gated child to die. The killed child stays a zombie until the runtime reaps it; a stopped
-  /// one keeps state `T`.
+  /// Wait up to a second for a gated child to die. The killed child stays a zombie until the runtime reaps it. A
+  /// stopped one keeps state `T`.
   async fn assert_gated_child_killed(child: &ProcessIdentity, marker: &Path) {
     let pid_start = child.pid_start.as_deref().expect("the gated child has a stat line");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
@@ -1551,7 +1551,7 @@ mod tests {
   }
 
   fn test_request(prompt: String, cwd: PathBuf, values: Env, cgroup_base: PathBuf) -> RunRequest {
-    // Every agent environment carries the wrapper; a test that checks the spawn path supplies its own.
+    // Every agent environment carries the wrapper. A test that checks the spawn path supplies its own.
     let mut values = values;
     if !values.contains_key(crate::gh_wrapper::WRAPPER_PATH_VAR) {
       let wrapper_dir = cgroup_base.parent().expect("the cgroup base has a parent").join("gh-wrapper-stub");

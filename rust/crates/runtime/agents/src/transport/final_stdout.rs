@@ -51,7 +51,7 @@ pub fn supervise(args: &[OsString]) -> anyhow::Result<()> {
   let [program, arguments @ ..] = context.command.as_slice() else { bail!("supervised command is empty") };
   let stdout = fs::OpenOptions::new().append(true).open(directory.join(STDOUT_LOG_NAME))?;
   let stderr = fs::OpenOptions::new().append(true).open(directory.join(STDERR_LOG_NAME))?;
-  // The agent receives group SIGTERM; the supervisor must remain to record its wait status.
+  // The agent receives group SIGTERM. The supervisor must remain to record its wait status.
   // A caught handler resets on exec, so the agent retains the default SIGTERM behavior.
   unsafe {
     nix::sys::signal::signal(nix::sys::signal::Signal::SIGTERM, nix::sys::signal::SigHandler::Handler(wait_for_agent))
@@ -204,7 +204,7 @@ pub fn is_capture(directory: &Path) -> bool {
   directory.join(CONTEXT_NAME).exists()
 }
 
-/// Final-stdout answers have no line-size limit; raw streaming backends use the configured limit.
+/// Final-stdout answers have no line-size limit. Raw streaming backends use the configured limit.
 pub fn event_buffer_limit(directory: &Path, configured: usize) -> usize {
   if is_capture(directory) { usize::MAX } else { configured }
 }

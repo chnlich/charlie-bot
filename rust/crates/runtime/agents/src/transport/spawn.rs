@@ -1014,7 +1014,7 @@ fn apply_turn_tree_limits(pid: u32, cgroup: Option<&SessionCgroup>) {
   }
 }
 
-/// Pin `pid_start`, then await the owner callback; a callback error terminates and reaps the child.
+/// Pin `pid_start`, then await the owner callback. A callback error terminates and reaps the child.
 pub async fn pin_identity_and_on_spawn<E, F, Fut>(
   mut spawned: SpawnedChild,
   on_spawn: F,
@@ -1078,7 +1078,7 @@ where
 }
 
 /// Parse one line of the backend's NDJSON stream. An empty or ASCII-whitespace line and a line that is not JSON read
-/// as `None`; a line that is not JSON is logged under `backend_line_not_json`. A line of invalid UTF-8 is parsed
+/// as `None`. A line that is not JSON is logged under `backend_line_not_json`. A line of invalid UTF-8 is parsed
 /// lossily first, and the repaired event is returned when the repair parses.
 pub fn parse_backend_line(line: &[u8]) -> Option<Value> {
   parse_ndjson_line(line, LineStream::Backend)

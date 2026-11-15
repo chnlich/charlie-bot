@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub const CURSOR_FIELD_BYTES: usize = 20;
 
-/// The consumed byte offset; a missing or malformed file reads as zero, which requests replay.
+/// The consumed byte offset. A missing or malformed file reads as zero, which requests replay.
 pub fn read_raw_cursor(path: &Path) -> u64 {
   fs::read_to_string(path).ok().and_then(|contents| contents.trim().parse().ok()).unwrap_or(0)
 }

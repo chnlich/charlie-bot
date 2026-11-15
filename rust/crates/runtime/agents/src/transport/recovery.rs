@@ -19,7 +19,7 @@ pub struct TypeLineFilter {
 }
 
 impl TypeLineFilter {
-  /// A filter for the named event types; every line the prefix cannot classify passes.
+  /// A filter for the named event types. Every line the prefix cannot classify passes.
   pub fn new(types: impl IntoIterator<Item = impl Into<String>>) -> Self {
     Self { keep_types: types.into_iter().map(Into::into).collect() }
   }
@@ -48,7 +48,7 @@ impl TypeLineFilter {
   }
 }
 
-/// The events parsed from raw NDJSON lines; blank and malformed lines are dropped.
+/// The events parsed from raw NDJSON lines. Blank and malformed lines are dropped.
 pub fn parse_raw_lines(raw_bytes: &[u8]) -> Vec<Value> {
   raw_bytes.split(|byte| *byte == b'\n').filter_map(spawn::parse_raw_line).collect()
 }
@@ -81,7 +81,7 @@ where
   Ok(projected)
 }
 
-/// The projected events of the raw file; a line filter skips only provable type mismatches.
+/// The projected events of the raw file. A line filter skips only provable type mismatches.
 pub fn project_raw_file<T>(
   raw_path: &Path,
   mut translate: T,

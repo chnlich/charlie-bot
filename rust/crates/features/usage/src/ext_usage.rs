@@ -57,8 +57,8 @@ impl Panel {
     self.state.lock().expect("the panel lock is never poisoned")
   }
 
-  /// Adopts a round's accounts: prunes the entries of dropped accounts, then seeds a pending marker for each account not
-  /// yet read, in derivation order.
+  /// The start of one round: the round's accounts adopted, the entries of dropped accounts pruned, and a pending
+  /// marker seeded for each account not yet read, in derivation order.
   fn begin_round(&self, cycle: &[Arc<dyn QuotaAccount>]) {
     let mut state = self.lock();
     let PanelState { cached, accounts } = &mut *state;
@@ -71,8 +71,8 @@ impl Panel {
     }
   }
 
-  /// Writes one fetch's outcome. A reading replaces the entry. A failed fetch keeps a real reading, and otherwise writes
-  /// the error entry. The account then sets or clears its login mark on the stored entry.
+  /// One fetch's outcome, written into the panel. A reading replaces the entry. A failed fetch keeps a real reading,
+  /// and otherwise writes the error entry. The account then sets or clears its login mark on the stored entry.
   fn record_fetch(&self, account: &dyn QuotaAccount, reading: Option<Map<String, Value>>) {
     let key = cache_key(account);
     let mut state = self.lock();
@@ -125,7 +125,7 @@ fn cache_key(account: &dyn QuotaAccount) -> String {
   format!("{}:{}", account.provider(), account.label())
 }
 
-/// Rounds forever. A round that fails logs once, then sleeps one round gap before the next round.
+/// The poll loop that rounds forever. A round that fails logs once, then sleeps one round gap before the next round.
 pub async fn poll_loop(panel: Arc<Panel>, host: Arc<dyn PollHost>) {
   loop {
     if let Err(error) = poll_round(&panel, host.as_ref()).await {
@@ -298,7 +298,7 @@ mod tests {
     Box::pin(poll_loop(Arc::clone(panel), Arc::clone(host) as Arc<dyn PollHost>))
   }
 
-  /// Runs the loop until `at` after `start`. The loop never ends, so the timeout must fire.
+  /// The loop, run until `at` after `start`. The loop never ends, so the timeout must fire.
   async fn run_until(poll: &mut PollFuture, start: Instant, at: Duration) {
     let remaining = (start + at).saturating_duration_since(Instant::now());
     assert!(tokio::time::timeout(remaining, poll.as_mut()).await.is_err(), "the poll loop never ends");

@@ -235,7 +235,7 @@ fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, P
   Ok(logs)
 }
 
-/// Maps a container entry's directory to the log file that holds its usage.
+/// The mapping from a container entry's directory to the log file that holds its usage.
 type LogPathFn = fn(&Path) -> PathBuf;
 
 /// The event log of one thread directory.

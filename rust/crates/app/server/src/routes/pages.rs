@@ -15,6 +15,7 @@ use charliebot_compat::compression::{gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::paths;
 use charliebot_registry::Registry;
 use charliebot_registry::templating::{self, STATIC_ASSET_VERSION_KEY, Templating};
@@ -560,7 +561,7 @@ fn page_response(body: Bytes, compressed: Option<PageCompressed>, status: Status
       builder = builder
         .header(header::CONTENT_LENGTH, compressed.bytes.len())
         .header(header::CONTENT_ENCODING, compressed.encoding)
-        .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+        .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
       compressed.bytes
     }
     None => {

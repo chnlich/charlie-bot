@@ -18,6 +18,7 @@ use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::text_repr;
 use charliebot_core::timefmt;
 use charliebot_registry::task_errors::task_http_error;
@@ -1063,7 +1064,7 @@ fn json_bytes_response(body: Bytes, encoding: Option<&'static str>) -> Response 
   if let Some(encoding) = encoding {
     builder = builder
       .header(header::CONTENT_ENCODING, HeaderValue::from_static(encoding))
-      .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+      .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
   }
   builder.body(Body::from(body)).expect("a session JSON response builds")
 }
@@ -1091,7 +1092,7 @@ fn events_window_response(body: Bytes, gzip: Option<Bytes>, start: u64) -> Respo
     .header(header::CONTENT_TYPE, "application/x-ndjson")
     .header(header::CONTENT_LENGTH, served.len())
     .header("x-window-start", start)
-    .header(header::VARY, "Accept-Encoding");
+    .header(header::VARY, ACCEPT_ENCODING);
   if let Some(encoding) = encoding {
     builder = builder.header(header::CONTENT_ENCODING, encoding);
   }
@@ -1104,7 +1105,7 @@ fn events_gzip_response(body: Bytes) -> Response {
     .header(header::CONTENT_TYPE, "application/x-ndjson")
     .header(header::CONTENT_LENGTH, body.len())
     .header(header::CONTENT_ENCODING, "gzip")
-    .header(header::VARY, "Accept-Encoding")
+    .header(header::VARY, ACCEPT_ENCODING)
     .body(Body::from(body))
     .expect("a compressed events response builds")
 }

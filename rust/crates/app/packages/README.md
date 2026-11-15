@@ -9,6 +9,11 @@ package added here reaches both and the two lists cannot drift.
 | Rust item | Role |
 | --- | --- |
 | `registry` | the composition root both binaries share |
+| `helper_entry::run` | the argv entries a binary serves before it registers, the OpenCode relay among them |
 
 The two lists, `RUNTIME` and `PACKAGES`, are internal to this crate; `registry` reads both.
 The list belongs to this crate: a package added to the server is added here.
+
+`helper_entry` owns the argv check both binaries make before registration. The OpenCode backend spawns its relay as a
+child of `std::env::current_exe()`, so the server and the CLI both re-enter themselves through `--opencode-relay`; the
+check lives here, and neither binary names the backend crate that spawns it.

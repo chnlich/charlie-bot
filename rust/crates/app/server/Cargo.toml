@@ -16,7 +16,6 @@ charliebot-compat.workspace = true
 charliebot-agents.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
-charliebot-opencode.workspace = true
 charliebot-packages.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true

@@ -301,8 +301,7 @@
     const view = document.getElementById(VIEW_ID);
     if (view) {
       clearChildren(view);
-      if (pageIsOffline()) view.innerHTML = OFFLINE_PANEL_MARK;
-      else if (panelSessionId) statusPanelBody(view);
+      if (panelSessionId) statusPanelBody(view);
     }
     renderWaitingBadge();
   }
@@ -332,7 +331,6 @@
   // The descendant rows: one GET per open and per subtree notice. A response for a
   // session the page no longer shows, or one overtaken by a later GET, is dropped.
   async function fetchDescendants(sessionId) {
-    if (pageIsOffline()) return;
     const gen = ++panelFetchGen;
     let body;
     try {
@@ -398,13 +396,6 @@
 
   // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);
-
-  // The Status view shows the offline label while the page is offline and loads once it is back.
-  window.addEventListener('offline', renderPanel);
-  window.addEventListener('online', () => {
-    renderPanel();
-    refreshSessionStatusPanel();
-  });
 
   Chat.wire({
     openSessionStatusPanel,

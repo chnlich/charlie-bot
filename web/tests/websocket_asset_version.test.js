@@ -12,7 +12,6 @@ function buildHarness(clock) {
   const reloaded = [];
   const timers = [];
   const bodyChildren = [];
-  const documentListeners = new Map();
   const sessionStorage = {
     getItem: (key) => (sessionStorage.store.has(key) ? sessionStorage.store.get(key) : null),
     setItem: (key, value) => sessionStorage.store.set(key, value),
@@ -20,15 +19,6 @@ function buildHarness(clock) {
   };
   const document = {
     getElementById: () => null,
-    addEventListener: (type, listener) => {
-      const listeners = documentListeners.get(type) || [];
-      listeners.push(listener);
-      documentListeners.set(type, listeners);
-    },
-    dispatchEvent: (event) => {
-      for (const listener of documentListeners.get(event.type) || []) listener(event);
-      return true;
-    },
     createElement: () => ({
       style: {cssText: ''},
       textContent: '',
@@ -43,8 +33,6 @@ function buildHarness(clock) {
     Date: {now: () => clock.now},
     sessionStorage,
     location: {protocol: 'http:', host: 'localhost:8000', reload: () => reloaded.push(clock.now)},
-    // The offline-shell helper records a reload after refreshing the stored shell.
-    reloadAfterRefreshingShell: () => reloaded.push(clock.now),
     setTimeout: (fn, ms) => {
       timers.push({fn, ms});
       return timers.length;
@@ -52,7 +40,7 @@ function buildHarness(clock) {
     clearTimeout: () => {},
     document,
   });
-  return {context, FakeWebSocket, reloaded, timers, sessionStorage, bodyChildren, document};
+  return {context, FakeWebSocket, reloaded, timers, sessionStorage, bodyChildren};
 }
 
 test('the handshake URL carries the encoded asset_version', () => {
@@ -92,22 +80,9 @@ test('a second 4409 within 60 seconds shows the banner and neither reloads nor r
   assert.equal(bodyChildren[0].textContent, BANNER_TEXT);
   assert.equal(bodyChildren[0].children.length, 1);
   assert.equal(bodyChildren[0].children[0].textContent, 'Reload');
-  // The Reload button retries the shell refresh, outside the guard.
+  // The Reload button reloads by hand, outside the guard.
   bodyChildren[0].children[0].onclick();
   assert.deepEqual(reloaded, [5000, 30000]);
-});
-
-test('a failed shell refresh offers a retry without reloading the current page', () => {
-  const clock = {now: 5000};
-  const {context, reloaded, bodyChildren, document} = buildHarness(clock);
-
-  document.dispatchEvent(new context.CustomEvent('charliebot:offline-shell-refresh-failed'));
-
-  assert.deepEqual(reloaded, []);
-  assert.equal(bodyChildren.length, 1);
-  assert.equal(bodyChildren[0].children[0].textContent, 'Reload');
-  bodyChildren[0].children[0].onclick();
-  assert.deepEqual(reloaded, [5000]);
 });
 
 test('a 4409 at least 60 seconds after the stored time reloads again', () => {

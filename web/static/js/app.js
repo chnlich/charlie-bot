@@ -1,53 +1,20 @@
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
-// Boot order: the session's messages paint before the sidebar rows. The embedded first screen paints at once. A boot
-// without one takes the open path (session-view.js openSession), which fetches the first screen before anything else
-// paints and connects the socket itself. The read posts after the open's catch-up (last-state.js), never here.
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
   initSidebarResize();
+  restoreSidebarFromUrl();
   updateRelativeTimes();
-  registerOfflineShell();
-
-  if (SESSION_ID && !SESSION_BOOTSTRAP) {
-    initPage();
-    openSession(SESSION_ID, null).then(() => restoreSidebarFromUrl());
-    return;
-  }
-
-  // The shell names no session; its URL does. The open requests that session's first screen before the sidebar
-  // list, which the shell fetches on its own (restoreSidebarFromUrl).
-  const shellSessionId = SESSION_ID === null ? new URLSearchParams(location.search).get('session') : null;
-  if (shellSessionId) {
-    initPage();
-    openSession(shellSessionId, null);
-    restoreSidebarFromUrl();
-    return;
-  }
 
   // Initial chat render uses the server-embedded minimal bootstrap so refresh
   // and SPA switches share the same renderer without a duplicate /view fetch.
-  if (SESSION_ID) {
+  if (SESSION_ID && SESSION_BOOTSTRAP) {
     renderSessionView(SESSION_BOOTSTRAP);
-    const dotShown = ownUnread(SESSION_ID);
-    recordUnreadFact(SESSION_ID, false);
-    // The same paint clears the opened row's dot and every ancestor's subtree mark.
-    refreshSessionIndicator(SESSION_ID);
-    beginCatchUp({
-      sessionId: SESSION_ID,
-      storedPosition: SESSION_BOOTSTRAP.event_count,
-      copyBytes: null,
-      listPending: false,
-      readDot: dotShown,
-    });
+    // "Read" means rendered: a render throw above skips the read.
+    markSessionRead(SESSION_ID, null);
   }
-  restoreSidebarFromUrl();
-  initPage();
-  connectWS();
-});
 
-function initPage() {
   // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.
   postProcessRenderedMessages(document);
 
@@ -70,6 +37,9 @@ function initPage() {
 
   // Init scroll-to-top pagination for tail-loaded sessions
   initScrollPagination();
+
+  // Connect WebSocket
+  connectWS();
 
   // Poll sidebar status to correct WS drift (adaptive: 3s when tasks running, 10s idle)
   function scheduleStatusPoll() {
@@ -122,7 +92,8 @@ function initPage() {
       location.reload();
     }
   });
-}
+
+});
 
 // ---------------------------------------------------------------------------
 // Global input key handler (Enter-to-send)

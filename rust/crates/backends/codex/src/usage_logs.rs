@@ -179,7 +179,7 @@ fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result
 }
 
 /// The complete lines of `bytes` that carry a marker, parsed. A trailing fragment without its newline waits for a
-/// later read. A line that does not parse is dropped; a valid JSON value that is not an object fails when read.
+/// later read. A line that does not parse is dropped. A valid JSON value that is not an object fails when read.
 fn marker_lines(bytes: &[u8]) -> anyhow::Result<Vec<Map<String, Value>>> {
   let Some(last_newline) = memrchr(b'\n', bytes) else {
     return Ok(Vec::new());

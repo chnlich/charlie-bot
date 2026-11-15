@@ -436,7 +436,7 @@ fn codex_windows(rate_limits: &Map<String, Value>, account: &str) -> anyhow::Res
   Ok(windows.into_iter().map(|(_, window)| window).collect())
 }
 
-/// The credits reading to emit, or `None` when its shape is not recognized. `unlimited` must be a boolean; a balance
+/// The credits reading to emit, or `None` when its shape is not recognized. `unlimited` must be a boolean. A balance
 /// that parses as a number is included.
 fn codex_credits(raw: &Value, account: &str) -> Option<Map<String, Value>> {
   let Some(credits) = raw.as_object() else {
@@ -697,7 +697,7 @@ impl SpendMemo {
     (entry.signature == signature).then(|| Arc::clone(&entry.events))
   }
 
-  /// Stores `events` for `path` under `signature`; the cache evicts the least recently used entry past its limit.
+  /// Stores `events` for `path` under `signature`. The cache evicts the least recently used entry past its limit.
   fn record(&mut self, path: PathBuf, signature: (i128, u64), events: Arc<Vec<SpendEvent>>) {
     self.entries.put(path, MemoEntry { signature, events });
   }

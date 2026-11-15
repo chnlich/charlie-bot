@@ -100,10 +100,11 @@ pub fn build_bootstrap_payload(
   let mut worker_summary = None;
   // The tail the payload renders, oldest first, with the ordinal of its first slot in the space
   // the session's older pages read: a message ordinal in a worker's transcript projection, an
-  // event index for every other session, whose events fold to messages one to many.
+  // event index for every other session, whose events fold to messages one to many. The events
+  // branch keeps the fold of the whole tail, which is the payload's first trim step.
   enum Tail {
     Slots { messages: Vec<Value>, start: usize, projection: Arc<MessageProjection> },
-    Events { events: Vec<charliebot_store::ChatEvent>, start: usize },
+    Events { events: Vec<charliebot_store::ChatEvent>, start: usize, messages: Vec<Value> },
   }
   let (tail, pending_draft, event_count) = if meta.profile == TaskProfile::Worker {
     let transcript = worker_transcript::load_worker_transcript(store, &meta.id)?;
@@ -120,22 +121,22 @@ pub fn build_bootstrap_payload(
     let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
     // A turn's events fold to more than one message, so a read of the message budget's count of events can fold to
     // fewer messages than the page shows. The read doubles until the tail holds the budget or the log ends, and the
-    // trim below keeps the budget's last messages.
+    // trim below keeps the budget's last messages. The read that ends the loop keeps its fold, because the payload's
+    // first trim step folds that same tail.
     // The read covers the log's last `read` lines, and a line that does not parse is no event: the cursor counts the
     // lines the tail covers, not the events they parse to, so a malformed line never advances it.
     let mut read = BOOTSTRAP_MESSAGE_LIMIT;
-    let (events, total_count, oldest) = loop {
+    let (events, total_count, oldest, messages, pending_draft) = loop {
       let (events, total_count, _has_more) = store.load_chat_events_tail(&meta.id, read)?;
       let complete = total_count <= read;
       let oldest = archive_offset + total_count.saturating_sub(read.min(total_count));
-      let (messages, _) = store.events_to_view_at(&events, oldest)?;
+      let (messages, pending_draft) = store.events_to_view_at(&events, oldest)?;
       if messages.len() >= BOOTSTRAP_MESSAGE_LIMIT || complete {
-        break (events, total_count, oldest);
+        break (events, total_count, oldest, messages, pending_draft);
       }
       read *= 2;
     };
-    let (_, pending_draft) = store.events_to_view_at(&events, oldest)?;
-    (Tail::Events { events, start: oldest }, pending_draft, archive_offset + total_count)
+    (Tail::Events { events, start: oldest, messages }, pending_draft, archive_offset + total_count)
   };
 
   // The payload's fields that no trim step changes, built once. Each step clones them and inserts
@@ -154,9 +155,13 @@ pub fn build_bootstrap_payload(
   let mut build = |drop: usize| -> StoreResult<Value> {
     let (messages, start) = match &tail {
       Tail::Slots { messages, start, .. } => (messages[drop..].to_vec(), start + drop),
-      Tail::Events { events, start } => {
-        let (messages, _) = store.events_to_view_at(&events[drop..], start + drop)?;
-        (messages, start + drop)
+      Tail::Events { events, start, messages } => {
+        if drop == 0 {
+          (messages.clone(), *start)
+        } else {
+          let (messages, _) = store.events_to_view_at(&events[drop..], start + drop)?;
+          (messages, start + drop)
+        }
       }
     };
     let mut payload = base.clone();

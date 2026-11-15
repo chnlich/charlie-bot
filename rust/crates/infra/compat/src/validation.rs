@@ -350,8 +350,10 @@ fn lax_int(text: &str) -> Option<i128> {
     Some((whole, fraction)) => (whole, Some(fraction)),
     None => (text, None),
   };
+  // The fraction follows the digits with no whitespace between them, so a whole part with an edge of its own
+  // stays refused even though `int_digits` trims: `"1 .0"` is not an int.
   if let Some(fraction) = fraction
-    && (fraction.is_empty() || fraction.bytes().any(|digit| digit != b'0'))
+    && (whole.trim() != whole || fraction.is_empty() || fraction.bytes().any(|digit| digit != b'0'))
   {
     return None;
   }
@@ -412,7 +414,7 @@ mod tests {
     for (text, value) in accepted {
       assert_eq!(lax_int(text), Some(value), "{text:?}");
     }
-    for text in ["1.5", "1.", ".5", "1e3", "1.0_0", "0x10", "1__0", "_1", "", "-", "\u{661}\u{662}"] {
+    for text in ["1.5", "1.", ".5", "1 .0", "1e3", "1.0_0", "0x10", "1__0", "_1", "", "-", "\u{661}\u{662}"] {
       assert_eq!(lax_int(text), None, "{text:?}");
     }
   }

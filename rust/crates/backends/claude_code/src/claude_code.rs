@@ -841,7 +841,17 @@ mod tests {
       true,
       false,
       None,
-      LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: vec!["--resume".to_string(), "resume-id".to_string()],
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -873,12 +883,18 @@ mod tests {
       true,
       None,
       LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: Some("manager-session".to_string()),
         backend_kwargs: serde_json::json!({"run_kind": "manager_turn", "run_id": "manager-run", "can_delegate": true})
           .as_object()
           .unwrap()
           .clone(),
-        cgroup_session_id: Some("manager-session".to_string()),
-        ..LaunchArgs::default()
+        manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
     )
@@ -968,8 +984,15 @@ mod tests {
       false,
       None,
       LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
         backend_kwargs: serde_json::json!({"run_kind": "manager_turn"}).as_object().unwrap().clone(),
-        ..LaunchArgs::default()
+        manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
     )
@@ -989,7 +1012,17 @@ mod tests {
       false,
       None,
       8123,
-      LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: vec!["--resume".to_string(), "resume-id".to_string()],
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1033,7 +1066,17 @@ mod tests {
       false,
       false,
       None,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1071,7 +1114,17 @@ mod tests {
       false,
       false,
       None,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       zero_limits(),
     )
     .unwrap();
@@ -1103,7 +1156,17 @@ mod tests {
       false,
       None,
       8123,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1220,7 +1283,17 @@ mod tests {
       false,
       false,
       None,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1298,7 +1371,17 @@ mod tests {
       false,
       None,
       8123,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1322,7 +1405,17 @@ mod tests {
       false,
       None,
       18498,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();

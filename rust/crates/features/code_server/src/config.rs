@@ -7,6 +7,7 @@ use std::str::Utf8Error;
 use std::sync::Arc;
 
 use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::int_text;
 use charliebot_core::json_loads::{UTF8_CODEC, codec_error_text};
 use charliebot_core::paths;
 use charliebot_core::repo_root::CONFIGS_DIR_NAME;
@@ -102,23 +103,11 @@ fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
   codec_error_text(UTF8_CODEC, bytes, position, position + 1, reason)
 }
 
-/// A port literal: surrounding whitespace, an optional sign, and digits with single underscores between them.
-/// A value beyond the i64 range reads as not an integer here.
+/// A port literal: `int(text)` at i64 width, where a value beyond that width reads as not an integer here.
 fn parse_int(text: &str) -> Option<i64> {
-  let text = text.trim();
-  let (sign, digits) = match text.strip_prefix('-') {
-    Some(rest) => (-1, rest),
-    None => (1, text.strip_prefix('+').unwrap_or(text)),
-  };
-  let valid = digits.starts_with(|c: char| c.is_ascii_digit())
-    && digits.ends_with(|c: char| c.is_ascii_digit())
-    && !digits.contains("__")
-    && digits.chars().all(|c| c.is_ascii_digit() || c == '_');
-  if !valid {
-    return None;
-  }
-  let magnitude: i64 = digits.replace('_', "").parse().ok()?;
-  Some(sign * magnitude)
+  let (negative, digits) = int_text::int_digits(text)?;
+  let magnitude: i64 = digits.parse().ok()?;
+  Some(if negative { -magnitude } else { magnitude })
 }
 
 /// `text` normalized as a POSIX path: repeated slashes and `.` parts drop, and a trailing slash goes. An empty path is

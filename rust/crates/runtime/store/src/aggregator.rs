@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use charliebot_core::event_types::{self, EventFields, is_truthy};
+use charliebot_core::int_text;
 use charliebot_core::text_repr::value_str;
 use serde_json::{Value, json};
 
@@ -1267,30 +1268,8 @@ fn event_int<E: EventFields>(value: &E) -> Option<String> {
 }
 
 fn parse_int_string(value: &str) -> Option<String> {
-  let value = value.trim();
-  let (negative, digits) = if let Some(digits) = value.strip_prefix('-') {
-    (true, digits)
-  } else if let Some(digits) = value.strip_prefix('+') {
-    (false, digits)
-  } else {
-    (false, value)
-  };
-  let mut parsed_digits = String::with_capacity(digits.len());
-  let mut previous_was_digit = false;
-  for character in digits.chars() {
-    if character.is_ascii_digit() {
-      parsed_digits.push(character);
-      previous_was_digit = true;
-    } else if character == '_' && previous_was_digit {
-      previous_was_digit = false;
-    } else {
-      return None;
-    }
-  }
-  if !previous_was_digit {
-    return None;
-  }
-  let digits = parsed_digits.trim_start_matches('0');
+  let (negative, digits) = int_text::int_digits(value)?;
+  let digits = digits.trim_start_matches('0');
   if digits.is_empty() {
     return Some("0".to_string());
   }

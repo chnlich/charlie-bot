@@ -508,8 +508,10 @@
       }
     }
 
-    // Prepend the events before the loaded window. The scroll offset is kept on the first row that was
-    // on screen, so the reader stays where they were while earlier rows arrive above.
+    // Prepend the events before the loaded window. The control stands above the list, so a click on it
+    // comes from the page's top, and the view stays there: the rows just loaded open the list under the
+    // control, earliest first, in the order the list reads. Holding the first row on screen instead would
+    // move the reader down by the whole prepended block and leave the loaded rows above the viewport.
     async function loadEarlier() {
       if (loadingEarlier || !(windowStart > 0)) return;
       loadingEarlier = true;
@@ -517,7 +519,6 @@
       button.disabled = true;
       button.textContent = 'Loading…';
       const before = windowStart;
-      const previousHeight = document.documentElement.scrollHeight;
       try {
         const res = await fetch(EVENTS_URL + '?tail=' + EVENTS_PAGE + '&before=' + before);
         if (!res.ok) {
@@ -527,7 +528,6 @@
         windowStart = windowStartOf(res);
         allEvents = earlier.concat(allEvents);
         filterEvents();
-        window.scrollBy(0, document.documentElement.scrollHeight - previousHeight);
         document.getElementById('error-msg').classList.add('hidden');
       } catch (err) {
         const errEl = document.getElementById('error-msg');

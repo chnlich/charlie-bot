@@ -2203,13 +2203,16 @@ fn ui_text_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
   text.lines().enumerate().filter(|(_, line)| line.chars().any(is_ui_text)).map(|(index, line)| (index + 1, line))
 }
 
-/// The hits of one tracked text file, read as UTF-8.
-fn text_file_hits(repo: &Path, file: &str) -> Vec<UiHit> {
-  let path = repo.join(file);
-  let text = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {} as UTF-8 text: {error}", path.display()));
-  ui_text_lines(&text)
-    .map(|(line, text)| UiHit { file: file.to_string(), line, text: text.trim().to_string() })
-    .collect()
+/// The hits of one tracked file read as UTF-8, or `None` when its bytes are not UTF-8. The web surface reads every
+/// tracked file under `web/`, among them binary assets (a font, a precompressed copy) that hold no readable UI text.
+/// The embedded surface's files are `include_str!`'d, so the caller treats a `None` there as the defect it is.
+fn text_file_hits(repo: &Path, file: &str) -> Option<Vec<UiHit>> {
+  let text = fs::read_to_string(repo.join(file)).ok()?;
+  Some(
+    ui_text_lines(&text)
+      .map(|(line, text)| UiHit { file: file.to_string(), line, text: text.trim().to_string() })
+      .collect(),
+  )
 }
 
 /// The web surface: every tracked file under `web/` except the tests under `web/tests/`.
@@ -2233,7 +2236,7 @@ fn web_surface(repo: &Path) -> UiSurface {
       continue;
     }
     surface.files_read += 1;
-    surface.hits.extend(text_file_hits(repo, file));
+    surface.hits.extend(text_file_hits(repo, file).unwrap_or_default());
   }
   surface
 }
@@ -2271,11 +2274,15 @@ fn rust_surface(repo: &Path, workspace: &Workspace) -> (UiSurface, Vec<EmbeddedF
   (surface, embedded)
 }
 
-/// The embedded surface: the files that production code embeds with `include_str!`.
+/// The embedded surface: the files that production code embeds with `include_str!`. Such a file is UTF-8 by
+/// construction, so a read that fails names a real defect.
 fn embedded_surface(repo: &Path, embedded: &[EmbeddedFile]) -> UiSurface {
   let mut surface = UiSurface { name: "embedded", files_read: embedded.len(), hits: Vec::new() };
   for file in embedded {
-    surface.hits.extend(text_file_hits(repo, &file.file));
+    let hits = text_file_hits(repo, &file.file).unwrap_or_else(|| {
+      panic!("read {} as UTF-8 text: a file include_str! embeds is UTF-8", repo.join(&file.file).display())
+    });
+    surface.hits.extend(hits);
   }
   surface
 }

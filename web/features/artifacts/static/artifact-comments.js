@@ -22,7 +22,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // The column also needs vertical room. The gate reads the window, never how many
     // comments are pending. The action bar's own list is capped at 320px, so the bar
     // has a height ceiling (522px measured). At 600px, the worst case still leaves
-    // band = innerHeight - 72 - barHeight positive; the usual bar leaves 326px.
+    // band = innerHeight - 72 - barHeight positive. The usual bar leaves 326px.
     var GUTTER_MIN_HEIGHT = 600;
     // Properties that can make body or documentElement the containing block for the
     // injected layer's fixed boxes. Declared with the other constants: installBatchTray
@@ -757,7 +757,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       var quoteLines = (context
         ? '\u25B8 ' + context + ' \u203A "' + quote + '"'
         : '\u25B8 "' + quote + '"').split('\n');
-      // A quote spanning lines keeps its locator shape; the suffix rides the last
+      // A quote spanning lines keeps its locator shape. The suffix rides the last
       // quote line, right of the closing quote.
       quoteLines[quoteLines.length - 1] += suffix || '';
       return quoteLines.concat(('\u21B3 ' + comment).split('\n'));
@@ -961,7 +961,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         var entry = pending[i];
         if (entry.el) continue;
         if (entry.quote === '') continue;
-        // Rows match by quote alone; the stored occurrence picks which same-quote
+        // Rows match by quote alone. The stored occurrence picks which same-quote
         // row the draft belongs to. An absent or 0 occurrence is the first row.
         var seen = 0;
         for (var j = 0; j < blocks.length; j++) {
@@ -1402,7 +1402,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // Read back as well. The enumeration above is a known set, not a complete test for
-    // the causes the spec defines; this is the backstop for whatever the enumeration
+    // the causes the spec defines. This is the backstop for whatever the enumeration
     // misses, at placement time.
     // The free margin is measured in viewport coordinates (getBoundingClientRect) but
     // written in containing-block coordinates (style.left), and the whole card layout
@@ -1489,7 +1489,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       var count = pending.length;
       var ordered = pending.slice();
       ordered.sort(function(a, b) {
-        // Shortcut entries lead the batch; among themselves the sort is stable,
+        // Shortcut entries lead the batch. Among themselves the sort is stable,
         // so they keep click order. Block comments follow in document order.
         var aShortcut = a.kind !== ENTRY_KIND.BLOCK;
         var bShortcut = b.kind !== ENTRY_KIND.BLOCK;

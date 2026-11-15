@@ -4,7 +4,7 @@
 //
 // The chat page's document carries a forward post-processor in place of this file, so a transcript that links no
 // artifact page never fetches it. The first rendered message that names one loads it from
-// /static/features/artifacts/artifact-cards.js; the module then registers its own post-processor, its file link
+// /static/features/artifacts/artifact-cards.js. The module then registers its own post-processor, its file link
 // family and the iframe resize listener, which serve every message rendered after it.
 // ---------------------------------------------------------------------------
 (function() {
@@ -286,7 +286,7 @@ function markArtifactCardMissing(card) {
 
 // ---------------------------------------------------------------------------
 // Plan compact cards — registered plan-version links render as native cards.
-// Pure helpers (exported for testing) live below; the DOM render path is in
+// Pure helpers (exported for testing) live below. The DOM render path is in
 // embedLinkedHtmlArtifacts. The registry snapshot is owned by the plan panel
 // module (single source of truth, no client-side state derivation).
 // ---------------------------------------------------------------------------
@@ -308,7 +308,7 @@ function _planStateLabel(plan) {
   return plan ? plan.state : '';
 }
 
-// Both plan-version lookups return this one record shape; compact-card
+// Both plan-version lookups return this one record shape. Compact-card
 // renders and badge updates read the same fields.
 function _planVersionRecord(plan, ver) {
   return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
@@ -391,7 +391,7 @@ function expandArtifactCard(card) {
   var fetchUrl = card.dataset.artifactFetchUrl;
   return fetchHtmlArtifact(absPath, fetchUrl).then(function(html) {
     // The chat can be rebuilt (SPA session switch) while the fetch is in
-    // flight; never revive a detached card into the expanded set.
+    // flight. Never revive a detached card into the expanded set.
     if (!card.isConnected) return;
     if (card.dataset.artifactExpanded === '1') return;
     card.innerHTML = buildHtmlArtifactFrameHtml({absPath: absPath, filePath: absPath, html: html});

@@ -29,7 +29,7 @@ const THREAD_SLOT: ThreadSlot = ThreadSlot {
   origin_field: "discord_origin",
   origin_type: "DiscordOrigin",
   origin_keys: &["guild_id", "parent_channel_id", "thread_id"],
-  watermark_field: "discord_watermark_id",
+  watermark_field: thread_contract::DISCORD.watermark_field,
 };
 
 /// `register`: the service, the routes and the package's other registrations, in server order.

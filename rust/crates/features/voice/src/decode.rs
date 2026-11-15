@@ -101,7 +101,7 @@ fn decode(path: &Path) -> Result<Mono, String> {
 }
 
 /// The frames of `samples` that an MP4 edit list plays: it starts at `media_time` and runs for its duration. A file
-/// without an edit list has no priming to cut; symphonia already applies the MP3 and Ogg priming in its decoders.
+/// without an edit list has no priming to cut. Symphonia already applies the MP3 and Ogg priming in its decoders.
 fn trim_mp4_edit(samples: &mut Vec<f32>, rate: u32, edit: Option<AudioEdit>) -> Result<(), String> {
   let Some(edit) = edit else {
     return Ok(());

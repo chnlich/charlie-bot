@@ -66,7 +66,7 @@ pub(crate) fn audio_edit(file: &[u8]) -> Result<Option<AudioEdit>, String> {
   Ok(None)
 }
 
-/// The boxes laid out in `data`. A size of 0 runs to the end of the data; a size of 1 is followed by a 64-bit size.
+/// The boxes laid out in `data`. A size of 0 runs to the end of the data. A size of 1 is followed by a 64-bit size.
 fn atoms(mut data: &[u8]) -> Result<Vec<Atom<'_>>, String> {
   let mut boxes = Vec::new();
   while !data.is_empty() {

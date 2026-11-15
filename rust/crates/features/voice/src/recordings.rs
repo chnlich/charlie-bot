@@ -43,7 +43,7 @@ fn run_lock(voice_dir: &Path, run_id: &str) -> Arc<Mutex<()>> {
 
 /// The session ids that hold a `voice/` directory, per sessions directory.
 ///
-/// The first list request of a home builds the set with one probe per session; later requests read only the
+/// The first list request of a home builds the set with one probe per session. Later requests read only the
 /// sessions it names. [`with_run_stem`] names its session under the same lock, so a recording this server stores
 /// appears on the next request. No other process writes a voice directory, so the set names every session the list
 /// can answer.
@@ -432,7 +432,7 @@ fn voice_entry_exists(sessions: &fs::File, session_id: &str) -> io::Result<bool>
 /// The most recent recordings across every session directory, newest first, one row per run.
 ///
 /// Each request reads the `voice/` directory of the sessions the session index names, so a request enumerates no
-/// session that holds no recording; a session without one is skipped, and any other read failure fails the
+/// session that holds no recording. A session without one is skipped, and any other read failure fails the
 /// request. The duration and the levels of each row come from its WAV at request time.
 pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Result<Vec<Value>> {
   let sessions_dir = cfg.sessions_dir();
@@ -526,7 +526,7 @@ fn recording_row(sessions_dir: &Path, session_id: &str, stem: &str) -> io::Resul
   }))
 }
 
-/// A session's name from the metadata the store owns; a session without its metadata file names no row name.
+/// A session's name from the metadata the store owns. A session without its metadata file names no row name.
 fn session_name(session_dir: &Path) -> io::Result<Option<String>> {
   match metadata::read_metadata_object(&layout::metadata_path(session_dir)) {
     Ok(Some(object)) => Ok(object.get("name").and_then(Value::as_str).map(str::to_string)),

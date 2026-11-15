@@ -24,6 +24,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
   USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
 };
+use charliebot_core::home::CLAUDE_CONFIG_DIR_NAME;
 use charliebot_core::text_repr::{is_truthy, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::usage::{
@@ -97,7 +98,7 @@ impl UsageSourceImpl for ClaudeLogs {
 /// The account label of a login directory: `work (default)` for `.claude`, else the name after `.claude-`.
 fn account_label(dir: &Path) -> String {
   let name = dir.file_name().unwrap_or_default();
-  if name == OsStr::new(".claude") {
+  if name == OsStr::new(CLAUDE_CONFIG_DIR_NAME) {
     return "work (default)".to_string();
   }
   let name = name.to_string_lossy();

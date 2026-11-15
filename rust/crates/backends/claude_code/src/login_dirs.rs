@@ -4,6 +4,7 @@ use std::env;
 use std::path::PathBuf;
 
 use anyhow::Context;
+use charliebot_core::home::CLAUDE_CONFIG_DIR_NAME;
 
 pub const CLAUDE_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 pub const CREDENTIALS_FILE: &str = ".credentials.json";
@@ -11,7 +12,7 @@ pub const CREDENTIALS_FILE: &str = ".credentials.json";
 /// Return the default Claude login directory.
 pub fn default_claude_dir() -> anyhow::Result<PathBuf> {
   let home = env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
-  Ok(PathBuf::from(home).join(".claude"))
+  Ok(PathBuf::from(home).join(CLAUDE_CONFIG_DIR_NAME))
 }
 
 /// Resolve the login directory from CLAUDE_CONFIG_DIR, then HOME/.claude.
@@ -51,9 +52,9 @@ impl ClaudeHost {
     Ok(Self { home: PathBuf::from(home), claude_config_dir: claude_config_dir()? })
   }
 
-  /// The default login directory: this host's home directory joined with `.claude`.
+  /// The default login directory: this host's home directory joined with [`CLAUDE_CONFIG_DIR_NAME`].
   pub fn default_dir(&self) -> PathBuf {
-    self.home.join(".claude")
+    self.home.join(CLAUDE_CONFIG_DIR_NAME)
   }
 
   /// Expand a leading `~` or `~/` in `raw` against this host's home.

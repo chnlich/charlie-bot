@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{CREDENTIALS_FILENAME, SESSIONS_DIR_NAME};
-use charliebot_core::home::OPENCODE_DIR_NAME;
+use charliebot_core::home::{CLAUDE_CONFIG_DIR_NAME, OPENCODE_DIR_NAME};
 use charliebot_store::run_records::THREADS_DIR_NAME;
 
 use crate::config::ResticSettings;
@@ -24,7 +24,7 @@ pub fn exclude_patterns(home: &Path) -> Vec<String> {
     // The profile's opencode store is the top-level directory only; a deeper part with the same name stays.
     format!("{home}/{OPENCODE_DIR_NAME}"),
     ".git".to_string(),
-    ".claude".to_string(),
+    CLAUDE_CONFIG_DIR_NAME.to_string(),
     // CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a snapshot.
     CREDENTIALS_FILENAME.to_string(),
     "__pycache__".to_string(),

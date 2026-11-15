@@ -29,6 +29,10 @@ pub fn display_dir(relative: &str) -> String {
   format!("{}/", display_path(relative))
 }
 
+/// Claude Code's configuration directory name: the default login directory under the user's home, which
+/// `CLAUDE_CONFIG_DIR` names a path in place of, and an excluded name wherever a profile backup meets one.
+pub const CLAUDE_CONFIG_DIR_NAME: &str = ".claude";
+
 /// The profile's opencode store directory name, under the profile home.
 pub const OPENCODE_DIR_NAME: &str = "opencode";
 /// The `data` directory under the OpenCode store, which OpenCode itself lays out as its `XDG_DATA_HOME`.

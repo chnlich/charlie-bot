@@ -2,6 +2,10 @@
   const Sidebar = globalThis.Sidebar;
 
 const GROUP_SESSION_PREVIEW_LIMIT = 5;
+// The matches one search answer carries: the route keeps the newest `SEARCH_RESULT_LIMIT` of them
+// (rust/crates/runtime/session-api/src/search.rs). The search list states that cap from this number, so a drift
+// shows the notice late or not at all, never a row.
+const SEARCH_MATCH_LIMIT = 200;
 const SESSION_GROUP_LIMIT_STORAGE_KEY = 'session-group-list-expanded';
 const SESSION_GROUP_COLLAPSED_STORAGE_KEY = 'session-group-collapsed';
 const groupLimitState = {
@@ -936,10 +940,13 @@ function renderSessionList(sessions, filter, options = {}) {
     renderGroupedSessionList(sessions, filter, options);
     return;
   }
-  const truncationHint = filter === 'search' && sessions.length >= 200
-    ? renderEmptyNote('Showing the newest 200 matches — narrow the search.')
+  // A full search answer is the newest matches only, and the notice saying so stands above the first row: a
+  // reader who scans the rows first has already concluded that the match they want is not there, and below them
+  // the notice followed every row of the list.
+  const capNotice = sessions.length >= SEARCH_MATCH_LIMIT
+    ? renderEmptyNote('Showing the newest ' + SEARCH_MATCH_LIMIT + ' matches — narrow the search.')
     : '';
-  nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('') + truncationHint;
+  nav.innerHTML = capNotice + sessions.map(s => renderSessionItem(s, filter)).join('');
   updateRelativeTimes();
 }
 

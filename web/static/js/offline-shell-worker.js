@@ -23,8 +23,11 @@ const STORED_AT_HEADER = 'X-CharlieBot-Stored-At';
 const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
 // How long the network may take before a stored copy answers a first screen or a list. The
 // page's first paint budget is 1 s: navigation start to the request, plus rendering the message,
-// plus a 0.1 s margin. Until the bench measures those on the reader's device, the cap is 0.25 s.
-const WAIT_CAP_MS = 250;
+// plus a 0.1 s margin. The bench measured the two terms on the reader's CPU speed (the plan's
+// calibration; the traced stored-copy opens of 2026-11-15): the first-screen request issues 0.38 s
+// after navigation start and the message paints 0.07 s after the copy answers, so the cap is
+// 1 − 0.38 − 0.07 − 0.1 = 0.45 s, clamped to the plan's 0.4 s maximum.
+const WAIT_CAP_MS = 400;
 
 const SHELL_STATIC_REF = /<(?:link|script)\b[^>]*?\b(?:href|src)="(\/static\/[^"]+)"/g;
 

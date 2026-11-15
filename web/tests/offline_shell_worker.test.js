@@ -17,7 +17,7 @@ const SESSION = 'session-a';
 const BOOTSTRAP_URL = ORIGIN + '/api/sessions/' + SESSION + '/bootstrap';
 const LIST_URL = ORIGIN + '/api/sessions/?compact=1';
 
-const WAIT_CAP_MS = 250;
+const WAIT_CAP_MS = 400;
 
 // A network answer the test releases by hand, so no test waits on a real timer.
 function deferred() {

@@ -282,7 +282,7 @@ fn run_end_event(run: &RunRecord) -> Value {
     "type": event_types::RUN_END,
     "run_id": run.id,
     "timestamp": run.ended_at.map(UtcDateTime::to_isoformat_text),
-    "duration_seconds": duration_seconds,
+    (event_types::RUN_DURATION_SECONDS): duration_seconds,
   })
 }
 

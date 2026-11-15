@@ -1,10 +1,11 @@
 //! Claude Code's login directories, and the process environment they resolve against.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use charliebot_core::home::CLAUDE_CONFIG_DIR_NAME;
+use charliebot_core::paths;
 
 pub const CLAUDE_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 pub const CREDENTIALS_FILE: &str = ".credentials.json";
@@ -23,18 +24,11 @@ pub fn claude_config_dir() -> anyhow::Result<PathBuf> {
   }
 }
 
-/// Expand a leading `~` or `~/` in an account configuration path against the supplied home, dropping the home's
-/// trailing slashes first. `~user` stays as written.
-pub fn expanduser(path: &str, home: Option<&str>) -> anyhow::Result<PathBuf> {
-  if path == "~" || path.starts_with("~/") {
-    let home = home.ok_or_else(|| anyhow::anyhow!("HOME is required to expand {path}"))?;
-    if home == "/" {
-      return Ok(PathBuf::from(if path == "~" { "/" } else { &path[1..] }));
-    }
-    let home = home.trim_end_matches('/');
-    return Ok(PathBuf::from(shellexpand::tilde_with_context(path, || Some(home)).into_owned()));
-  }
-  Ok(PathBuf::from(path))
+/// The directory a configuration file names for a Claude config directory: a leading `~` or `~/` becomes `home`,
+/// and every other path stays as written. A `~` path without a home is an error, since the path would otherwise
+/// name a literal directory called `~`.
+pub fn config_dir_path(path: &str, home: Option<&str>) -> anyhow::Result<PathBuf> {
+  paths::expanduser_under(path, home.map(Path::new)).ok_or_else(|| anyhow::anyhow!("HOME is required to expand {path}"))
 }
 
 /// The process environment the Claude usage source reads: the home directory for the default login directory and the
@@ -59,14 +53,7 @@ impl ClaudeHost {
 
   /// Expand a leading `~` or `~/` in `raw` against this host's home.
   pub fn expand(&self, raw: &str) -> PathBuf {
-    match raw.strip_prefix('~') {
-      Some("") => self.home.clone(),
-      Some(rest) => match rest.strip_prefix('/') {
-        Some(under_home) => self.home.join(under_home),
-        None => PathBuf::from(raw),
-      },
-      None => PathBuf::from(raw),
-    }
+    paths::expanduser_under(raw, Some(&self.home)).expect("the host carries its home")
   }
 }
 
@@ -75,17 +62,12 @@ mod tests {
   use super::*;
 
   #[test]
-  fn a_leading_tilde_names_the_supplied_home() {
-    assert_eq!(expanduser("~/.claude-b", Some("/synthetic/home")).unwrap(), PathBuf::from("/synthetic/home/.claude-b"));
-    assert_eq!(expanduser("/abs/.claude", Some("/synthetic/home")).unwrap(), PathBuf::from("/abs/.claude"));
-    assert_eq!(expanduser("~user/.claude", Some("/synthetic/home")).unwrap(), PathBuf::from("~user/.claude"));
-    assert_eq!(expanduser("~", Some("/synthetic/home")).unwrap(), PathBuf::from("/synthetic/home"));
+  fn a_tilde_path_without_a_home_is_an_error() {
     assert_eq!(
-      expanduser("~/.claude-b", Some("/synthetic/home/")).unwrap(),
+      config_dir_path("~/.claude-b", Some("/synthetic/home")).unwrap(),
       PathBuf::from("/synthetic/home/.claude-b")
     );
-    assert_eq!(expanduser("~", Some("/")).unwrap(), PathBuf::from("/"));
-    assert_eq!(expanduser("~/claude", Some("/")).unwrap(), PathBuf::from("/claude"));
-    assert!(expanduser("~/.claude-b", None).is_err());
+    assert!(config_dir_path("~/.claude-b", None).is_err());
+    assert_eq!(config_dir_path("/abs/.claude", None).unwrap(), PathBuf::from("/abs/.claude"));
   }
 }

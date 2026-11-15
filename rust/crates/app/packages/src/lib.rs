@@ -6,7 +6,9 @@
 //! package, so the page parts, the static mounts and the template search path keep their registration order.
 //!
 //! One crate owns both lists, so the server binary and the CLI binary cannot drift: a package added here reaches
-//! both.
+//! both. `helper_entry` owns the argv entries a binary serves before it registers, the OpenCode relay included.
+
+pub mod helper_entry;
 
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
 

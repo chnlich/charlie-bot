@@ -162,7 +162,7 @@ mod tests {
 
   #[test]
   fn fixture_bodies_read_back_as_wave_reads_them() {
-    // The three-byte fixture holds one whole 16-bit mono frame; the odd trailing byte is not a frame.
+    // The three-byte fixture holds one whole 16-bit mono frame. The odd trailing byte is not a frame.
     let wave = read(include_bytes!("../tests/fixtures/wav-three-bytes.wav")).expect("a fixture WAV parses");
     assert_eq!(wave, WaveData { channels: 1, sample_width: 2, frame_rate: 16_000, frames: &[1, 2] });
   }

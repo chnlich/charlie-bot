@@ -3,7 +3,7 @@
 //! Recent recordings page `GET /voice-recordings`.
 //!
 //! The upload persists the recording before it selects an online backend. Selection failures answer 400, and
-//! transcription failures answer 500; both leave the WAV on disk, and a transcription failure is recorded in the
+//! transcription failures answer 500. Both leave the WAV on disk, and a transcription failure is recorded in the
 //! run's `.json`. The preview relay lives in relay.rs and shares the `voice_transcribed` line written here. The
 //! startup report validates one recording run's startup record, logs it as one `voice_startup` line, and persists
 //! it as the run's `startup` part. Every route carries the run's id, validated as eight lowercase hex characters
@@ -38,7 +38,7 @@ use crate::recordings;
 use crate::wav;
 
 /// The recording's device facts. The browser sends them as the upload form's `devices` field and as the relay's
-/// end frame; `voice_transcribed` logs them under these names.
+/// end frame. `voice_transcribed` logs them under these names.
 pub(crate) const DEVICE_FIELDS: &[&str] =
   &["input_device", "capture_settings", "output_device", "communications_output_device", "device_error"];
 
@@ -173,7 +173,7 @@ const STARTUP_DEVICE_FIELDS: &[BodyField] = &[
 ];
 const STARTUP_DEVICES: BodyModel = BodyModel::required(STARTUP_DEVICE_FIELDS);
 
-/// The startup body's fields in their declaration order, which is also the log line's field order; an unknown field
+/// The startup body's fields in their declaration order, which is also the log line's field order. An unknown field
 /// is refused. `run_id` identifies the recording run and reaches no log line.
 const STARTUP_FIELDS: &[BodyField] = &[
   BodyField::required("run_id", FieldType::String),
@@ -461,8 +461,8 @@ async fn upload_recording(
   responses::fast_json(StatusCode::OK, &json!({ "text": transcript.text }))
 }
 
-/// The upload form's `devices` field as its object; None when the field is absent. A present field must be a JSON
-/// object with exactly the device keys: the browser always sends the whole object.
+/// The upload form's `devices` field as its object. It is None when the field is absent. A present field must be
+/// a JSON object with exactly the device keys: the browser always sends the whole object.
 fn devices_form_field(raw: Option<&str>) -> Result<Option<Value>, VoiceRequestError> {
   let Some(raw) = raw else {
     return Ok(None);
@@ -506,7 +506,7 @@ fn error_response(error: VoiceRequestError) -> Response {
 }
 
 // --- Recent recordings -------------------------------------------------------
-// The list route answers the JSON the API consumers read; the page route renders the same rows as HTML. Both
+// The list route answers the JSON the API consumers read. The page route renders the same rows as HTML. Both
 // scan the sessions' voice directories on the blocking pool.
 
 /// The recent recordings JSON at `GET /api/voice/recordings?limit=N`: the newest rows across every session
@@ -551,16 +551,17 @@ async fn recordings_page(State(features): State<Arc<FeatureContext>>, parts: Par
   }
 }
 
-/// The fields of one `voice_transcribed` line. Both archive paths log it; the relay adds `end_to_final_s`.
+/// The fields of one `voice_transcribed` line. Both archive paths log it. The relay adds `end_to_final_s`.
 pub(crate) struct Transcribed<'a> {
   pub(crate) session_id: &'a str,
   pub(crate) audio_path: &'a Path,
   pub(crate) audio_bytes_size: usize,
   pub(crate) text: &'a str,
   pub(crate) produced_by: &'a str,
-  /// The backend the browser selected, as sent; None when the form named none.
+  /// The backend the browser selected, as sent. It is None when the form named none.
   pub(crate) selected_backend: Option<&'a str>,
-  /// The recording's device object; None, every device field logs as null, for a page loaded before devices existed.
+  /// The recording's device object. When it is None, every device field logs as null, for a page loaded before
+  /// devices existed.
   pub(crate) devices: Option<&'a Value>,
   pub(crate) end_to_final_s: Option<f64>,
 }

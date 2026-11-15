@@ -64,8 +64,8 @@ enum BackendKind {
 
 /// One transcription backend the feature offers.
 ///
-/// The catalog below is the one home for a backend's id, label, credential, endpoint and preview support; config,
-/// selection and relay read it instead of restating a fact.
+/// The catalog below is the one home for a backend's id, label, credential, endpoint and preview support.
+/// Config, selection and relay read it instead of restating a fact.
 pub(crate) struct BackendSpec {
   pub(crate) id: &'static str,
   pub(crate) label: &'static str,
@@ -97,8 +97,8 @@ pub(crate) const BACKENDS: &[BackendSpec] = &[
 
 /// One transcript language the feature offers.
 ///
-/// The catalog below is the one home for a language's config code and its name in each backend's protocol; both
-/// setups read it.
+/// The catalog below is the one home for a language's config code and its name in each backend's protocol.
+/// Both setups read it.
 struct LanguageSpec {
   code: &'static str,
   gemini_code: &'static str,

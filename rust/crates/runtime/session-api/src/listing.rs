@@ -13,8 +13,8 @@ use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS,
-  SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus, TaskProfile,
-  UtcDateTime, WORK_STATE,
+  RUN_BACKEND, SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
+  THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -1463,9 +1463,9 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
       derived.and_then(|entry| entry.get(HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
     );
   }
-  object.insert("thinking_since".to_string(), row.thinking_since.clone());
+  object.insert(THINKING_SINCE.to_string(), row.thinking_since.clone());
   if projection.include_run_backend {
-    object.insert("run_backend".to_string(), row.run_backend.clone().map_or(Value::Null, Value::String));
+    object.insert(RUN_BACKEND.to_string(), row.run_backend.clone().map_or(Value::Null, Value::String));
   }
   if projection.display_backend
     && row.meta.profile == TaskProfile::Worker

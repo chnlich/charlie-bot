@@ -74,6 +74,12 @@ pub const HAS_UNREAD: &str = "has_unread";
 /// The session-metadata field saying whether the session has a run in flight. The session routes, the sidebar state
 /// and the running-changed broadcast carry the same name, so it is spelled once, here.
 pub const HAS_RUNNING_TASKS: &str = "has_running_tasks";
+/// The session-metadata field holding the instant the session's live run started thinking. The session routes, the
+/// sidebar state and the running-changed broadcast carry the same name, so it is spelled once, here.
+pub const THINKING_SINCE: &str = "thinking_since";
+/// The session-metadata field holding the backend the session's live run resolved to. The session routes and the chat
+/// page carry the same name, so it is spelled once, here.
+pub const RUN_BACKEND: &str = "run_backend";
 /// The session-metadata field saying whether a trigger waits for the session.
 pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
 /// The session-metadata field holding the number of triggers waiting for the session.
@@ -657,8 +663,8 @@ impl SessionMetadata {
     }
     push(&mut declared, "starred", &self.starred);
     if !exclude_transient {
-      push(&mut declared, "thinking_since", &self.thinking_since);
-      push(&mut declared, "run_backend", &self.run_backend);
+      push(&mut declared, THINKING_SINCE, &self.thinking_since);
+      push(&mut declared, RUN_BACKEND, &self.run_backend);
     }
     push(&mut declared, "created_at", &self.created_at);
     push(&mut declared, "updated_at", &self.updated_at);

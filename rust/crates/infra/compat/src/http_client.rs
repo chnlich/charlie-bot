@@ -1,26 +1,16 @@
 //! The outbound HTTP client: shared TLS roots, HTTPS proxy selection, no redirect following, and the process's
 //! rustls crypto provider.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use reqwest::Proxy;
 
 pub use crate::transport::{ClientError, Settings};
+pub use charliebot_core::tls::ensure_crypto_provider;
 
 /// The process's shared client, built from the process environment on first use, and dropped by
 /// [`close_shared_client`] at shutdown.
 static SHARED: Mutex<Option<reqwest::Client>> = Mutex::new(None);
-
-/// Make a rustls crypto provider available to the process's plain `reqwest` clients.
-///
-/// The workspace's reqwest build carries no default provider, so its client builder refuses to build until one is
-/// installed. A failed install means another provider already serves the process, which is the same outcome.
-pub fn ensure_crypto_provider() {
-  static INSTALLED: OnceLock<()> = OnceLock::new();
-  INSTALLED.get_or_init(|| {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-  });
-}
 
 /// The outbound HTTP client with shared TLS roots and HTTPS proxy selection. A 3xx response is returned as it
 /// arrived: redirects are never followed.

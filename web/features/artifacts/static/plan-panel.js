@@ -17,7 +17,7 @@ const planPanel = (() => {
   let _selectedPlanId = null;
   let _selectedVersion = null;
   // Compare with previous toggle. Reset to the selected version's default (on when a
-  // predecessor exists) at every selection change; a user click overrides it
+  // predecessor exists) at every selection change. A user click overrides it
   // until the next change of plan or version.
   let _diffEnabled = false;
   let _loadedViewerKey = null;
@@ -164,7 +164,7 @@ const planPanel = (() => {
   // The address shape every plan-page URL this panel builds shares: the
   // /absolute_filepath URL, then the ?diff= query ahead of the fragment (see
   // encodeDiffFile), then the #cbsession= fragment. The withPanelMarker flag
-  // appends `&cbpanel=1` inside the fragment; the framed guard in
+  // appends `&cbpanel=1` inside the fragment. The framed guard in
   // artifact-comments.js reads that marker. The urlKind parameter names the
   // caller in the SESSIONS_ROOT error.
   function _planPageUrl(file, sessionId, sessionsRoot, diffFile, urlKind, withPanelMarker) {
@@ -643,7 +643,7 @@ const planPanel = (() => {
     if (!_stale && !switched) {
       if (_renderedSessionId === sid) return;
       // The registry is current but the markup is still the template's default. Paint it from the
-      // committed registry rather than refetching; render() reloads the viewer only when its key
+      // committed registry rather than refetching. render() reloads the viewer only when its key
       // changes.
       _ensureSelection();
       render();
@@ -665,7 +665,7 @@ const planPanel = (() => {
   // -- Selection ----------------------------------------------------------
 
   // The four panels every selection mutation repaints afterward. The action
-  // bar render is async and generation-guarded; these paths fire it without
+  // bar render is async and generation-guarded. These paths fire it without
   // awaiting, and refresh() awaits it on its own path.
   function _renderSelectionPanels() {
     _renderStaleNotice();
@@ -787,7 +787,7 @@ const planPanel = (() => {
   };
 })();
 
-// The plans tab is a full-area view that hides chat; a session switch returns to chat.
+// The plans tab is a full-area view that hides chat. A session switch returns to chat.
 registerTab({
   id: 'chat-plans',
   showsChat: false,

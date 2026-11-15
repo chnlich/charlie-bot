@@ -21,6 +21,9 @@
   }
   .sub { color:var(--mut); margin:0 0 22px; font-size:13.5px; max-width:82ch }
   .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px }
+  /* Section 1 alone carries .page-cards: from 900 px its six page cards fill full rows of three, and the
+     half-empty second row of the auto-fill grid goes. Section 2 keeps the auto-fill grid. */
+  @media (min-width:900px) { .page-cards { grid-template-columns:repeat(3,minmax(0,1fr)) } }
   /* The card is the link, and a phone has no hover to reveal that, so its boundary is the only mark of the target.
      --bd draws 1.34:1 on the card's white fill and 1.23:1 on the page background, under the 3:1 floor WCAG 1.4.11
      sets for a component. --card-bd draws 3.70:1 and 3.38:1, and in the dark theme 3.25:1 and 3.49:1. The hover
@@ -29,6 +32,10 @@
     border-radius:12px; padding:14px 16px; color:var(--tx); text-decoration:none }
   .card:hover { border-color:var(--acc); text-decoration:none }
   .card .head { display:flex; align-items:center; justify-content:space-between; gap:8px }
+  /* On a section-1 card the route is a suffix of the name, not a right-aligned neighbour. min-width:0 lets
+     the suffix shrink under the card's edge, where its own ellipsis takes over. */
+  .page-cards .head { justify-content:flex-start }
+  .page-cards .tgt { min-width:0 }
   .card .nm { font-size:14px; font-weight:600 }
   .card .desc { font-size:12.5px; color:var(--mut) }
   /* The route line and the footnote carry the body muted tone. --mut2 renders 3.70:1 on the white card and
@@ -59,12 +66,11 @@
   reachability probe at page-load time.</p>
 
   <h2><span class="n">1</span>Served by this server</h2>
-  <div class="cards">
+  <div class="cards page-cards">
     {% for d in destinations %}
     <a class="card" href="{{ d.url }}">
-      <span class="head"><span class="nm">{{ d.name }}</span></span>
+      <span class="head"><span class="nm">{{ d.name }}</span><span class="tgt">{{ d.url }}</span></span>
       <span class="desc">{{ d.description }}</span>
-      <span class="tgt">{{ d.url }}</span>
     </a>
     {% endfor %}
   </div>

@@ -60,7 +60,7 @@ pub(crate) fn flag(params: &Params, name: &str, default: bool) -> Result<bool, F
   }
 }
 
-/// Keeps a parameter's value, or records its error in declaration order.
+/// A parameter's value when it parsed, with its error appended to `errors` when it did not.
 pub(crate) fn take<T>(outcome: Result<T, FieldError>, errors: &mut Vec<FieldError>) -> Option<T> {
   match outcome {
     Ok(value) => Some(value),

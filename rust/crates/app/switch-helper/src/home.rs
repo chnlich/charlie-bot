@@ -130,8 +130,8 @@ fn outcome(args: &[OsString]) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// Read the complete live lines after `consumed`, advancing it past them. A line still being written has no newline and
-/// stays unread, as the live log's own reader requires.
+/// The complete live lines after `consumed`, with `consumed` advanced past them. A line still being written has no
+/// newline and stays unread, as the live log's own reader requires.
 fn drain(text: &str, consumed: &mut usize, line_number: &mut usize, outcome: &mut Outcome, path: &Path, run_id: &str) {
   for line in chat_events::take_complete_lines(text, consumed, line_number) {
     outcome.read(&line.text, line.number, path, run_id);
@@ -174,7 +174,7 @@ struct Outcome {
 }
 
 impl Outcome {
-  /// Read one event line. A line the live log's own reader skips is not a fact. The skip is logged.
+  /// One event line, read into the outcome. A line the live log's own reader skips is not a fact. The skip is logged.
   fn read(&mut self, line: &str, number: usize, path: &Path, run_id: &str) {
     match chat_events::decode_line(line.as_bytes()) {
       Ok(event) => {

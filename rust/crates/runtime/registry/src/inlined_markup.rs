@@ -226,12 +226,11 @@ impl Hasher for BodyHash {
 
   fn write(&mut self, bytes: &[u8]) {
     let mut hash = self.0;
-    let mut words = bytes.chunks_exact(8);
-    for word in &mut words {
-      let value = u64::from_le_bytes(word.try_into().expect("a chunk of eight bytes"));
-      hash = (hash ^ value).wrapping_mul(BODY_HASH_PRIME).rotate_left(29);
+    let (words, remainder) = bytes.as_chunks::<8>();
+    for word in words {
+      hash = (hash ^ u64::from_le_bytes(*word)).wrapping_mul(BODY_HASH_PRIME).rotate_left(29);
     }
-    for &byte in words.remainder() {
+    for &byte in remainder {
       hash = (hash ^ u64::from(byte)).wrapping_mul(BODY_HASH_PRIME);
     }
     self.0 = hash;
@@ -430,7 +429,8 @@ mod tests {
     let first = script_form(body);
     assert_eq!(&*first, "const a=1;\nif(a){\nrun(a);\n}\n");
     // The same bytes in another buffer are the same body, and the memo answers them with the form it built.
-    let again = script_form(&body.to_owned());
+    let copy = body.to_string();
+    let again = script_form(&copy);
     assert_eq!(&*again, &*first);
     // Another body keeps its own form: the memo never answers one body with another's.
     assert_eq!(&*script_form("const b = 2; // note\n"), "const b=2;\n");

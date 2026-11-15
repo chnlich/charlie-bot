@@ -69,7 +69,10 @@ class FakeVoiceXhr {
 // tests enter the transcription window directly through startUpload with the
 // slot claimed below.
 function makeVoiceRun(h, sessionId) {
-  return h.context.newVoiceRun(sessionId, h.context.VOICE_BACKENDS[0]);
+  return h.context.newVoiceRun(sessionId, h.context.VOICE_BACKENDS[0], {
+    clickedAt: 0,
+    micPermission: null,
+  });
 }
 
 const sendLocked = (h) => h.sendButton.hasAttribute('disabled');
@@ -82,7 +85,7 @@ const sendPlain = (h) => !h.sendButton.classList.contains('opacity-50')
 
 function buildLockHarness() {
   const elements = new Map();
-  for (const id of ['messages', 'msg-input', 'thinking', 'thinking-time', 'file-chips', 'usage-text']) {
+  for (const id of ['messages', 'msg-input', 'thinking', 'thinking-time', 'file-chips', 'usage-text', 'voice-btn']) {
     elements.set(id, createElement({id}));
   }
   const sendButton = new SendButton();

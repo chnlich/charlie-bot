@@ -218,6 +218,7 @@ async fn record_relay_failure(run: &RelayRun<'_>, reason: &str) {
     return;
   }
   let pcm_bytes = run.queue.recording_pcm().await;
+  let chunk_arrived_ms = run.queue.chunk_arrived_ms().await;
   let devices = run.queue.devices().await;
   let config = Arc::clone(run.config);
   let session_id = run.session_id.to_string();
@@ -225,7 +226,18 @@ async fn record_relay_failure(run: &RelayRun<'_>, reason: &str) {
   let backend = run.backend_id.to_string();
   let reason = reason.to_string();
   let written = tokio::task::spawn_blocking(move || {
-    recordings::store_relay_failure(&config, &session_id, &run_id, &pcm_bytes, &backend, devices.as_ref(), &reason)
+    recordings::store_relay_failure(
+      &config,
+      &session_id,
+      &run_id,
+      recordings::RelayCapture {
+        pcm_bytes: &pcm_bytes,
+        chunk_arrived_ms: &chunk_arrived_ms,
+        backend: &backend,
+        devices: devices.as_ref(),
+      },
+      &reason,
+    )
   })
   .await;
   match written {
@@ -275,7 +287,11 @@ async fn stream_preview(context: StreamContext) {
           break;
         };
         let sent = match event.kind {
-          TranscriptKind::Partial => send_frame(&writer, json!({ "type": "partial", "text": event.text })).await,
+          TranscriptKind::Partial => send_frame(
+            &writer,
+            json!({ "type": "partial", "text": event.text, "samples": event.samples.expect("a partial reports sent samples") }),
+          )
+          .await,
           TranscriptKind::Final => {
             if !queue.ended().await {
               let reason = "backend produced its final before the recording's end frame";
@@ -368,6 +384,7 @@ where
   Fut: Future<Output = Result<(), String>>,
 {
   let pcm_bytes = run.queue.recording_pcm().await;
+  let chunk_arrived_ms = run.queue.chunk_arrived_ms().await;
   let audio_bytes_size = pcm_bytes.len();
   let text = event.text.clone();
   let devices = run.queue.devices().await;
@@ -381,10 +398,13 @@ where
       &cfg,
       &archive_session_id,
       &archive_run_id,
-      &pcm_bytes,
+      recordings::RelayCapture {
+        pcm_bytes: &pcm_bytes,
+        chunk_arrived_ms: &chunk_arrived_ms,
+        backend: &archive_backend_id,
+        devices: archive_devices.as_ref(),
+      },
       &text,
-      &archive_backend_id,
-      archive_devices.as_ref(),
     )
   })
   .await;
@@ -855,7 +875,8 @@ mod tests {
       recorded: &recorded,
     };
     let (acknowledged, _acknowledgement) = oneshot::channel();
-    let event = TranscriptEvent { kind: TranscriptKind::Final, text: "synthetic final".to_string(), acknowledged };
+    let event =
+      TranscriptEvent { kind: TranscriptKind::Final, text: "synthetic final".to_string(), samples: None, acknowledged };
 
     archive_final_with(&run, &event, |audio_path, text| async move {
       assert_eq!(text, "synthetic final");
@@ -900,7 +921,9 @@ mod tests {
       browser.send(ClientMessage::Binary(frame.clone().into())).await.expect("send one live audio frame");
     }
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
-    assert_eq!(receive_json_frame(&mut browser).await["type"], "partial");
+    let partial = receive_json_frame(&mut browser).await;
+    assert_eq!(partial["type"], "partial");
+    assert_eq!(partial["samples"], 6);
     assert_eq!(receive_json_frame(&mut browser).await, json!({ "type": "final", "text": "synthetic final" }));
 
     let wav = std::fs::read_dir(voice_dir(&server.config))

@@ -116,6 +116,7 @@ pub enum FieldType {
   Enum(&'static [&'static str]),
   NullableEnum(&'static [&'static str]),
   StringList,
+  IntegerList,
   /// A nested model or null, validated with its own fields. `class_name` is the model's name in its `model_type`
   /// error.
   NullableModel {
@@ -169,6 +170,7 @@ impl FieldType {
       FieldType::String
         | FieldType::NullableString
         | FieldType::StringList
+        | FieldType::IntegerList
         | FieldType::ModelList { .. }
         | FieldType::NullableModelList { .. }
         | FieldType::NullableTaggedUnionList { .. }
@@ -373,6 +375,24 @@ pub fn integer_field(fields: &Map<String, Value>, name: &str) -> Option<i128> {
   }
 }
 
+/// An integer list field of a validated body.
+pub fn integer_list_field(fields: &Map<String, Value>, name: &str) -> Vec<i128> {
+  match fields.get(name) {
+    Some(Value::Array(items)) => items
+      .iter()
+      .map(|item| {
+        let number = item.as_number().expect("a validated integer list item is a number");
+        number
+          .as_i64()
+          .map(i128::from)
+          .or_else(|| number.as_u64().map(i128::from))
+          .expect("a validated integer list item is a 64-bit value")
+      })
+      .collect(),
+    other => unreachable!("a validated {name} is an integer list, got {other:?}"),
+  }
+}
+
 /// A boolean field of a validated body, `None` when it is absent or null.
 pub fn flag_field(fields: &Map<String, Value>, name: &str) -> Option<bool> {
   match fields.get(name) {
@@ -474,6 +494,7 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
       None => failure(validation::Kind::Enum(choices)),
     },
     FieldType::StringList => list_field(field, value, loc, string_item),
+    FieldType::IntegerList => list_field(field, value, loc, integer_item),
     FieldType::ModelList { model, .. } => model_list(field, value, loc, model),
     FieldType::NullableModelList { .. } if value.is_null() => Ok(Value::Null),
     FieldType::NullableModelList { model, .. } => model_list(field, value, loc, model),
@@ -558,6 +579,12 @@ fn string_item(item: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<valid
     return Ok(item.clone());
   }
   Err(vec![validation::FieldError { loc: loc.to_vec(), input: item.clone(), kind: validation::Kind::StringType }])
+}
+
+/// An integer-list item: the same integer conversions as an integer field, with errors at its index.
+fn integer_item(item: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<validation::FieldError>> {
+  integer_value(item, false)
+    .map_err(|kind| vec![validation::FieldError { loc: loc.to_vec(), input: item.clone(), kind }])
 }
 
 /// A list field. `max_length` is checked before the items and `min_length` after them, and a list with an
@@ -902,6 +929,22 @@ mod tests {
     assert_eq!(integer_field(fields, "small"), Some(-3));
     assert_eq!(integer_field(fields, "nothing"), None);
     assert_eq!(integer_field(fields, "missing"), None);
+    const INTEGER_LIST: &[Field] = &[Field::required("times", FieldType::IntegerList)];
+    const INTEGER_LIST_MODEL: BodyModel = BodyModel::required(INTEGER_LIST);
+    let times = RequestBody::Json(json!({"times": [0, 15, u64::MAX]})).validate(&INTEGER_LIST_MODEL).unwrap().unwrap();
+    assert_eq!(integer_list_field(times.as_object().expect("fields"), "times"), [0, 15, i128::from(u64::MAX)]);
+    assert_eq!(
+      check(json!({"times": [0, 1.5]}), &INTEGER_LIST_MODEL),
+      vec![validation::FieldError {
+        loc: vec![
+          validation::Loc::Field("body".to_string()),
+          validation::Loc::Field("times".to_string()),
+          validation::Loc::Index(1),
+        ],
+        input: json!(1.5),
+        kind: validation::Kind::IntFromFloat,
+      }]
+    );
     assert_eq!(flag_field(fields, "flag"), Some(false));
     assert_eq!(flag_field(fields, "missing"), None);
   }

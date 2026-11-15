@@ -3,8 +3,9 @@
 //! The browser makes a run id (eight lowercase hex characters) at the click, and the startup report, the relay
 //! socket and the upload all carry it. Every file of the run lands under one stem, `<UTC stamp>_<run id>`,
 //! whichever request arrives first. The first write creates the stem, and the later ones resolve it by the run id
-//! suffix. The `.json` beside the WAV holds the run's three parts. Each part is updated only by its writer
-//! through [`with_run_stem`], which serializes the writes per stem and replaces the file atomically.
+//! suffix. The `.json` beside the WAV holds the run's audio, startup and failure parts plus relay chunk arrival
+//! times. Each part is updated only by its writer through [`with_run_stem`], which serializes the writes per stem
+//! and replaces the file atomically.
 //!
 //! [`list_recordings`] answers the newest rows first, with the duration and the levels read from each row's WAV at
 //! request time. Each request reads the `voice/` directory of every session the session index names, and walks no
@@ -188,6 +189,7 @@ fn read_parts(stem: &Path) -> io::Result<Map<String, Value>> {
       parts.insert("audio".to_string(), Value::Null);
       parts.insert("startup".to_string(), Value::Null);
       parts.insert("failure".to_string(), Value::Null);
+      parts.insert("chunk_arrived_ms".to_string(), json!([]));
       return Ok(parts);
     }
     Err(error) => return Err(error),
@@ -300,22 +302,29 @@ pub(crate) fn write_upload_transcript(
   })
 }
 
+/// The relay audio and its server arrival times, with the associated backend and device facts.
+pub(crate) struct RelayCapture<'a> {
+  pub(crate) pcm_bytes: &'a [u8],
+  pub(crate) chunk_arrived_ms: &'a [u64],
+  pub(crate) backend: &'a str,
+  pub(crate) devices: Option<&'a Value>,
+}
+
 /// The archive of one successful relay final: the WAV, the transcript and the run's `audio` part, under one stem.
 /// Answers the WAV path for the `voice_transcribed` line.
 pub(crate) fn archive_relay_final(
   cfg: &CharlieBotConfig,
   session_id: &str,
   run_id: &str,
-  pcm_bytes: &[u8],
+  capture: RelayCapture<'_>,
   text: &str,
-  backend: &str,
-  devices: Option<&Value>,
 ) -> io::Result<PathBuf> {
   with_run_stem(cfg, session_id, run_id, |stem| {
-    write_run_wav(stem, pcm_bytes)?;
+    write_run_wav(stem, capture.pcm_bytes)?;
     fs::write(with_kind(stem, "txt"), text.as_bytes())?;
     update_parts(stem, |parts| {
-      parts.insert("audio".to_string(), audio_part("relay", Some(backend), devices));
+      parts.insert("audio".to_string(), audio_part("relay", Some(capture.backend), capture.devices));
+      parts.insert("chunk_arrived_ms".to_string(), json!(capture.chunk_arrived_ms));
     })?;
     Ok(with_kind(stem, "wav"))
   })
@@ -327,19 +336,18 @@ pub(crate) fn store_relay_failure(
   cfg: &CharlieBotConfig,
   session_id: &str,
   run_id: &str,
-  pcm_bytes: &[u8],
-  backend: &str,
-  devices: Option<&Value>,
+  capture: RelayCapture<'_>,
   error: &str,
 ) -> io::Result<()> {
   with_run_stem(cfg, session_id, run_id, |stem| {
-    if !pcm_bytes.is_empty() {
-      write_run_wav(stem, pcm_bytes)?;
+    if !capture.pcm_bytes.is_empty() {
+      write_run_wav(stem, capture.pcm_bytes)?;
     }
     update_parts(stem, |parts| {
-      if !pcm_bytes.is_empty() {
-        parts.insert("audio".to_string(), audio_part("relay", Some(backend), devices));
+      if !capture.pcm_bytes.is_empty() {
+        parts.insert("audio".to_string(), audio_part("relay", Some(capture.backend), capture.devices));
       }
+      parts.insert("chunk_arrived_ms".to_string(), json!(capture.chunk_arrived_ms));
       parts.insert("failure".to_string(), json!({ "stage": "relay", "error": error }));
     })?;
     Ok(())
@@ -721,8 +729,14 @@ mod tests {
               .expect("the startup part writes");
           }
           1 => {
-            archive_relay_final(&config, "synthetic-session", &id, &[1, 2, 3], "relay words", "gemini", None)
-              .expect("the relay final archives");
+            archive_relay_final(
+              &config,
+              "synthetic-session",
+              &id,
+              RelayCapture { pcm_bytes: &[1, 2, 3], chunk_arrived_ms: &[0, 128], backend: "gemini", devices: None },
+              "relay words",
+            )
+            .expect("the relay final archives");
           }
           _ => {
             store_upload_audio(&config, "synthetic-session", &id, &[4, 5, 6], Some("gemini"), None)
@@ -747,6 +761,7 @@ mod tests {
       )
       .expect("the parts parse");
       assert_eq!(parts["startup"], json!({"reached": "ready"}), "order {orders:?}");
+      assert_eq!(parts["chunk_arrived_ms"], json!([0, 128]), "order {orders:?}");
       // The audio part names whichever audio writer came last: the upload, or the relay final.
       let last_audio = orders.iter().rev().find(|step| **step != 0).expect("every order holds an audio writer");
       let expected = if *last_audio == 2 { "upload" } else { "relay" };
@@ -778,8 +793,14 @@ mod tests {
       "communications_output_device": null,
       "device_error": null
     });
-    store_relay_failure(&config, "synthetic-session", &id, &[1, 2, 3], "gemini", Some(&devices), "connection lost")
-      .expect("the failure archives");
+    store_relay_failure(
+      &config,
+      "synthetic-session",
+      &id,
+      RelayCapture { pcm_bytes: &[1, 2, 3], chunk_arrived_ms: &[0, 64], backend: "gemini", devices: Some(&devices) },
+      "connection lost",
+    )
+    .expect("the failure archives");
     let files: Vec<String> = fs::read_dir(voice_dir(&config, "synthetic-session"))
       .expect("read the voice directory")
       .map(|entry| entry.expect("read a voice entry").file_name().to_string_lossy().into_owned())
@@ -796,6 +817,7 @@ mod tests {
         .expect("parse");
     assert_eq!(parts["failure"], json!({"stage": "relay", "error": "connection lost"}));
     assert_eq!(parts["audio"], json!({"path": "relay", "backend": "gemini", "devices": devices}));
+    assert_eq!(parts["chunk_arrived_ms"], json!([0, 64]));
   }
 
   #[test]
@@ -803,8 +825,14 @@ mod tests {
     let home = tempfile::tempdir().expect("make an isolated home");
     let config = synthetic_config(home.path());
     let id = run_id(5);
-    store_relay_failure(&config, "synthetic-session", &id, &[], "gemini", None, "connection lost")
-      .expect("the failure records");
+    store_relay_failure(
+      &config,
+      "synthetic-session",
+      &id,
+      RelayCapture { pcm_bytes: &[], chunk_arrived_ms: &[], backend: "gemini", devices: None },
+      "connection lost",
+    )
+    .expect("the failure records");
     let files: Vec<String> = fs::read_dir(voice_dir(&config, "synthetic-session"))
       .expect("read the voice directory")
       .map(|entry| entry.expect("read a voice entry").file_name().to_string_lossy().into_owned())
@@ -816,6 +844,7 @@ mod tests {
         .expect("parse");
     assert_eq!(parts["failure"], json!({"stage": "relay", "error": "connection lost"}));
     assert_eq!(parts["audio"], Value::Null);
+    assert_eq!(parts["chunk_arrived_ms"], json!([]));
   }
 
   #[test]

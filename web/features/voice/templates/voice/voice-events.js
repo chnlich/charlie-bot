@@ -34,22 +34,180 @@ function updateVoiceMicTitle() {
   if (btn && selected) btn.title = 'Voice input · ' + selected.label;
 }
 
-// One promise per key: a second click while the module travels joins the first
-// load. The recording module registers the caret's menu and the run handlers.
-// The overlay's rules come first, so the overlay is styled when it appears. A
-// stylesheet that fails still lets the module load.
+let voiceInputBusy = false;
+let voiceInputStartPending = null;
+
+// The first-click state is visible before the lazy module arrives.
+function setVoiceButtonState(state) {
+  const button = document.getElementById('voice-btn');
+  const styles = {
+    starting: ['bg-amber-600', 'border-amber-500'],
+    recording: ['bg-red-600', 'border-red-500'],
+    idle: ['bg-slate-800', 'border-slate-600'],
+  };
+  const classes = styles[state];
+  if (!classes) throw new Error('Unknown voice button state: ' + state);
+  button.classList.remove('bg-slate-800', 'border-slate-600', 'bg-amber-600', 'border-amber-500',
+      'bg-red-600', 'border-red-500');
+  button.classList.add(...classes);
+  button.dataset.state = state;
+  if (state === 'starting') {
+    button.title = 'Preparing microphone…';
+    button.setAttribute('aria-label', 'Preparing microphone…');
+  } else if (state === 'recording') {
+    button.title = 'Speak now';
+    button.setAttribute('aria-label', 'Speak now');
+  } else {
+    button.title = 'Voice input';
+    button.setAttribute('aria-label', 'Voice input');
+  }
+}
+
+// One promise per key: a second caller joins a pending request. The stylesheet
+// and module start together; neither delays the other.
 function loadVoiceInput() {
-  return loadPageStyles('voice', ['/static/features/voice/voice-overlay.css'])
-    .catch((error) => console.error(error.message))
-    .then(() => loadPageScripts('voice', ['/static/features/voice/voice-input.js']));
+  return Promise.all([
+    loadPageStyles('voice', ['/static/features/voice/voice-overlay.css']),
+    loadPageScripts('voice', ['/static/features/voice/voice-input.js']),
+  ]);
 }
 
 function openVoiceInput() {
-  loadVoiceInput().then(() => toggleVoice()).catch((error) => console.error(error));
+  if (voiceInputStartPending) return;
+  if (voiceInputBusy) {
+    loadVoiceInput().then(() => toggleVoice()).catch(handleVoiceInputLoadError);
+    return;
+  }
+  if (!SESSION_ID) {
+    showToast('Open a session before recording voice input', true);
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showToast('Microphone access is not available. Use HTTPS or a supported browser.', true);
+    return;
+  }
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) {
+    showToast('Audio capture is not available in this browser', true);
+    return;
+  }
+
+  const request = {
+    clickedAt: performance.now(),
+    sessionId: SESSION_ID,
+    backend: selectedVoiceBackend(),
+    micOpenMs: null,
+    micPermission: null,
+    stream: null,
+    micResultPromise: null,
+    audioContext: null,
+    moduleReady: false,
+    contextReady: false,
+    error: null,
+    runStarted: false,
+    cancelled: false,
+  };
+  voiceInputStartPending = request;
+  setVoiceButtonState('starting');
+
+  const fail = (error) => {
+    if (voiceInputStartPending !== request) return;
+    voiceInputStartPending = null;
+    request.cancelled = true;
+    request.stream?.getTracks().forEach((track) => track.stop());
+    request.audioContext?.close().catch((closeError) => console.error('Voice audio engine close failed:', closeError));
+    setVoiceButtonState('idle');
+    updateVoiceMicTitle();
+    const message = error && error.message ? error.message : String(error);
+    showToast('Voice input failed: ' + message, true);
+  };
+  const startWhenReady = () => {
+    if (request.error) {
+      fail(request.error);
+      return;
+    }
+    if (!request.moduleReady || !request.contextReady) return;
+    request.runStarted = true;
+    voiceInputStartPending = null;
+    toggleVoice(request).catch((error) => {
+      voiceInputBusy = false;
+      setVoiceButtonState('idle');
+      updateVoiceMicTitle();
+      handleVoiceInputLoadError(error);
+    });
+  };
+
+  try {
+    request.audioContext = new AudioContextCtor();
+  } catch (error) {
+    request.error = error;
+    fail(error);
+    return;
+  }
+  try {
+    const resume = request.audioContext.resume();
+    request.contextReady = true;
+    startWhenReady();
+    Promise.resolve(resume).catch((error) => console.warn('Voice audio engine resume failed:', error));
+  } catch (error) {
+    request.contextReady = true;
+    request.resumeError = error;
+    console.warn('Voice audio engine resume failed:', error);
+    startWhenReady();
+  }
+  let micPromise;
+  try {
+    micPromise = navigator.mediaDevices.getUserMedia({
+      audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true},
+    });
+  } catch (error) {
+    micPromise = Promise.reject(error);
+  }
+  request.micResultPromise = Promise.resolve(micPromise).then((stream) => {
+    if (request.cancelled || (!request.runStarted && voiceInputStartPending !== request)) {
+      stream.getTracks().forEach((track) => track.stop());
+      return {cancelled: true};
+    }
+    request.stream = stream;
+    request.micOpenMs = Math.max(0, Math.round(performance.now() - request.clickedAt));
+    return {stream};
+  }, (error) => ({error}));
+  if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+    navigator.permissions.query({name: 'microphone'}).then((status) => {
+      request.micPermission = status.state;
+      if (activeVoiceRun && activeVoiceRun.startup.clickedAt === request.clickedAt) {
+        activeVoiceRun.startup.micPermission = status.state;
+      }
+      if (status.state === 'prompt' && (voiceInputStartPending === request ||
+          (request.runStarted && activeVoiceRun && activeVoiceRun.startRequest === request))) {
+        const button = document.getElementById('voice-btn');
+        button.title = 'Allow the microphone in Chrome’s prompt';
+        button.setAttribute('aria-label', 'Allow the microphone in Chrome’s prompt');
+      }
+    }).catch((error) => console.warn('Voice microphone permission query failed:', error));
+  }
+  loadVoiceInput().then(() => {
+    request.moduleReady = true;
+    startWhenReady();
+  }, fail);
+}
+
+function handleVoiceInputLoadError(error) {
+  console.error('Voice input failed:', error);
+  showToast('Voice input failed: ' + error.message, true);
+}
+
+function cancelPendingVoiceInput() {
+  const request = voiceInputStartPending;
+  if (!request) return;
+  voiceInputStartPending = null;
+  request.cancelled = true;
+  request.stream?.getTracks().forEach((track) => track.stop());
+  request.audioContext?.close().catch((error) => console.error('Voice audio engine close failed:', error));
 }
 
 function toggleVoiceBackend() {
-  loadVoiceInput().then(() => toggleVoiceBackendMenu()).catch((error) => console.error(error));
+  loadVoiceInput().then(() => toggleVoiceBackendMenu()).catch(handleVoiceInputLoadError);
 }
 
 // The composer's ⋯ menu entry, created by this package so the core template
@@ -64,7 +222,7 @@ function ensureVoiceBackendEntry() {
   entry.textContent = 'Voice backend';
   entry.onclick = () => {
     overflow.classList.remove('show');
-    loadVoiceInput().then(() => openVoiceBackendMenu()).catch((error) => console.error(error));
+    loadVoiceInput().then(() => openVoiceBackendMenu()).catch(handleVoiceInputLoadError);
   };
   overflow.appendChild(entry);
 }
@@ -74,3 +232,10 @@ function ensureVoiceBackendEntry() {
 Chat.registerInputMode(VOICE_INPUT_MODE, '&#127908; Voice');
 updateVoiceMicTitle();
 ensureVoiceBackendEntry();
+
+window.addEventListener('pagehide', cancelPendingVoiceInput);
+window.addEventListener('load', () => {
+  window.requestIdleCallback(() => {
+    loadVoiceInput().catch(handleVoiceInputLoadError);
+  });
+}, {once: true});

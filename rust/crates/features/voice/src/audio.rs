@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::Value;
 use tokio::sync::{Mutex, Notify};
@@ -16,6 +17,8 @@ struct QueueState {
   devices: Option<Value>,
   recording: Vec<u8>,
   end_frame_at: Option<Instant>,
+  first_chunk_received_at: Option<Instant>,
+  chunk_arrived_ms: Vec<u64>,
 }
 
 pub(crate) struct AudioQueue {
@@ -23,6 +26,7 @@ pub(crate) struct AudioQueue {
   recording_budget_bytes: usize,
   state: Mutex<QueueState>,
   changed: Notify,
+  sent_samples: AtomicUsize,
 }
 
 impl AudioQueue {
@@ -50,8 +54,11 @@ impl AudioQueue {
         devices: None,
         recording: Vec::new(),
         end_frame_at: None,
+        first_chunk_received_at: None,
+        chunk_arrived_ms: Vec::new(),
       }),
       changed: Notify::new(),
+      sent_samples: AtomicUsize::new(0),
     })
   }
 
@@ -60,6 +67,8 @@ impl AudioQueue {
     if state.ended || state.queued_bytes + frame.len() > self.max_bytes {
       return false;
     }
+    let first_received = *state.first_chunk_received_at.get_or_insert_with(Instant::now);
+    state.chunk_arrived_ms.push(first_received.elapsed().as_millis() as u64);
     state.queued_bytes += frame.len();
     let room = self.recording_budget_bytes.saturating_sub(state.recording.len());
     state.recording.extend_from_slice(&frame[..frame.len().min(room)]);
@@ -107,6 +116,18 @@ impl AudioQueue {
     self.state.lock().await.recording.clone()
   }
 
+  pub(crate) async fn chunk_arrived_ms(&self) -> Vec<u64> {
+    self.state.lock().await.chunk_arrived_ms.clone()
+  }
+
+  pub(crate) fn sent_samples(&self) -> usize {
+    self.sent_samples.load(Ordering::SeqCst)
+  }
+
+  pub(crate) fn mark_sent(&self, bytes: usize) {
+    self.sent_samples.fetch_add(bytes / 2, Ordering::SeqCst);
+  }
+
   pub(crate) async fn recording_seconds(&self) -> f64 {
     self.state.lock().await.recording.len() as f64 / 2.0 / SAMPLE_RATE as f64
   }
@@ -127,15 +148,21 @@ impl AudioQueue {
 mod tests {
   use super::*;
 
-  #[tokio::test]
+  #[tokio::test(start_paused = true)]
   async fn recording_cap_keeps_the_exact_audio_prefix() {
     let frame = vec![0x2a_u8; 4];
     let queue = AudioQueue::new_with_limits_for_test(frame.len() * 3, 6);
-    for _ in 0..3 {
+    for index in 0..3 {
       assert!(queue.put(frame.clone()).await);
+      if index < 2 {
+        tokio::time::advance(std::time::Duration::from_millis(128)).await;
+      }
     }
     let recorded = [&frame[..], &frame[..2]].concat();
     assert_eq!(queue.recording_pcm().await, recorded);
+    assert_eq!(queue.chunk_arrived_ms().await, [0, 128, 256]);
+    queue.mark_sent(4);
+    assert_eq!(queue.sent_samples(), 2);
     assert!(!queue.put(vec![0x2a; 1]).await, "the preview queue rejects bytes above its capacity");
     assert_eq!(queue.recording_pcm().await, recorded);
   }

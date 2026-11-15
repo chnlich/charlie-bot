@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 /// The proxy's event style: the compact ASCII JSON from its one owner in `charliebot_core::text_repr`.
 pub use charliebot_core::text_repr::COMPACT_ASCII_JSON;
 
-/// The fault a translation raises. A value error is answered with a status and its text; any other fault is
+/// The fault a translation raises. A value error is answered with a status and its text. Any other fault is
 /// unhandled, which answers 500 and names its kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {

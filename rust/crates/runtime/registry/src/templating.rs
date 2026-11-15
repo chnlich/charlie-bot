@@ -31,6 +31,7 @@ use charliebot_compat::headers::header_text;
 use charliebot_compat::{jinja, responses};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::{git, text_repr, timefmt};
 use ignore::WalkBuilder;
 use minijinja::{Environment, Error, ErrorKind, Value};
@@ -681,7 +682,7 @@ fn compressed_html(body: Vec<u8>) -> Response {
     .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
     .header(header::CONTENT_LENGTH, body.len())
     .header(header::CONTENT_ENCODING, "gzip")
-    .header(header::VARY, "Accept-Encoding")
+    .header(header::VARY, ACCEPT_ENCODING)
     .body(Body::from(body))
     .expect("a page response builds")
 }

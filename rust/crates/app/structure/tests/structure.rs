@@ -1315,6 +1315,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
            request builders write the name.",
   },
   OwnerRow {
+    name: "Accept-Encoding",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::headers::ACCEPT_ENCODING`; the responses whose body varies by coding name it in \
+           `Vary`, and the transport gzip appends it.",
+  },
+  OwnerRow {
     name: "application/x-www-form-urlencoded",
     owner: "infra/core",
     hint: "Use `charliebot_core::headers::FORM_URLENCODED`; the CLI's Google token requests state it, and the \

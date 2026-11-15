@@ -13,6 +13,7 @@ use axum::response::Response;
 use axum::routing::get;
 use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_compat::{responses, validation};
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{
@@ -695,7 +696,7 @@ fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
     .header(header::CONTENT_TYPE, "application/json")
     .header(header::CONTENT_LENGTH, compressed.len())
     .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
-    .header(header::VARY, HeaderValue::from_static("Accept-Encoding"))
+    .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING))
     .body(Body::from(compressed))
     .expect("a compressed JSON response builds")
 }
@@ -851,7 +852,7 @@ fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   if gzip {
     builder = builder
       .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
-      .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+      .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
   }
   builder.body(Body::from(body)).expect("a JSON response builds")
 }

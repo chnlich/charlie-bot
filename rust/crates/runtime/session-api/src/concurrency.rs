@@ -23,6 +23,7 @@ use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_level_four};
 use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{HAS_RUNNING_TASKS, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunRecord};
@@ -742,7 +743,7 @@ fn history_response(body: Bytes, compressed: Option<Bytes>, tag: String) -> Resp
     Some(compressed) => {
       builder = builder
         .header(header::CONTENT_ENCODING, "gzip")
-        .header(header::VARY, "Accept-Encoding")
+        .header(header::VARY, ACCEPT_ENCODING)
         .header(header::CONTENT_LENGTH, compressed.len());
       compressed
     }

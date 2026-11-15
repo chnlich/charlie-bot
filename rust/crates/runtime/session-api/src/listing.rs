@@ -8,6 +8,7 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
@@ -1480,7 +1481,7 @@ fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   if gzip {
     response = response
       .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
-      .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+      .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
   }
   response.body(Body::from(body)).expect("a JSON response builds")
 }

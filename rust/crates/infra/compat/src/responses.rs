@@ -10,6 +10,8 @@ use percent_encoding::{AsciiSet, utf8_percent_encode};
 use serde_json::{Value, json};
 
 use crate::json;
+use crate::mimetypes;
+use crate::mimetypes_table;
 use crate::urlquote::quote_set;
 
 /// The failure behind a 500: the name the `http_request` log line carries in `error`, and the
@@ -54,12 +56,14 @@ pub fn method_not_allowed(allow: &str) -> Response {
 
 /// The plain-text response.
 pub fn plain_text(status: StatusCode, content: &str) -> Response {
-  bytes_response(status, "text/plain; charset=utf-8", Bytes::from(content.to_string()))
+  let content_type = mimetypes::with_utf8_charset(mimetypes_table::TEXT_PLAIN);
+  bytes_response(status, &content_type, Bytes::from(content.to_string()))
 }
 
 /// The HTML response.
 pub fn html(content: String) -> Response {
-  bytes_response(StatusCode::OK, "text/html; charset=utf-8", Bytes::from(content))
+  let content_type = mimetypes::with_utf8_charset(mimetypes_table::TEXT_HTML);
+  bytes_response(StatusCode::OK, &content_type, Bytes::from(content))
 }
 
 /// The redirect response: 307, empty body, the URL quoted with the redirect-safe set.
@@ -82,7 +86,7 @@ pub fn internal_error(kind: &str, detail: String) -> Response {
   response
 }
 
-fn bytes_response(status: StatusCode, content_type: &'static str, body: Bytes) -> Response {
+fn bytes_response(status: StatusCode, content_type: &str, body: Bytes) -> Response {
   Response::builder()
     .status(status)
     .header(header::CONTENT_TYPE, content_type)

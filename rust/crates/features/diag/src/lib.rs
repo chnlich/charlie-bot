@@ -1,7 +1,7 @@
 //! The write-only client timing telemetry route. The web UI posts one client timing event per
-//! interaction — a session switch, a message send, a socket disconnect episode, a page load or one
-//! tab-minute of background traffic — to `POST /api/diag/client-events`, and the route logs the
-//! event as one `diag_client` line. No state is kept.
+//! interaction: a session switch, a message send, a socket disconnect episode, a page load or one
+//! tab-minute of background traffic. The event goes to `POST /api/diag/client-events`, and the
+//! route logs it as one `diag_client` line. No state is kept.
 
 mod api;
 

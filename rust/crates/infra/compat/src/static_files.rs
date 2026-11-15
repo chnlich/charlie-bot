@@ -45,7 +45,7 @@ const FILE_BODY_MEMO_ENTRIES: usize = 64;
 const FILE_BODY_MEMO_MAX_BYTES: usize = 256 * 1024;
 
 /// The whole-file bodies served recently. A page load asks for the same few static files, and every request read its
-/// file again: the read, its allocation and the body's message list cost more than the metadata read the request
+/// file again. The read, its allocation and the body's message list cost more than the metadata read the request
 /// already made. The key holds the file's path and the `(mtime, size)` identity its ETag is built from, so a file that
 /// moved is read again on the next request.
 static FILE_BODY_MEMO: LazyLock<Mutex<BodyMemo<FileBodyKey>>> =

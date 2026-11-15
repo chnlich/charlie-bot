@@ -351,7 +351,7 @@ fn lax_int(text: &str) -> Option<i128> {
     None => (text, None),
   };
   // The fraction follows the digits with no whitespace between them, so a whole part with an edge of its own
-  // stays refused even though `int_digits` trims: `"1 .0"` is not an int.
+  // stays refused even though `int_digits` trims. `"1 .0"` is not an int.
   if let Some(fraction) = fraction
     && (whole.trim() != whole || fraction.is_empty() || fraction.bytes().any(|digit| digit != b'0'))
   {

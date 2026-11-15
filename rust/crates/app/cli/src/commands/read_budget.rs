@@ -9,9 +9,8 @@
 //! remaining budget is withheld when it is a successful Bash or Read output: `updatedToolOutput`
 //! replaces the text the model reads with the withhold notice, and the result counts nothing. A
 //! failure or another tool's output passes whole, is counted, and carries the over-budget notice as
-//! `additionalContext`. Exempt material — rule and skill files, the session's own rule files read
-//! whole, child conclusions and session status, approval objects, the user's decisions — is never
-//! counted and never withheld.
+//! `additionalContext`. Exempt material — whole reads of rule and skill files, child conclusions and
+//! session status, approval objects, the user's decisions — is never counted and never withheld.
 //!
 //! The session's own rule files are the markdown files its `CLAUDE.md` names in backticks, so a line
 //! rule file and the shared rule file it opens with are exempt wherever they live. A partial read of
@@ -70,7 +69,7 @@ const WRITING_TOOLS: [&str; 4] = [WRITE_TOOL, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBO
 /// 2KB"), cut back to the last line end when that line end lies past the preview's halfway mark.
 const PERSISTED_PREVIEW_CHARS: usize = 2000;
 
-/// The paths of rule and skill material, whose reads Direct Work keeps outside the budget.
+/// The paths of rule and skill material, whose whole reads Direct Work keeps outside the budget.
 const RULE_PATH: &str = r"(/skills/|(^|[\s:/])prompts/|SKILL\.md|LESSONS\.md|CLAUDE\.md|AGENTS\.md|\.claude/rules/)";
 
 /// The file that states a session's effective rules, in its session directory. The markdown files it
@@ -442,21 +441,24 @@ fn read_class(
   cwd: Option<&str>,
   session_rules: &[String],
 ) -> Option<&'static str> {
-  if let Some(class) = path_class(path, cwd) {
-    return Some(class);
-  }
   let whole = !PARTIAL_READ_FIELDS.iter().any(|field| tool_input.contains_key(*field));
+  if let Some(class) = path_class(path, cwd) {
+    return (class != "rule_skill" || whole).then_some(class);
+  }
   (whole && is_session_rule_file(path, cwd, session_rules)).then_some("rule_skill")
 }
 
-/// Whether the command reads one session rule file whole: `cat` with that one path, and no pipe or
-/// other shell syntax.
-fn is_whole_cat_of_session_rule(command: &str, cwd: Option<&str>, session_rules: &[String]) -> bool {
+/// Whether the command reads one rule file whole: `cat` with that one path, and no pipe or other
+/// shell syntax.
+fn is_whole_cat_of_rule_file(command: &str, cwd: Option<&str>, session_rules: &[String]) -> bool {
   if has_shell_control(command) || command.contains('|') {
     return false;
   }
   match command.split_whitespace().collect::<Vec<&str>>().as_slice() {
-    ["cat", path] => is_session_rule_file(path.trim_matches(['\'', '"']), cwd, session_rules),
+    ["cat", path] => {
+      let path = path.trim_matches(['\'', '"']);
+      path_class(path, cwd) == Some("rule_skill") || is_session_rule_file(path, cwd, session_rules)
+    }
     _ => false,
   }
 }
@@ -476,7 +478,14 @@ fn exempt_class(
       .and_then(Value::as_str)
       .and_then(|p| read_class(p, tool_input, cwd, session_rules)),
     "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(|c| {
-      if is_whole_cat_of_session_rule(c, cwd, session_rules) { Some("rule_skill") } else { bash_class(c, cwd) }
+      if is_whole_cat_of_rule_file(c, cwd, session_rules) {
+        Some("rule_skill")
+      } else {
+        match bash_class(c, cwd) {
+          Some("rule_skill") => None,
+          class => class,
+        }
+      }
     }),
     _ => None,
   };
@@ -1118,6 +1127,26 @@ mod tests {
     result.unwrap();
     assert!(output.is_empty());
     assert_eq!(home.state().counted, 1_000);
+  }
+
+  #[test]
+  fn partial_reads_of_path_matched_rule_and_skill_files_count() {
+    let home = RunHome::new();
+    let mut partial = read_event("/repo/prompts/master.md", &"x".repeat(200));
+    partial["tool_input"]["offset"] = json!(10);
+    let (result, _) = run_event(&home, &partial);
+    result.unwrap();
+    assert_eq!(home.state().counted, 200);
+
+    let mut partial = read_event("/repo/skills/charliebot/SKILL.md", &"y".repeat(300));
+    partial["tool_input"]["limit"] = json!(40);
+    let (result, _) = run_event(&home, &partial);
+    result.unwrap();
+    assert_eq!(home.state().counted, 500);
+
+    let (result, _) = run_event(&home, &bash_event("sed -n '1,5p' /repo/CLAUDE.md", "z".repeat(400)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 900);
   }
 
   #[test]

@@ -4,7 +4,9 @@ use std::path::Path;
 
 use anyhow::Context;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
-use charliebot_core::event_types::{ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RESULT};
+use charliebot_core::event_types::{
+  API_ERROR_STATUS, ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RESULT,
+};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{DEFAULT_JSON, value_str};
 use charliebot_store::run_records::NewestFirstEvents;
@@ -191,7 +193,7 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
   }
   let is_plain_result = event_type == Some(RESULT)
     && event.get("is_error") != Some(&Value::Bool(true))
-    && event.get("api_error_status").is_none_or(Value::is_null)
+    && event.get(API_ERROR_STATUS).is_none_or(Value::is_null)
     && !value_str(event.get("subtype").unwrap_or(&Value::String(String::new()))).to_lowercase().contains("error");
   if is_plain_result {
     return Ok(None);
@@ -226,7 +228,7 @@ fn is_falsy(value: &Value) -> bool {
 /// The text an event's fields carry, joined by newlines: the message's text blocks, and the other fields as text.
 fn event_text(event: &Value) -> String {
   let mut parts = Vec::new();
-  for key in ["message", "content", "result", "error", "api_error_status"] {
+  for key in ["message", "content", "result", "error", API_ERROR_STATUS] {
     let Some(value) = event.get(key).filter(|value| !value.is_null()) else { continue };
     if key == "message" && value.is_object() {
       let text = message_text(Some(value));

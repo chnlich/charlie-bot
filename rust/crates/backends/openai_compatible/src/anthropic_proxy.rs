@@ -212,7 +212,7 @@ struct Relay {
 enum RelayState {
   /// The upstream still has lines to read. `[DONE]` and the upstream's end both leave this state.
   Reading,
-  /// The reading ended; the translator's closing events still have to queue.
+  /// The reading ended. The translator's closing events still have to queue.
   Finishing,
   /// Nothing follows the queued frames but the end.
   Done,

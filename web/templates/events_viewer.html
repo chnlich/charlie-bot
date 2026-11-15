@@ -275,6 +275,9 @@
     // A row previews its event on one line: the string content, the description, or the first
     // message block that carries text — a typed answer, a tool call, or a tool result. A tool
     // call or a tool result otherwise shows its badges alone, so a reader cannot tell what ran.
+    // A run's end writes no message, so its row names the run's own outcome instead: the exit code
+    // and the seconds it thought. Without that the rows of one type read alike, and a failed run's
+    // end cannot be told from a clean one without opening each row.
     const PREVIEW_CHARS = 120;
 
     function toolResultText(content) {
@@ -294,6 +297,22 @@
       return '';
     }
 
+    // A whole-second duration in the words the chat's run-end separator uses: "45s", "2m57s".
+    function runDuration(seconds) {
+      const total = Math.max(0, Math.floor(Number(seconds)));
+      if (total < 60) return total + 's';
+      return Math.floor(total / 60) + 'm' + String(total % 60).padStart(2, '0') + 's';
+    }
+
+    // The run's end: its exit code, which the run writes to every end event, and the seconds it
+    // thought. An end event with no code is not a run's end and contributes no summary.
+    function runEndText(ev) {
+      if (typeof ev.exit_code !== 'number') return '';
+      const parts = ['exit ' + ev.exit_code];
+      if (typeof ev.thinking_seconds === 'number') parts.push(runDuration(ev.thinking_seconds));
+      return parts.join(' · ');
+    }
+
     function summaryText(ev) {
       if (typeof ev.content === 'string') return ev.content;
       if (typeof ev.description === 'string') return ev.description;
@@ -302,7 +321,7 @@
         const text = blockSummary(block);
         if (text) return text;
       }
-      return '';
+      return runEndText(ev);
     }
 
     // The one-line preview: whitespace collapsed, cut at PREVIEW_CHARS with an ellipsis so a cut

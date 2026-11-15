@@ -62,8 +62,8 @@ pub const NATIVE_BACKEND: &str = "native_backend";
 /// The session-metadata field holding the session's work state: `idle`, `waiting` or `running`. The session routes
 /// import this name instead of each spelling it.
 pub const WORK_STATE: &str = "work_state";
-/// The field holding a task's lifecycle state: the task detail, the run-delivery event and the close event carry it.
-/// The store's fact checkpoint and the session routes import this name instead of each spelling it.
+/// The field holding a task's lifecycle state: the task detail, the run-delivery event and the close readback carry
+/// it. The store's fact checkpoint and the session routes import this name instead of each spelling it.
 pub const TASK_STATE: &str = "task_state";
 /// The session-metadata field holding the document's schema version: `2` for every session a current server writes.
 /// The store's declared-field lists, the session listing's page-row field drop and the mock home's session seed carry

@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Inline-delete backfill for the sidebar's grouped views: archive and
 // permanent-delete repaint the grouped list in place from the last-rendered
-// list minus the session. So the 5-row preview window backfills, and the group
+// list minus the session. So the preview window backfills, and the group
 // header count and Show-all toggle resync to the remaining total, with zero
 // list fetches. The archived tab and the search overlay keep node-only row
 // removal, and deleting the viewed session keeps its switch/empty behavior.

@@ -395,7 +395,7 @@ fn pre_fix_ledger(raw: &Connection, served: &[UsageRecord], late: &[UsageRecord]
   raw.execute_batch("INSERT INTO ledger_meta (key, value) VALUES ('agg_backfilled', '1'), ('schema', '2')").unwrap();
 }
 
-/// Makes the usage insert fail for `rec-bad`, after its sessions have registered.
+/// The trigger that makes the usage insert fail for `rec-bad`, after its sessions have registered.
 const REJECT_BAD_USAGE: &str = "CREATE TRIGGER reject_usage BEFORE INSERT ON usage WHEN new.record_id = 'rec-bad' BEGIN SELECT RAISE(ABORT, 'fixture rejection'); END;";
 
 #[test]

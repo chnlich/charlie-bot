@@ -519,7 +519,7 @@ impl UsageLedger {
     )?)
   }
 
-  /// Runs one grouped read and returns its rows.
+  /// One grouped read's rows.
   fn group_rows(&self, query: &str, params: impl rusqlite::Params) -> anyhow::Result<Vec<GroupRow>> {
     let mut statement = self.conn.prepare(query)?;
     let rows = statement.query_map(params, read_group_row)?;

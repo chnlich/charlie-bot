@@ -73,7 +73,7 @@ pub struct Topic {
   pub resident: bool,
 }
 
-/// One parsed entry file. A header field the file leaves out is `None`; validation rejects those.
+/// One parsed entry file. A header field the file leaves out is `None`. Validation rejects those.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
   pub path: PathBuf,
@@ -208,7 +208,7 @@ pub fn parse_entry(path: &Path) -> anyhow::Result<Entry> {
   Ok(parse_entry_text(&text, path)?)
 }
 
-/// Parses one entry file's text. Only the first header block is parsed; the body is the rest,
+/// Parses one entry file's text. Only the first header block is parsed. The body is the rest,
 /// so it may hold `---` lines. Structure only: `load_store` checks the semantic rules.
 pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFormatError> {
   let location = entry_path.display();
@@ -252,7 +252,7 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
   if i >= lines.len() {
     return Err(MemoryFormatError(format!("{location}: missing closing '---' after header")));
   }
-  // lines[i] is the closing `---`; the body is everything after it.
+  // lines[i] is the closing `---`. The body is everything after it.
   let body_lines = &lines[i + 1..];
   if body_lines.is_empty() || (body_lines.len() == 1 && body_lines[0].is_empty()) {
     return Err(MemoryFormatError(format!("{location}: line {}: empty body", i + 2)));
@@ -528,7 +528,7 @@ fn selection_from_parts(
   }
   if let Some(usage) = usage_line {
     match segments.last_mut() {
-      // The usage line rides the index segment; a selection with no index entries gets a usage-only one.
+      // The usage line rides the index segment. A selection with no index entries gets a usage-only one.
       Some(last) if last.delivery == DELIVERY_INDEX => last.text = format!("{}\n\n{usage}", last.text),
       _ => segments.push(MemorySegment { delivery: DELIVERY_INDEX, text: usage.to_string(), sources: Vec::new() }),
     }

@@ -43,7 +43,7 @@ struct CommitArgs {
   /// File holding the commit message.
   #[arg(long)]
   message_file: PathBuf,
-  /// Commit even when lines the PR already added are rewritten or gone; the commit message lists each replaced line
+  /// Commit even when lines the PR already added are rewritten or gone. The commit message lists each replaced line
   /// under 'Replaced PR lines:'.
   #[arg(long)]
   replace_pr_lines: bool,

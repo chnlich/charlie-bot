@@ -1,5 +1,5 @@
 //! The commit gate's writing checks: the prose violations and the negation warnings. The prose check
-//! refuses a commit; the negation check only returns the warnings the commit prints and records.
+//! refuses a commit. The negation check only returns the warnings the commit prints and records.
 
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -23,7 +23,7 @@ static NEGATION: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// The writing-rule violations of `text` over the same file's base version. A unit the base version holds verbatim
-/// escapes the sentence checks; the column limit binds every body line. `skip_body_line_limit` waives the line limit
+/// escapes the sentence checks. The column limit binds every body line. `skip_body_line_limit` waives the line limit
 /// for a pure deletion.
 pub(super) fn prose_violations(text: &str, base_text: Option<&str>, skip_body_line_limit: bool) -> Vec<String> {
   let body = entry_body(text);
@@ -103,7 +103,7 @@ fn prose_units(body: &[&str]) -> Vec<String> {
 }
 
 /// The text with each backticked span replaced by `CODE`, and for each masked character the index of the character it
-/// reads from. A backticked span reads from its opening backtick; a backtick with no closing one stays literal.
+/// reads from. A backticked span reads from its opening backtick. A backtick with no closing one stays literal.
 fn mask_backticks(text: &str) -> (String, Vec<usize>) {
   let chars: Vec<char> = text.chars().collect();
   let mut masked = String::new();

@@ -26,7 +26,7 @@ struct LocalWorkGuard {
 }
 
 /// The guard switch of `server` read for the checkout at `repo_root`. The server calls this once, before any agent
-/// run; an error stops the start.
+/// run. An error stops the start.
 pub fn configure(repo_root: &Path, server: &ServerConfig) -> Result<(), String> {
   let guard = LocalWorkGuard::from_server(repo_root, server)?;
   GUARD.set(guard).map_err(|_| "the local work guard is configured twice in one process".to_string())

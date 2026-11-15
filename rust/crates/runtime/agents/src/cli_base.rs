@@ -99,8 +99,8 @@ pub fn prepend_path_dir(env: &mut Env, dir: &str) {
 }
 
 /// Merges `LOCAL_NO_PROXY_ENTRIES` into a NO_PROXY value, deduplicated and order-stable (`base.merge_local_no_proxy`).
-/// Caller entries keep their positions and may repeat; each local entry appears once, appended in canonical order when
-/// absent.
+/// Caller entries keep their positions and may repeat. Each local entry appears once, appended in canonical order
+/// when absent.
 pub fn merge_local_no_proxy(value: &str) -> String {
   let mut entries: Vec<&str> = Vec::new();
   let mut seen_local: Vec<&str> = Vec::new();

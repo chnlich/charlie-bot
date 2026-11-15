@@ -251,8 +251,8 @@ async fn file_metadata(file: &tokio::fs::File) -> io::Result<std::fs::Metadata> 
 fn event_file_metadata(file: &tokio::fs::File) -> io::Result<std::fs::Metadata> {
   #[cfg(test)]
   FOLLOW_EVENT_METADATA_CALLS.with(|count| count.set(count.get() + 1));
-  // Each valid event is fstat'ed; keep that timestamp point without Tokio's blocking-pool metadata hop.
-  // SAFETY: the Tokio file owns this stable descriptor for the borrow; ManuallyDrop prevents a second close.
+  // Each valid event is fstat'ed. Keep that timestamp point without Tokio's blocking-pool metadata hop.
+  // SAFETY: the Tokio file owns this stable descriptor for the borrow. ManuallyDrop prevents a second close.
   let borrowed = ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(file.as_raw_fd()) });
   borrowed.metadata()
 }

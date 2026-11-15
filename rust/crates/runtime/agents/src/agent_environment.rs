@@ -19,7 +19,7 @@ use crate::transport::cgroup;
 
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
 /// GitHub credentials and the token command the server process may carry. The wrapper owns the App token when the
-/// live host config (`spawn_base_environment`) names a command; with no command it uses the host's stored gh login.
+/// live host config (`spawn_base_environment`) names a command. With no command it uses the host's stored gh login.
 /// Neither an inherited `GH_TOKEN` nor a stale command reaches an agent. The server's own environment and its
 /// non-agent children keep both.
 const GITHUB_ENVIRONMENT_VARIABLES: [&str; 3] = ["GH_TOKEN", "GITHUB_TOKEN", gh_wrapper::TOKEN_COMMAND_VAR];
@@ -105,7 +105,7 @@ fn spawn_base_environment_from(
 }
 
 /// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative
-/// limits are logged as they are; each spawn applies them as well.
+/// limits are logged as they are. Each spawn applies them as well.
 pub fn run_session_cgroup_startup(base_dir: &Path, sessions_dir: &Path, server: &ServerConfig) -> anyhow::Result<()> {
   run_session_cgroup_startup_inner(base_dir, sessions_dir, server, None)
 }
@@ -365,7 +365,7 @@ mod tests {
   }
 
   /// One hot-reloaded config file read at three spawns: key absent, then added, then changed — no server restart
-  /// between them. The startup environment carries no token command; each spawn reads the live config.
+  /// between them. The startup environment carries no token command. Each spawn reads the live config.
   #[test]
   fn spawn_base_environment_reads_the_live_config_token_command_at_each_spawn() {
     let root = tempfile::tempdir().unwrap();

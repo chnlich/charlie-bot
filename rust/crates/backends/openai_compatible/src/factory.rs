@@ -24,7 +24,7 @@ impl BackendFactory for OpenAiCompatibleFactory {
     };
     let proxy_base_url =
       format!("http://localhost:{}/api/anthropic-proxy/openai-compatible/{}", cfg.server.port, option.id);
-    let auth_token = credentials::load_credentials(&cfg.charliebot_home)?.require("charliebot", "access_key")?;
+    let auth_token = credentials::load_credentials(&cfg.charliebot_home)?.require_access_key()?;
     let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
     let launch = launch_with_kwargs(launch)?;
     let config_dir = launch_config_dir(&launch)?;

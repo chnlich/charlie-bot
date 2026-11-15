@@ -9,8 +9,13 @@
 //! remaining budget is withheld when it is a successful Bash or Read output: `updatedToolOutput`
 //! replaces the text the model reads with the withhold notice, and the result counts nothing. A
 //! failure or another tool's output passes whole, is counted, and carries the over-budget notice as
-//! `additionalContext`. Exempt material — rule and skill files, child conclusions and session
-//! status, approval objects, the user's decisions — is never counted and never withheld.
+//! `additionalContext`. Exempt material — rule and skill files, the session's own rule files read
+//! whole, child conclusions and session status, approval objects, the user's decisions — is never
+//! counted and never withheld.
+//!
+//! The session's own rule files are the markdown files its `CLAUDE.md` names in backticks, so a line
+//! rule file and the shared rule file it opens with are exempt wherever they live. A partial read of
+//! one of them counts.
 //!
 //! Persisted output: when a Bash output exceeds the inline limit, the model reads only the
 //! `<persisted-output>` wrapper with a first-2KB preview, and the full text is saved at the
@@ -67,6 +72,16 @@ const PERSISTED_PREVIEW_CHARS: usize = 2000;
 
 /// The paths of rule and skill material, whose reads Direct Work keeps outside the budget.
 const RULE_PATH: &str = r"(/skills/|(^|[\s:/])prompts/|SKILL\.md|LESSONS\.md|CLAUDE\.md|AGENTS\.md|\.claude/rules/)";
+
+/// The file that states a session's effective rules, in its session directory. The markdown files it
+/// names in backticks are the session's own rule files.
+const SESSION_RULES_FILE_NAME: &str = "CLAUDE.md";
+
+/// A backticked markdown path, whose capture is the path.
+const BACKTICKED_MD: &str = r"`([^`\s]+\.md)`";
+
+/// The Read input fields that make a read partial: it starts at `offset` or stops at `limit`.
+const PARTIAL_READ_FIELDS: [&str; 2] = ["offset", "limit"];
 
 /// The approval objects under a session's artifacts directory.
 const APPROVAL_PATH: &str = r"/artifacts/(plan|understanding)_[^/\s]*\.html";
@@ -228,6 +243,7 @@ fn tool_result(event: &Value, run_dir: &Path, agent_tool: bool, can_delegate: bo
     .and_then(Value::as_str)
     .ok_or_else(|| CliExit::usage(format!("{hook_event} hook input must include a string tool_use_id")))?;
   let cwd = event.get("cwd").and_then(Value::as_str);
+  let session_rules = session_rule_files(run_dir)?;
   let response = if failure {
     let error = event
       .get("error")
@@ -245,10 +261,12 @@ fn tool_result(event: &Value, run_dir: &Path, agent_tool: bool, can_delegate: bo
   update_state(run_dir, |state| {
     let persisted_path = persisted_output_path(tool_name, response);
     if let Some(path) = &persisted_path {
-      state.persisted.push(PersistedOutput { path: path.clone(), exempt: exempt_class(tool_name, tool_input, cwd) });
+      state
+        .persisted
+        .push(PersistedOutput { path: path.clone(), exempt: exempt_class(tool_name, tool_input, cwd, &session_rules) });
     }
-    let exempt =
-      read_back_exemption(tool_name, tool_input, state).unwrap_or_else(|| exempt_class(tool_name, tool_input, cwd));
+    let exempt = read_back_exemption(tool_name, tool_input, state)
+      .unwrap_or_else(|| exempt_class(tool_name, tool_input, cwd, &session_rules));
     if exempt.is_some() {
       return;
     }
@@ -381,13 +399,85 @@ fn over_budget_notice(total: usize, agent_tool: bool, can_delegate: bool) -> Str
   )
 }
 
+/// The session directory of a run directory: `sessions/<sid>/data/runs/<run>`.
+fn session_dir_of(run_dir: &Path) -> &Path {
+  run_dir.ancestors().nth(3).expect("a run directory lies under its session's data directory")
+}
+
+/// The session's own rule files: the markdown files its `CLAUDE.md` names in backticks, each one that
+/// exists. A session without a `CLAUDE.md` names none. A file that is not a rule file of the session
+/// is not named there, so its reads keep counting.
+fn session_rule_files(run_dir: &Path) -> Result<Vec<String>, CliExit> {
+  let session_dir = session_dir_of(run_dir);
+  let path = session_dir.join(SESSION_RULES_FILE_NAME);
+  let text = match std::fs::read_to_string(&path) {
+    Ok(text) => text,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(error) => return Err(CliExit::usage(format!("could not read {}: {error}", path.display()))),
+  };
+  let base = session_dir.to_string_lossy().into_owned();
+  let mut rules: Vec<String> = Vec::new();
+  for captures in backticked_md_pattern().captures_iter(&text) {
+    if let Some(resolved) = resolve_token(&captures[1], Some(base.as_str()))
+      && Path::new(&resolved).is_file()
+      && !is_memo_path(&resolved, Some(base.as_str()))
+      && !rules.contains(&resolved)
+    {
+      rules.push(resolved);
+    }
+  }
+  Ok(rules)
+}
+
+/// Whether a path names one of the session's rule files. Only a markdown path can name one.
+fn is_session_rule_file(path: &str, cwd: Option<&str>, session_rules: &[String]) -> bool {
+  path.ends_with(".md") && resolve_token(path, cwd).is_some_and(|resolved| session_rules.contains(&resolved))
+}
+
+/// The class of a Read: the path's own class, or a session rule file read whole. A read with `offset`
+/// or `limit` is partial, so a partial read of a session rule file counts.
+fn read_class(
+  path: &str,
+  tool_input: &Map<String, Value>,
+  cwd: Option<&str>,
+  session_rules: &[String],
+) -> Option<&'static str> {
+  if let Some(class) = path_class(path, cwd) {
+    return Some(class);
+  }
+  let whole = !PARTIAL_READ_FIELDS.iter().any(|field| tool_input.contains_key(*field));
+  (whole && is_session_rule_file(path, cwd, session_rules)).then_some("rule_skill")
+}
+
+/// Whether the command reads one session rule file whole: `cat` with that one path, and no pipe or
+/// other shell syntax.
+fn is_whole_cat_of_session_rule(command: &str, cwd: Option<&str>, session_rules: &[String]) -> bool {
+  if has_shell_control(command) || command.contains('|') {
+    return false;
+  }
+  match command.split_whitespace().collect::<Vec<&str>>().as_slice() {
+    ["cat", path] => is_session_rule_file(path.trim_matches(['\'', '"']), cwd, session_rules),
+    _ => false,
+  }
+}
+
 /// The Direct Work item a tool call reads, or `None` when its output counts toward the budget.
-fn exempt_class(tool_name: &str, tool_input: &Map<String, Value>, cwd: Option<&str>) -> Option<String> {
+fn exempt_class(
+  tool_name: &str,
+  tool_input: &Map<String, Value>,
+  cwd: Option<&str>,
+  session_rules: &[String],
+) -> Option<String> {
   let class = match tool_name {
     name if SUBAGENT_TOOL_NAMES.contains(&name) => Some("child_conclusion"),
     SKILL_TOOL => Some("rule_skill"),
-    READ_TOOL => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str).and_then(|p| path_class(p, cwd)),
-    "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(|c| bash_class(c, cwd)),
+    READ_TOOL => tool_input
+      .get(TOOL_INPUT_FILE_PATH)
+      .and_then(Value::as_str)
+      .and_then(|p| read_class(p, tool_input, cwd, session_rules)),
+    "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(|c| {
+      if is_whole_cat_of_session_rule(c, cwd, session_rules) { Some("rule_skill") } else { bash_class(c, cwd) }
+    }),
     _ => None,
   };
   class.map(str::to_string)
@@ -798,6 +888,7 @@ macro_rules! hook_pattern {
 hook_pattern!(rule_path_pattern, RULE_PATH);
 hook_pattern!(approval_path_pattern, APPROVAL_PATH);
 hook_pattern!(child_report_pattern, CHILD_REPORT);
+hook_pattern!(backticked_md_pattern, BACKTICKED_MD);
 hook_pattern!(coordination_cmd_pattern, COORDINATION_CMD);
 hook_pattern!(session_cmd_pattern, SESSION_CMD);
 hook_pattern!(shell_reader_pattern, SHELL_READERS);
@@ -836,6 +927,10 @@ mod tests {
 
     fn state(&self) -> BudgetState {
       serde_json::from_slice(&std::fs::read(self.run_dir.join(STATE_FILE_NAME)).unwrap()).unwrap()
+    }
+
+    fn session_dir(&self) -> &Path {
+      session_dir_of(&self.run_dir)
     }
 
     fn seed_counted(&self, counted: usize) {
@@ -979,6 +1074,73 @@ mod tests {
     assert!(output.is_empty());
     assert_eq!(home.state().counted, 0);
     assert!(home.state().withheld.is_empty());
+  }
+
+  /// Writes a session's `CLAUDE.md` naming a line rule file and a shared rule file, both outside the
+  /// rule-path fragments, and returns the two files' paths. `LINE_RULES` and `COMMON_RULES` in
+  /// `claude_md` stand for the paths.
+  fn session_with_rules(home: &RunHome, claude_md: &str) -> (String, String) {
+    let line_rules = home.session_dir().join("lines").join("goal_line_shared.md");
+    let common_rules = home.session_dir().join("shared").join("research_rules_common.md");
+    std::fs::create_dir_all(line_rules.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(common_rules.parent().unwrap()).unwrap();
+    std::fs::write(&line_rules, "x".repeat(3_000)).unwrap();
+    std::fs::write(&common_rules, "y".repeat(4_000)).unwrap();
+    let text = claude_md
+      .replace("LINE_RULES", &line_rules.to_string_lossy())
+      .replace("COMMON_RULES", &common_rules.to_string_lossy());
+    std::fs::write(home.session_dir().join(SESSION_RULES_FILE_NAME), text).unwrap();
+    (line_rules.to_string_lossy().into_owned(), common_rules.to_string_lossy().into_owned())
+  }
+
+  #[test]
+  fn a_session_rule_file_read_whole_passes_uncounted() {
+    let home = RunHome::new();
+    let (line_rules, common_rules) = session_with_rules(&home, "The rules are `LINE_RULES` and `COMMON_RULES`.");
+    home.seed_counted(14_000);
+    let (result, output) = run_event(&home, &read_event(&line_rules, &"x".repeat(3_000)));
+    result.unwrap();
+    assert!(output.is_empty());
+    let (result, output) = run_event(&home, &read_event(&common_rules, &"y".repeat(4_000)));
+    result.unwrap();
+    assert!(output.is_empty());
+    assert_eq!(home.state().counted, 14_000);
+    assert!(home.state().withheld.is_empty());
+  }
+
+  #[test]
+  fn a_partial_read_of_a_session_rule_file_counts() {
+    let home = RunHome::new();
+    let (line_rules, _) = session_with_rules(&home, "The rules are `LINE_RULES`.");
+    let mut partial = read_event(&line_rules, &"x".repeat(1_000));
+    partial["tool_input"]["limit"] = json!(40);
+    let (result, output) = run_event(&home, &partial);
+    result.unwrap();
+    assert!(output.is_empty());
+    assert_eq!(home.state().counted, 1_000);
+  }
+
+  #[test]
+  fn a_whole_cat_of_a_session_rule_file_passes_and_a_piped_one_counts() {
+    let home = RunHome::new();
+    let (line_rules, _) = session_with_rules(&home, "The rules are `LINE_RULES`.");
+    let (result, _) = run_event(&home, &bash_event(format!("cat {line_rules}"), "x".repeat(3_000)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 0);
+    let (result, _) = run_event(&home, &bash_event(format!("cat {line_rules} | head -5"), "x".repeat(300)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 300);
+  }
+
+  #[test]
+  fn a_markdown_file_the_session_rules_do_not_name_counts() {
+    let home = RunHome::new();
+    session_with_rules(&home, "The rules are `skills/x/y.md` and nothing else.");
+    let stray = home.session_dir().join("ledger.md");
+    std::fs::write(&stray, "z".repeat(2_000)).unwrap();
+    let (result, _) = run_event(&home, &read_event(&stray.to_string_lossy(), &"z".repeat(2_000)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 2_000);
   }
 
   #[test]
@@ -1254,7 +1416,7 @@ mod tests {
     ];
     for (tool_name, tool_input, expected) in cases {
       let input = tool_input.as_object().unwrap().clone();
-      assert_eq!(exempt_class(tool_name, &input, None).as_deref(), expected, "{tool_name} {tool_input}");
+      assert_eq!(exempt_class(tool_name, &input, None, &[]).as_deref(), expected, "{tool_name} {tool_input}");
     }
   }
 

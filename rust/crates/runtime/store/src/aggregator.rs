@@ -827,7 +827,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     event_types::RUN_END => json!({
       "role": "separator",
       "kind": event_types::RUN_END,
-      event_types::THINKING_SECONDS: event.field("duration_seconds").map(EventFields::to_owned_value).unwrap_or(Value::Null),
+      event_types::THINKING_SECONDS: event.field(event_types::RUN_DURATION_SECONDS).map(EventFields::to_owned_value).unwrap_or(Value::Null),
     }),
     event_types::RUN_ERROR => {
       let content = event

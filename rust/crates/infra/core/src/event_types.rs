@@ -133,6 +133,9 @@ pub const BACKEND_LABEL: &str = "backend_label";
 /// The run header's reference to the run's launch prompt file.
 pub const LAUNCH_PROMPT_REF: &str = "launch_prompt_ref";
 pub const RUN_END: &str = "run_end";
+/// The run's wall-clock length in seconds, in the `run_end` event that the worker transcript writes and the message
+/// aggregator renders as [`THINKING_SECONDS`].
+pub const RUN_DURATION_SECONDS: &str = "duration_seconds";
 pub const RUN_ERROR: &str = "run_error";
 pub const RUN_DELIVERY: &str = "run_delivery";
 pub const TASK_INPUT_ACKNOWLEDGED: &str = "task_input_acknowledged";

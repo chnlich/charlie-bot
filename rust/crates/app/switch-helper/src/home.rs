@@ -89,13 +89,13 @@ fn alive(args: &[OsString]) -> Result<(), CliExit> {
 /// path.
 pub(crate) fn reattach(args: &[OsString]) -> Result<(), CliExit> {
   let [repo, sha, backend_type] = exact::<3>(args)?;
-  let (enabled, detail) = scan::read_registration(Path::new(&repo), &sha, &backend_type).map_err(failed)?;
-  match enabled {
-    Some(value) => {
-      println!("{value} ({detail})");
+  let (state, detail) = scan::read_registration(Path::new(&repo), &sha, &backend_type).map_err(failed)?;
+  match state {
+    scan::ReattachState::Unknown => Err(CliExit::error(detail)),
+    scan::ReattachState::Enabled | scan::ReattachState::Disabled => {
+      println!("{} ({detail})", state.text());
       Ok(())
     }
-    None => Err(CliExit::error(detail)),
   }
 }
 

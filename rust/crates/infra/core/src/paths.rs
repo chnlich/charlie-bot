@@ -1,5 +1,5 @@
-//! Path resolution: `expanduser`, the non-strict `realpath`, the `PATH` a process without one searches, and the
-//! executable a `PATH` value names.
+//! Path resolution: `expanduser` and the caller-supplied-home form `expanduser_under`, the non-strict `realpath`, the
+//! `PATH` a process without one searches, and the executable a `PATH` value names.
 //!
 //! The home resolution, the fence's containment check and the static-file containment check all
 //! compare paths these two functions produce. Those checks therefore follow POSIX path resolution step
@@ -41,6 +41,25 @@ pub fn expanduser(path: &str) -> String {
       if joined.is_empty() { "/".to_string() } else { joined }
     }
   }
+}
+
+/// `expanduser_under`: a leading `~` or `~/` becomes `home`; `~user` and every other path stay as written.
+///
+/// The home comes from the caller, so this reads no process environment and looks up no user. It serves a path
+/// written for another account, whose home this process does not know. `None` when the path names `~` or `~/` and
+/// the caller supplies no home.
+pub fn expanduser_under(path: &str, home: Option<&Path>) -> Option<PathBuf> {
+  let under_home = match path.strip_prefix('~') {
+    Some(rest) if rest.is_empty() || rest.starts_with('/') => rest,
+    _ => return Some(PathBuf::from(path)),
+  };
+  let home = home?;
+  // Every leading slash drops, so a second one cannot turn the tail into an absolute path that leaves `home`.
+  let tail = under_home.trim_start_matches('/');
+  if tail.is_empty() {
+    return Some(home.to_path_buf());
+  }
+  Some(home.join(tail))
 }
 
 /// The real path of an absolute path: every symlink resolved.
@@ -176,6 +195,24 @@ mod tests {
     let home = std::env::var("HOME").unwrap();
     assert_eq!(expanduser("~/x"), format!("{}/x", home.trim_end_matches('/')));
     assert_eq!(expanduser("/abs"), "/abs");
+  }
+
+  #[test]
+  fn expanduser_under_reads_the_supplied_home_for_a_tilde_prefix() {
+    let home = Path::new("/synthetic/home");
+    assert_eq!(expanduser_under("~/.claude-b", Some(home)), Some(PathBuf::from("/synthetic/home/.claude-b")));
+    assert_eq!(expanduser_under("/abs/.claude", Some(home)), Some(PathBuf::from("/abs/.claude")));
+    assert_eq!(expanduser_under("~user/.claude", Some(home)), Some(PathBuf::from("~user/.claude")));
+    assert_eq!(expanduser_under("~", Some(home)), Some(PathBuf::from("/synthetic/home")));
+    assert_eq!(
+      expanduser_under("~/.claude-b", Some(Path::new("/synthetic/home/"))),
+      Some(PathBuf::from("/synthetic/home/.claude-b"))
+    );
+    assert_eq!(expanduser_under("~", Some(Path::new("/"))), Some(PathBuf::from("/")));
+    assert_eq!(expanduser_under("~/claude", Some(Path::new("/"))), Some(PathBuf::from("/claude")));
+    assert_eq!(expanduser_under("~//cache", Some(home)), Some(PathBuf::from("/synthetic/home/cache")));
+    assert_eq!(expanduser_under("~/", Some(home)), Some(PathBuf::from("/synthetic/home")));
+    assert_eq!(expanduser_under("~/.claude-b", None), None);
   }
 
   #[test]

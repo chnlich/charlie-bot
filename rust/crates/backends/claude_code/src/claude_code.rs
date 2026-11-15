@@ -327,7 +327,7 @@ impl ClaudeCodeBackend {
       let home = env.get("HOME").map(String::as_str);
       env.insert(
         login_dirs::CLAUDE_CONFIG_DIR_ENV.to_string(),
-        login_dirs::expanduser(config_dir, home)?.to_string_lossy().into_owned(),
+        login_dirs::config_dir_path(config_dir, home)?.to_string_lossy().into_owned(),
       );
     }
     Ok(env)

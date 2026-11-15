@@ -216,7 +216,7 @@ pub fn compaction_env_from(config_dir: &Path, inherited: &Env, run_kind: RunKind
   let headless = claude_launch::headless_claude_env(run_kind, &env);
   env.extend(headless);
   env.remove(login_dirs::CLAUDE_CONFIG_DIR_ENV);
-  let path = login_dirs::expanduser(&config_dir.to_string_lossy(), inherited.get("HOME").map(String::as_str))?;
+  let path = login_dirs::config_dir_path(&config_dir.to_string_lossy(), inherited.get("HOME").map(String::as_str))?;
   env.insert(login_dirs::CLAUDE_CONFIG_DIR_ENV.to_string(), path.to_string_lossy().into_owned());
   Ok(env)
 }

@@ -119,9 +119,10 @@ const GZIP_HEAD_LEVEL: u32 = 6;
 /// smallest form: on the mock home's 316 KB chat page tail level 9 spends 2.5 ms once for 239 fewer bytes than level 6.
 const GZIP_TAIL_LEVEL: u32 = 9;
 
-/// The ten bytes of a gzip member's header: no name, comment or extra field, no modification time, the best-compression
-/// flag and an unknown operating system.
-const GZIP_HEADER: [u8; 10] = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff];
+/// The ten bytes of a gzip member's header: no name, comment or extra field, no modification time, no compression flag
+/// — a member's head and its tail deflate at different levels, so one flag cannot name both — and an unknown
+/// operating system.
+const GZIP_HEADER: [u8; 10] = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
 
 /// The compressed forms of a page's static tail: the bytes a page's bodies end with in common.
 ///
@@ -130,8 +131,8 @@ const GZIP_HEADER: [u8; 10] = [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0
 /// member's end and drop the rest. The head's stream therefore ends with a full flush, which resets the deflate
 /// history and ends the block, and the tail's deflate — built from a fresh deflator — decodes after it in the same
 /// member. A zstd stream carries frames, and a decoder reads the frames in turn, so the tail travels as its own
-/// frame. The boundary costs the matches that crossed it: on the mock home's chat page the gzip form grows from
-/// 97,683 to 98,474 bytes and the zstd form from 84,552 to 87,212.
+/// frame. The boundary costs the matches that crossed it: on the mock home's chat page (version 2) a 371,088-byte
+/// body's gzip form grows from 93,988 to 94,881 bytes when the tail splits off.
 pub struct PageTail {
   tail: Vec<u8>,
   deflate: Vec<u8>,

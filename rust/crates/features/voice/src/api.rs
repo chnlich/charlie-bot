@@ -211,7 +211,11 @@ const STARTUP_BODY: BodyModel = BodyModel::required(STARTUP_FIELDS).forbid_extra
 fn validate_startup_arrays(values: &serde_json::Map<String, Value>) -> Option<String> {
   let shown = values.get("partial_shown_ms").and_then(Value::as_array).expect("the required integer list validates");
   let samples = values.get("partial_samples").and_then(Value::as_array).expect("the required integer list validates");
-  (shown.len() != samples.len()).then(|| "partial_shown_ms and partial_samples must have the same length".to_string())
+  if shown.len() != samples.len() {
+    return Some("partial_shown_ms and partial_samples must have the same length".to_string());
+  }
+  (!shown.is_empty() && values.get("first_frame_ms").is_none_or(Value::is_null))
+    .then(|| "partial_shown_ms requires first_frame_ms".to_string())
 }
 
 /// The startup report route: validate one startup record, persist it as the run's `startup` part, log one
@@ -1196,6 +1200,20 @@ mod tests {
     let (_home, features) = test_features();
     let mut body = startup_body();
     body["partial_samples"] = json!([2048, 4096]);
+
+    let (response, logs) = post_startup(&features, body).await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(startup_lines(&logs).is_empty());
+    let cfg = features.config.get().expect("the config loads");
+    assert!(files_under(&voice_dir(&cfg)).is_empty());
+  }
+
+  #[tokio::test]
+  async fn startup_report_refuses_partials_without_first_frame_ms() {
+    let (_home, features) = test_features();
+    let mut body = startup_body();
+    body["first_frame_ms"] = Value::Null;
 
     let (response, logs) = post_startup(&features, body).await;
 

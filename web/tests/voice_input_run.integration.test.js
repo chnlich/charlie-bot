@@ -1134,6 +1134,20 @@ test('an error frame mid-recording stops visibly and one click uploads the recor
   assert.equal(state.beforeunloadCount, 0);
 });
 
+test('a relay failure before the first sound keeps its reason when the ready chunk arrives', async () => {
+  const {state} = buildHarness();
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  socket.receiveMessage({type: 'error', message: 'relay down early'});
+  await tick();
+
+  worklet.emitPcmCount(RATE);
+  assert.deepEqual([...state.buttonClasses].sort(), ['bg-red-600', 'border-red-500']);
+  const hint = state.voiceUi().hint.textContent;
+  assert.ok(hint.includes('relay down early'), hint);
+  assert.ok(!hint.includes('Speak now'), hint);
+});
+
 test('a lost socket mid-recording stops visibly and one click uploads the recording', async () => {
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);

@@ -181,8 +181,10 @@ function openVoiceInput() {
       if (status.state === 'prompt' && (voiceInputStartPending === request ||
           (request.runStarted && activeVoiceRun && activeVoiceRun.startRequest === request))) {
         const button = document.getElementById('voice-btn');
-        button.title = 'Allow the microphone in Chrome’s prompt';
-        button.setAttribute('aria-label', 'Allow the microphone in Chrome’s prompt');
+        if (button && button.dataset.state === 'starting') {
+          button.title = 'Allow the microphone in Chrome’s prompt';
+          button.setAttribute('aria-label', 'Allow the microphone in Chrome’s prompt');
+        }
       }
     }).catch((error) => console.warn('Voice microphone permission query failed:', error));
   }
@@ -235,7 +237,9 @@ ensureVoiceBackendEntry();
 
 window.addEventListener('pagehide', cancelPendingVoiceInput);
 window.addEventListener('load', () => {
-  window.requestIdleCallback(() => {
-    loadVoiceInput().catch(handleVoiceInputLoadError);
-  });
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(() => {
+      loadVoiceInput().catch(handleVoiceInputLoadError);
+    });
+  }
 }, {once: true});

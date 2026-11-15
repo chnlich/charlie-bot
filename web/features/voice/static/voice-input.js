@@ -689,7 +689,7 @@ function handleVoiceWorkletMessage(run, event) {
         run.startup.firstSoundMs = voiceStartupElapsed(run);
         run.startup.reached = 'ready';
         setVoiceButtonState(VOICE_BUTTON_STATE.RECORDING);
-        showVoiceHint(run, voiceReadyHint());
+        showVoiceHint(run, voiceReadyHint(run));
         break;
       }
     }
@@ -1153,7 +1153,10 @@ function voiceRelayBudgetHint(run) {
   return run.backend.label + ': no final after ' + seconds + ' s, still waiting. Click to transcribe.';
 }
 
-function voiceReadyHint() {
+function voiceReadyHint(run) {
+  // A relay that already failed keeps its reason up. The ready cue must not
+  // overwrite it.
+  if (run && run.relayFailure !== null) return voiceRelayFailureHint(run, run.relayFailure);
   return VOICE_HINT_LISTENING;
 }
 

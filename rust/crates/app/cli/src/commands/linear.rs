@@ -6,6 +6,7 @@ use std::time::Duration;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::{self, CliExit};
 use charliebot_cli_common::http;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::home;
@@ -91,7 +92,7 @@ fn execute_graphql(body: &[u8], endpoint: &str, home: &Path) -> Result<Vec<u8>, 
       .map_err(|error| response_failure(None, "request failed", Some(&error), &api_key))?;
     let response = client
       .post(endpoint)
-      .header(reqwest::header::CONTENT_TYPE, "application/json")
+      .header(reqwest::header::CONTENT_TYPE, APPLICATION_JSON)
       .header(reqwest::header::AUTHORIZATION, api_key.as_str())
       .body(body.to_vec())
       .send()

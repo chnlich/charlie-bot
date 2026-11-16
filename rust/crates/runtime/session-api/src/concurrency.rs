@@ -21,6 +21,7 @@ use axum::response::Response;
 use bytes::Bytes;
 use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_level_four};
 use charliebot_compat::headers::header_text;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_core::headers::ACCEPT_ENCODING;
@@ -735,10 +736,8 @@ fn history_answer(
 ///
 /// A body too small to deflate stays plain, as the transport's own rule has it.
 fn history_response(body: Bytes, compressed: Option<Bytes>, tag: String) -> Response {
-  let mut builder = Response::builder()
-    .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
-    .header(header::ETAG, tag);
+  let mut builder =
+    Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE, APPLICATION_JSON).header(header::ETAG, tag);
   let served = match compressed {
     Some(compressed) => {
       builder = builder

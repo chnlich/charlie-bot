@@ -17,6 +17,7 @@ charliebot-backup.workspace = true
 charliebot-charlie-code.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-claude-code.workspace = true
+charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-cron.workspace = true
 charliebot-discord.workspace = true

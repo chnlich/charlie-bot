@@ -26,7 +26,7 @@ pub fn draft_registered_message(event: &Value) -> Value {
   })
 }
 
-/// The chat line of one `draft_sent` event; the card it names loses its button.
+/// The chat line of one `draft_sent` event. The card it names loses its button.
 pub fn draft_sent_message(event: &Value) -> Value {
   json!({
     "role": event_types::DRAFT_SENT,
@@ -38,7 +38,7 @@ pub fn draft_sent_message(event: &Value) -> Value {
   })
 }
 
-/// The chat line of one `draft_failed` event; the card it names keeps its button and shows the failure.
+/// The chat line of one `draft_failed` event. The card it names keeps its button and shows the failure.
 pub fn draft_failed_message(event: &Value) -> Value {
   json!({
     "role": event_types::DRAFT_FAILED,

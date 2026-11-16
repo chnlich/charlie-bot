@@ -41,6 +41,7 @@ import {
 import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
+import { sleep } from './tabs.mjs';
 
 // `starred` and `threads` measure scenario 1's background with the visible tab on that sidebar view. They run only when
 // named, after the six scenarios' own.
@@ -198,12 +199,28 @@ async function createSessions(api) {
   };
 }
 
-// The default "all" view as the server lists it, bench sessions included. The view must hold the live view's rows, so a
-// home of another size fails here, before any scenario runs.
-async function measureView(api) {
+// The scheduler binds the default cron tasks to root sessions at its first tick, 60 s after the server starts, and each
+// bound session is a row of the default view (profile.mjs DEFAULT_CRON_ROWS). Until then the view holds fewer rows, so
+// the count waits while it is short of VIEW.rows, up to this deadline; a count above VIEW.rows fails at once.
+const VIEW_SETTLE_TIMEOUT_MS = 180000;
+const VIEW_SETTLE_POLL_MS = 2000;
+
+async function listView(api) {
   const rows = await api.json('GET', '/api/sessions/');
   if (!Array.isArray(rows)) {
     throw new Error('GET /api/sessions/ did not answer a list of rows');
+  }
+  return rows;
+}
+
+// The default "all" view as the server lists it, bench sessions and the default cron tasks' sessions included. The view
+// must hold the live view's rows, so a home of another size fails here, before any scenario runs.
+async function measureView(api) {
+  const deadline = Date.now() + VIEW_SETTLE_TIMEOUT_MS;
+  let rows = await listView(api);
+  while (rows.length < VIEW.rows && Date.now() < deadline) {
+    await sleep(VIEW_SETTLE_POLL_MS);
+    rows = await listView(api);
   }
   if (rows.length !== VIEW.rows) {
     throw new Error(`the default view holds ${rows.length} rows, not the live view's ${VIEW.rows}`);

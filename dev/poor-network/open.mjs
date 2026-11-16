@@ -15,7 +15,7 @@ import { cdnRoutes } from './cdn.mjs';
 import { LINK, OPEN, LIVE_CPU_TAIL } from './profile.mjs';
 import { ShapingProxy } from './proxy.mjs';
 import { percentile } from './report.mjs';
-import { NETWORK_CHANGED_ERROR, Tabs, sleep } from './tabs.mjs';
+import { NETWORK_CHANGED_ERROR, PAGE_REPORT_BINDING, Tabs, sleep } from './tabs.mjs';
 
 const CONDITIONS = ['link', 'held', 'reset', 'flaps', 'offline'];
 const CASES = ['A', 'B', 'C'];
@@ -48,28 +48,52 @@ export function cpuRateFrom(liveTailMs, referenceTailMs) {
   return Math.max(1, Math.round((liveTailMs / referenceTailMs) * 100) / 100);
 }
 
+// The CPU tail of a reference repetition: DOMContentLoaded minus responseEnd, the parse and the blocking scripts. The
+// tail holds that work only when the document's bytes arrive together, as the revalidated copy of case A's cached page
+// does (a 304: the page's whole body comes from the cache after one round trip). A document that crosses the link in
+// full is parsed while it arrives, and its tail keeps only the last chunk's work: about 10 ms at rate 1, against 83 ms
+// for the same page from the cache, which once put the rate at 24.55 instead of 3.56. Such a repetition gives no
+// rate, and the run stops.
+export function referenceTail(rep) {
+  const { documentTransferBytes: transfer, documentBodyBytes: body } = rep;
+  if (rep.tailMs === null || transfer === null || body === null || !(transfer < body)) {
+    throw new Error(
+      `reference repetition ${rep.rep} gives no CPU tail: its document arrived ` +
+        `${transfer === null ? 'nowhere' : `with ${transfer} B on the wire for a ${body} B body`}` +
+        `${rep.navigationError === null ? '' : ` (${rep.navigationError})`}, not from case A's cached page`,
+    );
+  }
+  return rep.tailMs;
+}
+
 // The CPU record of an open run: the rate the invocation's cells run at — the shared rate when the invocation
-// passes one, so the sides of one `--side both` run compare at one CPU speed — beside the inputs. `derivedRate` is
-// what this side's own reference tail gives, so a side that ran at the other side's rate shows the gap.
-export function openCpuRecord(sharedCpuRate, referenceTails) {
-  const referenceTail = median(referenceTails);
-  const derivedRate = cpuRateFrom(LIVE_CPU_TAIL.medianMs, referenceTail);
+// passes one, so two sides compare at one CPU speed — beside the inputs. `derivedRate` is what this side's own
+// reference tail gives, so a side that ran at a shared rate shows the gap.
+export function openCpuRecord(sharedCpuRate, referenceReps) {
+  const referenceTails = referenceReps.map(referenceTail);
+  const referenceTailMedian = median(referenceTails);
+  const derivedRate = cpuRateFrom(LIVE_CPU_TAIL.medianMs, referenceTailMedian);
   return {
     rate: sharedCpuRate ?? derivedRate,
     derivedRate,
-    rateSource: sharedCpuRate === null ? "this side's reference cell" : "the before side's reference cell",
+    rateSource: sharedCpuRate === null ? "this side's reference cell" : 'the rate the invocation passed',
     liveTailMs: LIVE_CPU_TAIL.medianMs,
     liveDevice: LIVE_CPU_TAIL.device,
     liveLoads: LIVE_CPU_TAIL.loads,
-    referenceTailMedianMs: referenceTail,
+    referenceTailMedianMs: referenceTailMedian,
     referenceTails,
   };
 }
 
-// The cause a repetition names when the host's network changed under it, or null when the repetition is a page
-// result. Chrome drops every connection when the host's interfaces change and fails the requests in flight with
-// `net::ERR_NETWORK_CHANGED`, a document cut mid-body included; such a repetition measures the host, not the page.
+// The cause a repetition names when the host spoiled it, or null when the repetition is a page result. Chrome drops
+// every connection when the host's interfaces change and fails the requests in flight with `net::ERR_NETWORK_CHANGED`,
+// a document cut mid-body included. A release open that a stall of the bench host pushed past OPEN.openByMs into the
+// hold meets Chrome's idle check, which the cell does not name. Either repetition measures the host, not the page.
 export function hostInterference(rep) {
+  if (rep.openInHoldMs !== null && rep.openInHoldMs > OPEN.openByMs) {
+    return `the open navigated ${rep.openInHoldMs} ms into the hold, past the ${OPEN.openByMs} ms its pooled ` +
+      'connection allows: the bench host stalled';
+  }
   if (rep.networkChanged.length > 0) {
     const named = rep.networkChanged.slice(0, 3).map((failure) => {
       const url = new URL(failure.url);
@@ -85,7 +109,7 @@ export function hostInterference(rep) {
   return null;
 }
 
-// One cell's repetitions. A repetition the host's network change spoiled is rerun — at most
+// One cell's repetitions. A repetition the host spoiled is rerun — at most
 // OPEN.interferenceReruns times, and each rerun recorded — because it never counts as the page's result; any other
 // failure is the rep's record, as before. A repetition that still meets the interference at the bound fails the run.
 export async function runRepetitions(measure, repetitions, results = []) {
@@ -120,42 +144,50 @@ export function flapWindows({ upSeconds, downSeconds, totalSeconds }) {
   return windows;
 }
 
-// The init script of a measured page. It runs before the page's own scripts. It records the navigation's time origin,
-// the localStorage record the page starts from, the first time the newest message is in the chat, the first time the
-// not-current mark is in the document, the DOMContentLoaded and load times, and the load time's clock. The newest
-// message is the first screen's last message, named by its `data-message-id`: the page's own `newest_message_ms`
-// definition (web/features/diag/templates/diag/client-events.js). A text marker goes stale: the scenarios that run
-// before the open scenario send turns to the same session, so the seed's text no longer sits in the first screen.
+// The init script of a measured page. It runs before the page's own scripts, in every document of the tab, and reports
+// through PAGE_REPORT_BINDING. Each report carries its document's time origin, so the reports of a reloaded tab sort
+// into their documents (openRecord). A document reports where it starts: the localStorage record it starts from. Then
+// the first time the newest message is in the chat, the first time the not-current mark is in the document, the
+// DOMContentLoaded and load times, the open case read at the load, and the cause the page gives for a reload it starts.
+// Only the top document reports: the page's frames (the chat's artifact iframes) run the same script, and their loads
+// are not the page's. The newest message is the first screen's last message, named by its `data-message-id`: the page's
+// own `newest_message_ms` definition (web/features/diag/templates/diag/client-events.js). A text marker goes stale: the
+// scenarios that run before the open scenario send turns to the same session, so the seed's text no longer sits in the
+// first screen.
 function measuredInitScript(newestMessageId) {
   return `(() => {
+    if (window !== window.top) return;
     const selector = '[data-message-id="' + CSS.escape(${JSON.stringify(String(newestMessageId))}) + '"]';
-    const state = {
-      timeOrigin: performance.timeOrigin,
-      recordAtStart: localStorage.getItem('charliebot_opened_pages'),
-      newest: null,
-      mark: null,
-      domContentLoaded: null,
-      load: null,
-    };
-    window.__pn = state;
+    const report = (kind, fields) => window.${PAGE_REPORT_BINDING}(
+      JSON.stringify({ kind, timeOrigin: performance.timeOrigin, ...fields }));
+    const seen = { newest: false, mark: false };
+    report('document', { recordAtStart: localStorage.getItem('charliebot_opened_pages') });
     const scan = () => {
-      if (state.newest === null && document.querySelector(selector) !== null) {
-        state.newest = Date.now();
+      if (!seen.newest && document.querySelector(selector) !== null) {
+        seen.newest = true;
+        report('newest', { at: Date.now() });
       }
-      if (state.mark === null && document.querySelector('[data-freshness="not-current"]') !== null) {
-        state.mark = Date.now();
+      if (!seen.mark && document.querySelector('[data-freshness="not-current"]') !== null) {
+        seen.mark = true;
+        report('mark', {});
       }
     };
     new MutationObserver(scan).observe(document, { childList: true, subtree: true, characterData: true });
-    document.addEventListener('DOMContentLoaded', () => { state.domContentLoaded = performance.now(); });
-    window.addEventListener('load', () => { state.load = performance.now(); });
+    document.addEventListener('DOMContentLoaded', () => report('dcl', { domContentLoadedMs: performance.now() }));
+    document.addEventListener('charliebot:page-load-cause', (event) => report('cause', { cause: event.detail.cause }));
+    window.addEventListener('load', () => report('load', {
+      loadMs: performance.now(),
+      openCase: typeof OpenedSessions === 'undefined' ? null : OpenedSessions.openCase(),
+    }));
   })();`;
 }
 
-// The page's own case: the mechanism of web/static/js/opened-sessions.js, read at the end of the page's load. A side
-// whose client predates the mechanism (origin/main before the telemetry lands) has none, and reports null.
-async function pageOpenCase(tab) {
-  return tab.evaluate("typeof OpenedSessions === 'undefined' ? null : OpenedSessions.openCase()");
+// Opens a measured tab: its init script, and the binding every document of the tab reports through. The binding is
+// added before the tab navigates, so the first document's reports reach the tab.
+export async function openMeasuredTab(tabs, newestMessageId) {
+  const tab = await tabs.open('open', measuredInitScript(newestMessageId));
+  await tab.page.send('Runtime.addBinding', { name: PAGE_REPORT_BINDING });
+  return tab;
 }
 
 // The case the browser's record names for a session, from the record the page starts from.
@@ -289,16 +321,25 @@ async function measureOnce(ctx, cell, repetition) {
       await tabs.close(warm);
     }
 
+    let holdStart = null;
     if (cell.condition === 'held' || cell.condition === 'reset') {
       // The condition names the cell; the proxy's modes are hold and reset.
       const mode = cell.condition === 'held' ? 'hold' : 'reset';
       link.proxy.blackout({ seconds: LINK.blackoutSeconds, mode });
       await sleep(OPEN.blackoutLeadMs);
     } else if (cell.condition === 'release') {
+      // The open goes at a fixed time into the hold, however long the release takes to land (profile.mjs names the
+      // bound that time keeps).
+      holdStart = Date.now();
       link.proxy.blackout({ seconds: LINK.blackoutSeconds, mode: 'hold' });
       await sleep(OPEN.releaseAtMs);
       await release(ctx, session.id);
-      await sleep(OPEN.openAfterMs - OPEN.releaseAtMs);
+      const openIn = holdStart + OPEN.openAfterMs - Date.now();
+      if (openIn < 0) {
+        throw new Error(`the release landed ${OPEN.openAfterMs - openIn} ms into the hold, after the open's ` +
+          `${OPEN.openAfterMs} ms`);
+      }
+      await sleep(openIn);
     }
 
     // The newest message the measured open must show: the first screen's last message, fetched now, after the
@@ -308,7 +349,7 @@ async function measureOnce(ctx, cell, repetition) {
     if (newestMessage === undefined || newestMessage.id == null) {
       throw new Error(`the open target's first screen (${firstScreen.messages.length} messages) names no last message id`);
     }
-    const tab = await tabs.open('open', measuredInitScript(newestMessage.id));
+    const tab = await openMeasuredTab(tabs, newestMessage.id);
     await tab.page.send('Emulation.setCPUThrottlingRate', { rate: cell.rate });
     await tabs.show(tab);
     if (cell.condition === 'offline') {
@@ -321,21 +362,19 @@ async function measureOnce(ctx, cell, repetition) {
       link.proxy.schedule(flapWindows(OPEN.flaps));
     }
     // The navigation is not awaited: a navigation inside a hold answers when the link does, and the bytes until then
-    // must still be sampled. Its answer is read after the loop.
+    // must still be sampled. Its answer is read after the loop. The reports of every document of the tab arrive
+    // through the binding, which a reload keeps, so the open's record is folded from all of them.
     let navigationError = null;
     const navStart = Date.now();
     timeline.push({ t: navStart, ...link.proxy.counters() });
     const navigated = tabs.navigate(tab, `/?session=${session.id}`).then((answer) => {
       navigationError = answer.errorText ?? null;
     });
-    let state = null;
     for (;;) {
       const now = Date.now();
       timeline.push({ t: now, ...link.proxy.counters() });
-      state = navigationError === null ? await tab.evaluate('window.__pn ?? null') : null;
-      const catchupSeen = tab.frames.some((frame) => frame.type === 'catchup_complete' && frame.at >= navStart);
-      const finished = state !== null && state.newest !== null && catchupSeen && state.load !== null &&
-        now >= loadWall(state) + OPEN.postLoadWindowMs;
+      const current = openRecord(navigationError === null ? tab.reports : []);
+      const finished = openSettled(current, now);
       const offlineDone = navigationError !== null && now >= navStart + OPEN.offlineSettleMs;
       if (finished || offlineDone || now >= navStart + OPEN.capMs) {
         break;
@@ -346,22 +385,30 @@ async function measureOnce(ctx, cell, repetition) {
     timeline.push({ t: end, ...link.proxy.counters() });
     await navigated;
 
-    const pageState = navigationError === null && state !== null ? state : null;
+    const opened = openRecord(navigationError === null ? tab.reports : []);
+    if (navigationError === null) {
+      if (opened.startWall === null) {
+        throw new Error(`${cell.id} reached no document before its cap`);
+      }
+      if (opened.openCase !== null && opened.openCase !== cell.case) {
+        throw new Error(`the page of ${cell.id} opened as case ${opened.openCase}, not ${cell.case}`);
+      }
+      if (caseFromRecord(opened.recordAtStart, session.id) !== cell.case) {
+        throw new Error(`the record ${cell.id} starts from does not name case ${cell.case}`);
+      }
+    }
     const catchup = tab.frames.find((frame) => frame.type === 'catchup_complete' && frame.at >= navStart) ?? null;
-    const loadWallMs = pageState !== null && pageState.load !== null ? loadWall(pageState) : null;
-    const newestWall = pageState !== null && pageState.newest !== null ? pageState.newest : null;
-    const responseEnd = navigationError === null
-      ? await tab.evaluate("performance.getEntriesByType('navigation')[0]?.responseEnd ?? null")
+    const newestWall = opened.newestWall;
+    const loadWallMs = opened.loadWall;
+    // The final document's Navigation Timing, the document whose load ends the open: when its last byte arrived, and
+    // how many bytes it moved on the wire against its body's size. A revalidated copy moves only its 304's headers.
+    const navigation = navigationError === null
+      ? await tab.evaluate("(() => { const entry = performance.getEntriesByType('navigation')[0]; return entry ? " +
+          '{ responseEnd: entry.responseEnd, transferSize: entry.transferSize, encodedBodySize: entry.encodedBodySize } ' +
+          ': null; })()')
       : null;
-    const openCase = navigationError === null ? await pageOpenCase(tab) : null;
-    if (openCase !== null && openCase !== cell.case) {
-      throw new Error(`the page of ${cell.id} opened as case ${openCase}, not ${cell.case}`);
-    }
-    if (navigationError === null && caseFromRecord(pageState.recordAtStart, session.id) !== cell.case) {
-      throw new Error(`the record ${cell.id} starts from does not name case ${cell.case}`);
-    }
-    const timeOrigin = pageState !== null ? pageState.timeOrigin : null;
-    const dclMs = pageState !== null && pageState.domContentLoaded !== null ? pageState.domContentLoaded : null;
+    const responseEnd = navigation === null ? null : navigation.responseEnd;
+    const dclMs = opened.domContentLoadedMs;
 
     const frameTypes = {};
     for (const frame of tab.frames) {
@@ -377,8 +424,8 @@ async function measureOnce(ctx, cell, repetition) {
       rep: repetition,
       navigationError,
       networkChanged: tab.networkChanged,
-      newestMs: newestWall === null ? null : newestWall - timeOrigin,
-      catchupMs: catchup === null || timeOrigin === null ? null : catchup.at - timeOrigin,
+      newestMs: newestWall === null ? null : newestWall - opened.startWall,
+      catchupMs: catchup === null || opened.startWall === null ? null : catchup.at - opened.startWall,
       sockets: tab.sockets.length,
       frames: tab.frames.length,
       frameTypes,
@@ -386,16 +433,20 @@ async function measureOnce(ctx, cell, repetition) {
       wsState,
       consoleTail: tab.consoleLines.slice(-8).map((line) => line.text),
       pageErrors: tab.pageErrors.slice(-4).map((line) => line.text),
-      loadMs: pageState === null || pageState.load === null ? null : pageState.load,
+      loadMs: opened.loadMs,
       dclMs,
       responseEndMs: responseEnd,
       tailMs: dclMs === null || responseEnd === null ? null : dclMs - responseEnd,
+      documentTransferBytes: navigation === null ? null : navigation.transferSize,
+      documentBodyBytes: navigation === null ? null : navigation.encodedBodySize,
       bytesToNewest: newestWall === null ? null : countersAt(timeline, newestWall) - countersAt(timeline, navStart),
       bytesAfterLoad: loadWallMs === null
         ? null
         : countersAt(timeline, Math.min(end, loadWallMs + OPEN.postLoadWindowMs)) - countersAt(timeline, loadWallMs),
-      markSeen: pageState !== null && pageState.mark !== null,
-      pageCase: openCase,
+      markSeen: opened.markSeen,
+      pageCase: opened.openCase,
+      reloadCauses: opened.reloadCauses,
+      openInHoldMs: holdStart === null ? null : navStart - holdStart,
       elapsedMs: end - navStart,
     };
   } finally {
@@ -405,9 +456,77 @@ async function measureOnce(ctx, cell, repetition) {
   }
 }
 
-// The wall-clock time of a page's load event. The page's load time counts from its time origin, which is wall-clock.
-function loadWall(state) {
-  return state.timeOrigin + state.load;
+// One open's record, folded from the reports its tab's documents sent, in arrival order. The open runs from the tab's
+// first navigation, which is the first document's time origin: a reload inside the open stays part of it. The newest
+// message is the first paint of it in whichever document shows it first. The case and the record the open started
+// from are the first document's, since the first document is the one that finds the browser's state; the reloaded
+// document reads the record the first one wrote. The load that ends the open is the last document's. Each reload
+// names the cause its previous document reported, or null when that document reported none, so reloadCauses has one
+// entry per reload.
+export function openRecord(reports) {
+  const documents = [];
+  const byOrigin = new Map();
+  for (const report of reports) {
+    let doc = byOrigin.get(report.timeOrigin);
+    if (doc === undefined) {
+      doc = {
+        timeOrigin: report.timeOrigin,
+        recordAtStart: null,
+        newestAt: null,
+        markSeen: false,
+        domContentLoadedMs: null,
+        loadMs: null,
+        openCase: null,
+        cause: null,
+      };
+      byOrigin.set(report.timeOrigin, doc);
+      documents.push(doc);
+    }
+    switch (report.kind) {
+      case 'document':
+        doc.recordAtStart = report.recordAtStart;
+        break;
+      case 'newest':
+        doc.newestAt = report.at;
+        break;
+      case 'mark':
+        doc.markSeen = true;
+        break;
+      case 'dcl':
+        doc.domContentLoadedMs = report.domContentLoadedMs;
+        break;
+      case 'load':
+        doc.loadMs = report.loadMs;
+        doc.openCase = report.openCase;
+        break;
+      case 'cause':
+        doc.cause = report.cause;
+        break;
+      default:
+        throw new Error(`the page sent an unknown report kind ${JSON.stringify(report.kind)}`);
+    }
+  }
+  const first = documents[0] ?? null;
+  const last = documents.at(-1) ?? null;
+  const newestTimes = documents.filter((doc) => doc.newestAt !== null).map((doc) => doc.newestAt);
+  return {
+    startWall: first === null ? null : first.timeOrigin,
+    newestWall: newestTimes.length === 0 ? null : Math.min(...newestTimes),
+    openCase: first === null ? null : first.openCase,
+    recordAtStart: first === null ? null : first.recordAtStart,
+    markSeen: documents.some((doc) => doc.markSeen),
+    reloadCauses: documents.slice(0, -1).map((doc) => doc.cause),
+    loadMs: last === null ? null : last.loadMs,
+    loadWall: last === null || last.loadMs === null ? null : last.timeOrigin + last.loadMs,
+    domContentLoadedMs: last === null ? null : last.domContentLoadedMs,
+  };
+}
+
+// The open settles after its newest message has painted and the last document's byte window ends. When a navigation
+// never reports load, the measured page has no load event to anchor that window, so the window starts at newest paint.
+export function openSettled(record, now) {
+  const settleWall = record.loadWall ?? record.newestWall;
+  return record.newestWall !== null && now >= settleWall + OPEN.postLoadWindowMs;
 }
 
 async function runCell(ctx, cell, repetitions) {
@@ -437,11 +556,32 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
   ctx.releases = 0;
   result.releases = 0;
   result.cells = [];
+  // Case A's open revalidates the page its browser cached, and it is a 304 only while the server serves that copy's
+  // entity tag. Two things would move the tag after a warm build, so both are settled here, before any warm build
+  // caches a page:
+  // - The page's sidebar rows carry each session's unread mark, and an opened page marks its session read. The seeded
+  //   sessions start unread, so the warm builds' own reads would change the page's content. The sessions the opens
+  //   read are marked read first.
+  // - The server compresses a chat page whole until a second chat page shares the first one's tail, and as the
+  //   request's head plus the shared tail from then on (`compressed_page` in rust/crates/app/server/src/routes/
+  //   pages.rs). The tag hashes the compressed bytes, so the two forms of one page carry different tags, and a fresh
+  //   trial's first chat page would be the A warm build's. The bench serves both opened sessions' pages first.
+  // Without either step every A open downloads the whole page, and the reference cell gives no CPU tail.
+  const opened = [ctx.sessions.switchTarget, ctx.sessions.probes[0]];
+  for (const session of opened) {
+    await ctx.api.markRead(session.id);
+  }
+  for (const session of opened) {
+    const { status } = await ctx.api.request('GET', `/?session=${session.id}`);
+    if (status !== 200) {
+      throw new Error(`GET the chat page of ${session.id} answered ${status}`);
+    }
+  }
   const warm = { A: await buildWarm(ctx, 'A'), B: await buildWarm(ctx, 'B'), C: await buildWarm(ctx, 'C') };
   const reference = { ...REFERENCE, warmDir: warm[REFERENCE.case] };
   result.reference = reference;
   await runCell(ctx, reference, repetitions);
-  result.cpu = openCpuRecord(sharedCpuRate, reference.reps.map((rep) => rep.tailMs));
+  result.cpu = openCpuRecord(sharedCpuRate, reference.reps);
   const cpuRate = result.cpu.rate;
 
   for (const condition of CONDITIONS.filter((name) => conditions.includes(name))) {
@@ -464,7 +604,8 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
 }
 
 // The open scenario's table: one row per cell. Each time is the median, then the five values in repetition order; a
-// value that was not reached is `-`, and the last column counts the repetitions that reached the newest message.
+// value that was not reached is `-`. `reached` counts the repetitions that reached the newest message, and `reloads`
+// counts the page reloads across the cell's repetitions.
 export function formatOpen(open) {
   const ms = (value) => (value === null ? '-' : `${Math.round(value)}ms`);
   const bytes = (value) => (value === null ? '-' : `${Math.round(value)}B`);
@@ -473,7 +614,7 @@ export function formatOpen(open) {
       `loads of ${open.cpu.liveDevice}; the reference cell's tail median ` +
         `${open.cpu.referenceTailMedianMs} ms at rate 1)`,
     'cell                  newest median  newest, five reps                   catchup median  ' +
-      'bytes to newest  bytes after load  reached',
+      'bytes to newest  bytes after load  reached  reloads',
   ];
   for (const cell of [open.reference, ...open.cells]) {
     const newest = cell.reps.map((rep) => rep.newestMs);
@@ -481,6 +622,7 @@ export function formatOpen(open) {
     const toNewest = cell.reps.map((rep) => rep.bytesToNewest);
     const afterLoad = cell.reps.map((rep) => rep.bytesAfterLoad);
     const reached = newest.filter((value) => value !== null).length;
+    const reloads = cell.reps.reduce((count, rep) => count + rep.reloadCauses.length, 0);
     lines.push([
       cell.id.padEnd(21),
       ms(median(newest)).padStart(13),
@@ -489,6 +631,7 @@ export function formatOpen(open) {
       bytes(median(toNewest)).padStart(16),
       bytes(median(afterLoad)).padStart(17),
       `${reached}/${cell.reps.length}`.padStart(8),
+      String(reloads).padStart(7),
     ].join('  '));
   }
   return lines.join('\n');

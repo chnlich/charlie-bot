@@ -78,6 +78,10 @@ const SIDEBAR_PROBE_SOURCE = `(() => {
 // included. A load failure with this error says what the host did, not what the page did.
 export const NETWORK_CHANGED_ERROR = 'net::ERR_NETWORK_CHANGED';
 
+// The binding a measured page reports through: `window[PAGE_REPORT_BINDING](json)` hands the tab one JSON report. A
+// binding outlives a reload, so the reports of every document of a tab arrive on the tab.
+export const PAGE_REPORT_BINDING = '__pnReport';
+
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -131,6 +135,8 @@ export class Tab {
   // Every request the host's network change dropped: {at, url}. A document among them means the measurement
   // recorded the host's behaviour, not the page's.
   networkChanged = [];
+  // Every report the page sent through PAGE_REPORT_BINDING, oldest first, as the page wrote it.
+  reports = [];
   // The URLs whose 200 bodies the tab keeps, as `request.body` text: a request's body reads after it finishes. A
   // request that finished before keepBodies has no `body`.
   #bodyPattern = null;
@@ -467,6 +473,11 @@ export class Tab {
         this.pageErrors.push({ at, text: text.slice(0, 300) });
         return;
       }
+      case 'Runtime.bindingCalled':
+        if (message.params.name === PAGE_REPORT_BINDING) {
+          this.reports.push(JSON.parse(message.params.payload));
+        }
+        return;
       default:
     }
   }

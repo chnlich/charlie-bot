@@ -106,6 +106,11 @@ export class ServerApi {
     return performance.now() - started;
   }
 
+  // Marks the session read, as an opened page does.
+  async markRead(sessionId) {
+    await this.json('POST', `/api/sessions/${sessionId}/read`);
+  }
+
   // Waits until the session has run a turn and stays without an active run for IDLE_QUIET_MS. A finished run can start
   // a follow-on turn about half a second later, so one idle poll is not enough.
   async waitForIdle(sessionId, timeoutMs) {

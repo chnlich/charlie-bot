@@ -209,19 +209,34 @@ async function withProxy(body) {
   }
 }
 
-// What a tunnel attempt did within `ms`: its answer, its refusal, or nothing at all.
-function attemptWithin(attempt, ms) {
-  return Promise.race([attempt, new Promise((resolve) => setTimeout(() => resolve('silent'), ms))]);
-}
-
-test('a blackout drops a connection attempt: it is never answered, not even at the restore', { timeout: 30000 }, async () => {
+test('a blackout drops the SYN until the client TCP stack retries after restore', { timeout: 70000 }, async () => {
   await withProxy(async ({ proxy, port, target }) => {
-    proxy.blackout({ seconds: 1, mode: 'hold' });
-    const attempt = tunnel(port, target.port, 'dropped').then(() => 'answered', () => 'refused');
-    assert.equal(await attemptWithin(attempt, 1600), 'silent');
-    // The restore does not answer the lost attempt: a person's retry starts a new one.
-    assert.equal(await attemptWithin(attempt, 400), 'silent');
-    const socket = await tunnel(port, target.port, 'after-restore');
+    const blackoutSeconds = LINK.blackoutSeconds;
+    const started = performance.now();
+    proxy.schedule([{ at: 250, seconds: blackoutSeconds, mode: 'hold' }]);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const socket = net.connect(port, '127.0.0.1');
+    const retryDeadline = setTimeout(() => {
+      socket.destroy(new Error('the client did not connect on its first post-restore TCP retry'));
+    }, (blackoutSeconds + 20) * 1000);
+    try {
+      await once(socket, 'connect');
+    } finally {
+      clearTimeout(retryDeadline);
+    }
+    const elapsedMs = performance.now() - started;
+    assert.ok(
+      elapsedMs >= (blackoutSeconds + 0.25) * 1000,
+      `the client's TCP handshake completed before restore at ${elapsedMs.toFixed(0)} ms`,
+    );
+    assert.ok(
+      elapsedMs < (blackoutSeconds + 20.25) * 1000,
+      `the client's first post-restore retry connected at ${elapsedMs.toFixed(0)} ms`,
+    );
+    const answer = once(socket, 'data');
+    socket.write(`CONNECT 127.0.0.1:${target.port} HTTP/1.1\r\nHost: 127.0.0.1:${target.port}\r\n\r\n`);
+    const [response] = await answer;
+    assert.ok(response.toString('latin1').startsWith('HTTP/1.1 200'));
     socket.destroy();
   });
 });

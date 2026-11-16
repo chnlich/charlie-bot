@@ -35,7 +35,12 @@ const CHROME_FLAGS = [
   '--metrics-recording-only',
   '--password-store=basic',
   '--use-mock-keychain',
-  '--disable-features=Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,CertificateTransparencyComponentUpdater',
+  // The HTTP proxy deadline must span the host's first post-restore SYN retry in this 30 s blackout.
+  '--force-fieldtrials=NetAdaptiveProxyConnectionTimeout/PoorNetwork',
+  '--force-fieldtrial-params=NetAdaptiveProxyConnectionTimeout.PoorNetwork:' +
+    'min_proxy_connection_timeout_seconds/90/max_proxy_connection_timeout_seconds/90',
+  '--disable-features=Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,' +
+    'CertificateTransparencyComponentUpdater',
   // The loopback bypass would send the bench's own host past the proxy, so it is cleared.
   '--proxy-bypass-list=<-loopback>',
   '--window-size=1440,900',

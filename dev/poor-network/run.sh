@@ -19,6 +19,9 @@
 # attempt; a side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
 # --open-conditions LIST  the open scenario's cells: any of link,held,reset,flaps,offline,release (default all). The
 #                reference cell always runs, since the CPU rate is derived from it.
+# --open-cpu-rate RATE  every side runs the open scenario's cells at RATE instead of a rate its reference derives, so
+#                sides of separate invocations (two benches on one product) compare at one CPU speed. Each side's JSON
+#                still records the rate its own reference cell derives.
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
@@ -70,6 +73,7 @@ while (($#)); do
     --repetitions) repetitions=${2:?--repetitions needs a value}; shift 2 ;;
     --scenarios) scenarios=${2:?--scenarios needs a value}; shift 2 ;;
     --open-conditions) open_conditions=${2:?--open-conditions needs a value}; shift 2 ;;
+    --open-cpu-rate) open_rate_args=(--open-cpu-rate "${2:?--open-cpu-rate needs a value}"); shift 2 ;;
     --assets-dir) assets_dir=${2:?--assets-dir needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -87,23 +91,55 @@ if [[ $side != after ]]; then
   [[ -n $before_clone ]] || die 2 "--before-clone is required for --side $side"
 fi
 
+syn_drop_needed=0
+for scenario in ${scenarios//,/ }; do
+  case $scenario in
+    held|reset) syn_drop_needed=1 ;;
+    open)
+      for condition in ${open_conditions//,/ }; do
+        case $condition in
+          held|reset|flaps|release) syn_drop_needed=1 ;;
+        esac
+      done
+      ;;
+  esac
+done
+
 for tool in node cargo git openssl systemd-run flock; do
   command -v "$tool" >/dev/null || die 2 "missing tool on this host: $tool"
 done
+if ((syn_drop_needed)); then
+  for tool in sudo iptables; do
+    command -v "$tool" >/dev/null || die 2 "blackout scenarios need $tool to drop loopback SYN packets"
+  done
+  sudo -n iptables -w -L OUTPUT -n >/dev/null 2>&1 \
+    || die 2 "blackout scenarios need noninteractive sudo access to iptables OUTPUT"
+fi
 
 tree=$(git -C "$BENCH_DIR" rev-parse --show-toplevel) || die 2 "$BENCH_DIR is not in a git tree"
 mkdir -p "$out_dir"
 out_dir=$(cd "$out_dir" && pwd)
+cd "$out_dir"
 run_id=$(date -u +%Y%m%dT%H%M%SZ)
 
 if ((detach)); then
   log="$out_dir/pn-$run_id.log"
+  detached_env=()
+  [[ -z ${CARGO_HOME:-} ]] || detached_env+=(--setenv="CARGO_HOME=$CARGO_HOME")
+  [[ -z ${RUSTUP_HOME:-} ]] || detached_env+=(--setenv="RUSTUP_HOME=$RUSTUP_HOME")
+  # The remote runner's TMPDIR belongs to the SSH command. Carry a caller's scratch path into the detached run only
+  # when it is inside HOME, where the task keeps its durable files.
+  if [[ -n ${TMPDIR:-} && $TMPDIR == "$HOME/"* ]]; then
+    mkdir -p "$TMPDIR"
+    detached_env+=(--setenv="TMPDIR=$TMPDIR")
+  fi
   forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions"
-    --scenarios "$scenarios" --open-conditions "$open_conditions")
+    --scenarios "$scenarios" --open-conditions "$open_conditions" ${open_rate_args+"${open_rate_args[@]}"})
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
+    "${detached_env[@]}" \
     ${POOR_NETWORK_CHROME:+--setenv=POOR_NETWORK_CHROME="$POOR_NETWORK_CHROME"} \
     bash -c "exec bash '$BENCH_DIR/run.sh' ${forwarded[*]@Q} > '$log' 2>&1" >/dev/null
   printf 'started transient unit pn-%s; log: %s\n' "$run_id" "$log"
@@ -154,10 +190,11 @@ if [[ $side != after ]]; then
   [[ -x $before_bin ]] || die 1 "the before build did not produce charliebot-server"
 fi
 
-# The mock home holds the view's rows that the bench's own sessions do not: VIEW.rows less BENCH_SESSIONS, each one a
-# session of the mock's active corpus, with a task spec sized to the live view's rows (the view shape).
+# The mock home holds the view's rows that the bench's own sessions and the default cron tasks' sessions do not:
+# VIEW.rows less BENCH_SESSIONS less DEFAULT_CRON_ROWS, each one a session of the mock's active corpus, with a task spec
+# sized to the live view's rows (the view shape).
 mock_version=$("$mock_bin" version)
-mock_sessions=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS)))' "file://$BENCH_DIR/profile.mjs")
+mock_sessions=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS - profile.DEFAULT_CRON_ROWS)))' "file://$BENCH_DIR/profile.mjs")
 mock_home="$HOME/improve/mock-home/$mock_version-view-$mock_sessions"
 if [[ ! -d $mock_home ]]; then
   echo "poor-network: generating the view home of $mock_sessions sessions at $mock_home"
@@ -184,7 +221,8 @@ YAML
 # Runs one side as the command of a serve trial. $1 side, $2 trial script, $3 commit, $4 server binary.
 run_side() {
   local name=$1 trial_script=$2 commit=$3 server_bin=$4 trial_root trial_status
-  trial_root="${TMPDIR:-/tmp}/pn-$run_id-$name"
+  # The host bench lock serializes sides, and the trial removes this tree before the next side starts.
+  trial_root="${TMPDIR:-/tmp}/pn-$name"
   mkdir -p "$trial_root"
   local label=$commit
   [[ $name == after ]] && label=$after_label
@@ -259,11 +297,11 @@ if [[ $side == before || $side == both ]]; then
       die 3 "the reference baseline $calibration_reference did not reproduce the switch-during-refresh hold; the proxy does not model the link. The after side did not run."
     fi
   fi
-  # One CPU rate per invocation: the after side's open cells run at the rate the before side's reference cell
-  # derived, so the two sides' numbers compare at one CPU speed. bench.mjs records the rate it ran at beside the
-  # one its own reference would give. The before side has measured (its failure would have stopped above), so its
+  # One CPU rate per invocation: unless --open-cpu-rate pins one, the after side's open cells run at the rate the
+  # before side's reference cell derived, so the two sides' numbers compare at one CPU speed. bench.mjs records the
+  # rate it ran at beside the one its own reference would give. The before side has measured (its failure would have stopped above), so its
   # JSON names the rate whenever the open scenario was selected.
-  if [[ $side == both && ",$scenarios," == *",open,"* ]]; then
+  if [[ $side == both && ",$scenarios," == *",open,"* && ${#open_rate_args[@]} -eq 0 ]]; then
     open_cpu_rate=$(node -e '
       const side = require(process.argv[1]);
       const rate = side.open?.cpu?.rate;

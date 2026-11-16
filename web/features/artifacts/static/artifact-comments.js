@@ -223,10 +223,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return rows.indexOf(row) !== -1 && rowsHolding(quote, rows).length >= 2;
     }
 
-    // The BEFORE_CHARS characters that precede the row's first character in the page text:
-    // the document's text nodes in source order, without script and style content and without
-    // the comment layer, each whitespace run collapsed to one space. The walk reads the source,
-    // not the layout, so a folded block gives the same value open or shut.
+    // The BEFORE_CHARS characters that precede the row's first character in the page text.
+    // They come from the document's text nodes in source order, each whitespace run collapsed
+    // to one space. Script content, style content and the comment layer are skipped. The walk
+    // reads the source, not the layout, so a folded block gives the same value open or shut.
     function beforeOf(row) {
       var tail = '';
       var inSpace = false;
@@ -275,9 +275,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // The row a pending draft belongs to, or null when the page does not place it. A draft with a
-    // stored `before` takes the one row whose quote and `before` both match; with several such rows,
-    // the row at its stored occurrence among the rows holding the quote, when that row is one of them.
-    // A draft without a stored `before` takes the only row that holds its quote.
+    // stored `before` takes the one row whose quote and `before` both match. With several such rows,
+    // it takes the row at its stored occurrence among the rows holding the quote, when that row is
+    // one of them. A draft without a stored `before` takes the only row that holds its quote.
     function rowForDraft(entry, rows) {
       var held = rowsHolding(entry.quote, rows);
       if (typeof entry.before !== 'string') return held.length === 1 ? held[0] : null;
@@ -858,10 +858,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return buildCommentEntry(entry.quote, entry.context, entry.comment, suffix, before);
     }
 
-    // The occurrence suffix still to disambiguate: after the fork label, m rows on
-    // the page share the locator's heading, question segment and quote, and k
-    // counts them top to bottom from 1. One match, or an entry the page no longer
-    // holds, renders no suffix.
+    // The occurrence suffix still to disambiguate. After the fork label, m rows on
+    // the page share the locator's heading, question segment and quote. k counts
+    // them top to bottom from 1. One match, or an entry the page no longer holds,
+    // renders no suffix.
     function occurrenceSuffix(entry) {
       if (!entry.el) return '';
       var rows = collectCommentableBlocks();

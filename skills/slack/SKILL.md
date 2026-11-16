@@ -12,7 +12,7 @@ Read messages, search conversations, and look up users in the configured Slack w
 
 - Token location: `$CHARLIEBOT_HOME/credentials.yaml` under `slack.user_token` and `slack.bot_token`
 - Token type: User OAuth Token (`xoxp-`)
-- Available scopes on `slack.user_token`, as the Web API reads them back: `identify`, `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `mpim:history`, `search:read`, `users:read`, `files:read`
+- Available scopes on `slack.user_token`, as the Web API reads them back: `identify`, `channels:history`, `channels:read`, `chat:write`, `groups:history`, `groups:read`, `im:history`, `im:read`, `im:write`, `mpim:history`, `mpim:read`, `mpim:write`, `search:read`, `users:read`, `files:read`
 - Requests: send every Slack Web API call through `charliebot slack request`. The command reads the token from `credentials.yaml` inside its own process, so no token appears in a command, an output or a run record.
 - Files: download a message file through `charliebot slack download`.
 

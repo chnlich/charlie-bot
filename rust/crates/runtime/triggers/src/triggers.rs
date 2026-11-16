@@ -1597,6 +1597,13 @@ struct EndFields {
   clock_offset_ms: i64,
 }
 
+/// One wake's lag, in ms: the fire moment minus the later of the recorded remote end and the trigger's
+/// registration. Every end source reports this one quantity, and `seen_gone_at` never enters it: how long the server
+/// took to learn the end, or to read it back, is part of the wake rather than of the job's end.
+fn fire_lag_ms(fired_at: UtcDateTime, end_at: time::OffsetDateTime, created_at: time::OffsetDateTime) -> i64 {
+  (fired_at.into_inner() - end_at.max(created_at)).whole_milliseconds() as i64
+}
+
 /// Select one trigger's fire log from its remote end readings. The latest recorded end wins, and a job that ended
 /// before the trigger was created lags from the creation instead.
 fn build_fire_log(
@@ -1611,9 +1618,11 @@ fn build_fire_log(
     .iter()
     .filter_map(|end| Some((end.end_at?, end.source?, end.clock_offset_ms?)))
     .max_by_key(|(end_at, _, _)| *end_at)
-    .map(|(end_at, source, clock_offset_ms)| {
-      let basis = end_at.max(created_at);
-      EndFields { end_at, source, lag_ms: (fired_at.into_inner() - basis).whole_milliseconds() as i64, clock_offset_ms }
+    .map(|(end_at, source, clock_offset_ms)| EndFields {
+      end_at,
+      source,
+      lag_ms: fire_lag_ms(fired_at, end_at, created_at),
+      clock_offset_ms,
     });
   FireLog { seen_gone_at, end, recovered, wait_s: (fired_at.into_inner() - created_at).as_seconds_f64() }
 }
@@ -4702,6 +4711,52 @@ mod tests {
     assert!(log.recovered);
     let log = build_fire_log(&trigger, fired_at, &[], false);
     assert!(log.end.is_none() && log.seen_gone_at.is_none(), "a timeout fire with nothing seen gone logs neither");
+  }
+
+  #[test]
+  fn fire_log_lags_from_the_fire_moment_for_every_end_source() {
+    let trigger = pending_trigger(
+      "synthetic-fire-log-source",
+      SESSION_ID,
+      near_future(10),
+      vec![WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None }],
+    );
+    let created = trigger.created_at.into_inner();
+    // The job ended 4 s after registration, the server learned it 8 s later, and the wake fired 38 s after that.
+    let seen_gone_at = created + time::Duration::seconds(12);
+    let fired_at = UtcDateTime::from(created + time::Duration::seconds(50));
+    for source in [EndSource::SacctEnd, EndSource::ExitFileMtime, EndSource::EndRecorder] {
+      let end = RemoteTargetEnd {
+        end_at: Some(created + time::Duration::seconds(4)),
+        source: Some(source),
+        clock_offset_ms: Some(7),
+        seen_gone_at,
+      };
+      let log = build_fire_log(&trigger, fired_at, &[end], false);
+      let fields = log.end.expect("the recorded end is logged");
+      assert_eq!(fields.source, source);
+      assert_eq!(fields.lag_ms, 46_000, "{source} lags from the fire moment, not from seen_gone_at");
+    }
+  }
+
+  #[test]
+  fn fire_log_counts_a_wait_registered_after_the_end_from_the_registration() {
+    let trigger = pending_trigger(
+      "synthetic-fire-log-early-end",
+      SESSION_ID,
+      near_future(10),
+      vec![WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None }],
+    );
+    let created = trigger.created_at.into_inner();
+    let end = RemoteTargetEnd {
+      end_at: Some(created - time::Duration::seconds(30)),
+      source: Some(EndSource::SacctEnd),
+      clock_offset_ms: Some(7),
+      seen_gone_at: created - time::Duration::seconds(29),
+    };
+    let log = build_fire_log(&trigger, UtcDateTime::from(created + time::Duration::seconds(20)), &[end], false);
+    let fields = log.end.expect("the recorded end is logged");
+    assert_eq!(fields.lag_ms, 20_000, "an end before the registration lags from the registration");
   }
 
   // ---- End-time readback: scripted ssh sequences ----

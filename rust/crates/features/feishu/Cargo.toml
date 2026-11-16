@@ -26,7 +26,6 @@ serde_yaml.workspace = true
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 charliebot-chat-threads = { workspace = true, features = ["test-support"] }

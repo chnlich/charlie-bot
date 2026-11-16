@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_chat_threads::channel_service::ChannelListener;
 use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
+use charliebot_chat_threads::summon::{DISCORD_NAMESPACE, namespaced_uuid};
 use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform};
 use charliebot_compat::http_client;
 use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Options, Receiver, Sender};
@@ -21,15 +22,11 @@ use regex::Regex;
 use serde_json::{Value, json};
 use tokio::sync::OnceCell;
 use tokio::time::Instant;
-use uuid::Uuid;
 
 use crate::config::DiscordConfig;
 use crate::discord_client::{DiscordClient, Message};
 use crate::metadata::DiscordOrigin;
 pub use crate::thread_contract::{DISCORD, FOLLOW_TRIGGER_PREFIX, MAX_POST_CHARS, READ_COMMAND, REPLY_COMMAND};
-
-/// The namespace of Discord summon session ids. Changing it would orphan every existing Discord-backed session.
-const DISCORD_NS: Uuid = Uuid::from_u128(0x13667dae_7551_489f_9cf1_d0819d0978e6);
 
 /// The 👀 reaction: the summon ack, lit at the summon and cleared when the question closes.
 const ACK_EMOJI: &str = "👀";
@@ -49,7 +46,7 @@ static MENTION_TOKEN_RE: LazyLock<Regex> =
 
 /// The deterministic session id of the Discord thread `thread_id` in `guild_id` (`summon_session_id`).
 pub fn summon_session_id(guild_id: &str, thread_id: &str) -> String {
-  Uuid::new_v5(&DISCORD_NS, format!("discord:{guild_id}:{thread_id}").as_bytes()).to_string()
+  namespaced_uuid(DISCORD_NAMESPACE, &format!("discord:{guild_id}:{thread_id}"))
 }
 
 /// Whether a message counts for the thread: a human's plain message or reply, from an account in `allowed_users`

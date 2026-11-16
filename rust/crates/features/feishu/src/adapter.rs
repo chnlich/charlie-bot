@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
+use charliebot_chat_threads::summon::{FEISHU_NAMESPACE, namespaced_uuid};
 use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform};
 use charliebot_compat::http_client;
 use charliebot_core::config::CharlieBotConfig;
@@ -18,7 +19,6 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::OnceCell;
-use uuid::Uuid;
 
 use crate::client::{BASE_URL, FeishuAPIError, FeishuClient, Page};
 use crate::config::FeishuConfig;
@@ -31,8 +31,6 @@ use crate::owners;
 use crate::package::NAME;
 use crate::thread_contract::FEISHU;
 
-/// The namespace of Feishu session ids. Changing it would orphan every existing Feishu-backed session.
-const FEISHU_NS: Uuid = Uuid::from_u128(0x5b1e0c2a_7f4d_4a7e_9d3b_6c8f1a2e4d70);
 /// The reaction the bot lights on a summon: Feishu's `OnIt` emoji, which means "received".
 pub const ACK_EMOJI: &str = "OnIt";
 /// The label prefix of a session created from a Feishu summon; the chat id follows it.
@@ -41,7 +39,7 @@ const SESSION_LABEL: &str = "Feishu · ";
 /// The deterministic session id of the Feishu thread a summon names (`summon_session_id`). Its key is known before the
 /// thread exists, because the summon's own message id stands in for the root until the first reply.
 pub fn summon_session_id(tenant_key: &str, chat_id: &str, root_id: &str) -> String {
-  Uuid::new_v5(&FEISHU_NS, format!("feishu:{tenant_key}:{chat_id}:{root_id}").as_bytes()).to_string()
+  namespaced_uuid(FEISHU_NAMESPACE, &format!("feishu:{tenant_key}:{chat_id}:{root_id}"))
 }
 
 /// The composite id of one message: its creation time in milliseconds, a dash, and its `om_` id.
@@ -222,7 +220,7 @@ impl ThreadAdapter for FeishuThreadAdapter {
       if !owners::chat_has_owner(client, owners, chat_id).await? {
         bail!("chat {chat_id} has no listed owner among its members, so the reply is refused");
       }
-      let uuid = Uuid::new_v5(&FEISHU_NS, post_key.as_bytes()).to_string();
+      let uuid = namespaced_uuid(FEISHU_NAMESPACE, post_key);
       client.reply_in_thread(str_field(address, ROOT_ID)?, text, &uuid).await?;
       Ok(())
     })
@@ -515,6 +513,7 @@ mod tests {
   #[test]
   fn the_session_id_derives_from_tenant_chat_and_root() {
     let first = summon_session_id("tk_1", "oc_1", "om_root");
+    assert_eq!(first, "151036e3-6544-5978-ab8d-267c9c58a5fc");
     assert_eq!(first, summon_session_id("tk_1", "oc_1", "om_root"));
     assert_ne!(first, summon_session_id("tk_1", "oc_1", "om_other"));
     assert_ne!(first, summon_session_id("tk_2", "oc_1", "om_root"));

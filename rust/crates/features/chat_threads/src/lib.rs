@@ -7,6 +7,7 @@ pub mod backfill;
 pub mod channel_service;
 pub mod listener_connection;
 mod sidebar;
+pub mod summon;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 pub mod thread_entry;

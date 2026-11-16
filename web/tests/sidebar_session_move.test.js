@@ -188,21 +188,21 @@ test('acceptance 1: a manager row offers Move under… in every view; worker and
 });
 
 test('acceptance 2: candidates come from both lists, less the moved session, its descendants and parent', async () => {
-    const {context, document, calls} = buildContext(LIST_ANSWERS);
-    const expected = ['Top level', 'Session A', 'Session T', 'Session E'];
-    for (const view of ['all', 'starred', 'threads', 'search']) {
-      context.currentFilter = view;
-      await context.openSessionMovePicker('B');
-      assert.deepEqual(choiceLabels(document), expected, `the candidates opened from ${view}`);
-      assert.ok(calls.some((call) => call.url === '/api/sessions/chat-threads'), 'the Threads list is read');
-    }
-
+  const {context, document, calls} = buildContext(LIST_ANSWERS);
+  const expected = ['Top level', 'Session A', 'Session T', 'Session E'];
+  for (const view of ['all', 'starred', 'threads', 'search']) {
+    context.currentFilter = view;
     await context.openSessionMovePicker('B');
-    const parts = pickerParts(document);
-    parts.search.value = 't';
-    parts.search.fire('input');
-    assert.deepEqual(choiceLabels(document), ['Top level', 'Session T'], 'the search filters the candidates by name');
-  });
+    assert.deepEqual(choiceLabels(document), expected, `the candidates opened from ${view}`);
+    assert.ok(calls.some((call) => call.url === '/api/sessions/chat-threads'), 'the Threads list is read');
+  }
+
+  await context.openSessionMovePicker('B');
+  const parts = pickerParts(document);
+  parts.search.value = 't';
+  parts.search.fire('input');
+  assert.deepEqual(choiceLabels(document), ['Top level', 'Session T'], 'the search filters the candidates by name');
+});
 
 test('acceptance 3: one pick sends one PATCH whose body holds only task_parent_id', async () => {
   const {context, document, calls} = buildContext({
@@ -220,15 +220,23 @@ test('acceptance 3: one pick sends one PATCH whose body holds only task_parent_i
   assert.deepEqual(JSON.parse(patches[0].body), {task_parent_id: 'A'});
 });
 
-test('acceptance 4: a 200 closes the dialog and reads nothing back; the push delivers the row', async () => {
-  const {context, document, calls} = buildContext({
+test('acceptance 4: a 200 closes the dialog and the row refresh renders under the new parent', async () => {
+  const {context, document, nav, calls} = buildContext({
     ...LIST_ANSWERS,
     'PATCH /api/sessions/B': {status: 200, body: {}},
   });
+  context.renderSessionList([row('A', 'manager'), row('B', 'manager', 'P')], 'all');
   await context.openSessionMovePicker('B');
   choiceButton(document, 'Session A').click();
   await settle();
   assert.equal(pickerParts(document), null, 'the dialog closes');
+
+  const movedRow = row('B', 'manager', 'A');
+  assert.equal(context.mergeRowsIntoRenderedList([movedRow], []), true, 'the existing row refresh path repaints');
+  const parentChildren = nav.innerHTML.indexOf('data-tree-children="A"');
+  const movedSession = nav.innerHTML.indexOf('id="session-B"');
+  assert.ok(parentChildren >= 0 && movedSession > parentChildren, 'the refreshed row is nested below its new parent');
+
   const patchAt = calls.findIndex((call) => call.method === 'PATCH');
   assert.equal(calls.slice(patchAt + 1).length, 0, 'no list is read after the move');
 });

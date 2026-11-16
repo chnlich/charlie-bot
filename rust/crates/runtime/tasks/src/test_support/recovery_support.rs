@@ -341,7 +341,7 @@ fn registry(extra: Option<(&'static str, RegisterFn)>) -> anyhow::Result<Registr
   registry.register_package("test.recovery_backend", register_scripted_backend)?;
   registry.register_package("test.synthetic_loop", register_loop_controller)?;
   registry.register_package("test.synthetic_probe", register_probe_controller)?;
-  registry.register_package("features.backend_pool", charliebot_agents::backend_pool::register)?;
+  registry.register_package(charliebot_agents::backend_pool::PACKAGE, charliebot_agents::backend_pool::register)?;
   // The `pool_member` session slot, which the server registers at startup: a pool-chosen delegation writes it.
   registry.register_package("features.model_pool", charliebot_agents::model_pool::register)?;
   if let Some((package, register)) = extra {

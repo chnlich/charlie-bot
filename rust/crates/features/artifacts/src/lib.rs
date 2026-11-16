@@ -21,6 +21,9 @@ use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_registry::{Registry, RegistryError};
 use futures_util::future::BoxFuture;
 
+/// The package label the composition list registers this crate's package under.
+pub const PACKAGE: &str = "features.artifacts";
+
 /// `register`: the file view, the sessions router, the `publish:` section, then
 /// the sidebar contribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

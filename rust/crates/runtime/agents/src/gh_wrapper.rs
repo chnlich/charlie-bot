@@ -106,6 +106,27 @@ fn is_same_file(found: &Path, wrapper: &Path) -> bool {
     .is_ok_and(|found| found == fs::canonicalize(wrapper).unwrap_or_else(|_| wrapper.to_path_buf()))
 }
 
+/// The spawn environment of a test whose agent must pass [`require_gh_wrapper`]: a stub `gh` under `base`.
+///
+/// The stub is a `#!/bin/sh` script, so a test never runs it. `path` continues the PATH after the stub's directory,
+/// and the PATH puts that directory first, which is the shape [`require_gh_wrapper`] accepts. A test of the wrapper
+/// script itself names the checkout's wrapper through [`dir_under`] instead.
+#[cfg(any(test, feature = "test-support"))]
+pub fn stub_environment(base: &Path, path: &str) -> Env {
+  use std::os::unix::fs::PermissionsExt;
+  let wrapper_dir = base.join("gh-wrapper");
+  fs::create_dir_all(&wrapper_dir).expect("the stub wrapper directory creates");
+  let wrapper = wrapper_dir.join("gh");
+  fs::write(&wrapper, "#!/bin/sh\n").expect("the stub wrapper script writes");
+  let mut permissions = fs::metadata(&wrapper).expect("the stub wrapper script exists").permissions();
+  permissions.set_mode(0o755);
+  fs::set_permissions(&wrapper, permissions).expect("the stub wrapper script becomes executable");
+  Env::from([
+    ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
+    (WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+  ])
+}
+
 #[cfg(test)]
 mod tests {
   use std::os::unix::fs::PermissionsExt;

@@ -41,6 +41,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+charliebot-agents = { workspace = true, features = ["test-support"] }
 charliebot-anthropic-compatible.workspace = true
 charliebot-antigravity.workspace = true
 charliebot-charlie-code.workspace = true

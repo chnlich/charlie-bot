@@ -327,9 +327,21 @@
 
     // The one-line preview: whitespace collapsed, cut at PREVIEW_CHARS with an ellipsis so a cut
     // preview reads as cut rather than as the event's whole text.
+    //
+    // The line breaker breaks a preview at its spaces alone, so a run longer than a phone's preview
+    // column — about 62 characters on the row's 358 px — moves whole to the next line. A tool call's
+    // row then spends the preview's first line on the name alone, 23 px of 358, and cuts the input,
+    // the text the row exists to show, at the second. A zero-width space after each run's own
+    // punctuation — a tool input's braces, brackets, commas and colons, prose's commas and
+    // semicolons — gives the run break points, so the first line fills with the input. The character
+    // draws nothing, and the cut lands before it goes in, so the preview keeps its PREVIEW_CHARS
+    // characters.
+    const PREVIEW_BREAKS = /([{}[\],:;])/g;
+
     function previewText(ev) {
       const text = summaryText(ev).replace(/\s+/g, ' ').trim();
-      return text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS) + '…' : text;
+      const cut = text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS) + '…' : text;
+      return cut.replace(PREVIEW_BREAKS, '$1\u200b');
     }
 
     // The event's time: a `ts` epoch in seconds, or the ISO `timestamp` most event types write.

@@ -657,7 +657,7 @@ async fn test_concurrent_duplicate_discord_message_create_accepts_one_thread_sum
 
 #[tokio::test]
 async fn test_discord_accepted_post_timeout_retries_with_one_nonce_keyed_post() {
-  // The retry delay is the code's own; the small value stands in for the production [1 s, 4 s].
+  // The retry delay is the code's own. The small value stands in for the production [1 s, 4 s].
   let _retry_delays = charliebot_chat_threads::test_support::keyed_post_retry_delays_for_test([Duration::ZERO; 2]);
   let home = Home::new(true).await;
   let sid = discord_session(&home).await;

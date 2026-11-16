@@ -28,19 +28,19 @@ enum DiscordCommand {
   Reply(ReplyArgs),
   /// Read thread messages, marking the returned unread ones read
   Read(ReadArgs),
-  /// Verify the Discord bot setup; exits 1 when ok is false
+  /// Verify the Discord bot setup. Exits 1 when ok is false
   Check,
 }
 
 #[derive(Args)]
 struct ReadArgs {
-  /// Discord link to read instead of this session's own thread; marks nothing read
+  /// Discord link to read instead of this session's own thread. Marks nothing read
   #[arg(long)]
   url: Option<String>,
   /// Messages per page, 1..100 (default 50)
   #[arg(long, default_value_t = READ_LIMIT_DEFAULT, value_name = "N")]
   limit: i64,
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
+  /// Session ID (optional). It is taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment
   #[arg(long)]
   session: Option<String>,
 }

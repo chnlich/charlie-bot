@@ -9,7 +9,8 @@
   const Sidebar = globalThis.Sidebar;
 
 // The one modal chrome for the sidebar's JS-built overlays: the group modal
-// and the delete-confirm modal below. Each dialog keeps its own extras (the
+// and the delete-confirm modal below, and the move picker (session-move.js),
+// which reads it as Sidebar.modalChrome. Each dialog keeps its own extras (the
 // delete confirm adds text-center) and inner markup.
 const MODAL_OVERLAY_CLASS = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
 const MODAL_DIALOG_CLASS = 'bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72';
@@ -353,6 +354,7 @@ const SIDEBAR_ONLY = {
   removeSessionRowInline,
   deleteSessionPermanently,
   setSessionGroup,
+  modalChrome: {overlay: MODAL_OVERLAY_CLASS, dialog: MODAL_DIALOG_CLASS},
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

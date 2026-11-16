@@ -120,9 +120,9 @@ pub fn build_bootstrap_payload(
   } else {
     let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
     // A turn's events fold to more than one message, so a read of the message budget's count of events can fold to
-    // fewer messages than the page shows. The read doubles until the tail holds the budget or the log ends, and the
-    // trim below keeps the budget's last messages. The read that ends the loop keeps its fold, because the payload's
-    // first trim step folds that same tail.
+    // fewer messages than the page shows. The read that ends the loop keeps its fold: the payload's first trim step
+    // takes that same tail, and a longer tail only adds whole turns the trim drops. The next read therefore holds
+    // the events this session's own ratio needs, never the next doubling of the last.
     // The read covers the log's last `read` lines, and a line that does not parse is no event: the cursor counts the
     // lines the tail covers, not the events they parse to, so a malformed line never advances it.
     let mut read = BOOTSTRAP_MESSAGE_LIMIT;
@@ -134,7 +134,7 @@ pub fn build_bootstrap_payload(
       if messages.len() >= BOOTSTRAP_MESSAGE_LIMIT || complete {
         break (events, total_count, oldest, messages, pending_draft);
       }
-      read *= 2;
+      read = next_bootstrap_read(read, messages.len(), total_count);
     };
     (Tail::Events { events, start: oldest, messages }, pending_draft, archive_offset + total_count)
   };
@@ -193,6 +193,17 @@ pub fn build_bootstrap_payload(
   };
   let (value, untrimmed_wire_bytes) = fit_first_screen_payload(&mut build, &next_drop)?;
   Ok(BootstrapPayload { value, untrimmed_wire_bytes })
+}
+
+/// The next tail read after one that folded `read` events to `messages` messages: the events the message budget
+/// needs at that ratio, bounded to eight times the last read and to the log's own line count.
+///
+/// The read grows by at least half, so a fold that missed the budget by a few messages still ends the loop at the
+/// next read.
+fn next_bootstrap_read(read: usize, messages: usize, total: usize) -> usize {
+  let wanted = read.saturating_mul(BOOTSTRAP_MESSAGE_LIMIT) / messages.max(1);
+  let grown = read.saturating_add((read / 2).max(1));
+  grown.max(wanted.min(read.saturating_mul(8))).min(total)
 }
 
 /// The payload with the tail kept from turn boundary `drop` on, for the smallest turn-aligned
@@ -1752,6 +1763,58 @@ backends:
       messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 700))),
       "the newest turn renders on the first screen"
     );
+  }
+
+  /// The next read covers the events the message budget needs at the fold's own ratio, and it grows by at least
+  /// half and never past the log's line count.
+  #[test]
+  fn a_bootstrap_read_grows_to_the_budget_and_no_further_than_the_log() {
+    // 40 events folding to 20 messages need 80 events for the budget's 40 messages.
+    assert_eq!(next_bootstrap_read(40, 20, 1_000), 80);
+    // A tail that folds to no message grows by the eightfold bound instead of dividing by zero.
+    assert_eq!(next_bootstrap_read(40, 0, 1_000), 320);
+    // The log's own line count caps the read.
+    assert_eq!(next_bootstrap_read(40, 20, 60), 60);
+    // The read always grows, so the loop reaches the log's end.
+    assert_eq!(next_bootstrap_read(90, 45, 100), 100);
+  }
+
+  /// A log whose events fold to fewer messages than the budget needs a second read. The second read serves the
+  /// budget's messages, and the cursor names the first of their events inside the log.
+  #[tokio::test]
+  async fn a_log_past_the_first_read_budget_reads_again_for_the_message_budget() {
+    let (_home, features) = feature_context();
+    let meta =
+      crate::test_support::create_node(&features.store, "two-read-bootstrap", None, TaskProfile::Manager).await;
+    // Each turn is a user event and a note that folds to nothing, so the first read of the budget's count of events
+    // folds to half the budget's messages and the loop reads again.
+    let turns = 100usize;
+    for turn in 1..=turns {
+      features
+        .store
+        .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(turn as u64, 40)}))
+        .await
+        .unwrap();
+      features
+        .store
+        .append_chat_event(&meta.id, json!({"type": "unrendered_note", "content": "filler"}))
+        .await
+        .unwrap();
+    }
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    assert_eq!(total, 2 * turns + 1, "the fixture's log is its two events per turn and the node's own event");
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), BOOTSTRAP_MESSAGE_LIMIT, "the second read fills the message budget");
+    let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    assert!(start > 0, "the kept events start past the log's first event");
+    assert!(start + messages.len() <= total, "the cursor names events inside the log");
+    assert!(
+      messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 40))),
+      "the newest turn renders on the first screen"
+    );
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
   }
 
   /// A closed newest turn over the whole budget renders whole: the trim stops at its start, not past its end.

@@ -70,11 +70,11 @@ fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 /// The local half of the hint: `git rev-parse --short HEAD` in the directory
-/// `CHARLIEBOT_REPO_ROOT` names, under the sha timeout. A missing variable or a failed
+/// `CHARLIEBOT_REPO_ROOT` names, under `git::SHA_TIMEOUT`. A missing variable or a failed
 /// read yields no local SHA and so no hint.
 fn local_repo_head_sha() -> Option<String> {
   let root = repo_root::RepoRoot::new(std::env::var_os(repo_root::REPO_ROOT_ENV)).ok()?;
-  git::head_sha(root.path(), timeouts::SUBPROCESS_GIT_SHA_TIMEOUT)
+  git::head_sha(root.path(), git::SHA_TIMEOUT)
 }
 
 #[cfg(test)]

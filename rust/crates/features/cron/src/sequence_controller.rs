@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
@@ -143,6 +144,7 @@ impl SequenceBinding for CronBinding {
 pub struct CronSequenceController {
   registry: watch::Receiver<Option<Weak<Registry>>>,
   row_schedule_memo: Mutex<Option<RowScheduleMemo>>,
+  listing_snapshot: Mutex<Option<ListingSnapshot>>,
 }
 
 #[derive(Clone)]
@@ -155,12 +157,50 @@ struct RowScheduleMemo {
   builds: usize,
 }
 
+/// The cron tree one listing read, and when it read it.
+struct ListingSnapshot {
+  read_at: Instant,
+  snapshot: Arc<loader::CronSnapshot>,
+}
+
+/// How long a listing's snapshot answers the next listing read.
+///
+/// One listing reads the rows' schedule fields and the bound ids with them, and each read fingerprinted the cron tree:
+/// one directory read and a stat per config and prompt file. The read within this window serves the snapshot the
+/// previous read took, so a listing fingerprints the tree once instead of once per read. The window stays under the
+/// sidebar's own poll interval: an edit shows on the poll after it.
+const LISTING_SNAPSHOT_TTL: Duration = Duration::from_millis(250);
+
 impl CronSequenceController {
   pub fn new(registry: watch::Receiver<Option<Weak<Registry>>>) -> Self {
-    Self { registry, row_schedule_memo: Mutex::new(None) }
+    Self { registry, row_schedule_memo: Mutex::new(None), listing_snapshot: Mutex::new(None) }
   }
 
-  fn snapshot_for_listing(&self) -> loader::CronSnapshot {
+  /// The cron tree as the last listing read within [`LISTING_SNAPSHOT_TTL`] saw it, or a fresh read.
+  fn listing_snapshot(&self) -> Arc<loader::CronSnapshot> {
+    let started = Instant::now();
+    {
+      let held = self.listing_snapshot.lock().expect("the cron listing snapshot mutex is not poisoned");
+      if let Some(entry) = held.as_ref()
+        && entry.read_at.elapsed() < LISTING_SNAPSHOT_TTL
+      {
+        return Arc::clone(&entry.snapshot);
+      }
+    }
+    let snapshot = Arc::new(self.read_snapshot_for_listing());
+    let mut held = self.listing_snapshot.lock().expect("the cron listing snapshot mutex is not poisoned");
+    // Two reads that both missed raced: the one that started later holds the fresher tree, and installs itself first.
+    // Replacing it here would serve the tree the other read already replaced for another window.
+    if let Some(entry) = held.as_ref()
+      && entry.read_at >= started
+    {
+      return Arc::clone(&entry.snapshot);
+    }
+    *held = Some(ListingSnapshot { read_at: started, snapshot: Arc::clone(&snapshot) });
+    snapshot
+  }
+
+  fn read_snapshot_for_listing(&self) -> loader::CronSnapshot {
     if let Some(registry) = self.registry.borrow().as_ref().and_then(Weak::upgrade)
       && let Some(features) = registry.feature_context()
     {
@@ -380,8 +420,9 @@ impl SequenceController for CronSequenceController {
   }
 
   fn binding(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
-    // A binding lookup reads the same loader snapshot the listing renders.
-    let snapshot = self.snapshot_for_listing();
+    // A binding lookup reads the same loader snapshot the listing renders. The write paths that ask for a binding
+    // decide from its names, so this read fingerprints the tree rather than serving a listing's cached snapshot.
+    let snapshot = self.read_snapshot_for_listing();
     let names = names_for_binding(&snapshot.tasks, session_id);
     let name = names.first()?.clone();
     Some(Arc::new(CronBinding { name, names, registry: self.registry.clone() }))
@@ -392,20 +433,20 @@ impl SequenceController for CronSequenceController {
   }
 
   fn listing_fields(&self, session_ids: &[String], now: UtcDateTime) -> HashMap<String, Map<String, Value>> {
-    let tasks = self.snapshot_for_listing();
+    let tasks = self.listing_snapshot();
     let mut memo = self.row_schedule_memo.lock().expect("cron row schedule memo is not poisoned");
     row_schedule_fields(&mut memo, &tasks.tasks, tasks.fingerprint, session_ids, now)
   }
 
   fn bound_session_ids(&self) -> Option<Vec<String>> {
-    let tasks = self.snapshot_for_listing();
+    let tasks = self.listing_snapshot();
     Some(tasks.tasks.iter().filter_map(|task| task.session_id.clone()).collect())
   }
 
   fn listing_bound_and_fields(&self, _rows: &[Arc<SessionMetadata>], now: UtcDateTime) -> ListingContribution {
     // The bound ids and the rows' schedule fields both come from one loader snapshot, and the snapshot's
     // fingerprint check is what a listing pays to see the current config. A listing reads it once.
-    let tasks = self.snapshot_for_listing();
+    let tasks = self.listing_snapshot();
     let bound: Vec<String> = tasks.tasks.iter().filter_map(|task| task.session_id.clone()).collect();
     let mut memo = self.row_schedule_memo.lock().expect("cron row schedule memo is not poisoned");
     let fields = row_schedule_fields(&mut memo, &tasks.tasks, tasks.fingerprint, &bound, now);
@@ -415,7 +456,7 @@ impl SequenceController for CronSequenceController {
   fn move_bindings<'a>(&'a self, source: &'a str, new: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async move {
       let home = cron_home();
-      let snapshot = self.snapshot_for_listing();
+      let snapshot = self.read_snapshot_for_listing();
       let names = names_for_binding(&snapshot.tasks, source);
       let moved_to = new.to_string();
       let source = source.to_string();
@@ -934,7 +975,10 @@ mod tests {
   use serde_json::{Value, json};
   use tokio::sync::watch;
 
-  use super::{CronBinding, last_saturday_1am_utc, register_step_run, row_schedule_fields, switch_failed_step};
+  use super::{
+    CronBinding, CronSequenceController, last_saturday_1am_utc, register_step_run, row_schedule_fields,
+    switch_failed_step,
+  };
   use crate::boundary::BoundaryState;
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{AUTO_POOL_ID, auto_manager, feature_context, feature_context_with_auto, manager};
@@ -961,6 +1005,18 @@ mod tests {
     assert_eq!(receiver.borrow_and_update().generation, 3);
     assert_eq!(receiver.borrow().state, BoundaryState::Finished);
     crate::boundary::remove_boundary(leaf_id, owner_ref);
+  }
+
+  #[test]
+  fn a_listing_read_serves_the_snapshot_another_read_in_the_window_took() {
+    let (_home, features) = feature_context();
+    features.registry.bind_feature_context(&features).unwrap();
+    let (sender, receiver) = watch::channel(None);
+    sender.send_replace(Some(Arc::downgrade(&features.registry)));
+    let controller = CronSequenceController::new(receiver);
+    let first = controller.listing_snapshot();
+    let second = controller.listing_snapshot();
+    assert!(Arc::ptr_eq(&first, &second), "a listing read in the window keeps the snapshot the previous read took");
   }
 
   #[test]

@@ -7,13 +7,13 @@ Post one reply per round that states:
 
 ### Sources
 
-Find work sources through this instance's OKR skill, credentials, and memory. Have a read-only worker read the sources, so this session keeps only their conclusions. A source that cannot be read is reported as unread; an unread source never counts as evidence that no work exists.
+Find work sources through this instance's OKR skill, credentials, and memory. Have a read-only worker read the sources, so this session keeps only their conclusions. The worker reads every result of each source for the last 7 days, following the source's next-page marker until none remains. A source that cannot be read is reported as unread; an unread source never counts as evidence that no work exists.
 
 ### Selection Questions
 
 An item qualifies only when both answers are yes:
-1. Does it move an active key result (KR) in Linear, or does a week of waiting cost something (a deadline passes, or someone stays blocked)?
-2. Does no session hold it? An open session holds its item; a session where the user stopped this item keeps holding it; an item that waits on the user's own answer does not count.
+1. Does it move an active key result (KR) that this instance's `okr` skill lists, or does a week of waiting cost something (a deadline passes, or someone stays blocked)? An instance without an `okr` skill reports its goals as an unread source.
+2. Does nobody hold it? An open session holds its item; a session where the user stopped this item keeps holding it; an item assigned to another person is held by that person; an item that waits on the user's own answer does not count.
 An item an open session holds gets its one reply line and nothing else: send no message to that session and change nothing in it.
 
 ### Escalation

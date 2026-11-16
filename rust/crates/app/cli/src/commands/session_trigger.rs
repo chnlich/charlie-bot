@@ -18,7 +18,9 @@ use charliebot_core::config;
 use charliebot_core::int_text;
 use charliebot_core::text_repr;
 use charliebot_core::timefmt;
-use charliebot_store::trigger_files::{FIRE_AT_FIELD, LOCAL_PID_KIND, REMOTE_PID_KIND, SLURM_JOB_KIND};
+use charliebot_store::trigger_files::{
+  EXIT_FILE_FIELD, FIRE_AT_FIELD, LOCAL_PID_KIND, REMOTE_PID_KIND, SLURM_JOB_KIND,
+};
 use charliebot_store::{layout, trigger_files};
 use charliebot_triggers::triggers;
 use clap::{Arg, ArgMatches, Command};
@@ -328,7 +330,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
     "cmd": cmd,
     "started_at": started_text,
     "log": launch.log,
-    "exit_file": launch.exit_file,
+    (EXIT_FILE_FIELD): launch.exit_file,
     "trigger_id": trigger_id,
   });
   let Value::Object(record) = record else { unreachable!("the record literal is an object") };
@@ -368,9 +370,20 @@ fn kill_started(launch: &Launch) -> Result<(), CliExit> {
 /// The `watch_targets` entry the POST carries: the target shape plus the two paths its wake reads.
 fn launch_target(launch: &Launch) -> Value {
   match &launch.host {
-    None => json!({ "kind": LOCAL_PID_KIND, "pid": launch.pid, "exit_file": launch.exit_file, "log": launch.log }),
+    None => json!({
+      "kind": LOCAL_PID_KIND,
+      "pid": launch.pid,
+      (EXIT_FILE_FIELD): launch.exit_file,
+      "log": launch.log
+    }),
     Some(host) => {
-      json!({ "kind": REMOTE_PID_KIND, "host": host, "pid": launch.pid, "exit_file": launch.exit_file, "log": launch.log })
+      json!({
+        "kind": REMOTE_PID_KIND,
+        "host": host,
+        "pid": launch.pid,
+        (EXIT_FILE_FIELD): launch.exit_file,
+        "log": launch.log
+      })
     }
   }
 }

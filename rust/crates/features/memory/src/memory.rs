@@ -131,11 +131,11 @@ pub struct MemorySelection {
   pub text: Option<String>,
 }
 
-/// Serializes `ensure_store` in the process: a `git init` that starts while another runs in the
-/// same directory exits 128.
+/// The process-wide serializer of `ensure_store`. A `git init` that starts while another runs in
+/// the same directory exits 128.
 static ENSURE_STORE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Creates the store scaffold under `memory_dir`, idempotently. It runs `git init` when `.git`
+/// The store scaffold under `memory_dir`, created idempotently. It runs `git init` when `.git`
 /// is absent, seeds `topics` and `.gitignore` only when missing, and creates `entries/` and `staging/`.
 pub fn ensure_store(memory_dir: &Path) -> anyhow::Result<()> {
   let _guard = ENSURE_STORE_LOCK.lock().expect("the memory store lock was poisoned by an earlier ensure_store");
@@ -171,7 +171,7 @@ fn seed_if_missing(path: &Path, content: &str) -> anyhow::Result<()> {
   fs::write(path, content).with_context(|| format!("write {}", path.display()))
 }
 
-/// Creates the directory. An existing directory is fine, and an existing file at the path is an error.
+/// The directory at `path`, created unless it already exists. An existing file at the path is an error.
 fn make_dir(path: &Path) -> anyhow::Result<()> {
   match fs::create_dir(path) {
     Ok(()) => Ok(()),
@@ -180,8 +180,8 @@ fn make_dir(path: &Path) -> anyhow::Result<()> {
   }
 }
 
-/// Loads the topics vocabulary and every entry, failing on the first violation. It runs
-/// [`ensure_store`] first, so a missing store loads as the empty store with the seeded vocabulary.
+/// The loaded topics vocabulary and every entry, failing on the first violation. [`ensure_store`]
+/// runs first, so a missing store loads as the empty store with the seeded vocabulary.
 pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
   ensure_store(memory_dir)?;
   let topics = load_topics(memory_dir)?;
@@ -196,19 +196,19 @@ pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
   Ok(Store { memory_dir: memory_dir.to_path_buf(), topics, entries })
 }
 
-/// Reads a text file with universal newlines: `\r\n` and a lone `\r` turn into `\n`.
+/// The text of `path`, with universal newlines: `\r\n` and a lone `\r` turn into `\n`.
 fn read_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   Ok(str_methods::universal_newlines(&text))
 }
 
-/// Parses one entry file.
+/// The `Entry` parsed from the entry file at `path`.
 pub fn parse_entry(path: &Path) -> anyhow::Result<Entry> {
   let text = read_text(path)?;
   Ok(parse_entry_text(&text, path)?)
 }
 
-/// Parses one entry file's text. Only the first header block is parsed. The body is the rest,
+/// The `Entry` parsed from one entry file's text. Only the first header block is parsed. The body is the rest,
 /// so it may hold `---` lines. Structure only: `load_store` checks the semantic rules.
 pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFormatError> {
   let location = entry_path.display();
@@ -547,7 +547,7 @@ mod tests {
   const MASTER_ENTRY: &str =
     "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Dark Mode\n---\nbody\n";
 
-  /// Writes each `(relative path, text)` under `root`, creating the parent directories.
+  /// Each `(relative path, text)` written under `root`, with the parent directories created.
   fn write_files(root: &Path, files: &[(impl AsRef<str>, impl AsRef<str>)]) {
     for (relative, text) in files {
       let path = root.join(relative.as_ref());

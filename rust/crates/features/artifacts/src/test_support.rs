@@ -90,7 +90,7 @@ fn features_in(home: &Path) -> Arc<FeatureContext> {
   registry
     .register_package("features.user_text_checks", charliebot_user_text_checks::register)
     .expect("the user text checks package registers");
-  registry.register_package("features.artifacts", crate::register).expect("the artifacts package registers");
+  registry.register_package(crate::PACKAGE, crate::register).expect("the artifacts package registers");
   let registry = Arc::new(registry);
   let config_value = registry.load_config(home).expect("the default config loads");
   let store = Arc::new(
@@ -112,9 +112,7 @@ fn features_in(home: &Path) -> Arc<FeatureContext> {
   ));
   let repo_root = repo_root();
   let startup = StartupState::default();
-  startup
-    .insert(Templating::new(&repo_root, &["features.artifacts"]))
-    .expect("the template engine enters startup state");
+  startup.insert(Templating::new(&repo_root, &[crate::PACKAGE])).expect("the template engine enters startup state");
   startup
     .insert(RepoRoot::new(Some(repo_root.clone().into_os_string())).expect("the checkout is a non-empty path"))
     .expect("the repo root enters startup state");

@@ -24,9 +24,9 @@ const RUNTIME: &[(&str, RegisterFn)] = &[
 /// The listed packages in registration order.
 const PACKAGES: &[(&str, RegisterFn)] = &[
   ("features.user_text_checks", charliebot_user_text_checks::register),
-  ("features.artifacts", charliebot_artifacts::register),
+  (charliebot_artifacts::PACKAGE, charliebot_artifacts::register),
   ("features.backup", charliebot_backup::register),
-  ("features.backend_pool", charliebot_agents::backend_pool::register),
+  (charliebot_agents::backend_pool::PACKAGE, charliebot_agents::backend_pool::register),
   ("features.chat_threads", charliebot_chat_threads::register),
   ("features.code_server", charliebot_code_server::register),
   ("features.cron", charliebot_cron::register),

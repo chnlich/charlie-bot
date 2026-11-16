@@ -1473,16 +1473,17 @@ const ENVIRONMENT_HINT: &str = "Name it once, as a const in its owner module (in
 const ROUTE_HINT: &str = "Export the path as a `pub const` from the crate that registers its route, and reference that \
                           const from the other crates. `charliebot_cli_common::route::fill` fills its `{}` parameters.";
 
-const PACKAGE_HINT: &str = "Export the label as `pub const PACKAGE` from the backend crate that registers the package, \
-                            and reference that const from the composition list.";
+const PACKAGE_HINT: &str = "Export the label as `pub const PACKAGE` from the crate that registers the package, and \
+                            reference that const from the composition list and from every other crate that names the \
+                            package.";
 
 /// The environment variable names: `CHARLIEBOT_` followed by one or more of `A-Z`, `0-9` and `_`. The route paths: the
-/// part of a literal from `/api/` on, with each `{...}` parameter written `{}`. The backend package labels:
-/// `backends.` followed by a backend's directory name.
+/// part of a literal from `/api/` on, with each `{...}` parameter written `{}`. The package labels: `backends.` or
+/// `features.` followed by a lowercase name.
 const SPELLING_CLASSES: &[SpellingClass] = &[
   SpellingClass { name_of: environment_name, hint: ENVIRONMENT_HINT },
   SpellingClass { name_of: route_name, hint: ROUTE_HINT },
-  SpellingClass { name_of: backend_package_name, hint: PACKAGE_HINT },
+  SpellingClass { name_of: package_label_name, hint: PACKAGE_HINT },
 ];
 
 /// A production string literal and where it sits.
@@ -1560,9 +1561,9 @@ fn environment_name(site: &Site) -> Option<String> {
   spelled.then(|| name.to_string())
 }
 
-/// The backend package label a literal spells: `backends.` followed by a backend's directory name.
-fn backend_package_name(site: &Site) -> Option<String> {
-  let suffix = site.value.strip_prefix("backends.")?;
+/// The package label a literal spells: `backends.` or `features.` followed by a lowercase name.
+fn package_label_name(site: &Site) -> Option<String> {
+  let suffix = site.value.strip_prefix("backends.").or_else(|| site.value.strip_prefix("features."))?;
   let spelled =
     !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
   spelled.then(|| site.value.clone())
@@ -2970,26 +2971,38 @@ fn the_route_rule_finds_each_break() {
   );
 }
 
-/// The backend package rule on a synthetic workspace. The backend crate exports its label, and a composition crate
-/// that references that const passes. A composition crate that spells the label itself fails with each site and the
-/// hint, so the label cannot drift between the two crates.
+/// The package rule on a synthetic workspace. A backend crate and a feature crate export their labels, and a
+/// composition crate that references those consts passes. A composition crate that spells a label itself fails with
+/// each site and the hint, so the label cannot drift between the two crates.
 #[test]
 #[ignore = "integration"]
-fn the_backend_package_rule_finds_each_break() {
+fn the_package_label_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
   let backend_lib = r##"pub const PACKAGE: &str = "backends.thing";
 "##;
+  let feature_lib = r##"pub const PACKAGE: &str = "features.widget";
+"##;
   let composer_lib = r##"pub const FROM_THE_BACKEND: &str = thing_crate::PACKAGE;
 pub const SPELLED: &str = "backends.thing";
+pub const SPELLED_FEATURE: &str = "features.widget";
 "##;
   write_tree(
     root,
     &[
-      ("Cargo.toml", workspace_manifest(&["crates/backends/thing", "crates/app/composer"])),
+      ("Cargo.toml", workspace_manifest(&["crates/backends/thing", "crates/features/widget", "crates/app/composer"])),
       ("crates/backends/thing/Cargo.toml", crate_manifest("thing-crate", &[], &[])),
       ("crates/backends/thing/src/lib.rs", backend_lib.to_string()),
-      ("crates/app/composer/Cargo.toml", crate_manifest("composer", &[("thing-crate", "../../backends/thing")], &[])),
+      ("crates/features/widget/Cargo.toml", crate_manifest("widget-crate", &[], &[])),
+      ("crates/features/widget/src/lib.rs", feature_lib.to_string()),
+      (
+        "crates/app/composer/Cargo.toml",
+        crate_manifest(
+          "composer",
+          &[("thing-crate", "../../backends/thing"), ("widget-crate", "../../features/widget")],
+          &[],
+        ),
+      ),
       ("crates/app/composer/src/lib.rs", composer_lib.to_string()),
     ],
   );
@@ -3005,8 +3018,15 @@ pub const SPELLED: &str = "backends.thing";
         PACKAGE_HINT,
       ]
       .join("\n"),
+      [
+        "features.widget: spelled in 2 crates at:",
+        "  crates/app/composer/src/lib.rs:3",
+        "  crates/features/widget/src/lib.rs:1",
+        PACKAGE_HINT,
+      ]
+      .join("\n"),
     ],
-    "the package rule fails the label that two crates spell, and passes the const reference"
+    "the package rule fails each label that two crates spell, and passes the const references"
   );
 }
 

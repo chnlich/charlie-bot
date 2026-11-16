@@ -839,7 +839,7 @@ function renderSessionView(data) {
   updateActiveBackendBadges();
 
   // Update events viewer link
-  const evLink = document.querySelector('a[href*="/events"]');
+  const evLink = document.getElementById('events-link');
   if (evLink) evLink.href = '/sessions/' + session.id + '/events';
 
   // Update usage

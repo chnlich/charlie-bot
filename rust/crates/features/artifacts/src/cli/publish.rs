@@ -45,7 +45,7 @@ struct PublishArgs {
   lane_options: Vec<OsString>,
 }
 
-/// Parse the publish arguments and print the resulting reader URL.
+/// The `charliebot publish` entry point: parse the arguments and print the resulting reader URL.
 pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   let args = parse_args(args)?;
   let host = host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;

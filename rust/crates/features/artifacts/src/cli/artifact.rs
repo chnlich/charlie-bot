@@ -81,8 +81,8 @@ enum CheckOutcome {
   Failed { stdout: String, exit: CliExit },
 }
 
-/// Parse the artifact arguments and run one verb. Parser errors print and exit on their own (argparse-compatible:
-/// help 0, usage error 2).
+/// The `charliebot artifact` entry point: parse the arguments and run one verb. Parser errors print and exit on
+/// their own (argparse-compatible: help 0, usage error 2).
 pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   let command = with_infer_long_args(ArtifactCli::command());
   let argv = std::iter::once(OsString::from("charliebot artifact")).chain(args.iter().cloned());

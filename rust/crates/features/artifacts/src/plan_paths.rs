@@ -17,7 +17,8 @@ pub fn exists(path: &Path) -> io::Result<bool> {
   }
 }
 
-/// Resolve a plan artifact and return its in-session relative path, or `None` when it resolves outside the session.
+/// A plan artifact's resolved path and its in-session relative path, the relative path being `None` when the
+/// artifact resolves outside the session.
 pub fn resolve_plan_file(session_dir: &Path, file: &str) -> (PathBuf, Option<PathBuf>) {
   let resolved_session_dir = paths::realpath(session_dir);
   let candidate = paths::realpath(&resolved_session_dir.join(file));

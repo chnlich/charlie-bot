@@ -1101,7 +1101,7 @@ fn analyse(base_html: &str, new_html: &str) -> Result<Analysis, String> {
   Ok((base_parser, new_parser, base_leaves, new_leaves, changes))
 }
 
-/// Return `new_html` with word-level marks against `base_html` embedded in its source.
+/// `new_html` with word-level marks against `base_html` embedded in its source.
 pub fn annotate(base_html: &str, new_html: &str) -> Result<String, String> {
   let (base_parser, new_parser, base_leaves, new_leaves, changes) = analyse(base_html, new_html)?;
   let root = document_root(&new_parser);
@@ -1120,7 +1120,7 @@ pub fn annotate(base_html: &str, new_html: &str) -> Result<String, String> {
   append_style_and_header(&splice(new_html, &insertions))
 }
 
-/// Return a plain-text, one-section-per-changed-leaf comparison of `new_html` against `base_html`.
+/// A plain-text, one-section-per-changed-leaf comparison of `new_html` against `base_html`.
 pub fn diff_text(base_html: &str, new_html: &str) -> Result<String, String> {
   let (base_parser, new_parser, old_leaves, new_leaves, changes) = analyse(base_html, new_html)?;
   let mut sections = Vec::new();

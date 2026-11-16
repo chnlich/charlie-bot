@@ -45,7 +45,7 @@ pub struct DevinBackend {
   instructions_content: Option<String>,
   resume_session_id: Option<String>,
   extra_flags: Vec<String>,
-  /// The turn's log directory. `prepare_transport` names it for a live launch; a recovered capture names it through
+  /// The turn's log directory. `prepare_transport` names it for a live launch. A recovered capture names it through
   /// its launch, because no transport runs again for it.
   run_dir: Option<PathBuf>,
 }
@@ -69,7 +69,7 @@ impl DevinBackend {
 
   /// The print-mode command of one turn. Each value is bound with `=`, so the optional-value flags `--export`,
   /// `--resume` and `--respect-workspace-trust` cannot take the next argument as their value. `--print` comes last,
-  /// because its optional value would take the argument after it; the prompt comes from the prompt file.
+  /// because its optional value would take the argument after it. The prompt comes from the prompt file.
   fn argv(&self, prompt_file: &Path, export_file: &Path) -> Vec<String> {
     let mut command = vec![
       self.devin_bin.clone(),
@@ -88,7 +88,7 @@ impl DevinBackend {
   }
 
   /// The events and guard of a finished turn. A nonzero exit carries Devin's stderr, which holds its quota and login
-  /// errors. A zero exit reads the export; any failure there becomes the turn's guard error, which fails the run.
+  /// errors. A zero exit reads the export. Any failure there becomes the turn's guard error, which fails the run.
   fn finish(&self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
     if exit_code != 0 {
       return finished(vec![make_error_event(&nonzero_exit_message(stderr, exit_code))], exit_code, None);
@@ -306,7 +306,7 @@ mod tests {
       cgroup_config,
       Arc::new(Registry::new()),
     );
-    // The supervisor is the helper binary; it runs the backend's `devin` path as the child it supervises.
+    // The supervisor is the helper binary. It runs the backend's `devin` path as the child it supervises.
     request.final_stdout_supervisor = Some(fake_program_bin());
     let pid_slot = Arc::new(Mutex::new(None));
     let recorded_pid = pid_slot.clone();

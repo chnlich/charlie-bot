@@ -820,12 +820,14 @@
     window.dispatchEvent(new CustomEvent('cbdiff:compared', { detail: { comparison } }));
 
     const files = data.files || [];
-    renderSummary(data);
 
+    // An empty comparison states its outcome in the note alone: a totals line would repeat it with a zero
+    // count and echo the two refs the form above already carries.
     if (files.length === 0) {
       emptyEl.classList.remove('hidden');
       return;
     }
+    renderSummary(data);
     for (const file of files) {
       outputEl.appendChild(buildFileRow(params, file, token));
     }

@@ -466,6 +466,29 @@ test('a comparison writes its totals above the list and leaves the form status l
   assert.equal(elements.get('diff-output').children.length, 2);
 });
 
+test('an empty comparison states its outcome in the note and draws no totals', async () => {
+  const {elements} = loadDiffPage({
+    search: '?repo=/work/alpha&base=main&head=feature',
+    repos: [{label: 'alpha', path: '/work/alpha'}],
+    manifest: {
+      base: 'main',
+      head: 'feature',
+      mode: 'three-dot',
+      head_sha: 'abcdef0123456789',
+      total_files: 0,
+      total_additions: 0,
+      total_deletions: 0,
+      files: [],
+    },
+  });
+  await settle();
+
+  assert.equal(elements.get('empty').classList.contains('hidden'), false);
+  assert.equal(elements.get('summary').classList.contains('hidden'), true);
+  assert.deepEqual(elements.get('summary').children, []);
+  assert.equal(elements.get('diff-output').children.length, 0);
+});
+
 test('an unresolved ref reads in the form\'s words and keeps git\'s line as the title', async () => {
   const baseDetail = "fatal: ambiguous argument 'no-such-base^{commit}': unknown revision or path not in the "
     + "working tree. Use '--' to separate paths from revisions, like this: 'git <command> [<revision>...] -- "

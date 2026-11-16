@@ -234,6 +234,26 @@ test('the row control opens the archive confirmation, which names the session an
   assert.equal(context.document.getElementById('confirm-overlay'), null);
 });
 
+test('the touch row-menu Archive item opens the same confirmation', () => {
+  const context = buildContext({fetchImpl: okJson(), showToastImpl: () => {}});
+  let items;
+  context.Sidebar.sessionMenuItemSources = [];
+  context.registerSessionMenuItems = () => {};
+  context.openRowMenu = (_anchor, menuItems) => { items = menuItems; };
+  context.window = {matchMedia: () => ({matches: true})};
+  vm.runInContext(readStatic('sidebar/session-menus.js'), context, {filename: 'session-menus.js'});
+
+  context.Sidebar.openSessionRowMenu({dataset: {}}, 'leaf-1');
+  const archive = items.find((item) => item.label === 'Archive');
+  assert.ok(archive, 'the touch row menu has an Archive item');
+  archive.onSelect();
+
+  const overlay = context.document.getElementById('confirm-overlay');
+  assert.ok(overlay);
+  assert.match(overlay.innerHTML, /Leaf one/);
+  assert.deepEqual(context.fetchCalls, []);
+});
+
 test('the dialog escapes a session title that carries markup', async () => {
   const context = buildContext({fetchImpl: okJson(), showToastImpl: () => {}, rowName: 'Leaf <img src=x> & co'});
 

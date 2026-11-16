@@ -171,9 +171,14 @@ function confirmDeletePermanently(sessionId) {
 // Group move, rename and delete
 // ---------------------------------------------------------------------------
 const GROUP_MODAL_OVERLAY_ID = 'group-modal-overlay';
+let groupModalKeyHandler = null;
 
 function closeGroupModal() {
   document.getElementById(GROUP_MODAL_OVERLAY_ID)?.remove();
+  if (groupModalKeyHandler) {
+    document.removeEventListener('keydown', groupModalKeyHandler);
+    groupModalKeyHandler = null;
+  }
 }
 
 async function showGroupSelector(sessionId, currentGroup) {
@@ -263,16 +268,15 @@ async function showGroupSelector(sessionId, currentGroup) {
 
   // Close on overlay click
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay) closeGroupModal();
   });
-  // Close on Escape
-  const escHandler = (e) => {
-    if (e.key === 'Escape') {
-      closeGroupModal();
-      document.removeEventListener('keydown', escHandler);
-    }
+  // Close on Escape. The handler is a field rather than a local so that every close path, the backdrop and
+  // the dialog's own buttons included, unregisters it; a local would keep one listener per open until a
+  // later Escape press retires the whole pile.
+  groupModalKeyHandler = (e) => {
+    if (e.key === 'Escape') closeGroupModal();
   };
-  document.addEventListener('keydown', escHandler);
+  document.addEventListener('keydown', groupModalKeyHandler);
 
   document.body.appendChild(overlay);
   document.getElementById('new-group-input').focus();

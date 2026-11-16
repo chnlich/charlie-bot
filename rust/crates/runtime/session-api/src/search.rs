@@ -28,14 +28,14 @@ const SEARCH_MATCH_MEMO_LIMIT: usize = 8;
 /// without reading its file's signature.
 ///
 /// The repeat check is one `stat` per watched chat file: every active session's file while the answer is short of the
-/// cap, which is 7,160 reads and about 12 ms of CPU on the mock home for an answer of a few bytes. The fresh query's
+/// cap. That is 7,160 reads and about 12 ms of CPU on the mock home for an answer of a few bytes. The fresh query's
 /// index check is the same read per candidate file, and it is the route's dominant cost. A chat file that an
 /// out-of-band writer changes is seen within this interval either way, the same bound the store's listing memo puts on
 /// its own out-of-band edits.
 #[cfg(not(test))]
 const SEARCH_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
-/// A test changes a file behind the memo's back and expects the next query to see it, so tests read a signature on
-/// every query unless they name their own interval.
+/// A test changes a file behind the memo's back and expects the next query to see it. Tests therefore read a
+/// signature on every query, unless they name their own interval.
 #[cfg(test)]
 const SEARCH_SWEEP_INTERVAL: Duration = Duration::ZERO;
 const SEARCH_CHUNK_SIZE: usize = 1 << 18;
@@ -60,7 +60,7 @@ const CONTENT_NONE: u8 = u8::MAX;
 ///
 /// The trigram bitmap keeps the 26 letters alone, because a bitmap over these 64 symbols would take 32 KB per file.
 /// A bigram needs only 64 × 64 bits, so it covers the digits and symbols that a needle such as an identifier, a
-/// version number or a path holds, which no letter trigram can prove absent.
+/// version number or a path holds. No letter trigram can prove such a needle absent.
 const BIGRAM_SYMBOLS: &[u8; 64] = b"abcdefghijklmnopqrstuvwxyz0123456789 ._-/:,;()[]{}<>=\"'`|&#*@+%!";
 /// The files whose content indexes the memo keeps.
 ///
@@ -121,7 +121,7 @@ struct WatchedFile {
 
 /// The key a chat file's content index is stored under.
 ///
-/// The sweep looks every candidate's index up, so the key is the path's FNV-1a hash: an eight-byte key costs one
+/// The sweep looks every candidate's index up, so the key is the path's FNV-1a hash. An eight-byte key costs one
 /// hashbrown probe, where the path itself cost a hash of its bytes and a compare on every candidate. A hash is not
 /// unique, so an entry keeps the path it was built for, and a mismatched path answers as a missing index.
 fn path_key(path: &Path) -> u64 {
@@ -205,11 +205,11 @@ pub(crate) struct SearchMatch {
   /// The corpus the matched rows were taken from. A rebuilt listing answers a new `Arc`, so a pointer match names the
   /// same rows.
   corpus: Arc<Vec<Arc<SessionMetadata>>>,
-  /// The corpus's chat files, shared with the corpus work: a short result watches every candidate, so a copy of the
+  /// The corpus's chat files, shared with the corpus work. A short result watches every candidate, so a copy of the
   /// list would clone and later free 7,160 paths for each query the match memo keeps.
   candidates: Arc<Vec<WatchedFile>>,
-  /// The candidates a repeat query re-checks: every content candidate while the result is short of the cap, and only
-  /// the candidates at or above the last returned row's `updated_at` once the result reaches it.
+  /// The candidates a repeat query re-checks. Every content candidate is re-checked while the result is short of the
+  /// cap. Above the cap, only the candidates at or above the last returned row's `updated_at` are re-checked.
   watched: Vec<usize>,
   /// The signature each watched candidate was read at, in `watched` order.
   signatures: Vec<Option<FileSignature>>,
@@ -263,7 +263,7 @@ pub(crate) struct SearchAnswer {
 /// file.
 ///
 /// A fresh query tests the needle against every session name and checks the chat files of the active sessions that the
-/// capped answer can still take, and both sets depend only on the corpus. The store keeps a corpus until a metadata
+/// capped answer can still take. Both sets depend only on the corpus. The store keeps a corpus until a metadata
 /// write or the sweep interval rebuilds it, so the entry serves the queries between two rebuilds. `corpus` is the key
 /// and holds the rows it names alive, so a pointer match names the same sessions. `sessions_dir` is the directory the
 /// paths resolve below.
@@ -402,7 +402,7 @@ impl SearchMemos {
   /// `None` means the caller reads the file's signature before it asks [`Self::content_verdict`]. A fresh query reads
   /// one signature per candidate, which is the route's dominant cost: 7,160 path walks on the mock home, 85% of its
   /// CPU. The interval that already bounds how long a repeat query takes to see an out-of-band writer now bounds the
-  /// index's age too, so a query inside it answers from the indexes and a query after it re-reads the signatures.
+  /// index's age too. A query inside it answers from the indexes, and a query after it re-reads the signatures.
   ///
   /// `now` is read once per sweep, because the clock read costs more than the index test it guards.
   fn recent_absence(
@@ -468,12 +468,12 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 pub(crate) type RepeatAnswer = (Vec<Arc<SessionMetadata>>, Arc<Vec<u8>>);
 
 /// The rows and body a repeat of `query` over `corpus` already holds, when every check its memo makes holds without
-/// reading a file, and `None` when the answer needs a signature read or a scan.
+/// reading a file. `None` when the answer needs a signature read or a scan.
 ///
-/// The body this returns is the body a rebuild would render: the match it comes from passed the same corpus-identity
+/// The body this returns is the body a rebuild would render. The match it comes from passed the same corpus-identity
 /// and verification checks [`search_sessions`] makes before it answers a repeat from the memo. The rows come with it
-/// because a route that answers from a memo still counts its sidebar read, which is what starts the periodic sweep for
-/// an edit made outside the server. The route calls this on the request's own thread, because the blocking pool exists
+/// because a route that answers from a memo still counts its sidebar read. That read is what starts the periodic sweep
+/// for an edit made outside the server. The route calls this on the request's own thread. The blocking pool exists
 /// for the file reads a fresh query and a lapsed check need, and this path makes none.
 pub(crate) fn repeat_answer(
   query: &str,
@@ -577,13 +577,13 @@ fn search_sessions_with_limit(
   let mut scan_failures = 0;
 
   // The result keeps the newest `result_limit` matches, so the sweep reads candidates newest-first and stops
-  // once every unread candidate is older than the result's slot at rank `result_limit`: such a candidate cannot
+  // once every unread candidate is older than the result's slot at rank `result_limit`. Such a candidate cannot
   // enter the capped result, however its chat file reads. A common word matches most of the corpus, so this is the
   // difference between reading the corpus and reading the rows the answer can hold.
   //
-  // While the answer is short, the next window is sized to the candidates the matches so far say it still needs: a
-  // window that matches nothing means the answer sits far below it, so the rest of the corpus goes in one batch and
-  // pays no further signature round trip.
+  // While the answer is short, the next window is sized to the candidates the matches so far say it still needs. A
+  // window that matches nothing means the answer sits far below it. The rest of the corpus then goes in one batch
+  // and pays no further signature round trip.
   let mut processed = 0;
   let mut window = SWEEP_WINDOW_CANDIDATES;
   loop {
@@ -693,8 +693,8 @@ fn search_sessions_with_limit(
       }
     }
     // A file with no fresh content index gets one, and the same pass searches it, so the query reads it once. A file
-    // whose index rules the needle out leaves the scan batch here, while a file the index cannot rule out is searched
-    // by the pass itself and leaves it too.
+    // whose index rules the needle out leaves the scan batch here. A file the index cannot rule out is searched by
+    // the pass itself and leaves it too.
     if !unindexed.is_empty() {
       let answers = index_and_search_files(&work.candidates, &unindexed, &signatures, &needle);
       let mut indexed = HashSet::new();
@@ -808,11 +808,11 @@ fn search_sessions_with_limit(
 /// The signatures of the selected paths, in the selection's order.
 ///
 /// Each read is one `stat` and the answers do not depend on each other, so a batch reads on the signature pool's
-/// threads. The pool lives for the process: a repeat query re-checks one `stat` per watched file, 200 on the mock
+/// threads. The pool lives for the process. A repeat query re-checks one `stat` per watched file, 200 on the mock
 /// home, and starting that many threads costs more than the reads they share.
 ///
 /// When `sessions_dir` is open, a read resolves the file below it instead of walking the home's whole path to the
-/// session's `data` directory, which is most of the route's kernel time on a repeat query.
+/// session's `data` directory. That walk is most of the route's kernel time on a repeat query.
 fn file_signatures(
   paths: &Arc<Vec<WatchedFile>>,
   selection: &[usize],
@@ -1051,10 +1051,10 @@ fn needle_bigrams(needle: &str) -> Vec<usize> {
 /// The high-byte bigrams a needle holds: one for each adjacent pair of bytes at or above 0x80.
 ///
 /// Every multibyte character's UTF-8 bytes lie at or above 0x80, so a needle that holds one carries at least one of
-/// these pairs, and the trigram and bigram indexes cannot encode it.
+/// these pairs. The trigram and bigram indexes cannot encode it.
 ///
 /// Only a needle the raw-byte scan handles gets them. The index folds ASCII only, while any other needle is scanned
-/// with Unicode lowercase folding, and that fold can produce bytes the index never saw: U+0130 lowers to `i` and
+/// with Unicode lowercase folding, and that fold can produce bytes the index never saw. U+0130 lowers to `i` and
 /// U+0307, whose bytes an index built from a file that holds U+0130 lacks.
 fn needle_high_bigrams(needle: &str) -> Vec<usize> {
   if needle.is_ascii() || !uncased_alphanumeric(needle) {
@@ -1085,7 +1085,7 @@ fn high_bigram_number(first: u8, second: u8) -> Option<usize> {
 /// The bit position of two symbol codes, or None when a code is not a [`BIGRAM_SYMBOLS`] entry or both codes are
 /// letters.
 ///
-/// A pair of letters needs no bit: the trigram index already holds every letter sequence, and giving most positions a
+/// A pair of letters needs no bit. The trigram index already holds every letter sequence, and giving most positions a
 /// bigram would double the first query's indexing pass for evidence the next query does not need.
 fn bigram_number(first: u8, second: u8) -> Option<usize> {
   let symbols = BIGRAM_SYMBOLS.len() as u8;
@@ -1335,7 +1335,8 @@ fn size_balanced_bins(jobs: usize, size: impl Fn(usize) -> u64, workers: usize) 
 /// The scan answer of every job, in the jobs' order.
 ///
 /// A scan reads its file from the start offset to the end. The jobs touch different files, so a batch long
-/// enough to pay for them runs the jobs on their own threads, each holding one read buffer for every file it scans.
+/// enough to pay for them runs the jobs on their own threads. Each thread holds one read buffer for every file it
+/// scans.
 fn scan_contents(
   paths: &[WatchedFile],
   scans: &[(usize, u64)],
@@ -1686,7 +1687,7 @@ mod tests {
     );
   }
 
-  /// A query whose matching names fill the cap reads no chat file: the name hits already hold every slot of the
+  /// A query whose matching names fill the cap reads no chat file. The name hits already hold every slot of the
   /// answer, and the sweep stops before it reads a candidate older than the answer's last row.
   #[test]
   fn name_hits_that_fill_the_cap_read_no_chat_file() {
@@ -1719,7 +1720,7 @@ mod tests {
     assert_eq!(counters.scan_calls, 0, "no chat file was opened");
   }
 
-  /// Rows tied at the answer's last timestamp keep corpus order, so the cap drops the corpus-last of them: the cutoff
+  /// Rows tied at the answer's last timestamp keep corpus order, so the cap drops the corpus-last of them. The cutoff
   /// selection reorders `matched`'s timestamps, and only their values reach the stop test.
   #[test]
   fn rows_tied_at_the_answers_last_row_keep_corpus_order() {
@@ -1814,7 +1815,7 @@ mod tests {
   }
 
   /// The request-thread repeat answer serves a body only while the corpus the match was taken from, the file check
-  /// behind it and the derived-state generation all still hold: any one that moved sends the request to the blocking
+  /// behind it and the derived-state generation all still hold. Any one that moved sends the request to the blocking
   /// path, which reads the files the answer depends on.
   #[test]
   fn a_repeat_answer_serves_only_the_corpus_check_and_generation_its_body_holds_for() {
@@ -1896,8 +1897,8 @@ mod tests {
   }
 
   /// A repeat query inside [`super::SEARCH_SWEEP_INTERVAL`] answers from the match it shares, so it reads no chat
-  /// file's signature: the sweep is one `stat` per watched file, and every active session's file is watched while the
-  /// answer is short of the cap.
+  /// file's signature. The sweep is one `stat` per watched file, and every active session's file is watched while
+  /// the answer is short of the cap.
   #[test]
   fn a_repeat_query_inside_the_sweep_interval_reads_no_signature() {
     let home = tempfile::tempdir().unwrap();
@@ -1923,7 +1924,7 @@ mod tests {
   }
 
   /// A fresh query inside the sweep interval answers from the content indexes alone, and one at an exhausted interval
-  /// reads the signatures again: the index's age decides whether a file's signature is read.
+  /// reads the signatures again. The index's age decides whether a file's signature is read.
   #[test]
   fn a_fresh_query_inside_the_sweep_interval_reads_no_signature() {
     let home = tempfile::tempdir().unwrap();
@@ -1949,7 +1950,7 @@ mod tests {
     assert_eq!(memos.lock().unwrap().swept_candidates, 8, "an interval of zero reads every candidate's signature");
   }
 
-  /// A fresh query answers from the content index of a file whose identity it already holds: a trigram the index
+  /// A fresh query answers from the content index of a file whose identity it already holds. A trigram the index
   /// lacks proves the needle absent, while a needle the index cannot rule out still reaches the file.
   #[test]
   fn a_fresh_query_skips_a_file_whose_content_index_lacks_one_of_its_trigrams() {
@@ -2120,7 +2121,7 @@ mod tests {
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
   }
 
-  /// A needle Unicode lowering composes out of a cased character keeps the scan: U+0130 lowers to "i" and a
+  /// A needle Unicode lowering composes out of a cased character keeps the scan. U+0130 lowers to "i" and a
   /// combining dot, bytes an index built from the file's own U+0130 never saw.
   #[test]
   fn a_needle_folded_out_of_a_cased_character_reaches_the_file() {
@@ -2161,7 +2162,7 @@ mod tests {
     assert_eq!(memos.lock().unwrap().scan_calls, 2, "the index lets through a needle the file holds");
   }
 
-  /// A full result re-checks only the candidates at or above its last row: a new match in an older session cannot
+  /// A full result re-checks only the candidates at or above its last row. A new match in an older session cannot
   /// enter the capped result, while a new match in a newer candidate does.
   #[test]
   fn a_full_result_watches_only_candidates_at_or_above_its_last_row() {

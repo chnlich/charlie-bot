@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling};
-use charliebot_core::headers::CONTENT_TYPE;
 use charliebot_core::utc_datetime::UtcDateTime;
 use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
@@ -94,9 +93,9 @@ impl DevinQuotaAccount {
         "locale": "en"
       }
     });
+    // `.json` sets `Content-Type: application/json` when the request carries none.
     let response = client
       .post(format!("{}{}", credentials.api_server_url.trim_end_matches('/'), STATUS_URL_PATH))
-      .header(CONTENT_TYPE, "application/json")
       .header("Connect-Protocol-Version", "1")
       .json(&request)
       .send()

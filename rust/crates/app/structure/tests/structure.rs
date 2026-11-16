@@ -1241,6 +1241,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_tasks::routes::COLD_READ_SPEC_CLASS_NAME`.",
   },
   OwnerRow { name: "application/gzip", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow {
+    name: "application/json",
+    owner: "infra/compat",
+    hint: "Use `charliebot_compat::mimetypes_table::APPLICATION_JSON`; the JSON response helpers, the session and \
+           task routes' JSON bodies, and every client that sends a JSON body read it.",
+  },
   OwnerRow { name: "application/msword", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/pdf", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/vnd.ms-powerpoint", owner: "infra/compat", hint: MIME_HINT },

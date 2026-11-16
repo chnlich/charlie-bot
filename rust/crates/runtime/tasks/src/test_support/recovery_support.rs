@@ -26,6 +26,7 @@ use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::model_pool::RotationPositions;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CONFIG_FILENAME, CallClass, CallTarget, CallsConfig, CharlieBotConfig, PathsConfig,
   PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
@@ -1542,7 +1543,7 @@ pub async fn post_internal(
         .method("POST")
         .uri(path)
         .header(header::AUTHORIZATION, authorization)
-        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_TYPE, APPLICATION_JSON)
         .body(Body::from(serde_json::to_vec(&body)?))?,
     )
     .await?;

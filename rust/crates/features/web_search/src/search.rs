@@ -1,6 +1,7 @@
 //! The Google search call and its grounding sources: one `generateContent` request with the `google_search` tool,
 //! then one redirect resolution per grounding chunk.
 
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::credentials::{API_KEY_FIELD, Credentials};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
@@ -72,7 +73,7 @@ pub async fn search(
   });
   let response = client
     .post(&url)
-    .header(reqwest::header::CONTENT_TYPE, "application/json")
+    .header(reqwest::header::CONTENT_TYPE, APPLICATION_JSON)
     .header("x-goog-api-key", key)
     .body(serde_json::to_vec(&payload).expect("a JSON value serializes"))
     .send()

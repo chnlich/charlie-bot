@@ -24,17 +24,17 @@ pub struct Failure {
 
 /// The JSON response: compact separators, raw UTF-8.
 pub fn json(status: StatusCode, content: &Value) -> Response {
-  bytes_response(status, "application/json", Bytes::from(json::starlette_bytes(content)))
+  bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(json::starlette_bytes(content)))
 }
 
 /// The fast JSON response: `application/json` with the compact serializer's bytes.
 pub fn fast_json(status: StatusCode, content: &Value) -> Response {
-  bytes_response(status, "application/json", Bytes::from(json::fast_json_bytes(content)))
+  bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(json::fast_json_bytes(content)))
 }
 
 /// The fast JSON response over a body its route already serialized, so a rendered page skips the value tree.
 pub fn fast_json_rendered(status: StatusCode, body: Vec<u8>) -> Response {
-  bytes_response(status, "application/json", Bytes::from(body))
+  bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(body))
 }
 
 /// The error-status rendering: `{"detail": <reason phrase>}`.

@@ -546,6 +546,7 @@ dependencies = [
  "charliebot-charlie-code",
  "charliebot-claude-code",
  "charliebot-cli-common",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-cron",
  "charliebot-discord",

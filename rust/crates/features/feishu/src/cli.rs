@@ -1,4 +1,4 @@
-//! The `feishu` verbs. `reply` posts on a session's topic. Plain `read` reads that topic and marks unread messages;
+//! The `feishu` verbs. `reply` posts on a session's topic. Plain `read` reads that topic and marks unread messages.
 //! `--chat` and `--topic` read group messages without marking them. `download` saves a group image or file in the
 //! session directory. `check` prints setup status, and the user-token verbs manage user authorization.
 
@@ -34,7 +34,7 @@ enum FeishuCommand {
   Read(ReadArgs),
   /// One image or file from this session's group, downloaded into the session directory
   Download(DownloadArgs),
-  /// The Feishu app setup check; exits 1 when ok is false
+  /// The Feishu app setup check. Exits 1 when ok is false
   Check,
   /// One authenticated Feishu Open API request, sent as the user
   Request(RequestCommand),
@@ -58,7 +58,7 @@ struct ReadArgs {
   /// The next page of a main-chat or topic listing
   #[arg(long, value_name = "TOKEN")]
   page: Option<String>,
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
+  /// Session ID (optional). It is taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
   #[arg(long)]
   session: Option<String>,
 }
@@ -72,10 +72,10 @@ struct DownloadArgs {
   /// Whether the resource is an image or a file
   #[arg(long = "type", value_parser = ["image", "file"], value_name = "KIND")]
   kind: String,
-  /// Where to write the bytes; must resolve inside the session directory
+  /// Where to write the bytes. It must resolve inside the session directory
   #[arg(long)]
   output: String,
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
+  /// Session ID (optional). It is taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
   #[arg(long)]
   session: Option<String>,
 }
@@ -88,7 +88,7 @@ struct RequestCommand {
 
 #[derive(Args)]
 struct ConsentUrlArgs {
-  /// One granted scope; repeat or list several.
+  /// One granted scope. Repeat or list several.
   #[arg(long = "scope", required = true, num_args = 1.., value_name = "SCOPE")]
   scope: Vec<String>,
 }

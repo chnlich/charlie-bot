@@ -14,7 +14,7 @@ use http::{Method, StatusCode, header};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-/// The Open API's domain; every path below is relative to it.
+/// The Open API's domain. Every path below is relative to it.
 pub const BASE_URL: &str = "https://open.feishu.cn";
 const TENANT_TOKEN_PATH: &str = "/open-apis/auth/v3/tenant_access_token/internal";
 const ENDPOINT_PATH: &str = "/callback/ws/endpoint";

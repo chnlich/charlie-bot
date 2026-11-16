@@ -51,7 +51,7 @@ struct Connection {
 }
 
 /// The long-connection listener, which runs until the process stops it (`run_listener`). The bot's identity is read
-/// once for the service start; a missing bot capability stops the listener before it opens the long connection.
+/// once for the service start. A missing bot capability stops the listener before it opens the long connection.
 async fn run_listener(features: Arc<FeatureContext>) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(&features), BASE_URL);
   let client = bot.client()?;
@@ -91,7 +91,7 @@ fn bot_capability_off(error: &anyhow::Error) -> bool {
 }
 
 /// The reconnect loop the service start reaches once the bot identity is known. A connection that opens or drops
-/// retries with backoff from 1 s to 30 s; the identity itself is never read again.
+/// retries with backoff from 1 s to 30 s. The identity itself is never read again.
 async fn run_listener_loop(
   features: Arc<FeatureContext>,
   client: FeishuClient,
@@ -171,7 +171,7 @@ async fn run_connection(
   }
 }
 
-/// The handling of one binary frame: pongs and other control frames need nothing; an event is acknowledged, then
+/// The handling of one binary frame: pongs and other control frames need nothing. An event is acknowledged, then
 /// handled.
 async fn handle_frame(
   bytes: &[u8],

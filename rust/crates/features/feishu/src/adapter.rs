@@ -3,7 +3,7 @@
 //! with the bot's handle.
 //!
 //! A Feishu message id is `om_…` and carries no order, so the adapter names each message `<create_time ms>-<om_id>`.
-//! Only this module builds and splits that composite; the core orders it through `IdOrdering::TimeThenId`.
+//! Only this module builds and splits that composite. The core orders it through `IdOrdering::TimeThenId`.
 
 use std::sync::Arc;
 
@@ -33,7 +33,7 @@ use crate::thread_contract::FEISHU;
 
 /// The reaction the bot lights on a summon: Feishu's `OnIt` emoji, which means "received".
 pub const ACK_EMOJI: &str = "OnIt";
-/// The label prefix of a session created from a Feishu summon; the chat id follows it.
+/// The label prefix of a session created from a Feishu summon. The chat id follows it.
 const SESSION_LABEL: &str = "Feishu · ";
 
 /// The deterministic session id of the Feishu thread a summon names (`summon_session_id`). Its key is known before the
@@ -164,7 +164,7 @@ fn is_own_app_reaction(item: &Value, app_id: &str) -> bool {
 }
 
 /// One thread message from the message list: the composite id, the sender, the text, and the eligibility the follow
-/// and the readback share (`eligible_message`). Every non-deleted message from a human is eligible; the group's
+/// and the readback share (`eligible_message`). Every non-deleted message from a human is eligible. The group's
 /// admission is checked where the thread is read. The bot's own posts carry the app id as `bot_id`.
 pub fn thread_message(item: &Value) -> anyhow::Result<ThreadMessage> {
   let text_of = |object: &Value, name: &str| -> anyhow::Result<String> {

@@ -1,8 +1,8 @@
-Outcome: each round, find the work that passes both selection questions and that no session holds, and start each qualifying item in its own session under this task.
+Outcome: each round, find the user's own work that passes every selection question, and start each qualifying item in its own session under this task.
 
 Post one reply per round that states:
 - each session opened, the work it finished, and what waits on the user, each with a link;
-- one line with a link for each item that passes the first question but another session holds or someone else is assigned to;
+- one line with a link for each item that passes question 2 but another session holds or someone else is assigned to;
 - each source this round could not read.
 
 ### Sources
@@ -11,9 +11,10 @@ Find work sources through this instance's OKR skill, credentials, and memory. Ha
 
 ### Selection Questions
 
-An item qualifies only when both answers are yes:
-1. Does it move an active key result (KR) that this instance's `okr` skill lists, or does a week of waiting cost something (a deadline passes, or someone stays blocked)? An instance without an `okr` skill reports its goals as an unread source.
-2. Does nobody hold it? An open session holds its item; a session where the user stopped this item keeps holding it; an item assigned to another person is held by that person; an item that waits on the user's own answer does not count.
+An item qualifies only when every answer is yes:
+1. Is it the user's work? The user's work is an item assigned to the user, a request addressed to the user, or an unassigned item under a KR that the user owns.
+2. Does it move an active key result (KR) that this instance's `okr` skill lists, or does a week of waiting cost something (a deadline passes, or someone stays blocked)? An instance without an `okr` skill reports its goals as an unread source.
+3. Does nobody hold it? An open session holds its item; a session where the user stopped this item keeps holding it; an item that waits on the user's own answer does not count.
 An item an open session holds gets its one reply line and nothing else: send no message to that session and change nothing in it.
 
 ### Escalation

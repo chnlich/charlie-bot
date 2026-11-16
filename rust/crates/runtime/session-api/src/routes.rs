@@ -11,6 +11,7 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::get;
+use charliebot_compat::compression::accepts_gzip;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_compat::{responses, validation};
@@ -148,7 +149,7 @@ fn store_status_body(key: StatusKey, body: Arc<StatusBody>) {
 
 /// The response for one status body, compressed when the request accepts gzip.
 fn status_response(request: &Request<Body>, body: &StatusBody) -> Response {
-  let wants_gzip = accepts_gzip(request);
+  let wants_gzip = accepts_gzip(request.headers());
   json_bytes_response(body.bytes(wants_gzip), wants_gzip)
 }
 
@@ -671,11 +672,7 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
 /// headers the middleware would write: `Vary: Accept-Encoding` with the compressed body, and the plain response for
 /// a body below the middleware's minimum size.
 fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
-  let wants_gzip = request
-    .headers()
-    .get(header::ACCEPT_ENCODING)
-    .and_then(|value| value.to_str().ok())
-    .is_some_and(|value| value.contains("gzip"));
+  let wants_gzip = accepts_gzip(request.headers());
   if !wants_gzip || body.len() < TRANSPORT_GZIP_MINIMUM_SIZE {
     return responses::fast_json_rendered(StatusCode::OK, body);
   }
@@ -814,17 +811,8 @@ fn parse_session_ids(ids: &str) -> Vec<String> {
   api::parse_session_ids(ids)
 }
 
-/// Whether the request accepts a gzip response body.
-fn accepts_gzip(request: &Request<Body>) -> bool {
-  request
-    .headers()
-    .get(header::ACCEPT_ENCODING)
-    .and_then(|value| value.to_str().ok())
-    .is_some_and(|value| value.contains("gzip"))
-}
-
 fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
-  if !accepts_gzip(request) {
+  if !accepts_gzip(request.headers()) {
     return json_bytes_response(Bytes::from(body), false);
   }
   let compressed = {

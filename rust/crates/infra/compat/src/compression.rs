@@ -20,7 +20,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flate2::write::{DeflateEncoder, GzEncoder};
 use flate2::{Compress, Compression as DeflateLevel, Crc, FlushCompress, Status};
+use http::{HeaderMap, header};
 
+use crate::headers::header_text;
 use crate::mimetypes_table::{
   APPLICATION_GZIP, APPLICATION_MSWORD, APPLICATION_PDF, APPLICATION_VND_MS_POWERPOINT, APPLICATION_X_7Z_COMPRESSED,
   APPLICATION_ZIP, FONT_WOFF, IMAGE_GIF, IMAGE_HEIC, IMAGE_JPEG, IMAGE_PNG, IMAGE_VND_MICROSOFT_ICON, IMAGE_WEBP,
@@ -61,6 +63,14 @@ pub const SKIP_MEDIA_PREFIXES: &[&str] = &[
   FONT_WOFF,
   "application/font-woff",
 ];
+
+/// Whether the request's `Accept-Encoding` names gzip, so its response takes the gzip form of the body.
+///
+/// The first value is the one read, as [`header_text`] returns it. A request that names no coding, or names only
+/// another one, takes the plain body.
+pub fn accepts_gzip(headers: &HeaderMap) -> bool {
+  header_text(headers, &header::ACCEPT_ENCODING).contains("gzip")
+}
 
 /// The level-1 gzip form of *data*; deterministic for equal input, with the gzip header's mtime
 /// field zeroed.
@@ -241,6 +251,16 @@ mod tests {
   use std::io::Read;
 
   use super::*;
+
+  #[test]
+  fn a_request_takes_gzip_only_when_its_accept_encoding_names_it() {
+    let mut headers = HeaderMap::new();
+    assert!(!accepts_gzip(&headers), "a request naming no coding takes the plain body");
+    headers.insert(header::ACCEPT_ENCODING, "br, deflate".parse().unwrap());
+    assert!(!accepts_gzip(&headers), "another coding leaves the body plain");
+    headers.insert(header::ACCEPT_ENCODING, "gzip, deflate".parse().unwrap());
+    assert!(accepts_gzip(&headers), "a coding list that names gzip takes the gzip form");
+  }
 
   #[test]
   fn each_call_charges_its_input_bytes() {

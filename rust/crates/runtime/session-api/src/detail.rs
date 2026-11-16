@@ -13,7 +13,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
-use charliebot_compat::compression::gzip_level_one;
+use charliebot_compat::compression::{accepts_gzip, gzip_level_one};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
@@ -520,9 +520,9 @@ async fn session_bootstrap(
   };
   let store = Arc::clone(&features.store);
   let registry = Arc::clone(&features.registry);
-  let accepts_gzip = request_wants_gzip(&request);
+  let wants_gzip = accepts_gzip(request.headers());
   let result = tokio::task::spawn_blocking(move || {
-    bootstrap_body(&BOOTSTRAP_BODY_MEMO, &store, &registry, &cfg, &meta, accepts_gzip)
+    bootstrap_body(&BOOTSTRAP_BODY_MEMO, &store, &registry, &cfg, &meta, wants_gzip)
   })
   .await;
   match result {
@@ -779,7 +779,7 @@ async fn events_jsonl(
   };
   if let Some(tail) = tail {
     let size = metadata.size();
-    let wants_gzip = request_wants_gzip(&request);
+    let wants_gzip = accepts_gzip(request.headers());
     let result = tokio::task::spawn_blocking(move || {
       let (body, start) = events_window(&path, size, tail, before)?;
       let gzip = wants_gzip.then(|| Bytes::from(gzip_level_one(&body)));
@@ -792,7 +792,7 @@ async fn events_jsonl(
       Err(error) => store_error(StoreError::new(error.to_string())),
     };
   }
-  if !request_wants_gzip(&request) {
+  if !accepts_gzip(request.headers()) {
     return static_files::serve_file(&path, "application/x-ndjson", request.method(), request.headers());
   }
   let result = tokio::task::spawn_blocking(move || gzip_file(&path, metadata)).await;
@@ -1176,14 +1176,6 @@ fn events_gzip_response(body: Bytes) -> Response {
     .header(header::VARY, ACCEPT_ENCODING)
     .body(Body::from(body))
     .expect("a compressed events response builds")
-}
-
-fn request_wants_gzip(request: &Request<Body>) -> bool {
-  request
-    .headers()
-    .get(header::ACCEPT_ENCODING)
-    .and_then(|value| value.to_str().ok())
-    .is_some_and(|value| value.contains("gzip"))
 }
 
 fn to_index(value: i64) -> usize {

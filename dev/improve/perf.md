@@ -44,6 +44,12 @@ Both sides use one release profile on one machine, so the change under test is t
 For a change to web files only, build one server from `origin/main` and start it twice, once per tree.
 The server binary then stays equal, so the web files are the only difference.
 
+When the round adds or changes Rust unit tests, run the unit-test-time check with `--alone-limit 0.08` for every
+crate whose unit tests it changed before opening the pull request.
+Keep each new or changed test's worst alone time below 0.08 s.
+Put each test's worst alone time in the pull request body.
+Shrink or move any test over 0.08 s before opening the pull request.
+
 ## Serving
 
 Start each side with `scripts/release/trial.sh --serve --tree-root /tmp/improve-perf/ --seed-home <mock home directory> --in-caller-scope <commit> <server binary> -- <command>`.

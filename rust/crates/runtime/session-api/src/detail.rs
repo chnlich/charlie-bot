@@ -53,8 +53,8 @@ const EVENTS_WINDOW_CHUNK: u64 = 64 * 1024;
 
 /// The compressed body of an events file, keyed by its path and `(mtime, size)`.
 ///
-/// The value is a [`Bytes`] handle, so a hit shares the one stored buffer through a refcount bump;
-/// the largest production log holds about 18 MB of compressed bytes.
+/// The value is a [`Bytes`] handle, so a hit shares the one stored buffer through a refcount bump.
+/// The largest production log holds about 18 MB of compressed bytes.
 type FileGzipMemo = Mutex<LruCache<(PathBuf, i64, u64), Bytes>>;
 
 static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
@@ -172,7 +172,7 @@ pub fn build_bootstrap_payload(
   };
   // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes).
   // A step therefore keeps every kept turn whole and never cuts the newest turn. A worker's projection branch
-  // reads the projection's separator ordinals, which are history ordinals; every other session reads the events
+  // reads the projection's separator ordinals, which are history ordinals. Every other session reads the events
   // behind the fold's turn separators (master_done, run_end).
   let next_drop = |drop: usize| -> Option<usize> {
     match &tail {
@@ -1013,7 +1013,7 @@ fn active_backend_payload(
     switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));
     switchable
   };
-  // The pickers list only the config's visible entries; the session's own active entry stays exempt, so the
+  // The pickers list only the config's visible entries. The session's own active entry stays exempt, so the
   // header menu still shows it as the current value.
   let switchable: Vec<String> =
     switchable.into_iter().filter(|id| id == &active_backend || cfg.backends.picker_visible(id)).collect();
@@ -1470,7 +1470,7 @@ backends:
         backend["switchable_backends"]
       );
       if menu_lists {
-        // An allowed switch moved the node; put it back, so the next id judges against `twin-a` again.
+        // An allowed switch moved the node. Put it back, so the next id judges against `twin-a` again.
         let (headers, body) = json_request(json!({"backend": "twin-a"}));
         let (status, detail) = answer(
           crate::write_routes::switch_backend(State(Arc::clone(&features)), AxumPath(node.id.clone()), headers, body)

@@ -225,7 +225,7 @@ fn metadata_signature(metadata: &fs::Metadata) -> Value {
   json!([timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size()])
 }
 
-/// One run's events.jsonl parsed into the compact form; a missing or unreadable log is an empty segment.
+/// One run's events.jsonl parsed into the compact form. A missing or unreadable log is an empty segment.
 fn read_run_events(store: &Store, path: &Path) -> Vec<ChatEvent> {
   match store_read(store, path) {
     Ok(events) => events,

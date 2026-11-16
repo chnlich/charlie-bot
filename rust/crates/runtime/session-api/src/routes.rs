@@ -413,7 +413,7 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
 /// The sidebar's status poll: the rows of one filter, plus any further sessions the page names, answered as the rows
 /// whose state moved since the page's last answer.
 ///
-/// A `since` token names the state the page holds; without one, or with a token this process did not publish, the
+/// A `since` token names the state the page holds. Without one, or with a token this process did not publish, the
 /// answer carries every row. `answer=ids` names the rows the request's `ids` carry and leaves the filter to name the
 /// set membership follows, so a page that paints its first screen downloads the rows it paints. The answer is
 /// `{"token": <state>, "rows": {<id>: <state>}, "gone": [<id>, ...]}`: the token to send back, the rows that moved,
@@ -429,7 +429,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   // open chat. A view the registry does not know is refused rather than answered with an empty set. The filter's own
   // set is kept apart: membership follows it alone, since two pages on one filter name different extra sessions.
   //
-  // `all` is the Workspace's page, whose memoized derived overlay names the row corpus; every other filter names its
+  // `all` is the Workspace's page, whose memoized derived overlay names the row corpus. Every other filter names its
   // own rows. The key holds that overlay instead of 7,160 ids, so a repeat poll leaves the ids unbuilt.
   let extra = raw_ids.map(parse_session_ids).unwrap_or_default();
   let force = match query.parse_bool("force", false) {
@@ -534,7 +534,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     }
     return status_response(request, &body);
   }
-  // A named answer carries the request's rows; the filter's set still rides for membership alone, so a row that
+  // A named answer carries the request's rows. The filter's set still rides for membership alone, so a row that
   // leaves the filter is reported gone. Any other answer carries the whole set.
   let (requested, members) = if answer == StatusAnswer::Named {
     let members = match &key {
@@ -730,7 +730,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
     Ok(result) => result,
     Err(error) => return store_error(error),
   };
-  // A repeat query holds the rows and their file signatures; while the derived state still sits at the generation the
+  // A repeat query holds the rows and their file signatures. While the derived state still sits at the generation the
   // body was rendered under, that body is the body a rebuild would render.
   if let Some(source) = &answer.source
     && let Some(body) = source.body(generation)

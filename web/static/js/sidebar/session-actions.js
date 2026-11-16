@@ -171,9 +171,14 @@ function confirmDeletePermanently(sessionId) {
 // Group move, rename and delete
 // ---------------------------------------------------------------------------
 const GROUP_MODAL_OVERLAY_ID = 'group-modal-overlay';
+let groupModalKeyHandler = null;
 
 function closeGroupModal() {
   document.getElementById(GROUP_MODAL_OVERLAY_ID)?.remove();
+  if (groupModalKeyHandler) {
+    document.removeEventListener('keydown', groupModalKeyHandler);
+    groupModalKeyHandler = null;
+  }
 }
 
 async function showGroupSelector(sessionId, currentGroup) {
@@ -203,6 +208,10 @@ async function showGroupSelector(sessionId, currentGroup) {
 
   // The Remove group row keeps the group rows' slate-300 label: slate-400 reads 4.04:1 on the
   // row's slate-700 fill, under the 4.5:1 floor for its 14px text; slate-300 reads 6.97:1.
+  // The dialog's close button carries close_button.html's modal-close-btn class: that macro's rule gives a
+  // phone's close control its 44 px box, and index.html calls the macro, so the rule is already on this page.
+  // Without a visible control the dialog's only exits are the backdrop and the Escape key, and a phone has no
+  // Escape key.
   overlay.innerHTML = `
     <style>
       /* The New group name field draws its boundary at the 3:1 control floor on its slate-700 fill:
@@ -214,7 +223,13 @@ async function showGroupSelector(sessionId, currentGroup) {
     </style>
     <div class="${MODAL_DIALOG_CLASS}"
          onclick="event.stopPropagation()">
-      <p class="text-sm text-slate-300 mb-3 font-semibold">Set Group</p>
+      <div class="flex items-center justify-between gap-2 mb-3">
+        <p class="text-sm text-slate-300 font-semibold">Set Group</p>
+        <button id="group-modal-close" type="button" title="Close"
+                class="text-slate-500 hover:text-slate-300 p-1 modal-close-btn">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
       <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">
         ${currentGroup ? `<button data-group="" class="w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-red-600/20 hover:text-red-300 text-slate-300 transition-colors">Remove group</button>` : ''}
         ${groupButtons}
@@ -235,6 +250,8 @@ async function showGroupSelector(sessionId, currentGroup) {
     });
   });
 
+  overlay.querySelector('#group-modal-close').addEventListener('click', closeGroupModal);
+
   // Handle new group
   const addNewGroup = () => {
     const input = document.getElementById('new-group-input');
@@ -251,16 +268,15 @@ async function showGroupSelector(sessionId, currentGroup) {
 
   // Close on overlay click
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay) closeGroupModal();
   });
-  // Close on Escape
-  const escHandler = (e) => {
-    if (e.key === 'Escape') {
-      closeGroupModal();
-      document.removeEventListener('keydown', escHandler);
-    }
+  // Close on Escape. The handler is a field rather than a local so that every close path, the backdrop and
+  // the dialog's own buttons included, unregisters it; a local would keep one listener per open until a
+  // later Escape press retires the whole pile.
+  groupModalKeyHandler = (e) => {
+    if (e.key === 'Escape') closeGroupModal();
   };
-  document.addEventListener('keydown', escHandler);
+  document.addEventListener('keydown', groupModalKeyHandler);
 
   document.body.appendChild(overlay);
   document.getElementById('new-group-input').focus();

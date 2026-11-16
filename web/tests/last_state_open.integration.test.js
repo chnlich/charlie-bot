@@ -208,6 +208,37 @@ test('a boot with no embedded first screen requests it at once, then reads after
   assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read?page_dot=false']);
 });
 
+test('a shell list copy waits for the first screen before starting its refresh', async () => {
+  const {h, page} = buildOpenHarness();
+  h.context.SESSION_ID = null;
+  h.context.location.search = '?session=session-b';
+  let currentEvents = 0;
+  h.context.document.addEventListener('charliebot:page-current', () => { currentEvents += 1; });
+
+  dispatchPage(h, 'charliebot:stored-list');
+
+  assert.equal(requestsTo(page, STARRED_URL).length, 0, 'no list refresh precedes the first screen');
+  assert.deepEqual(markOf(h), {shown: true, state: 'not-current'});
+
+  const opening = h.context.openSession('session-b', null);
+  await flush();
+  lastRequestTo(page, '/bootstrap').respond(bootstrapPayload('session-b', 0, false), {stored: true});
+  await opening;
+
+  assert.equal(requestsTo(page, STARRED_URL).length, 1, 'the first screen starts one list refresh');
+  assert.deepEqual(page.readPosts, [], 'the read waits for both catch-up parts');
+  h.context.onSocketCatchupComplete(6);
+  await flush();
+  assert.equal(currentEvents, 0, 'the page is not current while the list refresh is pending');
+
+  lastRequestTo(page, STARRED_URL).respond([makeSessionMeta('session-b')]);
+  await flush();
+
+  assert.equal(currentEvents, 1);
+  assert.deepEqual(markOf(h), {shown: false, state: null});
+  assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read?page_dot=false']);
+});
+
 test('an offline open with no stored copy names the missing copy in the placeholder', async () => {
   const {h, page} = buildOpenHarness();
   h.context.navigator = {userAgent: 'TestAgent/1.0', onLine: false};

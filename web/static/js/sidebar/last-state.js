@@ -23,6 +23,7 @@ const LIST_REFRESH_RETRY_BASE_MS = 1000;
 const LIST_REFRESH_RETRY_MAX_MS = 30000;
 
 let catchUp = null;
+let storedListPending = false;
 
 // The source of the content the page's first open painted: 'stored' for a copy, 'network' otherwise. page_load
 // reports it as content_source; null until the page opens a session.
@@ -59,6 +60,9 @@ function listStillPending(sessionId) {
 // the list state it inherits and starts no second refresh, since the first one still runs.
 function beginCatchUp({sessionId, storedPosition, copyBytes, listPending, readDot}) {
   if (firstOpenSource === null) firstOpenSource = copyBytes !== null ? 'stored' : 'network';
+  const refreshList = storedListPending || (copyBytes !== null && listPending);
+  listPending = listPending || storedListPending;
+  storedListPending = false;
   catchUp = {
     sessionId,
     storedPosition,
@@ -69,12 +73,19 @@ function beginCatchUp({sessionId, storedPosition, copyBytes, listPending, readDo
     readDot,
   };
   setNotCurrent(copyBytes !== null || listPending);
-  if (copyBytes !== null && listPending) requestListRefresh(sessionId, 0);
+  if (refreshList) requestListRefresh(sessionId, 0);
 }
 
 // A sidebar list answer came from a copy: its rows carry the mark until a list refresh succeeds.
 function noteStoredList() {
   if (catchUp === null) {
+    const requestedSession = new URLSearchParams(location.search).get('session');
+    if (SESSION_ID === null && requestedSession) {
+      // The shell has not opened this session yet; keep its stored-list refresh with that open's catch-up.
+      storedListPending = true;
+      setNotCurrent(true);
+      return;
+    }
     catchUp = {
       sessionId: SESSION_ID,
       storedPosition: null,

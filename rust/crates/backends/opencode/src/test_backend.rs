@@ -1644,7 +1644,7 @@ async fn concurrent_turns_share_one_server_process() {
 #[ignore = "integration"]
 #[tokio::test]
 async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
-  // The held turn's text event marks its relay as streaming: the relay forwards events only from its main loop, and
+  // The held turn's text event marks its relay as streaming. The relay forwards events only from its main loop, and
   // a signal that lands before that is recorded as a failure instead of an interrupt.
   let harness = Harness::new(json!({"prompts": {
     "held": {"events": [text_event("held running")], "hold": true},

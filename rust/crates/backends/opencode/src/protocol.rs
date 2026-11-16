@@ -1,6 +1,6 @@
-//! The OpenCode event stream's protocol: the event types this crate reads and writes, and the environment variables
-//! that point the opencode child at its directories and configuration and that name a relay's connection record and
-//! identity.
+//! The OpenCode event stream's protocol: the event types this crate reads and writes.
+//! It also names the environment variables that point the opencode child at its directories and configuration.
+//! Other variables carry the relay's own directory, its connection-record directory, and its parent's identity.
 //!
 //! The backend translates the stream, the server dispatches it, the relay records it, and the test harness reads the
 //! child's environment. One module owns the names, so a change reaches all four.

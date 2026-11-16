@@ -1,5 +1,6 @@
 {% include 'partials/prologue.html' %}
-{% if probe_running %}<meta http-equiv="refresh" content="3">{% endif %}
+{% set refreshing = probe_running or any_live %}
+{% if probe_running %}<meta http-equiv="refresh" content="3">{% elif any_live %}<meta http-equiv="refresh" content="5">{% endif %}
 <title>Host login authorization</title>
 <style>
   {% include 'partials/standalone_base_styles.html' %}
@@ -56,18 +57,15 @@
   .next { margin-top:5px; font-size:12.5px; color:var(--tx) }
   .next form { margin:8px 0 0 }
   .cap { color:var(--mut); font-size:12.5px; max-width:86ch; margin:12px 0 0 }
-  /* The Browser logins sentence leads into the summary panel, so it keeps the page's 16 px block
-     gap below it. The other .cap paragraphs caption the block above them and take a top margin only. */
-  .cap.lead { margin:12px 0 16px }
-  /* The Browser logins link is the sentence's only pointer target, and its 14 px text box is under
-     the page's 24 px floor. Vertical padding on an inline box grows the hit area to 24 px without
-     moving the line box, so every other box keeps its position. The link takes the page's accent, as
-     the approvals day nav and the recordings session links do: an unstyled link paints the browser's
-     own tones instead, rgb(0, 0, 238) in the light theme and rgb(158, 158, 255) in the dark one, and
-     the visited tone is the browser's too. The UA underline stays, so the link is marked by more than
-     its colour; --acc draws 5.38:1 on the light page and 7.53:1 on the dark one, above the 4.5:1
-     floor for this 12.5 px text. */
-  .cap a { color:var(--acc); padding:5px 0 }
+  /* A browser login is one card: its label, its state, its start control. The card is the page's block,
+     so it takes the same panel, border and radius as the summary bar. */
+  .login { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px }
+  .login h3 { margin:0 0 10px; font-size:15px }
+  .login .state { font-size:13px; margin:0 0 10px }
+  .login form { margin:8px 0 0 }
+  .k { color:var(--mut); font-size:11.5px; font-weight:620; text-transform:uppercase; letter-spacing:.4px }
+  pre { font-family:var(--mono); font-size:11.5px; color:var(--mut); white-space:pre-wrap; word-break:break-all;
+    margin:6px 0 0 }
   .legend { display:flex; flex-wrap:wrap; gap:18px; margin:14px 0 0; font-size:12.5px; color:var(--mut) }
   .legend .k { display:inline-flex; align-items:center; gap:7px }
   /* At 390 px each host takes a card, its cells stacked under their column label, as the recordings
@@ -98,8 +96,6 @@
   <span>probe every &middot; {{ interval_label }} ({{ backoff_label }} once blocked)</span> &middot;
   <span>trust cache lifetime &middot; {{ ttl_label }}</span> &middot;
   <span>remote writes &middot; none</span></p>
-  <p class="cap lead"><a href="/host-auth/logins">Browser logins</a>: start a login with one click, when its code can be approved.</p>
-
   <div class="bar">
     <div class="line">
       {%- if summary.blocked %}Blocked now: <span class="hot">{{ summary.blocked|join(", ") }}</span>. {% endif -%}
@@ -193,6 +189,67 @@
   {% else %}
   <p class="cap">No host is listed yet: the first probe round has not completed, or the ssh config names none.</p>
   {% endif %}
+
+  <h2>Browser logins</h2>
+  <p class="cap">Each login starts with one click, when its code can be approved. Each card reads its own status back, so
+  a slow login leaves the others filled in.</p>
+  {% for login in logins %}
+  <section class="login">
+    <h3>{{ login.label }}</h3>
+    {% if login.live %}
+    <div class="state">
+      <div class="k">In progress &middot; {{ login.live.phase }}</div>
+      <div>User code <code>{{ login.live.user_code or "not in the link" }}</code></div>
+      <div>Approval link
+        {% if login.live.approval_url %}<a href="{{ login.live.approval_url }}" target="_blank" rel="noopener">{{ login.live.approval_url }}</a>{% else %}not printed yet{% endif %}</div>
+      <div class="at">Started {{ login.live.started_at }}</div>
+    </div>
+    {% else %}
+    <div class="state"{% if not refreshing %} data-readback-url="/api/host-auth/logins/{{ login.name }}/readback"{% endif %}>
+      <div class="none">{% if refreshing %}Reads back when the running probe or login finishes.{% else %}Reading back…{% endif %}</div>
+    </div>
+    {% endif %}
+    {% if login.last %}
+    <div class="state">
+      <div class="k">Last attempt &middot; {{ login.last.outcome }}</div>
+      <div class="at">Finished {{ login.last.finished_at }}</div>
+      {% if login.last.last_line %}<pre>{{ login.last.last_line }}</pre>{% endif %}
+      {% if login.last.readback_output is not none %}<pre>{{ login.last.readback_output }}</pre>{% endif %}
+    </div>
+    {% endif %}
+    <form method="post" action="/api/host-auth/logins/{{ login.name }}/start" target="_blank">
+      <button class="btn" type="submit">Start login</button>
+    </form>
+  </section>
+  {% else %}
+  <p class="cap">No browser logins are configured. Add entries under <code>host_auth.browser_logins</code> in config.yaml.</p>
+  {% endfor %}
 </div>
+<script>
+  for (const form of document.querySelectorAll('form[target="_blank"]')) {
+    form.addEventListener("submit", () => setTimeout(() => location.reload(), 2000));
+  }
+  // Each card fills from its own readback, so one slow login does not hold up another card.
+  for (const slot of document.querySelectorAll("[data-readback-url]")) {
+    const show = (head, text) => {
+      const label = document.createElement("div");
+      label.className = "k";
+      label.textContent = head;
+      const output = document.createElement("pre");
+      output.textContent = text;
+      slot.replaceChildren(label, output);
+    };
+    fetch(slot.dataset.readbackUrl, { headers: { accept: "application/json" } })
+      .then(async (response) => {
+        if (!response.ok) {
+          const body = await response.json().catch(() => null);
+          throw new Error(body?.detail ?? `HTTP ${response.status}`);
+        }
+        const body = await response.json();
+        show(body.exit === null ? "Not logged in" : `Exit ${body.exit}`, body.output);
+      })
+      .catch((error) => show("Readback failed", error.message));
+  }
+</script>
 </body>
 </html>

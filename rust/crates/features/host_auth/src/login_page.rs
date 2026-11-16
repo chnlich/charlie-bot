@@ -1,50 +1,44 @@
-//! The browser-login page's template context: one row per configured login, built from the attempt in progress
-//! or the last attempt that ended.
-
-use std::collections::HashMap;
+//! The browser-login section of the host-auth page: one row per configured login, built from the attempt in progress or
+//! the last attempt that ended. A login's readback is not in the page; the browser asks for it per login.
 
 use anyhow::Context;
 use serde_json::{Value, json};
 
-use crate::browser_login::{AttemptSnapshot, Outcome, READBACK_SHOWN_CHARS};
+use crate::browser_login::{self, AttemptSnapshot, Outcome, READBACK_SHOWN_CHARS, Readback};
 use crate::config::BrowserLoginConfig;
 use crate::timestamps::{self, LocalFormat};
 
-/// The template context of `browser_logins_page`: one row per login, and whether any attempt is in progress.
-pub fn context(logins: &[BrowserLoginConfig], readbacks: &HashMap<String, (i32, String)>) -> anyhow::Result<Value> {
-  let rows = logins
+/// One row per login: its attempt in progress, else its last ended attempt.
+pub fn rows(logins: &[BrowserLoginConfig]) -> anyhow::Result<Vec<Value>> {
+  logins
     .iter()
-    .map(|login| {
-      row(
-        login,
-        crate::browser_login::live_attempt(&login.name),
-        crate::browser_login::last_attempt(&login.name),
-        readbacks.get(&login.name),
-      )
-    })
-    .collect::<anyhow::Result<Vec<_>>>()?;
-  Ok(json!({
-    "logins": rows,
-    "any_live": rows.iter().any(|row| !row["live"].is_null()),
-  }))
+    .map(|login| row(login, browser_login::live_attempt(&login.name), browser_login::last_attempt(&login.name)))
+    .collect()
 }
 
-/// One row per login: its attempt in progress, else its last ended attempt and this load's readback.
-/// A login that went live while this load's readback ran shows no readback.
 fn row(
   login: &BrowserLoginConfig,
   live: Option<AttemptSnapshot>,
   last: Option<AttemptSnapshot>,
-  readback: Option<&(i32, String)>,
 ) -> anyhow::Result<Value> {
-  let readback = if live.is_some() { None } else { readback };
   Ok(json!({
     "name": login.name,
     "label": login.label,
     "live": match live { Some(attempt) => live_view(attempt)?, None => Value::Null },
     "last": match last { Some(attempt) => last_view(attempt)?, None => Value::Null },
-    "readback": match readback { Some(result) => readback_view(result), None => Value::Null },
   }))
+}
+
+/// The readback as the per-login route answers it. `exit` is null when the timeout ended the readback, and the output
+/// then names the timeout. Otherwise the output is trimmed to the characters the page shows.
+pub fn readback_json(readback: Readback) -> Value {
+  match readback {
+    Readback::Exited { code, output } => {
+      let shown: String = output.trim().chars().take(READBACK_SHOWN_CHARS).collect();
+      json!({ "exit": code, "output": shown })
+    }
+    Readback::TimedOut { after_sec } => json!({ "exit": null, "output": browser_login::timeout_text(after_sec) }),
+  }
 }
 
 /// The attempt in progress as the template reads it.
@@ -68,12 +62,6 @@ fn last_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
     "readback_exit": if shows_readback { json!(attempt.readback_exit) } else { Value::Null },
     "readback_output": if shows_readback { json!(attempt.readback_output.trim()) } else { Value::Null },
   }))
-}
-
-/// The page-load readback, trimmed to the characters the page shows.
-fn readback_view(result: &(i32, String)) -> Value {
-  let shown: String = result.1.trim().chars().take(READBACK_SHOWN_CHARS).collect();
-  json!({ "exit": result.0, "output": shown })
 }
 
 /// The stored instant in the server's own zone, or `None` when absent.
@@ -114,48 +102,39 @@ mod tests {
 
   #[test]
   fn a_live_row_carries_the_phase_the_code_and_the_link() {
-    let row = row(&login(), Some(snapshot(None)), None, None).expect("the row builds");
+    let row = row(&login(), Some(snapshot(None)), None).expect("the row builds");
     assert_eq!(row["name"], json!("aws-sso"));
     assert_eq!(row["live"]["phase"], json!("waiting for approval"));
     assert_eq!(row["live"]["user_code"], json!("7f3c9d21"));
     assert_eq!(row["live"]["approval_url"], json!("https://device.sso.us-east-1.amazonaws.com/?user_code=7f3c9d21"));
     assert_eq!(row["last"], Value::Null);
-    assert_eq!(row["readback"], Value::Null);
-    assert!(!row["live"].is_null(), "a row with an attempt in progress marks the page as live");
   }
 
   #[test]
   fn a_ended_row_shows_its_readback_only_when_one_ran() {
-    let approved = row(&login(), None, Some(snapshot(Some(Outcome::Approved))), None).expect("the row builds");
+    let approved = row(&login(), None, Some(snapshot(Some(Outcome::Approved)))).expect("the row builds");
     assert_eq!(approved["last"]["outcome"], json!("approved"));
     assert_eq!(approved["last"]["readback_exit"], json!(0));
     assert_eq!(approved["last"]["readback_output"], json!("valid"));
-    let login_failed = row(&login(), None, Some(snapshot(Some(Outcome::LoginFailed))), None).expect("the row builds");
+    let login_failed = row(&login(), None, Some(snapshot(Some(Outcome::LoginFailed)))).expect("the row builds");
     assert_eq!(login_failed["last"]["readback_exit"], Value::Null);
     assert_eq!(login_failed["last"]["readback_output"], Value::Null);
     assert_eq!(login_failed["live"], Value::Null);
     let record_failed =
-      row(&login(), None, Some(snapshot(Some(Outcome::RenewalRecordFailed))), None).expect("the row builds");
+      row(&login(), None, Some(snapshot(Some(Outcome::RenewalRecordFailed)))).expect("the row builds");
     assert_eq!(record_failed["last"]["readback_exit"], json!(0));
     assert_eq!(record_failed["last"]["readback_output"], json!("valid"));
   }
 
   #[test]
-  fn a_login_that_went_live_during_the_readback_shows_no_readback() {
-    let readback = (0, "valid\n".to_string());
-    let row = row(&login(), Some(snapshot(None)), None, Some(&readback)).expect("the row builds");
-    assert!(!row["live"].is_null(), "the attempt in progress shows");
-    assert_eq!(row["readback"], Value::Null, "a live login shows no page-load readback");
-  }
-
-  #[test]
-  fn an_idle_row_carries_the_page_load_readback_cut_to_its_shown_characters() {
+  fn a_readback_answers_its_exit_and_its_shown_characters_or_a_null_exit_on_timeout() {
     let long_output = "x".repeat(READBACK_SHOWN_CHARS + 40);
-    let readbacks = HashMap::from([("aws-sso".to_string(), (0, format!("{long_output}\n")))]);
-    let context = context(&[login()], &readbacks).expect("the context builds");
-    assert_eq!(context["any_live"], json!(false));
-    assert_eq!(context["logins"][0]["readback"]["exit"], json!(0));
-    let shown = context["logins"][0]["readback"]["output"].as_str().expect("the output shows");
-    assert_eq!(shown.len(), READBACK_SHOWN_CHARS);
+    let exited = readback_json(Readback::Exited { code: 0, output: format!("{long_output}\n") });
+    assert_eq!(exited["exit"], json!(0));
+    assert_eq!(exited["output"].as_str().expect("the output shows").len(), READBACK_SHOWN_CHARS);
+
+    let timed_out = readback_json(Readback::TimedOut { after_sec: 20 });
+    assert_eq!(timed_out["exit"], Value::Null, "a timed-out readback has no exit");
+    assert_eq!(timed_out["output"], json!(browser_login::timeout_text(20)));
   }
 }

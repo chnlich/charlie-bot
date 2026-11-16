@@ -1,0 +1,138 @@
+//! A readback's process tree: the process group its root leads, and the descendants that left that group. A readback that
+//! its timeout ends takes the whole tree with it.
+
+use std::collections::HashMap;
+use std::fs;
+use std::io;
+
+/// SIGKILL to the process group `root` leads, then to every descendant of `root` that left the group.
+///
+/// `root` must lead its own process group, as `spawn` makes it. The descendants are listed from `/proc` before any signal
+/// goes out, because a killed parent hands its children to another process. A target already gone is not an error.
+pub fn kill_tree(root: u32) -> io::Result<()> {
+  let members = descendants(root);
+  send_sigkill(root as libc::pid_t, true)?;
+  for pid in members? {
+    send_sigkill(pid as libc::pid_t, false)?;
+  }
+  Ok(())
+}
+
+/// SIGKILL to the process group `target` when `group`, else to the process `target`.
+fn send_sigkill(target: libc::pid_t, group: bool) -> io::Result<()> {
+  // SAFETY: kill and killpg send one signal; they touch only the kernel's process table.
+  let sent = unsafe { if group { libc::killpg(target, libc::SIGKILL) } else { libc::kill(target, libc::SIGKILL) } };
+  if sent == -1 {
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() != Some(libc::ESRCH) {
+      return Err(error);
+    }
+  }
+  Ok(())
+}
+
+/// Every process below `root` by the parent links `/proc` reports, `root` excluded.
+fn descendants(root: u32) -> io::Result<Vec<u32>> {
+  let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+  for entry in fs::read_dir("/proc")? {
+    let name = entry?.file_name();
+    let Some(pid) = name.to_str().and_then(|name| name.parse::<u32>().ok()) else {
+      continue;
+    };
+    if let Some(parent) = parent_of(pid)? {
+      children.entry(parent).or_default().push(pid);
+    }
+  }
+  let mut found = Vec::new();
+  let mut frontier = vec![root];
+  while let Some(parent) = frontier.pop() {
+    for &child in children.get(&parent).into_iter().flatten() {
+      found.push(child);
+      frontier.push(child);
+    }
+  }
+  Ok(found)
+}
+
+/// The parent of `pid` from `/proc/<pid>/stat`, or `None` once the process is gone.
+fn parent_of(pid: u32) -> io::Result<Option<u32>> {
+  let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+    Ok(stat) => stat,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error),
+  };
+  // The command name sits in parentheses and may hold spaces, so the fields are read after its last parenthesis:
+  // the state, then the parent.
+  let fields = stat.rsplit_once(')').map(|(_, fields)| fields).unwrap_or_default();
+  let parent = fields
+    .split_whitespace()
+    .nth(1)
+    .and_then(|field| field.parse::<u32>().ok())
+    .ok_or_else(|| io::Error::other(format!("/proc/{pid}/stat has no parent field")))?;
+  Ok(Some(parent))
+}
+
+/// Whether `pid` still runs. A zombie has ended, so it does not count.
+#[cfg(test)]
+pub(crate) fn is_running(pid: u32) -> bool {
+  match fs::read_to_string(format!("/proc/{pid}/stat")) {
+    Ok(stat) => stat.rsplit_once(')').is_some_and(|(_, fields)| !fields.trim_start().starts_with('Z')),
+    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+    Err(error) => panic!("reading /proc/{pid}/stat failed: {error}"),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::fs;
+  use std::time::Duration;
+
+  use tempfile::TempDir;
+
+  use super::*;
+
+  /// The pid a script wrote to `path`, once it has written it.
+  async fn pid_in(path: &std::path::Path) -> u32 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+      if let Ok(text) = fs::read_to_string(path)
+        && let Ok(pid) = text.trim().parse()
+      {
+        return pid;
+      }
+      assert!(tokio::time::Instant::now() < deadline, "the script did not write {}", path.display());
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  }
+
+  #[tokio::test]
+  async fn kill_tree_ends_the_group_and_a_descendant_that_left_it() {
+    let dir = TempDir::new().expect("temporary directory exists");
+    let script = dir.path().join("tree.sh");
+    // A background child stays in the group; a `setsid` child moves to a session of its own. Both outlive the shell.
+    fs::write(&script, "sleep 600 & echo $! > \"$0.group\"\nsetsid sleep 600 & echo $! > \"$0.session\"\nwait\n")
+      .expect("the script writes");
+    let mut root = tokio::process::Command::new("/bin/sh")
+      .arg(&script)
+      .process_group(0)
+      .stdin(std::process::Stdio::null())
+      .stdout(std::process::Stdio::null())
+      .stderr(std::process::Stdio::null())
+      .spawn()
+      .expect("the shell starts");
+    let root_pid = root.id().expect("a child not yet waited for has a pid");
+    let group_pid = pid_in(&dir.path().join("tree.sh.group")).await;
+    let session_pid = pid_in(&dir.path().join("tree.sh.session")).await;
+    assert!(is_running(group_pid) && is_running(session_pid), "both children run before the kill");
+
+    kill_tree(root_pid).expect("the tree is killed");
+    root.wait().await.expect("the shell is reaped");
+    for pid in [group_pid, session_pid] {
+      let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+      while is_running(pid) {
+        assert!(tokio::time::Instant::now() < deadline, "process {pid} survived the kill");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    }
+  }
+}

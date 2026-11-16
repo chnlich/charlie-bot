@@ -1,6 +1,6 @@
 //! `web/features/host_auth`: the host login panel. A standing poller probes every ssh alias in the operator's config
 //! and keeps the result in `<home>/host_auth.json`. The feature serves that result at `/host-auth` and
-//! `/api/host-auth/*`, with the browser-login page at `/host-auth/logins`.
+//! `/api/host-auth/*`, with the browser logins on that same page.
 
 mod api;
 mod browser_login;
@@ -10,6 +10,7 @@ mod login_page;
 mod page;
 mod poller;
 mod probe;
+mod process_tree;
 mod readers;
 mod ssh_config;
 mod timestamps;

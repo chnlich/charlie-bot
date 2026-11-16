@@ -35,6 +35,7 @@ use tokio::sync::watch;
 
 use crate::config::BrowserLoginConfig;
 use crate::host_auth;
+use crate::process_tree;
 use crate::timestamps;
 use time::OffsetDateTime;
 
@@ -97,6 +98,18 @@ impl Phase {
       Phase::ReadingBack => "reading back",
     }
   }
+}
+
+/// How a readback ended: its exit code and merged output, or the timeout that ended its process tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Readback {
+  Exited { code: i32, output: String },
+  TimedOut { after_sec: u64 },
+}
+
+/// The text a readback shows once its timeout has ended it.
+pub fn timeout_text(after_sec: u64) -> String {
+  format!("readback timed out after {after_sec} s; its process tree was ended")
 }
 
 /// A start that produced no approval link. The string is the 502 body of the click that waited on it.
@@ -318,11 +331,15 @@ async fn await_link(link: &mut watch::Receiver<LinkState>) -> Result<String, Sta
   }
 }
 
-/// `page_readback`: run the login's readback once for the page: `(exit code, combined output)`. The login never runs
-/// here.
-pub async fn page_readback(login: &BrowserLoginConfig) -> io::Result<(i32, String)> {
+/// `page_readback`: run the login's readback once for the page and answer how it ended. The login never runs here.
+///
+/// The capture runs as a task of its own, so its timeout ends the readback's process tree even when the request that
+/// asked for the readback has gone.
+pub async fn page_readback(login: &BrowserLoginConfig) -> io::Result<Readback> {
   let child = spawn(&login.readback_command)?;
-  finish_capture(child, Duration::from_secs(PAGE_READBACK_TIMEOUT_SEC)).await
+  tokio::spawn(finish_capture(child, Duration::from_secs(PAGE_READBACK_TIMEOUT_SEC)))
+    .await
+    .expect("the readback capture task does not panic")
 }
 
 /// `stop_all`: end every live attempt by killing its child — the driver's own paths then record each outcome — and
@@ -498,11 +515,18 @@ async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
     }
   };
   record_child(core, child.id());
-  let (readback_exit, readback_output) = finish_capture(child, Duration::from_secs(READBACK_TIMEOUT_SEC)).await?;
+  let readback = finish_capture(child, Duration::from_secs(READBACK_TIMEOUT_SEC)).await?;
+  let readback_exit = match &readback {
+    Readback::Exited { code, .. } => Some(*code),
+    Readback::TimedOut { .. } => None,
+  };
   {
     let mut state = core.lock().expect("the attempt record lock is never poisoned");
-    state.readback_exit = Some(readback_exit);
-    state.readback_output = readback_output;
+    state.readback_exit = readback_exit;
+    state.readback_output = match readback {
+      Readback::Exited { output, .. } => output,
+      Readback::TimedOut { after_sec } => timeout_text(after_sec),
+    };
     state.child_pid = None;
   }
   let (already_ended, login_name, host, state_path) = {
@@ -512,9 +536,8 @@ async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   if already_ended {
     return Ok(());
   }
-  if readback_exit == 0
-    && let Some(alias) = host
-  {
+  let succeeded = readback_exit == Some(0);
+  if succeeded && let Some(alias) = host {
     let state_path = state_path.expect("a host renewal has a resolved host-auth state path");
     if let Err(error) = host_auth::record_host_renewal(&state_path, &alias, timestamps::utc_now()).await {
       tracing::error!(error = %format!("{error:#}"), login = %login_name, host = %alias, "browser_login_renewal_record_failed");
@@ -522,7 +545,7 @@ async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
       return Ok(());
     }
   }
-  end(core, if readback_exit == 0 { Outcome::Approved } else { Outcome::ReadbackFailed });
+  end(core, if succeeded { Outcome::Approved } else { Outcome::ReadbackFailed });
   Ok(())
 }
 
@@ -543,7 +566,8 @@ async fn read_line(core: &Arc<Mutex<AttemptCore>>, output: &mut LoginReader) -> 
 fn spawn(argv: &[String]) -> io::Result<Child> {
   let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
   let mut command = tokio::process::Command::new(program);
-  command.args(arguments).stdin(Stdio::null()).stdout(Stdio::piped());
+  // The child leads its own process group, so a readback's timeout can end every process it started.
+  command.args(arguments).stdin(Stdio::null()).stdout(Stdio::piped()).process_group(0);
   // The child's own stderr writes into the same pipe as its stdout (`2>&1`).
   // SAFETY: `dup2` is async-signal-safe, and the closure runs between fork and exec with nothing else to touch.
   unsafe {
@@ -795,23 +819,27 @@ fn text_of(bytes: &[u8]) -> String {
   String::from_utf8_lossy(bytes).trim_end_matches(['\r', '\n']).to_string()
 }
 
-/// A captured child's `(exit code, output)`. Past the limit it is killed, and its output
-/// drained to the pipe's end.
-async fn finish_capture(mut child: Child, limit: Duration) -> io::Result<(i32, String)> {
+/// A captured child's [`Readback`]: its exit code and merged output once its output ends and it exits. Past `limit`,
+/// the child's whole process tree is killed, so no descendant keeps the output pipe open.
+async fn finish_capture(mut child: Child, limit: Duration) -> io::Result<Readback> {
+  let pid = child.id().expect("a child not yet waited for has a pid");
   let mut stdout = child.stdout.take().expect("the captured child pipes its merged output");
   let mut output = Vec::new();
-  match tokio::time::timeout(limit, stdout.read_to_end(&mut output)).await {
-    Ok(read) => {
-      read?;
+  let capture = async {
+    stdout.read_to_end(&mut output).await?;
+    child.wait().await
+  };
+  match tokio::time::timeout(limit, capture).await {
+    Ok(status) => {
+      let code = proc_status::code_of(status?).expect("an exit status has a code or a signal");
+      Ok(Readback::Exited { code, output: String::from_utf8_lossy(&output).into_owned() })
     }
     Err(_elapsed) => {
-      child.start_kill().expect("a spawned child that has not been reaped takes the kill");
-      stdout.read_to_end(&mut output).await?;
+      process_tree::kill_tree(pid)?;
+      child.wait().await?;
+      Ok(Readback::TimedOut { after_sec: limit.as_secs() })
     }
   }
-  let status = child.wait().await?;
-  let exit_code = proc_status::code_of(status).expect("an exit status has a code or a signal");
-  Ok((exit_code, String::from_utf8_lossy(&output).into_owned()))
 }
 
 /// The 502 body: the exit code, then the last output lines.
@@ -1008,8 +1036,10 @@ mod tests {
   async fn the_page_readback_reports_the_merged_output_without_starting_a_login() {
     let _serial = SERIAL.lock().await;
     let stub = LoginStub::new("page-readback", PRINT_LINK, "echo valid; echo broken 1>&2\nexit 0\n");
-    let (exit, output) = page_readback(&stub.login).await.expect("the readback runs");
-    assert_eq!(exit, 0);
+    let Readback::Exited { code, output } = page_readback(&stub.login).await.expect("the readback runs") else {
+      panic!("the readback ends within its limit");
+    };
+    assert_eq!(code, 0);
     assert_eq!(output.trim(), "valid\nbroken", "the child's own stderr reaches the same capture");
   }
 

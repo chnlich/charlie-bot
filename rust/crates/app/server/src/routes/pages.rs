@@ -92,11 +92,18 @@ static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(
 /// The rendered template is part of the key: a template, page part or template directory edited on disk renders
 /// different bytes and never matches. The chat page's two large texts compare by identity, and the entry keeps their
 /// `Arc`s alive, so an address the entry holds is never handed to a different text.
+/// The finished bodies one page keeps: the body the page served most recently, and the ones before it that the reader
+/// is likely to come back to. A reader who moves between two sessions reopens a body the page built a moment ago, and
+/// a single slot would rebuild it on every switch.
+const PAGE_BODY_MEMO_ENTRIES_PER_PAGE: usize = 4;
+
 #[derive(Default)]
 struct PageBodyMemo {
   entries: Vec<PageBodyEntry>,
   /// The compressed forms of each page's static tail, one entry per page, kept while the tail's bytes hold.
   tails: Vec<PageTailEntry>,
+  #[cfg(test)]
+  builds: usize,
 }
 
 struct PageBodyEntry {
@@ -264,7 +271,12 @@ impl PageBodyMemo {
         && same_text(entry.bootstrap_text.as_ref(), bootstrap_text)
     });
     let index = match held {
-      Some(index) => index,
+      Some(index) => {
+        // A body served again is this page's most recent entry, so an eviction takes the body it served longest ago.
+        let entry = self.entries.remove(index);
+        self.entries.push(entry);
+        self.entries.len() - 1
+      }
       None => {
         let html = templating::substitute_placeholders(name, template_html.as_str().to_string(), substitutions)
           .map_err(|error| failure(error.kind(), error))?;
@@ -281,19 +293,26 @@ impl PageBodyMemo {
           gzip: None,
           zstd: None,
         };
-        match self.entries.iter().position(|entry| entry.name == name) {
-          Some(index) => {
-            self.entries[index] = entry;
-            index
-          }
-          None => {
-            self.entries.push(entry);
-            self.entries.len() - 1
-          }
+        self.entries.push(entry);
+        #[cfg(test)]
+        {
+          self.builds += 1;
         }
+        let mut index = self.entries.len() - 1;
+        // The page's least recently served body goes once the page holds one past its limit.
+        let mut held_bodies = self.entries.iter().filter(|entry| entry.name == name).count();
+        while held_bodies > PAGE_BODY_MEMO_ENTRIES_PER_PAGE {
+          let oldest = self.entries.iter().position(|entry| entry.name == name).expect("the page holds a body");
+          self.entries.remove(oldest);
+          if oldest < index {
+            index -= 1;
+          }
+          held_bodies -= 1;
+        }
+        index
       }
     };
-    let PageBodyMemo { entries, tails } = self;
+    let PageBodyMemo { entries, tails, .. } = self;
     let entry = entries.get_mut(index).expect("the page body entry matched or was built");
     let body = entry.body.clone();
     let tail = entry.tail.clone();
@@ -969,6 +988,65 @@ mod tests {
     let stream = compressed.expect("a zstd client gets a compressed body").bytes;
     let decoded = zstd::decode_all(stream.as_ref()).expect("a zstd page body decodes");
     assert_eq!(decoded, body.to_vec(), "the two zstd frames decode to the head and the tail");
+  }
+
+  #[test]
+  fn a_reader_switching_between_two_sessions_serves_each_kept_body() {
+    let mut memo = PageBodyMemo::default();
+    let template = Arc::new(index_template());
+    let sidebar = Arc::new("x".repeat(4096));
+    let a = Arc::new("{\"messages\":[\"a\"]}".to_string());
+    let b = Arc::new("{\"messages\":[\"b\"]}".to_string());
+    let open = |memo: &mut PageBodyMemo, bootstrap: &Arc<String>| {
+      memo
+        .body(
+          "index.html",
+          &template,
+          &substitutions(sidebar.as_str(), bootstrap.as_str()),
+          Some(&sidebar),
+          Some(bootstrap),
+          PageEncoding::Identity,
+        )
+        .unwrap()
+        .0
+    };
+    let first_a = open(&mut memo, &a);
+    let first_b = open(&mut memo, &b);
+    let again_a = open(&mut memo, &a);
+    let again_b = open(&mut memo, &b);
+    assert_eq!(again_a.as_ptr(), first_a.as_ptr(), "the session opened before is served from the memo");
+    assert_eq!(again_b.as_ptr(), first_b.as_ptr(), "and so is the one opened after it");
+    assert_eq!(memo.builds, 2, "each session's body is built once");
+  }
+
+  #[test]
+  fn a_page_keeps_its_newest_bodies_and_rebuilds_the_one_it_dropped() {
+    let mut memo = PageBodyMemo::default();
+    let template = Arc::new(index_template());
+    let sidebar = Arc::new("x".repeat(4096));
+    let bootstraps: Vec<Arc<String>> =
+      (0..=PAGE_BODY_MEMO_ENTRIES_PER_PAGE).map(|at| Arc::new(format!("{{\"messages\":[{at}]}}"))).collect();
+    let open = |memo: &mut PageBodyMemo, bootstrap: &Arc<String>| {
+      memo
+        .body(
+          "index.html",
+          &template,
+          &substitutions(sidebar.as_str(), bootstrap.as_str()),
+          Some(&sidebar),
+          Some(bootstrap),
+          PageEncoding::Identity,
+        )
+        .unwrap()
+        .0
+    };
+    for bootstrap in &bootstraps {
+      open(&mut memo, bootstrap);
+    }
+    assert_eq!(memo.builds, PAGE_BODY_MEMO_ENTRIES_PER_PAGE + 1, "each new session's body is built once");
+    open(&mut memo, &bootstraps[PAGE_BODY_MEMO_ENTRIES_PER_PAGE - 1]);
+    assert_eq!(memo.builds, PAGE_BODY_MEMO_ENTRIES_PER_PAGE + 1, "the last bodies the page kept are still there");
+    open(&mut memo, &bootstraps[0]);
+    assert_eq!(memo.builds, PAGE_BODY_MEMO_ENTRIES_PER_PAGE + 2, "the body the page dropped is built again");
   }
 
   #[test]

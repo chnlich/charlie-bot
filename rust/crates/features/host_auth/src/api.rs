@@ -111,7 +111,22 @@ async fn browser_login_readback(
     Err(error) => return responses::internal_error("RuntimeError", error),
   };
   match browser_login::page_readback(&login).await {
-    Ok(readback) => responses::json(StatusCode::OK, &login_page::readback_json(readback)),
+    Ok(browser_login::Readback::Exited { code, output }) => {
+      if output.starts_with(crate::process_tree::ROUTE_ERROR_PREFIX) {
+        let error = output
+          .strip_prefix(crate::process_tree::ROUTE_ERROR_PREFIX)
+          .expect("the route error prefix is present")
+          .trim();
+        tracing::error!(login = %name, error = %error, "browser_login_readback_failed");
+        detail(StatusCode::INTERNAL_SERVER_ERROR, format!("the readback did not run: {error}"))
+      } else {
+        let readback = browser_login::Readback::Exited { code, output };
+        responses::json(StatusCode::OK, &login_page::readback_json(readback))
+      }
+    }
+    Ok(readback @ browser_login::Readback::TimedOut { .. }) => {
+      responses::json(StatusCode::OK, &login_page::readback_json(readback))
+    }
     Err(error) => {
       tracing::error!(login = %name, error = %error, "browser_login_readback_failed");
       detail(StatusCode::INTERNAL_SERVER_ERROR, format!("the readback did not run: {error}"))

@@ -34,6 +34,13 @@ pub(crate) mod test_support {
   }
 }
 
+pub const READBACK_SUPERVISOR_ARG: &str = process_tree::SUPERVISOR_ARG;
+
+/// The helper entry that runs one readback as a supervised process.
+pub fn readback_supervisor_entry(args: &[std::ffi::OsString]) -> Option<u8> {
+  process_tree::helper_entry(args)
+}
+
 /// `register`: the config section, the router, the `host_auth` service in phase Ready, the host readers the cron gate
 /// and the Waiting on you read use, then the home card.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

@@ -58,8 +58,10 @@ fn context(state: &State, now: OffsetDateTime, logins: &[BrowserLoginConfig]) ->
   let last_probe = timestamps::local_timestamp(host_auth::opt_str(state, "probed_at")?, LocalFormat::DateZone)?;
   let login_rows = login_page::rows(logins)?;
   let any_live = login_rows.iter().any(|row| !row["live"].is_null());
+  let probe_running = state.get("probe_running").is_some_and(text_repr::is_truthy);
   Ok(json!({
-    "probe_running": state.get("probe_running").is_some_and(text_repr::is_truthy),
+    "probe_running": probe_running,
+    "refresh_after_sec": if probe_running { 3 } else if any_live { 5 } else { 0 },
     "hosts": rows,
     "summary": summary,
     "logins": login_rows,

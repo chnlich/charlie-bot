@@ -336,7 +336,7 @@ async fn await_link(link: &mut watch::Receiver<LinkState>) -> Result<String, Sta
 /// The capture runs as a task of its own, so its timeout ends the readback's process tree even when the request that
 /// asked for the readback has gone.
 pub async fn page_readback(login: &BrowserLoginConfig) -> io::Result<Readback> {
-  let child = spawn(&login.readback_command)?;
+  let child = spawn_readback(&login.readback_command)?;
   tokio::spawn(finish_capture(child, Duration::from_secs(PAGE_READBACK_TIMEOUT_SEC)))
     .await
     .expect("the readback capture task does not panic")
@@ -505,7 +505,7 @@ async fn drain_and_wait(
 async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   core.lock().expect("the attempt record lock is never poisoned").phase = Phase::ReadingBack;
   let readback_command = core.lock().expect("the attempt record lock is never poisoned").login.readback_command.clone();
-  let child = match spawn(&readback_command) {
+  let child = match spawn_readback(&readback_command) {
     Ok(child) => child,
     Err(error) => {
       core.lock().expect("the attempt record lock is never poisoned").readback_output =
@@ -566,8 +566,32 @@ async fn read_line(core: &Arc<Mutex<AttemptCore>>, output: &mut LoginReader) -> 
 fn spawn(argv: &[String]) -> io::Result<Child> {
   let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
   let mut command = tokio::process::Command::new(program);
+  command.args(arguments);
+  spawn_command(command)
+}
+
+/// A readback under a dedicated subreaper so descendants stay discoverable after their parent exits.
+fn spawn_readback(argv: &[String]) -> io::Result<Child> {
+  #[cfg(test)]
+  let command = {
+    let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
+    let mut command = tokio::process::Command::new(program);
+    command.args(arguments);
+    command
+  };
+  #[cfg(not(test))]
+  let command = {
+    let mut command = tokio::process::Command::new(std::env::current_exe()?);
+    command.arg(crate::READBACK_SUPERVISOR_ARG).args(argv);
+    command
+  };
+  spawn_command(command)
+}
+
+/// Spawn a merged-output command in its own process group.
+fn spawn_command(mut command: tokio::process::Command) -> io::Result<Child> {
   // The child leads its own process group, so a readback's timeout can end every process it started.
-  command.args(arguments).stdin(Stdio::null()).stdout(Stdio::piped()).process_group(0);
+  command.stdin(Stdio::null()).stdout(Stdio::piped()).process_group(0);
   // The child's own stderr writes into the same pipe as its stdout (`2>&1`).
   // SAFETY: `dup2` is async-signal-safe, and the closure runs between fork and exec with nothing else to touch.
   unsafe {

@@ -1,6 +1,4 @@
 {% include 'partials/prologue.html' %}
-{% set refreshing = probe_running or any_live %}
-{% if probe_running %}<meta http-equiv="refresh" content="3">{% elif any_live %}<meta http-equiv="refresh" content="5">{% endif %}
 <title>Host login authorization</title>
 <style>
   {% include 'partials/standalone_base_styles.html' %}
@@ -205,8 +203,8 @@
       <div class="at">Started {{ login.live.started_at }}</div>
     </div>
     {% else %}
-    <div class="state"{% if not refreshing %} data-readback-url="/api/host-auth/logins/{{ login.name }}/readback"{% endif %}>
-      <div class="none">{% if refreshing %}Reads back when the running probe or login finishes.{% else %}Reading back…{% endif %}</div>
+    <div class="state" data-readback-url="/api/host-auth/logins/{{ login.name }}/readback">
+      <div class="none">Reading back…</div>
     </div>
     {% endif %}
     {% if login.last %}
@@ -226,8 +224,12 @@
   {% endfor %}
 </div>
 <script>
+  const readbacks = [];
+  const refreshAfterSeconds = {{ refresh_after_sec }};
   for (const form of document.querySelectorAll('form[target="_blank"]')) {
-    form.addEventListener("submit", () => setTimeout(() => location.reload(), 2000));
+    form.addEventListener("submit", () => {
+      Promise.all(readbacks).then(() => setTimeout(() => location.reload(), 2000));
+    });
   }
   // Each card fills from its own readback, so one slow login does not hold up another card.
   for (const slot of document.querySelectorAll("[data-readback-url]")) {
@@ -239,16 +241,20 @@
       output.textContent = text;
       slot.replaceChildren(label, output);
     };
-    fetch(slot.dataset.readbackUrl, { headers: { accept: "application/json" } })
+    const readback = fetch(slot.dataset.readbackUrl, { headers: { accept: "application/json" } })
       .then(async (response) => {
         if (!response.ok) {
-          const body = await response.json().catch(() => null);
-          throw new Error(body?.detail ?? `HTTP ${response.status}`);
+          const body = await response.json();
+          throw new Error(body.detail);
         }
         const body = await response.json();
-        show(body.exit === null ? "Not logged in" : `Exit ${body.exit}`, body.output);
+        show(body.exit === null ? "Not logged in" : "Exit " + body.exit, body.output);
       })
       .catch((error) => show("Readback failed", error.message));
+    readbacks.push(readback);
+  }
+  if (refreshAfterSeconds > 0) {
+    Promise.all(readbacks).then(() => setTimeout(() => location.reload(), refreshAfterSeconds * 1000));
   }
 </script>
 </body>

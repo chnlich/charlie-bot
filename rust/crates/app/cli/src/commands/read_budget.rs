@@ -607,10 +607,12 @@ fn without_stream_redirects(command: &str) -> String {
   stream_file_pattern().replace_all(&duplicated, " ").into_owned()
 }
 
-/// Whether the command or the path names a decision path while it carries a glob (`*`, `?`, `[`) or a `$` word.
-/// The hook cannot resolve such a word to the path a read opens, so the decision path's exemption does not hold.
+/// Whether a token of the command or the path names a decision path while it carries a glob (`*`, `?`, `[`) or a
+/// `$` word. The hook cannot resolve such a word to the path a read opens, so the decision path's exemption does
+/// not hold. The test is per token: a glob or `$` in another token (a sed regex, an unrelated variable) does not
+/// change the command's class.
 fn names_unresolved_decision_path(text: &str) -> bool {
-  text.contains(['*', '?', '[', '$']) && decision_name_pattern().is_match(text)
+  text.split_whitespace().any(|token| token.contains(['*', '?', '[', '$']) && decision_name_pattern().is_match(token))
 }
 
 /// Whether the command has shell syntax beyond one CharlieBot command piped into filters: a list or
@@ -1823,7 +1825,13 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
     assert_eq!(bash("cat artifacts/plan_x.html").as_deref(), Some("approval_object"));
     assert_eq!(bash("cat artifacts/plan_*.html"), None);
     assert_eq!(bash("cat \"$D/artifacts/plan_x.html\""), None);
-    assert_eq!(bash("charliebot plan amend --file artifacts/plan_x.html --note \"$NOTE\""), None);
+    // A glob in a sed regex beside a literal decision path keeps the class the command has without the glob.
+    assert_eq!(bash("sed 's/<[^>]*>//g' artifacts/plan_x.html").as_deref(), Some("approval_object"));
+    // An unrelated `$NOTE` beside a literal decision path keeps the coordination class.
+    assert_eq!(
+      bash("charliebot plan amend --file artifacts/plan_x.html --note \"$NOTE\"").as_deref(),
+      Some("status_decision")
+    );
     let read = |file_path: &str| {
       let input = json!({"file_path": file_path}).as_object().unwrap().clone();
       exempt_class(READ_TOOL, &input, None, &[])

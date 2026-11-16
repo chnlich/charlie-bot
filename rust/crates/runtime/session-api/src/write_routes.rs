@@ -200,7 +200,7 @@ pub(crate) async fn switch_backend(
   }
 }
 
-/// `PATCH /api/sessions/{session_id}`: a name-only PATCH renames; any other field runs the task metadata mutation.
+/// `PATCH /api/sessions/{session_id}`: a name-only PATCH renames. Any other field runs the task metadata mutation.
 pub(crate) async fn patch_session(
   State(features): State<Arc<FeatureContext>>,
   AxumPath(session_id): AxumPath<String>,
@@ -234,7 +234,7 @@ async fn create(
     || fields.task.is_some()
     || fields.approver.is_some();
   if v2 {
-    // The task-tree owner binds (parent, request_id) to one node; request_id is required there.
+    // The task-tree owner binds (parent, request_id) to one node. request_id is required there.
     let Some(request_id) = fields.request_id else {
       return Err(store_error(StoreError::invalid(TASK_CREATE_REQUEST_ID_REQUIRED)));
     };
@@ -401,7 +401,7 @@ async fn switch(
     .await
     .map_err(store_error)?;
 
-  // The audit event is the switch history; the durable metadata read here (the backfill included) is what it records.
+  // The audit event is the switch history. The durable metadata read here (the backfill included) is what it records.
   let durable = features.store.read_metadata_fresh(session_id).map_err(store_error)?;
   let held = durable.as_ref().filter(|meta| meta.cc_session_id.as_deref().is_some_and(|id| !id.is_empty()));
   let audit = json!({

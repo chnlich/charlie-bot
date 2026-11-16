@@ -546,7 +546,8 @@ async fn send_telegram(
   anyhow::bail!("Telegram API returned {status}: {}", body.chars().take(200).collect::<String>())
 }
 
-/// The backend-reference check over every valid cron file, run before the server serves.
+/// The backend-reference check over every valid cron file, run before the server serves. A distinct-step conflict is
+/// checked when the firing reaches that step, so one task cannot prevent the server from starting.
 pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Result<(), String> {
   let mut problems = Vec::new();
   let directory = cron_dir(cfg);
@@ -579,13 +580,6 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
       {
         problems.push(format!("{}: {entry}: {error}", path.display()));
       }
-    }
-    // Identical option ids are refused here, where the config tells an option from a pool. Two steps on one pool take
-    // different members, so only options that resolve to the same type and model conflict.
-    match crate::steps::distinct_backend_conflict(&task, cfg) {
-      Ok(Some(conflict)) => problems.push(format!("{}: {conflict}", path.display())),
-      Ok(None) => {}
-      Err(error) => problems.push(format!("{}: {error:#}", path.display())),
     }
   }
   if problems.is_empty() {

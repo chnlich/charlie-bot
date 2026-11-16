@@ -424,6 +424,9 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
   })
 }
 
+/// The package label the composition list registers this module's package under.
+pub const PACKAGE: &str = "features.backend_pool";
+
 /// Register the session metadata slot owned by `features.backend_pool`.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.metadata_slot_with_validator(

@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
-/// The `git rev-parse --short HEAD` timeout at startup.
+/// The timeout of a best-effort `git rev-parse --short HEAD` read: the server's startup SHA and the CLI's
+/// version-skew hint both accept no SHA past it.
 pub const SHA_TIMEOUT: Duration = Duration::from_secs(2);
 /// The page version's git timeout.
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(5);

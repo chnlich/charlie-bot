@@ -32,8 +32,8 @@ pub struct SeedReport {
 /// Creates `config.d/cron.d/` when absent, and each new host file goes through [`loader::write_task_file`], the
 /// writer the cron API uses.
 ///
-/// [`setup_step`], which `charliebot setup` runs, is this function's only caller. The server startup path
-/// `init_charliebot_home` never seeds cron tasks; the server writes cron files when the scheduler auto-binds an
+/// The callers are [`setup_step`], which `charliebot setup` runs, and the server's startup, which runs this function
+/// after `init_charliebot_home` on every start. The server also writes cron files when the scheduler auto-binds an
 /// unbound task's session id and when an API caller creates or updates a task.
 pub fn seed_default_cron_tasks(
   cfg: &CharlieBotConfig,
@@ -47,7 +47,8 @@ pub fn seed_default_cron_tasks(
   // directory, so a bad repo default fails loudly without any partial write.
   for entry in &default_entries {
     let (name, body) = split_entry(entry)?;
-    loader::validate_body(&name, body, repo_root)?;
+    loader::validate_body(&name, body, repo_root)
+      .map_err(|error| format!("default cron entry {name:?} failed the seed check: {error}"))?;
   }
 
   let cron_d_dir = loader::cron_dir(cfg);
@@ -137,10 +138,15 @@ mod tests {
 
   use super::*;
 
+  /// The committed checkout, whose `configs/cron.default.yaml` and prompt files the server reads at start.
+  fn checkout_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..")
+  }
+
   /// A temp repo with the checkout's own `configs/cron.default.yaml` and the prompt files it points to.
   fn repo_with_defaults() -> tempfile::TempDir {
     let repo = tempfile::tempdir().expect("a temp repo");
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    let checkout = checkout_root();
     let defaults = fs::read_to_string(checkout.join("configs/cron.default.yaml")).expect("the committed defaults");
     fs::create_dir_all(repo.path().join("configs")).expect("create the configs directory");
     fs::write(repo.path().join("configs/cron.default.yaml"), defaults).expect("write the defaults");
@@ -158,6 +164,80 @@ mod tests {
 
   fn cfg(home: &Path) -> CharlieBotConfig {
     charliebot_core::config::load_config(home, &Default::default()).expect("the empty config loads")
+  }
+
+  /// The default table's entries, each with its `name`.
+  fn default_entries(repo: &Path) -> Vec<Value> {
+    read_defaults(repo).expect("the default table")["scheduled_tasks"]
+      .as_array()
+      .expect("the default table lists scheduled tasks")
+      .clone()
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn a_missing_host_file_carries_its_default_entry_keys() {
+    let repo = checkout_root();
+    let home = tempfile::tempdir().expect("a temp home");
+    let cfg = cfg(home.path());
+
+    seed_default_cron_tasks(&cfg, &repo, false).expect("the seed");
+    for entry in default_entries(&repo) {
+      let (name, body) = split_entry(&entry).expect("a default entry");
+      let text = fs::read_to_string(loader::cron_path(&cfg, &name)).expect("the seeded host file");
+      let seeded: Value = serde_yaml::from_str(&text).expect("the seeded host file is YAML");
+      assert_eq!(seeded, body, "{name} carries its default entry's keys");
+    }
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn an_owner_edited_host_file_stays_byte_for_byte() {
+    let repo = checkout_root();
+    let home = tempfile::tempdir().expect("a temp home");
+    let cfg = cfg(home.path());
+    fs::create_dir_all(loader::cron_dir(&cfg)).expect("the cron directory");
+    let owner_file = loader::cron_path(&cfg, "proactive-agent");
+    let owner_text = "# paused by the owner\nproject: CharlieBot\ncron: \"0 7 * * *\"\n\
+      prompt_file: prompts/cron/proactive_agent/prompt.md\nmode: master\nenabled: false\n";
+    fs::write(&owner_file, owner_text).expect("the owner's host file");
+
+    let report = seed_default_cron_tasks(&cfg, &repo, false).expect("the seed");
+    assert_eq!(fs::read_to_string(&owner_file).expect("the owner's host file"), owner_text);
+    assert!(
+      report.iter().any(|item| item.name == "proactive-agent" && item.status == home_init::SEED_EXISTS),
+      "{report:?}"
+    );
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn a_home_with_every_default_file_gets_no_new_file() {
+    let repo = checkout_root();
+    let home = tempfile::tempdir().expect("a temp home");
+    let cfg = cfg(home.path());
+    fs::create_dir_all(loader::cron_dir(&cfg)).expect("the cron directory");
+    let mut owner_files = Vec::new();
+    for entry in default_entries(&repo) {
+      let (name, _) = split_entry(&entry).expect("a default entry");
+      let text = format!("# the owner's {name}\nenabled: false\n");
+      fs::write(loader::cron_path(&cfg, &name), &text).expect("the owner's host file");
+      owner_files.push((name, text));
+    }
+
+    let report = seed_default_cron_tasks(&cfg, &repo, false).expect("the seed");
+    assert!(report.iter().all(|item| item.status == home_init::SEED_EXISTS), "{report:?}");
+    let mut names: Vec<String> = fs::read_dir(loader::cron_dir(&cfg))
+      .expect("the cron directory")
+      .map(|entry| entry.expect("a directory entry").file_name().to_string_lossy().into_owned())
+      .collect();
+    names.sort();
+    let mut wanted: Vec<String> = owner_files.iter().map(|(name, _)| format!("{name}.yaml")).collect();
+    wanted.sort();
+    assert_eq!(names, wanted, "the seed adds no file");
+    for (name, text) in &owner_files {
+      assert_eq!(fs::read_to_string(loader::cron_path(&cfg, name)).expect("the owner's host file"), *text);
+    }
   }
 
   #[test]
@@ -218,6 +298,7 @@ mod tests {
 
     let error = seed_default_cron_tasks(&cfg, repo.path(), true).expect_err("the dry run fails loudly");
     assert!(error.contains("prompt_file"), "{error}");
+    assert!(error.contains("memory-curator"), "the seed error names the failed entry: {error}");
     assert!(seed_default_cron_tasks(&cfg, repo.path(), false).is_err(), "the real run fails the same way");
     assert!(!loader::cron_dir(&cfg).exists(), "no partial write happened");
   }

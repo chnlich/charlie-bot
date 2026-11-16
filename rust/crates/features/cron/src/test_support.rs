@@ -154,7 +154,7 @@ fn feature_context_with_entries(
     .register_package("features.model_pool", charliebot_agents::model_pool::register)
     .expect("auto backend registration");
   registry
-    .register_package("features.backend_pool", charliebot_agents::backend_pool::register)
+    .register_package(charliebot_agents::backend_pool::PACKAGE, charliebot_agents::backend_pool::register)
     .expect("backend pool registration");
   let registry = Arc::new(registry);
   let mut cfg = registry.load_config(home.path()).expect("default config loads");

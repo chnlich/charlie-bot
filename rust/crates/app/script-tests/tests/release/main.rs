@@ -622,15 +622,21 @@ impl ServeWorld {
     fs::write(repo.join("README.md"), "serve trial\n").expect("the README");
 
     let mut env = sandbox.env();
-    // The server refuses a repository root without web/templates or the agent gh wrapper, and the trial's archive is
-    // this repository's commit.
+    // The server requires the checkout's web assets, cron defaults and prompts, and agent gh wrapper. The trial's
+    // archive is this repository's commit.
+    let source_repo = harness::repo_root();
     let mut copy = harness::command("cp", &env);
-    copy.arg("-r").arg(harness::repo_root().join("web")).arg(&repo);
+    copy.arg("-r").arg(source_repo.join("web")).arg(source_repo.join("configs")).arg(&repo);
+    let copied = harness::run(&mut copy);
+    assert_eq!(copied.code, 0, "{}", copied.describe());
+    fs::create_dir_all(repo.join("prompts")).expect("the prompt directory");
+    let mut copy = harness::command("cp", &env);
+    copy.arg("-r").arg(source_repo.join("prompts/cron")).arg(repo.join("prompts"));
     let copied = harness::run(&mut copy);
     assert_eq!(copied.code, 0, "{}", copied.describe());
     fs::create_dir_all(repo.join("rust/crates/runtime/agents/gh_wrapper")).expect("the gh wrapper directory");
     harness::copy_file(
-      &harness::repo_root().join("rust/crates/runtime/agents/gh_wrapper/gh"),
+      &source_repo.join("rust/crates/runtime/agents/gh_wrapper/gh"),
       &repo.join("rust/crates/runtime/agents/gh_wrapper/gh"),
     );
     for (name, value) in [

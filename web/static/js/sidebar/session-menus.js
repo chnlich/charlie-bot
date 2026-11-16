@@ -102,6 +102,14 @@ function openGroupHeaderMenu(anchor) {
   ]);
 }
 
+// A manager row's Move under… item opens the picker (session-move.js). Worker rows render no Settings menu, and the
+// archived menu builds its own list, so only the normal row's manager rows reach this item.
+registerSessionMenuItems({
+  items: (attrs, sessionId) => (attrs.profile === 'manager'
+    ? [{label: 'Move under…', onSelect: () => openSessionMovePicker(sessionId)}]
+    : []),
+});
+
 // The Settings buttons that groups.js renders open these menus.
 registerSidebarControl('openSessionRowMenu', openSessionRowMenu);
 registerSidebarControl('openGroupHeaderMenu', openGroupHeaderMenu);

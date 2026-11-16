@@ -23,7 +23,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::templating::{self, STATIC_ASSET_VERSION_KEY, Templating};
 use charliebot_session_api::api as session_routes;
 use charliebot_session_api::{detail, listing};
-use charliebot_store::metadata::{RUN_BACKEND, THINKING_SINCE};
+use charliebot_store::metadata::{NATIVE_MODEL, RUN_BACKEND, THINKING_SINCE};
 use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::join_all;
 use percent_encoding::percent_decode_str;
@@ -420,7 +420,7 @@ fn chat_page(
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
   let active_pool_member = active_session.get("pool_member").cloned().unwrap_or(Value::Null);
-  let active_native_model = active_session.get("native_model").cloned().unwrap_or(Value::Null);
+  let active_native_model = active_session.get(NATIVE_MODEL).cloned().unwrap_or(Value::Null);
   let active_backend_label = active_backend_label(&cfg, active_backend, &active_pool_member, &active_native_model);
   let backend_compact = compact_facts(&cfg, &state.features.registry)?;
   let context = json!({

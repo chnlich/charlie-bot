@@ -1084,6 +1084,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::CC_SESSION_STARTED_AT`.",
   },
+  OwnerRow { name: "native_model", owner: "runtime/store", hint: "Use `charliebot_store::metadata::NATIVE_MODEL`." },
   OwnerRow { name: "round_ratings", owner: "runtime/store", hint: "Use `charliebot_store::metadata::ROUND_RATINGS`." },
   OwnerRow { name: "thumbs_up", owner: "runtime/store", hint: "Use `charliebot_store::metadata::THUMBS_UP`." },
   OwnerRow { name: "thumbs_down", owner: "runtime/store", hint: "Use `charliebot_store::metadata::THUMBS_DOWN`." },

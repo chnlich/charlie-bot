@@ -274,6 +274,10 @@ pub enum WatchTarget {
   },
 }
 
+/// The watched target's key for the file whose exit ends the watch. The `WatchTarget` serializer writes the key from
+/// the struct's field name, and the trigger body model and the `session trigger` command name it with this const.
+pub const EXIT_FILE_FIELD: &str = "exit_file";
+
 /// The trigger record's key for its UTC fire deadline. The record's serializer writes the key from the field name, and
 /// a hand read of the file names it with this const.
 pub const FIRE_AT_FIELD: &str = "fire_at";

@@ -1205,6 +1205,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
   OwnerRow { name: "fire_at", owner: "runtime/store", hint: "Use `charliebot_store::trigger_files::FIRE_AT_FIELD`." },
   OwnerRow {
+    name: "exit_file",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::trigger_files::EXIT_FILE_FIELD`.",
+  },
+  OwnerRow {
     name: "delay_seconds",
     owner: "runtime/triggers",
     hint: "Use `charliebot_triggers::triggers::DELAY_SECONDS_FIELD`.",

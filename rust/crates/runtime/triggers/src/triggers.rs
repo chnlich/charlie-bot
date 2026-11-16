@@ -24,8 +24,8 @@ use charliebot_core::{event_types, parallel_walk, ssh, text_repr};
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{
-  self, FIRE_AT_FIELD, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus, WatchTarget,
-  fresh_uuid,
+  self, EXIT_FILE_FIELD, FIRE_AT_FIELD, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus,
+  WatchTarget, fresh_uuid,
 };
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, StoreError, layout};
 use futures_util::future::join_all;
@@ -146,7 +146,7 @@ pub const JOB_ID_FIELD: &str = "job_id";
 const LOCAL_PID_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[LOCAL_PID_KIND])),
   Field::required("pid", FieldType::Integer),
-  Field::optional("exit_file", FieldType::NullableString),
+  Field::optional(EXIT_FILE_FIELD, FieldType::NullableString),
   Field::optional("log", FieldType::NullableString),
 ];
 const LOCAL_PID: BodyModel = BodyModel::optional(LOCAL_PID_FIELDS);
@@ -154,7 +154,7 @@ const REMOTE_PID_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[REMOTE_PID_KIND])),
   Field::required("host", FieldType::String),
   Field::required("pid", FieldType::Integer),
-  Field::optional("exit_file", FieldType::NullableString),
+  Field::optional(EXIT_FILE_FIELD, FieldType::NullableString),
   Field::optional("log", FieldType::NullableString),
 ];
 const REMOTE_PID: BodyModel = BodyModel::optional(REMOTE_PID_FIELDS);
@@ -2272,13 +2272,13 @@ fn watch_target(value: &Value) -> anyhow::Result<WatchTarget> {
   Ok(match value["kind"].as_str().expect("validated tag") {
     LOCAL_PID_KIND => WatchTarget::LocalPid {
       pid: integer_field(value, "pid")?,
-      exit_file: optional_string(value, "exit_file"),
+      exit_file: optional_string(value, EXIT_FILE_FIELD),
       log: optional_string(value, "log"),
     },
     REMOTE_PID_KIND => WatchTarget::RemotePid {
       host: value["host"].as_str().expect("validated string field").to_string(),
       pid: integer_field(value, "pid")?,
-      exit_file: optional_string(value, "exit_file"),
+      exit_file: optional_string(value, EXIT_FILE_FIELD),
       log: optional_string(value, "log"),
     },
     SLURM_JOB_KIND => {

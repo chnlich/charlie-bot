@@ -66,6 +66,14 @@ Common filters:
 - By state: `{"state": {"name": {"in": ["Todo", "In Progress"]}}}`
 - Combined: nest multiple filters together
 
+### Read a Whole Connection
+
+Linear's pagination docs give a default of 50 items for `first` and state no maximum.
+Each connection response carries `pageInfo { hasNextPage endCursor }`.
+To read the whole result set, pass `pageInfo.endCursor` as `after` on the next request, with the same `filter`, and repeat while `pageInfo.hasNextPage` is true.
+
+Source: Linear developer docs, pagination (https://linear.app/developers/pagination).
+
 ### Get Single Issue
 
 ```graphql

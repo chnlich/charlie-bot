@@ -94,6 +94,11 @@ GET https://slack.com/api/search.messages?query=QUERY
 
 Supports Slack search modifiers: `from:username`, `in:#channel`, `before:2026-01-01`, `after:2026-01-01`, `has:link`, etc.
 
+Search returns at most 100 messages per page: `count` defaults to 20 and accepts up to 100.
+To read the whole time window, send the same `query` with `count=100`, then request each next page by raising `page` by one, starting from 1, until `page` reaches `pagination.page_count` in the response.
+
+Source: Slack API method reference, `search.messages` (https://docs.slack.dev/reference/methods/search.messages).
+
 ### Download a File
 
 A message's `files[]` entry carries the file URL in `url_private` or `url_private_download`. Pass that URL and the output path:

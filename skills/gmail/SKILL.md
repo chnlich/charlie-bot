@@ -37,6 +37,14 @@ With search query (Gmail search syntax):
 charliebot google request GET "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=from%3Aexample%40gmail.com&maxResults=10" --account <name>
 ```
 
+### Read a Whole Time Window
+
+`messages.list` returns at most 500 messages per page: `maxResults` defaults to 100 and accepts up to 500.
+Its `resultSizeEstimate` estimates the total; it is not a count.
+Set the window in `q` with Gmail search syntax. To read the whole window, pass each response's `nextPageToken` as `pageToken` on the next request, with the same `q`, until a response has no `nextPageToken`.
+
+Source: Gmail API reference, `users.messages.list` (https://developers.google.com/gmail/api/reference/rest/v1/users.messages/list).
+
 ### Read a Message
 
 ```bash

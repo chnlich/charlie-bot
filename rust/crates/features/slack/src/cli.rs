@@ -3,11 +3,11 @@
 //! message in the operator's name.
 //!
 //! `reply` posts the file's text to the thread the session was summoned from and prints the server's readback. `ack`
-//! advances the session's read watermark and prints the readback; every read message's id must be passed. `request`
+//! advances the session's read watermark and prints the readback. Every read message's id must be passed. `request`
 //! reads the token inside this process, sends one request and prints the response body. `download` reads one Slack
 //! file's bytes into a named path. The user token is read-only in this CLI: it admits only the read methods in
 //! `token::USER_READ_METHODS` and a GET of a file on Slack's file host, and the bot token keeps every method.
-//! `draft` registers a channel post, thread reply, DM, or group DM whose card the operator approves; the server sends
+//! `draft` registers a channel post, thread reply, DM, or group DM whose card the operator approves. The server sends
 //! the card's body from the operator's own account.
 
 use std::ffi::OsString;
@@ -63,7 +63,7 @@ struct RequestCommand {
 struct DownloadCommand {
   /// The file URL from a message's `files[]`: its `url_private` or `url_private_download`
   url: String,
-  /// Path to write the file's bytes to; the path is written only when the response is the file
+  /// Path to write the file's bytes to. The path is written only when the response is the file
   #[arg(long, value_name = "PATH")]
   output: PathBuf,
   /// Which Slack token to authenticate with: the user token by default, the bot token with `bot`.
@@ -73,10 +73,10 @@ struct DownloadCommand {
 
 #[derive(Args)]
 struct AckArgs {
-  /// Slack ts of each read message; every read id at or below the newest must be included
+  /// Slack ts of each read message. Every read id at or below the newest must be included
   #[arg(long = "message-id", required = true, num_args = 1.., value_name = "TS")]
   message_id: Vec<String>,
-  /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
+  /// Session ID (optional). It is taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment
   #[arg(long)]
   session: Option<String>,
 }
@@ -86,13 +86,13 @@ struct DraftArgs {
   /// Slack channel id for a channel post or thread reply
   #[arg(long, value_name = "CHANNEL")]
   channel: Option<String>,
-  /// Thread timestamp; turns the channel post into a thread reply
+  /// Thread timestamp. Turns the channel post into a thread reply
   #[arg(long, value_name = "TS")]
   thread: Option<String>,
   /// One or more Slack user ids, comma-separated: one user is a DM, several are a group DM
   #[arg(long, value_name = "ID", value_delimiter = ',')]
   users: Option<Vec<String>>,
-  /// File holding the message body; - reads stdin
+  /// File holding the message body. - reads stdin
   #[arg(long)]
   file: String,
   /// Draft id this one replaces, whose card loses its button

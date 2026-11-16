@@ -1,7 +1,7 @@
 //! The Slack draft platform: `auth.test` for the sending user, `conversations.open` for a DM or group DM, then
 //! `chat.postMessage` with the registered body.
 //!
-//! Every call authenticates with `slack.user_token`. A DM or group DM opens the conversation first; a thread reply
+//! Every call authenticates with `slack.user_token`. A DM or group DM opens the conversation first. A thread reply
 //! carries `thread_ts`. The sender never retries and never falls back to the bot token.
 
 use std::time::Duration;
@@ -177,7 +177,7 @@ mod tests {
       let recorded = Arc::clone(&requests);
       let answers: Vec<(String, u16, Value)> =
         answers.into_iter().map(|(method, status, value)| (method.to_string(), status, value)).collect();
-      // The thread lives as long as the test binary; every response closes its connection, and a test's later stubs
+      // The thread lives as long as the test binary. Every response closes its connection, and a test's later stubs
       // bind their own ports.
       thread::spawn(move || {
         for stream in listener.incoming() {

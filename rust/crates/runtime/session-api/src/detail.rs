@@ -1779,27 +1779,38 @@ backends:
     assert_eq!(next_bootstrap_read(90, 45, 100), 100);
   }
 
-  /// A log longer than the first read's budget of events needs a second read. The tail that read covers still runs
-  /// to the history's end, starts at a turn boundary, and trims to the wire budget's whole turns.
+  /// A log whose events fold to fewer messages than the budget needs a second read. The second read serves the
+  /// budget's messages, and the cursor names the first of their events inside the log.
   #[tokio::test]
-  async fn a_log_past_the_first_read_budget_still_serves_the_newest_whole_turns() {
+  async fn a_log_past_the_first_read_budget_reads_again_for_the_message_budget() {
     let (_home, features) = feature_context();
     let meta =
       crate::test_support::create_node(&features.store, "two-read-bootstrap", None, TaskProfile::Manager).await;
-    let turns = 30usize;
+    // Each turn is a user event and a note that folds to nothing, so the first read of the budget's count of events
+    // folds to half the budget's messages and the loop reads again.
+    let turns = 100usize;
     for turn in 1..=turns {
-      append_fixture_turn(&features.store, &meta.id, turn, 700, false).await;
+      features
+        .store
+        .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(turn as u64, 40)}))
+        .await
+        .unwrap();
+      features
+        .store
+        .append_chat_event(&meta.id, json!({"type": "unrendered_note", "content": "filler"}))
+        .await
+        .unwrap();
     }
     let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
-    assert!(total > BOOTSTRAP_MESSAGE_LIMIT, "the fixture's log is longer than the first read");
+    assert_eq!(total, 2 * turns + 1, "the fixture's log is its two events per turn and the node's own event");
     let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), BOOTSTRAP_MESSAGE_LIMIT, "the second read fills the message budget");
     let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
     assert!(start > 0, "the kept events start past the log's first event");
-    assert_eq!(start + messages.len(), total, "the kept events run to the history's end");
-    assert_eq!(messages[0]["role"], "user", "a kept turn starts at its user message");
+    assert!(start + messages.len() <= total, "the cursor names events inside the log");
     assert!(
-      messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 700))),
+      messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 40))),
       "the newest turn renders on the first screen"
     );
     let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();

@@ -103,6 +103,10 @@ const SESSION_CONCLUSION: &str = "conclusion";
 /// is a selection of the material, not the material itself.
 const SHELL_READERS: &str = r"\bgrep\b|\brg\b|\bfind\b|\bdiff\b|git (log|diff)";
 
+/// A stream duplicated into another (`2>&1`), and a stream written to a file (`>f`, `2>f`, `>>f`, `&>f`).
+const STREAM_DUP: &str = r"\d*>&(\d+|-)";
+const STREAM_FILE: &str = r"(\d*|&)>>?[ \t]*[^\s&;|<>()`]+";
+
 #[derive(Parser)]
 #[command(
   name = "read-budget",
@@ -575,9 +579,21 @@ fn status_decision(command: &str) -> bool {
   })
 }
 
+/// The command with its stream redirects removed, for the standalone check. A stream duplicated into another
+/// (`2>&1`) and a stream written to a file (`>f`, `2>f`, `>>f`, `&>f`) are not shell controls. A pipeline keeps
+/// its redirects as written, so its `2>&1` still reads as the background `&`.
+fn without_stream_redirects(command: &str) -> String {
+  if command.contains('|') {
+    return command.to_string();
+  }
+  let duplicated = stream_dup_pattern().replace_all(command, " ");
+  stream_file_pattern().replace_all(&duplicated, " ").into_owned()
+}
+
 /// Whether the command has shell syntax beyond one CharlieBot command piped into filters: a list or
 /// background operator (`;`, `&`, `||`), a newline, a redirection in (`<`), or a subshell or substitution
-/// (`(`, `)`, a backtick). Each one can run a second read beside the exempt one.
+/// (`(`, `)`, a backtick). Each one can run a second read beside the exempt one. The standalone checks remove
+/// the stream redirects first (`without_stream_redirects`).
 fn has_shell_control(command: &str) -> bool {
   command.contains(['&', ';', '<', '(', ')', '`', '\n']) || command.contains("||")
 }
@@ -590,7 +606,8 @@ fn names_run_log(command: &str) -> bool {
 }
 
 fn is_standalone_conclusion(command: &str, cwd: Option<&str>) -> bool {
-  if has_shell_control(command) {
+  let command = without_stream_redirects(command);
+  if has_shell_control(&command) {
     return false;
   }
   let stages: Vec<&str> = command.split('|').map(str::trim).collect();
@@ -605,7 +622,8 @@ fn is_standalone_conclusion(command: &str, cwd: Option<&str>) -> bool {
 }
 
 fn is_standalone_user_dialog(command: &str, cwd: Option<&str>) -> bool {
-  if has_shell_control(command) {
+  let command = without_stream_redirects(command);
+  if has_shell_control(&command) {
     return false;
   }
   let stages: Vec<&str> = command.split('|').map(str::trim).collect();
@@ -923,6 +941,8 @@ hook_pattern!(named_pattern, r"((plan|understanding)_[^/]*\.html$|(report|findin
 hook_pattern!(cd_pattern, r"^\s*cd\s+([^\s]+)\s*$");
 hook_pattern!(segment_split_pattern, r"&&|\|\||;|\n|\|");
 hook_pattern!(token_split_pattern, r#"[^\s'"'`|;&<>()=,]+"#);
+hook_pattern!(stream_dup_pattern, STREAM_DUP);
+hook_pattern!(stream_file_pattern, STREAM_FILE);
 
 #[cfg(test)]
 mod tests {
@@ -1731,6 +1751,36 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
       Some("child_conclusion")
     );
     assert_eq!(bash_class("cat artifacts/plan_x.html", Some(cwd_str)), Some("approval_object"));
+  }
+
+  /// The exemption of one Bash command, through the entry the hook calls.
+  fn bash_exemption(command: &str) -> Option<String> {
+    let input = json!({"command": command}).as_object().unwrap().clone();
+    exempt_class("Bash", &input, None, &[])
+  }
+
+  /// A stream redirect is not a shell control: a standalone conclusion or dialog read keeps its exemption through
+  /// `2>&1` and a redirect of either stream to a file. A background `&`, a pipe and a substitution still count it.
+  #[test]
+  fn a_stream_redirect_keeps_a_standalone_read_exempt() {
+    let exempt: [(&str, &str); 5] = [
+      ("charliebot session conclusion --session s 2>&1", "child_conclusion"),
+      ("charliebot session conclusion --session s > tmp/out.txt 2>&1", "child_conclusion"),
+      ("charliebot session conclusion --session s 2>tmp/err.txt", "child_conclusion"),
+      ("charliebot session conclusion --session s &>tmp/both.txt", "child_conclusion"),
+      ("charliebot session dialog --from user 2>&1", "user_words"),
+    ];
+    for (command, class) in exempt {
+      assert_eq!(bash_exemption(command).as_deref(), Some(class), "{command}");
+    }
+    for command in [
+      "charliebot session conclusion --session s 2>&1 & cat /abs/data/x.md",
+      "charliebot session conclusion --session s 2>&1 | head -c 3000",
+      "charliebot session conclusion --session s 2>&1; cat /abs/data/x.md",
+      "charliebot session conclusion --session \"$(cat /abs/x)\" 2>&1",
+    ] {
+      assert_eq!(bash_exemption(command), None, "{command}");
+    }
   }
 
   #[test]

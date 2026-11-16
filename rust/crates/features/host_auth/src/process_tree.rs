@@ -175,6 +175,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn kill_tree_ends_the_group_and_a_descendant_that_left_it() {
     let dir = TempDir::new().expect("temporary directory exists");
     let script = dir.path().join("tree.sh");
@@ -224,6 +225,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn kill_tree_ends_a_detached_descendant_after_its_parent_exits() {
     let dir = TempDir::new().expect("temporary directory exists");
     let pid_file = dir.path().join("detached.pid");

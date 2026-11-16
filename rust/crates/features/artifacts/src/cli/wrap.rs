@@ -42,7 +42,7 @@ impl WrapArgs {
   }
 }
 
-/// Run `artifact wrap` and return its stdout line.
+/// The stdout line of one `artifact wrap` run.
 pub(super) fn run(args: &WrapArgs, argv: &[OsString]) -> Result<String, CliExit> {
   let fragment_arg = PathBuf::from(&args.fragment);
   let fragment = resolve_path(&fragment_arg).map_err(|error| CliExit::error(error.to_string()))?;

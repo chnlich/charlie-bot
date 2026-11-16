@@ -177,7 +177,7 @@ fn attribute_dict(value: &Value) -> anyhow::Result<&Map<String, Value>> {
   }
 }
 
-/// Sets the `file` of the version a reference names.
+/// The `file` setter for the version a reference names.
 fn set_version_file(data: &mut Value, reference: &Reference, file: &str) {
   data["plans"][reference.plan_index]["versions"][reference.version_index]["file"] = Value::String(file.to_string());
 }

@@ -81,7 +81,7 @@ fn raw_section(value: &serde_yaml::Value) -> Result<SectionValue, String> {
   Ok(Arc::new(value.clone()))
 }
 
-/// Render the raw section the way `charliebot config get publish` prints it: the entry's
+/// The raw section rendered the way `charliebot config get publish` prints it: the entry's
 /// keys plus the model's three defaults, with `dir`'s `~` expanded as its validator does.
 fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
   let raw = value.downcast_ref::<serde_yaml::Value>().ok_or("the publish section holds an unexpected value")?;

@@ -247,7 +247,7 @@ pub fn fork_assertions(genre: &str) -> Vec<&'static str> {
     .unwrap_or_default()
 }
 
-/// Run the fork assertions of the genre that `page`'s file name names, or `None` when the name carries no genre
+/// The fork assertion outcomes of the genre that `page`'s file name names, or `None` when the name carries no genre
 /// prefix. The web status set gate reaches this through `Registry::fork_assertions_runner`.
 pub fn run_fork_assertions(page: &Path, home: &Path) -> anyhow::Result<Option<Vec<AssertionOutcome>>> {
   let Some(genre) = page.file_name().and_then(|name| name.to_str()).and_then(genre_from_file_name) else {
@@ -318,7 +318,7 @@ struct CodeText {
 type AssertionCheck = for<'a> fn(&Context<'a>) -> anyhow::Result<Vec<AssertionOutcome>>;
 type OrdinalFailure = (usize, Vec<String>, String);
 
-/// Run one genre's assertion set on a blocking thread. `only` narrows the run to the named assertions. `None` runs
+/// One genre's assertion set, run on a blocking thread. `only` narrows the run to the named assertions. `None` runs
 /// the whole set.
 pub async fn run_assertions(
   genre: &str,
@@ -339,7 +339,7 @@ pub async fn run_assertions(
   .await
 }
 
-/// Run one genre's assertion set with an explicit Chrome path on a blocking thread.
+/// One genre's assertion set, run with an explicit Chrome path on a blocking thread.
 pub async fn run_assertions_with_chrome(
   genre: &str,
   artifact: PathBuf,
@@ -2091,7 +2091,8 @@ mod tests {
     assert_eq!(value["detail"], "detail");
   }
 
-  /// Runs only `names` over `source` as a page file, so a fork test needs no Chrome and no template.
+  /// The assertion outcomes of only `names` over `source` as a page file, so a fork test needs no Chrome and no
+  /// template.
   fn run_only(genre: &str, source: &str, names: &[&str]) -> Vec<AssertionOutcome> {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "page.html", source);

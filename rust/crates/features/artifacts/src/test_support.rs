@@ -68,7 +68,7 @@ pub(crate) fn plan_page(goal: &str) -> String {
   format!("<html><head>{style}</head><body>{sections}<div class=\"foot\"><p>How to respond.</p></div></body></html>")
 }
 
-/// Writes `source` as `artifacts/<name>` under the session directory and returns that plan-relative path.
+/// The plan-relative path of `source`, written as `artifacts/<name>` under the session directory.
 pub(crate) fn write_plan_artifact(features: &FeatureContext, session_id: &str, name: &str, source: &str) -> String {
   let directory = features.store.session_dir(session_id).join("artifacts");
   fs::create_dir_all(&directory).expect("the artifacts directory is created");
@@ -119,7 +119,8 @@ fn features_in(home: &Path) -> Arc<FeatureContext> {
   Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) })
 }
 
-/// Writes a root session's metadata through the registered slots, so the store reads it back as the store writes it.
+/// A root session's metadata written through the registered slots, so the store reads it back as the store writes
+/// it.
 pub(crate) fn write_session(features: &FeatureContext, session_id: &str) {
   let slots = features.registry.metadata_slots();
   let meta = SessionMetadata::new(session_id, session_id, TaskProfile::Manager);

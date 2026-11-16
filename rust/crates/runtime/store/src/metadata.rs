@@ -59,6 +59,9 @@ pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
 /// The session-metadata field holding the backend that ran the session's native conversation. The turn's finish
 /// extras and the store's declared-field list carry the same name, so it is spelled once, here.
 pub const NATIVE_BACKEND: &str = "native_backend";
+/// The session-metadata field holding the model the backend's native conversation names. The store's declared-field
+/// lists and the page's active-session read carry the same name, so it is spelled once, here.
+pub const NATIVE_MODEL: &str = "native_model";
 /// The session-metadata field holding the session's work state: `idle`, `waiting` or `running`. The session routes
 /// import this name instead of each spelling it.
 pub const WORK_STATE: &str = "work_state";
@@ -691,7 +694,7 @@ impl SessionMetadata {
     push(&mut declared, "node_prompt_ref", &self.node_prompt_ref);
     push(&mut declared, "native_prompt_hash", &self.native_prompt_hash);
     push(&mut declared, NATIVE_BACKEND, &self.native_backend);
-    push(&mut declared, "native_model", &self.native_model);
+    push(&mut declared, NATIVE_MODEL, &self.native_model);
     push(&mut declared, ROUND_RATINGS, &self.round_ratings);
     push(&mut declared, "group", &self.group);
     push(&mut declared, ARCHIVE_OFFSET, &self.archive_offset);

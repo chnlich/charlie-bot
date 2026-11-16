@@ -412,7 +412,7 @@ test('a draft on a row whose quote repeats stores the words before it; a unique 
   const repeated = {kind: 'block', el: page.fork2.rec, quote: REC_TEXT, context: 'ctx', comment: 'cm'};
   const unique = {kind: 'block', el: page.heading, quote: HEADING_11_12, context: '', comment: 'cm'};
   const [stored, plain] = serialize([repeated, unique]);
-  assert.equal(stored.before, '有 1000 核，Charlie 问作业能不能跑更久、并发更低？', 'the words before the row');
+  assert.equal(stored.before, page.fork2.q.textContent.slice(-32), 'the words before the row');
   assert.equal(stored.occurrence, 1);
   assert.equal('before' in plain, false, 'a quote held by one row stores no before');
 });
@@ -434,7 +434,7 @@ test('a stored draft with a before attaches to the one row whose quote and befor
   const storage = makeStorage();
   storage.setItem(DRAFT_KEY, JSON.stringify([
     {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note',
-      before: '有 1000 核，Charlie 问作业能不能跑更久、并发更低？', occurrence: 0},
+      before: page.fork2.q.textContent.slice(-32), occurrence: 0},
   ]));
   loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
   assert.equal(page.fork1.rec.classList.contains('__cbc-marked'), false, 'fork 1\'s row stays unmarked');
@@ -587,4 +587,17 @@ test('two unattached drafts with equal stored locators each send the stored loca
     '   before "the words before"',
     '   ↳ second note',
   ].join('\n'));
+});
+
+test('a whole-section draft with a repeated row quote stores no before', () => {
+  const quote = 'Synthetic shared section text';
+  const section = makeElement();
+  section.tagName = 'SECTION';
+  section.appendChild(blockOf(quote));
+  const other = blockOf(quote);
+  const {window} = loadScript({bodyChildren: [section, other], fetch: sessionFetch(true)});
+  const [stored] = window.__cbcSerializeDraft([
+    {kind: 'block', el: section, quote, context: 'Section', comment: 'note'},
+  ]);
+  assert.equal('before' in stored, false, 'whole-section drafts keep the existing schema');
 });

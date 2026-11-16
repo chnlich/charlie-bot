@@ -218,8 +218,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return held;
     }
 
-    function quoteRepeats(quote) {
-      return rowsHolding(quote, collectCommentableBlocks()).length >= 2;
+    function quoteRepeats(quote, row) {
+      var rows = collectCommentableBlocks();
+      return rows.indexOf(row) !== -1 && rowsHolding(quote, rows).length >= 2;
     }
 
     // The BEFORE_CHARS characters that precede the row's first character in the page text:
@@ -270,7 +271,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // it; an unattached draft keeps the value it stored; any other entry has none (undefined).
     function beforeOfEntry(entry, quote) {
       if (!entry.el) return entry.before;
-      return quoteRepeats(quote) ? beforeOf(entry.el) : undefined;
+      return quoteRepeats(quote, entry.el) ? beforeOf(entry.el) : undefined;
     }
 
     // The row a pending draft belongs to, or null when the page does not place it. A draft with a

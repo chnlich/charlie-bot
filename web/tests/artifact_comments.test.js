@@ -1528,6 +1528,8 @@ async function sendCommentsFor(bodyChildren, comments) {
 
 test('the same rec line in two forks locates its own fork and needs no occurrence suffix', async () => {
   const page = makeForkPage();
+  const firstBefore = page.fork1.q.textContent.slice(-32);
+  const secondBefore = page.fork2.q.textContent.slice(-32);
   const content = await sendCommentsFor(page.children, [
     {block: page.fork1.rec, text: '做'},
     {block: page.fork2.rec, text: '不做'},
@@ -1540,11 +1542,11 @@ test('the same rec line in two forks locates its own fork and needs no occurrenc
       '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
       '',
       '1. ▸ ' + HEADING_11_12 + ' › Q1 "要不要处理 Yuesheng 的请求：在 11/12（周四，…" › "' + REC_TEXT + '"',
-      '   before "2（周四，今天）前更新你负责的 4 个过期 Linear 项目？"',
+      '   before "' + firstBefore + '"',
       '   ↳ 做',
       '',
       '2. ▸ ' + HEADING_11_12 + ' › Q2 "要不要回应 FPT 的 CPU 容量答复：明年前没有容量，之…" › "' + REC_TEXT + '"',
-      '   before "有 1000 核，Charlie 问作业能不能跑更久、并发更低？"',
+      '   before "' + secondBefore + '"',
       '   ↳ 不做',
     ].join('\n')
   );
@@ -1697,6 +1699,28 @@ test('the same sentence under two numbered questions with equal before words kee
       '2. ▸ ' + HEADING_11_12 + ' › Q2 "两个问题下面的同一句话，前面的三十二个字也都一样，所以它们的…" › "' + REC_TEXT + '"',
       '   before "' + before + '"',
       '   ↳ 不做',
+    ].join('\n')
+  );
+});
+
+test('a whole-section comment does not gain before when its quote repeats on rows', () => {
+  const quote = 'Synthetic shared section text';
+  const section = makeElement();
+  section.tagName = 'SECTION';
+  section.appendChild(makeBlock(quote));
+  const other = makeBlock(quote);
+  const {window} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
+    bodyChildren: [section, other],
+    serverSessionId: 'session-270',
+    fetch: FETCH_OK,
+  });
+  assert.equal(
+    window.__cbcBuildBatchMessage([{kind: 'block', el: section, quote, context: '', comment: 'note'}]),
+    [
+      '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (1)',
+      '',
+      '1. ▸ "' + quote + '"',
+      '   ↳ note',
     ].join('\n')
   );
 });

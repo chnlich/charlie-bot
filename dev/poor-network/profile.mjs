@@ -98,6 +98,13 @@ export const OTHER_VIEWS = Object.freeze({
 // server takes a message.
 export const BENCH_SESSIONS = 12;
 
+// The repo's default cron tasks (configs/cron.default.yaml: memory-curator, storage-cool, proactive-agent). Since commit
+// 0cae6f846 the server seeds them at startup, and the scheduler binds each to a root session at its first tick, 60 s
+// after start, so every trial home lists three sessions that the mock home does not hold. A live home holds these
+// three sessions in its default view already, so VIEW.rows counts them: the mock home holds VIEW.rows less
+// BENCH_SESSIONS less these, and measureView waits for the first tick before it counts.
+export const DEFAULT_CRON_ROWS = 3;
+
 // The live readback of a release's default view, from one visible tab for 4.02 h: status polls about 20 per minute at
 // 5,767 bytes received each, and full-list fetches, 174 at 113,791 bytes each. Together they receive about 206 KB a
 // minute. The background scenario's before-numbers are compared with it as a second calibration check.
@@ -121,11 +128,20 @@ export const OPEN = Object.freeze({
   // Repeated drops: the link is up for upSeconds, then down for downSeconds, until totalSeconds have passed. Each
   // drop resets every connection, so each recovery reconnects.
   flaps: Object.freeze({upSeconds: 5, downSeconds: 5, totalSeconds: 60}),
-  // The first open after a release: the resource version changes this long after a held blackout starts, and the
-  // open navigates openAfterMs after it, so the open is inside the hold.
-  releaseAtMs: 5000,
-  openAfterMs: 10000,
-  // An open that has not shown its newest message or its catch-up by this time is recorded at the cap.
+  // The first open after a release: the resource version changes releaseAtMs after a held blackout starts, and the
+  // open navigates openAfterMs after the blackout starts, so the open is inside the hold. Chrome sends a request on an
+  // HTTP/2 connection that has read nothing for 10 s only after a PING on it; inside the hold the PING goes unanswered,
+  // Chrome drops the connection 10 s later and retries on a new one, and the blackout drops the new connection's
+  // CONNECT. The open then fails with net::ERR_TIMED_OUT 40 s after it navigates, as every A and B release repetition
+  // did with the open 10 s in. The open therefore navigates well within 10 s of the pooled connection's last read.
+  releaseAtMs: 2000,
+  openAfterMs: 5000,
+  // The latest an open may navigate into the hold. The precontact's last read lands within 0.5 s before the hold
+  // starts, so an open by this time is still inside Chrome's 10 s. An open later than this came after a stall of the
+  // bench host, which spoils the repetition: one D2 repetition navigated 8.7 s in, after a 3.6 s stall, and failed
+  // 40.3 s later.
+  openByMs: 8000,
+  // An open that has not shown its newest message by this time is recorded at the cap.
   capMs: 240000,
   // An offline navigation that has not shown the page within this time is recorded as not reached.
   offlineSettleMs: 5000,

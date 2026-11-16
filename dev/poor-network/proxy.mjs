@@ -6,11 +6,10 @@
 // Each direction adds half the round trip to every byte. A delay spike holds both directions: the link starts no byte
 // while a hold is on.
 //
-// A blackout drops packets. No byte crosses the link while it runs, and a connection attempt that starts inside it is
-// lost: its CONNECT is never answered, not even at the restore, so the browser retries on its own schedule rather than
-// waiting for a held answer. A `hold` blackout keeps the established tunnels: their bytes stop with the link and travel
-// again at the restore, as a real link's TCP retransmission does. A `reset` blackout also resets every tunnel when it
-// starts, so the browser sees its connections close.
+// A blackout drops packets. The userland link stops established tunnel bytes; a loopback firewall rule drops new SYNs
+// before the proxy accepts them, leaving Linux to retry each connection on its TCP timer. A `hold` blackout keeps the
+// established tunnels: their bytes travel again at the restore, as a real link's TCP retransmission does. A `reset`
+// blackout also resets every established tunnel when it starts, so the browser sees its connections close.
 //
 // Bytes are counted per direction where they cross the link: `sent` is browser to server, `received` is server to
 // browser. The CONNECT answer counts as received, because it crosses the link too.
@@ -18,6 +17,7 @@
 import net from 'node:net';
 
 import { LINK } from './profile.mjs';
+import { LoopbackSynDropper } from './syn-dropper.mjs';
 
 // The link starts one quantum at a time, so a hold stops it within one quantum's time.
 const QUANTUM_BYTES = 1024;
@@ -56,6 +56,8 @@ export class ShapingProxy {
   #spikeOffsetMs;
   #startedAt = 0;
   #server = null;
+  #synDropper;
+  #synDropped = false;
   #dirs = { sent: new Direction('sent'), received: new Direction('received') };
   // The routes of the CONNECT authorities other than the target: `host:port` -> {host, port}. Each route shares the
   // link's budget, so a route's bytes cross the shaped link as the target's do.
@@ -90,7 +92,9 @@ export class ShapingProxy {
       this.#server.listen(0, '127.0.0.1', resolve);
     });
     this.#startedAt = performance.now();
-    return this.#server.address().port;
+    const port = this.#server.address().port;
+    this.#synDropper = new LoopbackSynDropper(port);
+    return port;
   }
 
   // The bytes that have crossed the link so far, per direction.
@@ -114,36 +118,69 @@ export class ShapingProxy {
         throw new Error(`blackout mode must be hold or reset, got ${mode}`);
       }
       const start = now + at;
-      this.#holds.push({ start, end: start + seconds * 1000 });
-      this.#holdStartsAt(start, mode);
+      const end = start + seconds * 1000;
+      this.#holds.push({ start, end });
+      this.#holdStartsAt(start, end, mode);
     }
     for (const dir of Object.values(this.#dirs)) {
       this.#pump(dir);
     }
   }
 
-  // Applies a window's start at `at` (performance.now() milliseconds), now when that time has come. A reset window
-  // resets every tunnel; a hold window drops every attempt still waiting for its CONNECT answer.
-  #holdStartsAt(at, mode) {
+  // Applies a window's packet drop at its start and restore. A reset window also resets established tunnels.
+  #holdStartsAt(at, end, mode) {
     const begin = () => {
+      const delay = at - performance.now();
+      if (delay > 0) {
+        const timer = setTimeout(() => {
+          this.#timers.delete(timer);
+          begin();
+        }, Math.ceil(delay));
+        this.#timers.add(timer);
+        return;
+      }
+      this.#syncSynDrop();
       for (const conn of [...this.#conns]) {
         if (mode === 'reset') {
           this.#reset(conn);
         } else if (!conn.established) {
-          this.#dropAttempt(conn);
+          this.#reset(conn);
         }
       }
     };
     const delay = at - performance.now();
     if (delay <= 0) {
       begin();
+    } else {
+      const timer = setTimeout(() => {
+        this.#timers.delete(timer);
+        begin();
+      }, Math.ceil(delay));
+      this.#timers.add(timer);
+    }
+
+    const restore = () => {
+      const delay = end - performance.now();
+      if (delay > 0) {
+        const timer = setTimeout(() => {
+          this.#timers.delete(timer);
+          restore();
+        }, Math.ceil(delay));
+        this.#timers.add(timer);
+        return;
+      }
+      this.#syncSynDrop();
+    };
+    const restoreDelay = end - performance.now();
+    if (restoreDelay <= 0) {
+      restore();
       return;
     }
-    const timer = setTimeout(() => {
-      this.#timers.delete(timer);
-      begin();
-    }, delay);
-    this.#timers.add(timer);
+    const restoreTimer = setTimeout(() => {
+      this.#timers.delete(restoreTimer);
+      restore();
+    }, Math.ceil(restoreDelay));
+    this.#timers.add(restoreTimer);
   }
 
   // The end of the delay spike or blackout that overlaps the window [at, at + windowMs), or 0 when the link is clear
@@ -197,6 +234,17 @@ export class ShapingProxy {
     return at >= start && at < start + this.#spikeMs ? { start, end: start + this.#spikeMs } : null;
   }
 
+  #syncSynDrop() {
+    const shouldDrop = this.#inBlackout(performance.now());
+    if (shouldDrop && !this.#synDropped) {
+      this.#synDropper.drop();
+      this.#synDropped = true;
+    } else if (!shouldDrop && this.#synDropped) {
+      this.#synDropper.restore();
+      this.#synDropped = false;
+    }
+  }
+
   #onClient(client) {
     this.#sockets.add(client);
     client.setNoDelay(true);
@@ -229,11 +277,10 @@ export class ShapingProxy {
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
-    // A blackout drops packets, the SYN of a new connection included. The attempt never reaches the target and its
-    // CONNECT is never answered, not even at the restore, so the browser retries on its own schedule. The client socket
-    // stays open and silent until the browser gives up on it.
+    // The loopback SYN filter drops new attempts before they reach this listener. Reset a connection that crossed the
+    // filter just before the blackout instead of leaving its CONNECT request open until Chrome times out.
     if (this.#inBlackout(performance.now())) {
-      client.resume();
+      resetSocket(client);
       return;
     }
     const upstream = net.connect({ host: route.host, port: route.port, allowHalfOpen: true });
@@ -317,11 +364,10 @@ export class ShapingProxy {
       const now = performance.now();
       const freeAt = Math.max(now, dir.nextFreeAt);
       const conn = dir.ring[0];
-      // A blackout drops a connection attempt's packets: a tunnel whose CONNECT answer has not reached the browser is
-      // lost, not held to the restore, so the browser's own retry decides the recovery. A byte whose half round trip
-      // lands inside the blackout is in flight when the packets drop, and is lost too.
+      // A blackout drops a connection attempt whose CONNECT answer has not reached the browser. A byte whose half round
+      // trip lands inside the blackout is in flight when packets drop, and is lost too.
       if (!conn.established && (this.#inBlackout(freeAt) || this.#inBlackout(freeAt + this.#oneWayMs))) {
-        this.#dropAttempt(conn);
+        this.#reset(conn);
         continue;
       }
       const openAt = this.#openAt(freeAt);
@@ -422,20 +468,6 @@ export class ShapingProxy {
     resetSocket(conn.upstream);
   }
 
-  // Drops a connection attempt: the link loses its packets, so it never reaches the target and the browser gets no
-  // answer, not even at the restore. The client socket stays open and silent, its bytes discarded, until the browser's
-  // own connect timeout ends the attempt.
-  #dropAttempt(conn) {
-    if (conn.dead) {
-      return;
-    }
-    this.#forget(conn);
-    conn.client.pause();
-    if (!conn.upstream.destroyed) {
-      conn.upstream.destroy();
-    }
-  }
-
   #retire(conn) {
     this.#forget(conn);
     conn.client.destroy();
@@ -454,11 +486,18 @@ export class ShapingProxy {
         dir.timer = null;
       }
     }
-    for (const socket of this.#sockets) {
-      socket.destroy();
+    try {
+      if (this.#synDropped) {
+        this.#synDropper.restore();
+        this.#synDropped = false;
+      }
+    } finally {
+      for (const socket of this.#sockets) {
+        socket.destroy();
+      }
+      this.#sockets.clear();
+      this.#conns.clear();
+      await new Promise((resolve) => this.#server.close(resolve));
     }
-    this.#sockets.clear();
-    this.#conns.clear();
-    await new Promise((resolve) => this.#server.close(resolve));
   }
 }

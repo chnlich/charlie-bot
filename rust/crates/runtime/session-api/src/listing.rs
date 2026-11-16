@@ -167,7 +167,7 @@ pub struct ListingCorpus {
 /// Both identities are held weakly: a dropped store's corpus never answers another store's request.
 static ACTIVE_CORPUS_MEMO: LazyLock<Mutex<Option<ActiveCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
 
-/// One memo entry. The memo holds it by value; only the store and registry it names are weak.
+/// One memo entry. The memo holds it by value. Only the store and registry it names are weak.
 struct ActiveCorpusEntry {
   store: Weak<Store>,
   registry: Weak<Registry>,
@@ -289,7 +289,7 @@ impl PageRows {
 /// store's corpus never answers another store's request.
 static PAGE_CORPUS_MEMO: LazyLock<Mutex<Option<PageCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
 
-/// One memo entry. The memo holds it by value; only the store and registry it names are weak.
+/// One memo entry. The memo holds it by value. Only the store and registry it names are weak.
 struct PageCorpusEntry {
   store: Weak<Store>,
   registry: Weak<Registry>,
@@ -413,7 +413,7 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<Page
 
 /// The row ids a status poll names by filter, or `None` when the sidebar has no filter of that name.
 ///
-/// `all` is the Workspace's page; `starred` is every starred session, archived ones included; any other name is a
+/// `all` is the Workspace's page. `starred` is every starred session, archived ones included. Any other name is a
 /// sidebar view the registry knows, answered with the active rows that belong to it.
 pub fn status_filter_ids(
   store: &Arc<Store>,
@@ -584,7 +584,7 @@ impl PageRowsMemo {
 /// `clear_unread` names the active session. Its row renders with `has_unread` false and is left out of the memo, so
 /// a later request that names another active session does not serve the marked row.
 ///
-/// `active` names the session the page shows; the text carries the rows the sidebar paints before the reader expands
+/// `active` names the session the page shows. The text carries the rows the sidebar paints before the reader expands
 /// a group ([`PageFirstScreen`]), and `active`'s row and subtree are always among them.
 pub fn active_page_json_text(
   store: &Store,
@@ -1108,8 +1108,8 @@ const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", SCHEMA_VERSION_FIELD];
 /// Leave out the fields no page client reads, and an empty `round_ratings`.
 ///
 /// A row's `round_ratings` is an object of rounds the user rated, so a session with ratings keeps it. The page's
-/// client reads the field as `session.round_ratings || {}`, which draws an absent field exactly like an empty map;
-/// on the mock home every session's map is empty, and the field's 121,720 bytes of the sidebar text carry no value.
+/// client reads the field as `session.round_ratings || {}`, which draws an absent field exactly like an empty map.
+/// On the mock home every session's map is empty, and the field's 121,720 bytes of the sidebar text carry no value.
 fn drop_unread_fields(value: &mut Value) {
   let object = value.as_object_mut().expect("a session metadata value is an object");
   object.retain(|field, value| {
@@ -1123,7 +1123,7 @@ fn drop_unread_fields(value: &mut Value) {
 /// The page's own presence and form of the row values the client fixes.
 ///
 /// The page lists active sessions only ([`active_page_rows`] reads [`SessionStatus::Active`]), so every page row's
-/// `status` is `active`; the sidebar reads an absent status as active. A task-tree row's `work_state` paints an
+/// `status` is `active`. The sidebar reads an absent status as active. A task-tree row's `work_state` paints an
 /// indicator only for `waiting`, and `idle` is the client's own default, so an idle row drops it while any other
 /// state stays.
 ///
@@ -1170,7 +1170,7 @@ pub fn sessions_list_page_response(
 
 /// Render sidebar rows with their controller fields and route-local body and gzip memos.
 ///
-/// `shared` names the allocation a memoized corpus was handed out as, when the caller holds one; a route that filters
+/// `shared` names the allocation a memoized corpus was handed out as, when the caller holds one. A route that filters
 /// the corpus into a list of its own passes `None` and the source compares row by row.
 pub fn sessions_list_response(
   request: &Request<Body>,
@@ -1298,7 +1298,7 @@ pub fn row_refresh_ids(request: &Request<Body>) -> Option<Vec<String>> {
 /// decoding and the same epoch-minute times. The row memo is local to this call: a refresh names a few rows, and the
 /// whole-listing memo keys on the full page.
 pub fn row_refresh_text(store: &Store, page: &PageRows, ids: &[String]) -> StoreResult<String> {
-  // The named rows come from the page's id index, so a refresh of a full Workspace does not walk the corpus; the ids
+  // The named rows come from the page's id index, so a refresh of a full Workspace does not walk the corpus. The ids
   // the page no longer holds come back in `gone`.
   let named = page.rows_named(ids);
   row_refresh_text_for(store, &named, page.derived(), &page.sequence_fields, ids, LISTING_PROJECTION)
@@ -1411,7 +1411,7 @@ fn row_inputs(
         derived: derived.get(&row.id).cloned(),
         thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_str())),
         run_backend: if projection.include_run_backend { run_backend(store, row)? } else { None },
-        // Only a worker row renders a display backend; another row keeps the backend its metadata carries.
+        // Only a worker row renders a display backend. Another row keeps the backend its metadata carries.
         display_backend: if projection.display_backend && row.profile == TaskProfile::Worker {
           display_backend(store, row)?
         } else {
@@ -1730,7 +1730,7 @@ mod tests {
   async fn a_repeat_page_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
     let (_home, features) = crate::test_support::feature_context();
     crate::test_support::create_node(&features.store, "corpus-first", None, TaskProfile::Manager).await;
-    // The first read probes the new session and moves the sidebar generation, so it stores nothing; the read after it
+    // The first read probes the new session and moves the sidebar generation, so it stores nothing. The read after it
     // resolves the overlays with every probe settled.
     let _ = active_page_rows(&features.store, &features.registry).unwrap();
     let page = active_page_rows(&features.store, &features.registry).unwrap();
@@ -1740,7 +1740,7 @@ mod tests {
     assert!(Arc::ptr_eq(&page.rows, &again.rows), "a repeat read serves the row vector it already built");
     assert!(Arc::ptr_eq(&page.derived, &again.derived), "a repeat read serves the overlays it already resolved");
 
-    // A rebuilt index holds an equal archive list in a new allocation; the page still serves the corpus it built.
+    // A rebuilt index holds an equal archive list in a new allocation. The page still serves the corpus it built.
     features.store.invalidate_tree_index();
     let rebuilt = active_page_rows(&features.store, &features.registry).unwrap();
     assert!(
@@ -1764,7 +1764,7 @@ mod tests {
   async fn a_repeat_listing_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
     let (_home, features) = crate::test_support::feature_context();
     crate::test_support::create_node(&features.store, "active-first", None, TaskProfile::Manager).await;
-    // The first read probes the new session and moves the sidebar generation, so it stores nothing; the read after it
+    // The first read probes the new session and moves the sidebar generation, so it stores nothing. The read after it
     // resolves the overlays with every probe settled.
     let _ = active_listing_corpus(&features.store, &features.registry).unwrap();
     let corpus = active_listing_corpus(&features.store, &features.registry).unwrap();

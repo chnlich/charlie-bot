@@ -350,7 +350,7 @@ enum ClientFrame {
   Subscribe(SubscribeRequest),
 }
 
-/// Parse one client frame. A frame that does not claim to be a `subscribe` is `Other`; one that
+/// Parse one client frame. A frame that does not claim to be a `subscribe` is `Other`. One that
 /// claims it and cannot be served is `MalformedSubscribe`.
 fn parse_client_frame(text: &str) -> ClientFrame {
   let Ok(frame) = serde_json::from_str::<Value>(text) else {
@@ -587,7 +587,7 @@ async fn keepalive(
 /// Whether a queued session frame repeats an event the catch-up replay already sent. Only stream frames need
 /// this: a repeated append would concatenate its text a second time, where a repeated committed message is
 /// recognized by its id. `replayed_through` is the replay's event count, in the same stamped index the live
-/// frames carry; frames of later events are new.
+/// frames carry. Frames of later events are new.
 fn covered_by_replay(frame: &str, replayed_through: Option<usize>) -> bool {
   let Some(replayed_through) = replayed_through else { return false };
   let Ok(value) = serde_json::from_str::<Value>(frame) else { return false };
@@ -1408,7 +1408,7 @@ mod tests {
     let _ = server.await;
   }
 
-  /// A matching `asset_version` and an absent one both serve the catch-up as before; the matching value
+  /// A matching `asset_version` and an absent one both serve the catch-up as before. The matching value
   /// is the one the same `Templating` renders into the page's `?v=` script URLs.
   #[tokio::test]
   async fn a_matching_or_absent_asset_version_reaches_the_catchup() {

@@ -108,7 +108,7 @@ static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<LiveCountMemo>>> = LazyLock::new(|
 ///
 /// The rows are the ones the sidebar lists. They are the active sessions no sequence owns, less the ones a sidebar
 /// view owns other than the one whose descendants fill the Threads tab. A row counts when the busy table holds it or
-/// when its own run is running; the split reads the session's profile.
+/// when its own run is running. The split reads the session's profile.
 ///
 /// A repeat poll serves the count the last request derived while the corpus, the two subtree-root maps, the derived
 /// archive set and the sidebar state still hold. A busy interval opening or closing, a probe storing a snapshot and a
@@ -520,7 +520,7 @@ fn series_of(records: &[(String, RunRecord)], range: &'static str, now: UtcDateT
 
 /// One merged span per session and channel: a session with several overlapping runs covers its span once.
 ///
-/// A run without `started_at` never ran and contributes nothing; an unended run runs up to `now`.
+/// A run without `started_at` never ran and contributes nothing. An unended run runs up to `now`.
 fn merged_spans(records: &[(String, RunRecord)], now: OffsetDateTime) -> Vec<Span> {
   let mut indexes: HashMap<&str, usize> = HashMap::new();
   let mut spans = Vec::new();
@@ -704,7 +704,7 @@ fn accepts_gzip(headers: &HeaderMap) -> bool {
 
 /// The body, its gzip form when a gzip client asks, and the tag one history request answers with.
 ///
-/// A request inside the bucket the entry holds answers the body it already built; a new bucket or a moved record set
+/// A request inside the bucket the entry holds answers the body it already built. A new bucket or a moved record set
 /// builds the series and takes the next build number for its tag.
 fn history_answer(
   store: &Store,
@@ -974,7 +974,7 @@ mod tests {
     assert_eq!(buckets[1].point.running, 0, "both runs ended at 23:00, so the bucket starting then holds none");
   }
 
-  /// A worker session with its own running run and no busy entry counts, and so does a Threads-tab session; a
+  /// A worker session with its own running run and no busy entry counts, and so does a Threads-tab session. A
   /// sequence-owned session counts nowhere.
   #[tokio::test]
   async fn the_live_count_reads_both_inputs_over_the_listed_rows() {

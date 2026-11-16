@@ -10,7 +10,8 @@
 //! replaces the text the model reads with the withhold notice, and the result counts nothing. A
 //! failure or another tool's output passes whole, is counted, and carries the over-budget notice as
 //! `additionalContext`. Exempt material — whole reads of rule and skill files, child conclusions and
-//! session status, approval objects, the user's decisions — is never counted and never withheld.
+//! session status, approval objects, the user's decisions — is never counted and never withheld, unless
+//! a glob or a `$` word names its decision path: the hook cannot resolve that word, so the read counts.
 //!
 //! The session's own rule files are the markdown files its `CLAUDE.md` names in backticks and the
 //! rule files those files name in backticks, transitively. A partial read of one of them counts.
@@ -102,6 +103,14 @@ const SESSION_CONCLUSION: &str = "conclusion";
 /// The shell readers whose presence in a Bash command keeps a rule-path read counted: their output
 /// is a selection of the material, not the material itself.
 const SHELL_READERS: &str = r"\bgrep\b|\brg\b|\bfind\b|\bdiff\b|git (log|diff)";
+
+/// The decision-path names a glob or a `$` word can hide: a plan or understanding page, a report or findings
+/// file, and a rule or skill file by name (`SKILL.md`, `LESSONS.md`, `CLAUDE.md`, `AGENTS.md`, `prompts/`,
+/// `.claude/rules/`).
+const DECISION_NAME: &str = concat!(
+  r#"(plan|understanding)_[^\s/'"]*\.html|(report|findings)\.md|"#,
+  r#"SKILL\.md|LESSONS\.md|CLAUDE\.md|AGENTS\.md|prompts/|\.claude/rules/"#,
+);
 
 /// A stream duplicated into another (`2>&1`), and a stream written to a file (`>f`, `2>f`, `>>f`, `&>f`).
 const STREAM_DUP: &str = r"\d*>&(\d+|-)";
@@ -490,6 +499,14 @@ fn exempt_class(
   cwd: Option<&str>,
   session_rules: &[String],
 ) -> Option<String> {
+  let named = match tool_name {
+    READ_TOOL => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str),
+    "Bash" => tool_input.get("command").and_then(Value::as_str),
+    _ => None,
+  };
+  if named.is_some_and(names_unresolved_decision_path) {
+    return None;
+  }
   let class = match tool_name {
     name if SUBAGENT_TOOL_NAMES.contains(&name) => Some("child_conclusion"),
     SKILL_TOOL => Some("rule_skill"),
@@ -588,6 +605,12 @@ fn without_stream_redirects(command: &str) -> String {
   }
   let duplicated = stream_dup_pattern().replace_all(command, " ");
   stream_file_pattern().replace_all(&duplicated, " ").into_owned()
+}
+
+/// Whether the command or the path names a decision path while it carries a glob (`*`, `?`, `[`) or a `$` word.
+/// The hook cannot resolve such a word to the path a read opens, so the decision path's exemption does not hold.
+fn names_unresolved_decision_path(text: &str) -> bool {
+  text.contains(['*', '?', '[', '$']) && decision_name_pattern().is_match(text)
 }
 
 /// Whether the command has shell syntax beyond one CharlieBot command piped into filters: a list or
@@ -941,6 +964,7 @@ hook_pattern!(named_pattern, r"((plan|understanding)_[^/]*\.html$|(report|findin
 hook_pattern!(cd_pattern, r"^\s*cd\s+([^\s]+)\s*$");
 hook_pattern!(segment_split_pattern, r"&&|\|\||;|\n|\|");
 hook_pattern!(token_split_pattern, r#"[^\s'"'`|;&<>()=,]+"#);
+hook_pattern!(decision_name_pattern, DECISION_NAME);
 hook_pattern!(stream_dup_pattern, STREAM_DUP);
 hook_pattern!(stream_file_pattern, STREAM_FILE);
 
@@ -1781,6 +1805,32 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
     ] {
       assert_eq!(bash_exemption(command), None, "{command}");
     }
+  }
+
+  /// An exemption that rests on a decision path holds only for a literal path. A glob or a `$` word beside the
+  /// path counts the read, for a Bash command of any class and for a Read.
+  #[test]
+  fn a_glob_or_dollar_word_beside_a_decision_path_counts() {
+    let temp_session = tempfile::tempdir().unwrap();
+    let session_path = temp_session.path();
+    std::fs::create_dir_all(session_path.join("artifacts")).unwrap();
+    std::fs::write(session_path.join("artifacts").join("plan_x.html"), "plan content").unwrap();
+    let cwd = session_path.to_str().unwrap();
+    let bash = |command: &str| {
+      let input = json!({"command": command}).as_object().unwrap().clone();
+      exempt_class("Bash", &input, Some(cwd), &[])
+    };
+    assert_eq!(bash("cat artifacts/plan_x.html").as_deref(), Some("approval_object"));
+    assert_eq!(bash("cat artifacts/plan_*.html"), None);
+    assert_eq!(bash("cat \"$D/artifacts/plan_x.html\""), None);
+    assert_eq!(bash("charliebot plan amend --file artifacts/plan_x.html --note \"$NOTE\""), None);
+    let read = |file_path: &str| {
+      let input = json!({"file_path": file_path}).as_object().unwrap().clone();
+      exempt_class(READ_TOOL, &input, None, &[])
+    };
+    assert_eq!(read("/s/artifacts/plan_x.html").as_deref(), Some("approval_object"));
+    assert_eq!(read("/s/artifacts/plan_*.html"), None);
+    assert_eq!(read("/s/$D/artifacts/plan_x.html"), None);
   }
 
   #[test]

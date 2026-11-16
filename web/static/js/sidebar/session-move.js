@@ -24,8 +24,11 @@ const SEARCH_BORDER = '#94a3b8';
 const SEARCH_FOCUS_BORDER = '#c084fc';
 const SEARCH_CLASS = 'w-full bg-slate-700 border rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none mb-3';
 const LIST_CLASS = 'flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto';
+// A choice is a flex item of the scrolling list. truncate sets overflow to hidden, which gives the item a zero
+// automatic minimum height, so without shrink-0 the list squeezes each row to a share of its height. shrink-0 keeps
+// each row at its line height plus padding, and the list scrolls the rest.
 const CHOICE_CLASS = 'w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 ' +
-  'transition-colors truncate';
+  'transition-colors truncate shrink-0';
 const ERROR_CLASS = 'flex flex-col gap-1 text-xs text-red-300';
 const FOOTER_CLASS = 'mt-2 text-xs text-slate-400';
 // The Set Group dialog's close control. The modal-close-btn class is styled by the page's close_button.html.

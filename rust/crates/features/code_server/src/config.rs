@@ -3,12 +3,11 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::str::Utf8Error;
 use std::sync::Arc;
 
 use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_core::int_text;
-use charliebot_core::json_loads::{UTF8_CODEC, codec_error_text};
+use charliebot_core::json_loads;
 use charliebot_core::paths;
 use charliebot_core::repo_root::CONFIGS_DIR_NAME;
 use charliebot_core::text_repr;
@@ -80,27 +79,13 @@ fn read_document(path: &Path) -> Result<Value, String> {
     return Ok(Value::Null);
   }
   let bytes = std::fs::read(path).map_err(|error| os_error_text(&error, path))?;
-  let text = std::str::from_utf8(&bytes).map_err(|error| decode_error_text(error, &bytes))?;
+  let text = std::str::from_utf8(&bytes).map_err(|error| json_loads::utf8_error_text(&bytes, &error))?;
   serde_yaml::from_str(text).map_err(|error| error.to_string())
 }
 
 /// The failure text: `[Errno 13] Permission denied: '<path>'`.
 fn os_error_text(error: &io::Error, path: &Path) -> String {
   charliebot_core::os_error::text(error, &text_repr::str_repr(&paths::display(path)))
-}
-
-/// The decode-failure text: the first byte that cannot start or continue a sequence, and the reason.
-fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
-  let position = error.valid_up_to();
-  let byte = bytes[position];
-  let reason = if error.error_len().is_none() {
-    "unexpected end of data"
-  } else if (0x80..0xC0).contains(&byte) || byte == 0xC0 || byte == 0xC1 || byte >= 0xF5 {
-    "invalid start byte"
-  } else {
-    "invalid continuation byte"
-  };
-  codec_error_text(UTF8_CODEC, bytes, position, position + 1, reason)
 }
 
 /// `text` normalized as a POSIX path: repeated slashes and `.` parts drop, and a trailing slash goes. An empty path is

@@ -11,7 +11,7 @@ use std::io;
 use std::path::Path;
 
 use anyhow::{anyhow, bail};
-use charliebot_core::json_loads::{UTF8_CODEC, codec_error_text};
+use charliebot_core::json_loads;
 use charliebot_core::str_methods::universal_newlines;
 use charliebot_core::text_repr::str_repr;
 use charliebot_store::metadata::{TaskSpec, TaskType};
@@ -76,43 +76,8 @@ impl TextReadError {
 pub fn read_text(path: &Path) -> Result<String, TextReadError> {
   let bytes = fs::read(path).map_err(TextReadError::Io)?;
   let text = String::from_utf8(bytes)
-    .map_err(|error| TextReadError::Decode(utf8_decode_error_text(error.as_bytes(), &error.utf8_error())))?;
+    .map_err(|error| TextReadError::Decode(json_loads::utf8_error_text(error.as_bytes(), &error.utf8_error())))?;
   Ok(universal_newlines(&text))
-}
-
-/// The text of a `UnicodeDecodeError` for the bad bytes of a UTF-8 decode.
-fn utf8_decode_error_text(bytes: &[u8], error: &std::str::Utf8Error) -> String {
-  let start = error.valid_up_to();
-  let (end, reason) = match error.error_len() {
-    Some(_) => {
-      let lead = bytes[start];
-      let expected_len = match lead {
-        0xC2..=0xDF => 2,
-        0xE0..=0xEF => 3,
-        0xF0..=0xF4 => 4,
-        _ => return codec_error_text(UTF8_CODEC, bytes, start, start + 1, "invalid start byte"),
-      };
-      let invalid_offset = (1..expected_len)
-        .find(|offset| bytes.get(start + offset).is_none_or(|byte| !valid_continuation(lead, *offset, *byte)));
-      let Some(offset) = invalid_offset else {
-        unreachable!("a complete valid UTF-8 sequence cannot produce a decode error")
-      };
-      (start + offset, "invalid continuation byte")
-    }
-    None => (bytes.len(), "unexpected end of data"),
-  };
-  codec_error_text(UTF8_CODEC, bytes, start, end, reason)
-}
-
-/// Whether this byte is a permitted continuation at this position in the UTF-8 sequence.
-fn valid_continuation(lead: u8, offset: usize, byte: u8) -> bool {
-  match (lead, offset) {
-    (0xE0, 1) => (0xA0..=0xBF).contains(&byte),
-    (0xED, 1) => (0x80..=0x9F).contains(&byte),
-    (0xF0, 1) => (0x90..=0xBF).contains(&byte),
-    (0xF4, 1) => (0x80..=0x8F).contains(&byte),
-    _ => (0x80..=0xBF).contains(&byte),
-  }
 }
 
 /// The section that states the contract of a task whose record carries no type (`WORKFLOW_NO_REVIEWER_SECTION`).
@@ -402,20 +367,5 @@ mod tests {
       .as_str();
     assert_eq!(actual, repo.path().join(PLAN_TEMPLATE_PATH).display().to_string());
     assert!(Path::new(actual).is_absolute());
-  }
-
-  #[test]
-  fn utf8_errors_match_ranges_for_invalid_sequences() {
-    let cases: &[(&[u8], &str)] = &[
-      (&[0xE2, 0x28, 0xA1], "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte"),
-      (&[0xE2, 0x82, 0x28], "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte"),
-      (&[0xED, 0xA0, 0x80], "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte"),
-      (&[0xF4, 0x90, 0x80, 0x80], "'utf-8' codec can't decode byte 0xf4 in position 0: invalid continuation byte"),
-      (&[0xF0, 0x90, 0x80], "'utf-8' codec can't decode bytes in position 0-2: unexpected end of data"),
-    ];
-    for (bytes, expected) in cases {
-      let error = std::str::from_utf8(bytes).expect_err("the test bytes are not valid UTF-8");
-      assert_eq!(utf8_decode_error_text(bytes, &error), *expected);
-    }
   }
 }

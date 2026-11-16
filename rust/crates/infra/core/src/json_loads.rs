@@ -10,6 +10,7 @@
 //! errors before it therefore win, and the document is then refused as [`LoadError::Unrepresentable`].
 
 use std::fmt;
+use std::str::Utf8Error;
 use std::sync::LazyLock;
 
 use regex::bytes::Regex;
@@ -503,9 +504,48 @@ fn decode(body: &[u8]) -> Result<Vec<u32>, LoadError> {
 /// Python's codec name for UTF-8, the name its decode-error text prints and the name a form body decodes under.
 pub const UTF8_CODEC: &str = "utf-8";
 
-/// The decode-error text the readers below report and a text reader outside this module reuses: a one-byte range
-/// names the byte, a longer range names `start-end` (end inclusive). `codec` is Python's codec name, such as `utf-8`.
-pub fn codec_error_text(codec: &str, body: &[u8], start: usize, end: usize, reason: &str) -> String {
+/// The reasons Python's UTF-8 decode error states, one per way a byte or a sequence can fail.
+const INVALID_START_BYTE: &str = "invalid start byte";
+const INVALID_CONTINUATION_BYTE: &str = "invalid continuation byte";
+const UNEXPECTED_END_OF_DATA: &str = "unexpected end of data";
+
+/// The decode-error text of a failed UTF-8 decode of `bytes`, as Python's `UnicodeDecodeError` states it: the byte
+/// that cannot open a sequence, the byte that cannot continue one, or the held range of a truncated sequence.
+pub fn utf8_error_text(bytes: &[u8], error: &Utf8Error) -> String {
+  let start = error.valid_up_to();
+  let (end, reason) = match error.error_len() {
+    Some(_) => {
+      let lead = bytes[start];
+      let width = match lead {
+        0xC2..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF4 => 4,
+        _ => return codec_error_text(UTF8_CODEC, bytes, start, start + 1, INVALID_START_BYTE),
+      };
+      let invalid = (1..width)
+        .find(|offset| bytes.get(start + offset).is_none_or(|byte| !is_continuation_at(lead, *offset, *byte)))
+        .expect("a sequence with a valid lead byte and a decode error holds an invalid continuation");
+      (start + invalid, INVALID_CONTINUATION_BYTE)
+    }
+    None => (bytes.len(), UNEXPECTED_END_OF_DATA),
+  };
+  codec_error_text(UTF8_CODEC, bytes, start, end, reason)
+}
+
+/// Whether `byte` may follow `lead` at `offset` in a UTF-8 sequence.
+fn is_continuation_at(lead: u8, offset: usize, byte: u8) -> bool {
+  match (lead, offset) {
+    (0xE0, 1) => (0xA0..=0xBF).contains(&byte),
+    (0xED, 1) => (0x80..=0x9F).contains(&byte),
+    (0xF0, 1) => (0x90..=0xBF).contains(&byte),
+    (0xF4, 1) => (0x80..=0x8F).contains(&byte),
+    _ => (0x80..=0xBF).contains(&byte),
+  }
+}
+
+/// The decode-error text: a one-byte range names the byte, a longer range names `start-end` (end inclusive). `codec`
+/// is Python's codec name, such as `utf-8`.
+fn codec_error_text(codec: &str, body: &[u8], start: usize, end: usize, reason: &str) -> String {
   if end == start + 1 {
     format!("'{codec}' codec can't decode byte 0x{:02x} in position {start}: {reason}", body[start])
   } else {
@@ -536,17 +576,17 @@ fn decode_utf8(body: &[u8], skip: usize) -> Result<Vec<u32>, LoadError> {
       0xF0 => (4, 0x90, 0xBF),
       0xF1..=0xF3 => (4, 0x80, 0xBF),
       0xF4 => (4, 0x80, 0x8F),
-      _ => return Err(codec_error(UTF8_CODEC, body, i, i + 1, "invalid start byte")),
+      _ => return Err(codec_error(UTF8_CODEC, body, i, i + 1, INVALID_START_BYTE)),
     };
     let mut code = u32::from(lead) & (0x7F >> width);
     for offset in 1..width {
       let position = i + offset;
       let Some(&byte) = body.get(position) else {
-        return Err(codec_error(UTF8_CODEC, body, i, position, "unexpected end of data"));
+        return Err(codec_error(UTF8_CODEC, body, i, position, UNEXPECTED_END_OF_DATA));
       };
       let (lower, upper) = if offset == 1 { (low, high) } else { (0x80, 0xBF) };
       if !(lower..=upper).contains(&byte) {
-        return Err(codec_error(UTF8_CODEC, body, i, position, "invalid continuation byte"));
+        return Err(codec_error(UTF8_CODEC, body, i, position, INVALID_CONTINUATION_BYTE));
       }
       code = (code << 6) | u32::from(byte & 0x3F);
     }
@@ -651,6 +691,24 @@ mod tests {
     assert_eq!(message(b"\xff"), "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte");
     assert_eq!(message(b"\"\xe2\x82\""), "'utf-8' codec can't decode bytes in position 1-2: invalid continuation byte");
     assert_eq!(message(b"\xe2\x82"), "'utf-8' codec can't decode bytes in position 0-1: unexpected end of data");
+  }
+
+  #[test]
+  fn a_failed_str_decode_names_the_range_as_a_json_read_does() {
+    let cases: &[(&[u8], &str)] = &[
+      (&[0xFF], "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"),
+      (&[0xE4, 0x41], "'utf-8' codec can't decode byte 0xe4 in position 0: invalid continuation byte"),
+      (&[0xE2, 0x28, 0xA1], "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte"),
+      (&[0xE2, 0x82, 0x28], "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte"),
+      (&[0xED, 0xA0, 0x80], "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte"),
+      (&[0xF4, 0x90, 0x80, 0x80], "'utf-8' codec can't decode byte 0xf4 in position 0: invalid continuation byte"),
+      (&[0xE2, 0x82], "'utf-8' codec can't decode bytes in position 0-1: unexpected end of data"),
+      (&[0xF0, 0x90, 0x80], "'utf-8' codec can't decode bytes in position 0-2: unexpected end of data"),
+    ];
+    for (bytes, expected) in cases {
+      let error = std::str::from_utf8(bytes).expect_err("the test bytes are not valid UTF-8");
+      assert_eq!(utf8_error_text(bytes, &error), *expected);
+    }
   }
 
   #[test]

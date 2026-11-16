@@ -9,7 +9,6 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::str::Utf8Error;
 
 use anyhow::anyhow;
 use charliebot_core::json_loads;
@@ -238,7 +237,8 @@ pub(crate) fn load_registry(plans_path: &Path) -> Result<Value, LoadFailure> {
 
 /// The registry document decoded from the file's bytes, or the decode failure.
 pub(crate) fn decode_registry(bytes: &[u8]) -> Result<Value, LoadFailure> {
-  let text = std::str::from_utf8(bytes).map_err(|error| LoadFailure::Caught(utf8_error_text(&error, bytes)))?;
+  let text =
+    std::str::from_utf8(bytes).map_err(|error| LoadFailure::Caught(json_loads::utf8_error_text(bytes, &error)))?;
   // The text-mode read translates every line ending to "\n", and the JSON error positions count that text.
   let text = str_methods::universal_newlines(text);
   json_loads::loads_text(&text).map_err(|error| match error {
@@ -302,20 +302,6 @@ pub(crate) fn os_escape(error: &io::Error, path: &Path) -> EscapedError {
 fn os_error_text(error: &io::Error, path: &Path) -> String {
   let filename = text_repr::str_repr(&path.to_string_lossy());
   charliebot_core::os_error::errno_text(error, &filename).expect("a filesystem call fails with an errno")
-}
-
-/// The decode-failure text for the UTF-8 failure at `error` in `bytes`.
-fn utf8_error_text(error: &Utf8Error, bytes: &[u8]) -> String {
-  let start = error.valid_up_to();
-  let (end, reason) = match error.error_len() {
-    Some(length) => {
-      let lead_byte = matches!(bytes[start], 0xC2..=0xF4);
-      let reason = if lead_byte { "invalid continuation byte" } else { "invalid start byte" };
-      (start + length, reason)
-    }
-    None => (bytes.len(), "unexpected end of data"),
-  };
-  json_loads::codec_error_text(json_loads::UTF8_CODEC, bytes, start, end, reason)
 }
 
 /// The repr form of a JSON value: strings quoted, the rest in their value spelling.

@@ -1622,7 +1622,8 @@ backends:
   async fn a_page_bootstrap_keeps_the_sessions_it_served_before() {
     let (_home, features) = feature_context();
     let first = crate::test_support::create_node(&features.store, "page-bootstrap-a", None, TaskProfile::Manager).await;
-    let second = crate::test_support::create_node(&features.store, "page-bootstrap-b", None, TaskProfile::Manager).await;
+    let second =
+      crate::test_support::create_node(&features.store, "page-bootstrap-b", None, TaskProfile::Manager).await;
     let memo = PageBootstrapMemo::default();
     let cfg = features.config.get().expect("the test config loads");
     let text = |session: &SessionMetadata| {

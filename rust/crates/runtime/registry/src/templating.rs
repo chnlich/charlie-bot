@@ -94,8 +94,8 @@ pub struct Templating {
   sources: Mutex<Option<SourceCache>>,
   /// The last compiled environment, kept while its template sources and globals still hold their value.
   render_cache: Mutex<Option<RenderCache>>,
-  /// The page text one render built and the inputs it built from.
-  render_memo: Mutex<Option<RenderMemo>>,
+  /// The page texts one render built, newest last, and the inputs each built from.
+  render_memo: Mutex<Vec<RenderMemo>>,
   /// The stable globals one config and credentials version produced.
   globals_memo: Mutex<Option<StableGlobalsMemo>>,
   /// The compressed forms of the last eight page bodies deflated, the oldest first.
@@ -165,6 +165,10 @@ struct RenderMemo {
   html: Arc<String>,
 }
 
+/// The renders one watch revision keeps, newest last. A reader who moves between two sessions asks for a render whose
+/// context differs only in that session's values, and one slot would rebuild the whole page on every switch.
+const RENDER_MEMO_ENTRIES: usize = 4;
+
 /// The stable globals one config and credentials version produced, by name.
 ///
 /// Both hot reloads hand out a new `Arc` when their file moves, so the memo keeps a version's values while both
@@ -210,7 +214,7 @@ impl Templating {
       asset_digest: Mutex::new(AssetDigestState::default()),
       sources: Mutex::new(None),
       render_cache: Mutex::new(None),
-      render_memo: Mutex::new(None),
+      render_memo: Mutex::new(Vec::new()),
       globals_memo: Mutex::new(None),
       page_gzips: Mutex::new(Vec::new()),
       static_tails: Mutex::new(Vec::new()),
@@ -384,15 +388,19 @@ impl Templating {
     let request = request_context(request);
     let revision = self.watch.revision();
     {
-      let memo = self.render_memo.lock().expect("the render memo mutex is not poisoned");
-      if let Some(entry) = memo.as_ref()
-        && entry.revision == revision
-        && entry.name == name
-        && entry.globals == globals
-        && entry.context == *context
-        && entry.request == request
-      {
-        return Ok(Arc::clone(&entry.html));
+      let mut memo = self.render_memo.lock().expect("the render memo mutex is not poisoned");
+      if let Some(at) = memo.iter().position(|entry| {
+        entry.revision == revision
+          && entry.name == name
+          && entry.globals == globals
+          && entry.context == *context
+          && entry.request == request
+      }) {
+        // The page served again is the newest render, so an eviction takes the one served longest ago.
+        let entry = memo.remove(at);
+        let html = Arc::clone(&entry.html);
+        memo.push(entry);
+        return Ok(html);
       }
     }
     let mut render_context = context.clone();
@@ -401,7 +409,10 @@ impl Templating {
       .expect("a page context is a JSON object")
       .insert("request".to_string(), request.clone());
     let html = Arc::new(self.render(name, &render_context, globals.clone(), revision)?);
-    *self.render_memo.lock().expect("the render memo mutex is not poisoned") = Some(RenderMemo {
+    let mut memo = self.render_memo.lock().expect("the render memo mutex is not poisoned");
+    // A moved tree renders under a new revision, and the renders it replaces never answer again.
+    memo.retain(|entry| entry.revision == revision);
+    memo.push(RenderMemo {
       revision,
       name: name.to_string(),
       globals,
@@ -409,6 +420,9 @@ impl Templating {
       request,
       html: Arc::clone(&html),
     });
+    if memo.len() > RENDER_MEMO_ENTRIES {
+      memo.remove(0);
+    }
     Ok(html)
   }
 
@@ -1271,6 +1285,30 @@ mod tests {
     let moved = templating.render_page_template(&features, "counted.html", &json!({}), &parts).unwrap();
     assert_eq!(moved.as_str(), (base + 1).to_string(), "a moved config evaluates the globals again");
     assert_eq!(GLOBAL_EVALUATIONS.load(Ordering::SeqCst) - base, 2);
+  }
+
+  /// A reader who moves between two pages and comes back is served the render it leaves, because one page's render
+  /// no longer displaces the other's.
+  #[test]
+  fn a_page_rendered_before_another_is_still_served_from_the_memo() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_templates_directory(root.path(), "features.notes");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("both.html"), "{{ name }}").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("features.notes", register_counted).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/both").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    let first_a = templating.render_page_template(&features, "both.html", &json!({"name": "a"}), &parts).unwrap();
+    let first_b = templating.render_page_template(&features, "both.html", &json!({"name": "b"}), &parts).unwrap();
+    let again_a = templating.render_page_template(&features, "both.html", &json!({"name": "a"}), &parts).unwrap();
+    assert_eq!(first_a.as_str(), "a");
+    assert_eq!(first_b.as_str(), "b");
+    assert!(Arc::ptr_eq(&first_a, &again_a), "the page rendered before another one is still kept");
   }
 
   /// A live global may read state the config does not carry, so the engine evaluates it at every render.

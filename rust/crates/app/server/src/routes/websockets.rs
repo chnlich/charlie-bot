@@ -14,6 +14,7 @@ use axum::extract::{FromRequestParts, Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::mimetypes_table::TEXT_PLAIN;
+use charliebot_core::event_types::REQUEST_EXCEPTION_EVENT;
 use http::{HeaderMap, StatusCode, header};
 
 use crate::auth;
@@ -43,7 +44,7 @@ pub async fn gate(State(state): State<Arc<AppState>>, request: Request, next: Ne
   let key = match state.access_key() {
     Ok(key) => key,
     Err(error) => {
-      tracing::error!(error = %error, "Exception in ASGI application");
+      tracing::error!(error = %error, "{}", REQUEST_EXCEPTION_EVENT);
       return forbidden();
     }
   };
@@ -51,7 +52,7 @@ pub async fn gate(State(state): State<Arc<AppState>>, request: Request, next: Ne
     Ok(true) => {}
     Ok(false) => return forbidden(),
     Err(auth::NonAsciiCredential) => {
-      tracing::error!(error = "TypeError", "Exception in ASGI application");
+      tracing::error!(error = "TypeError", "{}", REQUEST_EXCEPTION_EVENT);
       return forbidden();
     }
   }

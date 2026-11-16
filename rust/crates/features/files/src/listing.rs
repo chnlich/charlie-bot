@@ -25,7 +25,30 @@ pub enum ListingError {
   /// The directory cannot be listed (`PermissionError`): 403.
   PermissionDenied,
   /// Any other failure, such as an I/O error or a name the page cannot encode: 500.
-  Failed { kind: &'static str, detail: String },
+  Failed { kind: FailureKind, detail: String },
+}
+
+/// The exception name a 500's request log line carries in its `error` field. Each name is a Python exception
+/// class, because the log event is the ASGI server's `Exception in ASGI application`.
+#[derive(Debug, Clone, Copy)]
+#[allow(clippy::enum_variant_names)] // Each name is the exception name the log line carries.
+pub enum FailureKind {
+  OSError,
+  UnicodeEncodeError,
+  OverflowError,
+  RuntimeError,
+}
+
+impl FailureKind {
+  /// The exception name the request log's `error` field carries.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::OSError => "OSError",
+      Self::UnicodeEncodeError => "UnicodeEncodeError",
+      Self::OverflowError => "OverflowError",
+      Self::RuntimeError => "RuntimeError",
+    }
+  }
 }
 
 /// One child that `stat` could read.
@@ -46,7 +69,7 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
         ErrorKind::NotADirectory => Ok(None),
         ErrorKind::NotFound => Err(ListingError::Missing),
         ErrorKind::PermissionDenied => Err(ListingError::PermissionDenied),
-        _ => Err(failed("OSError", format!("{}: {error}", dir_path.display()))),
+        _ => Err(failed(FailureKind::OSError, format!("{}: {error}", dir_path.display()))),
       };
     }
   };
@@ -54,8 +77,10 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
   for entry in entries {
     // A child that cannot be stat-ed is skipped, not reported.
     let Ok(metadata) = fs::metadata(entry.path()) else { continue };
-    let name =
-      entry.file_name().into_string().map_err(|name| failed("UnicodeEncodeError", format!("{name:?} is not UTF-8")))?;
+    let name = entry
+      .file_name()
+      .into_string()
+      .map_err(|name| failed(FailureKind::UnicodeEncodeError, format!("{name:?} is not UTF-8")))?;
     children.push(Child {
       name,
       is_dir: metadata.is_dir(),
@@ -69,15 +94,19 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
   let base = url_prefix.trim_end_matches('/');
   if base != FILE_SERVER_MOUNT {
     let (parent, _) = base.rsplit_once('/').expect("a listed URL runs under the mount, so it holds a slash");
-    rows.push_str(&format!(r#"<tr><td>📁</td><td><a href="{}">..</a></td><td></td><td></td></tr>"#, escape(parent)));
+    rows.push_str(&format!(
+      r#"<tr><td class="icon">📁</td><td class="name"><a href="{}">..</a></td><td class="size"></td><td class="modified"></td></tr>"#,
+      escape(parent)
+    ));
     rows.push('\n');
   }
   for child in &children {
     rows.push_str(&row(child, base)?);
     rows.push('\n');
   }
-  let display_path =
-    dir_path.to_str().ok_or_else(|| failed("UnicodeEncodeError", "the directory path is not UTF-8".into()))?;
+  let display_path = dir_path
+    .to_str()
+    .ok_or_else(|| failed(FailureKind::UnicodeEncodeError, "the directory path is not UTF-8".into()))?;
   Ok(Some(page(&escape(display_path), &rows)))
 }
 
@@ -89,28 +118,44 @@ fn row(child: &Child, base: &str) -> Result<String, ListingError> {
   let size = if child.is_dir { String::new() } else { human_size::format_size(child.size) };
   let modified = modified_minute(child.modified)?;
   Ok(format!(
-    r#"<tr><td>{icon}</td><td><a href="{href}">{name}</a></td><td style="text-align:right">{size}</td><td>{modified}</td></tr>"#
+    r#"<tr><td class="icon">{icon}</td><td class="name"><a href="{href}">{name}</a></td><td class="size">{size}</td><td class="modified">{modified}</td></tr>"#
   ))
 }
 
 /// The page around the rows. The format reads the markup's doubled braces as single ones.
+///
+/// Below 600 px each row is a grid: the icon beside the name, and the size and modified time beneath the name. The
+/// viewport meta makes a phone use its own width, so the query matches the screen and not a 980 px desktop layout.
 fn page(display_path: &str, rows: &str) -> String {
   format!(
     r#"<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Index of {display_path}</title>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Index of {display_path}</title>
 <style>
   body {{ font-family: monospace; margin: 2em; }}
   table {{ border-collapse: collapse; }}
   td, th {{ padding: 4px 12px; text-align: left; }}
+  td.size {{ text-align: right; }}
   a {{ text-decoration: none; color: #0366d6; }}
   a:hover {{ text-decoration: underline; }}
+  @media (max-width: 600px) {{
+    body {{ margin: 1em; }}
+    h2 {{ overflow-wrap: anywhere; }}
+    table, tbody {{ display: block; }}
+    tr {{ display: grid; grid-template-columns: 2em 6em minmax(0, 1fr); padding: 6px 0; border-bottom: 1px solid #e1e4e8; }}
+    tr.head {{ display: none; }}
+    td {{ padding: 0; }}
+    td.icon {{ grid-row: 1 / span 2; }}
+    td.name {{ grid-column: 2 / span 2; overflow-wrap: anywhere; }}
+    td.size {{ grid-column: 2; grid-row: 2; text-align: left; }}
+    td.modified {{ grid-column: 3; grid-row: 2; }}
+  }}
 </style>
 </head>
 <body>
 <h2>Index of {display_path}</h2>
 <table>
-<tr><th></th><th>Name</th><th>Size</th><th>Modified</th></tr>
+<tr class="head"><th></th><th>Name</th><th>Size</th><th>Modified</th></tr>
 {rows}
 </table>
 </body>
@@ -129,8 +174,8 @@ fn modified_minute(seconds: f64) -> Result<String, ListingError> {
   } else {
     seconds.trunc()
   };
-  let moment =
-    OffsetDateTime::from_unix_timestamp(whole as i64).map_err(|error| failed("OverflowError", error.to_string()))?;
+  let moment = OffsetDateTime::from_unix_timestamp(whole as i64)
+    .map_err(|error| failed(FailureKind::OverflowError, error.to_string()))?;
   Ok(format!(
     "{:04}-{:02}-{:02} {:02}:{:02}",
     moment.year(),
@@ -151,7 +196,7 @@ fn quote(name: &str) -> String {
   utf8_percent_encode(name, FILENAME_SET).to_string()
 }
 
-fn failed(kind: &'static str, detail: String) -> ListingError {
+fn failed(kind: FailureKind, detail: String) -> ListingError {
   ListingError::Failed { kind, detail }
 }
 
@@ -212,13 +257,13 @@ mod tests {
     let page = listing(dir.path(), "/absolute_filepath/tmp");
     assert!(
       page.contains(
-        r#"<tr><td>📄</td><td><a href="/absolute_filepath/tmp/notes.txt">notes.txt</a></td><td style="text-align:right">1.5 KB</td><td>2026-01-01 12:00</td></tr>"#
+        r#"<tr><td class="icon">📄</td><td class="name"><a href="/absolute_filepath/tmp/notes.txt">notes.txt</a></td><td class="size">1.5 KB</td><td class="modified">2026-01-01 12:00</td></tr>"#
       ),
       "{page}"
     );
     assert!(
       page.contains(
-        r#"<tr><td>📁</td><td><a href="/absolute_filepath/tmp/sub">sub/</a></td><td style="text-align:right"></td><td>"#
+        r#"<tr><td class="icon">📁</td><td class="name"><a href="/absolute_filepath/tmp/sub">sub/</a></td><td class="size"></td><td class="modified">"#
       ),
       "{page}"
     );
@@ -230,7 +275,7 @@ mod tests {
     let file = dir.path().join("late.txt");
     fs::write(&file, "").expect("the file writes");
     set_mtime(&file, NOON + 59, 999_999_900);
-    assert!(listing(dir.path(), "/absolute_filepath").contains("<td>2026-01-01 12:01</td>"));
+    assert!(listing(dir.path(), "/absolute_filepath").contains(r#"<td class="modified">2026-01-01 12:01</td>"#));
   }
 
   #[test]
@@ -239,7 +284,9 @@ mod tests {
     let at_root = listing(dir.path(), "/absolute_filepath/");
     assert!(!at_root.contains(">..</a>"), "{at_root}");
     let below = listing(dir.path(), "/absolute_filepath/x/y/");
-    assert!(below.contains(r#"<tr><td>📁</td><td><a href="/absolute_filepath/x">..</a></td><td></td><td></td></tr>"#));
+    assert!(below.contains(
+      r#"<tr><td class="icon">📁</td><td class="name"><a href="/absolute_filepath/x">..</a></td><td class="size"></td><td class="modified"></td></tr>"#
+    ));
   }
 
   #[test]

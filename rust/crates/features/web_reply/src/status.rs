@@ -877,20 +877,16 @@ mod tests {
   /// Write one archived close fact, as the completion owner's operator archive writes a root's fact.
   async fn archive_task(features: &charliebot_registry::context::FeatureContext, session_id: &str) {
     let guard = features.store.control_lock().await;
-    let event = charliebot_store::control_events::build_control_event(
-      charliebot_core::event_types::TASK_CLOSED,
-      "user",
+    let event = charliebot_store::control_events::archived_close_event(
       session_id,
+      "synthetic-status-archive",
+      "archived by the user",
       None,
       None,
-      [
-        ("request_id".to_string(), json!("synthetic-status-archive")),
-        ("outcome".to_string(), json!("archived")),
-        ("summary".to_string(), json!("archived by the user")),
-        ("result_refs".to_string(), json!([])),
-        ("run_ids".to_string(), json!([])),
-        ("report_to".to_string(), serde_json::Value::Null),
-      ],
+      None,
+      charliebot_store::control_events::ACTOR_USER,
+      &[],
+      &[],
     );
     features.store.append_control_fact(&guard, session_id, event).await.expect("the archive fact appends");
     drop(guard);

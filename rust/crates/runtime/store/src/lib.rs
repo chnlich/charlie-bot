@@ -74,7 +74,7 @@ pub use task_reparent::{AGENT_REPARENT_SCOPE_REFUSAL, CALLER_SESSION_ID_FIELD};
 pub use task_tree::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, NodeFacts, PatchTask, PromptScope, StructuralBlockers,
   TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller, TaskFacts, TaskState, TaskTreeActivity, TaskTreePage, TaskTreeRow,
-  TaskTreeSnapshot, is_read_only_exempt,
+  TaskTreeSnapshot,
 };
 
 use std::fmt;

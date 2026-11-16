@@ -906,6 +906,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "backends/charlie_code",
     hint: "Use the `TASK_FILE_NAME` of `backends/charlie_code/src/charlie_code_cli.rs`.",
   },
+  OwnerRow { name: ".claude", owner: "infra/core", hint: "Use `charliebot_core::home::CLAUDE_CONFIG_DIR_NAME`." },
   OwnerRow {
     name: "PreToolUse",
     owner: "backends/claude_code",
@@ -949,6 +950,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Use `charliebot_core::pacific::ZONE`, the house time zone.",
   },
+  OwnerRow { name: "pid_start", owner: "infra/core", hint: "Use `charliebot_core::proc_identity::PID_START_FIELD`." },
   OwnerRow { name: "NaN", owner: "infra/core", hint: "Use `charliebot_core::json_loads::NAN`." },
   OwnerRow { name: "Infinity", owner: "infra/core", hint: "Use `charliebot_core::json_loads::INFINITY`." },
   OwnerRow { name: "-Infinity", owner: "infra/core", hint: "Use `charliebot_core::json_loads::NEGATIVE_INFINITY`." },
@@ -1082,10 +1084,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::CC_SESSION_STARTED_AT`.",
   },
+  OwnerRow { name: "native_model", owner: "runtime/store", hint: "Use `charliebot_store::metadata::NATIVE_MODEL`." },
   OwnerRow { name: "round_ratings", owner: "runtime/store", hint: "Use `charliebot_store::metadata::ROUND_RATINGS`." },
   OwnerRow { name: "thumbs_up", owner: "runtime/store", hint: "Use `charliebot_store::metadata::THUMBS_UP`." },
   OwnerRow { name: "thumbs_down", owner: "runtime/store", hint: "Use `charliebot_store::metadata::THUMBS_DOWN`." },
   OwnerRow { name: "work_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::WORK_STATE`." },
+  OwnerRow { name: "task_state", owner: "runtime/store", hint: "Use `charliebot_store::metadata::TASK_STATE`." },
   OwnerRow { name: "has_unread", owner: "runtime/store", hint: "Use `charliebot_store::metadata::HAS_UNREAD`." },
   OwnerRow {
     name: "has_running_tasks",
@@ -1106,6 +1110,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     name: "successor_session_id",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::SUCCESSOR_SESSION_ID`.",
+  },
+  OwnerRow {
+    name: "task_parent_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::TASK_PARENT_ID_FIELD`.",
   },
   OwnerRow {
     name: "has_pending_trigger",
@@ -1189,6 +1198,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::trigger_files::SLURM_JOB_KIND`.",
   },
+  OwnerRow { name: "fire_at", owner: "runtime/store", hint: "Use `charliebot_store::trigger_files::FIRE_AT_FIELD`." },
   OwnerRow {
     name: "delay_seconds",
     owner: "runtime/triggers",
@@ -1199,6 +1209,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/triggers",
     hint: "Use `charliebot_triggers::triggers::WATCH_TARGETS_FIELD`.",
   },
+  OwnerRow { name: "job_id", owner: "runtime/triggers", hint: "Use `charliebot_triggers::triggers::JOB_ID_FIELD`." },
   OwnerRow { name: "modelUsage", owner: "infra/core", hint: "Use `charliebot_core::event_types::MODEL_USAGE`." },
   OwnerRow {
     name: "active_backend",
@@ -1231,6 +1242,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_tasks::routes::COLD_READ_SPEC_CLASS_NAME`.",
   },
   OwnerRow { name: "application/gzip", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow {
+    name: "application/json",
+    owner: "infra/compat",
+    hint: "Use `charliebot_compat::mimetypes_table::APPLICATION_JSON`; the JSON response helpers, the session and \
+           task routes' JSON bodies, and every client that sends a JSON body read it.",
+  },
   OwnerRow { name: "application/msword", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/pdf", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/vnd.ms-powerpoint", owner: "infra/compat", hint: MIME_HINT },
@@ -1297,6 +1314,18 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::SESSION_NAME_FIELD`; the voice recordings page's rows carry a session's \
            display name under it.",
   },
+  OwnerRow {
+    name: "thinking_since",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::THINKING_SINCE`; the session listing, the sidebar status row and the \
+           running-changed broadcast carry a live run's thinking start under it.",
+  },
+  OwnerRow {
+    name: "run_backend",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::RUN_BACKEND`; the session listing and the chat page carry the backend a \
+           live run resolved to under it.",
+  },
   OwnerRow { name: "Read", owner: "infra/core", hint: "Use `charliebot_core::event_types::READ_TOOL`." },
   OwnerRow { name: "Write", owner: "infra/core", hint: "Use `charliebot_core::event_types::WRITE_TOOL`." },
   OwnerRow { name: "Edit", owner: "infra/core", hint: "Use `charliebot_core::event_types::EDIT_TOOL`." },
@@ -1315,6 +1344,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
            request builders write the name.",
   },
   OwnerRow {
+    name: "Accept-Encoding",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::headers::ACCEPT_ENCODING`; the responses whose body varies by coding name it in \
+           `Vary`, and the transport gzip appends it.",
+  },
+  OwnerRow {
     name: "application/x-www-form-urlencoded",
     owner: "infra/core",
     hint: "Use `charliebot_core::headers::FORM_URLENCODED`; the CLI's Google token requests state it, and the \
@@ -1326,6 +1361,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::json_loads::UTF8_CODEC`; the decode-error texts and the multipart form's charset \
            default read it.",
   },
+  OwnerRow {
+    name: "watermark_id",
+    owner: "features/chat_threads",
+    hint: "Use `ThreadPlatform::watermark_key` in `charliebot_chat_threads::thread_entry`.",
+  },
 ];
 
 /// Plain config keys that the path matcher intentionally does not recognize. These must match an exact string literal
@@ -1333,17 +1373,55 @@ const OWNER_TABLE: &[OwnerRow] = &[
 const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "credential", owner: "infra/core", hint: "Use `charliebot_core::config::CREDENTIAL_KEY`." },
   OwnerRow { name: "api_key", owner: "infra/core", hint: "Use `charliebot_core::credentials::API_KEY_FIELD`." },
+  OwnerRow {
+    name: "access_key",
+    owner: "infra/core",
+    hint: "Read it through `charliebot_core::credentials::Credentials::access_key` or `require_access_key`; the field \
+           name is `charliebot_core::credentials::ACCESS_KEY_FIELD`.",
+  },
+  OwnerRow {
+    name: "bot_token",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::credentials::BOT_TOKEN_FIELD`; the Slack, Discord and Telegram sections of \
+           credentials.yaml hold a bot's token under it.",
+  },
+  OwnerRow {
+    name: "rateLimitType",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::event_types::RATE_LIMIT_TYPE`; every reader of a `rate_limit_info` object names the \
+           field there.",
+  },
+  OwnerRow {
+    name: "overageStatus",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::event_types::RATE_LIMIT_OVERAGE_STATUS`; every reader of a `rate_limit_info` object \
+           names the field there.",
+  },
 ];
 
-/// Response detail sentences that one crate owns. The routes that answer with one read the owner's const, so a reworded
-/// detail reaches every route at once. Each row matches its sentence whole: a sentence splits on no separator that the
-/// name rules could match.
-const PHRASE_OWNER_TABLE: &[OwnerRow] = &[OwnerRow {
-  name: "Session not found",
-  owner: "runtime/store",
-  hint: "Use `charliebot_store::SESSION_NOT_FOUND_DETAIL`; every route that answers a missing session reads its detail \
-         from there.",
-}];
+/// The phrases that one crate owns: the response detail sentences that a route answers with, and the log event
+/// names a request path writes. A site reads the owner's const, so a reworded phrase reaches every site at once.
+/// Each row matches its phrase whole: a phrase splits on no separator that the name rules could match.
+const PHRASE_OWNER_TABLE: &[OwnerRow] = &[
+  OwnerRow {
+    name: "Session not found",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::SESSION_NOT_FOUND_DETAIL`; every route that answers a missing session reads its \
+           detail from there.",
+  },
+  OwnerRow {
+    name: "session backend resolution requires a configured backends.options entry",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::model_pool::MISSING_BACKEND_OPTION`; every path that resolves a session's backend \
+           reads its refusal there.",
+  },
+  OwnerRow {
+    name: "Exception in ASGI application",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::event_types::REQUEST_EXCEPTION_EVENT`; every request path that logs an escaped error \
+           names the event there.",
+  },
+];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
 /// of them may be writing that output, so the owner rule cannot tell the two apart, and these stay unprotected.
@@ -1408,16 +1486,17 @@ const ENVIRONMENT_HINT: &str = "Name it once, as a const in its owner module (in
 const ROUTE_HINT: &str = "Export the path as a `pub const` from the crate that registers its route, and reference that \
                           const from the other crates. `charliebot_cli_common::route::fill` fills its `{}` parameters.";
 
-const PACKAGE_HINT: &str = "Export the label as `pub const PACKAGE` from the backend crate that registers the package, \
-                            and reference that const from the composition list.";
+const PACKAGE_HINT: &str = "Export the label as `pub const PACKAGE` from the crate that registers the package, and \
+                            reference that const from the composition list and from every other crate that names the \
+                            package.";
 
 /// The environment variable names: `CHARLIEBOT_` followed by one or more of `A-Z`, `0-9` and `_`. The route paths: the
-/// part of a literal from `/api/` on, with each `{...}` parameter written `{}`. The backend package labels:
-/// `backends.` followed by a backend's directory name.
+/// part of a literal from `/api/` on, with each `{...}` parameter written `{}`. The package labels: `backends.` or
+/// `features.` followed by a lowercase name.
 const SPELLING_CLASSES: &[SpellingClass] = &[
   SpellingClass { name_of: environment_name, hint: ENVIRONMENT_HINT },
   SpellingClass { name_of: route_name, hint: ROUTE_HINT },
-  SpellingClass { name_of: backend_package_name, hint: PACKAGE_HINT },
+  SpellingClass { name_of: package_label_name, hint: PACKAGE_HINT },
 ];
 
 /// A production string literal and where it sits.
@@ -1495,9 +1574,9 @@ fn environment_name(site: &Site) -> Option<String> {
   spelled.then(|| name.to_string())
 }
 
-/// The backend package label a literal spells: `backends.` followed by a backend's directory name.
-fn backend_package_name(site: &Site) -> Option<String> {
-  let suffix = site.value.strip_prefix("backends.")?;
+/// The package label a literal spells: `backends.` or `features.` followed by a lowercase name.
+fn package_label_name(site: &Site) -> Option<String> {
+  let suffix = site.value.strip_prefix("backends.").or_else(|| site.value.strip_prefix("features."))?;
   let spelled =
     !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
   spelled.then(|| site.value.clone())
@@ -2203,16 +2282,13 @@ fn ui_text_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
   text.lines().enumerate().filter(|(_, line)| line.chars().any(is_ui_text)).map(|(index, line)| (index + 1, line))
 }
 
-/// The hits of one tracked file read as UTF-8, or `None` when its bytes are not UTF-8. The web surface reads every
-/// tracked file under `web/`, among them binary assets (a font, a precompressed copy) that hold no readable UI text.
-/// The embedded surface's files are `include_str!`'d, so the caller treats a `None` there as the defect it is.
-fn text_file_hits(repo: &Path, file: &str) -> Option<Vec<UiHit>> {
-  let text = fs::read_to_string(repo.join(file)).ok()?;
-  Some(
-    ui_text_lines(&text)
-      .map(|(line, text)| UiHit { file: file.to_string(), line, text: text.trim().to_string() })
-      .collect(),
-  )
+/// The hits of one tracked text file, read as UTF-8.
+fn text_file_hits(repo: &Path, file: &str) -> Vec<UiHit> {
+  let path = repo.join(file);
+  let text = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {} as UTF-8 text: {error}", path.display()));
+  ui_text_lines(&text)
+    .map(|(line, text)| UiHit { file: file.to_string(), line, text: text.trim().to_string() })
+    .collect()
 }
 
 /// The web surface: every tracked file under `web/` except the tests under `web/tests/`.
@@ -2236,7 +2312,7 @@ fn web_surface(repo: &Path) -> UiSurface {
       continue;
     }
     surface.files_read += 1;
-    surface.hits.extend(text_file_hits(repo, file).unwrap_or_default());
+    surface.hits.extend(text_file_hits(repo, file));
   }
   surface
 }
@@ -2274,15 +2350,11 @@ fn rust_surface(repo: &Path, workspace: &Workspace) -> (UiSurface, Vec<EmbeddedF
   (surface, embedded)
 }
 
-/// The embedded surface: the files that production code embeds with `include_str!`. Such a file is UTF-8 by
-/// construction, so a read that fails names a real defect.
+/// The embedded surface: the files that production code embeds with `include_str!`.
 fn embedded_surface(repo: &Path, embedded: &[EmbeddedFile]) -> UiSurface {
   let mut surface = UiSurface { name: "embedded", files_read: embedded.len(), hits: Vec::new() };
   for file in embedded {
-    let hits = text_file_hits(repo, &file.file).unwrap_or_else(|| {
-      panic!("read {} as UTF-8 text: a file include_str! embeds is UTF-8", repo.join(&file.file).display())
-    });
-    surface.hits.extend(hits);
+    surface.hits.extend(text_file_hits(repo, &file.file));
   }
   surface
 }
@@ -2912,26 +2984,38 @@ fn the_route_rule_finds_each_break() {
   );
 }
 
-/// The backend package rule on a synthetic workspace. The backend crate exports its label, and a composition crate
-/// that references that const passes. A composition crate that spells the label itself fails with each site and the
-/// hint, so the label cannot drift between the two crates.
+/// The package rule on a synthetic workspace. A backend crate and a feature crate export their labels, and a
+/// composition crate that references those consts passes. A composition crate that spells a label itself fails with
+/// each site and the hint, so the label cannot drift between the two crates.
 #[test]
 #[ignore = "integration"]
-fn the_backend_package_rule_finds_each_break() {
+fn the_package_label_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
   let backend_lib = r##"pub const PACKAGE: &str = "backends.thing";
 "##;
+  let feature_lib = r##"pub const PACKAGE: &str = "features.widget";
+"##;
   let composer_lib = r##"pub const FROM_THE_BACKEND: &str = thing_crate::PACKAGE;
 pub const SPELLED: &str = "backends.thing";
+pub const SPELLED_FEATURE: &str = "features.widget";
 "##;
   write_tree(
     root,
     &[
-      ("Cargo.toml", workspace_manifest(&["crates/backends/thing", "crates/app/composer"])),
+      ("Cargo.toml", workspace_manifest(&["crates/backends/thing", "crates/features/widget", "crates/app/composer"])),
       ("crates/backends/thing/Cargo.toml", crate_manifest("thing-crate", &[], &[])),
       ("crates/backends/thing/src/lib.rs", backend_lib.to_string()),
-      ("crates/app/composer/Cargo.toml", crate_manifest("composer", &[("thing-crate", "../../backends/thing")], &[])),
+      ("crates/features/widget/Cargo.toml", crate_manifest("widget-crate", &[], &[])),
+      ("crates/features/widget/src/lib.rs", feature_lib.to_string()),
+      (
+        "crates/app/composer/Cargo.toml",
+        crate_manifest(
+          "composer",
+          &[("thing-crate", "../../backends/thing"), ("widget-crate", "../../features/widget")],
+          &[],
+        ),
+      ),
       ("crates/app/composer/src/lib.rs", composer_lib.to_string()),
     ],
   );
@@ -2947,8 +3031,15 @@ pub const SPELLED: &str = "backends.thing";
         PACKAGE_HINT,
       ]
       .join("\n"),
+      [
+        "features.widget: spelled in 2 crates at:",
+        "  crates/app/composer/src/lib.rs:3",
+        "  crates/features/widget/src/lib.rs:1",
+        PACKAGE_HINT,
+      ]
+      .join("\n"),
     ],
-    "the package rule fails the label that two crates spell, and passes the const reference"
+    "the package rule fails each label that two crates spell, and passes the const references"
   );
 }
 

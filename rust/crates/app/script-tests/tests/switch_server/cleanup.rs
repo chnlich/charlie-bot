@@ -1,6 +1,6 @@
 //! Checks that a stand-in server, and a pane's server, end with the test process that started them.
 //!
-//! `tests/common/hold.rs` says how a check holds a test process and kills it: the `hold_*` tests here are the ones
+//! `tests/common/hold.rs` says how a check holds a test process and kills it. The `hold_*` tests here are the ones
 //! the checks start in a second copy of this binary.
 
 // The hold module serves two test binaries. Each uses part of it, so the rest is not dead code there.

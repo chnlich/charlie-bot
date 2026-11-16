@@ -38,6 +38,12 @@ where
     (stored_signature == signature).then_some(value)
   }
 
+  /// The memo's entry for `key` whatever signature it was recorded at, so a caller that moved the file itself can
+  /// carry the value forward to the signature the move makes.
+  pub(crate) fn held(&mut self, key: &K) -> Option<(FileSignature, V)> {
+    self.entries.get(key)
+  }
+
   pub(crate) fn record(&mut self, key: K, signature: FileSignature, value: V) {
     self.entries.store(key, (signature, value));
   }

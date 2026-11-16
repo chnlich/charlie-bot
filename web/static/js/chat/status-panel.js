@@ -4,7 +4,7 @@
 // A web session's status shows in the Status view (#status-panel). That panel
 // takes the message list's place in the Chat column while Status is selected in
 // the view toggle. The selection and the panel's visibility belong to
-// chat/for-you.js's applyChatView; this file renders the panel's content and
+// chat/for-you.js's applyChatView. This file renders the panel's content and
 // the waiting count on the toggle option's badge. A thread session and a worker
 // session show neither the option nor the badge. A web session is one that
 // Chat.ForYou.isWebSession (for-you.js) accepts.
@@ -104,7 +104,7 @@
   }
 
   // An item's context: one fold under the item's line. Own items open with their
-  // context shown; descendant items keep it folded until the operator clicks.
+  // context shown. Descendant items keep it folded until the operator clicks.
   function contextFold(context, open) {
     const block = document.createElement('div');
     block.className = 'mt-1';
@@ -128,7 +128,7 @@
     return block;
   }
 
-  // A phone stacks each label above its value at full width; the desktop keeps a label column.
+  // A phone stacks each label above its value at full width. The desktop keeps a label column.
   function statusRow(kind) {
     const row = document.createElement('div');
     row.className = platform.isMobile ? 'flex flex-col gap-1' : 'flex gap-3';
@@ -179,7 +179,7 @@
   }
 
   // A Waiting on you item. contextOpen: the Status view shows an own item's
-  // context open; the descendant rows keep it folded.
+  // context open. The descendant rows keep it folded.
   function waitingItem(item, contextOpen) {
     const el = document.createElement('div');
     el.className = 'break-words text-amber-200';
@@ -295,14 +295,13 @@
   }
 
   // The panel redraws on every status update, and the badge follows the
-  // same state. The panel may be hidden while Status is not selected; its
+  // same state. The panel may be hidden while Status is not selected. Its
   // content stays current, so selecting it shows the newest state.
   function renderPanel() {
     const view = document.getElementById(VIEW_ID);
     if (view) {
       clearChildren(view);
-      if (pageIsOffline()) view.innerHTML = OFFLINE_PANEL_MARK;
-      else if (panelSessionId) statusPanelBody(view);
+      if (panelSessionId) statusPanelBody(view);
     }
     renderWaitingBadge();
   }
@@ -332,7 +331,6 @@
   // The descendant rows: one GET per open and per subtree notice. A response for a
   // session the page no longer shows, or one overtaken by a later GET, is dropped.
   async function fetchDescendants(sessionId) {
-    if (pageIsOffline()) return;
     const gen = ++panelFetchGen;
     let body;
     try {
@@ -398,13 +396,6 @@
 
   // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);
-
-  // The Status view shows the offline label while the page is offline and loads once it is back.
-  window.addEventListener('offline', renderPanel);
-  window.addEventListener('online', () => {
-    renderPanel();
-    refreshSessionStatusPanel();
-  });
 
   Chat.wire({
     openSessionStatusPanel,

@@ -24,9 +24,6 @@ const {
 const { createElement } = require('./dom_element_stub');
 const { readPackageStatic } = require('./read_static');
 
-// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
-const NO_STORED_COPY = {get: () => null};
-
 const PILL_IDS = ['filter-all', 'filter-threads', 'filter-starred', 'filter-archived'];
 
 function buildContext({search = '', sessions = []} = {}) {
@@ -49,7 +46,7 @@ function buildContext({search = '', sessions = []} = {}) {
   context.document.querySelector = () => null;
   context.fetch = async (url) => {
     fetchRequests.push(url);
-    return {ok: true, headers: NO_STORED_COPY, json: async () => sessions};
+    return {ok: true, json: async () => sessions};
   };
   createChatSidebarContext(context);
   vm.runInContext(readPackageStatic('features', 'chat_threads', 'threads-filter.js'), context,

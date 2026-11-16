@@ -1,8 +1,5 @@
-//! The host-auth routes: the page, the status JSON, the manual probe, and the browser-login page with its start
-//! route.
+//! The host-auth routes: the page, the status JSON, the manual probe, and each browser login's readback and start routes.
 
-use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
@@ -13,8 +10,6 @@ use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::{get_only, post_only};
 use charliebot_registry::FeatureContext;
-use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
-use futures_util::future::join_all;
 use http::{StatusCode, header};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -26,33 +21,33 @@ use crate::login_page;
 use crate::page;
 use crate::timestamps;
 
-/// The browser-login page's template.
-const LOGIN_TEMPLATE: &str = "browser_login.html";
-
 /// Register host-auth routes with the application feature context as shared state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/host-auth", get_only(host_auth_page))
-    .route("/host-auth/logins", get_only(browser_logins_page))
     .route("/api/host-auth/status", get_only(host_auth_status))
     .route("/api/host-auth/probe", post_only(host_auth_probe))
+    .route("/api/host-auth/logins/{name}/readback", get_only(browser_login_readback))
     .route("/api/host-auth/logins/{name}/start", post_only(browser_login_start))
     .with_state(Arc::clone(features))
 }
 
 /// The paths the routes answer, for the trailing-slash redirect: a slashed form of one of them redirects to it.
 pub fn matches(path: &str) -> bool {
-  if matches!(path, "/host-auth" | "/host-auth/logins" | "/api/host-auth/status" | "/api/host-auth/probe") {
+  if matches!(path, "/host-auth" | "/api/host-auth/status" | "/api/host-auth/probe") {
     return true;
   }
-  // `/api/host-auth/logins/{name}/start`: the name is one non-empty segment, as matchit's parameter captures.
-  match path.strip_prefix("/api/host-auth/logins/").and_then(|rest| rest.strip_suffix("/start")) {
-    Some(name) => !name.is_empty() && !name.contains('/'),
-    None => false,
-  }
+  login_action_name(path, "readback").or_else(|| login_action_name(path, "start")).is_some()
 }
 
-/// `GET /host-auth`: the standing page, rendered from the state file.
+/// The login name of `/api/host-auth/logins/{name}/<action>`: one non-empty segment, as matchit's parameter captures.
+fn login_action_name<'a>(path: &'a str, action: &str) -> Option<&'a str> {
+  let name = path.strip_prefix("/api/host-auth/logins/")?.strip_suffix(action)?.strip_suffix('/')?;
+  (!name.is_empty() && !name.contains('/')).then_some(name)
+}
+
+/// `GET /host-auth`: the standing page, rendered from the state file, the config and the live attempts. It awaits no
+/// login readback: each idle login's row asks for its own.
 async fn host_auth_page(State(features): State<Arc<FeatureContext>>, request: Parts) -> Response {
   let rendered = tokio::task::spawn_blocking(move || {
     let state_path = host_auth::default_state_path().map_err(|error| ("Exception".to_string(), error.to_string()))?;
@@ -81,7 +76,7 @@ async fn host_auth_status() -> Response {
 }
 
 /// The status body: `{**state, "hosts": [{**entry, **estimate}]}`.
-pub fn status_body(state_path: &Path, now: OffsetDateTime) -> anyhow::Result<Value> {
+pub fn status_body(state_path: &std::path::Path, now: OffsetDateTime) -> anyhow::Result<Value> {
   let mut state = host_auth::load_state(state_path);
   let mut hosts = Vec::new();
   for entry in host_auth::host_entries(&state)? {
@@ -103,44 +98,39 @@ async fn host_auth_probe() -> Response {
   see_other()
 }
 
-/// `GET /host-auth/logins`: the browser-login page. Only idle logins run their readback here. No page view starts a
-/// login.
-async fn browser_logins_page(State(features): State<Arc<FeatureContext>>, request: Parts) -> Response {
-  let cfg = match features.config.get() {
-    Ok(cfg) => cfg,
-    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+/// `GET /api/host-auth/logins/{name}/readback`: the login's readback, run now and answered as `{"exit", "output"}`. The
+/// `exit` is null when the timeout ended the readback. A readback that cannot start answers 500 with its reason in
+/// `detail`.
+async fn browser_login_readback(
+  State(features): State<Arc<FeatureContext>>,
+  RoutePath(name): RoutePath<String>,
+) -> Response {
+  let login = match login_named(&features, &name) {
+    Ok(Some(login)) => login,
+    Ok(None) => return no_such_login(&name),
+    Err(error) => return responses::internal_error("RuntimeError", error),
   };
-  let logins = &cfg.section::<HostAuthConfig>("host_auth").browser_logins;
-  let idle: Vec<&BrowserLoginConfig> =
-    logins.iter().filter(|login| browser_login::live_attempt(&login.name).is_none()).collect();
-  let results = join_all(idle.iter().map(|login| browser_login::page_readback(login))).await;
-  let mut readbacks = HashMap::new();
-  for (login, result) in idle.iter().zip(results) {
-    match result {
-      Ok(result) => {
-        readbacks.insert(login.name.clone(), result);
+  match browser_login::page_readback(&login).await {
+    Ok(browser_login::Readback::Exited { code, output }) => {
+      if output.starts_with(crate::process_tree::ROUTE_ERROR_PREFIX) {
+        let error = output
+          .strip_prefix(crate::process_tree::ROUTE_ERROR_PREFIX)
+          .expect("the route error prefix is present")
+          .trim();
+        tracing::error!(login = %name, error = %error, "browser_login_readback_failed");
+        detail(StatusCode::INTERNAL_SERVER_ERROR, format!("the readback did not run: {error}"))
+      } else {
+        let readback = browser_login::Readback::Exited { code, output };
+        responses::json(StatusCode::OK, &login_page::readback_json(readback))
       }
-      Err(error) => return responses::internal_error("OSError", error.to_string()),
     }
-  }
-  let mut context = match login_page::context(logins, &readbacks) {
-    Ok(context) => context,
-    Err(error) => return responses::internal_error("Exception", error.to_string()),
-  };
-  let templating = match features.startup.require::<Templating>() {
-    Ok(templating) => templating,
-    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-  };
-  let asset_version = match templating.static_asset_version() {
-    Ok(version) => version,
-    Err(error) => return responses::internal_error("OSError", error.to_string()),
-  };
-  if let Some(object) = context.as_object_mut() {
-    object.insert(STATIC_ASSET_VERSION_KEY.to_string(), Value::String(asset_version));
-  }
-  match templating.render_page(&features, LOGIN_TEMPLATE, &context, &request) {
-    Ok(response) => response,
-    Err(error) => responses::internal_error(error.kind(), error.to_string()),
+    Ok(readback @ browser_login::Readback::TimedOut { .. }) => {
+      responses::json(StatusCode::OK, &login_page::readback_json(readback))
+    }
+    Err(error) => {
+      tracing::error!(login = %name, error = %error, "browser_login_readback_failed");
+      detail(StatusCode::INTERNAL_SERVER_ERROR, format!("the readback did not run: {error}"))
+    }
   }
 }
 
@@ -150,18 +140,26 @@ async fn browser_login_start(
   State(features): State<Arc<FeatureContext>>,
   RoutePath(name): RoutePath<String>,
 ) -> Response {
-  let cfg = match features.config.get() {
-    Ok(cfg) => cfg,
-    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  let login = match login_named(&features, &name) {
+    Ok(Some(login)) => login,
+    Ok(None) => return no_such_login(&name),
+    Err(error) => return responses::internal_error("RuntimeError", error),
   };
-  let Some(login) = cfg.section::<HostAuthConfig>("host_auth").browser_logins.iter().find(|login| login.name == name)
-  else {
-    return detail(StatusCode::NOT_FOUND, format!("no browser login named '{name}'"));
-  };
-  match browser_login::start_login(login).await {
+  match browser_login::start_login(&login).await {
     Ok(link) => see_other_to(&link),
     Err(failed) => responses::plain_text(StatusCode::BAD_GATEWAY, &failed.0),
   }
+}
+
+/// The login `name` names in the current config, copied out, or `None` when no login has that name.
+fn login_named(features: &FeatureContext, name: &str) -> Result<Option<BrowserLoginConfig>, String> {
+  let cfg = features.config.get().map_err(|error| error.to_string())?;
+  Ok(cfg.section::<HostAuthConfig>("host_auth").browser_logins.iter().find(|login| login.name == name).cloned())
+}
+
+/// The 404 answer for a login name the config does not hold.
+fn no_such_login(name: &str) -> Response {
+  detail(StatusCode::NOT_FOUND, format!("no browser login named '{name}'"))
 }
 
 /// The error body of a status-coded answer: a JSON object whose `detail` holds the message.
@@ -207,6 +205,7 @@ mod tests {
   use std::fs;
   use std::os::unix::fs::PermissionsExt;
   use std::path::Path;
+  use std::time::Duration;
 
   use axum::body::{Body, to_bytes};
   use axum::http::{HeaderMap, Method, Request, StatusCode};
@@ -222,6 +221,7 @@ mod tests {
   use tower::ServiceExt;
 
   use super::*;
+  use crate::process_tree::is_running;
 
   const LINK: &str = "https://device.sso.us-east-1.amazonaws.com/?user_code=7f3c9d21";
   /// The link a pty login's fake command prints, once its user code is appended.
@@ -239,9 +239,10 @@ mod tests {
     path.to_str().expect("the temp path is UTF-8").to_string()
   }
 
-  /// A home whose `host_auth:` section names three logins: one whose command prints the approval link, one whose
-  /// command fails after a line of output, and one renewing `host1` under a pseudo-terminal. The names carry the
-  /// test's prefix, so parallel tests share no record.
+  /// A home whose `host_auth:` section names these logins. One command prints the approval link, one fails after a
+  /// line of output, one renews `host1` under a pseudo-terminal, one sleeps past the readback timeout, one starts a
+  /// background child that holds its output and then sleeps, and one cannot start. The names carry the test's prefix,
+  /// so parallel tests share no record.
   struct Home {
     _dir: TempDir,
     router: Router,
@@ -249,6 +250,9 @@ mod tests {
     ok_name: String,
     failing_name: String,
     router_name: String,
+    slow_name: String,
+    tree_name: String,
+    missing_name: String,
   }
 
   fn home(prefix: &str, templating: bool) -> Home {
@@ -256,10 +260,22 @@ mod tests {
     let ok_name = format!("{prefix}-aws-sso");
     let failing_name = format!("{prefix}-failing-sso");
     let router_name = format!("{prefix}-router-host1");
+    let slow_name = format!("{prefix}-slow");
+    let tree_name = format!("{prefix}-tree");
+    let missing_name = format!("{prefix}-missing");
+    let missing_readback = dir.path().join(format!("{prefix}-no-such-readback")).display().to_string();
     let login = write_script(dir.path(), &format!("{prefix}-login"), &format!("printf '%s\\n' '{LINK}'\n"));
     let failing = write_script(dir.path(), &format!("{prefix}-failing"), "echo starting; exit 3\n");
     let readback = write_script(dir.path(), &format!("{prefix}-readback"), "echo valid\n");
     let failing_readback = write_script(dir.path(), &format!("{prefix}-failing-readback"), "echo failed\nexit 1\n");
+    let slow_readback = write_script(dir.path(), &format!("{prefix}-slow-readback"), "sleep 60\n");
+    // The shell records its pid and its background child's pid beside itself, then both wait. The background child holds
+    // the output pipe, so only the timeout's tree kill ends the readback.
+    let tree_readback = write_script(
+      dir.path(),
+      &format!("{prefix}-tree-readback"),
+      "echo $$ > \"$0.root\"\nsleep 600 & echo $! > \"$0.child\"\nsleep 600\n",
+    );
     // The login router's flow: a link with no code, the code on its own line, then an Enter prompt with no newline.
     // The script ends approved only when the newline it reads from its terminal is the one the driver wrote.
     let router_login = write_script(
@@ -294,6 +310,21 @@ host_auth:
       use_pty: true
       enter_after_pattern: 'Press Enter after approval'
       user_code_pattern: 'Code:\\s*(\\S+)'
+    - name: {slow_name}
+      label: Slow SSO
+      login_command: [{login}]
+      approval_url_pattern: 'https://device\\.sso\\S*'
+      readback_command: [{slow_readback}]
+    - name: {tree_name}
+      label: Tree SSO
+      login_command: [{login}]
+      approval_url_pattern: 'https://device\\.sso\\S*'
+      readback_command: [{tree_readback}]
+    - name: {missing_name}
+      label: Missing SSO
+      login_command: [{login}]
+      approval_url_pattern: 'https://device\\.sso\\S*'
+      readback_command: [{missing_readback}]
 "
     );
     fs::write(dir.path().join(CONFIG_FILENAME), config).expect("the config writes");
@@ -330,7 +361,7 @@ host_auth:
         .expect("the templating inserts once");
     }
     let router = routes(&features);
-    Home { _dir: dir, router, features, ok_name, failing_name, router_name }
+    Home { _dir: dir, router, features, ok_name, failing_name, router_name, slow_name, tree_name, missing_name }
   }
 
   /// One route call: its status, headers and body text.
@@ -383,32 +414,121 @@ host_auth:
   }
 
   #[tokio::test]
-  #[ignore = "integration"]
-  async fn the_login_page_renders_the_configured_logins_and_their_page_load_readback() {
-    let home = home("page", true);
-    let (status, headers, body) = call(home.router, Method::GET, "/host-auth/logins").await;
+  async fn the_readback_route_answers_the_exit_and_output_and_a_readback_that_cannot_start_fails() {
+    let home = home("readback-route", false);
+    let readback = |name: &str| format!("/api/host-auth/logins/{name}/readback");
+
+    let (status, _, body) = call(home.router.clone(), Method::GET, &readback(&home.ok_name)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(headers.get(header::CONTENT_TYPE).expect("a page names its type"), "text/html; charset=utf-8");
-    assert!(body.contains("Browser logins"), "the page renders its title");
-    assert!(body.contains("AWS SSO"), "the configured login's label shows");
-    assert!(body.contains("Failing SSO"), "every configured login gets a row");
-    assert!(body.contains("exit 0"), "the page-load readback's exit shows");
-    assert!(body.contains("valid"), "the page-load readback's output shows");
-    assert!(body.contains("exit 1"), "the failing login's readback exit shows");
-    assert!(body.contains("failed"), "the failing login's readback output shows");
-    assert!(
-      body.contains("<h2>AWS SSO<span class=\"badge\">exit 0</span></h2>"),
-      "the exit mark sits in the card title row"
+    let answer: Value = serde_json::from_str(&body).expect("the answer is JSON");
+    assert_eq!(answer, json!({"exit": 0, "output": "valid"}));
+
+    let (_, _, body) = call(home.router.clone(), Method::GET, &readback(&home.failing_name)).await;
+    let answer: Value = serde_json::from_str(&body).expect("the answer is JSON");
+    assert_eq!(answer, json!({"exit": 1, "output": "failed"}));
+
+    let (status, _, body) = call(home.router.clone(), Method::GET, &readback(&home.missing_name)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let detail: Value = serde_json::from_str(&body).expect("the error names its reason as JSON");
+    assert!(detail["detail"].as_str().expect("the detail is a string").starts_with("the readback did not run:"));
+
+    let (status, _, _) = call(home.router, Method::GET, &readback("nope")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn the_page_answers_while_a_readback_runs_and_lists_each_login_with_its_readback_and_start_route() {
+    let home = home("page-frame", true);
+    // The page reads the state file the process's home names, and the pty test below names its own home through the
+    // same process-wide variable. Both hold the round-slot lock while they run, so neither reads the other's home.
+    let _slot_lock = crate::test_support::round_slot_lock().lock().await;
+    // SAFETY: every test that sets the variable holds the round-slot lock, so no two of them write it at once.
+    unsafe { std::env::set_var(charliebot_core::home::CHARLIEBOT_HOME_ENV, home._dir.path()) };
+    // The first render loads the templates. The timed render below is the frame a browser waits on.
+    call(home.router.clone(), Method::GET, "/host-auth").await;
+    // The browser's readback for the sleeping login is in flight. The page must not wait for it.
+    let slow_path = format!("/api/host-auth/logins/{}/readback", home.slow_name);
+    let slow_router = home.router.clone();
+    let slow = tokio::spawn(async move { call(slow_router, Method::GET, &slow_path).await });
+    let started = tokio::time::Instant::now();
+    let (status, _, body) = call(home.router.clone(), Method::GET, "/host-auth").await;
+    let frame = started.elapsed();
+    assert!(frame < Duration::from_secs(1), "the page answers within a second, took {frame:?}");
+    assert_eq!(status, StatusCode::OK);
+    for name in [&home.ok_name, &home.failing_name, &home.router_name, &home.slow_name] {
+      assert!(body.contains(&format!("data-readback-url=\"/api/host-auth/logins/{name}/readback\"")));
+      assert!(body.contains(&format!("action=\"/api/host-auth/logins/{name}/start\"")));
+    }
+    let (status, _, body) = slow.await.expect("the readback task finishes");
+    assert_eq!(status, StatusCode::OK);
+    let answer: Value = serde_json::from_str(&body).expect("the answer is JSON");
+    assert_eq!(answer["exit"], Value::Null, "the timeout ended the sleeping readback");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_readback_past_its_timeout_leaves_no_process_of_its_tree_and_answers_within_the_margin() {
+    let home = home("tree", false);
+    let started = tokio::time::Instant::now();
+    let (status, _, body) =
+      call(home.router, Method::GET, &format!("/api/host-auth/logins/{}/readback", home.tree_name)).await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::OK);
+    let answer: Value = serde_json::from_str(&body).expect("the answer is JSON");
+    assert_eq!(answer["exit"], Value::Null);
+    assert!(elapsed <= Duration::from_secs(22), "the readback answers within its timeout plus 2 s, took {elapsed:?}");
+
+    let script = home._dir.path().join(format!("{}-readback", home.tree_name));
+    for pid_file in [script.with_extension("root"), script.with_extension("child")] {
+      let pid: u32 =
+        fs::read_to_string(&pid_file).expect("the readback recorded its pid").trim().parse().expect("the pid parses");
+      let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+      while is_running(pid) {
+        assert!(tokio::time::Instant::now() < deadline, "process {pid} of the timed-out tree survived");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn the_logins_page_is_gone_with_no_redirect() {
+    let home = home("logins-gone", false);
+    let (status, _, _) = call(home.router, Method::GET, "/host-auth/logins").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_pty_login_answers_the_enter_prompt_and_the_start_route_redirects_to_the_code_link() {
+    let home = home("pty", false);
+    // The renewal claims the process-wide round slot, which a poller test's round skips while it is held.
+    let _slot_lock = crate::test_support::round_slot_lock().lock().await;
+    // The renewal records through the state file the server home names, so this process's home is the fixture's and
+    // holds a host1 entry. Nextest runs each test in its own process, and no other test of this binary reads it.
+    let dir = home._dir.path();
+    // SAFETY: a nextest test owns its process, and the tests of this binary that could run alongside read no
+    // environment variable.
+    unsafe { std::env::set_var(charliebot_core::home::CHARLIEBOT_HOME_ENV, dir) };
+    let state_path = dir.join(host_auth::STATE_FILENAME);
+    let mut state = host_auth::empty_state();
+    state.insert("hosts".to_string(), json!([{ "alias": "host1", "hostname": "host1.example.internal" }]));
+    host_auth::save_state(&state, &state_path).expect("the state seeds");
+
+    let path = format!("/api/host-auth/logins/{}/start", home.router_name);
+    let (status, headers, body) = call(home.router, Method::POST, &path).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+      headers.get(header::LOCATION),
+      Some(&header::HeaderValue::from_str(ROUTER_LINK).expect("the link is header-safe"))
     );
-    assert!(
-      body.contains("<h2>Failing SSO<span class=\"badge\">exit 1</span></h2>"),
-      "the failing exit mark sits in the card title row"
-    );
-    let pos_failing = body.find("Failing SSO").expect("failing card is present");
-    let pos_ok = body.find("AWS SSO").expect("healthy card is present");
-    assert!(pos_failing < pos_ok, "failed login card comes first");
-    let start_path = format!("/api/host-auth/logins/{}/start", home.ok_name);
-    assert!(body.contains(&start_path), "each row's form posts to its login's start route");
+    assert_eq!(body, "", "the redirect carries an empty body");
+    assert_eq!(ended_outcome(&home.router_name).await, browser_login::Outcome::Approved);
+
+    let state = host_auth::read_state(&state_path).expect("the state reads");
+    let entry = host_auth::host_entries(&state).expect("the hosts read")[0];
+    let baseline = host_auth::opt_str(entry, "enrolled_observed_at").expect("the baseline field reads");
+    assert!(baseline.is_some(), "the approved renewal recorded the baseline");
   }
 
   /// The outcome the login's attempt ended with, once it ends.
@@ -450,62 +570,41 @@ host_auth:
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn a_pty_login_answers_the_enter_prompt_and_the_start_route_redirects_to_the_code_link() {
-    let home = home("pty", false);
-    // The renewal records through the state file the server home names, so this process's home is the fixture's and
-    // holds a host1 entry. Nextest runs each test in its own process, and no other test of this binary reads it.
-    let dir = home._dir.path();
-    // SAFETY: a nextest test owns its process, and the tests of this binary that could run alongside read no
-    // environment variable.
-    unsafe { std::env::set_var(charliebot_core::home::CHARLIEBOT_HOME_ENV, dir) };
-    let state_path = dir.join(host_auth::STATE_FILENAME);
-    let mut state = host_auth::empty_state();
-    state.insert("hosts".to_string(), json!([{ "alias": "host1", "hostname": "host1.example.internal" }]));
-    host_auth::save_state(&state, &state_path).expect("the state seeds");
-
-    let path = format!("/api/host-auth/logins/{}/start", home.router_name);
-    let (status, headers, body) = call(home.router, Method::POST, &path).await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(
-      headers.get(header::LOCATION),
-      Some(&header::HeaderValue::from_str(ROUTER_LINK).expect("the link is header-safe"))
-    );
-    assert_eq!(body, "", "the redirect carries an empty body");
-    assert_eq!(ended_outcome(&home.router_name).await, browser_login::Outcome::Approved);
-
-    let state = host_auth::read_state(&state_path).expect("the state reads");
-    let entry = host_auth::host_entries(&state).expect("the hosts read")[0];
-    let baseline = host_auth::opt_str(entry, "enrolled_observed_at").expect("the baseline field reads");
-    assert!(baseline.is_some(), "the approved renewal recorded the baseline");
-  }
-
-  #[tokio::test]
-  #[ignore = "integration"]
   async fn the_page_offers_the_renewal_login_to_a_router_rejected_row_and_names_a_missing_one() {
     let home = home("page-rows", true);
     let form = format!("action=\"/api/host-auth/logins/{}/start\"", home.router_name);
 
+    // The browser-login cards follow the host rows and carry their own start forms, so the host rows are read alone.
+    let host_rows = |body: &str| body.split("<section class=\"login\">").next().expect("the page has text").to_string();
+
     let mapped = page_body(&home, &[("host1", "router-rejected")]).await;
-    assert!(mapped.contains(&form), "a router-rejected row with a mapped login offers its start route");
+    assert!(host_rows(&mapped).contains(&form), "a router-rejected row with a mapped login offers its start route");
     assert!(mapped.contains("Needs renewal"), "the state is labelled as needing renewal");
     assert!(!mapped.contains("No renewal login is configured"));
 
     let unmapped = page_body(&home, &[("host2", "router-rejected")]).await;
     assert!(unmapped.contains("No renewal login is configured for this host"));
-    assert!(!unmapped.contains(&form), "a row with no mapped login shows no start form");
+    assert!(!host_rows(&unmapped).contains(&form), "a row with no mapped login shows no start form");
 
     let unreachable = page_body(&home, &[("host2", "unreachable")]).await;
-    assert!(!unreachable.contains(&form), "an unreachable row takes no renewal login");
+    assert!(!host_rows(&unreachable).contains(&form), "an unreachable row takes no renewal login");
     assert!(!unreachable.contains("No renewal login is configured"));
     assert!(unreachable.contains("Nothing to renew"), "an unreachable row keeps its current next step");
   }
 
   #[tokio::test]
-  async fn the_page_and_the_start_route_claim_their_slashed_forms_for_the_redirect() {
-    assert!(matches("/host-auth/logins"));
+  async fn the_page_and_the_login_routes_claim_their_slashed_forms_for_the_redirect() {
+    assert!(!matches("/host-auth/logins"), "the removed logins page is no longer a route");
     assert!(matches("/api/host-auth/logins/aws-sso/start"));
+    assert!(matches("/api/host-auth/logins/aws-sso/readback"));
     assert!(matches("/api/host-auth/logins/a-b-c/start"));
-    for path in ["/host-auth/logins/", "/api/host-auth/logins//start", "/api/host-auth/logins/a/b/start"] {
+    for path in [
+      "/host-auth/logins/",
+      "/api/host-auth/logins//start",
+      "/api/host-auth/logins//readback",
+      "/api/host-auth/logins/a/b/start",
+      "/api/host-auth/logins/a/b/readback",
+    ] {
       assert!(!matches(path), "{path} should not be claimed");
     }
   }

@@ -123,7 +123,7 @@ fn model_of_event(event: &Map<String, Value>) -> anyhow::Result<Option<String>> 
   Ok(payload.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()).map(str::to_string))
 }
 
-/// One line parsed as a record. A blank line and a line that is not JSON read as `None`; the latter is logged. A line
+/// One line parsed as a record. A blank line and a line that is not JSON read as `None`. The latter is logged. A line
 /// that is JSON but not an object is an error.
 pub fn parse_event_line(line: &[u8], path: &Path, log_event: &str) -> anyhow::Result<Option<Map<String, Value>>> {
   if line.iter().all(u8::is_ascii_whitespace) {
@@ -224,7 +224,7 @@ mod tests {
       json!({"type": "turn_context", "payload": {"model": "gpt-5.5"}}),
       json!({"type": "event_msg", "payload": {"type": "token_count", "info": {
         "last_token_usage": {"input_tokens": 10}, "model_context_window": 1000}}}),
-      // A trailing fragment is one more line read backwards; this one is not JSON, so it is skipped.
+      // A trailing fragment is one more line read backwards. This one is not JSON, so it is skipped.
       "{\"type\":\"turn_context\",\"payload\":{\"model\":\"unfinished\""
     );
     fs::write(&path, text).unwrap();

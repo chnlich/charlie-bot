@@ -27,8 +27,6 @@ pub fn parse(text: &str) -> anyhow::Result<OffsetDateTime> {
 pub enum LocalFormat {
   /// `%Y-%m-%d %H:%M %Z`
   DateZone,
-  /// `%H:%M`
-  Clock,
 }
 
 /// The stored timestamp in the server's zone, or `None` when it is absent.
@@ -48,7 +46,6 @@ fn local_text(moment: OffsetDateTime, format: LocalFormat) -> String {
       local.hour(),
       local.minute()
     ),
-    LocalFormat::Clock => format!("{:02}:{:02}", local.hour(), local.minute()),
   }
 }
 
@@ -82,13 +79,5 @@ mod tests {
   #[test]
   fn text_without_an_offset_is_refused() {
     assert!(parse("2026-10-18T09:00:00").is_err());
-  }
-
-  #[test]
-  fn the_clock_rendering_is_hours_and_minutes() {
-    let text = local_timestamp(Some("2026-10-18T09:05:00+00:00"), LocalFormat::Clock).expect("the stamp renders");
-    let text = text.expect("a stamp renders to text");
-    assert_eq!(text.len(), 5);
-    assert_eq!(text.as_bytes()[2], b':');
   }
 }

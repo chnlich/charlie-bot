@@ -1,6 +1,6 @@
-//! `web/features/host_auth`: the host login panel. A standing poller probes every ssh alias in the operator's config,
-//! keeps the result in `<home>/host_auth.json`, and serves it at `/host-auth` and `/api/host-auth/*`, with the
-//! browser-login page at `/host-auth/logins`.
+//! `web/features/host_auth`: the host login panel. A standing poller probes every ssh alias in the operator's config
+//! and keeps the result in `<home>/host_auth.json`. The feature serves that result at `/host-auth` and
+//! `/api/host-auth/*`, with the browser logins on that same page.
 
 mod api;
 mod browser_login;
@@ -10,6 +10,7 @@ mod login_page;
 mod page;
 mod poller;
 mod probe;
+mod process_tree;
 mod readers;
 mod ssh_config;
 mod timestamps;
@@ -31,6 +32,13 @@ pub(crate) mod test_support {
     static LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(tokio::sync::Mutex::default);
     &LOCK
   }
+}
+
+pub const READBACK_SUPERVISOR_ARG: &str = process_tree::SUPERVISOR_ARG;
+
+/// The helper entry that runs one readback as a supervised process.
+pub fn readback_supervisor_entry(args: &[std::ffi::OsString]) -> Option<u8> {
+  process_tree::helper_entry(args)
 }
 
 /// `register`: the config section, the router, the `host_auth` service in phase Ready, the host readers the cron gate

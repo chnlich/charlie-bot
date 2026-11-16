@@ -2,11 +2,11 @@
 //!
 //! The wrapper script is `rust/crates/runtime/agents/gh_wrapper/gh`, in the directory this module owns.
 //! `agent_environment` puts its directory first on the PATH of every agent process and records the script path in
-//! the environment; the spawn path
+//! the environment. The spawn path
 //! (`AgentRunner.run`) calls [`require_gh_wrapper`] once after the backend's own environment edits, moves the wrapper
 //! directory back to the front and refuses a process whose PATH resolves `gh` anywhere else. The script sends each
 //! text-carrying GitHub write to the App through the token command named by [`TOKEN_COMMAND_VAR`] (the host config's
-//! `github.app_token_command`) when configured; otherwise every call passes through as the host's personal login.
+//! `github.app_token_command`) when configured. Otherwise every call passes through as the host's personal login.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -17,15 +17,13 @@ use charliebot_registry::backend::Env;
 
 /// The repository directory that holds the wrapper script.
 pub const WRAPPER_REPO_DIR: &str = "rust/crates/runtime/agents/gh_wrapper";
-/// The environment variable that names the wrapper script for the spawn check. `agent_environment` sets it; an
+/// The environment variable that names the wrapper script for the spawn check. `agent_environment` sets it. An
 /// environment without it was not built by the server and carries no wrapper contract.
 pub const WRAPPER_PATH_VAR: &str = "CHARLIEBOT_GH_WRAPPER";
 /// The environment variable that names the App token command the wrapper runs. The spawn path sets it from the live
-/// host config's [`CONFIG_KEY`] (`agent_environment::spawn_base_environment`); when unset, the wrapper uses the host
-/// gh login.
+/// host config's `github.app_token_command` (`agent_environment::spawn_base_environment`). When unset, the wrapper
+/// uses the host gh login.
 pub const TOKEN_COMMAND_VAR: &str = "CHARLIEBOT_GH_APP_TOKEN_CMD";
-/// The host config key that names the App token command.
-pub const CONFIG_KEY: &str = "github.app_token_command";
 
 /// The wrapper directory under `repo_root`.
 pub fn dir_under(repo_root: &Path) -> PathBuf {
@@ -106,6 +104,27 @@ fn resolve_gh(path: &str) -> Option<PathBuf> {
 fn is_same_file(found: &Path, wrapper: &Path) -> bool {
   fs::canonicalize(found)
     .is_ok_and(|found| found == fs::canonicalize(wrapper).unwrap_or_else(|_| wrapper.to_path_buf()))
+}
+
+/// The spawn environment of a test whose agent must pass [`require_gh_wrapper`]: a stub `gh` under `base`.
+///
+/// The stub is a `#!/bin/sh` script, so a test never runs it. `path` continues the PATH after the stub's directory,
+/// and the PATH puts that directory first, which is the shape [`require_gh_wrapper`] accepts. A test of the wrapper
+/// script itself names the checkout's wrapper through [`dir_under`] instead.
+#[cfg(any(test, feature = "test-support"))]
+pub fn stub_environment(base: &Path, path: &str) -> Env {
+  use std::os::unix::fs::PermissionsExt;
+  let wrapper_dir = base.join("gh-wrapper");
+  fs::create_dir_all(&wrapper_dir).expect("the stub wrapper directory creates");
+  let wrapper = wrapper_dir.join("gh");
+  fs::write(&wrapper, "#!/bin/sh\n").expect("the stub wrapper script writes");
+  let mut permissions = fs::metadata(&wrapper).expect("the stub wrapper script exists").permissions();
+  permissions.set_mode(0o755);
+  fs::set_permissions(&wrapper, permissions).expect("the stub wrapper script becomes executable");
+  Env::from([
+    ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
+    (WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
+  ])
 }
 
 #[cfg(test)]
@@ -343,7 +362,7 @@ esac
     String::from_utf8(output.stdout.clone()).unwrap()
   }
 
-  /// Claude Code's Haiku environment leaves PATH as built; Codex prepends its local bin. Both go through the same
+  /// Claude Code's Haiku environment leaves PATH as built. Codex prepends its local bin. Both go through the same
   /// runner spawn check before invoking `gh`.
   #[test]
   #[ignore = "integration"]

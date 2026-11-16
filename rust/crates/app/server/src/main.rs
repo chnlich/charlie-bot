@@ -115,14 +115,8 @@ fn stop_sequence(reason: StopReason) -> Vec<StopAction> {
 
 fn main() -> ExitCode {
   let args: Vec<_> = std::env::args_os().skip(1).collect();
-  if args.first().is_some_and(|arg| arg == charliebot_opencode::relay::RELAY_ARG) {
-    return match charliebot_opencode::relay::run_args(&args[1..]) {
-      Ok(()) => ExitCode::SUCCESS,
-      Err(error) => {
-        eprintln!("OpenCode relay: {error:#}");
-        ExitCode::FAILURE
-      }
-    };
+  if let Some(code) = charliebot_packages::helper_entry::run(&args) {
+    return ExitCode::from(code);
   }
   if args.first().is_some_and(|arg| arg == charliebot_agents::transport::final_stdout::SUPERVISOR_ARG) {
     return match charliebot_agents::transport::final_stdout::supervise(&args[1..]) {
@@ -260,6 +254,19 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     return ExitCode::from(EXIT_STARTUP);
   }
   clock.segment("home_init");
+  match charliebot_cron::seed::seed_default_cron_tasks(&cfg, repo_root.path(), false) {
+    Ok(seeded) => {
+      for item in seeded.iter().filter(|item| item.status == charliebot_core::home_init::SEED_CREATED) {
+        tracing::info!(task = %item.name, "cron_default_task_seeded");
+      }
+    }
+    Err(error) => {
+      writer_fence.release();
+      tracing::error!(error = %error, "cron_default_seed_failed");
+      return ExitCode::from(EXIT_STARTUP);
+    }
+  }
+  clock.segment("cron_seed");
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, Some(&mut writer_fence), signal_receiver).await;
   }

@@ -8,14 +8,13 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling};
-use charliebot_core::headers::CONTENT_TYPE;
+use charliebot_core::utc_datetime::UtcDateTime;
 use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
   PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl, WEEKLY_WINDOW_MINUTES,
   mark_expired_windows, member_reading_from_windows,
 };
-use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -79,7 +78,7 @@ impl DevinQuotaAccount {
     let credentials_text = std::fs::read_to_string(&self.credentials_path).context("reading Devin CLI credentials")?;
     let credentials: DevinCredentials =
       toml::from_str(&credentials_text).map_err(|_| anyhow!("parsing Devin CLI credentials failed"))?;
-    charliebot_compat::http_client::ensure_crypto_provider();
+    charliebot_core::tls::ensure_crypto_provider();
     let client = reqwest::Client::builder()
       .timeout(Duration::from_secs(30))
       .build()
@@ -94,9 +93,9 @@ impl DevinQuotaAccount {
         "locale": "en"
       }
     });
+    // `.json` sets `Content-Type: application/json` when the request carries none.
     let response = client
       .post(format!("{}{}", credentials.api_server_url.trim_end_matches('/'), STATUS_URL_PATH))
-      .header(CONTENT_TYPE, "application/json")
       .header("Connect-Protocol-Version", "1")
       .json(&request)
       .send()

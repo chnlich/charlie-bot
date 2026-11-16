@@ -27,8 +27,10 @@ serde_json.workspace = true
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+charliebot-core = { workspace = true, features = ["test-support"] }
 charliebot-discord.workspace = true
 charliebot-feishu.workspace = true
 charliebot-slack.workspace = true

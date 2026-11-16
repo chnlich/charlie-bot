@@ -43,7 +43,7 @@ struct DraftArgs {
   /// Pull-request or issue number for a comment
   #[arg(long, value_name = "N")]
   number: Option<u64>,
-  /// File holding the body; - reads stdin
+  /// File holding the body, or - to read stdin
   #[arg(long)]
   file: String,
   /// Draft id this one replaces, whose card loses its button

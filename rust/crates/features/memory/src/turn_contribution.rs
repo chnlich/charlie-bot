@@ -74,12 +74,9 @@ fn rule_segments(selection: &MemorySelection) -> Vec<RuleSegment> {
 #[cfg(test)]
 mod tests {
   use std::fs;
-  use std::path::Path;
 
   use charliebot_core::RepoRoot;
-  use charliebot_core::config::{
-    BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
-  };
+  use charliebot_core::test_support::synthetic_config;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
 
   use super::*;
@@ -87,43 +84,6 @@ mod tests {
   /// The checkout the memory segments never read: the contribution takes it and ignores it.
   fn checkout() -> RepoRoot {
     RepoRoot::new(Some("/synthetic/checkout".into())).unwrap()
-  }
-
-  fn config(home: &Path) -> CharlieBotConfig {
-    CharlieBotConfig {
-      charliebot_home: home.to_path_buf(),
-      headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
-      server: ServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 18650,
-        subprocess_buffer_limit_mb: 1,
-        session_memory_max_mb: 0,
-        session_swap_max_mb: 0,
-        public_url: None,
-        session_tasks_max: 0,
-        min_free_disk_gib: 0,
-        enable_session_cpu_weight: true,
-        enable_session_io_weight: true,
-        enable_local_work_guard: false,
-        enable_offline_shell: false,
-      },
-      paths: PathsConfig {
-        workspace_dirs: Vec::new(),
-        worktree_dir: "/synthetic/worktrees".to_string(),
-        scratch_dir: "/synthetic/scripts".to_string(),
-      },
-      backends: BackendsConfig {
-        routing: None,
-        options: Vec::new(),
-        pools: Vec::new(),
-        calls: charliebot_core::config::CallsConfig::default(),
-      },
-      ui: UiConfig { home_services: Vec::new() },
-      telegram: TelegramConfig { chat_id: None },
-      remote_run: charliebot_core::config::RemoteRunConfig::default(),
-      github: Default::default(),
-      sections: Sections::default(),
-    }
   }
 
   fn worker_meta(repo_path: Option<&str>) -> SessionMetadata {
@@ -163,7 +123,7 @@ mod tests {
       .instruction_segments(
         &SessionMetadata::new("s", "s", TaskProfile::Manager),
         "manager_turn",
-        &config(home.path()),
+        &synthetic_config(home.path()),
         &checkout(),
       )
       .unwrap();
@@ -176,7 +136,7 @@ mod tests {
   #[test]
   fn a_worker_gets_its_repo_topic_in_full_and_no_other_repo_in_full() {
     let home = seeded_home();
-    let cfg = config(home.path());
+    let cfg = synthetic_config(home.path());
     let matched = worker_meta(Some("/home/synthetic/gamma-service/"));
     let segments = MemoryTurn.instruction_segments(&matched, "work", &cfg, &checkout()).unwrap();
     let full = segments.iter().find(|segment| segment.delivery == "full").expect("a full segment");
@@ -190,7 +150,7 @@ mod tests {
   #[test]
   fn a_repo_less_worker_gets_the_index_only_and_no_guessed_project() {
     let home = seeded_home();
-    let cfg = config(home.path());
+    let cfg = synthetic_config(home.path());
     let segments = MemoryTurn.instruction_segments(&worker_meta(None), "review", &cfg, &checkout()).unwrap();
     assert!(segments.iter().all(|segment| segment.delivery != "full"));
     assert!(segments.iter().any(|segment| segment.delivery == "index"));

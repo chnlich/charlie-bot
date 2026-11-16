@@ -53,8 +53,8 @@ impl ClaudeCliLifecycle {
 }
 
 /// The launch arguments one Claude process receives: its run kind, the manager turn's flags, and,
-/// for a manager turn, the run id that its read-budget hook entries name — a relayed process
-/// continues the same run.
+/// for a manager turn, the run id that its read-budget hook entries name.
+/// A relayed process continues the same run.
 fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map<String, Value>> {
   let mut kwargs = Map::new();
   kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
@@ -806,9 +806,15 @@ mod tests {
         false,
         None,
         LaunchArgs {
-          backend_kwargs: launch.backend_kwargs.clone(),
+          extra_flags: Vec::new(),
+          buffer_limit: None,
+          instructions_content: None,
+          instructions_file: None,
+          resume_session_id: None,
+          log_dir: None,
           cgroup_session_id: Some(meta.id.clone()),
-          ..LaunchArgs::default()
+          backend_kwargs: launch.backend_kwargs.clone(),
+          manager_turn: false,
         },
         disabled_cgroup(),
       )

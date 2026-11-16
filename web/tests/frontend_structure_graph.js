@@ -72,10 +72,7 @@ function scriptPathOf(src) {
 // template name, which is not a core script and stays out of the graph, as before.
 function scriptNodes(html) {
   const found = [];
-  // Third-party files under static/vendor/ (the blocking CDN copies, self-hosted) stay out of the frontend graph.
-  for (const m of html.matchAll(/<script\s+src="\/static\/([^"?]+)/g)) {
-    if (!m[1].startsWith('vendor/')) found.push([m.index, scriptPathOf(m[1])]);
-  }
+  for (const m of html.matchAll(/<script\s+src="\/static\/([^"?]+)/g)) found.push([m.index, scriptPathOf(m[1])]);
   for (const m of html.matchAll(/<script>\s*\{%\s*include\s+'js\/([^']+)'\s*%\}\s*<\/script>/g)) {
     found.push([m.index, `web/static/js/${m[1]}`]);
   }
@@ -264,9 +261,9 @@ function computeGraph(templates) {
   return {templates, nodes, edges, sccs, multiDefs, loadErrors};
 }
 
-// The page the structure test checks: index.html plus every package's page part templates, in
-// registration order.
-const chatTemplates = ['web/templates/index.html'];
+// The page the structure test checks: index.html, the script tail it names after its markup, and every
+// package's page part templates, in page order.
+const chatTemplates = ['web/templates/index.html', 'web/templates/partials/chat_scripts.html'];
 for (const pkg of packages) chatTemplates.push(...pageTemplatesOf(pkg));
 
 console.log(JSON.stringify({

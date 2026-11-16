@@ -90,7 +90,7 @@ pub struct BackendAvailability {
 }
 
 impl BackendAvailability {
-  /// Read the home's availability state. A missing file is an empty state; a file that exists but cannot be read or
+  /// Read the home's availability state. A missing file is an empty state. A file that exists but cannot be read or
   /// parsed is an error that names the file, and the caller stops.
   pub fn load(home: &Path) -> anyhow::Result<Self> {
     let path = home::backend_availability_path(home);
@@ -171,7 +171,7 @@ impl BackendAvailability {
       .map_err(|(_, error)| anyhow!("could not lock {}: {error}", display_state_path()))
   }
 
-  /// Read the file's current rows. A missing file is empty; anything else unreadable names the file.
+  /// Read the file's current rows. A missing file is empty. Anything else unreadable names the file.
   fn read_rows(path: &Path) -> anyhow::Result<HashMap<String, AvailabilityRow>> {
     match fs::read_to_string(path) {
       Ok(contents) => serde_json::from_str::<HashMap<String, AvailabilityRow>>(&contents).with_context(read_error),

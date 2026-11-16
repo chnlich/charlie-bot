@@ -24,6 +24,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
   USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
 };
+use charliebot_core::home::CLAUDE_CONFIG_DIR_NAME;
 use charliebot_core::text_repr::{is_truthy, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::usage::{
@@ -97,7 +98,7 @@ impl UsageSourceImpl for ClaudeLogs {
 /// The account label of a login directory: `work (default)` for `.claude`, else the name after `.claude-`.
 fn account_label(dir: &Path) -> String {
   let name = dir.file_name().unwrap_or_default();
-  if name == OsStr::new(".claude") {
+  if name == OsStr::new(CLAUDE_CONFIG_DIR_NAME) {
     return "work (default)".to_string();
   }
   let name = name.to_string_lossy();
@@ -137,7 +138,7 @@ fn walk_jsonl(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 /// One transcript's records and its `<mtime_ns>:<size>` signature, taken before the read.
 ///
 /// The file streams line by line. Only complete lines parse: a trailing fragment without its newline waits for a
-/// later read. A marker line that does not parse is skipped; one that parses to a non-object fails the read.
+/// later read. A marker line that does not parse is skipped. One that parses to a non-object fails the read.
 pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Vec<UsageRecord>)> {
   let metadata = fs::metadata(path).with_context(|| format!("statting {}", path.display()))?;
   let signature = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());

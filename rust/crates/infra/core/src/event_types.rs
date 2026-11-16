@@ -133,6 +133,9 @@ pub const BACKEND_LABEL: &str = "backend_label";
 /// The run header's reference to the run's launch prompt file.
 pub const LAUNCH_PROMPT_REF: &str = "launch_prompt_ref";
 pub const RUN_END: &str = "run_end";
+/// The run's wall-clock length in seconds, in the `run_end` event that the worker transcript writes and the message
+/// aggregator renders as [`THINKING_SECONDS`].
+pub const RUN_DURATION_SECONDS: &str = "duration_seconds";
 pub const RUN_ERROR: &str = "run_error";
 pub const RUN_DELIVERY: &str = "run_delivery";
 pub const TASK_INPUT_ACKNOWLEDGED: &str = "task_input_acknowledged";
@@ -140,6 +143,18 @@ pub const TASK_TRIGGERED: &str = "task_triggered";
 pub const THINKING: &str = "thinking";
 pub const RATE_LIMIT_EVENT: &str = "rate_limit_event";
 pub const RATE_LIMIT_INFO: &str = "rate_limit_info";
+/// The `rate_limit_info` field naming the account's state for the window: a rejection, a warning, or an allowed run.
+pub const RATE_LIMIT_STATUS: &str = "status";
+/// The [`RATE_LIMIT_STATUS`] value of a window whose account may not run until the window resets.
+pub const RATE_LIMIT_STATUS_REJECTED: &str = "rejected";
+/// The [`RATE_LIMIT_STATUS`] value of a window near exhaustion that still lets the run continue.
+pub const RATE_LIMIT_STATUS_ALLOWED_WARNING: &str = "allowed_warning";
+/// The `rate_limit_info` field naming the quota window the status came from, such as `five_hour`.
+pub const RATE_LIMIT_TYPE: &str = "rateLimitType";
+/// The `rate_limit_info` field naming the overage status beside the window's own.
+pub const RATE_LIMIT_OVERAGE_STATUS: &str = "overageStatus";
+/// The `rate_limit_info` field holding the epoch seconds a rejected window resets at.
+pub const RATE_LIMIT_RESETS_AT: &str = "resetsAt";
 pub const BACKEND_SWITCHED: &str = "backend_switched";
 pub const QUOTA_FAILOVER: &str = "quota_failover";
 /// The `quota_failover` field naming why the backend changed.
@@ -203,6 +218,14 @@ pub const SERVER_READY_EVENT: &str = "server_ready";
 /// One startup segment's log event: the startup clock logs one per segment, and the recovery check's digest drops it
 /// as a timing-only line.
 pub const STARTUP_SEGMENT_EVENT: &str = "startup_segment";
+/// The log event a request handler writes when its error escapes: the internal-error response, the websocket gate's
+/// refusal and the SSE relay's failed step all log it.
+pub const REQUEST_EXCEPTION_EVENT: &str = "Exception in ASGI application";
+/// The log event of a compaction notice from a run's transcript: the store's compaction handler and the task worker
+/// both log it.
+pub const CC_CONTEXT_COMPACTED_EVENT: &str = "cc_context_compacted";
+/// The log event of a failed compaction notice: the store's compaction handler and the task worker both log it.
+pub const CC_CONTEXT_COMPACT_FAILED_EVENT: &str = "cc_context_compact_failed";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

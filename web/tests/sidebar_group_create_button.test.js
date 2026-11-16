@@ -177,6 +177,7 @@ test('a control click before the interaction scripts arrive loads the group once
   assert.deepEqual(requests[0][1], [
     '/static/js/sidebar/row-menu.js', '/static/js/sidebar/modals.js',
     '/static/js/sidebar/session-actions.js', '/static/js/sidebar/session-menus.js',
+    '/static/js/sidebar/session-move.js',
   ]);
 
   // A second click while the group downloads joins the first load.

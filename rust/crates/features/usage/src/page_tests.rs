@@ -73,7 +73,7 @@ fn fallback(record_id: &str, source: &str, model: &str, ts: &str, output: i64, s
   }
 }
 
-/// Writes records into the ledger under `home`, one file signature per call.
+/// The records written into the ledger under `home`, one file signature per call.
 fn add_records(home: &Path, path: &str, signature: &str, records: &[UsageRecord]) {
   let mut ledger = UsageLedger::open(default_ledger_path(home)).expect("the ledger opens");
   ledger.record_file("host", path, signature, records).expect("the records write");

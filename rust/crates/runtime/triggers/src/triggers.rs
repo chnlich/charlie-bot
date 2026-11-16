@@ -24,7 +24,8 @@ use charliebot_core::{event_types, parallel_walk, ssh, text_repr};
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{
-  self, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus, WatchTarget, fresh_uuid,
+  self, FIRE_AT_FIELD, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus, WatchTarget,
+  fresh_uuid,
 };
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, StoreError, layout};
 use futures_util::future::join_all;
@@ -138,6 +139,10 @@ struct SshRun {
 static PROGRAM_AVAILABILITY: OnceLock<StdMutex<HashMap<String, bool>>> = OnceLock::new();
 #[cfg(test)]
 static PROGRAM_SEARCHES: AtomicUsize = AtomicUsize::new(0);
+/// The SLURM watch target's job-number field. The body model reads it and so does the `session trigger` command, so
+/// neither crate spells the name on its own.
+pub const JOB_ID_FIELD: &str = "job_id";
+
 const LOCAL_PID_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[LOCAL_PID_KIND])),
   Field::required("pid", FieldType::Integer),
@@ -156,7 +161,7 @@ const REMOTE_PID: BodyModel = BodyModel::optional(REMOTE_PID_FIELDS);
 const SLURM_JOB_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[SLURM_JOB_KIND])),
   Field::optional("host", FieldType::NullableString),
-  Field::required("job_id", FieldType::Integer),
+  Field::required(JOB_ID_FIELD, FieldType::Integer),
 ];
 const SLURM_JOB: BodyModel = BodyModel::optional(SLURM_JOB_FIELDS);
 const WATCH_TARGET_VARIANTS: &[TaggedVariant] = &[
@@ -290,7 +295,7 @@ struct Timing {
 }
 
 impl TriggerManager {
-  /// Construct the one manager held in startup state.
+  /// The one manager held in startup state.
   pub fn new(features: Arc<FeatureContext>) -> TriggerManager {
     let probe_programs = ProbePrograms { ssh: "ssh".to_string(), sacct: "sacct".to_string() };
     TriggerManager {
@@ -316,7 +321,8 @@ impl TriggerManager {
     }
   }
 
-  /// Create a trigger, verify remote targets, enforce the session limit, persist the record, and start its waiter.
+  /// One trigger created: remote targets verified, the session limit enforced, the record persisted, and its waiter
+  /// started.
   #[allow(clippy::too_many_arguments)]
   pub async fn create_trigger(
     self: &Arc<Self>,
@@ -497,7 +503,7 @@ impl TriggerManager {
     }
   }
 
-  /// Read one session's trigger files in newest-first creation order.
+  /// One session's trigger files, in newest-first creation order.
   pub async fn list_triggers(&self, session_id: &str) -> anyhow::Result<Vec<PendingTrigger>> {
     let directory = self.triggers_dir(session_id);
     match tokio::fs::metadata(&directory).await {
@@ -522,7 +528,7 @@ impl TriggerManager {
     Ok(triggers)
   }
 
-  /// Mark one pending trigger cancelled and stop its waiter.
+  /// One pending trigger cancelled, with its waiter stopped.
   pub async fn cancel_trigger(&self, session_id: &str, trigger_id: &str) -> anyhow::Result<()> {
     let mut trigger = self.load_trigger(session_id, trigger_id).await?;
     if trigger.status != TriggerStatus::Pending {
@@ -654,7 +660,7 @@ impl TriggerManager {
     self.ssh_probe_pid_with(target, trigger_id, purpose, remote, end_record::pid_probe_read).await
   }
 
-  /// Run one pid ssh and read the clock and end lines its `read` parser names.
+  /// The outcome of one pid ssh: the clock and end lines that the given `read` parser names.
   async fn ssh_probe_pid_with(
     &self,
     target: &RemotePid,
@@ -699,7 +705,7 @@ impl TriggerManager {
     self.ssh_probe_pid_with(target, trigger_id, SshPurpose::Readback, &remote, end_record::pid_readback_read).await
   }
 
-  /// Run one remote ssh process, logging the `remote_ssh_started` row that counts ssh processes per wake across
+  /// One remote ssh process, run with the `remote_ssh_started` row logged to count ssh processes per wake across
   /// restarts. The local midpoint brackets the whole run, so a readback's offset math measures the same ssh it
   /// reads the remote time from.
   async fn run_remote_ssh(&self, host: &str, remote: &str, trigger_id: &str, purpose: SshPurpose) -> SshRun {
@@ -724,7 +730,7 @@ impl TriggerManager {
     remote_ssh_argv(&self.probe_programs.ssh, self.ssh_control_dir.as_deref(), host, remote)
   }
 
-  /// Run one Slurm probe, locally or over ssh, and read the job states and pending reasons it answers. The query
+  /// One Slurm probe's answer, locally or over ssh: the job states and pending reasons it reports. The query
   /// pairs the sacct row that decides a finish with the squeue reason that decides a hold, because sacct reports no
   /// pending reason. The remote ssh also prints the clock and zone lines that convert a terminal row's `End` column.
   /// A remote end readback therefore measures its offset in the ssh that read the end back.
@@ -800,7 +806,7 @@ impl TriggerManager {
     SacctReading { states, reasons, error: None, prefix: end_record::sacct_probe_prefix(&stdout), local_mid_ns }
   }
 
-  /// Read one `--cmd` target's exit file back over ssh: the exit code, the file's mtime as the launch's end
+  /// One `--cmd` target's exit file read back over ssh: the exit code, the file's mtime as the launch's end
   /// instant, and the date line that measures the offset. A failure is logged and yields no reading. It never
   /// delays or blocks the fire.
   async fn remote_exit_read(&self, target: &RemotePid, trigger_id: &str) -> (end_record::ExitRead, Option<i128>) {
@@ -1391,9 +1397,9 @@ impl TriggerManager {
     Ok(outcome)
   }
 
-  /// Apply one Slurm probe reading to the jobs a wait still watches. A terminal row finishes its job with the end
-  /// reading the same ssh answered, a held job is reported as needing attention, and every other job stays. Returns
-  /// the jobs that still wait.
+  /// The effect of one Slurm probe reading on the jobs a wait still watches. A terminal row finishes its job with the
+  /// end reading the same ssh answered, a held job is reported as needing attention, and every other job stays. The
+  /// returned list is the jobs that still wait.
   fn settle_sacct(
     &self,
     trigger: &PendingTrigger,
@@ -1593,7 +1599,14 @@ struct EndFields {
   clock_offset_ms: i64,
 }
 
-/// Select one trigger's fire log from its remote end readings. The latest recorded end wins, and a job that ended
+/// One wake's lag, in ms: the fire moment minus the later of the recorded remote end and the trigger's
+/// registration. Every end source reports this one quantity, and `seen_gone_at` never enters it: how long the server
+/// took to learn the end, or to read it back, is part of the wake rather than of the job's end.
+fn fire_lag_ms(fired_at: UtcDateTime, end_at: time::OffsetDateTime, created_at: time::OffsetDateTime) -> i64 {
+  (fired_at.into_inner() - end_at.max(created_at)).whole_milliseconds() as i64
+}
+
+/// One trigger's fire log, built from its remote end readings. The latest recorded end wins, and a job that ended
 /// before the trigger was created lags from the creation instead.
 fn build_fire_log(
   trigger: &PendingTrigger,
@@ -1607,9 +1620,11 @@ fn build_fire_log(
     .iter()
     .filter_map(|end| Some((end.end_at?, end.source?, end.clock_offset_ms?)))
     .max_by_key(|(end_at, _, _)| *end_at)
-    .map(|(end_at, source, clock_offset_ms)| {
-      let basis = end_at.max(created_at);
-      EndFields { end_at, source, lag_ms: (fired_at.into_inner() - basis).whole_milliseconds() as i64, clock_offset_ms }
+    .map(|(end_at, source, clock_offset_ms)| EndFields {
+      end_at,
+      source,
+      lag_ms: fire_lag_ms(fired_at, end_at, created_at),
+      clock_offset_ms,
     });
   FireLog { seen_gone_at, end, recovered, wait_s: (fired_at.into_inner() - created_at).as_seconds_f64() }
 }
@@ -1887,8 +1902,8 @@ fn is_zone_line(line: &str) -> bool {
   bytes.len() == 5 && matches!(bytes[0], b'+' | b'-') && bytes[1..].iter().all(u8::is_ascii_digit)
 }
 
-/// Read one Slurm probe's output: the sacct rows before the squeue marker, then the squeue rows and the status line
-/// that follows them. An unreadable line is an error, not a skipped row, because a dropped pending row would look
+/// The parse of one Slurm probe's output: the sacct rows before the squeue marker, then the squeue rows and the status
+/// line that follows them. An unreadable line is an error, not a skipped row, because a dropped pending row would look
 /// like a job that simply has not started. An empty section is fine: a query can answer no rows.
 fn read_slurm_probe(stdout: &str) -> Result<SlurmProbe, String> {
   let mut states = HashMap::new();
@@ -2074,8 +2089,9 @@ fn unsettled_target_labels(targets: &[WatchTarget], finished: &[String], held: &
 /// trigger files it waited on, without growing the log on a healthy one.
 const SLOW_TRIGGER_RECOVERY_MS: u64 = 1000;
 
-/// Logs one session's trigger read that took [`SLOW_TRIGGER_RECOVERY_MS`] or more. One line per slow session: the time
-/// covers the session's trigger-file stat walk and trigger loads, the work a slow boot's trigger phase waits in.
+/// The log line of one session's trigger read that took [`SLOW_TRIGGER_RECOVERY_MS`] or more, or none for a fast one.
+/// One line per slow session: the time covers the session's trigger-file stat walk and trigger loads, the work a slow
+/// boot's trigger phase waits in.
 fn log_slow_trigger_recovery(session_dir: &Path, recovered: u64, read_time: std::time::Duration) {
   let elapsed_ms = read_time.as_millis() as u64;
   if elapsed_ms < SLOW_TRIGGER_RECOVERY_MS {
@@ -2102,8 +2118,9 @@ struct TriggerWalk {
   end: anyhow::Result<()>,
 }
 
-/// Read every session's trigger files under `sessions_dir`, in directory order, until a stop request or an error. The
-/// sessions are read in parallel, and the walk keeps those before the first error in directory order.
+/// The trigger walk over every session's trigger files under `sessions_dir`: they are read in directory order, until a
+/// stop request or an error. The sessions are read in parallel, and the walk keeps those before the first error in
+/// directory order.
 fn read_session_triggers(sessions_dir: &Path, stop: &StartupStop, index: &TriggerIndex) -> TriggerWalk {
   let none_read = |end| TriggerWalk { sessions: Vec::new(), index_rows: Vec::new(), end };
   let entries = match std::fs::read_dir(sessions_dir) {
@@ -2216,7 +2233,7 @@ fn format_suffix(reason: WaitReason, finished: &[String], held: &[String], still
 /// CLI.
 pub const SCHEDULE_TRIGGER_PATH: &str = "/api/internal/schedule-trigger";
 
-/// Register delayed trigger routes under the internal API paths.
+/// The delayed trigger routes under the internal API paths.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route(SCHEDULE_TRIGGER_PATH, post_only(schedule_trigger))
@@ -2227,7 +2244,7 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
 /// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
 pub const ROUTE_PATTERNS: &[&str] = &[SCHEDULE_TRIGGER_PATH, "/api/internal/triggers/{session_id}/{trigger_id}/cancel"];
 
-/// Build one manager after recovery, then recover its durable pending triggers.
+/// One manager built after recovery, with its durable pending triggers recovered.
 pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2236,7 +2253,7 @@ pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxF
   })
 }
 
-/// Build the schedule request from the fields the body model validated, in the model's declaration order.
+/// The schedule request the body model's validated fields name, in the model's declaration order.
 fn schedule_request(payload: &Value) -> anyhow::Result<ScheduleTriggerRequest> {
   Ok(ScheduleTriggerRequest {
     session_id: payload["session_id"].as_str().expect("validated string field").to_string(),
@@ -2250,7 +2267,7 @@ fn schedule_request(payload: &Value) -> anyhow::Result<ScheduleTriggerRequest> {
   })
 }
 
-/// Build one watched target from a validated member of the tagged union.
+/// One watched target from a validated member of the tagged union.
 fn watch_target(value: &Value) -> anyhow::Result<WatchTarget> {
   Ok(match value["kind"].as_str().expect("validated tag") {
     LOCAL_PID_KIND => WatchTarget::LocalPid {
@@ -2265,7 +2282,7 @@ fn watch_target(value: &Value) -> anyhow::Result<WatchTarget> {
       log: optional_string(value, "log"),
     },
     SLURM_JOB_KIND => {
-      WatchTarget::SlurmJob { host: optional_string(value, "host"), job_id: integer_field(value, "job_id")? }
+      WatchTarget::SlurmJob { host: optional_string(value, "host"), job_id: integer_field(value, JOB_ID_FIELD)? }
     }
     other => unreachable!("validated watch target kind {other}"),
   })
@@ -2383,7 +2400,7 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
     watch_targets = %serde_json::to_string(&trigger.watch_targets).expect("watch targets serialize"),
     "trigger_scheduled"
   );
-  let mut body = json!({ "trigger_id": trigger.id, "fire_at": trigger.fire_at.to_isoformat_text() });
+  let mut body = json!({ "trigger_id": trigger.id, (FIRE_AT_FIELD): trigger.fire_at.to_isoformat_text() });
   if !watch_probe.is_empty() {
     body["watch_probe"] = Value::Object(watch_probe);
   }
@@ -2425,7 +2442,7 @@ impl TriggerManager {
     self
   }
 
-  /// Turn the held sessions on or off for a test, with the given silence and reconnect limits.
+  /// The test builder with the held sessions turned on or off, at the given silence and reconnect limits.
   fn with_held_session(mut self, enabled: bool, timing: held_session::HeldTiming) -> Self {
     self.held = self.held_for_tests(enabled, timing);
     self
@@ -3220,7 +3237,7 @@ mod tests {
     std::process::Command::new("sleep").arg("600").spawn().expect("spawn a live sleeper")
   }
 
-  /// Kill and reap a sleeper. A reaped pid stops answering `kill -0`, as a finished remote job does.
+  /// The kill and reap of a sleeper. A reaped pid stops answering `kill -0`, as a finished remote job does.
   fn end_sleeper(mut child: std::process::Child) {
     child.kill().expect("kill the sleeper");
     child.wait().expect("reap the sleeper");
@@ -4088,8 +4105,9 @@ mod tests {
     );
   }
 
-  /// Register and fire one `--cmd` watch whose command left `exit_code` in its exit file. Its pid is gone, so the wake
-  /// reads the exit file at once. Returns the fired record and the wake text admitted to the session.
+  /// One `--cmd` watch registered and fired, its command having left `exit_code` in its exit file. Its pid is gone, so
+  /// the wake reads the exit file at once. The returned pair is the fired record and the wake text admitted to the
+  /// session.
   async fn fire_cmd_watch(exit_code: &str, trigger_id: &str) -> (PendingTrigger, String) {
     let (home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -4287,7 +4305,7 @@ mod tests {
     assert_eq!(body["detail"][0]["loc"], json!(["body", "delay_seconds"]));
   }
 
-  /// Assert every `detail` entry's `type` and `loc`, in field order.
+  /// The assertion that every `detail` entry's `type` and `loc` match `expected`, in field order.
   async fn assert_validation_detail(response: Response, expected: &[(&str, Value)]) {
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = response_json(response).await;
@@ -4700,6 +4718,52 @@ mod tests {
     assert!(log.end.is_none() && log.seen_gone_at.is_none(), "a timeout fire with nothing seen gone logs neither");
   }
 
+  #[test]
+  fn fire_log_lags_from_the_fire_moment_for_every_end_source() {
+    let trigger = pending_trigger(
+      "synthetic-fire-log-source",
+      SESSION_ID,
+      near_future(10),
+      vec![WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None }],
+    );
+    let created = trigger.created_at.into_inner();
+    // The job ended 4 s after registration, the server learned it 8 s later, and the wake fired 38 s after that.
+    let seen_gone_at = created + time::Duration::seconds(12);
+    let fired_at = UtcDateTime::from(created + time::Duration::seconds(50));
+    for source in [EndSource::SacctEnd, EndSource::ExitFileMtime, EndSource::EndRecorder] {
+      let end = RemoteTargetEnd {
+        end_at: Some(created + time::Duration::seconds(4)),
+        source: Some(source),
+        clock_offset_ms: Some(7),
+        seen_gone_at,
+      };
+      let log = build_fire_log(&trigger, fired_at, &[end], false);
+      let fields = log.end.expect("the recorded end is logged");
+      assert_eq!(fields.source, source);
+      assert_eq!(fields.lag_ms, 46_000, "{source} lags from the fire moment, not from seen_gone_at");
+    }
+  }
+
+  #[test]
+  fn fire_log_counts_a_wait_registered_after_the_end_from_the_registration() {
+    let trigger = pending_trigger(
+      "synthetic-fire-log-early-end",
+      SESSION_ID,
+      near_future(10),
+      vec![WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None }],
+    );
+    let created = trigger.created_at.into_inner();
+    let end = RemoteTargetEnd {
+      end_at: Some(created - time::Duration::seconds(30)),
+      source: Some(EndSource::SacctEnd),
+      clock_offset_ms: Some(7),
+      seen_gone_at: created - time::Duration::seconds(29),
+    };
+    let log = build_fire_log(&trigger, UtcDateTime::from(created + time::Duration::seconds(20)), &[end], false);
+    let fields = log.end.expect("the recorded end is logged");
+    assert_eq!(fields.lag_ms, 20_000, "an end before the registration lags from the registration");
+  }
+
   // ---- End-time readback: scripted ssh sequences ----
 
   /// The fixed end instant a scripted sequence writes, far before any test's creation time, as one epoch.ns line.
@@ -4764,8 +4828,8 @@ mod tests {
     panic!("trigger {trigger_id} never fired");
   }
 
-  /// Wait until the capture holds one trigger's `trigger_fired` line. `stamp_fired` writes the Fired record before it
-  /// emits that line, so a test that read the capture the moment the record turned Fired could still miss it.
+  /// The wait until the capture holds one trigger's `trigger_fired` line. `stamp_fired` writes the Fired record before
+  /// it emits that line, so a test that read the capture the moment the record turned Fired could still miss it.
   async fn wait_for_fire_line(log: &LogCapture, trigger_id: &str) {
     for _ in 0..500 {
       if log.text().lines().any(|line| line.contains("trigger_fired") && line.contains(trigger_id)) {

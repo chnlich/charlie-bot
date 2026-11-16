@@ -26,7 +26,7 @@ use crate::backend_availability::BackendAvailability;
 use crate::model_pool::{self, RotationPositions};
 use charliebot_store::metadata::UtcDateTime;
 
-/// Error substrings that mark a backend as out of quota; the aigw gateway's `402 Insufficient Balance` text is one.
+/// Error substrings that mark a backend as out of quota. The aigw gateway's `402 Insufficient Balance` text is one.
 pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "quota exhausted",
   "quota exceeded",
@@ -281,7 +281,7 @@ impl BackendPool {
 }
 
 /// The members one call of a `backends.calls` class tries, in order. Each selected member is excluded on the next pass,
-/// so a caller that records a failed member out moves to the next one. An unset class yields nothing; the caller
+/// so a caller that records a failed member out moves to the next one. An unset class yields nothing. The caller
 /// decides what an unset class means.
 pub fn one_shot_members<'a>(
   cfg: &'a CharlieBotConfig,
@@ -354,9 +354,9 @@ pub fn is_spent_quota_error(text: &str) -> bool {
   is_quota_error(text) && !is_temporary_unavailable_error(text)
 }
 
-/// Sort one member failure from a launch verdict and its text. A stated quota verdict decides first; then a spent
-/// quota text; then a refusal of authentication or model access; anything else is other. Every record site uses this
-/// one sort, so a refusal no longer lands in the quota reason.
+/// Sort one member failure from a launch verdict and its text. A stated quota verdict decides first. A spent
+/// quota text comes next. A refusal of authentication or model access follows. Anything else is other. Every record
+/// site uses this one sort, so a refusal no longer lands in the quota reason.
 pub fn classify_member_failure(text: &str, quota_exhausted: Option<bool>) -> MemberFailure {
   if quota_exhausted == Some(true) || is_spent_quota_error(text) {
     MemberFailure::Quota
@@ -423,6 +423,9 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
     Ok(())
   })
 }
+
+/// The package label the composition list registers this module's package under.
+pub const PACKAGE: &str = "features.backend_pool";
 
 /// Register the session metadata slot owned by `features.backend_pool`.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -612,7 +615,6 @@ mod tests {
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
         enable_local_work_guard: false,
-        enable_offline_shell: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),

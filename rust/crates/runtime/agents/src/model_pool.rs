@@ -1,12 +1,12 @@
 //! The model pool: the one resolver for a backend id, whether it names an option or a configured pool.
 //!
-//! A pool names `backends.options` ids and a rule. A priority pool picks its best selectable member; a rotate pool
+//! A pool names `backends.options` ids and a rule. A priority pool picks its best selectable member. A rotate pool
 //! picks the first selectable member after its rotation position. Both rules skip a member the caller excludes, that
 //! [`BackendAvailability`] holds out, or whose usage reading says it is exhausted. A member one pool recorded out is
 //! skipped by every pool that names it. A session whose backend is a pool id runs each turn on the member this module
 //! picks, and records that member in its `pool_member` slot.
 //!
-//! Terms: a *member* is a `backends.options` id that a pool names; *out* is the "out until" record that
+//! Terms: a *member* is a `backends.options` id that a pool names. *Out* is the "out until" record that
 //! [`BackendAvailability`] keeps per member. A *position* is a rotate pool's place in its member list, kept in process
 //! memory, one per pool id.
 
@@ -48,7 +48,7 @@ pub struct Selection<'a> {
   pool: &'a ModelPool,
   excluded: &'a [String],
   now: UtcDateTime,
-  /// How many active sessions each member holds, which orders a priority pool's subscription tier; empty when the
+  /// How many active sessions each member holds, which orders a priority pool's subscription tier. Empty when the
   /// caller keeps no such count.
   member_loads: &'a HashMap<String, usize>,
 }
@@ -360,9 +360,9 @@ fn select_rotate(
 /// One member change a turn start made.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MemberChange {
-  /// The pool whose member changed; the `quota_failover` event's `set`.
+  /// The pool whose member changed: the `quota_failover` event's `set`.
   pub pool: String,
-  /// The member the session left; empty for its first assignment, which records no change event.
+  /// The member the session left. Empty for its first assignment, which records no change event.
   pub from: String,
   /// The member the session now runs on.
   pub to: String,
@@ -371,7 +371,7 @@ pub struct MemberChange {
   pub reason: String,
   /// The moment the member left recovers, in the minute-resolution event format.
   pub recovers_at: Option<String>,
-  /// The handoff summary state of a change made mid-turn; a turn-start change carries none.
+  /// The handoff summary state of a change made mid-turn. A turn-start change carries none.
   pub summary: Option<String>,
 }
 
@@ -403,7 +403,7 @@ impl MemberChange {
 pub enum TurnStart {
   /// The session keeps its member and dispatches no change event.
   Kept,
-  /// The session switched members; the caller appends the change event.
+  /// The session switched members. The caller appends the change event.
   Changed(MemberChange),
   /// No member is selectable: the turn ends with this error listing every member.
   Exhausted(String),
@@ -459,7 +459,7 @@ fn is_out(availability: &BackendAvailability, backend_id: &str, now: UtcDateTime
 enum TurnDecision {
   /// The session keeps the member it records.
   Keep(String),
-  /// The session moves to `member`, which the turn start records. `change` is the event to log; a first assignment
+  /// The session moves to `member`, which the turn start records. `change` is the event to log. A first assignment
   /// logs none.
   Move { member: String, change: Option<MemberChange> },
   /// No member is selectable: the turn ends with this error.
@@ -468,7 +468,7 @@ enum TurnDecision {
 
 /// Choose the member for a turn that is about to dispatch, record it, and return the change to log.
 ///
-/// A model id resolves to itself; a pool session with no recorded member, or whose member is out, gets a fresh
+/// A model id resolves to itself. A pool session with no recorded member, or whose member is out, gets a fresh
 /// selection. The first assignment records the member without a change event. A rotate pool's session
 /// otherwise keeps its member until the member is out or its reading is exhausted. A priority pool's session keeps its
 /// member unless it is on pay-as-you-go and a subscription is selectable (a subscription reset). It also switches when
@@ -607,7 +607,7 @@ fn decide_keep_or_switch(
   {
     (event_types::QUOTA_REASON_SUBSCRIPTION_RESET.to_string(), None)
   } else if current_reading.as_ref().is_some_and(|reading| reading.exhausted) {
-    // The reading says the member has no capacity left; the turn start leaves it, as an out record would.
+    // The reading says the member has no capacity left. The turn start leaves it, as an out record would.
     let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
     (event_types::QUOTA_REASON_QUOTA_ERROR.to_string(), reset)
   } else if near_exhaustion(current_reading.as_ref())
@@ -751,18 +751,26 @@ pub fn member_loads_in(store: &Store, pool: &ModelPool) -> anyhow::Result<HashMa
   }
 }
 
-/// The member a session runs on now, for the resolver. A model session resolves to its backend id; a pool session
-/// resolves to its recorded member. A pool with no recorded member or a member it no longer lists is a refusal.
-pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
+/// The refusal of a session whose backend resolves to no `backends.options` entry.
+pub const MISSING_BACKEND_OPTION: &str = "session backend resolution requires a configured backends.options entry";
+
+/// The session's backend id: the one its metadata records, else the config's new-session default.
+///
+/// A config whose `backends.options` names no entry is a refusal, and so is an id that names no option.
+pub fn session_backend_id_or_default(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
   let backend_id = if meta.backend.is_empty() {
-    cfg
-      .backends
-      .new_session_backend()
-      .ok_or_else(|| anyhow!("session backend resolution requires a configured backends.options entry"))?
+    cfg.backends.new_session_backend().ok_or_else(|| anyhow!(MISSING_BACKEND_OPTION))?
   } else {
     meta.backend.clone()
   };
   cfg.backends.check_backend_id(&backend_id).map_err(anyhow::Error::msg)?;
+  Ok(backend_id)
+}
+
+/// The member a session runs on now, for the resolver. A model session resolves to its backend id. A pool session
+/// resolves to its recorded member. A pool with no recorded member or a member it no longer lists is a refusal.
+pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
+  let backend_id = session_backend_id_or_default(cfg, meta)?;
   let Some(pool) = cfg.backends.pool(&backend_id) else { return Ok(backend_id) };
   let member =
     meta.extra(POOL_MEMBER_FIELD).and_then(Value::as_str).filter(|backend_id| !backend_id.is_empty()).ok_or_else(
@@ -1081,7 +1089,7 @@ backends:
       positions(features).select(&selection).unwrap().map(|member| member.backend)
     };
 
-    // `spent`'s reading says it is exhausted; `payg-a` exposes no reading and is selectable.
+    // `spent`'s reading says it is exhausted. `payg-a` exposes no reading and is selectable.
     assert_eq!(rotate(&features, &[]), Some("payg-a".to_string()));
     assert_eq!(rotate(&features, &["payg-a"]), Some("chatgpt".to_string()), "a member the caller excludes is skipped");
 
@@ -1095,7 +1103,7 @@ backends:
   #[tokio::test]
   async fn a_member_both_pools_share_is_skipped_by_both_once_recorded_out() {
     let (_home, features) = fixture();
-    // `chatgpt` is a member of the priority pool and of the rotate pool; one out record covers both.
+    // `chatgpt` is a member of the priority pool and of the rotate pool. One out record covers both.
     availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
     assert_eq!(pick(&features, "auto", &[]), Some("claude-sub".to_string()));
     assert_eq!(pick(&features, "light", &[]), Some("payg-a".to_string()));

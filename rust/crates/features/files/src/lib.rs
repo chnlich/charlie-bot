@@ -15,7 +15,7 @@ use axum::Router;
 use axum::extract::{Path, Request, State};
 use axum::http::request::Parts;
 use axum::response::Response;
-use charliebot_compat::mimetypes::MimeTypes;
+use charliebot_compat::mimetypes::{self, MimeTypes};
 use charliebot_compat::mimetypes_table::TEXT_PLAIN;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_and_head;
@@ -25,7 +25,7 @@ use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::run_logs;
 use http::{HeaderMap, Method, StatusCode, header};
-use listing::ListingError;
+use listing::{FailureKind, ListingError};
 use serde_json::json;
 
 /// `file_urls.FILE_SERVER_MOUNTS[0]`: the prefix the route is mounted under, without its trailing slash.
@@ -98,14 +98,15 @@ fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Respons
     // A missing path is 404 unless the compaction stored a run log here as `<name>.zst`.
     Err(ListingError::Missing) => return answer_compressed_run_log(&fs_path, method).unwrap_or_else(not_found),
     Err(ListingError::PermissionDenied) => return permission_denied(),
-    Err(ListingError::Failed { kind, detail }) => return responses::internal_error(kind, detail),
+    Err(ListingError::Failed { kind, detail }) => return responses::internal_error(kind.as_str(), detail),
   }
   // Not a directory. The metadata read decides between 404 and the file answer.
   match fs::metadata(&fs_path) {
     Err(_) => not_found(),
-    Ok(metadata) if !metadata.is_file() => {
-      responses::internal_error("RuntimeError", format!("File at path {} is not a file.", fs_path.display()))
-    }
+    Ok(metadata) if !metadata.is_file() => responses::internal_error(
+      FailureKind::RuntimeError.as_str(),
+      format!("File at path {} is not a file.", fs_path.display()),
+    ),
     Ok(_) => answer_file(&fs_path, method, headers),
   }
 }
@@ -115,7 +116,7 @@ fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Respons
 /// static root is `/`, so the answer serves the resolved path wherever it lies.
 fn answer_file(fs_path: &FsPath, method: &Method, headers: &HeaderMap) -> Response {
   let Some(route_path) = fs_path.to_str() else {
-    return responses::internal_error("UnicodeEncodeError", format!("{fs_path:?} is not UTF-8"));
+    return responses::internal_error(FailureKind::UnicodeEncodeError.as_str(), format!("{fs_path:?} is not UTF-8"));
   };
   let mut headers = headers.clone();
   headers.remove(header::IF_NONE_MATCH);
@@ -131,8 +132,7 @@ fn answer_compressed_run_log(fs_path: &FsPath, method: &Method) -> Option<Respon
   }
   let bytes = run_logs::read_bytes(fs_path).ok().flatten()?;
   let guessed = MIME_TYPES.guess_type(&paths::display(fs_path)).unwrap_or(TEXT_PLAIN);
-  let content_type =
-    if guessed.starts_with("text/") { format!("{guessed}; charset=utf-8") } else { guessed.to_string() };
+  let content_type = mimetypes::with_utf8_charset(guessed);
   let size = bytes.len() as u64;
   let body = if method == Method::HEAD { axum::body::Body::empty() } else { axum::body::Body::from(bytes.to_vec()) };
   Response::builder()

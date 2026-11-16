@@ -9,8 +9,12 @@
 //! remaining budget is withheld when it is a successful Bash or Read output: `updatedToolOutput`
 //! replaces the text the model reads with the withhold notice, and the result counts nothing. A
 //! failure or another tool's output passes whole, is counted, and carries the over-budget notice as
-//! `additionalContext`. Exempt material — rule and skill files, child conclusions and session
-//! status, approval objects, the user's decisions — is never counted and never withheld.
+//! `additionalContext`. Exempt material — whole reads of rule and skill files, child conclusions and
+//! session status, approval objects, the user's decisions — is never counted and never withheld, unless
+//! a glob or a `$` word names its decision path: the hook cannot resolve that word, so the read counts.
+//!
+//! The session's own rule files are the markdown files its `CLAUDE.md` names in backticks and the
+//! rule files those files name in backticks, transitively. A partial read of one of them counts.
 //!
 //! Persisted output: when a Bash output exceeds the inline limit, the model reads only the
 //! `<persisted-output>` wrapper with a first-2KB preview, and the full text is saved at the
@@ -24,6 +28,7 @@
 //! missing run directory and a state-file failure exit 2 with the error on stderr, which Claude
 //! Code shows to the model.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -65,8 +70,18 @@ const WRITING_TOOLS: [&str; 4] = [WRITE_TOOL, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBO
 /// 2KB"), cut back to the last line end when that line end lies past the preview's halfway mark.
 const PERSISTED_PREVIEW_CHARS: usize = 2000;
 
-/// The paths of rule and skill material, whose reads Direct Work keeps outside the budget.
+/// The paths of rule and skill material, whose whole reads Direct Work keeps outside the budget.
 const RULE_PATH: &str = r"(/skills/|(^|[\s:/])prompts/|SKILL\.md|LESSONS\.md|CLAUDE\.md|AGENTS\.md|\.claude/rules/)";
+
+/// The file that states a session's effective rules, in its session directory. The markdown files it
+/// names in backticks, and the files they name in turn, are the session's own rule files.
+const SESSION_RULES_FILE_NAME: &str = charliebot_registry::backend::CLAUDE_INSTRUCTIONS_FILE_NAME;
+
+/// A backticked markdown path, whose capture is the path.
+const BACKTICKED_MD: &str = r"`([^`\s]+\.md)`";
+
+/// The Read input fields that make a read partial: it starts at `offset` or stops at `limit`.
+const PARTIAL_READ_FIELDS: [&str; 2] = ["offset", "limit"];
 
 /// The approval objects under a session's artifacts directory.
 const APPROVAL_PATH: &str = r"/artifacts/(plan|understanding)_[^/\s]*\.html";
@@ -88,6 +103,18 @@ const SESSION_CONCLUSION: &str = "conclusion";
 /// The shell readers whose presence in a Bash command keeps a rule-path read counted: their output
 /// is a selection of the material, not the material itself.
 const SHELL_READERS: &str = r"\bgrep\b|\brg\b|\bfind\b|\bdiff\b|git (log|diff)";
+
+/// The decision-path names a glob or a `$` word can hide: a plan or understanding page, a report or findings
+/// file, and a rule or skill file by name (`SKILL.md`, `LESSONS.md`, `CLAUDE.md`, `AGENTS.md`, `prompts/`,
+/// `.claude/rules/`).
+const DECISION_NAME: &str = concat!(
+  r#"(plan|understanding)_[^\s/'"]*\.html|(report|findings)\.md|"#,
+  r#"SKILL\.md|LESSONS\.md|CLAUDE\.md|AGENTS\.md|prompts/|\.claude/rules/"#,
+);
+
+/// A stream duplicated into another (`2>&1`), and a stream written to a file (`>f`, `2>f`, `>>f`, `&>f`).
+const STREAM_DUP: &str = r"\d*>&(\d+|-)";
+const STREAM_FILE: &str = r"(\d*|&)>>?[ \t]*[^\s&;|<>()`]+";
 
 #[derive(Parser)]
 #[command(
@@ -228,6 +255,7 @@ fn tool_result(event: &Value, run_dir: &Path, agent_tool: bool, can_delegate: bo
     .and_then(Value::as_str)
     .ok_or_else(|| CliExit::usage(format!("{hook_event} hook input must include a string tool_use_id")))?;
   let cwd = event.get("cwd").and_then(Value::as_str);
+  let session_rules = session_rule_files(run_dir)?;
   let response = if failure {
     let error = event
       .get("error")
@@ -245,10 +273,12 @@ fn tool_result(event: &Value, run_dir: &Path, agent_tool: bool, can_delegate: bo
   update_state(run_dir, |state| {
     let persisted_path = persisted_output_path(tool_name, response);
     if let Some(path) = &persisted_path {
-      state.persisted.push(PersistedOutput { path: path.clone(), exempt: exempt_class(tool_name, tool_input, cwd) });
+      state
+        .persisted
+        .push(PersistedOutput { path: path.clone(), exempt: exempt_class(tool_name, tool_input, cwd, &session_rules) });
     }
-    let exempt =
-      read_back_exemption(tool_name, tool_input, state).unwrap_or_else(|| exempt_class(tool_name, tool_input, cwd));
+    let exempt = read_back_exemption(tool_name, tool_input, state)
+      .unwrap_or_else(|| exempt_class(tool_name, tool_input, cwd, &session_rules));
     if exempt.is_some() {
       return;
     }
@@ -381,13 +411,119 @@ fn over_budget_notice(total: usize, agent_tool: bool, can_delegate: bool) -> Str
   )
 }
 
+/// The session directory of a run directory: `sessions/<sid>/data/runs/<run>`.
+fn session_dir_of(run_dir: &Path) -> &Path {
+  run_dir.ancestors().nth(3).expect("a run directory lies under its session's data directory")
+}
+
+/// The session's own rule files: existing markdown files named in backticks by its `CLAUDE.md` or by
+/// another session rule file. Relative names use the directory of the file naming them. The session
+/// memo is not a rule file. A session without a `CLAUDE.md` names none.
+fn session_rule_files(run_dir: &Path) -> Result<Vec<String>, CliExit> {
+  let session_dir = session_dir_of(run_dir);
+  let path = session_dir.join(SESSION_RULES_FILE_NAME);
+  let text = match std::fs::read_to_string(&path) {
+    Ok(text) => text,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(error) => return Err(CliExit::usage(format!("could not read {}: {error}", path.display()))),
+  };
+  let session_base = session_dir.to_string_lossy().into_owned();
+  let mut rules: Vec<String> = Vec::new();
+  let canonical =
+    path.canonicalize().map_err(|error| CliExit::usage(format!("could not resolve {}: {error}", path.display())))?;
+  let mut visited = HashSet::from([canonical]);
+  let mut pending = vec![(path, text)];
+  while let Some((source, text)) = pending.pop() {
+    let base = source.parent().expect("a rule file has a parent directory").to_string_lossy();
+    for captures in backticked_md_pattern().captures_iter(&text) {
+      if let Some(resolved) = resolve_token(&captures[1], Some(&base))
+        && Path::new(&resolved).is_file()
+        && !is_memo_path(&resolved, Some(&session_base))
+        && !rules.contains(&resolved)
+      {
+        let path = Path::new(&resolved);
+        let canonical = path
+          .canonicalize()
+          .map_err(|error| CliExit::usage(format!("could not resolve {}: {error}", path.display())))?;
+        if visited.insert(canonical) {
+          let text = std::fs::read_to_string(path)
+            .map_err(|error| CliExit::usage(format!("could not read {}: {error}", path.display())))?;
+          pending.push((path.to_path_buf(), text));
+        }
+        rules.push(resolved);
+      }
+    }
+  }
+  Ok(rules)
+}
+
+/// Whether a path names one of the session's rule files. Only a markdown path can name one.
+fn is_session_rule_file(path: &str, cwd: Option<&str>, session_rules: &[String]) -> bool {
+  path.ends_with(".md") && resolve_token(path, cwd).is_some_and(|resolved| session_rules.contains(&resolved))
+}
+
+/// The class of a Read: the path's own class, or a session rule file read whole. A read with `offset`
+/// or `limit` is partial, so a partial read of a session rule file counts.
+fn read_class(
+  path: &str,
+  tool_input: &Map<String, Value>,
+  cwd: Option<&str>,
+  session_rules: &[String],
+) -> Option<&'static str> {
+  let whole = !PARTIAL_READ_FIELDS.iter().any(|field| tool_input.contains_key(*field));
+  if let Some(class) = path_class(path, cwd) {
+    return (class != "rule_skill" || whole).then_some(class);
+  }
+  (whole && is_session_rule_file(path, cwd, session_rules)).then_some("rule_skill")
+}
+
+/// Whether the command reads one rule file whole: `cat` with that one path, and no pipe or other
+/// shell syntax.
+fn is_whole_cat_of_rule_file(command: &str, cwd: Option<&str>, session_rules: &[String]) -> bool {
+  if has_shell_control(command) {
+    return false;
+  }
+  match command.split_whitespace().collect::<Vec<&str>>().as_slice() {
+    ["cat", path] => {
+      let path = path.trim_matches(['\'', '"']);
+      path_class(path, cwd) == Some("rule_skill") || is_session_rule_file(path, cwd, session_rules)
+    }
+    _ => false,
+  }
+}
+
 /// The Direct Work item a tool call reads, or `None` when its output counts toward the budget.
-fn exempt_class(tool_name: &str, tool_input: &Map<String, Value>, cwd: Option<&str>) -> Option<String> {
+fn exempt_class(
+  tool_name: &str,
+  tool_input: &Map<String, Value>,
+  cwd: Option<&str>,
+  session_rules: &[String],
+) -> Option<String> {
+  let named = match tool_name {
+    READ_TOOL => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str),
+    "Bash" => tool_input.get("command").and_then(Value::as_str),
+    _ => None,
+  };
+  if named.is_some_and(names_unresolved_decision_path) {
+    return None;
+  }
   let class = match tool_name {
     name if SUBAGENT_TOOL_NAMES.contains(&name) => Some("child_conclusion"),
     SKILL_TOOL => Some("rule_skill"),
-    READ_TOOL => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str).and_then(|p| path_class(p, cwd)),
-    "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(|c| bash_class(c, cwd)),
+    READ_TOOL => tool_input
+      .get(TOOL_INPUT_FILE_PATH)
+      .and_then(Value::as_str)
+      .and_then(|p| read_class(p, tool_input, cwd, session_rules)),
+    "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(|c| {
+      if is_whole_cat_of_rule_file(c, cwd, session_rules) {
+        Some("rule_skill")
+      } else {
+        match bash_class(c, cwd) {
+          Some("rule_skill") => None,
+          class => class,
+        }
+      }
+    }),
     _ => None,
   };
   class.map(str::to_string)
@@ -417,10 +553,10 @@ fn path_class(path: &str, cwd: Option<&str>) -> Option<&'static str> {
 }
 
 fn bash_class(command: &str, cwd: Option<&str>) -> Option<&'static str> {
-  if is_standalone_conclusion(command, cwd) {
+  if is_standalone_conclusion(command) {
     return Some("child_conclusion");
   }
-  if is_standalone_user_dialog(command, cwd) {
+  if is_standalone_user_dialog(command) {
     return Some("user_words");
   }
   if status_decision(command) {
@@ -460,11 +596,27 @@ fn status_decision(command: &str) -> bool {
   })
 }
 
-/// Whether the command has shell syntax beyond one CharlieBot command piped into filters: a list or
-/// background operator (`;`, `&`, `||`), a newline, a redirection in (`<`), or a subshell or substitution
-/// (`(`, `)`, a backtick). Each one can run a second read beside the exempt one.
+/// The command with its stream redirects removed, for the standalone check. A stream duplicated into another
+/// (`2>&1`) and a stream written to a file (`>f`, `2>f`, `>>f`, `&>f`) are not shell controls.
+fn without_stream_redirects(command: &str) -> String {
+  let duplicated = stream_dup_pattern().replace_all(command, " ");
+  stream_file_pattern().replace_all(&duplicated, " ").into_owned()
+}
+
+/// Whether a token of the command or the path names a decision path while it carries a glob (`*`, `?`, `[`) or a
+/// `$` word. The hook cannot resolve such a word to the path a read opens, so the decision path's exemption does
+/// not hold. The test is per token: a glob or `$` in another token (a sed regex, an unrelated variable) does not
+/// change the command's class.
+fn names_unresolved_decision_path(text: &str) -> bool {
+  text.split_whitespace().any(|token| token.contains(['*', '?', '[', '$']) && decision_name_pattern().is_match(token))
+}
+
+/// Whether the command has shell syntax beyond one command: a pipeline (`|`), command list (`;`, `&&`, `||`),
+/// background operator (`&`), newline, redirection in (`<`), or subshell or substitution (`(`, `)`, a backtick).
+/// Each one can run a second read beside the exempt one. The standalone checks remove stream redirects first
+/// (`without_stream_redirects`).
 fn has_shell_control(command: &str) -> bool {
-  command.contains(['&', ';', '<', '(', ')', '`', '\n']) || command.contains("||")
+  command.contains(['&', ';', '<', '|', '(', ')', '`', '\n']) || command.contains("||")
 }
 
 /// Whether the command names a run log, `events.jsonl` or `agent.raw.ndjson`. Quotes and backslashes go
@@ -474,66 +626,30 @@ fn names_run_log(command: &str) -> bool {
   words.contains(RUN_EVENTS_NAME) || words.contains(RAW_LOG_NAME)
 }
 
-fn is_standalone_conclusion(command: &str, cwd: Option<&str>) -> bool {
-  if has_shell_control(command) {
+fn is_standalone_conclusion(command: &str) -> bool {
+  let command = without_stream_redirects(command);
+  if has_shell_control(&command) {
     return false;
   }
-  let stages: Vec<&str> = command.split('|').map(str::trim).collect();
-  if stages.is_empty() {
-    return false;
-  }
-  let words: Vec<&str> = stages[0].split_whitespace().collect();
+  let words: Vec<&str> = command.split_whitespace().collect();
   if words.len() < 3 || words[0] != "charliebot" || words[1] != "session" || words[2] != "conclusion" {
     return false;
   }
-  validate_pipeline_filters(&stages[1..], cwd)
+  true
 }
 
-fn is_standalone_user_dialog(command: &str, cwd: Option<&str>) -> bool {
-  if has_shell_control(command) {
+fn is_standalone_user_dialog(command: &str) -> bool {
+  let command = without_stream_redirects(command);
+  if has_shell_control(&command) {
     return false;
   }
-  let stages: Vec<&str> = command.split('|').map(str::trim).collect();
-  if stages.is_empty() {
-    return false;
-  }
-  let words: Vec<&str> = stages[0].split_whitespace().collect();
+  let words: Vec<&str> = command.split_whitespace().collect();
   if words.len() < 3 || words[0] != "charliebot" || words[1] != "session" || words[2] != "dialog" {
     return false;
   }
   let has_from_user = words.windows(2).any(|w| w[0] == "--from" && w[1] == "user") || words.contains(&"--from=user");
   if !has_from_user {
     return false;
-  }
-  validate_pipeline_filters(&stages[1..], cwd)
-}
-
-fn validate_pipeline_filters(stages: &[&str], cwd: Option<&str>) -> bool {
-  const ALLOWED_FILTERS: [&str; 7] = ["head", "tail", "grep", "rg", "sed", "cut", "wc"];
-  for stage in stages {
-    let tokens: Vec<&str> = stage.split_whitespace().collect();
-    if tokens.is_empty() {
-      return false;
-    }
-    if !ALLOWED_FILTERS.contains(&tokens[0]) {
-      return false;
-    }
-    for arg in &tokens[1..] {
-      let trimmed = arg.trim_matches(['\'', '"', '`']);
-      if trimmed.starts_with('-') {
-        continue;
-      }
-      // A glob, a brace or a variable names files the hook cannot list, so the filter's read counts.
-      if trimmed.contains(['*', '?', '[', '{', '$']) {
-        return false;
-      }
-      if let Some(resolved) = resolve_token(trimmed, cwd)
-        && resolved != "/"
-        && Path::new(&resolved).exists()
-      {
-        return false;
-      }
-    }
   }
   true
 }
@@ -798,6 +914,7 @@ macro_rules! hook_pattern {
 hook_pattern!(rule_path_pattern, RULE_PATH);
 hook_pattern!(approval_path_pattern, APPROVAL_PATH);
 hook_pattern!(child_report_pattern, CHILD_REPORT);
+hook_pattern!(backticked_md_pattern, BACKTICKED_MD);
 hook_pattern!(coordination_cmd_pattern, COORDINATION_CMD);
 hook_pattern!(session_cmd_pattern, SESSION_CMD);
 hook_pattern!(shell_reader_pattern, SHELL_READERS);
@@ -807,6 +924,9 @@ hook_pattern!(named_pattern, r"((plan|understanding)_[^/]*\.html$|(report|findin
 hook_pattern!(cd_pattern, r"^\s*cd\s+([^\s]+)\s*$");
 hook_pattern!(segment_split_pattern, r"&&|\|\||;|\n|\|");
 hook_pattern!(token_split_pattern, r#"[^\s'"'`|;&<>()=,]+"#);
+hook_pattern!(decision_name_pattern, DECISION_NAME);
+hook_pattern!(stream_dup_pattern, STREAM_DUP);
+hook_pattern!(stream_file_pattern, STREAM_FILE);
 
 #[cfg(test)]
 mod tests {
@@ -836,6 +956,10 @@ mod tests {
 
     fn state(&self) -> BudgetState {
       serde_json::from_slice(&std::fs::read(self.run_dir.join(STATE_FILE_NAME)).unwrap()).unwrap()
+    }
+
+    fn session_dir(&self) -> &Path {
+      session_dir_of(&self.run_dir)
     }
 
     fn seed_counted(&self, counted: usize) {
@@ -979,6 +1103,132 @@ mod tests {
     assert!(output.is_empty());
     assert_eq!(home.state().counted, 0);
     assert!(home.state().withheld.is_empty());
+  }
+
+  /// Writes a session's `CLAUDE.md` naming a line rule file and a shared rule file, both outside the
+  /// rule-path fragments, and returns the two files' paths. `LINE_RULES` and `COMMON_RULES` in
+  /// `claude_md` stand for the paths.
+  fn session_with_rules(home: &RunHome, claude_md: &str) -> (String, String) {
+    let line_rules = home.session_dir().join("lines").join("goal_line_shared.md");
+    let common_rules = home.session_dir().join("shared").join("research_rules_common.md");
+    std::fs::create_dir_all(line_rules.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(common_rules.parent().unwrap()).unwrap();
+    std::fs::write(&line_rules, "x".repeat(3_000)).unwrap();
+    std::fs::write(&common_rules, "y".repeat(4_000)).unwrap();
+    let text = claude_md
+      .replace("LINE_RULES", &line_rules.to_string_lossy())
+      .replace("COMMON_RULES", &common_rules.to_string_lossy());
+    std::fs::write(home.session_dir().join(SESSION_RULES_FILE_NAME), text).unwrap();
+    (line_rules.to_string_lossy().into_owned(), common_rules.to_string_lossy().into_owned())
+  }
+
+  #[test]
+  fn a_session_rule_file_read_whole_passes_uncounted() {
+    let home = RunHome::new();
+    let (line_rules, common_rules) = session_with_rules(&home, "The rules are `LINE_RULES` and `COMMON_RULES`.");
+    home.seed_counted(14_000);
+    let (result, output) = run_event(&home, &read_event(&line_rules, &"x".repeat(3_000)));
+    result.unwrap();
+    assert!(output.is_empty());
+    let (result, output) = run_event(&home, &read_event(&common_rules, &"y".repeat(4_000)));
+    result.unwrap();
+    assert!(output.is_empty());
+    assert_eq!(home.state().counted, 14_000);
+    assert!(home.state().withheld.is_empty());
+  }
+
+  #[test]
+  fn referenced_rules_are_transitive_and_cycles_stop() {
+    let home = RunHome::new();
+    let session = home.session_dir();
+    let nested = session.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let a = nested.join("A.md");
+    let b = session.join("B.md");
+    let c = nested.join("C.md");
+    let d = session.join("D.md");
+    let e = session.join("E.md");
+    let memo = session.join("memo.md");
+    std::fs::write(session.join(SESSION_RULES_FILE_NAME), "`nested/A.md`").unwrap();
+    std::fs::write(&a, format!("`{}` `C.md` `../memo.md` `missing.md`", b.display())).unwrap();
+    std::fs::write(&b, "`D.md`").unwrap();
+    std::fs::write(&c, "`A.md`").unwrap();
+    std::fs::write(&d, "`B.md`").unwrap();
+    std::fs::write(&e, "unlisted").unwrap();
+    std::fs::write(&memo, "`E.md`").unwrap();
+
+    let rules = session_rule_files(&home.run_dir).unwrap();
+    assert_eq!(rules.len(), 4);
+    assert!(!rules.contains(&memo.to_string_lossy().into_owned()));
+    for path in [&b, &c, &d] {
+      let (result, output) = run_event(&home, &read_event(&path.to_string_lossy(), &"x".repeat(1_000)));
+      result.unwrap();
+      assert!(output.is_empty());
+      assert_eq!(home.state().counted, 0);
+    }
+    let (result, _) = run_event(&home, &read_event(&e.to_string_lossy(), &"x".repeat(1_000)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 1_000);
+    let mut partial = read_event(&a.to_string_lossy(), &"x".repeat(500));
+    partial["tool_input"]["limit"] = json!(40);
+    let (result, _) = run_event(&home, &partial);
+    result.unwrap();
+    assert_eq!(home.state().counted, 1_500);
+  }
+
+  #[test]
+  fn a_partial_read_of_a_session_rule_file_counts() {
+    let home = RunHome::new();
+    let (line_rules, _) = session_with_rules(&home, "The rules are `LINE_RULES`.");
+    let mut partial = read_event(&line_rules, &"x".repeat(1_000));
+    partial["tool_input"]["limit"] = json!(40);
+    let (result, output) = run_event(&home, &partial);
+    result.unwrap();
+    assert!(output.is_empty());
+    assert_eq!(home.state().counted, 1_000);
+  }
+
+  #[test]
+  fn partial_reads_of_path_matched_rule_and_skill_files_count() {
+    let home = RunHome::new();
+    let mut partial = read_event("/repo/prompts/master.md", &"x".repeat(200));
+    partial["tool_input"]["offset"] = json!(10);
+    let (result, _) = run_event(&home, &partial);
+    result.unwrap();
+    assert_eq!(home.state().counted, 200);
+
+    let mut partial = read_event("/repo/skills/charliebot/SKILL.md", &"y".repeat(300));
+    partial["tool_input"]["limit"] = json!(40);
+    let (result, _) = run_event(&home, &partial);
+    result.unwrap();
+    assert_eq!(home.state().counted, 500);
+
+    let (result, _) = run_event(&home, &bash_event("sed -n '1,5p' /repo/CLAUDE.md", "z".repeat(400)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 900);
+  }
+
+  #[test]
+  fn a_whole_cat_of_a_session_rule_file_passes_and_a_piped_one_counts() {
+    let home = RunHome::new();
+    let (line_rules, _) = session_with_rules(&home, "The rules are `LINE_RULES`.");
+    let (result, _) = run_event(&home, &bash_event(format!("cat {line_rules}"), "x".repeat(3_000)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 0);
+    let (result, _) = run_event(&home, &bash_event(format!("cat {line_rules} | head -5"), "x".repeat(300)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 300);
+  }
+
+  #[test]
+  fn a_markdown_file_the_session_rules_do_not_name_counts() {
+    let home = RunHome::new();
+    session_with_rules(&home, "The rules are `skills/x/y.md` and nothing else.");
+    let stray = home.session_dir().join("ledger.md");
+    std::fs::write(&stray, "z".repeat(2_000)).unwrap();
+    let (result, _) = run_event(&home, &read_event(&stray.to_string_lossy(), &"z".repeat(2_000)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 2_000);
   }
 
   #[test]
@@ -1254,7 +1504,7 @@ mod tests {
     ];
     for (tool_name, tool_input, expected) in cases {
       let input = tool_input.as_object().unwrap().clone();
-      assert_eq!(exempt_class(tool_name, &input, None).as_deref(), expected, "{tool_name} {tool_input}");
+      assert_eq!(exempt_class(tool_name, &input, None, &[]).as_deref(), expected, "{tool_name} {tool_input}");
     }
   }
 
@@ -1427,11 +1677,8 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
     // 7. `charliebot session conclusion --session s` is exempt
     assert_eq!(bash_class("charliebot session conclusion --session s", Some(cwd_str)), Some("child_conclusion"));
 
-    // 8. `charliebot session conclusion --session s | head -c 3000` is exempt
-    assert_eq!(
-      bash_class("charliebot session conclusion --session s | head -c 3000", Some(cwd_str)),
-      Some("child_conclusion")
-    );
+    // 8. A pipe makes even a conclusion read non-standalone.
+    assert_eq!(bash_class("charliebot session conclusion --session s | head -c 3000", Some(cwd_str)), None);
 
     // 9. `charliebot session conclusion --session s; cat events.jsonl` is counted
     assert_eq!(bash_class("charliebot session conclusion --session s; cat events.jsonl", Some(cwd_str)), None);
@@ -1447,7 +1694,7 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
 
     // 11. `charliebot session dialog --from user` is exempt
     assert_eq!(bash_class("charliebot session dialog --from user", Some(cwd_str)), Some("user_words"));
-    assert_eq!(bash_class("charliebot session dialog s --from user | head -n 20", Some(cwd_str)), Some("user_words"));
+    assert_eq!(bash_class("charliebot session dialog s --from user | head -n 20", Some(cwd_str)), None);
 
     // 12. `charliebot session dialog --turns 5` is counted
     assert_eq!(bash_class("charliebot session dialog --turns 5", Some(cwd_str)), None);
@@ -1469,22 +1716,78 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
       bash_class("charliebot session dialog --from user | head -c 100 </abs/events.jsonl", Some(cwd_str)),
       None
     );
-    // A glob in a filter's file argument names files the hook cannot check.
-    assert_eq!(
-      bash_class("charliebot session dialog --from user | head /abs/data/runs/*/events.jsonl", Some(cwd_str)),
-      None
-    );
     // A run log named beside a decision read, a child report or a rule file counts whole, glob or not.
     assert_eq!(bash_class("cat artifacts/plan_x.html; cat /abs/data/runs/*/events.jsonl", Some(cwd_str)), None);
     assert_eq!(bash_class("cat /abs/data/runs/r/report.md; cat /abs/data/runs/r/events.jsonl", Some(cwd_str)), None);
     assert_eq!(bash_class("cat /repo/CLAUDE.md; cat /abs/data/runs/r/agent.raw.ndjson", Some(cwd_str)), None);
     assert_eq!(bash_class("cat artifacts/plan_x.html; cat ev\"\"ents.jsonl", Some(cwd_str)), None);
-    // The plain forms still exempt.
-    assert_eq!(
-      bash_class("charliebot session conclusion --session s | head -c 3000", Some(cwd_str)),
-      Some("child_conclusion")
-    );
+    // The plain standalone form still exempts.
+    assert_eq!(bash_class("charliebot session conclusion --session s", Some(cwd_str)), Some("child_conclusion"));
     assert_eq!(bash_class("cat artifacts/plan_x.html", Some(cwd_str)), Some("approval_object"));
+  }
+
+  /// The exemption of one Bash command, through the entry the hook calls.
+  fn bash_exemption(command: &str) -> Option<String> {
+    let input = json!({"command": command}).as_object().unwrap().clone();
+    exempt_class("Bash", &input, None, &[])
+  }
+
+  /// A stream redirect is not a shell control: a standalone conclusion or dialog read keeps its exemption through
+  /// `2>&1` and a redirect of either stream to a file. A background `&`, a pipe and a substitution still count it.
+  #[test]
+  fn a_stream_redirect_keeps_a_standalone_read_exempt() {
+    let exempt: [(&str, &str); 5] = [
+      ("charliebot session conclusion --session s 2>&1", "child_conclusion"),
+      ("charliebot session conclusion --session s > tmp/out.txt 2>&1", "child_conclusion"),
+      ("charliebot session conclusion --session s 2>tmp/err.txt", "child_conclusion"),
+      ("charliebot session conclusion --session s &>tmp/both.txt", "child_conclusion"),
+      ("charliebot session dialog --from user 2>&1", "user_words"),
+    ];
+    for (command, class) in exempt {
+      assert_eq!(bash_exemption(command).as_deref(), Some(class), "{command}");
+    }
+    for command in [
+      "charliebot session conclusion --session s 2>&1 & cat /abs/data/x.md",
+      "charliebot session conclusion --session s 2>&1 && cat /abs/data/x.md",
+      "charliebot session conclusion --session s 2>&1 || cat /abs/data/x.md",
+      "charliebot session conclusion --session s 2>&1 | head -c 3000",
+      "charliebot session conclusion --session s 2>&1; cat /abs/data/x.md",
+      "charliebot session conclusion --session \"$(cat /abs/x)\" 2>&1",
+    ] {
+      assert_eq!(bash_exemption(command), None, "{command}");
+    }
+  }
+
+  /// An exemption that rests on a decision path holds only for a literal path. A glob or a `$` word beside the
+  /// path counts the read, for a Bash command of any class and for a Read.
+  #[test]
+  fn a_glob_or_dollar_word_beside_a_decision_path_counts() {
+    let temp_session = tempfile::tempdir().unwrap();
+    let session_path = temp_session.path();
+    std::fs::create_dir_all(session_path.join("artifacts")).unwrap();
+    std::fs::write(session_path.join("artifacts").join("plan_x.html"), "plan content").unwrap();
+    let cwd = session_path.to_str().unwrap();
+    let bash = |command: &str| {
+      let input = json!({"command": command}).as_object().unwrap().clone();
+      exempt_class("Bash", &input, Some(cwd), &[])
+    };
+    assert_eq!(bash("cat artifacts/plan_x.html").as_deref(), Some("approval_object"));
+    assert_eq!(bash("cat artifacts/plan_*.html"), None);
+    assert_eq!(bash("cat \"$D/artifacts/plan_x.html\""), None);
+    // A glob in a sed regex beside a literal decision path keeps the class the command has without the glob.
+    assert_eq!(bash("sed 's/<[^>]*>//g' artifacts/plan_x.html").as_deref(), Some("approval_object"));
+    // An unrelated `$NOTE` beside a literal decision path keeps the coordination class.
+    assert_eq!(
+      bash("charliebot plan amend --file artifacts/plan_x.html --note \"$NOTE\"").as_deref(),
+      Some("status_decision")
+    );
+    let read = |file_path: &str| {
+      let input = json!({"file_path": file_path}).as_object().unwrap().clone();
+      exempt_class(READ_TOOL, &input, None, &[])
+    };
+    assert_eq!(read("/s/artifacts/plan_x.html").as_deref(), Some("approval_object"));
+    assert_eq!(read("/s/artifacts/plan_*.html"), None);
+    assert_eq!(read("/s/$D/artifacts/plan_x.html"), None);
   }
 
   #[test]

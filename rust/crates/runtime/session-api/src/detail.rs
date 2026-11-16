@@ -14,10 +14,12 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_compat::compression::gzip_level_one;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::text_repr;
 use charliebot_core::timefmt;
 use charliebot_registry::task_errors::task_http_error;
@@ -52,8 +54,8 @@ const EVENTS_WINDOW_CHUNK: u64 = 64 * 1024;
 
 /// The compressed body of an events file, keyed by its path and `(mtime, size)`.
 ///
-/// The value is a [`Bytes`] handle, so a hit shares the one stored buffer through a refcount bump;
-/// the largest production log holds about 18 MB of compressed bytes.
+/// The value is a [`Bytes`] handle, so a hit shares the one stored buffer through a refcount bump.
+/// The largest production log holds about 18 MB of compressed bytes.
 type FileGzipMemo = Mutex<LruCache<(PathBuf, i64, u64), Bytes>>;
 
 static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
@@ -98,11 +100,12 @@ pub fn build_bootstrap_payload(
   let response_meta = response_metadata(store, meta)?;
   let mut worker_summary = None;
   // The tail the payload renders, oldest first, with the ordinal of its first slot in the space
-  // the session's older pages read. A message ordinal in the projection branches, an event index
-  // in the archived branch, whose events fold to messages one to many.
+  // the session's older pages read: a message ordinal in a worker's transcript projection, an
+  // event index for every other session, whose events fold to messages one to many. The events
+  // branch keeps the fold of the whole tail, which is the payload's first trim step.
   enum Tail {
     Slots { messages: Vec<Value>, start: usize, projection: Arc<MessageProjection> },
-    Events { events: Vec<charliebot_store::ChatEvent>, start: usize },
+    Events { events: Vec<charliebot_store::ChatEvent>, start: usize, messages: Vec<Value> },
   }
   let (tail, pending_draft, event_count) = if meta.profile == TaskProfile::Worker {
     let transcript = worker_transcript::load_worker_transcript(store, &meta.id)?;
@@ -115,17 +118,26 @@ pub fn build_bootstrap_payload(
       pending_draft,
       event_count,
     )
-  } else if let Some(projection) = store.get_message_projection(&meta.id)? {
-    let (messages, oldest, _has_more) = projection.tail(BOOTSTRAP_MESSAGE_LIMIT);
-    let pending_draft = projection.pending_draft().cloned();
-    let event_count = projection.event_count();
-    (Tail::Slots { messages, start: oldest, projection }, pending_draft, event_count)
   } else {
     let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
-    let (events, total_count, _has_more) = store.load_chat_events_tail(&meta.id, BOOTSTRAP_MESSAGE_LIMIT)?;
-    let oldest = archive_offset + total_count.saturating_sub(events.len());
-    let (_, pending_draft) = store.events_to_view_at(&events, oldest)?;
-    (Tail::Events { events, start: oldest }, pending_draft, archive_offset + total_count)
+    // A turn's events fold to more than one message, so a read of the message budget's count of events can fold to
+    // fewer messages than the page shows. The read that ends the loop keeps its fold: the payload's first trim step
+    // takes that same tail, and a longer tail only adds whole turns the trim drops. The next read therefore holds
+    // the events this session's own ratio needs, never the next doubling of the last.
+    // The read covers the log's last `read` lines, and a line that does not parse is no event: the cursor counts the
+    // lines the tail covers, not the events they parse to, so a malformed line never advances it.
+    let mut read = BOOTSTRAP_MESSAGE_LIMIT;
+    let (events, total_count, oldest, messages, pending_draft) = loop {
+      let (events, total_count, _has_more) = store.load_chat_events_tail(&meta.id, read)?;
+      let complete = total_count <= read;
+      let oldest = archive_offset + total_count.saturating_sub(read.min(total_count));
+      let (messages, pending_draft) = store.events_to_view_at(&events, oldest)?;
+      if messages.len() >= BOOTSTRAP_MESSAGE_LIMIT || complete {
+        break (events, total_count, oldest, messages, pending_draft);
+      }
+      read = next_bootstrap_read(read, messages.len(), total_count);
+    };
+    (Tail::Events { events, start: oldest, messages }, pending_draft, archive_offset + total_count)
   };
 
   // The payload's fields that no trim step changes, built once. Each step clones them and inserts
@@ -144,9 +156,13 @@ pub fn build_bootstrap_payload(
   let mut build = |drop: usize| -> StoreResult<Value> {
     let (messages, start) = match &tail {
       Tail::Slots { messages, start, .. } => (messages[drop..].to_vec(), start + drop),
-      Tail::Events { events, start } => {
-        let (messages, _) = store.events_to_view_at(&events[drop..], start + drop)?;
-        (messages, start + drop)
+      Tail::Events { events, start, messages } => {
+        if drop == 0 {
+          (messages.clone(), *start)
+        } else {
+          let (messages, _) = store.events_to_view_at(&events[drop..], start + drop)?;
+          (messages, start + drop)
+        }
       }
     };
     let mut payload = base.clone();
@@ -156,9 +172,9 @@ pub fn build_bootstrap_payload(
     Ok(Value::Object(payload))
   };
   // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes).
-  // A step therefore keeps every kept turn whole and never cuts the newest turn. The projection branches read
-  // the projection's separator ordinals, which are history ordinals; the archived branch falls back to the
-  // events behind the fold's turn separators (master_done, run_end).
+  // A step therefore keeps every kept turn whole and never cuts the newest turn. A worker's projection branch
+  // reads the projection's separator ordinals, which are history ordinals. Every other session reads the events
+  // behind the fold's turn separators (master_done, run_end).
   let next_drop = |drop: usize| -> Option<usize> {
     match &tail {
       Tail::Slots { start, projection, .. } => {
@@ -180,9 +196,20 @@ pub fn build_bootstrap_payload(
   Ok(BootstrapPayload { value, untrimmed_wire_bytes })
 }
 
+/// The next tail read after one that folded `read` events to `messages` messages: the events the message budget
+/// needs at that ratio, bounded to eight times the last read and to the log's own line count.
+///
+/// The read grows by at least half, so a fold that missed the budget by a few messages still ends the loop at the
+/// next read.
+fn next_bootstrap_read(read: usize, messages: usize, total: usize) -> usize {
+  let wanted = read.saturating_mul(BOOTSTRAP_MESSAGE_LIMIT) / messages.max(1);
+  let grown = read.saturating_add((read / 2).max(1));
+  grown.max(wanted.min(read.saturating_mul(8))).min(total)
+}
+
 /// The payload with the tail kept from turn boundary `drop` on, for the smallest turn-aligned
-/// `drop` whose gzip fits [`FIRST_SCREEN_WIRE_BUDGET_BYTES`]. Returns the payload and the wire
-/// bytes the untrimmed payload takes.
+/// `drop` whose messages fit `BOOTSTRAP_MESSAGE_LIMIT` and whose gzip fits
+/// [`FIRST_SCREEN_WIRE_BUDGET_BYTES`]. Returns the payload and the wire bytes the untrimmed payload takes.
 ///
 /// The trim drops one whole turn per step and stops at the turn boundary when the newest turn
 /// alone exceeds the budget. That turn is the first screen, and the served size then exceeds the
@@ -194,11 +221,12 @@ fn fit_first_screen_payload(
   next_drop: &dyn Fn(usize) -> Option<usize>,
 ) -> StoreResult<(Value, usize)> {
   let wire_of = |payload: &Value| gzip_level_one(&charliebot_compat::json::fast_json_bytes(payload)).len();
+  let messages_of = |payload: &Value| payload["messages"].as_array().map_or(0, Vec::len);
   let mut payload = build(0)?;
   let untrimmed_wire = wire_of(&payload);
   let mut wire = untrimmed_wire;
   let mut drop = 0;
-  while wire > FIRST_SCREEN_WIRE_BUDGET_BYTES {
+  while wire > FIRST_SCREEN_WIRE_BUDGET_BYTES || messages_of(&payload) > BOOTSTRAP_MESSAGE_LIMIT {
     let Some(next) = next_drop(drop) else { break };
     drop = next;
     payload = build(drop)?;
@@ -208,31 +236,41 @@ fn fit_first_screen_payload(
 }
 
 /// A session page's bootstrap payload as the page carries it.
+///
+/// The `session` object is the payload's largest value, and the page reads it without changing it, so a memo hit
+/// hands back the object the memo built instead of copying it.
 #[derive(Clone)]
 pub struct PageBootstrap {
   /// The payload's Jinja `tojson` text, the value the page's `SESSION_BOOTSTRAP` constant carries.
   pub text: Arc<String>,
   /// The payload's `session` object.
-  pub session: Value,
+  pub session: Arc<Value>,
   pub pending_draft: Value,
   pub event_count: Value,
 }
 
-/// The page bootstrap one session produced last, kept while every payload input still holds its value.
+/// The page bootstraps the last few sessions produced, newest last, each kept while every payload input still holds
+/// its value.
 ///
 /// The payload is the page's largest value, and its text is its whole escaped form, so a page request that rebuilds it
-/// serializes the session's message tail from scratch. The memo holds one session's bootstrap, about one page's worth
-/// of memory, and a page for another session replaces it.
+/// serializes the session's message tail from scratch. A reader who moves between two sessions asks for a payload the
+/// page built a moment ago, and one slot would rebuild it on every switch.
 #[derive(Default)]
 pub struct PageBootstrapMemo {
-  entry: Mutex<Option<(PageBootstrapKey, PageBootstrap)>>,
+  entries: Mutex<Vec<(PageBootstrapKey, PageBootstrap)>>,
 }
 
-/// The inputs [`build_bootstrap_payload`] reads for a session whose events a live projection holds.
+/// The bootstraps one page keeps: the session it served most recently, and the ones before it a reader comes back to.
+const PAGE_BOOTSTRAP_MEMO_ENTRIES: usize = 4;
+
+/// The identity of a session's live event log: its modification time in nanoseconds and its size.
+type EventLogIdentity = (i128, u64);
+
+/// The inputs [`build_bootstrap_payload`] reads for a session whose events it reads from the live log.
 ///
-/// The projection is shared and immutable: an event that lands moves the store to a new projection, so its pointer
-/// names its content. The metadata compares by content, because the store hands a caller its own copy of the row.
-/// Everything else compares by value, except the config, which compares by pointer because a reload builds a new one.
+/// The tail the payload renders is the log's last events, so the log's identity names that tail: an appended event
+/// moves it. The metadata compares by content, because the store hands a caller its own copy of the row. Everything
+/// else compares by value, except the config, which compares by pointer because a reload builds a new one.
 struct PageBootstrapKey {
   session_id: String,
   meta: SessionMetadata,
@@ -240,18 +278,44 @@ struct PageBootstrapKey {
   thinking_since: Option<UtcDateTime>,
   backend: Map<String, Value>,
   config: Arc<CharlieBotConfig>,
-  projection: Arc<MessageProjection>,
+  events: EventLogIdentity,
 }
 
-impl PartialEq for PageBootstrapKey {
-  fn eq(&self, other: &Self) -> bool {
-    self.session_id == other.session_id
-      && self.meta == other.meta
-      && self.run_backend == other.run_backend
-      && self.thinking_since == other.thinking_since
-      && self.backend == other.backend
-      && Arc::ptr_eq(&self.config, &other.config)
-      && Arc::ptr_eq(&self.projection, &other.projection)
+/// One request's payload inputs, borrowed from the row the request read, so a memo hit compares them without
+/// copying the row or building the key it already holds.
+struct PageBootstrapInputs<'a> {
+  session_id: &'a str,
+  meta: &'a SessionMetadata,
+  run_backend: Option<String>,
+  thinking_since: Option<UtcDateTime>,
+  backend: Map<String, Value>,
+  config: &'a Arc<CharlieBotConfig>,
+  events: EventLogIdentity,
+}
+
+impl PageBootstrapKey {
+  /// The key of one request's inputs, for a memo that holds no entry matching them.
+  fn from_inputs(inputs: &PageBootstrapInputs<'_>) -> PageBootstrapKey {
+    PageBootstrapKey {
+      session_id: inputs.session_id.to_string(),
+      meta: inputs.meta.clone(),
+      run_backend: inputs.run_backend.clone(),
+      thinking_since: inputs.thinking_since,
+      backend: inputs.backend.clone(),
+      config: Arc::clone(inputs.config),
+      events: inputs.events,
+    }
+  }
+
+  /// Whether this key's inputs still hold these values.
+  fn matches(&self, inputs: &PageBootstrapInputs<'_>) -> bool {
+    self.session_id == inputs.session_id
+      && self.meta == *inputs.meta
+      && self.run_backend == inputs.run_backend
+      && self.thinking_since == inputs.thinking_since
+      && self.backend == inputs.backend
+      && Arc::ptr_eq(&self.config, inputs.config)
+      && self.events == inputs.events
   }
 }
 
@@ -283,11 +347,11 @@ fn bootstrap_body(
   meta: &SessionMetadata,
   accepts_gzip: bool,
 ) -> StoreResult<(Bytes, Option<Bytes>, usize)> {
-  let key = page_bootstrap_key(store, registry, cfg, meta)?;
+  let inputs = page_bootstrap_inputs(store, registry, cfg, meta)?;
   let mut entry = memo.entry.lock().expect("the bootstrap body memo mutex is not poisoned");
-  let cached = match &key {
-    Some(current) => match entry.as_ref() {
-      Some((cached, body, gzip, untrimmed)) if cached == current => Some((body.clone(), gzip.clone(), *untrimmed)),
+  let cached = match &inputs {
+    Some(inputs) => match entry.as_ref() {
+      Some((cached, body, gzip, untrimmed)) if cached.matches(inputs) => Some((body.clone(), gzip.clone(), *untrimmed)),
       _ => None,
     },
     None => None,
@@ -298,9 +362,9 @@ fn bootstrap_body(
       let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
       let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&payload.value));
       let untrimmed = payload.untrimmed_wire_bytes;
-      let held = key.is_some();
-      if let Some(key) = key {
-        *entry = Some((key, body.clone(), None, untrimmed));
+      let held = inputs.is_some();
+      if let Some(inputs) = &inputs {
+        *entry = Some((PageBootstrapKey::from_inputs(inputs), body.clone(), None, untrimmed));
       }
       (body, None, untrimmed, held)
     }
@@ -319,6 +383,9 @@ fn bootstrap_body(
 }
 
 /// The bootstrap payload of `meta`, with its text taken from `memo` when every payload input still holds its value.
+///
+/// A memo hit hands back the payload the memo holds, whose `session` object it shares, so a page request serves the
+/// largest value the page carries without copying it.
 pub fn page_bootstrap(
   memo: &PageBootstrapMemo,
   store: &Store,
@@ -326,52 +393,73 @@ pub fn page_bootstrap(
   cfg: &Arc<CharlieBotConfig>,
   meta: &SessionMetadata,
 ) -> StoreResult<PageBootstrap> {
-  let key = page_bootstrap_key(store, registry, cfg, meta)?;
-  if let Some(key) = &key
-    && let Some((cached_key, cached)) =
-      memo.entry.lock().expect("the page bootstrap memo mutex is not poisoned").as_ref()
-    && cached_key == key
-  {
-    return Ok(cached.clone());
+  let inputs = page_bootstrap_inputs(store, registry, cfg, meta)?;
+  if let Some(inputs) = &inputs {
+    let mut entries = memo.entries.lock().expect("the page bootstrap memo mutex is not poisoned");
+    if let Some(at) = entries.iter().position(|(cached_key, _)| cached_key.matches(inputs)) {
+      // The session served again is the newest entry, so an eviction takes the one served longest ago.
+      let entry = entries.remove(at);
+      let bootstrap = entry.1.clone();
+      entries.push(entry);
+      return Ok(bootstrap);
+    }
   }
   let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
   let bootstrap = PageBootstrap {
     text: Arc::new(charliebot_compat::jinja::tojson_text(&payload.value)),
-    session: payload.value["session"].clone(),
+    session: Arc::new(payload.value["session"].clone()),
     pending_draft: payload.value["pending_draft"].clone(),
     event_count: payload.value["event_count"].clone(),
   };
-  if let Some(key) = key {
-    *memo.entry.lock().expect("the page bootstrap memo mutex is not poisoned") = Some((key, bootstrap.clone()));
+  if let Some(inputs) = inputs {
+    let mut entries = memo.entries.lock().expect("the page bootstrap memo mutex is not poisoned");
+    entries.push((PageBootstrapKey::from_inputs(&inputs), bootstrap.clone()));
+    if entries.len() > PAGE_BOOTSTRAP_MEMO_ENTRIES {
+      entries.remove(0);
+    }
   }
   Ok(bootstrap)
 }
 
-/// The memo key of `meta`'s payload, or `None` when the payload reads state the key cannot name.
+/// The payload inputs of `meta`, or `None` when the payload reads state the memo key cannot name.
 ///
 /// A worker session's transcript and an archived session's event file are read fresh for every payload, so neither
 /// session kind is memoized.
-fn page_bootstrap_key(
+fn page_bootstrap_inputs<'a>(
   store: &Store,
   registry: &Registry,
-  cfg: &Arc<CharlieBotConfig>,
-  meta: &SessionMetadata,
-) -> StoreResult<Option<PageBootstrapKey>> {
+  cfg: &'a Arc<CharlieBotConfig>,
+  meta: &'a SessionMetadata,
+) -> StoreResult<Option<PageBootstrapInputs<'a>>> {
   if meta.profile == TaskProfile::Worker || meta.archive_offset != 0 {
     return Ok(None);
   }
-  let Some(projection) = store.get_message_projection(&meta.id)? else { return Ok(None) };
-  let response_meta = response_metadata(store, meta)?;
-  let backend = active_backend_payload(store, &response_meta, cfg, registry)?;
-  Ok(Some(PageBootstrapKey {
-    session_id: meta.id.clone(),
-    meta: meta.clone(),
-    run_backend: response_meta.run_backend,
-    thinking_since: response_meta.thinking_since,
+  let Some(events) = live_event_log_identity(store, &meta.id)? else { return Ok(None) };
+  // The payload renders the displayed backend from the row's own backend, its profile and its bound picker entries,
+  // so the row itself carries every input this payload reads.
+  let backend = active_backend_payload(store, meta, cfg, registry)?;
+  Ok(Some(PageBootstrapInputs {
+    session_id: &meta.id,
+    meta,
+    run_backend: listing::run_backend(store, meta)?,
+    thinking_since: store.busy_since(&meta.id),
     backend,
-    config: Arc::clone(cfg),
-    projection,
+    config: cfg,
+    events,
   }))
+}
+
+/// The identity of a session's live event log: the modification time in nanoseconds and the size.
+///
+/// A payload that reads the log's tail holds this pair, so an appended event moves the pair and the memo serves the
+/// body it built before the append no longer.
+fn live_event_log_identity(store: &Store, session_id: &str) -> StoreResult<Option<EventLogIdentity>> {
+  let path = store.chat_events_path(session_id);
+  match fs::metadata(&path) {
+    Ok(metadata) => Ok(Some((timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len()))),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
+  }
 }
 
 pub(crate) async fn session_detail(
@@ -537,48 +625,29 @@ async fn session_events(
     );
   }
 
-  if meta.archive_offset == 0 {
-    let projection = match features.store.get_message_projection(&session_id) {
-      Ok(projection) => projection,
-      Err(error) => return store_error(error),
-    };
-    if let Some(projection) = projection {
-      let body = match projection.cached_page_body(to_index(before), limit) {
-        Some(body) => body,
-        None => {
-          let (messages, next_before, has_more) = projection.slice_before(to_index(before), limit);
-          let body = Bytes::from(charliebot_compat::json::fast_json_bytes(
-            &json!({"messages": messages, "has_more": has_more, "next_before": next_before}),
-          ));
-          projection.store_page_body(to_index(before), limit, body.clone());
-          body
-        }
-      };
-      if request_wants_gzip(&request) {
-        let compressed = match projection.cached_page_body_gzip(to_index(before), limit) {
-          Some(compressed) => compressed,
-          None => {
-            let compressed = Bytes::from(gzip_level_one(&body));
-            projection.store_page_body_gzip(to_index(before), limit, compressed.clone());
-            compressed
-          }
-        };
-        return json_bytes_response(compressed, Some("gzip"));
-      }
-      return json_bytes_response(body, None);
-    }
-  }
-
-  let payload = match events_range_page(&features.store, &session_id, before, limit) {
+  let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
+  let payload = match events_range_page(&features.store, &session_id, archive_offset, before, limit) {
     Ok(payload) => payload,
     Err(error) => return store_error(error),
   };
   responses::fast_json(StatusCode::OK, &payload)
 }
 
-fn events_range_page(store: &Store, session_id: &str, before: i64, limit: usize) -> StoreResult<Value> {
-  let start = if before <= 0 { 0 } else { (before - limit as i64).max(0) as usize };
-  let end = usize::try_from(before).unwrap_or(0);
+/// The messages of the page that ends at or before `before`, an absolute event index whose space counts the archived
+/// events before the live ones.
+///
+/// A `before` past the history's end names the newest page, so a caller that does not know the history's length still
+/// reads the newest message.
+fn events_range_page(
+  store: &Store,
+  session_id: &str,
+  archive_offset: usize,
+  before: i64,
+  limit: usize,
+) -> StoreResult<Value> {
+  let (_, live_events, _) = store.load_chat_events_tail(session_id, 0)?;
+  let end = usize::try_from(before.max(0)).unwrap_or(usize::MAX).min(archive_offset + live_events);
+  let start = end.saturating_sub(limit);
   let (events, has_more) = store.load_chat_events_range(session_id, start, end)?;
   let messages = store.events_to_messages_at(&events, start)?;
   Ok(json!({"messages": messages, "has_more": has_more, "next_before": start}))
@@ -625,7 +694,7 @@ async fn session_transcript(
   });
   Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len())
     .body(Body::from(body))
     .expect("worker transcript response builds")
@@ -989,7 +1058,7 @@ fn active_backend_payload(
     switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));
     switchable
   };
-  // The pickers list only the config's visible entries; the session's own active entry stays exempt, so the
+  // The pickers list only the config's visible entries. The session's own active entry stays exempt, so the
   // header menu still shows it as the current value.
   let switchable: Vec<String> =
     switchable.into_iter().filter(|id| id == &active_backend || cfg.backends.picker_visible(id)).collect();
@@ -1058,12 +1127,12 @@ fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Bytes> {
 fn json_bytes_response(body: Bytes, encoding: Option<&'static str>) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len());
   if let Some(encoding) = encoding {
     builder = builder
       .header(header::CONTENT_ENCODING, HeaderValue::from_static(encoding))
-      .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+      .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
   }
   builder.body(Body::from(body)).expect("a session JSON response builds")
 }
@@ -1091,7 +1160,7 @@ fn events_window_response(body: Bytes, gzip: Option<Bytes>, start: u64) -> Respo
     .header(header::CONTENT_TYPE, "application/x-ndjson")
     .header(header::CONTENT_LENGTH, served.len())
     .header("x-window-start", start)
-    .header(header::VARY, "Accept-Encoding");
+    .header(header::VARY, ACCEPT_ENCODING);
   if let Some(encoding) = encoding {
     builder = builder.header(header::CONTENT_ENCODING, encoding);
   }
@@ -1104,7 +1173,7 @@ fn events_gzip_response(body: Bytes) -> Response {
     .header(header::CONTENT_TYPE, "application/x-ndjson")
     .header(header::CONTENT_LENGTH, body.len())
     .header(header::CONTENT_ENCODING, "gzip")
-    .header(header::VARY, "Accept-Encoding")
+    .header(header::VARY, ACCEPT_ENCODING)
     .body(Body::from(body))
     .expect("a compressed events response builds")
 }
@@ -1446,7 +1515,7 @@ backends:
         backend["switchable_backends"]
       );
       if menu_lists {
-        // An allowed switch moved the node; put it back, so the next id judges against `twin-a` again.
+        // An allowed switch moved the node. Put it back, so the next id judges against `twin-a` again.
         let (headers, body) = json_request(json!({"backend": "twin-a"}));
         let (status, detail) = answer(
           crate::write_routes::switch_backend(State(Arc::clone(&features)), AxumPath(node.id.clone()), headers, body)
@@ -1564,7 +1633,7 @@ backends:
     let first = page_bootstrap_text(&memo);
     let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap();
     assert_eq!(first.text.as_str(), charliebot_compat::jinja::tojson_text(&payload.value));
-    assert_eq!(first.session, payload.value["session"]);
+    assert_eq!(*first.session, payload.value["session"]);
 
     let repeat = page_bootstrap_text(&memo);
     assert!(Arc::ptr_eq(&first.text, &repeat.text), "an unchanged payload keeps its text");
@@ -1579,6 +1648,31 @@ backends:
     let payload_after = build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap();
     assert_eq!(after.text.as_str(), charliebot_compat::jinja::tojson_text(&payload_after.value));
     assert_ne!(after.text.as_str(), first.text.as_str(), "a new event rebuilds the text");
+  }
+
+  /// A reader who moves between two sessions and comes back is served the payload the page built before, because one
+  /// session's payload no longer displaces the other's.
+  #[tokio::test]
+  async fn a_page_bootstrap_keeps_the_sessions_it_served_before() {
+    let (_home, features) = feature_context();
+    let first = crate::test_support::create_node(&features.store, "page-bootstrap-a", None, TaskProfile::Manager).await;
+    let second =
+      crate::test_support::create_node(&features.store, "page-bootstrap-b", None, TaskProfile::Manager).await;
+    let memo = PageBootstrapMemo::default();
+    let cfg = features.config.get().expect("the test config loads");
+    let served = |session: &SessionMetadata| page_bootstrap(&memo, &features.store, &features.registry, &cfg, session);
+
+    let first_a = served(&first).unwrap();
+    let first_b = served(&second).unwrap();
+    let again_a = served(&first).unwrap();
+    let again_b = served(&second).unwrap();
+    assert!(!Arc::ptr_eq(&first_a.text, &first_b.text), "the two sessions build different payloads");
+    assert!(Arc::ptr_eq(&first_a.text, &again_a.text), "the session opened before another one is still kept");
+    assert!(Arc::ptr_eq(&first_b.text, &again_b.text));
+    assert!(
+      Arc::ptr_eq(&first_a.session, &again_a.session) && Arc::ptr_eq(&first_b.session, &again_b.session),
+      "a served-again payload shares the session object it built instead of copying it"
+    );
   }
 
   /// Deterministic incompressible-ish text: a fixed LCG over a 62-character alphabet. The gzip of one
@@ -1667,15 +1761,16 @@ backends:
     let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
     let kept = messages.len();
-    assert!(kept > 0 && kept < 24, "kept {kept} of the 24-slot tail");
+    let total_events = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    assert!(kept > 0 && kept < 24, "kept {kept} of the tail's 40 events");
     let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
     assert_eq!(payload.value["has_more"], json!(true));
-    // A turn is three messages (user, assistant, separator), so the kept suffix starts at a turn
-    // boundary and the newest turn's user message is on the first screen.
-    assert_eq!(kept % 3, 0, "the kept slots are whole turns");
-    assert_eq!(payload.value["oldest_message_ordinal"], json!(24 - kept));
+    // A turn is three events (user, assistant, separator), each folding to one message, so the kept
+    // suffix starts at a turn boundary and the newest turn's user message is on the first screen.
+    assert_eq!(kept % 3, 0, "the kept events are whole turns");
+    assert_eq!(payload.value["oldest_message_ordinal"], json!(total_events - kept));
     assert_eq!(messages[0]["role"], "user", "a kept turn starts at its user message");
     let newest_marker = messages.iter().find(|message| message["content"] == json!(fixture_text(8, 1_600)));
     assert!(newest_marker.is_some(), "the newest turn's user message renders on the first screen");
@@ -1701,9 +1796,9 @@ backends:
     store.append_chat_event(session_id, json!({"type": "master_done"})).await.unwrap();
   }
 
-  /// A tail that starts past the history's first slot trims in its own indexes. The kept slots are the tail's last
-  /// whole turns, and the paging cursor is the absolute ordinal of the first kept slot. The turns take 3, 3, 2, 2
-  /// slots in turn, and the tail starts at slot 6, which is 6 modulo the 10-slot period. A trim that walked the
+  /// A tail that starts past the history's first event trims in its own indexes. The kept events are the tail's last
+  /// whole turns, and the paging cursor is the absolute ordinal of the first kept event. The turns take 3, 3, 2, 2
+  /// events in turn, and the tail starts at event 6, which is 6 modulo the 10-event period. A trim that walked the
   /// history's turn starts as the tail's own indexes would then land between turns at every step.
   #[tokio::test]
   async fn a_first_screen_trim_past_the_history_start_keeps_whole_turns_at_absolute_ordinals() {
@@ -1712,24 +1807,23 @@ backends:
       crate::test_support::create_node(&features.store, "trim-long-bootstrap", None, TaskProfile::Manager).await;
     let turns = 18usize;
     let mut turn_starts = Vec::new();
-    let mut total = 0usize;
     for turn in 1..=turns {
-      turn_starts.push(total);
+      turn_starts.push(features.store.load_chat_events_sync(&meta.id).unwrap().len());
       let with_reply = matches!(turn % 4, 1 | 2);
       append_fixture_turn(&features.store, &meta.id, turn, 700, with_reply).await;
-      total += if with_reply { 3 } else { 2 };
     }
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
     let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
     let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
-    assert!(start > 0, "the tail starts past the history's first slot");
+    assert!(start > 0, "the tail starts past the history's first event");
     let first_turn = turn_starts.iter().position(|turn_start| *turn_start == start);
-    let first_turn = first_turn.expect("the kept slots start at a turn boundary") + 1;
-    assert_eq!(start + messages.len(), total, "the kept slots run to the history's end");
+    let first_turn = first_turn.expect("the kept events start at a turn boundary") + 1;
+    assert_eq!(start + messages.len(), total, "the kept events run to the history's end");
     assert_eq!(
       messages[0]["content"],
       json!(fixture_text(first_turn as u64, 700)),
-      "the first kept slot is its turn's user message"
+      "the first kept event is its turn's user message"
     );
     let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
@@ -1739,6 +1833,58 @@ backends:
       messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 700))),
       "the newest turn renders on the first screen"
     );
+  }
+
+  /// The next read covers the events the message budget needs at the fold's own ratio, and it grows by at least
+  /// half and never past the log's line count.
+  #[test]
+  fn a_bootstrap_read_grows_to_the_budget_and_no_further_than_the_log() {
+    // 40 events folding to 20 messages need 80 events for the budget's 40 messages.
+    assert_eq!(next_bootstrap_read(40, 20, 1_000), 80);
+    // A tail that folds to no message grows by the eightfold bound instead of dividing by zero.
+    assert_eq!(next_bootstrap_read(40, 0, 1_000), 320);
+    // The log's own line count caps the read.
+    assert_eq!(next_bootstrap_read(40, 20, 60), 60);
+    // The read always grows, so the loop reaches the log's end.
+    assert_eq!(next_bootstrap_read(90, 45, 100), 100);
+  }
+
+  /// A log whose events fold to fewer messages than the budget needs a second read. The second read serves the
+  /// budget's messages, and the cursor names the first of their events inside the log.
+  #[tokio::test]
+  async fn a_log_past_the_first_read_budget_reads_again_for_the_message_budget() {
+    let (_home, features) = feature_context();
+    let meta =
+      crate::test_support::create_node(&features.store, "two-read-bootstrap", None, TaskProfile::Manager).await;
+    // Each turn is a user event and a note that folds to nothing, so the first read of the budget's count of events
+    // folds to half the budget's messages and the loop reads again.
+    let turns = 100usize;
+    for turn in 1..=turns {
+      features
+        .store
+        .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(turn as u64, 40)}))
+        .await
+        .unwrap();
+      features
+        .store
+        .append_chat_event(&meta.id, json!({"type": "unrendered_note", "content": "filler"}))
+        .await
+        .unwrap();
+    }
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    assert_eq!(total, 2 * turns + 1, "the fixture's log is its two events per turn and the node's own event");
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), BOOTSTRAP_MESSAGE_LIMIT, "the second read fills the message budget");
+    let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    assert!(start > 0, "the kept events start past the log's first event");
+    assert!(start + messages.len() <= total, "the cursor names events inside the log");
+    assert!(
+      messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 40))),
+      "the newest turn renders on the first screen"
+    );
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
   }
 
   /// A closed newest turn over the whole budget renders whole: the trim stops at its start, not past its end.
@@ -1751,10 +1897,66 @@ backends:
     append_fixture_turn(&features.store, &meta.id, 2, 20_000, true).await;
     let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 3, "the newest turn's three slots render");
+    assert_eq!(messages.len(), 3, "the newest turn's three events render");
     assert_eq!(messages[0]["content"], json!(fixture_text(2, 20_000)));
-    assert_eq!(payload.value["oldest_message_ordinal"], json!(3));
+    assert_eq!(
+      payload.value["oldest_message_ordinal"],
+      json!(features.store.load_chat_events_sync(&meta.id).unwrap().len() - messages.len()),
+      "the cursor is the first kept event"
+    );
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
+  }
+
+  /// A log whose last line does not parse names the tail's first line as the paging cursor: the cursor counts the lines
+  /// the tail covers, so the next page starts where the bootstrap's messages do instead of past them.
+  #[tokio::test]
+  async fn a_malformed_line_does_not_advance_the_first_screen_cursor() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "malformed-tail", None, TaskProfile::Manager).await;
+    for turn in 1..=3usize {
+      append_fixture_turn(&features.store, &meta.id, turn, 700, true).await;
+    }
+    let path = features.store.chat_events_path(&meta.id);
+    let mut lines = fs::read_to_string(&path).unwrap();
+    lines.push_str("{malformed\n");
+    fs::write(&path, lines).unwrap();
+    features.store.clear_chat_events_cache(&meta.id);
+
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    assert_eq!(payload.value["oldest_message_ordinal"], json!(0), "the tail starts at the log's first line");
+    assert_eq!(payload.value["has_more"], json!(false));
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert!(
+      messages.iter().any(|message| message["content"] == json!(fixture_text(3 + 100, 700))),
+      "the newest turn renders on the first screen"
+    );
+  }
+
+  /// A log whose turns carry more events than messages still fills the first screen's message budget: the read walks
+  /// past the budget's count of events until the tail folds to the budget, and the trim keeps its last messages.
+  #[tokio::test]
+  async fn the_first_screen_fills_its_message_budget_from_turns_of_many_events() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "budget-bootstrap", None, TaskProfile::Manager).await;
+    // 45 turns of two events that fold to one message: the budget's count of events folds to 20 messages, so the read
+    // doubles to 80 and stops at the budget, leaving events older than the kept tail.
+    for turn in 1..=45usize {
+      let events = [
+        json!({"type": "user", "content": fixture_text(turn as u64, 40)}),
+        json!({"type": "unrendered_note", "content": "filler"}),
+      ];
+      for event in events {
+        features.store.append_chat_event(&meta.id, event).await.unwrap();
+      }
+    }
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), BOOTSTRAP_MESSAGE_LIMIT, "the first screen carries the budget's messages");
+    let total_events = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    assert!(start > 0, "the kept messages start past the log's first event");
+    assert!(start + messages.len() <= total_events, "the cursor names events inside the log");
+    assert_eq!(payload.value["has_more"], json!(true));
   }
 
   /// The route's answer carries the untrimmed wire size in its header.
@@ -1996,9 +2198,10 @@ backends:
       (8, 3, 5, vec!["Question five"]),
       (10, 4, 6, vec!["Answer eight", ""]),
       (3, 5, 0, vec!["Question zero"]),
+      (u32::MAX as i64, 4, 6, vec!["Answer eight", ""]),
     ];
     for (before, limit, next_before, expected_content) in cases {
-      let page = events_range_page(&store, session_id, before, limit).unwrap();
+      let page = events_range_page(&store, session_id, 0, before, limit).unwrap();
       let content: Vec<&str> =
         page["messages"].as_array().unwrap().iter().map(|message| message["content"].as_str().unwrap_or("")).collect();
       assert_eq!(content, expected_content, "before={before}, limit={limit}");

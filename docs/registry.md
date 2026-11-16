@@ -100,6 +100,15 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   `handler: <name>` awaits it, and the `Ok` string is the fire's summary.
 - Example: `registry.scheduled_handler("publish_sweep", publish_sweep)?;`
 
+### Worktree removal
+
+- Rust: `worktree_removal(remove: WorktreeRemovalFn)` (at most one), where
+  `WorktreeRemovalFn = for<'a> fn(WorktreeRemoval<'a>) -> BoxFuture<'a, Option<String>>`. The request names the
+  repository, the worktree, its branch, the owning run and the caller's log identity; a `Some` message reports the
+  removal's failure in the caller's own words. `runtime.tasks` registers it, and the disk sweep reads it with
+  `worktree_remover()`, which fails when no package registered one.
+- Example: `registry.worktree_removal(remove_worktree_hook)?;`
+
 ### Config sections
 
 - Rust: `config_section(section: ConfigSection)`, where `ConfigSection { key, legacy_keys, parse }` and

@@ -32,7 +32,7 @@ struct NumstatEntry {
   old_path: Option<String>,
 }
 
-/// Runs the two manifest reads over the same range at once. The name-status failure surfaces before the numstat one,
+/// The two manifest reads over `range`, run at once. The name-status failure surfaces before the numstat one,
 /// the order the sequential form raised them in.
 pub(crate) async fn build(repo: &Path, range: &str) -> Result<Manifest, Response> {
   let name_status_args = ["diff", "--name-status", "-z", range];

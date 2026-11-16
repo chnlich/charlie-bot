@@ -92,7 +92,7 @@ const SCAN_BATCH_MIN_JOBS: usize = 32;
 /// The candidates the first sweep window reads before the route checks whether the answer's slots are full.
 ///
 /// The sweep runs newest-first, so the first window holds the newest candidates a full answer can carry. A window
-/// larger than the slots need would read files the answer cannot hold; a smaller one needs more batches to fill it.
+/// larger than the slots need would read files the answer cannot hold. A smaller one needs more batches to fill it.
 /// Tests shrink it, so a stopped sweep needs a corpus small enough to write inside the unit-test time bound.
 #[cfg(not(test))]
 const SWEEP_WINDOW_CANDIDATES: usize = 256;
@@ -265,7 +265,7 @@ pub(crate) struct SearchAnswer {
 /// A fresh query tests the needle against every session name and checks the chat files of the active sessions that the
 /// capped answer can still take, and both sets depend only on the corpus. The store keeps a corpus until a metadata
 /// write or the sweep interval rebuilds it, so the entry serves the queries between two rebuilds. `corpus` is the key
-/// and holds the rows it names alive, so a pointer match names the same sessions; `sessions_dir` is the directory the
+/// and holds the rows it names alive, so a pointer match names the same sessions. `sessions_dir` is the directory the
 /// paths resolve below.
 struct CorpusWork {
   corpus: Arc<Vec<Arc<SessionMetadata>>>,
@@ -774,7 +774,7 @@ fn search_sessions_with_limit(
   if scan_failures == 0 {
     // The result holds at most the newest `result_limit` rows, so a candidate older than the last row cannot
     // enter a full result however its chat file changes. A repeat query re-checks only the candidates that could
-    // enter it; a short result can still take any candidate, so it keeps watching all of them.
+    // enter it. A short result can still take any candidate, so it keeps watching all of them.
     let cutoff = names.get(result_limit - 1).map(|meta| meta.updated_at);
     let mut watched = Vec::new();
     let mut watched_signatures = Vec::new();
@@ -914,7 +914,7 @@ static SIGNATURE_POOL: LazyLock<SignaturePool> = LazyLock::new(SignaturePool::st
 /// The open sessions directory, one handle for the process lifetime, keyed by its path.
 ///
 /// A signature read resolves a session's file below this handle, so it walks only the session's own components.
-/// The store holds the same kind of handle for its identity reads; this one keeps search's reads off the home's
+/// The store holds the same kind of handle for its identity reads. This one keeps search's reads off the home's
 /// path prefix. A directory that is not there answers None, and the batch reads by path instead.
 /// The sessions directory's path and its open handle, so a store built on another home opens its own.
 type SessionsDirMemo = Mutex<Option<(PathBuf, Arc<File>)>>;
@@ -952,7 +952,7 @@ fn file_signature_unlogged(path: &Path) -> io::Result<FileSignature> {
 
 /// The identity of the file at `relative`, resolved below the open directory `dir`.
 ///
-/// It is the same `fstatat` the path form makes; anchoring it on a directory handle means each read walks only
+/// It is the same `fstatat` the path form makes. Anchoring it on a directory handle means each read walks only
 /// the session's own path components instead of the home's whole path.
 fn file_signature_at(dir: &File, relative: &CString) -> io::Result<FileSignature> {
   let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -985,7 +985,7 @@ fn hit_root_covers<'a>(
   })
 }
 
-/// `None` means a stored absence already proves this query; otherwise return the byte offset to re-scan.
+/// `None` means a stored absence already proves this query. Otherwise return the byte offset to re-scan.
 fn absence_rescan_start(roots: &RootMemo, signature: FileSignature, needle: &str) -> Option<u64> {
   for (root, root_signature) in roots.iter() {
     if needle.starts_with(root) && *root_signature == signature {
@@ -1016,7 +1016,7 @@ fn result_cutoff(matched: &mut [UtcDateTime], limit: usize) -> Option<UtcDateTim
   Some(*cutoff)
 }
 
-/// The trigrams a lowercase ASCII needle holds; a window with any other byte contributes none.
+/// The trigrams a lowercase ASCII needle holds. A window with any other byte contributes none.
 ///
 /// Every window of the needle's own bytes is a window of any text that holds the needle, so an index that lacks one
 /// of these trigrams proves the needle absent. A window the index cannot encode proves nothing and is dropped.
@@ -1034,7 +1034,7 @@ fn needle_trigrams(needle: &str) -> Vec<usize> {
     .collect()
 }
 
-/// The bigrams a lowercase ASCII needle holds; a pair of letters and a pair holding a byte outside [`BIGRAM_SYMBOLS`]
+/// The bigrams a lowercase ASCII needle holds. A pair of letters and a pair holding a byte outside [`BIGRAM_SYMBOLS`]
 /// contribute none.
 ///
 /// A bigram holds a digit or a symbol the trigram index cannot, so a needle such as an identifier or a version number
@@ -1160,7 +1160,7 @@ fn index_and_search_file(path: &Path, needle: &str) -> ContentIndexAnswer {
 
 /// A content index and a needle search for each named candidate, each answer carrying its candidate's index.
 ///
-/// The split is why the answers come in no fixed order; the caller pairs each answer with the index it carries.
+/// The split is why the answers come in no fixed order. The caller pairs each answer with the index it carries.
 fn index_and_search_files(
   paths: &[WatchedFile],
   jobs: &[usize],
@@ -1416,7 +1416,7 @@ mod tests {
   }
 
   /// The raw scan reads the needle's own bytes. A Han needle is six or more bytes for two characters, so a chunk
-  /// boundary can fall inside it; the buffer's overlap must keep the whole needle.
+  /// boundary can fall inside it. The buffer's overlap must keep the whole needle.
   #[test]
   fn raw_scan_finds_a_multibyte_needle_across_a_chunk_boundary() {
     let mut file = tempfile::tempfile().unwrap();
@@ -1636,7 +1636,7 @@ mod tests {
   /// exactly the newest matches.
   ///
   /// Eight name hits fill the cap on their own. Two newer content hits enter the answer and push the cutoff to the
-  /// sixth name hit; eight older content hits are past the
+  /// sixth name hit. Eight older content hits are past the
   /// cutoff and stay unread. Rank 0 is the newest session.
   #[test]
   fn a_full_result_stops_the_scan_at_the_newest_matches() {
@@ -1669,7 +1669,7 @@ mod tests {
       content(&format!("old-{index}"), 400 + index);
     }
     let memos = Mutex::new(super::SearchMemos::default());
-    // The first query indexes every chat file; the second reaches the first sweep window through that index.
+    // The first query indexes every chat file. The second reaches the first sweep window through that index.
     assert!(super::search_sessions_with_limit(&store, "zzzq", &memos, limit).unwrap().rows.is_empty());
 
     let rows = super::search_sessions_with_limit(&store, "needle", &memos, limit).unwrap().rows;
@@ -2152,7 +2152,7 @@ mod tests {
     assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
     assert_eq!(memos.lock().unwrap().scan_calls, 1, "the first query reads the file and keeps its index");
 
-    // Every trigram of "qu1ck" occurs in the file; its "1c" bigram does not, and the query answers without reading it.
+    // Every trigram of "qu1ck" occurs in the file. Its "1c" bigram does not, and the query answers without reading it.
     assert!(super::search_sessions_with_memos(&store, "qu1ck", &memos).unwrap().rows.is_empty());
     assert_eq!(memos.lock().unwrap().scan_calls, 1, "a missing bigram ruled the file out");
 

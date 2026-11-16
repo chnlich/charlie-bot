@@ -1,5 +1,5 @@
-//! The open route's answers: no executable, a folder outside the roots, an invalid `bind-addr`, a stub executable that
-//! listens on the configured port, and one that exits before it listens.
+//! The open route's answers: no executable, a folder outside the roots, an invalid `bind-addr`, and a stub executable
+//! that listens on the configured port. Another stub exits before it listens.
 
 use std::fs;
 use std::net::TcpListener;

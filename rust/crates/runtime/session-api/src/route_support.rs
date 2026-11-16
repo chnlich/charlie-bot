@@ -7,7 +7,7 @@ use axum::response::Response;
 use charliebot_compat::validation;
 use charliebot_store::{StoreError, StoreResult};
 
-/// The store error as its route's JSON response; `charliebot_registry::task_errors` owns the mapping.
+/// The store error as its route's JSON response. `charliebot_registry::task_errors` owns the mapping.
 pub(crate) use charliebot_registry::task_errors::store_error;
 
 /// Run a handler's store work on the blocking pool, so a slow read holds no async worker.

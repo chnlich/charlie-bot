@@ -112,7 +112,7 @@ pub struct CollectedSignature {
   pub source: Source,
   /// The run kind, or `log` for a server-log line.
   pub kind: String,
-  /// The normalized cause line that retrieval searches with; empty for a no-cause record.
+  /// The normalized cause line that retrieval searches with. Empty for a no-cause record.
   pub cause_line: String,
   /// The no-cause shape, when the record has no cause to judge.
   pub no_cause: Option<NoCauseShape>,
@@ -363,7 +363,7 @@ fn read_run_events(path: &Path) -> Result<RunEvents> {
         }
       }
       Some(event_types::RESULT) => {
-        // The walk is newest first, so the first result event is the run's newest; only its error text is read.
+        // The walk is newest first, so the first result event is the run's newest. Only its error text is read.
         if !newest_result_seen {
           newest_result_seen = true;
           run.result_error = reported_error(&event);

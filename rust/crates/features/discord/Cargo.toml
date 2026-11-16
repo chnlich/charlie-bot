@@ -27,9 +27,9 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 charliebot-chat-threads = { workspace = true, features = ["test-support"] }
+charliebot-core = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 tower.workspace = true

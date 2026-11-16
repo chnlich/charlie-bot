@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Reads the parallel JUnit report and reruns each test above the parallel limit alone. If its first alone time is over
-// 0.1 s, the check runs it alone twice more and judges by the shortest time. A missing JUnit row fails.
+// the alone limit, the check runs it alone twice more and judges by the shortest time. A missing JUnit row fails.
 //
-//   dev/check-unit-test-time.mjs --runner rust|node --junit <path> [--parallel-limit <seconds>] [--workspace-dir <dir>]
+//   dev/check-unit-test-time.mjs --runner rust|node --junit <path> [--parallel-limit <seconds>]
+//       [--alone-limit <seconds>] [--workspace-dir <dir>]
 //
 //   --runner            the suite the report came from: rust (nextest) or node (node --test) (required)
 //   --junit             the JUnit report of the parallel run (required)
 //   --parallel-limit    rerun tests above this parallel time alone (default: 0.1)
+//   --alone-limit       fail tests whose shortest alone run exceeds this time (default: 0.1)
 //   --workspace-dir     the directory the reruns run in (default: rust for rust, web for node)
 //
 // A rust rerun is one nextest run, one test thread. A node rerun is one `node --test` per suspect, on the
@@ -18,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-const LIMIT_S = 0.1;
+const DEFAULT_LIMIT_S = 0.1;
 const RERUN_TIMEOUT_MS = 55 * 60_000;
 const RUNNER_DIRECTORY = { rust: 'rust', node: 'web' };
 
@@ -55,11 +57,18 @@ function main() {
         const shortest = Math.min(...times);
         const aloneTimes = times.map((time) => `${formatTime(time)} s`).join(', ');
         const failed = rows.some((row) => row.failed);
-        if (shortest > LIMIT_S) {
+        const aloneLimit = String(options.aloneLimit);
+        const overAloneLimit = options.aloneLimit === options.parallelLimit
+          ? `${aloneLimit} s`
+          : `alone limit ${aloneLimit} s`;
+        const withinAloneLimit = options.aloneLimit === options.parallelLimit
+          ? `${aloneLimit} s alone`
+          : `alone limit ${aloneLimit} s`;
+        if (shortest > options.aloneLimit) {
           stillOverAlone += 1;
           const suffix = failed ? ', an isolated run FAILED' : '';
           lines.push(
-            `unit test over ${LIMIT_S} s: ${suspect.binaryId} ${suspect.name} ${aloneTimes} alone` +
+            `unit test over ${overAloneLimit}: ${suspect.binaryId} ${suspect.name} ${aloneTimes} alone` +
               ` (shortest ${formatTime(shortest)} s${suffix})`
           );
         } else if (failed) {
@@ -70,7 +79,7 @@ function main() {
           );
         } else {
           lines.push(
-            `unit test within ${LIMIT_S} s alone: ${suspect.binaryId} ${suspect.name}` +
+            `unit test within ${withinAloneLimit}: ${suspect.binaryId} ${suspect.name}` +
               ` ${formatTime(suspect.time)} s parallel, ${aloneTimes} alone` +
               ` (shortest ${formatTime(shortest)} s)`
           );
@@ -111,14 +120,22 @@ function rerunAlone(suspects, options) {
       byId.get(key).push(row);
     }
     if (runNumber === 1) {
-      pending = pending.filter((suspect) => byId.get(`${suspect.binaryId} ${suspect.name}`)[0].time > LIMIT_S);
+      pending = pending.filter(
+        (suspect) => byId.get(`${suspect.binaryId} ${suspect.name}`)[0].time > options.aloneLimit
+      );
     }
   }
   return { byId, error: undefined };
 }
 
 function parseArgs(argv) {
-  const options = { runner: null, junit: null, parallelLimit: LIMIT_S, workspaceDir: null };
+  const options = {
+    runner: null,
+    junit: null,
+    parallelLimit: DEFAULT_LIMIT_S,
+    aloneLimit: DEFAULT_LIMIT_S,
+    workspaceDir: null,
+  };
   const take = (i) => {
     if (i + 1 >= argv.length) usage(`missing value for ${argv[i]}`);
     return argv[i + 1];
@@ -133,6 +150,11 @@ function parseArgs(argv) {
       options.parallelLimit = Number(take(i));
       if (!Number.isFinite(options.parallelLimit) || options.parallelLimit < 0) {
         usage('--parallel-limit must be a non-negative number');
+      }
+    } else if (arg === '--alone-limit') {
+      options.aloneLimit = Number(take(i));
+      if (!Number.isFinite(options.aloneLimit) || options.aloneLimit < 0) {
+        usage('--alone-limit must be a non-negative number');
       }
     } else if (arg === '--workspace-dir') {
       options.workspaceDir = take(i);
@@ -152,7 +174,7 @@ function parseArgs(argv) {
 function usage(message) {
   console.error(
     'usage: check-unit-test-time.mjs --runner rust|node --junit <path> ' +
-      '[--parallel-limit <seconds>] [--workspace-dir <dir>]'
+      '[--parallel-limit <seconds>] [--alone-limit <seconds>] [--workspace-dir <dir>]'
   );
   console.error(`check-unit-test-time: ${message}`);
   process.exit(2);

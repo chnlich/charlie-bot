@@ -334,7 +334,7 @@
   }
 
   function decorateLine(row, numberCell, side, line, oldLine, newLine, hunkHeader) {
-    // A file re-renders its decoration when line expansion inserts rows; a decorated row keeps its marker.
+    // A file re-renders its decoration when line expansion inserts rows. A decorated row keeps its marker.
     if (row.classList.contains(`${PREFIX}-line`)) return;
     row.classList.add(`${PREFIX}-line`);
     row.dataset.cbdcSide = side;

@@ -2,9 +2,9 @@
 //! The recorded reference (`fixtures/cli_backends_golden.json`) holds every section's recorded answer over the
 //! synthetic inputs built here. The test fails with every section that differs.
 //!
-//! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases); the translator
-//! streams of gemini and charlie-code (2); and the antigravity finish cases, each run through the `AgentRunner`
-//! final-stdout path over a fake `agy` (11 cases).
+//! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases). The translator
+//! streams of gemini and charlie-code come next (2). The antigravity finish cases follow, each run through the
+//! `AgentRunner` final-stdout path over a fake `agy` (11 cases).
 
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -99,7 +99,6 @@ impl Fixture {
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
         enable_local_work_guard: false,
-        enable_offline_shell: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),
@@ -575,22 +574,6 @@ fn check_finish(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Ve
   }
 }
 
-/// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
-fn gh_wrapper_env(dir: &Path) -> Env {
-  use std::os::unix::fs::PermissionsExt;
-  let wrapper_dir = dir.join("gh-wrapper");
-  fs::create_dir_all(&wrapper_dir).unwrap();
-  let wrapper = wrapper_dir.join("gh");
-  fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-  let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-  permissions.set_mode(0o755);
-  fs::set_permissions(&wrapper, permissions).unwrap();
-  env_map(&json!({
-    "PATH": format!("{}:{}:/usr/bin:/bin", wrapper_dir.display(), dir.display()),
-    charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR: wrapper.display().to_string(),
-  }))
-}
-
 /// Runs one fake `agy` through the runner's final-stdout path. Returns the events it emitted, the exit code the runner
 /// recorded, and the guard error that ended the run.
 async fn run_finish(fx: &Fixture, case: &Value) -> Value {
@@ -599,7 +582,8 @@ async fn run_finish(fx: &Fixture, case: &Value) -> Value {
   let launch = LaunchArgs { resume_session_id: opt_text(&case["resume"]), ..LaunchArgs::default() };
   let backend = AntigravityFactory::new(host).build(Some(&option_of(case)), &fx.config(), launch.clone()).unwrap();
   let runner = AgentRunner::new("antigravity", backend, launch);
-  let environment = AgentBaseEnvironment { values: gh_wrapper_env(&dir) };
+  let agent_path = format!("{}:/usr/bin:/bin", dir.display());
+  let environment = AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(&dir, &agent_path) };
   let mut request = RunRequest::new(
     text(&case["prompt"]).to_string(),
     dir.join("cwd"),
@@ -752,7 +736,7 @@ fn launch_of(case: &Value) -> LaunchArgs {
     resume_session_id: opt_text(&case["resume_session_id"]),
     instructions_content: opt_text(&case["instructions_content"]),
     instructions_file: opt_text(&case["instructions_file"]).map(PathBuf::from),
-    // A manager turn carries no run instructions file, and a worker run does; the live launch sets this flag on the
+    // A manager turn carries no run instructions file, and a worker run does. The live launch sets this flag on the
     // manager path.
     manager_turn: case["instructions_file"].is_null(),
     backend_kwargs,

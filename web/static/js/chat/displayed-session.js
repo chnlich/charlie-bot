@@ -24,7 +24,7 @@ let displayedSessionId = SESSION_ID;
 let displayedSessionName = SESSION_NAME;
 
 // The composer actions waiting for their session's switch to land. Each
-// carries the session it binds; kind says how a switch that never lands
+// carries the session it binds. Kind says how a switch that never lands
 // treats it: 'message' posts, 'interrupt' drops.
 let heldComposerActions = [];
 
@@ -47,7 +47,7 @@ function setDisplayedSession(sessionId, sessionName) {
   paintDisplayedSession();
 }
 
-// A render refreshes the displayed session's name; the two rename writers
+// A render refreshes the displayed session's name. The two rename writers
 // come through here too. A rename of another session repaints nothing.
 function refreshDisplayedSessionName(sessionId, sessionName) {
   if (sessionId !== displayedSessionId) return;
@@ -82,7 +82,7 @@ function runHeldComposerActions(sessionId) {
 
 // The switch to sessionId will never land. A newer click took the view, the
 // bootstrap failed and left its retry placeholder, or the page moved to the
-// welcome view. A held message posts to the session it bound; a held Stop or
+// welcome view. A held message posts to the session it bound. A held Stop or
 // attachment is dropped with a note.
 function abandonHeldComposerActions(sessionId) {
   const due = heldComposerActions.filter((held) => held.sessionId === sessionId);

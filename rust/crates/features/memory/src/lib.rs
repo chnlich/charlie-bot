@@ -22,9 +22,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 mod tests {
   use std::path::Path;
 
-  use charliebot_core::config::{
-    BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
-  };
+  use charliebot_core::test_support::synthetic_config;
   use charliebot_registry::Registry;
 
   use super::register;
@@ -33,40 +31,7 @@ mod tests {
   fn the_diff_root_is_the_home_memory_dir() {
     let mut registry = Registry::new();
     registry.register_package("features.memory", register).unwrap();
-    let cfg = CharlieBotConfig {
-      charliebot_home: Path::new("/synthetic/home").to_path_buf(),
-      headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
-      server: ServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 18650,
-        subprocess_buffer_limit_mb: 1,
-        session_memory_max_mb: 0,
-        session_swap_max_mb: 0,
-        public_url: None,
-        session_tasks_max: 0,
-        min_free_disk_gib: 0,
-        enable_session_cpu_weight: true,
-        enable_session_io_weight: true,
-        enable_local_work_guard: false,
-        enable_offline_shell: false,
-      },
-      paths: PathsConfig {
-        workspace_dirs: Vec::new(),
-        worktree_dir: "/synthetic/worktrees".to_string(),
-        scratch_dir: "/synthetic/scripts".to_string(),
-      },
-      backends: BackendsConfig {
-        routing: None,
-        options: Vec::new(),
-        pools: Vec::new(),
-        calls: charliebot_core::config::CallsConfig::default(),
-      },
-      ui: UiConfig { home_services: Vec::new() },
-      telegram: TelegramConfig { chat_id: None },
-      remote_run: charliebot_core::config::RemoteRunConfig::default(),
-      github: Default::default(),
-      sections: Sections::default(),
-    };
+    let cfg = synthetic_config("/synthetic/home");
     let roots: Vec<_> = registry.diff_roots().map(|(name, root)| (name, root(&cfg))).collect();
     assert_eq!(roots, [("memory", Path::new("/synthetic/home/memory").to_path_buf())]);
   }

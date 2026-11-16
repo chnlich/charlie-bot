@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 
 use crate::config::{BrowserLoginConfig, HostAuthConfig};
 use crate::host_auth::{self, BLOCKED_BACKOFF_SEC, PROBE_INTERVAL_SEC, State, TRUST_CACHE_TTL_SEC};
+use crate::login_page;
 use crate::probe::{
   STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK, STATUS_ROUTER_REJECTED, STATUS_UNREACHABLE,
 };
@@ -55,10 +56,16 @@ fn context(state: &State, now: OffsetDateTime, logins: &[BrowserLoginConfig]) ->
     .collect::<anyhow::Result<Vec<_>>>()?;
   let summary = summary(state, now)?;
   let last_probe = timestamps::local_timestamp(host_auth::opt_str(state, "probed_at")?, LocalFormat::DateZone)?;
+  let login_rows = login_page::rows(logins)?;
+  let any_live = login_rows.iter().any(|row| !row["live"].is_null());
+  let probe_running = state.get("probe_running").is_some_and(text_repr::is_truthy);
   Ok(json!({
-    "probe_running": state.get("probe_running").is_some_and(text_repr::is_truthy),
+    "probe_running": probe_running,
+    "refresh_after_sec": if probe_running { 3 } else if any_live { 5 } else { 0 },
     "hosts": rows,
     "summary": summary,
+    "logins": login_rows,
+    "any_live": any_live,
     "last_probe": last_probe,
     "interval_label": format!("{} min", PROBE_INTERVAL_SEC / 60),
     "backoff_label": format!("{} h", BLOCKED_BACKOFF_SEC / 3600),
@@ -76,7 +83,6 @@ fn page_row(entry: &Map<String, Value>, now: OffsetDateTime, renewals: &HashMap<
   let baseline = host_auth::opt_str(entry, "enrolled_observed_at")?;
   let hostname = entry.get("hostname").with_context(|| format!("host {alias} has no hostname"))?;
   let baseline_text = timestamps::local_timestamp(baseline, LocalFormat::DateZone)?;
-  let last_probe = timestamps::local_timestamp(host_auth::opt_str(entry, "last_probe_at")?, LocalFormat::Clock)?;
 
   let mut row = json!({
     "alias": alias,
@@ -89,7 +95,6 @@ fn page_row(entry: &Map<String, Value>, now: OffsetDateTime, renewals: &HashMap<
     "renew_login": if status == STATUS_ROUTER_REJECTED { renewals.get(alias).copied() } else { None },
     "has_url": detail.contains("http"),
     "baseline": baseline_text,
-    "last_probe": last_probe,
     "deadline_kind": "not_applicable",
     "remaining": null,
     "expires": null,

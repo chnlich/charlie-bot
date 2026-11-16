@@ -10,6 +10,7 @@ use std::process;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
 use charliebot_core::{config, credentials, event_types, home, run_token, str_methods};
 use charliebot_store::chat_events::{self, LineRule};
@@ -49,11 +50,11 @@ enum MemoryCommand {
 
 #[derive(Args)]
 struct QueryArgs {
-  /// Topic to match (repeatable); must exist in the vocabulary.
+  /// Topic to match (repeatable). It must exist in the vocabulary.
   #[arg(long, required = true, action = clap::ArgAction::Append)]
   topic: Vec<String>,
   /// Only entries whose audience contains this value.
-  #[arg(long, value_parser = ["master", "worker"])]
+  #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(crate::memory::AUDIENCE_ELEMENTS))]
   audience: Option<String>,
   /// Print index lines only.
   #[arg(long)]
@@ -68,7 +69,7 @@ struct QueryArgs {
 
 #[derive(Args)]
 struct AddArgs {
-  /// Read the capture body from a file; stdin is used by default.
+  /// Read the capture body from a file. Stdin is used by default.
   #[arg(long)]
   file: Option<PathBuf>,
 }
@@ -80,7 +81,7 @@ struct LintArgs {
   dir: Option<PathBuf>,
 }
 
-/// Parse the memory arguments and run one local store verb.
+/// The memory CLI entry point, which parses the arguments and runs one local store verb.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if args.first().and_then(|arg| arg.to_str()) == Some("proposal") {
     return proposal::main(&args[1..]);
@@ -170,7 +171,7 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
     "id": identity.id,
     "session_id": claims.session_id,
     "pid": identity.pid,
-    "pid_start": identity.pid_start,
+    (PID_START_FIELD): identity.pid_start,
   }))
   .map_err(|error| CliExit::error(error.to_string()))?;
   let events_path = layout::chat_events_path(&session_dir);

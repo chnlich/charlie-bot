@@ -29,7 +29,6 @@ fn main_module() -> CharlieBotConfig {
       enable_session_cpu_weight: true,
       enable_session_io_weight: true,
       enable_local_work_guard: false,
-      enable_offline_shell: false,
     },
     paths: PathsConfig {
       workspace_dirs: Vec::new(),
@@ -113,9 +112,14 @@ fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Arc<Registry>) -
       .iter()
       .map(|value| value.as_str().unwrap().to_string())
       .collect(),
+    buffer_limit: None,
+    instructions_content: None,
     instructions_file,
+    resume_session_id: None,
+    log_dir: None,
+    cgroup_session_id: None,
     backend_kwargs: kwargs,
-    ..LaunchArgs::default()
+    manager_turn: false,
   };
   let backend = backend_types::build_backend(Arc::clone(registry), &option(case), cfg, launch).unwrap().backend;
   let argv = backend.build_command(case["prompt"].as_str().unwrap()).unwrap();

@@ -28,9 +28,12 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_memoized_body};
 use charliebot_compat::headers::header_text;
+use charliebot_compat::mimetypes;
+use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::{jinja, responses};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::{git, text_repr, timefmt};
 use ignore::WalkBuilder;
 use minijinja::{Environment, Error, ErrorKind, Value};
@@ -52,6 +55,20 @@ pub type TemplateGlobal = (&'static str, Value);
 /// The template context key that carries [`Templating::static_asset_version`]. A page context that serves a static
 /// asset inserts the version under it, and the page's template reads it to bust that asset's cache.
 pub const STATIC_ASSET_VERSION_KEY: &str = "static_asset_version";
+
+/// The marker a page writes where its static tail stands: this prefix, the environment's nonce, the tail's template
+/// name, and [`STATIC_TAIL_CLOSE`].
+///
+/// A session's name reaches the page as text and may carry any character, so the closing control byte alone would
+/// let a name spell a marker and make the engine render a template the name chose. The nonce
+/// ([`static_tail_marker`]) is unguessable, so only the engine writes a marker.
+const STATIC_TAIL_PREFIX: &str = "\u{4}charliebot-static-tail:";
+const STATIC_TAIL_CLOSE: char = '\u{4}';
+
+/// The open marker of one compiled environment: the prefix and a fresh nonce, which the tail's name follows.
+fn static_tail_marker() -> String {
+  format!("{STATIC_TAIL_PREFIX}{}:", uuid::Uuid::new_v4().simple())
+}
 
 /// One served source file: its path as a URL path, `mtime_ns` and size.
 type SourceStat = (String, i64, u64);
@@ -77,14 +94,26 @@ pub struct Templating {
   sources: Mutex<Option<SourceCache>>,
   /// The last compiled environment, kept while its template sources and globals still hold their value.
   render_cache: Mutex<Option<RenderCache>>,
-  /// The page text one render built and the inputs it built from.
-  render_memo: Mutex<Option<RenderMemo>>,
+  /// The page texts one render built, newest last, and the inputs each built from.
+  render_memo: Mutex<Vec<RenderMemo>>,
   /// The stable globals one config and credentials version produced.
   globals_memo: Mutex<Option<StableGlobalsMemo>>,
   /// The compressed forms of the last eight page bodies deflated, the oldest first.
   page_gzips: Mutex<Vec<PageGzip>>,
+  /// The served form of each static page tail, kept while the watch revision holds it.
+  static_tails: Mutex<Vec<StaticTail>>,
   /// The watch whose revision says whether the template and static trees moved.
   watch: TreeWatch,
+}
+
+/// One static page tail's served form: the markup a page puts where its tail's sentinel stands.
+///
+/// A tail's bytes are the same in every response, so the engine renders and strips it once per watch revision and
+/// keeps that text. The field names the revision, so a moved template or script serves the new tail.
+struct StaticTail {
+  revision: u64,
+  path: String,
+  html: Arc<String>,
 }
 
 #[derive(Default)]
@@ -112,6 +141,8 @@ struct RenderCache {
   sources: Arc<Vec<SourceStat>>,
   globals: Vec<TemplateGlobal>,
   environment: Arc<Environment<'static>>,
+  /// The open marker this environment's `static_page_tail` writes, nonce and all.
+  tail_marker: Arc<String>,
 }
 
 /// The text one render of one template with one context produced, and the watch revision it rendered at.
@@ -133,6 +164,10 @@ struct RenderMemo {
   request: serde_json::Value,
   html: Arc<String>,
 }
+
+/// The renders one watch revision keeps, newest last. A reader who moves between two sessions asks for a render whose
+/// context differs only in that session's values, and one slot would rebuild the whole page on every switch.
+const RENDER_MEMO_ENTRIES: usize = 4;
 
 /// The stable globals one config and credentials version produced, by name.
 ///
@@ -179,9 +214,10 @@ impl Templating {
       asset_digest: Mutex::new(AssetDigestState::default()),
       sources: Mutex::new(None),
       render_cache: Mutex::new(None),
-      render_memo: Mutex::new(None),
+      render_memo: Mutex::new(Vec::new()),
       globals_memo: Mutex::new(None),
       page_gzips: Mutex::new(Vec::new()),
+      static_tails: Mutex::new(Vec::new()),
       watch: TreeWatch::new(&trees),
     }
   }
@@ -352,15 +388,19 @@ impl Templating {
     let request = request_context(request);
     let revision = self.watch.revision();
     {
-      let memo = self.render_memo.lock().expect("the render memo mutex is not poisoned");
-      if let Some(entry) = memo.as_ref()
-        && entry.revision == revision
-        && entry.name == name
-        && entry.globals == globals
-        && entry.context == *context
-        && entry.request == request
-      {
-        return Ok(Arc::clone(&entry.html));
+      let mut memo = self.render_memo.lock().expect("the render memo mutex is not poisoned");
+      if let Some(at) = memo.iter().position(|entry| {
+        entry.revision == revision
+          && entry.name == name
+          && entry.globals == globals
+          && entry.context == *context
+          && entry.request == request
+      }) {
+        // The page served again is the newest render, so an eviction takes the one served longest ago.
+        let entry = memo.remove(at);
+        let html = Arc::clone(&entry.html);
+        memo.push(entry);
+        return Ok(html);
       }
     }
     let mut render_context = context.clone();
@@ -369,7 +409,10 @@ impl Templating {
       .expect("a page context is a JSON object")
       .insert("request".to_string(), request.clone());
     let html = Arc::new(self.render(name, &render_context, globals.clone(), revision)?);
-    *self.render_memo.lock().expect("the render memo mutex is not poisoned") = Some(RenderMemo {
+    let mut memo = self.render_memo.lock().expect("the render memo mutex is not poisoned");
+    // A moved tree renders under a new revision, and the renders it replaces never answer again.
+    memo.retain(|entry| entry.revision == revision);
+    memo.push(RenderMemo {
       revision,
       name: name.to_string(),
       globals,
@@ -377,6 +420,9 @@ impl Templating {
       request,
       html: Arc::clone(&html),
     });
+    if memo.len() > RENDER_MEMO_ENTRIES {
+      memo.remove(0);
+    }
     Ok(html)
   }
 
@@ -437,20 +483,83 @@ impl Templating {
       self.names_checked.store(true, Ordering::Release);
     }
     let sources = self.template_sources(revision)?;
-    let environment = {
+    let (environment, tail_marker) = {
       let mut cache = self.render_cache.lock().expect("the render cache mutex is not poisoned");
       let reused =
         cache.as_ref().is_some_and(|entry| Arc::ptr_eq(&entry.sources, &sources) && entry.globals == globals);
       if !reused {
-        *cache =
-          Some(RenderCache { sources, globals: globals.clone(), environment: Arc::new(self.environment(globals)) });
+        let marker = Arc::new(static_tail_marker());
+        *cache = Some(RenderCache {
+          sources,
+          globals: globals.clone(),
+          environment: Arc::new(self.environment(globals, Arc::clone(&marker))),
+          tail_marker: marker,
+        });
       }
-      Arc::clone(&cache.as_ref().expect("the render cache holds the environment it built").environment)
+      let entry = cache.as_ref().expect("the render cache holds the environment it built");
+      (Arc::clone(&entry.environment), Arc::clone(&entry.tail_marker))
     };
     let template = environment.get_template(name).map_err(RenderError::Template)?;
     let html = template.render(Value::from_serialize(context)).map_err(RenderError::Template)?;
     let html = inline_local_stylesheets(&environment, html)?;
-    Ok(crate::inlined_markup::without_comments(&html))
+    let html = crate::inlined_markup::without_comments(&html);
+    self.substitute_static_tails(&environment, html, revision, &tail_marker)
+  }
+
+  /// The page markup with each static tail's marker replaced by the tail's served form.
+  ///
+  /// A page's scripts are the same bytes in every response, and on the chat page they are most of the document. The
+  /// page names them with `static_page_tail`, which writes `marker` and then the tail's template name; this step puts
+  /// the kept markup there, so the passes that run per response — the stylesheet inline and the comment strip — read
+  /// the page's own markup instead of the script bytes every body shares. A page that names no tail pays one search
+  /// of its own markup.
+  fn substitute_static_tails(
+    &self,
+    environment: &Environment<'_>,
+    html: String,
+    revision: u64,
+    marker: &str,
+  ) -> Result<String, RenderError> {
+    let mut out = String::new();
+    let mut built = false;
+    let mut copied = 0;
+    let mut search = 0;
+    while let Some(open) = html[search..].find(marker).map(|at| search + at) {
+      let path_start = open + marker.len();
+      let Some(close) = html[path_start..].find(STATIC_TAIL_CLOSE) else { break };
+      let tail = self.static_tail(environment, &html[path_start..path_start + close], revision)?;
+      if !built {
+        out.reserve(html.len() + tail.len());
+        built = true;
+      }
+      out.push_str(&html[copied..open]);
+      out.push_str(&tail);
+      copied = path_start + close + STATIC_TAIL_CLOSE.len_utf8();
+      search = copied;
+    }
+    if !built {
+      return Ok(html);
+    }
+    out.push_str(&html[copied..]);
+    Ok(out)
+  }
+
+  /// One static tail's served form: its template rendered with no context and stripped of its comments, once per
+  /// watch revision.
+  fn static_tail(&self, environment: &Environment<'_>, path: &str, revision: u64) -> Result<Arc<String>, RenderError> {
+    {
+      let kept = self.static_tails.lock().expect("the static tail mutex is not poisoned");
+      if let Some(entry) = kept.iter().find(|entry| entry.revision == revision && entry.path == path) {
+        return Ok(Arc::clone(&entry.html));
+      }
+    }
+    let template = environment.get_template(path).map_err(RenderError::Template)?;
+    let rendered = template.render(Value::from_serialize(json!({}))).map_err(RenderError::Template)?;
+    let html = Arc::new(crate::inlined_markup::without_comments(&rendered));
+    let mut kept = self.static_tails.lock().expect("the static tail mutex is not poisoned");
+    kept.retain(|entry| entry.revision == revision);
+    kept.push(StaticTail { revision, path: path.to_string(), html: Arc::clone(&html) });
+    Ok(html)
   }
 
   /// The `(rel path, mtime_ns, size)` of every template source under the search directories, sorted, as the walk
@@ -483,7 +592,7 @@ impl Templating {
     Ok(sources)
   }
 
-  fn environment(&self, globals: Vec<TemplateGlobal>) -> Environment<'static> {
+  fn environment(&self, globals: Vec<TemplateGlobal>, tail_marker: Arc<String>) -> Environment<'static> {
     let loader = jinja::file_system_loader(self.loader.clone());
     // A page carries its scripts and its stylesheets inline, and a comment in either explains it to an editor rather
     // than to the browser. The inline copy leaves the comments out, and a script's code indentation with them. A
@@ -518,6 +627,11 @@ impl Templating {
     for (name, value) in globals {
       environment.add_function(name, move || value.clone());
     }
+    // A page writes this at the place its static tail stands. The tail's bytes are the same in every response, so the
+    // render keeps its served form once per revision ([`Templating::substitute_static_tails`]).
+    environment.add_function("static_page_tail", move |path: String| {
+      Ok(Value::from_safe_string(format!("{tail_marker}{path}{STATIC_TAIL_CLOSE}")))
+    });
     environment
   }
 }
@@ -607,9 +721,78 @@ fn link_attributes(tag: &str) -> Option<Vec<(&str, &str)>> {
 
 /// The write of each `(placeholder, text)` pair's text where `html` carries its placeholder.
 ///
+/// One pass finds the placeholders by their first byte and writes the page once. A pass per pair would search and
+/// copy the whole page for each text, and the page is the largest text the server builds.
+///
 /// A placeholder that the rendered page does not carry fails the render, because serving the placeholder would
-/// break the page's script.
+/// break the page's script. A pair's text never carries another pair's placeholder, because a page's texts are JSON,
+/// which escapes the control characters a placeholder is spelled with.
 pub fn substitute_placeholders(
+  name: &str,
+  html: String,
+  substitutions: &[(&str, &str)],
+) -> Result<String, RenderError> {
+  if substitutions.iter().any(|(placeholder, _)| placeholder.is_empty()) {
+    return substitute_placeholders_one_at_a_time(name, html, substitutions);
+  }
+  // A placeholder's text stands at the first byte of its spelling, and UTF-8 continuation bytes never equal ASCII or
+  // a character's first byte, so one scan of those bytes finds every place a placeholder can start.
+  let mut openers: Vec<u8> = Vec::with_capacity(substitutions.len());
+  for (placeholder, _) in substitutions {
+    let first = placeholder.as_bytes()[0];
+    if !openers.contains(&first) {
+      openers.push(first);
+    }
+  }
+  let bytes = html.as_bytes();
+  let mut found = vec![false; substitutions.len()];
+  let mut out = String::new();
+  let mut built = false;
+  let mut copied = 0;
+  let mut cursor = 0;
+  while let Some(at) = next_opener(&openers, &bytes[cursor..]).map(|at| cursor + at) {
+    match substitutions.iter().position(|(placeholder, _)| bytes[at..].starts_with(placeholder.as_bytes())) {
+      Some(index) => {
+        found[index] = true;
+        if !built {
+          out.reserve(html.len());
+          built = true;
+        }
+        out.push_str(&html[copied..at]);
+        out.push_str(substitutions[index].1);
+        copied = at + substitutions[index].0.len();
+        cursor = copied;
+      }
+      None => cursor = at + 1,
+    }
+  }
+  if let Some(index) = found.iter().position(|found| !found) {
+    let placeholder = substitutions[index].0;
+    let message = format!("{name}: the rendered page does not carry the placeholder {placeholder:?}");
+    return Err(RenderError::Template(Error::new(ErrorKind::InvalidOperation, message)));
+  }
+  if !built {
+    return Ok(html);
+  }
+  out.push_str(&html[copied..]);
+  Ok(out)
+}
+
+/// The position of the first byte in `bytes` that opens one of `openers`.
+///
+/// The scan is the page's whole length and it runs on every first open of a session, so it takes the vectorized
+/// searcher: two openers is every page the server serves, and three covers a page with one more large text.
+fn next_opener(openers: &[u8], bytes: &[u8]) -> Option<usize> {
+  match openers {
+    [one] => memchr::memchr(*one, bytes),
+    [one, two] => memchr::memchr2(*one, *two, bytes),
+    [one, two, three] => memchr::memchr3(*one, *two, *three, bytes),
+    _ => bytes.iter().position(|byte| openers.contains(byte)),
+  }
+}
+
+/// The write of each pair's text in turn, for a placeholder with no first byte to scan for.
+fn substitute_placeholders_one_at_a_time(
   name: &str,
   mut html: String,
   substitutions: &[(&str, &str)],
@@ -678,10 +861,10 @@ fn accepts_gzip(request: &Parts) -> bool {
 fn compressed_html(body: Vec<u8>) -> Response {
   Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+    .header(header::CONTENT_TYPE, mimetypes::with_utf8_charset(TEXT_HTML))
     .header(header::CONTENT_LENGTH, body.len())
     .header(header::CONTENT_ENCODING, "gzip")
-    .header(header::VARY, "Accept-Encoding")
+    .header(header::VARY, ACCEPT_ENCODING)
     .body(Body::from(body))
     .expect("a page response builds")
 }
@@ -916,6 +1099,67 @@ mod tests {
     assert_eq!(error.kind(), "TemplateError");
   }
 
+  /// A page writes `static_page_tail` where its scripts stand, and the render puts the tail's stripped markup there.
+  /// The sentinel never reaches the page, and a tail that names no marker leaves a page without one as it was.
+  #[tokio::test]
+  async fn render_page_puts_a_static_tail_where_the_page_names_it() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_templates_directory(root.path(), "features.notes");
+    fs::create_dir_all(templates.join("partials")).unwrap();
+    fs::write(templates.join("partials/tail.html"), "<!-- tail -->\n<script>const tail = 1;</script>").unwrap();
+    fs::write(templates.join("page.html"), "<p>head</p>\n{{ static_page_tail('partials/tail.html') }}\n<p>foot</p>")
+      .unwrap();
+    fs::write(templates.join("plain.html"), "<p>no tail</p>").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("features.notes", register_notes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/page").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    let html = templating.render_page_template(&features, "page.html", &json!({}), &parts).unwrap();
+    assert_eq!(html.as_str(), "<p>head</p>\n\n<script>const tail=1;</script>\n<p>foot</p>");
+    assert!(!html.contains(STATIC_TAIL_CLOSE), "the page carries no sentinel");
+
+    let plain = templating.render_page_template(&features, "plain.html", &json!({}), &parts).unwrap();
+    assert_eq!(plain.as_str(), "<p>no tail</p>");
+  }
+
+  /// Page text that spells a marker without the environment's nonce is text, not a tail: a session name reaches the
+  /// page, and it may carry the marker's characters.
+  #[tokio::test]
+  async fn render_page_leaves_text_that_spells_a_marker_alone() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_templates_directory(root.path(), "features.notes");
+    fs::create_dir_all(templates.join("partials")).unwrap();
+    fs::write(templates.join("partials/tail.html"), "<script>const tail = 1;</script>").unwrap();
+    fs::write(templates.join("page.html"), "{{ name }}\n{{ static_page_tail('partials/tail.html') }}").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("features.notes", register_notes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/page").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+    let forged = format!("{STATIC_TAIL_PREFIX}partials/tail.html{STATIC_TAIL_CLOSE}");
+
+    let html = templating.render_page_template(&features, "page.html", &json!({"name": forged}), &parts).unwrap();
+    assert_eq!(html.as_str(), format!("{forged}\n<script>const tail=1;</script>"));
+  }
+
+  /// One pass writes every occurrence of every pair's text, and an absent placeholder still fails the render.
+  #[test]
+  fn substitute_placeholders_writes_every_occurrence_in_one_pass() {
+    let html = "<a>\u{1}one\u{1}</a><b>\u{2}two\u{2}</b><c>\u{1}one\u{1}</c>".to_string();
+    let written = substitute_placeholders("page", html, &[("\u{1}one\u{1}", "1"), ("\u{2}two\u{2}", "2")]).unwrap();
+    assert_eq!(written, "<a>1</a><b>2</b><c>1</c>");
+
+    let error = substitute_placeholders("page", "<p>none</p>".to_string(), &[("\u{1}one\u{1}", "1")]).unwrap_err();
+    assert_eq!(error.kind(), "TemplateError");
+    assert!(error.to_string().contains("does not carry the placeholder"));
+  }
+
   /// A page that links a stylesheet from the served static tree renders that file inline at the link's place. A
   /// remote sheet, a tag that states a media query and a URL the loader does not hold keep their link.
   #[tokio::test]
@@ -1041,6 +1285,30 @@ mod tests {
     let moved = templating.render_page_template(&features, "counted.html", &json!({}), &parts).unwrap();
     assert_eq!(moved.as_str(), (base + 1).to_string(), "a moved config evaluates the globals again");
     assert_eq!(GLOBAL_EVALUATIONS.load(Ordering::SeqCst) - base, 2);
+  }
+
+  /// A reader who moves between two pages and comes back is served the render it leaves, because one page's render
+  /// no longer displaces the other's.
+  #[test]
+  fn a_page_rendered_before_another_is_still_served_from_the_memo() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_templates_directory(root.path(), "features.notes");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("both.html"), "{{ name }}").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("features.notes", register_counted).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/both").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+
+    let first_a = templating.render_page_template(&features, "both.html", &json!({"name": "a"}), &parts).unwrap();
+    let first_b = templating.render_page_template(&features, "both.html", &json!({"name": "b"}), &parts).unwrap();
+    let again_a = templating.render_page_template(&features, "both.html", &json!({"name": "a"}), &parts).unwrap();
+    assert_eq!(first_a.as_str(), "a");
+    assert_eq!(first_b.as_str(), "b");
+    assert!(Arc::ptr_eq(&first_a, &again_a), "the page rendered before another one is still kept");
   }
 
   /// A live global may read state the config does not carry, so the engine evaluates it at every render.

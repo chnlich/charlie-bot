@@ -113,10 +113,19 @@ jobs:
         working-directory: web
         run: npm install --no-audit --no-fund
 
+      # The browser suites drive the Chrome that CHARLIEBOT_TEST_CHROME_BIN names, as the Rust integration job does.
+      - name: Find Google Chrome
+        if: steps.selection.outputs.node_files != ''
+        id: chrome
+        run: |
+          chrome=$(command -v google-chrome)
+          echo "path=$chrome" >> "$GITHUB_OUTPUT"
+
       - name: Run selected node integration tests
         if: steps.selection.outputs.node_files != ''
         env:
           NODE_INTEGRATION_FILES: ${{ steps.selection.outputs.node_files }}
+          CHARLIEBOT_TEST_CHROME_BIN: ${{ steps.chrome.outputs.path }}
         run: |
           read -r -a files <<< "$NODE_INTEGRATION_FILES"
           timeout 780 node --test "${files[@]}"

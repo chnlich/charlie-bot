@@ -16,14 +16,14 @@ use std::sync::{LazyLock, Mutex};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_core::{paths, text_repr, timefmt};
+use charliebot_core::{int_text, paths, text_repr, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
 
 use crate::body_memo::BodyMemo;
 use crate::headers::header_text;
-use crate::mimetypes::MimeTypes;
+use crate::mimetypes::{self, MimeTypes};
 use crate::mimetypes_table::TEXT_PLAIN;
 use crate::responses;
 
@@ -45,7 +45,7 @@ const FILE_BODY_MEMO_ENTRIES: usize = 64;
 const FILE_BODY_MEMO_MAX_BYTES: usize = 256 * 1024;
 
 /// The whole-file bodies served recently. A page load asks for the same few static files, and every request read its
-/// file again: the read, its allocation and the body's message list cost more than the metadata read the request
+/// file again. The read, its allocation and the body's message list cost more than the metadata read the request
 /// already made. The key holds the file's path and the `(mtime, size)` identity its ETag is built from, so a file that
 /// moved is read again on the next request.
 static FILE_BODY_MEMO: LazyLock<Mutex<BodyMemo<FileBodyKey>>> =
@@ -197,9 +197,6 @@ struct FileHeaders {
   size: u64,
   last_modified: String,
   etag: String,
-  /// The transport encoding the body carries, `Some` for a precompressed form.
-  content_encoding: Option<&'static str>,
-  vary_accept_encoding: bool,
 }
 
 impl FileHeaders {
@@ -208,67 +205,31 @@ impl FileHeaders {
     metadata: &std::fs::Metadata,
     mime_types: &MimeTypes,
     override_content_type: Option<&str>,
-    content_encoding: Option<&'static str>,
   ) -> FileHeaders {
     let content_type = override_content_type.map_or_else(
       || {
         let guessed = mime_types.guess_type(&paths::display(path)).unwrap_or(TEXT_PLAIN);
-        if guessed.starts_with("text/") { format!("{guessed}; charset=utf-8") } else { guessed.to_string() }
+        mimetypes::with_utf8_charset(guessed)
       },
       str::to_string,
     );
     let mtime = timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec());
-    let mut etag_base = format!("{}-{}", text_repr::float_repr(mtime), metadata.size());
-    if content_encoding.is_some() {
-      etag_base.push_str("-br");
-    }
+    let etag_base = format!("{}-{}", text_repr::float_repr(mtime), metadata.size());
     FileHeaders {
       content_type,
       size: metadata.size(),
       last_modified: timefmt::http_date(mtime.floor() as i64),
       etag: format!("\"{:x}\"", Md5::digest(etag_base.as_bytes())),
-      content_encoding,
-      vary_accept_encoding: false,
     }
   }
 
   fn apply(&self, builder: http::response::Builder) -> http::response::Builder {
-    let builder = builder
+    builder
       .header(header::CONTENT_TYPE, &self.content_type)
       .header(header::ACCEPT_RANGES, "bytes")
       .header(header::CONTENT_LENGTH, self.size)
       .header(header::LAST_MODIFIED, &self.last_modified)
-      .header(header::ETAG, &self.etag);
-    if let Some(encoding) = self.content_encoding {
-      builder.header(header::CONTENT_ENCODING, encoding)
-    } else {
-      builder
-    }
-  }
-}
-
-/// The file a request serves and how: a request that accepts brotli serves a file's `.br` sibling when
-/// one sits beside it, so the wire bytes match what the CDN the file replaced served; the sibling's own
-/// validators name the encoding. A ranged request reads the plain file: a byte range names the decoded
-/// form. `vary` is true when the sibling exists, so every encoding of the file names `Vary`.
-fn precompressed(
-  path: &Path,
-  metadata: &std::fs::Metadata,
-  headers: &HeaderMap,
-) -> (PathBuf, std::fs::Metadata, Option<&'static str>, bool) {
-  let accepts = header_text(headers, &header::ACCEPT_ENCODING);
-  if !accepts.split(',').any(|name| name.trim().split(';').next().is_some_and(|name| name.trim() == "br")) {
-    return (path.to_path_buf(), metadata.clone(), None, false);
-  }
-  let mut brotli = path.as_os_str().to_os_string();
-  brotli.push(".br");
-  let brotli_path = PathBuf::from(brotli);
-  match std::fs::metadata(&brotli_path) {
-    Ok(sibling) if sibling.is_file() && !headers.contains_key(&header::RANGE) => {
-      (brotli_path, sibling, Some("br"), true)
-    }
-    Ok(_) => (path.to_path_buf(), metadata.clone(), None, true),
-    Err(_) => (path.to_path_buf(), metadata.clone(), None, false),
+      .header(header::ETAG, &self.etag)
   }
 }
 
@@ -280,21 +241,13 @@ fn file_response(
   method: &Method,
   headers: &HeaderMap,
 ) -> Response {
-  let (path, metadata, encoding, vary) = precompressed(path, metadata, headers);
-  let mut file_headers = FileHeaders::of(&path, &metadata, mime_types, override_content_type, encoding);
-  if vary {
-    file_headers.vary_accept_encoding = true;
-  }
+  let file_headers = FileHeaders::of(path, metadata, mime_types, override_content_type);
   if is_not_modified(&file_headers, headers) {
-    let mut response = Response::builder()
+    return Response::builder()
       .status(StatusCode::NOT_MODIFIED)
       .header(header::ETAG, &file_headers.etag)
       .body(Body::empty())
       .expect("a 304 response builds");
-    if vary {
-      response.headers_mut().insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-    }
-    return response;
   }
   let head_only = method == Method::HEAD;
   let range = headers.get(header::RANGE).map(|_| header_text(headers, &header::RANGE));
@@ -308,17 +261,12 @@ fn file_response(
     let body = if head_only {
       Body::empty()
     } else {
-      match whole_file_body(&path, &metadata) {
+      match whole_file_body(path, metadata) {
         Ok(body) => body,
         Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
       }
     };
-    let mut response =
-      file_headers.apply(Response::builder().status(StatusCode::OK)).body(body).expect("a file response builds");
-    if vary {
-      response.headers_mut().insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-    }
-    return response;
+    return file_headers.apply(Response::builder().status(StatusCode::OK)).body(body).expect("a file response builds");
   }
   let ranges = match parse_range_header(range.as_deref().expect("use_range implies a Range header"), file_headers.size)
   {
@@ -329,7 +277,7 @@ fn file_response(
         .status(StatusCode::RANGE_NOT_SATISFIABLE)
         .header(header::CONTENT_RANGE, format!("bytes */{}", file_headers.size))
         .header(header::CONTENT_LENGTH, 0)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(header::CONTENT_TYPE, mimetypes::with_utf8_charset(TEXT_PLAIN))
         .body(Body::empty())
         .expect("a 416 response builds");
     }
@@ -341,7 +289,7 @@ fn file_response(
     let body = if head_only {
       Body::empty()
     } else {
-      match range_body(&path, start, end) {
+      match range_body(path, start, end) {
         Ok(body) => body,
         Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
       }
@@ -350,7 +298,7 @@ fn file_response(
     response.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(end - start));
     return response;
   }
-  multipart_response(&path, &file_headers, &ranges, head_only)
+  multipart_response(path, &file_headers, &ranges, head_only)
 }
 
 fn is_not_modified(file_headers: &FileHeaders, request: &HeaderMap) -> bool {
@@ -418,9 +366,13 @@ fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, Ra
     }
     let (start_text, end_text) = part.split_once('-').expect("the part holds a dash");
     let (start_text, end_text) = (start_text.trim(), end_text.trim());
-    let start = if start_text.is_empty() { parse_int(end_text).map(|end| size - end) } else { parse_int(start_text) };
+    let start = if start_text.is_empty() {
+      int_text::int_value::<i128>(end_text).map(|end| size - end)
+    } else {
+      int_text::int_value(start_text)
+    };
     let end = if !start_text.is_empty() && !end_text.is_empty() {
-      parse_int(end_text).map(|end| if end < size { end + 1 } else { size })
+      int_text::int_value::<i128>(end_text).map(|end| if end < size { end + 1 } else { size })
     } else {
       Some(size)
     };
@@ -451,21 +403,6 @@ fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, Ra
     ranges = merged;
   }
   Ok(ranges.into_iter().map(|(start, end)| (start as u64, end as u64)).collect())
-}
-
-/// Parse decimal text: optional sign, digits with single underscores between them.
-fn parse_int(text: &str) -> Option<i128> {
-  let text = text.trim();
-  let (negative, digits) = match text.as_bytes().first()? {
-    b'-' => (true, &text[1..]),
-    b'+' => (false, &text[1..]),
-    _ => (false, text),
-  };
-  if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') || digits.contains("__") {
-    return None;
-  }
-  let value: i128 = digits.replace('_', "").parse().ok()?;
-  Some(if negative { -value } else { value })
 }
 
 fn multipart_response(path: &Path, file_headers: &FileHeaders, ranges: &[(u64, u64)], head_only: bool) -> Response {
@@ -676,51 +613,5 @@ mod tests {
     assert_eq!(parse_http_date("Sun, 18 Oct 2026 07:15:40 GMT"), Some((2026, 10, 18, 7, 15, 40)));
     assert_eq!(parse_http_date("18 Oct 2026 07:15:40 GMT"), Some((2026, 10, 18, 7, 15, 40)));
     assert_eq!(parse_http_date("garbage"), None);
-  }
-
-  /// A request that accepts brotli serves a file's `.br` sibling with the encoding named, and its own
-  /// ETag, so a revalidation of one form never answers for the other.
-  #[test]
-  fn a_brotli_request_serves_the_precompressed_sibling() {
-    let home = tempfile::tempdir().unwrap();
-    let root = home.path().join("static");
-    std::fs::create_dir(&root).unwrap();
-    std::fs::write(root.join("lib.js"), "a body long enough for compression to shrink it in wire bytes").unwrap();
-    std::fs::write(root.join("lib.js.br"), b"precompressed bytes").unwrap();
-    let served = StaticDirectory::new(root);
-
-    let body_of = |headers: HeaderMap| {
-      let response = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &headers);
-      tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap()
-        .block_on(async { axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap() })
-    };
-
-    let mut br_headers = HeaderMap::new();
-    br_headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate, br, zstd"));
-    let br_response = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &br_headers);
-    assert_eq!(br_response.headers().get(header::CONTENT_ENCODING).unwrap(), "br");
-    assert_eq!(br_response.headers().get(header::VARY).unwrap(), "Accept-Encoding");
-    let br_etag = br_response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
-    assert_eq!(&body_of(br_headers.clone())[..], b"precompressed bytes");
-
-    let plain_response = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &HeaderMap::new());
-    assert!(plain_response.headers().get(header::CONTENT_ENCODING).is_none());
-    assert_ne!(plain_response.headers().get(header::ETAG).unwrap().to_str().unwrap(), br_etag);
-    assert_eq!(&body_of(HeaderMap::new())[..], b"a body long enough for compression to shrink it in wire bytes");
-
-    // A revalidation of the precompressed form answers 304 only for its own ETag, and a ranged request
-    // reads the plain file.
-    let mut revalidate = br_headers.clone();
-    revalidate.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&br_etag).unwrap());
-    let not_modified = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &revalidate);
-    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
-    let mut ranged = br_headers;
-    ranged.insert(header::RANGE, HeaderValue::from_static("bytes=0-9"));
-    let ranged_response = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &ranged);
-    assert_eq!(ranged_response.status(), StatusCode::PARTIAL_CONTENT);
-    assert!(ranged_response.headers().get(header::CONTENT_ENCODING).is_none());
-    assert_eq!(&body_of(ranged)[..], b"a body lon");
   }
 }

@@ -43,7 +43,7 @@ struct CommitArgs {
   /// File holding the commit message.
   #[arg(long)]
   message_file: PathBuf,
-  /// Commit even when lines the PR already added are rewritten or gone; the commit message lists each replaced line
+  /// Commit even when lines the PR already added are rewritten or gone. The commit message lists each replaced line
   /// under 'Replaced PR lines:'.
   #[arg(long)]
   replace_pr_lines: bool,
@@ -68,7 +68,7 @@ struct GitOutput {
 
 type ProposalResult<T> = Result<T, ProposalError>;
 
-/// Parse the proposal arguments and run one local store operation.
+/// The proposal CLI entry point, which parses the arguments and runs one local store operation.
 pub(super) fn main(args: &[OsString]) -> Result<(), CliExit> {
   let cli: ProposalCli = cli_args::parse("charliebot memory proposal", args);
 

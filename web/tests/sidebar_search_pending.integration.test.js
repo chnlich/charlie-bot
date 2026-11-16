@@ -94,3 +94,27 @@ test('a workspace badge repaint does not replace the pending note', () => {
   assert.doesNotMatch(nav.innerHTML, /id="badge"/);
   assert.deepEqual(rowIds(nav.innerHTML), [], 'the badge repaint leaves the search note in place');
 });
+
+// A full answer holds only the newest matches, so the list says so. The notice stands above the first row: a
+// reader who scans the rows first has concluded that the match they want is not there.
+test('a full search answer states its cap above the first row', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const rows = Array.from({length: 200}, (_, index) => makeSessionMeta('s' + index));
+
+  context.renderSessionList(rows, 'search');
+
+  const notice = nav.innerHTML.indexOf('newest 200 matches');
+  const firstRow = nav.innerHTML.indexOf('id="session-s0"');
+  assert.ok(notice >= 0, 'a full answer carries the cap notice');
+  assert.ok(firstRow >= 0, 'the rows follow the notice');
+  assert.ok(notice < firstRow, 'the notice stands above the rows, where the reader starts');
+});
+
+test('a short search answer carries no cap notice', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+
+  context.renderSessionList(Array.from({length: 199}, (_, index) => makeSessionMeta('s' + index)), 'search');
+
+  assert.deepEqual(rowIds(nav.innerHTML).length, 199);
+  assert.doesNotMatch(nav.innerHTML, /newest 200 matches/);
+});

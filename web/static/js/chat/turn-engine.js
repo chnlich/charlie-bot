@@ -6,7 +6,7 @@
   // Turn window engine — the #messages DOM is a projection of one contiguous
   // turn window near the viewport, with one height spacer above and below.
   //
-  // Fetched messages live in an in-memory store; HTML build / markdown /
+  // Fetched messages live in an in-memory store. HTML build / markdown /
   // math / file-link / package / timestamp post-process run in scroll-gated idle slices
   // producing ready fragments. Collapsed turn bodies and out-of-window turns
   // are never in the DOM. Open/override, expanded `N steps` bars and open
@@ -24,13 +24,13 @@
   // The pre-render queue starts no new slice while scroll is active, and it
   // never uses a forcing requestIdleCallback timeout. Unready turns entering
   // the window appear as estimated-height placeholder rows and are replaced
-  // when ready. Queue order is nearer-to-viewport first; a manual fold-open jumps
+  // when ready. Queue order is nearer-to-viewport first. A manual fold-open jumps
   // the queue and renders that single turn synchronously.
   //
   // The For-you view is a second projection of the same store, chosen per
   // engine. It is a flat list of the shown messages in place, or one
   // empty-state row when none shows, with no window, spacers or measurements.
-  // The store and the turn registry carry across a view switch; only the DOM
+  // The store and the turn registry carry across a view switch. Only the DOM
   // is rebuilt.
   // ---------------------------------------------------------------------------
   const VIEW_EVERYTHING = 'everything';
@@ -178,7 +178,7 @@
       this.forYouHolder = null;
       // The For-you panel slots (one block container per round, holding an
       // open separator panel below the round's last reply), keyed by the
-      // round id. A slot exists while its panel is open; the cache is what
+      // round id. A slot exists while its panel is open. The cache is what
       // keeps the panel across a view switch.
       this.forYouPanelSlots = new Map();
       // A worker page's pagination sentinel (holdWorkerSentinel), or null.
@@ -198,7 +198,7 @@
       this.measuredFlat = new WeakMap();
       this.foldedRowMeasures = [];
       // The measured row gap (one row's margin-top), from the first
-      // measurement on; null until then, so rowGap() serves ROW_GAP_EST.
+      // measurement on. Null until then, so rowGap() serves ROW_GAP_EST.
       this.measuredRowGap = null;
       this.domBySeg = new Map();
       this.window = null;
@@ -206,7 +206,7 @@
       this.offsetsDirty = true;
       this.totalHeight = 0;
       this.lastScrollTs = -Infinity;
-      // Mount intent is bottom-pinned; a genuine upward user scroll clears it
+      // Mount intent is bottom-pinned. A genuine upward user scroll clears it
       // and a genuine scroll landing at the bottom re-arms it. It is the pin
       // source for every follow decision — never live geometry, which still
       // reads "pinned" inside the 150px band a reader paused in.
@@ -216,7 +216,7 @@
       // the view lands there without the pin. The next append then re-arms
       // the follow pin, while late layout changes leave the restored position
       // alone. Cleared by mount, by jumpToBottom, and by any genuine reader
-      // scroll; engine write echoes and the browser's clamp over shrunk
+      // scroll. Engine write echoes and the browser's clamp over shrunk
       // content keep it.
       this.followNextTurn = false;
       // Set by a projection that found the list at zero height (a hidden Chat column). The first
@@ -224,7 +224,7 @@
       // that return does not arm the follow, so the next message leaves a history reader where
       // they are.
       this.returnedFromHidden = false;
-      // scrollTop at the last genuine (non-echo) scroll event; the direction
+      // scrollTop at the last genuine (non-echo) scroll event. The direction
       // of each new genuine event is read against it.
       this.lastUserScrollTop = null;
       // The reading position: one content node's identity plus its offset
@@ -311,8 +311,8 @@
     }
 
     // ---- derivation ---------------------------------------------------------
-    // One pass over a message-entry run. A span closes at a stable separator;
-    // the tail of a run that never closes stays pending. Settled segments are
+    // One pass over a message-entry run. A span closes at a stable separator.
+    // The tail of a run that never closes stays pending. Settled segments are
     // immutable: their span can no longer change, so pagination only ever
     // re-derives the boundary span.
     deriveSegments(entries) {
@@ -403,7 +403,7 @@
     }
 
     foldedRowEstimate() {
-      // The measured average already carries the gap; the default adds it.
+      // The measured average already carries the gap. The default adds it.
       if (!this.foldedRowMeasures.length) return FOLDED_ROW_DEFAULT_EST + this.rowGap();
       const sum = this.foldedRowMeasures.reduce((acc, value) => acc + value, 0);
       return sum / this.foldedRowMeasures.length;
@@ -596,7 +596,7 @@
       // The measured height is the layout extent: the border box plus the
       // row's own margin-top. The margin reads as the gap between the row's
       // box and its predecessor's bottom edge. Every row and spacer has
-      // margin-bottom 0, so the gap is the row's margin-top; a first child
+      // margin-bottom 0, so the gap is the row's margin-top. A first child
       // carries no space-y-3 margin.
       const rect = el.getBoundingClientRect();
       const prev = el.previousElementSibling;
@@ -658,7 +658,7 @@
 
     scheduleIdle() {
       // The For-you list builds only the nodes it shows, so there is nothing
-      // to pre-render; a switch back to Everything schedules the queue again.
+      // to pre-render. A switch back to Everything schedules the queue again.
       if (!this.alive || this.idleScheduled || this.quietTimer || this.view === VIEW_FOR_YOU) return;
       this.idleScheduled = true;
       const arm = () => {
@@ -768,7 +768,7 @@
     // The follow decision for incoming content: the reader's pin intent, or
     // the deferred follow the engine recorded when an anchor restore left
     // the view at the bottom. appendMessage and the stream paint read this
-    // one method; live geometry never feeds it.
+    // one method. Live geometry never feeds it.
     shouldFollow() {
       return this.pinnedIntent || this.followNextTurn;
     }
@@ -820,8 +820,8 @@
       // worse: it would re-anchor whatever row the previous collapse's clamp
       // left at the top edge. Repeated collapse-and-reopen then drifts the
       // place one turn per fold, and the reader's message ends screens away.
-      // Those frames restore the existing anchor instead (the branch below);
-      // the recovery path after a hidden container reads the same preserved
+      // Those frames restore the existing anchor instead (the branch below).
+      // The recovery path after a hidden container reads the same preserved
       // anchor. While the anchor's turn hides its message, its fold row
       // carries the place (restoreReadingAnchor), so the identity survives
       // the collapse.
@@ -945,7 +945,7 @@
       this.bottomSpacer.style.height = Math.round(Math.max(0, covered)) + 'px';
 
       // 4. Scroll correction: anchor keeps its visual position, or stay pinned.
-      // User scroll and quiet-phase pre-rendering are new engine reasons; they
+      // User scroll and quiet-phase pre-rendering are new engine reasons. They
       // must not turn a near-bottom viewport back into a pinned one. The
       // positional snap remains for the legacy-equivalent reasons.
       if (snapToBottom) {
@@ -1029,7 +1029,7 @@
       this.lastSeenMaxScrollTop = max;
       this.lastSeenScrollHeight = height;
       this.lastUserScrollTop = top;
-      // A genuine scroll re-declares the reading position by itself; a sticky
+      // A genuine scroll re-declares the reading position by itself. A sticky
       // restore target from an earlier update must not fight it.
       this.pendingAnchor = null;
       // The deferred follow yields to the reader: any genuine scroll event
@@ -1223,7 +1223,7 @@
     // is the node the list shows. The list's children are compared before the
     // container changes, so a stream paint that moves nothing writes nothing.
 
-    // Leaving Everything keeps the reader's place; entering For you pins the
+    // Leaving Everything keeps the reader's place. Entering For you pins the
     // bottom, where the newest message is, on the first entry only. Each view's
     // place saves when the reader leaves it and restores on the return.
     setView(view) {
@@ -1270,7 +1270,7 @@
 
     // reproject for the For-you view. A scroll only records the reader's
     // place. Every other reason rebuilds the list and holds the place, or
-    // keeps the bottom when the reader is pinned; a prepend never pins.
+    // keeps the bottom when the reader is pinned. A prepend never pins.
     reprojectForYou(reason, returning) {
       if (reason === 'scroll') {
         this.readingAnchor = this.captureForYouAnchor();
@@ -1643,9 +1643,6 @@
 
     // ---- ingest: live stream --------------------------------------------------
     appendMessage(msg, forceScroll) {
-      // A replayed frame of a message the engine already holds (the copy's first screen, then the socket's catch-up)
-      // is dropped, so the message renders once.
-      if (msg.id != null && msg.id !== '' && this.entries.some((entry) => entry.msg.id === msg.id)) return;
       if (msg.id == null || msg.id === '') {
         msg = Object.assign({}, msg, {
           id: 'client:' + String(this.sessionId) + ':' + (++this.liveMessageSequence),
@@ -1685,7 +1682,7 @@
       this.offsetsDirty = true;
       this.reproject('append');
       if (forceScroll || wasPinned) {
-        // A follow-append re-arms the pin intent; it never clears it here —
+        // A follow-append re-arms the pin intent. It never clears it here —
         // only a genuine user scroll may do that (handleScroll).
         this.jumpToBottom();
       } else if (this.container.clientHeight > 0 && typeof showScrollToBottom === 'function') {
@@ -1722,7 +1719,7 @@
         this.measuredFlat.delete(seg);
       }
       this.offsetsDirty = true;
-      // For you lists no tool rows, so its projection has nothing to redraw; a switch back to Everything
+      // For you lists no tool rows, so its projection has nothing to redraw. A switch back to Everything
       // projects the replaced entry.
       if (this.view === VIEW_EVERYTHING) this.reproject('replace');
     }
@@ -1841,7 +1838,7 @@
   Chat.registerProjectionCheck = registerProjectionCheck;
 
   // options.view picks the first projection (Everything when omitted, the page's
-  // unchanged view); pinned and readingAnchor place the reader as mount does.
+  // unchanged view). Pinned and readingAnchor place the reader as mount does.
   function mountIfAvailable(container, messages, sessionId, options = {}) {
     if (!supportsTurnEngine(container)) return null;
     const prev = activeEngines().get(container);

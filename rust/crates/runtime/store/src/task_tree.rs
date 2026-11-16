@@ -23,7 +23,7 @@ use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
 use crate::layout;
 use crate::metadata::{
-  EventRef, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, TaskType,
+  EventRef, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_STATE, TaskApprover, TaskProfile, TaskSpec,
   UtcDateTime, WORK_STATE,
 };
 use crate::run_facts::{CachedRunFacts, RunFacts};
@@ -145,10 +145,6 @@ impl NodeState {
     Ok(self.facts.task()?.task_state.as_str())
   }
 
-  fn has_user_request(&self) -> bool {
-    self.facts.task.as_ref().is_ok_and(|task| task.has_user_request)
-  }
-
   pub fn display_state(
     &self,
     run: &crate::run_records::RunRecord,
@@ -194,7 +190,6 @@ impl Default for TaskFacts {
   fn default() -> Self {
     Self {
       task_state: "open".to_string(),
-      has_user_request: false,
       run_outcomes: HashMap::new(),
       run_outcome_string_none_ids: HashSet::new(),
       run_finish_positions: HashMap::new(),
@@ -1301,12 +1296,11 @@ impl Store {
     Ok(ancestors)
   }
 
-  /// Return the nearest node on the open manager chain that holds a user request: a real user message or a thread
-  /// platform summon. A refusal is `forbidden`: `takeoff_gate.DelegationBlockedError` is a 403 on every route.
-  pub fn check_task_authorization(&self, session_id: &str) -> StoreResult<String> {
+  /// Verify that `session_id` is an open manager task and every ancestor on its chain is open. A refusal is
+  /// `forbidden`, which routes answer as 403.
+  pub fn check_task_authorization(&self, session_id: &str) -> StoreResult<()> {
     let index = self.tree_index()?;
     let mut current = session_id.to_string();
-    let mut user_node = None;
     for _ in 0..TASK_ANCESTOR_HOP_LIMIT {
       let metadata = index.metas.get(&current);
       let (parent_id, profile) =
@@ -1322,11 +1316,8 @@ impl Store {
         let kind = if is_start { "task" } else { "ancestor task" };
         return Err(StoreError::forbidden(format!("Delegation blocked: {kind} {current} is {state}; open it first")));
       }
-      if user_node.is_none() && self.node_state(&current)?.has_user_request() {
-        user_node = Some(current.clone());
-      }
       let Some(parent_id) = parent_id else {
-        return user_node.ok_or_else(|| no_user_request_error(session_id));
+        return Ok(());
       };
       current = parent_id.to_string();
     }
@@ -1348,7 +1339,7 @@ impl Store {
     if parent.as_ref().is_none_or(|meta| meta.profile != TaskProfile::Manager) {
       return Err(StoreError::forbidden(AGENT_CREATE_SCOPE_REFUSAL));
     }
-    if request.profile == TaskProfile::Worker && !is_read_only_exempt(request.task.as_ref()) {
+    if request.profile == TaskProfile::Worker {
       self.check_task_authorization(session_id)?;
     }
     Ok(())
@@ -2151,7 +2142,7 @@ impl Store {
     let mut detail = self.session_metadata_value(meta.as_ref());
     let mut reads = NodeReads::new(self);
     let object = detail.as_object_mut().expect("session metadata serializes to an object");
-    object.insert("task_state".to_string(), Value::String(reads.task_state(session_id)?));
+    object.insert(TASK_STATE.to_string(), Value::String(reads.task_state(session_id)?));
     object.insert(WORK_STATE.to_string(), Value::String(reads.activity(session_id)?.work_state));
     object.insert("archived".to_string(), Value::Bool(reads.archived(&index, session_id, &mut HashMap::new())?));
 
@@ -2816,13 +2807,6 @@ fn fold_task_facts_from(
       run_facts.observe(event);
     }
     let position = offset + index;
-    match event.get("type").and_then(CompactValue::as_str) {
-      Some(event_types::CLONE_START) => facts.has_user_request = false,
-      _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => {
-        facts.has_user_request = true;
-      }
-      _ => {}
-    }
     // A close-request replay looks for these lines in the raw history, so they are kept before the id check below.
     match (event.get("type").and_then(CompactValue::as_str), event.get("request_id").and_then(CompactValue::as_str)) {
       (Some(event_types::TASK_CLOSE_REQUESTED), Some(request_id)) => {
@@ -3072,55 +3056,9 @@ fn admits_input(event: &ChatEvent) -> bool {
   }
 }
 
-fn no_user_request_error(session_id: &str) -> StoreError {
-  StoreError::forbidden(format!(
-    "Delegation blocked: no user request on the task chain from task {session_id} to its root. A delegation serves a line that a real user message or a thread platform summon started; other agent messages, scheduled triggers and child reports do not count."
-  ))
-}
-
-/// Whether a node's task carries the read-only exemption: verify and cold-read are read-only and repo-less, so the
-/// runtime gate does not need a user message for them. The one owner of the judgment
-/// (`takeoff_gate.is_read_only_exempt`); no task is not exempt.
-pub fn is_read_only_exempt(task: Option<&TaskSpec>) -> bool {
-  task
-    .and_then(|task| task.task_type)
-    .is_some_and(|task_type| matches!(task_type, TaskType::Verify | TaskType::ColdRead))
-}
-
 fn task_spec_hash(task: &TaskSpec) -> StoreResult<String> {
   let serialized = serde_json::to_string(task).map_err(|error| StoreError::new(error.to_string()))?;
   Ok(control_events::sha256_hex(&serialized))
-}
-
-/// One archive-format close fact: outcome `archived` and no report target, so an archive wakes nobody.
-#[cfg(test)]
-pub(crate) fn archived_close_event(
-  session_id: &str,
-  request_id: &str,
-  actor: &str,
-  summary: &str,
-  run_ids: &[&str],
-  archived_with: Option<&str>,
-) -> Value {
-  let mut payload = vec![
-    ("request_id".to_string(), Value::String(request_id.to_string())),
-    ("outcome".to_string(), Value::String("archived".to_string())),
-    ("summary".to_string(), Value::String(summary.to_string())),
-    ("result_refs".to_string(), json!([])),
-    ("run_ids".to_string(), json!(run_ids)),
-    ("report_to".to_string(), Value::Null),
-  ];
-  if let Some(archived_with) = archived_with {
-    payload.push(("archived_with".to_string(), Value::String(archived_with.to_string())));
-  }
-  control_events::build_control_event(
-    "task_closed",
-    actor,
-    session_id,
-    Some(&control_events::stable_close_event_id(session_id, request_id)),
-    None,
-    payload,
-  )
 }
 
 fn caller_actor(caller: &TaskCaller) -> &'static str {
@@ -3211,7 +3149,7 @@ pub(crate) mod tests {
   use crate::compact::CompactValue;
 
   use super::*;
-  use crate::metadata::{TaskProfile, TaskSpec};
+  use crate::metadata::{TaskProfile, TaskSpec, TaskType};
   use crate::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
   use crate::store::{
     AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
@@ -3435,18 +3373,15 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
-  async fn gate_matches_manager_chain_user_and_open_state_rules() {
+  async fn gate_requires_an_open_manager_chain() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
     let child = create_node(&store, "child", Some(&root.id), TaskProfile::Manager).await;
     let grandchild = create_node(&store, "grandchild", Some(&child.id), TaskProfile::Manager).await;
 
-    append(&store, &root.id, user_event(json!("Can you inspect this?"))).await;
-    append(&store, &child.id, json!({"type": "agent_message", "content": "progress"})).await;
-    assert_eq!(store.check_task_authorization(&grandchild.id).unwrap(), root.id);
-    append(&store, &child.id, user_event(json!("Which file?"))).await;
-    assert_eq!(store.check_task_authorization(&grandchild.id).unwrap(), child.id);
+    assert!(store.check_task_authorization(&root.id).is_ok());
+    assert!(store.check_task_authorization(&grandchild.id).is_ok());
 
     for state in ["completed", "cancelled", "archived"] {
       let guard = store.control_lock().await;
@@ -3476,7 +3411,7 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
-  async fn gate_ignores_machine_inputs_and_resets_at_clone_markers() {
+  async fn gate_allows_manager_chain_without_user_message_and_across_clone_markers() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
@@ -3488,24 +3423,20 @@ pub(crate) mod tests {
       append(&store, session_id, json!({"type": "child_report", "content": "take off"})).await;
       append(&store, session_id, user_event(json!([{"type": "tool_result", "content": "take off"}]))).await;
     }
-    let error = store.check_task_authorization(&grandchild.id).unwrap_err();
-    assert!(error.to_string().contains("no user request on the task chain"));
+    assert!(store.check_task_authorization(&grandchild.id).is_ok());
 
     let clone = create_node(&store, "clone", Some(&root.id), TaskProfile::Manager).await;
-    append(&store, &clone.id, user_event(json!("source request"))).await;
     append(&store, &clone.id, json!({"type": "clone_start"})).await;
-    assert!(store.check_task_authorization(&clone.id).unwrap_err().to_string().contains("no user request"));
-    append(&store, &clone.id, user_event(json!("new request"))).await;
-    assert_eq!(store.check_task_authorization(&clone.id).unwrap(), clone.id);
-    append(&store, &clone.id, json!({"type": "clone_start"})).await;
-    assert!(store.check_task_authorization(&clone.id).unwrap_err().to_string().contains("no user request"));
+    assert!(store.check_task_authorization(&clone.id).is_ok());
   }
 
   #[tokio::test]
-  async fn agent_create_runs_the_gate_except_for_coordination_and_read_only_work() {
+  async fn agent_create_allows_worker_without_user_message_and_blocks_closed_chain() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let root = create_node(&store, "agent-root", None, TaskProfile::Manager).await;
+    append(&store, &root.id, json!({"type": "scheduled_trigger", "content": "cron tick"})).await;
+
     let manager_request = CreateTask {
       request_id: "agent-manager-child".to_string(),
       task_parent_id: Some(root.id.clone()),
@@ -3516,9 +3447,8 @@ pub(crate) mod tests {
       group: None,
       session_id: None,
     };
-    assert!(
-      store.create_task(manager_request, TaskCaller::Agent { session_id: root.id.clone() }, Map::new()).await.is_ok()
-    );
+    let child =
+      store.create_task(manager_request, TaskCaller::Agent { session_id: root.id.clone() }, Map::new()).await.unwrap();
 
     let worker_request = CreateTask {
       request_id: "agent-worker-child".to_string(),
@@ -3534,30 +3464,52 @@ pub(crate) mod tests {
       store
         .create_task(worker_request.clone(), TaskCaller::Agent { session_id: root.id.clone() }, Map::new())
         .await
-        .unwrap_err()
-        .to_string()
-        .contains("no user request on the task chain")
+        .is_ok()
+    );
+
+    let guard = store.control_lock().await;
+    let close = control_events::build_control_event(
+      "task_closed",
+      ACTOR_SYSTEM,
+      &root.id,
+      None,
+      None,
+      [("outcome".to_string(), json!("completed"))],
+    );
+    store.append_control_fact(&guard, &root.id, close).await.unwrap();
+    drop(guard);
+
+    let blocked = store
+      .create_task(
+        CreateTask {
+          request_id: "closed-ancestor-worker".to_string(),
+          task_parent_id: Some(child.id.clone()),
+          ..worker_request
+        },
+        TaskCaller::Agent { session_id: child.id.clone() },
+        Map::new(),
+      )
+      .await
+      .unwrap_err();
+    assert_eq!(blocked.status_code(), Some(403));
+    assert_eq!(
+      blocked.to_string(),
+      format!("Delegation blocked: ancestor task {} is completed; open it first", root.id)
     );
 
     let verify_request = CreateTask {
       task: Some(TaskSpec { task_type: Some(TaskType::Verify), ..TaskSpec::default() }),
-      request_id: "agent-verify-child".to_string(),
-      ..worker_request.clone()
+      request_id: "closed-ancestor-verify".to_string(),
+      task_parent_id: Some(child.id.clone()),
+      profile: TaskProfile::Worker,
+      name: Some("verify child".to_string()),
+      backend: Some("synthetic".to_string()),
+      group: None,
+      session_id: None,
     };
-    assert!(
-      store.create_task(verify_request, TaskCaller::Agent { session_id: root.id.clone() }, Map::new()).await.is_ok()
-    );
-    append(&store, &root.id, user_event(json!("Please make the change."))).await;
-    assert!(
-      store
-        .create_task(
-          CreateTask { request_id: "agent-worker-after-user".to_string(), ..worker_request },
-          TaskCaller::Agent { session_id: root.id },
-          Map::new(),
-        )
-        .await
-        .is_ok()
-    );
+    let verify_blocked =
+      store.create_task(verify_request, TaskCaller::Agent { session_id: child.id }, Map::new()).await.unwrap_err();
+    assert_eq!(verify_blocked.status_code(), Some(403));
   }
 
   #[tokio::test]
@@ -4296,7 +4248,18 @@ pub(crate) mod tests {
     assert_eq!(error.to_string(), "an agent may only create a task directly under its own open manager task");
     assert_eq!(error.status_code(), Some(403));
 
-    // `takeoff_gate.DelegationBlockedError`: an implementation worker with no user request on its chain.
+    // A worker created under a closed manager is refused with 403 before the conflict check runs.
+    let guard = store.control_lock().await;
+    let close = control_events::build_control_event(
+      "task_closed",
+      ACTOR_SYSTEM,
+      &root.id,
+      None,
+      None,
+      [("outcome".to_string(), json!("completed"))],
+    );
+    store.append_control_fact(&guard, &root.id, close).await.unwrap();
+    drop(guard);
     let gated = CreateTask {
       request_id: "gated-worker".to_string(),
       task_parent_id: Some(root.id.clone()),
@@ -4308,14 +4271,24 @@ pub(crate) mod tests {
       session_id: None,
     };
     let error = store.create_task(gated, caller, Map::new()).await.unwrap_err();
-    assert!(error.to_string().starts_with("Delegation blocked: no user request on the task chain"));
+    assert_eq!(error.to_string(), format!("Delegation blocked: task {} is completed; open it first", root.id));
     assert_eq!(error.status_code(), Some(403));
   }
 
   /// Write one archive close fact directly, as the completion owner's archive writes it.
   pub(crate) async fn archive_node(store: &Store, session_id: &str) {
     let guard = store.control_lock().await;
-    let event = archived_close_event(session_id, "archive-test", ACTOR_USER, "archived by the user", &[], None);
+    let event = control_events::archived_close_event(
+      session_id,
+      "archive-test",
+      "archived by the user",
+      None,
+      None,
+      None,
+      ACTOR_USER,
+      &[],
+      &[],
+    );
     store.append_control_fact(&guard, session_id, event).await.unwrap();
     drop(guard);
     store.invalidate_tree_index();
@@ -4724,15 +4697,15 @@ pub(crate) mod tests {
 
     let before = store.history_work();
     let facts = store.facts_of(&node.id).unwrap();
-    assert!(facts.has_user_request);
+    assert_eq!(facts.task_state, "open");
     let after_fold = store.history_work();
     assert_eq!(after_fold.full_folds - before.full_folds, 1);
     assert_eq!(after_fold.folded_events - before.folded_events, facts.covered as u64);
     store.evict_recovery_history(&node.id);
 
     let before_read = store.history_work();
-    assert!(store.facts_of(&node.id).unwrap().has_user_request);
-    assert_eq!(store.check_task_authorization(&node.id).unwrap(), node.id);
+    assert_eq!(store.facts_of(&node.id).unwrap().task_state, "open");
+    assert!(store.check_task_authorization(&node.id).is_ok());
     let after_read = store.history_work();
     assert_eq!(after_read.file_reads, before_read.file_reads);
     assert_eq!(after_read.full_folds, before_read.full_folds);

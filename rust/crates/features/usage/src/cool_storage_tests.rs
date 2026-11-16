@@ -139,7 +139,7 @@ impl Fixture {
     default_ledger_path(&self.cfg.charliebot_home)
   }
 
-  /// Writes `sessions/<sid>/metadata.json` and returns the session directory.
+  /// `sessions/<sid>/metadata.json`, written for `sid`, with the session directory returned.
   fn write_session(&self, sid: &str, meta: Value) -> PathBuf {
     let dir = self.sessions().join(sid);
     put(&dir.join("metadata.json"), meta.to_string().as_bytes(), None);
@@ -170,12 +170,12 @@ const fn days(count: u64) -> u64 {
   count * 86_400
 }
 
-/// Asserts that `path` resolves inside `tree` (the sandbox guard).
+/// The assertion that `path` resolves inside `tree` (the sandbox guard).
 fn assert_inside(tree: &Path, path: &Path) {
   assert!(realpath(path).starts_with(realpath(tree)), "{} resolves outside the synthetic tree", path.display());
 }
 
-/// Writes a file, creating its parents, and sets its mtime when one is given.
+/// The file at `path`, written with its parents created and its mtime set when one is given.
 fn put(path: &Path, bytes: &[u8], mtime: Option<SystemTime>) -> PathBuf {
   fs::create_dir_all(path.parent().expect("a file has a parent")).expect("the parent directory");
   fs::write(path, bytes).expect("the file");

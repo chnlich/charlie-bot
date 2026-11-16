@@ -383,7 +383,7 @@ mod tests {
   fn test_host(home: &Path, repo_root: &Path) -> CliHost {
     let mut registry = Registry::new();
     registry.register_package("features.user_text_checks", charliebot_user_text_checks::register).unwrap();
-    registry.register_package("features.artifacts", crate::register).unwrap();
+    registry.register_package(crate::PACKAGE, crate::register).unwrap();
     let cfg = registry.load_config(home).unwrap();
     let registry = Arc::new(registry);
     CliHost {

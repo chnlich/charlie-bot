@@ -22,6 +22,7 @@ use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 use charliebot_core::event_types::{self, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL};
 use charliebot_core::headers::AUTHORIZATION;
+use charliebot_core::int_text;
 use charliebot_core::proc_status;
 use charliebot_core::run_token;
 use charliebot_core::subagent::AGENT_TOOL;
@@ -87,9 +88,9 @@ fn headless_command(run_kind: RunKind, enable_subagents: bool) -> Vec<String> {
   ]
 }
 
-/// The `--disallowed-tools` value the headless command carries, for the setup check (`setup_check::setup_step`);
-/// the work run's list with the subagent switch on, which leaves `Agent` allowed. The errors name the flag and
-/// `BASE_COMMAND` in their text.
+/// The `--disallowed-tools` value the headless command carries, for the setup check (`setup_check::setup_step`).
+/// It is the work run's list with the subagent switch on, which leaves `Agent` allowed. The errors name the flag
+/// and `BASE_COMMAND` in their text.
 pub fn base_disallowed_tools() -> Result<String, String> {
   let command = headless_command(RunKind::Work, true);
   let index = command
@@ -143,30 +144,11 @@ pub fn claude_reading_limits_from(run_kind: RunKind, source: &Env) -> ContextLim
 }
 
 fn parse_positive_integer(raw: &str) -> Option<u64> {
-  let value = raw.trim();
-  let (positive, digits) = match value.strip_prefix('+') {
-    Some(digits) => (true, digits),
-    None => match value.strip_prefix('-') {
-      Some(digits) => (false, digits),
-      None => (true, value),
-    },
-  };
-  let characters = digits.chars().collect::<Vec<_>>();
-  if characters.is_empty()
-    || !characters.iter().enumerate().all(|(index, character)| {
-      character.is_ascii_digit()
-        || (*character == '_'
-          && index > 0
-          && index + 1 < characters.len()
-          && characters[index - 1].is_ascii_digit()
-          && characters[index + 1].is_ascii_digit())
-    })
-    || !positive
-  {
+  let (negative, digits) = int_text::int_digits(raw)?;
+  if negative {
     return None;
   }
-  let normalized = characters.into_iter().filter(|character| *character != '_').collect::<String>();
-  normalized.parse::<u64>().ok().filter(|number| *number > 0)
+  digits.parse::<u64>().ok().filter(|number| *number > 0)
 }
 
 fn warn_unparseable_window(window: &str) {
@@ -219,7 +201,7 @@ pub struct ClaudeCodeBackend {
   instructions_file: Option<PathBuf>,
   midturn_delivery: bool,
   midturn_run_id: Option<String>,
-  /// The CharlieBot run id of this manager turn; the read-budget hook entries name it.
+  /// The CharlieBot run id of this manager turn. The read-budget hook entries name it.
   run_id: Option<String>,
   can_delegate: bool,
 }
@@ -345,7 +327,7 @@ impl ClaudeCodeBackend {
       let home = env.get("HOME").map(String::as_str);
       env.insert(
         login_dirs::CLAUDE_CONFIG_DIR_ENV.to_string(),
-        login_dirs::expanduser(config_dir, home)?.to_string_lossy().into_owned(),
+        login_dirs::config_dir_path(config_dir, home)?.to_string_lossy().into_owned(),
       );
     }
     Ok(env)
@@ -841,7 +823,17 @@ mod tests {
       true,
       false,
       None,
-      LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: vec!["--resume".to_string(), "resume-id".to_string()],
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -873,12 +865,18 @@ mod tests {
       true,
       None,
       LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: Some("manager-session".to_string()),
         backend_kwargs: serde_json::json!({"run_kind": "manager_turn", "run_id": "manager-run", "can_delegate": true})
           .as_object()
           .unwrap()
           .clone(),
-        cgroup_session_id: Some("manager-session".to_string()),
-        ..LaunchArgs::default()
+        manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
     )
@@ -968,8 +966,15 @@ mod tests {
       false,
       None,
       LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
         backend_kwargs: serde_json::json!({"run_kind": "manager_turn"}).as_object().unwrap().clone(),
-        ..LaunchArgs::default()
+        manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
     )
@@ -989,7 +994,17 @@ mod tests {
       false,
       None,
       8123,
-      LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: vec!["--resume".to_string(), "resume-id".to_string()],
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1033,7 +1048,17 @@ mod tests {
       false,
       false,
       None,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1071,7 +1096,17 @@ mod tests {
       false,
       false,
       None,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       zero_limits(),
     )
     .unwrap();
@@ -1103,7 +1138,17 @@ mod tests {
       false,
       None,
       8123,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1220,7 +1265,17 @@ mod tests {
       false,
       false,
       None,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1298,7 +1353,17 @@ mod tests {
       false,
       None,
       8123,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
@@ -1322,7 +1387,17 @@ mod tests {
       false,
       None,
       18498,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();

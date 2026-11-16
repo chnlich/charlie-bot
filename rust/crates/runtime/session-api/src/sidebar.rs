@@ -40,7 +40,7 @@ const SIDEBAR_SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(10);
 ///
 /// A sweep rechecked every active session, so its cost grew with the home's session count: on the 7,160-session mock
 /// home one sweep spent about 58 ms of CPU, and the interval starts one every ten seconds. A sweep rechecks this many
-/// sessions and the next sweep continues after them, so each sweep costs a fixed share of CPU; a session waits at most
+/// sessions and the next sweep continues after them, so each sweep costs a fixed share of CPU. A session waits at most
 /// the corpus size divided by this slice, times the interval, to be rechecked again.
 const SIDEBAR_SWEEP_SLICE: usize = 1024;
 
@@ -225,7 +225,7 @@ fn schedule_sidebar_sweep(
 ) -> StoreResult<()> {
   // In the test build the sweep never runs: its thread would move the shared sidebar generation long after the read
   // that scheduled it returned, which is exactly the window the corpus-memo tests of `listing.rs` compare. No test
-  // of this crate observes the sweep itself; `should_start_sweep` covers its policy as a pure function.
+  // of this crate observes the sweep itself. `should_start_sweep` covers its policy as a pure function.
   if cfg!(test) {
     return Ok(());
   }
@@ -289,7 +289,7 @@ fn schedule_sidebar_sweep(
 /// sweep stopped, wrapping around the end.
 ///
 /// A corpus no larger than one slice is rechecked whole. The corpus's cursor advances by the slice's length, so its
-/// consecutive sweeps cover disjoint slices until the corpus ends and the next one wraps; a change in the corpus
+/// consecutive sweeps cover disjoint slices until the corpus ends and the next one wraps. A change in the corpus
 /// names a new corpus, whose rotation starts at its first row.
 fn sweep_slice(sessions: &[Arc<SessionMetadata>]) -> Vec<Arc<SessionMetadata>> {
   let len = sessions.len();

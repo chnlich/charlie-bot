@@ -20,8 +20,8 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_TYPE_FIELD, TaskApprover, TaskProfile,
-  TaskSpec, TaskType, WORK_STATE,
+  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_STATE,
+  TASK_TYPE_FIELD, TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -70,7 +70,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("backend", FieldType::NullableString),
   Field::optional("session_id", FieldType::NullableString),
   Field::optional("request_id", FieldType::NullableString),
-  Field::optional("task_parent_id", FieldType::NullableString),
+  Field::optional(TASK_PARENT_ID_FIELD, FieldType::NullableString),
   Field::optional("profile", FieldType::NullableLiteral(TaskProfile::NAMES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("group", FieldType::NullableString),
@@ -81,7 +81,7 @@ const CREATE_SESSION: BodyModel = BodyModel::required(CREATE_FIELDS);
 /// `models.PatchSessionTaskRequest`.
 const PATCH_FIELDS: &[Field] = &[
   Field::optional("name", FieldType::NullableString),
-  Field::optional("task_parent_id", FieldType::NullableString),
+  Field::optional(TASK_PARENT_ID_FIELD, FieldType::NullableString),
   Field::optional("profile", FieldType::NullableLiteral(TaskProfile::NAMES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("subtree_prompt", FieldType::NullableString),
@@ -200,7 +200,7 @@ pub(crate) async fn switch_backend(
   }
 }
 
-/// `PATCH /api/sessions/{session_id}`: a name-only PATCH renames; any other field runs the task metadata mutation.
+/// `PATCH /api/sessions/{session_id}`: a name-only PATCH renames. Any other field runs the task metadata mutation.
 pub(crate) async fn patch_session(
   State(features): State<Arc<FeatureContext>>,
   AxumPath(session_id): AxumPath<String>,
@@ -234,7 +234,7 @@ async fn create(
     || fields.task.is_some()
     || fields.approver.is_some();
   if v2 {
-    // The task-tree owner binds (parent, request_id) to one node; request_id is required there.
+    // The task-tree owner binds (parent, request_id) to one node. request_id is required there.
     let Some(request_id) = fields.request_id else {
       return Err(store_error(StoreError::invalid(TASK_CREATE_REQUEST_ID_REQUIRED)));
     };
@@ -401,7 +401,7 @@ async fn switch(
     .await
     .map_err(store_error)?;
 
-  // The audit event is the switch history; the durable metadata read here (the backfill included) is what it records.
+  // The audit event is the switch history. The durable metadata read here (the backfill included) is what it records.
   let durable = features.store.read_metadata_fresh(session_id).map_err(store_error)?;
   let held = durable.as_ref().filter(|meta| meta.cc_session_id.as_deref().is_some_and(|id| !id.is_empty()));
   let audit = json!({
@@ -465,7 +465,7 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
 fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Response> {
   let mut detail = store.session_metadata_value(meta);
   let object = detail.as_object_mut().expect("session metadata serializes to an object");
-  object.insert("task_state".to_string(), json!("open"));
+  object.insert(TASK_STATE.to_string(), json!("open"));
   if object.get(WORK_STATE).is_none_or(Value::is_null) {
     object.insert(WORK_STATE.to_string(), json!("idle"));
   }

@@ -10,6 +10,10 @@ pub const AUTHORIZATION: &str = "Authorization";
 /// The `Content-Type` header name. A request announces its body's media type in this header.
 pub const CONTENT_TYPE: &str = "Content-Type";
 
+/// The `Accept-Encoding` header name. A request lists the content codings it takes in this header, and a response whose
+/// body varies by one of them names this header in `Vary`.
+pub const ACCEPT_ENCODING: &str = "Accept-Encoding";
+
 /// The media type of a urlencoded form body. A `Content-Type` header carrying it announces name-and-value pairs, which
 /// the request's form reader takes apart.
 pub const FORM_URLENCODED: &str = "application/x-www-form-urlencoded";

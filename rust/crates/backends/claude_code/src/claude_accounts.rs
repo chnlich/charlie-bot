@@ -11,6 +11,7 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, anyhow};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::backend::{MemberFailure, MemberReading, MemberWindow};
 use charliebot_registry::usage::{self, WEEKLY_WINDOW_MINUTES};
@@ -111,7 +112,7 @@ pub fn pool(cfg: &CharlieBotConfig) -> anyhow::Result<Vec<claude_config::ClaudeA
 
 fn expand_account_path(value: &str) -> anyhow::Result<PathBuf> {
   let home = std::env::var("HOME").ok();
-  login_dirs::expanduser(value, home.as_deref())
+  login_dirs::config_dir_path(value, home.as_deref())
 }
 
 pub fn is_pooled(option: &BackendOption, cfg: &CharlieBotConfig) -> bool {
@@ -233,14 +234,14 @@ pub fn observe_rate_limit(
       }
     }
   }
-  let rejected = info.get("status").and_then(Value::as_str) == Some("rejected");
+  let rejected = info.get(RATE_LIMIT_STATUS).and_then(Value::as_str) == Some(RATE_LIMIT_STATUS_REJECTED);
   if values.is_empty() && !rejected {
     return None;
   }
   let rejected_until = if rejected {
     Some(
       info
-        .get("resetsAt")
+        .get(RATE_LIMIT_RESETS_AT)
         .and_then(Value::as_f64)
         .map_or_else(|| add_duration(moment, REJECTED_WITHOUT_RESET), unix_seconds),
     )
@@ -1294,7 +1295,7 @@ mod tests {
   fn a_login_without_a_weekly_reading_counts_168_hours() {
     let now = timestamp("2025-01-01T12:00:00Z");
     {
-      // "x" has no weekly reading, so its 30% headroom scores 0.30 over 168 h; "y" has 50% headroom at 10 h
+      // "x" has no weekly reading, so its 30% headroom scores 0.30 over 168 h. "y" has 50% headroom at 10 h
       // and scores 8.4. Without the 168 h value "x" would score at the 0.5 h floor (100.8) and win.
       let (_root, cfg, state) = pool_fixture(&["x", "y"]);
       observe_rate_limit(&state, "x", &window(0.70), Some(now));
@@ -1302,7 +1303,7 @@ mod tests {
       assert_eq!(select_now(&state, &cfg, now), "y");
     }
     {
-      // "x" (30% over 168 h) and "z" (20% over 168 h) tie; "x" carries the most headroom.
+      // "x" (30% over 168 h) and "z" (20% over 168 h) tie. "x" carries the most headroom.
       let (_root, cfg, state) = pool_fixture(&["x", "z"]);
       observe_rate_limit(&state, "x", &window(0.70), Some(now));
       observe_usage_panel(&state, "z", &panel_window(80.0, WEEKLY_WINDOW_MINUTES, "2025-01-08T12:00:00Z"));
@@ -1330,7 +1331,7 @@ mod tests {
     // "a": 50% headroom -> 0.50 * 168 / 24 = 3.50. "b": 51% headroom -> 3.57.
     observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
     observe_usage_panel(&state, "b", &panel_window(49.0, WEEKLY_WINDOW_MINUTES, weekly));
-    // The scores differ by 0.01 per hour, inside the 0.02 band; "b" was read more recently and still wins.
+    // The scores differ by 0.01 per hour, inside the 0.02 band. "b" was read more recently and still wins.
     observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")));
     observe_rate_limit(&state, "b", &window(0.49), Some(timestamp("2025-01-01T11:00:00Z")));
     assert_eq!(select_now(&state, &cfg, now), "b");
@@ -1415,8 +1416,9 @@ mod tests {
     assert_eq!(answer.failure, MemberFailure::Quota);
     assert_eq!(answer.recovers_at, Some(UtcDateTime::from(reset)));
 
-    // A login both out for quota and under its disable is still a quota refusal, and it recovers when the later of the
-    // two has ended: here the reset, 30 minutes out, outlasts the 15-minute disable.
+    // A login both out for quota and under its disable is still a quota refusal.
+    // It recovers when the later of the two has ended.
+    // Here the reset, 30 minutes out, outlasts the 15-minute disable.
     let cfg = config(&home, &[("a", &a)]);
     let state = ClaudeAccountState::new();
     let reset = now.into_inner() + Duration::minutes(30);

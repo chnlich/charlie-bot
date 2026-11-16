@@ -54,7 +54,7 @@ where
   }
 }
 
-/// Await a future and cancel its stderr task on every exit; timeout kills the process group first.
+/// Await a future and cancel its stderr task on every exit. A timeout kills the process group first.
 pub async fn wait_or_kill_group<F, T, U>(
   future: F,
   timeout: Option<Duration>,

@@ -17,8 +17,8 @@ mod home;
 mod process;
 mod scan;
 
-/// Run one switch helper. `--help` exits 0 so that the switch can tell whether a release's binary carries the
-/// subcommand at all. An unknown name is a usage error.
+/// The entry point that runs one switch helper. `--help` exits 0 so that the switch can tell whether a release's
+/// binary carries the subcommand at all. An unknown name is a usage error.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let Some(name) = args.first().and_then(|argument| argument.to_str()) else {
     return Err(CliExit::usage(common::USAGE));

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::{METADATA_FILE_NAME, MetadataFile, MetadataSlot};
+use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::timefmt;
 use lru::LruCache;
 use serde_json::{Map, Value};
@@ -26,10 +27,11 @@ use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
   ARCHIVE_OFFSET, BASE_BRANCH_FIELD, CC_SESSION_ID_FIELD, CC_SESSION_STARTED_AT, HAS_PENDING_TRIGGER,
-  HAS_RUNNING_TASKS, HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError, NATIVE_BACKEND, NEXT_TRIGGER_AT,
-  PARENT_SESSION_ID, PENDING_TRIGGER_COUNT, REPO_PATH_FIELD, ROUND_RATINGS, RoundRating, SCHEDULE_ALLOW_FAILURE,
-  SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_PROJECT, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD,
-  SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_TYPE_FIELD, UtcDateTime, WORK_STATE,
+  HAS_RUNNING_TASKS, HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError, NATIVE_BACKEND, NATIVE_MODEL, NEXT_TRIGGER_AT,
+  PARENT_SESSION_ID, PENDING_TRIGGER_COUNT, REPO_PATH_FIELD, ROUND_RATINGS, RUN_BACKEND, RoundRating,
+  SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_PROJECT, SCHEDULE_TIMEZONE,
+  SCHEMA_VERSION_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
+  THINKING_SINCE, UtcDateTime, WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -1343,8 +1345,8 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         NEXT_TRIGGER_AT,
         HAS_PENDING_PLAN_APPROVAL,
         "starred",
-        "thinking_since",
-        "run_backend",
+        THINKING_SINCE,
+        RUN_BACKEND,
         "created_at",
         "updated_at",
         CC_SESSION_ID_FIELD,
@@ -1359,7 +1361,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         PARENT_SESSION_ID,
         SUCCESSOR_SESSION_ID,
         SCHEMA_VERSION_FIELD,
-        "task_parent_id",
+        TASK_PARENT_ID_FIELD,
         "profile",
         "task",
         "created_by_event",
@@ -1368,7 +1370,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "node_prompt_ref",
         "native_prompt_hash",
         NATIVE_BACKEND,
-        "native_model",
+        NATIVE_MODEL,
         ROUND_RATINGS,
         "group",
         ARCHIVE_OFFSET,
@@ -1382,7 +1384,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "started_at",
         "completed_at",
         "pid",
-        "pid_start",
+        PID_START_FIELD,
         "exit_code",
         "branch_name",
         BASE_BRANCH_FIELD,

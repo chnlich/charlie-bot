@@ -15,9 +15,10 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::config;
+use charliebot_core::int_text;
 use charliebot_core::text_repr;
 use charliebot_core::timefmt;
-use charliebot_store::trigger_files::{LOCAL_PID_KIND, REMOTE_PID_KIND, SLURM_JOB_KIND};
+use charliebot_store::trigger_files::{FIRE_AT_FIELD, LOCAL_PID_KIND, REMOTE_PID_KIND, SLURM_JOB_KIND};
 use charliebot_store::{layout, trigger_files};
 use charliebot_triggers::triggers;
 use clap::{Arg, ArgMatches, Command};
@@ -47,9 +48,9 @@ impl WatchSpec {
     match self {
       WatchSpec::LocalPid { pid } => json!({ "kind": LOCAL_PID_KIND, "pid": pid }),
       WatchSpec::RemotePid { host, pid } => json!({ "kind": REMOTE_PID_KIND, "host": host, "pid": pid }),
-      WatchSpec::SlurmJob { host: None, job_id } => json!({ "kind": SLURM_JOB_KIND, "job_id": job_id }),
+      WatchSpec::SlurmJob { host: None, job_id } => json!({ "kind": SLURM_JOB_KIND, (triggers::JOB_ID_FIELD): job_id }),
       WatchSpec::SlurmJob { host: Some(host), job_id } => {
-        json!({ "kind": SLURM_JOB_KIND, "host": host, "job_id": job_id })
+        json!({ "kind": SLURM_JOB_KIND, "host": host, (triggers::JOB_ID_FIELD): job_id })
       }
     }
   }
@@ -68,7 +69,7 @@ impl WatchSpec {
     if pid.is_some_and(|pid| stored.get("pid").and_then(Value::as_i64) != Some(pid)) {
       return false;
     }
-    if job_id.is_some_and(|job_id| stored.get("job_id").and_then(Value::as_i64) != Some(job_id)) {
+    if job_id.is_some_and(|job_id| stored.get(triggers::JOB_ID_FIELD).and_then(Value::as_i64) != Some(job_id)) {
       return false;
     }
     match host {
@@ -130,7 +131,7 @@ impl TriggerKey {
       .filter_map(|stored| Some((stored.get("created_at")?.as_str()?, stored)))
       .max_by_key(|(created_at, _)| *created_at)
       .map(|(_, stored)| stored)?;
-    Some(json!({ "trigger_id": newest.get("id")?, "fire_at": newest.get("fire_at")? }))
+    Some(json!({ "trigger_id": newest.get("id")?, (FIRE_AT_FIELD): newest.get(FIRE_AT_FIELD)? }))
   }
 }
 
@@ -317,7 +318,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   }
 
   let trigger_id = response_field(&result, "trigger_id")?.clone();
-  let fire_at = response_field(&result, "fire_at")?.clone();
+  let fire_at = response_field(&result, FIRE_AT_FIELD)?.clone();
   let record = json!({
     "launch_id": launch_id,
     "session_id": session_id,
@@ -339,7 +340,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   // The output object: trigger_id and fire_at first, then the record's fields (its trigger_id keeps the first slot).
   let mut output = Map::new();
   output.insert("trigger_id".to_string(), trigger_id);
-  output.insert("fire_at".to_string(), fire_at);
+  output.insert(FIRE_AT_FIELD.to_string(), fire_at);
   for (key, value) in record {
     output.insert(key, value);
   }
@@ -415,26 +416,10 @@ fn home_dir() -> Result<PathBuf, CliExit> {
   charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))
 }
 
-/// `int(text)` for a flag: surrounding whitespace, an optional sign, and digits with single underscores between them.
-fn parse_int(text: &str) -> Option<i64> {
-  let trimmed = text.trim();
-  let (negative, unsigned) = match trimmed.strip_prefix('-') {
-    Some(rest) => (true, rest),
-    None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-  };
-  let well_placed = !unsigned.starts_with('_') && !unsigned.ends_with('_') && !unsigned.contains("__");
-  let digits: String = unsigned.chars().filter(|c| *c != '_').collect();
-  if !well_placed || digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-    return None;
-  }
-  let magnitude: i64 = digits.parse().ok()?;
-  Some(if negative { -magnitude } else { magnitude })
-}
-
 /// Refuses a wait past the trigger cap here, before `--cmd` starts anything the registration would have to kill.
 fn parse_max_wait(text: &str) -> Result<i64, String> {
-  let seconds =
-    parse_int(text).ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))?;
+  let seconds = int_text::int_value(text)
+    .ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))?;
   if seconds > triggers::MAX_TRIGGER_DELAY_SECONDS {
     return Err(format!(
       "argument --max-wait: {seconds} exceeds the {} second limit",
@@ -476,8 +461,8 @@ fn parse_watch_target(raw: &str) -> Result<WatchSpec, String> {
 
 /// `_positive_int`: an int above zero, with the watch spec named in the error.
 fn positive_int(value: &str, raw: &str, what: &str) -> Result<i64, String> {
-  let number =
-    parse_int(value).ok_or_else(|| format!("--watch {what} must be int (got {})", text_repr::str_repr(raw)))?;
+  let number = int_text::int_value(value)
+    .ok_or_else(|| format!("--watch {what} must be int (got {})", text_repr::str_repr(raw)))?;
   if number <= 0 {
     return Err(format!("--watch {what} must be positive (got {})", text_repr::str_repr(raw)));
   }
@@ -487,21 +472,6 @@ fn positive_int(value: &str, raw: &str, what: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn int_accepts_the_flag_forms_int_accepts() {
-    assert_eq!(parse_int("60"), Some(60));
-    assert_eq!(parse_int(" +60 "), Some(60));
-    assert_eq!(parse_int("-5"), Some(-5));
-    assert_eq!(parse_int("1_000"), Some(1000));
-    assert_eq!(parse_int("1__000"), None);
-    assert_eq!(parse_int("_1"), None);
-    assert_eq!(parse_int("1_"), None);
-    assert_eq!(parse_int(""), None);
-    assert_eq!(parse_int("-"), None);
-    assert_eq!(parse_int("+-5"), None);
-    assert_eq!(parse_int("12x"), None);
-  }
 
   #[test]
   fn watch_specs_take_the_dict_shape() {

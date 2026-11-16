@@ -34,7 +34,7 @@ use charliebot_agents::transport::spawn::{
 /// The log event that reports writing the instructions file.
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "codex_wrote_agents_md";
 
-/// The stderr a one-shot keeps for its error message; later bytes are read and dropped.
+/// The stderr a one-shot keeps for its error message. Later bytes are read and dropped.
 const MAX_ONE_SHOT_STDERR_BYTES: usize = 4 * 1024;
 
 /// The scan-guard `PreToolUse` hook for a streaming run's Bash calls, given on the command line. The run passes
@@ -107,7 +107,7 @@ impl CodexBackend {
     })
   }
 
-  /// The `--config` pair that carries a worker or review run's instructions; none on a manager turn.
+  /// The `--config` pair that carries a worker or review run's instructions. A manager turn carries none.
   ///
   /// `developer_instructions` takes the instructions text. `project_doc_fallback_filenames` lets Codex read the
   /// repository's CLAUDE.md when its worktree has no AGENTS.md.
@@ -386,7 +386,7 @@ mod tests {
     assert_eq!(env["PATH"], "/home/a/bin:/usr/bin:/home/a/.local/bin");
   }
 
-  /// A manager turn's context names the session memo after a compaction; a worker run carries no memo and no hook.
+  /// A manager turn's context names the session memo after a compaction. A worker run carries no memo and no hook.
   #[test]
   fn a_manager_turn_installs_the_session_memo_hook_and_a_worker_run_does_not() {
     let root = tempfile::tempdir().unwrap();

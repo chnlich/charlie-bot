@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::{event_types, paths};
+use charliebot_registry::worktree_removal::{WorktreeRemoval, WorktreeRemovalFn};
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, TaskSpec, read_metadata_object};
@@ -242,7 +243,14 @@ impl SweepReport {
 }
 
 /// One sweep of the supplied roots at the supplied time, in the supplied [`SweepMode`].
-pub async fn run_sweep(roots: SweepRoots, mode: SweepMode, now: DateTime<Utc>) -> Result<SweepReport> {
+///
+/// `remove_worktree` performs each removal the sweep decides, and the task runtime registers it in the registry.
+pub async fn run_sweep(
+  roots: SweepRoots,
+  mode: SweepMode,
+  now: DateTime<Utc>,
+  remove_worktree: WorktreeRemovalFn,
+) -> Result<SweepReport> {
   let scan_roots = roots.clone();
   let scanned = on_blocking(move || scan(scan_roots, now)).await?;
   let mut report = scanned.report;
@@ -271,7 +279,7 @@ pub async fn run_sweep(roots: SweepRoots, mode: SweepMode, now: DateTime<Utc>) -
       match prepared {
         Ok(PreparedApply::Skip(row)) => report.rows[index] = row,
         Ok(PreparedApply::ScratchRemoved(row)) => report.rows[index] = row,
-        Ok(PreparedApply::RemoveWorktree(row)) => match remove_worktree(&row, &roots).await {
+        Ok(PreparedApply::RemoveWorktree(row)) => match apply_worktree_removal(&row, &roots, remove_worktree).await {
           Ok(()) => report.rows[index] = row,
           Err(error) => record_apply_failure(&mut report, index, row, error.to_string()),
         },
@@ -711,7 +719,7 @@ enum PreparedApply {
   ScratchRemoved(SweepRow),
 }
 
-async fn remove_worktree(row: &SweepRow, roots: &SweepRoots) -> Result<()> {
+async fn apply_worktree_removal(row: &SweepRow, roots: &SweepRoots, remove_worktree: WorktreeRemovalFn) -> Result<()> {
   let run = row.owner()?;
   let repo_path = run.repo_path.as_deref().context("worktree owner run has no repository path")?;
   let branch_name = run.branch_name.as_deref().context("worktree owner run has no branch name")?;
@@ -728,17 +736,17 @@ async fn remove_worktree(row: &SweepRow, roots: &SweepRoots) -> Result<()> {
   ]);
   let error = on_blocking(move || {
     Ok(handle.block_on(async move {
-      charliebot_tasks::git::git_worktree_remove_reporting(
-        Some(&repo_path),
-        Some(&worktree_path),
-        Some(&branch_name),
-        &run_id,
-        &worktree_root,
-        &log_fields,
-        "Disk sweep worktree",
-        "disk_sweep_remove_failed",
-        "disk_sweep_remove_failed",
-      )
+      remove_worktree(WorktreeRemoval {
+        repo_path: &repo_path,
+        worktree_path: &worktree_path,
+        branch_name: &branch_name,
+        owner_id: &run_id,
+        worktree_parent: &worktree_root,
+        log_fields: &log_fields,
+        label: "Disk sweep worktree",
+        fail_event: "disk_sweep_remove_failed",
+        remove_failed_event: "disk_sweep_remove_failed",
+      })
       .await
     }))
   })

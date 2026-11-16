@@ -152,8 +152,6 @@ function loadPackageScripts(name, files, extra = {}) {
   const context = {
     registerTab: (tab) => tabs.push(tab),
     registerWsMessageHandler: (type, handler) => handlers.set(type, handler),
-    window: {addEventListener: () => {}},
-    navigator: {onLine: true},
     document: {
       readyState: 'loading',
       addEventListener: (type, listener) => listeners.set(type, listener),

@@ -157,7 +157,7 @@ impl IdleCompaction {
     }
   }
 
-  /// Evaluate a timer at a supplied instant; return the spawned compaction when it qualifies.
+  /// Evaluate a timer at a supplied instant. Return the spawned compaction when it qualifies.
   pub fn fire_at(&self, session_id: &str, now: UtcDateTime) -> anyhow::Result<Option<JoinHandle<()>>> {
     self.fire_at_inner(session_id, now, false)
   }
@@ -325,9 +325,14 @@ pub fn build_idle_process(
   backend_kwargs.insert("use_pre_tool_use_guards".to_string(), json!(false));
   let launch = LaunchArgs {
     extra_flags: vec!["--resume".to_string(), identity.cc_session_id, EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string()],
+    buffer_limit: None,
+    instructions_content: None,
+    instructions_file: None,
+    resume_session_id: None,
+    log_dir: None,
     cgroup_session_id: Some(identity.session_id.clone()),
     backend_kwargs,
-    ..LaunchArgs::default()
+    manager_turn: false,
   };
   let built = charliebot_agents::backend_types::build_backend(Arc::clone(&registry), option, cfg, launch)?;
   let argv = built.backend.build_command("/compact\n")?;
@@ -521,7 +526,7 @@ pub fn arm_for_round(ctx: IdleArmContext<'_>) -> BoxFuture<'_, anyhow::Result<()
             env: run.env,
             cwd: &run.cwd,
             config_dir: Path::new(&run.config_dir),
-            // The compaction looks the transcript up by the Claude session id; the CharlieBot one stays in
+            // The compaction looks the transcript up by the Claude session id. The CharlieBot one stays in
             // `session_cgroup_id` and the `session` log fields.
             session_id: &cc_session_id,
             family: &run.family,

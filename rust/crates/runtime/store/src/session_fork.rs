@@ -29,11 +29,6 @@ pub const HISTORY_LOCATION_NOTE: &str = concat!(
   "data/chat_events.jsonl in the working directory."
 );
 
-/// The session memo sentence. Every context reorganization puts it at the top of the new context: the reset and
-/// switch notes, the Claude and Codex compaction hooks, and the CLC rebuilt-context pointer all carry it.
-pub const SESSION_MEMO_NOTE: &str =
-  "Read your session memo, memo.md in the working directory, in full before your next action.";
-
 /// The command that lists `session_id`'s current child tasks. The fork and elone bootstraps and the manager reset
 /// note share it.
 pub fn child_task_list_note(session_id: &str) -> String {
@@ -443,8 +438,8 @@ mod tests {
   use serde_json::{Map, Value, json};
 
   use super::*;
+  use crate::control_events::archived_close_event;
   use crate::metadata::TaskSpec;
-  use crate::task_tree::archived_close_event;
   use crate::task_tree::tests::{create_node, make_store, queued_run};
   use crate::{CreateTask, TaskCaller};
 
@@ -475,7 +470,7 @@ mod tests {
         }
         let request_id = format!("elone-{}", Uuid::new_v4());
         let summary = format!("archived by elone successor {successor_id}");
-        let event = crate::task_tree::archived_close_event(source_id, &request_id, ACTOR_USER, &summary, &[], None);
+        let event = archived_close_event(source_id, &request_id, &summary, None, None, None, ACTOR_USER, &[], &[]);
         store.append_control_fact(guard, source_id, event).await?;
         store.invalidate_tree_index();
         Ok(())
@@ -540,7 +535,17 @@ mod tests {
   /// One archived close fact, written as the completion owner's archive writes it.
   async fn archive_task(store: &Store, session_id: &str) {
     let guard = store.control_lock().await;
-    let event = archived_close_event(session_id, "elone-test-archive", ACTOR_USER, "archived by the user", &[], None);
+    let event = archived_close_event(
+      session_id,
+      "elone-test-archive",
+      "archived by the user",
+      None,
+      None,
+      None,
+      ACTOR_USER,
+      &[],
+      &[],
+    );
     store.append_control_fact(&guard, session_id, event).await.unwrap();
     drop(guard);
     store.invalidate_tree_index();
@@ -878,7 +883,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn copied_user_message_does_not_authorize_the_successor() {
+  async fn cloned_open_manager_is_authorized_under_open_parent() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
@@ -887,8 +892,7 @@ mod tests {
 
     let clone = store.fork_session(&source.id, None, None).await.unwrap();
 
-    // The copied user message belongs to the source, so it does not authorize the clone.
-    assert!(store.check_task_authorization(&clone.id).is_err());
+    assert!(store.check_task_authorization(&clone.id).is_ok());
   }
 
   #[tokio::test]

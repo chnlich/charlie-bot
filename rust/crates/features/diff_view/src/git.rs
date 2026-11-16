@@ -17,16 +17,16 @@ pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// The timeout of the two `diff` reads.
 pub(crate) const DIFF_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The exit status and the two streams of one finished `git` run. The stderr is decoded before the status is read;
-/// the stdout stays bytes so a caller can check the content before decoding it.
+/// The exit status and the two streams of one finished `git` run. The stderr is decoded before the status is read.
+/// The stdout stays bytes so a caller can check the content before decoding it.
 struct RawOutput {
   ok: bool,
   stdout: Vec<u8>,
   stderr: String,
 }
 
-/// Runs `git <args>` in `repo` and collects its streams. Only a timeout, a spawn failure or undecodable stderr is
-/// this function's error; a nonzero exit lands in `RawOutput.ok`.
+/// The `git <args>` run in `repo`, with its exit status and streams collected. Only a timeout, a spawn failure or
+/// undecodable stderr is this function's error. A nonzero exit lands in `RawOutput.ok`.
 async fn run_raw(repo: &Path, args: &[&str], timeout: Duration) -> Result<RawOutput, Response> {
   let mut command = tokio::process::Command::new("git");
   command

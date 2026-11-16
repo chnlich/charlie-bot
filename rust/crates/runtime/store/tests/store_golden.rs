@@ -785,22 +785,17 @@ impl ReplacedSourceArchive for NoRedelivery {
         return Ok(());
       }
       let request_id = format!("elone-{}", uuid::Uuid::new_v4());
-      let event_id = charliebot_store::control_events::stable_close_event_id(source_id, &request_id);
       let summary = format!("archived by elone successor {successor_id}");
-      let event = charliebot_store::control_events::build_control_event(
-        charliebot_core::event_types::TASK_CLOSED,
-        charliebot_store::control_events::ACTOR_USER,
+      let event = charliebot_store::control_events::archived_close_event(
         source_id,
-        Some(&event_id),
+        &request_id,
+        &summary,
         None,
-        [
-          ("request_id".to_string(), json!(request_id)),
-          ("outcome".to_string(), json!("archived")),
-          ("summary".to_string(), json!(summary)),
-          ("result_refs".to_string(), json!([])),
-          ("run_ids".to_string(), json!([])),
-          ("report_to".to_string(), Value::Null),
-        ],
+        None,
+        None,
+        charliebot_store::control_events::ACTOR_USER,
+        &[],
+        &[],
       );
       store.append_control_fact(guard, source_id, event).await?;
       store.invalidate_tree_index();
@@ -1026,8 +1021,8 @@ async fn task_gate_matches_recorded_cases_and_the_parity_fixture_tree() {
     }
     let start_id = case["start"].as_str().unwrap();
     let actual = match store.check_task_authorization(start_id) {
-      Ok(user_node) => json!({"authorized": true, "user_node": user_node, "reason": null}),
-      Err(error) => json!({"authorized": false, "user_node": null, "reason": error.to_string()}),
+      Ok(()) => json!({"authorized": true, "reason": null}),
+      Err(error) => json!({"authorized": false, "reason": error.to_string()}),
     };
     assert_eq!(actual, expected[name], "gate case {name}");
   }
@@ -1044,8 +1039,8 @@ async fn task_gate_matches_recorded_cases_and_the_parity_fixture_tree() {
   assert!(!fixture_sessions.is_empty());
   for session_id in fixture_sessions {
     let actual = match fixture_store.check_task_authorization(&session_id) {
-      Ok(user_node) => json!({"authorized": true, "user_node": user_node, "reason": null}),
-      Err(error) => json!({"authorized": false, "user_node": null, "reason": error.to_string()}),
+      Ok(()) => json!({"authorized": true, "reason": null}),
+      Err(error) => json!({"authorized": false, "reason": error.to_string()}),
     };
     assert_eq!(actual, fixture_expected[&session_id], "parity fixture task {session_id}");
   }

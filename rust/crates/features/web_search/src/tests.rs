@@ -25,7 +25,7 @@ use super::{matches, mcp};
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const CREDENTIALS: &str = "gemini:\n  api_key: synthetic-gemini-key\n";
 
-/// The path Google serves `generateContent` on; the model name carries a colon, which axum's router cannot spell.
+/// The path Google serves `generateContent` on. The model name carries a colon, which axum's router cannot spell.
 fn generate_path() -> String {
   format!("/v1beta/models/{SEARCH_MODEL}:generateContent")
 }
@@ -120,7 +120,7 @@ fn credentials(yaml: &str) -> (TempDir, Arc<HotReload<Credentials>>) {
 /// The endpoint over `fake`, answering with `credentials`.
 fn app(credentials: Arc<HotReload<Credentials>>, fake: &FakeGoogle) -> Router {
   // reqwest is built with `rustls-no-provider`, and the production client supplies its provider through
-  // `charliebot_compat::http_client`; this bare client installs the process provider instead.
+  // `charliebot_compat::http_client`. This bare client installs the process provider instead.
   let _ = rustls::crypto::ring::default_provider().install_default();
   let client = reqwest::Client::builder()
     .no_proxy()

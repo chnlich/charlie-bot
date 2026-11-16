@@ -20,11 +20,11 @@ const PENDING_TRIGGER_BELL_SVG_PATH = '<path stroke-linecap="round" stroke-linej
 // The inputs are a user message, a relayed agent_message, a scheduled trigger,
 // a child report and a worker summary. Both turn-layout consumers —
 // turn-engine.js over message entries and rendering.js over rendered
-// elements — call this one pure function; neither keeps a second copy of the
+// elements — call this one pure function. Neither keeps a second copy of the
 // rule.
 //
 // `items` is one separator-terminated span's messages in arrival order (the
-// separator itself excluded); `roleOf(item)` reads the message's role, which
+// separator itself excluded). `roleOf(item)` reads the message's role, which
 // is what lets the two consumers share the function. Inputs a round queued
 // while an earlier round was still running arrive after that round's first
 // assistant message. They are carried out of this span, and the caller moves
@@ -82,8 +82,8 @@ function shouldAutoScroll(container, threshold = 150) {
 
 // The reading position for the legacy (non-engine) views, in the same shape
 // the turn engine uses: one message's identity plus its offset from the
-// container's visible top. Captured before a full re-render, restored after;
-// live-rect deltas on both ends keep margins and fixture rows cancelled out.
+// container's visible top. Captured before a full re-render, restored after.
+// Live-rect deltas on both ends keep margins and fixture rows cancelled out.
 function captureReadingPosition(container) {
   if (!container || typeof container.getBoundingClientRect !== 'function') return null;
   const cTop = container.getBoundingClientRect().top;
@@ -143,8 +143,8 @@ function showMoreToggleHtml(id, restHtml) {
 // Collapsed "Thinking…" button: the onclick flips the target element's display
 // in place, so the paired element must carry this id and start hidden. The id
 // is interpolated into a DOM query and must be page-unique. Chat mints one per
-// message; the streaming draft is a singleton, so its fixed id cannot collide.
-// Each caller passes its palette class; the button label and flip mechanism are
+// message. The streaming draft is a singleton, so its fixed id cannot collide.
+// Each caller passes its palette class. The button label and flip mechanism are
 // the shared part.
 function thinkingButtonHtml(id, buttonClass) {
   return `<button onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'" class="${buttonClass}">Thinking…</button>`;
@@ -157,7 +157,7 @@ function thinkingToggleHtml(id, thinking) {
 }
 
 // Tool-name chip on a turn's tool-call row: rendering.js stamps it in the
-// chat transcript. The caller passes the resolved display name; the helper
+// chat transcript. The caller passes the resolved display name. The helper
 // escapes it.
 function toolNameChipHtml(name) {
   return '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">'
@@ -182,16 +182,13 @@ function toolInputSummary(toolName, input) {
 }
 
 // A transcript time names the day and the clock time the reader acts on, in the
-// reader's own zone: the shape the sidebar's session rows print (utils.js
-// relativeTime). A reader wondering when a message landed reads the minute; the
-// seconds field and the zone name are needless precision on every bubble, so the
-// events viewer carries the exact instant instead.
+// reader's own zone: the label the sidebar's session rows print (utils.js
+// formatTimeLabel), with the year on an instant outside the current year. A
+// reader wondering when a message landed reads the minute. The seconds field and
+// the zone name are needless precision on every bubble, so the events viewer
+// carries the exact instant instead.
 function formatBubbleTime(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
-  return d.toLocaleString('en-US', {
-    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
-  });
+  return formatTimeLabel(isoStr);
 }
 
 function messageRenderId(msg) {
@@ -203,8 +200,8 @@ function messageIdentityAttrs(msg) {
   const id = messageRenderId(msg);
   let attrs = id ? ' data-message-id="' + escapeHtmlAttr(id) + '"' : '';
   if (msg && msg.role) attrs += ' data-message-role="' + escapeHtmlAttr(msg.role) + '"';
-  // The worker-only run_header tag lets the turn fold label that Run's row;
-  // ordinary manager messages keep their existing rendered attributes.
+  // The worker-only run_header tag lets the turn fold label that Run's row.
+  // Ordinary manager messages keep their existing rendered attributes.
   if (msg && msg.kind === 'run_header') attrs += ' data-message-kind="run_header"';
   // The turn fold row reads its time field from here — a message without a
   // timestamp emits no attribute and the row's time field stays empty.

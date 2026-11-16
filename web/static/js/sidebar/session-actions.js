@@ -9,12 +9,13 @@
   const Sidebar = globalThis.Sidebar;
 
 // The one modal chrome for the sidebar's JS-built overlays: the group modal
-// and the delete-confirm modal below. Each dialog keeps its own extras (the
-// delete confirm adds text-center) and inner markup.
+// and the confirmation dialog below, and the move picker (session-move.js),
+// which reads it as Sidebar.modalChrome. Each dialog keeps its own extras (the
+// confirmation dialog adds text-center) and inner markup.
 const MODAL_OVERLAY_CLASS = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
 const MODAL_DIALOG_CLASS = 'bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72';
 
-// The one trash-can outline: real deletion only -- the delete-confirm modal
+// The one trash-can outline: real deletion only -- the delete confirmation
 // below; the archived row's Delete permanently and the group header's Delete
 // group are menu items, not icons.
 const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>`;
@@ -52,7 +53,29 @@ async function removeSessionRowInline(sessionId) {
   }
 }
 
-async function archiveSession(id) {
+// The title a session's row displays. The archive confirmation names the session by it; a session
+// with no row on screen has no title to name, so the miss throws.
+function sessionDisplayTitle(sessionId) {
+  const nameEl = document.getElementById('session-' + sessionId)?.querySelector('.session-name');
+  if (!nameEl) throw new Error('No sidebar row shows session ' + sessionId);
+  return nameEl.textContent;
+}
+
+// Every archive control calls this: the row's Archive button (groups.js) and the touch row
+// menu's Archive item (session-menus.js). It opens the confirmation, and only the
+// confirmation's Archive answer sends the POST. Enter answers the confirmation too.
+function archiveSession(id) {
+  Sidebar.openConfirmDialog({
+    heading: 'Archive session?',
+    detail: sessionDisplayTitle(id),
+    confirmLabel: 'Archive',
+    confirmClass: 'bg-blue-600 hover:bg-blue-500',
+    confirmOnEnter: true,
+    onConfirm: () => sendArchive(id),
+  });
+}
+
+async function sendArchive(id) {
   try {
     const res = await fetch(`/api/sessions/${id}/archive`, {
       method: 'POST',
@@ -117,63 +140,96 @@ async function unarchiveSession(id) {
   }
 }
 
-let deleteConfirmKeyHandler = null;
+// The one confirmation dialog the sidebar's actions open: archive and permanent delete. The caller gives the heading,
+// the detail (plain text), the confirm button and what its confirm runs. Cancel, Escape and a click on the backdrop
+// close it and run nothing. Enter runs the confirm only where confirmOnEnter is set.
+const CONFIRM_OVERLAY_ID = 'confirm-overlay';
+let confirmDialogKeyHandler = null;
 
-function closeDeleteConfirmModal() {
-  document.getElementById('delete-confirm-overlay')?.remove();
-  if (deleteConfirmKeyHandler) {
-    document.removeEventListener('keydown', deleteConfirmKeyHandler);
-    deleteConfirmKeyHandler = null;
+function closeConfirmDialog() {
+  document.getElementById(CONFIRM_OVERLAY_ID)?.remove();
+  if (confirmDialogKeyHandler) {
+    document.removeEventListener('keydown', confirmDialogKeyHandler);
+    confirmDialogKeyHandler = null;
   }
 }
 
-function confirmDeletePermanently(sessionId) {
-  closeDeleteConfirmModal();
+function openConfirmDialog({iconPath = '', iconClass = '', heading, detail, confirmLabel, confirmClass,
+    confirmOnEnter = false, onConfirm}) {
+  closeConfirmDialog();
 
   const overlay = document.createElement('div');
-  overlay.id = 'delete-confirm-overlay';
+  overlay.id = CONFIRM_OVERLAY_ID;
   overlay.className = MODAL_OVERLAY_CLASS;
+  const icon = iconPath
+    ? `<svg class="w-8 h-8 ${iconClass} mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">`
+      + `${iconPath}</svg>`
+    : '';
+  const okClass = `px-3 py-1.5 text-xs rounded-lg ${confirmClass} text-white transition-colors`;
   overlay.innerHTML = `
     <div class="${MODAL_DIALOG_CLASS} text-center"
          onclick="event.stopPropagation()">
-      <svg class="w-8 h-8 text-red-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        ${TRASH_SVG_PATH}
-      </svg>
-      <p class="text-sm font-semibold text-slate-200 mb-1">Delete permanently?</p>
-      <p class="text-xs text-slate-400 mb-4">This will permanently delete this session and all its data. This cannot be undone.</p>
+      ${icon}
+      <p class="text-sm font-semibold text-slate-200 mb-1">${escapeHtml(heading)}</p>
+      <p class="text-xs text-slate-400 mb-4 break-words">${escapeHtml(detail)}</p>
       <div class="flex gap-2 justify-center">
         <button id="confirm-cancel-btn" class="px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
-        <button id="confirm-delete-btn" class="px-3 py-1.5 text-xs rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors">Delete</button>
+        <button id="confirm-ok-btn" class="${okClass}">${escapeHtml(confirmLabel)}</button>
       </div>
     </div>`;
 
-  overlay.querySelector('#confirm-cancel-btn').addEventListener('click', closeDeleteConfirmModal);
-  overlay.querySelector('#confirm-delete-btn').addEventListener('click', async () => {
-    closeDeleteConfirmModal();
-    try {
-      await deleteSessionPermanently(sessionId);
-    } catch (err) {
-      console.error('Permanent delete failed:', err);
-    }
-  });
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeDeleteConfirmModal();
-  });
-  deleteConfirmKeyHandler = (e) => {
-    if (e.key === 'Escape') closeDeleteConfirmModal();
+  const confirm = () => {
+    closeConfirmDialog();
+    onConfirm();
   };
-  document.addEventListener('keydown', deleteConfirmKeyHandler);
+  overlay.querySelector('#confirm-cancel-btn').addEventListener('click', closeConfirmDialog);
+  overlay.querySelector('#confirm-ok-btn').addEventListener('click', confirm);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeConfirmDialog();
+  });
+  confirmDialogKeyHandler = (e) => {
+    if (e.key === 'Escape') closeConfirmDialog();
+    // A held Enter repeats keydown; only the first press answers the dialog.
+    if (confirmOnEnter && e.key === 'Enter' && !e.repeat) {
+      e.preventDefault();
+      confirm();
+    }
+  };
+  document.addEventListener('keydown', confirmDialogKeyHandler);
 
   document.body.appendChild(overlay);
+}
+
+function confirmDeletePermanently(sessionId) {
+  Sidebar.openConfirmDialog({
+    iconPath: TRASH_SVG_PATH,
+    iconClass: 'text-red-400',
+    heading: 'Delete permanently?',
+    detail: 'This will permanently delete this session and all its data. This cannot be undone.',
+    confirmLabel: 'Delete',
+    confirmClass: 'bg-red-600 hover:bg-red-500',
+    onConfirm: async () => {
+      try {
+        await deleteSessionPermanently(sessionId);
+      } catch (err) {
+        console.error('Permanent delete failed:', err);
+      }
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Group move, rename and delete
 // ---------------------------------------------------------------------------
 const GROUP_MODAL_OVERLAY_ID = 'group-modal-overlay';
+let groupModalKeyHandler = null;
 
 function closeGroupModal() {
   document.getElementById(GROUP_MODAL_OVERLAY_ID)?.remove();
+  if (groupModalKeyHandler) {
+    document.removeEventListener('keydown', groupModalKeyHandler);
+    groupModalKeyHandler = null;
+  }
 }
 
 async function showGroupSelector(sessionId, currentGroup) {
@@ -203,6 +259,10 @@ async function showGroupSelector(sessionId, currentGroup) {
 
   // The Remove group row keeps the group rows' slate-300 label: slate-400 reads 4.04:1 on the
   // row's slate-700 fill, under the 4.5:1 floor for its 14px text; slate-300 reads 6.97:1.
+  // The dialog's close button carries close_button.html's modal-close-btn class: that macro's rule gives a
+  // phone's close control its 44 px box, and index.html calls the macro, so the rule is already on this page.
+  // Without a visible control the dialog's only exits are the backdrop and the Escape key, and a phone has no
+  // Escape key.
   overlay.innerHTML = `
     <style>
       /* The New group name field draws its boundary at the 3:1 control floor on its slate-700 fill:
@@ -214,7 +274,13 @@ async function showGroupSelector(sessionId, currentGroup) {
     </style>
     <div class="${MODAL_DIALOG_CLASS}"
          onclick="event.stopPropagation()">
-      <p class="text-sm text-slate-300 mb-3 font-semibold">Set Group</p>
+      <div class="flex items-center justify-between gap-2 mb-3">
+        <p class="text-sm text-slate-300 font-semibold">Set Group</p>
+        <button id="group-modal-close" type="button" title="Close"
+                class="text-slate-500 hover:text-slate-300 p-1 modal-close-btn">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
       <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">
         ${currentGroup ? `<button data-group="" class="w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-red-600/20 hover:text-red-300 text-slate-300 transition-colors">Remove group</button>` : ''}
         ${groupButtons}
@@ -235,6 +301,8 @@ async function showGroupSelector(sessionId, currentGroup) {
     });
   });
 
+  overlay.querySelector('#group-modal-close').addEventListener('click', closeGroupModal);
+
   // Handle new group
   const addNewGroup = () => {
     const input = document.getElementById('new-group-input');
@@ -251,16 +319,15 @@ async function showGroupSelector(sessionId, currentGroup) {
 
   // Close on overlay click
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay) closeGroupModal();
   });
-  // Close on Escape
-  const escHandler = (e) => {
-    if (e.key === 'Escape') {
-      closeGroupModal();
-      document.removeEventListener('keydown', escHandler);
-    }
+  // Close on Escape. The handler is a field rather than a local so that every close path, the backdrop and
+  // the dialog's own buttons included, unregisters it; a local would keep one listener per open until a
+  // later Escape press retires the whole pile.
+  groupModalKeyHandler = (e) => {
+    if (e.key === 'Escape') closeGroupModal();
   };
-  document.addEventListener('keydown', escHandler);
+  document.addEventListener('keydown', groupModalKeyHandler);
 
   document.body.appendChild(overlay);
   document.getElementById('new-group-input').focus();
@@ -336,7 +403,9 @@ const GLOBALS = {
 const SIDEBAR_ONLY = {
   removeSessionRowInline,
   deleteSessionPermanently,
+  openConfirmDialog,
   setSessionGroup,
+  modalChrome: {overlay: MODAL_OVERLAY_CLASS, dialog: MODAL_DIALOG_CLASS},
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

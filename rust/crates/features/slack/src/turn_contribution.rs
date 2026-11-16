@@ -2,16 +2,16 @@
 
 use std::sync::Arc;
 
+use charliebot_chat_threads::reply_event::reply_line;
 use charliebot_chat_threads::thread_entry::{self, ThreadAdapter, thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::run_kind::RunKind;
-use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::event_types::SLACK_REPLY;
 use crate::metadata::slack_origin;
@@ -64,12 +64,7 @@ impl TurnContribution for SlackTurnContribution {
 
 /// The chat line of a `slack_reply` event.
 fn slack_reply_message(event: &Value) -> Value {
-  json!({"role": "system", "content": format!("Posted to Slack: {}", content_text(event))})
-}
-
-/// The event's `content` as text, or `""` when the event has none.
-fn content_text(event: &Value) -> String {
-  event.get("content").map(text_repr::value_str).unwrap_or_default()
+  reply_line(&SLACK, event)
 }
 
 #[cfg(test)]
@@ -77,9 +72,7 @@ mod tests {
   use std::ffi::OsString;
   use std::fs;
 
-  use charliebot_core::config::{
-    BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
-  };
+  use charliebot_core::test_support::synthetic_config;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
   use serde_json::json;
   use tempfile::TempDir;
@@ -108,43 +101,6 @@ mod tests {
     ])
   }
 
-  fn config() -> CharlieBotConfig {
-    CharlieBotConfig {
-      charliebot_home: "/synthetic/home".into(),
-      headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
-      server: ServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 18650,
-        subprocess_buffer_limit_mb: 1,
-        session_memory_max_mb: 0,
-        session_swap_max_mb: 0,
-        public_url: None,
-        session_tasks_max: 0,
-        min_free_disk_gib: 0,
-        enable_session_cpu_weight: true,
-        enable_session_io_weight: true,
-        enable_local_work_guard: false,
-        enable_offline_shell: false,
-      },
-      paths: PathsConfig {
-        workspace_dirs: Vec::new(),
-        worktree_dir: "/synthetic/worktrees".to_string(),
-        scratch_dir: "/synthetic/scripts".to_string(),
-      },
-      backends: BackendsConfig {
-        routing: None,
-        options: Vec::new(),
-        pools: Vec::new(),
-        calls: charliebot_core::config::CallsConfig::default(),
-      },
-      ui: UiConfig { home_services: Vec::new() },
-      telegram: TelegramConfig { chat_id: None },
-      remote_run: charliebot_core::config::RemoteRunConfig::default(),
-      github: Default::default(),
-      sections: Sections::default(),
-    }
-  }
-
   /// A manager session with the given `slack_origin` field value.
   fn manager_with(origin: Value) -> SessionMetadata {
     let mut meta = SessionMetadata::new("synthetic-session", "Session 1", TaskProfile::Manager);
@@ -161,7 +117,9 @@ mod tests {
     let (_dir, repo) = full_checkout();
     let origin = synthetic_origin();
     let meta = manager_with(json!({"team_id": "T1", "channel_id": "C1", "thread_ts": ORIGIN_TS}));
-    let segments = SlackTurnContribution.instruction_segments(&meta, "manager_turn", &config(), &repo).unwrap();
+    let segments = SlackTurnContribution
+      .instruction_segments(&meta, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+      .unwrap();
 
     assert_eq!(segments.len(), 1);
     assert_eq!(segments[0].text, format!("{}\n\nSCOPE\nRED\nFORMAT", thread_contract_part(&origin)));
@@ -186,20 +144,37 @@ mod tests {
     let origin = json!({"team_id": "T1", "channel_id": "C1", "thread_ts": ORIGIN_TS});
     let contribution = SlackTurnContribution;
     for kind in ["work", "review"] {
-      let segments = contribution.instruction_segments(&manager_with(origin.clone()), kind, &config(), &repo);
+      let segments = contribution.instruction_segments(
+        &manager_with(origin.clone()),
+        kind,
+        &synthetic_config("/synthetic/home"),
+        &repo,
+      );
       assert!(segments.unwrap().is_empty(), "{kind}");
     }
     let no_origin = SessionMetadata::new("synthetic-session", "Session 1", TaskProfile::Manager);
-    assert!(contribution.instruction_segments(&no_origin, "manager_turn", &config(), &repo).unwrap().is_empty());
+    assert!(
+      contribution
+        .instruction_segments(&no_origin, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+        .unwrap()
+        .is_empty()
+    );
     let null_origin = manager_with(Value::Null);
-    assert!(contribution.instruction_segments(&null_origin, "manager_turn", &config(), &repo).unwrap().is_empty());
+    assert!(
+      contribution
+        .instruction_segments(&null_origin, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+        .unwrap()
+        .is_empty()
+    );
   }
 
   #[test]
   fn a_stored_origin_missing_a_field_fails_the_build() {
     let (_dir, repo) = full_checkout();
     let meta = manager_with(json!({"team_id": "T1", "channel_id": "C1"}));
-    let error = SlackTurnContribution.instruction_segments(&meta, "manager_turn", &config(), &repo).unwrap_err();
+    let error = SlackTurnContribution
+      .instruction_segments(&meta, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+      .unwrap_err();
     assert!(error.to_string().starts_with("slack_origin is not a Slack origin"), "{error}");
   }
 
@@ -207,7 +182,9 @@ mod tests {
   fn a_missing_contract_doc_fails_the_build_with_its_name_and_cause() {
     let (_dir, repo) = checkout(&[("slack_reply_scope.md", "SCOPE"), ("thread_reply_format.md", "FORMAT")]);
     let meta = manager_with(json!({"team_id": "T1", "channel_id": "C1", "thread_ts": ORIGIN_TS}));
-    let error = SlackTurnContribution.instruction_segments(&meta, "manager_turn", &config(), &repo).unwrap_err();
+    let error = SlackTurnContribution
+      .instruction_segments(&meta, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+      .unwrap_err();
     assert!(error.to_string().starts_with("thread_reply_redline.md prompt not found at "), "{error}");
   }
 

@@ -283,7 +283,7 @@ fn first_command(events: &[Value]) -> (String, String) {
   (cwd.unwrap_or_default(), kind.unwrap_or_default().to_string())
 }
 
-/// Keeps the kind of the first tool result it is given. Later results change nothing.
+/// The kind of the first tool result it is given. Later results change nothing.
 fn record_first_result(kind: &mut Option<&'static str>, tool: &str, is_error: bool) {
   if kind.is_none() {
     *kind = Some(match (tool, is_error) {

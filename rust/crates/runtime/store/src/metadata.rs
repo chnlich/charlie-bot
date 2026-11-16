@@ -12,8 +12,6 @@ use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::v1_session_conversion::V1_SESSION_CONVERSION_GUIDANCE;
 use crate::{StoreError, StoreResult};
@@ -61,9 +59,15 @@ pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
 /// The session-metadata field holding the backend that ran the session's native conversation. The turn's finish
 /// extras and the store's declared-field list carry the same name, so it is spelled once, here.
 pub const NATIVE_BACKEND: &str = "native_backend";
+/// The session-metadata field holding the model the backend's native conversation names. The store's declared-field
+/// lists and the page's active-session read carry the same name, so it is spelled once, here.
+pub const NATIVE_MODEL: &str = "native_model";
 /// The session-metadata field holding the session's work state: `idle`, `waiting` or `running`. The session routes
 /// import this name instead of each spelling it.
 pub const WORK_STATE: &str = "work_state";
+/// The field holding a task's lifecycle state: the task detail, the run-delivery event and the close readback carry
+/// it. The store's fact checkpoint and the session routes import this name instead of each spelling it.
+pub const TASK_STATE: &str = "task_state";
 /// The session-metadata field holding the document's schema version: `2` for every session a current server writes.
 /// The store's declared-field lists, the session listing's page-row field drop and the mock home's session seed carry
 /// the same name, so it is spelled once, here.
@@ -73,6 +77,12 @@ pub const HAS_UNREAD: &str = "has_unread";
 /// The session-metadata field saying whether the session has a run in flight. The session routes, the sidebar state
 /// and the running-changed broadcast carry the same name, so it is spelled once, here.
 pub const HAS_RUNNING_TASKS: &str = "has_running_tasks";
+/// The session-metadata field holding the instant the session's live run started thinking. The session routes, the
+/// sidebar state and the running-changed broadcast carry the same name, so it is spelled once, here.
+pub const THINKING_SINCE: &str = "thinking_since";
+/// The session-metadata field holding the backend the session's live run resolved to. The session routes and the chat
+/// page carry the same name, so it is spelled once, here.
+pub const RUN_BACKEND: &str = "run_backend";
 /// The session-metadata field saying whether a trigger waits for the session.
 pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
 /// The session-metadata field holding the number of triggers waiting for the session.
@@ -90,6 +100,9 @@ pub const PARENT_SESSION_ID: &str = "parent_session_id";
 /// The session-metadata field holding the id of the session that took over this one's work. The Discord, Feishu and
 /// Slack packages place their metadata fields after it, so it is spelled once, here.
 pub const SUCCESSOR_SESSION_ID: &str = "successor_session_id";
+/// The session-metadata field holding the id of the session that delegated this task. The create and patch requests
+/// and the reparent control event carry the same name, so it is spelled once, here.
+pub const TASK_PARENT_ID_FIELD: &str = "task_parent_id";
 /// The task-spec field saying whether the run keeps its worktree after it ends. The delegate request and the stored
 /// thread record carry the same name, so it is spelled once, here.
 pub const KEEP_WORKTREE_FIELD: &str = "keep_worktree";
@@ -106,85 +119,7 @@ pub const TASK_TYPE_FIELD: &str = "task_type";
 /// is spelled once, here.
 pub const SESSION_NAME_FIELD: &str = "session_name";
 
-/// Datetime stored as UTC with a `Z` suffix and microsecond format.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct UtcDateTime(OffsetDateTime);
-
-impl UtcDateTime {
-  /// Return the current UTC time, truncated to microseconds.
-  pub fn now() -> Self {
-    let now = OffsetDateTime::now_utc();
-    let nanos = (now.nanosecond() / 1_000) * 1_000;
-    Self(now.replace_nanosecond(nanos).expect("a microsecond fits in the current second"))
-  }
-
-  /// Parse an ISO 8601 datetime; treat an offset-less value as UTC.
-  pub fn parse(value: &str) -> Result<Self, time::error::Parse> {
-    let normalized = value.replace(' ', "T");
-    let time_part = normalized.split_once('T').map_or("", |(_, time)| time);
-    let has_offset = time_part.contains('+') || time_part.contains('-');
-    let with_utc = if normalized.ends_with('Z') || has_offset { normalized } else { format!("{normalized}Z") };
-    OffsetDateTime::parse(&with_utc, &Rfc3339).map(|datetime| Self(datetime.to_offset(time::UtcOffset::UTC)))
-  }
-
-  /// Render the UTC datetime with microsecond precision.
-  pub fn to_str(self) -> String {
-    let value = self.0.to_offset(time::UtcOffset::UTC);
-    let base = format!(
-      "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-      value.year(),
-      u8::from(value.month()),
-      value.day(),
-      value.hour(),
-      value.minute(),
-      value.second()
-    );
-    let microseconds = value.microsecond();
-    if microseconds == 0 { format!("{base}Z") } else { format!("{base}.{microseconds:06}Z") }
-  }
-
-  /// Render the same UTC instant with a `+00:00` suffix.
-  pub fn to_isoformat_text(self) -> String {
-    format!("{}+00:00", self.to_str().trim_end_matches('Z'))
-  }
-
-  /// Return the underlying UTC instant.
-  pub fn into_inner(self) -> OffsetDateTime {
-    self.0
-  }
-}
-
-impl From<OffsetDateTime> for UtcDateTime {
-  /// Wrap one instant, normalized to UTC as the stored form is.
-  fn from(value: OffsetDateTime) -> Self {
-    Self(value.to_offset(time::UtcOffset::UTC))
-  }
-}
-
-impl Serialize for UtcDateTime {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: Serializer,
-  {
-    serializer.serialize_str(&self.to_str())
-  }
-}
-
-impl<'de> Deserialize<'de> for UtcDateTime {
-  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-  where
-    D: Deserializer<'de>,
-  {
-    let value = String::deserialize(deserializer)?;
-    Self::parse(&value).map_err(serde::de::Error::custom)
-  }
-}
-
-impl fmt::Display for UtcDateTime {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.write_str(&self.to_str())
-  }
-}
+pub use charliebot_core::utc_datetime::UtcDateTime;
 
 /// Session lifecycle state.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -731,8 +666,8 @@ impl SessionMetadata {
     }
     push(&mut declared, "starred", &self.starred);
     if !exclude_transient {
-      push(&mut declared, "thinking_since", &self.thinking_since);
-      push(&mut declared, "run_backend", &self.run_backend);
+      push(&mut declared, THINKING_SINCE, &self.thinking_since);
+      push(&mut declared, RUN_BACKEND, &self.run_backend);
     }
     push(&mut declared, "created_at", &self.created_at);
     push(&mut declared, "updated_at", &self.updated_at);
@@ -750,7 +685,7 @@ impl SessionMetadata {
     push(&mut declared, PARENT_SESSION_ID, &self.parent_session_id);
     push(&mut declared, SUCCESSOR_SESSION_ID, &self.successor_session_id);
     push(&mut declared, SCHEMA_VERSION_FIELD, &self.schema_version);
-    push(&mut declared, "task_parent_id", &self.task_parent_id);
+    push(&mut declared, TASK_PARENT_ID_FIELD, &self.task_parent_id);
     push(&mut declared, "profile", &self.profile);
     push(&mut declared, "task", &self.task);
     push(&mut declared, "created_by_event", &self.created_by_event);
@@ -759,7 +694,7 @@ impl SessionMetadata {
     push(&mut declared, "node_prompt_ref", &self.node_prompt_ref);
     push(&mut declared, "native_prompt_hash", &self.native_prompt_hash);
     push(&mut declared, NATIVE_BACKEND, &self.native_backend);
-    push(&mut declared, "native_model", &self.native_model);
+    push(&mut declared, NATIVE_MODEL, &self.native_model);
     push(&mut declared, ROUND_RATINGS, &self.round_ratings);
     push(&mut declared, "group", &self.group);
     push(&mut declared, ARCHIVE_OFFSET, &self.archive_offset);

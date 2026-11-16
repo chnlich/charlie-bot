@@ -93,6 +93,20 @@
       .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-chevron,
       .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-badge { grid-row: span 3; }
     }
+    /* A phone's line-by-line table stands as wide as its widest line plus the 8.85em number column (the
+       line's comment control and a four-digit number) and diff2html's 8em right padding, which holds no
+       control on this page. A 42-character line then measures 580 px in the 354 px panel: the reader sees
+       28 characters and swipes the panel sideways for the rest, with no ellipsis or scrollbar to say the
+       line continues, though the page starts a phone in line-by-line to keep a changed line whole. This
+       block drops the right padding and wraps the code text at the panel's width, breaking a token no
+       space separates, so the table fits without sideways scrolling. The 1.5em cap keeps the code text
+       clear of the row's +/- prefix, a wrapped line takes the rows its text needs, and above 768 px a
+       line keeps its one row. A side-by-side table on a phone keeps its own per-pane scroll. */
+    @media (max-width: 768px) {
+      .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line { padding-right: 0; width: 100%; }
+      .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line .d2h-code-line-ctn {
+        white-space: pre-wrap; overflow-wrap: anywhere; max-width: calc(100% - 1.5em); }
+    }
   </style>
 </head>
 <body class="bg-white text-slate-900 min-h-screen">
@@ -120,7 +134,8 @@
                class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 w-80 max-sm:w-full" />
         <datalist id="repo-list"></datalist>
       </div>
-      <!-- On a phone Base and Head share one row, Head keeping its 12 rem width; on desktop the wrapper is not a box. -->
+      <!-- On a phone Base and Head share one row, Head keeping its 12 rem width. On desktop the wrapper is
+           not a box. -->
       <div class="contents max-sm:flex max-sm:basis-full max-sm:gap-3">
         <div class="flex flex-col gap-1 max-sm:flex-1 max-sm:min-w-0">
           <label for="base-input" class="text-xs text-slate-600">Base</label>

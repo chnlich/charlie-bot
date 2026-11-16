@@ -225,7 +225,7 @@ pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -
   Err(JudgeError::Call(reason))
 }
 
-/// Record one failed judge attempt against the member that failed it. A timeout is the judge's own reason; a quota
+/// Record one failed judge attempt against the member that failed it. A timeout is the judge's own reason. A quota
 /// or an access refusal is the shared classification's reason. A response or contract failure records nothing: it is
 /// not a member failure.
 fn record_member_failure(backends: &JudgeBackends<'_>, backend_id: &str, error: &JudgeError) -> Result<(), JudgeError> {
@@ -322,7 +322,7 @@ pub async fn native_one_shot_text(
 }
 
 /// One judge call for one signature, as the scan drives it. It takes `&self` because a scan keeps several calls in
-/// flight; each call's state lives in [`Judgement`] or in the caller.
+/// flight. Each call's state lives in [`Judgement`] or in the caller.
 pub trait JudgeRunner {
   /// The judgement of `input`. `Err` marks only this signature judge_failed.
   fn judge<'a>(&'a self, input: JudgeInput) -> Pin<Box<dyn Future<Output = Result<Judgement, JudgeError>> + 'a>>;
@@ -500,7 +500,6 @@ mod tests {
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
         enable_local_work_guard: false,
-        enable_offline_shell: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),

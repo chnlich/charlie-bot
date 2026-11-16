@@ -331,6 +331,50 @@ mod tests {
     assert_eq!(row_ids(&rows), expected);
   }
 
+  /// A Feishu thread session: the origin the Feishu line stamps on the sessions it creates.
+  fn feishu_thread(id: &str, parent: Option<&str>) -> SessionMetadata {
+    let mut meta = session(id, TaskProfile::Manager, parent);
+    meta.set_extra(
+      "feishu_origin",
+      json!({"tenant_key": "synthetic-tenant", "chat_id": "oc_synthetic", "root_id": "om_synthetic_root"}),
+    );
+    meta
+  }
+
+  #[tokio::test]
+  async fn a_thread_session_nested_under_a_workspace_manager_lists_only_in_the_workspace() {
+    let server = Server::new(&SERVER);
+    let corpus = seed(&server.features);
+    let nested = feishu_thread("feishu-nested", Some(&corpus.plain));
+    write_session(&server.features.store, &server.features.registry.metadata_slots(), &nested);
+    let app = server.app();
+
+    let workspace = row_ids(&json_list(send(&app, get_request("/api/sessions/", false)).await).await);
+    let threads = row_ids(&json_list(send(&app, get_request("/api/sessions/chat-threads", false)).await).await);
+    assert!(workspace.contains(&nested.id), "the nested thread session lists in the Workspace");
+    assert!(!threads.contains(&nested.id), "the nested thread session does not list in the Threads view");
+  }
+
+  #[tokio::test]
+  async fn a_top_level_thread_session_and_its_subtree_list_only_in_the_threads_view() {
+    let server = Server::new(&SERVER);
+    seed(&server.features);
+    let slots = server.features.registry.metadata_slots();
+    let top = feishu_thread("feishu-top", None);
+    let child = session("feishu-top-child", TaskProfile::Manager, Some(&top.id));
+    let worker = session("feishu-top-worker", TaskProfile::Worker, Some(&child.id));
+    for meta in [&top, &child, &worker] {
+      write_session(&server.features.store, &slots, meta);
+    }
+    let app = server.app();
+
+    let workspace = row_ids(&json_list(send(&app, get_request("/api/sessions/", false)).await).await);
+    let threads = row_ids(&json_list(send(&app, get_request("/api/sessions/chat-threads", false)).await).await);
+    let subtree = HashSet::from([top.id.clone(), child.id.clone(), worker.id.clone()]);
+    assert!(subtree.is_subset(&threads), "the top-level thread session and its subtree list in the Threads view");
+    assert!(subtree.is_disjoint(&workspace), "the top-level thread session's subtree does not list in the Workspace");
+  }
+
   #[tokio::test]
   async fn the_workspace_and_threads_lists_partition_the_active_rows() {
     let server = Server::new(&SERVER);

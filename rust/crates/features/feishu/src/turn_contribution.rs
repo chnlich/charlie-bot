@@ -2,16 +2,16 @@
 
 use std::sync::Arc;
 
+use charliebot_chat_threads::reply_event::reply_line;
 use charliebot_chat_threads::thread_entry::{thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::run_kind::RunKind;
-use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::adapter;
 use crate::event_types::FEISHU_REPLY;
@@ -60,12 +60,7 @@ impl TurnContribution for FeishuTurnContribution {
 
 /// The chat line of a `feishu_reply` event.
 fn feishu_reply_message(event: &Value) -> Value {
-  json!({"role": "system", "content": format!("Posted to Feishu: {}", content_text(event))})
-}
-
-/// The event's `content` as text, or `""` when the event has none.
-fn content_text(event: &Value) -> String {
-  event.get("content").map(text_repr::value_str).unwrap_or_default()
+  reply_line(&FEISHU, event)
 }
 
 #[cfg(test)]
@@ -73,9 +68,7 @@ mod tests {
   use std::ffi::OsString;
   use std::fs;
 
-  use charliebot_core::config::{
-    BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
-  };
+  use charliebot_core::test_support::synthetic_config;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
   use serde_json::json;
   use tempfile::TempDir;
@@ -101,43 +94,6 @@ mod tests {
     ])
   }
 
-  fn config() -> CharlieBotConfig {
-    CharlieBotConfig {
-      charliebot_home: "/synthetic/home".into(),
-      headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
-      server: ServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 18650,
-        subprocess_buffer_limit_mb: 1,
-        session_memory_max_mb: 0,
-        session_swap_max_mb: 0,
-        public_url: None,
-        session_tasks_max: 0,
-        min_free_disk_gib: 0,
-        enable_session_cpu_weight: true,
-        enable_session_io_weight: true,
-        enable_local_work_guard: false,
-        enable_offline_shell: false,
-      },
-      paths: PathsConfig {
-        workspace_dirs: Vec::new(),
-        worktree_dir: "/synthetic/worktrees".to_string(),
-        scratch_dir: "/synthetic/scripts".to_string(),
-      },
-      backends: BackendsConfig {
-        routing: None,
-        options: Vec::new(),
-        pools: Vec::new(),
-        calls: charliebot_core::config::CallsConfig::default(),
-      },
-      ui: UiConfig { home_services: Vec::new() },
-      telegram: TelegramConfig { chat_id: None },
-      remote_run: charliebot_core::config::RemoteRunConfig::default(),
-      github: Default::default(),
-      sections: Sections::default(),
-    }
-  }
-
   /// A manager session with the given `feishu_origin` field value.
   fn manager_with(origin: Value) -> SessionMetadata {
     let mut meta = SessionMetadata::new("synthetic-session", "Session 1", TaskProfile::Manager);
@@ -153,7 +109,12 @@ mod tests {
   fn a_manager_run_of_a_feishu_thread_gets_the_contract_as_one_full_segment() {
     let (_dir, repo) = full_checkout();
     let segments = FeishuTurnContribution
-      .instruction_segments(&manager_with(synthetic_origin()), "manager_turn", &config(), &repo)
+      .instruction_segments(
+        &manager_with(synthetic_origin()),
+        "manager_turn",
+        &synthetic_config("/synthetic/home"),
+        &repo,
+      )
       .unwrap();
 
     assert_eq!(segments.len(), 1);
@@ -171,20 +132,37 @@ mod tests {
     let (_dir, repo) = full_checkout();
     let contribution = FeishuTurnContribution;
     for kind in ["work", "review"] {
-      let segments = contribution.instruction_segments(&manager_with(synthetic_origin()), kind, &config(), &repo);
+      let segments = contribution.instruction_segments(
+        &manager_with(synthetic_origin()),
+        kind,
+        &synthetic_config("/synthetic/home"),
+        &repo,
+      );
       assert!(segments.unwrap().is_empty(), "{kind}");
     }
     let no_origin = SessionMetadata::new("synthetic-session", "Session 1", TaskProfile::Manager);
-    assert!(contribution.instruction_segments(&no_origin, "manager_turn", &config(), &repo).unwrap().is_empty());
+    assert!(
+      contribution
+        .instruction_segments(&no_origin, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+        .unwrap()
+        .is_empty()
+    );
     let null_origin = manager_with(Value::Null);
-    assert!(contribution.instruction_segments(&null_origin, "manager_turn", &config(), &repo).unwrap().is_empty());
+    assert!(
+      contribution
+        .instruction_segments(&null_origin, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+        .unwrap()
+        .is_empty()
+    );
   }
 
   #[test]
   fn a_stored_origin_missing_a_field_fails_the_build() {
     let (_dir, repo) = full_checkout();
     let meta = manager_with(json!({"tenant_key": "synthetic-tenant", "chat_id": "oc_synthetic"}));
-    let error = FeishuTurnContribution.instruction_segments(&meta, "manager_turn", &config(), &repo).unwrap_err();
+    let error = FeishuTurnContribution
+      .instruction_segments(&meta, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+      .unwrap_err();
     assert!(error.to_string().starts_with("feishu_origin is not a Feishu origin"), "{error}");
   }
 }

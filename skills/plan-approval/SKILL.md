@@ -196,10 +196,9 @@ An understanding page lists the divergences of a request that admits several rea
 
 ## Runtime delegation authorization
 
-The runtime gate admits a delegation when the calling manager and its ancestors are open
-and the chain holds a real user message or a thread platform summon. Verify and cold-read
-always pass.
-The gate judges the chain alone; its definitions live in rust/crates/runtime/store/src/task_tree.rs (`is_read_only_exempt` and the delegation refusals).
+The runtime gate admits a delegation when the calling node is an open manager and every
+ancestor on its task chain is open.
+Its definitions live in `rust/crates/runtime/store/src/task_tree.rs` (`check_task_authorization` and `runtime_gate`).
 
 ## Execution
 

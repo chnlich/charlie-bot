@@ -17,7 +17,7 @@ const planPanel = (() => {
   let _selectedPlanId = null;
   let _selectedVersion = null;
   // Compare with previous toggle. Reset to the selected version's default (on when a
-  // predecessor exists) at every selection change; a user click overrides it
+  // predecessor exists) at every selection change. A user click overrides it
   // until the next change of plan or version.
   let _diffEnabled = false;
   let _loadedViewerKey = null;
@@ -164,7 +164,7 @@ const planPanel = (() => {
   // The address shape every plan-page URL this panel builds shares: the
   // /absolute_filepath URL, then the ?diff= query ahead of the fragment (see
   // encodeDiffFile), then the #cbsession= fragment. The withPanelMarker flag
-  // appends `&cbpanel=1` inside the fragment; the framed guard in
+  // appends `&cbpanel=1` inside the fragment. The framed guard in
   // artifact-comments.js reads that marker. The urlKind parameter names the
   // caller in the SESSIONS_ROOT error.
   function _planPageUrl(file, sessionId, sessionsRoot, diffFile, urlKind, withPanelMarker) {
@@ -401,25 +401,9 @@ const planPanel = (() => {
     }
   }
 
-  // The offline label takes the empty state's and the viewer's place while the page is offline; the registry is read
-  // once it is back (the online listener below).
-  function _paintOfflinePlanPanel() {
-    var toolbar = _getEl('plan-toolbar');
-    if (toolbar) toolbar.classList.toggle('hidden', true);
-    _getEl('plan-empty-state').style.display = 'none';
-    _getEl('plan-viewer').style.display = 'none';
-    var label = _getEl('plan-offline-label');
-    label.innerHTML = OFFLINE_PANEL_MARK;
-    label.style.display = '';
-  }
-
   function render() {
     var panel = _getEl('tab-plans');
     if (!panel) return;
-    if (pageIsOffline()) {
-      _paintOfflinePlanPanel();
-      return;
-    }
     _renderedSessionId = _currentSessionId();
     var empty = _getEl('plan-empty-state');
     var viewer = _getEl('plan-viewer');
@@ -506,7 +490,6 @@ const planPanel = (() => {
   // failed or the commit was superseded (see the _commitRegistry guard), and
   // the caller must bail without touching the selection or the DOM.
   async function _refetchRegistry(sid, failLabel) {
-    if (pageIsOffline()) return false;
     var generation = ++_fetchGeneration;
     try {
       var data = await _fetchRegistry(sid);
@@ -649,12 +632,6 @@ const planPanel = (() => {
     _stale = true;
   }
 
-  // Back online, the label leaves and the panel reads its registry the way a shown tab does.
-  window.addEventListener('online', () => {
-    _getEl('plan-offline-label').style.display = 'none';
-    onTabShown();
-  });
-
   async function onTabShown() {
     // Fallback for the paths the hook cannot fix: its load failed, or
     // SESSION_ID went null. Reset first so the panel never shows the previous
@@ -666,7 +643,7 @@ const planPanel = (() => {
     if (!_stale && !switched) {
       if (_renderedSessionId === sid) return;
       // The registry is current but the markup is still the template's default. Paint it from the
-      // committed registry rather than refetching; render() reloads the viewer only when its key
+      // committed registry rather than refetching. render() reloads the viewer only when its key
       // changes.
       _ensureSelection();
       render();
@@ -688,7 +665,7 @@ const planPanel = (() => {
   // -- Selection ----------------------------------------------------------
 
   // The four panels every selection mutation repaints afterward. The action
-  // bar render is async and generation-guarded; these paths fire it without
+  // bar render is async and generation-guarded. These paths fire it without
   // awaiting, and refresh() awaits it on its own path.
   function _renderSelectionPanels() {
     _renderStaleNotice();
@@ -810,7 +787,7 @@ const planPanel = (() => {
   };
 })();
 
-// The plans tab is a full-area view that hides chat; a session switch returns to chat.
+// The plans tab is a full-area view that hides chat. A session switch returns to chat.
 registerTab({
   id: 'chat-plans',
   showsChat: false,

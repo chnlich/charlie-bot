@@ -1,6 +1,7 @@
 //! The Google search call and its grounding sources: one `generateContent` request with the `google_search` tool,
 //! then one redirect resolution per grounding chunk.
 
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::credentials::{API_KEY_FIELD, Credentials};
 use futures_util::future::join_all;
 use serde_json::{Value, json};
@@ -72,7 +73,7 @@ pub async fn search(
   });
   let response = client
     .post(&url)
-    .header(reqwest::header::CONTENT_TYPE, "application/json")
+    .header(reqwest::header::CONTENT_TYPE, APPLICATION_JSON)
     .header("x-goog-api-key", key)
     .body(serde_json::to_vec(&payload).expect("a JSON value serializes"))
     .send()
@@ -109,7 +110,7 @@ pub async fn search(
   Ok(Search { answer, queries, sources: resolve_sources(client, chunks).await })
 }
 
-/// One grounding chunk's redirect URL and title; a chunk without a `web.uri` names no source.
+/// One grounding chunk's redirect URL and title. A chunk without a `web.uri` names no source.
 fn chunk(value: &Value) -> Option<Chunk> {
   let web = value.get("web")?;
   let uri = web.get("uri").and_then(Value::as_str).filter(|uri| !uri.is_empty())?;
@@ -117,7 +118,7 @@ fn chunk(value: &Value) -> Option<Chunk> {
   Some(Chunk { uri: uri.to_string(), title })
 }
 
-/// One source per chunk, with every redirect URL resolved in parallel; a failed chunk keeps its redirect URL and
+/// One source per chunk, with every redirect URL resolved in parallel. A failed chunk keeps its redirect URL and
 /// carries the error.
 async fn resolve_sources(client: &reqwest::Client, chunks: Vec<Chunk>) -> Vec<Source> {
   join_all(chunks.into_iter().map(|chunk| resolve_source(client, chunk))).await
@@ -130,7 +131,7 @@ async fn resolve_source(client: &reqwest::Client, chunk: Chunk) -> Source {
   }
 }
 
-/// One GET that does not follow redirects; a source's real URL is the `Location` of its grounding redirect.
+/// One GET that does not follow redirects. A source's real URL is the `Location` of its grounding redirect.
 async fn redirect_target(client: &reqwest::Client, uri: &str) -> Result<String, String> {
   let response = client.get(uri).send().await.map_err(|error| error.to_string())?;
   let status = response.status();

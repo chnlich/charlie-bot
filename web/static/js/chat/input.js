@@ -83,9 +83,9 @@ function waitForSendRetry(delay) {
 // the record is the only copy the browser keeps — the composer and the bubble live in the tab, so a
 // reload, a closed tab or a crash in between loses the text. When a session renders
 // (charliebot:session-rendered), the entries the loaded history holds are dropped, the entries this
-// page instance recorded stay (its POST is still carrying them; a switch away and back must not put
-// one back), and the rest go into the composer in click order, ahead of the draft, and become the
-// draft. Attachments of an unsent message are not stored: the record is text only.
+// page instance recorded stay. Their POST is still carrying them, so a switch away and back must
+// not put one back. The rest go into the composer in click order, ahead of the draft, and become
+// the draft. Attachments of an unsent message are not stored: the record is text only.
 const PENDING_SEND_KEY_PREFIX = 'charliebot-pending-send-';
 
 // The request ids this page instance recorded. A page instance never puts its own sends back into the
@@ -215,22 +215,22 @@ async function sendMessage() {
     // Optimistic UI: append the user message. The sidebar row moves only when the refetched list repaints.
     pendingUserRequestIds.add(requestId);
     const optimisticMessage = appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles, requestId);
-    // Start thinking indicator; keepSendEnabled leaves the button to the
+    // Start thinking indicator. keepSendEnabled leaves the button to the
     // in-flight lock, so a master run never locks typing.
     startThinking({keepSendEnabled: true});
 
     const accepted = await submitUserMessage(
         target.id, content, {uploaded_files: payloadFiles, input_mode: inputMode}, requestId, optimisticMessage);
-    // Only a send that started the thinking round above ends it on refusal; /compact never starts one.
+    // Only a send that started the thinking round above ends it on refusal. /compact never starts one.
     if (!accepted) stopThinking();
   };
   // A send pressed while its session is still loading waits for that switch
-  // to land; a click that moves on posts it to the session it bound.
+  // to land. A click that moves on posts it to the session it bound.
   return bindComposerAction(target.id, 'message', finish);
 }
 
 // ---------------------------------------------------------------------------
-// Manual compaction (backends whose compact facts enable it; gated by #compact-btn's disabled attribute)
+// Manual compaction (backends whose compact facts enable it, gated by #compact-btn's disabled attribute)
 // ---------------------------------------------------------------------------
 async function compactContext() {
   if (blockIfUploadsInFlight()) return;
@@ -252,7 +252,7 @@ async function compactContext() {
     await submitUserMessage(target.id, '/compact', {}, requestId, optimisticMessage);
   };
   // A /compact pressed while its session is still loading waits for that
-  // switch to land; a click that moves on posts it to the session it bound.
+  // switch to land. A click that moves on posts it to the session it bound.
   return bindComposerAction(target.id, 'message', finish);
 }
 

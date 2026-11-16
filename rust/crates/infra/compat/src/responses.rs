@@ -4,11 +4,14 @@
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
+use charliebot_core::event_types::REQUEST_EXCEPTION_EVENT;
 use http::{HeaderValue, StatusCode, header};
 use percent_encoding::{AsciiSet, utf8_percent_encode};
 use serde_json::{Value, json};
 
 use crate::json;
+use crate::mimetypes;
+use crate::mimetypes_table;
 use crate::urlquote::quote_set;
 
 /// The failure behind a 500: the name the `http_request` log line carries in `error`, and the
@@ -21,17 +24,17 @@ pub struct Failure {
 
 /// The JSON response: compact separators, raw UTF-8.
 pub fn json(status: StatusCode, content: &Value) -> Response {
-  bytes_response(status, "application/json", Bytes::from(json::starlette_bytes(content)))
+  bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(json::starlette_bytes(content)))
 }
 
 /// The fast JSON response: `application/json` with the compact serializer's bytes.
 pub fn fast_json(status: StatusCode, content: &Value) -> Response {
-  bytes_response(status, "application/json", Bytes::from(json::fast_json_bytes(content)))
+  bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(json::fast_json_bytes(content)))
 }
 
 /// The fast JSON response over a body its route already serialized, so a rendered page skips the value tree.
 pub fn fast_json_rendered(status: StatusCode, body: Vec<u8>) -> Response {
-  bytes_response(status, "application/json", Bytes::from(body))
+  bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(body))
 }
 
 /// The error-status rendering: `{"detail": <reason phrase>}`.
@@ -53,12 +56,14 @@ pub fn method_not_allowed(allow: &str) -> Response {
 
 /// The plain-text response.
 pub fn plain_text(status: StatusCode, content: &str) -> Response {
-  bytes_response(status, "text/plain; charset=utf-8", Bytes::from(content.to_string()))
+  let content_type = mimetypes::with_utf8_charset(mimetypes_table::TEXT_PLAIN);
+  bytes_response(status, &content_type, Bytes::from(content.to_string()))
 }
 
 /// The HTML response.
 pub fn html(content: String) -> Response {
-  bytes_response(StatusCode::OK, "text/html; charset=utf-8", Bytes::from(content))
+  let content_type = mimetypes::with_utf8_charset(mimetypes_table::TEXT_HTML);
+  bytes_response(StatusCode::OK, &content_type, Bytes::from(content))
 }
 
 /// The redirect response: 307, empty body, the URL quoted with the redirect-safe set.
@@ -75,13 +80,13 @@ pub fn redirect(url: &str) -> Response {
 /// The answer to a failed request: 500 `Internal Server Error` as plain text.
 /// The failure rides the response as an extension so the request log names it.
 pub fn internal_error(kind: &str, detail: String) -> Response {
-  tracing::error!(error = kind, detail = %detail, "Exception in ASGI application");
+  tracing::error!(error = kind, detail = %detail, "{}", REQUEST_EXCEPTION_EVENT);
   let mut response = plain_text(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error");
   response.extensions_mut().insert(Failure { kind: kind.to_string(), detail });
   response
 }
 
-fn bytes_response(status: StatusCode, content_type: &'static str, body: Bytes) -> Response {
+fn bytes_response(status: StatusCode, content_type: &str, body: Bytes) -> Response {
   Response::builder()
     .status(status)
     .header(header::CONTENT_TYPE, content_type)

@@ -64,29 +64,20 @@ mod tests {
     SessionCgroupConfig::disabled()
   }
 
-  /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
-  fn gh_wrapper_env(root: &std::path::Path) -> Env {
-    use std::os::unix::fs::PermissionsExt;
-    let wrapper_dir = root.join("gh-wrapper");
-    std::fs::create_dir_all(&wrapper_dir).unwrap();
-    let wrapper = wrapper_dir.join("gh");
-    std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-    let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&wrapper, permissions).unwrap();
-    Env::from([
-      ("PATH".to_string(), format!("{}:/usr/bin:/bin", wrapper_dir.display())),
-      (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
-    ])
-  }
-
   fn midturn_launch_kwargs(run_id: &str) -> LaunchArgs {
     LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
       backend_kwargs: serde_json::Map::from_iter([
         ("midturn_delivery".to_string(), Value::Bool(true)),
         ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
       ]),
-      ..LaunchArgs::default()
+      manager_turn: false,
     }
   }
 
@@ -153,7 +144,7 @@ mod tests {
     let mut request = RunRequest::new(
       "Initial prompt".to_string(),
       root.path().join("cwd"),
-      AgentBaseEnvironment { values: gh_wrapper_env(root.path()) },
+      AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root.path(), "/usr/bin:/bin") },
       SessionCgroupConfig::disabled(),
       Arc::new(Registry::new()),
     );
@@ -171,7 +162,17 @@ mod tests {
     let runner = Arc::new(AgentRunner::new(
       "cc-claude",
       Box::new(backend),
-      LaunchArgs { log_dir: Some(root.path().join("run")), ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: Some(root.path().join("run")),
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     ));
     let run_task = tokio::spawn({
       let runner = Arc::clone(&runner);
@@ -198,8 +199,9 @@ mod tests {
   }
 
   /// A CLI that reads one stream-json line, echoes it, and skips it as a duplicate when its transcript already
-  /// holds the uuid — the behavior probe_dedupe.py measured on Claude Code 2.1.312 and later. A skipped line is
-  /// echoed, marked completed, and the CLI then waits for the next stdin line instead of running a result.
+  /// holds the uuid. This is the behavior probe_dedupe.py measured on Claude Code 2.1.312 and later.
+  /// A skipped line is echoed, marked completed, and the CLI then waits for the next stdin line instead of
+  /// running a result.
   const DEDUPE_STUB: &str = concat!(
     "#!/bin/sh\n",
     "read -r line\n",
@@ -232,12 +234,18 @@ mod tests {
       false,
       None,
       LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
         log_dir: Some(root.join("run")),
+        cgroup_session_id: None,
         backend_kwargs: serde_json::Map::from_iter([
           ("midturn_delivery".to_string(), Value::Bool(true)),
           ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
         ]),
-        ..LaunchArgs::default()
+        manager_turn: false,
       },
       disabled_cgroup(),
     )
@@ -247,7 +255,7 @@ mod tests {
     let mut request = RunRequest::new(
       prompt.to_string(),
       root.join("cwd"),
-      AgentBaseEnvironment { values: gh_wrapper_env(root) },
+      AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root, "/usr/bin:/bin") },
       SessionCgroupConfig::disabled(),
       Arc::new(Registry::new()),
     );
@@ -256,7 +264,17 @@ mod tests {
     let runner = AgentRunner::new(
       "cc-claude",
       Box::new(backend),
-      LaunchArgs { log_dir: Some(root.join("run")), ..LaunchArgs::default() },
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: Some(root.join("run")),
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     match tokio::time::timeout(Duration::from_secs(30), runner.run(request)).await {
       Ok(outcome) => outcome.unwrap(),

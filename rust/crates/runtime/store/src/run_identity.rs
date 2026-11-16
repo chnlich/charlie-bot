@@ -4,6 +4,7 @@ use std::path::Path;
 
 use charliebot_core::event_types;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::proc_identity::PID_START_FIELD;
 use serde_json::Value;
 
 use crate::run_records::RunRecord;
@@ -51,7 +52,7 @@ pub fn read_run_identity_sync(path: &Path) -> StoreResult<Option<RunIdentity>> {
       StoreError::new(format!("run metadata unreadable at {}: pid must be an unsigned 32-bit integer", path.display()))
     })?),
   };
-  let pid_start = match record.get("pid_start") {
+  let pid_start = match record.get(PID_START_FIELD) {
     None | Some(Value::Null) => None,
     Some(value) => Some(
       value

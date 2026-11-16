@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use charliebot_core::event_types::{self, EventFields, is_truthy};
+use charliebot_core::int_text;
 use charliebot_core::text_repr::value_str;
 use serde_json::{Value, json};
 
 use crate::hooks::EventRenderer;
 use crate::message_events;
-use crate::metadata::BASE_BRANCH_FIELD;
+use crate::metadata::{BASE_BRANCH_FIELD, TASK_STATE};
 use crate::streaming::{APPEND, LENGTH, THINKING_APPEND, THINKING_LENGTH};
 use crate::tool_rows::{SubagentStatus, ToolRow, ToolRows, Usage, tool_preview};
 use crate::{StoreError, StoreResult};
@@ -826,7 +827,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     event_types::RUN_END => json!({
       "role": "separator",
       "kind": event_types::RUN_END,
-      event_types::THINKING_SECONDS: event.field("duration_seconds").map(EventFields::to_owned_value).unwrap_or(Value::Null),
+      event_types::THINKING_SECONDS: event.field(event_types::RUN_DURATION_SECONDS).map(EventFields::to_owned_value).unwrap_or(Value::Null),
     }),
     event_types::RUN_ERROR => {
       let content = event
@@ -845,15 +846,15 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }
     event_types::RUN_DELIVERY => {
       let task_state = event
-        .field("task_state")
+        .field(TASK_STATE)
         .filter(|value| is_truthy(*value))
         .map(EventFields::to_owned_value)
         .unwrap_or_else(|| json!(""));
       json!({
         "role": event_types::RUN_DELIVERY,
         "content": event.field("summary").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-        "task_state": task_state,
-        "completed": event.field("task_state").and_then(EventFields::as_str_field) == Some("completed"),
+        TASK_STATE: task_state,
+        "completed": event.field(TASK_STATE).and_then(EventFields::as_str_field) == Some("completed"),
         "result_refs": event.field("result_refs").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
         "raw_log_ref": event.field("raw_log_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "events_ref": event.field("events_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
@@ -1267,30 +1268,8 @@ fn event_int<E: EventFields>(value: &E) -> Option<String> {
 }
 
 fn parse_int_string(value: &str) -> Option<String> {
-  let value = value.trim();
-  let (negative, digits) = if let Some(digits) = value.strip_prefix('-') {
-    (true, digits)
-  } else if let Some(digits) = value.strip_prefix('+') {
-    (false, digits)
-  } else {
-    (false, value)
-  };
-  let mut parsed_digits = String::with_capacity(digits.len());
-  let mut previous_was_digit = false;
-  for character in digits.chars() {
-    if character.is_ascii_digit() {
-      parsed_digits.push(character);
-      previous_was_digit = true;
-    } else if character == '_' && previous_was_digit {
-      previous_was_digit = false;
-    } else {
-      return None;
-    }
-  }
-  if !previous_was_digit {
-    return None;
-  }
-  let digits = parsed_digits.trim_start_matches('0');
+  let (negative, digits) = int_text::int_digits(value)?;
+  let digits = digits.trim_start_matches('0');
   if digits.is_empty() {
     return Some("0".to_string());
   }

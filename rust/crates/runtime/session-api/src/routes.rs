@@ -11,13 +11,15 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::get;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_compat::{responses, validation};
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata,
-  UtcDateTime, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, RUN_BACKEND,
+  SessionMetadata, THINKING_SINCE, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state;
 use http::header::HeaderValue;
@@ -309,13 +311,11 @@ fn archived_page_body(
     let mut value = listing::metadata_value(&features.store, &row)?;
     let object = value.as_object_mut().expect("session metadata serializes to an object");
     object.insert(
-      "thinking_since".to_string(),
+      THINKING_SINCE.to_string(),
       features.store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_str())),
     );
-    object.insert(
-      "run_backend".to_string(),
-      listing::run_backend(&features.store, &row)?.map_or(Value::Null, Value::String),
-    );
+    object
+      .insert(RUN_BACKEND.to_string(), listing::run_backend(&features.store, &row)?.map_or(Value::Null, Value::String));
     if !context_only {
       apply_derived_fields(&mut value, &row, status.get(&row.id).map(Arc::as_ref), &features.store, true, true, false);
     }
@@ -414,7 +414,7 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
 /// The sidebar's status poll: the rows of one filter, plus any further sessions the page names, answered as the rows
 /// whose state moved since the page's last answer.
 ///
-/// A `since` token names the state the page holds; without one, or with a token this process did not publish, the
+/// A `since` token names the state the page holds. Without one, or with a token this process did not publish, the
 /// answer carries every row. `answer=ids` names the rows the request's `ids` carry and leaves the filter to name the
 /// set membership follows, so a page that paints its first screen downloads the rows it paints. The answer is
 /// `{"token": <state>, "rows": {<id>: <state>}, "gone": [<id>, ...]}`: the token to send back, the rows that moved,
@@ -430,7 +430,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   // open chat. A view the registry does not know is refused rather than answered with an empty set. The filter's own
   // set is kept apart: membership follows it alone, since two pages on one filter name different extra sessions.
   //
-  // `all` is the Workspace's page, whose memoized derived overlay names the row corpus; every other filter names its
+  // `all` is the Workspace's page, whose memoized derived overlay names the row corpus. Every other filter names its
   // own rows. The key holds that overlay instead of 7,160 ids, so a repeat poll leaves the ids unbuilt.
   let extra = raw_ids.map(parse_session_ids).unwrap_or_default();
   let force = match query.parse_bool("force", false) {
@@ -535,7 +535,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     }
     return status_response(request, &body);
   }
-  // A named answer carries the request's rows; the filter's set still rides for membership alone, so a row that
+  // A named answer carries the request's rows. The filter's set still rides for membership alone, so a row that
   // leaves the filter is reported gone. Any other answer carries the whole set.
   let (requested, members) = if answer == StatusAnswer::Named {
     let members = match &key {
@@ -610,7 +610,7 @@ fn status_row_payload(
     entry.and_then(|row| row.get(HAS_RUNNING_TASKS)).cloned().unwrap_or(Value::Bool(false)),
   );
   payload.insert(
-    "thinking_since".to_string(),
+    THINKING_SINCE.to_string(),
     features.store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_isoformat_text())),
   );
   payload.insert(
@@ -692,10 +692,10 @@ fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
   };
   Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, compressed.len())
     .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
-    .header(header::VARY, HeaderValue::from_static("Accept-Encoding"))
+    .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING))
     .body(Body::from(compressed))
     .expect("a compressed JSON response builds")
 }
@@ -731,7 +731,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
     Ok(result) => result,
     Err(error) => return store_error(error),
   };
-  // A repeat query holds the rows and their file signatures; while the derived state still sits at the generation the
+  // A repeat query holds the rows and their file signatures. While the derived state still sits at the generation the
   // body was rendered under, that body is the body a rebuild would render.
   if let Some(source) = &answer.source
     && let Some(body) = source.body(generation)
@@ -793,10 +793,8 @@ fn apply_derived_fields(
       derived.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
     );
   }
-  object.insert(
-    "thinking_since".to_string(),
-    store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_str())),
-  );
+  object
+    .insert(THINKING_SINCE.to_string(), store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_str())));
 }
 
 fn fresh_sessions(
@@ -846,12 +844,12 @@ fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBody
 fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len());
   if gzip {
     builder = builder
       .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
-      .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+      .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
   }
   builder.body(Body::from(body)).expect("a JSON response builds")
 }

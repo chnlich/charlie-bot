@@ -81,7 +81,7 @@ pub struct AccountsConfig {
   /// The named pools: each key lists the account labels it holds. A `cc-claude` option's `account_pool` picks one.
   #[serde(default)]
   pub claude_pools: BTreeMap<String, Vec<String>>,
-  /// The master session's compaction thresholds; a key the host omits takes the struct's default.
+  /// The master session's compaction thresholds. A key the host omits takes the struct's default.
   #[serde(default)]
   pub claude_compaction: ClaudeCompactionConfig,
 }
@@ -92,7 +92,7 @@ pub struct AccountsConfig {
 #[serde(deny_unknown_fields)]
 pub struct ClaudeCodeConfig {
   /// The subagent switch: `true` removes `Agent` from the disallowed tools of manager turns, work runs and improve
-  /// iterations; `false` keeps `Agent` disallowed on every run kind.
+  /// iterations. `false` keeps `Agent` disallowed on every run kind.
   #[serde(default)]
   pub enable_subagents: bool,
 }
@@ -111,7 +111,7 @@ pub fn dump_claude_code(value: &charliebot_core::config::SectionValue) -> Result
 /// Whether the configured run kinds receive Claude Code's `Agent` tool.
 ///
 /// A config built directly rather than loaded through the registry, as the golden tests' configs are, carries no
-/// package sections; the settings there are the section's defaults. A loaded config always holds the section,
+/// package sections. The settings there are the section's defaults. A loaded config always holds the section,
 /// because the loader parses it from an empty mapping when `config.yaml` omits the key.
 pub fn enable_subagents(cfg: &CharlieBotConfig) -> bool {
   match cfg.section_value("claude_code") {

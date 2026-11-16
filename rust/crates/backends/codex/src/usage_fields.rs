@@ -6,7 +6,7 @@
 //! owns the names, so a change reaches every reader.
 //!
 //! The prompt, completion and cached counts are `charliebot_core::event_types` names, which the Claude and usage-page
-//! readers spell from there too; only the names Codex alone uses are defined here.
+//! readers spell from there too. Only the names Codex alone uses are defined here.
 
 /// The token counts of a usage object, under the names their owner defines.
 pub(crate) use charliebot_core::event_types::{

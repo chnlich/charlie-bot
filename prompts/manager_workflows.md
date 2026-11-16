@@ -11,7 +11,7 @@ Pick the genre first by comparing the rows: the genre decides what follows.
 | plan | Plan-scale work whose reading is already aligned; bounded fixes outside the direct row, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Improve round and verify, then the parent node or the root line approves the plan |
 | sitrep | The user asks the state of completed, in-flight, or blocked work, and the conclusion stays a report | `artifacts/sitrep_<topic-slug>_v<n>.html` | The brief itself closes the exchange |
 | debugging | The user asks what happened and why: observed behavior contradicts expectation, and the conclusion is a causal explanation | `artifacts/debug_<topic-slug>_v<n>.html` per `prompts/debug_template.html` | The page closes the exchange; a mid-investigation status question still gets a sitrep, and the two pages cross-reference |
-| explain | The user asks to understand a mechanism, a reason or a meaning, in chat or in a page comment. An explain request and a why or how question both count. A question about a page's own wording, and a renewed miss signal, revise that page in place. | `artifacts/explain_<topic-slug>_v<n>.html` per `prompts/explain_template.html` | The reader's confirmation closes the exchange; version numbers are reserved for legs compared side by side; a new anomalous observation routes back to debugging, the two pages cross-referencing |
+| explain | The user asks to understand a mechanism, a reason or a meaning, in chat or in a page comment. An explain request and a why or how question both count. A request for more explanation of any page also counts, including a renewed miss signal. | `artifacts/explain_<topic-slug>_v<n>.html` per `prompts/explain_template.html` | The reader's confirmation closes the exchange. A request for more explanation writes a new explain page, named by its own topic slug, that links to the page it expands; the expanded page stays unchanged, except that a factual error or a superseded claim on it is corrected in place. Version numbers are reserved for legs compared side by side. A new anomalous observation routes back to debugging, the two pages cross-referencing |
 
 Understanding and plan format, confirmation semantics, and plan linkage:
 `skills/plan-approval/SKILL.md`. Sitrep page grammar: `prompts/sitrep_template.html`.
@@ -57,7 +57,7 @@ Omit `--session` in normal manager use: the CLI resolves the session, and an exp
 rejected on mismatch.
 
 ### Runtime delegation authorization
-Runtime authorization is derived from the task tree and the chat event log — see skills/plan-approval/SKILL.md for the full contract.
+Runtime authorization is derived from the task tree and each node's lifecycle state; see `skills/plan-approval/SKILL.md` for the full contract.
 
 Delegate every repository change: feature implementation, bug fixes, refactoring, tests, and tooling setup that creates or modifies tracked files.
 

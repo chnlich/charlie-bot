@@ -93,7 +93,7 @@ fn feature_context_with_config(config_yaml: Option<&str>) -> (tempfile::TempDir,
   (home, features)
 }
 
-/// A manager session with no user request: its chat stream is empty.
+/// A manager session with an empty chat stream.
 fn add_manager(features: &FeatureContext) {
   let metadata = SessionMetadata::new(SESSION, "Synthetic improve session", TaskProfile::Manager);
   let directory = features.store.session_dir(SESSION);
@@ -102,15 +102,6 @@ fn add_manager(features: &FeatureContext) {
     .expect("session metadata");
   std::fs::write(directory.join("data").join("chat_events.jsonl"), "").expect("empty event stream");
   features.store.invalidate_cache(SESSION);
-}
-
-/// The user request that makes the manager's delegation authorized.
-async fn add_user_request(features: &FeatureContext) {
-  features
-    .store
-    .append_chat_event(SESSION, json!({"type": "user", "content": "Improve the loop."}))
-    .await
-    .expect("the user request is appended");
 }
 
 fn start_body(session_id: &str, backend: Option<&str>) -> Value {
@@ -147,25 +138,29 @@ async fn start_for_a_missing_session_is_not_found() {
 }
 
 #[tokio::test]
-async fn start_without_a_user_request_is_forbidden() {
+async fn start_for_a_closed_manager_is_forbidden() {
   let (_home, features) = feature_context();
   add_manager(&features);
+  features
+    .store
+    .append_chat_event(SESSION, json!({"type": "task_closed", "outcome": "completed"}))
+    .await
+    .expect("close event");
 
   let (status, body) = post(&features, START, start_body(SESSION, None)).await;
 
   assert_eq!(status, StatusCode::FORBIDDEN);
   let detail = body["detail"].as_str().unwrap_or_default();
-  assert!(detail.contains("no user request"), "the refusal names the missing request: {body}");
+  assert!(detail.contains("Delegation blocked:"), "the refusal names the closed state: {body}");
   let cfg = features.config.get().expect("the test config");
-  assert!(!command::active_lock_path(&cfg, SESSION).exists(), "a refused takeoff leaves no active lock");
-  assert!(!command::loops_dir(&cfg, SESSION).exists(), "a refused takeoff creates no loop directory");
+  assert!(!command::active_lock_path(&cfg, SESSION).exists(), "a refused start leaves no active lock");
+  assert!(!command::loops_dir(&cfg, SESSION).exists(), "a refused start creates no loop directory");
 }
 
 #[tokio::test]
 async fn start_with_an_unknown_backend_is_a_bad_request_and_reserves_nothing() {
   let (_home, features) = feature_context();
   add_manager(&features);
-  add_user_request(&features).await;
 
   let (status, body) = post(&features, START, start_body(SESSION, Some("no-such-backend"))).await;
 
@@ -181,7 +176,6 @@ async fn starting_a_second_loop_returns_conflict_with_the_running_loop_id() {
     "backends:\n  options:\n    - id: claude-fable\n      label: Synthetic Claude\n      type: cc-claude\n      model: claude-fable-model\n",
   ));
   add_manager(&features);
-  add_user_request(&features).await;
   let cfg = features.config.get().expect("the test config");
   let reservation = Reservation {
     goal: "optimize",

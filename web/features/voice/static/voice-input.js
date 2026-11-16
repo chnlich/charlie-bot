@@ -1,11 +1,10 @@
 // ---------------------------------------------------------------------------
-// Voice input: pick a transcription backend, record locally, end by relay or upload
+// Voice input: record locally, then use the selected backend's live relay or upload
 // ---------------------------------------------------------------------------
 // One recording = one run object owning its mic stream, capture graph, local PCM
-// buffer, and at most one in-flight upload request. A single module-level slot
-// (`activeVoiceRun`) is claimed synchronously inside the click handler, so two
-// pipelines can never coexist. Every asynchronous continuation of a run first
-// checks that the slot still belongs to it and silently exits otherwise.
+// buffer, and at most one in-flight upload request. The page-level click handler
+// starts the mic request; this module claims the run slot when the module arrives.
+// Every asynchronous continuation checks that the slot still belongs to it.
 //
 // The recording itself never touches the persistence path. The worklet's 16 kHz
 // PCM chunks append to a local buffer, and the level bar plus elapsed timer are
@@ -76,15 +75,19 @@ const VOICE_BUTTON_STATE = {
   IDLE: 'idle',
 };
 
-const VOICE_HINT_LISTENING = 'Listening...';
-const VOICE_HINT_WAITING = 'Waiting for microphone signal...';
+const VOICE_HINT_LISTENING = 'Speak now';
+const VOICE_HINT_WAITING = 'Preparing microphone…';
+const VOICE_HINT_MIC_SILENT = 'Microphone went silent for 2 s, recording stopped';
+const VOICE_SILENCE_THRESHOLD = 32768 * Math.pow(10, -75 / 20);
+const VOICE_SILENCE_WARMUP_CHUNKS = 2;
+const VOICE_SILENCE_CHUNKS = 16;
 const VOICE_HINT_UPLOADING = 'Uploading...';
 const VOICE_HINT_DECODING = 'Decoding...';
 const VOICE_HINT_RETRY = 'Upload failed — click to retry';
 
-const VOICE_OVERLAY_CLASS = 'absolute left-0 right-0 bottom-full mb-2 rounded-lg border border-blue-500/40 bg-slate-800 px-3 py-2 text-sm text-slate-100 shadow-lg max-h-28 overflow-y-auto';
+const VOICE_OVERLAY_CLASS = 'absolute left-0 right-0 bottom-full mb-2 rounded-lg border border-blue-500/40 bg-slate-800 px-3 py-2 text-sm text-slate-100 shadow-lg';
 // Not-yet-final words from the preview relay: grey, above the level bar.
-const VOICE_PARTIAL_CLASS = 'voice-partial-text text-sm text-slate-400 whitespace-pre-wrap break-words';
+const VOICE_PARTIAL_CLASS = 'voice-partial-text text-sm text-slate-400 whitespace-pre-wrap break-words max-h-28 overflow-y-auto';
 // The caret's dropdown, anchored above the mic group the template renders. voice.css sizes it to its longest row.
 const VOICE_MENU_CLASS = 'absolute bottom-full right-0 mb-2 rounded-lg border border-slate-600 bg-slate-800 py-1 shadow-lg z-50';
 // The menu sits on slate-800. There, slate-500 holds 3.07:1, under the 4.5:1 floor for the title's
@@ -138,7 +141,11 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
       this.sourcePosition += this.ratio;
     }
 
-    const consumed = Math.floor(this.sourcePosition);
+    // The read position can step past the buffer's end by less than one input
+    // sample; that carry belongs to the next buffer's first sample. Capping the
+    // consumed count at the buffer length keeps it, so the output count stays
+    // the input duration at 16 kHz.
+    const consumed = Math.min(Math.floor(this.sourcePosition), merged.length);
     this.sourceRemainder = merged.slice(consumed);
     this.sourcePosition -= consumed;
   }
@@ -280,10 +287,10 @@ function updateVoiceCaret() {
   caret.disabled = !!activeVoiceRun;
 }
 
-async function toggleVoice() {
+async function toggleVoice(startRequest) {
   const run = activeVoiceRun;
   if (!run) {
-    await startRecording();
+    await startRecording(startRequest);
     return;
   }
   // Clicks during arming or finalizing are ignored, not queued. A recording
@@ -304,7 +311,7 @@ async function toggleVoice() {
 
 // The one construction site of a recording's run object: every phase below
 // mutates the fields it initializes, so a field the pipeline needs starts here.
-function newVoiceRun(sessionId, backend) {
+function newVoiceRun(sessionId, backend, startRequest) {
   return {
     sessionId,
     // The run id the browser makes at the click. The startup report, the relay
@@ -312,6 +319,7 @@ function newVoiceRun(sessionId, backend) {
     // this recording under one stem. That stem is set in the voice crate's
     // `recordings.rs`.
     runId: newVoiceRunId(),
+    startRequest,
     stream: null,
     audioContext: null,
     sourceNode: null,
@@ -319,6 +327,9 @@ function newVoiceRun(sessionId, backend) {
     recording: false,
     stopping: false,
     signalReady: false,
+    quietWarmupChunks: 0,
+    quietChunks: 0,
+    lastPartial: '',
     phase: VOICE_RUN_PHASE.IDLE,
     pcmChunks: [],
     totalSamples: 0,
@@ -333,7 +344,7 @@ function newVoiceRun(sessionId, backend) {
     backend,
     devicesPromise: null,
     devices: null,
-    startup: newVoiceStartup(),
+    startup: newVoiceStartup(startRequest),
     relaySocket: null,
     relayFinalResolve: null,
     relayWaitTimer: null,
@@ -349,23 +360,15 @@ function newVoiceRunId() {
   return Math.floor(Math.random() * 2 ** 32).toString(16).padStart(8, '0');
 }
 
-async function startRecording() {
-  if (!SESSION_ID) {
-    showToast('Open a session before recording voice input', true);
-    return;
-  }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showToast('Microphone access is not available. Use HTTPS or a supported browser.', true);
-    return;
-  }
-  if (!window.AudioContext && !window.webkitAudioContext) {
-    showToast('Audio capture is not available in this browser', true);
-    return;
-  }
-
-  const run = newVoiceRun(SESSION_ID, selectedVoiceBackend());
+async function startRecording(startRequest) {
+  if (!startRequest) throw new Error('The voice button click did not provide its microphone request');
+  const run = newVoiceRun(startRequest.sessionId, startRequest.backend, startRequest);
   activeVoiceRun = run;
-  noteVoiceStartupPermission(run);
+  voiceInputBusy = true;
+  run.stream = startRequest.stream;
+  run.audioContext = startRequest.audioContext;
+  run.startup.micOpenMs = startRequest.micOpenMs;
+  run.startup.micPermission = startRequest.micPermission;
   // Amber from the click on: the mic is not delivering sound yet, so the
   // user must not speak. Red is the speak cue and lights at the first
   // chunk with a non-zero sample.
@@ -373,22 +376,14 @@ async function startRecording() {
   updateVoiceCaret();
   if (run.backend.livePartials) openVoiceRelay(run);
   run.ui = ensureVoiceOverlay();
-  showVoiceHint(run, 'Starting...');
+  showVoiceHint(run, VOICE_HINT_WAITING);
 
-  // Parallel startup: both branches launch in this one synchronous step, so
-  // the wait is the longer of the two instead of their sum. Each resource
-  // lands on the run as it opens, which the catch below relies on: one
-  // release path frees whatever a failed startup leaves behind.
-  const micBranch = tagVoiceStartupError(run, 'mic', navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  }).then((stream) => {
-    run.startup.micOpenMs = voiceStartupElapsed(run);
-    run.stream = stream;
+  const micBranch = tagVoiceStartupError(run, 'mic', (async () => {
+    const result = await startRequest.micResultPromise;
+    if (result.error) throw result.error;
+    if (result.cancelled) return;
+    run.stream = result.stream;
+    run.startup.micOpenMs = startRequest.micOpenMs;
     // The recording's device facts: collection starts here, at recording
     // start, without delaying it — the end frame and the upload await the
     // settled object instead. The startup report reads the value only once
@@ -397,14 +392,8 @@ async function startRecording() {
       run.devices = devices;
       return devices;
     });
-  }));
+  })());
   const graphBranch = tagVoiceStartupError(run, 'graph', (async () => {
-    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-    run.audioContext = new AudioContextCtor();
-    // Chrome's autoplay policy counts a resume only inside the click, so this
-    // call stays before the first await. A rejection is logged. The state check
-    // after both branches settle decides the run.
-    run.audioContext.resume().catch((err) => console.error('Voice audio engine resume failed:', err));
     const workletUrl = URL.createObjectURL(new Blob([VOICE_WORKLET_SOURCE], {type: 'application/javascript'}));
     try {
       await run.audioContext.audioWorklet.addModule(workletUrl);
@@ -417,6 +406,7 @@ async function startRecording() {
   try {
     await Promise.all([micBranch, graphBranch]);
     if (activeVoiceRun !== run) {
+      sendVoiceStartup(run, 'left');
       abortVoiceRun(run);
       return;
     }
@@ -456,12 +446,8 @@ async function startRecording() {
     // The first rejection goes out now: the other branch may never settle, and
     // the wait below would hold the report forever.
     sendVoiceStartup(run, 'startup_error');
-    // Both branches settle before the release, so the slower branch's
-    // resources are already on the run. The one release path closes the
-    // AudioContext and stops every opened track in either order of success
-    // and failure.
-    await Promise.allSettled([micBranch, graphBranch]);
     if (activeVoiceRun !== run) {
+      sendVoiceStartup(run, 'left');
       abortVoiceRun(run);
       return;
     }
@@ -547,26 +533,33 @@ function voiceOutputDeviceLabel(listed, deviceId) {
 }
 
 // --- Startup report ---------------------------------------------------------
-// One record per recording run, created at the click, marks the last startup
-// step the run reached and how it ended. The first exit sends it. The record's
-// flag makes every later exit a no-op, so a late mic return, a session switch,
-// or a page close after a stop adds no second line. The server writes one
-// voice_startup line per run and keeps no state.
+// One record per recording run keeps the click-time origin, startup steps and
+// terminal result. Its flag makes later exits no-ops, so a session switch or
+// page close after completion adds no second line. The server writes one line.
 
-function newVoiceStartup() {
+function newVoiceStartup(startRequest) {
   return {
-    clickedAt: performance.now(),
+    clickedAt: startRequest.clickedAt,
     reached: 'mic_opening',
     end: null,
     error: null,
+    stopMs: null,
+    textMs: null,
+    chunkSentMs: [],
+    partialShownMs: [],
+    partialSamples: [],
     micOpenMs: null,
     graphReadyMs: null,
     audioContextSettledState: null,
     audioContextResume: null,
+    audioContextState: null,
+    audioContextRate: null,
+    trackReadyState: null,
+    trackMuted: null,
     firstFrameMs: null,
     firstSoundMs: null,
     frames: 0,
-    micPermission: null,
+    micPermission: startRequest.micPermission,
     sent: false,
   };
 }
@@ -575,18 +568,6 @@ function newVoiceStartup() {
 // adjustment moves.
 function voiceStartupElapsed(run) {
   return Math.max(0, Math.round(performance.now() - run.startup.clickedAt));
-}
-
-// The browser's permission for this site's microphone at the click. The query
-// is never awaited: an unsupported browser or one still asking leaves null.
-function noteVoiceStartupPermission(run) {
-  const permissions = navigator.permissions;
-  if (!permissions || typeof permissions.query !== 'function') return;
-  permissions.query({name: 'microphone'}).then((status) => {
-    run.startup.micPermission = status.state;
-  }).catch((err) => {
-    console.warn('Voice microphone permission query failed:', err);
-  });
 }
 
 // A failed startup step's error text: its name when that name says something
@@ -624,15 +605,20 @@ function voiceStartupBody(run) {
     first_frame_ms: startup.firstFrameMs,
     first_sound_ms: startup.firstSoundMs,
     end_ms: voiceStartupElapsed(run),
+    stop_ms: startup.stopMs,
+    text_ms: startup.textMs,
+    chunk_sent_ms: startup.chunkSentMs,
+    partial_shown_ms: startup.partialShownMs,
+    partial_samples: startup.partialSamples,
     frames: startup.frames,
     samples: Math.min(run.totalSamples, VOICE_MAX_SAMPLES),
-    audio_context_state: context ? context.state : null,
-    audio_context_rate: context ? context.sampleRate : null,
+    audio_context_state: startup.audioContextState || (context ? context.state : null),
+    audio_context_rate: startup.audioContextRate || (context ? context.sampleRate : null),
     audio_context_settled_state: startup.audioContextSettledState,
     audio_context_resume: startup.audioContextResume,
     mic_permission: startup.micPermission,
-    track_ready_state: track ? track.readyState : null,
-    track_muted: track ? track.muted : null,
+    track_ready_state: startup.trackReadyState || (track ? track.readyState : null),
+    track_muted: startup.trackMuted === null ? (track ? track.muted : null) : startup.trackMuted,
     devices: run.devices,
     user_agent: navigator.userAgent,
     client_ts: new Date().toISOString(),
@@ -646,7 +632,7 @@ function sendVoiceStartup(run, end) {
   const startup = run.startup;
   if (startup.sent) return;
   startup.sent = true;
-  startup.end = end;
+  if (startup.end === null || end === 'page_closed') startup.end = end;
   const report = end !== 'page_closed';
   fetch(`/api/voice/${encodeURIComponent(run.sessionId)}/startup`, {
     method: 'POST',
@@ -691,7 +677,8 @@ function handleVoiceWorkletMessage(run, event) {
     run.startup.reached = 'silent';
   }
   run.startup.frames += 1;
-  updateVoiceLevel(run, samples);
+  const wasReady = run.signalReady;
+  const levels = updateVoiceLevel(run, samples);
   updateVoiceIndicator(run);
   sendVoiceRelayAudio(run, data.buffer);
   if (run.recording) {
@@ -708,6 +695,16 @@ function handleVoiceWorkletMessage(run, event) {
         setVoiceButtonState(VOICE_BUTTON_STATE.RECORDING);
         showVoiceHint(run, voiceReadyHint(run));
         break;
+      }
+    }
+    if (wasReady) {
+      if (run.quietWarmupChunks < VOICE_SILENCE_WARMUP_CHUNKS) {
+        run.quietWarmupChunks += 1;
+      } else if (levels.nonZero && levels.rms * 32768 < VOICE_SILENCE_THRESHOLD) {
+        run.quietChunks += 1;
+        if (run.quietChunks >= VOICE_SILENCE_CHUNKS) stopRecording(run, 'mic_silent');
+      } else {
+        run.quietChunks = 0;
       }
     }
     if (run.totalSamples >= VOICE_MAX_SAMPLES) stopRecording(run); // auto-stop enters the stop flow
@@ -730,15 +727,19 @@ function flushVoiceWorklet(run) {
   });
 }
 
-async function stopRecording(run) {
+async function stopRecording(run, end = 'stop') {
   if (!run.recording) return;
   run.recording = false;
   run.stopping = true;
-  // A click stop and the 5-minute auto-stop both report here, before the flush
-  // adds its tail to the recorded counts.
-  sendVoiceStartup(run, 'stop');
+  run.startup.stopMs = voiceStartupElapsed(run);
+  run.startup.end = end;
   setVoiceButtonState(VOICE_BUTTON_STATE.IDLE);
+  updateVoiceMicTitle();
   updateVoiceLeaveGuard();
+  if (end === 'mic_silent') {
+    showVoiceHint(run, VOICE_HINT_MIC_SILENT);
+    showToast(VOICE_HINT_MIC_SILENT, true);
+  }
   try {
     // The worklet drains its buffered tail into the local buffer — and, live,
     // out to the relay — so the recording is whole before it ends. The upload
@@ -752,7 +753,6 @@ async function stopRecording(run) {
     const finalText = run.relaySocket ? await collectVoiceRelayFinal(run) : null;
     if (activeVoiceRun !== run) return;
     run.stopping = false;
-    showVoicePartial(run, '');
     if (finalText !== null) {
       // The relay's final means the recording is already archived server-side.
       // The words go in through the one insertion path and the run ends with
@@ -771,7 +771,7 @@ async function stopRecording(run) {
   } catch (err) {
     console.error('Voice stop failed:', err);
     showToast('Voice input failed: ' + err.message, true);
-    releaseVoiceRun(run);
+    releaseVoiceRun(run, run.startup.end || 'stop');
   }
 }
 
@@ -780,13 +780,15 @@ async function stopRecording(run) {
 // in and the run ends with nothing uploaded. An empty final means the recording
 // held no speech.
 function finishWithRelayFinal(run, finalText) {
-  releaseVoiceRun(run);
   const words = finalText.trim();
   if (!words) {
     showToast('No speech detected');
+    releaseVoiceRun(run, run.startup.end || 'stop');
     return;
   }
-  insertVoiceText(words);
+  insertVoiceText(run, words);
+  run.startup.textMs = voiceStartupElapsed(run);
+  releaseVoiceRun(run, run.startup.end || 'stop');
 }
 
 // The stop state: a live recording is over, no final owns the words, and no
@@ -871,27 +873,102 @@ function applyVoiceFinal(run, fullText) {
   // The window closes once the decode lands. The run's xhr is already null, so
   // the release's abort below settles nothing further.
   inputWorkSettled(VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE);
-  releaseVoiceRun(run);
   const words = fullText.trim();
   if (!words) {
     showToast('No speech detected');
+    releaseVoiceRun(run, run.startup.end || 'stop');
     return;
   }
-  insertVoiceText(words);
+  insertVoiceText(run, words);
+  run.startup.textMs = voiceStartupElapsed(run);
+  releaseVoiceRun(run, run.startup.end || 'stop');
 }
 
-function insertVoiceText(text) {
+function insertVoiceText(run, text) {
   // The one text-insertion path for recognized voice words: append to the input,
   // mark the message as voice-contributed, and restore the caret. Returns the
   // start offset of the inserted span.
   const input = document.getElementById('msg-input');
   const current = input.value.trim();
-  input.value = current ? current + ' ' + text : text;
+  const merged = mergeVoiceText(run.lastPartial, text).trim();
+  input.value = current ? current + ' ' + merged : merged;
   Chat.setInputMode(VOICE_INPUT_MODE);
   autoResize(input);
   saveDraft();
   input.focus();
-  return input.value.length - text.length;
+  return input.value.length - merged.length;
+}
+
+// Match the visible preview to the backend final. A matching token anchors
+// its surrounding span; a preview-only span survives while a final-only span
+// wins when the backend rewrote those words.
+function mergeVoiceText(partialText, finalText) {
+  const tokenPattern = /[A-Za-z0-9_]+(?:['.-][A-Za-z0-9_]+)*|\p{Script=Han}/gu;
+  const tokenize = (text) => Array.from(text.matchAll(tokenPattern), (match) => ({
+    text: match[0],
+    key: match[0].toLocaleLowerCase('en-US'),
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
+  const partial = tokenize(partialText);
+  const final = tokenize(finalText);
+  if (!partial.length || !final.length) return partial.length ? partialText : finalText;
+
+  const lengths = Array.from({length: partial.length + 1}, () => new Uint32Array(final.length + 1));
+  for (let i = partial.length - 1; i >= 0; i--) {
+    for (let j = final.length - 1; j >= 0; j--) {
+      lengths[i][j] = partial[i].key === final[j].key
+        ? lengths[i + 1][j + 1] + 1
+        : Math.max(lengths[i + 1][j], lengths[i][j + 1]);
+    }
+  }
+
+  const matches = [];
+  let i = 0;
+  let j = 0;
+  while (i < partial.length && j < final.length) {
+    if (partial[i].key === final[j].key) {
+      matches.push([i++, j++]);
+    } else if (lengths[i][j + 1] >= lengths[i + 1][j]) {
+      // On a tie keep the earlier preview token available to match.
+      j += 1;
+    } else {
+      i += 1;
+    }
+  }
+
+  const insertions = [];
+  let previousPartial = -1;
+  let previousFinal = -1;
+  for (const [matchedPartial, matchedFinal] of [...matches, [partial.length, final.length]]) {
+    const partialStart = previousPartial + 1;
+    const finalStart = previousFinal + 1;
+    const partialCount = matchedPartial - partialStart;
+    const finalCount = matchedFinal - finalStart;
+    if (partialCount > 0 && finalCount === 0) {
+      const start = partial[partialStart].start;
+      const end = partial[matchedPartial - 1].end;
+      const offset = matchedFinal < final.length
+        ? final[matchedFinal].start
+        : final[final.length - 1].end;
+      insertions.push({offset, text: partialText.slice(start, end)});
+    }
+    previousPartial = matchedPartial;
+    previousFinal = matchedFinal;
+  }
+
+  let merged = finalText;
+  for (const insertion of insertions.sort((left, right) => right.offset - left.offset)) {
+    const before = merged[insertion.offset - 1] || '';
+    const after = merged[insertion.offset] || '';
+    const first = insertion.text[0] || '';
+    const last = insertion.text[insertion.text.length - 1] || '';
+    const asciiWord = (character) => /[A-Za-z0-9_]/.test(character);
+    const prefix = asciiWord(before) && asciiWord(first) ? ' ' : '';
+    const suffix = asciiWord(last) && asciiWord(after) ? ' ' : '';
+    merged = merged.slice(0, insertion.offset) + prefix + insertion.text + suffix + merged.slice(insertion.offset);
+  }
+  return merged;
 }
 
 // --- WAV assembly -----------------------------------------------------------
@@ -1013,6 +1090,7 @@ function sendVoiceRelayAudio(run, chunk) {
   if (!socket || socket.readyState !== VOICE_WS_OPEN) return;
   try {
     socket.send(chunk);
+    run.startup.chunkSentMs.push(voiceStartupElapsed(run));
   } catch (err) {
     console.warn('Voice relay send failed:', err);
     failVoiceRelay(run, 'connection lost');
@@ -1030,7 +1108,12 @@ function handleVoiceRelayMessage(run, event) {
     return;
   }
   if (message.type === 'partial') {
-    showVoicePartial(run, message.text);
+    if (!Number.isSafeInteger(message.samples) || message.samples < 0) {
+      console.warn('Voice preview partial had an invalid sample count');
+      failVoiceRelay(run, 'bad partial frame');
+      return;
+    }
+    showVoicePartial(run, message.text, message.samples);
     return;
   }
   if (message.type === 'final') {
@@ -1077,8 +1160,8 @@ function voiceRelayBudgetHint(run) {
 function voiceReadyHint(run) {
   // A relay that already failed keeps its reason up. The ready cue must not
   // overwrite it.
-  if (run.relayFailure !== null) return voiceRelayFailureHint(run, run.relayFailure);
-  return run.backend.livePartials ? 'Listening · ' + run.backend.label : VOICE_HINT_LISTENING;
+  if (run && run.relayFailure !== null) return voiceRelayFailureHint(run, run.relayFailure);
+  return VOICE_HINT_LISTENING;
 }
 
 async function collectVoiceRelayFinal(run) {
@@ -1126,7 +1209,6 @@ function settleVoiceRelayWait(run, text) {
 // stop the run is on its way into (or already sits in) the stop state. There
 // the failure only rewrites the hint reason.
 function failVoiceRelay(run, reason) {
-  showVoicePartial(run, '');
   closeVoiceRelay(run);
   run.relayFailure = reason;
   showVoiceHint(run, voiceRelayFailureHint(run, reason));
@@ -1203,16 +1285,24 @@ function showVoiceHint(run, text) {
   if (run.ui && run.ui.hint) run.ui.hint.textContent = text;
 }
 
-function showVoicePartial(run, text) {
-  // Not-yet-final words from the preview relay, in grey; '' clears them.
-  if (run.ui && run.ui.partial) run.ui.partial.textContent = text;
+function showVoicePartial(run, text, samples) {
+  // Keep the latest grey preview for the final merge and scroll it into view.
+  run.lastPartial = text;
+  run.startup.partialShownMs.push(voiceStartupElapsed(run));
+  run.startup.partialSamples.push(samples);
+  if (run.ui && run.ui.partial) {
+    run.ui.partial.textContent = text;
+    run.ui.partial.scrollTop = run.ui.partial.scrollHeight;
+  }
 }
 
 function updateVoiceLevel(run, samples) {
   // Per-chunk RMS mapped onto the bar, with a decay so silence falls instead of
   // snapping: pure client-side, no server round-trip.
   let sum = 0;
+  let nonZero = false;
   for (let i = 0; i < samples.length; i++) {
+    if (samples[i] !== 0) nonZero = true;
     const v = samples[i] / 32768;
     sum += v * v;
   }
@@ -1220,6 +1310,7 @@ function updateVoiceLevel(run, samples) {
   const level = Math.min(100, Math.round(rms * 400));
   run.level = Math.max(level, Math.round(run.level * 0.8));
   if (run.ui && run.ui.fill) run.ui.fill.style.width = run.level + '%';
+  return {rms, nonZero};
 }
 
 // --- Page-leave guard -------------------------------------------------------
@@ -1254,8 +1345,13 @@ function resetVoiceState() {
   // continuations die on the ownership check and no request outlives the view.
   const run = activeVoiceRun;
   activeVoiceRun = null;
-  if (run) abortVoiceRun(run);
+  if (run) {
+    sendVoiceStartup(run, run.startup.end || 'left');
+    abortVoiceRun(run);
+  }
+  voiceInputBusy = false;
   setVoiceButtonState(VOICE_BUTTON_STATE.IDLE);
+  updateVoiceMicTitle();
   removeVoiceOverlay();
   updateVoiceLeaveGuard();
   updateVoiceCaret();
@@ -1263,17 +1359,20 @@ function resetVoiceState() {
 }
 
 function discardVoiceRecording(run, message) {
-  releaseVoiceRun(run);
+  releaseVoiceRun(run, 'left');
   if (message) showToast(message, true);
 }
 
 // End-of-run release for the run that owns the slot: tear down its resources,
 // free the slot, and reset the button and overlay. Callers add any toast.
-function releaseVoiceRun(run) {
+function releaseVoiceRun(run, end = 'left') {
+  sendVoiceStartup(run, run.startup.end || end);
   abortVoiceRun(run);
   if (activeVoiceRun === run) activeVoiceRun = null;
+  voiceInputBusy = false;
   clearVoiceUploadTimer(run);
   setVoiceButtonState(VOICE_BUTTON_STATE.IDLE);
+  updateVoiceMicTitle();
   removeVoiceOverlay();
   updateVoiceLeaveGuard();
   updateVoiceCaret();
@@ -1283,9 +1382,7 @@ function releaseVoiceRun(run) {
 // in-flight upload. Idempotent, so an ownership-lost continuation and the
 // teardown path can both call it. The later call only sees nulls.
 function abortVoiceRun(run) {
-  // Every teardown reaches here, including a session switch during startup. A
-  // run that already sent (stop, startup error) only sees the flag.
-  sendVoiceStartup(run, 'left');
+  run.startRequest.cancelled = true;
   cleanupVoiceCapture(run);
   closeVoiceRelay(run);
   abortVoiceUpload(run);
@@ -1315,26 +1412,23 @@ function cleanupVoiceCapture(run) {
   }
   if (run.audioContext) {
     const ctx = run.audioContext;
+    run.startup.audioContextState = ctx.state;
+    run.startup.audioContextRate = ctx.sampleRate;
     run.audioContext = null;
     ctx.close().catch((err) => console.warn('Voice audio context close failed:', err));
   }
   if (run.stream) {
-    run.stream.getTracks().forEach((track) => track.stop());
+    const tracks = run.stream.getTracks();
+    const audioTrack = run.stream.getAudioTracks()[0];
+    if (audioTrack) {
+      run.startup.trackReadyState = audioTrack.readyState;
+      run.startup.trackMuted = audioTrack.muted;
+    }
+    tracks.forEach((track) => track.stop());
     run.stream = null;
   }
   run.flushResolvers.forEach((resolve) => resolve());
   run.flushResolvers.clear();
-}
-
-// The button's one class pair per run state: amber promises no sound is
-// being recorded yet, red means sound is arriving now.
-function setVoiceButtonState(state) {
-  const btn = document.getElementById('voice-btn');
-  if (!btn) return;
-  btn.classList.remove('bg-slate-800', 'border-slate-600', 'bg-amber-600', 'border-amber-500', 'bg-red-600', 'border-red-500');
-  if (state === VOICE_BUTTON_STATE.STARTING) btn.classList.add('bg-amber-600', 'border-amber-500');
-  else if (state === VOICE_BUTTON_STATE.RECORDING) btn.classList.add('bg-red-600', 'border-red-500');
-  else btn.classList.add('bg-slate-800', 'border-slate-600');
 }
 
 function removeVoiceOverlay() {

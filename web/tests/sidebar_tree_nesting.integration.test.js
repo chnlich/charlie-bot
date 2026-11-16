@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Sidebar task-tree nesting (groups.js): a child task node renders under its
 // parent row, collapsed by default behind an in-memory expand state. The
-// five-row preview cap counts root rows only, and the registered limit
+// preview limit counts root rows only, and the registered limit
 // exemptions (cron.js's bound roots) show outside it. A worker leaf carries the
 // leaf icon and the archive action alone. The Scheduled tab nests the same way:
 // its cron rows group by project at root level with the worker leaves
@@ -273,7 +273,7 @@ test('the count title names a single direct manager child or multiple children',
   assert.match(rowHtml(nav.innerHTML, 'r1'), /title="2 active child sessions"/);
 });
 
-test('the five-row preview counts root rows only and hides a capped root with its subtree', () => {
+test('the preview counts root rows only and hides a capped root with its subtree', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
   const rows = [];
   for (let i = 1; i <= 6; i++) rows.push(manager(`work-${i}`, null, 20 - i));
@@ -630,7 +630,7 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
   // harness's reach; the browser harness covers it. cron_broken_ui.test.js
   // drives the schedule items.)
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'r1'),
-    ['Rename', 'Move to group\u2026', 'Task & context', 'Add schedule\u2026']);
+    ['Rename', 'Move to group\u2026', 'Task & context', 'Move under\u2026', 'Add schedule\u2026']);
   items[0].onSelect(click);
   items[2].onSelect(click);
   assert.deepEqual(calls, [
@@ -641,7 +641,7 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
 
   // A child manager moves with its parent: no Move to group.
   assert.deepEqual(open({taskParent: 'r1', profile: 'manager'}, 'c1'),
-    ['Rename', 'Task & context', 'Add schedule\u2026']);
+    ['Rename', 'Task & context', 'Move under\u2026', 'Add schedule\u2026']);
   calls.length = 0;
   items[1].onSelect(click);
   assert.deepEqual(calls, [['taskContext', 'c1']]);
@@ -680,7 +680,7 @@ test('touch menus lead with the Later toggle and child creation and trail with A
   // order, then the separator and Archive.
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'm1'),
     ['Add to Later', 'New child session', 'Rename', 'Move to group\u2026', 'Task & context',
-     'Add schedule\u2026', '---', 'Archive']);
+     'Move under\u2026', 'Add schedule\u2026', '---', 'Archive']);
   items[0].onSelect(click);
   items[1].onSelect(click);
   items[items.length - 1].onSelect(click);
@@ -692,7 +692,8 @@ test('touch menus lead with the Later toggle and child creation and trail with A
 
   // A task-tree child keeps the desktop order minus Move to group.
   assert.deepEqual(open({taskParent: 'r1', profile: 'manager'}, 'c1'),
-    ['Add to Later', 'New child session', 'Rename', 'Task & context', 'Add schedule\u2026', '---', 'Archive']);
+    ['Add to Later', 'New child session', 'Rename', 'Task & context', 'Move under\u2026',
+     'Add schedule\u2026', '---', 'Archive']);
 
   // A starred row reads its state off the star button (only star-r1 resolves
   // to the repainted solid star): Remove from Later toggles away from

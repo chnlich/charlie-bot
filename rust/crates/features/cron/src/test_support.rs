@@ -38,22 +38,6 @@ fn auto_pool(members: &[&str]) -> PoolConfig {
   }
 }
 
-/// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
-fn gh_wrapper_env(base: &Path, path: &str) -> Env {
-  use std::os::unix::fs::PermissionsExt;
-  let wrapper_dir = base.join("gh-wrapper");
-  std::fs::create_dir_all(&wrapper_dir).unwrap();
-  let wrapper = wrapper_dir.join("gh");
-  std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-  let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
-  permissions.set_mode(0o755);
-  std::fs::set_permissions(&wrapper, permissions).unwrap();
-  Env::from([
-    ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
-    (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
-  ])
-}
-
 pub fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
   feature_context_with_extra_backends(&[])
 }
@@ -170,7 +154,7 @@ fn feature_context_with_entries(
     .register_package("features.model_pool", charliebot_agents::model_pool::register)
     .expect("auto backend registration");
   registry
-    .register_package("features.backend_pool", charliebot_agents::backend_pool::register)
+    .register_package(charliebot_agents::backend_pool::PACKAGE, charliebot_agents::backend_pool::register)
     .expect("backend pool registration");
   let registry = Arc::new(registry);
   let mut cfg = registry.load_config(home.path()).expect("default config loads");
@@ -221,7 +205,7 @@ fn feature_context_with_entries(
   ));
   let startup = Arc::new(StartupState::default());
   startup
-    .insert(AgentBaseEnvironment { values: gh_wrapper_env(home.path(), "/usr/bin") })
+    .insert(AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(home.path(), "/usr/bin") })
     .expect("agent base environment inserts");
   startup
     .insert(
@@ -514,20 +498,16 @@ pub async fn child_manager(
 /// One task session archived as the completion owner's archive writes it: one closed fact on the session.
 pub async fn archive_task(features: &FeatureContext, session_id: &str) {
   let guard = features.store.control_lock().await;
-  let event = charliebot_store::control_events::build_control_event(
-    charliebot_core::event_types::TASK_CLOSED,
-    "user",
+  let event = charliebot_store::control_events::archived_close_event(
     session_id,
+    "synthetic-cron-archive",
+    "archived by the user",
     None,
     None,
-    [
-      ("request_id".to_string(), serde_json::json!("synthetic-cron-archive")),
-      ("outcome".to_string(), serde_json::json!("archived")),
-      ("summary".to_string(), serde_json::json!("archived by the user")),
-      ("result_refs".to_string(), serde_json::json!([])),
-      ("run_ids".to_string(), serde_json::json!([])),
-      ("report_to".to_string(), Value::Null),
-    ],
+    None,
+    charliebot_store::control_events::ACTOR_USER,
+    &[],
+    &[],
   );
   features.store.append_control_fact(&guard, session_id, event).await.expect("the archive fact appends");
   drop(guard);

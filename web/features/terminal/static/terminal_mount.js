@@ -5,7 +5,7 @@
 // / pty_resize message shapes.
 // ---------------------------------------------------------------------------
 
-// Both mounts bail when the xterm.js script tags failed to load; a missing
+// Both mounts bail when the xterm.js script tags failed to load. A missing
 // Terminal global would otherwise surface as a TypeError deep in createTerminal.
 globalThis.terminalScriptsReady = function() {
   if (window.Terminal && window.FitAddon) return true;
@@ -20,7 +20,7 @@ globalThis.createTerminal = function(container) {
     fontFamily: '"Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     theme: {background: '#000000', foreground: '#e2e8f0'},
     // Terminal text is 13px, so it takes the 4.5:1 floor. xterm's minimumContrastRatio lifts a
-    // non-dim cell's foreground to that floor; the shell's black-on-green status line measures
+    // non-dim cell's foreground to that floor. The shell's black-on-green status line measures
     // 3.58:1 in the default palette. xterm gives a dim cell half the ratio by design.
     minimumContrastRatio: 4.5,
     scrollback: 50000,
@@ -50,7 +50,7 @@ globalThis.scheduleAfterTerminalPaint = function(fn) {
   requestAnimationFrame(() => requestAnimationFrame(fn));
 };
 
-// The pty message shapes are the ws contract; both surfaces emit them over
+// The pty message shapes are the ws contract. Both surfaces emit them over
 // their own socket wrapper, so the wrapper is the only parameter.
 globalThis.makePtySenders = function(sendJson) {
   return {
@@ -64,7 +64,7 @@ globalThis.makePtySenders = function(sendJson) {
 };
 
 // The fit glue both surfaces share: fit the surface's terminal, then push the
-// fitted grid over its socket. The surfaces keep their own terminal refs; the
+// fitted grid over its socket. The surfaces keep their own terminal refs. The
 // bridge reads them through the getters instead of holding copies. The mayFit
 // callback carries the surface's extra guard: the panel only fits while its
 // tab is open. The onFitted callback runs after each fit the guard admitted,

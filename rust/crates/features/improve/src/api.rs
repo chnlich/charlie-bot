@@ -248,16 +248,7 @@ fn loop_backend(
     Some(backend_id) => backend_id.to_string(),
     None => match cfg.backends.calls.get(CallClass::Improve) {
       Some(CallTarget::Backend(target)) => target.clone(),
-      None | Some(CallTarget::Session) => {
-        if meta.backend.is_empty() {
-          cfg
-            .backends
-            .new_session_backend()
-            .ok_or_else(|| anyhow::anyhow!("session backend resolution requires a configured backends.options entry"))?
-        } else {
-          meta.backend.clone()
-        }
-      }
+      None | Some(CallTarget::Session) => charliebot_agents::model_pool::session_backend_id_or_default(cfg, meta)?,
     },
   };
   cfg.backends.check_backend_id(&backend_id).map_err(anyhow::Error::msg)?;

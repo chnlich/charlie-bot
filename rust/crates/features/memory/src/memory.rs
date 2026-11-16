@@ -48,7 +48,7 @@ pub const WORKER_USAGE_LINE: &str = concat!(
 
 const KNOWN_FIELDS: &[&str] = &["scope", "topic", "audience", "title"];
 const SCOPES: &[&str] = &["user", "host"];
-const AUDIENCE_ELEMENTS: &[&str] = &["master", "worker"];
+pub(crate) const AUDIENCE_ELEMENTS: &[&str] = &["master", "worker"];
 
 /// A store file violates the entry or topic grammar. The text is the refusal message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,7 +73,7 @@ pub struct Topic {
   pub resident: bool,
 }
 
-/// One parsed entry file. A header field the file leaves out is `None`; validation rejects those.
+/// One parsed entry file. A header field the file leaves out is `None`. Validation rejects those.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
   pub path: PathBuf,
@@ -131,11 +131,11 @@ pub struct MemorySelection {
   pub text: Option<String>,
 }
 
-/// Serializes `ensure_store` in the process: a `git init` that starts while another runs in the
-/// same directory exits 128.
+/// The process-wide serializer of `ensure_store`. A `git init` that starts while another runs in
+/// the same directory exits 128.
 static ENSURE_STORE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Creates the store scaffold under `memory_dir`, idempotently. It runs `git init` when `.git`
+/// The store scaffold under `memory_dir`, created idempotently. It runs `git init` when `.git`
 /// is absent, seeds `topics` and `.gitignore` only when missing, and creates `entries/` and `staging/`.
 pub fn ensure_store(memory_dir: &Path) -> anyhow::Result<()> {
   let _guard = ENSURE_STORE_LOCK.lock().expect("the memory store lock was poisoned by an earlier ensure_store");
@@ -171,7 +171,7 @@ fn seed_if_missing(path: &Path, content: &str) -> anyhow::Result<()> {
   fs::write(path, content).with_context(|| format!("write {}", path.display()))
 }
 
-/// Creates the directory. An existing directory is fine, and an existing file at the path is an error.
+/// The directory at `path`, created unless it already exists. An existing file at the path is an error.
 fn make_dir(path: &Path) -> anyhow::Result<()> {
   match fs::create_dir(path) {
     Ok(()) => Ok(()),
@@ -180,8 +180,8 @@ fn make_dir(path: &Path) -> anyhow::Result<()> {
   }
 }
 
-/// Loads the topics vocabulary and every entry, failing on the first violation. It runs
-/// [`ensure_store`] first, so a missing store loads as the empty store with the seeded vocabulary.
+/// The loaded topics vocabulary and every entry, failing on the first violation. [`ensure_store`]
+/// runs first, so a missing store loads as the empty store with the seeded vocabulary.
 pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
   ensure_store(memory_dir)?;
   let topics = load_topics(memory_dir)?;
@@ -196,19 +196,19 @@ pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
   Ok(Store { memory_dir: memory_dir.to_path_buf(), topics, entries })
 }
 
-/// Reads a text file with universal newlines: `\r\n` and a lone `\r` turn into `\n`.
+/// The text of `path`, with universal newlines: `\r\n` and a lone `\r` turn into `\n`.
 fn read_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   Ok(str_methods::universal_newlines(&text))
 }
 
-/// Parses one entry file.
+/// The `Entry` parsed from the entry file at `path`.
 pub fn parse_entry(path: &Path) -> anyhow::Result<Entry> {
   let text = read_text(path)?;
   Ok(parse_entry_text(&text, path)?)
 }
 
-/// Parses one entry file's text. Only the first header block is parsed; the body is the rest,
+/// The `Entry` parsed from one entry file's text. Only the first header block is parsed. The body is the rest,
 /// so it may hold `---` lines. Structure only: `load_store` checks the semantic rules.
 pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFormatError> {
   let location = entry_path.display();
@@ -252,7 +252,7 @@ pub fn parse_entry_text(text: &str, entry_path: &Path) -> Result<Entry, MemoryFo
   if i >= lines.len() {
     return Err(MemoryFormatError(format!("{location}: missing closing '---' after header")));
   }
-  // lines[i] is the closing `---`; the body is everything after it.
+  // lines[i] is the closing `---`. The body is everything after it.
   let body_lines = &lines[i + 1..];
   if body_lines.is_empty() || (body_lines.len() == 1 && body_lines[0].is_empty()) {
     return Err(MemoryFormatError(format!("{location}: line {}: empty body", i + 2)));
@@ -322,6 +322,12 @@ fn load_topics(memory_dir: &Path) -> anyhow::Result<BTreeMap<String, Topic>> {
     return Err(format_error(format!("{}: topics vocabulary file not found", topics_path.display())));
   }
   let text = read_text(&topics_path)?;
+  parse_topics_text(&topics_path, &text).map_err(format_error)
+}
+
+/// The topics named by a vocabulary file's `text`, keyed by topic name. `topics_path` names the file in each
+/// violation message, which is the store's format error and the lint's violation text.
+pub(crate) fn parse_topics_text(topics_path: &Path, text: &str) -> Result<BTreeMap<String, Topic>, String> {
   let mut topics = BTreeMap::new();
   for (index, raw) in text.split('\n').enumerate() {
     if raw.is_empty() {
@@ -329,18 +335,10 @@ fn load_topics(memory_dir: &Path) -> anyhow::Result<BTreeMap<String, Topic>> {
     }
     let lineno = index + 1;
     let Some((name, resident)) = parse_topic_line(raw) else {
-      return Err(format_error(format!(
-        "{}: line {lineno}: malformed topic line: {}",
-        topics_path.display(),
-        str_repr(raw)
-      )));
+      return Err(format!("{}: line {lineno}: malformed topic line: {}", topics_path.display(), str_repr(raw)));
     };
     if topics.contains_key(name) {
-      return Err(format_error(format!(
-        "{}: line {lineno}: duplicate topic {}",
-        topics_path.display(),
-        str_repr(name)
-      )));
+      return Err(format!("{}: line {lineno}: duplicate topic {}", topics_path.display(), str_repr(name)));
     }
     topics.insert(name.to_string(), Topic { name: name.to_string(), resident });
   }
@@ -349,7 +347,7 @@ fn load_topics(memory_dir: &Path) -> anyhow::Result<BTreeMap<String, Topic>> {
 
 /// The semantic violations of one entry against the vocabulary, in the order the validator reports them.
 /// Empty when the entry is valid.
-fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) -> Vec<String> {
+pub(crate) fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) -> Vec<String> {
   let topic_label = entry.topic.as_deref().unwrap_or("?");
   let violation = |message: String| format!("{ENTRIES_DIRNAME}/{topic_label}/{}.md: {message}", entry.slug);
   let mut violations = Vec::new();
@@ -528,7 +526,7 @@ fn selection_from_parts(
   }
   if let Some(usage) = usage_line {
     match segments.last_mut() {
-      // The usage line rides the index segment; a selection with no index entries gets a usage-only one.
+      // The usage line rides the index segment. A selection with no index entries gets a usage-only one.
       Some(last) if last.delivery == DELIVERY_INDEX => last.text = format!("{}\n\n{usage}", last.text),
       _ => segments.push(MemorySegment { delivery: DELIVERY_INDEX, text: usage.to_string(), sources: Vec::new() }),
     }
@@ -549,7 +547,7 @@ mod tests {
   const MASTER_ENTRY: &str =
     "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Dark Mode\n---\nbody\n";
 
-  /// Writes each `(relative path, text)` under `root`, creating the parent directories.
+  /// Each `(relative path, text)` written under `root`, with the parent directories created.
   fn write_files(root: &Path, files: &[(impl AsRef<str>, impl AsRef<str>)]) {
     for (relative, text) in files {
       let path = root.join(relative.as_ref());

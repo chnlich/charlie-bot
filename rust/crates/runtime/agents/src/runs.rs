@@ -25,9 +25,9 @@ pub fn clean_control_characters(text: &str) -> String {
   control_character().replace_all(&ansi_escape().replace_all(text, ""), "").into_owned()
 }
 
-/// The failure message an event carries. An `error` event carries its `message`; a Claude Code `result` record carries
-/// its `result` text when `is_error` is true, which is where a rejected request names its cause. An empty text carries
-/// no failure message.
+/// The failure message an event carries. An `error` event carries its `message`. A Claude Code `result` record
+/// carries its `result` text when `is_error` is true, which is where a rejected request names its cause. An empty
+/// text carries no failure message.
 pub fn failure_message(event: &Value) -> Option<String> {
   let text = match event.get("type").and_then(Value::as_str)? {
     event_types::ERROR => event.get("message").and_then(Value::as_str),
@@ -78,7 +78,7 @@ mod tests {
 
   use super::*;
 
-  /// The stderr line Claude Code writes on every run of a non-Claude model name; it names no failure.
+  /// The stderr line Claude Code writes on every run of a non-Claude model name. It names no failure.
   const MODEL_WARNING: &str =
     "[claude-code:unrecognized_model] {\"model\":\"synthetic-model\",\"query_source\":\"sdk\"}\n";
 

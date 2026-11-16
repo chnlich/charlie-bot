@@ -8,12 +8,14 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS,
-  SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus, TaskProfile,
-  UtcDateTime, WORK_STATE,
+  RUN_BACKEND, SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
+  THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -166,7 +168,7 @@ pub struct ListingCorpus {
 /// Both identities are held weakly: a dropped store's corpus never answers another store's request.
 static ACTIVE_CORPUS_MEMO: LazyLock<Mutex<Option<ActiveCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
 
-/// One memo entry. The memo holds it by value; only the store and registry it names are weak.
+/// One memo entry. The memo holds it by value. Only the store and registry it names are weak.
 struct ActiveCorpusEntry {
   store: Weak<Store>,
   registry: Weak<Registry>,
@@ -288,7 +290,7 @@ impl PageRows {
 /// store's corpus never answers another store's request.
 static PAGE_CORPUS_MEMO: LazyLock<Mutex<Option<PageCorpusEntry>>> = LazyLock::new(|| Mutex::new(None));
 
-/// One memo entry. The memo holds it by value; only the store and registry it names are weak.
+/// One memo entry. The memo holds it by value. Only the store and registry it names are weak.
 struct PageCorpusEntry {
   store: Weak<Store>,
   registry: Weak<Registry>,
@@ -412,7 +414,7 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<Page
 
 /// The row ids a status poll names by filter, or `None` when the sidebar has no filter of that name.
 ///
-/// `all` is the Workspace's page; `starred` is every starred session, archived ones included; any other name is a
+/// `all` is the Workspace's page. `starred` is every starred session, archived ones included. Any other name is a
 /// sidebar view the registry knows, answered with the active rows that belong to it.
 pub fn status_filter_ids(
   store: &Arc<Store>,
@@ -583,7 +585,7 @@ impl PageRowsMemo {
 /// `clear_unread` names the active session. Its row renders with `has_unread` false and is left out of the memo, so
 /// a later request that names another active session does not serve the marked row.
 ///
-/// `active` names the session the page shows; the text carries the rows the sidebar paints before the reader expands
+/// `active` names the session the page shows. The text carries the rows the sidebar paints before the reader expands
 /// a group ([`PageFirstScreen`]), and `active`'s row and subtree are always among them.
 pub fn active_page_json_text(
   store: &Store,
@@ -751,19 +753,21 @@ const ID_FIELD: &str = "id";
 /// The key under which the page declares which rows its listing covers.
 const FIRST_SCREEN_KEY: &str = "$screen";
 
-/// The roots the sidebar shows per group before the reader asks for the rest.
+/// The roots each group's first screen may carry: the most a sidebar of any window paints.
 ///
-/// The sidebar that renders these rows holds the same limit as `GROUP_SESSION_PREVIEW_LIMIT` in
-/// `web/static/js/sidebar/groups.js`. The server picks the rows the page carries, so both sides hold the number: the
-/// sidebar hides the roots past it, and the page carries no others. A drift costs a row of preview, never a row.
-const SIDEBAR_PREVIEW_LIMIT: usize = 5;
+/// The sidebar fills its own height with rows, so the number it paints follows the window:
+/// `web/static/js/sidebar/groups.js` measures its list and takes the roots that fit, up to
+/// `GROUP_SESSION_PREVIEW_MAX`. The page carries this many roots per group, with their descendants, so a tall
+/// window has rows to paint without another request. A drift leaves spare rows in the page, or paints the rows
+/// the page carries, never a broken row.
+const SIDEBAR_SCREEN_CAPACITY: usize = 20;
 
-/// The rows the chat page's sidebar paints before the reader expands a group, and the rows each group holds.
+/// The rows the chat page's sidebar paints on its first screen, and the rows each group holds.
 ///
-/// The sidebar groups its rows by the session's `group` and paints the first [`SIDEBAR_PREVIEW_LIMIT`] roots of
-/// each group with their descendants. A root with a bound schedule task always shows, and the open session's root
-/// and subtree always show. Every other row is hidden behind the group's "Show all" toggle, so the page does not
-/// carry it: the reader's expansion fetches the full listing.
+/// The sidebar groups its rows by the session's `group` and paints the roots of each group with their descendants
+/// that fit its list, up to [`SIDEBAR_SCREEN_CAPACITY`]. A root with a bound schedule task always shows, and the
+/// open session's root and subtree always show. Every other row is hidden behind the group's "Show all" toggle, so
+/// the page does not carry it: the reader's expansion fetches the full listing.
 ///
 /// A row's group is its root's `group`, so a group's count is the sum of its roots' subtree sizes.
 pub(crate) struct PageFirstScreen {
@@ -794,7 +798,7 @@ impl PageFirstScreen {
       let mut rank = 0;
       for &root in roots {
         let root = root as usize;
-        let in_preview = !shape.has_task[root] && rank < SIDEBAR_PREVIEW_LIMIT;
+        let in_preview = !shape.has_task[root] && rank < SIDEBAR_SCREEN_CAPACITY;
         if !shape.has_task[root] {
           rank += 1;
         }
@@ -1105,8 +1109,8 @@ const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", SCHEMA_VERSION_FIELD];
 /// Leave out the fields no page client reads, and an empty `round_ratings`.
 ///
 /// A row's `round_ratings` is an object of rounds the user rated, so a session with ratings keeps it. The page's
-/// client reads the field as `session.round_ratings || {}`, which draws an absent field exactly like an empty map;
-/// on the mock home every session's map is empty, and the field's 121,720 bytes of the sidebar text carry no value.
+/// client reads the field as `session.round_ratings || {}`, which draws an absent field exactly like an empty map.
+/// On the mock home every session's map is empty, and the field's 121,720 bytes of the sidebar text carry no value.
 fn drop_unread_fields(value: &mut Value) {
   let object = value.as_object_mut().expect("a session metadata value is an object");
   object.retain(|field, value| {
@@ -1120,7 +1124,7 @@ fn drop_unread_fields(value: &mut Value) {
 /// The page's own presence and form of the row values the client fixes.
 ///
 /// The page lists active sessions only ([`active_page_rows`] reads [`SessionStatus::Active`]), so every page row's
-/// `status` is `active`; the sidebar reads an absent status as active. A task-tree row's `work_state` paints an
+/// `status` is `active`. The sidebar reads an absent status as active. A task-tree row's `work_state` paints an
 /// indicator only for `waiting`, and `idle` is the client's own default, so an idle row drops it while any other
 /// state stays.
 ///
@@ -1167,7 +1171,7 @@ pub fn sessions_list_page_response(
 
 /// Render sidebar rows with their controller fields and route-local body and gzip memos.
 ///
-/// `shared` names the allocation a memoized corpus was handed out as, when the caller holds one; a route that filters
+/// `shared` names the allocation a memoized corpus was handed out as, when the caller holds one. A route that filters
 /// the corpus into a list of its own passes `None` and the source compares row by row.
 pub fn sessions_list_response(
   request: &Request<Body>,
@@ -1295,7 +1299,7 @@ pub fn row_refresh_ids(request: &Request<Body>) -> Option<Vec<String>> {
 /// decoding and the same epoch-minute times. The row memo is local to this call: a refresh names a few rows, and the
 /// whole-listing memo keys on the full page.
 pub fn row_refresh_text(store: &Store, page: &PageRows, ids: &[String]) -> StoreResult<String> {
-  // The named rows come from the page's id index, so a refresh of a full Workspace does not walk the corpus; the ids
+  // The named rows come from the page's id index, so a refresh of a full Workspace does not walk the corpus. The ids
   // the page no longer holds come back in `gone`.
   let named = page.rows_named(ids);
   row_refresh_text_for(store, &named, page.derived(), &page.sequence_fields, ids, LISTING_PROJECTION)
@@ -1408,7 +1412,7 @@ fn row_inputs(
         derived: derived.get(&row.id).cloned(),
         thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_str())),
         run_backend: if projection.include_run_backend { run_backend(store, row)? } else { None },
-        // Only a worker row renders a display backend; another row keeps the backend its metadata carries.
+        // Only a worker row renders a display backend. Another row keeps the backend its metadata carries.
         display_backend: if projection.display_backend && row.profile == TaskProfile::Worker {
           display_backend(store, row)?
         } else {
@@ -1460,9 +1464,9 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
       derived.and_then(|entry| entry.get(HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
     );
   }
-  object.insert("thinking_since".to_string(), row.thinking_since.clone());
+  object.insert(THINKING_SINCE.to_string(), row.thinking_since.clone());
   if projection.include_run_backend {
-    object.insert("run_backend".to_string(), row.run_backend.clone().map_or(Value::Null, Value::String));
+    object.insert(RUN_BACKEND.to_string(), row.run_backend.clone().map_or(Value::Null, Value::String));
   }
   if projection.display_backend
     && row.meta.profile == TaskProfile::Worker
@@ -1475,12 +1479,12 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
 fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   let mut response = Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len());
   if gzip {
     response = response
       .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
-      .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+      .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
   }
   response.body(Body::from(body)).expect("a JSON response builds")
 }
@@ -1617,11 +1621,12 @@ mod tests {
     screen.kept.iter().map(|&index| page.rows[index].id.as_str()).collect()
   }
 
-  /// The page carries the five roots each group paints with their descendants, and each group's whole row count.
+  /// The page carries the roots a group's first screen may draw with their descendants, and each group's whole row
+  /// count.
   #[test]
   fn the_page_carries_the_roots_each_group_paints_and_each_groups_count() {
     let mut rows: Vec<SessionMetadata> =
-      (1..=6).map(|n| synthetic_session(&format!("grouped-{n}"), Some("g1"), None)).collect();
+      (1..=25).map(|n| synthetic_session(&format!("grouped-{n}"), Some("g1"), None)).collect();
     rows.push(synthetic_session("grouped-1-child", Some("g1"), Some("grouped-1")));
     rows.push(synthetic_session("keyless-1", None, None));
     let page = synthetic_page(rows, HashMap::new());
@@ -1629,11 +1634,11 @@ mod tests {
     let screen_memo = Mutex::new(None);
     let screen = PageFirstScreen::of(&page, None, &screen_memo);
 
-    assert_eq!(
-      kept_ids(&screen, &page),
-      vec!["grouped-1", "grouped-2", "grouped-3", "grouped-4", "grouped-5", "grouped-1-child", "keyless-1"]
-    );
-    assert_eq!(screen.counts.get("g1"), Some(&7));
+    let mut expected: Vec<String> = (1..=20).map(|n| format!("grouped-{n}")).collect();
+    expected.push("grouped-1-child".to_string());
+    expected.push("keyless-1".to_string());
+    assert_eq!(kept_ids(&screen, &page), expected);
+    assert_eq!(screen.counts.get("g1"), Some(&26));
     assert_eq!(screen.counts.get(""), Some(&1));
     assert!(screen.partial);
   }
@@ -1642,29 +1647,30 @@ mod tests {
   #[test]
   fn a_scheduled_root_and_the_open_sessions_tree_stay_past_the_preview() {
     let mut rows: Vec<SessionMetadata> =
-      (1..=8).map(|n| synthetic_session(&format!("plain-{n}"), None, None)).collect();
-    rows.push(synthetic_session("plain-8-child", None, Some("plain-8")));
+      (1..=25).map(|n| synthetic_session(&format!("plain-{n}"), None, None)).collect();
+    rows.push(synthetic_session("plain-24-child", None, Some("plain-24")));
     let mut scheduled = Map::new();
     scheduled.insert(SCHEDULE_TASK.to_string(), json!("nightly"));
-    let sequence_fields = HashMap::from([("plain-7".to_string(), scheduled)]);
+    let sequence_fields = HashMap::from([("plain-23".to_string(), scheduled)]);
     let page = synthetic_page(rows, sequence_fields);
 
     let screen_memo = Mutex::new(None);
-    let screen = PageFirstScreen::of(&page, Some("plain-8"), &screen_memo);
+    let screen = PageFirstScreen::of(&page, Some("plain-24"), &screen_memo);
 
-    assert_eq!(
-      kept_ids(&screen, &page),
-      vec!["plain-1", "plain-2", "plain-3", "plain-4", "plain-5", "plain-7", "plain-8", "plain-8-child"]
-    );
-    assert_eq!(screen.counts.get(""), Some(&9));
+    let mut expected: Vec<String> = (1..=20).map(|n| format!("plain-{n}")).collect();
+    expected.push("plain-23".to_string());
+    expected.push("plain-24".to_string());
+    expected.push("plain-24-child".to_string());
+    assert_eq!(kept_ids(&screen, &page), expected);
+    assert_eq!(screen.counts.get(""), Some(&26));
     assert!(screen.partial);
     // The shape the first render built follows the corpus, so another open session picks another root from it.
-    let other = PageFirstScreen::of(&page, Some("plain-6"), &screen_memo);
-    assert_eq!(
-      kept_ids(&other, &page),
-      vec!["plain-1", "plain-2", "plain-3", "plain-4", "plain-5", "plain-6", "plain-7"]
-    );
-    assert_eq!(other.counts.get(""), Some(&9));
+    let other = PageFirstScreen::of(&page, Some("plain-25"), &screen_memo);
+    let mut other_expected: Vec<String> = (1..=20).map(|n| format!("plain-{n}")).collect();
+    other_expected.push("plain-23".to_string());
+    other_expected.push("plain-25".to_string());
+    assert_eq!(kept_ids(&other, &page), other_expected);
+    assert_eq!(other.counts.get(""), Some(&26));
   }
 
   /// A sidebar with nothing hidden carries every row, and its text says the listing is complete.
@@ -1725,7 +1731,7 @@ mod tests {
   async fn a_repeat_page_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
     let (_home, features) = crate::test_support::feature_context();
     crate::test_support::create_node(&features.store, "corpus-first", None, TaskProfile::Manager).await;
-    // The first read probes the new session and moves the sidebar generation, so it stores nothing; the read after it
+    // The first read probes the new session and moves the sidebar generation, so it stores nothing. The read after it
     // resolves the overlays with every probe settled.
     let _ = active_page_rows(&features.store, &features.registry).unwrap();
     let page = active_page_rows(&features.store, &features.registry).unwrap();
@@ -1735,7 +1741,7 @@ mod tests {
     assert!(Arc::ptr_eq(&page.rows, &again.rows), "a repeat read serves the row vector it already built");
     assert!(Arc::ptr_eq(&page.derived, &again.derived), "a repeat read serves the overlays it already resolved");
 
-    // A rebuilt index holds an equal archive list in a new allocation; the page still serves the corpus it built.
+    // A rebuilt index holds an equal archive list in a new allocation. The page still serves the corpus it built.
     features.store.invalidate_tree_index();
     let rebuilt = active_page_rows(&features.store, &features.registry).unwrap();
     assert!(
@@ -1759,7 +1765,7 @@ mod tests {
   async fn a_repeat_listing_read_serves_the_corpus_it_built_and_a_new_session_joins_it() {
     let (_home, features) = crate::test_support::feature_context();
     crate::test_support::create_node(&features.store, "active-first", None, TaskProfile::Manager).await;
-    // The first read probes the new session and moves the sidebar generation, so it stores nothing; the read after it
+    // The first read probes the new session and moves the sidebar generation, so it stores nothing. The read after it
     // resolves the overlays with every probe settled.
     let _ = active_listing_corpus(&features.store, &features.registry).unwrap();
     let corpus = active_listing_corpus(&features.store, &features.registry).unwrap();

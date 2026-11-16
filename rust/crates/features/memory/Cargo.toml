@@ -25,4 +25,5 @@ time.workspace = true
 unicode-width = "0.2"
 
 [dev-dependencies]
+charliebot-core = { workspace = true, features = ["test-support"] }
 flate2.workspace = true

@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 use anyhow::{Context as _, Result};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
+use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::text_repr;
 use charliebot_improve::command::{active_lock_path_in, loop_dir_in, read_active_lock_loop_id, read_loop_controller};
 use charliebot_store::layout;
@@ -78,12 +79,12 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
         continue;
       };
       for (label, sha) in [("running build", source_sha), ("target build", target_sha.as_str())] {
-        let (enabled, detail) = registrations.lookup(&repo, sha, backend_type).map_err(failed)?;
-        if enabled != Some(true) {
-          let state = if enabled == Some(false) { "false" } else { "unknown" };
+        let (state, detail) = registrations.lookup(&repo, sha, backend_type).map_err(failed)?;
+        if state != ReattachState::Enabled {
           println!(
             "block\t{display} run {id} (type {backend_type}, pid {pid}) cannot be re-attached after a restart: {label} \
-             {sha} marks restart_reattach = {state} ({detail})"
+             {sha} marks restart_reattach = {} ({detail})",
+            state.text()
           );
         }
       }
@@ -153,7 +154,7 @@ fn backend_types(home: &Path) -> Result<HashMap<String, String>, CliExit> {
 fn live_run(run: &Value, boot: i64) -> Result<Option<(u32, String, Value)>> {
   let (Some(pid), Some(pid_start), Some(started_at)) = (
     run.get("pid").and_then(Value::as_u64),
-    run.get("pid_start").and_then(Value::as_str),
+    run.get(PID_START_FIELD).and_then(Value::as_str),
     run.get("started_at").and_then(Value::as_str),
   ) else {
     return Ok(None);
@@ -201,8 +202,28 @@ struct BackendFiles {
   siblings: Vec<String>,
 }
 
+/// A build's `restart_reattach` declaration for one backend type: the value its trait block sets, or that the
+/// declaration could not be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReattachState {
+  Enabled,
+  Disabled,
+  Unknown,
+}
+
+impl ReattachState {
+  /// The word the scan prints for this declaration: the trait block's value, or `unknown` when it could not be read.
+  pub fn text(self) -> &'static str {
+    match self {
+      Self::Enabled => "true",
+      Self::Disabled => "false",
+      Self::Unknown => "unknown",
+    }
+  }
+}
+
 /// The declared backend types in one build, keyed by type name.
-type BuildRegistrations = HashMap<String, (Option<bool>, String)>;
+type BuildRegistrations = HashMap<String, (ReattachState, String)>;
 
 /// The registration files of one build in the layout its tree has, with each file's sibling sources, or the read error.
 fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<BackendFiles>, Option<String>)> {
@@ -237,7 +258,7 @@ fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<BackendFiles>, Opti
   Ok((Vec::new(), None))
 }
 
-/// Reads every backend type registration in build `sha` without checking out or changing its source tree.
+/// Every backend type registration in build `sha`, read without checking out or changing its source tree.
 fn read_build_registrations(repo: &Path, sha: &str) -> Result<Result<BuildRegistrations, String>> {
   let (backends, error) = registration_files(repo, sha)?;
   if let Some(error) = error {
@@ -274,8 +295,13 @@ fn read_build_registrations(repo: &Path, sha: &str) -> Result<Result<BuildRegist
         continue;
       };
       let reattach = match REATTACH.captures(&capture["body"]) {
-        Some(enabled) => (Some(&enabled[1] == "true"), backend.registration.clone()),
-        None => (None, format!("{} in build {sha} has no restart_reattach value", backend.registration)),
+        Some(value) => {
+          let state = if &value[1] == "true" { ReattachState::Enabled } else { ReattachState::Disabled };
+          (state, backend.registration.clone())
+        }
+        None => {
+          (ReattachState::Unknown, format!("{} in build {sha} has no restart_reattach value", backend.registration))
+        }
       };
       registrations.insert(declared, reattach);
     }
@@ -291,7 +317,7 @@ pub struct Registrations {
 
 impl Registrations {
   /// The declaration of `backend_type` in build `sha`, read from that build's tree once per build.
-  pub fn lookup(&mut self, repo: &Path, sha: &str, backend_type: &str) -> Result<(Option<bool>, String)> {
+  pub fn lookup(&mut self, repo: &Path, sha: &str, backend_type: &str) -> Result<(ReattachState, String)> {
     if !self.cache.contains_key(sha) {
       let build = read_build_registrations(repo, sha)?;
       self.cache.insert(sha.to_string(), build);
@@ -299,15 +325,17 @@ impl Registrations {
     match self.cache.get(sha).expect("entry inserted") {
       Ok(registrations) => match registrations.get(backend_type) {
         Some(found) => Ok(found.clone()),
-        None => Ok((None, format!("build {sha} has no registration for backend type {backend_type}"))),
+        None => {
+          Ok((ReattachState::Unknown, format!("build {sha} has no registration for backend type {backend_type}")))
+        }
       },
-      Err(error) => Ok((None, error.clone())),
+      Err(error) => Ok((ReattachState::Unknown, error.clone())),
     }
   }
 }
 
-/// Read one build's registration without checking out or changing its source tree.
-pub fn read_registration(repo: &Path, sha: &str, backend_type: &str) -> Result<(Option<bool>, String)> {
+/// One build's registration, read without checking out or changing its source tree.
+pub fn read_registration(repo: &Path, sha: &str, backend_type: &str) -> Result<(ReattachState, String)> {
   Registrations::default().lookup(repo, sha, backend_type)
 }
 
@@ -359,9 +387,9 @@ mod tests {
     assert!(!types.is_empty(), "expected registered backend types");
     let mut registrations = Registrations::default();
     for backend_type in types {
-      let (enabled, detail) = registrations.lookup(&repo, "HEAD", backend_type).expect("lookup succeeds");
+      let (state, detail) = registrations.lookup(&repo, "HEAD", backend_type).expect("lookup succeeds");
       assert!(
-        enabled.is_some(),
+        state != ReattachState::Unknown,
         "backend type {backend_type} declaration could not be resolved from tree HEAD: {detail}"
       );
     }
@@ -371,8 +399,8 @@ mod tests {
   fn genuinely_missing_backend_type_fails_closed() {
     let repo = repo_root();
     let mut registrations = Registrations::default();
-    let (enabled, detail) = registrations.lookup(&repo, "HEAD", "nonexistent-backend-type").expect("lookup succeeds");
-    assert_eq!(enabled, None);
+    let (state, detail) = registrations.lookup(&repo, "HEAD", "nonexistent-backend-type").expect("lookup succeeds");
+    assert_eq!(state, ReattachState::Unknown);
     assert!(
       detail.contains("has no registration for backend type nonexistent-backend-type"),
       "unexpected detail: {detail}"

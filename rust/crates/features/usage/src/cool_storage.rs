@@ -197,7 +197,7 @@ fn scan_references(facts: &HashMap<String, SessionFacts>) -> HashMap<String, Vec
   references
 }
 
-/// Deletes the reserved transport names inside one cold session's managed run directories.
+/// The sweep that deletes the reserved transport names inside one cold session's managed run directories.
 /// A file that a v2 run record references is kept.
 fn sweep_raw_transport(session_dir: &Path, counter: &mut SweepCounter) -> anyhow::Result<()> {
   let referenced = run_referenced_transport(session_dir)?;

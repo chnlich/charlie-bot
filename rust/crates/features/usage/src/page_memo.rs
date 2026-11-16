@@ -92,8 +92,8 @@ impl PageMemo {
     Ok(&self.entry.as_ref().expect("the memo holds the body it served or built").html)
   }
 
-  /// Open the ledger at `ledger_path` unless the memo already reads that file. Another path, or a path that names
-  /// another file, holds another ledger's body, so the entry goes with the connection.
+  /// The memo's connection, opened at `ledger_path` unless the memo already reads that file. Another path, or a path
+  /// that names another file, holds another ledger's body, so the entry goes with the connection.
   fn connect(&mut self, ledger_path: &Path) -> anyhow::Result<()> {
     let reads_this_file =
       self.ledger.as_ref().is_some_and(|ledger| ledger.path() == ledger_path) && self.file == file_id(ledger_path);

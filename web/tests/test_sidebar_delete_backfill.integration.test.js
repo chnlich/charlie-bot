@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Inline-delete backfill for the sidebar's grouped views: archive and
 // permanent-delete repaint the grouped list in place from the last-rendered
-// list minus the session. So the 5-row preview window backfills, and the group
+// list minus the session. So the preview window backfills, and the group
 // header count and Show-all toggle resync to the remaining total, with zero
 // list fetches. The archived tab and the search overlay keep node-only row
 // removal, and deleting the viewed session keeps its switch/empty behavior.
@@ -13,11 +13,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-
-// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
-const NO_STORED_COPY = {get: () => null};
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
-  loadCronPackage, makeSessionMeta } = require('./session_context_stub');
+const { answerArchiveConfirmations, baseSessionContext, buildSidebarFilterElements, createChatSidebarContext,
+  inlinePageTimers, loadCronPackage, makeSessionMeta, makeSidebarRow } = require('./session_context_stub');
 
 function makeSession(id, overrides = {}) {
   return makeSessionMeta(id, {group: 'Work', status: 'active', ...overrides});
@@ -32,10 +29,10 @@ function rowStubs(ids) {
 function deleteOkFetch() {
   return async (url, opts = {}) => {
     if (opts.method === 'POST' && url.endsWith('/archive')) {
-      return {ok: true, headers: NO_STORED_COPY, json: async () => ({})};
+      return {ok: true, json: async () => ({})};
     }
     if (opts.method === 'DELETE' && url.endsWith('/permanent')) {
-      return {ok: true, headers: NO_STORED_COPY, json: async () => ({})};
+      return {ok: true, json: async () => ({})};
     }
     throw new Error('unexpected fetch ' + url);
   };
@@ -78,6 +75,7 @@ function buildContext({sessionId = 'session-live', rows = [], fetchHandler} = {}
   // be re-installed over the wired ones.
   context.switchSession = recordSwitch;
   context.renderNoActiveSessionView = recordNoActiveView;
+  answerArchiveConfirmations(context);
   return {context, nav, fetchCalls, switches, noActiveViews, elements};
 }
 
@@ -197,8 +195,8 @@ test('entering Workspace paints the badge and the list from one parallel fetch p
   ];
   const {context, nav, fetchCalls} = buildContext({
     fetchHandler: async (url) => {
-      if (url === '/api/sessions/?compact=1') return {ok: true, headers: NO_STORED_COPY, json: async () => sessions};
-      if (url === '/api/cron/tasks') return {ok: true, headers: NO_STORED_COPY, json: async () => cronTasks};
+      if (url === '/api/sessions/?compact=1') return {ok: true, json: async () => sessions};
+      if (url === '/api/cron/tasks') return {ok: true, json: async () => cronTasks};
       throw new Error('unexpected fetch ' + url);
     },
   });
@@ -219,7 +217,7 @@ test('a failed cron pull still paints the Workspace list, with no badge', async 
   const sessions = [makeSession('c1', {group: null}), makeSession('c2', {group: null})];
   const {context, nav, fetchCalls} = buildContext({
     fetchHandler: async (url) => {
-      if (url === '/api/sessions/?compact=1') return {ok: true, headers: NO_STORED_COPY, json: async () => sessions};
+      if (url === '/api/sessions/?compact=1') return {ok: true, json: async () => sessions};
       if (url === '/api/cron/tasks') throw new Error('cron endpoint down');
       throw new Error('unexpected fetch ' + url);
     },
@@ -268,7 +266,7 @@ test('deleting from the search overlay removes only the row node', async () => {
     makeSession('search-2', {group: null}),
     makeSession('search-3', {group: null}),
   ];
-  const deletedRow = createElement({tagName: 'A', id: 'session-search-1'});
+  const deletedRow = makeSidebarRow('search-1', 'Search one');
   const {context, nav, fetchCalls} = buildContext({rows: [deletedRow]});
   // Paint a grouped list first so lastGroupedRenderArgs exists: the overlay
   // delete must not repaint it even though the args are sitting there.

@@ -2,7 +2,7 @@
 //!
 //! A candidate is one piece of the user's own text that may hold a choice precedent. Four sources produce them:
 //! artifact and diff comment batches, plan version notes, replies that follow a thumbs-down round rating, and every
-//! other user message. Only `user` events produce chat candidates; `agent_message` events carry another session's
+//! other user message. Only `user` events produce chat candidates. `agent_message` events carry another session's
 //! agent and never become one.
 //!
 //! Each candidate carries the latest web reply before it, because that reply states what the user was asked and what
@@ -71,7 +71,7 @@ pub struct Candidate {
   pub session_id: String,
   pub reference: SourceRef,
   pub timestamp: String,
-  /// A note's predecessor Trade-off lines; `None` when the predecessor page is gone. Other sources carry none.
+  /// A note's predecessor Trade-off lines. `None` when the predecessor page is gone. Other sources carry none.
   pub trade_off_options: Option<Vec<String>>,
 }
 
@@ -445,7 +445,7 @@ pub fn trade_off_lines(html: &str) -> Vec<String> {
 }
 
 fn trade_offs_section(html: &str) -> Option<&str> {
-  // ASCII case folding keeps `lowered` offsets equal to `html` offsets; every marker searched for is ASCII.
+  // ASCII case folding keeps `lowered` offsets equal to `html` offsets. Every marker searched for is ASCII.
   let lowered = html.to_ascii_lowercase();
   let heading = lowered.find("trade-offs")?;
   let heading_start = lowered[..heading].rfind("<h2")?;

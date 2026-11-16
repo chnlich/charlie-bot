@@ -19,6 +19,16 @@ pub const REDACTED: &str = "[redacted]";
 /// The key, under a credentials section, that holds the section's API key.
 pub const API_KEY_FIELD: &str = "api_key";
 
+/// The `charliebot` section that holds the access key.
+const CHARLIEBOT_SECTION: &str = "charliebot";
+
+/// The `access_key` field of the `charliebot` section: the secret a client presents to the server, and the auth token
+/// a backend presents to the server's proxy.
+pub const ACCESS_KEY_FIELD: &str = "access_key";
+
+/// The key, under a chat platform's credentials section, that holds the bot's own API token.
+pub const BOT_TOKEN_FIELD: &str = "bot_token";
+
 /// One credential value: text, an integer, or a flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialValue {
@@ -65,7 +75,13 @@ impl Credentials {
   /// The `charliebot.access_key` credential, or `None` when it is unset or
   /// falsy. `None` means every access-key gate lets unauthenticated readers through.
   pub fn access_key(&self) -> Option<String> {
-    self.get("charliebot", "access_key").filter(|value| value.is_truthy()).map(CredentialValue::value_str)
+    self.get(CHARLIEBOT_SECTION, ACCESS_KEY_FIELD).filter(|value| value.is_truthy()).map(CredentialValue::value_str)
+  }
+
+  /// The `charliebot.access_key` credential, or the error naming it and the file when it is unset. A falsy value such
+  /// as `""` is set, so a caller that must authenticate refuses a missing key here and an empty one at its own gate.
+  pub fn require_access_key(&self) -> Result<String, ConfigError> {
+    self.require(CHARLIEBOT_SECTION, ACCESS_KEY_FIELD)
   }
 
   /// The value under `section`/`key` as text, or an error naming the key and the file
@@ -268,6 +284,14 @@ mod tests {
     assert_eq!(load("charliebot:\n  access_key: \"\"\n").unwrap().access_key(), None);
     assert_eq!(load("charliebot:\n  access_key: null\n").unwrap().access_key(), None);
     assert_eq!(load("").unwrap().access_key(), None);
+  }
+
+  #[test]
+  fn require_access_key_names_the_credential_when_it_is_unset() {
+    assert_eq!(load("charliebot:\n  access_key: k-1\n").unwrap().require_access_key().unwrap(), "k-1");
+    let credentials = load("").unwrap();
+    let error = credentials.require_access_key().unwrap_err().to_string();
+    assert!(error.contains("credentials.charliebot.access_key"), "{error}");
   }
 
   #[test]

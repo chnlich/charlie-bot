@@ -52,13 +52,18 @@
     /* A phone cannot fit the row on one line: the index, the type and the time take about 200 of the
        row's 358 px, which leaves a preview there about 20 characters long, and the rows of one type
        then read alike. The first line holds the index, the type, the time and the caret at its right
-       end; the second line holds the preview across the row's 16 px inset, where the 120-character
-       preview the script builds reaches the reader. No row, strip or label is added: the row grows
-       one text line, and the screen space goes to the preview the reader scans. */
+       end; the second line holds the preview across the row's 16 px inset. One line there carries
+       about 62 Latin characters, so holding the preview to one line cut its text: a 68-character
+       sentence read to "matt…" with 29 px of itself left over, and a 121-character preview showed
+       about 31 of its characters. Two lines carry a 68-character preview whole and 58 of a
+       121-character one, and the box elides at the end of the second. No row, strip or label is
+       added: a preview that fits one line keeps the row's height. */
     @media (max-width: 768px) {
       .event-row-head { flex-wrap: wrap; row-gap: 2px; }
       .event-row-head > .event-caret { order: 1; margin-left: auto; }
-      .event-row-head > .event-preview { order: 2; flex: 1 0 100%; }
+      .event-row-head > .event-preview { order: 2; flex: 1 0 100%; white-space: normal;
+        overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2; line-clamp: 2; }
       /* The row's reading column on a phone is its 16 px inset, where the preview starts. The
          payload follows it: the 56 px badge column it clears on a desk sets no column here, and
          holding it would take 40 px from every payload line. */
@@ -83,6 +88,13 @@
        3.07:1 on the fill, the tone the diff page's fields draw; the blue focus border still wins. */
     #type-filter:not(:focus) { border-color: #64748b; }
 
+    /* Clear acts on the filter's text: with an empty box it sets the empty value again and redraws
+       the same rows, so it is a control with no result beside a box that shows only its placeholder.
+       It shows while the box carries a query and leaves the row while the box is empty, the way the
+       sidebar search's clear control leaves the idle search row. The idle row then spends no width
+       on it: 49 px plus the row's 12 px gap, at both widths. */
+    #type-filter:placeholder-shown ~ #clear-filter { display: none; }
+
     /* The Download, Clear and Load earlier controls draw their box with a slate-700 outline:
        rgb(51, 65, 85) draws 1.72:1 on the slate-900 bar and 1.57:1 on the header's slate-850,
        under the 3:1 boundary floor WCAG 1.4.11 sets for a control, and the outline is the only
@@ -97,8 +109,8 @@
        icon-only download action and the count on its first row. The divider that
        separates Back from the title leaves with the title, so no bare separator
        hangs after Back. The filter bar keeps its label and input on the first row
-       and moves "Expand all" and "Clear" to a second row rather than squeezing
-       that row. */
+       and moves "Expand all", "Clear" (while the filter carries text) and "Load
+       earlier events" to a second row rather than squeezing that row. */
     @media (max-width: 768px) {
       .events-download-label { display: none; }
       .events-filter { flex-wrap: wrap; }
@@ -108,11 +120,14 @@
       .events-topbar .events-back-sep { display: none; }
     }
 
-    /* Pointer targets: the Expand all label keeps a 24 px row around its 16 px box, and Clear is the
-       page's bordered secondary button at 26 px tall, so both clear the 24 px minimum. The two sit
-       12 px apart, where undersized targets would still not. The type filter already stands 26 px
-       tall, so the bar keeps its height. */
+    /* Pointer targets: the Expand all label keeps a 24 px row around its 16 px box, and Clear and
+       Load earlier events are the page's bordered secondary buttons at 26 px tall, so all three
+       clear the 24 px minimum. They sit 12 px apart, where undersized targets would still not. The
+       type filter already stands 26 px tall, so the bar keeps its height. */
     .events-expand { min-height: 24px; }
+    /* The load control joins the filter row, so its label keeps one line there and the row keeps
+       the height the filter and Clear already set. */
+    #load-earlier { white-space: nowrap; }
     #expand-all { width: 16px; height: 16px; }
     /* The Back link's 16 px icon and 14 px text draw a 20 px box, and the header's padding does not
        extend it. The 24 px box gives the page's only way back to the session the pointer floor the
@@ -193,7 +208,9 @@
       {% include 'partials/concurrency_badge.html' %}
     </header>
 
-    <!-- Filter bar -->
+    <!-- Filter bar. The load control rides this row rather than a bar of its own: a bar would spend a
+         row of the page on one button, and this row has room for it at both widths. The bar is
+         sticky, so the control also stays in reach while the list scrolls. -->
     <div class="events-filter border-b border-slate-800 px-4 py-2 flex items-center gap-3 bg-slate-900">
       <label class="text-xs text-slate-400">Filter by type:</label>
       <input id="type-filter"
@@ -204,17 +221,13 @@
         <input id="expand-all" type="checkbox" class="accent-blue-500">
         Expand all
       </label>
-      <button onclick="clearFilter()"
+      <button id="clear-filter" onclick="clearFilter()"
               class="events-secondary text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">Clear</button>
+      <button id="load-earlier"
+              class="events-secondary hidden text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">
+        Load earlier events
+      </button>
     </div>
-  </div>
-
-  <!-- Earlier events: the page loads the log's tail first, so a large log does not hold the first screen -->
-  <div id="earlier-bar" class="hidden px-4 py-2 border-b border-slate-800">
-    <button id="load-earlier"
-            class="events-secondary text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">
-      Load earlier events
-    </button>
   </div>
 
   <!-- Event list -->
@@ -270,6 +283,9 @@
     // A row previews its event on one line: the string content, the description, or the first
     // message block that carries text — a typed answer, a tool call, or a tool result. A tool
     // call or a tool result otherwise shows its badges alone, so a reader cannot tell what ran.
+    // A run's end writes no message, so its row names the run's own outcome instead: the exit code
+    // and the seconds it thought. Without that the rows of one type read alike, and a failed run's
+    // end cannot be told from a clean one without opening each row.
     const PREVIEW_CHARS = 120;
 
     function toolResultText(content) {
@@ -289,6 +305,22 @@
       return '';
     }
 
+    // A whole-second duration in the words the chat's run-end separator uses: "45s", "2m57s".
+    function runDuration(seconds) {
+      const total = Math.max(0, Math.floor(Number(seconds)));
+      if (total < 60) return total + 's';
+      return Math.floor(total / 60) + 'm' + String(total % 60).padStart(2, '0') + 's';
+    }
+
+    // The run's end: its exit code, which the run writes to every end event, and the seconds it
+    // thought. An end event with no code is not a run's end and contributes no summary.
+    function runEndText(ev) {
+      if (typeof ev.exit_code !== 'number') return '';
+      const parts = ['exit ' + ev.exit_code];
+      if (typeof ev.thinking_seconds === 'number') parts.push(runDuration(ev.thinking_seconds));
+      return parts.join(' · ');
+    }
+
     function summaryText(ev) {
       if (typeof ev.content === 'string') return ev.content;
       if (typeof ev.description === 'string') return ev.description;
@@ -297,14 +329,26 @@
         const text = blockSummary(block);
         if (text) return text;
       }
-      return '';
+      return runEndText(ev);
     }
 
     // The one-line preview: whitespace collapsed, cut at PREVIEW_CHARS with an ellipsis so a cut
     // preview reads as cut rather than as the event's whole text.
+    //
+    // The line breaker breaks a preview at its spaces alone, so a run longer than a phone's preview
+    // column — about 62 characters on the row's 358 px — moves whole to the next line. A tool call's
+    // row then spends the preview's first line on the name alone, 23 px of 358, and cuts the input,
+    // the text the row exists to show, at the second. A zero-width space after each run's own
+    // punctuation — a tool input's braces, brackets, commas and colons, prose's commas and
+    // semicolons — gives the run break points, so the first line fills with the input. The character
+    // draws nothing, and the cut lands before it goes in, so the preview keeps its PREVIEW_CHARS
+    // characters.
+    const PREVIEW_BREAKS = /([{}[\],:;])/g;
+
     function previewText(ev) {
       const text = summaryText(ev).replace(/\s+/g, ' ').trim();
-      return text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS) + '…' : text;
+      const cut = text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS) + '…' : text;
+      return cut.replace(PREVIEW_BREAKS, '$1\u200b');
     }
 
     // The event's time: a `ts` epoch in seconds, or the ISO `timestamp` most event types write.
@@ -356,6 +400,7 @@
         const row = document.createElement('div');
         row.className = 'event-row';
         row.dataset.idx = idx;
+        row.dataset.key = eventKey(ev);
 
         const type = ev.type || 'unknown';
         const badgeCls = badgeStyle(type);
@@ -443,6 +488,21 @@
     // -------------------------------------------------------------------------
     // Fetch JSONL
     // -------------------------------------------------------------------------
+    // Every event gets a key for the page's lifetime. A re-render rebuilds each row, and a load moves
+    // every event's place in the list, so the key is what names the same event across a render; a list
+    // position cannot. The key rides beside the event rather than on it: the row shows the event's own
+    // JSON, and a field added to the object would show up there.
+    const eventKeys = new WeakMap();
+    let nextEventKey = 0;
+    function eventKey(ev) {
+      let key = eventKeys.get(ev);
+      if (key === undefined) {
+        key = ++nextEventKey;
+        eventKeys.set(ev, key);
+      }
+      return key;
+    }
+
     function parseEvents(text) {
       return text.split('\n').filter(l => l.trim()).map(line => {
         try {
@@ -460,8 +520,9 @@
       return Number.isFinite(value) && value >= 0 ? value : 0;
     }
 
+    // The load control shows only while the served window leaves earlier events to fetch.
     function updateEarlierBar() {
-      document.getElementById('earlier-bar').classList.toggle('hidden', !(windowStart > 0));
+      document.getElementById('load-earlier').classList.toggle('hidden', !(windowStart > 0));
     }
 
     async function loadEvents() {
@@ -484,8 +545,21 @@
       }
     }
 
-    // Prepend the events before the loaded window. The scroll offset is kept on the first row that was
-    // on screen, so the reader stays where they were while earlier rows arrive above.
+    // The row the reader is on: the first one whose bottom edge is below the sticky block. It is the
+    // anchor a load keeps in place, because the rows just loaded sit above it.
+    function readerAnchor(list) {
+      const filterBar = document.querySelector('.events-filter');
+      const bottom = filterBar ? filterBar.getBoundingClientRect().bottom : 0;
+      return [...list.querySelectorAll('.event-row')].find((row) => row.getBoundingClientRect().bottom > bottom) || null;
+    }
+
+    // Prepend the events before the loaded window. The control rides the sticky filter row, so a press
+    // can come at any scroll position. The re-render rebuilds every row and the loaded ones push the
+    // rest down, so the anchor row is found again by its key and the page follows its move: the reader
+    // keeps the rows they were reading, and a row that folds its payload on the way takes its own
+    // height with it. At the page's top the move is not followed, because the loaded rows open the list
+    // under the control there, earliest first, in the order the list reads; following it would leave
+    // them above the viewport, where the press would read as nothing.
     async function loadEarlier() {
       if (loadingEarlier || !(windowStart > 0)) return;
       loadingEarlier = true;
@@ -493,17 +567,30 @@
       button.disabled = true;
       button.textContent = 'Loading…';
       const before = windowStart;
-      const previousHeight = document.documentElement.scrollHeight;
+      const list = document.getElementById('event-list');
       try {
         const res = await fetch(EVENTS_URL + '?tail=' + EVENTS_PAGE + '&before=' + before);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
         const earlier = parseEvents(await res.text());
+        // The anchor is read once the rows are about to be replaced, after the fetch: a scroll made
+        // while the request was pending is part of the place a press keeps, not something the
+        // compensation undoes.
+        const anchor = readerAnchor(list);
+        const anchorKey = anchor ? anchor.dataset.key : null;
+        const anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;
+        const scrolled = window.scrollY > 0;
         windowStart = windowStartOf(res);
         allEvents = earlier.concat(allEvents);
         filterEvents();
-        window.scrollBy(0, document.documentElement.scrollHeight - previousHeight);
+        if (scrolled && anchorKey != null) {
+          const again = list.querySelector('.event-row[data-key="' + anchorKey + '"]');
+          if (again) {
+            const moved = again.getBoundingClientRect().top - anchorTop;
+            if (moved) window.scrollBy(0, moved);
+          }
+        }
         document.getElementById('error-msg').classList.add('hidden');
       } catch (err) {
         const errEl = document.getElementById('error-msg');

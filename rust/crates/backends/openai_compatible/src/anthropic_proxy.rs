@@ -14,9 +14,11 @@ use axum::response::sse::{self, Sse};
 use axum::response::{IntoResponse, Response};
 use bstr::ByteSlice;
 use charliebot_compat::http_client;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::credentials::API_KEY_FIELD;
+use charliebot_core::event_types::REQUEST_EXCEPTION_EVENT;
 use charliebot_core::headers::bearer_value;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
@@ -132,7 +134,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
   let client = http_client::shared_client().map_err(|error| unhandled("ClientError", format!("{error:#}")))?;
   let mut request = client
     .post(&upstream_url)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .body(text_repr::json_dumps(&openai_payload, &text_repr::STARLETTE_JSON));
   if let Some(authorization) = authorization {
     request = request.header(header::AUTHORIZATION, authorization);
@@ -211,7 +213,7 @@ struct Relay {
 enum RelayState {
   /// The upstream still has lines to read. `[DONE]` and the upstream's end both leave this state.
   Reading,
-  /// The reading ended; the translator's closing events still have to queue.
+  /// The reading ended. The translator's closing events still have to queue.
   Finishing,
   /// Nothing follows the queued frames but the end.
   Done,
@@ -248,7 +250,7 @@ impl Relay {
 
   async fn advance(&mut self) {
     if let Err((kind, message)) = self.step().await {
-      tracing::error!(error = %kind, detail = %message, "Exception in ASGI application");
+      tracing::error!(error = %kind, detail = %message, "{}", REQUEST_EXCEPTION_EVENT);
       self.failure = Some(io::Error::other(message));
       self.state = RelayState::Done;
     }

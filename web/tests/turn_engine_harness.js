@@ -10,7 +10,7 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 
-const {chatModules, runStaticModules} = require('./read_static');
+const {chatModules, readStatic, runStaticModules} = require('./read_static');
 const { createClassList } = require('./dom_element_stub');
 const { escapeHtmlText } = require('./escape_html_stub');
 
@@ -372,6 +372,8 @@ function loadChatContext(document) {
     },
     console: {error: () => {}},
     relativeTime: (iso) => `relative:${iso}`,
+    // markdown-renderer.js's registration seam, which utils.js calls at load.
+    registerChatMathLoader: () => {},
     window: {addEventListener() {}},
     platform: {isMobile: false, onChange() {}},
     // Real parsing (the fold row formats a message timestamp), fixed "now"
@@ -384,6 +386,8 @@ function loadChatContext(document) {
   };
 
   vm.createContext(context);
+  // The page loads utils.js ahead of every chat module; the chat's time label is utils.js formatTimeLabel.
+  vm.runInContext(readStatic('utils.js'), context, {filename: 'utils.js'});
   runStaticModules(context, chatModules());
   return {context, nowIso};
 }

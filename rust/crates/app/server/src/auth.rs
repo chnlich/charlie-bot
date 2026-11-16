@@ -14,7 +14,8 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use charliebot_compat::headers::header_text;
-use charliebot_compat::mimetypes_table::TEXT_HTML;
+use charliebot_compat::mimetypes;
+use charliebot_compat::mimetypes_table::{APPLICATION_JSON, TEXT_HTML};
 use charliebot_compat::responses;
 use charliebot_core::run_token;
 use charliebot_registry::pages::STATIC_URL_PREFIX;
@@ -29,10 +30,8 @@ pub const ACCESS_KEY_COOKIE: &str = "charliebot_access_key";
 
 pub const AUTH_STATUS_PATH: &str = "/api/auth/status";
 
-const PUBLIC_PATHS: &[&str] = &["/", AUTH_STATUS_PATH, OFFLINE_SHELL_WORKER_PATH];
+const PUBLIC_PATHS: &[&str] = &["/", AUTH_STATUS_PATH];
 const PUBLIC_PREFIXES: &[&str] = &[STATIC_URL_PREFIX];
-/// The offline shell's worker script, served before the key is presented: the browser fetches it on its own.
-pub const OFFLINE_SHELL_WORKER_PATH: &str = "/offline-shell-worker.js";
 
 /// The self-contained page an unauthenticated browser navigation receives (`login_page.html`).
 const LOGIN_PAGE: &str = include_str!("login_page.html");
@@ -145,15 +144,15 @@ pub async fn layer(State(state): State<Arc<AppState>>, request: Request, next: N
   };
   match decide(request.method(), request_path::of(&request), request.headers(), key.as_deref()) {
     Ok(Decision::Pass) => next.run(request).await,
-    Ok(Decision::LoginPage) => unauthorized("text/html; charset=utf-8", LOGIN_PAGE),
-    Ok(Decision::JsonUnauthorized) => unauthorized("application/json", UNAUTHORIZED_JSON),
+    Ok(Decision::LoginPage) => unauthorized(&mimetypes::with_utf8_charset(TEXT_HTML), LOGIN_PAGE),
+    Ok(Decision::JsonUnauthorized) => unauthorized(APPLICATION_JSON, UNAUTHORIZED_JSON),
     Err(NonAsciiCredential) => {
       responses::internal_error("TypeError", "comparing strings with non-ASCII characters is not supported".to_string())
     }
   }
 }
 
-fn unauthorized(content_type: &'static str, body: &'static str) -> Response {
+fn unauthorized(content_type: &str, body: &'static str) -> Response {
   Response::builder()
     .status(StatusCode::UNAUTHORIZED)
     .header(header::CONTENT_TYPE, content_type)
@@ -196,7 +195,6 @@ mod tests {
     let cases: Vec<Case> = vec![
       ("/", vec![], Pass),
       ("/api/auth/status", vec![], Pass),
-      ("/offline-shell-worker.js", vec![], Pass),
       ("/static/js/app.js", vec![], Pass),
       ("/static", vec![], JsonUnauthorized),
       ("/api/internal/version", vec![], JsonUnauthorized),

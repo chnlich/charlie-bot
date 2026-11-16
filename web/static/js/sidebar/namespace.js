@@ -87,7 +87,7 @@
   }
 
   // The sidebar's interaction scripts: the Settings menus, the rename and session-action dialogs,
-  // and the archive and group actions. A page paints its rows without them, and only a control
+  // the archive and group actions, and the move picker. A page paints its rows without them, and only a control
   // click reaches them. Each include of one is replaced by a loader under web/templates that calls
   // deferSidebarInteractions; the first control call or forwarded global loads the whole group. Each
   // module's own registerSidebarControl and Sidebar.wire then replace the forwards.
@@ -96,6 +96,7 @@
     '/static/js/sidebar/modals.js',
     '/static/js/sidebar/session-actions.js',
     '/static/js/sidebar/session-menus.js',
+    '/static/js/sidebar/session-move.js',
   ];
   const INTERACTION_CONTROLS = [
     'startRename', 'archiveSession', 'unarchiveSession', 'openPendingTriggers',
@@ -106,7 +107,7 @@
     'openSessionActionModal', 'closeSessionActionModal', 'submitSessionActionModal',
     'forkSession', 'eloneSession', 'openTaskContextModal', 'closeTaskContextModal',
     'archiveSession', 'unarchiveSession', 'confirmDeletePermanently', 'showGroupSelector',
-    'renameGroup', 'deleteGroup', 'openPendingTriggers',
+    'renameGroup', 'deleteGroup', 'openPendingTriggers', 'openSessionMovePicker',
   ];
   const INTERACTION_SIDEBAR_ONLY = [
     'removeSessionRowInline', 'deleteSessionPermanently', 'setSessionGroup',

@@ -1,5 +1,5 @@
 //! The Claude Code backend's setup check: `setup_step` asserts the command disallows the headless-unsafe tools.
-//! Registered as a setup step; `charliebot setup` runs it.
+//! Registered as a setup step. `charliebot setup` runs it.
 
 use std::collections::BTreeSet;
 
@@ -9,7 +9,7 @@ const REQUIRED: [&str; 8] =
   ["Monitor", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "Workflow", "SendMessage", "RemoteTrigger"];
 
 /// Smoke-check the Claude Code backend command for headless-unsafe tools. Prints the banner and the
-/// `OK:` line; the error names the missing tools, sorted and comma-separated.
+/// `OK:` line. The error names the missing tools, sorted and comma-separated.
 pub fn setup_step() -> Result<(), String> {
   println!("==> Checking Claude Code backend tools");
   let disallowed = super::base_disallowed_tools()?;
@@ -29,7 +29,7 @@ mod tests {
 
   #[test]
   fn the_check_passes_and_names_every_required_tool_in_the_ok_line() {
-    // Pins the step's presence; the output lines are the setup command's contract.
+    // Pins the step's presence. The output lines are the setup command's contract.
     setup_step().expect("the committed command disallows the required tools");
   }
 }

@@ -31,7 +31,7 @@ function scrollToBottom() {
 // Shared post-render scroll rule. *wasAtBottom* is the pin state each render
 // path captured before mutating the container: reading it afterwards would
 // see the grown scrollHeight. A render landing while the reader is pinned
-// keeps them at the bottom; one landing while they scrolled up raises the
+// keeps them at the bottom. One landing while they scrolled up raises the
 // jump button instead of yanking them down. Under the turn engine the pin
 // state is the engine's user-intent flag, and the jump routes through it so
 // the write stays an engine write.
@@ -41,7 +41,7 @@ function restoreBottomPin(container, wasAtBottom, forceScroll) {
     if (forceScroll || wasAtBottom) {
       engine.jumpToBottom();
     } else if (container.clientHeight > 0) {
-      // A hidden list (the Status view) has no viewport to jump from; the
+      // A hidden list (the Status view) has no viewport to jump from. The
       // return sets the button from the engine's pin state.
       showScrollToBottom();
     }
@@ -62,8 +62,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (container) {
     container.addEventListener('scroll', () => {
       // Under the turn engine the button tracks the user's pin intent (a
-      // reader paused inside the 150px geometry band is still reading);
-      // legacy views keep the geometry band.
+      // reader paused inside the 150px geometry band is still reading).
+      // Legacy views keep the geometry band.
       const engine = Chat.activeTurnEngineFor(container);
       if (engine ? engine.pinnedIntent : shouldAutoScroll(container)) hideScrollToBottom();
     });

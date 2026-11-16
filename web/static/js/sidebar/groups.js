@@ -1,7 +1,33 @@
 (function() {
   const Sidebar = globalThis.Sidebar;
 
-const GROUP_SESSION_PREVIEW_LIMIT = 5;
+// The rows a group's preview paints: the rows that fit the sidebar's list, shared by the groups it holds, so the
+// panel's free space goes to session rows. A row's two lines, each group's header and its "Show all" line set the
+// arithmetic. The page carries at most SIDEBAR_SCREEN_CAPACITY roots per group
+// (rust/crates/runtime/session-api/src/listing.rs), the most this limit asks for.
+const GROUP_SESSION_PREVIEW_MIN = 5;
+const GROUP_SESSION_PREVIEW_MAX = 20;
+const GROUP_SESSION_ROW_PX = 52;
+const SESSION_GROUP_HEADER_PX = 28;
+const SESSION_GROUP_LIMIT_TOGGLE_PX = 28;
+
+// The rows one group's preview paints, from the height its list holds and the groups that share it: each group's
+// header and "Show all" line come out first, and the groups split the rest, never below the minimum. The phone's
+// drawer has no height until it opens, and the archived panel's container grows with its rows, so both keep the
+// minimum.
+function groupPreviewLimit(nav, groupCount) {
+  const height = nav && nav === document.getElementById('session-list') ? nav.clientHeight : 0;
+  if (!height) return GROUP_SESSION_PREVIEW_MIN;
+  const groups = Math.max(1, groupCount || 1);
+  const fixed = groups * (SESSION_GROUP_HEADER_PX + SESSION_GROUP_LIMIT_TOGGLE_PX);
+  const rows = Math.floor((height - fixed) / GROUP_SESSION_ROW_PX);
+  return Math.max(GROUP_SESSION_PREVIEW_MIN,
+    Math.min(GROUP_SESSION_PREVIEW_MAX, Math.floor(rows / groups)));
+}
+// The matches one search answer carries: the route keeps the newest `SEARCH_RESULT_LIMIT` of them
+// (rust/crates/runtime/session-api/src/search.rs). The search list states that cap from this number, so a drift
+// shows the notice late or not at all, never a row.
+const SEARCH_MATCH_LIMIT = 200;
 const SESSION_GROUP_LIMIT_STORAGE_KEY = 'session-group-list-expanded';
 const SESSION_GROUP_COLLAPSED_STORAGE_KEY = 'session-group-collapsed';
 const groupLimitState = {
@@ -137,8 +163,8 @@ const groupMenuItems = [];
 const groupPreviewLimitExemptions = [];
 
 // A preview limit exemption: predicate(s) answers true for a root row that
-// stays outside the 5-row preview limit. That row always shows and takes no
-// rank, so feature packages own row facts without adding them to the core.
+// stays outside the preview limit. That row always shows and takes no rank, so
+// feature packages own row facts without adding them to the core.
 function registerGroupPreviewLimitExemption(predicate) {
   if (typeof predicate !== 'function') throw new Error('Invalid group preview limit exemption registration');
   if (groupPreviewLimitExemptions.includes(predicate)) throw new Error('Duplicate group preview limit exemption');
@@ -349,6 +375,12 @@ function renderSearchNote(text) {
 
 let lastGroupedRenderArgs = null;
 
+// The preview limit the last paint of the sidebar's list used, and the group count it shared that limit over. The
+// observer below repaints only when the list's height moves the limit, so a resize inside one row's band costs no
+// paint.
+let paintedPreviewLimit = null;
+let paintedPreviewGroups = 1;
+
 // The Workspace badges' async repaint: the first paint never waits for the
 // badge loaders (filters.js registerWorkspaceBadge). This repaint sources the
 // first paint's own args, with no list refetch. It discards itself when the
@@ -371,6 +403,18 @@ function repaintRenderedRows() {
   if (!lastListPaint) return;
   const {sessions, filter, options} = lastListPaint;
   renderSessionList(sessions, filter, options);
+}
+
+// The sidebar's list holds a fixed height, and the rows its preview paints follow that height: the phone's drawer
+// opening gives the list its first height, and a window resize changes it. A height that keeps the same row count
+// repaints nothing.
+function watchSessionListHeight() {
+  const nav = document.getElementById('session-list');
+  if (!nav || typeof ResizeObserver !== 'function') return;
+  new ResizeObserver(() => {
+    if (groupPreviewLimit(nav, paintedPreviewGroups) === paintedPreviewLimit) return;
+    repaintRenderedRows();
+  }).observe(nav);
 }
 
 // Whether the last renderSessionList call painted the search overlay. The
@@ -400,6 +444,11 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   const {groups, sortedKeys} = groupSessionsBySortedKeys(roots, s => s.group);
   const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(SESSION_GROUP_LIMIT_STORAGE_KEY);
+  const previewLimit = groupPreviewLimit(nav, sortedKeys.length);
+  if (nav === document.getElementById('session-list')) {
+    paintedPreviewLimit = previewLimit;
+    paintedPreviewGroups = sortedKeys.length;
+  }
 
   let html = '';
   for (const key of sortedKeys) {
@@ -409,12 +458,23 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     const isLimitExpanded = limitState[key] === true;
     const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtmlAttr(key);
+    // The open session's row joins the preview from past the limit, so the group paints one row more
+    // than groupPreviewLimit budgets for the list's height. The preview gives up its last row for it:
+    // the header, the open row and the Show all line then stay inside the panel's height. At the
+    // preview's floor the height fits fewer rows than the floor paints (a closed phone drawer reports
+    // no height at all), so the floor keeps its rows and the open row joins them still.
+    const previewRoots =
+      groupSessions.filter((root) => !groupPreviewLimitExemptions.some((predicate) => predicate(root)));
+    const openRootRank = previewRoots.findIndex((root) => root.id === activeRootId);
+    const previewRows = openRootRank >= previewLimit && previewLimit > GROUP_SESSION_PREVIEW_MIN
+      ? previewLimit - 1
+      : previewLimit;
     let previewRank = 0;
     const groupRows = groupSessions.map((s) => {
       // An exempt root always shows and takes no rank, so the limit counts
       // only the other roots; those past it are the extra rows.
       const exempt = groupPreviewLimitExemptions.some((predicate) => predicate(s));
-      const inPreview = !exempt && previewRank < GROUP_SESSION_PREVIEW_LIMIT;
+      const inPreview = !exempt && previewRank < previewRows;
       if (!exempt) previewRank += 1;
       // The open session's root never hides, since a hidden root hides its subtree.
       const isHideable = !exempt && !inPreview && s.id !== activeRootId;
@@ -469,8 +529,9 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         childrenOf
       );
     }).join('');
-    // A partial listing carries only the rows the preview paints, so the group's hidden rows have no markup to
-    // reveal. The toggle stands after the rows it fetches, and the click loads the full listing.
+    // A partial listing whose rows all fit the preview has no hidden row to stand the toggle at, so the toggle
+    // stands after the rows it fetches, and the click loads the full listing. A page that carries rows past the
+    // preview already placed it in front of them.
     const groupRowCount = countTreeRows(groupSessions, childrenOf);
     const groupCount = listing && listing.counts && Object.prototype.hasOwnProperty.call(listing.counts, key)
       ? listing.counts[key]
@@ -495,7 +556,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
         ${groupItemsHtml}
-        ${listing && listing.partial && fetchesMore ? renderGroupLimitToggle(key, isLimitExpanded) : ''}
+        ${listing && listing.partial && fetchesMore && !limitTogglePlaced ? renderGroupLimitToggle(key, isLimitExpanded) : ''}
       </div>
     </div>`;
   }
@@ -685,7 +746,7 @@ function renderWorkerDeliveredIcon() {
 }
 
 // One row followed by its subtree. The outer wrapper carries the row's
-// group-limit class and attributes, so a root hidden by the 5-row preview
+// group-limit class and attributes, so a root hidden by the preview limit
 // hides its subtree with it and Show all reveals both. The inner container
 // carries the expand state. Each level indents 22px behind a guide line.
 // Every row rendered here receives treeChildCount, 0 for a leaf. Its presence
@@ -936,10 +997,13 @@ function renderSessionList(sessions, filter, options = {}) {
     renderGroupedSessionList(sessions, filter, options);
     return;
   }
-  const truncationHint = filter === 'search' && sessions.length >= 200
-    ? renderEmptyNote('Showing the newest 200 matches — narrow the search.')
+  // A full search answer is the newest matches only, and the notice saying so stands above the first row: a
+  // reader who scans the rows first has already concluded that the match they want is not there, and below them
+  // the notice followed every row of the list.
+  const capNotice = sessions.length >= SEARCH_MATCH_LIMIT
+    ? renderEmptyNote('Showing the newest ' + SEARCH_MATCH_LIMIT + ' matches — narrow the search.')
     : '';
-  nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('') + truncationHint;
+  nav.innerHTML = capNotice + sessions.map(s => renderSessionItem(s, filter)).join('');
   updateRelativeTimes();
 }
 
@@ -1030,6 +1094,7 @@ const SIDEBAR_ONLY = {
   renderGroupedSessionList,
   expandSessionColumns,
 };
+watchSessionListHeight();
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 
 })();

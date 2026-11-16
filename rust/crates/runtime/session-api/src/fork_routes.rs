@@ -258,7 +258,7 @@ mod tests {
   use super::*;
   use crate::test_support::{answer, feature_context, install_dispatcher, json_request};
 
-  /// Records the session and input contents of every launched run; each run is reported as `run-1`.
+  /// Records the session and input contents of every launched run. Each run is reported as `run-1`.
   #[derive(Default)]
   struct RecordingExecutor {
     launches: Mutex<Vec<(String, Vec<String>)>>,

@@ -11,15 +11,19 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts
 use axum::response::Response;
 use bytes::Bytes;
 use charliebot_cli_common::route;
-use charliebot_compat::compression::{gzip_memoized_body, zstd_memoized_body};
+use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
+use charliebot_compat::mimetypes;
+use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
+use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::paths;
 use charliebot_registry::Registry;
 use charliebot_registry::templating::{self, STATIC_ASSET_VERSION_KEY, Templating};
 use charliebot_session_api::api as session_routes;
 use charliebot_session_api::{detail, listing};
+use charliebot_store::metadata::{NATIVE_MODEL, RUN_BACKEND, THINKING_SINCE};
 use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::join_all;
 use percent_encoding::percent_decode_str;
@@ -35,7 +39,6 @@ pub const FAMILY: Family = Family { routes, matches: |_, path| is_page_path(path
 fn routes() -> Router<Arc<AppState>> {
   Router::new()
     .route("/", get_only(index))
-    .route(crate::auth::OFFLINE_SHELL_WORKER_PATH, get_only(offline_shell_worker))
     .route("/home", get_only(home_page))
     .route("/sessions/{session_id}/events", get_only(events_viewer))
 }
@@ -71,17 +74,20 @@ const SESSION_BOOTSTRAP_PLACEHOLDER: &str = "\u{2}charliebot-session-bootstrap\u
 /// The text a page without a session bootstrap carries: JSON's `null`.
 const NO_SESSION_BOOTSTRAP: &str = "null";
 
-/// The text the shell carries for its sidebar rows: JSON's `null`, which makes the page fetch the listing itself.
-const NO_INITIAL_SESSIONS: &str = "null";
-
 /// The chat page's rendered row texts, reused across requests while a row's inputs are unchanged.
 static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::PageRowsMemo::default);
 
-/// The session bootstrap one page request built last, reused while every payload input is unchanged.
+/// The session bootstraps the page built for its last few sessions, each reused while every payload input is
+/// unchanged.
 static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(detail::PageBootstrapMemo::default);
 
-/// The finished bodies of the pages, one entry per page, each kept while its rendered template and its own texts
-/// still hold their value.
+/// The number of finished bodies one page keeps: the body it served most recently, and the ones before it that the
+/// reader comes back to. A reader who moves between two sessions reopens a body the page built a moment ago, and a
+/// single slot would rebuild it on every switch.
+const PAGE_BODY_MEMO_ENTRIES_PER_PAGE: usize = 4;
+
+/// The finished bodies of the pages, up to `PAGE_BODY_MEMO_ENTRIES_PER_PAGE` of each, every body kept while its
+/// rendered template and its own texts still hold their value.
 ///
 /// A page's body is its rendered template with the sidebar text and, on the chat page, the session bootstrap
 /// substituted in. The chat page's sidebar text runs to about nine megabytes for a full home, and the events viewer's
@@ -90,11 +96,15 @@ static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(
 /// it already built.
 ///
 /// The rendered template is part of the key: a template, page part or template directory edited on disk renders
-/// different bytes and never matches. The chat page's two large texts compare by identity, and the entry keeps their
-/// `Arc`s alive, so an address the entry holds is never handed to a different text.
+/// different bytes and never matches. The chat page's two large texts compare by identity, and an entry keeps their
+/// `Arc`s alive, so an address an entry holds is never handed to a different text.
 #[derive(Default)]
 struct PageBodyMemo {
   entries: Vec<PageBodyEntry>,
+  /// The compressed forms of each page's static tail, one entry per page, kept while the tail's bytes hold.
+  tails: Vec<PageTailEntry>,
+  #[cfg(test)]
+  builds: usize,
 }
 
 struct PageBodyEntry {
@@ -103,8 +113,15 @@ struct PageBodyEntry {
   sidebar_text: Option<Arc<String>>,
   bootstrap_text: Option<Arc<String>>,
   body: Bytes,
+  /// The bytes this body ends with in common with the page's last body: the tail a page keeps compressed once.
+  tail: Bytes,
   gzip: Option<Bytes>,
   zstd: Option<Bytes>,
+}
+
+struct PageTailEntry {
+  name: &'static str,
+  tail: PageTail,
 }
 
 /// The encoding a page body travels in: the smallest form of the body the request names as acceptable.
@@ -149,24 +166,83 @@ struct PageCompressed {
   bytes: Bytes,
 }
 
-// One form of the body, built once per body version and kept for every repeat request.
-impl PageBodyEntry {
-  fn encoded(&mut self, encoding: PageEncoding, body: &Bytes) -> Bytes {
-    let slot = match encoding {
-      PageEncoding::Gzip => &mut self.gzip,
-      PageEncoding::Zstd => &mut self.zstd,
-      PageEncoding::Identity => unreachable!("an identity page body travels whole"),
-    };
-    slot
-      .get_or_insert_with(|| {
-        Bytes::from(match encoding {
-          PageEncoding::Gzip => gzip_memoized_body(body),
-          PageEncoding::Zstd => zstd_memoized_body(body),
-          PageEncoding::Identity => unreachable!("an identity page body travels whole"),
-        })
-      })
-      .clone()
+/// The shortest tail worth keeping compressed: a smaller one saves less deflate than the memo costs to compare.
+const PAGE_TAIL_MINIMUM: usize = 16 * 1024;
+
+/// The tail `body` shares with the page's last body: the bytes it ends with that the last body ended with too.
+///
+/// A page places every value that changes with the request before its scripts and its trailing markup, so the bytes
+/// after the last of them are the same in every body the page serves. The shared suffix is the longest such run this
+/// body and the last one have, and any run shorter than [`PAGE_TAIL_MINIMUM`] is no tail at all. The memo's kept tail
+/// answers first, because a request that repeats a page's round takes it without a scan.
+fn page_tail(name: &'static str, body: &Bytes, previous: Option<&Bytes>, tails: &[PageTailEntry]) -> Bytes {
+  if let Some(entry) = tails.iter().find(|entry| entry.name == name)
+    && body.ends_with(entry.tail.bytes())
+  {
+    return body.slice(body.len() - entry.tail.len()..);
   }
+  let Some(previous) = previous else { return Bytes::new() };
+  let len = common_suffix_len(previous, body);
+  if len < PAGE_TAIL_MINIMUM { Bytes::new() } else { body.slice(body.len() - len..) }
+}
+
+/// The length of the longest suffix `new` shares with `last`, at most the shorter body's length.
+fn common_suffix_len(last: &[u8], new: &[u8]) -> usize {
+  let max = last.len().min(new.len());
+  let (mut low, mut high) = (0, max);
+  while low < high {
+    let middle = low + (high - low).div_ceil(2);
+    if new[new.len() - middle..] == last[last.len() - middle..] {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  low
+}
+
+/// The compressed form of `body`, whose kept tail is `tail`.
+///
+/// A body without a tail — every page but the chat page, and the first body of each version — deflates whole. A body
+/// with one deflates the head a request built and appends the tail's form from the memo, which the first body with
+/// those tail bytes built.
+fn compressed_page(
+  name: &'static str,
+  body: &Bytes,
+  tail: &Bytes,
+  encoding: PageEncoding,
+  tails: &mut Vec<PageTailEntry>,
+) -> Bytes {
+  if tail.is_empty() {
+    return Bytes::from(match encoding {
+      PageEncoding::Gzip => gzip_memoized_body(body),
+      PageEncoding::Zstd => zstd_memoized_body(body),
+      PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+    });
+  }
+  let head = &body[..body.len() - tail.len()];
+  let held = tails.iter().position(|entry| entry.name == name && entry.tail.holds(tail));
+  let index = match held {
+    Some(index) => index,
+    None => {
+      let entry = PageTailEntry { name, tail: PageTail::new(tail) };
+      match tails.iter().position(|entry| entry.name == name) {
+        Some(index) => {
+          tails[index] = entry;
+          index
+        }
+        None => {
+          tails.push(entry);
+          tails.len() - 1
+        }
+      }
+    }
+  };
+  Bytes::from(match encoding {
+    PageEncoding::Gzip => tails[index].tail.gzip(head),
+    PageEncoding::Zstd => tails[index].tail.zstd(head),
+    PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+  })
 }
 
 /// Whether an optional substituted text still holds its value: both absent, or the same `Arc`.
@@ -196,35 +272,59 @@ impl PageBodyMemo {
         && same_text(entry.bootstrap_text.as_ref(), bootstrap_text)
     });
     let index = match held {
-      Some(index) => index,
+      Some(index) => {
+        // A body served again is this page's most recent entry, so an eviction takes the body it served longest ago.
+        let entry = self.entries.remove(index);
+        self.entries.push(entry);
+        self.entries.len() - 1
+      }
       None => {
         let html = templating::substitute_placeholders(name, template_html.as_str().to_string(), substitutions)
           .map_err(|error| failure(error.kind(), error))?;
+        let body = Bytes::from(html);
+        let previous = self.entries.iter().find(|entry| entry.name == name).map(|entry| &entry.body);
+        let tail = page_tail(name, &body, previous, &self.tails);
         let entry = PageBodyEntry {
           name,
           template_html: Arc::clone(template_html),
           sidebar_text: sidebar_text.cloned(),
           bootstrap_text: bootstrap_text.cloned(),
-          body: Bytes::from(html),
+          body,
+          tail,
           gzip: None,
           zstd: None,
         };
-        match self.entries.iter().position(|entry| entry.name == name) {
-          Some(index) => {
-            self.entries[index] = entry;
-            index
-          }
-          None => {
-            self.entries.push(entry);
-            self.entries.len() - 1
-          }
+        self.entries.push(entry);
+        #[cfg(test)]
+        {
+          self.builds += 1;
         }
+        let mut index = self.entries.len() - 1;
+        // The page's least recently served body goes once the page holds one past its limit.
+        let mut held_bodies = self.entries.iter().filter(|entry| entry.name == name).count();
+        while held_bodies > PAGE_BODY_MEMO_ENTRIES_PER_PAGE {
+          let oldest = self.entries.iter().position(|entry| entry.name == name).expect("the page holds a body");
+          self.entries.remove(oldest);
+          if oldest < index {
+            index -= 1;
+          }
+          held_bodies -= 1;
+        }
+        index
       }
     };
-    let entry = self.entries.get_mut(index).expect("the page body entry matched or was built");
+    let PageBodyMemo { entries, tails, .. } = self;
+    let entry = entries.get_mut(index).expect("the page body entry matched or was built");
     let body = entry.body.clone();
+    let tail = entry.tail.clone();
     let compressed = if encoding != PageEncoding::Identity && body.len() >= gzip::MINIMUM_SIZE {
-      Some(PageCompressed { encoding: encoding.content_encoding(), bytes: entry.encoded(encoding, &body) })
+      let slot = match encoding {
+        PageEncoding::Gzip => &mut entry.gzip,
+        PageEncoding::Zstd => &mut entry.zstd,
+        PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+      };
+      let bytes = slot.get_or_insert_with(|| compressed_page(name, &body, &tail, encoding, tails)).clone();
+      Some(PageCompressed { encoding: encoding.content_encoding(), bytes })
     } else {
       None
     };
@@ -283,7 +383,7 @@ fn chat_page(
           Ok(bootstrap) => {
             let bootstrap_session = bootstrap.session.as_object().expect("a bootstrap session is an object");
             let active = active_session.as_object_mut().expect("session metadata serializes to an object");
-            for name in ["run_backend", "thinking_since"] {
+            for name in [RUN_BACKEND, THINKING_SINCE] {
               if let Some(value) = bootstrap_session.get(name) {
                 active.insert(name.to_string(), value.clone());
               }
@@ -306,28 +406,22 @@ fn chat_page(
     }
   }
 
-  // A page opened without a session redirects to the first row before any row renders. The shell (`?session=`
-  // with an empty value) names no session and embeds no sidebar rows: its list comes from the listing route.
+  // A page opened without a session redirects to the first row before any row renders.
   let redirect_to_first = session.is_none();
-  let shell = session.as_deref() == Some("");
-  let listing_result = if shell {
-    Ok(PageListing::Text(Arc::new(NO_INITIAL_SESSIONS.to_string())))
-  } else {
-    (|| -> StoreResult<PageListing> {
-      if redirect_to_first && let Some(first) = listing::first_page_row_id(&state.features.store)? {
-        return Ok(PageListing::Redirect(first));
-      }
-      let page = listing::active_page_rows(&state.features.store, &state.features.registry)?;
-      listing::active_page_json_text(
-        &state.features.store,
-        &page,
-        clear_unread.as_deref(),
-        session.as_deref(),
-        &PAGE_ROWS_MEMO,
-      )
-      .map(PageListing::Text)
-    })()
-  };
+  let listing_result = (|| -> StoreResult<PageListing> {
+    if redirect_to_first && let Some(first) = listing::first_page_row_id(&state.features.store)? {
+      return Ok(PageListing::Redirect(first));
+    }
+    let page = listing::active_page_rows(&state.features.store, &state.features.registry)?;
+    listing::active_page_json_text(
+      &state.features.store,
+      &page,
+      clear_unread.as_deref(),
+      session.as_deref(),
+      &PAGE_ROWS_MEMO,
+    )
+    .map(PageListing::Text)
+  })();
   let initial_sessions_json = match listing_result {
     Ok(PageListing::Redirect(session_id)) => return Ok(responses::redirect(&format!("/?session={session_id}"))),
     Ok(PageListing::Text(text)) => text,
@@ -346,14 +440,13 @@ fn chat_page(
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
   let active_pool_member = active_session.get("pool_member").cloned().unwrap_or(Value::Null);
-  let active_native_model = active_session.get("native_model").cloned().unwrap_or(Value::Null);
+  let active_native_model = active_session.get(NATIVE_MODEL).cloned().unwrap_or(Value::Null);
   let active_backend_label = active_backend_label(&cfg, active_backend, &active_pool_member, &active_native_model);
   let backend_compact = compact_facts(&cfg, &state.features.registry)?;
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
     "session_bootstrap_json": SESSION_BOOTSTRAP_PLACEHOLDER,
     "active_session": active_session,
-    "shell": shell,
     "pending_draft": pending_draft,
     "event_count": event_count,
     "backend_options": cfg.backends.options
@@ -379,35 +472,6 @@ fn chat_page(
     PageRuntime::Index { cfg, auth_enabled, sidebar_text: initial_sessions_json, bootstrap_text },
     StatusCode::OK,
   )
-}
-
-/// The offline shell's worker script: the shell's worker source behind its config, the switch and the release version
-/// the worker's store names. The browser checks the script on navigation, so `no-cache` keeps a stale copy from
-/// outliving a release.
-async fn offline_shell_worker(State(state): State<Arc<AppState>>, request: Parts) -> Response {
-  let rendered = tokio::task::spawn_blocking(move || worker_script(&state, &request))
-    .await
-    .expect("rendering the worker script does not panic");
-  match rendered {
-    Ok(response) => response,
-    Err(error) => responses::internal_error(&error.kind, error.detail),
-  }
-}
-
-fn worker_script(state: &Arc<AppState>, request: &Parts) -> Result<Response, Failure> {
-  let cfg = state.config().map_err(|error| failure("ValueError", error))?;
-  let templating =
-    state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
-  let version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
-  let worker_config = json!({"version": version, "enabled": cfg.server.enable_offline_shell});
-  let context = json!({"worker_config_json": worker_config.to_string()});
-  let body = templating
-    .render_page_template(&state.features, "offline-shell-worker.js", &context, request)
-    .map_err(|error| failure(error.kind(), error))?;
-  let mut response = Response::new(Body::from((*body).clone()));
-  response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/javascript; charset=utf-8"));
-  response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-  Ok(response)
 }
 
 async fn home_page(State(state): State<Arc<AppState>>, request: Parts) -> Response {
@@ -594,13 +658,14 @@ fn page_body(
 /// instead of under the transport gzip; the transport passes a response that already sets `Content-Encoding`
 /// through untouched.
 fn page_response(body: Bytes, compressed: Option<PageCompressed>, status: StatusCode) -> Response {
-  let mut builder = Response::builder().status(status).header(header::CONTENT_TYPE, "text/html; charset=utf-8");
+  let mut builder =
+    Response::builder().status(status).header(header::CONTENT_TYPE, mimetypes::with_utf8_charset(TEXT_HTML));
   let served = match compressed {
     Some(compressed) => {
       builder = builder
         .header(header::CONTENT_LENGTH, compressed.bytes.len())
         .header(header::CONTENT_ENCODING, compressed.encoding)
-        .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+        .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
       compressed.bytes
     }
     None => {
@@ -668,7 +733,7 @@ fn active_backend_id<'a>(cfg: &CharlieBotConfig, session: &'a Value, default_bac
     return backend;
   }
   session
-    .get("run_backend")
+    .get(RUN_BACKEND)
     .and_then(Value::as_str)
     .filter(|backend| !backend.is_empty())
     .or(session_backend)
@@ -737,6 +802,11 @@ mod tests {
     )
   }
 
+  /// A chat page template whose static scripts carry more than [`PAGE_TAIL_MINIMUM`], as the served page's do.
+  fn tailed_index_template() -> String {
+    format!("{}<script>{}</script>", index_template(), "const tail = 1;".repeat(1600))
+  }
+
   fn substitutions<'a>(sidebar: &'a str, bootstrap: &'a str) -> Vec<(&'static str, &'a str)> {
     vec![(INITIAL_SESSIONS_PLACEHOLDER, sidebar), (SESSION_BOOTSTRAP_PLACEHOLDER, bootstrap)]
   }
@@ -761,7 +831,6 @@ mod tests {
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
         enable_local_work_guard: false,
-        enable_offline_shell: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),
@@ -874,6 +943,111 @@ mod tests {
       )
       .unwrap();
     assert!(rebuilt.ends_with(b"{\"messages\":[1]};"), "a new bootstrap text rebuilds the body");
+  }
+
+  #[test]
+  fn every_session_of_a_page_serves_its_one_static_tail_form() {
+    let mut memo = PageBodyMemo::default();
+    let template = Arc::new(tailed_index_template());
+    let sidebar = Arc::new("x".repeat(4096));
+    for bootstrap_text in ["{\"messages\":[]}", "{\"messages\":[1,2,3]}"] {
+      let bootstrap = Arc::new(bootstrap_text.to_string());
+      let (body, compressed) = memo
+        .body(
+          "index.html",
+          &template,
+          &substitutions(sidebar.as_str(), bootstrap.as_str()),
+          Some(&sidebar),
+          Some(&bootstrap),
+          PageEncoding::Gzip,
+        )
+        .unwrap();
+      let body = String::from_utf8(body.to_vec()).unwrap();
+      assert!(body.ends_with("</script>"), "the body carries the template's tail");
+      let gzip = compressed.expect("a gzip client gets a compressed body");
+      assert_eq!(gunzip(&gzip.bytes), body);
+    }
+    assert_eq!(memo.tails.len(), 1, "both bodies take the same tail form, built once");
+    let tail = memo.tails[0].tail.bytes();
+    assert!(tail.len() >= PAGE_TAIL_MINIMUM && tail.ends_with(b"</script>"), "the kept tail is the template's scripts");
+
+    let bootstrap = Arc::new("{\"messages\":[1,2,3]}".to_string());
+    let mut page = |encoding| {
+      memo
+        .body(
+          "index.html",
+          &template,
+          &substitutions(sidebar.as_str(), bootstrap.as_str()),
+          Some(&sidebar),
+          Some(&bootstrap),
+          encoding,
+        )
+        .unwrap()
+    };
+    let (body, _) = page(PageEncoding::Identity);
+    let (_, compressed) = page(PageEncoding::Zstd);
+    let stream = compressed.expect("a zstd client gets a compressed body").bytes;
+    let decoded = zstd::decode_all(stream.as_ref()).expect("a zstd page body decodes");
+    assert_eq!(decoded, body.to_vec(), "the two zstd frames decode to the head and the tail");
+  }
+
+  #[test]
+  fn a_reader_switching_between_two_sessions_serves_each_kept_body() {
+    let mut memo = PageBodyMemo::default();
+    let template = Arc::new(index_template());
+    let sidebar = Arc::new("x".repeat(4096));
+    let a = Arc::new("{\"messages\":[\"a\"]}".to_string());
+    let b = Arc::new("{\"messages\":[\"b\"]}".to_string());
+    let open = |memo: &mut PageBodyMemo, bootstrap: &Arc<String>| {
+      memo
+        .body(
+          "index.html",
+          &template,
+          &substitutions(sidebar.as_str(), bootstrap.as_str()),
+          Some(&sidebar),
+          Some(bootstrap),
+          PageEncoding::Identity,
+        )
+        .unwrap()
+        .0
+    };
+    let first_a = open(&mut memo, &a);
+    let first_b = open(&mut memo, &b);
+    let again_a = open(&mut memo, &a);
+    let again_b = open(&mut memo, &b);
+    assert_eq!(again_a.as_ptr(), first_a.as_ptr(), "the session opened before is served from the memo");
+    assert_eq!(again_b.as_ptr(), first_b.as_ptr(), "and so is the one opened after it");
+    assert_eq!(memo.builds, 2, "each session's body is built once");
+  }
+
+  #[test]
+  fn a_page_keeps_its_newest_bodies_and_rebuilds_the_one_it_dropped() {
+    let mut memo = PageBodyMemo::default();
+    let template = Arc::new(index_template());
+    let sidebar = Arc::new("x".repeat(4096));
+    let bootstraps: Vec<Arc<String>> =
+      (0..=PAGE_BODY_MEMO_ENTRIES_PER_PAGE).map(|at| Arc::new(format!("{{\"messages\":[{at}]}}"))).collect();
+    let open = |memo: &mut PageBodyMemo, bootstrap: &Arc<String>| {
+      memo
+        .body(
+          "index.html",
+          &template,
+          &substitutions(sidebar.as_str(), bootstrap.as_str()),
+          Some(&sidebar),
+          Some(bootstrap),
+          PageEncoding::Identity,
+        )
+        .unwrap()
+        .0
+    };
+    for bootstrap in &bootstraps {
+      open(&mut memo, bootstrap);
+    }
+    assert_eq!(memo.builds, PAGE_BODY_MEMO_ENTRIES_PER_PAGE + 1, "each new session's body is built once");
+    open(&mut memo, &bootstraps[PAGE_BODY_MEMO_ENTRIES_PER_PAGE - 1]);
+    assert_eq!(memo.builds, PAGE_BODY_MEMO_ENTRIES_PER_PAGE + 1, "the last bodies the page kept are still there");
+    open(&mut memo, &bootstraps[0]);
+    assert_eq!(memo.builds, PAGE_BODY_MEMO_ENTRIES_PER_PAGE + 2, "the body the page dropped is built again");
   }
 
   #[test]

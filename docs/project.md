@@ -163,7 +163,7 @@ For complex tasks, the master plans before building; the plan registry keeps tha
 
 - **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (the CLI command `rust/crates/features/artifacts/src/cli/plan.rs` over the server's `present` verb in `rust/crates/features/artifacts/src/plan_verbs.rs`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
 - **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`web/features/artifacts/static/plan-panel.js`).
-- **Approve**: After the plan's Improve round and verify, the parent node or the root line approves it; `charliebot plan approve` records the approval against the latest version. The runtime gate (`rust/crates/runtime/store/src/task_tree.rs`, `is_read_only_exempt` and the delegation refusals) admits `/delegate` and `/improve` when the calling manager and its ancestors are open and the chain holds a real user message or a thread platform summon.
+- **Approve**: After the plan's Improve round and verify, the parent node or the root line approves it; `charliebot plan approve` records the approval against the latest version. The runtime gate (`rust/crates/runtime/store/src/task_tree.rs`, `check_task_authorization` and `runtime_gate`) admits `/delegate` and `/improve` when the calling node is an open manager and every ancestor on its task chain is open.
 - **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
 
 ---

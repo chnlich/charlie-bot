@@ -145,8 +145,8 @@ function buildAppContext() {
   const noop = (name) => () => { calls.push(name); };
   const context = {
     document,
-    registerOfflineShell() {},
     SESSION_ID: 'session-a',
+    SESSION_PROFILE: '',
     SESSION_BOOTSTRAP: null,
     THINKING_SINCE: null,
     DRAFT_KEY: null,
@@ -164,8 +164,14 @@ function buildAppContext() {
     console: {error() {}, warn() {}, log() {}},
     initAuth: noop('initAuth'),
     initSidebarResize: noop('initSidebarResize'),
+    // The header controls a page writes when its bootstrap failed.
+    paintDisplayedSession: noop('paintDisplayedSession'),
+    updateActiveBackendBadges: noop('updateActiveBackendBadges'),
+    updateBackendHeaderControls: noop('updateBackendHeaderControls'),
+    getActiveBackendId: () => 'backend-a',
+    setInputAreaVisible: noop('setInputAreaVisible'),
+    BACKEND_TYPES: { 'backend-a': 'synthetic' },
     restoreSidebarFromUrl: noop('restoreSidebarFromUrl'),
-    openSession: () => Promise.resolve(),
     updateRelativeTimes: noop('updateRelativeTimes'),
     postProcessRenderedMessages: noop('postProcessRenderedMessages'),
     initScrollPagination: noop('initScrollPagination'),

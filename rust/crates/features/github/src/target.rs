@@ -118,7 +118,7 @@ pub fn validate_target(target: &Value) -> Result<Value, String> {
   Target::parse(target).map(|target| target.to_value())
 }
 
-/// The target's one-line card label. The caller passes a target that `validate_target` accepted; a target it refuses
+/// The target's one-line card label. The caller passes a target that `validate_target` accepted. A target it refuses
 /// gets a label that names the refusal.
 pub fn target_label(target: &Value) -> String {
   match Target::parse(target) {
@@ -146,7 +146,7 @@ fn valid_repo_char(character: char) -> bool {
 }
 
 /// A head or base: a branch ref, or `<owner>:<branch>` for a branch of another owner's fork. The owner is non-empty and
-/// made of repository-name characters; the branch is a branch ref.
+/// made of repository-name characters. The branch is a branch ref.
 fn valid_branch(branch: &str) -> bool {
   match branch.split_once(':') {
     Some((owner, branch_ref)) => {

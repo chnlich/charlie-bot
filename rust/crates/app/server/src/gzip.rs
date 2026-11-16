@@ -30,6 +30,7 @@ use http_body_util::{BodyExt, BodyStream, StreamBody};
 
 use charliebot_compat::body_memo::BodyMemo;
 use charliebot_compat::headers::header_text;
+use charliebot_core::headers::ACCEPT_ENCODING;
 
 /// `GZipMiddleware(minimum_size=1000)`.
 pub const MINIMUM_SIZE: usize = charliebot_compat::compression::MINIMUM_DEFLATE_BYTES;
@@ -177,14 +178,14 @@ async fn collect_body(first: Bytes, mut body: Body) -> Result<Vec<u8>, axum::Err
   Ok(whole)
 }
 
-/// `MutableHeaders.add_vary_header("Accept-Encoding")`: an existing `Vary` gains `, Accept-Encoding`.
+/// `MutableHeaders.add_vary_header`: an existing `Vary` list gains the `Accept-Encoding` name.
 fn add_vary_accept_encoding(headers: &mut HeaderMap) {
   let value = match headers.get(header::VARY) {
     Some(existing) => {
-      let joined = [existing.as_bytes(), b", Accept-Encoding"].concat();
+      let joined = [existing.as_bytes(), b", ", ACCEPT_ENCODING.as_bytes()].concat();
       HeaderValue::from_bytes(&joined).expect("appending visible ASCII keeps a header value valid")
     }
-    None => HeaderValue::from_static("Accept-Encoding"),
+    None => HeaderValue::from_static(ACCEPT_ENCODING),
   };
   headers.insert(header::VARY, value);
 }

@@ -2,12 +2,12 @@
 //!
 //! A status poll answers the rows whose state changed since the answer a page already holds. A poll that
 //! follows a task-tree change therefore carries one row instead of every row. The page passes back the `token`
-//! of its last answer; the token names a sequence of published states and this process's epoch. A token from
+//! of its last answer. The token names a sequence of published states and this process's epoch. A token from
 //! another epoch (a server restart) or none at all asks for the whole set.
 //!
 //! A row's version is the sequence at which its payload last changed, or at which it entered a filter's set. A row
 //! that leaves a filter's set gets a version too, under that filter's name, so a page that held it drops it. The first
-//! request of a filter records that filter's set; the row sets live here rather than in the route because two pages
+//! request of a filter records that filter's set. The row sets live here rather than in the route because two pages
 //! polling the same filter share them.
 
 use std::collections::{HashMap, HashSet};

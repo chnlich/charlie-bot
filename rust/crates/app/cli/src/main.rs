@@ -56,14 +56,8 @@ fn main() {
   let program = argv.next().map(|argv0| program_name(&argv0)).unwrap_or_else(|| "charliebot".to_string());
   let args: Vec<OsString> = argv.collect();
 
-  if args.first().is_some_and(|arg| arg == charliebot_opencode::relay::RELAY_ARG) {
-    match charliebot_opencode::relay::run_args(&args[1..]) {
-      Ok(()) => exit(0),
-      Err(error) => {
-        eprintln!("OpenCode relay: {error:#}");
-        exit(1);
-      }
-    }
+  if let Some(code) = charliebot_packages::helper_entry::run(&args) {
+    exit(code.into());
   }
 
   if args.first().is_some_and(|arg| arg == charliebot_agents::transport::final_stdout::SUPERVISOR_ARG) {

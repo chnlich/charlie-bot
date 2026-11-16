@@ -14,7 +14,7 @@ use charliebot_store::ChatEvent;
 use charliebot_store::CompactValue;
 use charliebot_store::aggregator;
 use charliebot_store::control_events;
-use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::metadata::{TASK_STATE, UtcDateTime};
 use charliebot_store::projection::MessageProjection;
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{
@@ -225,7 +225,7 @@ fn metadata_signature(metadata: &fs::Metadata) -> Value {
   json!([timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size()])
 }
 
-/// One run's events.jsonl parsed into the compact form; a missing or unreadable log is an empty segment.
+/// One run's events.jsonl parsed into the compact form. A missing or unreadable log is an empty segment.
 fn read_run_events(store: &Store, path: &Path) -> Vec<ChatEvent> {
   match store_read(store, path) {
     Ok(events) => events,
@@ -282,7 +282,7 @@ fn run_end_event(run: &RunRecord) -> Value {
     "type": event_types::RUN_END,
     "run_id": run.id,
     "timestamp": run.ended_at.map(UtcDateTime::to_isoformat_text),
-    "duration_seconds": duration_seconds,
+    (event_types::RUN_DURATION_SECONDS): duration_seconds,
   })
 }
 
@@ -337,7 +337,7 @@ fn delivery_event(
     .unwrap_or_else(|| run_records.last().expect("run records are non-empty"));
   Ok(Some(json!({
     "type": event_types::RUN_DELIVERY,
-    "task_state": task_state,
+    TASK_STATE: task_state,
     "summary": summary,
     "result_refs": close_refs,
     (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
@@ -499,7 +499,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     .unwrap_or_else(|| json!({}));
 
   Ok(json!({
-    "task_state": task_state,
+    TASK_STATE: task_state,
     "closed_at": if closed_at.is_empty() { Value::Null } else { json!(closed_at) },
     "landed": if landed.is_empty() { Value::Null } else { json!(landed) },
     "delivery": delivery,

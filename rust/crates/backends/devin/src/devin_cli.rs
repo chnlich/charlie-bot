@@ -45,7 +45,7 @@ pub struct DevinBackend {
   instructions_content: Option<String>,
   resume_session_id: Option<String>,
   extra_flags: Vec<String>,
-  /// The turn's log directory. `prepare_transport` names it for a live launch; a recovered capture names it through
+  /// The turn's log directory. `prepare_transport` names it for a live launch. A recovered capture names it through
   /// its launch, because no transport runs again for it.
   run_dir: Option<PathBuf>,
 }
@@ -69,7 +69,7 @@ impl DevinBackend {
 
   /// The print-mode command of one turn. Each value is bound with `=`, so the optional-value flags `--export`,
   /// `--resume` and `--respect-workspace-trust` cannot take the next argument as their value. `--print` comes last,
-  /// because its optional value would take the argument after it; the prompt comes from the prompt file.
+  /// because its optional value would take the argument after it. The prompt comes from the prompt file.
   fn argv(&self, prompt_file: &Path, export_file: &Path) -> Vec<String> {
     let mut command = vec![
       self.devin_bin.clone(),
@@ -88,7 +88,7 @@ impl DevinBackend {
   }
 
   /// The events and guard of a finished turn. A nonzero exit carries Devin's stderr, which holds its quota and login
-  /// errors. A zero exit reads the export; any failure there becomes the turn's guard error, which fails the run.
+  /// errors. A zero exit reads the export. Any failure there becomes the turn's guard error, which fails the run.
   fn finish(&self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
     if exit_code != 0 {
       return finished(vec![make_error_event(&nonzero_exit_message(stderr, exit_code))], exit_code, None);
@@ -275,22 +275,6 @@ mod tests {
     fs::read_to_string(root.join(format!("call-{call}-argv.txt"))).unwrap().lines().map(str::to_string).collect()
   }
 
-  /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
-  fn gh_wrapper_env(root: &Path) -> Env {
-    use std::os::unix::fs::PermissionsExt;
-    let wrapper_dir = root.join("gh-wrapper");
-    fs::create_dir_all(&wrapper_dir).unwrap();
-    let wrapper = wrapper_dir.join("gh");
-    fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&wrapper, permissions).unwrap();
-    Env::from([
-      ("PATH".to_string(), format!("{}:/bin:/usr/bin", wrapper_dir.display())),
-      (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
-    ])
-  }
-
   /// The fake-program helper that cargo builds beside this test binary. The final-stdout supervisor is a separate
   /// process, and `CARGO_BIN_EXE_*` names only this package's binaries.
   fn fake_program_bin() -> std::path::PathBuf {
@@ -318,11 +302,11 @@ mod tests {
     let mut request = RunRequest::new(
       "Pick the number in number.txt.".into(),
       root.to_path_buf(),
-      AgentBaseEnvironment { values: gh_wrapper_env(root) },
+      AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root, "/bin:/usr/bin") },
       cgroup_config,
       Arc::new(Registry::new()),
     );
-    // The supervisor is the helper binary; it runs the backend's `devin` path as the child it supervises.
+    // The supervisor is the helper binary. It runs the backend's `devin` path as the child it supervises.
     request.final_stdout_supervisor = Some(fake_program_bin());
     let pid_slot = Arc::new(Mutex::new(None));
     let recorded_pid = pid_slot.clone();

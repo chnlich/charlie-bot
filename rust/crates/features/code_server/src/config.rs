@@ -7,6 +7,7 @@ use std::str::Utf8Error;
 use std::sync::Arc;
 
 use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::int_text;
 use charliebot_core::json_loads::{UTF8_CODEC, codec_error_text};
 use charliebot_core::paths;
 use charliebot_core::repo_root::CONFIGS_DIR_NAME;
@@ -70,7 +71,7 @@ pub(crate) fn listen_port(config_path: &Path) -> Result<i64, String> {
   let Some((_, port_text)) = bind_addr.rsplit_once(':') else {
     return Err(missing());
   };
-  parse_int(port_text).ok_or_else(|| format!("code-server bind-addr port must be an integer: {bind_addr}"))
+  int_text::int_value(port_text).ok_or_else(|| format!("code-server bind-addr port must be an integer: {bind_addr}"))
 }
 
 /// The document at `path`: `Null` when the file is missing or holds no document.
@@ -102,25 +103,6 @@ fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
   codec_error_text(UTF8_CODEC, bytes, position, position + 1, reason)
 }
 
-/// A port literal: surrounding whitespace, an optional sign, and digits with single underscores between them.
-/// A value beyond the i64 range reads as not an integer here.
-fn parse_int(text: &str) -> Option<i64> {
-  let text = text.trim();
-  let (sign, digits) = match text.strip_prefix('-') {
-    Some(rest) => (-1, rest),
-    None => (1, text.strip_prefix('+').unwrap_or(text)),
-  };
-  let valid = digits.starts_with(|c: char| c.is_ascii_digit())
-    && digits.ends_with(|c: char| c.is_ascii_digit())
-    && !digits.contains("__")
-    && digits.chars().all(|c| c.is_ascii_digit() || c == '_');
-  if !valid {
-    return None;
-  }
-  let magnitude: i64 = digits.replace('_', "").parse().ok()?;
-  Some(sign * magnitude)
-}
-
 /// `text` normalized as a POSIX path: repeated slashes and `.` parts drop, and a trailing slash goes. An empty path is
 /// `.`.
 pub(crate) fn pathlib_text(text: &str) -> String {
@@ -135,19 +117,6 @@ pub(crate) fn pathlib_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn int_reads_what_int_reads_for_a_port() {
-    assert_eq!(parse_int("8080"), Some(8080));
-    assert_eq!(parse_int(" 8080 "), Some(8080));
-    assert_eq!(parse_int("+8080"), Some(8080));
-    assert_eq!(parse_int("-1"), Some(-1));
-    assert_eq!(parse_int("80_80"), Some(8080));
-    assert_eq!(parse_int(""), None);
-    assert_eq!(parse_int("80__80"), None);
-    assert_eq!(parse_int("_80"), None);
-    assert_eq!(parse_int("http"), None);
-  }
 
   #[test]
   fn pathlib_text_drops_dot_parts_and_repeated_slashes() {

@@ -191,7 +191,7 @@ pub(crate) fn executable(section: &CodeServerConfig) -> anyhow::Result<Option<St
 /// How long a resolved executable answers the next caller.
 ///
 /// The `code_server_enabled` template global is evaluated at every page render, and the search of `PATH` costs a
-/// metadata read per directory. The answer follows the setting and `PATH`, and an install or removal under a `PATH`
+/// metadata read per directory. The answer follows the setting and `PATH`. An install or removal under a `PATH`
 /// directory is the one change neither names, so the entry expires and the next caller searches again.
 const EXECUTABLE_TTL: Duration = Duration::from_secs(5);
 
@@ -205,11 +205,11 @@ struct ExecutableMemo {
 
 static EXECUTABLE_MEMO: LazyLock<Mutex<Option<ExecutableMemo>>> = LazyLock::new(|| Mutex::new(None));
 
-/// The executable `setting` names (a bare name searches `search_path`; `~` in a name with a directory part is already
-/// expanded by the caller), from the memo while the setting and `search_path` still hold and the entry is younger
-/// than [`EXECUTABLE_TTL`].
+/// The executable `setting` names, from the memo while the setting and `search_path` still hold and the entry is
+/// younger than [`EXECUTABLE_TTL`]. A bare name searches `search_path`. A `~` in a name with a directory part is
+/// already expanded by the caller.
 ///
-/// A resolution that reads the working directory is not memoized: the search joins a relative `bin` and a relative
+/// A resolution that reads the working directory is not memoized. The search joins a relative `bin` and a relative
 /// `PATH` entry onto it, and the memo names neither, so those callers search every time as they did before.
 pub(crate) fn resolve_executable(setting: Option<&str>, search_path: Option<&OsStr>) -> anyhow::Result<Option<String>> {
   let search_path = search_path.map(|path| path.to_string_lossy().into_owned());
@@ -236,8 +236,8 @@ pub(crate) fn resolve_executable(setting: Option<&str>, search_path: Option<&OsS
   Ok(executable)
 }
 
-/// Whether the search for `setting` under `search_path` resolves through the working directory: a `bin` that names a
-/// relative path, or a `PATH` with a relative entry (an empty one names the working directory).
+/// Whether the search for `setting` under `search_path` resolves through the working directory. It does so for a
+/// `bin` that names a relative path, or a `PATH` with a relative entry (an empty one names the working directory).
 pub(crate) fn reads_working_directory(setting: Option<&str>, search_path: Option<&str>) -> bool {
   if let Some(bin) = setting
     && Path::new(bin).is_relative()

@@ -1,7 +1,8 @@
-//! One improve run: `dev/improve/remote-launch.sh` on this host, and `dev/improve/remote-runner.sh` on the
-//! remote host for a round or this host's local claude for a cron session's own turn. A fake `ssh` records its
-//! arguments and runs the remote side locally. Fake `claude`, `systemd-run`, `systemctl` and `cargo` record what
-//! they receive, so each test checks the run's contract without a network, a server or a real remote host.
+//! One improve run: `dev/improve/remote-launch.sh` on this host. A round then runs
+//! `dev/improve/remote-runner.sh` on the remote host. A cron session's own turn runs this host's local claude
+//! instead. A fake `ssh` records its arguments and runs the remote side locally. Fake `claude`, `systemd-run`,
+//! `systemctl` and `cargo` record what they receive, so each test checks the run's contract without a network, a
+//! server or a real remote host.
 //!
 //! The tests that assert a bound on time measure it: the approval preflight and the heartbeat stop must both finish
 //! inside five seconds.
@@ -1570,8 +1571,8 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   // No task names this worktree, so its committed and dirty paths stay alongside the open pull request's file.
-  // Each path prints with the branch that carries it: the branch commit is unmerged, the dirty and
-  // untracked paths are uncommitted work, and the pull request's head branch carries its file.
+  // Each path prints with the branch that carries it. An unmerged commit's branch carries its file. The
+  // dirty worktree's branch carries its uncommitted paths. An open pull request's head branch carries its file.
   let mut listed: Vec<&str> = run.stdout.lines().collect();
   listed.sort_unstable();
   assert_eq!(
@@ -1880,9 +1881,9 @@ fn a_launch_record_naming_the_worktree_claims_nothing() {
   let world = World::new();
   let checkout = unlanded_worktree_with_uncommitted_state(&world, "launch-record");
   write_task_state(&world, "record-owner-launch", false);
-  // A trigger launch record beside the task records that names the worktree as its worktree_path:
-  // the store writes no such field there, and only the run and task records own a worktree, so the
-  // record names no owner and the worktree stays unrecorded.
+  // A trigger launch record beside the task records names the worktree as its worktree_path. The store
+  // writes no such field there, and only the run and task records own a worktree. The record therefore
+  // names no owner, and the worktree stays unrecorded.
   let launch_dir = world.profile_home.join("sessions/record-owner-launch/launches/20261113T000000-abcdef");
   fs::create_dir_all(&launch_dir).expect("the launch record directory");
   let record = serde_json::json!({

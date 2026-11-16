@@ -86,7 +86,7 @@ const SUBAGENT_STATUS_CLASS = {
   stopped: 'text-slate-400',
 };
 
-// The card of a subagent under the Agent row that started it. The header stays visible; the subagent's own rows
+// The card of a subagent under the Agent row that started it. The header stays visible. The subagent's own rows
 // fold below it. The row count in the header is the subagent's tool uses, so the parent's count never includes them.
 function renderSubagentCard(subagent) {
   var statusCls = SUBAGENT_STATUS_CLASS[subagent.status];
@@ -157,7 +157,7 @@ function isStableRenderedMessage(el) {
 //
 // Every finished turn (one stimulus-to-answer round, ending in a separator)
 // lives in one `.turn-wrap`: that span's own nodes in their original order,
-// plus one `.turn-row`. Folded shows the row and hides the span; open does the
+// plus one `.turn-row`. Folded shows the row and hides the span. Open does the
 // reverse. Nothing is ever unwrapped. After wrapping, the only nodes that ever
 // move are a span's carried inputs, queued for the next round. So a
 // reader-expanded `N steps` bar, an open separator panel and embedded package
@@ -200,7 +200,7 @@ function collectTurns(root) {
 // The parts of one finished turn — computed by the one shared span rule
 // (shared.js) over the rendered elements. Null for a span that stays flat: a
 // bare separator with an empty body. `carried` lists the span's queued
-// inputs; wrapTurn moves their nodes to just after the wrapper.
+// inputs. wrapTurn moves their nodes to just after the wrapper.
 function describeTurn(nodes) {
   const messages = nodes.filter(isStableRenderedMessage);
   const separator = messages[messages.length - 1];
@@ -249,8 +249,8 @@ function buildTurnFoldBar(turnKey, count) {
 }
 
 // The `N steps` band: the stable messages between head and conclusion. New
-// bands start collapsed; Expand all opens them from the derive. The engine
-// drives this with already-rendered elements; the legacy derive drives it
+// bands start collapsed. Expand all opens them from the derive. The engine
+// drives this with already-rendered elements. The legacy derive drives it
 // with its DOM turn.
 function installTurnFold(wrap, foldRange, turnKey) {
   if (!foldRange.length) return;
@@ -376,7 +376,7 @@ function turnFirstLine(text) {
   return '';
 }
 
-// A worker summary titles itself by the worker it reports on; every other head
+// A worker summary titles itself by the worker it reports on. Every other head
 // titles itself by its first line.
 function turnRowTitleFromText(role, text) {
   if (role === 'worker_summary') {
@@ -422,7 +422,7 @@ function buildTurnRowFromSpec(spec) {
   row.setAttribute('title', 'Open this turn');
   row.onclick = function() { setTurnOverride(this.parentNode, true); };
 
-  // A Run's turn (stimulus-free, headed by its header line) reads Run; every
+  // A Run's turn (stimulus-free, headed by its header line) reads Run. Every
   // other head normalizes through the role table.
   const label = spec.headRole === 'system' && spec.headKind === 'run_header'
     ? 'Run'
@@ -509,7 +509,7 @@ function setTurnOpen(wrap, open) {
   wrap.dataset.turnOpen = String(open);
 }
 
-// open(turn) = override ?? isLastWrapper: the reader's choice wins; with no
+// open(turn) = override ?? isLastWrapper: the reader's choice wins. With no
 // choice, only the newest finished turn is open.
 function turnIsOpen(wrap, isLast) {
   const override = wrap.dataset.turnOverride;
@@ -517,7 +517,7 @@ function turnIsOpen(wrap, isLast) {
   return isLast;
 }
 
-// Engine-hosted wraps route open/fold through the engine's registry; legacy
+// Engine-hosted wraps route open/fold through the engine's registry. Legacy
 // wraps keep the dataset implementation.
 function turnEngineForWrap(wrap) {
   if (!wrap || !wrap.dataset || !wrap.dataset.turnKey) return null;
@@ -615,8 +615,8 @@ function buildRoundButtonGroup(sessionId, msg) {
 // The round separator's row class.
 const SEPARATOR_ROW_CLASS = 'flex items-center gap-3 py-2 px-4 separator-line group/sep';
 
-// The row's inner markup. A run-end row keeps its label between the hairlines;
-// an ordinary round separator carries the round's button group and no text.
+// The row's inner markup. A run-end row keeps its label between the hairlines.
+// An ordinary round separator carries the round's button group and no text.
 // separator-hairline and separator-label are the phone layout's hooks
 // (styles.css): a phone hides a labelled row's hairlines and stacks its label
 // above the controls.
@@ -819,7 +819,7 @@ function delegateBackendLabelText(backendId) {
 }
 
 // The live line the 3 s status poll paints into the card. A new-style card
-// reads the child session's own status; a legacy delegation has no session id
+// reads the child session's own status. A legacy delegation has no session id
 // for the poll to resolve, so its line follows the owning session's status.
 function delegateLiveStateHtml(msg, sessionId) {
   const child = msg.child_session_id || '';
@@ -900,7 +900,7 @@ function mdDiv(text) {
 // that clears the same floor.
 const BUBBLE_TIME_CLASS = "text-slate-300";
 
-// Message roles a package renders. A registered role takes the whole message and returns its HTML; the core roles
+// Message roles a package renders. A registered role takes the whole message and returns its HTML. The core roles
 // below keep their own branches. A package registers its renderer when its script loads.
 const messageRoleRenderers = new Map();
 
@@ -979,7 +979,7 @@ function renderMessage(msg, sessionId) {
       + titleAttr + ">"
       + "<span class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</span></div></div>";
   }
-  // A web_status change and a cold read of a waiting item read as a system line; the For you view folds both instead.
+  // A web_status change and a cold read of a waiting item read as a system line. The For you view folds both instead.
   if (msg.role === "system" || msg.role === "web_status" || msg.role === "web_ask_check") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
     return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
@@ -1188,8 +1188,8 @@ const GLOBALS = {
   setMessageDeliveryStatus,
   applyTurnOutline,
 };
-// Turn primitives the window engine builds wraps from and drives through Chat;
-// the fold bar's click handler closes over the module scope. Legacy callers go
+// Turn primitives the window engine builds wraps from and drives through Chat.
+// The fold bar's click handler closes over the module scope. Legacy callers go
 // through wrapTurn / applyTurnOutline above and never touch these directly.
 const CHAT_ONLY = {
   registerMessagePostProcessor,

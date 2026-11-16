@@ -1,6 +1,6 @@
 //! The bounded memo of response bodies: at most `limit` bodies, each no longer than the memo's byte cap.
 //!
-//! A response body's bytes follow from the version of the resource the response answers for, so a repeat request that
+//! A response body's bytes follow from the version of the resource the response answers for. A repeat request that
 //! names the same version answers from the memo instead of reading the file or deflating the body again. The memo
 //! drops entries in insertion order, so a full memo frees the entry stored longest ago. A body past the cap is not
 //! kept: the caller sends it and the next request produces it again, which keeps one large response from pinning the

@@ -177,7 +177,7 @@ fn read_in_ledger(
   })
 }
 
-/// Render the page from one ledger read through the shared template engine.
+/// The page from one ledger read, rendered through the shared template engine.
 #[cfg(test)]
 fn render(features: &FeatureContext, read: &LedgerRead, request: &Parts) -> Result<Response, PageFailure> {
   let templating =

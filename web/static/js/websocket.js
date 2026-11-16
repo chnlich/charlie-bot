@@ -35,12 +35,12 @@ let networkLossPending = false;
 let sessionListResyncPending = false;
 // The quick retry: a visible page retries a closed socket at a short fixed delay instead of waiting out
 // a backoff it cannot observe the link through. A reset blackout surfaces a socket's close only when the
-// link returns, and an idle page has no poll to prove the link returned, so this retry starts the
-// recovery; from there the browser's connection setup decides when the handshake leaves. A hidden page
-// keeps the exponential backoff — becoming visible reconnects it at once.
+// link returns. An idle page has no poll to prove the link returned, so this retry starts the recovery.
+// From there, the browser's connection setup decides when the handshake leaves. A hidden page keeps the
+// exponential backoff — becoming visible reconnects it at once.
 const RECONNECT_QUICK_RETRY_MS = 250;
-// A server that is down refuses each attempt at once, so the quick retry is capped: after these attempts
-// the exponential backoff owns the reconnect until a socket opens again.
+// A server that is down refuses each attempt at once, so the quick retry is capped. After these
+// attempts, the exponential backoff owns the reconnect until a socket opens again.
 const RECONNECT_QUICK_RETRY_LIMIT = 5;
 let quickRetryTimer = null;
 let quickRetriesLeft = RECONNECT_QUICK_RETRY_LIMIT;
@@ -64,8 +64,8 @@ let switchWaitSession = null;
 // then the session and number of the last accepted `subscribed` frame.
 let boundSession = null;
 let boundSubscription = 0;
-// The subscription whose frames the session view accepts, or null while the view belongs to no
-// subscription — between a switch's click and its `subscribed` frame, and after a subscribe error.
+// The subscription whose frames the session view accepts. It is null while the view belongs to no
+// subscription: between a switch's click and its `subscribed` frame, and after a subscribe error.
 let viewSubscription = null;
 // The replay the socket is currently receiving: its subscription number, the bytes collected for
 // it so far, and whether its `catchup_complete` has landed. A `subscribed` frame opens the next
@@ -79,10 +79,10 @@ let replayDone = false;
 // registers core's. A handler runs for an event of this session after the
 // event cursor advances. A handler registered with {advancesCursor: false}
 // runs before that point, and its event leaves the cursor where it is. A
-// handler registered with {sidebar: true} serves a sidebar frame — one the
-// server broadcasts on the shared sidebar channel, naming its own session —
-// and runs whatever subscription the view holds, so the list stays live
-// across a switch's frame drop.
+// handler registered with {sidebar: true} serves a sidebar frame: one the
+// server broadcasts on the shared sidebar channel, naming its own session. It
+// runs whatever subscription the view holds, so the list stays live across a
+// switch's frame drop.
 const wsMessageHandlers = new Map();
 
 function registerWsMessageHandler(type, handler, options) {
@@ -126,7 +126,7 @@ function canRetrySessionSubscription() {
   return viewSubscription === null && switchWaitSession === null;
 }
 
-// A switch drops the frames of the session it leaves from its click: the click wipes the message
+// A switch drops the frames of the session it leaves from its click. The click wipes the message
 // area and moves the displayed session, so a late stream or commit of the left session may not
 // render into the target's view. The drop holds until the target's `subscribed` frame binds.
 function holdSessionFrames(targetSessionId) {
@@ -147,8 +147,8 @@ function bindSubscription(sessionId, subscription) {
 
 // A failed switch's wait ends with the view back on the session it started from: the socket's
 // standing subscription serves it again. When no open socket holds that subscription — one closed
-// during the switch window — its pending reconnect handshakes for the displayed session and binds
-// subscription 0 once the wait is released.
+// during the switch window — its pending reconnect handshakes for the displayed session. That
+// handshake binds subscription 0 once the wait is released.
 function resumeViewSubscription() {
   switchWaitSession = null;
   if (boundSession === SESSION_ID && ws && wsOpen) {
@@ -157,7 +157,7 @@ function resumeViewSubscription() {
 }
 
 // Request the target session's subscription from the bootstrap's event position. `report` carries
-// the switch context the failure notice reports; a subscribe outside a switch (a new task node's
+// the switch context the failure notice reports. A subscribe outside a switch (a new task node's
 // path reports none) passes null and its failure leaves the notice without a switch record.
 function requestSessionSubscription(sessionId, cursor, report) {
   pageSubscription++;
@@ -169,10 +169,7 @@ function requestSessionSubscription(sessionId, cursor, report) {
     generation: report ? report.generation : 0,
   };
   if (ws && wsOpen) sendPendingSubscribe();
-  else if (!ws) connectWS();
-  // Otherwise the socket still in its handshake sends it once open. A page the offline shell served
-  // opens its socket here: its boot ran with no session to name, so nothing connected one before the
-  // open path queued this subscribe.
+  // Otherwise the socket still in its handshake sends it once open.
 }
 
 function sendPendingSubscribe() {
@@ -216,10 +213,10 @@ function closeSessionSocket() {
 }
 
 // A successful request of any kind proves the link returned. A socket waiting
-// out its reconnect backoff reconnects now instead, and its backoff resets:
-// after a blackout the page's first answered request restores the socket
+// out its reconnect backoff reconnects now instead, and its backoff resets.
+// After a blackout, the page's first answered request restores the socket
 // without waiting the delay out. A switch window holds its own timer only by
-// chance: a poke during one reconnects for the session being left, and the
+// chance. A poke during one reconnects for the session being left, and the
 // switch's subscribe takes that socket over once its bootstrap completes.
 function noteRequestSuccess() {
   if (!reconnectTimer) return;
@@ -253,14 +250,14 @@ if (typeof pageFetch === 'function') {
 
 function connectWS() {
   if (!SESSION_ID) {
-    // Without a session there is no socket, so no sidebar frame reaches the page: the list the welcome view shows
-    // misses every row change until the first session opens, and that open resyncs it.
+    // Without a session there is no socket, so no sidebar frame reaches the page. The list the welcome
+    // view shows misses every row change until the first session opens. That open resyncs it.
     sessionListResyncPending = true;
     return;
   }
   cancelReconnect();
-  // A socket that had opened can die without a close event (a phone backgrounding does this), and it took the frames
-  // it received with it: the socket this call opens resyncs the list too.
+  // A socket that had opened can die without a close event (a phone backgrounding does this), and it
+  // took the frames it received with it. The socket this call opens resyncs the list too.
   if (wsOpen) sessionListResyncPending = true;
   reconnectAttempts++;
   const targetSession = SESSION_ID;
@@ -332,20 +329,16 @@ function connectWS() {
       return;
     }
     // A replay's frames are counted into the subscription's byte total until its `catchup_complete`.
-    const frameBytes = replayBytesEncoder.encode(e.data).length;
     if (!replayDone) {
-      replayBytes += frameBytes;
+      replayBytes += replayBytesEncoder.encode(e.data).length;
     }
-    // The view accepts only frames of the subscription it took: a switch drops every frame of the
-    // session it left from its click until its `subscribed` frame binds the target, and a socket
-    // whose binding session is not the displayed one has nothing this view reads. The sidebar's
-    // frames name their own session and keep flowing, so the list they paint stays live across the
-    // switch the way it does across the socket a network close leaves behind.
+    // The view accepts only frames of the subscription it took. A switch drops every frame of the
+    // session it left from its click until its `subscribed` frame binds the target. A socket whose
+    // binding session is not the displayed one has nothing this view reads. The sidebar's frames name
+    // their own session and keep flowing. The list they paint therefore stays live across the switch,
+    // the way it does across the socket a network close leaves behind.
     const registered = wsMessageHandlers.get(type);
     if ((viewSubscription === null || boundSession !== SESSION_ID) && !(registered && registered.sidebar)) return;
-    if (!replayDone) {
-      document.dispatchEvent(new CustomEvent('charliebot:client-socket-replay', {detail: {bytes: frameBytes}}));
-    }
     handleWSEvent(data);
   };
 
@@ -407,8 +400,10 @@ function handleCatchupComplete(data) {
 // ---------------------------------------------------------------------------
 // Stale-page reload guard
 // ---------------------------------------------------------------------------
-// The 4409 close asks this page to refresh its stored shell, then reload. The guard caps the automatic reload
-// at one per tab per 60 seconds, so a stale cache cannot turn the close into a reload loop.
+// The 4409 close asks this page to reload, and no-store page responses mean the reload gets the
+// current code. The guard caps the automatic reload at one per tab per 60 seconds. A layer
+// that still serves old HTML (a stale cache in the path) therefore cannot turn the close
+// into a reload loop.
 const STALE_PAGE_RELOAD_KEY = 'charliebot-stale-page-reload-at';
 const STALE_PAGE_RELOAD_GUARD_MS = 60000;
 
@@ -427,10 +422,8 @@ function reloadStalePage() {
   sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(now));
   // The page-load telemetry names this reload's cause on the other side.
   document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'stale_asset'}}));
-  reloadAfterRefreshingShell();
+  location.reload();
 }
-
-document.addEventListener('charliebot:offline-shell-refresh-failed', showStalePageBanner);
 
 function showStalePageBanner() {
   const banner = document.createElement('div');
@@ -443,7 +436,7 @@ function showStalePageBanner() {
     'padding:4px 12px;border-radius:6px;border:none;background:#fca5a5;color:#7f1d1d;' +
     'font-size:13px;font-weight:600;cursor:pointer;';
   button.textContent = 'Reload';
-  button.onclick = () => reloadAfterRefreshingShell();
+  button.onclick = () => location.reload();
   banner.appendChild(button);
   document.body.appendChild(banner);
 }

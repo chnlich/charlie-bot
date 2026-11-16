@@ -1,13 +1,14 @@
 //! The GitHub draft platform: the server calls the REST API with the operator's own token.
 //!
 //! The token command comes from the core config's `github.user_token_command`, so no repository content names the
-//! operator's host. A pull request opens with `draft: true`; a comment goes to the issues comments endpoint. The
+//! operator's host. A pull request opens with `draft: true`. A comment goes to the issues comments endpoint. The
 //! sender never retries and never falls back to another account.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use charliebot_compat::http_client::{self, Settings};
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftPlatformFactory, DraftSendFailure, DraftSent};
 use futures_util::future::BoxFuture;
 use http::header;
@@ -49,7 +50,7 @@ impl GithubDraftPlatform {
       .post(format!("{}{path}", self.api_base))
       .bearer_auth(token)
       .header(header::ACCEPT, "application/vnd.github+json")
-      .header(header::CONTENT_TYPE, "application/json")
+      .header(header::CONTENT_TYPE, APPLICATION_JSON)
       .header("X-GitHub-Api-Version", "2022-11-28")
       .header(header::USER_AGENT, "charliebot")
       .timeout(REQUEST_TIMEOUT)

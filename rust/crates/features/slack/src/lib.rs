@@ -30,7 +30,7 @@ const THREAD_SLOT: ThreadSlot = ThreadSlot {
   origin_field: "slack_origin",
   origin_type: "SlackOrigin",
   origin_keys: &["team_id", "channel_id", "thread_ts"],
-  watermark_field: "slack_watermark_ts",
+  watermark_field: thread_contract::SLACK.watermark_field,
 };
 
 /// `register`: the service, the routes and the package's other registrations, in server order.

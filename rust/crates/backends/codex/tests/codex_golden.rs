@@ -134,7 +134,6 @@ fn main_module() -> CharlieBotConfig {
       enable_session_cpu_weight: true,
       enable_session_io_weight: true,
       enable_local_work_guard: false,
-      enable_offline_shell: false,
     },
     paths: PathsConfig {
       workspace_dirs: Vec::new(),
@@ -685,7 +684,7 @@ fn launch_of(case: &Value) -> LaunchArgs {
     resume_session_id: opt_text(&case["resume_session_id"]),
     instructions_content: opt_text(&case["instructions_content"]),
     instructions_file: opt_text(&case["instructions_file"]).map(PathBuf::from),
-    // A manager turn carries no run instructions file, and a worker run does; the live launch sets this flag on the
+    // A manager turn carries no run instructions file, and a worker run does. The live launch sets this flag on the
     // manager path.
     manager_turn: case["instructions_file"].is_null(),
     ..LaunchArgs::default()

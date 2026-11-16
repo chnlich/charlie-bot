@@ -19,7 +19,8 @@ use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::form_body::{self, Field, FormModel};
 use charliebot_compat::request_body::{
-  self, BodyModel, Field as BodyField, FieldType, flag_field, integer_field, optional_text_field_ref, text_field_ref,
+  self, BodyModel, Field as BodyField, FieldType, flag_field, integer_field, integer_list_field,
+  optional_text_field_ref, text_field_ref,
 };
 use charliebot_compat::responses;
 use charliebot_compat::routing::{get_only, post_only};
@@ -153,7 +154,7 @@ async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, req
 /// The step names of the startup report's `reached` field, in their progression order.
 const STARTUP_STEPS: &[&str] = &["mic_opening", "no_frames", "silent", "ready"];
 /// How a recording ended, as the startup report's `end` field names it.
-const STARTUP_ENDS: &[&str] = &["stop", "startup_error", "left", "page_closed"];
+const STARTUP_ENDS: &[&str] = &["stop", "mic_silent", "startup_error", "left", "page_closed"];
 /// The browser's microphone permission at the click.
 const MIC_PERMISSIONS: &[&str] = &["granted", "prompt", "denied"];
 /// How the audio engine's resume after both startup branches settled ended: not needed, started, or timed out.
@@ -186,6 +187,11 @@ const STARTUP_FIELDS: &[BodyField] = &[
   BodyField::required("first_frame_ms", FieldType::NullableInteger),
   BodyField::required("first_sound_ms", FieldType::NullableInteger),
   BodyField::required("end_ms", FieldType::Integer),
+  BodyField::required("stop_ms", FieldType::NullableInteger),
+  BodyField::required("text_ms", FieldType::NullableInteger),
+  BodyField::required("chunk_sent_ms", FieldType::IntegerList),
+  BodyField::required("partial_shown_ms", FieldType::IntegerList),
+  BodyField::required("partial_samples", FieldType::IntegerList),
   BodyField::required("frames", FieldType::Integer),
   BodyField::required("samples", FieldType::Integer),
   BodyField::required("audio_context_state", FieldType::NullableString),
@@ -200,7 +206,17 @@ const STARTUP_FIELDS: &[BodyField] = &[
   BodyField::required(request_body::CLIENT_TS, FieldType::String),
 ];
 
-const STARTUP_BODY: BodyModel = BodyModel::required(STARTUP_FIELDS).forbid_extra();
+const STARTUP_BODY: BodyModel = BodyModel::required(STARTUP_FIELDS).forbid_extra().checked(validate_startup_arrays);
+
+fn validate_startup_arrays(values: &serde_json::Map<String, Value>) -> Option<String> {
+  let shown = values.get("partial_shown_ms").and_then(Value::as_array).expect("the required integer list validates");
+  let samples = values.get("partial_samples").and_then(Value::as_array).expect("the required integer list validates");
+  if shown.len() != samples.len() {
+    return Some("partial_shown_ms and partial_samples must have the same length".to_string());
+  }
+  (!shown.is_empty() && values.get("first_frame_ms").is_none_or(Value::is_null))
+    .then(|| "partial_shown_ms requires first_frame_ms".to_string())
+}
 
 /// The startup report route: validate one startup record, persist it as the run's `startup` part, log one
 /// `voice_startup` line, answer `{"ok": true}`. A validation failure answers 422 and logs nothing. The route
@@ -257,6 +273,11 @@ struct VoiceStartup<'a> {
   first_frame_ms: Option<i128>,
   first_sound_ms: Option<i128>,
   end_ms: i128,
+  stop_ms: Option<i128>,
+  text_ms: Option<i128>,
+  chunk_sent_ms: Vec<i128>,
+  partial_shown_ms: Vec<i128>,
+  partial_samples: Vec<i128>,
   frames: i128,
   samples: i128,
   audio_context_state: Option<&'a str>,
@@ -284,6 +305,11 @@ impl<'a> VoiceStartup<'a> {
       first_frame_ms: integer_field(values, "first_frame_ms"),
       first_sound_ms: integer_field(values, "first_sound_ms"),
       end_ms: integer_field(values, "end_ms").expect("a required integer validates to a value"),
+      stop_ms: integer_field(values, "stop_ms"),
+      text_ms: integer_field(values, "text_ms"),
+      chunk_sent_ms: integer_list_field(values, "chunk_sent_ms"),
+      partial_shown_ms: integer_list_field(values, "partial_shown_ms"),
+      partial_samples: integer_list_field(values, "partial_samples"),
       frames: integer_field(values, "frames").expect("a required integer validates to a value"),
       samples: integer_field(values, "samples").expect("a required integer validates to a value"),
       audio_context_state: optional_text_field_ref(values, "audio_context_state"),
@@ -304,6 +330,28 @@ impl<'a> VoiceStartup<'a> {
 /// `voice_transcribed` writes its five device fields, and an absent optional as null.
 fn log_voice_startup(session_id: &str, startup: &VoiceStartup<'_>) {
   let device = |field: &str| device_text(startup.devices.and_then(|devices| devices.get(field)));
+  let stop_to_text_ms = startup.stop_ms.zip(startup.text_ms).map(|(stop, text)| (text - stop) as f64);
+  let capture_gap_ms = startup
+    .stop_ms
+    .zip(startup.first_frame_ms)
+    .map(|(stop, first_frame)| (stop - first_frame + 128) as f64 - startup.samples as f64 / 16.0);
+  let max_chunk_gap_ms = startup.chunk_sent_ms.windows(2).map(|times| times[1] - times[0]).max();
+  let mut partial_rtt_ms: Vec<f64> = startup
+    .partial_shown_ms
+    .iter()
+    .zip(&startup.partial_samples)
+    .map(|(shown, samples)| {
+      (*shown - startup.first_frame_ms.expect("a preview partial follows the first audio frame")) as f64
+        - *samples as f64 / 16.0
+    })
+    .collect();
+  partial_rtt_ms.sort_by(f64::total_cmp);
+  let partial_rtt_p50_ms = match partial_rtt_ms.len() {
+    0 => None,
+    length if length % 2 == 0 => Some((partial_rtt_ms[length / 2 - 1] + partial_rtt_ms[length / 2]) / 2.0),
+    length => Some(partial_rtt_ms[length / 2]),
+  };
+  let partial_rtt_max_ms = partial_rtt_ms.last().copied();
   tracing::info!(
     target: "charliebot_voice",
     session_id,
@@ -316,6 +364,13 @@ fn log_voice_startup(session_id: &str, startup: &VoiceStartup<'_>) {
     first_frame_ms = %Nullable(startup.first_frame_ms),
     first_sound_ms = %Nullable(startup.first_sound_ms),
     end_ms = %startup.end_ms,
+    stop_ms = %Nullable(startup.stop_ms),
+    text_ms = %Nullable(startup.text_ms),
+    stop_to_text_ms = %Nullable(stop_to_text_ms),
+    capture_gap_ms = %Nullable(capture_gap_ms),
+    max_chunk_gap_ms = %Nullable(max_chunk_gap_ms),
+    partial_rtt_p50_ms = %Nullable(partial_rtt_p50_ms),
+    partial_rtt_max_ms = %Nullable(partial_rtt_max_ms),
     frames = %startup.frames,
     samples = %startup.samples,
     audio_context_state = %Nullable(startup.audio_context_state.map(cut_startup_text)),
@@ -988,7 +1043,12 @@ mod tests {
       "graph_ready_ms": 95,
       "first_frame_ms": 230,
       "first_sound_ms": 260,
-      "end_ms": 5000,
+      "end_ms": 5100,
+      "stop_ms": 5000,
+      "text_ms": 5100,
+      "chunk_sent_ms": [0, 172, 344],
+      "partial_shown_ms": [544, 672, 872],
+      "partial_samples": [2048, 4096, 6144],
       "frames": 212,
       "samples": 27136,
       "audio_context_state": "running",
@@ -1052,6 +1112,13 @@ mod tests {
         "first_frame_ms",
         "first_sound_ms",
         "end_ms",
+        "stop_ms",
+        "text_ms",
+        "stop_to_text_ms",
+        "capture_gap_ms",
+        "max_chunk_gap_ms",
+        "partial_rtt_p50_ms",
+        "partial_rtt_max_ms",
         "frames",
         "samples",
         "audio_context_state",
@@ -1079,7 +1146,14 @@ mod tests {
     assert_eq!(line["graph_ready_ms"], "95");
     assert_eq!(line["first_frame_ms"], "230");
     assert_eq!(line["first_sound_ms"], "260");
-    assert_eq!(line["end_ms"], "5000");
+    assert_eq!(line["end_ms"], "5100");
+    assert_eq!(line["stop_ms"], "5000");
+    assert_eq!(line["text_ms"], "5100");
+    assert_eq!(line["stop_to_text_ms"], "100");
+    assert_eq!(line["capture_gap_ms"], "3202");
+    assert_eq!(line["max_chunk_gap_ms"], "172");
+    assert_eq!(line["partial_rtt_p50_ms"], "186");
+    assert_eq!(line["partial_rtt_max_ms"], "258");
     assert_eq!(line["frames"], "212");
     assert_eq!(line["samples"], "27136");
     assert_eq!(line["audio_context_state"], "running");
@@ -1095,6 +1169,58 @@ mod tests {
     assert_eq!(line["device_error"], "null");
     assert_eq!(line["user_agent"], "Mozilla/5.0 (Test) Chrome/1");
     assert_eq!(line["client_ts"], "2026-11-04T10:00:00Z");
+    let cfg = features.config.get().expect("the config loads");
+    let json_path = files_under(&voice_dir(&cfg))
+      .into_iter()
+      .find(|path| path.extension().is_some_and(|extension| extension == "json"))
+      .expect("the startup part is persisted");
+    let parts: Value =
+      serde_json::from_slice(&std::fs::read(json_path).expect("read the parts")).expect("the parts parse");
+    assert_eq!(parts["startup"]["chunk_sent_ms"], json!([0, 172, 344]));
+    assert_eq!(parts["startup"]["partial_shown_ms"], json!([544, 672, 872]));
+    assert_eq!(parts["startup"]["partial_samples"], json!([2048, 4096, 6144]));
+  }
+
+  #[tokio::test]
+  async fn startup_report_refuses_non_integer_chunk_timestamps() {
+    let (_home, features) = test_features();
+    let mut body = startup_body();
+    body["chunk_sent_ms"] = json!([0, 1.5]);
+
+    let (response, logs) = post_startup(&features, body).await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(startup_lines(&logs).is_empty());
+    let cfg = features.config.get().expect("the config loads");
+    assert!(files_under(&voice_dir(&cfg)).is_empty());
+  }
+
+  #[tokio::test]
+  async fn startup_report_refuses_unpaired_partial_timing_arrays() {
+    let (_home, features) = test_features();
+    let mut body = startup_body();
+    body["partial_samples"] = json!([2048, 4096]);
+
+    let (response, logs) = post_startup(&features, body).await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(startup_lines(&logs).is_empty());
+    let cfg = features.config.get().expect("the config loads");
+    assert!(files_under(&voice_dir(&cfg)).is_empty());
+  }
+
+  #[tokio::test]
+  async fn startup_report_refuses_partials_without_first_frame_ms() {
+    let (_home, features) = test_features();
+    let mut body = startup_body();
+    body["first_frame_ms"] = Value::Null;
+
+    let (response, logs) = post_startup(&features, body).await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(startup_lines(&logs).is_empty());
+    let cfg = features.config.get().expect("the config loads");
+    assert!(files_under(&voice_dir(&cfg)).is_empty());
   }
 
   #[tokio::test]
@@ -1106,6 +1232,8 @@ mod tests {
     for field in ["mic_open_ms", "graph_ready_ms", "first_frame_ms", "first_sound_ms"] {
       body[field] = Value::Null;
     }
+    body["partial_shown_ms"] = json!([]);
+    body["partial_samples"] = json!([]);
     body["audio_context_state"] = Value::Null;
     body["audio_context_rate"] = Value::Null;
     body["audio_context_settled_state"] = Value::Null;
@@ -1327,6 +1455,15 @@ mod tests {
     assert_eq!(row["end"], "startup_error");
     assert_eq!(row["startup_error"], "mic: no frames arrived");
     assert_eq!(row["mic_permission"], "denied");
+    let parts_path = files_under(&voice_dir(&cfg))
+      .into_iter()
+      .find(|path| path.extension().is_some_and(|extension| extension == "json"))
+      .expect("the startup report writes the run json");
+    let parts: Value =
+      serde_json::from_slice(&std::fs::read(parts_path).expect("read the run json")).expect("the run json parses");
+    assert_eq!(parts["startup"]["chunk_sent_ms"], json!([0, 172, 344]));
+    assert_eq!(parts["startup"]["partial_shown_ms"], json!([544, 672, 872]));
+    assert_eq!(parts["startup"]["partial_samples"], json!([2048, 4096, 6144]));
     for field in ["audio_url", "duration_s", "digital_silence", "peak_dbfs", "rms_dbfs", "transcript"] {
       assert_eq!(row[field], Value::Null, "{field} of a run without audio");
     }

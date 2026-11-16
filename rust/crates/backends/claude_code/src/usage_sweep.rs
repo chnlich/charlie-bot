@@ -204,7 +204,7 @@ fn delete_project_dir(counter: &mut SweepCounter, path: &Path, dry_run: bool) {
 /// Deletes the cold sessions' transcript directories and the unreferenced orphan directories.
 ///
 /// A transcript directory whose session is known is deleted once that session is cold. One whose session metadata is
-/// gone is an orphan, deleted once idle past the window; a session directory that still exists keeps its transcripts.
+/// gone is an orphan, deleted once idle past the window. A session directory that still exists keeps its transcripts.
 /// A worktree-encoded directory follows the orphan rule once its worktree is gone. A scoped run touches only the
 /// scoped session's directories.
 fn sweep_transcripts(host: &ClaudeHost, scope: &SweepScope, counter: &mut SweepCounter) -> anyhow::Result<()> {

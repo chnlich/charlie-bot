@@ -26,6 +26,7 @@ use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::model_pool::RotationPositions;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CONFIG_FILENAME, CallClass, CallTarget, CallsConfig, CharlieBotConfig, PathsConfig,
   PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
@@ -341,7 +342,7 @@ fn registry(extra: Option<(&'static str, RegisterFn)>) -> anyhow::Result<Registr
   registry.register_package("test.recovery_backend", register_scripted_backend)?;
   registry.register_package("test.synthetic_loop", register_loop_controller)?;
   registry.register_package("test.synthetic_probe", register_probe_controller)?;
-  registry.register_package("features.backend_pool", charliebot_agents::backend_pool::register)?;
+  registry.register_package(charliebot_agents::backend_pool::PACKAGE, charliebot_agents::backend_pool::register)?;
   // The `pool_member` session slot, which the server registers at startup: a pool-chosen delegation writes it.
   registry.register_package("features.model_pool", charliebot_agents::model_pool::register)?;
   if let Some((package, register)) = extra {
@@ -436,7 +437,6 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
       enable_session_cpu_weight: true,
       enable_session_io_weight: true,
       enable_local_work_guard: false,
-      enable_offline_shell: false,
     },
     paths: PathsConfig {
       workspace_dirs: Vec::new(),
@@ -1543,7 +1543,7 @@ pub async fn post_internal(
         .method("POST")
         .uri(path)
         .header(header::AUTHORIZATION, authorization)
-        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_TYPE, APPLICATION_JSON)
         .body(Body::from(serde_json::to_vec(&body)?))?,
     )
     .await?;

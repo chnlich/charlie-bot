@@ -10,17 +10,23 @@ const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModu
 const {createElement, createEscapingElement} = require('./dom_element_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
+// The page loads utils.js ahead of the chat and sidebar modules; the chat's time label is utils.js
+// formatTimeLabel, so the harnesses load it in the same place.
+const UTILS_JS = readStatic('utils.js');
 const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 // The connection layer's request-abort registry; the page loads it before every chat and
 // sidebar module, so the harnesses run it before those too.
 const VIEW_REQUESTS_JS = readStatic('view-requests.js');
 
-// The right-hand panels' offline mark, as config.js builds it.
-const OFFLINE_PANEL_MARK_HTML = '<span class="inline-flex text-amber-400" title="Offline, loads after reconnect" role="img" ' +
-        'aria-label="Offline, loads after reconnect"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-        '<path d="M7 18h10a4 4 0 0 0 .9-7.9A6 6 0 0 0 6.3 9.2 4.5 4.5 0 0 0 7 18z"/>' +
-        '<line x1="3" y1="3" x2="21" y2="21"/></svg></span>';
+// The sandbox's own fixed time forms. utils.js supplies the real ones, and the suites read these fixed strings
+// from the sidebar rows and the trigger tray, so they land again after utils.js runs.
+const SANDBOX_TIME_FORMS = {
+  relativeTime: (txt) => txt,
+  clockTimeHM: () => 'HH:mm',
+  dateClockMDHM: () => 'MM/DD HH:mm',
+  relativeFireIn: () => '(in 0m)',
+  updateRelativeTimes: () => {},
+};
 
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
@@ -110,13 +116,9 @@ function baseSessionContext(overrides = {}) {
     stopThinking: () => {},
     // platform.js's desktop face: the chat status panel reads isMobile and registers its layout callback at load.
     platform: {isMobile: false, onChange() {}},
-    relativeTime: (txt) => txt,
-    // utils.js's trigger clock form; harnesses needing the real one load utils.js
-    // (pending_triggers_tray.test.js does) and its top-level functions overwrite these.
-    clockTimeHM: () => 'HH:mm',
-    dateClockMDHM: () => 'MM/DD HH:mm',
-    relativeFireIn: () => '(in 0m)',
-    updateRelativeTimes: () => {},
+    // markdown-renderer.js's registration seam, which utils.js calls at load.
+    registerChatMathLoader: () => {},
+    ...SANDBOX_TIME_FORMS,
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
     formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
     escapeHtml: (v) => v,
@@ -145,11 +147,6 @@ function baseSessionContext(overrides = {}) {
     // config.js before the chat/sidebar modules createChatSidebarContext fans
     // out to.
     JSON_HEADERS: {'Content-Type': 'application/json'},
-    // config.js's freshness labels (sidebar/last-state.js and the panels paint them).
-    NOT_CURRENT_LABEL: 'Not current',
-    NO_LOCAL_COPY_LABEL: 'No local copy',
-    OFFLINE_PANEL_LABEL: 'Offline, loads after reconnect',
-    OFFLINE_PANEL_MARK: OFFLINE_PANEL_MARK_HTML,
     crypto: {randomUUID: () => 'archive-request-id'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
     saveDraftNow: () => {},
@@ -167,8 +164,11 @@ function baseSessionContext(overrides = {}) {
 // page-timers before the chat and sidebar modules, matching the script order
 // in web/templates/index.html. The chat and sidebar lists are that page's
 // /static/js/chat/ and /static/js/sidebar/ script tags in document order.
-function createChatSidebarContext(context) {
+function createChatSidebarContext(context, options = {}) {
   vm.createContext(context);
+  vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
+  // A suite that reads real time strings keeps utils.js's own forms; the rest read SANDBOX_TIME_FORMS.
+  if (!options.realTimeForms) Object.assign(context, SANDBOX_TIME_FORMS);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
   vm.runInContext(VIEW_REQUESTS_JS, context, {filename: 'view-requests.js'});
   runStaticModules(context, chatModules());
@@ -210,6 +210,16 @@ function makeSidebarRow(sessionId, name) {
     id: 'session-' + sessionId,
     querySelector: (sel) => (sel === '.session-name' ? nameEl : null),
   });
+}
+
+// The archive confirmation names the session by its row's title and waits for an answer. The suites that test what an
+// archive changes answer it with Archive as it opens, and a session with no row in the harness gets one for its title.
+// The dialog itself is covered by sidebar_archive_refusal.test.js.
+function answerArchiveConfirmations(context) {
+  const lookUp = context.document.getElementById;
+  context.document.getElementById = (id) => lookUp(id)
+    || (id.startsWith('session-') ? makeSidebarRow(id.slice('session-'.length), id) : null);
+  context.Sidebar.openConfirmDialog = ({onConfirm}) => onConfirm();
 }
 
 // One session-metadata fixture as the sidebar wire format carries it. Only the
@@ -316,7 +326,6 @@ function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweak
     ['header-session-name', createElement({id: 'header-session-name'})],
     ['backend-badge', createElement()],
     ['msg-input', createElement()],
-    ['freshness-mark', createElement({id: 'freshness-mark'})],
     ...rows.map((row) => [row.id, row]),
   ]);
   const h = {messages, elements, ...fields};
@@ -430,7 +439,6 @@ function buildUsageElements() {
 }
 
 module.exports = {
-  OFFLINE_PANEL_MARK: OFFLINE_PANEL_MARK_HTML,
   baseSessionContext,
   buildSidebarIndicatorContext,
   paintListReply,
@@ -441,6 +449,7 @@ module.exports = {
   buildUsageElements,
   buildSwitchFlowHarness,
   makeSidebarRow,
+  answerArchiveConfirmations,
   makeSessionMeta,
   sessionColumns,
   bootstrapPayload,

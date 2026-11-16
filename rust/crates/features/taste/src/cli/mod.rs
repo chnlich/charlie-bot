@@ -53,7 +53,7 @@ struct MarkArgs {
   /// Withdraw a row whose source the extractor read wrong.
   #[arg(long)]
   retracted: bool,
-  /// Why the row is withdrawn; required with --retracted.
+  /// Why the row is withdrawn. Required with --retracted.
   #[arg(long)]
   reason: Option<String>,
 }
@@ -81,7 +81,7 @@ struct CandidatesArgs {
   sources: Option<String>,
 }
 
-/// Parse the taste arguments and run one verb. `read_plans` reads one session's plan registry; only `candidates`
+/// Parse the taste arguments and run one verb. `read_plans` reads one session's plan registry. Only `candidates`
 /// calls it.
 pub fn main<F>(args: &[OsString], read_plans: F) -> Result<(), CliExit>
 where

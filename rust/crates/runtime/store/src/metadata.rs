@@ -41,15 +41,20 @@ pub const SCHEDULE_FIELDS: [&str; 6] =
   [SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEDULE_PROJECT, SCHEDULE_ALLOW_FAILURE];
 /// The cron slot's field naming the task bound to the session's schedule.
 pub const SCHEDULED_TASK: &str = "scheduled_task";
-/// The cron slot's field holding the fire time of the bound task's last scheduled run.
+/// The cron slot's field holding each bound task's schedule state, keyed by task name. Its value is an object whose
+/// entry for a task holds that task's `LAST_SCHEDULED_RUN`, `LAST_SCHEDULED_CRON` and `LAST_RUN_STATUS`, so every task
+/// bound to a session keeps its own entry.
+pub const TASK_SCHEDULE_SLOTS: &str = "task_schedule_slots";
+/// The key, in a task's entry of `TASK_SCHEDULE_SLOTS`, holding the fire time of the task's last scheduled run.
 pub const LAST_SCHEDULED_RUN: &str = "last_scheduled_run";
-/// The cron slot's field holding the cron expression that produced the last scheduled run.
+/// The key, in a task's entry of `TASK_SCHEDULE_SLOTS`, holding the cron expression that produced the task's last
+/// scheduled run.
 pub const LAST_SCHEDULED_CRON: &str = "last_scheduled_cron";
-/// The cron slot's field holding the outcome of the bound task's last run.
+/// The key, in a task's entry of `TASK_SCHEDULE_SLOTS`, holding the outcome of the task's last run.
 pub const LAST_RUN_STATUS: &str = "last_run_status";
 /// The cron slot's fields, in registration order. The cron feature registers them, and the store reads them when it
 /// rebinds a scheduled binding.
-pub const CRON_SLOT_FIELDS: [&str; 4] = [SCHEDULED_TASK, LAST_SCHEDULED_RUN, LAST_RUN_STATUS, LAST_SCHEDULED_CRON];
+pub const CRON_SLOT_FIELDS: [&str; 2] = [SCHEDULED_TASK, TASK_SCHEDULE_SLOTS];
 /// The session-metadata field holding the backend's native session id, which the next turn resumes. The store writes
 /// it, the registry's anchor reconciler names it in its correction warning, and the cold-storage sweep reads it from
 /// the raw metadata, so it is spelled once, here.

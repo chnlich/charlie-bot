@@ -51,12 +51,12 @@ const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 
 /// The identity of one status body.
 ///
-/// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus: it holds one
-/// entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key holds that overlay
-/// instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A request that names
-/// its filter and ids keys on those. `generation` names the sidebar state the body reads beyond the rows, and `since`
-/// the answer's own delta base: a page that holds the state of its last answer sends that answer's token back, so the
-/// same state answers with the same token.
+/// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus. The
+/// overlay holds one entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key
+/// holds that overlay instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A
+/// request that names its filter and ids keys on those. `generation` names the sidebar state the body reads beyond
+/// the rows, and `since` the answer's own delta base. A page that holds the state of its last answer sends that
+/// answer's token back, so the same state answers with the same token.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum StatusKey {
   Listing {
@@ -79,8 +79,8 @@ enum StatusKey {
 /// Which rows a status body carries.
 ///
 /// `Set` answers every row of the filter's set. `Named` answers the ids the request names, while the filter still
-/// names the set that membership follows: a page that paints its first screen asks for the rows it paints rather than
-/// every row of the home.
+/// names the set that membership follows. A page that paints its first screen asks for the rows it paints rather
+/// than every row of the home.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum StatusAnswer {
   Set,
@@ -397,8 +397,8 @@ async fn list_groups(State(features): State<Arc<FeatureContext>>) -> Response {
 
 /// The sorted, distinct, nonempty group names of every stored session.
 ///
-/// The names come from the memoized metadata corpus, whose rows the listing memo shares as `Arc`s, so a call clones
-/// only the names it returns, not the metadata of the sessions that carry no group.
+/// The names come from the memoized metadata corpus, whose rows the listing memo shares as `Arc`s. A call therefore
+/// clones only the names it returns, not the metadata of the sessions that carry no group.
 fn list_group_names(features: &FeatureContext) -> charliebot_store::StoreResult<Vec<String>> {
   let (rows, _) = features.store.load_session_metas_snapshot_versioned(None)?;
   let mut groups: Vec<String> =
@@ -417,7 +417,7 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
 ///
 /// A `since` token names the state the page holds. Without one, or with a token this process did not publish, the
 /// answer carries every row. `answer=ids` names the rows the request's `ids` carry and leaves the filter to name the
-/// set membership follows, so a page that paints its first screen downloads the rows it paints. The answer is
+/// set membership follows. A page that paints its first screen therefore downloads the rows it paints. The answer is
 /// `{"token": <state>, "rows": {<id>: <state>}, "gone": [<id>, ...]}`: the token to send back, the rows that moved,
 /// and the ids that left the filter's set.
 fn session_status_response(features: &FeatureContext, request: &Request<Body>) -> Response {
@@ -665,12 +665,12 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
 /// Send a task-tree page, reusing the compressed body a repeat request already deflated.
 ///
 /// A page holds its bytes across requests while the tree and its rows hold, and the transport middleware deflates
-/// every body afresh: on the 7,160-session mock home that deflate costs about two thirds of this route's latency.
+/// every body afresh. On the 7,160-session mock home that deflate costs about two thirds of this route's latency.
 /// The memo answers a repeat with the bytes it already compressed.
 ///
 /// The middleware leaves a response that names its own `Content-Encoding` untouched, so this sender writes the
-/// headers the middleware would write: `Vary: Accept-Encoding` with the compressed body, and the plain response for
-/// a body below the middleware's minimum size.
+/// headers the middleware would write. They are `Vary: Accept-Encoding` with the compressed body, and the plain
+/// response for a body below the middleware's minimum size.
 fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
   let wants_gzip = accepts_gzip(request.headers());
   if !wants_gzip || body.len() < TRANSPORT_GZIP_MINIMUM_SIZE {
@@ -705,13 +705,13 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   // Read the generation before the rows, so a state change during this request leaves the body this request keeps
   // stamped with a generation no later request serves.
   let generation = sidebar_state::derived_generation();
-  // A repeat query whose listing memo and file check still hold answers on this thread: the corpus and the body are
-  // in memory, and the checks that answer it read no file. A fresh query, or one whose check has lapsed, takes the
-  // blocking path below, which reads the files the answer depends on.
+  // A repeat query whose listing memo and file check still hold answers on this thread. The corpus and the body
+  // are in memory, and the checks that answer it read no file. A fresh query, or one whose check has lapsed, takes
+  // the blocking path below, which reads the files the answer depends on.
   if let Some(corpus) = features.store.cached_session_metas_snapshot()
     && let Some((rows, body)) = search::repeat_answer(&q, &corpus, generation)
   {
-    // The body resolved its sidebar fields when it was rendered, but the read still counts: the periodic self-heal
+    // The body resolved its sidebar fields when it was rendered, but the read still counts. The periodic self-heal
     // sweep a memoized answer starts is what catches an edit made outside the server.
     if let Err(error) = sidebar::count_memoized_read(&features.store, &features.registry, &rows) {
       return store_error(error);
@@ -954,8 +954,8 @@ mod tests {
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
   }
 
-  /// `answer=ids` answers the rows the request names while the filter still names the set membership follows, so a
-  /// page that paints its first screen does not download every row of the Workspace.
+  /// `answer=ids` answers the rows the request names while the filter still names the set membership follows. A page
+  /// that paints its first screen therefore does not download every row of the Workspace.
   #[tokio::test]
   async fn a_named_status_answer_carries_the_named_rows_alone() {
     let (_home, features) = crate::test_support::feature_context();
@@ -1059,7 +1059,7 @@ mod tests {
     assert_eq!(payload["sessions"]["name"], json!(["starred-kept"]), "only the named row answers");
   }
 
-  /// The status answer's bytes do not follow the order the caller named the ids in: a row that moved in the listing
+  /// The status answer's bytes do not follow the order the caller named the ids in. A row that moved in the listing
   /// must not change the body, or the poll answers 200 with no row's state changed.
   #[tokio::test]
   async fn the_status_body_ignores_the_order_the_caller_named_the_ids_in() {
@@ -1081,8 +1081,8 @@ mod tests {
     assert_eq!(forward, reverse);
   }
 
-  /// A repeat `filter=all` poll that carries the token of its last answer answers the listing as it stands now: the
-  /// row whose fact moved and the row that appeared, and not the rows that stand.
+  /// A repeat `filter=all` poll that carries the token of its last answer answers the listing as it stands now. It
+  /// answers the row whose fact moved and the row that appeared, and not the rows that stand.
   #[tokio::test]
   async fn a_repeat_status_filter_answers_the_listing_as_it_stands_now() {
     let (_home, features) = crate::test_support::feature_context();
@@ -1109,7 +1109,7 @@ mod tests {
     assert_eq!(answered.len(), 2, "the repeat poll answers only the rows that moved");
   }
 
-  /// A repeat poll without a token answers the state as it stands now rather than the body an earlier poll kept: the
+  /// A repeat poll without a token answers the state as it stands now rather than the body an earlier poll kept. The
   /// memo answers only while the row corpus and the sidebar state it was built from still hold.
   #[tokio::test]
   async fn a_repeat_status_poll_answers_the_state_as_it_stands_now() {

@@ -338,9 +338,9 @@ pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreRe
 
 /// The Workspace page's row corpus and the derived overlay that names it, without the sequence controllers' row fields.
 ///
-/// The status poll reads only the row ids and the overlay, and the overlay is the corpus' identity: a rebuild
-/// replaces it whenever a row, an overlay or the order moves. Asking for the rendered page's controller fields here
-/// would sort and clone every id on each poll, so this route reads the corpus alone.
+/// The status poll reads only the row ids and the overlay, and the overlay is the corpus' identity. A rebuild
+/// replaces the overlay whenever a row, an overlay or the order moves. Asking for the rendered page's controller
+/// fields here would sort and clone every id on each poll, so this route reads the corpus alone.
 pub struct PageCorpusRows {
   pub rows: Arc<Vec<Arc<SessionMetadata>>>,
   pub derived: Arc<DerivedSidebarMap>,
@@ -535,7 +535,7 @@ impl PageTextSource {
   }
 
   fn holds(&mut self, page: &PageRows) -> bool {
-    // The corpus arrives as one shared allocation: `active_page_rows` hands out the memoized list until an input
+    // The corpus arrives as one shared allocation. `active_page_rows` hands out the memoized list until an input
     // that shapes it moves, so the same pointer is the same rows and the same order. Comparing the rows one by one
     // walked all of them on every request. A rebuilt corpus that holds equal rows in a new allocation still matches,
     // and the source takes that allocation so the next request pays one comparison.
@@ -628,7 +628,7 @@ impl<'a> PageRowsScope<'a> {
 /// Render one row projection of the sidebar corpus as its column text.
 ///
 /// The text carries the fields of `projection` over the session value of `schema`, so each pair needs a memo of its
-/// own: a memo serves the pair it filled from, and another projection or schema renders other values.
+/// own. A memo serves the pair it filled from, and another projection or schema renders other values.
 pub(crate) fn page_json_text(
   store: &Store,
   page: &PageRows,
@@ -784,8 +784,8 @@ impl PageFirstScreen {
   /// The first screen of `page` with `active` kept visible, over the shape `screen` memoizes.
   ///
   /// Only the open session's root picks which roots the screen keeps. Every other part — each row's root, each root's
-  /// subtree size and schedule flag, each group's roots and total — follows the corpus alone, so the shape is built
-  /// once while the corpus holds and a page that names another session reads it.
+  /// subtree size and schedule flag, each group's roots and total — follows the corpus alone. The shape is therefore
+  /// built once while the corpus holds, and a page that names another session reads it.
   fn of(page: &PageRows, active: Option<&str>, screen: &Mutex<Option<FirstScreenShape>>) -> Self {
     let rows = page.rows();
     let mut held = screen.lock().expect("the first-screen memo mutex is not poisoned");
@@ -888,17 +888,17 @@ impl FirstScreenShape {
 ///
 /// The page's rows repeat the same field names and value shapes on every row. A gzip deflator finds the repetition
 /// inside one field's values before it finds any across interleaved rows, so grouping the values by field shrinks
-/// the page: on the 7,160-session mock home the sidebar costs 453 KB of the page's compressed bytes as columns and
+/// the page. On the 7,160-session mock home the sidebar costs 453 KB of the page's compressed bytes as columns and
 /// 506 KB as row objects.
 ///
 /// Two columns carry an encoding the page declares under [`COLUMN_ENCODING_KEY`], because their plain text costs
 /// bytes a client-side expansion removes. A session id is a canonical UUID, so [`UUID_ENCODING`] carries the ids' 16
-/// bytes in row order as one base64url string: the 36-character text costs a gzip deflator's 22 bytes per row, one
+/// bytes in row order as one base64url string. The 36-character text costs a gzip deflator's 22 bytes per row, one
 /// base64url cell per row costs the same, and the string of them costs the 16 bytes' entropy. An `updated_at` is
 /// epoch minutes in newest-first order, so [`DELTA_ENCODING`] carries the differences, which are small numbers the
 /// deflator packs tightly.
 ///
-/// A page row never carries a null value: the falsy fields it keeps are a name and a schedule flag, and
+/// A page row never carries a null value. The falsy fields it keeps are a name and a schedule flag, and
 /// [`drop_falsy_fields`] leaves every other falsy field out before this text is built.
 fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>) -> String {
   let mut fields: Vec<&str> = Vec::new();
@@ -986,8 +986,8 @@ fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
   text.push('"');
 }
 
-/// Write the `id` column as one cell per row: a canonical UUID as its 16 bytes in base64url, any other id as `~` and
-/// its text, and `null` where the row leaves the field out.
+/// Write the `id` column as one cell per row. A canonical UUID is its 16 bytes in base64url, and any other id is `~`
+/// and its text. A row that leaves the field out writes `null`.
 fn write_id_cells(text: &mut String, rows: &[Arc<PageRowText>]) {
   text.push('[');
   for (index, row) in rows.iter().enumerate() {
@@ -1013,7 +1013,7 @@ fn write_id_cells(text: &mut String, rows: &[Arc<PageRowText>]) {
 
 /// The 16 bytes one id carries, when its text is the canonical UUID spelling.
 ///
-/// The store holds and the routes name an id by its exact text, so only the canonical spelling may travel encoded:
+/// The store holds and the routes name an id by its exact text, so only the canonical spelling may travel encoded.
 /// `Uuid::parse_str` also accepts uppercase, simple, braced and URN spellings, and decoding those would hand the page
 /// a different id string.
 fn canonical_uuid(id: &str) -> Option<[u8; 16]> {
@@ -1081,17 +1081,17 @@ fn page_row_value(
 
 /// Fields the page keeps even when their value is falsy.
 ///
-/// The client reads these values themselves rather than their truth: it renders `name` literally, so an absent name
-/// prints "undefined" in the sidebar, and it draws a schedule as disabled only for `schedule_enabled` false, so an
+/// The client reads these values themselves rather than their truth. It renders `name` literally, so an absent name
+/// prints "undefined" in the sidebar. It draws a schedule as disabled only for `schedule_enabled` false, so an
 /// absent value would draw the schedule as enabled.
 const KEPT_FALSY_FIELDS: [&str; 2] = ["name", SCHEDULE_ENABLED];
 
 /// Leave out every field the page's client reads as falsy: null, false, zero and the empty string.
 ///
-/// The page carries each row's whole metadata, and most sessions leave most of its fields at their default: on the
+/// The page carries each row's whole metadata, and most sessions leave most of its fields at their default. On the
 /// 7,160-session mock home a row keeps 10 of its 49 fields. The client reads a missing field as undefined, which
-/// every falsy test (a condition, `||`, `!!`, `|| 0`) treats like null, false or zero, so an omitted field changes no
-/// decision it takes. The sidebar text falls from 9.2 MB to 2.0 MB, and the page body from 695 KB to 577 KB
+/// every falsy test (a condition, `||`, `!!`, `|| 0`) treats like null, false or zero. So an omitted field changes
+/// no decision it takes. The sidebar text falls from 9.2 MB to 2.0 MB, and the page body from 695 KB to 577 KB
 /// compressed.
 fn drop_falsy_fields(value: &mut Value) {
   let object = value.as_object_mut().expect("a session metadata value is an object");
@@ -1102,7 +1102,7 @@ fn drop_falsy_fields(value: &mut Value) {
 /// version.
 ///
 /// The page's rows feed the sidebar and the session views under `web/static/js`, and none of them reads either
-/// field: the tree listing orders and pages by `created_at` on the server, and `schema_version` is the store's own
+/// field. The tree listing orders and pages by `created_at` on the server, and `schema_version` is the store's own
 /// compatibility marker. On the 7,160-session mock home the two fields are 365,160 bytes of the page's 2,347,241-byte
 /// sidebar text.
 const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", SCHEMA_VERSION_FIELD];
@@ -1160,7 +1160,7 @@ fn is_falsy(value: &Value) -> bool {
 /// Render a page's sidebar rows with their controller fields and route-local body and gzip memos.
 ///
 /// The page hands out the corpus as the listing memo's own allocation, so its row and overlay identities are the
-/// memo's, and a repeat request proves the corpus unchanged with one pointer comparison.
+/// memo's. A repeat request proves the corpus unchanged with one pointer comparison.
 pub fn sessions_list_page_response(
   request: &Request<Body>,
   store: &Store,
@@ -1235,7 +1235,7 @@ pub fn sessions_list_response(
 ///
 /// The Workspace filter refetches the listing on every session or task-tree change, and the page already carries the
 /// same rows in the column form [`active_page_json_text`] writes. The compact response serves that text in place of a
-/// row array: the row texts it joins are the page's own fields, so the sidebar decodes it with the same
+/// row array. The row texts it joins are the page's own fields, so the sidebar decodes it with the same
 /// `expandSessionColumns` the page's inline listing takes. Its gzip memo reuses the previous body while the text
 /// keeps its allocation, and the row memo re-renders only the rows a corpus change moved.
 #[derive(Default)]
@@ -1422,7 +1422,20 @@ fn render_row(store: &Store, row: &RowInputs, projection: SidebarProjection) -> 
   let mut value = metadata_value(store, &row.meta)?;
   apply_sidebar_fields(&mut value, row, projection);
   apply_listing_fields(&mut value, row.listing.clone().unwrap_or_default());
+  drop_null_fields(&mut value);
   Ok(value)
+}
+
+/// Leave out the fields a row holds at null.
+///
+/// Most sessions leave most of their metadata fields at their default, so a row's null fields carry no value and a
+/// client reads a missing field as null. Every truth test, `||` default and null check answers the same for the two.
+/// A field with any other value stays, so a client that reads its own value — `name`, `created_at`, a false flag —
+/// takes the same bytes as before. On the 7,160-session mock home a row keeps 18 of its 50 fields. The listing body
+/// falls from 8.6 MB to 3.6 MB, and its gzip form from 468 KB to 373 KB.
+fn drop_null_fields(value: &mut Value) {
+  let object = value.as_object_mut().expect("a session metadata value is an object");
+  object.retain(|_, value| !value.is_null());
 }
 
 fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarProjection) {
@@ -1498,6 +1511,29 @@ mod tests {
     let request = Request::builder().uri("/api/sessions/").body(Body::empty()).unwrap();
     let response = sessions_list_response(&request, &features.store, rows, None, derived, sequence_fields, memos);
     serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
+  }
+
+  /// A listed row leaves out the fields it holds at null and keeps every field with a value, a false flag included.
+  #[test]
+  fn a_listed_row_leaves_out_the_fields_it_holds_at_null() {
+    let (_home, features) = crate::test_support::feature_context();
+    let row = RowInputs {
+      meta: Arc::new(SessionMetadata::new("synthetic", "Null fields", TaskProfile::Manager)),
+      derived: None,
+      thinking_since: Value::Null,
+      run_backend: None,
+      display_backend: None,
+      listing: None,
+    };
+    let value = render_row(&features.store, &row, LISTING_PROJECTION).unwrap();
+    let fields = value.as_object().expect("a listed row is an object");
+
+    for field in ["cc_session_id", "task", "task_parent_id", "next_trigger_at", "thinking_since"] {
+      assert!(!fields.contains_key(field), "{field} holds null, so the row leaves it out");
+    }
+    assert_eq!(fields["name"], "Null fields");
+    assert_eq!(fields["has_unread"], false);
+    assert!(fields.contains_key("created_at"));
   }
 
   #[tokio::test]
@@ -1685,7 +1721,7 @@ mod tests {
   }
 
   /// The compact listing carries the listing projection's columns, so the sidebar's expander restores the rows the
-  /// full listing sends, and a repeat gzip request serves the compressed body the first one built.
+  /// full listing sends. A repeat gzip request serves the compressed body the first one built.
   #[tokio::test]
   async fn the_compact_listing_carries_the_listing_columns_and_reuses_its_gzip_body() {
     let (_home, features) = crate::test_support::feature_context();
@@ -1805,7 +1841,7 @@ mod tests {
     for omitted in [SCHEDULE_TASK, "cc_session_id", "has_unread", "pending_trigger_count"] {
       assert!(!row.contains_key(omitted), "{omitted} is falsy and stays out of the page row");
     }
-    // No page client reads these: the sidebar and session views never touch a row's creation time or schema
+    // No page client reads these. The sidebar and session views never touch a row's creation time or schema
     // version, and an absent rating map reads like the empty one this row holds.
     for omitted in UNREAD_PAGE_FIELDS.iter().copied().chain([ROUND_RATINGS]) {
       assert!(!row.contains_key(omitted), "{omitted} is not a field the page's client reads");
@@ -2032,8 +2068,8 @@ mod tests {
     );
   }
 
-  /// A home whose ids are not all canonical UUIDs carries one cell per row: a canonical UUID as 22 base64url
-  /// characters, any other id as `~` and its text, and the expansion restores both.
+  /// A home whose ids are not all canonical UUIDs carries one cell per row. A canonical UUID takes 22 base64url
+  /// characters, and any other id takes `~` and its text. The expansion restores both.
   #[test]
   fn a_canonical_uuid_id_travels_as_its_bytes_and_any_other_id_as_text() {
     let uuid = "e870f19c-96c6-40e7-8da7-71f02b2622e3";

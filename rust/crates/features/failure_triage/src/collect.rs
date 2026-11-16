@@ -386,7 +386,7 @@ fn read_run_events(path: &Path) -> Result<RunEvents> {
 
 /// The text a `result` event reports as its error: its `result` text when `is_error` is true and the text is not empty.
 fn reported_error(event: &serde_json::Value) -> Option<String> {
-  if event.get("is_error").and_then(serde_json::Value::as_bool) != Some(true) {
+  if event.get(event_types::IS_ERROR).and_then(serde_json::Value::as_bool) != Some(true) {
     return None;
   }
   event.get("result").and_then(serde_json::Value::as_str).filter(|text| !text.is_empty()).map(str::to_string)

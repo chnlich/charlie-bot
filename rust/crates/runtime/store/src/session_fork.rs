@@ -789,10 +789,13 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let source = create_node(&store, "source", None, TaskProfile::Manager).await;
+    let slots = json!({"nightly": {
+      "last_scheduled_run": "2026-01-02T03:04:05+00:00",
+      "last_scheduled_cron": "0 3 * * *",
+      "last_run_status": "success",
+    }});
     let mut cron = Map::new();
-    cron.insert("last_scheduled_run".to_string(), json!("2026-01-02T03:04:05+00:00"));
-    cron.insert("last_scheduled_cron".to_string(), json!("0 3 * * *"));
-    cron.insert("last_run_status".to_string(), json!("success"));
+    cron.insert("task_schedule_slots".to_string(), slots.clone());
     {
       let guard = store.control_lock().await;
       store.update_slot_fields_locked(&guard, &source.id, "cron", cron).await.unwrap();
@@ -802,9 +805,7 @@ mod tests {
     let new = store.elone_session(&source.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
 
     let fresh = store.get_session(&new.id).await.unwrap().unwrap();
-    assert_eq!(fresh.extra("last_scheduled_run"), Some(&json!("2026-01-02T03:04:05+00:00")));
-    assert_eq!(fresh.extra("last_scheduled_cron"), Some(&json!("0 3 * * *")));
-    assert_eq!(fresh.extra("last_run_status"), Some(&json!("success")));
+    assert_eq!(fresh.extra("task_schedule_slots"), Some(&slots));
   }
 
   #[tokio::test]

@@ -28,17 +28,17 @@ static SIDEBAR_SWEEP_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// How long after one self-heal sweep starts the next one may start.
 ///
-/// The sweep is triggered by every tenth sidebar poll, and a poller faster than ten polls per sweep would start a new
-/// sweep the moment the previous one ended, so the sweep thread ran back to back for as long as the poller kept up.
-/// The interval fixes the sweep's frequency and [`SIDEBAR_SWEEP_SLICE`] fixes each sweep's size, so together they
-/// bound the CPU the self-heal spends on a home of any size. Changes the server makes itself reach the sidebar
-/// through their dirty marks, which the poll consumes without a sweep, so the interval only bounds how late an edit
-/// from outside the server can show.
+/// The sweep is triggered by every tenth sidebar poll. A poller faster than ten polls per sweep would start a new
+/// sweep the moment the previous one ended. The sweep thread therefore ran back to back for as long as the poller
+/// kept up. The interval fixes the sweep's frequency and [`SIDEBAR_SWEEP_SLICE`] fixes each sweep's size, so
+/// together they bound the CPU the self-heal spends on a home of any size. Changes the server makes itself reach
+/// the sidebar through their dirty marks, which the poll consumes without a sweep. The interval therefore only
+/// bounds how late an edit from outside the server can show.
 const SIDEBAR_SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(10);
 
 /// How many sessions one self-heal sweep rechecks.
 ///
-/// A sweep rechecked every active session, so its cost grew with the home's session count: on the 7,160-session mock
+/// A sweep rechecked every active session, so its cost grew with the home's session count. On the 7,160-session mock
 /// home one sweep spent about 58 ms of CPU, and the interval starts one every ten seconds. A sweep rechecks this many
 /// sessions and the next sweep continues after them, so each sweep costs a fixed share of CPU. A session waits at most
 /// the corpus size divided by this slice, times the interval, to be rechecked again.
@@ -51,9 +51,9 @@ const SIDEBAR_SWEEP_CURSOR_ENTRIES: usize = 16;
 
 /// The next corpus index each corpus's rotation starts at, keyed by the corpus's own ids.
 ///
-/// The cursor belongs to the corpus: one shared cursor would skip rows when two corpora of related lengths are
-/// polled in turn, because each corpus would apply the other corpus's advance modulo its own length and repeat the
-/// same offsets. A corpus is named by what it holds, so a caller that builds an equal corpus per request keeps its
+/// The cursor belongs to the corpus. One shared cursor would skip rows when two corpora of related lengths are
+/// polled in turn. Each corpus would apply the other corpus's advance modulo its own length and repeat the same
+/// offsets. A corpus is named by what it holds, so a caller that builds an equal corpus per request keeps its
 /// rotation instead of restarting at the first row.
 static SIDEBAR_SWEEP_CURSORS: LazyLock<Mutex<BoundedMemo<(usize, u64), usize>>> =
   LazyLock::new(|| Mutex::new(BoundedMemo::new(SIDEBAR_SWEEP_CURSOR_ENTRIES)));
@@ -194,7 +194,7 @@ fn should_probe_synchronously(force_full: bool, force: bool, dirty: bool, has_sn
 
 /// Count one sidebar read that answered from a memo, and schedule the periodic self-heal sweep when this poll is due.
 ///
-/// The poll count bounds how late an edit from outside the server can show: every tenth poll sweeps the active
+/// The poll count bounds how late an edit from outside the server can show. Every tenth poll sweeps the active
 /// sessions and stores what moved, which moves the sidebar generation that invalidates the memo. A route that
 /// answered from a memo without counting its read would stop the sweeps for a client that only reads that route.
 pub(crate) fn count_memoized_read(
@@ -223,9 +223,9 @@ fn schedule_sidebar_sweep(
   registry: Arc<Registry>,
   sessions: &[Arc<SessionMetadata>],
 ) -> StoreResult<()> {
-  // In the test build the sweep never runs: its thread would move the shared sidebar generation long after the read
-  // that scheduled it returned, which is exactly the window the corpus-memo tests of `listing.rs` compare. No test
-  // of this crate observes the sweep itself. `should_start_sweep` covers its policy as a pure function.
+  // In the test build the sweep never runs. Its thread would move the shared sidebar generation long after the
+  // read that scheduled it returned, which is exactly the window the corpus-memo tests of `listing.rs` compare.
+  // No test of this crate observes the sweep itself. `should_start_sweep` covers its policy as a pure function.
   if cfg!(test) {
     return Ok(());
   }

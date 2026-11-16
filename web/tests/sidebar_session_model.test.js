@@ -98,7 +98,8 @@ function boundPoolRow(extra) {
      backend: 'cheap', pool_member: 'codex-gpt-luna', native_backend: 'codex-gpt-luna', native_model: 'gpt-6-luna',
      backend_from_pool: false, scheduled_task: 'speedup-h2-wake',
      schedule_task: 'speedup-h2-wake', schedule_cron: '17 */4 * * *', schedule_timezone: 'America/Los_Angeles',
-     schedule_enabled: true, schedule_next_run: '2026-07-30T01:00:00Z', last_run_status: 'success',
+     schedule_enabled: true, schedule_next_run: '2026-07-30T01:00:00Z',
+     task_schedule_slots: {'speedup-h2-wake': {last_run_status: 'success'}},
      ...extra},
     'all'
   );
@@ -115,7 +116,7 @@ test('a pool-bound task row shows the pool, its recorded member and its model', 
 });
 
 test('a pool-bound task that has not run shows the pool label alone', () => {
-  const html = boundPoolRow({pool_member: undefined, native_model: undefined, last_run_status: undefined});
+  const html = boundPoolRow({pool_member: undefined, native_model: undefined, task_schedule_slots: undefined});
   const model = modelSpan(html);
   assert.ok(model, 'a pool-bound row keeps its pool label');
   assert.equal(model[3], 'Cheap');

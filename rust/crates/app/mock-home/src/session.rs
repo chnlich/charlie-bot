@@ -121,7 +121,7 @@ fn next_event(rng: &mut Rng, text: &SyntheticText, timestamp: &str, budget: u64)
     "type": event_types::TOOL_RESULT,
     event_types::TOOL_USE_ID: tool_use_id,
     "content": content,
-    "is_error": false
+    (event_types::IS_ERROR): false
   });
   json!({"type": event_types::USER, "message": {"content": [result]}, "timestamp": timestamp})
 }

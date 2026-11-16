@@ -23,8 +23,8 @@ use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
 use crate::layout;
 use crate::metadata::{
-  EventRef, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_STATE, TaskApprover, TaskProfile, TaskSpec,
-  UtcDateTime, WORK_STATE,
+  EventRef, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE, TaskApprover,
+  TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
 };
 use crate::run_facts::{CachedRunFacts, RunFacts};
 use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
@@ -1476,54 +1476,6 @@ impl Store {
     Ok(())
   }
 
-  /// Copy registered metadata fields from `old` into a fresh target metadata read.
-  pub async fn adopt_metadata_slot_locked(
-    &self,
-    guard: &ControlGuard,
-    session_id: &str,
-    old: &SessionMetadata,
-    owner: &str,
-    fields: Option<&[&str]>,
-  ) -> StoreResult<SessionMetadata> {
-    self.require_control_guard(guard)?;
-    let slot = self
-      .slots
-      .iter()
-      .find(|slot| slot.owner == owner && slot.on == charliebot_core::metadata_slot::MetadataFile::Session)
-      .ok_or_else(|| StoreError::new(format!("{owner:?} registered no fields on session metadata")))?;
-    let selected: Vec<_> = match fields {
-      Some(names) => names
-        .iter()
-        .map(|name| {
-          slot
-            .fields
-            .iter()
-            .find(|field| field.name == *name)
-            .ok_or_else(|| StoreError::new(format!("{owner:?} has no field {name:?}")))
-        })
-        .collect::<StoreResult<Vec<_>>>()?,
-      None => slot.fields.iter().collect(),
-    };
-    let old = old.clone();
-    let mut copied = Vec::new();
-    for field in selected {
-      let value = old.extra.get(field.name).unwrap_or(&field.default).clone();
-      copied.push((field.name, value));
-    }
-    let result = self
-      .mutate_fresh(session_id, false, true, move |meta| {
-        for (name, value) in copied {
-          meta.set_extra(name, value);
-        }
-        meta.updated_at = UtcDateTime::now();
-        Ok(true)
-      })
-      .await?
-      .ok_or_else(|| StoreError::not_found(format!("session {session_id} not found")))?;
-    self.invalidate_tree_index();
-    Ok(result)
-  }
-
   /// Persist the native anchor provenance under the tree control lock.
   pub async fn record_native_anchor(
     &self,
@@ -1972,18 +1924,12 @@ impl Store {
       .iter()
       .find(|slot| slot.owner == "cron" && slot.on == charliebot_core::metadata_slot::MetadataFile::Session)
       .ok_or_else(|| StoreError::new("cron registered no fields on session metadata"))?;
-    let names = ["last_scheduled_run", "last_scheduled_cron", "last_run_status"];
-    let selected = names
+    let field = slot
+      .fields
       .iter()
-      .map(|name| {
-        let field = slot
-          .fields
-          .iter()
-          .find(|field| field.name == *name)
-          .ok_or_else(|| StoreError::new(format!("cron has no field {name:?}")))?;
-        Ok((field.name, source.extra.get(field.name).unwrap_or(&field.default).clone()))
-      })
-      .collect::<StoreResult<Vec<_>>>()?;
+      .find(|field| field.name == TASK_SCHEDULE_SLOTS)
+      .ok_or_else(|| StoreError::new(format!("cron has no field {TASK_SCHEDULE_SLOTS:?}")))?;
+    let selected = vec![(field.name, source.extra.get(field.name).unwrap_or(&field.default).clone())];
     let updated = self
       .mutate_fresh(new_session_id, false, true, move |meta| {
         for (name, value) in selected {
@@ -3233,11 +3179,7 @@ pub(crate) mod tests {
         owner: "cron",
         on: MetadataFile::Session,
         after: Some("backend"),
-        fields: vec![
-          SlotField { name: "last_scheduled_run", default: Value::Null },
-          SlotField { name: "last_scheduled_cron", default: Value::Null },
-          SlotField { name: "last_run_status", default: Value::Null },
-        ],
+        fields: vec![SlotField { name: "task_schedule_slots", default: Value::Null }],
       },
       MetadataSlot {
         owner: "slack",
@@ -3962,10 +3904,13 @@ pub(crate) mod tests {
     assert_eq!(prompts[1]["previous_ref"].to_value(), ref_a);
     assert_eq!(prompts[1]["new_ref"].to_value(), ref_b);
 
+    let slots = json!({"nightly": {
+      "last_scheduled_run": "2025-02-03T04:05:06+00:00",
+      "last_scheduled_cron": "0 0 * * *",
+      "last_run_status": "success",
+    }});
     let mut source_slots = Map::new();
-    source_slots.insert("last_scheduled_run".to_string(), json!("2025-02-03T04:05:06+00:00"));
-    source_slots.insert("last_scheduled_cron".to_string(), json!("0 0 * * *"));
-    source_slots.insert("last_run_status".to_string(), json!("success"));
+    source_slots.insert("task_schedule_slots".to_string(), slots.clone());
     let source = {
       let guard = store.control_lock().await;
       store.update_slot_fields_locked(&guard, &source.id, "cron", source_slots).await.unwrap().unwrap()
@@ -3973,8 +3918,7 @@ pub(crate) mod tests {
     let guard = store.control_lock().await;
     assert!(store.rebind_elone_bindings_locked(&guard, &source.id, &new.id).await.unwrap());
     let updated = store.read_metadata_fresh(&new.id).unwrap().unwrap();
-    assert_eq!(updated.extra("last_scheduled_cron"), Some(&json!("0 0 * * *")));
-    assert_eq!(updated.extra("last_run_status"), Some(&json!("success")));
+    assert_eq!(updated.extra("task_schedule_slots"), Some(&slots));
   }
 
   pub(crate) fn queued_run(session_id: &str, run_id: &str) -> RunRecord {

@@ -317,6 +317,11 @@ main > header > a[title="View JSONL events"] {
 main > header > a[title="View JSONL events"]:hover {
   border-color: #94a3b8;
 }
+/* The backend badge's switch (session-view.js) is a select whose text-xs line and px-1.5 py-0.5 pad
+   draw a 22 px box, under the 24 px pointer floor the header's other controls hold. The select takes a
+   24 px box; the badge's 30 px box holds it without growing the header row. A label wider than the
+   badge's bound ellipsizes at its last whole character instead of losing half of one. */
+#backend-badge select { min-height: 24px; max-width: 100%; text-overflow: ellipsis; }
 @media (max-width: 768px) {
   .input-row { flex-wrap: nowrap; }
   .input-buttons { display: flex; gap: 0.5rem; margin-left: auto; }
@@ -331,13 +336,13 @@ main > header > a[title="View JSONL events"]:hover {
   /* Header on phones: the menu and the session name keep the first row, so the
      name shows its topic and number instead of the first few characters. The
      bounded backend badge, Compact and the concurrency badge share the second
-     row. The tabs and the events link share the third, the link at its right
-     end. */
+     row, and the badge's 144 px bound shows a pool's short label whole and
+     ellipsizes a longer one. The tabs and the events link share the third, the
+     link at its right end. */
   main > header { flex-wrap: wrap; }
   main > header > .flex-1.min-w-0 { flex-basis: calc(100% - 2.5rem); }
   #backend-badge, #compact-btn, main > header > .cb-slot { order: 1; }
-  #backend-badge { max-width: 120px; overflow: hidden; }
-  #backend-badge select { max-width: 100%; }
+  #backend-badge { max-width: 144px; overflow: hidden; }
   #tab-buttons { width: auto; flex: 1 1 calc(100% - 2.5rem); overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
   #tab-buttons button { white-space: nowrap; }
   main > header > a[title="View JSONL events"] { order: 100; align-self: center; }

@@ -116,11 +116,11 @@ function statusRequestUrls(path, ids, query = '', since = '') {
 // paint (the open chat, a delegate card's child) travel as ids. The archive view and a search answer their own row
 // sets, so they name every session by id.
 //
-// A page that carried only its first screen names those rows, while they fit one URL, and asks for `answer=ids`: the
-// server then answers those rows alone while the filter still names the set membership follows. Its first poll
-// otherwise downloads every row of the view, though the page paints only its first screen. Once a full listing or a
-// view change moves the poll's row set, the filter form answers it again, so a row entering the view still rides a
-// poll.
+// A page that carried only its first screen names those rows, while they fit one URL, and asks for `answer=ids`. The
+// server then answers those rows alone, and the filter still names the set whose membership the poll follows. Its
+// first poll otherwise downloads every row of the view, though the page paints only its first screen. Once a full
+// listing or a view change moves the poll's row set, the filter form answers it again, so a row entering the view
+// still rides a poll.
 function sidebarStatusUrls(path, ids, since) {
   if (!sidebarRowsRefreshable()) return statusRequestUrls(path, ids);
   const query = 'filter=' + encodeURIComponent(currentFilter);
@@ -182,8 +182,9 @@ function updateBackendHeaderControls(backendType) {
 // The title a row shows. A Threads row under a named group header drops the header's label from its title: the
 // header already names the channel, so the title keeps the thread's date and time. Every other row keeps its full
 // name: rows outside Threads, rows under the keyless "(No group)" header, and a title that does not start with its
-// header's label. status.js carries the rule because it loads before the row renderers (groups.js) and owns the one
-// name write both the rename commit and the session_renamed event funnel into; the renderers read it as a global.
+// header's label. The rule lives in status.js because it loads before the row renderers (groups.js). That module
+// owns the one name write both the rename commit and the session_renamed event funnel into. The renderers read it
+// as a global.
 function sessionRowTitle(s, filter, groupHeader) {
   const label = groupHeader + ' ';
   if (filter !== 'threads' || !groupHeader || !s.name.startsWith(label)) return s.name;
@@ -195,9 +196,9 @@ function updateSidebarSessionName(sessionId, name) {
   if (!link) return;
   const nameEl = link.querySelector('.session-name');
   if (!nameEl) return;
-  // The row paints the title the next list repaint would give it: under a named
+  // The row paints the title the next list repaint would give it. Under a named
   // Threads group header the title drops that label (sessionRowTitle, whose
-  // header the row's own group container carries), everywhere else the title is
+  // header the row's own group container carries). Everywhere else the title is
   // the name. The full name stays the row's data for the rename field.
   const group = link.closest('.session-group');
   const title = sessionRowTitle({name}, currentFilter, group ? group.dataset.sgroupKey : '');
@@ -221,23 +222,23 @@ function getSessionIndicatorState(status) {
 // ---------------------------------------------------------------------------
 // sessionUnread and ownIndicatorState hold the client's applied facts per
 // session. The facts land through four channels: the unread_changed and
-// running_changed broadcasts, the fetched row lists (the page's own rows, a
-// filter's list, the row refresh, the full listing and the search answer),
-// and the scoped status poll. A reply can carry a snapshot older than a fact
-// this client already applied — a poll issued before the flip, a row fetch
-// answered before the read POST landed. Every applied fact is stamped with a
-// per-session sequence in its domain, the unread mark or the activity
-// indicator. A reply captured before the domain's newest stamp is refused in
-// that domain, so a late reply can neither erase a newer unread fact nor
-// revert a newer indicator state, a running_changed frame included.
-// Broadcasts are ordered by their channel and always apply; applying one
-// stamps it, so any reply captured earlier is refused.
+// running_changed broadcasts, the fetched row lists, and the scoped status
+// poll. The fetched row lists are the page's own rows, a filter's list, the
+// row refresh, the full listing and the search answer. A reply can carry a
+// snapshot older than a fact this client already applied — a poll issued
+// before the flip, a row fetch answered before the read POST landed. Every
+// applied fact is stamped with a per-session sequence in its domain, the
+// unread mark or the activity indicator. A reply captured before the domain's
+// newest stamp is refused in that domain. A late reply then can neither erase
+// a newer unread fact nor revert a newer indicator state, a running_changed
+// frame included. Broadcasts are ordered by their channel and always apply;
+// applying one stamps it, so any reply captured earlier is refused.
 //
 // The unread mark has this one owner: every row paints its dot and subtree
 // mark from sessionUnread, and only the functions below write it. A list paint
-// that reuses rows the page already holds (the Workspace badge repaint, the
-// row refresh's merge, the inline delete) reads the facts and applies none, so
-// a held row's has_unread cannot bring back a dot a newer fact cleared.
+// that reuses rows the page already holds reads the facts and applies none:
+// the Workspace badge repaint, the row refresh's merge, the inline delete. A
+// held row's has_unread then cannot bring back a dot a newer fact cleared.
 const sessionUnread = {};
 let factSeq = 0;
 const factSeqByDomain = {unread: {}, indicator: {}};
@@ -302,8 +303,8 @@ const GEAR_TITLE = 'Delegated work running or waiting in subtasks';
 // The spin phase every spinner shares: the wall clock's milliseconds within
 // one turn of the animation. The paint bakes the current phase into the
 // element as a negative animation-delay, so a spinner a repaint recreates
-// starts where the spinner it replaces was — a running row's rotation keeps
-// its phase through every list update instead of jumping back to 0°.
+// starts where the spinner it replaces was. A running row's rotation keeps its
+// phase through every list update instead of jumping back to 0°.
 const SPINNER_PERIOD_MS = 1000;
 
 function spinnerPhaseDelay() {
@@ -483,7 +484,7 @@ function paintSessionIndicator(sid) {
 }
 
 // Repaint one row and every ancestor whose gear or subtree mark may have
-// changed. markSessionRead calls this right after it clears the fact, so the
+// changed. This runs right after markSessionRead clears the fact, so the
 // opened row's dot and every ancestor's subtree mark clear in one paint.
 function refreshSessionIndicator(sid) {
   paintSessionIndicator(sid);

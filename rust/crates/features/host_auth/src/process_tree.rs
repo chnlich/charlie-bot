@@ -123,11 +123,18 @@ fn descendants(root: u32) -> io::Result<Vec<u32>> {
   Ok(found)
 }
 
+/// Whether a read of a `/proc/<pid>` entry failed because the process is gone. The entry is missing once the process is
+/// reaped, and procfs answers ESRCH to a read of an entry whose task exited after the open. Every other error is a
+/// failure for the caller.
+fn is_gone(error: &io::Error) -> bool {
+  error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+}
+
 /// The parent of `pid` from `/proc/<pid>/stat`, or `None` once the process is gone.
 fn parent_of(pid: u32) -> io::Result<Option<u32>> {
   let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
     Ok(stat) => stat,
-    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+    Err(error) if is_gone(&error) => return Ok(None),
     Err(error) => return Err(error),
   };
   // The command name sits in parentheses and may hold spaces, so the fields are read after its last parenthesis:
@@ -146,7 +153,7 @@ fn parent_of(pid: u32) -> io::Result<Option<u32>> {
 pub(crate) fn is_running(pid: u32) -> bool {
   match fs::read_to_string(format!("/proc/{pid}/stat")) {
     Ok(stat) => stat.rsplit_once(')').is_some_and(|(_, fields)| !fields.trim_start().starts_with('Z')),
-    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+    Err(error) if is_gone(&error) => false,
     Err(error) => panic!("reading /proc/{pid}/stat failed: {error}"),
   }
 }
@@ -257,5 +264,14 @@ mod tests {
       assert!(tokio::time::Instant::now() < deadline, "process {child_pid} survived the kill");
       tokio::time::sleep(Duration::from_millis(10)).await;
     }
+  }
+
+  #[test]
+  fn a_read_error_marks_a_process_gone_only_for_a_missing_entry_or_esrch() {
+    assert!(is_gone(&io::Error::from_raw_os_error(libc::ESRCH)), "ESRCH means the process exited");
+    assert!(is_gone(&io::Error::from(io::ErrorKind::NotFound)), "a missing entry means the process was reaped");
+    assert!(!is_gone(&io::Error::from_raw_os_error(libc::EACCES)), "a denied read is a failure");
+    assert!(!is_gone(&io::Error::from_raw_os_error(libc::EIO)), "an I/O error is a failure");
+    assert!(!is_gone(&io::Error::from(io::ErrorKind::PermissionDenied)), "a permission error is a failure");
   }
 }

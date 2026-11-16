@@ -379,7 +379,9 @@ mod tests {
   use charliebot_core::run_token::{self, RunTokenClaims};
   use charliebot_registry::context::FeatureContext;
   use charliebot_registry::route_claims::RouteClaims;
-  use charliebot_store::metadata::{LAST_RUN_STATUS, LAST_SCHEDULED_RUN, SCHEDULED_TASK, SessionMetadata, TaskProfile};
+  use charliebot_store::metadata::{
+    LAST_RUN_STATUS, LAST_SCHEDULED_RUN, SCHEDULED_TASK, SessionMetadata, TASK_SCHEDULE_SLOTS, TaskProfile,
+  };
   use charliebot_store::{CreateTask, RunKind, RunRecord, TaskCaller};
   use serde_json::{Map, Value, json};
   use tower::ServiceExt;
@@ -568,8 +570,9 @@ mod tests {
     let meta = features.store.get_session(session_id).await.unwrap().unwrap();
     assert_eq!(meta.profile, charliebot_store::metadata::TaskProfile::Manager);
     assert_eq!(meta.extra.get(SCHEDULED_TASK), Some(&Value::Null));
-    assert!(meta.extra.get(LAST_SCHEDULED_RUN).and_then(Value::as_str).is_some());
-    assert_eq!(meta.extra.get(LAST_RUN_STATUS).and_then(Value::as_str), Some("success"));
+    let entry = &meta.extra[TASK_SCHEDULE_SLOTS]["synthetic-handler"];
+    assert!(entry[LAST_SCHEDULED_RUN].as_str().is_some());
+    assert_eq!(entry[LAST_RUN_STATUS].as_str(), Some("success"));
     let events = features.store.load_chat_events_sync(session_id).unwrap();
     assert!(events.iter().any(|event| event["type"].as_str() == Some(charliebot_core::event_types::HANDLER_RESULT)));
     let projection = features.store.get_message_projection(session_id).unwrap();

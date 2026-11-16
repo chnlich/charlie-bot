@@ -249,26 +249,33 @@ function scheduledBackendText(s) {
   return s.native_model || '';
 }
 
+// The schedule slot of the task a row is bound to: the session's `task_schedule_slots` entry under that task's
+// name. Each task bound to a session keeps its own entry; a row with no entry yet shows no Last line.
+function boundTaskSlot(s) {
+  return (s.task_schedule_slots && s.task_schedule_slots[s.schedule_task]) || {};
+}
+
 // A bound node's schedule lines, in every view: the next run (or Disabled),
 // then the truncated cron · timezone line, then the backend line naming the
 // member and model the records hold, then the Last line from the firing
 // bookkeeping. One markup home for every view's row.
 function renderSessionScheduleLine(s) {
   const disabled = s.schedule_enabled === false;
+  const slot = boundTaskSlot(s);
   let html = `<span class="block text-xs ${disabled ? 'text-slate-500' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`
     + `<span class="block truncate text-xs text-slate-500" title="${escapeHtmlAttr(s.schedule_cron)} (${escapeHtmlAttr(s.schedule_timezone || '')})">${escapeHtml(s.schedule_cron)} · ${escapeHtml(s.schedule_timezone || '')}</span>`;
   const backend = scheduledBackendText(s);
   if (backend) {
     html += `<span class="session-backend block truncate text-xs text-slate-500" title="${escapeHtmlAttr(backend)}">${escapeHtml(backend)}</span>`;
   }
-  if (s.last_run_status) {
-    const lastClass = s.last_run_status === LAST_RUN_STATUS.SUCCESS ? 'text-green-400'
-      : s.last_run_status === LAST_RUN_STATUS.RUNNING ? 'text-yellow-400'
-        : s.last_run_status === LAST_RUN_STATUS.SKIPPED ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400');
+  if (slot.last_run_status) {
+    const lastClass = slot.last_run_status === LAST_RUN_STATUS.SUCCESS ? 'text-green-400'
+      : slot.last_run_status === LAST_RUN_STATUS.RUNNING ? 'text-yellow-400'
+        : slot.last_run_status === LAST_RUN_STATUS.SKIPPED ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400');
     // The Last line truncates with an ellipsis like the cron line above it,
     // and stays one line tall on the touch drawer too. Its full text sits in
     // the title attribute.
-    const lastText = `Last: ${s.last_run_status}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === LAST_RUN_STATUS.FAILED && s.schedule_allow_failure ? ' (review needed)' : ''}`;
+    const lastText = `Last: ${slot.last_run_status}${slot.last_scheduled_run ? ', ' + formatBubbleTime(slot.last_scheduled_run) : ''}${slot.last_run_status === LAST_RUN_STATUS.FAILED && s.schedule_allow_failure ? ' (review needed)' : ''}`;
     html += `<span class="block truncate text-xs ${lastClass}" title="${escapeHtmlAttr(lastText)}">${escapeHtml(lastText)}</span>`;
   }
   return html;

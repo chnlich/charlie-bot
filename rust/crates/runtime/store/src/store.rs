@@ -969,6 +969,46 @@ impl Store {
     self.update_slot_fields_fresh(session_id, owner, values, None).await
   }
 
+  /// Merge `values` into one entry of a registered slot field that holds an object keyed by name. The entry for `key`
+  /// is created on its first write, and the field's other entries keep their values.
+  pub async fn update_slot_entry_fields(
+    &self,
+    session_id: &str,
+    owner: &str,
+    field: &str,
+    key: &str,
+    values: Map<String, Value>,
+  ) -> StoreResult<Option<SessionMetadata>> {
+    if values.is_empty() {
+      return Err(StoreError::new("update_slot_entry_fields requires at least one field"));
+    }
+    let slot = self
+      .slots
+      .iter()
+      .find(|slot| slot.owner == owner && slot.on == MetadataFile::Session)
+      .ok_or_else(|| StoreError::new(format!("{owner:?} registered no session metadata fields")))?;
+    if !slot.fields.iter().any(|registered| registered.name == field) {
+      return Err(StoreError::new(format!("{owner:?} has no field {field:?}")));
+    }
+    let key = key.to_string();
+    self
+      .mutate_fresh(session_id, false, true, move |meta| {
+        // A registered field starts at its default, null, which is the empty map.
+        let slot_value = meta.extra.entry(field.to_string()).or_insert(Value::Null);
+        if slot_value.is_null() {
+          *slot_value = Value::Object(Map::new());
+        }
+        let entries =
+          slot_value.as_object_mut().ok_or_else(|| StoreError::new(format!("{field:?} is not an object")))?;
+        let entry = entries.entry(key).or_insert_with(|| Value::Object(Map::new()));
+        let entry =
+          entry.as_object_mut().ok_or_else(|| StoreError::new(format!("{field:?} entry is not an object")))?;
+        entry.extend(values);
+        Ok(true)
+      })
+      .await
+  }
+
   async fn update_slot_fields_fresh(
     &self,
     session_id: &str,

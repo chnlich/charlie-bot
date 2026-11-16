@@ -1080,6 +1080,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::LAST_RUN_STATUS`.",
   },
   OwnerRow {
+    name: "task_schedule_slots",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::TASK_SCHEDULE_SLOTS`.",
+  },
+  OwnerRow {
     name: "cc_session_id",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::CC_SESSION_ID_FIELD`.",
@@ -1204,6 +1209,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::trigger_files::SLURM_JOB_KIND`.",
   },
   OwnerRow { name: "fire_at", owner: "runtime/store", hint: "Use `charliebot_store::trigger_files::FIRE_AT_FIELD`." },
+  OwnerRow {
+    name: "exit_file",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::trigger_files::EXIT_FILE_FIELD`.",
+  },
   OwnerRow {
     name: "delay_seconds",
     owner: "runtime/triggers",

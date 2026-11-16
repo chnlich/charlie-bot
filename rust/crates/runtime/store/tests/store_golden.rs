@@ -13,7 +13,9 @@ use charliebot_core::run_token;
 use charliebot_registry::Registry;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::SequenceCompletion;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime, read_metadata_object};
+use charliebot_store::metadata::{
+  SessionMetadata, TASK_SCHEDULE_SLOTS, TaskProfile, TaskSpec, TaskType, UtcDateTime, read_metadata_object,
+};
 use charliebot_store::run_records::terminal_outcome;
 use charliebot_store::session_fork::{CloseReportRedelivery, ReplacedSourceArchive};
 use charliebot_store::{
@@ -584,8 +586,8 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
   copy_tree(&root.path().join("task-base"), &python_home);
   copy_tree(&root.path().join("task-base"), &rust_home);
 
-  let python_seed = make_store(&python_home);
-  let rust_seed = Arc::new(make_store(&rust_home));
+  let python_seed = make_store_with_task_schedule_slots(&python_home);
+  let rust_seed = Arc::new(make_store_with_task_schedule_slots(&rust_home));
   let rust_completion = make_completion(Arc::clone(&rust_seed), &rust_home);
   for store in [&python_seed, &*rust_seed] {
     let task_root = store.read_metadata_fresh("synthetic-task-root").unwrap().unwrap();
@@ -596,7 +598,7 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
   }
 
   let reverse_home = root.path().join("rust-created-home");
-  let reverse_store = make_store(&reverse_home);
+  let reverse_store = make_store_with_task_schedule_slots(&reverse_home);
   for (session_id, request_id, parent) in [
     ("rust-created-root", "reverse-root-request", None),
     ("rust-created-child", "reverse-child-request", Some("rust-created-root")),
@@ -847,7 +849,7 @@ async fn fork_and_elone_write_the_same_session_files_at_every_index() {
     let python_home = root.path().join(format!("python-{name}"));
     let rust_home = root.path().join(format!("rust-{name}"));
     copy_tree(&base, &rust_home);
-    let store = make_store(&rust_home);
+    let store = make_store_with_task_schedule_slots(&rust_home);
     let rust = if operation == "fork" {
       store.fork_session(FORK_ROOT_ID, event_index, Some("synthetic")).await.map(|_| ())
     } else {
@@ -1598,6 +1600,20 @@ fn make_completion(store: Arc<Store>, home: &Path) -> Arc<TaskCompletion> {
 }
 
 fn make_store(home: &Path) -> Store {
+  make_store_with_slots(home, slots())
+}
+
+fn make_store_with_task_schedule_slots(home: &Path) -> Store {
+  let mut slots = slots();
+  let cron = slots.iter_mut().find(|slot| slot.owner == "cron").expect("the test store registers the cron slot");
+  cron.fields = vec![
+    SlotField { name: "scheduled_task", default: Value::Null },
+    SlotField { name: TASK_SCHEDULE_SLOTS, default: Value::Null },
+  ];
+  make_store_with_slots(home, slots)
+}
+
+fn make_store_with_slots(home: &Path, slots: Vec<MetadataSlot>) -> Store {
   fs::create_dir_all(home).unwrap();
   let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
   let account_labels: Arc<dyn AccountLabelKeeper> = Arc::new(TestAccountLabelKeeper);
@@ -1606,7 +1622,7 @@ fn make_store(home: &Path) -> Store {
   let sequence_listing: Arc<dyn SequenceListingFields> = Arc::new(TestSequenceListing);
   Store::new(
     cfg,
-    slots(),
+    slots,
     StoreHooks {
       account_labels: Some(account_labels),
       anchor_reconciler: Some(anchor_reconciler),

@@ -4,8 +4,8 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::Registry;
 use charliebot_store::{StoreError, StoreResult};
 
-/// `backend_types.same_continuation_domain` over member sets: each id expands to its members (a pool's members, a
-/// model the set of itself) and the judgment passes only when every member shares one continuation domain, so a
+/// `backend_types.same_continuation_domain` over member sets. Each id expands to its members (a pool's members, a
+/// model the set of itself). The judgment passes only when every member shares one continuation domain, so a
 /// model and the pool holding it alone get the same verdict. A member without a configured option passes nothing,
 /// as an unconfigured id did.
 pub(crate) fn same_continuation_domain(

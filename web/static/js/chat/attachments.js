@@ -119,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     for (const clamp of node.querySelectorAll('.user-msg-clamp')) sizes.observe(clamp);
   };
   const list = document.getElementById('messages');
+  if (!list) return; // A page without a session carries no message list.
   observeClamps(list);
   new MutationObserver((records) => {
     for (const record of records) {

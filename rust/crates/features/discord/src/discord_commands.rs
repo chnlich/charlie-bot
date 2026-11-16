@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadReplyError};
+use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadReplyError};
+use charliebot_chat_threads::thread_read;
 use charliebot_core::credentials::BOT_TOKEN_FIELD;
 use charliebot_core::text_repr;
 use serde_json::{Value, json};
@@ -23,15 +24,15 @@ use crate::metadata::DiscordOrigin;
 /// the text, the attachment URLs, and the unread and summon flags.
 fn message_view(message: &Message, unread: bool, summon: bool, allowed_users: &BTreeMap<String, String>) -> Value {
   json!({
-    "id": message.id,
-    "author_id": message.author.id,
+    (thread_read::ID): message.id,
+    (thread_read::AUTHOR_ID): message.author.id,
     "author": message.author.global_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(message.author.username.as_str()),
-    "person": allowed_users.get(&message.author.id),
-    "timestamp": message.timestamp,
-    "content": message.content.as_deref().unwrap_or_default(),
+    (thread_read::PERSON): allowed_users.get(&message.author.id),
+    (thread_read::TIMESTAMP): message.timestamp,
+    (thread_read::CONTENT): message.content.as_deref().unwrap_or_default(),
     "attachments": message.attachments.iter().map(|attachment| attachment.url.as_str()).collect::<Vec<_>>(),
-    "unread": unread,
-    "summon": summon,
+    (thread_read::UNREAD): unread,
+    (thread_read::SUMMON): summon,
   })
 }
 
@@ -89,41 +90,35 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   .map(|message| message.id.clone())
   .collect();
   let pending = pending_summon_ids(bot, session_id).await?;
-  let mut starts = Vec::new();
-  if let Some(first) = thread_messages.iter().position(|message| unread_ids.contains(&message.id)) {
-    starts.push(first);
-  }
-  if let Some(first) = thread_messages.iter().position(|message| pending.contains(&message.id)) {
-    starts.push(first);
-  }
-  let window: &[Message] = match starts.into_iter().min() {
-    None => &thread_messages[thread_messages.len().saturating_sub(limit)..],
-    Some(start) => &thread_messages[start..thread_messages.len().min(start + limit)],
-  };
-  let window_unread_ids: Vec<String> =
-    window.iter().filter(|message| unread_ids.contains(&message.id)).map(|message| message.id.clone()).collect();
-  let watermark_key = DISCORD.watermark_key();
-  let mut watermark_id = json!(watermark);
-  if !window_unread_ids.is_empty() {
-    let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
-    let ack = thread_entry::ack_messages(&dyn_adapter, &bot.features, session_id, &window_unread_ids).await?;
-    watermark_id = ack[watermark_key.as_str()].clone();
-  }
+  let window = thread_read::read_window(
+    &adapter,
+    &bot.features,
+    session_id,
+    thread_read::ThreadRead {
+      messages: &thread_messages,
+      unread_ids: &unread_ids,
+      pending: &pending,
+      watermark: watermark.as_deref(),
+      limit,
+    },
+    |message| message.id.as_str(),
+  )
+  .await?;
   let mut messages = Vec::new();
   if let Some(starter) = &starter {
     messages.push(message_view(starter, false, pending.contains(&starter.id), allowed_users));
   }
-  messages.extend(window.iter().map(|message| {
+  messages.extend(thread_messages[window.first..window.last].iter().map(|message| {
     message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed_users)
   }));
   Ok(json!({
-    "messages": messages,
-    (watermark_key): watermark_id,
-    "more_unread": unread_ids.len() - window_unread_ids.len(),
+    (thread_read::MESSAGES): messages,
+    (DISCORD.watermark_key()): window.watermark,
+    (thread_read::MORE_UNREAD): window.more_unread,
   }))
 }
 
-/// Read the newest `limit` messages of the channel a discord.com link names; nothing is marked read.
+/// Read the newest `limit` messages of the channel a discord.com link names. Nothing is marked read.
 /// A link that is not one refuses with 422, a channel the bot cannot see with 404.
 async fn read_linked_channel(bot: &Bot, url: &str, limit: usize) -> Result<Value, ThreadReplyError> {
   let link = parse_message_link(url)
@@ -139,7 +134,7 @@ async fn read_linked_channel(bot: &Bot, url: &str, limit: usize) -> Result<Value
   let config = bot.config().map_err(ThreadReplyError::failure)?;
   let allowed_users = &config.section::<DiscordConfig>("discord").allowed_users;
   let messages: Vec<Value> = newest.iter().map(|message| message_view(message, false, false, allowed_users)).collect();
-  Ok(json!({"messages": messages, (DISCORD.watermark_key()): null, "more_unread": 0}))
+  Ok(json!({(thread_read::MESSAGES): messages, (DISCORD.watermark_key()): null, (thread_read::MORE_UNREAD): 0}))
 }
 
 /// The readback of `charliebot discord read`: the session's own thread (`url` None), or the newest messages of the

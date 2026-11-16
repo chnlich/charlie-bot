@@ -22,7 +22,7 @@ const HEADER_MESSAGE_ID: &str = "message_id";
 const HEADER_SUM: &str = "sum";
 const HEADER_SEQ: &str = "seq";
 const HEADER_BIZ_RT: &str = "biz_rt";
-/// The most fragments one event payload may split into; a larger count is refused.
+/// The most fragments one event payload may split into. A larger count is refused.
 const MAX_FRAGMENTS: u64 = 64;
 /// How long an incomplete fragment group waits for its missing parts.
 const REASSEMBLY_TIMEOUT: Duration = Duration::from_secs(5);

@@ -38,6 +38,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // number, so the session can tell which item a commented line belongs to
     // without opening the page.
     var QUESTION_HEAD_CHARS = 30;
+    // Characters of the page text that precede a row's first character. A row whose quote
+    // repeats on the page carries them, so its message and its draft name the row itself.
+    var BEFORE_CHARS = 32;
     // The kind of one comment entry, which doubles as its dedup key and as the
     // persisted draft discriminator. A manual block comment has the BLOCK kind;
     // each shortcut below has its own.
@@ -177,13 +180,16 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i] || {};
         var quote = String(entry.quote == null ? '' : entry.quote);
-        out.push({
+        var item = {
           kind: normalizeKind(entry.kind),
           quote: quote,
           context: String(entry.context == null ? '' : entry.context),
           comment: String(entry.comment == null ? '' : entry.comment),
-          occurrence: sameQuoteOccurrence(entry.el, quote),
-        });
+          occurrence: entry.el ? sameQuoteOccurrence(entry.el, quote) : entry.occurrence,
+        };
+        var before = beforeOfEntry(entry, quote);
+        if (before !== undefined) item.before = before;
+        out.push(item);
       }
       return out;
     }
@@ -203,6 +209,87 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return 0;
     }
 
+    // The rows among `rows` whose text equals `quote`, in page order.
+    function rowsHolding(quote, rows) {
+      var held = [];
+      for (var i = 0; i < rows.length; i++) {
+        if (cleanText(rows[i], 400) === quote) held.push(rows[i]);
+      }
+      return held;
+    }
+
+    function quoteRepeats(quote, row) {
+      var rows = collectCommentableBlocks();
+      return rows.indexOf(row) !== -1 && rowsHolding(quote, rows).length >= 2;
+    }
+
+    // The BEFORE_CHARS characters that precede the row's first character in the page text:
+    // the document's text nodes in source order, without script and style content and without
+    // the comment layer, each whitespace run collapsed to one space. The walk reads the source,
+    // not the layout, so a folded block gives the same value open or shut.
+    function beforeOf(row) {
+      var tail = '';
+      var inSpace = false;
+      var reached = false;
+      function read(text, inRow) {
+        for (var i = 0; i < text.length && !reached; i++) {
+          var ch = text.charAt(i);
+          if (/\s/.test(ch)) {
+            if (!inSpace) {
+              tail = (tail + ' ').slice(-BEFORE_CHARS);
+              inSpace = true;
+            }
+          } else if (inRow) {
+            reached = true;
+          } else {
+            tail = (tail + ch).slice(-BEFORE_CHARS);
+            inSpace = false;
+          }
+        }
+      }
+      function walk(node, inRow) {
+        if (reached) return;
+        if (node.nodeType === 3) {
+          read(node.textContent, inRow);
+          return;
+        }
+        if (node.nodeType !== 1 || node.tagName === 'SCRIPT' || node.tagName === 'STYLE' ||
+            node.classList.contains(UI_CLASS)) {
+          return;
+        }
+        var within = inRow || node === row;
+        for (var i = 0; i < node.childNodes.length && !reached; i++) {
+          walk(node.childNodes[i], within);
+        }
+      }
+      walk(document.body, false);
+      if (!reached) throw new Error('the comment row is not in the page text');
+      return tail;
+    }
+
+    // The `before` value of one entry. An attached row whose quote repeats has the words before
+    // it; an unattached draft keeps the value it stored; any other entry has none (undefined).
+    function beforeOfEntry(entry, quote) {
+      if (!entry.el) return entry.before;
+      return quoteRepeats(quote, entry.el) ? beforeOf(entry.el) : undefined;
+    }
+
+    // The row a pending draft belongs to, or null when the page does not place it. A draft with a
+    // stored `before` takes the one row whose quote and `before` both match; with several such rows,
+    // the row at its stored occurrence among the rows holding the quote, when that row is one of them.
+    // A draft without a stored `before` takes the only row that holds its quote.
+    function rowForDraft(entry, rows) {
+      var held = rowsHolding(entry.quote, rows);
+      if (typeof entry.before !== 'string') return held.length === 1 ? held[0] : null;
+      var candidates = [];
+      for (var i = 0; i < held.length; i++) {
+        if (beforeOf(held[i]) === entry.before) candidates.push(held[i]);
+      }
+      if (candidates.length <= 1) return candidates.length === 1 ? candidates[0] : null;
+      var own = held[entry.occurrence];
+      return candidates.indexOf(own) === -1 ? null : own;
+    }
+
     function deserializeDraft(stored) {
       if (stored == null) return [];
       var list;
@@ -216,21 +303,24 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       for (var i = 0; i < list.length; i++) {
         var item = list[i];
         if (!item || typeof item !== 'object') continue;
-        out.push({
+        var entry = {
           kind: normalizeKind(item.kind),
           el: null,
           quote: String(item.quote == null ? '' : item.quote),
           context: String(item.context == null ? '' : item.context),
           comment: String(item.comment == null ? '' : item.comment),
           occurrence: item.occurrence == null ? 0 : item.occurrence,
-        });
+        };
+        // A draft stored before the before field existed has none, and restores by its quote alone.
+        if (item.before != null) entry.before = String(item.before);
+        out.push(entry);
       }
       return out;
     }
 
     function saveDraft(entries, absPath) {
+      var data = JSON.stringify(serializeDraft(entries));
       try {
-        var data = JSON.stringify(serializeDraft(entries));
         sessionStorage.setItem(draftKey(absPath), data);
       } catch (e) {
         // sessionStorage unavailable or quota exceeded — degrade silently
@@ -750,7 +840,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       error.style.display = 'block';
     }
 
-    function buildCommentEntry(quote, context, comment, suffix) {
+    function buildCommentEntry(quote, context, comment, suffix, before) {
       if (quote === '') {
         return ('\u25B8 ' + context).split('\n').concat(('\u21B3 ' + comment).split('\n'));
       }
@@ -760,11 +850,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       // A quote spanning lines keeps its locator shape. The suffix rides the last
       // quote line, right of the closing quote.
       quoteLines[quoteLines.length - 1] += suffix || '';
-      return quoteLines.concat(('\u21B3 ' + comment).split('\n'));
+      var beforeLines = before === undefined ? [] : ['before "' + before + '"'];
+      return quoteLines.concat(beforeLines, ('\u21B3 ' + comment).split('\n'));
     }
 
-    function resolveEntryDraft(entry, suffix) {
-      return buildCommentEntry(entry.quote, entry.context, entry.comment, suffix);
+    function resolveEntryDraft(entry, suffix, before) {
+      return buildCommentEntry(entry.quote, entry.context, entry.comment, suffix, before);
     }
 
     // The occurrence suffix still to disambiguate: after the fork label, m rows on
@@ -792,7 +883,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       lines.push('');
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i];
-        var entryLines = resolveEntryDraft(entry, occurrenceSuffix(entry));
+        var entryLines = resolveEntryDraft(entry, occurrenceSuffix(entry), beforeOfEntry(entry, entry.quote));
         lines.push((i + 1) + '. ' + entryLines[0]);
         for (var j = 1; j < entryLines.length; j++) {
           lines.push('   ' + entryLines[j]);
@@ -854,6 +945,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         quote: '',
         context: shortcut.label,
         comment: shortcut.prompt,
+        occurrence: 0,
       });
       saveDraft(pending, artifactPath);
       refreshTray();
@@ -956,23 +1048,14 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     function reanchorPending() {
-      var blocks = collectCommentableBlocks();
+      var rows = collectCommentableBlocks();
       for (var i = 0; i < pending.length; i++) {
         var entry = pending[i];
-        if (entry.el) continue;
-        if (entry.quote === '') continue;
-        // Rows match by quote alone. The stored occurrence picks which same-quote
-        // row the draft belongs to. An absent or 0 occurrence is the first row.
-        var seen = 0;
-        for (var j = 0; j < blocks.length; j++) {
-          if (cleanText(blocks[j], 400) !== entry.quote) continue;
-          if (seen === entry.occurrence) {
-            entry.el = blocks[j];
-            blocks[j].classList.add(GLOBAL_PREFIX + '-marked');
-            break;
-          }
-          seen++;
-        }
+        if (entry.el || entry.quote === '') continue;
+        var row = rowForDraft(entry, rows);
+        if (!row) continue;
+        entry.el = row;
+        row.classList.add(GLOBAL_PREFIX + '-marked');
       }
     }
 
@@ -1022,6 +1105,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
       placeColumn();
       refreshTray();
+      // The page's own scripts can rewrite its text after this script has run. The drafts
+      // still unattached get a second look once the page has finished loading.
+      window.addEventListener('load', function() {
+        reanchorPending();
+        refreshTray();
+      });
     }
 
     function buildTrayItem(idx, entry) {

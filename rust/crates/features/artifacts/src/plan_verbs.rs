@@ -166,8 +166,9 @@ pub(crate) async fn close(
   Ok(json!({"plan": plan_id, "state": state}))
 }
 
-/// Loads the session's registry under its lock, applies `change` to its plans list, and saves the registry. The verb's
-/// plan, as `change` returns it, comes back once the lock is released. The file work runs on the blocking pool.
+/// One locked read-modify-write of the session's plan registry: `change` applies to its plans list, and the
+/// registry is saved. The verb's plan, as `change` returns it, comes back once the lock is released. The file work
+/// runs on the blocking pool.
 async fn mutate<F>(
   features: &FeatureContext,
   locks: &SessionLocks,
@@ -189,7 +190,7 @@ where
   .await
 }
 
-/// Runs a file step on the blocking pool. A step that the pool cannot finish is a `RuntimeError` of the verb.
+/// One file step on the blocking pool. A step that the pool cannot finish is a `RuntimeError` of the verb.
 async fn blocking<T, F>(step: F) -> Result<T, VerbError>
 where
   F: FnOnce() -> Result<T, VerbError> + Send + 'static,
@@ -209,7 +210,7 @@ async fn read_registry(path: PathBuf) -> Result<Value, VerbError> {
   blocking(move || load(&path)).await
 }
 
-/// Saves on the blocking pool, with the lock still held by the caller.
+/// A save on the blocking pool, with the lock still held by the caller.
 async fn write_registry(path: PathBuf, session_id: String, registry: Value) -> Result<(), VerbError> {
   blocking(move || save(&path, &session_id, &registry)).await
 }
@@ -227,8 +228,8 @@ fn load(path: &Path) -> Result<Value, VerbError> {
   })
 }
 
-/// Writes the projected registry, then marks the session's sidebar row dirty. The write creates no directory,
-/// so a session directory that is gone fails the save.
+/// The write of the projected registry, followed by marking the session's sidebar row dirty. The write creates no
+/// directory, so a session directory that is gone fails the save.
 fn save(path: &Path, session_id: &str, registry: &Value) -> Result<(), VerbError> {
   let projected = plans::project_registry(plans_of(registry)?).map_err(VerbError::Refused)?;
   fsutil::atomic_write_text(path, &plans::registry_text(&projected))

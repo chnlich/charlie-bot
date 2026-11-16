@@ -26,8 +26,7 @@ use axum::http::StatusCode;
 use axum::http::header;
 use axum::http::request::Parts;
 use axum::response::Response;
-use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_memoized_body};
-use charliebot_compat::headers::header_text;
+use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, accepts_gzip, gzip_memoized_body};
 use charliebot_compat::mimetypes;
 use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::{jinja, responses};
@@ -328,7 +327,7 @@ impl Templating {
   /// The response of a page body the caller already holds, with the headers and the compressed form
   /// [`Self::render_page`] serves for it.
   pub fn page_response(&self, name: &str, html: String, request: &Parts) -> Response {
-    let deflate = accepts_gzip(request) && html.len() >= MINIMUM_DEFLATE_BYTES;
+    let deflate = accepts_gzip(&request.headers) && html.len() >= MINIMUM_DEFLATE_BYTES;
     // `no-store` names this body as a page: a page must never come out of a cache, because it names the static asset
     // version it was built against and an older body runs an older script. The transport's entity-tag layer, outside
     // this one, replaces the marker with `no-cache` and the body's tag, so every navigation still reaches the server
@@ -848,11 +847,6 @@ impl std::error::Error for RenderError {}
 /// `Request`.
 fn request_context(request: &Parts) -> serde_json::Value {
   json!({"method": request.method.as_str(), "path": request.uri.path(), "query": request.uri.query().unwrap_or("")})
-}
-
-/// Whether the client asked for gzip, by the transport's rule: its `Accept-Encoding` names it.
-fn accepts_gzip(request: &Parts) -> bool {
-  header_text(&request.headers, &header::ACCEPT_ENCODING).contains("gzip")
 }
 
 /// The page response carrying a body this layer deflated. The transport gzip layer passes a response that already

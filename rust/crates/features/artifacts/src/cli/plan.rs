@@ -150,8 +150,8 @@ struct ListArgs {
   session: Option<String>,
 }
 
-/// Parse the plan arguments and run one verb. Parser errors print and exit on their own (argparse-compatible:
-/// help 0, usage error 2).
+/// The `charliebot plan` entry point: parse the arguments and run one verb. Parser errors print and exit on their
+/// own (argparse-compatible: help 0, usage error 2).
 pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   let cli: PlanCli = cli_args::parse("charliebot plan", args);
   let (session, verb) = match cli.command {

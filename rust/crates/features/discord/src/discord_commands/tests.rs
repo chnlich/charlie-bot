@@ -68,7 +68,7 @@ fn summon_event(mention_id: &str) -> Value {
   })
 }
 
-/// Post `body` to `path` on the router; returns the status and the JSON answer.
+/// Post `body` to `path` on the router. It returns the status and the JSON answer.
 async fn send(router: Router, path: &str, body: Value) -> (StatusCode, Value) {
   let request = Request::builder()
     .method(Method::POST)
@@ -82,7 +82,7 @@ async fn send(router: Router, path: &str, body: Value) -> (StatusCode, Value) {
   (status, serde_json::from_slice(&bytes).expect("the answer is JSON"))
 }
 
-/// The window starts at the oldest unread; the ack covers exactly its unread ids.
+/// The window starts at the oldest unread. The ack covers exactly its unread ids.
 #[tokio::test]
 async fn read_marks_only_returned_unread_and_reports_more_unread() {
   let home = Home::new_without_thread_runtime(true).await;
@@ -336,7 +336,7 @@ async fn read_prepends_the_parent_starter_outside_the_limit() {
   let result = read_thread(&bot(&home), &session_id, None, 2).await.unwrap();
 
   assert_eq!(ids(&result), [THREAD.to_string(), snowflake(1), snowflake(2)]);
-  // The starter rides first, unread false and not a summon; limit=2 still delivered both unread.
+  // The starter rides first, unread false and not a summon. Limit=2 still delivered both unread.
   assert_eq!(
     messages(&result)[0],
     json!({
@@ -381,7 +381,7 @@ async fn read_skips_a_404_starter() {
   assert_eq!(fields(&result, "unread"), [json!(true), json!(true)]);
 }
 
-/// `person` is the account's configured name; an author outside the map reads as None everywhere.
+/// `person` is the account's configured name. An author outside the map reads as None everywhere.
 #[tokio::test]
 async fn read_names_the_author_person_for_listed_and_unlisted_authors() {
   let home = Home::new_without_thread_runtime(true).await;
@@ -423,7 +423,7 @@ async fn read_with_url_reads_the_linked_channel_and_marks_nothing() {
   assert_eq!(home.fake().calls, [format!("GET /api/v10/channels/{OTHER_CHANNEL}/messages?limit=3")]);
 }
 
-/// A 403 from Discord answers 404 "cannot see"; a non-discord.com link answers 422.
+/// A 403 from Discord answers 404 "cannot see". A non-discord.com link answers 422.
 #[tokio::test]
 async fn read_with_url_refuses_hidden_channel_and_bad_link() {
   let home = Home::new_without_thread_runtime(true).await;

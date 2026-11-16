@@ -6,8 +6,8 @@ use std::sync::Arc;
 use charliebot_core::config::{ConfigSection, SectionValue};
 use serde::{Deserialize, Serialize};
 
-/// The `discord:` section. `allowed_users` maps a Discord user id to the person that account belongs to; an empty map
-/// admits nobody.
+/// The `discord:` section. `allowed_users` maps a Discord user id to the person that account belongs to.
+/// An empty map admits nobody.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiscordConfig {

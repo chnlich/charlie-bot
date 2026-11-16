@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use axum::http::StatusCode;
-use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadMessage, ThreadReplyError};
+use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadMessage, ThreadReplyError};
+use charliebot_chat_threads::thread_read;
 use charliebot_core::paths;
 use charliebot_core::str_methods;
 use serde::{Deserialize, Serialize};
@@ -25,7 +26,7 @@ use crate::thread_contract::FEISHU;
 
 const TOPIC_PAGE_TOKEN_PREFIX: &str = "charliebot-topic-v1:";
 
-/// Feishu advances past every listed item; the cursor keeps an overflow reply with its topic so paging cannot skip it.
+/// Feishu advances past every listed item. The cursor keeps an overflow reply with its topic so paging cannot skip it.
 #[derive(Deserialize, Serialize)]
 struct TopicPageCursor {
   thread_id: String,
@@ -39,20 +40,20 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
   let field = |name: &str| meta.and_then(|meta| meta.get(name)).cloned().unwrap_or(Value::Null);
   let author_id = message.user.clone().or_else(|| message.bot_id.clone());
   json!({
-    "id": message.id,
+    (thread_read::ID): message.id,
     (MESSAGE_ID): field(MESSAGE_ID),
     (MESSAGE_TYPE): field(MESSAGE_TYPE),
     (THREAD_ID): field(THREAD_ID),
-    "author_id": author_id,
-    "person": message.user.as_deref().and_then(|user| allowed.get(user)),
-    "timestamp": message.created_at,
-    "content": message.text,
-    "unread": unread,
-    "summon": summon,
+    (thread_read::AUTHOR_ID): author_id,
+    (thread_read::PERSON): message.user.as_deref().and_then(|user| allowed.get(user)),
+    (thread_read::TIMESTAMP): message.created_at,
+    (thread_read::CONTENT): message.text,
+    (thread_read::UNREAD): unread,
+    (thread_read::SUMMON): summon,
   })
 }
 
-/// The session's pending summons' composite mention ids. A mention is a string id; any other value fails the read.
+/// The session's pending summons' composite mention ids. A mention is a string id. Any other value fails the read.
 async fn pending_summon_ids(bot: &Bot, session_id: &str) -> Result<HashSet<String>, ThreadReplyError> {
   let events = thread_entry::load_chat_events(&bot.features, session_id).await?;
   thread_entry::pending_summon_mention_ids(&FEISHU, &bot.features.store, session_id, &events, |mention| {
@@ -92,39 +93,33 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   .into_iter()
   .map(|message| message.id.clone())
   .collect();
-  let mut starts = Vec::new();
-  if let Some(first) = thread_messages.iter().position(|message| unread_ids.contains(&message.id)) {
-    starts.push(first);
-  }
-  if let Some(first) = thread_messages.iter().position(|message| pending.contains(&message.id)) {
-    starts.push(first);
-  }
-  let window: &[ThreadMessage] = match starts.into_iter().min() {
-    None => &thread_messages[thread_messages.len().saturating_sub(limit)..],
-    Some(start) => &thread_messages[start..thread_messages.len().min(start + limit)],
-  };
-  let window_unread_ids: Vec<String> =
-    window.iter().filter(|message| unread_ids.contains(&message.id)).map(|message| message.id.clone()).collect();
-  let watermark_key = FEISHU.watermark_key();
-  let mut watermark_id = json!(watermark);
-  if !window_unread_ids.is_empty() {
-    let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
-    let ack = thread_entry::ack_messages(&dyn_adapter, &bot.features, session_id, &window_unread_ids).await?;
-    watermark_id = ack[watermark_key.as_str()].clone();
-  }
+  let window = thread_read::read_window(
+    &adapter,
+    &bot.features,
+    session_id,
+    thread_read::ThreadRead {
+      messages: &thread_messages,
+      unread_ids: &unread_ids,
+      pending: &pending,
+      watermark: watermark.as_deref(),
+      limit,
+    },
+    |message| message.id.as_str(),
+  )
+  .await?;
   let mut messages = Vec::new();
   if let Some(root) = root {
     messages.push(message_view(&root, false, pending.contains(&root.id), allowed));
   }
   messages.extend(
-    window
+    thread_messages[window.first..window.last]
       .iter()
       .map(|message| message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed)),
   );
   Ok(json!({
-    "messages": messages,
-    (watermark_key): watermark_id,
-    "more_unread": unread_ids.len() - window_unread_ids.len(),
+    (thread_read::MESSAGES): messages,
+    (FEISHU.watermark_key()): window.watermark,
+    (thread_read::MORE_UNREAD): window.more_unread,
   }))
 }
 
@@ -163,7 +158,7 @@ pub async fn read_chat(
   };
   let pending = pending_summon_ids(bot, session_id).await?;
   let mut output = json!({
-    "messages": messages
+    (thread_read::MESSAGES): messages
       .iter()
       .map(|message| message_view(message, false, pending.contains(&message.id), allowed))
       .collect::<Vec<_>>(),
@@ -245,7 +240,7 @@ pub async fn read_topic(
   }
   let pending = pending_summon_ids(bot, session_id).await?;
   let mut output = json!({
-    "messages": messages
+    (thread_read::MESSAGES): messages
       .iter()
       .map(|message| message_view(message, false, pending.contains(&message.id), allowed))
       .collect::<Vec<_>>(),

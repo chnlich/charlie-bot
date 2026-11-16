@@ -1,11 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
+const {dockOf, findChildByClass, makeElement, clickElement, addBlockComment, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
-const {REC_TEXT, makeForkPage} = require('./artifact_fork_fixture');
+const {HEADING_11_12, REC_TEXT, Q1_TEXT, Q2_TEXT, makeFork, makeForkPage} = require('./artifact_fork_fixture');
 const {SESSIONS_ROOT} = require('./sessions_root_stub');
 
 const ARTIFACT_PATH = '/absolute_filepath' + SESSIONS_ROOT + '/sess-draft/artifacts/plan.html';
@@ -40,7 +40,7 @@ function silentConsole() {
 
 function loadScript(opts = {}) {
   const storage = opts.storage || makeStorage();
-  const {context, window, body} = loadArtifactCommentsContext({
+  const {context, window, body, listeners} = loadArtifactCommentsContext({
     pathname: opts.pathname || ARTIFACT_PATH,
     hash: opts.hash,
     framed: opts.framed,
@@ -51,8 +51,29 @@ function loadScript(opts = {}) {
     nodePreceding: true,
     bodyChildren: opts.bodyChildren,
   });
-  return {context, window, body, storage};
+  return {context, window, body, storage, listeners};
 }
+
+// Fires the page's window `load` listeners, as the browser does once the page has finished loading.
+function firePageLoad(listeners) {
+  for (const l of listeners) {
+    if (l.target === 'window' && l.type === 'load') l.handler({});
+  }
+}
+
+// A block that directly owns `text`, as the page source gives a paragraph, cell or heading.
+function blockOf(text, tagName = 'DIV') {
+  const el = makeElement();
+  el.tagName = tagName;
+  el.childNodes = [{nodeType: 3, textContent: text}];
+  return el;
+}
+
+// Two questions whose text is the same and longer than the 32 characters the before words cover, so the
+// rows under them share their words before; OTHER_QUESTION differs at its end, so its row's words differ.
+const SAME_QUESTION = '两个问题下面的同一句话，前面的三十二个字也都一样，所以它们的前文相同。';
+const OTHER_QUESTION = '这一句和上面的不一样，它前面的三十二个字各不相同，所以两处的前文不同。';
+const SAME_BEFORE = SAME_QUESTION.slice(-32);
 
 // ---------------------------------------------------------------------------
 // Pure helpers: draftKey / serializeDraft / deserializeDraft
@@ -70,7 +91,7 @@ test('serializeDraft strips el and keeps kind/quote/context/comment/occurrence, 
   const serialize = window.__cbcSerializeDraft;
   const out = serialize([
     {kind: 'block', el: makeElement(), quote: 'q1', context: 'c1', comment: 'cm1'},
-    {kind: 'improve', el: null, quote: '', context: 'Imp', comment: 'p'},
+    {kind: 'improve', el: null, quote: '', context: 'Imp', comment: 'p', occurrence: 0},
     {kind: 'unknown', el: makeElement(), quote: 'q2', context: 'c2', comment: 'cm2'},
   ]);
   // The elements here are detached and the page has no rows, so every
@@ -377,32 +398,206 @@ test('serializeDraft stores the 0-based same-quote occurrence of the anchored ro
   assert.equal(serialize([entry])[0].occurrence, 0, 'the first same-quote row reads 0');
   entry.el = page.fork2.rec;
   assert.equal(serialize([entry])[0].occurrence, 1, 'the second same-quote row reads 1');
+  const detached = {kind: 'block', el: makeElement(), quote: 'a quote no row holds', context: 'ctx', comment: 'cm'};
+  assert.equal(serialize([detached])[0].occurrence, 0, 'a detached element reads 0');
   entry.el = null;
-  assert.equal(serialize([entry])[0].occurrence, 0, 'a detached element reads 0');
+  entry.occurrence = 1;
+  assert.equal(serialize([entry])[0].occurrence, 1, 'an unattached draft keeps its stored occurrence');
 });
 
-test('a draft on the second fork\'s repeated line re-anchors to that fork after reload', () => {
+test('a draft on a row whose quote repeats stores the words before it; a unique quote stores none', () => {
+  const page = makeForkPage();
+  const {window} = loadScript({bodyChildren: page.children, fetch: sessionFetch(true)});
+  const serialize = window.__cbcSerializeDraft;
+  const repeated = {kind: 'block', el: page.fork2.rec, quote: REC_TEXT, context: 'ctx', comment: 'cm'};
+  const unique = {kind: 'block', el: page.heading, quote: HEADING_11_12, context: '', comment: 'cm'};
+  const [stored, plain] = serialize([repeated, unique]);
+  assert.equal(stored.before, page.fork2.q.textContent.slice(-32), 'the words before the row');
+  assert.equal(stored.occurrence, 1);
+  assert.equal('before' in plain, false, 'a quote held by one row stores no before');
+});
+
+test('an unattached draft keeps its stored before and occurrence when it is saved again', () => {
+  const storage = makeStorage();
+  storage.setItem(DRAFT_KEY, JSON.stringify([
+    {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note', before: 'stored words', occurrence: 1},
+  ]));
+  const {window} = loadScript({storage, bodyChildren: [], fetch: sessionFetch(true)});
+  window.__cbcSaveDraft(window.__cbcLoadDraft(ARTIFACT_PATH), ARTIFACT_PATH);
+  jsonEqual(JSON.parse(storage.store.get(DRAFT_KEY)), [
+    {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note', occurrence: 1, before: 'stored words'},
+  ]);
+});
+
+test('a stored draft with a before attaches to the one row whose quote and before both match', () => {
   const page = makeForkPage();
   const storage = makeStorage();
   storage.setItem(DRAFT_KEY, JSON.stringify([
-    {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note', occurrence: 1},
+    {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note',
+      before: page.fork2.q.textContent.slice(-32), occurrence: 0},
   ]));
-  const {body} = loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
-  assert.equal(page.fork1.rec.classList.contains('__cbc-marked'), false,
-    'fork 1\'s row stays unmarked');
+  loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
+  assert.equal(page.fork1.rec.classList.contains('__cbc-marked'), false, 'fork 1\'s row stays unmarked');
   assert.equal(page.fork2.rec.classList.contains('__cbc-marked'), true,
-    'the draft re-anchors to fork 2\'s row, its own');
+    'the one matching row is taken, whatever the stored occurrence says');
 });
 
-test('a stored draft without occurrence re-anchors to the first same-quote row', () => {
+test('a draft with a before and several matching rows takes the row at its stored occurrence', () => {
+  const page = {
+    heading: blockOf(HEADING_11_12, 'H2'),
+    fork1: makeFork('1', SAME_QUESTION),
+    fork2: makeFork('2', SAME_QUESTION),
+  };
+  page.children = [page.heading, page.fork1.fork, page.fork2.fork];
+  const storage = makeStorage();
+  storage.setItem(DRAFT_KEY, JSON.stringify([
+    {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note', before: SAME_BEFORE, occurrence: 1},
+  ]));
+  loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
+  assert.equal(page.fork1.rec.classList.contains('__cbc-marked'), false, 'the row at occurrence 0 is not taken');
+  assert.equal(page.fork2.rec.classList.contains('__cbc-marked'), true, 'the row at occurrence 1 is taken');
+});
+
+test('a draft with a before stays unattached when its stored occurrence row is not a match', () => {
+  const page = {
+    heading: blockOf(HEADING_11_12, 'H2'),
+    fork1: makeFork('1', SAME_QUESTION),
+    fork2: makeFork('2', OTHER_QUESTION),
+    fork3: makeFork('3', SAME_QUESTION),
+  };
+  page.children = [page.heading, page.fork1.fork, page.fork2.fork, page.fork3.fork];
+  const storage = makeStorage();
+  storage.setItem(DRAFT_KEY, JSON.stringify([
+    {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note', before: SAME_BEFORE, occurrence: 1},
+  ]));
+  loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
+  for (const row of [page.fork1.rec, page.fork2.rec, page.fork3.rec]) {
+    assert.equal(row.classList.contains('__cbc-marked'), false, 'no row is marked');
+  }
+});
+
+test('a stored draft without a before stays unattached when its quote repeats', () => {
   const page = makeForkPage();
   const storage = makeStorage();
   storage.setItem(DRAFT_KEY, JSON.stringify([
     {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note'},
   ]));
-  const {body} = loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
-  assert.equal(page.fork1.rec.classList.contains('__cbc-marked'), true,
-    'an absent occurrence is the first same-quote row');
-  assert.equal(page.fork2.rec.classList.contains('__cbc-marked'), false,
-    'no other row is marked');
+  loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
+  assert.equal(page.fork1.rec.classList.contains('__cbc-marked'), false, 'no row is marked');
+  assert.equal(page.fork2.rec.classList.contains('__cbc-marked'), false, 'no row is marked');
+});
+
+// ---------------------------------------------------------------------------
+// A draft written on one page version finds its row on the next: the words
+// before the row place it, the stored occurrence only picks among matches.
+// ---------------------------------------------------------------------------
+
+function capturingFetch(posted) {
+  return async (url, options = {}) => {
+    if (url === '/api/sessions/sess-draft') {
+      return {ok: true, status: 200, async json() { return {name: 'Draft Session'}; }};
+    }
+    if (url === '/api/chat/sess-draft/message') {
+      posted.push(JSON.parse(options.body).content);
+      return {ok: true, status: 202, async json() { return {}; }};
+    }
+    throw new Error('unexpected fetch: ' + url);
+  };
+}
+
+async function sendTray(res) {
+  const tray = findChildByClass(dockOf(res.body), '__cbc-tray');
+  await clickElement(findChildByClass(findChildByClass(tray, '__cbc-tray-actions'), '__cbc-tray-send'));
+  await flushPromises(6);
+}
+
+test('a draft on a repeated row restores to its own row after one item is inserted above', () => {
+  const old = makeForkPage();
+  const first = loadScript({bodyChildren: old.children, fetch: sessionFetch(true)});
+  addBlockComment(first.body, first.listeners, old.fork2.rec, 'note');
+
+  const inserted = makeFork('1', '要不要处理新插入的一项？');
+  const shiftedFirst = makeFork('2', Q1_TEXT);
+  const shiftedSecond = makeFork('3', Q2_TEXT);
+  loadScript({
+    storage: first.storage,
+    bodyChildren: [blockOf(HEADING_11_12, 'H2'), inserted.fork, shiftedFirst.fork, shiftedSecond.fork],
+    fetch: sessionFetch(true),
+  });
+  assert.equal(shiftedSecond.rec.classList.contains('__cbc-marked'), true,
+    'the draft attaches to the row of the item it was written on');
+  assert.equal(shiftedFirst.rec.classList.contains('__cbc-marked'), false, 'the row above stays unmarked');
+  assert.equal(inserted.rec.classList.contains('__cbc-marked'), false, 'the inserted row stays unmarked');
+});
+
+test('a draft is restored at page load when the page rewrites its text after the script ran', () => {
+  const SENTENCE = '页面改写后两处相同的句子，它们前面的文字不同，所以前文也不同。';
+  const final = loadScript({
+    bodyChildren: [blockOf('第一段'), blockOf(SENTENCE), blockOf('第二段'), blockOf(SENTENCE)],
+    fetch: sessionFetch(true),
+  });
+  addBlockComment(final.body, final.listeners, final.body.children[3], 'note');
+
+  const placeholder = [blockOf('第一段'), blockOf('占位'), blockOf('第二段'), blockOf('占位')];
+  const rewritten = loadScript({storage: final.storage, bodyChildren: placeholder, fetch: sessionFetch(true)});
+  assert.equal(placeholder[3].classList.contains('__cbc-marked'), false, 'the placeholder text holds no draft');
+
+  placeholder[1].childNodes = [{nodeType: 3, textContent: SENTENCE}];
+  placeholder[3].childNodes = [{nodeType: 3, textContent: SENTENCE}];
+  firePageLoad(rewritten.listeners);
+  assert.equal(placeholder[3].classList.contains('__cbc-marked'), true,
+    'at page load the draft attaches to the row with its words before');
+  assert.equal(placeholder[1].classList.contains('__cbc-marked'), false, 'the other row stays unmarked');
+});
+
+test('a draft saved on a unique row attaches to the one other row that holds its sentence', () => {
+  const SENTENCE = '只出现一次的句子，原来的那一行之后会被删掉。';
+  const before = loadScript({bodyChildren: [blockOf('标题'), blockOf(SENTENCE)], fetch: sessionFetch(true)});
+  addBlockComment(before.body, before.listeners, before.body.children[1], 'note');
+  assert.equal('before' in JSON.parse(before.storage.store.get(DRAFT_KEY))[0], false,
+    'a quote that held one row stores no before');
+
+  const moved = blockOf(SENTENCE);
+  loadScript({storage: before.storage, bodyChildren: [blockOf('标题'), blockOf('别的内容'), moved],
+    fetch: sessionFetch(true)});
+  assert.equal(moved.classList.contains('__cbc-marked'), true,
+    'the one row that holds the sentence takes the draft');
+});
+
+test('two unattached drafts with equal stored locators each send the stored locator and before line', async () => {
+  const storage = makeStorage();
+  storage.setItem(DRAFT_KEY, JSON.stringify([
+    {kind: 'block', quote: 'Shared sentence in two rows', context: 'Plan', comment: 'first note',
+      before: 'the words before', occurrence: 0},
+    {kind: 'block', quote: 'Shared sentence in two rows', context: 'Plan', comment: 'second note',
+      before: 'the words before', occurrence: 0},
+  ]));
+  const posted = [];
+  const res = loadScript({storage, bodyChildren: [blockOf('Something else entirely')], fetch: capturingFetch(posted)});
+  await sendTray(res);
+  assert.equal(posted.length, 1, 'the batch was posted once');
+  assert.equal(posted[0], [
+    '[Artifact comments · ' + ARTIFACT_PATH + '] (2)',
+    '',
+    '1. ▸ Plan › "Shared sentence in two rows"',
+    '   before "the words before"',
+    '   ↳ first note',
+    '',
+    '2. ▸ Plan › "Shared sentence in two rows"',
+    '   before "the words before"',
+    '   ↳ second note',
+  ].join('\n'));
+});
+
+test('a whole-section draft with a repeated row quote stores no before', () => {
+  const quote = 'Synthetic shared section text';
+  const section = makeElement();
+  section.tagName = 'SECTION';
+  section.appendChild(blockOf(quote));
+  const other = blockOf(quote);
+  const {window} = loadScript({bodyChildren: [section, other], fetch: sessionFetch(true)});
+  const [stored] = window.__cbcSerializeDraft([
+    {kind: 'block', el: section, quote, context: 'Section', comment: 'note'},
+  ]);
+  assert.equal('before' in stored, false, 'whole-section drafts keep the existing schema');
 });

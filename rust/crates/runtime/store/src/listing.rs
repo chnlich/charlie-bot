@@ -320,17 +320,14 @@ impl Store {
 
   /// The sequence controllers' row fields for a listing of `rows`.
   ///
-  /// A caller that already holds the rows asks for their fields alone. The ids a controller binds bound the walk, so
-  /// a controller that binds nothing costs no per-row lookup.
+  /// A caller that already holds the rows asks for their fields alone. Each controller's bound ids and fields come
+  /// from one pass, so a controller that loads a snapshot for both reads it once, and one that binds nothing costs no
+  /// per-row lookup.
   pub fn sequence_listing_fields(
     &self,
     rows: &[Arc<SessionMetadata>],
   ) -> StoreResult<HashMap<String, serde_json::Map<String, Value>>> {
-    let ids = match self.sequence_listing.bound_listing_ids() {
-      Some(ids) => ids,
-      None => rows.iter().map(|meta| meta.id.clone()).collect(),
-    };
-    self.sequence_listing.listing_fields(&ids, UtcDateTime::now())
+    self.sequence_listing.listing_fields_for_rows(rows, UtcDateTime::now())
   }
 
   /// The sequence controllers' row fields of `ids` alone.

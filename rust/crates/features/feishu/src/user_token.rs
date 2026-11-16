@@ -98,7 +98,7 @@ pub(crate) fn execute_request(home: &Path, args: &RequestArgs, endpoints: &Endpo
   finish(response, &[access.as_str()])
 }
 
-/// A 2xx body without an error code; every other answer is an HTTP-style failure with exit 1.
+/// A 2xx body without an error code. Every other answer is an HTTP-style failure with exit 1.
 fn finish(response: request::Response, redactions: &[&str]) -> Result<Vec<u8>, CliExit> {
   if !(200..300).contains(&response.status) {
     return Err(request::http_failure(response.status, &response.body, redactions));
@@ -162,7 +162,7 @@ fn app_access_token(
   string_field(&payload, "app_access_token", "Feishu app token")
 }
 
-/// One token endpoint's JSON answer; a non-2xx status or a nonzero `code` is an exit-1 failure.
+/// One token endpoint's JSON answer. A non-2xx status or a nonzero `code` is an exit-1 failure.
 fn open_json(
   request: &Request,
   operation: &str,

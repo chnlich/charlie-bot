@@ -458,12 +458,23 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     const isLimitExpanded = limitState[key] === true;
     const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtmlAttr(key);
+    // The open session's row joins the preview from past the limit, so the group paints one row more
+    // than groupPreviewLimit budgets for the list's height. The preview gives up its last row for it:
+    // the header, the open row and the Show all line then stay inside the panel's height. At the
+    // preview's floor the height fits fewer rows than the floor paints (a closed phone drawer reports
+    // no height at all), so the floor keeps its rows and the open row joins them still.
+    const previewRoots =
+      groupSessions.filter((root) => !groupPreviewLimitExemptions.some((predicate) => predicate(root)));
+    const openRootRank = previewRoots.findIndex((root) => root.id === activeRootId);
+    const previewRows = openRootRank >= previewLimit && previewLimit > GROUP_SESSION_PREVIEW_MIN
+      ? previewLimit - 1
+      : previewLimit;
     let previewRank = 0;
     const groupRows = groupSessions.map((s) => {
       // An exempt root always shows and takes no rank, so the limit counts
       // only the other roots; those past it are the extra rows.
       const exempt = groupPreviewLimitExemptions.some((predicate) => predicate(s));
-      const inPreview = !exempt && previewRank < previewLimit;
+      const inPreview = !exempt && previewRank < previewRows;
       if (!exempt) previewRank += 1;
       // The open session's root never hides, since a hidden root hides its subtree.
       const isHideable = !exempt && !inPreview && s.id !== activeRootId;

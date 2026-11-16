@@ -94,6 +94,25 @@ test('the preview paints the rows the list height holds and hides the rest behin
   assert.equal(html.split('session-group-limit-toggle').length - 1, 1, 'one Show all control stands before its rows');
 });
 
+test('the open session past the preview keeps its row and Show all inside the list height', () => {
+  const rows = Array.from({length: 20}, (_, index) => makeSessionMeta(`row-${index + 1}`));
+  const initial = {$screen: {partial: true, counts: {'': 20}}, ...sessionColumns(rows)};
+  const {context, nav} = buildContext({initial, full: sessionColumns(rows)});
+  // The same 600 px list: ten 52 px rows beside the group's header and the Show all line.
+  nav.clientHeight = 600;
+  context.SESSION_ID = 'row-20';
+
+  context.restoreSidebarFromUrl();
+
+  const html = nav.innerHTML;
+  const toggleAt = html.indexOf('session-group-limit-toggle');
+  assert.ok(toggleAt > 0, 'the rows past the preview hide behind Show all');
+  const beforeToggle = rowIds(html.slice(0, toggleAt));
+  assert.equal(beforeToggle.length, 10, 'the open row takes the last row the height holds from the preview');
+  assert.deepEqual(beforeToggle.slice(0, 9), rows.slice(0, 9).map((row) => row.id));
+  assert.equal(beforeToggle[9], 'row-20', 'the open row joins the preview, before the control that hides the rest');
+});
+
 test('two groups share the list height instead of each taking a screen of it', () => {
   const first = Array.from({length: 10}, (_, index) => makeSessionMeta(`g1-${index + 1}`, {group: 'g1'}));
   const second = Array.from({length: 10}, (_, index) => makeSessionMeta(`g2-${index + 1}`, {group: 'g2'}));

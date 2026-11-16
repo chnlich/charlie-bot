@@ -245,6 +245,12 @@ impl FileHeaders {
       builder
     }
   }
+
+  fn apply_vary(&self, response: &mut Response) {
+    if self.vary_accept_encoding {
+      response.headers_mut().insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    }
+  }
 }
 
 /// The file a request serves and how: a request that accepts brotli serves a file's `.br` sibling when
@@ -291,9 +297,7 @@ fn file_response(
       .header(header::ETAG, &file_headers.etag)
       .body(Body::empty())
       .expect("a 304 response builds");
-    if vary {
-      response.headers_mut().insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-    }
+    file_headers.apply_vary(&mut response);
     return response;
   }
   let head_only = method == Method::HEAD;
@@ -315,9 +319,7 @@ fn file_response(
     };
     let mut response =
       file_headers.apply(Response::builder().status(StatusCode::OK)).body(body).expect("a file response builds");
-    if vary {
-      response.headers_mut().insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-    }
+    file_headers.apply_vary(&mut response);
     return response;
   }
   let ranges = match parse_range_header(range.as_deref().expect("use_range implies a Range header"), file_headers.size)
@@ -325,13 +327,15 @@ fn file_response(
     Ok(ranges) => ranges,
     Err(RangeError::Malformed(message)) => return responses::plain_text(StatusCode::BAD_REQUEST, message),
     Err(RangeError::NotSatisfiable) => {
-      return Response::builder()
+      let mut response = Response::builder()
         .status(StatusCode::RANGE_NOT_SATISFIABLE)
         .header(header::CONTENT_RANGE, format!("bytes */{}", file_headers.size))
         .header(header::CONTENT_LENGTH, 0)
         .header(header::CONTENT_TYPE, mimetypes::with_utf8_charset(TEXT_PLAIN))
         .body(Body::empty())
         .expect("a 416 response builds");
+      file_headers.apply_vary(&mut response);
+      return response;
     }
   };
   if let [(start, end)] = ranges[..] {
@@ -348,6 +352,7 @@ fn file_response(
     };
     let mut response = builder.body(body).expect("a 206 response builds");
     response.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(end - start));
+    file_headers.apply_vary(&mut response);
     return response;
   }
   multipart_response(&path, &file_headers, &ranges, head_only)
@@ -494,6 +499,7 @@ fn multipart_response(path: &Path, file_headers: &FileHeaders, ranges: &[(u64, u
       .expect("a hex boundary is header-safe"),
   );
   response.headers_mut().insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+  file_headers.apply_vary(&mut response);
   response
 }
 
@@ -709,6 +715,7 @@ mod tests {
     ranged.insert(header::RANGE, HeaderValue::from_static("bytes=0-9"));
     let ranged_response = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &ranged);
     assert_eq!(ranged_response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(ranged_response.headers().get(header::VARY).unwrap(), "Accept-Encoding");
     assert!(ranged_response.headers().get(header::CONTENT_ENCODING).is_none());
     assert_eq!(&body_of(ranged)[..], b"a body lon");
   }

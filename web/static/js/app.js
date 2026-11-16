@@ -7,6 +7,11 @@ document.addEventListener('DOMContentLoaded', () => {
   restoreSidebarFromUrl();
   updateRelativeTimes();
 
+  // The new-session picker starts on the open session's backend, the value the
+  // page carries in ACTIVE_BACKEND_ID; the server leaves the choice to this write.
+  const newSessionBackend = document.getElementById('new-session-backend');
+  if (newSessionBackend) newSessionBackend.value = globalThis.ACTIVE_BACKEND_ID;
+
   // Initial chat render uses the server-embedded minimal bootstrap so refresh
   // and SPA switches share the same renderer without a duplicate /view fetch.
   if (SESSION_ID && SESSION_BOOTSTRAP) {

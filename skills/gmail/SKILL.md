@@ -43,7 +43,7 @@ charliebot google request GET "https://gmail.googleapis.com/gmail/v1/users/me/me
 Its `resultSizeEstimate` estimates the total; it is not a count.
 Set the window in `q` with Gmail search syntax. To read the whole window, pass each response's `nextPageToken` as `pageToken` on the next request, with the same `q`, until a response has no `nextPageToken`.
 
-Source: Gmail API reference, `users.messages.list` (https://developers.google.com/gmail/api/reference/rest/v1/users.messages/list).
+Source: Gmail API reference, `users.messages.list` (https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list).
 
 ### Read a Message
 

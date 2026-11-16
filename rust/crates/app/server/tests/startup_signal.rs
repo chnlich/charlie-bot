@@ -265,6 +265,42 @@ fn sigint_stops_task_recovery_during_boot() {
   assert_boot_signal(Signal::SIGINT);
 }
 
+/// A start into an empty home seeds each default task's host file, the proactive agent's included.
+#[test]
+#[ignore = "integration"]
+fn startup_seeds_the_missing_default_cron_files() {
+  let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
+  let home = prepare_home(temporary.path(), 0);
+  let (mut server, receiver) = start_server(temporary.path(), &home, false, Cpus::All);
+  let mut lines = wait_for_event(&mut server, &receiver, "server_ready", Duration::from_secs(30));
+  assert!(
+    lines.iter().any(|line| {
+      is_event(line, "cron_default_task_seeded") && field_of(line, "task").as_deref() == Some("proactive-agent")
+    }),
+    "the start seeds the proactive-agent host file: {lines:?}"
+  );
+  assert!(home.join("config.d/cron.d/proactive-agent.yaml").is_file());
+
+  send_signal(&server, Signal::SIGTERM);
+  let (status, elapsed) = wait_for_exit(&mut server, &receiver, &mut lines, BOOT_STOP_TIMEOUT);
+  drain_logs(&receiver, &mut lines);
+  assert_eq!(status.signal(), Some(Signal::SIGTERM as i32), "{status:?}");
+  assert!(elapsed < BOOT_STOP_TIMEOUT, "the server took {elapsed:?} to stop");
+
+  let (mut restarted, restarted_receiver) = start_server(temporary.path(), &home, false, Cpus::All);
+  let mut restarted_lines =
+    wait_for_event(&mut restarted, &restarted_receiver, "server_ready", Duration::from_secs(30));
+  assert!(
+    !restarted_lines.iter().any(|line| is_event(line, "cron_default_task_seeded")),
+    "the restart finds all default files and seeds none: {restarted_lines:?}"
+  );
+  send_signal(&restarted, Signal::SIGTERM);
+  let (status, elapsed) = wait_for_exit(&mut restarted, &restarted_receiver, &mut restarted_lines, BOOT_STOP_TIMEOUT);
+  drain_logs(&restarted_receiver, &mut restarted_lines);
+  assert_eq!(status.signal(), Some(Signal::SIGTERM as i32), "{status:?}");
+  assert!(elapsed < BOOT_STOP_TIMEOUT, "the restarted server took {elapsed:?} to stop");
+}
+
 /// A port another listener holds: the bind fails after `server_ready`, so the server logs `bind_failed` as an error line
 /// that carries the address, and exits with the config status.
 #[test]

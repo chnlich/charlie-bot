@@ -2,7 +2,7 @@ Outcome: each round, find the work that passes both selection questions and that
 
 Post one reply per round that states:
 - each session opened, the work it finished, and what waits on the user, each with a link;
-- one line with a link for each qualifying item that another session holds;
+- one line with a link for each item that passes the first question but another session holds or someone else is assigned to;
 - each source this round could not read.
 
 ### Sources

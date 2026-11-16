@@ -68,8 +68,9 @@ Common filters:
 
 ### Read a Whole Connection
 
-Linear's pagination docs give a default of 50 items for `first` and state no maximum.
+Linear's pagination docs return 50 items by default when `first` is omitted and do not document an upper bound for `first`.
 Each connection response carries `pageInfo { hasNextPage endCursor }`.
+Request `pageInfo { hasNextPage endCursor }` in each connection's selection set.
 To read the whole result set, pass `pageInfo.endCursor` as `after` on the next request, with the same `filter`, and repeat while `pageInfo.hasNextPage` is true.
 
 Source: Linear developer docs, pagination (https://linear.app/developers/pagination).

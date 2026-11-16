@@ -254,6 +254,19 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     return ExitCode::from(EXIT_STARTUP);
   }
   clock.segment("home_init");
+  match charliebot_cron::seed::seed_default_cron_tasks(&cfg, repo_root.path(), false) {
+    Ok(seeded) => {
+      for item in seeded.iter().filter(|item| item.status == charliebot_core::home_init::SEED_CREATED) {
+        tracing::info!(task = %item.name, "cron_default_task_seeded");
+      }
+    }
+    Err(error) => {
+      writer_fence.release();
+      tracing::error!(error = %error, "cron_default_seed_failed");
+      return ExitCode::from(EXIT_STARTUP);
+    }
+  }
+  clock.segment("cron_seed");
   if startup_stop.is_cancelled() {
     return finish_boot_stop(None, Some(&mut writer_fence), signal_receiver).await;
   }

@@ -1275,6 +1275,7 @@ dependencies = [
  "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-cron",
  "charliebot-packages",
  "charliebot-registry",
  "charliebot-session-api",

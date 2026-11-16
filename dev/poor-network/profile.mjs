@@ -134,7 +134,7 @@ export const OPEN = Object.freeze({
   // bench host, which spoils the repetition: one D2 repetition navigated 8.7 s in, after a 3.6 s stall, and failed
   // 40.3 s later.
   openByMs: 8000,
-  // An open that has not shown its newest message or its catch-up by this time is recorded at the cap.
+  // An open that has not shown its newest message by this time is recorded at the cap.
   capMs: 240000,
   // An offline navigation that has not shown the page within this time is recorded as not reached.
   offlineSettleMs: 5000,

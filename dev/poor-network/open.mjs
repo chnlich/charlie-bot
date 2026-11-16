@@ -374,9 +374,7 @@ async function measureOnce(ctx, cell, repetition) {
       const now = Date.now();
       timeline.push({ t: now, ...link.proxy.counters() });
       const current = openRecord(navigationError === null ? tab.reports : []);
-      const catchupSeen = tab.frames.some((frame) => frame.type === 'catchup_complete' && frame.at >= navStart);
-      const finished = current.newestWall !== null && catchupSeen && current.loadWall !== null &&
-        now >= current.loadWall + OPEN.postLoadWindowMs;
+      const finished = openSettled(current, now);
       const offlineDone = navigationError !== null && now >= navStart + OPEN.offlineSettleMs;
       if (finished || offlineDone || now >= navStart + OPEN.capMs) {
         break;
@@ -522,6 +520,13 @@ export function openRecord(reports) {
     loadWall: last === null || last.loadMs === null ? null : last.timeOrigin + last.loadMs,
     domContentLoadedMs: last === null ? null : last.domContentLoadedMs,
   };
+}
+
+// The open settles after its newest message has painted and the last document's byte window ends. When a navigation
+// never reports load, the measured page has no load event to anchor that window, so the window starts at newest paint.
+export function openSettled(record, now) {
+  const settleWall = record.loadWall ?? record.newestWall;
+  return record.newestWall !== null && now >= settleWall + OPEN.postLoadWindowMs;
 }
 
 async function runCell(ctx, cell, repetitions) {

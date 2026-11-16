@@ -11,7 +11,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { chromeBinary, launchBrowser } from './chrome.mjs';
-import { assetVersionOf, hostInterference, openCpuRecord, openMeasuredTab, openRecord, runRepetitions } from './open.mjs';
+import { assetVersionOf, hostInterference, openCpuRecord, openMeasuredTab, openRecord, openSettled, runRepetitions }
+  from './open.mjs';
 import { LIVE_CPU_TAIL, OPEN } from './profile.mjs';
 import { Tabs, waitFor } from './tabs.mjs';
 
@@ -142,6 +143,19 @@ test('the newest message counts at the first document that shows it', () => {
     { kind: 'newest', timeOrigin: 11000, at: 11600 },
   ]);
   assert.equal(record.newestWall, 1900);
+});
+
+test('the measured byte window settles without waiting for a catch-up frame', () => {
+  const record = { newestWall: 1000, loadWall: 1200 };
+  assert.equal(openSettled(record, 1200 + OPEN.postLoadWindowMs - 1), false);
+  assert.equal(openSettled(record, 1200 + OPEN.postLoadWindowMs), true);
+  assert.equal(openSettled({ ...record, newestWall: null }, 1200 + OPEN.postLoadWindowMs), false);
+});
+
+test('a newest paint settles when its document has no load event', () => {
+  const record = { newestWall: 1000, loadWall: null };
+  assert.equal(openSettled(record, 1000 + OPEN.postLoadWindowMs - 1), false);
+  assert.equal(openSettled(record, 1000 + OPEN.postLoadWindowMs), true);
 });
 
 test('the open case and the record it starts from come from the first document', () => {

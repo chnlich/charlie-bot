@@ -1198,6 +1198,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::trigger_files::SLURM_JOB_KIND`.",
   },
+  OwnerRow { name: "fire_at", owner: "runtime/store", hint: "Use `charliebot_store::trigger_files::FIRE_AT_FIELD`." },
   OwnerRow {
     name: "delay_seconds",
     owner: "runtime/triggers",

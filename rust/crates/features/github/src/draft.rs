@@ -1,7 +1,7 @@
 //! The GitHub draft platform: the server calls the REST API with the operator's own token.
 //!
 //! The token command comes from the core config's `github.user_token_command`, so no repository content names the
-//! operator's host. A pull request opens with `draft: true`; a comment goes to the issues comments endpoint. The
+//! operator's host. A pull request opens with `draft: true`. A comment goes to the issues comments endpoint. The
 //! sender never retries and never falls back to another account.
 
 use std::sync::Arc;

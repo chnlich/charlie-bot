@@ -24,7 +24,8 @@ use charliebot_core::{event_types, parallel_walk, ssh, text_repr};
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::{
-  self, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus, WatchTarget, fresh_uuid,
+  self, FIRE_AT_FIELD, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus, WatchTarget,
+  fresh_uuid,
 };
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, StoreError, layout};
 use futures_util::future::join_all;
@@ -2399,7 +2400,7 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
     watch_targets = %serde_json::to_string(&trigger.watch_targets).expect("watch targets serialize"),
     "trigger_scheduled"
   );
-  let mut body = json!({ "trigger_id": trigger.id, "fire_at": trigger.fire_at.to_isoformat_text() });
+  let mut body = json!({ "trigger_id": trigger.id, (FIRE_AT_FIELD): trigger.fire_at.to_isoformat_text() });
   if !watch_probe.is_empty() {
     body["watch_probe"] = Value::Object(watch_probe);
   }

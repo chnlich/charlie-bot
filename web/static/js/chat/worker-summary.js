@@ -12,7 +12,7 @@
 // card shows writes only the elapsed-time text. A changed summary repaints the
 // card, and each closing passage's fold stays as the reader left it.
 // session-view.js feeds the bootstrap value (mountWorkerSummary) and each
-// poll's (applyWorkerSummary); turn-engine.js asks for the card node when it
+// poll's (applyWorkerSummary). turn-engine.js asks for the card node when it
 // builds the For-you list.
 //
 // Card states: a delivered task shows its result, close time, landed commit,
@@ -24,7 +24,7 @@
 
 // The page's document carries a loader in this file's place, and the loader
 // inserts its own node while this module travels. Adopting that node keeps the
-// card the For-you list already shows in place; the tests load this module
+// card the For-you list already shows in place. The tests load this module
 // alone, where no loader node exists.
 const loader = globalThis.Chat.__workerSummaryLoader;
 const card = loader ? loader.card : document.createElement('div');
@@ -65,7 +65,7 @@ function tickElapsed() {
 }
 
 // A run's event time reads as a bare clock (the card shows HH:MM:SS on the
-// current-step rows); the closing and stop lines use the full bubble time.
+// current-step rows). The closing and stop lines use the full bubble time.
 function formatClock(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -79,7 +79,7 @@ function toolCallWords(count) {
 }
 
 // The status line: the task state when closed, the newest run's state while it
-// is open. A live run reads Running/Queued; any other open run reads its own
+// is open. A live run reads Running/Queued. Any other open run reads its own
 // terminal state.
 function statusOf(summary) {
   const state = String(summary.task_state || WORKER_STATE.OPEN);
@@ -126,7 +126,7 @@ function toggleWorkerSummaryFold(button) {
 }
 
 // A long closing passage (Chat.isLongPassage) folds behind one button, keyed
-// by its role; the full text stays in the markup.
+// by its role. The full text stays in the markup.
 function textHtml(text, foldKey) {
   if (!text) return '';
   const body = '<div class="whitespace-pre-wrap break-words text-slate-300">' + escapeHtml(String(text)) + '</div>';
@@ -247,9 +247,9 @@ function render() {
 }
 
 // Applies a poll's summary. The summary the card already shows writes only
-// the elapsed-time text; a changed one repaints the card, each fold as the
+// the elapsed-time text. A changed one repaints the card, each fold as the
 // reader left it. A session that carries no summary (every non-worker)
-// empties the card state; its For-you list has no card then.
+// empties the card state. Its For-you list has no card then.
 function applyWorkerSummary(summary) {
   const json = JSON.stringify(summary || null);
   if (json === currentSummaryJson) {
@@ -281,7 +281,7 @@ if (loader) Chat.ForYou.replaceSummaryCardRenderer(workerSummaryCard);
 else Chat.ForYou.registerSummaryCardRenderer(workerSummaryCard);
 Chat.wire({applyWorkerSummary, mountWorkerSummary, workerSummaryCard, toggleWorkerSummaryFold}, {});
 
-// A session render or poll can carry its summary before this module lands; the
+// A session render or poll can carry its summary before this module lands. The
 // loader kept it, and the card paints it now.
 if (loader) {
   const queued = loader.take();

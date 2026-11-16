@@ -7,14 +7,14 @@
 // GET /api/sessions/{id}/pending-triggers returns (pending only, fire_at
 // ascending). Each row's inline two-step cancel posts to
 // POST /api/internal/triggers/{sid}/{tid}/cancel. A worker session (no input
-// area) shows it too; a session with zero pending triggers shows nothing at
+// area) shows it too. A session with zero pending triggers shows nothing at
 // all.
 //
 // The sidebar bell and this tray are the same signal — the same amber, the
 // same bell glyph. So the status poll is the only refetch signal here. The
 // tray remembers the session's last (pending_trigger_count, next_trigger_at)
 // as applySessionStatus hands it over, and refetches when either changes. No
-// timer of its own; an in-tray cancel refetches immediately.
+// timer of its own. An in-tray cancel refetches immediately.
 (function() {
   const Chat = globalThis.Chat;
   // chatOnly member of shared.js: reachable through the namespace, not as a bare global.
@@ -30,7 +30,7 @@
   const X_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>';
 
   // One active session's tray state. traySessionId is the session the fetched
-  // records belong to; the poll handoff and the bell only act on a session
+  // records belong to. The poll handoff and the bell only act on a session
   // the tray has opened.
   let traySessionId = null;
   let trayTriggers = [];
@@ -81,7 +81,7 @@
     return n + ' pending trigger' + (n === 1 ? '' : 's');
   }
 
-  // "fires at MM/DD HH:mm (in ...)" for a pure delay; "fires when <targets>
+  // "fires at MM/DD HH:mm (in ...)" for a pure delay. "fires when <targets>
   // exit(s) · at the latest MM/DD HH:mm (in ...)" for a watched trigger.
   function trayConditionHtml(tr) {
     const when = dateClockMDHM(new Date(tr.fire_at)) + ' ' + relTimeSpan(tr.fire_at);

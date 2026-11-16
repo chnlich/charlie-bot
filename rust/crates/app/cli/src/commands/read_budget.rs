@@ -480,7 +480,7 @@ fn read_class(
 /// Whether the command reads one rule file whole: `cat` with that one path, and no pipe or other
 /// shell syntax.
 fn is_whole_cat_of_rule_file(command: &str, cwd: Option<&str>, session_rules: &[String]) -> bool {
-  if has_shell_control(command) || command.contains('|') {
+  if has_shell_control(command) {
     return false;
   }
   match command.split_whitespace().collect::<Vec<&str>>().as_slice() {
@@ -553,10 +553,10 @@ fn path_class(path: &str, cwd: Option<&str>) -> Option<&'static str> {
 }
 
 fn bash_class(command: &str, cwd: Option<&str>) -> Option<&'static str> {
-  if is_standalone_conclusion(command, cwd) {
+  if is_standalone_conclusion(command) {
     return Some("child_conclusion");
   }
-  if is_standalone_user_dialog(command, cwd) {
+  if is_standalone_user_dialog(command) {
     return Some("user_words");
   }
   if status_decision(command) {
@@ -597,12 +597,8 @@ fn status_decision(command: &str) -> bool {
 }
 
 /// The command with its stream redirects removed, for the standalone check. A stream duplicated into another
-/// (`2>&1`) and a stream written to a file (`>f`, `2>f`, `>>f`, `&>f`) are not shell controls. A pipeline keeps
-/// its redirects as written, so its `2>&1` still reads as the background `&`.
+/// (`2>&1`) and a stream written to a file (`>f`, `2>f`, `>>f`, `&>f`) are not shell controls.
 fn without_stream_redirects(command: &str) -> String {
-  if command.contains('|') {
-    return command.to_string();
-  }
   let duplicated = stream_dup_pattern().replace_all(command, " ");
   stream_file_pattern().replace_all(&duplicated, " ").into_owned()
 }
@@ -615,12 +611,12 @@ fn names_unresolved_decision_path(text: &str) -> bool {
   text.split_whitespace().any(|token| token.contains(['*', '?', '[', '$']) && decision_name_pattern().is_match(token))
 }
 
-/// Whether the command has shell syntax beyond one CharlieBot command piped into filters: a list or
-/// background operator (`;`, `&`, `||`), a newline, a redirection in (`<`), or a subshell or substitution
-/// (`(`, `)`, a backtick). Each one can run a second read beside the exempt one. The standalone checks remove
-/// the stream redirects first (`without_stream_redirects`).
+/// Whether the command has shell syntax beyond one command: a pipeline (`|`), command list (`;`, `&&`, `||`),
+/// background operator (`&`), newline, redirection in (`<`), or subshell or substitution (`(`, `)`, a backtick).
+/// Each one can run a second read beside the exempt one. The standalone checks remove stream redirects first
+/// (`without_stream_redirects`).
 fn has_shell_control(command: &str) -> bool {
-  command.contains(['&', ';', '<', '(', ')', '`', '\n']) || command.contains("||")
+  command.contains(['&', ';', '<', '|', '(', ')', '`', '\n']) || command.contains("||")
 }
 
 /// Whether the command names a run log, `events.jsonl` or `agent.raw.ndjson`. Quotes and backslashes go
@@ -630,68 +626,30 @@ fn names_run_log(command: &str) -> bool {
   words.contains(RUN_EVENTS_NAME) || words.contains(RAW_LOG_NAME)
 }
 
-fn is_standalone_conclusion(command: &str, cwd: Option<&str>) -> bool {
+fn is_standalone_conclusion(command: &str) -> bool {
   let command = without_stream_redirects(command);
   if has_shell_control(&command) {
     return false;
   }
-  let stages: Vec<&str> = command.split('|').map(str::trim).collect();
-  if stages.is_empty() {
-    return false;
-  }
-  let words: Vec<&str> = stages[0].split_whitespace().collect();
+  let words: Vec<&str> = command.split_whitespace().collect();
   if words.len() < 3 || words[0] != "charliebot" || words[1] != "session" || words[2] != "conclusion" {
     return false;
   }
-  validate_pipeline_filters(&stages[1..], cwd)
+  true
 }
 
-fn is_standalone_user_dialog(command: &str, cwd: Option<&str>) -> bool {
+fn is_standalone_user_dialog(command: &str) -> bool {
   let command = without_stream_redirects(command);
   if has_shell_control(&command) {
     return false;
   }
-  let stages: Vec<&str> = command.split('|').map(str::trim).collect();
-  if stages.is_empty() {
-    return false;
-  }
-  let words: Vec<&str> = stages[0].split_whitespace().collect();
+  let words: Vec<&str> = command.split_whitespace().collect();
   if words.len() < 3 || words[0] != "charliebot" || words[1] != "session" || words[2] != "dialog" {
     return false;
   }
   let has_from_user = words.windows(2).any(|w| w[0] == "--from" && w[1] == "user") || words.contains(&"--from=user");
   if !has_from_user {
     return false;
-  }
-  validate_pipeline_filters(&stages[1..], cwd)
-}
-
-fn validate_pipeline_filters(stages: &[&str], cwd: Option<&str>) -> bool {
-  const ALLOWED_FILTERS: [&str; 7] = ["head", "tail", "grep", "rg", "sed", "cut", "wc"];
-  for stage in stages {
-    let tokens: Vec<&str> = stage.split_whitespace().collect();
-    if tokens.is_empty() {
-      return false;
-    }
-    if !ALLOWED_FILTERS.contains(&tokens[0]) {
-      return false;
-    }
-    for arg in &tokens[1..] {
-      let trimmed = arg.trim_matches(['\'', '"', '`']);
-      if trimmed.starts_with('-') {
-        continue;
-      }
-      // A glob, a brace or a variable names files the hook cannot list, so the filter's read counts.
-      if trimmed.contains(['*', '?', '[', '{', '$']) {
-        return false;
-      }
-      if let Some(resolved) = resolve_token(trimmed, cwd)
-        && resolved != "/"
-        && Path::new(&resolved).exists()
-      {
-        return false;
-      }
-    }
   }
   true
 }
@@ -1719,11 +1677,8 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
     // 7. `charliebot session conclusion --session s` is exempt
     assert_eq!(bash_class("charliebot session conclusion --session s", Some(cwd_str)), Some("child_conclusion"));
 
-    // 8. `charliebot session conclusion --session s | head -c 3000` is exempt
-    assert_eq!(
-      bash_class("charliebot session conclusion --session s | head -c 3000", Some(cwd_str)),
-      Some("child_conclusion")
-    );
+    // 8. A pipe makes even a conclusion read non-standalone.
+    assert_eq!(bash_class("charliebot session conclusion --session s | head -c 3000", Some(cwd_str)), None);
 
     // 9. `charliebot session conclusion --session s; cat events.jsonl` is counted
     assert_eq!(bash_class("charliebot session conclusion --session s; cat events.jsonl", Some(cwd_str)), None);
@@ -1739,7 +1694,7 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
 
     // 11. `charliebot session dialog --from user` is exempt
     assert_eq!(bash_class("charliebot session dialog --from user", Some(cwd_str)), Some("user_words"));
-    assert_eq!(bash_class("charliebot session dialog s --from user | head -n 20", Some(cwd_str)), Some("user_words"));
+    assert_eq!(bash_class("charliebot session dialog s --from user | head -n 20", Some(cwd_str)), None);
 
     // 12. `charliebot session dialog --turns 5` is counted
     assert_eq!(bash_class("charliebot session dialog --turns 5", Some(cwd_str)), None);
@@ -1761,21 +1716,13 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
       bash_class("charliebot session dialog --from user | head -c 100 </abs/events.jsonl", Some(cwd_str)),
       None
     );
-    // A glob in a filter's file argument names files the hook cannot check.
-    assert_eq!(
-      bash_class("charliebot session dialog --from user | head /abs/data/runs/*/events.jsonl", Some(cwd_str)),
-      None
-    );
     // A run log named beside a decision read, a child report or a rule file counts whole, glob or not.
     assert_eq!(bash_class("cat artifacts/plan_x.html; cat /abs/data/runs/*/events.jsonl", Some(cwd_str)), None);
     assert_eq!(bash_class("cat /abs/data/runs/r/report.md; cat /abs/data/runs/r/events.jsonl", Some(cwd_str)), None);
     assert_eq!(bash_class("cat /repo/CLAUDE.md; cat /abs/data/runs/r/agent.raw.ndjson", Some(cwd_str)), None);
     assert_eq!(bash_class("cat artifacts/plan_x.html; cat ev\"\"ents.jsonl", Some(cwd_str)), None);
-    // The plain forms still exempt.
-    assert_eq!(
-      bash_class("charliebot session conclusion --session s | head -c 3000", Some(cwd_str)),
-      Some("child_conclusion")
-    );
+    // The plain standalone form still exempts.
+    assert_eq!(bash_class("charliebot session conclusion --session s", Some(cwd_str)), Some("child_conclusion"));
     assert_eq!(bash_class("cat artifacts/plan_x.html", Some(cwd_str)), Some("approval_object"));
   }
 
@@ -1801,6 +1748,8 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
     }
     for command in [
       "charliebot session conclusion --session s 2>&1 & cat /abs/data/x.md",
+      "charliebot session conclusion --session s 2>&1 && cat /abs/data/x.md",
+      "charliebot session conclusion --session s 2>&1 || cat /abs/data/x.md",
       "charliebot session conclusion --session s 2>&1 | head -c 3000",
       "charliebot session conclusion --session s 2>&1; cat /abs/data/x.md",
       "charliebot session conclusion --session \"$(cat /abs/x)\" 2>&1",

@@ -280,7 +280,6 @@ impl Server {
     self.log_call(method, path)?;
     let delegation_prefixes = [
       task_routes::DELEGATE_PATH.to_string(),
-      format!("/api/chat/{PARENT_SESSION}"),
       route::fill(session_routes::SESSION_PATH, &[PARENT_SESSION]),
       route::fill(session_routes::SESSION_PATH, &[CHILD_SESSION]),
     ];
@@ -412,10 +411,6 @@ impl Server {
 
   fn delegation(&self, method: &str, path_and_query: &str, request: &Value) -> io::Result<(u16, Value)> {
     let path = path_and_query.split('?').next().unwrap_or_default();
-    if method == "POST" && path == route::fill(task_routes::CHAT_MESSAGE_PATH, &[PARENT_SESSION]) {
-      let _content = string_field(request, "content")?;
-      return Ok((ACCEPTED, json!({(event_types::INPUT_EVENT_ID): "open-input"})));
-    }
     if method == "POST" && path == task_routes::DELEGATE_PATH {
       if self.behavior.delegate == "refused" {
         return Ok((400, json!({"detail": "backend router failed: no backend is available"})));

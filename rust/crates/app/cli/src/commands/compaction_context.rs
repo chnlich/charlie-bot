@@ -26,7 +26,7 @@ use charliebot_cli_common::json_out;
 use charliebot_core::config;
 use charliebot_core::event_types::{ASSISTANT, READ_TOOL, SKILL_TOOL, TOOL_INPUT_FILE_PATH, TOOL_USE};
 use charliebot_core::home;
-use charliebot_core::json_loads::{UTF8_CODEC, codec_error_text};
+use charliebot_core::json_loads;
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_regex;
 use charliebot_core::repo_root;
@@ -342,7 +342,7 @@ fn is_env_name(name: &str) -> bool {
 }
 
 fn decode_utf8(bytes: &[u8]) -> Result<String, String> {
-  std::str::from_utf8(bytes).map(str::to_string).map_err(|error| utf8_error(bytes, &error))
+  std::str::from_utf8(bytes).map(str::to_string).map_err(|error| json_loads::utf8_error_text(bytes, &error))
 }
 
 /// Universal newlines: `\r\n` and `\r` become `\n`.
@@ -375,23 +375,8 @@ fn log_read_error(events_path: &Path, error: LogReadError) -> String {
     LogReadError::Io(error) | LogReadError::Line { error, .. } => {
       charliebot_core::os_error::text(&error, &str_repr(&paths::display(events_path)))
     }
-    LogReadError::Utf8(error) => utf8_error(error.as_bytes(), &error.utf8_error()),
+    LogReadError::Utf8(error) => json_loads::utf8_error_text(error.as_bytes(), &error.utf8_error()),
   }
-}
-
-fn utf8_error(bytes: &[u8], error: &std::str::Utf8Error) -> String {
-  let start = error.valid_up_to();
-  let (offset, reason) = match error.error_len() {
-    None => (start, "unexpected end of data"),
-    Some(_) if is_utf8_start_byte(bytes[start]) => (start + 1, "invalid continuation byte"),
-    Some(_) => (start, "invalid start byte"),
-  };
-  codec_error_text(UTF8_CODEC, bytes, offset, offset + 1, reason)
-}
-
-/// A byte that may open a UTF-8 sequence (ASCII or a non-overlong, non-surrogate lead).
-fn is_utf8_start_byte(byte: u8) -> bool {
-  matches!(byte, 0x00..=0x7f | 0xc2..=0xdf | 0xe0..=0xef | 0xf0..=0xf4)
 }
 
 /// The JSON parser's error message for one log line, from serde's message. Both scanners point at

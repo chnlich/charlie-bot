@@ -15,7 +15,7 @@ impl<K: Eq + Hash, V: Clone> LockedMemo<K, V> {
     Self { entries: Mutex::new(BoundedMemo::new(limit)) }
   }
 
-  /// The value stored under `key`; a hit moves the key to the most recent end.
+  /// The value stored under `key`. A hit moves the key to the most recent end.
   pub(crate) fn get(&self, key: &K) -> Option<V> {
     self.entries.lock().expect("the memo lock is never poisoned").get(key)
   }

@@ -16,7 +16,7 @@
 // record as the page always has.
 //
 // A web session (a manager session that is not a Slack or Discord thread)
-// opens in For you, root or child; so does a worker session. A thread session
+// opens in For you, root or child. So does a worker session. A thread session
 // opens in Everything. A worker's For you holds its one summary card
 // (chat/worker-summary.js) — nothing else. A manual switch holds for that
 // session until the page reloads.
@@ -59,7 +59,7 @@ function registerSummaryCardRenderer(renderer) {
 }
 
 // The page's document carries a loader that registers its own stand-in renderer
-// before the card module lands; the module replaces it here.
+// before the card module lands. The module replaces it here.
 function replaceSummaryCardRenderer(renderer) {
   if (typeof renderer !== 'function') throw new Error('Worker summary card renderer must be a function');
   summaryCardRenderer = renderer;
@@ -82,7 +82,7 @@ function items(entries) {
 
 // The round-end message whose button group each completed round's last reply
 // carries in its bubble, keyed by the reply's store entry. A round still
-// running has no end event, so its reply carries no group; a run-end round is
+// running has no end event, so its reply carries no group. A run-end round is
 // nobody's to rate or explain, so its reply carries none either.
 function roundButtonRows(entries) {
   const rows = new Map();
@@ -115,7 +115,7 @@ function isWebSession(session) {
   return session.profile === 'manager' && !session.thread_session;
 }
 
-// A web session, root or child, or a worker session opens in For you; a thread
+// A web session, root or child, or a worker session opens in For you. A thread
 // session opens in Everything.
 function defaultView(session) {
   if (session.profile === 'worker') return FOR_YOU;
@@ -168,7 +168,7 @@ function applyChatView(sessionId, view, statusShown, engine) {
   if (panel) panel.classList.toggle('hidden', !statusShown);
   messages.classList.toggle('hidden', statusShown);
   if (statusShown) {
-    // The button points at the hidden list; the return restores it from the
+    // The button points at the hidden list. The return restores it from the
     // engine's pin state.
     if (scrollButton) scrollButton.classList.add('hidden');
   } else if (engine) {
@@ -207,7 +207,7 @@ function setChatView(view) {
   applyChatView(SESSION_ID, view === STATUS ? engine.view : view, view === STATUS, engine);
 }
 
-// The turn engine projects these rules, so they register with it; the page reads the same object as
+// The turn engine projects these rules, so they register with it. The page reads the same object as
 // Chat.ForYou.
 const ForYou = {
   FOR_YOU,

@@ -47,6 +47,9 @@ pub trait SequenceBinding: Send + Sync {
   fn on_archive<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>>;
 }
 
+/// One controller's listing contribution: the sessions it binds, and the row fields it renders for them.
+pub type ListingContribution = (Option<Vec<String>>, HashMap<String, Map<String, Value>>);
+
 /// A package's runtime interface for one kind of durable sequence (`sequence_controllers.SequenceController`).
 pub trait SequenceController: Send + Sync {
   /// The sequence kind this controller owns: the `sequence_ref.kind` of its runs.
@@ -110,11 +113,7 @@ pub trait SequenceController: Send + Sync {
   /// A controller that loads a snapshot to answer either reads that snapshot once here, so a page request that walks
   /// the listing does not reread it for the same answer. The default reads the two separately. `rows` names the
   /// listing's rows for a controller whose [`bound_session_ids`](Self::bound_session_ids) answers `None`.
-  fn listing_bound_and_fields(
-    &self,
-    rows: &[Arc<SessionMetadata>],
-    now: UtcDateTime,
-  ) -> (Option<Vec<String>>, HashMap<String, Map<String, Value>>) {
+  fn listing_bound_and_fields(&self, rows: &[Arc<SessionMetadata>], now: UtcDateTime) -> ListingContribution {
     let bound = self.bound_session_ids();
     let ids = match &bound {
       Some(ids) => ids.clone(),

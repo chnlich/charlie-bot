@@ -30,5 +30,6 @@ uuid.workspace = true
 reqwest = { workspace = true, features = ["json", "query", "stream"] }
 
 [dev-dependencies]
+charliebot-agents = { workspace = true, features = ["test-support"] }
 charliebot-anthropic-compatible.workspace = true
 charliebot-claude-code.workspace = true

@@ -34,5 +34,6 @@ walkdir.workspace = true
 reqwest = { workspace = true, features = ["json", "query", "stream"] }
 
 [dev-dependencies]
+charliebot-agents = { workspace = true, features = ["test-support"] }
 charliebot-claude-code = { path = ".", features = ["test-support"] }
 charliebot-shell-harness.workspace = true

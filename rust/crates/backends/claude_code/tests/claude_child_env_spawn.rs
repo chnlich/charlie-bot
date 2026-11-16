@@ -1,7 +1,5 @@
 //! The Claude child environment edits that the package registers reach a spawned process through the runner.
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -42,17 +40,10 @@ async fn registered_claude_child_edits_apply_at_the_spawn_boundary() {
 
 /// Add the agent `gh` wrapper to a spawn environment: the runner refuses a spawn whose PATH does not resolve it.
 fn with_gh_wrapper(root: &Path, mut env: Env) -> Env {
-  let wrapper_dir = root.join("gh-wrapper");
-  fs::create_dir_all(&wrapper_dir).unwrap();
-  let wrapper = wrapper_dir.join("gh");
-  fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-  let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-  permissions.set_mode(0o755);
-  fs::set_permissions(&wrapper, permissions).unwrap();
   let path = env.remove("PATH").unwrap_or_else(|| "/bin".to_string());
-  env.insert("PATH".to_string(), format!("{}:{path}", wrapper_dir.display()));
-  env.insert(gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string());
-  env
+  let mut stub = gh_wrapper::stub_environment(root, &path);
+  stub.extend(env);
+  stub
 }
 
 async fn run_one_shell(

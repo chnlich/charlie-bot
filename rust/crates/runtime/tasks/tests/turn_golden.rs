@@ -453,22 +453,6 @@ fn config_with_features_from_config(
   config_with_features_from_config_and_agent_path(cfg, registry, install_queue, "/usr/bin".to_string())
 }
 
-/// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
-fn gh_wrapper_env(base: &Path, path: &str) -> Env {
-  use std::os::unix::fs::PermissionsExt;
-  let wrapper_dir = base.join("gh-wrapper");
-  std::fs::create_dir_all(&wrapper_dir).unwrap();
-  let wrapper = wrapper_dir.join("gh");
-  std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-  let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
-  permissions.set_mode(0o755);
-  std::fs::set_permissions(&wrapper, permissions).unwrap();
-  Env::from([
-    ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
-    (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
-  ])
-}
-
 fn config_with_features_from_config_and_agent_path(
   cfg: Arc<CharlieBotConfig>,
   registry: Arc<Registry>,
@@ -500,7 +484,7 @@ fn config_with_features_from_config_and_agent_path(
     },
   )?;
   let startup = Arc::new(StartupState::default());
-  let mut agent_env = gh_wrapper_env(&cfg.charliebot_home, &agent_path);
+  let mut agent_env = charliebot_agents::gh_wrapper::stub_environment(&cfg.charliebot_home, &agent_path);
   agent_env.insert("CLAUDECODE".to_string(), "stale-parent".to_string());
   agent_env.insert(charliebot_agents::launch_loop::SESSION_ID_ENV.to_string(), "stale-session".to_string());
   startup.insert(AgentBaseEnvironment { values: agent_env })?;

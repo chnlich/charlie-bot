@@ -275,22 +275,6 @@ mod tests {
     fs::read_to_string(root.join(format!("call-{call}-argv.txt"))).unwrap().lines().map(str::to_string).collect()
   }
 
-  /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
-  fn gh_wrapper_env(root: &Path) -> Env {
-    use std::os::unix::fs::PermissionsExt;
-    let wrapper_dir = root.join("gh-wrapper");
-    fs::create_dir_all(&wrapper_dir).unwrap();
-    let wrapper = wrapper_dir.join("gh");
-    fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&wrapper, permissions).unwrap();
-    Env::from([
-      ("PATH".to_string(), format!("{}:/bin:/usr/bin", wrapper_dir.display())),
-      (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
-    ])
-  }
-
   /// The fake-program helper that cargo builds beside this test binary. The final-stdout supervisor is a separate
   /// process, and `CARGO_BIN_EXE_*` names only this package's binaries.
   fn fake_program_bin() -> std::path::PathBuf {
@@ -318,7 +302,7 @@ mod tests {
     let mut request = RunRequest::new(
       "Pick the number in number.txt.".into(),
       root.to_path_buf(),
-      AgentBaseEnvironment { values: gh_wrapper_env(root) },
+      AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root, "/bin:/usr/bin") },
       cgroup_config,
       Arc::new(Registry::new()),
     );

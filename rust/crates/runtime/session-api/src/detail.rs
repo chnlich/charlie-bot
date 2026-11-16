@@ -236,12 +236,15 @@ fn fit_first_screen_payload(
 }
 
 /// A session page's bootstrap payload as the page carries it.
+///
+/// The `session` object is the payload's largest value, and the page reads it without changing it, so a memo hit
+/// hands back the object the memo built instead of copying it.
 #[derive(Clone)]
 pub struct PageBootstrap {
   /// The payload's Jinja `tojson` text, the value the page's `SESSION_BOOTSTRAP` constant carries.
   pub text: Arc<String>,
   /// The payload's `session` object.
-  pub session: Value,
+  pub session: Arc<Value>,
   pub pending_draft: Value,
   pub event_count: Value,
 }
@@ -278,15 +281,41 @@ struct PageBootstrapKey {
   events: EventLogIdentity,
 }
 
-impl PartialEq for PageBootstrapKey {
-  fn eq(&self, other: &Self) -> bool {
-    self.session_id == other.session_id
-      && self.meta == other.meta
-      && self.run_backend == other.run_backend
-      && self.thinking_since == other.thinking_since
-      && self.backend == other.backend
-      && Arc::ptr_eq(&self.config, &other.config)
-      && self.events == other.events
+/// One request's payload inputs, borrowed from the row the request read, so a memo hit compares them without
+/// copying the row or building the key it already holds.
+struct PageBootstrapInputs<'a> {
+  session_id: &'a str,
+  meta: &'a SessionMetadata,
+  run_backend: Option<String>,
+  thinking_since: Option<UtcDateTime>,
+  backend: Map<String, Value>,
+  config: &'a Arc<CharlieBotConfig>,
+  events: EventLogIdentity,
+}
+
+impl PageBootstrapKey {
+  /// The key of one request's inputs, for a memo that holds no entry matching them.
+  fn from_inputs(inputs: &PageBootstrapInputs<'_>) -> PageBootstrapKey {
+    PageBootstrapKey {
+      session_id: inputs.session_id.to_string(),
+      meta: inputs.meta.clone(),
+      run_backend: inputs.run_backend.clone(),
+      thinking_since: inputs.thinking_since,
+      backend: inputs.backend.clone(),
+      config: Arc::clone(inputs.config),
+      events: inputs.events,
+    }
+  }
+
+  /// Whether this key's inputs still hold these values.
+  fn matches(&self, inputs: &PageBootstrapInputs<'_>) -> bool {
+    self.session_id == inputs.session_id
+      && self.meta == *inputs.meta
+      && self.run_backend == inputs.run_backend
+      && self.thinking_since == inputs.thinking_since
+      && self.backend == inputs.backend
+      && Arc::ptr_eq(&self.config, inputs.config)
+      && self.events == inputs.events
   }
 }
 
@@ -318,11 +347,11 @@ fn bootstrap_body(
   meta: &SessionMetadata,
   accepts_gzip: bool,
 ) -> StoreResult<(Bytes, Option<Bytes>, usize)> {
-  let key = page_bootstrap_key(store, registry, cfg, meta)?;
+  let inputs = page_bootstrap_inputs(store, registry, cfg, meta)?;
   let mut entry = memo.entry.lock().expect("the bootstrap body memo mutex is not poisoned");
-  let cached = match &key {
-    Some(current) => match entry.as_ref() {
-      Some((cached, body, gzip, untrimmed)) if cached == current => Some((body.clone(), gzip.clone(), *untrimmed)),
+  let cached = match &inputs {
+    Some(inputs) => match entry.as_ref() {
+      Some((cached, body, gzip, untrimmed)) if cached.matches(inputs) => Some((body.clone(), gzip.clone(), *untrimmed)),
       _ => None,
     },
     None => None,
@@ -333,9 +362,9 @@ fn bootstrap_body(
       let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
       let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&payload.value));
       let untrimmed = payload.untrimmed_wire_bytes;
-      let held = key.is_some();
-      if let Some(key) = key {
-        *entry = Some((key, body.clone(), None, untrimmed));
+      let held = inputs.is_some();
+      if let Some(inputs) = &inputs {
+        *entry = Some((PageBootstrapKey::from_inputs(inputs), body.clone(), None, untrimmed));
       }
       (body, None, untrimmed, held)
     }
@@ -354,6 +383,9 @@ fn bootstrap_body(
 }
 
 /// The bootstrap payload of `meta`, with its text taken from `memo` when every payload input still holds its value.
+///
+/// A memo hit hands back the payload the memo holds, whose `session` object it shares, so a page request serves the
+/// largest value the page carries without copying it.
 pub fn page_bootstrap(
   memo: &PageBootstrapMemo,
   store: &Store,
@@ -361,10 +393,10 @@ pub fn page_bootstrap(
   cfg: &Arc<CharlieBotConfig>,
   meta: &SessionMetadata,
 ) -> StoreResult<PageBootstrap> {
-  let key = page_bootstrap_key(store, registry, cfg, meta)?;
-  if let Some(key) = &key {
+  let inputs = page_bootstrap_inputs(store, registry, cfg, meta)?;
+  if let Some(inputs) = &inputs {
     let mut entries = memo.entries.lock().expect("the page bootstrap memo mutex is not poisoned");
-    if let Some(at) = entries.iter().position(|(cached_key, _)| cached_key == key) {
+    if let Some(at) = entries.iter().position(|(cached_key, _)| cached_key.matches(inputs)) {
       // The session served again is the newest entry, so an eviction takes the one served longest ago.
       let entry = entries.remove(at);
       let bootstrap = entry.1.clone();
@@ -375,13 +407,13 @@ pub fn page_bootstrap(
   let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
   let bootstrap = PageBootstrap {
     text: Arc::new(charliebot_compat::jinja::tojson_text(&payload.value)),
-    session: payload.value["session"].clone(),
+    session: Arc::new(payload.value["session"].clone()),
     pending_draft: payload.value["pending_draft"].clone(),
     event_count: payload.value["event_count"].clone(),
   };
-  if let Some(key) = key {
+  if let Some(inputs) = inputs {
     let mut entries = memo.entries.lock().expect("the page bootstrap memo mutex is not poisoned");
-    entries.push((key, bootstrap.clone()));
+    entries.push((PageBootstrapKey::from_inputs(&inputs), bootstrap.clone()));
     if entries.len() > PAGE_BOOTSTRAP_MEMO_ENTRIES {
       entries.remove(0);
     }
@@ -389,29 +421,30 @@ pub fn page_bootstrap(
   Ok(bootstrap)
 }
 
-/// The memo key of `meta`'s payload, or `None` when the payload reads state the key cannot name.
+/// The payload inputs of `meta`, or `None` when the payload reads state the memo key cannot name.
 ///
 /// A worker session's transcript and an archived session's event file are read fresh for every payload, so neither
 /// session kind is memoized.
-fn page_bootstrap_key(
+fn page_bootstrap_inputs<'a>(
   store: &Store,
   registry: &Registry,
-  cfg: &Arc<CharlieBotConfig>,
-  meta: &SessionMetadata,
-) -> StoreResult<Option<PageBootstrapKey>> {
+  cfg: &'a Arc<CharlieBotConfig>,
+  meta: &'a SessionMetadata,
+) -> StoreResult<Option<PageBootstrapInputs<'a>>> {
   if meta.profile == TaskProfile::Worker || meta.archive_offset != 0 {
     return Ok(None);
   }
   let Some(events) = live_event_log_identity(store, &meta.id)? else { return Ok(None) };
-  let response_meta = response_metadata(store, meta)?;
-  let backend = active_backend_payload(store, &response_meta, cfg, registry)?;
-  Ok(Some(PageBootstrapKey {
-    session_id: meta.id.clone(),
-    meta: meta.clone(),
-    run_backend: response_meta.run_backend,
-    thinking_since: response_meta.thinking_since,
+  // The payload renders the displayed backend from the row's own backend, its profile and its bound picker entries,
+  // so the row itself carries every input this payload reads.
+  let backend = active_backend_payload(store, meta, cfg, registry)?;
+  Ok(Some(PageBootstrapInputs {
+    session_id: &meta.id,
+    meta,
+    run_backend: listing::run_backend(store, meta)?,
+    thinking_since: store.busy_since(&meta.id),
     backend,
-    config: Arc::clone(cfg),
+    config: cfg,
     events,
   }))
 }
@@ -1600,7 +1633,7 @@ backends:
     let first = page_bootstrap_text(&memo);
     let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap();
     assert_eq!(first.text.as_str(), charliebot_compat::jinja::tojson_text(&payload.value));
-    assert_eq!(first.session, payload.value["session"]);
+    assert_eq!(*first.session, payload.value["session"]);
 
     let repeat = page_bootstrap_text(&memo);
     assert!(Arc::ptr_eq(&first.text, &repeat.text), "an unchanged payload keeps its text");
@@ -1627,17 +1660,19 @@ backends:
       crate::test_support::create_node(&features.store, "page-bootstrap-b", None, TaskProfile::Manager).await;
     let memo = PageBootstrapMemo::default();
     let cfg = features.config.get().expect("the test config loads");
-    let text = |session: &SessionMetadata| {
-      page_bootstrap(&memo, &features.store, &features.registry, &cfg, session).unwrap().text
-    };
+    let served = |session: &SessionMetadata| page_bootstrap(&memo, &features.store, &features.registry, &cfg, session);
 
-    let first_a = text(&first);
-    let first_b = text(&second);
-    let again_a = text(&first);
-    let again_b = text(&second);
-    assert!(!Arc::ptr_eq(&first_a, &first_b), "the two sessions build different payloads");
-    assert!(Arc::ptr_eq(&first_a, &again_a), "the session opened before another one is still kept");
-    assert!(Arc::ptr_eq(&first_b, &again_b));
+    let first_a = served(&first).unwrap();
+    let first_b = served(&second).unwrap();
+    let again_a = served(&first).unwrap();
+    let again_b = served(&second).unwrap();
+    assert!(!Arc::ptr_eq(&first_a.text, &first_b.text), "the two sessions build different payloads");
+    assert!(Arc::ptr_eq(&first_a.text, &again_a.text), "the session opened before another one is still kept");
+    assert!(Arc::ptr_eq(&first_b.text, &again_b.text));
+    assert!(
+      Arc::ptr_eq(&first_a.session, &again_a.session) && Arc::ptr_eq(&first_b.session, &again_b.session),
+      "a served-again payload shares the session object it built instead of copying it"
+    );
   }
 
   /// Deterministic incompressible-ish text: a fixed LCG over a 62-character alphabet. The gzip of one

@@ -18,7 +18,7 @@ use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, read_metadata_object};
 use charliebot_store::run_logs as run_log_files;
-use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, RUN_METADATA_NAME};
+use charliebot_store::run_records::{NATIVE_SESSION_ID_FIELD, RAW_LOG_NAME, RUN_EVENTS_NAME, RUN_METADATA_NAME};
 use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value};
 
@@ -549,7 +549,7 @@ fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(Count, Count, Count)>>
 
 fn run_session_ids(objects: &[Value], metadata: &Map<String, Value>) -> anyhow::Result<HashSet<String>> {
   let mut ids = HashSet::new();
-  ids.extend(session_text(metadata, "native_session_id"));
+  ids.extend(session_text(metadata, NATIVE_SESSION_ID_FIELD));
   for value in objects {
     let object = as_object(value, "run event")?;
     ids.extend(session_text(object, "session_id"));

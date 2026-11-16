@@ -1,7 +1,7 @@
 //! The Slack entrypoint service and its configuration gate.
 
 use charliebot_chat_threads::channel_service::{ChannelService, ChatChannel};
-use charliebot_core::credentials::{CredentialValue, Credentials};
+use charliebot_core::credentials::{BOT_TOKEN_FIELD, CredentialValue, Credentials};
 use charliebot_registry::FeatureContext;
 
 use crate::config::SlackConfig;
@@ -25,7 +25,7 @@ impl ChatChannel for SlackListener {
 }
 
 fn configured(config: &SlackConfig, credentials: &Credentials) -> bool {
-  credentials.get(crate::config::NAME, "bot_token").is_some_and(CredentialValue::is_truthy)
+  credentials.get(crate::config::NAME, BOT_TOKEN_FIELD).is_some_and(CredentialValue::is_truthy)
     && credentials.get(crate::config::NAME, "app_token").is_some_and(CredentialValue::is_truthy)
     && !config.allowed_user_ids.is_empty()
 }

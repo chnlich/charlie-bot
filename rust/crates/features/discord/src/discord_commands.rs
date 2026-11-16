@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadReplyError};
+use charliebot_core::credentials::BOT_TOKEN_FIELD;
 use charliebot_core::text_repr;
 use serde_json::{Value, json};
 
@@ -161,7 +162,7 @@ pub async fn read_thread(
 /// a Discord call fails.
 pub async fn check_setup(bot: &Bot) -> Result<Value, ThreadReplyError> {
   let credentials = bot.features.credentials.get().map_err(ThreadReplyError::failure)?;
-  if credentials.get("discord", "bot_token").is_none() {
+  if credentials.get("discord", BOT_TOKEN_FIELD).is_none() {
     return Err(ThreadReplyError::refused(StatusCode::CONFLICT, "credentials.discord.bot_token is not set"));
   }
   let client = bot.client().map_err(ThreadReplyError::failure)?;

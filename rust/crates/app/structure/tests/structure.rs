@@ -1373,6 +1373,12 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
            name is `charliebot_core::credentials::ACCESS_KEY_FIELD`.",
   },
   OwnerRow {
+    name: "bot_token",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::credentials::BOT_TOKEN_FIELD`; the Slack, Discord and Telegram sections of \
+           credentials.yaml hold a bot's token under it.",
+  },
+  OwnerRow {
     name: "rateLimitType",
     owner: "infra/core",
     hint: "Use `charliebot_core::event_types::RATE_LIMIT_TYPE`; every reader of a `rate_limit_info` object names the \

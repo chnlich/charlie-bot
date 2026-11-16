@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::bail;
 use charliebot_core::fsutil;
 use charliebot_core::paths;
-use charliebot_core::text_repr::is_truthy;
+use charliebot_core::text_repr::{self, is_truthy};
 use charliebot_registry::sidebar::SidebarContribution;
 use charliebot_store::sidebar_state;
 use serde_json::{Map, Value};
@@ -165,7 +165,7 @@ fn registry_list(value: Option<&Value>) -> anyhow::Result<&[Value]> {
     Some(Value::Object(members)) if members.is_empty() => Ok(&[]),
     Some(Value::String(text)) if text.is_empty() => Ok(&[]),
     Some(Value::Object(_) | Value::String(_)) => bail!("'str' object has no attribute 'get'"),
-    Some(other) => bail!("'{}' object is not iterable", plans::type_name(other)),
+    Some(other) => bail!("{}", text_repr::not_iterable(plans::type_name(other))),
   }
 }
 
@@ -173,7 +173,7 @@ fn registry_list(value: Option<&Value>) -> anyhow::Result<&[Value]> {
 fn attribute_dict(value: &Value) -> anyhow::Result<&Map<String, Value>> {
   match value {
     Value::Object(members) => Ok(members),
-    other => bail!("'{}' object has no attribute 'get'", plans::type_name(other)),
+    other => bail!("{}", text_repr::no_attribute(plans::type_name(other), "get")),
   }
 }
 

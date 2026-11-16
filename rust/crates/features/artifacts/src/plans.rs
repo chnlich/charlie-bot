@@ -273,7 +273,7 @@ fn iter_items(value: &Value) -> Result<Vec<Value>, EscapedError> {
     Value::Array(items) => Ok(items.clone()),
     Value::Object(members) => Ok(members.keys().map(|key| Value::String(key.clone())).collect()),
     Value::String(text) => Ok(text.chars().map(|character| Value::String(character.to_string())).collect()),
-    other => Err(EscapedError { kind: "TypeError", detail: format!("'{}' object is not iterable", type_name(other)) }),
+    other => Err(EscapedError { kind: "TypeError", detail: text_repr::not_iterable(type_name(other)) }),
   }
 }
 

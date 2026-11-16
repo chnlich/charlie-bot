@@ -3,7 +3,7 @@
 //! `charliebot_core::json_loads` produced, and each error carries the text the route reports.
 
 use charliebot_core::json_loads::{self, LoadError};
-use charliebot_core::text_repr::{is_truthy, type_name};
+use charliebot_core::text_repr::{is_truthy, no_attribute, not_iterable, not_subscriptable, type_name};
 use serde_json::{Map, Value};
 
 /// The proxy's event style: the compact ASCII JSON from its one owner in `charliebot_core::text_repr`.
@@ -32,7 +32,7 @@ pub fn raised<T>(kind: &'static str, message: impl Into<String>) -> ValueResult<
 pub fn get<'a>(value: &'a Value, key: &str) -> ValueResult<Option<&'a Value>> {
   match value {
     Value::Object(members) => Ok(members.get(key)),
-    other => raised("AttributeError", format!("'{}' object has no attribute 'get'", type_name(other))),
+    other => raised("AttributeError", no_attribute(type_name(other), "get")),
   }
 }
 
@@ -47,7 +47,7 @@ pub fn iterate(value: &Value) -> ValueResult<Vec<Value>> {
     Value::Array(items) => Ok(items.clone()),
     Value::Object(members) => Ok(members.keys().map(|key| Value::String(key.clone())).collect()),
     Value::String(text) => Ok(text.chars().map(|character| Value::String(character.to_string())).collect()),
-    other => raised("TypeError", format!("'{}' object is not iterable", type_name(other))),
+    other => raised("TypeError", not_iterable(type_name(other))),
   }
 }
 
@@ -72,7 +72,7 @@ pub fn first_item(value: &Value) -> ValueResult<Value> {
       Some(character) => Ok(Value::String(character.to_string())),
       None => raised("IndexError", "string index out of range"),
     },
-    other => raised("TypeError", format!("'{}' object is not subscriptable", type_name(other))),
+    other => raised("TypeError", not_subscriptable(type_name(other))),
   }
 }
 

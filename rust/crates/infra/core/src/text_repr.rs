@@ -264,6 +264,24 @@ pub fn type_name(value: &Value) -> &'static str {
   }
 }
 
+/// The text Python raises for a missing attribute on a value of class `class`:
+/// `'<class>' object has no attribute '<attribute>'`. [`type_name`] names the class of a loaded JSON value.
+pub fn no_attribute(class: &str, attribute: &str) -> String {
+  format!("'{class}' object has no attribute '{attribute}'")
+}
+
+/// The text Python raises for `iter(value)` on a value of class `class`:
+/// `'<class>' object is not iterable`.
+pub fn not_iterable(class: &str) -> String {
+  format!("'{class}' object is not iterable")
+}
+
+/// The text Python raises for `value[key]` on a value of class `class`:
+/// `'<class>' object is not subscriptable`.
+pub fn not_subscriptable(class: &str) -> String {
+  format!("'{class}' object is not subscriptable")
+}
+
 /// The repr of a loaded JSON value: strings quoted by [`str_repr`], `None`, booleans as `True` and `False`,
 /// floats by [`float_repr`], and containers with `, ` and `: ` separators.
 pub fn value_repr(value: &Value) -> String {
@@ -611,6 +629,13 @@ mod tests {
     assert!(!is_truthy(&json!([])));
     assert!(is_truthy(&json!({"a": 1})));
     assert!(is_truthy(&json!(0.5)));
+  }
+
+  #[test]
+  fn error_texts_name_the_python_class() {
+    assert_eq!(no_attribute(type_name(&json!([])), "get"), "'list' object has no attribute 'get'");
+    assert_eq!(not_iterable(type_name(&json!(5))), "'int' object is not iterable");
+    assert_eq!(not_subscriptable(type_name(&json!({}))), "'dict' object is not subscriptable");
   }
 
   #[test]

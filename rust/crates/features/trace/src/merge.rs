@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use charliebot_compat::json::fast_json_bytes;
-use charliebot_core::text_repr::{is_truthy, type_name, value_str};
+use charliebot_core::text_repr::{self, is_truthy, type_name, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::FeatureContext;
 use flate2::{Compression, GzBuilder};
@@ -593,7 +593,7 @@ fn gpu_index(label: &str) -> Option<u64> {
 }
 
 fn attribute_failure(value: &Value, attribute: &str) -> BuildFailure {
-  BuildFailure::Failed(format!("'{}' object has no attribute '{attribute}'", type_name(value)))
+  BuildFailure::Failed(text_repr::no_attribute(type_name(value), attribute))
 }
 
 fn thread_name_event(pid: &str, tid: u64, raw: &Value, rank_label: &str) -> Value {

@@ -1,6 +1,6 @@
-//! `web/features/chat_threads`: the chat thread sessions. Their turn contribution names the thread brief, their sidebar
-//! subtree is the Threads view, and `GET /api/sessions/chat-threads` lists that view. The reply contract that the
-//! platform turn contributions share is in `thread_entry`.
+//! `web/features/chat_threads`: the chat thread sessions. Their turn contribution names the thread brief, the subtree
+//! of each top-level thread session is the Threads view, and `GET /api/sessions/chat-threads` lists that view. The
+//! reply contract that the platform turn contributions share is in `thread_entry`.
 
 mod api;
 pub mod backfill;

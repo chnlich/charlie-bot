@@ -445,9 +445,9 @@ host_auth:
     let _slot_lock = crate::test_support::round_slot_lock().lock().await;
     // SAFETY: every test that sets the variable holds the round-slot lock, so no two of them write it at once.
     unsafe { std::env::set_var(charliebot_core::home::CHARLIEBOT_HOME_ENV, home._dir.path()) };
-    // The first render loads the templates; the timed render below is the frame a browser waits on.
+    // The first render loads the templates. The timed render below is the frame a browser waits on.
     call(home.router.clone(), Method::GET, "/host-auth").await;
-    // The browser's readback for the sleeping login is in flight; the page must not wait for it.
+    // The browser's readback for the sleeping login is in flight. The page must not wait for it.
     let slow_path = format!("/api/host-auth/logins/{}/readback", home.slow_name);
     let slow_router = home.router.clone();
     let slow = tokio::spawn(async move { call(slow_router, Method::GET, &slow_path).await });

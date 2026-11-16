@@ -1,5 +1,5 @@
 //! The browser-login section of the host-auth page: one row per configured login, built from the attempt in progress or
-//! the last attempt that ended. A login's readback is not in the page; the browser asks for it per login.
+//! the last attempt that ended. A login's readback is not in the page. The browser asks for it per login.
 
 use anyhow::Context;
 use serde_json::{Value, json};

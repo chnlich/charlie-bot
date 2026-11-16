@@ -89,7 +89,7 @@ pub fn kill_tree(root: u32) -> io::Result<()> {
 
 /// SIGKILL to the process group `target` when `group`, else to the process `target`.
 fn send_sigkill(target: libc::pid_t, group: bool) -> io::Result<()> {
-  // SAFETY: kill and killpg send one signal; they touch only the kernel's process table.
+  // SAFETY: kill and killpg send one signal. They touch only the kernel's process table.
   let sent = unsafe { if group { libc::killpg(target, libc::SIGKILL) } else { libc::kill(target, libc::SIGKILL) } };
   if sent == -1 {
     let error = io::Error::last_os_error();
@@ -179,7 +179,7 @@ mod tests {
   async fn kill_tree_ends_the_group_and_a_descendant_that_left_it() {
     let dir = TempDir::new().expect("temporary directory exists");
     let script = dir.path().join("tree.sh");
-    // A background child stays in the group; a `setsid` child moves to a session of its own. Both outlive the shell.
+    // A background child stays in the group. A `setsid` child moves to a session of its own. Both outlive the shell.
     fs::write(&script, "sleep 600 & echo $! > \"$0.group\"\nsetsid sleep 600 & echo $! > \"$0.session\"\nwait\n")
       .expect("the script writes");
     let mut root = tokio::process::Command::new("/bin/sh")

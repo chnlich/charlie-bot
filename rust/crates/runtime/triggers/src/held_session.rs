@@ -127,7 +127,7 @@ pub enum HeldEnd {
   Slurm { host: String, job_id: i64, state: String },
 }
 
-/// Builds the argv of one remote command on a host.
+/// The builder of one remote command's argv on a host.
 pub type SshArgv = Arc<dyn Fn(&str, &str) -> io::Result<Vec<String>> + Send + Sync>;
 
 /// The registry of held sessions. The sessions and their watches share the state through one lock.
@@ -384,7 +384,8 @@ async fn run_session(
   }
 }
 
-/// Make the kernel SIGKILL `command`'s child when this server exits, so no held ssh client outlives the server.
+/// The parent-death signal that makes the kernel SIGKILL `command`'s child when this server exits, so no held ssh
+/// client outlives the server.
 ///
 /// A client that outlived the server would keep its ssh connection, and its command line names the server's
 /// ControlPath, until the remote script ends on its heartbeat. `PR_SET_PDEATHSIG` follows the thread that starts the
@@ -483,7 +484,8 @@ async fn run_once(
   }
 }
 
-/// Route one line the script printed. A heartbeat is only proof of life. An end goes to the watches that name it.
+/// The route of one line the script printed. A heartbeat is only proof of life. An end goes to the watches that
+/// name it.
 fn dispatch_line(shared: &StdMutex<State>, host: &str, line: &str) -> Result<(), String> {
   let words = line.split_whitespace().collect::<Vec<_>>();
   match words.as_slice() {

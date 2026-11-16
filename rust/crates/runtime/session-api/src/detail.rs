@@ -245,15 +245,19 @@ pub struct PageBootstrap {
   pub event_count: Value,
 }
 
-/// The page bootstrap one session produced last, kept while every payload input still holds its value.
+/// The page bootstraps the last few sessions produced, newest last, each kept while every payload input still holds
+/// its value.
 ///
 /// The payload is the page's largest value, and its text is its whole escaped form, so a page request that rebuilds it
-/// serializes the session's message tail from scratch. The memo holds one session's bootstrap, about one page's worth
-/// of memory, and a page for another session replaces it.
+/// serializes the session's message tail from scratch. A reader who moves between two sessions asks for a payload the
+/// page built a moment ago, and one slot would rebuild it on every switch.
 #[derive(Default)]
 pub struct PageBootstrapMemo {
-  entry: Mutex<Option<(PageBootstrapKey, PageBootstrap)>>,
+  entries: Mutex<Vec<(PageBootstrapKey, PageBootstrap)>>,
 }
+
+/// The bootstraps one page keeps: the session it served most recently, and the ones before it a reader comes back to.
+const PAGE_BOOTSTRAP_MEMO_ENTRIES: usize = 4;
 
 /// The identity of a session's live event log: its modification time in nanoseconds and its size.
 type EventLogIdentity = (i128, u64);
@@ -357,12 +361,15 @@ pub fn page_bootstrap(
   meta: &SessionMetadata,
 ) -> StoreResult<PageBootstrap> {
   let key = page_bootstrap_key(store, registry, cfg, meta)?;
-  if let Some(key) = &key
-    && let Some((cached_key, cached)) =
-      memo.entry.lock().expect("the page bootstrap memo mutex is not poisoned").as_ref()
-    && cached_key == key
-  {
-    return Ok(cached.clone());
+  if let Some(key) = &key {
+    let mut entries = memo.entries.lock().expect("the page bootstrap memo mutex is not poisoned");
+    if let Some(at) = entries.iter().position(|(cached_key, _)| cached_key == key) {
+      // The session served again is the newest entry, so an eviction takes the one served longest ago.
+      let entry = entries.remove(at);
+      let bootstrap = entry.1.clone();
+      entries.push(entry);
+      return Ok(bootstrap);
+    }
   }
   let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
   let bootstrap = PageBootstrap {
@@ -372,7 +379,11 @@ pub fn page_bootstrap(
     event_count: payload.value["event_count"].clone(),
   };
   if let Some(key) = key {
-    *memo.entry.lock().expect("the page bootstrap memo mutex is not poisoned") = Some((key, bootstrap.clone()));
+    let mut entries = memo.entries.lock().expect("the page bootstrap memo mutex is not poisoned");
+    entries.push((key, bootstrap.clone()));
+    if entries.len() > PAGE_BOOTSTRAP_MEMO_ENTRIES {
+      entries.remove(0);
+    }
   }
   Ok(bootstrap)
 }
@@ -1603,6 +1614,28 @@ backends:
     let payload_after = build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap();
     assert_eq!(after.text.as_str(), charliebot_compat::jinja::tojson_text(&payload_after.value));
     assert_ne!(after.text.as_str(), first.text.as_str(), "a new event rebuilds the text");
+  }
+
+  /// A reader who moves between two sessions and comes back is served the payload the page built before, because one
+  /// session's payload no longer displaces the other's.
+  #[tokio::test]
+  async fn a_page_bootstrap_keeps_the_sessions_it_served_before() {
+    let (_home, features) = feature_context();
+    let first = crate::test_support::create_node(&features.store, "page-bootstrap-a", None, TaskProfile::Manager).await;
+    let second = crate::test_support::create_node(&features.store, "page-bootstrap-b", None, TaskProfile::Manager).await;
+    let memo = PageBootstrapMemo::default();
+    let cfg = features.config.get().expect("the test config loads");
+    let text = |session: &SessionMetadata| {
+      page_bootstrap(&memo, &features.store, &features.registry, &cfg, session).unwrap().text
+    };
+
+    let first_a = text(&first);
+    let first_b = text(&second);
+    let again_a = text(&first);
+    let again_b = text(&second);
+    assert!(!Arc::ptr_eq(&first_a, &first_b), "the two sessions build different payloads");
+    assert!(Arc::ptr_eq(&first_a, &again_a), "the session opened before another one is still kept");
+    assert!(Arc::ptr_eq(&first_b, &again_b));
   }
 
   /// Deterministic incompressible-ish text: a fixed LCG over a 62-character alphabet. The gzip of one

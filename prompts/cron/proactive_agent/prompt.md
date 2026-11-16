@@ -26,7 +26,3 @@ Work estimated above about 8 hours, or whose result reaches other people, goes t
 - Send no message to another session, and change no session outside this task's subtree.
 - A message in the user's name is a draft that waits for the user's send action.
 - The approval rules of `prompts/master.md` (Action Boundaries) apply unchanged.
-
-### Delegation Gate
-
-When delegation is refused because this session has no user message yet, post one reply that asks the user for one message in this session, and retry nothing.

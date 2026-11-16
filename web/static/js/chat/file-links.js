@@ -61,7 +61,7 @@ function resolveFileServerUrl(href) {
 // ---------------------------------------------------------------------------
 // Missing file links — a file link whose target the server has nothing at is
 // marked where it appears. A wrong path shows up on the render rather than
-// on the click that fails. A 404 marks probed links; retired prefixes are
+// on the click that fails. A 404 marks probed links. Retired prefixes are
 // marked by path. Other statuses and network errors leave probed links alone.
 // A link under the file-server prefix resolves to an absolute path. A package that owns a family of file links registers it:
 // core then also probes a same-host link of the family that the prefix does
@@ -71,7 +71,7 @@ function resolveFileServerUrl(href) {
 var MISSING_FILE_MARKER_TEXT = '\u26A0 missing';
 var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
 // Both recognition patterns cut a text run at the same boundaries, so the tail class is one
-// definition shared by both. URL_TAIL_CLASS holds the class; each pattern appends its own
+// definition shared by both. URL_TAIL_CLASS holds the class. Each pattern appends its own
 // quantifier. It ends the run at whitespace, at the closers markdown and prose
 // put after a URL, and at everything outside printable ASCII. A chat URL is a maximal
 // printable-ASCII run [\x21-\x7E]+, so a glued CJK character, full-width mark or emoji is
@@ -132,7 +132,7 @@ function fileServerOccurrence(href, node, kind, end) {
   }
   var absPath = absolutePathFromServedPathname(pathname);
   if (absPath !== null) {
-    // A family whose own fetch answers for this path already has a request on the way; probing
+    // A family whose own fetch answers for this path already has a request on the way. Probing
     // it here would be a second request for the same thing.
     for (var family of fileLinkFamilies.values()) {
       if (family.answersFor(pathname)) return null;
@@ -142,7 +142,7 @@ function fileServerOccurrence(href, node, kind, end) {
   return familyOccurrence(url, node, kind, end);
 }
 
-// A link the prefix does not resolve can still name a file here when a family recognizes it; it
+// A link the prefix does not resolve can still name a file here when a family recognizes it. It
 // is probed at its literal URL. Only links that already name the page origin reach the family
 // check. A link on another host or port is left as written and unprobed because this server
 // would not answer for that origin.
@@ -199,8 +199,8 @@ function markMissingFileLinks(occurrences) {
   });
   var groups = Array.from(byKey.values());
   // One HEAD per unique probe target — the absolute path for links under the prefix and the
-  // literal URL for family links outside it. Retired aliases are marked immediately;
-  // all markers wait until probes finish so a text node splits once with every missing link.
+  // literal URL for family links outside it. Retired aliases are marked immediately.
+  // All markers wait until probes finish so a text node splits once with every missing link.
   return Promise.all(groups.map(function(group) {
     return group[0].immediate ? Promise.resolve(true) : probeFileMissing(group[0].probeUrl);
   })).then(function(missing) {

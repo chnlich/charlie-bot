@@ -20,7 +20,6 @@ pub type TaskState = String;
 #[derive(Clone, Debug)]
 pub struct TaskFacts {
   pub task_state: TaskState,
-  pub has_user_request: bool,
   pub run_outcomes: HashMap<String, String>,
   #[doc(hidden)]
   pub run_outcome_string_none_ids: HashSet<String>,

@@ -58,10 +58,10 @@
 # start after the turn. It reads run states and message roles only, so the model's text cannot fail a healthy server.
 #
 # The delegation check runs after the probe turn. The probe proves that the server answers. The check proves that the
-# server creates a worktree on a repository, which the probe does not exercise. The check opens a session of its own
-# with a user message, because the server delegates only from a task chain that holds one. Then it delegates one
-# script-run task on the runtime clone, with base branch main. It waits up to CHARLIEBOT_SWITCH_DELEGATION_WAIT_S for a
-# pass. The run's event log gives the first tool result: the check passes as soon as that result is a Bash command that
+# server creates a worktree on a repository, which the probe does not exercise. The check opens a session of its own,
+# then delegates one script-run task on the runtime clone, with base branch main. It waits up to
+# CHARLIEBOT_SWITCH_DELEGATION_WAIT_S for a pass. The run's event log gives the first tool result: the check passes as
+# soon as that result is a Bash command that
 # did not error and ran in a worktree of the runtime clone, without waiting for the run to end. It also passes when the
 # run ends success and the worktree the record names exists. A run that ends failed fails the check. When the wait ends
 # first, a backend whose event log holds no init cwd or no tool result fails it, and the log names the backend. Pass or
@@ -729,11 +729,6 @@ probe_turn() {
   return "$verdict"
 }
 
-# The user message that opens the check's task chain. The server delegates only from a chain that holds a user message,
-# and the message content holds no quote or backslash, so the request body needs no escaping. The model reads it, so
-# each sentence states one instruction or the purpose of one.
-DELEGATION_OPEN='Reply with the single word READY. This message opens the task chain that the check delegates from.'
-
 # The goal of the check's task. The worker reads it, so each sentence states one instruction or the purpose of one.
 DELEGATION_TASK='Run `git rev-parse --short HEAD` once in your worktree. This reads the checked-out commit and '\
 'changes no file. Do not change or commit any file. The check needs the worktree as the server created it.'
@@ -806,8 +801,7 @@ delegation_timeout() {
   fi
 }
 
-# delegation_open: creates the session that holds the task, then sends it the user message that opens the task chain.
-# The archive closes the session.
+# delegation_open: creates the session that holds the task. The archive closes the session.
 delegation_open() {
   api POST /api/sessions/ '{"name":"switch delegation"}'
   [ "$API_STATUS" = 200 ] || {
@@ -817,13 +811,6 @@ delegation_open() {
   DELEG_PARENT="$(json_field id)" || return 1
   CHECK_SESSION=$DELEG_PARENT
   check_log "created"
-  api POST "/api/chat/$CHECK_SESSION/message" \
-    "{\"content\":\"$DELEGATION_OPEN\",\"request_id\":\"switch-open:$CHECK_SESSION\"}"
-  [ "$API_STATUS" = 202 ] || {
-    delegation_fail open "the message answered $API_STATUS: $(cat "$WORK/body")"
-    return 1
-  }
-  check_log "opened the task chain"
 }
 
 # delegation_run: delegates the task, waits for its run to end within DELEGATION_WAIT_S, then judges the run. A run that

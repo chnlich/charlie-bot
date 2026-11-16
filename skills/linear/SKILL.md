@@ -196,23 +196,16 @@ query($teamId: String!) {
 - **Default assignee:** Use the host-configured default assignee if one is set (host-specific skill / MEMORY); otherwise leave unassigned and ask the user.
 - **Issue writes:** A root session shows the draft and gets user confirmation before creating or updating issues.
   A sub session follows External System Writes in `~/workspace/charlie-bot/prompts/master.md`.
-- **Context lives in Linear:** For any work line with a Linear issue, Linear is the record of that work: someone reading the issue sees the goal, the current state and the next step without leaving Linear. Progress never lives only in session artifacts or in a linked document. A Feishu document exists when the user asks for one or when the issue's detail is meant for colleagues to read, and it holds that colleague-facing detail, not the running context. When a doc exists, each Linear issue maps to **one** Feishu document, subsequent updates append to the same Feishu doc never a new one, the Feishu doc title matches the Linear issue title, and the Feishu doc URL is linked in the Linear issue description.
+- **Feishu for documentation:** Create a Feishu document for a Linear issue when the user asks for one or when the issue's detail is meant for colleagues to read; otherwise the detail stays in the issue's session artifacts rather than in Linear comments or long descriptions. When a doc exists, each Linear issue maps to **one** Feishu document, subsequent updates append to the same Feishu doc never a new one, the Feishu doc title matches the Linear issue title, and the Feishu doc URL is linked in the Linear issue description.
 - **Default Feishu doc sharing:** When creating the Feishu doc associated with a Linear issue, set its public permission following the policy in the Feishu skill (skills/feishu/SKILL.md) after the user explicitly approves that permission write.
 - **Permission-write approval:** Any Feishu permission change for an associated Feishu doc, including the default `tenant_readable` setup for a new doc, still requires explicit user approval before sending the Feishu permission write.
 
 ## Content conventions
 
-- Issue body: goal and deliverables. No status updates, no implementation
-  detail, no results.
-- Milestone comments: each milestone of the work adds one issue comment carrying
-  that milestone's context — what was decided, why, the current state, the next
-  step, and links to the pages that hold the detail. Progress and technical
-  content live here, not in session artifacts and not only in a linked doc.
-- Project updates: a project with work in progress gets a periodic project
-  status update, so the project page reflects the state of its work lines.
-- Feishu docs: created when the user asks for one or when the detail is meant
-  for colleagues to read; they hold colleague-facing detail and are linked from
-  the issue description, never in place of milestone comments.
+- Issue body: goal and deliverables only. No status updates, no implementation
+  detail, no results. When no Feishu doc exists, progress and technical content
+  live in the issue's session artifacts; when one exists, they live in the linked
+  Feishu doc.
 - Externally shared Feishu result docs are written in English, structured as:
   what was done, which optimizations, final results, experiment environment,
   reproducible scripts. No process narrative.

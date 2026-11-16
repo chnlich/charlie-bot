@@ -1021,8 +1021,8 @@ async fn task_gate_matches_recorded_cases_and_the_parity_fixture_tree() {
     }
     let start_id = case["start"].as_str().unwrap();
     let actual = match store.check_task_authorization(start_id) {
-      Ok(user_node) => json!({"authorized": true, "user_node": user_node, "reason": null}),
-      Err(error) => json!({"authorized": false, "user_node": null, "reason": error.to_string()}),
+      Ok(()) => json!({"authorized": true, "reason": null}),
+      Err(error) => json!({"authorized": false, "reason": error.to_string()}),
     };
     assert_eq!(actual, expected[name], "gate case {name}");
   }
@@ -1039,8 +1039,8 @@ async fn task_gate_matches_recorded_cases_and_the_parity_fixture_tree() {
   assert!(!fixture_sessions.is_empty());
   for session_id in fixture_sessions {
     let actual = match fixture_store.check_task_authorization(&session_id) {
-      Ok(user_node) => json!({"authorized": true, "user_node": user_node, "reason": null}),
-      Err(error) => json!({"authorized": false, "user_node": null, "reason": error.to_string()}),
+      Ok(()) => json!({"authorized": true, "reason": null}),
+      Err(error) => json!({"authorized": false, "reason": error.to_string()}),
     };
     assert_eq!(actual, fixture_expected[&session_id], "parity fixture task {session_id}");
   }

@@ -986,7 +986,7 @@ async fn agent_manager_child_creation_replays_without_takeoff() {
 }
 
 #[tokio::test]
-async fn implementation_gate_uses_only_real_user_input_across_manager_depth() {
+async fn open_manager_chain_creates_workers_without_user_input_at_any_depth() {
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let child = h
@@ -1009,6 +1009,16 @@ async fn implementation_gate_uses_only_real_user_input_across_manager_depth() {
     )
     .await
     .unwrap();
+  h.dispatcher
+    .admit_input(
+      &grandchild.id,
+      event_types::AGENT_MESSAGE,
+      "implement without user message",
+      ACTOR_AGENT,
+      json!({"from_session": child.id}),
+    )
+    .await
+    .unwrap();
   let worker_request = create_request(
     "implementation",
     Some(&grandchild.id),
@@ -1019,52 +1029,22 @@ async fn implementation_gate_uses_only_real_user_input_across_manager_depth() {
       ..TaskSpec::default()
     }),
   );
-  let caller = TaskCaller::Agent { session_id: grandchild.id.clone() };
-  let blocked = h.base.store.create_task(worker_request.clone(), caller.clone(), Map::new()).await.unwrap_err();
-  assert!(blocked.to_string().starts_with("Delegation blocked: no user request on the task chain"));
-
-  h.dispatcher
-    .admit_input(
-      &grandchild.id,
-      event_types::AGENT_MESSAGE,
-      "take off and implement",
-      ACTOR_AGENT,
-      json!({"from_session": child.id}),
-    )
+  let worker = h
+    .base
+    .store
+    .create_task(worker_request, TaskCaller::Agent { session_id: grandchild.id.clone() }, Map::new())
     .await
     .unwrap();
-  h.dispatcher
-    .admit_input(
-      &grandchild.id,
-      event_types::CHILD_REPORT,
-      "take off, the child finished",
-      ACTOR_AGENT,
-      json!({"from_session": child.id}),
-    )
-    .await
-    .unwrap();
-  let still_blocked = h.base.store.create_task(worker_request.clone(), caller.clone(), Map::new()).await.unwrap_err();
-  assert!(still_blocked.to_string().starts_with("Delegation blocked: no user request on the task chain"));
-
-  h.dispatcher
-    .admit_input(&root.id, event_types::USER, "Can you ship the feature?", ACTOR_USER, json!({}))
-    .await
-    .unwrap();
-  let worker = h.base.store.create_task(worker_request, caller, Map::new()).await.unwrap();
   assert_eq!(worker.profile, TaskProfile::Worker);
-  for session_id in [&child.id, &grandchild.id] {
+  for session_id in [&root.id, &child.id, &grandchild.id] {
     assert!(h.base.store.load_all_facts(session_id).unwrap().iter().all(|event| event["type"] != event_types::USER));
   }
 }
 
 #[tokio::test]
-async fn queued_retry_launch_skips_reauthorization_and_verify_is_exempt() {
+async fn queued_retry_launch_skips_parent_reauthorization_when_root_closes() {
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
-  h.dispatcher
-    .admit_input(&root.id, event_types::USER, "Take off. Ship the feature.", ACTOR_USER, json!({}))
-    .await
-    .unwrap();
   let worker = h
     .base
     .store
@@ -1114,9 +1094,15 @@ async fn queued_retry_launch_skips_reauthorization_and_verify_is_exempt() {
   .unwrap();
 
   let guard = h.base.store.control_lock().await;
-  let clone_start =
-    control_events::build_control_event("clone_start", "system", &root.id, None, None, std::iter::empty());
-  h.base.store.append_control_fact(&guard, &root.id, clone_start).await.unwrap();
+  let close_root = control_events::build_control_event(
+    "task_closed",
+    ACTOR_SYSTEM,
+    &root.id,
+    None,
+    None,
+    [("outcome".to_string(), json!("completed"))],
+  );
+  h.base.store.append_control_fact(&guard, &root.id, close_root).await.unwrap();
   drop(guard);
   assert!(h.base.store.check_task_authorization(&root.id).is_err());
 
@@ -1138,7 +1124,7 @@ async fn queued_retry_launch_skips_reauthorization_and_verify_is_exempt() {
   assert_eq!(worker_finish["outcome"], "success");
 
   let verify_root = h.base.create_task("verify-root", None, TaskProfile::Manager, "Verify root").await;
-  assert!(h.base.store.check_task_authorization(&verify_root.id).is_err());
+  assert!(h.base.store.check_task_authorization(&verify_root.id).is_ok());
   let verify = h
     .base
     .store
@@ -1197,11 +1183,6 @@ async fn profile_changing_agent_create_replay_keeps_the_original_product() {
     .await
     .unwrap();
 
-  for profile in [TaskProfile::Manager, TaskProfile::Worker] {
-    let request = create_request("worker-original", Some(&root.id), profile, None);
-    let replay = h.base.store.create_task(request, caller.clone(), Map::new()).await.unwrap_err();
-    assert!(replay.to_string().starts_with("Delegation blocked: no user request on the task chain"));
-  }
   let manager = h
     .base
     .store
@@ -1225,18 +1206,16 @@ async fn profile_changing_agent_create_replay_keeps_the_original_product() {
   assert_eq!(manager_as_worker.id, manager.id);
   assert_eq!(manager_as_worker.profile, TaskProfile::Manager);
 
-  h.dispatcher
-    .admit_input(&root.id, event_types::USER, "Can you ship the feature?", ACTOR_USER, json!({}))
-    .await
-    .unwrap();
-  let worker_as_manager = h
-    .base
-    .store
-    .create_task(create_request("worker-original", Some(&root.id), TaskProfile::Manager, None), caller, Map::new())
-    .await
-    .unwrap();
-  assert_eq!(worker_as_manager.id, worker.id);
-  assert_eq!(worker_as_manager.profile, TaskProfile::Worker);
+  for profile in [TaskProfile::Manager, TaskProfile::Worker] {
+    let worker_replay = h
+      .base
+      .store
+      .create_task(create_request("worker-original", Some(&root.id), profile, None), caller.clone(), Map::new())
+      .await
+      .unwrap();
+    assert_eq!(worker_replay.id, worker.id);
+    assert_eq!(worker_replay.profile, TaskProfile::Worker);
+  }
 }
 
 #[tokio::test]

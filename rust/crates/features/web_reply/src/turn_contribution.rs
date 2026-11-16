@@ -141,9 +141,7 @@ fn content(event: &Value) -> Value {
 mod tests {
   use std::ffi::OsString;
 
-  use charliebot_core::config::{
-    BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
-  };
+  use charliebot_core::test_support::synthetic_config;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
   use serde_json::json;
   use tempfile::TempDir;
@@ -161,42 +159,6 @@ mod tests {
     (dir, repo)
   }
 
-  fn config() -> CharlieBotConfig {
-    CharlieBotConfig {
-      charliebot_home: "/synthetic/home".into(),
-      headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
-      server: ServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 18650,
-        subprocess_buffer_limit_mb: 1,
-        session_memory_max_mb: 0,
-        session_swap_max_mb: 0,
-        public_url: None,
-        session_tasks_max: 0,
-        min_free_disk_gib: 0,
-        enable_session_cpu_weight: true,
-        enable_session_io_weight: true,
-        enable_local_work_guard: false,
-      },
-      paths: PathsConfig {
-        workspace_dirs: Vec::new(),
-        worktree_dir: "/synthetic/worktrees".to_string(),
-        scratch_dir: "/synthetic/scripts".to_string(),
-      },
-      backends: BackendsConfig {
-        routing: None,
-        options: Vec::new(),
-        pools: Vec::new(),
-        calls: charliebot_core::config::CallsConfig::default(),
-      },
-      ui: UiConfig { home_services: Vec::new() },
-      telegram: TelegramConfig { chat_id: None },
-      remote_run: charliebot_core::config::RemoteRunConfig::default(),
-      github: Default::default(),
-      sections: Sections::default(),
-    }
-  }
-
   fn manager(extra: Value) -> SessionMetadata {
     let mut meta = SessionMetadata::new("synthetic-session", "Session 1", TaskProfile::Manager);
     if let Value::Object(fields) = extra {
@@ -208,8 +170,9 @@ mod tests {
   #[test]
   fn a_web_manager_run_gets_the_reply_rules_as_one_full_segment() {
     let (_dir, repo) = checkout("\n  Reply in the chat.\r\nSecond line.\n\n");
-    let segments =
-      WebReplyTurnContribution.instruction_segments(&manager(json!({})), "manager_turn", &config(), &repo).unwrap();
+    let segments = WebReplyTurnContribution
+      .instruction_segments(&manager(json!({})), "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+      .unwrap();
 
     assert_eq!(segments.len(), 1);
     assert_eq!(segments[0].text, "Reply in the chat.\nSecond line.");
@@ -239,12 +202,25 @@ mod tests {
 
     let contribution = WebReplyTurnContribution;
     for kind in ["work", "review"] {
-      assert!(contribution.instruction_segments(&web, kind, &config(), &repo).unwrap().is_empty());
+      assert!(
+        contribution.instruction_segments(&web, kind, &synthetic_config("/synthetic/home"), &repo).unwrap().is_empty()
+      );
     }
     for meta in [&worker, &slack_thread, &discord_thread, &feishu_thread] {
-      assert!(contribution.instruction_segments(meta, "manager_turn", &config(), &repo).unwrap().is_empty());
+      assert!(
+        contribution
+          .instruction_segments(meta, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+          .unwrap()
+          .is_empty()
+      );
     }
-    assert_eq!(contribution.instruction_segments(&null_origin, "manager_turn", &config(), &repo).unwrap().len(), 1);
+    assert_eq!(
+      contribution
+        .instruction_segments(&null_origin, "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+        .unwrap()
+        .len(),
+      1
+    );
   }
 
   #[test]
@@ -252,8 +228,9 @@ mod tests {
     let (dir, repo) = checkout("rules");
     fs::remove_file(dir.path().join("prompts").join(reply::RULES_FILE)).unwrap();
 
-    let error =
-      WebReplyTurnContribution.instruction_segments(&manager(json!({})), "manager_turn", &config(), &repo).unwrap_err();
+    let error = WebReplyTurnContribution
+      .instruction_segments(&manager(json!({})), "manager_turn", &synthetic_config("/synthetic/home"), &repo)
+      .unwrap_err();
     assert!(error.to_string().starts_with("read "), "{error}");
   }
 
@@ -369,7 +346,12 @@ mod tests {
       let meta = home.meta(&sid).await;
 
       WebReplyTurnContribution
-        .after_turn(&meta, &master_done("run-1", &[input_id.as_str()], 0), &config(), &home.features)
+        .after_turn(
+          &meta,
+          &master_done("run-1", &[input_id.as_str()], 0),
+          &synthetic_config("/synthetic/home"),
+          &home.features,
+        )
         .await
         .unwrap();
 
@@ -384,7 +366,10 @@ mod tests {
   /// The web contribution's after_turn for one finished turn, over the test home's feature context.
   async fn after_turn(home: &Home, session_id: &str, done: &Value) {
     let meta = home.meta(session_id).await;
-    WebReplyTurnContribution.after_turn(&meta, done, &config(), &home.features).await.unwrap();
+    WebReplyTurnContribution
+      .after_turn(&meta, done, &synthetic_config("/synthetic/home"), &home.features)
+      .await
+      .unwrap();
   }
 
   /// The status reminders of the session's log, in log order: the agent messages a turn's missing status set or
@@ -516,7 +501,12 @@ mod tests {
       let meta = home.meta(&sid).await;
 
       WebReplyTurnContribution
-        .after_turn(&meta, &master_done("run-2", &[input_id.as_str()], 1), &config(), &home.features)
+        .after_turn(
+          &meta,
+          &master_done("run-2", &[input_id.as_str()], 1),
+          &synthetic_config("/synthetic/home"),
+          &home.features,
+        )
         .await
         .unwrap();
 

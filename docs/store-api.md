@@ -157,7 +157,6 @@ route accepts run-token identity. `records_generation` increments after each run
 - `create_task(&self, request: CreateTask, caller: TaskCaller, slot_values: Map<String, Value>) -> StoreResult<SessionMetadata>`
 - `runtime_gate(&self, request: &CreateTask, caller: &TaskCaller) -> StoreResult<()>` (the create-task runtime gate)
 - `set_node_backend_locked(&self, guard: &ControlGuard, session_id: &str, backend: &str) -> StoreResult<()>`
-- `task_tree::is_read_only_exempt(task: Option<&TaskSpec>) -> bool` (re-exported)
 - `adopt_metadata_slot_locked(&self, guard: &ControlGuard, session_id: &str, old: &SessionMetadata, owner: &str, fields: Option<&[&str]>) -> StoreResult<SessionMetadata>`
 - `record_native_anchor(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>) -> StoreResult<()>`; `record_native_anchor_with_reset(&self, session_id: &str, prompt_hash: &str, backend: &str, model: Option<&str>, reset_anchor: bool) -> StoreResult<()>`
 - `archive_unsuccessful_worker(&self, guard: &ControlGuard, session_id: &str, run_id: &str, outcome: &str) -> StoreResult<bool>`
@@ -167,7 +166,7 @@ route accepts run-token identity. `records_generation` increments after each run
 - `ensure_prompt_changed_fact(&self, session_id: &str, meta: &SessionMetadata, scope: PromptScope) -> StoreResult<()>`
 - `load_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>>`; `load_task_meta(&self, session_id: &str) -> StoreResult<SessionMetadata>`
 - `task_state(&self, session_id: &str) -> StoreResult<TaskState>`; `facts_of(&self, session_id: &str) -> StoreResult<TaskFacts>`
-- `archived_of(&self, session_id: &str) -> StoreResult<bool>`; `check_task_authorization(&self, session_id: &str) -> StoreResult<String>`
+- `archived_of(&self, session_id: &str) -> StoreResult<bool>`; `check_task_authorization(&self, session_id: &str) -> StoreResult<()>`
 - `ancestor_ids(&self, session_id: &str) -> StoreResult<Vec<String>>`; `descendant_ids(&self, session_id: &str) -> StoreResult<Vec<String>>`
 - `resolve_successor_chain(&self, session_id: &str) -> StoreResult<Vec<SessionMetadata>>`; `deliver_to_successor(&self, session_id: &str, event: ChatEvent) -> StoreResult<Option<String>>`
 - `invalidate_tree_index(&self)`; `require_open_ancestry(&self, session_id: &str) -> StoreResult<Vec<String>>`
@@ -178,7 +177,7 @@ route accepts run-token identity. `records_generation` increments after each run
 
 `TaskFacts` is the durable event fold: task state, run outcomes and first finish positions, input boundaries and
 acknowledgements, close facts, delivered child reports, and the event-id index all come from `load_all_facts`.
-`check_task_authorization` returns the nearest user-message node that authorizes delegation.
+`check_task_authorization` verifies that `session_id` is an open manager whose ancestors are all open.
 `archive_unsuccessful_worker` returns whether it appended the archive fact.
 
 Tree-node metadata writes and control-fact writes run under the shared control guard. The locked methods verify its

@@ -416,17 +416,10 @@ fn home_dir() -> Result<PathBuf, CliExit> {
   charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))
 }
 
-/// `int(text)` for a flag, at i64 width.
-fn parse_int(text: &str) -> Option<i64> {
-  let (negative, digits) = int_text::int_digits(text)?;
-  let magnitude: i64 = digits.parse().ok()?;
-  Some(if negative { -magnitude } else { magnitude })
-}
-
 /// Refuses a wait past the trigger cap here, before `--cmd` starts anything the registration would have to kill.
 fn parse_max_wait(text: &str) -> Result<i64, String> {
-  let seconds =
-    parse_int(text).ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))?;
+  let seconds = int_text::int_value(text)
+    .ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))?;
   if seconds > triggers::MAX_TRIGGER_DELAY_SECONDS {
     return Err(format!(
       "argument --max-wait: {seconds} exceeds the {} second limit",
@@ -468,8 +461,8 @@ fn parse_watch_target(raw: &str) -> Result<WatchSpec, String> {
 
 /// `_positive_int`: an int above zero, with the watch spec named in the error.
 fn positive_int(value: &str, raw: &str, what: &str) -> Result<i64, String> {
-  let number =
-    parse_int(value).ok_or_else(|| format!("--watch {what} must be int (got {})", text_repr::str_repr(raw)))?;
+  let number = int_text::int_value(value)
+    .ok_or_else(|| format!("--watch {what} must be int (got {})", text_repr::str_repr(raw)))?;
   if number <= 0 {
     return Err(format!("--watch {what} must be positive (got {})", text_repr::str_repr(raw)));
   }
@@ -479,21 +472,6 @@ fn positive_int(value: &str, raw: &str, what: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn int_accepts_the_flag_forms_int_accepts() {
-    assert_eq!(parse_int("60"), Some(60));
-    assert_eq!(parse_int(" +60 "), Some(60));
-    assert_eq!(parse_int("-5"), Some(-5));
-    assert_eq!(parse_int("1_000"), Some(1000));
-    assert_eq!(parse_int("1__000"), None);
-    assert_eq!(parse_int("_1"), None);
-    assert_eq!(parse_int("1_"), None);
-    assert_eq!(parse_int(""), None);
-    assert_eq!(parse_int("-"), None);
-    assert_eq!(parse_int("+-5"), None);
-    assert_eq!(parse_int("12x"), None);
-  }
 
   #[test]
   fn watch_specs_take_the_dict_shape() {

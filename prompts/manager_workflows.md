@@ -57,7 +57,7 @@ Omit `--session` in normal manager use: the CLI resolves the session, and an exp
 rejected on mismatch.
 
 ### Runtime delegation authorization
-Runtime authorization is derived from the task tree and the chat event log — see skills/plan-approval/SKILL.md for the full contract.
+Runtime authorization is derived from the task tree and each node's lifecycle state; see `skills/plan-approval/SKILL.md` for the full contract.
 
 Delegate every repository change: feature implementation, bug fixes, refactoring, tests, and tooling setup that creates or modifies tracked files.
 

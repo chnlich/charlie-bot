@@ -781,7 +781,6 @@ mod tests {
     let (sealed, folded) = (sealed.task().unwrap(), folded.task().unwrap());
     let values = |events: &[SharedChatEvent]| events.iter().map(|event| event.to_value()).collect::<Vec<_>>();
     assert_eq!(sealed.task_state, folded.task_state);
-    assert_eq!(sealed.has_user_request, folded.has_user_request);
     assert_eq!(sealed.run_outcomes, folded.run_outcomes);
     assert_eq!(sealed.run_finish_positions, folded.run_finish_positions);
     assert_eq!(sealed.confirmed_input_ids, folded.confirmed_input_ids);
@@ -946,7 +945,6 @@ mod tests {
     delivered.sort();
     json!({
       "task_state": task.task_state,
-      "has_user_request": task.has_user_request,
       "run_outcomes": task.run_outcomes,
       "run_outcome_string_none_ids": sorted_strings(&task.run_outcome_string_none_ids),
       "run_finish_positions": task.run_finish_positions,
@@ -1071,7 +1069,6 @@ mod tests {
     assert_eq!(resumed.read_bytes(), total - checkpoint_leg, "the resumed scan reads only the appended bytes");
     assert_eq!(resumed.checkpoint_bytes(), checkpoint_bytes, "the scan reads its checkpoint");
     let facts = resumed.facts.task().unwrap();
-    assert!(facts.has_user_request);
     assert_eq!(facts.run_outcomes.get("run-1").map(String::as_str), Some("success"));
     assert!(facts.confirmed_input_ids.contains("ask"));
     let full_scan = {

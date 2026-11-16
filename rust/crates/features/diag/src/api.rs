@@ -1,6 +1,6 @@
 //! The diag route: `POST /api/diag/client-events`, one validated client timing event per call,
 //! logged as a single `diag_client` line carrying the event's `kind`, its fields and the browser's
-//! `forwarded_for`. No session or state is consulted; the route answers `{"ok": true}`.
+//! `forwarded_for`. No session or state is consulted. The route answers `{"ok": true}`.
 //!
 //! The five kinds and their fields follow plan section 4.1 of the poor-network line. `switch`
 //! carries the switch phases plus the bootstrap's Resource Timing, and `send` carries one message
@@ -32,10 +32,10 @@ use serde_json::{Map, Value, json};
 /// `MAX_ERROR_CHARS`.
 pub const MAX_ERROR_CHARS: usize = 300;
 
-/// The largest endpoint path one traffic row carries; the client folds the ids out of the path.
+/// The largest endpoint path one traffic row carries. The client folds the ids out of the path.
 const MAX_ENDPOINT_CHARS: usize = 200;
 
-/// The largest number of endpoint rows one traffic event carries; the client sends at most this
+/// The largest number of endpoint rows one traffic event carries. The client sends at most this
 /// many, the heaviest first.
 const MAX_TRAFFIC_ENDPOINTS: usize = 40;
 

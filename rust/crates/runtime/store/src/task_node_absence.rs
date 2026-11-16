@@ -248,9 +248,9 @@ mod tests {
   fn a_type_value_is_found_wherever_its_line_meets_a_piece() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("chat_events.jsonl");
-    // The event's line starts at every offset of three pieces, so a piece ends inside it at every position: inside
-    // the key, inside the colon and the opening quote, and inside every letter of the type name.
-    for pad in 0..3 * SCAN_CHUNK_BYTES {
+    // With a 38-byte line and test SCAN_CHUNK_BYTES = 64, the pad % 64 residues 28..=63 put the boundary
+    // 1..=36 bytes from the line start.
+    for pad in 28..=63 {
       let mut boundary = vec![b'\n'; pad];
       boundary.extend_from_slice(b"{\"id\": \"e1\", \"type\": \"prompt_changed\"}\n");
       fs::write(&path, &boundary).unwrap();

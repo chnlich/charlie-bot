@@ -314,7 +314,9 @@ async function warmShell(refresh = false) {
   const fetchedFiles = [];
   for (const ref of refs) {
     if (await files.match(ref)) continue;
-    const file = await fetch(ref, {credentials: 'same-origin'});
+    // The warm stores the bodies, so it bypasses the HTTP cache like the shell fetch: a conditional request
+    // can come back as a bodyless 304 from the worker, which is not a file the warm can store.
+    const file = await fetch(ref, {credentials: 'same-origin', cache: 'no-store'});
     if (file.status === 401) {
       if (refresh) await dropShell();
       await dropCopies();

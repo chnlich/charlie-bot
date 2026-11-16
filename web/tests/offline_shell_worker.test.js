@@ -306,8 +306,11 @@ test('warming stores the shell and the same-origin files it names, and drops the
   const h = harness();
   const html = '<link href="/static/css/a.css?v=1" rel="stylesheet"><script src="/static/js/b.js"></script>' +
       '<script defer src="https://cdn.example/x.js"></script>';
-  h.state.network = async (req) => {
+  // The browser answers a file request that carries its cached validator with a bodyless 304 unless the request
+  // bypasses the HTTP cache; the warm must store bodies, so the 304 stands in for that cached answer.
+  h.state.network = async (req, init) => {
     if (req.url === SHELL_URL) return new Response(html, {status: 200});
+    if (!init || init.cache !== 'no-store') return new Response(null, {status: 304});
     if (req.url === ORIGIN + '/static/css/a.css?v=1') return new Response('a', {status: 200, headers: {ETag: '"a"'}});
     if (req.url === ORIGIN + '/static/js/b.js') return new Response('b', {status: 200});
     throw new Error('unexpected ' + req.url);

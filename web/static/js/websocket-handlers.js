@@ -28,8 +28,8 @@ function _commitMessage(msg) {
   if (msg.content_streamed) msg = withStreamedDraft(msg);
   if (msg.role === 'assistant' || msg.role === 'plan') resetStreamDraft();
   // A committed bubble supersedes the streaming preview: the draft it carries is
-  // the same text the preview holds. The local tab did not produce the message;
-  // it arrived over the wire, so it never forces the follow. A reader pinned at
+  // the same text the preview holds. The local tab did not produce the message.
+  // It arrived over the wire, so it never forces the follow. A reader pinned at
   // the bottom follows through their pin intent, and one reading history keeps
   // their place.
   hideStreaming();
@@ -77,7 +77,7 @@ registerWsMessageHandler('task_tree_changed', (ev) => {
 // closes it, so a network close is the only close whose rows are missing. A page load's own first socket needs no
 // reload because the page carries the server's snapshot in its rows.
 registerWsConnectHandler(() => {
-  // The network-loss flag feeds the connect handlers that repair their own state (the plan panel); the list resync
+  // The network-loss flag feeds the connect handlers that repair their own state (the plan panel). The list resync
   // below covers every open that could have missed a frame.
   networkLossPending = false;
   if (!sessionListResyncPending) return;
@@ -120,7 +120,7 @@ registerWsMessageHandler('running_changed', (ev) => {
 
 // A backend switch on the active session: the header badge/dropdown must
 // reflect the new value immediately. The initiating tab already did this
-// through its own fetch; other tabs reach it through the shared
+// through its own fetch. Other tabs reach it through the shared
 // session/sidebar channels. `to` is the audit shape (session channel, always
 // this session). `backend`+`session_id` is the sidebar broadcast shape, which
 // every open tab receives regardless of which session it's viewing. Only
@@ -145,8 +145,9 @@ function _replaceCommittedMessage(msg) {
 registerWsMessageHandler('message', (ev) => _commitMessage(ev.message || {}), {advancesCursor: true});
 registerWsMessageHandler('message_update', (ev) => _replaceCommittedMessage(ev.message), {advancesCursor: false});
 
-// A stream frame carries only the text added since the previous frame; stream-draft.js accumulates it. The
-// catch-up sends one `reset` frame holding the whole draft, so a page that joins or reconnects mid-reply
+// A stream frame carries only the text added since the previous frame. The
+// stream-draft.js module accumulates it. The catch-up sends one `reset` frame
+// holding the whole draft, so a page that joins or reconnects mid-reply
 // renders the same draft as one that saw every frame.
 function withStreamedDraft(msg) {
   const draft = takeStreamedDraft();

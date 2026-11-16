@@ -204,6 +204,17 @@ function clickElement(el) {
   return el._listeners.click[0]({preventDefault() {}, stopPropagation() {}});
 }
 
+// Comments on a block through the real click flow: the document click opens the
+// popover, the text box takes the comment, and the Add button stores it.
+function addBlockComment(body, listeners, block, text) {
+  const click = listeners.find((l) => l.target === 'document' && l.type === 'click').handler;
+  click({target: block, preventDefault() {}, stopPropagation() {}});
+  const popover = body.children.find((c) => c.className === '__cbc-popover');
+  popover.children[0].value = text;
+  const actions = popover.children.find((c) => c.className === '__cbc-actions');
+  clickElement(actions.children.find((c) => c.textContent === 'Add'));
+}
+
 function waitForPromises() {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -212,4 +223,4 @@ async function flushPromises(times) {
   for (let i = 0; i < times; i++) await waitForPromises();
 }
 
-module.exports = {makeElement, findChildByClass, dockOf, clickElement, waitForPromises, flushPromises};
+module.exports = {makeElement, findChildByClass, dockOf, clickElement, addBlockComment, waitForPromises, flushPromises};

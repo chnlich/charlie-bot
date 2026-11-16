@@ -3,11 +3,11 @@ const test = require('node:test');
 
 const { readPackageStatic } = require('./read_static');
 
-const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
+const {dockOf, findChildByClass, makeElement, clickElement, addBlockComment, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
-const {HEADING_11_12, REC_TEXT, Q1_TEXT, makeForkPage} = require('./artifact_fork_fixture');
+const {HEADING_11_12, REC_TEXT, Q1_TEXT, makeFork, makeForkPage} = require('./artifact_fork_fixture');
 const {mulberry32} = require('./mulberry32');
 
 // Source of the script under test, for the assertions that pin constants in it.
@@ -1003,15 +1003,6 @@ test('chooseWidth never narrows as the window widens over 300 randomised sets', 
 // corner-list tests below never flip; the threshold still governs placement.
 // ---------------------------------------------------------------------------
 
-function addBlockComment(body, listeners, block, text) {
-  const click = listeners.find((l) => l.target === 'document' && l.type === 'click').handler;
-  click({target: block, preventDefault() {}, stopPropagation() {}});
-  const popover = body.children.find((c) => c.className === '__cbc-popover');
-  popover.children[0].value = text;
-  const actions = popover.children.find((c) => c.className === '__cbc-actions');
-  clickElement(actions.children.find((c) => c.textContent === 'Add'));
-}
-
 function fireResize(listeners) {
   for (const l of listeners) {
     if (l.target === 'window' && l.type === 'resize') l.handler();
@@ -1549,9 +1540,11 @@ test('the same rec line in two forks locates its own fork and needs no occurrenc
       '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
       '',
       '1. ▸ ' + HEADING_11_12 + ' › Q1 "要不要处理 Yuesheng 的请求：在 11/12（周四，…" › "' + REC_TEXT + '"',
+      '   before "2（周四，今天）前更新你负责的 4 个过期 Linear 项目？"',
       '   ↳ 做',
       '',
       '2. ▸ ' + HEADING_11_12 + ' › Q2 "要不要回应 FPT 的 CPU 容量答复：明年前没有容量，之…" › "' + REC_TEXT + '"',
+      '   before "有 1000 核，Charlie 问作业能不能跑更久、并发更低？"',
       '   ↳ 不做',
     ].join('\n')
   );
@@ -1572,9 +1565,11 @@ test('two identical lines outside any fork under one heading get the (k of m) su
       '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
       '',
       '1. ▸ 已做 › "已记入当日清单" (1 of 2)',
+      '   before "已做"',
       '   ↳ ok one',
       '',
       '2. ▸ 已做 › "已记入当日清单" (2 of 2)',
+      '   before "已做已记入当日清单"',
       '   ↳ ok two',
     ].join('\n')
   );
@@ -1611,6 +1606,97 @@ test('a page with no repeated lines keeps the pre-change locator byte for byte',
       '',
       '1. ▸ Plan › "Draft the coverage map."',
       '   ↳ note',
+    ].join('\n')
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The before line: a row whose quote repeats names itself by the words before
+// it. Pages here are synthetic; the whitespace between cells is a text node,
+// as the page source has it.
+// ---------------------------------------------------------------------------
+
+function makeCell(text, tagName) {
+  const cell = makeBlock(text);
+  cell.tagName = tagName;
+  return cell;
+}
+
+test('five cells of one text each get their own message with their own before words', async () => {
+  const table = makeElement();
+  table.tagName = 'TABLE';
+  const header = makeElement();
+  header.tagName = 'TR';
+  header.appendChild(makeCell('workspace', 'TH'));
+  header.appendChild(makeTextNode(' '));
+  header.appendChild(makeCell('最早', 'TH'));
+  table.appendChild(header);
+  table.appendChild(makeTextNode('\n'));
+  const cells = [];
+  for (const label of ['alpha-scheduler', 'beta-renderer-engine', 'gamma-indexer',
+    'delta-cache-core', 'epsilon-kit-core']) {
+    const row = makeElement();
+    row.tagName = 'TR';
+    row.appendChild(makeCell(label, 'TD'));
+    row.appendChild(makeTextNode(' '));
+    const cell = makeCell('09-30', 'TD');
+    row.appendChild(cell);
+    cells.push(cell);
+    table.appendChild(row);
+    table.appendChild(makeTextNode('\n'));
+  }
+  const content = await sendCommentsFor([table],
+    cells.map((block, i) => ({block, text: 'c' + (i + 1)})));
+  assert.equal(
+    content,
+    [
+      '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (5)',
+      '',
+      '1. ▸ "09-30" (1 of 5)',
+      '   before "workspace 最早 alpha-scheduler "',
+      '   ↳ c1',
+      '',
+      '2. ▸ "09-30" (2 of 5)',
+      '   before "uler 09-30 beta-renderer-engine "',
+      '   ↳ c2',
+      '',
+      '3. ▸ "09-30" (3 of 5)',
+      '   before "erer-engine 09-30 gamma-indexer "',
+      '   ↳ c3',
+      '',
+      '4. ▸ "09-30" (4 of 5)',
+      '   before "-indexer 09-30 delta-cache-core "',
+      '   ↳ c4',
+      '',
+      '5. ▸ "09-30" (5 of 5)',
+      '   before "che-core 09-30 epsilon-kit-core "',
+      '   ↳ c5',
+    ].join('\n')
+  );
+});
+
+test('the same sentence under two numbered questions with equal before words keeps each question label', async () => {
+  const SAME = '两个问题下面的同一句话，前面的三十二个字也都一样，所以它们的前文相同。';
+  const page = {fork1: makeFork('1', SAME), fork2: makeFork('2', SAME)};
+  const heading = makeBlock(HEADING_11_12);
+  heading.tagName = 'H2';
+  const content = await sendCommentsFor([heading, page.fork1.fork, page.fork2.fork], [
+    {block: page.fork1.rec, text: '做'},
+    {block: page.fork2.rec, text: '不做'},
+  ]);
+  const before = '题下面的同一句话，前面的三十二个字也都一样，所以它们的前文相同。';
+  assert.equal(
+    content,
+    [
+      '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
+      '',
+      '1. ▸ ' + HEADING_11_12 + ' › Q1 "两个问题下面的同一句话，前面的三十二个字也都一样，所以它们的…" › "' + REC_TEXT + '"',
+      '   before "' + before + '"',
+      '   ↳ 做',
+      '',
+      '2. ▸ ' + HEADING_11_12 + ' › Q2 "两个问题下面的同一句话，前面的三十二个字也都一样，所以它们的…" › "' + REC_TEXT + '"',
+      '   before "' + before + '"',
+      '   ↳ 不做',
     ].join('\n')
   );
 });

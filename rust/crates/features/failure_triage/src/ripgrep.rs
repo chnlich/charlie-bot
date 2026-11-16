@@ -31,7 +31,7 @@ pub(crate) fn ensure_available() -> Result<()> {
 }
 
 /// Every line of `file` that holds one of `patterns`, matched case-insensitively as fixed strings.
-/// A search with no match is an empty list; any other failure is an error.
+/// A search with no match is an empty list. Any other failure is an error.
 pub(crate) fn matching_lines(file: &Path, patterns: &[String]) -> Result<Vec<MatchLine>> {
   let mut command = Command::new("rg");
   command.arg("--json").arg("--no-config").arg("--color").arg("never").arg("-i").arg("-F");

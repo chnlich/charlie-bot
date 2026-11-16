@@ -1,10 +1,10 @@
 //! The remote runner: `dev/remote-run/run.sh` reads the build host and its state base from `config.yaml` on each
-//! run, and stops with exit 2 while the host is unset. It starts every run with a connectivity check whose Tailscale
+//! run. It stops with exit 2 while the host is unset. It starts every run with a connectivity check whose Tailscale
 //! login link exits 86 and whose other failures and time limit exit 87. The check's stop text names the `/host-auth`
 //! page. After the check, the command's exit code comes back unchanged, 255 included. `dev/remote-run/remote-exec.pl`
-//! runs a payload with a short TMPDIR on the /dev/shm tmpfs, passes the command's exit code through, and stops the
-//! descendants the command leaves behind. The local work guard's refusal names the same host and prints in full while
-//! the host is unset.
+//! runs a payload with a short TMPDIR on the /dev/shm tmpfs. It passes the command's exit code through, and stops
+//! the descendants the command leaves behind. The local work guard's refusal names the same host and prints in full
+//! while the host is unset.
 
 use std::fs;
 use std::path::{Path, PathBuf};

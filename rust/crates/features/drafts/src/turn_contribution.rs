@@ -5,7 +5,7 @@ use charliebot_registry::turn::{EventRenderer, TurnContribution};
 
 use crate::card;
 
-/// The drafts turn contribution. It adds no instruction segment and no after-turn work; it renders the three draft
+/// The drafts turn contribution. It adds no instruction segment and no after-turn work. It renders the three draft
 /// events.
 pub struct DraftsTurnContribution;
 

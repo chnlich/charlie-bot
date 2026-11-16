@@ -64,7 +64,7 @@ async fn pending_summon_ids(bot: &Bot, session_id: &str) -> Result<HashSet<Strin
 async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Value, ThreadReplyError> {
   let session = thread_entry::require_thread_session(&DISCORD, &bot.features, session_id).await?;
   let origin: DiscordOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
-  let watermark = session.meta.extra("discord_watermark_id").and_then(Value::as_str).map(str::to_string);
+  let watermark = session.meta.extra(DISCORD.watermark_field).and_then(Value::as_str).map(str::to_string);
   let config = bot.config().map_err(ThreadReplyError::failure)?;
   let allowed_users = &config.section::<DiscordConfig>("discord").allowed_users;
   let adapter = Arc::new(DiscordThreadAdapter::new(bot.clone()));
@@ -101,11 +101,12 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   };
   let window_unread_ids: Vec<String> =
     window.iter().filter(|message| unread_ids.contains(&message.id)).map(|message| message.id.clone()).collect();
+  let watermark_key = DISCORD.watermark_key();
   let mut watermark_id = json!(watermark);
   if !window_unread_ids.is_empty() {
     let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
     let ack = thread_entry::ack_messages(&dyn_adapter, &bot.features, session_id, &window_unread_ids).await?;
-    watermark_id = ack["watermark_id"].clone();
+    watermark_id = ack[watermark_key.as_str()].clone();
   }
   let mut messages = Vec::new();
   if let Some(starter) = &starter {
@@ -116,7 +117,7 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   }));
   Ok(json!({
     "messages": messages,
-    "watermark_id": watermark_id,
+    (watermark_key): watermark_id,
     "more_unread": unread_ids.len() - window_unread_ids.len(),
   }))
 }
@@ -137,7 +138,7 @@ async fn read_linked_channel(bot: &Bot, url: &str, limit: usize) -> Result<Value
   let config = bot.config().map_err(ThreadReplyError::failure)?;
   let allowed_users = &config.section::<DiscordConfig>("discord").allowed_users;
   let messages: Vec<Value> = newest.iter().map(|message| message_view(message, false, false, allowed_users)).collect();
-  Ok(json!({"messages": messages, "watermark_id": null, "more_unread": 0}))
+  Ok(json!({"messages": messages, (DISCORD.watermark_key()): null, "more_unread": 0}))
 }
 
 /// The readback of `charliebot discord read`: the session's own thread (`url` None), or the newest messages of the

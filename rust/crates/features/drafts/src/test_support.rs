@@ -66,7 +66,7 @@ pub struct Call {
   pub body: String,
 }
 
-/// A platform that records every send and answers the scripted replies in order; an unscripted send succeeds.
+/// A platform that records every send and answers the scripted replies in order. An unscripted send succeeds.
 #[derive(Default)]
 pub struct SyntheticPlatform {
   calls: Mutex<Vec<Call>>,

@@ -48,9 +48,9 @@ impl WatchSpec {
     match self {
       WatchSpec::LocalPid { pid } => json!({ "kind": LOCAL_PID_KIND, "pid": pid }),
       WatchSpec::RemotePid { host, pid } => json!({ "kind": REMOTE_PID_KIND, "host": host, "pid": pid }),
-      WatchSpec::SlurmJob { host: None, job_id } => json!({ "kind": SLURM_JOB_KIND, "job_id": job_id }),
+      WatchSpec::SlurmJob { host: None, job_id } => json!({ "kind": SLURM_JOB_KIND, (triggers::JOB_ID_FIELD): job_id }),
       WatchSpec::SlurmJob { host: Some(host), job_id } => {
-        json!({ "kind": SLURM_JOB_KIND, "host": host, "job_id": job_id })
+        json!({ "kind": SLURM_JOB_KIND, "host": host, (triggers::JOB_ID_FIELD): job_id })
       }
     }
   }
@@ -69,7 +69,7 @@ impl WatchSpec {
     if pid.is_some_and(|pid| stored.get("pid").and_then(Value::as_i64) != Some(pid)) {
       return false;
     }
-    if job_id.is_some_and(|job_id| stored.get("job_id").and_then(Value::as_i64) != Some(job_id)) {
+    if job_id.is_some_and(|job_id| stored.get(triggers::JOB_ID_FIELD).and_then(Value::as_i64) != Some(job_id)) {
       return false;
     }
     match host {

@@ -24,18 +24,21 @@ pub struct MetadataSlot {
   pub fields: Vec<SlotField>,
 }
 
-/// Whether `value` is null, or an object whose `fields` are all strings, keeping only those fields.
+/// Whether `value` is null, or an object whose `required` fields are all strings and whose `optional` fields are each
+/// absent, null or a string, keeping only those fields.
 ///
 /// A session's origin names the chat thread the session belongs to. A validator drops unlisted keys so the stored
-/// origin carries nothing beyond the platform's own fields.
-pub fn valid_origin(value: &mut serde_json::Value, fields: &[&str]) -> bool {
+/// origin carries nothing beyond the platform's own fields. A platform that fills a field after creating the origin
+/// lists it as optional: Feishu's `thread_id` is absent until the bot's first reply creates the thread.
+pub fn valid_origin(value: &mut serde_json::Value, required: &[&str], optional: &[&str]) -> bool {
   if value.is_null() {
     return true;
   }
   let Some(object) = value.as_object_mut() else { return false };
-  let valid = fields.iter().all(|name| object.get(*name).is_some_and(serde_json::Value::is_string));
+  let valid = required.iter().all(|name| object.get(*name).is_some_and(serde_json::Value::is_string))
+    && optional.iter().all(|name| object.get(*name).is_none_or(|field| field.is_null() || field.is_string()));
   if valid {
-    object.retain(|name, _| fields.contains(&name.as_str()));
+    object.retain(|name, _| required.contains(&name.as_str()) || optional.contains(&name.as_str()));
   }
   valid
 }
@@ -61,7 +64,7 @@ pub fn validate_thread_slot(
   slot: &ThreadSlot,
 ) -> Option<String> {
   if let Some(origin) = values.get_mut(slot.origin_field)
-    && !valid_origin(origin, slot.origin_keys)
+    && !valid_origin(origin, slot.origin_keys, &[])
   {
     return Some(format!("{} must be a {} or null", slot.origin_field, slot.origin_type));
   }
@@ -80,20 +83,38 @@ mod tests {
   #[test]
   fn valid_origin_accepts_null_and_keeps_only_the_named_string_fields() {
     let mut missing_field = json!({"guild_id": "g"});
-    assert!(!valid_origin(&mut missing_field, &["guild_id", "thread_id"]));
+    assert!(!valid_origin(&mut missing_field, &["guild_id", "thread_id"], &[]));
 
     let mut non_string = json!({"guild_id": "g", "thread_id": 7});
-    assert!(!valid_origin(&mut non_string, &["guild_id", "thread_id"]));
+    assert!(!valid_origin(&mut non_string, &["guild_id", "thread_id"], &[]));
 
     let mut not_object = json!("guild");
-    assert!(!valid_origin(&mut not_object, &["guild_id"]));
+    assert!(!valid_origin(&mut not_object, &["guild_id"], &[]));
 
     let mut null = serde_json::Value::Null;
-    assert!(valid_origin(&mut null, &["guild_id"]));
+    assert!(valid_origin(&mut null, &["guild_id"], &[]));
 
     let mut origin = json!({"guild_id": "g", "thread_id": "t", "extra": "x"});
-    assert!(valid_origin(&mut origin, &["guild_id", "thread_id"]));
+    assert!(valid_origin(&mut origin, &["guild_id", "thread_id"], &[]));
     assert_eq!(origin, json!({"guild_id": "g", "thread_id": "t"}));
+  }
+
+  #[test]
+  fn valid_origin_accepts_an_optional_field_that_is_absent_null_or_a_string() {
+    let required = ["tenant_key", "chat_id"];
+
+    let mut absent = json!({"tenant_key": "t", "chat_id": "c"});
+    assert!(valid_origin(&mut absent, &required, &["thread_id"]));
+
+    let mut null = json!({"tenant_key": "t", "chat_id": "c", "thread_id": null});
+    assert!(valid_origin(&mut null, &required, &["thread_id"]));
+
+    let mut present = json!({"tenant_key": "t", "chat_id": "c", "thread_id": "th", "extra": "x"});
+    assert!(valid_origin(&mut present, &required, &["thread_id"]));
+    assert_eq!(present, json!({"tenant_key": "t", "chat_id": "c", "thread_id": "th"}));
+
+    let mut wrong_type = json!({"tenant_key": "t", "chat_id": "c", "thread_id": 7});
+    assert!(!valid_origin(&mut wrong_type, &required, &["thread_id"]));
   }
 
   #[test]

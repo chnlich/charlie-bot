@@ -94,6 +94,8 @@ function loadChatContext(elements) {
     SESSION_NAME: 'Session session-a',
     // No stubs above run config.js: stand in for its shared header literal.
     JSON_HEADERS: {'Content-Type': 'application/json'},
+    // markdown-renderer.js's registration seam, which utils.js calls at load.
+    registerChatMathLoader: () => {},
   };
   vm.createContext(context);
   // The real file-upload.js rides the page before chat/input.js; its gate

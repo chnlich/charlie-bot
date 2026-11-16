@@ -1416,8 +1416,9 @@ mod tests {
     assert_eq!(answer.failure, MemberFailure::Quota);
     assert_eq!(answer.recovers_at, Some(UtcDateTime::from(reset)));
 
-    // A login both out for quota and under its disable is still a quota refusal, and it recovers when the later of the
-    // two has ended: here the reset, 30 minutes out, outlasts the 15-minute disable.
+    // A login both out for quota and under its disable is still a quota refusal.
+    // It recovers when the later of the two has ended.
+    // Here the reset, 30 minutes out, outlasts the 15-minute disable.
     let cfg = config(&home, &[("a", &a)]);
     let state = ClaudeAccountState::new();
     let reset = now.into_inner() + Duration::minutes(30);

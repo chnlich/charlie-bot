@@ -31,6 +31,8 @@ const { makeChatRenderContext } = require('./chat_rendering_context_stub');
 function loadChatContext(elements) {
   const context = makeChatRenderContext(elements);
   vm.createContext(context);
+  // The page loads utils.js ahead of every chat module; the chat's time label is utils.js formatTimeLabel.
+  vm.runInContext(readStatic('utils.js'), context, { filename: 'utils.js' });
   vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('chat/attachments.js'), context, { filename: 'chat/attachments.js' });

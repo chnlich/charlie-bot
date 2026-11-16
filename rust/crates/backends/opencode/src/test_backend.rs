@@ -306,17 +306,8 @@ impl Harness {
     let run_directory = launch.log_dir.clone().expect("the run log directory was assigned");
     let runner = Arc::new(AgentRunner::new("opencode", Box::new(backend), launch));
     // The runner refuses a spawn whose PATH does not resolve `gh` to the wrapper.
-    let wrapper_dir = self.root.path().join("gh-wrapper");
-    fs::create_dir_all(&wrapper_dir).unwrap();
-    let wrapper = wrapper_dir.join("gh");
-    fs::write(&wrapper, "#!/bin/sh\n").unwrap();
-    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&wrapper, permissions).unwrap();
-    let mut values = Env::from([
-      ("PATH".to_string(), format!("{}:{}", wrapper_dir.display(), std::env::var("PATH").expect("PATH is set"))),
-      (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string()),
-    ]);
+    let agent_path = std::env::var("PATH").expect("PATH is set");
+    let mut values = charliebot_agents::gh_wrapper::stub_environment(self.root.path(), &agent_path);
     values.extend(additions);
     // The runner finds the serve transport through the registry, so the run's registry holds the opencode type.
     let mut registry = Registry::new();
@@ -1644,7 +1635,7 @@ async fn concurrent_turns_share_one_server_process() {
 #[ignore = "integration"]
 #[tokio::test]
 async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
-  // The held turn's text event marks its relay as streaming: the relay forwards events only from its main loop, and
+  // The held turn's text event marks its relay as streaming. The relay forwards events only from its main loop, and
   // a signal that lands before that is recorded as a failure instead of an interrupt.
   let harness = Harness::new(json!({"prompts": {
     "held": {"events": [text_event("held running")], "hold": true},

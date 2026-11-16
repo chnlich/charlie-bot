@@ -5,6 +5,8 @@
 //! This module reads the raw event bytes to answer that absence without parsing them.
 
 use std::fs;
+use std::fs::File;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 use charliebot_core::event_types;
@@ -28,6 +30,16 @@ const TASK_EVENT_TYPES: [&str; 5] = [
 const TYPE_KEY: &[u8] = b"\"type\"";
 /// The longest task event name, an upper bound on the bytes a `"type"` value needs to hold.
 const MAX_EVENT_TYPE_LEN: usize = 16;
+/// The bytes one read of a log brings in while [`file_holds_task_event`] looks for a type value.
+///
+/// A log is read in pieces of this size rather than mapped whole: the boot walk scans every candidate log of a home,
+/// and a mapped 138 MB log faults that much of itself into the process, which the peak RSS keeps. A piece extends to
+/// the end of the line it ends inside, so the scan holds one event's line at most, never the log. Tests shrink the
+/// piece, so a line that crosses pieces is written in a few bytes.
+#[cfg(not(test))]
+const SCAN_CHUNK_BYTES: usize = 1 << 20;
+#[cfg(test)]
+const SCAN_CHUNK_BYTES: usize = 64;
 
 /// The error a task read returns for a session whose history holds no creation or import boundary.
 pub fn not_a_task_tree_node(session_id: &str) -> StoreError {
@@ -81,14 +93,61 @@ impl Store {
 }
 
 /// Whether one event log names a task boundary or prompt-change event. A missing file holds none.
+///
+/// The log holds one JSON object per line, so a piece ends on a line boundary: it extends to the end of the line it
+/// ends inside, and the next piece starts after the piece's last newline. A `"type"` key and its value are therefore
+/// always read in one piece, however much whitespace the writer put between the key, its colon and its value.
 fn file_holds_task_event(path: &Path) -> StoreResult<bool> {
-  let map = match charliebot_core::fsutil::read_or_map_file(path) {
-    Ok(Some(map)) => map,
-    Ok(None) => return Ok(false),
+  let file = match File::open(path) {
+    Ok(file) => file,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
     Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
   };
-  Ok(holds_task_event(&map))
+  // A log shorter than a piece has one read, so its buffer is the log's own length: most logs of a home are a few
+  // hundred bytes, and zeroing a piece for each would clear far more than they hold.
+  let length = match file.metadata() {
+    Ok(metadata) => usize::try_from(metadata.len()).expect("a log's length fits in usize"),
+    Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+  };
+  let mut piece: Vec<u8> = Vec::new();
+  let mut offset = 0usize;
+  while offset < length {
+    piece.resize(SCAN_CHUNK_BYTES.min(length - offset), 0);
+    let mut read = read_into(&file, path, &mut piece, offset)?;
+    if read == 0 {
+      return Ok(false);
+    }
+    piece.truncate(read);
+    // A line longer than a piece is read to its end, so no key is answered from a piece that stops inside it.
+    while offset + read < length && !piece[..read].contains(&b'\n') {
+      piece.resize(read + SCAN_CHUNK_BYTES.min(length - offset - read), 0);
+      let more = read_into(&file, path, &mut piece[read..], offset + read)?;
+      if more == 0 {
+        piece.truncate(read);
+        break;
+      }
+      read += more;
+      piece.truncate(read);
+    }
+    // A piece that ends inside the log is scanned up to its last newline; a writer that truncated the log under the
+    // read leaves no such line, and then the piece's bytes are all the scan has.
+    let end = if offset + read == length {
+      read
+    } else {
+      piece[..read].iter().rposition(|byte| *byte == b'\n').map_or(read, |at| at + 1)
+    };
+    if holds_task_event(&piece[..end]) {
+      return Ok(true);
+    }
+    offset += end;
+  }
+  Ok(false)
+}
+
+/// The bytes of `path` at `offset` into `buffer`, up to the buffer's length.
+fn read_into(file: &File, path: &Path, buffer: &mut [u8], offset: usize) -> StoreResult<usize> {
+  let at = u64::try_from(offset).expect("a log's offset fits in u64");
+  file.read_at(buffer, at).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
 }
 
 /// Whether any `"type"` value names a task boundary or prompt-change event. The value is read as a JSON string, so an
@@ -183,6 +242,43 @@ mod tests {
     assert!(!holds_task_event(br#"{"type": "task_closer"}"#));
     assert!(!holds_task_event(br#"{"type_hint": "task_created"}"#));
     assert!(!holds_task_event(br#"{"type": "task_created"#));
+  }
+
+  #[test]
+  fn a_type_value_is_found_wherever_its_line_meets_a_piece() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chat_events.jsonl");
+    // The event's line starts at every offset of three pieces, so a piece ends inside it at every position: inside
+    // the key, inside the colon and the opening quote, and inside every letter of the type name.
+    for pad in 0..3 * SCAN_CHUNK_BYTES {
+      let mut boundary = vec![b'\n'; pad];
+      boundary.extend_from_slice(b"{\"id\": \"e1\", \"type\": \"prompt_changed\"}\n");
+      fs::write(&path, &boundary).unwrap();
+      assert!(file_holds_task_event(&path).unwrap(), "a task event on the line after {pad} empty ones is a boundary");
+
+      let mut ordinary = vec![b'\n'; pad];
+      ordinary.extend_from_slice(b"{\"id\": \"e1\", \"type\": \"user\", \"content\": \"prompt_changed\"}\n");
+      fs::write(&path, &ordinary).unwrap();
+      assert!(!file_holds_task_event(&path).unwrap(), "an ordinary event after {pad} empty ones holds none");
+    }
+  }
+
+  #[test]
+  fn a_type_value_past_a_piece_inside_one_line_is_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chat_events.jsonl");
+    // One line runs past three pieces, and its `"type"` value is written after the first piece's end.
+    let mut boundary = b"{\"id\": \"e1\", \"content\": \"".to_vec();
+    boundary.resize(boundary.len() + 3 * SCAN_CHUNK_BYTES, b'x');
+    boundary.extend_from_slice(b"\", \"type\": \"task_closed\"}\n");
+    fs::write(&path, &boundary).unwrap();
+    assert!(file_holds_task_event(&path).unwrap(), "a type value past the first piece of a long line is read");
+
+    let mut ordinary = b"{\"id\": \"e1\", \"content\": \"".to_vec();
+    ordinary.resize(ordinary.len() + 3 * SCAN_CHUNK_BYTES, b'x');
+    ordinary.extend_from_slice(b"\", \"type\": \"user\", \"note\": \"task_closed\"}\n");
+    fs::write(&path, &ordinary).unwrap();
+    assert!(!file_holds_task_event(&path).unwrap(), "an ordinary long line holds no task event");
   }
 
   #[test]

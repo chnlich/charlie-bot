@@ -227,6 +227,23 @@ body.resizing { cursor: col-resize; user-select: none; }
    55% the selector takes its own 113px at the default sidebar width. The New Session button beside it
    keeps the rest. */
 #new-session-backend { max-width: 55% !important; }
+/* The session search's clear control (index.html): the field's 14 px × in a 24 px box at its right
+   end, the pointer floor the sidebar's other controls hold. The glyph is the control's only mark, so
+   it takes slate-400, which draws 5.71:1 on the field's slate-800 and stays the tone the field's
+   placeholder keeps; the hover reads slate-200. The field's right padding holds the box clear of the
+   text. The control shows only while the field holds a query: :placeholder-shown is the empty field,
+   so the idle sidebar carries no extra control. */
+#sidebar-search-clear {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 6px; color: #94a3b8;
+  transition: color 0.15s, background-color 0.15s;
+}
+#sidebar-search-clear:hover { color: #e2e8f0; background: rgba(148, 163, 184, 0.16); }
+#sidebar-search:placeholder-shown ~ #sidebar-search-clear { display: none; }
+/* The field's text ends at the control's box instead of running under it. The template keeps px-3,
+   whose right padding is the 12 px the left keeps; this rule widens that side only. */
+#sidebar-search { padding-right: 2rem; }
 /* The chat page's field placeholders read in the slate-400 tone. Their placeholder-slate-500 class draws
    3.07:1 on the slate-800 field, under the 4.5:1 floor for text this size; slate-400 renders 5.71:1. */
 #auth-key-input::placeholder, #sidebar-search::placeholder, #msg-input::placeholder { color: #94a3b8; }

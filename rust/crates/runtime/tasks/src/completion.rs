@@ -578,44 +578,6 @@ impl TaskCompletion {
     Ok((200, json!({"archived": archived})))
   }
 
-  /// Build an archive close fact with its fixed report recipient and subtree owner.
-  #[allow(clippy::too_many_arguments)]
-  pub fn archived_close_event(
-    &self,
-    session_id: &str,
-    request_id: &str,
-    summary: &str,
-    report_to: Option<&str>,
-    archived_with: Option<&str>,
-    archived_by: Option<&str>,
-    actor: &str,
-    result_refs: &[String],
-    run_ids: &[String],
-  ) -> Value {
-    let mut payload = vec![
-      ("request_id".to_string(), json!(request_id)),
-      ("outcome".to_string(), json!("archived")),
-      ("summary".to_string(), json!(summary)),
-      ("result_refs".to_string(), json!(result_refs)),
-      ("run_ids".to_string(), json!(run_ids)),
-      ("report_to".to_string(), report_to.map_or(Value::Null, |parent| json!(parent))),
-    ];
-    if let Some(archived_with) = archived_with {
-      payload.push(("archived_with".to_string(), json!(archived_with)));
-    }
-    if let Some(archived_by) = archived_by {
-      payload.push(("archived_by".to_string(), json!(archived_by)));
-    }
-    control_events::build_control_event(
-      event_types::TASK_CLOSED,
-      actor,
-      session_id,
-      Some(&control_events::stable_close_event_id(session_id, request_id)),
-      None,
-      payload,
-    )
-  }
-
   /// Archive an open task subtree and report the target close to its parent. The authority carries the decision
   /// `archive_task` made: the operator, or an agent caller with its task id.
   pub async fn archive_subtree(
@@ -1120,7 +1082,7 @@ impl TaskCompletion {
       sequence_outcome,
     } = append;
     let close_event = match outcome {
-      "archived" => self.archived_close_event(
+      "archived" => control_events::archived_close_event(
         session_id,
         request_id,
         summary,

@@ -167,6 +167,11 @@ impl ThreadPlatform {
     format!("{}_ack", self.name)
   }
 
+  /// The key naming the thread's newest consumed message id in the read and ack readbacks (`watermark_key`).
+  pub fn watermark_key(&self) -> String {
+    format!("watermark_{}", self.id_label)
+  }
+
   /// The platform line every platform's contract part opens with (`platform_line`).
   pub fn platform_line(&self) -> String {
     format!(
@@ -828,7 +833,7 @@ fn assert_thread_fresh_messages(
   let mut detail = Map::new();
   detail.insert("error".to_string(), json!("stale_thread"));
   detail.insert("new_messages".to_string(), Value::Array(new_messages));
-  detail.insert(format!("watermark_{}", platform.id_label), json!(watermark));
+  detail.insert(platform.watermark_key(), json!(watermark));
   Err(ThreadReplyError {
     status: StatusCode::PRECONDITION_FAILED,
     detail: ThreadDetail::Structured(Value::Object(detail)),
@@ -1120,14 +1125,14 @@ pub async fn ack_messages(
         "content": format!("{} thread ack: {} message(s) read through {ceiling}", platform.display_name, ids.len()),
         (platform.ack_event_type()): {
           "message_ids": ids,
-          format!("watermark_{}", platform.id_label): watermark,
+          (platform.watermark_key()): watermark,
         },
       }),
     )
     .await?;
   let event = format!("{}_thread_acked", platform.name);
   tracing::info!(%event, session = session_id, acked = ids.len(), watermark = ?watermark);
-  Ok(json!({"acked": ids.len(), format!("watermark_{}", platform.id_label): watermark}))
+  Ok(json!({"acked": ids.len(), (platform.watermark_key()): watermark}))
 }
 
 /// The nudge text the summon round's silence triggers.

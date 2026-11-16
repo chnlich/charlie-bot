@@ -1207,6 +1207,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/triggers",
     hint: "Use `charliebot_triggers::triggers::WATCH_TARGETS_FIELD`.",
   },
+  OwnerRow { name: "job_id", owner: "runtime/triggers", hint: "Use `charliebot_triggers::triggers::JOB_ID_FIELD`." },
   OwnerRow { name: "modelUsage", owner: "infra/core", hint: "Use `charliebot_core::event_types::MODEL_USAGE`." },
   OwnerRow {
     name: "active_backend",
@@ -1351,6 +1352,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Use `charliebot_core::json_loads::UTF8_CODEC`; the decode-error texts and the multipart form's charset \
            default read it.",
+  },
+  OwnerRow {
+    name: "watermark_id",
+    owner: "features/chat_threads",
+    hint: "Use `ThreadPlatform::watermark_key` in `charliebot_chat_threads::thread_entry`.",
   },
 ];
 

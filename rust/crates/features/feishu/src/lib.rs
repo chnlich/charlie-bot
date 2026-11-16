@@ -24,7 +24,7 @@ mod user_token;
 
 use std::sync::Arc;
 
-use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, valid_origin};
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
 use package::NAME;
@@ -55,7 +55,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 
 fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {
   if let Some(origin) = values.get_mut(metadata::FEISHU_ORIGIN)
-    && !metadata::valid_origin(origin)
+    && !valid_origin(origin, &metadata::ORIGIN_REQUIRED_FIELDS, &metadata::ORIGIN_OPTIONAL_FIELDS)
   {
     return Some("feishu_origin must be a FeishuOrigin or null".to_string());
   }

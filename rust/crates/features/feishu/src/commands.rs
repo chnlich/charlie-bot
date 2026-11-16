@@ -105,11 +105,12 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   };
   let window_unread_ids: Vec<String> =
     window.iter().filter(|message| unread_ids.contains(&message.id)).map(|message| message.id.clone()).collect();
+  let watermark_key = FEISHU.watermark_key();
   let mut watermark_id = json!(watermark);
   if !window_unread_ids.is_empty() {
     let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
     let ack = thread_entry::ack_messages(&dyn_adapter, &bot.features, session_id, &window_unread_ids).await?;
-    watermark_id = ack["watermark_id"].clone();
+    watermark_id = ack[watermark_key.as_str()].clone();
   }
   let mut messages = Vec::new();
   if let Some(root) = root {
@@ -122,7 +123,7 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   );
   Ok(json!({
     "messages": messages,
-    "watermark_id": watermark_id,
+    (watermark_key): watermark_id,
     "more_unread": unread_ids.len() - window_unread_ids.len(),
   }))
 }

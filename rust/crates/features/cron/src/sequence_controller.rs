@@ -400,6 +400,20 @@ impl SequenceController for CronSequenceController {
     Some(tasks.tasks.iter().filter_map(|task| task.session_id.clone()).collect())
   }
 
+  fn listing_bound_and_fields(
+    &self,
+    _rows: &[Arc<SessionMetadata>],
+    now: UtcDateTime,
+  ) -> (Option<Vec<String>>, HashMap<String, Map<String, Value>>) {
+    // The bound ids and the rows' schedule fields both come from one loader snapshot, and the snapshot's
+    // fingerprint check is what a listing pays to see the current config. A listing reads it once.
+    let tasks = self.snapshot_for_listing();
+    let bound: Vec<String> = tasks.tasks.iter().filter_map(|task| task.session_id.clone()).collect();
+    let mut memo = self.row_schedule_memo.lock().expect("cron row schedule memo is not poisoned");
+    let fields = row_schedule_fields(&mut memo, &tasks.tasks, tasks.fingerprint, &bound, now);
+    (Some(bound), fields)
+  }
+
   fn move_bindings<'a>(&'a self, source: &'a str, new: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async move {
       let home = cron_home();

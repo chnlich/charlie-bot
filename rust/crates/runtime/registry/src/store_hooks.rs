@@ -122,6 +122,23 @@ impl SequenceListingFields for RegisteredSequences {
     Ok(self.registry.sequence_listing_fields(&ids, now))
   }
 
+  fn listing_fields_for_rows(
+    &self,
+    rows: &[Arc<SessionMetadata>],
+    now: UtcDateTime,
+  ) -> StoreResult<HashMap<String, Map<String, Value>>> {
+    let mut fields: HashMap<String, Map<String, Value>> = HashMap::new();
+    for controller in self.registry.sequence_controllers() {
+      // A controller renders fields for the sessions it binds alone, so its own bound set is the whole batch it
+      // needs: one controller's bound ids add nothing to another's answer.
+      let (_, controller_fields) = controller.listing_bound_and_fields(rows, now);
+      for (session_id, controller_fields) in controller_fields {
+        fields.entry(session_id).or_default().extend(controller_fields);
+      }
+    }
+    Ok(fields)
+  }
+
   fn bound_listing_ids(&self) -> Option<Vec<String>> {
     let mut bound = Vec::new();
     for controller in self.registry.sequence_controllers() {

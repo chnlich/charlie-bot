@@ -1,8 +1,9 @@
 //! The read window that every chat channel's thread read shares: where the window starts, which unread messages it
-//! acks, and how many it leaves out.
+//! acks, how many it leaves out, and the field names of the reply's message view.
 //!
-//! A channel crate pages its own thread through its client and builds its own message views; the window itself is
-//! this module's rule, so a channel's read answers the same messages and moves the same watermark.
+//! A channel crate pages its own thread through its client and builds its own message views from this module's field
+//! names. The window itself is this module's rule, so a channel's read answers the same messages and moves the same
+//! watermark.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -14,6 +15,30 @@ use crate::thread_entry::{ThreadAdapter, ThreadReplyError, ack_messages};
 
 /// The reply field that counts the unread messages the window leaves out.
 pub const MORE_UNREAD: &str = "more_unread";
+
+/// The reply field that holds the messages the read answers, in the read's own order.
+pub const MESSAGES: &str = "messages";
+
+/// The reply field that holds one message view's id.
+pub const ID: &str = "id";
+
+/// The reply field that holds the platform account id that wrote the message.
+pub const AUTHOR_ID: &str = "author_id";
+
+/// The reply field that holds the configured person name of the message's author, when the config names the author.
+pub const PERSON: &str = "person";
+
+/// The reply field that holds the message's timestamp in the platform's format.
+pub const TIMESTAMP: &str = "timestamp";
+
+/// The reply field that holds the message's text.
+pub const CONTENT: &str = "content";
+
+/// The reply field that marks a message the watermark still counts as unread.
+pub const UNREAD: &str = "unread";
+
+/// The reply field that marks the message a pending summon answers.
+pub const SUMMON: &str = "summon";
 
 /// The thread listing a read answers from, and the state that picks its window.
 pub struct ThreadRead<'a, M> {

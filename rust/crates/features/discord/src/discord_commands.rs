@@ -24,15 +24,15 @@ use crate::metadata::DiscordOrigin;
 /// the text, the attachment URLs, and the unread and summon flags.
 fn message_view(message: &Message, unread: bool, summon: bool, allowed_users: &BTreeMap<String, String>) -> Value {
   json!({
-    "id": message.id,
-    "author_id": message.author.id,
+    (thread_read::ID): message.id,
+    (thread_read::AUTHOR_ID): message.author.id,
     "author": message.author.global_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(message.author.username.as_str()),
-    "person": allowed_users.get(&message.author.id),
-    "timestamp": message.timestamp,
-    "content": message.content.as_deref().unwrap_or_default(),
+    (thread_read::PERSON): allowed_users.get(&message.author.id),
+    (thread_read::TIMESTAMP): message.timestamp,
+    (thread_read::CONTENT): message.content.as_deref().unwrap_or_default(),
     "attachments": message.attachments.iter().map(|attachment| attachment.url.as_str()).collect::<Vec<_>>(),
-    "unread": unread,
-    "summon": summon,
+    (thread_read::UNREAD): unread,
+    (thread_read::SUMMON): summon,
   })
 }
 
@@ -112,7 +112,7 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
     message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed_users)
   }));
   Ok(json!({
-    "messages": messages,
+    (thread_read::MESSAGES): messages,
     (DISCORD.watermark_key()): window.watermark,
     (thread_read::MORE_UNREAD): window.more_unread,
   }))
@@ -134,7 +134,7 @@ async fn read_linked_channel(bot: &Bot, url: &str, limit: usize) -> Result<Value
   let config = bot.config().map_err(ThreadReplyError::failure)?;
   let allowed_users = &config.section::<DiscordConfig>("discord").allowed_users;
   let messages: Vec<Value> = newest.iter().map(|message| message_view(message, false, false, allowed_users)).collect();
-  Ok(json!({"messages": messages, (DISCORD.watermark_key()): null, (thread_read::MORE_UNREAD): 0}))
+  Ok(json!({(thread_read::MESSAGES): messages, (DISCORD.watermark_key()): null, (thread_read::MORE_UNREAD): 0}))
 }
 
 /// The readback of `charliebot discord read`: the session's own thread (`url` None), or the newest messages of the

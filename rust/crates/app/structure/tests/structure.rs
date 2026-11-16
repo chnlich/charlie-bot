@@ -1371,10 +1371,17 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "features/chat_threads",
     hint: "Use `ThreadPlatform::watermark_key` in `charliebot_chat_threads::thread_entry`.",
   },
+  OwnerRow {
+    name: "author_id",
+    owner: "features/chat_threads",
+    hint: "Use `charliebot_chat_threads::thread_read::AUTHOR_ID`; every message view in a thread read names the \
+           author field from it.",
+  },
 ];
 
-/// Plain config keys that the path matcher intentionally does not recognize. These must match an exact string literal
-/// outside their owner so a raw field name cannot return unnoticed.
+/// Plain names that only an exact literal match catches: the path matcher reads a plain word as a path segment, so a
+/// config key or a reply field with no separator would slip past it. These must match an exact string literal outside
+/// their owner so a raw field name cannot return unnoticed.
 const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "credential", owner: "infra/core", hint: "Use `charliebot_core::config::CREDENTIAL_KEY`." },
   OwnerRow { name: "api_key", owner: "infra/core", hint: "Use `charliebot_core::credentials::API_KEY_FIELD`." },
@@ -1401,6 +1408,12 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Use `charliebot_core::event_types::RATE_LIMIT_OVERAGE_STATUS`; every reader of a `rate_limit_info` object \
            names the field there.",
+  },
+  OwnerRow {
+    name: "person",
+    owner: "features/chat_threads",
+    hint: "Use `charliebot_chat_threads::thread_read::PERSON`; every message view in a thread read names the person \
+           field from it.",
   },
 ];
 

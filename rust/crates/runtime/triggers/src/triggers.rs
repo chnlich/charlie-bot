@@ -138,6 +138,10 @@ struct SshRun {
 static PROGRAM_AVAILABILITY: OnceLock<StdMutex<HashMap<String, bool>>> = OnceLock::new();
 #[cfg(test)]
 static PROGRAM_SEARCHES: AtomicUsize = AtomicUsize::new(0);
+/// The SLURM watch target's job-number field. The body model reads it and so does the `session trigger` command, so
+/// neither crate spells the name on its own.
+pub const JOB_ID_FIELD: &str = "job_id";
+
 const LOCAL_PID_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[LOCAL_PID_KIND])),
   Field::required("pid", FieldType::Integer),
@@ -156,7 +160,7 @@ const REMOTE_PID: BodyModel = BodyModel::optional(REMOTE_PID_FIELDS);
 const SLURM_JOB_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[SLURM_JOB_KIND])),
   Field::optional("host", FieldType::NullableString),
-  Field::required("job_id", FieldType::Integer),
+  Field::required(JOB_ID_FIELD, FieldType::Integer),
 ];
 const SLURM_JOB: BodyModel = BodyModel::optional(SLURM_JOB_FIELDS);
 const WATCH_TARGET_VARIANTS: &[TaggedVariant] = &[
@@ -2265,7 +2269,7 @@ fn watch_target(value: &Value) -> anyhow::Result<WatchTarget> {
       log: optional_string(value, "log"),
     },
     SLURM_JOB_KIND => {
-      WatchTarget::SlurmJob { host: optional_string(value, "host"), job_id: integer_field(value, "job_id")? }
+      WatchTarget::SlurmJob { host: optional_string(value, "host"), job_id: integer_field(value, JOB_ID_FIELD)? }
     }
     other => unreachable!("validated watch target kind {other}"),
   })

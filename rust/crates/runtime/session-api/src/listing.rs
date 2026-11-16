@@ -8,6 +8,7 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use charliebot_compat::compression::accepts_gzip;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
@@ -1183,11 +1184,7 @@ pub fn sessions_list_response(
   memos: &SessionsListMemos,
 ) -> Response {
   let projection = LISTING_PROJECTION;
-  let wants_gzip = request
-    .headers()
-    .get(header::ACCEPT_ENCODING)
-    .and_then(|value| value.to_str().ok())
-    .is_some_and(|value| value.contains("gzip"));
+  let wants_gzip = accepts_gzip(request.headers());
   let mut state = memos.state.lock().expect("sessions list memo mutex is not poisoned");
   // The corpus check answers the common request before it walks every row's inputs. It proves every input the body
   // reads still holds, so the body it returns is the body a rebuild would render.
@@ -1267,11 +1264,7 @@ impl CompactListingMemo {
       Ok(text) => text,
       Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
     };
-    let wants_gzip = request
-      .headers()
-      .get(header::ACCEPT_ENCODING)
-      .and_then(|value| value.to_str().ok())
-      .is_some_and(|value| value.contains("gzip"));
+    let wants_gzip = accepts_gzip(request.headers());
     if !wants_gzip {
       return json_bytes_response(Bytes::copy_from_slice(text.as_bytes()), false);
     }

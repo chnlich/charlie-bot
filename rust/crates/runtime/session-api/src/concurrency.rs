@@ -16,11 +16,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, Request, StatusCode, header};
+use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_level_four};
-use charliebot_compat::headers::header_text;
+use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, accepts_gzip, gzip_level_four};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
@@ -696,11 +695,6 @@ async fn history(State(features): State<Arc<FeatureContext>>, request: Request<B
     Ok((body, compressed, tag)) => history_response(body, compressed, tag),
     Err(error) => store_error(error),
   }
-}
-
-/// Whether the request's `Accept-Encoding` asks for a gzip response, the answer the transport gzip gives.
-fn accepts_gzip(headers: &HeaderMap) -> bool {
-  header_text(headers, &header::ACCEPT_ENCODING).contains("gzip")
 }
 
 /// The body, its gzip form when a gzip client asks, and the tag one history request answers with.

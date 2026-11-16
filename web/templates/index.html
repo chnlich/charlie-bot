@@ -41,11 +41,10 @@
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
   </script>
   <script>window.SESSIONS_ROOT = {{ sessions_root|tojson }};</script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="/static/vendor/marked-15.0.12.min.js"></script>
+  <link href="/static/vendor/fira-code-v27.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/vendor/highlight-github-dark-11.9.0.min.css">
+  <script src="/static/vendor/highlight-11.9.0.min.js"></script>
   {# KaTeX is not here: markdown-renderer.js downloads it at the first message that carries math. #}
   <style>{% include 'css/styles.css' %}</style>
   {% for part in page_parts('head') %}{% include part %}{% endfor %}
@@ -157,8 +156,10 @@
 
     <!-- ==================== MAIN AREA ==================== -->
     <main class="flex-1 flex flex-col min-w-0">
-      {% if active_session %}
-
+      {% if active_session or shell %}
+      <!-- The shell (`?session=` with an empty value, the document the offline shell's worker stores) renders
+           this column with no session in it: the open path fills the name, the events link and the input area in
+           from the first screen it fetches (session-view.js). -->
       <!-- Tab bar -->
       <header class="flex items-center border-b border-slate-700 bg-slate-800/50 px-4">
         <button class="hamburger-btn p-2 -ml-2 mr-1 rounded-lg hover:bg-slate-700 transition-colors" onclick="toggleMobileSidebar()" title="Menu">
@@ -217,6 +218,11 @@
                session's waiting count, hidden at 0 (chat/status-panel.js). -->
           <button type="button" data-chat-view-option="status" onclick="setChatView('status')" aria-pressed="false"
                   class="hidden px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Status<span id="status-waiting-count" class="hidden ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs text-white"></span></button>
+          <!-- The not-current mark: shown while the messages are a stored copy the page has not caught up
+               (sidebar/last-state.js sets data-freshness on it). -->
+          <span id="freshness-mark"
+                class="hidden ml-auto self-center px-2 py-0.5 text-xs rounded-md bg-amber-900/40
+                       text-amber-300">Not current</span>
         </div>
         <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
           <!-- Streaming target (initialized from pending_draft if present) -->

@@ -190,7 +190,8 @@ function loadPlanPanelScript(opts = {}) {
     SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT,
     console: {error: noop, log: noop, warn: noop},
     document,
-    window: {SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT},
+    window: {addEventListener() {}, SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT},
+    navigator: {onLine: true},
     localStorage: {getItem: () => null, setItem: noop},
     fetch: opts.fetch || (async () => {
       throw new Error('fetch should not run during script load');

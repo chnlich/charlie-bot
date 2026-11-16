@@ -13,6 +13,9 @@ const {createFakeWebSocketClass} = require('./fake_websocket');
 const {standInForUsageJs} = require('./session_context_stub');
 const {createElement} = require('./dom_element_stub');
 
+// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
+const NO_STORED_COPY = {get: () => null};
+
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
 const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
@@ -60,6 +63,7 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
     PAGE_HOSTNAME: 'localhost:8000',
     document,
     CustomEvent,
+    AbortController,
     TextEncoder,
     URLSearchParams,
     console: {error() {}, warn() {}, log() {}},
@@ -73,11 +77,12 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
     fetch: (url) => new Promise((resolve, reject) => {
       page.requests.push({
         url,
-        respond: (body) => resolve({ok: true, json: async () => body}),
+        respond: (body) => resolve({ok: true, headers: NO_STORED_COPY, json: async () => body}),
         fail: (error) => reject(error),
       });
     }),
     location: {href: '', protocol: 'http:', host: 'localhost', search: '', reload: () => { page.reloads += 1; }},
+    reloadAfterRefreshingShell: () => { page.reloads += 1; },
     localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
     sessionStorage: {
       getItem: (key) => page.storage.get(key) ?? null,
@@ -98,6 +103,7 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
+  vm.runInContext(readStatic('view-requests.js'), context, {filename: 'view-requests.js'});
   runStaticModules(context, chatModules());
   standInForUsageJs(context);
   runStaticModules(context, sidebarModules());

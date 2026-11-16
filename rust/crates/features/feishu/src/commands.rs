@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use axum::http::StatusCode;
-use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadMessage, ThreadReplyError};
+use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadMessage, ThreadReplyError};
+use charliebot_chat_threads::thread_read;
 use charliebot_core::paths;
 use charliebot_core::str_methods;
 use serde::{Deserialize, Serialize};
@@ -92,39 +93,33 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   .into_iter()
   .map(|message| message.id.clone())
   .collect();
-  let mut starts = Vec::new();
-  if let Some(first) = thread_messages.iter().position(|message| unread_ids.contains(&message.id)) {
-    starts.push(first);
-  }
-  if let Some(first) = thread_messages.iter().position(|message| pending.contains(&message.id)) {
-    starts.push(first);
-  }
-  let window: &[ThreadMessage] = match starts.into_iter().min() {
-    None => &thread_messages[thread_messages.len().saturating_sub(limit)..],
-    Some(start) => &thread_messages[start..thread_messages.len().min(start + limit)],
-  };
-  let window_unread_ids: Vec<String> =
-    window.iter().filter(|message| unread_ids.contains(&message.id)).map(|message| message.id.clone()).collect();
-  let watermark_key = FEISHU.watermark_key();
-  let mut watermark_id = json!(watermark);
-  if !window_unread_ids.is_empty() {
-    let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
-    let ack = thread_entry::ack_messages(&dyn_adapter, &bot.features, session_id, &window_unread_ids).await?;
-    watermark_id = ack[watermark_key.as_str()].clone();
-  }
+  let window = thread_read::read_window(
+    &adapter,
+    &bot.features,
+    session_id,
+    thread_read::ThreadRead {
+      messages: &thread_messages,
+      unread_ids: &unread_ids,
+      pending: &pending,
+      watermark: watermark.as_deref(),
+      limit,
+    },
+    |message| message.id.as_str(),
+  )
+  .await?;
   let mut messages = Vec::new();
   if let Some(root) = root {
     messages.push(message_view(&root, false, pending.contains(&root.id), allowed));
   }
   messages.extend(
-    window
+    thread_messages[window.first..window.last]
       .iter()
       .map(|message| message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed)),
   );
   Ok(json!({
     "messages": messages,
-    (watermark_key): watermark_id,
-    "more_unread": unread_ids.len() - window_unread_ids.len(),
+    (FEISHU.watermark_key()): window.watermark,
+    (thread_read::MORE_UNREAD): window.more_unread,
   }))
 }
 

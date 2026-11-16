@@ -1,7 +1,7 @@
 //! `web/features/chat_threads`: the chat thread sessions. Their turn contribution names the thread brief, the subtree
 //! of each top-level thread session is the Threads view, and `GET /api/sessions/chat-threads` lists that view. The
-//! reply contract that the platform turn contributions share is in `thread_entry`, and the chat line their reply
-//! events render is in `reply_event`.
+//! reply contract that the platform turn contributions share is in `thread_entry`, the window their read commands
+//! answer with is in `thread_read`, and the chat line their reply events render is in `reply_event`.
 
 mod api;
 pub mod backfill;
@@ -13,6 +13,7 @@ pub mod summon;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 pub mod thread_entry;
+pub mod thread_read;
 mod turn_contribution;
 
 use std::sync::Arc;

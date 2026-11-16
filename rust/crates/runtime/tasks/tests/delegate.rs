@@ -797,7 +797,7 @@ async fn an_unpinned_implement_takes_the_routers_answer() -> anyhow::Result<()> 
   Ok(())
 }
 
-/// A manager with no user message delegates a cold read. The read-only exemption admits it, the child is named after
+/// A manager with no user message delegates a cold read. The open manager chain admits it, the child is named after
 /// the page file, and its first run goes to the first pool member.
 #[tokio::test]
 #[ignore = "integration"]

@@ -642,10 +642,6 @@ impl OpenCodeServer {
     self.state.lock().expect("opencode server state mutex is not poisoned").process.as_ref().map(|process| process.pid)
   }
 
-  pub fn version(&self) -> Option<String> {
-    self.state.lock().expect("opencode server state mutex is not poisoned").version.clone()
-  }
-
   pub(crate) fn record_name(&self) -> anyhow::Result<String> {
     let process = self.process()?;
     relay::server_record_name(&process.record_path)

@@ -13,8 +13,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
-  loadCronPackage, makeSessionMeta } = require('./session_context_stub');
+const { answerArchiveConfirmations, baseSessionContext, buildSidebarFilterElements, createChatSidebarContext,
+  inlinePageTimers, loadCronPackage, makeSessionMeta, makeSidebarRow } = require('./session_context_stub');
 
 function makeSession(id, overrides = {}) {
   return makeSessionMeta(id, {group: 'Work', status: 'active', ...overrides});
@@ -75,6 +75,7 @@ function buildContext({sessionId = 'session-live', rows = [], fetchHandler} = {}
   // be re-installed over the wired ones.
   context.switchSession = recordSwitch;
   context.renderNoActiveSessionView = recordNoActiveView;
+  answerArchiveConfirmations(context);
   return {context, nav, fetchCalls, switches, noActiveViews, elements};
 }
 
@@ -265,7 +266,7 @@ test('deleting from the search overlay removes only the row node', async () => {
     makeSession('search-2', {group: null}),
     makeSession('search-3', {group: null}),
   ];
-  const deletedRow = createElement({tagName: 'A', id: 'session-search-1'});
+  const deletedRow = makeSidebarRow('search-1', 'Search one');
   const {context, nav, fetchCalls} = buildContext({rows: [deletedRow]});
   // Paint a grouped list first so lastGroupedRenderArgs exists: the overlay
   // delete must not repaint it even though the args are sitting there.

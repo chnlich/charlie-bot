@@ -12,9 +12,8 @@
 //! `additionalContext`. Exempt material — whole reads of rule and skill files, child conclusions and
 //! session status, approval objects, the user's decisions — is never counted and never withheld.
 //!
-//! The session's own rule files are the markdown files its `CLAUDE.md` names in backticks, so a line
-//! rule file and the shared rule file it opens with are exempt wherever they live. A partial read of
-//! one of them counts.
+//! The session's own rule files are the markdown files its `CLAUDE.md` names in backticks and the
+//! rule files those files name in backticks, transitively. A partial read of one of them counts.
 //!
 //! Persisted output: when a Bash output exceeds the inline limit, the model reads only the
 //! `<persisted-output>` wrapper with a first-2KB preview, and the full text is saved at the
@@ -28,6 +27,7 @@
 //! missing run directory and a state-file failure exit 2 with the error on stderr, which Claude
 //! Code shows to the model.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -73,7 +73,7 @@ const PERSISTED_PREVIEW_CHARS: usize = 2000;
 const RULE_PATH: &str = r"(/skills/|(^|[\s:/])prompts/|SKILL\.md|LESSONS\.md|CLAUDE\.md|AGENTS\.md|\.claude/rules/)";
 
 /// The file that states a session's effective rules, in its session directory. The markdown files it
-/// names in backticks are the session's own rule files.
+/// names in backticks, and the files they name in turn, are the session's own rule files.
 const SESSION_RULES_FILE_NAME: &str = charliebot_registry::backend::CLAUDE_INSTRUCTIONS_FILE_NAME;
 
 /// A backticked markdown path, whose capture is the path.
@@ -403,9 +403,9 @@ fn session_dir_of(run_dir: &Path) -> &Path {
   run_dir.ancestors().nth(3).expect("a run directory lies under its session's data directory")
 }
 
-/// The session's own rule files: the markdown files its `CLAUDE.md` names in backticks, each one that
-/// exists. A session without a `CLAUDE.md` names none. A file that is not a rule file of the session
-/// is not named there, so its reads keep counting.
+/// The session's own rule files: existing markdown files named in backticks by its `CLAUDE.md` or by
+/// another session rule file. Relative names use the directory of the file naming them. The session
+/// memo is not a rule file. A session without a `CLAUDE.md` names none.
 fn session_rule_files(run_dir: &Path) -> Result<Vec<String>, CliExit> {
   let session_dir = session_dir_of(run_dir);
   let path = session_dir.join(SESSION_RULES_FILE_NAME);
@@ -414,15 +414,31 @@ fn session_rule_files(run_dir: &Path) -> Result<Vec<String>, CliExit> {
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
     Err(error) => return Err(CliExit::usage(format!("could not read {}: {error}", path.display()))),
   };
-  let base = session_dir.to_string_lossy().into_owned();
+  let session_base = session_dir.to_string_lossy().into_owned();
   let mut rules: Vec<String> = Vec::new();
-  for captures in backticked_md_pattern().captures_iter(&text) {
-    if let Some(resolved) = resolve_token(&captures[1], Some(base.as_str()))
-      && Path::new(&resolved).is_file()
-      && !is_memo_path(&resolved, Some(base.as_str()))
-      && !rules.contains(&resolved)
-    {
-      rules.push(resolved);
+  let canonical =
+    path.canonicalize().map_err(|error| CliExit::usage(format!("could not resolve {}: {error}", path.display())))?;
+  let mut visited = HashSet::from([canonical]);
+  let mut pending = vec![(path, text)];
+  while let Some((source, text)) = pending.pop() {
+    let base = source.parent().expect("a rule file has a parent directory").to_string_lossy();
+    for captures in backticked_md_pattern().captures_iter(&text) {
+      if let Some(resolved) = resolve_token(&captures[1], Some(&base))
+        && Path::new(&resolved).is_file()
+        && !is_memo_path(&resolved, Some(&session_base))
+        && !rules.contains(&resolved)
+      {
+        let path = Path::new(&resolved);
+        let canonical = path
+          .canonicalize()
+          .map_err(|error| CliExit::usage(format!("could not resolve {}: {error}", path.display())))?;
+        if visited.insert(canonical) {
+          let text = std::fs::read_to_string(path)
+            .map_err(|error| CliExit::usage(format!("could not read {}: {error}", path.display())))?;
+          pending.push((path.to_path_buf(), text));
+        }
+        rules.push(resolved);
+      }
     }
   }
   Ok(rules)
@@ -1115,6 +1131,45 @@ mod tests {
     assert!(output.is_empty());
     assert_eq!(home.state().counted, 14_000);
     assert!(home.state().withheld.is_empty());
+  }
+
+  #[test]
+  fn referenced_rules_are_transitive_and_cycles_stop() {
+    let home = RunHome::new();
+    let session = home.session_dir();
+    let nested = session.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let a = nested.join("A.md");
+    let b = session.join("B.md");
+    let c = nested.join("C.md");
+    let d = session.join("D.md");
+    let e = session.join("E.md");
+    let memo = session.join("memo.md");
+    std::fs::write(session.join(SESSION_RULES_FILE_NAME), "`nested/A.md`").unwrap();
+    std::fs::write(&a, format!("`{}` `C.md` `../memo.md` `missing.md`", b.display())).unwrap();
+    std::fs::write(&b, "`D.md`").unwrap();
+    std::fs::write(&c, "`A.md`").unwrap();
+    std::fs::write(&d, "`B.md`").unwrap();
+    std::fs::write(&e, "unlisted").unwrap();
+    std::fs::write(&memo, "`E.md`").unwrap();
+
+    let rules = session_rule_files(&home.run_dir).unwrap();
+    assert_eq!(rules.len(), 4);
+    assert!(!rules.contains(&memo.to_string_lossy().into_owned()));
+    for path in [&b, &c, &d] {
+      let (result, output) = run_event(&home, &read_event(&path.to_string_lossy(), &"x".repeat(1_000)));
+      result.unwrap();
+      assert!(output.is_empty());
+      assert_eq!(home.state().counted, 0);
+    }
+    let (result, _) = run_event(&home, &read_event(&e.to_string_lossy(), &"x".repeat(1_000)));
+    result.unwrap();
+    assert_eq!(home.state().counted, 1_000);
+    let mut partial = read_event(&a.to_string_lossy(), &"x".repeat(500));
+    partial["tool_input"]["limit"] = json!(40);
+    let (result, _) = run_event(&home, &partial);
+    result.unwrap();
+    assert_eq!(home.state().counted, 1_500);
   }
 
   #[test]

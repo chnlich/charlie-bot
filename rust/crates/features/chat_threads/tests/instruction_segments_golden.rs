@@ -4,9 +4,7 @@ use std::io::Read;
 use std::path::Path;
 
 use charliebot_core::RepoRoot;
-use charliebot_core::config::{
-  BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
-};
+use charliebot_core::test_support::synthetic_config;
 use charliebot_registry::turn::RuleSegment;
 use charliebot_registry::{RegisterFn, Registry};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
@@ -196,7 +194,7 @@ fn rust_answer(case: &Value, repo_path: &Path, registry: &Registry) -> Value {
   meta.extra.extend(session["extra"].as_object().unwrap().clone());
   let repo = RepoRoot::new(Some(OsString::from(repo_path))).unwrap();
   let kind = case["kind"].as_str().unwrap();
-  let config = config(id);
+  let config = synthetic_config(format!("/synthetic/home/{id}"));
   match registry.instruction_segments(&meta, kind, &config, &repo) {
     Ok(segments) => json!({"segments": segments.iter().map(segment_json).collect::<Vec<_>>()}),
     Err(error) => json!({"error": format!("{error}")}),
@@ -213,42 +211,6 @@ fn segment_json(segment: &RuleSegment) -> Value {
     })).collect::<Vec<_>>(),
     "delivery": segment.delivery,
   })
-}
-
-fn config(session_id: &str) -> CharlieBotConfig {
-  CharlieBotConfig {
-    charliebot_home: format!("/synthetic/home/{session_id}").into(),
-    headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
-    server: ServerConfig {
-      host: "127.0.0.1".to_string(),
-      port: 18650,
-      subprocess_buffer_limit_mb: 1,
-      session_memory_max_mb: 0,
-      session_swap_max_mb: 0,
-      public_url: None,
-      session_tasks_max: 0,
-      min_free_disk_gib: 0,
-      enable_session_cpu_weight: true,
-      enable_session_io_weight: true,
-      enable_local_work_guard: false,
-    },
-    paths: PathsConfig {
-      workspace_dirs: Vec::new(),
-      worktree_dir: "/synthetic/worktrees".to_string(),
-      scratch_dir: "/synthetic/scripts".to_string(),
-    },
-    backends: BackendsConfig {
-      routing: None,
-      options: Vec::new(),
-      pools: Vec::new(),
-      calls: charliebot_core::config::CallsConfig::default(),
-    },
-    ui: UiConfig { home_services: Vec::new() },
-    telegram: TelegramConfig { chat_id: None },
-    remote_run: charliebot_core::config::RemoteRunConfig::default(),
-    github: Default::default(),
-    sections: Sections::default(),
-  }
 }
 
 fn matches_materialized_paths(expected: &Value, actual: &Value, root: &str) -> bool {

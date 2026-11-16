@@ -7,9 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use charliebot_core::RepoRoot;
-use charliebot_core::config::{
-  BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
-};
+use charliebot_core::test_support::synthetic_config;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_tasks::prompts::{PromptEnv, RuleInputs, SessionGoals, build_segments};
 use serde_json::json;
@@ -28,42 +26,6 @@ const THREAD_RULE_SENTENCES: [&str; 5] = [
 /// `rust/crates/app/server` sits four levels below the checkout root.
 fn checkout_root() -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate sits under the checkout").to_path_buf()
-}
-
-fn config(home: &Path) -> CharlieBotConfig {
-  CharlieBotConfig {
-    charliebot_home: home.to_path_buf(),
-    headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
-    server: ServerConfig {
-      host: "127.0.0.1".to_string(),
-      port: 18650,
-      subprocess_buffer_limit_mb: 1,
-      session_memory_max_mb: 0,
-      session_swap_max_mb: 0,
-      public_url: None,
-      session_tasks_max: 0,
-      min_free_disk_gib: 0,
-      enable_session_cpu_weight: true,
-      enable_session_io_weight: true,
-      enable_local_work_guard: false,
-    },
-    paths: PathsConfig {
-      workspace_dirs: Vec::new(),
-      worktree_dir: "/synthetic/worktrees".to_string(),
-      scratch_dir: "/synthetic/scripts".to_string(),
-    },
-    backends: BackendsConfig {
-      routing: None,
-      options: Vec::new(),
-      pools: Vec::new(),
-      calls: charliebot_core::config::CallsConfig::default(),
-    },
-    ui: UiConfig { home_services: Vec::new() },
-    telegram: TelegramConfig { chat_id: None },
-    remote_run: charliebot_core::config::RemoteRunConfig::default(),
-    github: Default::default(),
-    sections: Sections::default(),
-  }
 }
 
 fn slack_thread_session() -> SessionMetadata {
@@ -98,7 +60,7 @@ fn manager_turn_text(meta: &SessionMetadata) -> String {
   let registry = registry().expect("the listed packages register");
   let checkout = RepoRoot::new(Some(checkout_root().into_os_string())).expect("the checkout path is valid");
   let home = tempfile::tempdir().expect("temp home");
-  let cfg = config(home.path());
+  let cfg = synthetic_config(home.path());
   let env = PromptEnv { cfg: &cfg, registry: &registry, checkout: &checkout };
   let inputs = RuleInputs { overlay: None, chain: &[], node_ref: None, goals: &SessionGoals::default() };
   let (segments, _overlay_error) =

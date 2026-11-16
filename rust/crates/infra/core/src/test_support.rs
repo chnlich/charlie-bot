@@ -1,5 +1,6 @@
-//! The tracing capture that every crate's tests share. A test that reads rendered log lines uses [`LogCapture`]; a test
-//! that reads event fields installs [`RecordedEvents`], or implements [`EventSink`] itself, with [`install_events`].
+//! The fixtures every crate's tests share. A test that reads rendered log lines uses [`LogCapture`]; a test that reads
+//! event fields installs [`RecordedEvents`], or implements [`EventSink`] itself, with [`install_events`]. A test that
+//! runs a turn or reads a registered package builds its configuration with [`synthetic_config`].
 //!
 //! One global subscriber serves every thread and never changes; a capture is a thread-local sink that the subscriber's
 //! fmt writer or event layer consults. A scoped `set_default` per capture would not do: tracing-core 0.1.36 has one
@@ -9,6 +10,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
 
 use tracing::Event;
@@ -16,6 +18,8 @@ use tracing::Subscriber;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+use crate::config::{BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
 
 thread_local! {
   /// The capture this thread installed. One thread holds one capture at a time; a thread without one logs nowhere.
@@ -151,5 +155,43 @@ impl<S: Subscriber> Layer<S> for EventDispatch {
     if let Some(sink) = sink {
       sink.event(event);
     }
+  }
+}
+
+/// The synthetic configuration a test runs a turn or reads a registered package against: the given profile home,
+/// fixed synthetic paths and no backend entry.
+pub fn synthetic_config(home: impl Into<PathBuf>) -> CharlieBotConfig {
+  CharlieBotConfig {
+    charliebot_home: home.into(),
+    headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
+    server: ServerConfig {
+      host: "127.0.0.1".to_string(),
+      port: 18650,
+      subprocess_buffer_limit_mb: 1,
+      session_memory_max_mb: 0,
+      session_swap_max_mb: 0,
+      public_url: None,
+      session_tasks_max: 0,
+      min_free_disk_gib: 0,
+      enable_session_cpu_weight: true,
+      enable_session_io_weight: true,
+      enable_local_work_guard: false,
+    },
+    paths: PathsConfig {
+      workspace_dirs: Vec::new(),
+      worktree_dir: "/synthetic/worktrees".to_string(),
+      scratch_dir: "/synthetic/scripts".to_string(),
+    },
+    backends: BackendsConfig {
+      routing: None,
+      options: Vec::new(),
+      pools: Vec::new(),
+      calls: crate::config::CallsConfig::default(),
+    },
+    ui: UiConfig { home_services: Vec::new() },
+    telegram: TelegramConfig { chat_id: None },
+    remote_run: crate::config::RemoteRunConfig::default(),
+    github: Default::default(),
+    sections: Sections::default(),
   }
 }

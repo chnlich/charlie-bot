@@ -265,8 +265,13 @@ Conditions, each a fresh browser profile behind a fresh proxy, with the CDN file
 | `held` | A 30 s held blackout starts 1 s before the open navigates, so the open is inside it. |
 | `reset` | As `held`, but the blackout resets every connection when it starts. The pooled connection of A and B ends there. |
 | `flaps` | Up 5 s, then down 5 s, six times (60 s). Each drop resets every connection, so each recovery reconnects. |
-| `offline` | Chrome's network emulation is offline for the open. The navigation fails at once and the open is not reached. |
+| `offline` | Chrome's network emulation is offline for the open. The navigation fails at once with `net::ERR_INTERNET_DISCONNECTED` and the open is not reached. |
 | `release` | A held blackout starts; 2 s in, the server's static asset version changes (the bench appends a comment to the trial tree's served `web/static/js/config.js`, and the version the server answers must move); the open navigates 5 s in, inside the hold. The open's document request waits in the hold and reaches the server after the release. A page that revalidates its document, as main's does, receives the released page in full and does not reload. A page that opens from a stored copy without asking the server is older than the release: when the link returns, its socket closes with 4409 and the page reloads once, inside the open, and the open's time runs from the first navigation through that reload. |
+
+`A flaps` opens its page from the HTTP cache and reaches its newest message inside one up window. B's and C's documents
+must cross the link in full (about 7.3 s at 12.5 KB/s), longer than one up window, so no window completes the body and
+their opens are recorded at the cap. The offline cells fail at once and show no page: origin/main stores no page to show
+offline, so it has nothing to serve, and `web-offline-shell` is the branch that adds one.
 
 The release open navigates within 10 s of the last read on A's and B's pooled connection. Chrome sends a request on an
 HTTP/2 connection idle that long only after a PING, which the hold leaves unanswered; Chrome then drops the connection
@@ -275,8 +280,11 @@ repetition failed with `net::ERR_TIMED_OUT` 40.2 s after its navigation, against
 whose new connection is the first attempt; A held, 1.6 s after the last read, loads. With the open 5 s in, all 20 A and
 B release repetitions of a main-vs-main bench pair on 00574379c (2026-11-15, five per row on each bench) loaded, each
 with the released page in full (90,803 to 90,805 B on the wire), and the bench that records reloads recorded none. C has
-no pooled connection, so its first attempt falls inside the blackout in every blackout cell, and `C held`, `C reset`
-and `C release` end with `net::ERR_TIMED_OUT` when Chrome's 30 s connect timeout runs out.
+no pooled connection, so its first attempt falls inside the blackout in every blackout cell; the loopback filter drops
+its SYN, and the client's first retry after the restore, about 31 s in, reaches the proxy. C's blackout cells therefore
+reach their newest message about 20 s after the restore: a five-repetition run of this bench on product `ab531974` at
+rate 3.8 (2026-11-16) measured `C held` at a 50,633 ms median, `C reset` at 49,800 ms and `C release` at 50,319 ms,
+each 5 of 5.
 
 The open is `switchTarget` (a session whose bootstrap is the view's 26,592 bytes); B's other session is `probes[0]`.
 The CPU rate is `Emulation.setCPUThrottlingRate`. The cells run in this order: a reference cell (A, link, rate 1), the

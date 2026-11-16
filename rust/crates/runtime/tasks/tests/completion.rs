@@ -341,7 +341,7 @@ async fn archived_parent_keeps_child_archive_report_as_history_without_waking() 
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
-  let root_close = h.completion.archived_close_event(
+  let root_close = control_events::archived_close_event(
     &root.id,
     "archive-root",
     "archived by the user",

@@ -514,20 +514,16 @@ pub async fn child_manager(
 /// One task session archived as the completion owner's archive writes it: one closed fact on the session.
 pub async fn archive_task(features: &FeatureContext, session_id: &str) {
   let guard = features.store.control_lock().await;
-  let event = charliebot_store::control_events::build_control_event(
-    charliebot_core::event_types::TASK_CLOSED,
-    "user",
+  let event = charliebot_store::control_events::archived_close_event(
     session_id,
+    "synthetic-cron-archive",
+    "archived by the user",
     None,
     None,
-    [
-      ("request_id".to_string(), serde_json::json!("synthetic-cron-archive")),
-      ("outcome".to_string(), serde_json::json!("archived")),
-      ("summary".to_string(), serde_json::json!("archived by the user")),
-      ("result_refs".to_string(), serde_json::json!([])),
-      ("run_ids".to_string(), serde_json::json!([])),
-      ("report_to".to_string(), Value::Null),
-    ],
+    None,
+    charliebot_store::control_events::ACTOR_USER,
+    &[],
+    &[],
   );
   features.store.append_control_fact(&guard, session_id, event).await.expect("the archive fact appends");
   drop(guard);

@@ -3092,37 +3092,6 @@ fn task_spec_hash(task: &TaskSpec) -> StoreResult<String> {
   Ok(control_events::sha256_hex(&serialized))
 }
 
-/// One archive-format close fact: outcome `archived` and no report target, so an archive wakes nobody.
-#[cfg(test)]
-pub(crate) fn archived_close_event(
-  session_id: &str,
-  request_id: &str,
-  actor: &str,
-  summary: &str,
-  run_ids: &[&str],
-  archived_with: Option<&str>,
-) -> Value {
-  let mut payload = vec![
-    ("request_id".to_string(), Value::String(request_id.to_string())),
-    ("outcome".to_string(), Value::String("archived".to_string())),
-    ("summary".to_string(), Value::String(summary.to_string())),
-    ("result_refs".to_string(), json!([])),
-    ("run_ids".to_string(), json!(run_ids)),
-    ("report_to".to_string(), Value::Null),
-  ];
-  if let Some(archived_with) = archived_with {
-    payload.push(("archived_with".to_string(), Value::String(archived_with.to_string())));
-  }
-  control_events::build_control_event(
-    "task_closed",
-    actor,
-    session_id,
-    Some(&control_events::stable_close_event_id(session_id, request_id)),
-    None,
-    payload,
-  )
-}
-
 fn caller_actor(caller: &TaskCaller) -> &'static str {
   match caller {
     TaskCaller::Operator => ACTOR_USER,
@@ -4315,7 +4284,17 @@ pub(crate) mod tests {
   /// Write one archive close fact directly, as the completion owner's archive writes it.
   pub(crate) async fn archive_node(store: &Store, session_id: &str) {
     let guard = store.control_lock().await;
-    let event = archived_close_event(session_id, "archive-test", ACTOR_USER, "archived by the user", &[], None);
+    let event = control_events::archived_close_event(
+      session_id,
+      "archive-test",
+      "archived by the user",
+      None,
+      None,
+      None,
+      ACTOR_USER,
+      &[],
+      &[],
+    );
     store.append_control_fact(&guard, session_id, event).await.unwrap();
     drop(guard);
     store.invalidate_tree_index();

@@ -337,20 +337,16 @@ async fn closed_ancestor_refuses_delegation() -> anyhow::Result<()> {
   user_message(&stack, &child.id, "Can you fix it?").await?;
   // The root's archive close fact, which closes the task the gate reads (`archived_close_event`).
   let guard = stack.store().control_lock().await;
-  let close = control_events::build_control_event(
-    event_types::TASK_CLOSED,
-    control_events::ACTOR_USER,
+  let close = control_events::archived_close_event(
     &root.id,
-    Some(&control_events::stable_close_event_id(&root.id, "close-root")),
+    "close-root",
+    "archived by the user",
     None,
-    [
-      ("request_id".to_string(), json!("close-root")),
-      ("outcome".to_string(), json!("archived")),
-      ("summary".to_string(), json!("archived by the user")),
-      ("result_refs".to_string(), json!([])),
-      ("run_ids".to_string(), json!([])),
-      ("report_to".to_string(), Value::Null),
-    ],
+    None,
+    None,
+    control_events::ACTOR_USER,
+    &[],
+    &[],
   );
   stack.store().append_control_fact(&guard, &root.id, close).await?;
   drop(guard);

@@ -1,7 +1,7 @@
 //! Stable task-tree identifiers and the ordered headers for durable control facts.
 
 use charliebot_core::event_types::{self, EventFields};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -207,6 +207,43 @@ pub fn build_task_created_event(
       ),
       (TASK_SPEC_HASH_FIELD.to_string(), task_spec_hash.map_or(Value::Null, |value| Value::String(value.to_string()))),
     ],
+  )
+}
+
+/// Build an archived task-close fact with its report recipient and the subtree that archives it.
+#[allow(clippy::too_many_arguments)]
+pub fn archived_close_event(
+  session_id: &str,
+  request_id: &str,
+  summary: &str,
+  report_to: Option<&str>,
+  archived_with: Option<&str>,
+  archived_by: Option<&str>,
+  actor: &str,
+  result_refs: &[String],
+  run_ids: &[String],
+) -> Value {
+  let mut payload = vec![
+    ("request_id".to_string(), json!(request_id)),
+    ("outcome".to_string(), json!("archived")),
+    ("summary".to_string(), json!(summary)),
+    ("result_refs".to_string(), json!(result_refs)),
+    ("run_ids".to_string(), json!(run_ids)),
+    ("report_to".to_string(), report_to.map_or(Value::Null, |parent| json!(parent))),
+  ];
+  if let Some(archived_with) = archived_with {
+    payload.push(("archived_with".to_string(), json!(archived_with)));
+  }
+  if let Some(archived_by) = archived_by {
+    payload.push(("archived_by".to_string(), json!(archived_by)));
+  }
+  build_control_event(
+    event_types::TASK_CLOSED,
+    actor,
+    session_id,
+    Some(&stable_close_event_id(session_id, request_id)),
+    None,
+    payload,
   )
 }
 

@@ -40,16 +40,16 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
   let field = |name: &str| meta.and_then(|meta| meta.get(name)).cloned().unwrap_or(Value::Null);
   let author_id = message.user.clone().or_else(|| message.bot_id.clone());
   json!({
-    "id": message.id,
+    (thread_read::ID): message.id,
     (MESSAGE_ID): field(MESSAGE_ID),
     (MESSAGE_TYPE): field(MESSAGE_TYPE),
     (THREAD_ID): field(THREAD_ID),
-    "author_id": author_id,
-    "person": message.user.as_deref().and_then(|user| allowed.get(user)),
-    "timestamp": message.created_at,
-    "content": message.text,
-    "unread": unread,
-    "summon": summon,
+    (thread_read::AUTHOR_ID): author_id,
+    (thread_read::PERSON): message.user.as_deref().and_then(|user| allowed.get(user)),
+    (thread_read::TIMESTAMP): message.created_at,
+    (thread_read::CONTENT): message.text,
+    (thread_read::UNREAD): unread,
+    (thread_read::SUMMON): summon,
   })
 }
 
@@ -117,7 +117,7 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
       .map(|message| message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed)),
   );
   Ok(json!({
-    "messages": messages,
+    (thread_read::MESSAGES): messages,
     (FEISHU.watermark_key()): window.watermark,
     (thread_read::MORE_UNREAD): window.more_unread,
   }))
@@ -158,7 +158,7 @@ pub async fn read_chat(
   };
   let pending = pending_summon_ids(bot, session_id).await?;
   let mut output = json!({
-    "messages": messages
+    (thread_read::MESSAGES): messages
       .iter()
       .map(|message| message_view(message, false, pending.contains(&message.id), allowed))
       .collect::<Vec<_>>(),
@@ -240,7 +240,7 @@ pub async fn read_topic(
   }
   let pending = pending_summon_ids(bot, session_id).await?;
   let mut output = json!({
-    "messages": messages
+    (thread_read::MESSAGES): messages
       .iter()
       .map(|message| message_view(message, false, pending.contains(&message.id), allowed))
       .collect::<Vec<_>>(),

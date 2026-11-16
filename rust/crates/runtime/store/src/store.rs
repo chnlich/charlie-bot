@@ -78,6 +78,21 @@ pub trait SequenceListingFields: Send + Sync {
   fn bound_listing_ids(&self) -> Option<Vec<String>> {
     None
   }
+  /// Return the derived sequence fields of a listing's rows, each controller's bound set and fields read from one pass.
+  ///
+  /// A controller that loads a snapshot for both answers reads it once here, where the default reads the bound ids
+  /// and then asks for their fields.
+  fn listing_fields_for_rows(
+    &self,
+    rows: &[Arc<SessionMetadata>],
+    now: UtcDateTime,
+  ) -> StoreResult<HashMap<String, Map<String, Value>>> {
+    let ids = match self.bound_listing_ids() {
+      Some(ids) => ids,
+      None => rows.iter().map(|row| row.id.clone()).collect(),
+    };
+    self.listing_fields(&ids, now)
+  }
   /// Return sequence subtree roots over a metadata snapshot, borrowing the memoized rows.
   fn sequence_subtree_roots(&self, metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>>;
   /// Return view subtree roots over a metadata snapshot, borrowing the memoized rows.

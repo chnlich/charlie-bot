@@ -10,7 +10,9 @@ use charliebot_core::home;
 use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_registry::Registry;
 use charliebot_registry::context::FeatureContext;
-use charliebot_registry::sequence::{QuotaFailure, SequenceBinding, SequenceController, SequenceTree};
+use charliebot_registry::sequence::{
+  ListingContribution, QuotaFailure, SequenceBinding, SequenceController, SequenceTree,
+};
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use charliebot_store::StoreResult;
 use charliebot_store::metadata::{
@@ -398,6 +400,16 @@ impl SequenceController for CronSequenceController {
   fn bound_session_ids(&self) -> Option<Vec<String>> {
     let tasks = self.snapshot_for_listing();
     Some(tasks.tasks.iter().filter_map(|task| task.session_id.clone()).collect())
+  }
+
+  fn listing_bound_and_fields(&self, _rows: &[Arc<SessionMetadata>], now: UtcDateTime) -> ListingContribution {
+    // The bound ids and the rows' schedule fields both come from one loader snapshot, and the snapshot's
+    // fingerprint check is what a listing pays to see the current config. A listing reads it once.
+    let tasks = self.snapshot_for_listing();
+    let bound: Vec<String> = tasks.tasks.iter().filter_map(|task| task.session_id.clone()).collect();
+    let mut memo = self.row_schedule_memo.lock().expect("cron row schedule memo is not poisoned");
+    let fields = row_schedule_fields(&mut memo, &tasks.tasks, tasks.fingerprint, &bound, now);
+    (Some(bound), fields)
   }
 
   fn move_bindings<'a>(&'a self, source: &'a str, new: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {

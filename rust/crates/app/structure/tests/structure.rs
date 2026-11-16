@@ -1207,6 +1207,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/triggers",
     hint: "Use `charliebot_triggers::triggers::WATCH_TARGETS_FIELD`.",
   },
+  OwnerRow { name: "job_id", owner: "runtime/triggers", hint: "Use `charliebot_triggers::triggers::JOB_ID_FIELD`." },
   OwnerRow { name: "modelUsage", owner: "infra/core", hint: "Use `charliebot_core::event_types::MODEL_USAGE`." },
   OwnerRow {
     name: "active_backend",

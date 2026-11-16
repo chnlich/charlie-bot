@@ -50,9 +50,13 @@ pub const STDERR_LOG_NAME: &str = "agent.stderr.log";
 pub const CURSOR_NAME: &str = "agent.raw.cursor";
 pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
 
+/// The run metadata file's field naming the session's native (backend) session id. A reader of the file, such as the
+/// usage capture scan, takes the name from here.
+pub const NATIVE_SESSION_ID_FIELD: &str = "native_session_id";
+
 // The `record_observation` field names. The task side sends them, and this crate validates and applies them, so the
 // writer and the validator match these names instead of spelling them.
-pub const OBSERVATION_NATIVE_SESSION_ID: &str = "native_session_id";
+pub const OBSERVATION_NATIVE_SESSION_ID: &str = NATIVE_SESSION_ID_FIELD;
 pub const OBSERVATION_MODEL: &str = "model";
 pub const OBSERVATION_RAW_LOG_REF: &str = "raw_log_ref";
 pub const OBSERVATION_EVENTS_REF: &str = "events_ref";

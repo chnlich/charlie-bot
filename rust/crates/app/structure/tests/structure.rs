@@ -892,6 +892,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::run_records::STDERR_LOG_NAME`.",
   },
   OwnerRow {
+    name: "native_session_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::NATIVE_SESSION_ID_FIELD`.",
+  },
+  OwnerRow {
     name: "AGENTS.md",
     owner: "runtime/registry",
     hint: "Use `charliebot_registry::backend::AGENTS_INSTRUCTIONS_FILE_NAME`.",

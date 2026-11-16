@@ -883,7 +883,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn copied_user_message_does_not_authorize_the_successor() {
+  async fn cloned_open_manager_is_authorized_under_open_parent() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
@@ -892,8 +892,7 @@ mod tests {
 
     let clone = store.fork_session(&source.id, None, None).await.unwrap();
 
-    // The copied user message belongs to the source, so it does not authorize the clone.
-    assert!(store.check_task_authorization(&clone.id).is_err());
+    assert!(store.check_task_authorization(&clone.id).is_ok());
   }
 
   #[tokio::test]

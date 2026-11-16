@@ -93,15 +93,13 @@ struct RunRecord {
   state: String,
 }
 
-/// What the server has done so far: the probe session's runs, the read counts, the delegated task and the messages
-/// the parent session has received. The delegation check needs a message before the server delegates.
+/// What the server has done so far: the probe session's runs, the read counts, and the delegated task.
 #[derive(Default)]
 struct State {
   runs: Vec<RunRecord>,
   bootstrap_reads: u64,
   run_listings: u64,
   task: Option<Value>,
-  opened: Vec<String>,
 }
 
 struct Server {
@@ -415,20 +413,12 @@ impl Server {
   fn delegation(&self, method: &str, path_and_query: &str, request: &Value) -> io::Result<(u16, Value)> {
     let path = path_and_query.split('?').next().unwrap_or_default();
     if method == "POST" && path == route::fill(task_routes::CHAT_MESSAGE_PATH, &[PARENT_SESSION]) {
-      let content = string_field(request, "content")?.to_string();
-      self.lock().opened.push(content);
+      let _content = string_field(request, "content")?;
       return Ok((ACCEPTED, json!({(event_types::INPUT_EVENT_ID): "open-input"})));
     }
     if method == "POST" && path == task_routes::DELEGATE_PATH {
       if self.behavior.delegate == "refused" {
         return Ok((400, json!({"detail": "backend router failed: no backend is available"})));
-      }
-      // The server's rule: a delegation needs a user message on its task chain.
-      let opened = !self.lock().opened.is_empty();
-      if !opened {
-        let detail =
-          format!("Delegation blocked: no user request on the task chain from task {PARENT_SESSION} to its root.");
-        return Ok((403, json!({"detail": detail})));
       }
       let task = self.start_task(string_field(request, REPO_PATH_FIELD)?)?;
       self.lock().task = Some(task);

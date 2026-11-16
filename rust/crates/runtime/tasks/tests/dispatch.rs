@@ -124,20 +124,12 @@ async fn admission_replays_stable_ids_and_refuses_untrusted_provenance() {
 }
 
 #[tokio::test]
-async fn worker_agent_messages_require_parent_identity_and_authorization() {
+async fn worker_agent_messages_require_parent_identity_and_open_chain() {
   let harness = Harness::new();
   let root = harness.create_task("root", None, TaskProfile::Manager, "Root").await;
   let worker = harness.create_task("worker", Some(&root.id), TaskProfile::Worker, "Worker").await;
 
   let parent_fields = json!({"from_session":root.id,"from_session_name":"Root"});
-  assert!(matches!(
-    harness
-      .dispatcher
-      .admit_input(&worker.id, event_types::AGENT_MESSAGE, "work", "agent", parent_fields.clone())
-      .await,
-    Err(StoreError::Forbidden(_))
-  ));
-  harness.dispatcher.admit_input(&root.id, event_types::USER, "authorize", "user", json!({})).await.unwrap();
   assert!(matches!(
     harness
       .dispatcher
@@ -151,18 +143,31 @@ async fn worker_agent_messages_require_parent_identity_and_authorization() {
       .await,
     Err(StoreError::Forbidden(message)) if message.contains("must come from its parent task")
   ));
-  harness.dispatcher.admit_input(&worker.id, event_types::AGENT_MESSAGE, "work", "agent", parent_fields).await.unwrap();
+  harness
+    .dispatcher
+    .admit_input(&worker.id, event_types::AGENT_MESSAGE, "work", "agent", parent_fields.clone())
+    .await
+    .unwrap();
   assert_eq!(harness.dispatcher.pending_inputs(&worker.id).unwrap().len(), 1);
+
+  harness.close_task(&root.id, "root-close", None).await;
+  assert!(matches!(
+    harness
+      .dispatcher
+      .admit_input(&worker.id, event_types::AGENT_MESSAGE, "after close", "agent", parent_fields)
+      .await,
+    Err(StoreError::Forbidden(message)) if message.contains("Delegation blocked:")
+  ));
 }
 
-/// A parent's agent message reaches a verify or cold-read child with no user message anywhere, and the same message to
-/// an implement child is refused without that takeoff.
+/// A parent's agent message reaches verify, cold-read, and implement children without a user message, and a message
+/// from another sender is refused for every worker type.
 #[tokio::test]
-async fn agent_message_to_a_read_only_child_passes_without_takeoff() {
+async fn agent_message_to_worker_passes_without_user_message_and_requires_parent() {
   let harness = Harness::new();
   let root = harness.create_task("root", None, TaskProfile::Manager, "Root").await;
   let parent_fields = json!({"from_session": root.id, "from_session_name": "Root"});
-  for task_type in [TaskType::Verify, TaskType::ColdRead] {
+  for task_type in [TaskType::Verify, TaskType::ColdRead, TaskType::Implement] {
     let child = typed_child(&harness, &root.id, task_type).await;
     let event = harness
       .dispatcher
@@ -170,14 +175,14 @@ async fn agent_message_to_a_read_only_child_passes_without_takeoff() {
       .await
       .unwrap();
     assert_eq!(event["content"], "a note from the parent");
+    assert!(matches!(
+      harness
+        .dispatcher
+        .admit_input(&child.id, event_types::AGENT_MESSAGE, "x", "agent", json!({"from_session": "outsider"}))
+        .await,
+      Err(StoreError::Forbidden(message)) if message.contains("must come from its parent task")
+    ));
   }
-
-  // The control: an implement child refuses the same message without takeoff.
-  let implement = typed_child(&harness, &root.id, TaskType::Implement).await;
-  assert!(matches!(
-    harness.dispatcher.admit_input(&implement.id, event_types::AGENT_MESSAGE, "x", "agent", parent_fields).await,
-    Err(StoreError::Forbidden(_))
-  ));
 }
 
 /// A worker child of `parent` whose task record names `task_type`; a cold-read child names a page too.

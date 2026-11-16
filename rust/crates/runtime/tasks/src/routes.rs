@@ -324,12 +324,10 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     Err(error) => return task_http_error(error),
   };
 
-  let task_spec = delegate_task_spec(&request);
-  if !charliebot_store::is_read_only_exempt(Some(&task_spec))
-    && let Err(error) = features.store.check_task_authorization(&request.session_id)
-  {
+  if let Err(error) = features.store.check_task_authorization(&request.session_id) {
     return task_http_error(error);
   }
+  let task_spec = delegate_task_spec(&request);
   let cfg = match features.config.get() {
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
@@ -1594,6 +1592,11 @@ mod tests {
   async fn delegate_checks_the_runtime_gate_before_creating_a_child() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-manager").await;
+    features
+      .store
+      .append_chat_event("synthetic-manager", json!({"type": "task_closed", "outcome": "completed"}))
+      .await
+      .unwrap();
     let before_children = features.store.child_ids("synthetic-manager").unwrap();
     let before_events = features.store.load_chat_events_sync("synthetic-manager").unwrap();
     let router = routes(&features);

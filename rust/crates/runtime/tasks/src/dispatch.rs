@@ -209,9 +209,6 @@ impl Dispatcher {
     if event_type != event_types::AGENT_MESSAGE || meta.profile != TaskProfile::Worker {
       return Ok(());
     }
-    if charliebot_store::is_read_only_exempt(meta.task.as_ref()) {
-      return Ok(());
-    }
     if from_session != meta.task_parent_id.as_deref() {
       return Err(StoreError::forbidden(format!(
         "agent messages to worker task {} must come from its parent task {}; this message names sender {}",

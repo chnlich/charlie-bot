@@ -268,31 +268,12 @@ async fn user_questions_admit_root_and_child_delegations() -> anyhow::Result<()>
   Ok(())
 }
 
-/// A root manager whose log holds a recorded thread summon delegates, and a root whose only input is an agent message
-/// relayed through the session-message route is refused.
+/// A root manager with no user message (shaped like a cron-bound session) delegates a worker child.
 #[tokio::test]
 #[ignore = "integration"]
-async fn summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not() -> anyhow::Result<()> {
+async fn root_manager_without_user_message_delegates_worker() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
-
-  // Refusal: the root's only user-facing input is a relay admitted by the ordinary relay route.
-  let scripts = Scripts::new(vec![]);
-  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
-  let root = node(&stack, "root", None, TaskProfile::Manager, BACKEND_ID).await?;
-  let relay_caller = node(&stack, "relay-caller", None, TaskProfile::Manager, BACKEND_ID).await?;
-  stack.queue_run(&root.id, "root-run", RunKind::ManagerTurn).await?;
-  stack.launch(&root.id, "root-run", 424_242, "ps-root").await?;
-  let (status, body) = relay(&stack, &relay_caller.id, &root.id, "Take off. Ship the feature.").await?;
-  assert_eq!(status, StatusCode::OK, "{body}");
-  let auth = run_token_header(&root.id, "root-run", "manager-agent")?;
-  let (status, body) =
-    post_delegate_as(&routes::routes(&stack.features), delegate_body(&root.id, &repo, "quick-edit"), &auth).await?;
-  assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-  assert!(text(&body, "detail")?.contains("no user request"), "{body}");
-  assert!(scripts.builds().is_empty());
-
-  // Admission: a fresh root whose only user-facing input is the event a Slack thread summon writes.
   let scripts = Scripts::new(vec![result_script("leaf done")]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let root = node(&stack, "root", None, TaskProfile::Manager, BACKEND_ID).await?;
@@ -303,11 +284,10 @@ async fn summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not()
     .append_chat_event(
       &root.id,
       json!({
-        "type": event_types::AGENT_MESSAGE,
-        "actor": "agent",
+        "type": event_types::SCHEDULED_TRIGGER,
+        "actor": "system",
         "source_session_id": root.id,
-        "content": "Slack 线程召唤",
-        "slack": {"channel_id": "C123", "thread_ts": "1700000000.000100", "mention_ts": "1700000000.000200"},
+        "content": "scheduled tick",
       }),
     )
     .await?;
@@ -405,14 +385,14 @@ async fn foreign_run_token_cannot_delegate() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// A verify delegation needs no user message and launches on the route, while a repo task under the same tree stays
-/// blocked.
+/// An open manager without a user message launches both verify and repo tasks, and closing the root blocks both.
 #[tokio::test]
 #[ignore = "integration"]
-async fn verify_exemption_on_the_v2_route_and_launch() -> anyhow::Result<()> {
+async fn open_manager_launches_verify_and_repo_without_user_message_and_closed_root_blocks_both() -> anyhow::Result<()>
+{
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
-  let scripts = Scripts::new(vec![result_script("verdict: no")]);
+  let scripts = Scripts::new(vec![result_script("verdict: no"), result_script("leaf done")]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let root = node(&stack, "root", None, TaskProfile::Manager, BACKEND_ID).await?;
   let child = node(&stack, "child", Some(&root.id), TaskProfile::Manager, BACKEND_ID).await?;
@@ -426,11 +406,29 @@ async fn verify_exemption_on_the_v2_route_and_launch() -> anyhow::Result<()> {
     Some(RunOutcomeKind::Success)
   );
 
-  let (blocked, _) = post_delegate(&router, delegate_body(&child.id, &repo, "quick-edit")).await?;
-  assert_eq!(blocked, StatusCode::FORBIDDEN);
-  let leaves = stack.store().child_ids(&child.id)?;
-  assert_eq!(leaves, vec![text(&verify, "session_id")?], "the blocked repo task created nothing");
-  assert_eq!(scripts.builds().len(), 1);
+  let (status, leaf) = post_delegate(&router, delegate_body(&child.id, &repo, "quick-edit")).await?;
+  assert_eq!(status, StatusCode::OK, "{leaf}");
+  let leaf_id = text(&leaf, "session_id")?;
+  settle_runs(&stack, &leaf_id).await?;
+  assert_eq!(scripts.builds().len(), 2);
+
+  let guard = stack.store().control_lock().await;
+  let close = control_events::build_control_event(
+    "task_closed",
+    control_events::ACTOR_SYSTEM,
+    &root.id,
+    None,
+    None,
+    [("outcome".to_string(), json!("completed"))],
+  );
+  stack.store().append_control_fact(&guard, &root.id, close).await?;
+  drop(guard);
+
+  let (blocked_verify, _) = post_delegate(&router, verify_body(&child.id)).await?;
+  assert_eq!(blocked_verify, StatusCode::FORBIDDEN);
+  let (blocked_repo, _) = post_delegate(&router, delegate_body(&child.id, &repo, "quick-edit")).await?;
+  assert_eq!(blocked_repo, StatusCode::FORBIDDEN);
+  assert_eq!(stack.store().child_ids(&child.id)?, vec![text(&verify, "session_id")?, leaf_id]);
   Ok(())
 }
 
@@ -461,15 +459,26 @@ async fn agent_run_token_delegates_verify_without_a_takeoff() -> anyhow::Result<
   Ok(())
 }
 
-/// A manager with no user message delegates a repo task. The gate refuses, and no child or delegation fact is written.
+/// A closed manager delegates a repo task. The gate refuses, and no child or delegation fact is written.
 #[tokio::test]
 #[ignore = "integration"]
-async fn delegate_task_returns_403_when_takeoff_gate_blocks() -> anyhow::Result<()> {
+async fn delegate_task_returns_403_when_manager_is_closed() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let manager = node(&stack, "pm", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let guard = stack.store().control_lock().await;
+  let close = control_events::build_control_event(
+    "task_closed",
+    control_events::ACTOR_SYSTEM,
+    &manager.id,
+    None,
+    None,
+    [("outcome".to_string(), json!("completed"))],
+  );
+  stack.store().append_control_fact(&guard, &manager.id, close).await?;
+  drop(guard);
 
   let (status, body) =
     post_delegate(&routes::routes(&stack.features), delegate_body(&manager.id, &repo, "implement")).await?;

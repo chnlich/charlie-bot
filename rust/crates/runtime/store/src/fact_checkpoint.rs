@@ -39,7 +39,7 @@ use crate::task_tree_state::{
 use crate::{StoreError, StoreResult};
 
 /// The format version of the checkpoint file. A file of another version is not read.
-const CHECKPOINT_VERSION: u64 = 2;
+const CHECKPOINT_VERSION: u64 = 3;
 /// The bytes of each end of the covered prefix whose digest the checkpoint keeps. A rewrite that leaves both windows
 /// and the length intact would have to reproduce the prefix's ends, which no writer here does.
 pub(crate) const WINDOW_BYTES: usize = 4096;
@@ -374,7 +374,6 @@ fn task_facts_value(facts: &TaskFacts) -> Value {
   delivered_reports.sort();
   json!({
     TASK_STATE: facts.task_state,
-    "has_user_request": facts.has_user_request,
     "run_outcomes": run_outcomes,
     "run_outcome_string_none_ids": sorted(&facts.run_outcome_string_none_ids),
     "run_finish_positions": run_finish_positions,
@@ -422,7 +421,6 @@ fn task_facts_from_value(value: &Value) -> Option<TaskCheckpointFacts> {
     .collect::<Option<std::collections::HashSet<_>>>()?;
   let facts = TaskFacts {
     task_state: field(TASK_STATE)?.as_str()?.to_string(),
-    has_user_request: field("has_user_request")?.as_bool()?,
     run_outcomes,
     run_outcome_string_none_ids: strings_of(field("run_outcome_string_none_ids")?)?.into_iter().collect(),
     run_finish_positions,

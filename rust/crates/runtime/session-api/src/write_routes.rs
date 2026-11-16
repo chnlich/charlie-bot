@@ -964,8 +964,9 @@ mod tests {
     assert_eq!(detail, json!({"detail": "task metadata mutations require operator credentials"}));
   }
 
-  /// A run token resolves through `resolve_caller` to the agent path: a move inside the caller's subtree lands with the
-  /// caller on its fact, a move of the caller's own task is the scope refusal, and a name-only body stays the rename.
+  /// A run token resolves through `resolve_caller` to the agent path. A move inside the caller's subtree lands with
+  /// the caller on its fact. A move of the caller's own task is the scope refusal, and a name-only body stays the
+  /// rename.
   #[tokio::test]
   async fn a_run_token_reparents_only_inside_its_own_subtree() {
     let (home, features) = feature_context();
@@ -1300,8 +1301,8 @@ backends:
     assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "twin-a");
   }
 
-  /// A model and the pool holding it alone expand to the same member set, so the lock rules them the same way:
-  /// the foreign-domain model and its singleton pool both refuse, the same-domain model and its singleton pool
+  /// A model and the pool holding it alone expand to the same member set, so the lock rules them the same way.
+  /// The foreign-domain model and its singleton pool both refuse, and the same-domain model and its singleton pool
   /// both pass.
   #[tokio::test]
   async fn a_model_and_the_pool_holding_it_alone_get_the_same_lock_verdict() {

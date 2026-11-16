@@ -167,7 +167,7 @@ backends:
     charliebot_core::repo_root::RepoRoot::new(Some(checkout.as_os_str().to_os_string())).expect("repo root is valid")
   }
 
-  /// Entrance #9 of the plan's entry-consistency item, success side: a pool session previews 200 from the member
+  /// Entrance #9 of the plan's entry-consistency item, success side. A pool session previews 200 from the member
   /// the next start runs on, the same 200 the model over it alone gets.
   #[tokio::test]
   async fn a_pool_session_previews_200_like_the_model_it_holds() {
@@ -206,7 +206,7 @@ backends:
     assert_eq!(pool["mode"], "preview");
   }
 
-  /// Entrance #9 of the plan's entry-consistency item, exhausted side: a cooling model and the pool over it preview
+  /// Entrance #9 of the plan's entry-consistency item, exhausted side. A cooling model and the pool over it preview
   /// the same exhaustion, so the preview keeps no pool-or-model branch of its own.
   #[tokio::test]
   async fn a_cooling_model_and_its_singleton_pool_preview_the_same_exhaustion() {

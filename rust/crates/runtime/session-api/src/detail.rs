@@ -100,9 +100,9 @@ pub fn build_bootstrap_payload(
   let response_meta = response_metadata(store, meta)?;
   let mut worker_summary = None;
   // The tail the payload renders, oldest first, with the ordinal of its first slot in the space
-  // the session's older pages read: a message ordinal in a worker's transcript projection, an
-  // event index for every other session, whose events fold to messages one to many. The events
-  // branch keeps the fold of the whole tail, which is the payload's first trim step.
+  // the session's older pages read. That ordinal is a message ordinal in a worker's transcript
+  // projection, and an event index for every other session, whose events fold to messages one to
+  // many. The events branch keeps the fold of the whole tail, which is the payload's first trim step.
   enum Tail {
     Slots { messages: Vec<Value>, start: usize, projection: Arc<MessageProjection> },
     Events { events: Vec<charliebot_store::ChatEvent>, start: usize, messages: Vec<Value> },
@@ -124,8 +124,8 @@ pub fn build_bootstrap_payload(
     // fewer messages than the page shows. The read that ends the loop keeps its fold: the payload's first trim step
     // takes that same tail, and a longer tail only adds whole turns the trim drops. The next read therefore holds
     // the events this session's own ratio needs, never the next doubling of the last.
-    // The read covers the log's last `read` lines, and a line that does not parse is no event: the cursor counts the
-    // lines the tail covers, not the events they parse to, so a malformed line never advances it.
+    // The read covers the log's last `read` lines, and a line that does not parse is no event. The cursor counts
+    // the lines the tail covers, not the events they parse to, so a malformed line never advances it.
     let mut read = BOOTSTRAP_MESSAGE_LIMIT;
     let (events, total_count, oldest, messages, pending_draft) = loop {
       let (events, total_count, _has_more) = store.load_chat_events_tail(&meta.id, read)?;
@@ -196,8 +196,8 @@ pub fn build_bootstrap_payload(
   Ok(BootstrapPayload { value, untrimmed_wire_bytes })
 }
 
-/// The next tail read after one that folded `read` events to `messages` messages: the events the message budget
-/// needs at that ratio, bounded to eight times the last read and to the log's own line count.
+/// The next tail read after one that folded `read` events to `messages` messages. It holds the events the message
+/// budget needs at that ratio, bounded to eight times the last read and to the log's own line count.
 ///
 /// The read grows by at least half, so a fold that missed the budget by a few messages still ends the loop at the
 /// next read.
@@ -237,8 +237,8 @@ fn fit_first_screen_payload(
 
 /// A session page's bootstrap payload as the page carries it.
 ///
-/// The `session` object is the payload's largest value, and the page reads it without changing it, so a memo hit
-/// hands back the object the memo built instead of copying it.
+/// The `session` object is the payload's largest value, and the page reads it without changing it. A memo hit
+/// therefore hands back the object the memo built instead of copying it.
 #[derive(Clone)]
 pub struct PageBootstrap {
   /// The payload's Jinja `tojson` text, the value the page's `SESSION_BOOTSTRAP` constant carries.
@@ -1759,8 +1759,8 @@ backends:
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
     assert_eq!(payload.value["has_more"], json!(true));
-    // A turn is three events (user, assistant, separator), each folding to one message, so the kept
-    // suffix starts at a turn boundary and the newest turn's user message is on the first screen.
+    // A turn is three events (user, assistant, separator), each folding to one message. The kept
+    // suffix therefore starts at a turn boundary, and the newest turn's user message is on the first screen.
     assert_eq!(kept % 3, 0, "the kept events are whole turns");
     assert_eq!(payload.value["oldest_message_ordinal"], json!(total_events - kept));
     assert_eq!(messages[0]["role"], "user", "a kept turn starts at its user message");
@@ -1849,7 +1849,7 @@ backends:
     let meta =
       crate::test_support::create_node(&features.store, "two-read-bootstrap", None, TaskProfile::Manager).await;
     // Each turn is a user event and a note that folds to nothing, so the first read of the budget's count of events
-    // folds to half the budget's messages and the loop reads again.
+    // folds to half the budget's messages. The loop then reads again.
     let turns = 100usize;
     for turn in 1..=turns {
       features
@@ -1899,8 +1899,8 @@ backends:
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
   }
 
-  /// A log whose last line does not parse names the tail's first line as the paging cursor: the cursor counts the lines
-  /// the tail covers, so the next page starts where the bootstrap's messages do instead of past them.
+  /// A log whose last line does not parse names the tail's first line as the paging cursor. The cursor counts the
+  /// lines the tail covers, so the next page starts where the bootstrap's messages do instead of past them.
   #[tokio::test]
   async fn a_malformed_line_does_not_advance_the_first_screen_cursor() {
     let (_home, features) = feature_context();
@@ -1924,13 +1924,13 @@ backends:
     );
   }
 
-  /// A log whose turns carry more events than messages still fills the first screen's message budget: the read walks
+  /// A log whose turns carry more events than messages still fills the first screen's message budget. The read walks
   /// past the budget's count of events until the tail folds to the budget, and the trim keeps its last messages.
   #[tokio::test]
   async fn the_first_screen_fills_its_message_budget_from_turns_of_many_events() {
     let (_home, features) = feature_context();
     let meta = crate::test_support::create_node(&features.store, "budget-bootstrap", None, TaskProfile::Manager).await;
-    // 45 turns of two events that fold to one message: the budget's count of events folds to 20 messages, so the read
+    // 45 turns of two events that fold to one message. The budget's count of events folds to 20 messages, so the read
     // doubles to 80 and stops at the budget, leaving events older than the kept tail.
     for turn in 1..=45usize {
       let events = [

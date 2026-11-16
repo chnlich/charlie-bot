@@ -27,7 +27,7 @@ struct SessionRow<'a> {
 
 /// One page rendered straight from the snapshot and the row values, without a JSON value tree in between.
 ///
-/// The page carries strings, integers, booleans and nulls only, and the orjson formatter differs from `serde_json`'s
+/// The page carries strings, integers, booleans and nulls only. The orjson formatter differs from `serde_json`'s
 /// writer only in float text, so the two writers produce the same bytes for this page.
 #[derive(Serialize)]
 struct TreePage<'a> {
@@ -44,10 +44,10 @@ struct TreeCursor {
 
 /// The last page this route rendered, keyed by the store's own page allocation.
 ///
-/// The store serves a repeat page as the same `Arc` of rows and rebuilds it when a history moved, so a matching
+/// The store serves a repeat page as the same `Arc` of rows and rebuilds it when a history moved. A matching
 /// pointer names the page this body was rendered from. A page is a hundred rows, and the transport deflates every
-/// body it sends: rendering and serializing them again on each repeat request costs more than the identity check that
-/// proves the page still holds.
+/// body it sends. Rendering and serializing them again on each repeat request costs more than the identity check
+/// that proves the page still holds.
 struct TreePageBody {
   rows: Arc<Vec<TaskTreeRow>>,
   revision: String,

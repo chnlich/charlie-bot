@@ -1604,7 +1604,8 @@ mod tests {
         "review_of_run_id",
         "backend",
         "model",
-        "native_session_id",
+        // The serialized key the file's readers import, so this list fails when the two drift apart.
+        NATIVE_SESSION_ID_FIELD,
         "pid",
         "pid_start",
         "started_at",

@@ -4,8 +4,8 @@
 // bytes, pty_output frames decode back to bytes for term.write.
 // ---------------------------------------------------------------------------
 globalThis.encodeBytesB64 = function(strOrBytes) {
-  // term.onData passes a string of utf-8-ish characters; encode as UTF-8
-  // bytes and then base64.
+  // term.onData passes a string of utf-8-ish characters. Encode that string
+  // as UTF-8 bytes and then base64.
   let bytes;
   if (typeof strOrBytes === 'string') {
     bytes = new TextEncoder().encode(strOrBytes);

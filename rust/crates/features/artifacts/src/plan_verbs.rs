@@ -506,7 +506,7 @@ fn absent(plan: &Map<String, Value>, key: &str) -> bool {
 fn closed_as_repr(plan: &Map<String, Value>) -> Result<String, VerbError> {
   let closed = plan.get("closed").unwrap_or(&Value::Null);
   let Value::Object(closed) = closed else {
-    return Err(type_error(format!("'{}' object is not subscriptable", plans::type_name(closed))));
+    return Err(type_error(text_repr::not_subscriptable(plans::type_name(closed))));
   };
   Ok(plans::value_repr(closed.get("as").ok_or_else(|| key_error("as"))?))
 }
@@ -520,7 +520,7 @@ fn id_of(plan: &Map<String, Value>) -> Result<&Value, VerbError> {
 /// fails the lookup, so the verb answers 500.
 fn plans_of(registry: &Value) -> Result<&Vec<Value>, VerbError> {
   let Value::Object(registry) = registry else {
-    return Err(type_error(format!("'{}' object is not subscriptable", plans::type_name(registry))));
+    return Err(type_error(text_repr::not_subscriptable(plans::type_name(registry))));
   };
   match registry.get("plans") {
     Some(Value::Array(plans)) => Ok(plans),
@@ -532,7 +532,7 @@ fn plans_of(registry: &Value) -> Result<&Vec<Value>, VerbError> {
 /// The registry's plans list, as a list to change.
 fn plans_of_mut(registry: &mut Value) -> Result<&mut Vec<Value>, VerbError> {
   let Value::Object(registry) = registry else {
-    return Err(type_error(format!("'{}' object is not subscriptable", plans::type_name(registry))));
+    return Err(type_error(text_repr::not_subscriptable(plans::type_name(registry))));
   };
   match registry.get_mut("plans") {
     Some(Value::Array(plans)) => Ok(plans),
@@ -557,7 +557,7 @@ fn attribute_error(plan: &Value) -> VerbError {
 }
 
 fn attribute_error_named(kind: &str) -> VerbError {
-  VerbError::Failed { kind: "AttributeError", detail: format!("'{kind}' object has no attribute 'get'") }
+  VerbError::Failed { kind: "AttributeError", detail: text_repr::no_attribute(kind, "get") }
 }
 
 fn key_error(key: &str) -> VerbError {

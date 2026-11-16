@@ -36,7 +36,7 @@ pub fn token(home: &Path, kind: TokenKind) -> Result<String, ConfigError> {
 }
 
 /// The Slack Web API methods the user token may call through the CLI: the six read methods agents
-/// use today. The user token is read-only in this CLI; a message in the user's own name goes through
+/// use today. The user token is read-only in this CLI. A message in the user's own name goes through
 /// `charliebot slack draft` and a bot post through `--token bot`.
 pub const USER_READ_METHODS: [&str; 6] =
   [AUTH_TEST, USERS_LIST, CONVERSATIONS_LIST, CONVERSATIONS_HISTORY, CONVERSATIONS_REPLIES, SEARCH_MESSAGES];
@@ -45,7 +45,7 @@ pub const USER_READ_METHODS: [&str; 6] =
 pub const FILE_HOST: &str = "files.slack.com";
 
 /// Admit one `charliebot slack download` URL. A Slack-hosted file is a read, so either token may GET a
-/// URL on [`FILE_HOST`]; every other URL is refused before any network call.
+/// URL on [`FILE_HOST`]. Every other URL is refused before any network call.
 pub fn admit_download(kind: TokenKind, url: &str) -> Result<(), CliExit> {
   let Ok(parsed) = reqwest::Url::parse(url) else {
     return Err(CliExit::usage("URL must be an absolute http or https URL"));
@@ -62,7 +62,7 @@ pub fn admit_download(kind: TokenKind, url: &str) -> Result<(), CliExit> {
 }
 
 /// Admit one `slack request` call. The user token may only address one read method at a Slack Web API
-/// method URL; the bot token keeps every method. The refusal returns before any network call.
+/// method URL. The bot token keeps every method. The refusal returns before any network call.
 pub fn admit(kind: TokenKind, url: &str) -> Result<(), CliExit> {
   if kind == TokenKind::Bot {
     return Ok(());

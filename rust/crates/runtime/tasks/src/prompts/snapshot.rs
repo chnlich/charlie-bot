@@ -151,7 +151,7 @@ pub fn assemble_snapshot(segments: &[RuleSegment]) -> PromptSnapshot {
 /// its type.
 fn parse_blocks(data: &Value) -> Result<Vec<PromptBlock>, String> {
   let blocks = subscript(data, "blocks")?;
-  let items = blocks.as_array().ok_or_else(|| not_iterable(blocks))?;
+  let items = blocks.as_array().ok_or_else(|| text_repr::not_iterable(type_name(blocks)))?;
   items.iter().map(parse_block).collect()
 }
 
@@ -159,7 +159,7 @@ fn parse_block(value: &Value) -> Result<PromptBlock, String> {
   let sources = subscript(value, "sources")?;
   let sources = sources
     .as_array()
-    .ok_or_else(|| not_iterable(sources))?
+    .ok_or_else(|| text_repr::not_iterable(type_name(sources)))?
     .iter()
     .map(parse_source)
     .collect::<Result<Vec<PromptSource>, String>>()?;
@@ -207,7 +207,7 @@ fn subscript<'a>(value: &'a Value, key: &str) -> Result<&'a Value, String> {
     Value::Object(members) => members.get(key).ok_or_else(|| format!("'{key}'")),
     Value::Array(_) => Err("list indices must be integers or slices, not str".to_string()),
     Value::String(_) => Err("string indices must be integers, not 'str'".to_string()),
-    other => Err(format!("'{}' object is not subscriptable", type_name(other))),
+    other => Err(text_repr::not_subscriptable(type_name(other))),
   }
 }
 
@@ -216,10 +216,6 @@ fn string_field(value: &Value, key: &str) -> Result<String, String> {
     Value::String(text) => Ok(text.clone()),
     other => Err(format!("{key} must be a string, not {}", type_name(other))),
   }
-}
-
-fn not_iterable(value: &Value) -> String {
-  format!("'{}' object is not iterable", type_name(value))
 }
 
 /// The text a stored JSON value renders as, which the mismatch messages print for a recorded value. A missing key

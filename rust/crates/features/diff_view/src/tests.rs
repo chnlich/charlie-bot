@@ -45,7 +45,7 @@ fn build_repo(workspace: &Path) -> PathBuf {
   repo
 }
 
-/// `git <args>` in `repo`, which must succeed; returns its stdout.
+/// `git <args>` in `repo`, which must succeed. Returns its stdout.
 fn git(repo: &Path, args: &[&str]) -> String {
   let output = Command::new("git").args(args).current_dir(repo).output().expect("git runs");
   assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));

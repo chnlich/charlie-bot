@@ -23,7 +23,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use bytes::Bytes;
 use charliebot_compat::headers::header_text;
-use charliebot_compat::mimetypes_table::TEXT_HTML;
+use charliebot_compat::mimetypes_table::{APPLICATION_JSON, TEXT_HTML};
 use charliebot_compat::responses;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use sha2::{Digest, Sha256};
@@ -66,7 +66,7 @@ pub async fn layer(request: Request, next: Next) -> Response {
 }
 
 fn is_json(headers: &HeaderMap) -> bool {
-  header_text(headers, &header::CONTENT_TYPE).starts_with("application/json")
+  header_text(headers, &header::CONTENT_TYPE).starts_with(APPLICATION_JSON)
 }
 
 /// Whether the response is a page: an HTML body the page layer marked `no-store`.

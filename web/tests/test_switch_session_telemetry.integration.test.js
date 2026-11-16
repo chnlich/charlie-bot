@@ -2,8 +2,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSessionDocumentLookups, makeSidebarRow,
-  stubPageTimers} = require('./session_context_stub');
+const {answerArchiveConfirmations, baseSessionContext, bootstrapPayload, createChatSidebarContext,
+  installSessionDocumentLookups, makeSidebarRow, stubPageTimers} = require('./session_context_stub');
 const {createElement} = require('./dom_element_stub');
 const {readPackageStatic, readStatic} = require('./read_static');
 
@@ -751,7 +751,9 @@ test('a new session and the archive back to the welcome page keep the display an
   welcomeTpl.innerHTML = '<div>welcome</div>';
   h2.elements.set('welcome-view', welcomeTpl);
   h2.context.document.querySelector = (sel) => (sel === 'main' ? main : null);
+  answerArchiveConfirmations(h2.context);
   await h2.context.archiveSession('session-a');
+  await flush();
   assert.equal(h2.context.SESSION_ID, null);
   assert.equal(h2.context.closedSockets, 1,
       'the welcome view closes the socket, so the archived session’s live frames stop arriving');

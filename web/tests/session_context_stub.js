@@ -212,6 +212,16 @@ function makeSidebarRow(sessionId, name) {
   });
 }
 
+// The archive confirmation names the session by its row's title and waits for an answer. The suites that test what an
+// archive changes answer it with Archive as it opens, and a session with no row in the harness gets one for its title.
+// The dialog itself is covered by sidebar_archive_refusal.test.js.
+function answerArchiveConfirmations(context) {
+  const lookUp = context.document.getElementById;
+  context.document.getElementById = (id) => lookUp(id)
+    || (id.startsWith('session-') ? makeSidebarRow(id.slice('session-'.length), id) : null);
+  context.Sidebar.openConfirmDialog = ({onConfirm}) => onConfirm();
+}
+
 // One session-metadata fixture as the sidebar wire format carries it. Only the
 // fields every sidebar harness shares live here. A harness whose fixture must
 // leave a field undefined (usage_poll reads no status) or default it
@@ -439,6 +449,7 @@ module.exports = {
   buildUsageElements,
   buildSwitchFlowHarness,
   makeSidebarRow,
+  answerArchiveConfirmations,
   makeSessionMeta,
   sessionColumns,
   bootstrapPayload,

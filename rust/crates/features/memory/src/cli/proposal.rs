@@ -68,7 +68,7 @@ struct GitOutput {
 
 type ProposalResult<T> = Result<T, ProposalError>;
 
-/// Parse the proposal arguments and run one local store operation.
+/// The proposal CLI entry point, which parses the arguments and runs one local store operation.
 pub(super) fn main(args: &[OsString]) -> Result<(), CliExit> {
   let cli: ProposalCli = cli_args::parse("charliebot memory proposal", args);
 

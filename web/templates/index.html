@@ -1,20 +1,6 @@
 {% include 'partials/prologue.html' %}
   {% set defer_concurrency_badge_poll = true %}
   <title>{% if active_session %}{{ active_session.name }} · CharlieBot@{{ hostname }}{% else %}CharlieBot@{{ hostname }}{% endif %}</title>
-  <script>window.SESSIONS_ROOT = {{ sessions_root|tojson }};</script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-  {# KaTeX is not here: markdown-renderer.js downloads it at the first message that carries math. #}
-  <style>{% include 'css/styles.css' %}</style>
-  {% for part in page_parts('head') %}{% include part %}{% endfor %}
-  <!-- Loaded after styles.css so Tailwind's `.hidden` utility (display:none) wins the
-       cascade over styles.css's unconditional `display:flex` modal-overlay rules --
-       matching the Play CDN's effective load order, which injected its stylesheet
-       after styles.css had already been parsed. -->
-  <link rel="stylesheet" href="/static/css/tailwind.css?v={{ static_asset_version|urlencode }}">
   <script>
     let SESSION_ID = {{ active_session.id|tojson if active_session else 'null' }};
     let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
@@ -25,6 +11,8 @@
     const STATIC_ASSET_VERSION = {{ static_asset_version|tojson }};
     // The name the header and tab title show at page load; the displayed-session module starts from it.
     const SESSION_NAME = {{ active_session.name|tojson if active_session else 'null' }};
+    // The profile the composer's visibility starts from; a worker node takes no messages.
+    const SESSION_PROFILE = {{ (active_session.profile|tojson) if active_session and active_session.profile else '""' }};
     // The host the displayed-session module restates in the tab title.
     const PAGE_HOSTNAME = {{ hostname|tojson }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap_json|safe }};
@@ -52,6 +40,20 @@
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
   </script>
+  <script>window.SESSIONS_ROOT = {{ sessions_root|tojson }};</script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  {# KaTeX is not here: markdown-renderer.js downloads it at the first message that carries math. #}
+  <style>{% include 'css/styles.css' %}</style>
+  {% for part in page_parts('head') %}{% include part %}{% endfor %}
+  <!-- Loaded after styles.css so Tailwind's `.hidden` utility (display:none) wins the
+       cascade over styles.css's unconditional `display:flex` modal-overlay rules --
+       matching the Play CDN's effective load order, which injected its stylesheet
+       after styles.css had already been parsed. -->
+  <link rel="stylesheet" href="/static/css/tailwind.css?v={{ static_asset_version|urlencode }}">
 </head>
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
   {# Shared chrome literal: close_btn_class for the close_button calls below
@@ -95,7 +97,7 @@
                   style="max-width: 110px;"
                   title="Select backend for new session">
             {% for entry in picker_entries %}
-            <option value="{{ entry.id }}" {% if entry.id == active_backend %}selected{% endif %}>{{ entry.label }}</option>
+            <option value="{{ entry.id }}">{{ entry.label }}</option>
             {% endfor %}
           </select>
           {% endif %}
@@ -165,10 +167,10 @@
         <div class="flex-1 min-w-0 py-3 cursor-pointer hover:text-blue-300 transition-colors"
              onclick="startRename(event, SESSION_ID)" title="Click to rename">
           <h2 class="text-sm font-semibold truncate"
-              id="header-session-name">{{ active_session.name }}</h2>
+              id="header-session-name"></h2>
         </div>
         <!-- Backend badge -->
-        <span id="backend-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 border border-slate-600 whitespace-nowrap" title="Session backend">{{ active_backend_label or active_backend }}</span>
+        <span id="backend-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 border border-slate-600 whitespace-nowrap" title="Session backend"></span>
         <!-- Context usage indicator — starts hidden; the first /usage render fills it -->
         <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 hidden">
           <div class="flex items-center gap-1.5" title="Context window usage">
@@ -183,8 +185,8 @@
         <button id="compact-btn"
                 onclick="compactContext()"
                 class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-                {% set compact = backend_compact.get(active_backend_type) %}{% if not (compact and compact.manual) %}disabled{% endif %}>Compact</button>
-        <a href="/sessions/{{ active_session.id }}/events"
+                disabled>Compact</button>
+        <a id="events-link"
            class="border border-slate-600 rounded text-slate-400 hover:bg-slate-700
                   hover:text-slate-200 transition-colors ml-2 mr-2"
            title="View JSONL events">
@@ -262,7 +264,7 @@
         <div id="pending-triggers-tray" class="hidden px-4 pt-3"></div>
 
         <!-- Input (a worker node takes no messages). -->
-        <div id="input-area" class="border-t border-slate-700 p-4 {% if active_session.profile == 'worker' %}hidden{% endif %}">
+        <div id="input-area" class="border-t border-slate-700 p-4">
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">

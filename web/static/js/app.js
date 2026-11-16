@@ -7,12 +7,28 @@ document.addEventListener('DOMContentLoaded', () => {
   restoreSidebarFromUrl();
   updateRelativeTimes();
 
+  // The new-session picker starts on the open session's backend, the value the
+  // page carries in ACTIVE_BACKEND_ID; the server leaves the choice to this write.
+  const newSessionBackend = document.getElementById('new-session-backend');
+  if (newSessionBackend) newSessionBackend.value = globalThis.ACTIVE_BACKEND_ID;
+
   // Initial chat render uses the server-embedded minimal bootstrap so refresh
   // and SPA switches share the same renderer without a duplicate /view fetch.
   if (SESSION_ID && SESSION_BOOTSTRAP) {
     renderSessionView(SESSION_BOOTSTRAP);
     // "Read" means rendered: a render throw above skips the read.
     markSessionRead(SESSION_ID, null);
+  }
+
+  // A session whose bootstrap failed has no data for the renderer above. The page still carries the header's
+  // values in its constants, so the controls the render leaves unwritten are set from them here.
+  if (SESSION_ID && !SESSION_BOOTSTRAP) {
+    paintDisplayedSession();
+    const evLink = document.getElementById('events-link');
+    if (evLink) evLink.href = '/sessions/' + SESSION_ID + '/events';
+    updateActiveBackendBadges();
+    updateBackendHeaderControls(BACKEND_TYPES[getActiveBackendId()] || '');
+    setInputAreaVisible(SESSION_PROFILE !== 'worker');
   }
 
   // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.

@@ -164,8 +164,8 @@ pub const READBACK_START_TAG: &str = "T1";
 /// The tag of the readback's second remote date.
 pub const READBACK_END_TAG: &str = "T2";
 
-/// Parse one held pid readback's stdout: the two tagged dates and the bare end-file line between them. The clock the
-/// offset math uses is the midpoint of the two dates, because the local midpoint spans the same wait.
+/// One held pid readback's stdout, parsed into the two tagged dates and the bare end-file line between them. The
+/// clock the offset math uses is the midpoint of the two dates, because the local midpoint spans the same wait.
 pub fn pid_readback_read(stdout: &str) -> PidProbeRead {
   let lines: Vec<&str> = stdout.trim().lines().collect();
   let tagged =
@@ -188,9 +188,9 @@ pub struct ExitRead {
   pub now_ns: Option<i128>,
 }
 
-/// Parse one exit-read ssh's stdout. A stdout that starts with an epoch.ns date line carries the content and the
-/// mtime after it. Any other shape, such as a static-output fake that prints only the exit file, keeps the whole
-/// stdout as the code. That is what the exit read printed before the readback existed.
+/// One exit-read ssh's stdout, parsed into the [`ExitRead`] a caller reads. A stdout that starts with an epoch.ns date
+/// line carries the content and the mtime after it. Any other shape, such as a static-output fake that prints only
+/// the exit file, keeps the whole stdout as the code. That is what the exit read printed before the readback existed.
 pub fn exit_read(stdout: &str) -> ExitRead {
   let lines: Vec<&str> = stdout.trim().lines().collect();
   if let Some(now_ns) = lines.first().and_then(|line| parse_epoch_ns(line)) {

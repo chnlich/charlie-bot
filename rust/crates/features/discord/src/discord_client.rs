@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::text_repr;
 use http::{Method, StatusCode, header};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -238,7 +239,7 @@ impl DiscordClient {
         .header(header::AUTHORIZATION, format!("Bot {}", self.token))
         .header(header::USER_AGENT, USER_AGENT_VALUE);
       if let Some(body) = &json_body {
-        request = request.header(header::CONTENT_TYPE, "application/json").body(serde_json::to_vec(body)?);
+        request = request.header(header::CONTENT_TYPE, APPLICATION_JSON).body(serde_json::to_vec(body)?);
       }
       let response = request.send().await?;
       let status = response.status();

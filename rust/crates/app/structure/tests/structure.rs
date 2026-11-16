@@ -1241,6 +1241,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_tasks::routes::COLD_READ_SPEC_CLASS_NAME`.",
   },
   OwnerRow { name: "application/gzip", owner: "infra/compat", hint: MIME_HINT },
+  OwnerRow {
+    name: "application/json",
+    owner: "infra/compat",
+    hint: "Use `charliebot_compat::mimetypes_table::APPLICATION_JSON`; the JSON response helpers, the session and \
+           task routes' JSON bodies, and every client that sends a JSON body read it.",
+  },
   OwnerRow { name: "application/msword", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/pdf", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/vnd.ms-powerpoint", owner: "infra/compat", hint: MIME_HINT },
@@ -1371,6 +1377,12 @@ const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Read it through `charliebot_core::credentials::Credentials::access_key` or `require_access_key`; the field \
            name is `charliebot_core::credentials::ACCESS_KEY_FIELD`.",
+  },
+  OwnerRow {
+    name: "bot_token",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::credentials::BOT_TOKEN_FIELD`; the Slack, Discord and Telegram sections of \
+           credentials.yaml hold a bot's token under it.",
   },
   OwnerRow {
     name: "rateLimitType",

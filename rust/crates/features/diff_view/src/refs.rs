@@ -35,7 +35,7 @@ pub(crate) fn signature(repo: &Path) -> io::Result<Signature> {
     if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
       continue;
     }
-    // A ref deleted between the listing and the stat drops from the signature; the next walk sees the same absence.
+    // A ref deleted between the listing and the stat drops from the signature. The next walk sees the same absence.
     let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
       continue;
     };

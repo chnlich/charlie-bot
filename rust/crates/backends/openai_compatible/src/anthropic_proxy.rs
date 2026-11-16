@@ -14,6 +14,7 @@ use axum::response::sse::{self, Sse};
 use axum::response::{IntoResponse, Response};
 use bstr::ByteSlice;
 use charliebot_compat::http_client;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::credentials::API_KEY_FIELD;
@@ -133,7 +134,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
   let client = http_client::shared_client().map_err(|error| unhandled("ClientError", format!("{error:#}")))?;
   let mut request = client
     .post(&upstream_url)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .body(text_repr::json_dumps(&openai_payload, &text_repr::STARLETTE_JSON));
   if let Some(authorization) = authorization {
     request = request.header(header::AUTHORIZATION, authorization);

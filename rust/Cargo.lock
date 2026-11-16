@@ -503,6 +503,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -545,6 +546,7 @@ dependencies = [
  "charliebot-charlie-code",
  "charliebot-claude-code",
  "charliebot-cli-common",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-cron",
  "charliebot-discord",
@@ -823,7 +825,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -930,7 +931,6 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1369,7 +1369,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "uuid",
 ]
 
 [[package]]

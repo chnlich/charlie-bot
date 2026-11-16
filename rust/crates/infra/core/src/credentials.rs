@@ -26,6 +26,9 @@ const CHARLIEBOT_SECTION: &str = "charliebot";
 /// a backend presents to the server's proxy.
 pub const ACCESS_KEY_FIELD: &str = "access_key";
 
+/// The key, under a chat platform's credentials section, that holds the bot's own API token.
+pub const BOT_TOKEN_FIELD: &str = "bot_token";
+
 /// One credential value: text, an integer, or a flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialValue {

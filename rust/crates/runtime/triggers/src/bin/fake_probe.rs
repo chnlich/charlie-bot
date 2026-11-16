@@ -63,7 +63,7 @@ fn resolve_link(argv0: &str) -> PathBuf {
     .unwrap_or_else(|| panic!("no fake program {argv0} on PATH"))
 }
 
-/// Run the remote command an ssh invocation names in a local `sh`, with the fake programs' directory first on its
+/// The remote command an ssh invocation names, run in a local `sh` with the fake programs' directory first on its
 /// `PATH`. That way the command's `sacct` is the fake of the same name. The held-session tests run their remote scripts
 /// this way, against real local pids, and exit with the script's status. The remote home is the test's own home,
 /// because a probe writes its end recorder and end file beneath `$HOME`. The runner's real home is no test's to use.
@@ -95,7 +95,7 @@ fn sequence_entry(role_behavior: &serde_json::Value, link: &Path, role: &str) ->
   entries.get(index).unwrap_or_else(|| entries.last().expect("the sequence is non-empty")).clone()
 }
 
-/// Append this invocation's argv as one JSON line, so a test reads back the remote command each call ran.
+/// This invocation's argv as one JSON line, so a test reads back the remote command each call ran.
 fn record_invocation(argv: &[String], link: &Path, role: &str) {
   let argv_path = link.with_file_name(format!("{role}.argv.jsonl"));
   let line = serde_json::to_string(argv).expect("serialize argv");

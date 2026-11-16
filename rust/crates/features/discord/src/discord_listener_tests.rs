@@ -416,6 +416,11 @@ fn test_stop_close_codes_are_recognized() {
   }
 }
 
+#[test]
+fn a_thread_session_id_is_the_namespaced_uuid_of_its_guild_and_thread() {
+  assert_eq!(summon_session_id(GUILD, THREAD), "caa093b4-f2e6-5bf1-86ea-b9b347285993");
+}
+
 #[tokio::test]
 async fn test_ready_runs_the_backfill_per_connection() {
   let home = Home::new(true).await;

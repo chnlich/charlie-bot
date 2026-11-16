@@ -14,6 +14,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_compat::compression::gzip_level_one;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
@@ -649,7 +650,7 @@ async fn session_transcript(
   });
   Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len())
     .body(Body::from(body))
     .expect("worker transcript response builds")
@@ -1082,7 +1083,7 @@ fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Bytes> {
 fn json_bytes_response(body: Bytes, encoding: Option<&'static str>) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len());
   if let Some(encoding) = encoding {
     builder = builder

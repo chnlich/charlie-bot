@@ -11,6 +11,7 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::get;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
 use charliebot_compat::{responses, validation};
 use charliebot_core::headers::ACCEPT_ENCODING;
@@ -691,7 +692,7 @@ fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
   };
   Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, compressed.len())
     .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
     .header(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING))
@@ -843,7 +844,7 @@ fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBody
 fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len());
   if gzip {
     builder = builder

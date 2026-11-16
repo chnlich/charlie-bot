@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use charliebot_compat::http_client::{self, Settings};
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
+use charliebot_core::credentials::BOT_TOKEN_FIELD;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use http::Method;
@@ -58,7 +60,7 @@ impl SlackClient {
       .unwrap_or_default();
     Ok(Self::with_client(
       http_client::client(&Settings::from_env())?,
-      credentials.require("slack", "bot_token")?,
+      credentials.require("slack", BOT_TOKEN_FIELD)?,
       app_token,
       API_BASE.to_string(),
     ))
@@ -233,7 +235,7 @@ impl SlackClient {
     Ok(
       self
         .request(Method::POST, path, token)
-        .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(serde_json::to_vec(&body)?),
     )
   }

@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 
 use crate::config::{BrowserLoginConfig, HostAuthConfig};
 use crate::host_auth::{self, BLOCKED_BACKOFF_SEC, PROBE_INTERVAL_SEC, State, TRUST_CACHE_TTL_SEC};
+use crate::login_page;
 use crate::probe::{
   STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK, STATUS_ROUTER_REJECTED, STATUS_UNREACHABLE,
 };
@@ -55,10 +56,16 @@ fn context(state: &State, now: OffsetDateTime, logins: &[BrowserLoginConfig]) ->
     .collect::<anyhow::Result<Vec<_>>>()?;
   let summary = summary(state, now)?;
   let last_probe = timestamps::local_timestamp(host_auth::opt_str(state, "probed_at")?, LocalFormat::DateZone)?;
+  let login_rows = login_page::rows(logins)?;
+  let any_live = login_rows.iter().any(|row| !row["live"].is_null());
+  let probe_running = state.get("probe_running").is_some_and(text_repr::is_truthy);
   Ok(json!({
-    "probe_running": state.get("probe_running").is_some_and(text_repr::is_truthy),
+    "probe_running": probe_running,
+    "refresh_after_sec": if probe_running { 3 } else if any_live { 5 } else { 0 },
     "hosts": rows,
     "summary": summary,
+    "logins": login_rows,
+    "any_live": any_live,
     "last_probe": last_probe,
     "interval_label": format!("{} min", PROBE_INTERVAL_SEC / 60),
     "backoff_label": format!("{} h", BLOCKED_BACKOFF_SEC / 3600),

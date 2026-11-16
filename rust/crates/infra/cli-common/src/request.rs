@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::credentials::REDACTED;
 use charliebot_core::headers::{AUTHORIZATION, CONTENT_TYPE, bearer_value};
 use clap::Args;
@@ -79,7 +80,7 @@ impl RequestArgs {
     }
     let has_content_type = headers.iter().any(|(name, _)| name.eq_ignore_ascii_case(CONTENT_TYPE));
     if self.json.is_some() && !has_content_type {
-      headers.push((CONTENT_TYPE.to_string(), "application/json".to_string()));
+      headers.push((CONTENT_TYPE.to_string(), APPLICATION_JSON.to_string()));
     }
     Ok(headers)
   }

@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use charliebot_compat::http_client::{self, Settings};
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftPlatformFactory, DraftSendFailure, DraftSent};
 use futures_util::future::BoxFuture;
 use http::header;
@@ -97,7 +98,7 @@ impl SlackDraftSender {
       .http
       .post(format!("{}{method}", self.api_base))
       .bearer_auth(&self.token)
-      .header(header::CONTENT_TYPE, "application/json")
+      .header(header::CONTENT_TYPE, APPLICATION_JSON)
       .timeout(self.timeout)
       .body(serde_json::to_vec(&payload).expect("a JSON payload serializes"))
       .send()

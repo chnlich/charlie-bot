@@ -8,6 +8,7 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
@@ -1478,7 +1479,7 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
 fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   let mut response = Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_TYPE, APPLICATION_JSON)
     .header(header::CONTENT_LENGTH, body.len());
   if gzip {
     response = response

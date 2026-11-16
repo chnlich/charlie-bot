@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use charliebot_chat_threads::channel_service::ChannelListener;
 use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
+use charliebot_chat_threads::summon::{SLACK_NAMESPACE, namespaced_uuid};
 use charliebot_chat_threads::thread_entry::{
   self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform, ThreadReplyError,
 };
@@ -16,19 +17,16 @@ use charliebot_registry::FeatureContext;
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
-use uuid::Uuid;
 
 use crate::config::SlackConfig;
 pub use crate::slack_client::SlackClient;
 use crate::thread_contract::SLACK;
 
-const SLACK_NS: Uuid =
-  Uuid::from_bytes([0x1b, 0x4e, 0x28, 0xba, 0x2f, 0xa1, 0x4d, 0x7a, 0x9f, 0x0c, 0x8d, 0x5e, 0x7a, 0x3b, 0x6c, 0x11]);
 const ACCEPTANCE_REACTION: &str = "eyes";
 
 /// Return the deterministic session id for a Slack thread.
 pub fn summon_session_id(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
-  Uuid::new_v5(&SLACK_NS, format!("slack:{team_id}:{channel_id}:{thread_ts}").as_bytes()).to_string()
+  namespaced_uuid(SLACK_NAMESPACE, &format!("slack:{team_id}:{channel_id}:{thread_ts}"))
 }
 
 /// Accept one allowed `app_mention`, persist the summon, and start its round.
@@ -564,6 +562,7 @@ mod tests {
     let api = FakeApi::start(&[]).await;
     let event = mention();
     let expected_id = summon_session_id("T_TEST", "C_TEST", TS);
+    assert_eq!(expected_id, "43570b06-d31a-5613-a2ae-7ba251bdef29");
 
     let accepted = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap();
     assert_eq!(accepted.as_deref(), Some(expected_id.as_str()));

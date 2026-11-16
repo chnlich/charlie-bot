@@ -36,7 +36,7 @@
   };
 
   // The added-line figures are body text on the row's slate-50 and the summary's white. green-700 holds 4.9:1 and
-  // 5.0:1 there; green-600 held 3.2:1 and 3.3:1, under the 4.5:1 floor for text this size.
+  // 5.0:1 there. green-600 held 3.2:1 and 3.3:1, under the 4.5:1 floor for text this size.
   const ADDED_COUNT_CLASS = 'text-green-700';
 
   // The lines one expand click reveals. A gap this size or smaller expands in one click.
@@ -63,7 +63,7 @@
 
   // git answers an unresolvable ref with `fatal: ambiguous argument '<ref>^{commit}': unknown revision or path not
   // in the working tree.` and then the shell syntax that separates paths from revisions. This form has a Base and a
-  // Head field and no shell, so the box names the field the ref came from; git's line stays as the box's title.
+  // Head field and no shell, so the box names the field the ref came from. git's line stays as the box's title.
   const UNRESOLVED_REF =
     /fatal: ambiguous argument '(.+?)\^\{commit\}': unknown revision or path not in the working tree\./;
 
@@ -169,7 +169,7 @@
       repo: p.get('repo') || '',
       base: p.get('base') || DEFAULT_BASE,
       head: p.get('head') || DEFAULT_HEAD,
-      // Only a URL that names all three refs asks for its own comparison; the
+      // Only a URL that names all three refs asks for its own comparison. The
       // defaults fill the form without starting one.
       named: Boolean(p.get('repo') && p.get('base') && p.get('head')),
       mode: p.get('mode') || 'three-dot',
@@ -313,7 +313,7 @@
     return [gap.newLo, gap.newLo + EXPAND_STEP - 1];
   }
 
-  // Both diff endpoints take the same four comparison selectors; single-file
+  // Both diff endpoints take the same four comparison selectors. Single-file
   // requests add path/old_path/force on top via qs.set.
   function diffQuery(params) {
     return new URLSearchParams({
@@ -404,7 +404,7 @@
   }
 
   // The expand controls of one rendered file: a strip at each hidden gap. A side-by-side file draws one strip row
-  // per pane. Its first pane's strip carries the expand up, expand down and whole-file buttons; its last strip
+  // per pane. Its first pane's strip carries the expand up, expand down and whole-file buttons. Its last strip
   // carries the hidden-line count. A single-table file draws both in its one strip. Revealed rows go in place
   // with both sides' line numbers, and the strip stays at the gap's top edge while its blocks of revealed rows
   // keep their line order.

@@ -6,8 +6,9 @@ const {loadPageTimersOnce} = require('./websocket_context_stub');
 const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
-const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
-  loadCronPackage, makeSessionMeta, sessionColumns } = require('./session_context_stub');
+const { answerArchiveConfirmations, baseSessionContext, buildSidebarFilterElements, buildUsageElements,
+  createChatSidebarContext, loadCronPackage, makeSessionMeta, makeSidebarRow,
+  sessionColumns } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
 const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
@@ -1050,7 +1051,7 @@ test('createSession switches open chat through SPA state without full reload', a
 test('archiveSession removes the row inline and switches to the next rendered session without refetching', async () => {
   const nav = createElement();
   const input = createElement();
-  const rowA = createElement({tagName: 'A', id: 'session-session-a'});
+  const rowA = makeSidebarRow('session-a', 'Session A');
   const {context} = buildContext({
     elements: new Map([
       ['session-list', nav],
@@ -1095,8 +1096,10 @@ test('archiveSession removes the row inline and switches to the next rendered se
   context.renderSessionView = (data) => { rendered = data; };
   context.history.pushState = (_state, _title, url) => { pushedUrl = url; };
   context.pollSessionStatus = () => Promise.resolve(false);
+  answerArchiveConfirmations(context);
 
   await context.archiveSession('session-a');
+  await new Promise(setImmediate);
 
   assert.deepEqual(requests.map((req) => req.url), [
     '/api/sessions/session-a/archive',

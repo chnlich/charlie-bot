@@ -38,13 +38,17 @@ pub const TEXT_PLAIN: &str = "text/plain";
 /// sign-in-page check.
 pub const TEXT_HTML: &str = "text/html";
 
+/// The JSON media type: the table's `.json` row, the JSON response helpers, the session and task routes' JSON bodies,
+/// and the request `Content-Type` of every client that sends a JSON body.
+pub const APPLICATION_JSON: &str = "application/json";
+
 /// The strict extension -> type table, in insertion order.
 pub const TYPES_MAP: &[(&str, &str)] = &[
   (".js", "text/javascript"),
   (".mjs", "text/javascript"),
   (".epub", "application/epub+zip"),
   (".gz", APPLICATION_GZIP),
-  (".json", "application/json"),
+  (".json", APPLICATION_JSON),
   (".webmanifest", "application/manifest+json"),
   (".doc", APPLICATION_MSWORD),
   (".dot", APPLICATION_MSWORD),

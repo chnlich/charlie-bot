@@ -2,16 +2,16 @@
 
 use std::sync::Arc;
 
+use charliebot_chat_threads::reply_event::reply_line;
 use charliebot_chat_threads::thread_entry::{thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::run_kind::RunKind;
-use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::discord_listener::{self, DISCORD};
 use crate::event_types::DISCORD_REPLY;
@@ -60,12 +60,7 @@ impl TurnContribution for DiscordTurnContribution {
 
 /// The chat line of a `discord_reply` event.
 fn discord_reply_message(event: &Value) -> Value {
-  json!({"role": "system", "content": format!("Posted to Discord: {}", content_text(event))})
-}
-
-/// The event's `content` as text, or `""` when the event has none.
-fn content_text(event: &Value) -> String {
-  event.get("content").map(text_repr::value_str).unwrap_or_default()
+  reply_line(&DISCORD, event)
 }
 
 #[cfg(test)]

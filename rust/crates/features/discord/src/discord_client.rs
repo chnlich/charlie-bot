@@ -22,7 +22,7 @@ pub const BASE_URL: &str = "https://discord.com/api/v10";
 const MESSAGE_CONTENT_FLAG: u64 = 1 << 18;
 const MESSAGE_CONTENT_LIMITED_FLAG: u64 = 1 << 19;
 
-/// The permission that grants everything else; a bot holding it never reports missing permissions.
+/// The permission that grants everything else. A bot holding it never reports missing permissions.
 pub const ADMINISTRATOR: u64 = 1 << 3;
 
 /// The permission bits the Discord entrypoint needs, in table order, per
@@ -36,13 +36,13 @@ pub const REQUIRED_PERMISSIONS: &[(&str, u64)] = &[
   ("ADD_REACTIONS", 1 << 6),
 ];
 
-/// Discord's cap on a thread name; a longer name is cut, not refused.
+/// Discord's cap on a thread name. A longer name is cut, not refused.
 const THREAD_NAME_MAX_CHARS: usize = 100;
 
 /// The archive duration `start_thread_from_message` sends (`auto_archive_duration`'s default): seven days, in minutes.
 const AUTO_ARCHIVE_DURATION_MINUTES: u64 = 10080;
 
-/// Retries of one call after a 429; a third rate-limit answer gives up.
+/// Retries of one call after a 429. A third rate-limit answer gives up.
 const MAX_429_RETRIES: usize = 2;
 
 /// The page size of a message read, Discord's cap on one call.
@@ -68,7 +68,7 @@ pub fn snowflake_key(snowflake: &str) -> u64 {
   snowflake.parse().unwrap_or_else(|error| panic!("a Discord id is an unsigned integer, got {snowflake:?}: {error}"))
 }
 
-/// The ids of one discord.com channel or message link; `message_id` is None for a channel link.
+/// The ids of one discord.com channel or message link. `message_id` is None for a channel link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageLink {
   pub guild_id: String,
@@ -93,7 +93,8 @@ pub fn message_content_intent_enabled(application_flags: u64) -> bool {
   application_flags & (MESSAGE_CONTENT_FLAG | MESSAGE_CONTENT_LIMITED_FLAG) != 0
 }
 
-/// The names in `REQUIRED_PERMISSIONS` that the permission bitfield lacks, in table order; empty under ADMINISTRATOR.
+/// The names in `REQUIRED_PERMISSIONS` that the permission bitfield lacks, in table order. The list is
+/// empty under ADMINISTRATOR.
 pub fn missing_permissions(permissions: u64) -> Vec<&'static str> {
   if permissions & ADMINISTRATOR != 0 {
     return Vec::new();
@@ -194,7 +195,7 @@ pub struct Application {
   pub flags: u64,
 }
 
-/// A guild the bot is in; `permissions` is the bot's bitfield as Discord writes it, a decimal string.
+/// A guild the bot is in. `permissions` is the bot's bitfield as Discord writes it, a decimal string.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Guild {
   pub id: String,

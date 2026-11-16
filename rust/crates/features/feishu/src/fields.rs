@@ -10,7 +10,7 @@ pub const TENANT_KEY: &str = "tenant_key";
 pub const CHAT_ID: &str = "chat_id";
 /// The root message of the thread a message belongs to.
 pub const ROOT_ID: &str = "root_id";
-/// The thread (topic) a message belongs to; absent until the bot's first reply creates it.
+/// The thread (topic) a message belongs to. It is absent until the bot's first reply creates it.
 pub const THREAD_ID: &str = "thread_id";
 /// A message's own id (`om_…`).
 pub const MESSAGE_ID: &str = "message_id";

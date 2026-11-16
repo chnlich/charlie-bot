@@ -65,7 +65,7 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
   routes_at(features, BASE_URL)
 }
 
-/// The route table with the Open API base `base_url`; the tests point it at a loopback fake.
+/// The route table with the Open API base `base_url`. The tests point it at a loopback fake.
 pub fn routes_at(features: &Arc<FeatureContext>, base_url: &str) -> Router {
   Router::new()
     .route(REPLY_PATH, post_only(post_reply))

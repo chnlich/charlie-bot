@@ -25,7 +25,7 @@ use crate::thread_contract::FEISHU;
 
 const TOPIC_PAGE_TOKEN_PREFIX: &str = "charliebot-topic-v1:";
 
-/// Feishu advances past every listed item; the cursor keeps an overflow reply with its topic so paging cannot skip it.
+/// Feishu advances past every listed item. The cursor keeps an overflow reply with its topic so paging cannot skip it.
 #[derive(Deserialize, Serialize)]
 struct TopicPageCursor {
   thread_id: String,
@@ -52,7 +52,7 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
   })
 }
 
-/// The session's pending summons' composite mention ids. A mention is a string id; any other value fails the read.
+/// The session's pending summons' composite mention ids. A mention is a string id. Any other value fails the read.
 async fn pending_summon_ids(bot: &Bot, session_id: &str) -> Result<HashSet<String>, ThreadReplyError> {
   let events = thread_entry::load_chat_events(&bot.features, session_id).await?;
   thread_entry::pending_summon_mention_ids(&FEISHU, &bot.features.store, session_id, &events, |mention| {

@@ -19,9 +19,9 @@ pub struct Message {
   pub chat_id: String,
   /// The message's own id (`om_…`).
   pub message_id: String,
-  /// The root message of the thread the message belongs to; None when the event names none.
+  /// The root message of the thread the message belongs to. It is None when the event names none.
   pub root_id: Option<String>,
-  /// The thread's id (`omt_…`); None while the message is not in a thread.
+  /// The thread's id (`omt_…`). It is None while the message is not in a thread.
   pub thread_id: Option<String>,
   /// The creation time in milliseconds, as Feishu writes it.
   pub create_time: String,
@@ -116,7 +116,7 @@ impl Message {
 }
 
 /// The mentions of one message object, in order (`mentions[]`). The event carries each mention's `id` as an object
-/// with an `open_id`; the message list carries the open_id as the `id` string. A mention in neither shape fails.
+/// with an `open_id`. The message list carries the open_id as the `id` string. A mention in neither shape fails.
 pub fn mentions_of(message: &Value) -> anyhow::Result<Vec<Mention>> {
   let Some(list) = message.get("mentions").filter(|value| !value.is_null()) else {
     return Ok(Vec::new());

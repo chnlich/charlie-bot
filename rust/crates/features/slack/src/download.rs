@@ -28,7 +28,7 @@ pub fn download(url: &str, output: &Path, kind: TokenKind, token: &str) -> Resul
   Ok(body.len())
 }
 
-/// The response body when the answer is the file; a sign-in page, a redirect or an API error is a loud failure.
+/// The response body when the answer is the file. A sign-in page, a redirect or an API error is a loud failure.
 fn file_body(response: &request::Response, kind: TokenKind, token: &str) -> Result<Vec<u8>, CliExit> {
   if (300..400).contains(&response.status) {
     return Err(not_the_file(response.status, "Slack redirected the request", kind));

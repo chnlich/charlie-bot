@@ -68,7 +68,7 @@ fn post_user_dm<'a>(
   })
 }
 
-/// The host owner is the first id in `slack.allowed_user_ids`; a host that serves several people lists only the owner
+/// The host owner is the first id in `slack.allowed_user_ids`. A host that serves several people lists only the owner
 /// there.
 fn post_owner_dm<'a>(features: &'a FeatureContext, text: &'a str) -> BoxFuture<'a, anyhow::Result<String>> {
   Box::pin(async move {

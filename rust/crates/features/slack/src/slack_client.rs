@@ -15,7 +15,7 @@ use reqwest::{RequestBuilder, Response};
 use serde_json::{Value, json};
 
 pub(crate) const API_BASE: &str = "https://slack.com/api/";
-// The shared HTTP client's timeout; every Web API call takes it.
+// The shared HTTP client's timeout. Every Web API call takes it.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 // The Slack Web API method names. A call site and the user-token allow-list read the name from here, so a renamed
@@ -126,7 +126,7 @@ impl SlackClient {
     checked_payload(response, REACTIONS_ADD).await
   }
 
-  /// Remove the summon reaction; `no_reaction` already means the desired state.
+  /// Remove the summon reaction. `no_reaction` already means the desired state.
   pub(crate) async fn remove_reaction(&self, channel: &str, name: &str, ts: &str) -> Result<Value> {
     let body = json!({(CHANNEL): channel, "name": name, "timestamp": ts});
     let response = self.json_request(REACTIONS_REMOVE, &self.bot_token, body)?.send().await?;
@@ -177,7 +177,7 @@ impl SlackClient {
     }
   }
 
-  /// The cached channel name or a fresh lookup; a failed lookup is logged in the two classes the listener watches.
+  /// The cached channel name or a fresh lookup. A failed lookup is logged in the two classes the listener watches.
   pub(crate) async fn get_channel_name(&self, channel_id: &str) -> Option<String> {
     if let Some(name) =
       self.channel_name_cache.lock().expect("the Slack channel-name cache is never poisoned").get(channel_id)

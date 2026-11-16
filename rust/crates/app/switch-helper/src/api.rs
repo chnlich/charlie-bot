@@ -296,7 +296,7 @@ fn record_first_result(kind: &mut Option<&'static str>, tool: &str, is_error: bo
 
 /// Whether a tool result reports an error. An absent `is_error` is no error, as the aggregator reads it.
 fn is_error(result: &Value) -> bool {
-  result.get("is_error").is_some_and(text_repr::is_truthy)
+  result.get(event_types::IS_ERROR).is_some_and(text_repr::is_truthy)
 }
 
 /// The content blocks of an event's message, and empty when the message holds no list.

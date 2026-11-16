@@ -989,7 +989,7 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
   // Only an errored Claude Code result is classified here, by the shared member-failure sort. A temporary failure
   // keeps today's quota-class failover. A spent quota or a refusal ends the run as its own class, and anything else
   // is an ordinary error event that falls through.
-  if event_type == ET::RESULT && event.get("is_error") == Some(&Value::Bool(true)) {
+  if event_type == ET::RESULT && event.get(ET::IS_ERROR) == Some(&Value::Bool(true)) {
     let text = text_repr::value_str(event.get("result").context("an errored result carries its result text")?);
     let failure = if backend_pool::is_temporary_unavailable_result(&event) {
       backend_pool::MemberFailure::Quota

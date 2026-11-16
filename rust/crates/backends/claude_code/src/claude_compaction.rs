@@ -9,7 +9,7 @@ use std::time::Duration as StdDuration;
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
-  COMPACT_BOUNDARY, COMPACT_POST_TOKENS, COMPACT_PRE_TOKENS, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, MODEL_USAGE,
+  COMPACT_BOUNDARY, COMPACT_POST_TOKENS, COMPACT_PRE_TOKENS, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, IS_ERROR, MODEL_USAGE,
   NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL,
 };
 use charliebot_core::subagent::AGENT_TOOL;
@@ -281,7 +281,7 @@ pub fn judge(
     };
   };
   let models = models_that_grew(&result, baseline);
-  if returncode != 0 || result.get("is_error").and_then(Value::as_bool) == Some(true) {
+  if returncode != 0 || result.get(IS_ERROR).and_then(Value::as_bool) == Some(true) {
     let detail = result
       .get("result")
       .filter(|value| is_truthy(value))

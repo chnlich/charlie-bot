@@ -5,8 +5,8 @@ use std::path::Path;
 use anyhow::Context;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
 use charliebot_core::event_types::{
-  API_ERROR_STATUS, ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RATE_LIMIT_OVERAGE_STATUS,
-  RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED, RATE_LIMIT_TYPE, RESULT,
+  API_ERROR_STATUS, ASSISTANT, ASSISTANT_ERROR, ERROR, IS_ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO,
+  RATE_LIMIT_OVERAGE_STATUS, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED, RATE_LIMIT_TYPE, RESULT,
 };
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{DEFAULT_JSON, value_str};
@@ -193,7 +193,7 @@ pub fn quota_blocker_match(event: &Value) -> anyhow::Result<Option<String>> {
     return Ok(None);
   }
   let is_plain_result = event_type == Some(RESULT)
-    && event.get("is_error") != Some(&Value::Bool(true))
+    && event.get(IS_ERROR) != Some(&Value::Bool(true))
     && event.get(API_ERROR_STATUS).is_none_or(Value::is_null)
     && !value_str(event.get("subtype").unwrap_or(&Value::String(String::new()))).to_lowercase().contains("error");
   if is_plain_result {

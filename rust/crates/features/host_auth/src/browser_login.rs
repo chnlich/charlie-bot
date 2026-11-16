@@ -582,7 +582,7 @@ fn spawn_readback(argv: &[String]) -> io::Result<Child> {
   #[cfg(not(test))]
   let command = {
     let mut command = tokio::process::Command::new(std::env::current_exe()?);
-    command.arg(crate::READBACK_SUPERVISOR_ARG).args(argv);
+    command.arg(crate::process_tree::SUPERVISOR_ARG).args(argv);
     command
   };
   spawn_command(command)

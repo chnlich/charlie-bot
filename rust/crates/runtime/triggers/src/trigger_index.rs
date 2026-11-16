@@ -95,7 +95,7 @@ impl TriggerIndex {
   }
 }
 
-/// Write the rows this boot proved, replacing the previous index. The boot writes the rows of the files it read and
+/// The index this boot proved, written over the previous index. The boot writes the rows of the files it read and
 /// the rows it served. A file's row therefore survives while its identity holds and disappears when the file does.
 pub(crate) fn write(home: &Path, rows: &[TriggerIndexRow]) -> io::Result<()> {
   let fields = rows

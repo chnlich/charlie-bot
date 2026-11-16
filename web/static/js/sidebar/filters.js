@@ -256,6 +256,16 @@ let shownSearchQuery = '';
 // Whether the list holds a search note instead of rows.
 let searchPending = false;
 
+// The search field's clear control (index.html, wired below): the reader's way back to the pills and
+// the current filter's rows. The empty field hides the control itself, so this only empties the box
+// and hands the query to the one search path.
+function clearSidebarSearch() {
+  const input = document.getElementById('sidebar-search');
+  input.value = '';
+  input.focus();
+  handleSidebarSearch('');
+}
+
 function handleSidebarSearch(query) {
   clearTimeout(searchDebounceTimer);
   const pills = document.querySelector('.filter-pill')?.parentElement;
@@ -337,6 +347,7 @@ const GLOBALS = {
   enterSidebarFilter,
   restoreSidebarFromUrl,
   handleSidebarSearch,
+  clearSidebarSearch,
   toggleSessionStar,
   queueRowRefresh,
   refreshWorkspaceBadges,

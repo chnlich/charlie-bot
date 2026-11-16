@@ -399,10 +399,22 @@ mod tests {
     assert_eq!(&workspace_ids | &thread_ids, active);
     assert!(!thread_ids.contains(&corpus.plain));
 
-    // One row shape: every Threads row carries the Workspace row's keys.
+    // One row shape: every Threads row carries the Workspace row's keys, except the fields it holds at null, which
+    // no row sends.
     let shape = keys(row_for(&workspace, &corpus.plain));
     for row in &threads {
-      assert_eq!(keys(row), shape);
+      let id = row["id"].as_str().expect("a row has an id");
+      let meta = server
+        .features
+        .store
+        .get_session(id)
+        .await
+        .expect("the row's session reads")
+        .expect("the row's session exists");
+      let values = server.features.store.session_metadata_value(&meta);
+      for field in shape.difference(&keys(row)) {
+        assert!(values.get(field).is_none_or(Value::is_null), "{field} is absent from a Threads row but holds a value");
+      }
     }
   }
 

@@ -77,11 +77,17 @@ const NO_SESSION_BOOTSTRAP: &str = "null";
 /// The chat page's rendered row texts, reused across requests while a row's inputs are unchanged.
 static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::PageRowsMemo::default);
 
-/// The session bootstrap one page request built last, reused while every payload input is unchanged.
+/// The session bootstraps the page built for its last few sessions, each reused while every payload input is
+/// unchanged.
 static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(detail::PageBootstrapMemo::default);
 
-/// The finished bodies of the pages, one entry per page, each kept while its rendered template and its own texts
-/// still hold their value.
+/// The number of finished bodies one page keeps: the body it served most recently, and the ones before it that the
+/// reader comes back to. A reader who moves between two sessions reopens a body the page built a moment ago, and a
+/// single slot would rebuild it on every switch.
+const PAGE_BODY_MEMO_ENTRIES_PER_PAGE: usize = 4;
+
+/// The finished bodies of the pages, up to `PAGE_BODY_MEMO_ENTRIES_PER_PAGE` of each, every body kept while its
+/// rendered template and its own texts still hold their value.
 ///
 /// A page's body is its rendered template with the sidebar text and, on the chat page, the session bootstrap
 /// substituted in. The chat page's sidebar text runs to about nine megabytes for a full home, and the events viewer's
@@ -90,13 +96,8 @@ static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(
 /// it already built.
 ///
 /// The rendered template is part of the key: a template, page part or template directory edited on disk renders
-/// different bytes and never matches. The chat page's two large texts compare by identity, and the entry keeps their
-/// `Arc`s alive, so an address the entry holds is never handed to a different text.
-/// The finished bodies one page keeps: the body the page served most recently, and the ones before it that the reader
-/// is likely to come back to. A reader who moves between two sessions reopens a body the page built a moment ago, and
-/// a single slot would rebuild it on every switch.
-const PAGE_BODY_MEMO_ENTRIES_PER_PAGE: usize = 4;
-
+/// different bytes and never matches. The chat page's two large texts compare by identity, and an entry keeps their
+/// `Arc`s alive, so an address an entry holds is never handed to a different text.
 #[derive(Default)]
 struct PageBodyMemo {
   entries: Vec<PageBodyEntry>,

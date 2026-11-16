@@ -261,9 +261,9 @@ function computeGraph(templates) {
   return {templates, nodes, edges, sccs, multiDefs, loadErrors};
 }
 
-// The page the structure test checks: index.html plus every package's page part templates, in
-// registration order.
-const chatTemplates = ['web/templates/index.html'];
+// The page the structure test checks: index.html, the script tail it names after its markup, and every
+// package's page part templates, in page order.
+const chatTemplates = ['web/templates/index.html', 'web/templates/partials/chat_scripts.html'];
 for (const pkg of packages) chatTemplates.push(...pageTemplatesOf(pkg));
 
 console.log(JSON.stringify({

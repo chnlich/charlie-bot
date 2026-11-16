@@ -8,6 +8,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const INDEX_HTML = path.join(__dirname, '..', 'templates', 'index.html');
+// The page's scripts stand in the tail partial index.html names, so the harness reads both files in page order.
+const CHAT_SCRIPTS = path.join(__dirname, '..', 'templates', 'partials', 'chat_scripts.html');
 
 function readStatic(...parts) {
   return fs.readFileSync(path.join(__dirname, '..', 'static', 'js', ...parts), 'utf8');
@@ -21,11 +23,12 @@ function readPackageStatic(kind, name, ...parts) {
   return fs.readFileSync(fs.existsSync(included) ? included : path.join(packageRoot, 'static', ...parts), 'utf8');
 }
 
-// Script paths index.html carries in document order, relative to web/static/js. The page includes each core
+// Script paths the chat page carries in document order, relative to web/static/js. The page includes each core
 // script into the document, so the vm harnesses derive their module lists from the include tags and a script
-// added to or reordered on the page cannot drift from what the harnesses load.
+// added to or reordered on the page cannot drift from what the harnesses load. The page's scripts are the tail
+// partial it names after its markup, so the partial's tags follow index.html's.
 function indexScriptPaths() {
-  const html = fs.readFileSync(INDEX_HTML, 'utf8');
+  const html = fs.readFileSync(INDEX_HTML, 'utf8') + fs.readFileSync(CHAT_SCRIPTS, 'utf8');
   return [...html.matchAll(/<script>\{% include 'js\/([^']+)' %\}<\/script>/g)].map((m) => m[1]);
 }
 

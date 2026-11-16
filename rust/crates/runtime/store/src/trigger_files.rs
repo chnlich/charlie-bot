@@ -166,7 +166,7 @@ pub fn pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<U
       continue;
     }
     pending_count += 1;
-    if let Some(fire_at) = trigger.get("fire_at").and_then(serde_json::Value::as_str)
+    if let Some(fire_at) = trigger.get(FIRE_AT_FIELD).and_then(serde_json::Value::as_str)
       && let Ok(parsed) = UtcDateTime::parse(fire_at)
     {
       next_trigger = Some(next_trigger.map_or(parsed, |current: UtcDateTime| current.min(parsed)));
@@ -273,6 +273,10 @@ pub enum WatchTarget {
     job_id: i64,
   },
 }
+
+/// The trigger record's key for its UTC fire deadline. The record's serializer writes the key from the field name, and
+/// a hand read of the file names it with this const.
+pub const FIRE_AT_FIELD: &str = "fire_at";
 
 /// One durable pending, fired, or cancelled trigger.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

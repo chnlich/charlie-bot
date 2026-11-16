@@ -81,7 +81,7 @@ struct LintArgs {
   dir: Option<PathBuf>,
 }
 
-/// Parse the memory arguments and run one local store verb.
+/// The memory CLI entry point, which parses the arguments and runs one local store verb.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if args.first().and_then(|arg| arg.to_str()) == Some("proposal") {
     return proposal::main(&args[1..]);

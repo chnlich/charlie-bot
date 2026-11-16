@@ -438,8 +438,8 @@ mod tests {
   use serde_json::{Map, Value, json};
 
   use super::*;
+  use crate::control_events::archived_close_event;
   use crate::metadata::TaskSpec;
-  use crate::task_tree::archived_close_event;
   use crate::task_tree::tests::{create_node, make_store, queued_run};
   use crate::{CreateTask, TaskCaller};
 
@@ -470,7 +470,7 @@ mod tests {
         }
         let request_id = format!("elone-{}", Uuid::new_v4());
         let summary = format!("archived by elone successor {successor_id}");
-        let event = crate::task_tree::archived_close_event(source_id, &request_id, ACTOR_USER, &summary, &[], None);
+        let event = archived_close_event(source_id, &request_id, &summary, None, None, None, ACTOR_USER, &[], &[]);
         store.append_control_fact(guard, source_id, event).await?;
         store.invalidate_tree_index();
         Ok(())
@@ -535,7 +535,17 @@ mod tests {
   /// One archived close fact, written as the completion owner's archive writes it.
   async fn archive_task(store: &Store, session_id: &str) {
     let guard = store.control_lock().await;
-    let event = archived_close_event(session_id, "elone-test-archive", ACTOR_USER, "archived by the user", &[], None);
+    let event = archived_close_event(
+      session_id,
+      "elone-test-archive",
+      "archived by the user",
+      None,
+      None,
+      None,
+      ACTOR_USER,
+      &[],
+      &[],
+    );
     store.append_control_fact(&guard, session_id, event).await.unwrap();
     drop(guard);
     store.invalidate_tree_index();

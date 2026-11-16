@@ -785,22 +785,17 @@ impl ReplacedSourceArchive for NoRedelivery {
         return Ok(());
       }
       let request_id = format!("elone-{}", uuid::Uuid::new_v4());
-      let event_id = charliebot_store::control_events::stable_close_event_id(source_id, &request_id);
       let summary = format!("archived by elone successor {successor_id}");
-      let event = charliebot_store::control_events::build_control_event(
-        charliebot_core::event_types::TASK_CLOSED,
-        charliebot_store::control_events::ACTOR_USER,
+      let event = charliebot_store::control_events::archived_close_event(
         source_id,
-        Some(&event_id),
+        &request_id,
+        &summary,
         None,
-        [
-          ("request_id".to_string(), json!(request_id)),
-          ("outcome".to_string(), json!("archived")),
-          ("summary".to_string(), json!(summary)),
-          ("result_refs".to_string(), json!([])),
-          ("run_ids".to_string(), json!([])),
-          ("report_to".to_string(), Value::Null),
-        ],
+        None,
+        None,
+        charliebot_store::control_events::ACTOR_USER,
+        &[],
+        &[],
       );
       store.append_control_fact(guard, source_id, event).await?;
       store.invalidate_tree_index();

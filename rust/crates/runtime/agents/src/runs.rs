@@ -31,7 +31,7 @@ pub fn clean_control_characters(text: &str) -> String {
 pub fn failure_message(event: &Value) -> Option<String> {
   let text = match event.get("type").and_then(Value::as_str)? {
     event_types::ERROR => event.get("message").and_then(Value::as_str),
-    event_types::RESULT if event.get("is_error").and_then(Value::as_bool) == Some(true) => {
+    event_types::RESULT if event.get(event_types::IS_ERROR).and_then(Value::as_bool) == Some(true) => {
       event.get("result").and_then(Value::as_str)
     }
     _ => None,

@@ -14,6 +14,9 @@ pub const TOOL_USE_ID: &str = "tool_use_id";
 pub const TOOL_NAME: &str = "tool_name";
 /// The tool_use id whose subagent transcript line an event belongs to; an event without it belongs to the turn.
 pub const PARENT_TOOL_USE_ID: &str = "parent_tool_use_id";
+/// The field a `tool_result` block or a `result` event sets when what it reports failed. A reader treats an absent
+/// field as no error, so a writer states only the failure.
+pub const IS_ERROR: &str = "is_error";
 /// The `input` key of a file tool call: the path a `Read`, `Edit` or `Write` tool names.
 pub const TOOL_INPUT_FILE_PATH: &str = "file_path";
 /// The Claude Code tool that reads a file. The read-budget hook counts its `file.content` and a read-only one-shot

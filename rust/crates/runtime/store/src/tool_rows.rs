@@ -5,7 +5,9 @@
 //! the `subagent` object, only on a row that a subagent hangs under. A row without a subagent renders exactly as
 //! it did before subagents were shown.
 
-use charliebot_core::event_types::{EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, TOOL_INPUT_FILE_PATH, WRITE_TOOL};
+use charliebot_core::event_types::{
+  EDIT_TOOL, GLOB_TOOL, GREP_TOOL, IS_ERROR, READ_TOOL, TOOL_INPUT_FILE_PATH, WRITE_TOOL,
+};
 use charliebot_core::str_methods::take_chars;
 use charliebot_core::subagent::SUBAGENT_TOOL_NAMES;
 use serde_json::{Value, json};
@@ -153,7 +155,7 @@ impl Subagent {
 impl ToolRow {
   /// Build a row from a tool call with no result yet.
   pub fn new(id: Option<String>, name: Value, input: Value) -> Self {
-    let tool = tool_preview(json!({"name": name, "input": input, "output": "", "is_error": false}));
+    let tool = tool_preview(json!({"name": name, "input": input, "output": "", (IS_ERROR): false}));
     Self { id, tool, subagent: None }
   }
 
@@ -161,7 +163,7 @@ impl ToolRow {
   pub fn attach_output(&mut self, output: Value, is_error: bool) {
     let mut tool = self.tool.as_object().expect("tool rows are objects").clone();
     tool.insert("output".to_string(), output);
-    tool.insert("is_error".to_string(), json!(is_error));
+    tool.insert(IS_ERROR.to_string(), json!(is_error));
     self.tool = tool_preview(Value::Object(tool));
   }
 

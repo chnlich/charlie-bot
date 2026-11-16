@@ -234,7 +234,7 @@ impl MessageAggregator {
           continue;
         }
         let output = extract_tool_result_text(block)?;
-        let is_error = block.field("is_error").is_some_and(is_truthy);
+        let is_error = block.field(event_types::IS_ERROR).is_some_and(is_truthy);
         deltas.extend(self.attach_result(tool_use_id, output, is_error));
       }
       deltas.extend(self.stream_delta());
@@ -359,7 +359,7 @@ impl MessageAggregator {
       return Ok(Vec::new());
     }
     let output = event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!(""));
-    let is_error = event.field("is_error").is_some_and(is_truthy);
+    let is_error = event.field(event_types::IS_ERROR).is_some_and(is_truthy);
     let mut deltas = self.attach_result(tool_use_id, output, is_error);
     self.last_event_index = index;
     deltas.extend(self.stream_delta());
@@ -514,7 +514,7 @@ impl MessageAggregator {
       }
       let tool_use_id = required_str(block, event_types::TOOL_USE_ID)?;
       let output = extract_tool_result_text(block)?;
-      let is_error = block.field("is_error").is_some_and(is_truthy);
+      let is_error = block.field(event_types::IS_ERROR).is_some_and(is_truthy);
       deltas.extend(self.tool_rows.update_row(tool_use_id, |row| row.attach_output(output, is_error)));
     }
     deltas.extend(self.stream_delta());

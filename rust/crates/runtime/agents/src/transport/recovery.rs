@@ -120,7 +120,7 @@ pub fn result_exit_code(events: &[Value]) -> i32 {
   };
   let subtype_success = result.get("subtype").is_none_or(|value| value.is_null() || value == "success");
   let error_absent = result
-    .get("is_error")
+    .get(event_types::IS_ERROR)
     .is_none_or(|value| value.is_null() || value == false || value.as_f64().is_some_and(|number| number == 0.0));
   if subtype_success && error_absent { 0 } else { -1 }
 }

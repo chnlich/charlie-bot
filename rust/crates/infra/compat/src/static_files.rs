@@ -366,9 +366,13 @@ fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, Ra
     }
     let (start_text, end_text) = part.split_once('-').expect("the part holds a dash");
     let (start_text, end_text) = (start_text.trim(), end_text.trim());
-    let start = if start_text.is_empty() { parse_int(end_text).map(|end| size - end) } else { parse_int(start_text) };
+    let start = if start_text.is_empty() {
+      int_text::int_value::<i128>(end_text).map(|end| size - end)
+    } else {
+      int_text::int_value(start_text)
+    };
     let end = if !start_text.is_empty() && !end_text.is_empty() {
-      parse_int(end_text).map(|end| if end < size { end + 1 } else { size })
+      int_text::int_value::<i128>(end_text).map(|end| if end < size { end + 1 } else { size })
     } else {
       Some(size)
     };
@@ -399,13 +403,6 @@ fn parse_range_header(range: &str, file_size: u64) -> Result<Vec<(u64, u64)>, Ra
     ranges = merged;
   }
   Ok(ranges.into_iter().map(|(start, end)| (start as u64, end as u64)).collect())
-}
-
-/// A range bound: `int(text)` at i128 width, where a value beyond that width is not a bound.
-fn parse_int(text: &str) -> Option<i128> {
-  let (negative, digits) = int_text::int_digits(text)?;
-  let magnitude: i128 = digits.parse().ok()?;
-  Some(if negative { -magnitude } else { magnitude })
 }
 
 fn multipart_response(path: &Path, file_headers: &FileHeaders, ranges: &[(u64, u64)], head_only: bool) -> Response {

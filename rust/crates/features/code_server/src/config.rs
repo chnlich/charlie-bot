@@ -71,7 +71,7 @@ pub(crate) fn listen_port(config_path: &Path) -> Result<i64, String> {
   let Some((_, port_text)) = bind_addr.rsplit_once(':') else {
     return Err(missing());
   };
-  parse_int(port_text).ok_or_else(|| format!("code-server bind-addr port must be an integer: {bind_addr}"))
+  int_text::int_value(port_text).ok_or_else(|| format!("code-server bind-addr port must be an integer: {bind_addr}"))
 }
 
 /// The document at `path`: `Null` when the file is missing or holds no document.
@@ -103,13 +103,6 @@ fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
   codec_error_text(UTF8_CODEC, bytes, position, position + 1, reason)
 }
 
-/// A port literal: `int(text)` at i64 width, where a value beyond that width reads as not an integer here.
-fn parse_int(text: &str) -> Option<i64> {
-  let (negative, digits) = int_text::int_digits(text)?;
-  let magnitude: i64 = digits.parse().ok()?;
-  Some(if negative { -magnitude } else { magnitude })
-}
-
 /// `text` normalized as a POSIX path: repeated slashes and `.` parts drop, and a trailing slash goes. An empty path is
 /// `.`.
 pub(crate) fn pathlib_text(text: &str) -> String {
@@ -124,19 +117,6 @@ pub(crate) fn pathlib_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn int_reads_what_int_reads_for_a_port() {
-    assert_eq!(parse_int("8080"), Some(8080));
-    assert_eq!(parse_int(" 8080 "), Some(8080));
-    assert_eq!(parse_int("+8080"), Some(8080));
-    assert_eq!(parse_int("-1"), Some(-1));
-    assert_eq!(parse_int("80_80"), Some(8080));
-    assert_eq!(parse_int(""), None);
-    assert_eq!(parse_int("80__80"), None);
-    assert_eq!(parse_int("_80"), None);
-    assert_eq!(parse_int("http"), None);
-  }
 
   #[test]
   fn pathlib_text_drops_dot_parts_and_repeated_slashes() {

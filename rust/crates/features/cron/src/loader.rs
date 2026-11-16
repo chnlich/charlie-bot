@@ -531,7 +531,7 @@ async fn send_telegram(
   message: &str,
 ) -> anyhow::Result<()> {
   let credentials = credentials.get()?;
-  let token = credentials.require("telegram", "bot_token")?;
+  let token = credentials.require("telegram", charliebot_core::credentials::BOT_TOKEN_FIELD)?;
   let chat_id = chat_id.ok_or_else(|| anyhow::anyhow!("telegram.chat_id is not configured"))?;
   let response = charliebot_compat::http_client::shared_client()?
     .post(format!("https://api.telegram.org/bot{token}/sendMessage"))

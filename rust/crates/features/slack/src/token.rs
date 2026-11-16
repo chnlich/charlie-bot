@@ -24,7 +24,7 @@ impl TokenKind {
   pub fn key(self) -> &'static str {
     match self {
       TokenKind::User => "user_token",
-      TokenKind::Bot => "bot_token",
+      TokenKind::Bot => credentials::BOT_TOKEN_FIELD,
     }
   }
 }

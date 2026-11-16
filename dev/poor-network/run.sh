@@ -190,10 +190,11 @@ if [[ $side != after ]]; then
   [[ -x $before_bin ]] || die 1 "the before build did not produce charliebot-server"
 fi
 
-# The mock home holds the view's rows that the bench's own sessions do not: VIEW.rows less BENCH_SESSIONS, each one a
-# session of the mock's active corpus, with a task spec sized to the live view's rows (the view shape).
+# The mock home holds the view's rows that the bench's own sessions and the default cron tasks' sessions do not:
+# VIEW.rows less BENCH_SESSIONS less DEFAULT_CRON_ROWS, each one a session of the mock's active corpus, with a task spec
+# sized to the live view's rows (the view shape).
 mock_version=$("$mock_bin" version)
-mock_sessions=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS)))' "file://$BENCH_DIR/profile.mjs")
+mock_sessions=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS - profile.DEFAULT_CRON_ROWS)))' "file://$BENCH_DIR/profile.mjs")
 mock_home="$HOME/improve/mock-home/$mock_version-view-$mock_sessions"
 if [[ ! -d $mock_home ]]; then
   echo "poor-network: generating the view home of $mock_sessions sessions at $mock_home"

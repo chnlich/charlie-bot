@@ -91,23 +91,55 @@ if [[ $side != after ]]; then
   [[ -n $before_clone ]] || die 2 "--before-clone is required for --side $side"
 fi
 
+syn_drop_needed=0
+for scenario in ${scenarios//,/ }; do
+  case $scenario in
+    held|reset) syn_drop_needed=1 ;;
+    open)
+      for condition in ${open_conditions//,/ }; do
+        case $condition in
+          held|reset|flaps|release) syn_drop_needed=1 ;;
+        esac
+      done
+      ;;
+  esac
+done
+
 for tool in node cargo git openssl systemd-run flock; do
   command -v "$tool" >/dev/null || die 2 "missing tool on this host: $tool"
 done
+if ((syn_drop_needed)); then
+  for tool in sudo iptables; do
+    command -v "$tool" >/dev/null || die 2 "blackout scenarios need $tool to drop loopback SYN packets"
+  done
+  sudo -n iptables -w -L OUTPUT -n >/dev/null 2>&1 \
+    || die 2 "blackout scenarios need noninteractive sudo access to iptables OUTPUT"
+fi
 
 tree=$(git -C "$BENCH_DIR" rev-parse --show-toplevel) || die 2 "$BENCH_DIR is not in a git tree"
 mkdir -p "$out_dir"
 out_dir=$(cd "$out_dir" && pwd)
+cd "$out_dir"
 run_id=$(date -u +%Y%m%dT%H%M%SZ)
 
 if ((detach)); then
   log="$out_dir/pn-$run_id.log"
+  detached_env=()
+  [[ -z ${CARGO_HOME:-} ]] || detached_env+=(--setenv="CARGO_HOME=$CARGO_HOME")
+  [[ -z ${RUSTUP_HOME:-} ]] || detached_env+=(--setenv="RUSTUP_HOME=$RUSTUP_HOME")
+  # The remote runner's TMPDIR belongs to the SSH command. Carry a caller's scratch path into the detached run only
+  # when it is inside HOME, where the task keeps its durable files.
+  if [[ -n ${TMPDIR:-} && $TMPDIR == "$HOME/"* ]]; then
+    mkdir -p "$TMPDIR"
+    detached_env+=(--setenv="TMPDIR=$TMPDIR")
+  fi
   forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions"
     --scenarios "$scenarios" --open-conditions "$open_conditions" ${open_rate_args+"${open_rate_args[@]}"})
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
+    "${detached_env[@]}" \
     ${POOR_NETWORK_CHROME:+--setenv=POOR_NETWORK_CHROME="$POOR_NETWORK_CHROME"} \
     bash -c "exec bash '$BENCH_DIR/run.sh' ${forwarded[*]@Q} > '$log' 2>&1" >/dev/null
   printf 'started transient unit pn-%s; log: %s\n' "$run_id" "$log"
@@ -188,7 +220,8 @@ YAML
 # Runs one side as the command of a serve trial. $1 side, $2 trial script, $3 commit, $4 server binary.
 run_side() {
   local name=$1 trial_script=$2 commit=$3 server_bin=$4 trial_root trial_status
-  trial_root="${TMPDIR:-/tmp}/pn-$run_id-$name"
+  # The host bench lock serializes sides, and the trial removes this tree before the next side starts.
+  trial_root="${TMPDIR:-/tmp}/pn-$name"
   mkdir -p "$trial_root"
   local label=$commit
   [[ $name == after ]] && label=$after_label

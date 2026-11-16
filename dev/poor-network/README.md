@@ -55,10 +55,12 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 - 100 kbit/s per direction (12,500 bytes/s), one budget per direction shared by every browser connection. Bytes move in
   1 KB quanta, round robin across the connections.
 - A 1 s delay spike once every 60 s, both directions.
-- A scripted 30 s blackout that drops every packet in both directions, a new connection's SYN included. No byte crosses
-  the link while it runs, and a connection attempt that starts inside it is never answered — not even at the restore —
-  so the browser retries it on its own schedule. In `hold` mode the established connections survive: their bytes stop
-  with the link and travel again at the restore. In `reset` mode every connection is reset when the blackout starts.
+- A scripted 30 s blackout that drops every packet in both directions, a new connection's SYN included. The userland
+  shaper stops established tunnel bytes; a loopback firewall rule drops SYNs to the proxy before its listener accepts
+  them. Linux retries those connections on its TCP timer, and the first retry after restore reaches the proxy. Blackout
+  scenarios require `sudo -n iptables` access; `run.sh` checks it before building. In `hold` mode established
+  connections survive and their bytes travel again at restore. In `reset` mode every established tunnel is reset when
+  the blackout starts.
 
 | Scenario | Measures | Target |
 |---|---|---|

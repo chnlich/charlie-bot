@@ -88,6 +88,13 @@
        3.07:1 on the fill, the tone the diff page's fields draw; the blue focus border still wins. */
     #type-filter:not(:focus) { border-color: #64748b; }
 
+    /* Clear acts on the filter's text: with an empty box it sets the empty value again and redraws
+       the same rows, so it is a control with no result beside a box that shows only its placeholder.
+       It shows while the box carries a query and leaves the row while the box is empty, the way the
+       sidebar search's clear control leaves the idle search row. The idle row then spends no width
+       on it: 49 px plus the row's 12 px gap, at both widths. */
+    #type-filter:placeholder-shown ~ #clear-filter { display: none; }
+
     /* The Download, Clear and Load earlier controls draw their box with a slate-700 outline:
        rgb(51, 65, 85) draws 1.72:1 on the slate-900 bar and 1.57:1 on the header's slate-850,
        under the 3:1 boundary floor WCAG 1.4.11 sets for a control, and the outline is the only
@@ -102,8 +109,8 @@
        icon-only download action and the count on its first row. The divider that
        separates Back from the title leaves with the title, so no bare separator
        hangs after Back. The filter bar keeps its label and input on the first row
-       and moves "Expand all", "Clear" and "Load earlier events" to a second row
-       rather than squeezing that row. */
+       and moves "Expand all", "Clear" (while the filter carries text) and "Load
+       earlier events" to a second row rather than squeezing that row. */
     @media (max-width: 768px) {
       .events-download-label { display: none; }
       .events-filter { flex-wrap: wrap; }
@@ -214,7 +221,7 @@
         <input id="expand-all" type="checkbox" class="accent-blue-500">
         Expand all
       </label>
-      <button onclick="clearFilter()"
+      <button id="clear-filter" onclick="clearFilter()"
               class="events-secondary text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">Clear</button>
       <button id="load-earlier"
               class="events-secondary hidden text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">

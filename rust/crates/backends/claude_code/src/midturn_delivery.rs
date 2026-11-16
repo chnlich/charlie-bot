@@ -215,8 +215,9 @@ mod tests {
   }
 
   /// A CLI that reads one stream-json line, echoes it, and skips it as a duplicate when its transcript already
-  /// holds the uuid — the behavior probe_dedupe.py measured on Claude Code 2.1.312 and later. A skipped line is
-  /// echoed, marked completed, and the CLI then waits for the next stdin line instead of running a result.
+  /// holds the uuid. This is the behavior probe_dedupe.py measured on Claude Code 2.1.312 and later.
+  /// A skipped line is echoed, marked completed, and the CLI then waits for the next stdin line instead of
+  /// running a result.
   const DEDUPE_STUB: &str = concat!(
     "#!/bin/sh\n",
     "read -r line\n",

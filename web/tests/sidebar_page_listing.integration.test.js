@@ -136,6 +136,8 @@ test('two groups share the list height instead of each taking a screen of it', (
   assert.ok(secondToggle > 0, 'the second group carries its own toggle');
   const secondGroupRows = html.slice(html.indexOf('id="session-g2-1"'), secondToggle);
   assert.equal(rowIds(secondGroupRows).length, 5, 'the second group takes the same limit');
+});
+
 test('a stored page listing keeps its first-screen counts and Show all toggle', async () => {
   const preview = previewRows();
   const firstScreen = {$screen: {partial: true, counts: {'': 8}}, ...sessionColumns(preview)};

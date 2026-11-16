@@ -124,7 +124,9 @@ serde_path_to_error = "0.1"
 serde_yaml = "0.9"
 shlex = "2"
 sha1 = "0.10"
-sha2 = "0.10"
+# The asm forms run on the CPU's SHA-256 instructions: on aarch64 the crate's intrinsics, on x86_64 sha2-asm. The
+# digest is the same either way; the request path's entity tag hashes a page's compressed body on every first open.
+sha2 = { version = "0.10", features = ["asm"] }
 subtle = "2"
 symphonia = { version = "0.6", default-features = false, features = ["aac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 syn = { version = "2", features = ["full", "visit"] }

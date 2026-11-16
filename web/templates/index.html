@@ -11,6 +11,8 @@
     const STATIC_ASSET_VERSION = {{ static_asset_version|tojson }};
     // The name the header and tab title show at page load; the displayed-session module starts from it.
     const SESSION_NAME = {{ active_session.name|tojson if active_session else 'null' }};
+    // The profile the composer's visibility starts from; a worker node takes no messages.
+    const SESSION_PROFILE = {{ (active_session.profile|tojson) if active_session and active_session.profile else '""' }};
     // The host the displayed-session module restates in the tab title.
     const PAGE_HOSTNAME = {{ hostname|tojson }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap_json|safe }};

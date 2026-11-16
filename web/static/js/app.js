@@ -20,6 +20,17 @@ document.addEventListener('DOMContentLoaded', () => {
     markSessionRead(SESSION_ID, null);
   }
 
+  // A session whose bootstrap failed has no data for the renderer above. The page still carries the header's
+  // values in its constants, so the controls the render leaves unwritten are set from them here.
+  if (SESSION_ID && !SESSION_BOOTSTRAP) {
+    paintDisplayedSession();
+    const evLink = document.getElementById('events-link');
+    if (evLink) evLink.href = '/sessions/' + SESSION_ID + '/events';
+    updateActiveBackendBadges();
+    updateBackendHeaderControls(BACKEND_TYPES[getActiveBackendId()] || '');
+    setInputAreaVisible(SESSION_PROFILE !== 'worker');
+  }
+
   // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.
   postProcessRenderedMessages(document);
 

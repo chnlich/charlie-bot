@@ -58,7 +58,7 @@ struct ReadArgs {
   /// The next page of a main-chat or topic listing
   #[arg(long, value_name = "TOKEN")]
   page: Option<String>,
-  /// Session ID (optional). It is taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
+  /// Session ID (optional). It is taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment
   #[arg(long)]
   session: Option<String>,
 }
@@ -75,7 +75,7 @@ struct DownloadArgs {
   /// Where to write the bytes. It must resolve inside the session directory
   #[arg(long)]
   output: String,
-  /// Session ID (optional). It is taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
+  /// Session ID (optional). It is taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment
   #[arg(long)]
   session: Option<String>,
 }

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>example-repo #101 审阅：审阅人 承担哪一部分</title>
+<style>
+  :root{
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --acc:#1163c0; --grn:#187f37;
+    --amb:#9a6700; --red:#cf222e; --vio:#6a3fc0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--grn);color:#ffffff;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd)}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#ffffff;font-size:12px;font-weight:700;align-items:center;justify-content:center;margin-right:8px;vertical-align:-4px}
+  h2 .nb{background:var(--vio)}
+  h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  h3 .sn{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#ffffff;background:var(--vio);border-radius:5px;padding:1px 7px;margin-right:7px;vertical-align:baseline}
+  h3 .sn.read{background:var(--grn)}
+  h3 .layer{font-size:11px;font-weight:600;color:var(--mut);margin-left:7px}
+  p{margin:7px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
+  .plan-section{margin:0 0 18px}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  li .m,.muted{color:var(--mut)}
+  .src{font-size:11px;color:#66707b}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#7a4b00}
+  pre{background:#f6f8fa;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#24292f;margin:9px 0 0}
+  table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
+  th,td{border:1px solid var(--bd);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc);font-weight:600}
+  td .f,.f{font-family:var(--mono);color:#7a4b00}
+  .new{color:var(--grn);font-weight:600}
+  .edit{color:var(--amb);font-weight:600}
+  .callout{background:rgba(88,166,255,.08);border:1px solid #b6d3f2;border-left:3px solid var(--acc);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:#1c3f66}
+  .callout p{margin:0}
+  .callout.warn{background:rgba(210,153,34,.08);border-color:#e6d09b;border-left-color:var(--amb);color:#6b4e00}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px;margin:6px 0 0;font-size:12.5px}
+  .flow .b{background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+  .flow .b.n{border-color:var(--grn);color:#187f37}
+  .flow .ar{color:var(--mut)}
+  .fork{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--amb);border-radius:8px;padding:12px 15px;margin:12px 0}
+  .fork .q{font-weight:600;margin:0 0 4px}
+  .fork .fn{display:inline-flex;width:20px;height:20px;border-radius:6px;background:var(--amb);color:#ffffff;font-size:11.5px;font-weight:700;align-items:center;justify-content:center;margin-right:9px;vertical-align:-3px}
+  .fork .rec{margin:4px 0 0;font-size:12.5px}
+  .fork .rec b{color:var(--grn)}
+  .fork .trade{margin:3px 0 0;font-size:12.5px;color:var(--mut)}
+  .fork .resolved{margin:8px 0 0;padding-top:8px;border-top:1px dashed var(--bd);font-size:12.5px;font-weight:600;color:#187f37}
+  details.details-layer{background:var(--panel);border:1px solid var(--bd);border-radius:9px;margin:6px 0 0}
+  details.details-layer summary{cursor:pointer;padding:11px 15px;font-size:13px;font-weight:600;color:var(--mut)}
+  details.details-layer summary:hover{color:var(--tx)}
+  details.details-layer[open] summary{color:var(--tx);border-bottom:1px solid var(--bd)}
+  details.details-layer ul{margin:0;padding:10px 16px 13px 34px}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+  .foot p{margin:0}
+  .revbadge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;background:rgba(210,153,34,.18);color:#7a5a00;border:1px solid #e0c97f;border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .revnote{background:rgba(210,153,34,.07);border-left:3px solid var(--amb);border-radius:0 6px 6px 0;padding:6px 11px;margin:8px 0;font-size:12px;color:#7a5a00}
+  @media(max-width:760px){body{padding:18px}}
+</style>
+  .demo{margin:5px 0 2px;padding:6px 10px;border:1px dashed var(--bd);border-radius:6px;background:#fafbfc;font-size:12px;color:var(--tx)}
+  .demo .who{font-weight:600}
+  .demo .st{display:inline-block;font-size:10.5px;font-weight:700;border-radius:4px;padding:0 6px;margin:0 4px;color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>example-repo #101 审阅：审阅人 承担哪一部分<span class="status">UNDERSTANDING</span></h1>
+    <p class="sub">作者A 的 PR 把审阅请求发给一个 38 人的团队，14 天没有人审。本页先请 审阅人 定自己的角色，再起草任何以 审阅人 名义发出的文字。</p>
+    <div class="meta">
+      <span class="mtag">repo · example-org/example-repo</span>
+      <span class="mtag">PR · #101 @ abc1234</span>
+      <span class="mtag">作者工单 · TICKET-1</span>
+      <span class="mtag">来源 · 每日主动巡检</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="plan-section">
+      <h2><span class="n">1</span> 目标</h2>
+      <p>让 <a href="https://github.com/example-org/example-repo/pull/101">PR #101</a> 的作者从 审阅人 这一方拿到明确回应（一条审阅意见，或一条转交留言），因为这个 PR 让带缩放的 <code>.blend</code> 转换在 PR 自测的三个模型上各省 102–113 s，而 PR 描述称这类转换在 120 s 时限内同步运行。本页只定 审阅人 那一份：main 不要求批准，这个 PR 现在就能合并，合不合并由作者决定。</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n nb">2</span> 交付物</h2>
+      <p>按推荐读法，交付物是一张待发卡片：一条以 审阅人 名义发在 PR 讨论区的英文审阅评论。CharlieBot 用 <code>charliebot github draft</code> 登记它，审阅人 点击后服务器才发出。这条路只发评论正文，所以每条意见在正文里写明文件和行号，结论（有没有阻塞合并的问题）写在结尾。</p>
+      <div class="flow">
+        <span class="b">读 PR 代码与新测试 (abc1234)</span><span class="ar">→</span>
+        <span class="b">核对 PR 描述里每条说法</span><span class="ar">→</span>
+        <span class="b n">起草英文评论（意见带文件:行号）</span><span class="ar">→</span>
+        <span class="b">待发卡片</span><span class="ar">→</span>
+        <span class="b">审阅人 看过后点发送</span><span class="ar">→</span>
+        <span class="b">作者在 PR 讨论区收到</span>
+      </div>
+      <p><b>PR 改了什么</b>（convert_glb 是 example-repo 的模型格式转换命令行）：输出 <code>.blend</code> 并带 <code>--height</code>/<code>--pivot</code>（按高度缩放、按支点摆放）时，旧路径先在 Blender 里缩放、导出 GLB、再导入一次，再保存；新路径在同一个 Blender 会话里缩放后直接保存。代码改动新增 38 行、删除 21 行（2 个文件），另有 189 行新测试。<span class="src">来源：<a href="https://github.com/example-org/example-repo/pull/101/files">PR diff</a>，python/example_pkg/cli/convert_glb.py，python/example_pkg/mesh_utils.py</span></p>
+      <p><b>可手算的例子</b>（PR 描述中的模型 A1，227 MB）：改前中位数 136.9 s，比 PR 所说的 120 s 时限多 16.9 s；改后 23.8 s，省 136.9 − 23.8 = 113.1 s。改后分项 导入 5.2 + 焊接 16.5 + 缩放 0.6 + 保存 0.8 = 23.1 s，与总数 23.8 s 相差 0.7 s（未列出的其他步骤）。另两个模型：A2 127.1 → 22.8 s，A3 149.2 → 47.1 s。这些是 PR 自报的计时，审阅核对代码是否支持这条路径，不重跑计时。<span class="src">来源：PR #101 描述 “Why” 表</span></p>
+      <details class="details-layer">
+        <summary>和 审阅人 相关的读回：请求对象、合并门槛、可接手的人、代码来源、撞车的 PR</summary>
+        <table>
+        <tr><th>和 审阅人 相关的事实</th><th>读回值（2026-11-16）</th></tr>
+        <tr><td>审阅请求发给谁</td><td>团队 <code>example-team</code>（38 人，审阅人 是其中之一），没有点名 审阅人 <span class="src">gh api orgs/example-org/teams/example-team；PR timeline</span></td></tr>
+        <tr><td>14 天里收到的审阅</td><td>0 份；CI 4 项全绿（含 Cursor Bugbot） <span class="src">gh pr view 545</span></td></tr>
+        <tr><td>合并门槛</td><td>main 不要求批准；CODEOWNERS 把全部路径指给整个团队，但不强制；PR 现在就能合并（mergeStateStatus CLEAN） <span class="src">gh api repos/example-org/example-repo/rules/branches/main；CODEOWNERS</span></td></tr>
+        <tr><td>审阅人 在 example-repo 的记录</td><td>审阅过 0 个 PR，提交过 0 个 PR；有写权限 <span class="src">gh search prs --reviewed-by / --author example-user</span></td></tr>
+        <tr><td>60 天内活跃、又和这段代码有关的人</td><td>成员B：经 #539 把这段缩放代码前移到 main，改过 convert_glb.py 3 次，最近提交 2026-10-26，不在被请求的团队里 <span class="src">gh api commits?since=2026-09-17</span></td></tr>
+      </table>
+        <ul>
+          <li>PR 搬动的层级缩放代码出自 PR 作者本人（release 分支上的 TICKET-2、TICKET-3 系列提交，经 #539 进入 main），与 成员D 无关。<span class="src">#539 的 16 个提交；成员D 对 mesh_utils.py 只有 #504 的 pivot 格式改动</span></li>
+          <li>convert_glb.py 在 main 上共 33 次提交，主要作者 成员E 8、成员D 4、成员F 3、成员G 3。前三人 60 天内没有 example-repo 活动，成员D 已离职。</li>
+          <li>成员H 在被请求的团队里，60 天内有 4 次提交，但没改过 convert_glb.py。</li>
+          <li>同一作者的 #534 也改 <code>convert_glb.main</code>，仍开着；后合的一方可能要 rebase。</li>
+        </ul>
+      </details>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">3</span> 验收</h2>
+      <ul>
+        <li>审阅人 选了「完整审阅」或「重点审阅」时：本会话登记一张待发卡片，内含英文评论正文，每条意见写明文件和行号，结尾写明有没有阻塞合并的问题；审阅人 点击前 PR 上没有任何新内容。</li>
+        <li>审阅没有阻塞问题时：交付附上 PR 的审阅页链接，审阅人 认可的话可以在 GitHub 上自己点 Approve。</li>
+        <li>审阅人 选了「转交」时：本会话登记一张待发卡片，内含以 审阅人 名义的留言，写明接手人和理由；审阅人 点击前 PR 上没有任何新内容。</li>
+        <li>审阅人 选了「不处理」时：本会话不起草任何文字，把“审阅人 决定不处理”发给发起本会话的每日巡检会话，然后结束。</li>
+        <li>任何选项下：example-repo 仓库和 PR 状态不变（不提交、不推送、不改 PR 状态）。</li>
+      </ul>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">4</span> 不做的事</h2>
+      <p>不审 #534；不审 FBX/OBJ/STL 的行为（本 PR 只把它们的缩放代码抽成共用函数，行为未改）；不在 Blender 里重跑 PR 的计时（PR 用的三个线上 GLB 没有附上）。要加其中一项，回复它的名字即可。</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">5</span> 分歧</h2>
+      <div class="fork">
+        <p class="q"><span class="fn">1</span> 审阅人 在这次审阅里做哪一部分？</p>
+        <ul>
+          <li>「完整审阅」：读全部改动和新测试，逐条核对 PR 描述的说法，起草一条完整的英文审阅评论。作者拿到一份完整意见；审阅人 的名字第一次出现在 example-repo 的审阅上。
+            <div class="demo"><span class="who">example-user</span><span class="st" style="background:#5b6774">commented</span>· 结论 + 逐条意见（文件:行号）</div></li>
+          <li>「重点审阅」：只就三处风险写评论：<code>.blend</code> 输出的着色数据变了、<code>glb_to_blend</code> 的参数变了、与 #534 的合并顺序。审阅人 读得更少；其余改动仍然没有人看过。
+            <div class="demo"><span class="who">example-user</span><span class="st" style="background:#5b6774">commented</span>· 三条要点</div></li>
+          <li>「转交」：起草一条留言，请 成员B 接手（把这段缩放代码前移到 main 的人，10 月底仍有提交）。审阅人 只花一次点击；成员B 不在被请求的团队里，可能不接。
+            <div class="demo"><span class="who">example-user</span> 留言：“@成员B could you take this one? …”</div></li>
+          <li>「不处理」：请求是发给 38 人的团队，审阅人 不接。PR 上不出现任何 审阅人 的文字；作者继续等，或者不等审阅直接合并（规则允许）。
+            <div class="demo"><span class="who">example-team</span><span class="st" style="background:#9a6700">Review requested</span>· 0 份审阅 · PR 上没有 example-user 的任何条目</div></li>
+        </ul>
+        <p class="rec"><b>推荐：</b>「完整审阅」。只读预审已读完全部改动：没有阻塞问题，有 2 个问题、2 条非阻塞建议（<a href="https://example.com/review-report">预审报告，文件 prereview_report.md</a>），审阅人 的成本是读一遍据此起草的评论；团队 14 天无人接，唯一活跃的转交人选又不在该团队。</p>
+        <p class="trade">代价：一条以 审阅人 名义的审阅落在 审阅人 没参与过的模块上；审阅人 发送前要读一遍草稿。</p>
+        <details class="details-layer">
+          <summary>完整说明（无需背景）：展开核对推荐</summary>
+          <ul>
+            <li>每日巡检把这个 PR 当成“等 审阅人 审阅”找出来；读回后发现，请求发给了整个 <code>example-team</code> 团队，审阅人 只是 38 人之一。所以“审阅人 必须审”不成立，四个选项都站得住。</li>
+            <li>main 不要求批准，任何选项都不是合并的前提。作者等的是一份人工意见（推断：作者按团队习惯等审阅后再合，没有规则要求）。</li>
+            <li>以往 审阅人 不愿为自己的修复点名同事审阅、宁可自己处理（T0000）；这里是团队请求，情形不同，但同样指向自己处理而不转给别人。</li>
+            <li>对作者：完整审阅给出全部意见；重点审阅只覆盖三处风险；转交要等 成员B 接手；不处理则等团队里别人。</li>
+            <li>对 审阅人 的成本（估计）：完整审阅读一屏左右的评论草稿；重点审阅读三条；转交读一句；不处理为零。</li>
+            <li>着色数据变化：PR 描述自述，旧路径把导出时写入的法线当成自定义法线重新导入，约 5% 的面变成平滑着色；新路径保持原件的平直着色。合并后用户拿到的 <code>.blend</code> 在这些面上看起来会不同；审阅会核对这条依据，并在正文写明这项可见变化。<span class="src">来源：PR #101 描述 “Output” 节</span></li>
+            <li>“等一周有代价”的依据：A1 改前 136.9 s，比 120 s 时限多 16.9 s，如果时限属实，这类请求今天会超时。120 s 只见于 PR 描述，example-repo 代码里没有，调用方也未找到，所以标为待证实。</li>
+          </ul>
+        </details>
+      </div>
+      <div class="fork">
+        <p class="q"><span class="fn">2</span> 审阅用什么形式发出？</p>
+        <ul>
+          <li>「一条评论」：卡片发出一条 PR 评论，结论和逐条意见都在正文里，每条意见带文件:行号。PR 上没有审阅状态，除非 审阅人 发出后自己在 GitHub 上点 Approve。今天就能交付。
+            <div class="demo"><span class="who">example-user</span><span class="st" style="background:#5b6774">commented</span>· “… No blocking issues found.”（结论按实际发现写）</div></li>
+          <li>「先扩展待发卡片」：先给 CharlieBot 的待发卡片加上“PR 审阅”一类（审阅状态 + 挂在代码行上的行内评论），再发本审阅。作者拿到标准的 GitHub 审阅；本审阅要等那份 CharlieBot 改动做完并上线，它的方案另请 审阅人 批。
+            <div class="demo"><span class="who">example-user</span><span class="st" style="background:#187f37">Approved</span>或<span class="st" style="background:#cf222e">Changes requested</span>· 正文 + 行内评论</div></li>
+        </ul>
+        <p class="rec"><b>推荐：</b>「一条评论」。main 不要求批准，审阅状态不改变 PR 能否合并；带文件:行号的正文让作者逐条定位。</p>
+        <p class="trade">代价：意见不挂在代码行上，作者按行号自己找；PR 列表上没有绿色勾，除非 审阅人 自己点 Approve。</p>
+        <details class="details-layer">
+          <summary>完整说明：为什么待发卡片只能发评论</summary>
+          <ul>
+            <li>CharlieBot 的待发卡片（<code>charliebot github draft</code>）只登记两类内容：新建 PR，或在 PR/issue 讨论区发一条评论。它没有审阅状态字段，也没有文件和行号字段。<span class="src">来源：charlie-bot rust/crates/github/src/target.rs</span></li>
+            <li>所以 Approve、Request changes 和行内评论都发不出去。审阅人 自己在 GitHub 上点 Approve 不经过卡片，随时可做。</li>
+            <li>「先扩展待发卡片」是 CharlieBot 仓库里的一项新功能，要另走一份方案、实现、审查和上线；它对以后所有以 审阅人 名义的 PR 审阅都有用，但本 PR 要多等这一轮。</li>
+          </ul>
+        </details>
+      </div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">6</span> Linear</h2>
+      <p>本机还没有配置 Linear 跟踪仓库名单，所以本页不建工单；PR 作者自己的工单 TICKET-1 列在页头。</p>
+    </section>
+
+    <div class="foot">
+      <p><b>怎么回复：</b>按编号回复即可改推荐（例如“1 转交”或“2 先扩展待发卡片”）；没提到的项按推荐走。任何回复都会让本会话按选定读法继续；要停也直接说。</p>
+    </div>
+  </main>
+</div>
+</body>
+</html>

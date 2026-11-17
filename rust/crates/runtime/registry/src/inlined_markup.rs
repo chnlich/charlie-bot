@@ -427,13 +427,13 @@ mod tests {
   fn a_repeat_body_takes_the_form_the_memo_built_for_it() {
     let body = "const a = 1; // note\nif (a) {\n  run(a);\n}\n";
     let first = script_form(body);
-    assert_eq!(&*first, "const a=1;\nif(a){\nrun(a);\n}\n");
+    assert_eq!(&*first, "const a=1;if(a){run(a);}");
     // The same bytes in another buffer are the same body, and the memo answers them with the form it built.
     let copy = body.to_string();
     let again = script_form(&copy);
     assert_eq!(&*again, &*first);
     // Another body keeps its own form: the memo never answers one body with another's.
-    assert_eq!(&*script_form("const b = 2; // note\n"), "const b=2;\n");
+    assert_eq!(&*script_form("const b = 2; // note\n"), "const b=2;");
     assert_eq!(&*script_form(body), &*first);
     // A stylesheet body is stripped by its own language's owner and held in its own memo.
     assert_eq!(&*style_form(".a { color: red; }"), ".a{color: red;}");
@@ -461,13 +461,13 @@ mod tests {
   #[test]
   fn an_inline_script_drops_its_comments_and_the_indentation_of_its_code() {
     let script = "<script>\n    // explains the step\n    if (ok) {\n      run();\n    }\n</script>";
-    assert_eq!(without_comments(&format!("{script}<!-- gone -->")), "<script>\n\nif(ok){\nrun();\n}\n</script>");
+    assert_eq!(without_comments(&format!("{script}<!-- gone -->")), "<script>if(ok){run();}</script>");
   }
 
   #[test]
   fn an_inline_script_that_names_javascript_by_type_drops_them_too() {
     let module = "<script type=\"module\">\n    // explains the step\n    run();\n</script>";
-    assert_eq!(without_comments(&format!("{module}<!-- gone -->")), "<script type=\"module\">\n\nrun();\n</script>");
+    assert_eq!(without_comments(&format!("{module}<!-- gone -->")), "<script type=\"module\">run();</script>");
   }
 
   #[test]
@@ -479,7 +479,7 @@ mod tests {
   #[test]
   fn an_inline_script_keeps_its_code_when_a_line_comment_follows_a_statement_brace() {
     let script = "<script>function f() {} // explains the step\n</script>";
-    assert_eq!(without_comments(&format!("{script}<!-- gone -->")), "<script>function f(){}\n</script>");
+    assert_eq!(without_comments(&format!("{script}<!-- gone -->")), "<script>function f(){}</script>");
   }
 
   #[test]
@@ -502,17 +502,14 @@ mod tests {
     let javascript = "<script language=\"JavaScript\">\n  x(); // gone\n</script>";
     assert_eq!(
       without_comments(&format!("{javascript}<!-- gone -->")),
-      "<script language=\"JavaScript\">\nx();\n</script>"
+      "<script language=\"JavaScript\">x();</script>"
     );
   }
 
   #[test]
   fn an_inline_script_whose_type_is_a_legacy_javascript_mime_type_drops_them() {
     let script = "<script type=\"text/x-javascript\">\n  x(); // gone\n</script>";
-    assert_eq!(
-      without_comments(&format!("{script}<!-- gone -->")),
-      "<script type=\"text/x-javascript\">\nx();\n</script>"
-    );
+    assert_eq!(without_comments(&format!("{script}<!-- gone -->")), "<script type=\"text/x-javascript\">x();</script>");
   }
 
   #[test]

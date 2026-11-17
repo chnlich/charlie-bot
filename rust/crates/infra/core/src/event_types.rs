@@ -76,6 +76,9 @@ pub const FROM_SESSION: &str = "from_session";
 pub const FROM_SESSION_NAME: &str = "from_session_name";
 /// The key of an `agent_message` block that marks the message as a nudge and names the event it nudges.
 pub const NUDGE_OF: &str = "nudge_of";
+/// The key of a thread platform block that holds the id of the message that mentioned the bot. The platform package
+/// writes it, and the shared thread reader reads it.
+pub const MENTION_ID: &str = "mention_id";
 pub const WEB_REPLY: &str = "web_reply";
 pub const WEB_REPLY_NOTICE: &str = "web_reply_notice";
 pub const WEB_STATUS: &str = "web_status";

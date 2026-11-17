@@ -20,7 +20,5 @@ pub const SENDER: &str = "sender";
 pub const SENDER_TYPE: &str = "sender_type";
 /// A thread message's type, carried in its metadata from the message list's `msg_type` to the readback.
 pub const MESSAGE_TYPE: &str = "message_type";
-/// The summon block's id of the message that mentions the bot.
-pub const MENTION_ID: &str = "mention_id";
 /// A message's creation time, in milliseconds as Feishu writes it.
 pub const CREATE_TIME: &str = "create_time";

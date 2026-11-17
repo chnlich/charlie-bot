@@ -14,6 +14,7 @@ use charliebot_compat::http_client;
 use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Options, Receiver, Sender};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::BOT_TOKEN_FIELD;
+use charliebot_core::event_types::MENTION_ID;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
@@ -363,7 +364,7 @@ pub async fn handle_message_create(
     "guild_id": guild_id,
     "channel_id": channel_id,
     "thread_id": thread_id,
-    "mention_id": message_id,
+    (MENTION_ID): message_id,
   });
   Ok(Some(
     thread_entry::accept_summon(

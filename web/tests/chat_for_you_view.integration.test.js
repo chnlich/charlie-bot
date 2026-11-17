@@ -497,12 +497,34 @@ test('the empty state is one button row when no message shows', () => {
     eMsg('separator', 's1', '', {thinking_seconds: 3, event_index: 1}),
   ]);
   assert.deepEqual(rowsOf(rig.root), ['empty', 'holder']);
-  assert.equal(rig.root.children[0].tagName, 'BUTTON');
+  assert.equal(rig.root.children[0].children[0].tagName, 'BUTTON');
+});
+
+test('a session with no message names the composer instead of opening Everything', () => {
+  const rig = forYouRig([]);
+  assert.deepEqual(rowsOf(rig.root), ['empty', 'holder']);
+  const row = rig.root.children[0];
+  assert.equal(row.children.length, 1);
+  assert.equal(row.children[0].tagName, 'P');
+  assert.match(row.textContent, /send one below/);
+});
+
+test('a session that gains only hidden messages turns the row into the Everything button', () => {
+  const rig = forYouRig([]);
+  const row = rig.root.children[0];
+  assert.equal(row.children[0].tagName, 'P');
+
+  rig.engine.prependMessages([eMsg('assistant', 'a1', 'only work')]);
+  settle(rig.timers);
+
+  assert.deepEqual(rowsOf(rig.root), ['empty', 'holder']);
+  assert.equal(rig.root.children[0], row, 'the engine keeps the row node it was handed');
+  assert.equal(row.children[0].tagName, 'BUTTON');
 });
 
 test('a click on the empty-state row switches to Everything, and the switch holds', () => {
   const rig = forYouRig([eMsg('assistant', 'a1', 'only work')]);
-  rig.root.children[0].onclick();
+  rig.root.children[0].children[0].onclick();
   assert.equal(rig.engine.view, 'everything');
   assert.equal(rig.context.Chat.ForYou.viewFor({id: 'sess-fy'}), 'everything');
 });

@@ -86,10 +86,19 @@ const SUBAGENT_STATUS_CLASS = {
   stopped: 'text-slate-400',
 };
 
+// The color class of one subagent status. The store emits only the table's four values, so a status outside it
+// breaches that contract: the lookup throws rather than painting a card with no class.
+function subagentStatusClass(status) {
+  if (!Object.hasOwn(SUBAGENT_STATUS_CLASS, status)) {
+    throw new Error('Unknown subagent status: ' + status);
+  }
+  return SUBAGENT_STATUS_CLASS[status];
+}
+
 // The card of a subagent under the Agent row that started it. The header stays visible. The subagent's own rows
 // fold below it. The row count in the header is the subagent's tool uses, so the parent's count never includes them.
 function renderSubagentCard(subagent) {
-  var statusCls = SUBAGENT_STATUS_CLASS[subagent.status];
+  var statusCls = subagentStatusClass(subagent.status);
   var uses = subagent.tool_uses == null ? ''
     : '<span class="text-slate-500 whitespace-nowrap">' + subagent.tool_uses + ' tool call'
       + (subagent.tool_uses !== 1 ? 's' : '') + '</span>';
@@ -1110,7 +1119,9 @@ function renderMessage(msg, sessionId) {
       + messageIdentityAttrs(msg) + eventIndexAttr + ">"
       + separatorRowInnerHtml(sessionId, msg) + "</div>";
   }
-  return "";
+  // A role outside the core branches and the registry has no renderer, so the page cannot show the message whole:
+  // the branch names the missing role instead of dropping the message.
+  throw new Error('Unknown message role: ' + msg.role);
 }
 
 // A live message appends to the engine's store when the container is hosted.

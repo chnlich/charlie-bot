@@ -25,7 +25,8 @@ use std::sync::Arc;
 use axum::Router;
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 
-/// Register the session listing router, the prompt-inspection router and their registry contributions.
+/// The crate's registration entry point: the session listing router, the prompt-inspection router and their
+/// registry contributions.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router_patterns(routes::routes, routes::ROUTE_PATTERNS)?;
   registry.router_patterns(concurrency::routes, concurrency::ROUTE_PATTERNS)?;
@@ -33,7 +34,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.websocket("/ws/sessions/*", websocket::session_websocket)
 }
 
-/// Build the route table with the shared feature context.
+/// The route table over the shared feature context.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   routes::routes(features)
 }

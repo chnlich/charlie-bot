@@ -50,7 +50,7 @@ pub struct TranscriptEntry {
   states: BTreeMap<String, String>,
 }
 
-/// Load a memoized worker transcript, rebuilding after a run-file signature or task-state change.
+/// The memoized worker transcript, rebuilt after a run-file signature or task-state change.
 pub fn load_worker_transcript(store: &Store, session_id: &str) -> StoreResult<Arc<TranscriptEntry>> {
   let signature = worker_signature(store, session_id)?;
   let task_state = store.task_state(session_id)?;

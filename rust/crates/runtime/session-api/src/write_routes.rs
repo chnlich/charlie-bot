@@ -474,7 +474,7 @@ fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Respo
   Ok(detail)
 }
 
-/// Validate a body against `model` and return its declared fields. Any other shape answers 422.
+/// The declared fields of a body that validates against `model`. Any other shape answers 422.
 fn validated_object(body: &RequestBody, model: &BodyModel) -> Result<Map<String, Value>, Response> {
   match body.validate(model) {
     Ok(Some(Value::Object(values))) => Ok(values),

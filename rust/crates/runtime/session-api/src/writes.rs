@@ -32,7 +32,7 @@ const RATE_ROUND_BODY: BodyModel = BodyModel::required(RATE_ROUND_FIELDS);
 const SET_GROUP_FIELDS: &[Field] = &[Field::optional("group", FieldType::NullableString)];
 const SET_GROUP_BODY: BodyModel = BodyModel::required(SET_GROUP_FIELDS);
 
-/// Register fixed group routes before the routes whose first segment is a session id.
+/// The fixed group routes, registered before the routes whose first segment is a session id.
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
   Router::new()
     .route("/api/sessions/groups/rename", post_only(rename_group))

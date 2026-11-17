@@ -202,7 +202,7 @@ impl ActiveCorpusEntry {
   }
 }
 
-/// Fetch active, non-scheduled sessions, their sidebar overlays and their controller row fields.
+/// The active, non-scheduled sessions with their sidebar overlays and controller row fields.
 pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<ListingCorpus> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
@@ -328,7 +328,7 @@ impl PageCorpusEntry {
   }
 }
 
-/// Read the sidebar corpus without rendering a row. A memo hit still polls the sidebar state, because the periodic
+/// The sidebar corpus read without rendering a row. A memo hit still polls the sidebar state, because the periodic
 /// self-heal sweep is what catches an edit from outside the server.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
   let corpus = page_corpus(store, registry)?;
@@ -581,7 +581,7 @@ impl PageRowsMemo {
   }
 }
 
-/// Render the chat page's sidebar rows as their column text.
+/// The chat page's sidebar rows as their column text.
 ///
 /// `clear_unread` names the active session. Its row renders with `has_unread` false and is left out of the memo, so
 /// a later request that names another active session does not serve the marked row.
@@ -625,7 +625,7 @@ impl<'a> PageRowsScope<'a> {
   }
 }
 
-/// Render one row projection of the sidebar corpus as its column text.
+/// One row projection of the sidebar corpus as its column text.
 ///
 /// The text carries the fields of `projection` over the session value of `schema`, so each pair needs a memo of its
 /// own. A memo serves the pair it filled from, and another projection or schema renders other values.
@@ -953,7 +953,7 @@ fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>
   text
 }
 
-/// Write one column's cells as their field's JSON text, with `null` where a row leaves the field out.
+/// One column's cells as their field's JSON text, with `null` where a row leaves the field out.
 fn write_plain_column(text: &mut String, rows: &[Arc<PageRowText>], field: &str) {
   for (index, row) in rows.iter().enumerate() {
     if index > 0 {
@@ -963,7 +963,7 @@ fn write_plain_column(text: &mut String, rows: &[Arc<PageRowText>], field: &str)
   }
 }
 
-/// Write the `id` column in [`UUID_ENCODING`]: every id's 16 bytes, in row order, as one base64url string. A home
+/// The `id` column in [`UUID_ENCODING`]: every id's 16 bytes, in row order, as one base64url string. A home
 /// whose rows are not all canonical UUIDs carries one cell per row instead, so a row's exact id text survives.
 fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
   let mut ids = Vec::with_capacity(rows.len() * 16);
@@ -986,7 +986,7 @@ fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
   text.push('"');
 }
 
-/// Write the `id` column as one cell per row. A canonical UUID is its 16 bytes in base64url, and any other id is `~`
+/// The `id` column as one cell per row. A canonical UUID is its 16 bytes in base64url, and any other id is `~`
 /// and its text. A row that leaves the field out writes `null`.
 fn write_id_cells(text: &mut String, rows: &[Arc<PageRowText>]) {
   text.push('[');
@@ -1023,7 +1023,7 @@ fn canonical_uuid(id: &str) -> Option<[u8; 16]> {
   }
 }
 
-/// Write the `updated_at` column in [`DELTA_ENCODING`]: the first value as it stands, then each difference.
+/// The `updated_at` column in [`DELTA_ENCODING`]: the first value as it stands, then each difference.
 fn write_updated_at_column(text: &mut String, rows: &[Arc<PageRowText>]) {
   let mut previous: Option<i64> = None;
   for (index, row) in rows.iter().enumerate() {
@@ -1157,7 +1157,7 @@ fn is_falsy(value: &Value) -> bool {
   }
 }
 
-/// Render a page's sidebar rows with their controller fields and route-local body and gzip memos.
+/// A page's sidebar rows with their controller fields and route-local body and gzip memos.
 ///
 /// The page hands out the corpus as the listing memo's own allocation, so its row and overlay identities are the
 /// memo's. A repeat request proves the corpus unchanged with one pointer comparison.
@@ -1170,7 +1170,7 @@ pub fn sessions_list_page_response(
   sessions_list_response(request, store, page.rows(), Some(&page.rows), page.derived(), page.sequence_fields(), memos)
 }
 
-/// Render sidebar rows with their controller fields and route-local body and gzip memos.
+/// The sidebar rows with their controller fields and route-local body and gzip memos.
 ///
 /// `shared` names the allocation a memoized corpus was handed out as, when the caller holds one. A route that filters
 /// the corpus into a list of its own passes `None` and the source compares row by row.
@@ -1341,8 +1341,8 @@ pub fn row_refresh_text_for(
 /// The response key of the chat-thread flag: true for a session whose metadata names a chat thread.
 pub const THREAD_SESSION: &str = "thread_session";
 
-/// Render metadata as the response model does, excluding `task.goal`. The `thread_session` flag names a chat thread
-/// session, so the web client never reads the platform origin fields itself.
+/// The metadata rendered as the response model does, excluding `task.goal`. The `thread_session` flag names a chat
+/// thread session, so the web client never reads the platform origin fields itself.
 pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   let mut value = store.session_metadata_value(meta);
   let object = value.as_object_mut().expect("session metadata serializes to an object");
@@ -1353,7 +1353,7 @@ pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResu
   Ok(value)
 }
 
-/// Remove schedule model fields and apply the controller's row fields.
+/// `dump` with schedule model fields removed and the controller's row fields applied.
 pub fn apply_listing_fields(dump: &mut Value, fields: Map<String, Value>) {
   let object = dump.as_object_mut().expect("session metadata serializes to an object");
   for field in SCHEDULE_FIELDS {
@@ -1389,7 +1389,7 @@ pub(crate) fn listed_values(
     .collect()
 }
 
-/// Read every input that the rows of one listing render from.
+/// Every input that the rows of one listing render from.
 fn row_inputs(
   store: &Store,
   rows: &[Arc<SessionMetadata>],
@@ -1417,7 +1417,7 @@ fn row_inputs(
     .collect()
 }
 
-/// Render one listing row from its inputs.
+/// One listing row rendered from its inputs.
 fn render_row(store: &Store, row: &RowInputs, projection: SidebarProjection) -> StoreResult<Value> {
   let mut value = metadata_value(store, &row.meta)?;
   apply_sidebar_fields(&mut value, row, projection);

@@ -70,7 +70,7 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname === '/' && url.searchParams.has('session') && request.mode === 'navigate') {
     event.respondWith(answerShell(request));
   } else if (url.pathname.startsWith('/static/')) {
-    event.respondWith(answerFile(event, request));
+    event.respondWith(answerFile(request));
   } else if (isFirstScreenPath(url.pathname) || isSidebarListRequest(url)) {
     event.respondWith(answerCopy(event, request));
   }
@@ -99,30 +99,12 @@ async function answerShell(request) {
   return fetch(request);
 }
 
-// A same-origin file of the shell: the stored file, or the network's answer. The page's own load is the file's fetch:
-// a 200 with a validator is stored under its path, so the next open reads it from the worker. A 304 names no body, so
-// the file is fetched whole past the HTTP cache.
-async function answerFile(event, request) {
+// A same-origin file of the shell: the stored file, or the network when it is not stored.
+async function answerFile(request) {
   const cache = await caches.open(FILE_CACHE);
   const stored = await cache.match(request);
   if (stored) return stored;
-  let answer = await observe(fetch(request));
-  if (!answer.error && answer.response.status === 304) {
-    answer = await observe(fetch(request.url, {credentials: 'same-origin', cache: 'no-store'}));
-  }
-  if (answer.error) throw answer.error;
-  event.waitUntil(afterFileAnswer(request, answer));
-  return answer.response;
-}
-
-// A 401 drops every copy; a 200 with a validator is stored as the file.
-async function afterFileAnswer(request, answer) {
-  if (answer.response.status === 401) {
-    await dropCopies();
-  } else if (answer.stored && answer.response.headers.get('ETag')) {
-    const cache = await caches.open(FILE_CACHE);
-    await cache.put(request.url, answer.stored);
-  }
+  return fetch(request);
 }
 
 // A first screen or a sidebar list. The network answers if it gives a usable 200 within the wait cap;
@@ -314,9 +296,8 @@ function shellStaticRefs(html) {
   return [...new Set(refs)];
 }
 
-// Fetches the shell and stores it with the list of files it names. The warm fetches no file: the page's own loads
-// store them (answerFile), so a file the page already loaded is not downloaded twice. The stored files the new shell
-// no longer names are dropped. A refresh leaves the current shell in place until the replacement is stored.
+// Fetches the shell and the files it names, stores them, and drops the stored files it no longer names.
+// A refresh leaves the current shell in place until the replacement and its files are ready.
 async function warmShell(refresh = false) {
   const cache = await caches.open(COPY_CACHE);
   if (!refresh && await cache.match(SHELL_KEY)) return {stored: true};
@@ -330,6 +311,28 @@ async function warmShell(refresh = false) {
   const html = await response.text();
   const refs = shellStaticRefs(html);
   const files = await caches.open(FILE_CACHE);
+  const fetchedFiles = [];
+  for (const ref of refs) {
+    if (await files.match(ref)) continue;
+    // The page loaded these files a moment ago, so the browser's HTTP cache holds their bodies. only-if-cached reads
+    // the cache and never asks the network, so the warm costs the link nothing and opens no connection during a
+    // switch. A file the cache does not hold fails the request with a TypeError, and is not stored.
+    let file;
+    try {
+      file = await fetch(ref, {credentials: 'same-origin', cache: 'only-if-cached', mode: 'same-origin'});
+    } catch (error) {
+      if (error.name === 'TypeError') continue;
+      throw error;
+    }
+    if (file.status === 401) {
+      if (refresh) await dropShell();
+      await dropCopies();
+      return refresh ? {stored: false, unauthorized: true} : {stored: false};
+    }
+    if (!file.ok) throw new Error('shell file fetch failed: ' + ref + ' ' + file.status);
+    if (file.headers.get('ETag')) fetchedFiles.push([ref, file]);
+  }
+  for (const [ref, file] of fetchedFiles) await files.put(ref, file);
   for (const request of await files.keys()) {
     const path = new URL(request.url).pathname + new URL(request.url).search;
     if (!refs.includes(path)) await files.delete(request);

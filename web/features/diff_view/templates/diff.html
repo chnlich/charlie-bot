@@ -52,15 +52,16 @@
     .d2h-wrapper .line-num2 { color: #475569; }
     /* The CDN theme paints a keyword and a type at #d73a49 and a comment at #6a737d. Those tones read
        4.57:1 and 4.82:1 on a white context row. The rows a hunk adds, removes or changes sit on a tint
-       instead, where at 13 px the keyword falls to 4.23:1 on an added row, 3.78:1 on the changed row of
-       the line-by-line layout, 3.91:1 on a removed row and 4.09:1 on the changed row of the side-by-side
-       layout, and the comment to 4.45:1. diff2html paints a further word-level highlight over the words a
-       changed line rewrites: #97f295 on the added side, #ffb6ba on the removed one, where the theme's
-       keyword drops to 4.95:1 and 4.05:1 and its comment to 4.69:1 and 3.84:1. The keyword and the type
-       carry the code's structure and the comment carries its prose, so a tinted cell takes #9a1b27 for a
-       keyword or a type, which reads 6.78:1 to 7.59:1 on the four row tints and 6.04:1 and 4.94:1 on the
-       two word highlights, and #474f58 for a comment, which reads 6.86:1 to 7.69:1 on the row tints and
-       6.11:1 and 5.01:1 on the word highlights. A white context row keeps the theme's own pair. */
+       instead. There at 13 px the keyword falls to 4.23:1 on an added row, 3.78:1 on the changed row of
+       the line-by-line layout, and 3.91:1 on a removed row. On the side-by-side layout's changed row it
+       falls to 4.09:1, and the comment to 4.45:1. diff2html paints a further word-level highlight over
+       the words a changed line rewrites: #97f295 on the added side, #ffb6ba on the removed one. On that
+       highlight the theme's keyword drops to 4.95:1 and 4.05:1, and its comment to 4.69:1 and 3.84:1.
+       The keyword and the type carry the code's structure and the comment carries its prose. A tinted
+       cell therefore takes #9a1b27 for a keyword or a type. That tone reads 6.78:1 to 7.59:1 on the four
+       row tints and 6.04:1 and 4.94:1 on the two word highlights. A comment takes #474f58, which reads
+       6.86:1 to 7.69:1 on the row tints and 6.11:1 and 5.01:1 on the word highlights. A white context
+       row keeps the theme's own pair. */
     .d2h-ins .hljs-keyword, .d2h-ins .hljs-type,
     .d2h-del .hljs-keyword, .d2h-del .hljs-type { color: #9a1b27; }
     .d2h-ins .hljs-comment, .d2h-del .hljs-comment { color: #474f58; }
@@ -93,15 +94,16 @@
       .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-chevron,
       .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-badge { grid-row: span 3; }
     }
-    /* A phone's line-by-line table stands as wide as its widest line plus the 8.85em number column (the
-       line's comment control and a four-digit number) and diff2html's 8em right padding, which holds no
-       control on this page. A 42-character line then measures 580 px in the 354 px panel: the reader sees
-       28 characters and swipes the panel sideways for the rest, with no ellipsis or scrollbar to say the
-       line continues, though the page starts a phone in line-by-line to keep a changed line whole. This
-       block drops the right padding and wraps the code text at the panel's width, breaking a token no
-       space separates, so the table fits without sideways scrolling. The 1.5em cap keeps the code text
-       clear of the row's +/- prefix, a wrapped line takes the rows its text needs, and above 768 px a
-       line keeps its one row. A side-by-side table on a phone keeps its own per-pane scroll. */
+    /* A phone's line-by-line table stands as wide as its widest line plus the 8.85em number column and
+       diff2html's 8em right padding. The number column holds the line's comment control and a four-digit
+       number, and the right padding holds no control on this page. A 42-character line then measures
+       580 px in the 354 px panel. The reader sees 28 characters and swipes the panel sideways for the
+       rest, with no ellipsis or scrollbar to say the line continues. The page still starts a phone in
+       line-by-line, to keep a changed line whole. This block drops the right padding and wraps the code
+       text at the panel's width, breaking a token no space separates, so the table fits without
+       sideways scrolling. The 1.5em cap keeps the code text clear of the row's +/- prefix, and a
+       wrapped line takes the rows its text needs. Above 768 px a line keeps its one row. A side-by-side
+       table on a phone keeps its own per-pane scroll. */
     @media (max-width: 768px) {
       .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line { padding-right: 0; width: 100%; }
       .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line .d2h-code-line-ctn {

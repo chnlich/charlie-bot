@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use charliebot_agents::usage_time::timestamp_of;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
   USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
@@ -28,7 +27,7 @@ use charliebot_core::home::CLAUDE_CONFIG_DIR_NAME;
 use charliebot_core::text_repr::{is_truthy, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::usage::{
-  QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
+  QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl, timestamp_of,
 };
 use memchr::memmem;
 use serde_json::{Map, Value};

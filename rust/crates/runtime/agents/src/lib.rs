@@ -15,7 +15,6 @@ pub mod one_shot;
 pub mod runner;
 pub mod runs;
 pub mod transport;
-pub mod usage_time;
 
 use charliebot_registry::{Registry, RegistryError};
 

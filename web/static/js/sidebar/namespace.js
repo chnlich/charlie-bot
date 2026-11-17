@@ -22,7 +22,7 @@
 
   // Two disjoint lists: Object.assign puts both on Sidebar, and only globals'
   // keys become bare globals for the onclick strings. Adding a function to
-  // globals is enough for both; sidebarOnly stays reachable through Sidebar.
+  // globals is enough for both. The sidebarOnly list stays reachable through Sidebar.
   // A module whose every member is onclick-reachable passes one list only.
   function wire(globals, sidebarOnly) {
     Object.assign(Sidebar, globals, sidebarOnly || {});
@@ -54,7 +54,7 @@
   const deferredControls = new Map();
 
   // The browser clears an event's currentTarget when its dispatch ends, and a deferred handler
-  // reads it after the download; put back the value the call was made with.
+  // reads it after the download. Put back the value the call was made with.
   function restoreCurrentTarget(args, currentTarget) {
     const event = args[0];
     if (currentTarget && event && typeof event.preventDefault === 'function') {
@@ -89,7 +89,7 @@
   // The sidebar's interaction scripts: the Settings menus, the rename and session-action dialogs,
   // the archive and group actions, and the move picker. A page paints its rows without them, and only a control
   // click reaches them. Each include of one is replaced by a loader under web/templates that calls
-  // deferSidebarInteractions; the first control call or forwarded global loads the whole group. Each
+  // deferSidebarInteractions. The first control call or forwarded global loads the whole group. Each
   // module's own registerSidebarControl and Sidebar.wire then replace the forwards.
   const INTERACTION_SCRIPTS = [
     '/static/js/sidebar/row-menu.js',
@@ -123,7 +123,7 @@
         .catch((error) => console.error(error.message))
         .then(() => loadPageScripts('sidebar-interactions', INTERACTION_SCRIPTS));
       interactionLoad = loading;
-      // A failed download clears the memo so the next click retries; the caller logs the failure.
+      // A failed download clears the memo so the next click retries. The caller logs the failure.
       loading.catch(() => { if (interactionLoad === loading) interactionLoad = null; });
     }
     return interactionLoad;

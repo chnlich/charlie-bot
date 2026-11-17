@@ -243,10 +243,10 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   backend type and retains it.
 - Example:
   ```rust
-  let codex_home = host.codex_home();
+  let codex_home_dir = codex_home(host);
   registry.usage_resolver(
     "codex",
-    Arc::new(move |usage_host| resolver::usage_resolver(codex_home.clone(), usage_host)),
+    Arc::new(move |usage_host| resolver::usage_resolver(codex_home_dir.clone(), usage_host)),
   )?;
   ```
 

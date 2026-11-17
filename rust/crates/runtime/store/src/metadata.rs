@@ -120,6 +120,9 @@ pub const BASE_BRANCH_FIELD: &str = "base_branch";
 /// The task-spec field holding a task's kind. The delegate request, the session write request and the stored task
 /// record carry the same name, so it is spelled once, here.
 pub const TASK_TYPE_FIELD: &str = "task_type";
+/// The task-spec field holding a cold-read task's page, genre and trigger. The delegate request, the session create
+/// request and the stored task record carry the same name, so it is spelled once, here.
+pub const COLD_READ_FIELD: &str = "cold_read";
 /// The task-spec field naming who approves a task's delivery. The session create and patch requests and the stored
 /// task record carry the same name, so it is spelled once, here.
 pub const APPROVER_FIELD: &str = "approver";

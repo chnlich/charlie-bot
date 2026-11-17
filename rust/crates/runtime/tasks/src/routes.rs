@@ -22,8 +22,8 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD, SessionMetadata,
-  TASK_TYPE_FIELD, TaskProfile, TaskSpec, TaskType,
+  BASE_BRANCH_FIELD, COLD_READ_FIELD, ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD,
+  SessionMetadata, TASK_TYPE_FIELD, TaskProfile, TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError, TaskCaller};
@@ -186,7 +186,7 @@ const DELEGATE_BODY_FIELDS: &[Field] = &[
   ),
   Field::optional(DELEGATE_REQUEST_ID_FIELD, FieldType::NullableString),
   Field::optional(
-    "cold_read",
+    COLD_READ_FIELD,
     FieldType::NullableModel { class_name: COLD_READ_SPEC_CLASS_NAME, model: &COLD_READ_BODY },
   ),
 ];
@@ -213,7 +213,7 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
     None => TaskType::Implement,
   };
   let cold_read = values
-    .get("cold_read")
+    .get(COLD_READ_FIELD)
     .filter(|value| !value.is_null())
     .map(|value| serde_json::from_value(value.clone()).expect("validated cold_read matches ColdReadSpec"));
   Ok(DelegateRequest {

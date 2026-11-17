@@ -897,7 +897,7 @@ impl TaskCompletion {
       None,
       [
         ("request_id".to_string(), json!(request_id)),
-        ("owner_run_id".to_string(), json!(owner_run_id)),
+        (event_types::OWNER_RUN_ID.to_string(), json!(owner_run_id)),
         ("summary".to_string(), json!(evidence.summary)),
         ("result_refs".to_string(), json!(evidence.result_refs)),
         ("run_ids".to_string(), json!(evidence.run_ids)),
@@ -1803,7 +1803,7 @@ impl TaskCompletion {
       if stop.is_some_and(StartupStop::is_cancelled) {
         return Ok(None);
       }
-      if request.get("owner_run_id").and_then(CompactValue::as_str) != Some(run_id) {
+      if request.get(event_types::OWNER_RUN_ID).and_then(CompactValue::as_str) != Some(run_id) {
         continue;
       }
       let Some(request_id) = request.get("request_id").and_then(CompactValue::as_str).filter(|value| !value.is_empty())

@@ -190,7 +190,7 @@ function registerSessionRowLine(render) {
 // Settings menu items of a normal row: rowAttrs(s) names the row facts the
 // items read, as {camelCaseKey: value}, and the Settings button carries each
 // as a data attribute. items(attrs, sessionId) builds the items from the
-// button's dataset at click time; they follow the core items.
+// button's dataset at click time. They follow the core items.
 function registerSessionMenuItems(source) {
   if (!source || typeof source.items !== 'function'
       || (source.rowAttrs !== undefined && typeof source.rowAttrs !== 'function')) {
@@ -308,7 +308,7 @@ function renderNewChildButton(s) {
 // control's only mark, so it takes slate-400: on the open row's blue tint
 // rgb(26, 45, 88) slate-500 draws 2.82:1 and on the hovered row's cover
 // rgb(37, 49, 68) it draws 2.77:1, under the 3:1 floor WCAG 1.4.11 sets for a
-// component; slate-400 draws 5.23:1 and 5.14:1 there and 6.34:1 on the plain
+// component. slate-400 draws 5.23:1 and 5.14:1 there and 6.34:1 on the plain
 // row, the tone the row's time line keeps.
 function renderSettingsButton(s, rowMenu) {
   const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';
@@ -433,7 +433,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     nav.innerHTML = (options.workspaceBadges || '') + renderEmptyNote('No sessions yet');
     return;
   }
-  // Grouping follows the root rows; a child row nests under its parent
+  // Grouping follows the root rows. A child row nests under its parent
   // whatever its own group field says.
   const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
   recordTreeShape(childrenOf, parentOf);
@@ -472,7 +472,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     let previewRank = 0;
     const groupRows = groupSessions.map((s) => {
       // An exempt root always shows and takes no rank, so the limit counts
-      // only the other roots; those past it are the extra rows.
+      // only the other roots. Those past it are the extra rows.
       const exempt = groupPreviewLimitExemptions.some((predicate) => predicate(s));
       const inPreview = !exempt && previewRank < previewRows;
       if (!exempt) previewRank += 1;
@@ -499,7 +499,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     // created there has no platform origin and would fall back to Workspace.
     // The gate derives from the filter, not the call options, so the in-place
     // repaints (removeSessionFromRenderedList, paintWorkspaceBadges) keep it
-    // hidden too; the Settings gear stays.
+    // hidden too. The Settings gear stays.
     const createInGroupButton = filter !== 'threads' ? `
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); sidebarControl('createSessionInGroup', this.dataset.groupName)"
@@ -538,7 +538,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       : groupRowCount;
     const fetchesMore = groupCount > groupRowCount;
 
-    // The header row sits on slate-850. The count is 12 px text there, so it takes slate-400 (6.3:1);
+    // The header row sits on slate-850. The count is 12 px text there, so it takes slate-400 (6.3:1).
     // slate-500 holds 3.4:1, under the 4.5:1 floor. The chevron and the hover actions are icons, which
     // the 3:1 non-text floor admits at slate-500.
     // The count carries thousands separators, as the app's other counts do, so a five-figure group
@@ -621,7 +621,7 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
   const model = label
     ? `<span class="session-backend truncate" title="${escapeHtmlAttr(label.full)}">${escapeHtml(label.display)}</span>`
     : '';
-  // A static row formats its time once at build; without data-time it stays
+  // A static row formats its time once at build. Without data-time it stays
   // outside updateRelativeTimes's [data-time] sweep, so a long archived list
   // never joins the periodic full-table refresh.
   const timeAttr = staticTime ? '' : ` data-time="${timeIso}"`;
@@ -633,7 +633,7 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
     + `</span>`;
 }
 
-// The page's initial rows carry updated_at as epoch minutes; every listing
+// The page's initial rows carry updated_at as epoch minutes. Every listing
 // route carries it as an ISO string. Both shapes reach the row renderer.
 function sessionUpdatedMs(session) {
   const value = session && session.updated_at;
@@ -660,8 +660,8 @@ let lastRevealedSessionId = null;
 const LEAF_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>`;
 
 // Roots are the rows without a parent in this list (a null parent, or a parent
-// that is archived or filtered out); every other row nests under its parent.
-// Roots keep the list order; children put logical sessions before worker
+// that is archived or filtered out). Every other row nests under its parent.
+// Roots keep the list order. Children put logical sessions before worker
 // leaves, each newest first. The server rejects cycles, so the walk ends.
 function buildSessionTree(sessions) {
   const ids = new Set(sessions.map(s => s.id));
@@ -721,7 +721,7 @@ function renderTreeLeadSlot() {
   return '<span class="w-3 h-3 flex-shrink-0" aria-hidden="true"></span>';
 }
 
-// The count includes direct children whose profile is not 'worker'; worker
+// The count includes direct children whose profile is not 'worker'. Worker
 // leaves stay nested but do not add to it. All and Threads hold every
 // unarchived child, so the count reflects active non-worker child sessions.
 function renderTreeChildCount(sessionId, nonWorkerChildCount) {
@@ -816,7 +816,7 @@ function renderSessionItem(s, filter, options = {}) {
   if (isContextRow) {
     actions = renderStarButton(s);
   } else if (isArchivedRow) {
-    // The archived row: three direct buttons; the group move and the delete
+    // The archived row: three direct buttons. The group move and the delete
     // moved into the archived Settings menu (openArchivedRowMenu in
     // session-menus.js).
     actions = `
@@ -830,7 +830,7 @@ function renderSessionItem(s, filter, options = {}) {
   } else if (isWorkerRow) {
     actions = renderArchiveButton(s);
   } else {
-    // A normal row (manager or legacy): four direct buttons; rename, group
+    // A normal row (manager or legacy): four direct buttons. Rename, group
     // move, Task & context and the registered items moved into the Settings
     // menu (openSessionRowMenu in session-menus.js).
     actions = `
@@ -850,11 +850,11 @@ function renderSessionItem(s, filter, options = {}) {
   // them. A row without any draws an inert slot of the same size. Its
   // leading edge still opens the session instead of hitting an expander
   // with nothing to show. A worker row draws the worker glyph
-  // instead, never a chevron. A flat row (the search results) draws neither;
-  // the Archived tab paints through this tree, so its rows lead with the same
+  // instead, never a chevron. A flat row (the search results) draws neither.
+  // The Archived tab paints through this tree, so its rows lead with the same
   // marker. The indicators follow the lead marker.
   // The count beside the chevron uses direct children whose profile is not
-  // 'worker'; worker leaves still nest, and the chevron title still counts
+  // 'worker'. Worker leaves still nest, and the chevron title still counts
   // every child task. Only the all and threads paints draw the count.
   const showChildCount = 'treeChildCount' in options
       && options.treeNonWorkerChildCount > 0
@@ -975,7 +975,7 @@ function renderSessionList(sessions, filter, options = {}) {
   lastListPaint = {sessions, filter, options};
   searchListPainted = (filter === 'search');
   // The grouped paints (Workspace and Later) nest rows and record their tree
-  // shape themselves; a flat paint shows each row's own facts.
+  // shape themselves. A flat paint shows each row's own facts.
   recordTreeShape(new Map(), new Map());
   const nav = document.getElementById('session-list');
   if (!sessions.length) {

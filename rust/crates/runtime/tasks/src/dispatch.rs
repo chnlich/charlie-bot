@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use charliebot_core::event_types;
-use charliebot_core::text_repr::is_truthy;
+use charliebot_core::text_repr::{field_text, is_truthy, truthy_field_text};
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
@@ -19,8 +19,6 @@ use charliebot_store::{
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
-
-use crate::event_text::{truthy_string, value_str};
 
 const INPUT_EVENT_TYPES: [&str; 4] =
   [event_types::USER, event_types::AGENT_MESSAGE, event_types::SCHEDULED_TRIGGER, event_types::CHILD_REPORT];
@@ -522,7 +520,7 @@ impl Dispatcher {
       if event.get("type").and_then(Value::as_str) != Some(event_types::CHILD_REPORT) {
         continue;
       }
-      let child_id = value_str(event.get("child_session_id"));
+      let child_id = field_text(event.get("child_session_id"));
       if provenance.contains_key(&child_id) {
         continue;
       }
@@ -623,7 +621,7 @@ impl Dispatcher {
           target: "charliebot_tasks",
           parent = recipient,
           child = child_session_id,
-          report = %value_str(report.to_value().get("id")),
+          report = %field_text(report.to_value().get("id")),
           "child_report_into_archived_parent_kept_as_history"
         );
         return Ok((report, true));
@@ -679,7 +677,7 @@ impl Dispatcher {
     for (close, recipient) in self.undelivered_close_recipients(session_id)? {
       let close_value = close.to_value();
       let result_refs = close_result_refs(&close_value);
-      let summary = truthy_string(close_value.get("summary"));
+      let summary = truthy_field_text(close_value.get("summary"));
       let (report, created) = self
         .deliver_child_report_as(ChildReportInput {
           child_session_id: session_id,
@@ -709,7 +707,7 @@ impl Dispatcher {
     for (close, recipient) in self.undelivered_close_recipients(session_id)? {
       let close_value = close.to_value();
       let result_refs = close_result_refs(&close_value);
-      let summary = truthy_string(close_value.get("summary"));
+      let summary = truthy_field_text(close_value.get("summary"));
       let (report, created) = self
         .deliver_child_report_locked_as(
           guard,
@@ -738,7 +736,7 @@ impl Dispatcher {
         .undelivered_close_recipients(session_id)?
         .iter()
         .map(|(close, _)| {
-          format!("has an undelivered parent report for close event {}", value_str(close.to_value().get("id")))
+          format!("has an undelivered parent report for close event {}", field_text(close.to_value().get("id")))
         })
         .collect(),
     )
@@ -768,8 +766,8 @@ impl Dispatcher {
       if !recipient.is_some_and(is_truthy) {
         continue;
       }
-      let recipient = value_str(recipient);
-      let source_event_id = value_str(close_value.get("id"));
+      let recipient = field_text(recipient);
+      let source_event_id = field_text(close_value.get("id"));
       let report_id =
         charliebot_store::control_events::stable_child_report_id(session_id, &source_event_id, &recipient);
       if !recipient_events.contains_key(&recipient) {
@@ -1046,7 +1044,7 @@ fn close_result_refs(close: &Value) -> Vec<String> {
   close
     .get(event_types::RESULT_REFS)
     .and_then(Value::as_array)
-    .map(|values| values.iter().map(|value| value_str(Some(value))).collect())
+    .map(|values| values.iter().map(|value| field_text(Some(value))).collect())
     .unwrap_or_default()
 }
 

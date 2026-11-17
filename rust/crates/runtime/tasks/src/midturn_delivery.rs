@@ -14,6 +14,7 @@ use anyhow::Context;
 use charliebot_agents::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
+use charliebot_core::text_repr::field_text;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::midturn_delivery::{IS_REPLAY_FIELD, is_gated_turn, offer as offer_write};
@@ -26,7 +27,6 @@ use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
-use crate::event_text::value_str;
 use crate::task_input_prompt::compose_input_prompt;
 
 /// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
@@ -65,11 +65,11 @@ pub fn record_ack(user_event_ids: &mut Vec<String>, item_run_id: &str, event: &V
   if event.get("type").and_then(Value::as_str) != Some(event_types::INPUT_DELIVERED) {
     return Ok(());
   }
-  let run_id = value_str(event.get("run_id"));
+  let run_id = field_text(event.get("run_id"));
   if run_id != item_run_id {
     anyhow::bail!("input delivery for Run {run_id} reached manager Run {item_run_id}");
   }
-  let input_id = value_str(event.get(event_types::INPUT_EVENT_ID));
+  let input_id = field_text(event.get(event_types::INPUT_EVENT_ID));
   if !user_event_ids.contains(&input_id) {
     user_event_ids.push(input_id);
   }

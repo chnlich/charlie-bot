@@ -250,6 +250,23 @@ pub fn value_str(value: &Value) -> String {
   }
 }
 
+/// The text an event field shows: an absent or null field as `None`, a flag as `True` or `False`, a string as itself,
+/// and any other value as its JSON text. A container shows its JSON text here, where [`value_str`] shows its repr.
+pub fn field_text(value: Option<&Value>) -> String {
+  match value {
+    None | Some(Value::Null) => "None".to_string(),
+    Some(Value::String(text)) => text.clone(),
+    Some(Value::Bool(true)) => "True".to_string(),
+    Some(Value::Bool(false)) => "False".to_string(),
+    Some(value) => value.to_string(),
+  }
+}
+
+/// The text a truthy event field shows, and the empty string for an absent or falsy one.
+pub fn truthy_field_text(value: Option<&Value>) -> String {
+  value.filter(|value| is_truthy(value)).map(|value| field_text(Some(value))).unwrap_or_default()
+}
+
 /// The class name a JSON value reports in Python's error text: `NoneType`, `bool`, `float`, `int`, `str`, `list`
 /// or `dict`.
 pub fn type_name(value: &Value) -> &'static str {
@@ -639,6 +656,25 @@ mod tests {
     assert!(!is_truthy(&json!([])));
     assert!(is_truthy(&json!({"a": 1})));
     assert!(is_truthy(&json!(0.5)));
+  }
+
+  #[test]
+  fn field_text_renders_scalars_and_json_containers() {
+    assert_eq!(field_text(None), "None");
+    assert_eq!(field_text(Some(&json!(null))), "None");
+    assert_eq!(field_text(Some(&json!(true))), "True");
+    assert_eq!(field_text(Some(&json!("text"))), "text");
+    assert_eq!(field_text(Some(&json!(7))), "7");
+    assert_eq!(field_text(Some(&json!({"a": [1]}))), "{\"a\":[1]}");
+  }
+
+  #[test]
+  fn truthy_field_text_keeps_only_a_truthy_value() {
+    assert_eq!(truthy_field_text(Some(&json!("text"))), "text");
+    assert_eq!(truthy_field_text(Some(&json!(1))), "1");
+    assert_eq!(truthy_field_text(Some(&json!(""))), "");
+    assert_eq!(truthy_field_text(Some(&json!(0))), "");
+    assert_eq!(truthy_field_text(None), "");
   }
 
   #[test]

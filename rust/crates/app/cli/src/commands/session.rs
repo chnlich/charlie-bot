@@ -29,7 +29,7 @@ use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::{
-  ARCHIVE_OFFSET, TASK_PARENT_ID_FIELD, TASK_STATE, TaskProfile, UtcDateTime, read_session_metadata,
+  APPROVER_FIELD, ARCHIVE_OFFSET, TASK_PARENT_ID_FIELD, TASK_STATE, TaskProfile, UtcDateTime, read_session_metadata,
 };
 use charliebot_store::{CALLER_SESSION_ID_FIELD, control_events, layout};
 use charliebot_tasks::completion::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, pending_archive_answer};
@@ -314,7 +314,7 @@ fn create(args: &CreateArgs) -> Result<(), CliExit> {
     payload
       .insert("request_id".to_string(), json!(args.request_id.clone().unwrap_or_else(control_events::new_request_id)));
     if let Some(approver) = &args.approver {
-      payload.insert("approver".to_string(), json!(approver));
+      payload.insert(APPROVER_FIELD.to_string(), json!(approver));
     }
   }
   let mut result = client::post(session_routes::SESSIONS_PATH, Value::Object(payload), None, &[])?;
@@ -469,7 +469,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
 fn set_approver(args: &SetApproverArgs) -> Result<(), CliExit> {
   let result = client::patch(
     &route::fill(session_routes::SESSION_PATH, &[args.session_id.as_str()]),
-    json!({ "approver": args.approver }),
+    json!({ (APPROVER_FIELD): args.approver }),
     None,
     &[],
   )?;

@@ -380,9 +380,9 @@ impl Store {
             .map(|event| event.as_ref().clone())
             .collect(),
           None => {
-            // The tail window answers the newest page without counting the log. A page past that window seeks to
-            // the line index's nearest checkpoint and reads from there, so it costs its own lines rather than the
-            // log's head.
+            // The tail window answers the newest page without parsing the log's head. A page past that window seeks
+            // to the line index's nearest checkpoint and reads from there, so it costs the lines from that
+            // checkpoint rather than every line before the page.
             match self.live_tail_lines_newline_split(session_id, rel_start)? {
               Some(lines) => slice_live_lines(&lines, 0, rel_end.saturating_sub(rel_start)),
               None => {
@@ -711,9 +711,10 @@ impl Store {
   /// domain `ndjson.parse_ndjson_range` numbers on the unarchived cold path.
   ///
   /// The read starts at the line index's nearest checkpoint at or before `first_line`, so a page far inside a long log
-  /// costs its own lines rather than the log's head: on the mock home's 144 MB log, a page 50,000 lines in reads 512
-  /// lines instead of 50,000. A line's index matches the whole-file read's, because the split is the same `\n` one and
-  /// a final line without a terminator is still a line. The returned pair carries the index of the first line read.
+  /// costs the lines from that checkpoint rather than the log's head: on the mock home's 144 MB log, a page 50,000
+  /// lines in reads a stride or two of lines before the page instead of the 50,000 before it. A line's index matches
+  /// the whole-file read's, because the split is the same `\n` one and a final line without a terminator is still a
+  /// line. The returned pair carries the index of the first line read.
   fn live_lines_from_checkpoint(
     &self,
     session_id: &str,

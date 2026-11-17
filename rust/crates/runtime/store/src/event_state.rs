@@ -15,17 +15,17 @@ pub(crate) const LIVE_RANGE_MEMO_LIMIT: usize = 4;
 pub(crate) const TAIL_WINDOW_SIZE: usize = 512 * 1024;
 pub(crate) const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 
-/// How many physical lines sit between two byte checkpoints of a log's line index. A checkpoint costs eight bytes and
-/// one seek reaches the line after it, so a stride this size keeps the index small and the read near the page: on the
-/// mock home's 144 MB log, 513 checkpoints and a read that starts at most 512 lines before the page.
+/// How many physical lines sit between two byte checkpoints of a log's line index. A checkpoint is a line number and
+/// a byte offset, so a stride this size keeps the index small and one seek reaches the page's lines: on the mock
+/// home's 144 MB log, about 130 checkpoints and a read that starts within two strides of the page.
 pub(crate) const LINE_INDEX_STRIDE: usize = 512;
 
 /// A log's physical-line index: its line count and the byte where every [`LINE_INDEX_STRIDE`]-th line starts.
 ///
 /// A page far inside a long log seeks to the nearest checkpoint at or before its first line and reads from there, so
-/// the read costs the page's own lines instead of the log's head. A line's number here is the one the `\n` split
-/// numbers — a blank line keeps its slot and a final line without a terminator is still a line — so the reader can
-/// slice the page out of the lines it read.
+/// the read costs the lines from that checkpoint instead of the log's head. A line's number here is the one the `\n`
+/// split numbers — a blank line keeps its slot and a final line without a terminator is still a line — so the reader
+/// can slice the page out of the lines it read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LineIndex {
   pub(crate) count: usize,

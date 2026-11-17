@@ -379,13 +379,23 @@ impl Store {
             .take(rel_end.saturating_sub(rel_start))
             .map(|event| event.as_ref().clone())
             .collect(),
-          None => match self.live_tail_lines_newline_split(session_id, rel_start)? {
-            Some(lines) => slice_live_lines(&lines, 0, rel_end.saturating_sub(rel_start)),
-            None => {
-              let lines = self.live_lines_newline_split(session_id)?;
-              slice_live_lines(&lines, rel_start, rel_end)
+          None => {
+            // Each end has a read that costs the page's own lines: the tail window answers the newest page and the
+            // head read answers a page far inside a long log. Take the nearer end, so neither read walks a window the
+            // other would discard.
+            let tail = if rel_end > self.live_line_count(session_id)?.saturating_sub(rel_start) {
+              self.live_tail_lines_newline_split(session_id, rel_start)?
+            } else {
+              None
+            };
+            match tail {
+              Some(lines) => slice_live_lines(&lines, 0, rel_end.saturating_sub(rel_start)),
+              None => {
+                let lines = self.live_head_lines_newline_split(session_id, rel_end)?;
+                slice_live_lines(&lines, rel_start, rel_end)
+              }
             }
-          },
+          }
         }
       };
       return Ok((events, start > 0));
@@ -702,29 +712,65 @@ impl Store {
     Ok((lines, 0))
   }
 
-  /// Read the live log as parsed events with one slot per physical line, split on `\n` only —
-  /// the domain `ndjson.parse_ndjson_range` numbers on the unarchived cold path.
-  fn live_lines_newline_split(&self, session_id: &str) -> StoreResult<Vec<Option<Arc<ChatEvent>>>> {
+  /// The live log's physical line count, through the count memo.
+  fn live_line_count(&self, session_id: &str) -> StoreResult<usize> {
     let path = self.chat_events_path(session_id);
-    let bytes = match fs::read(&path) {
-      Ok(bytes) => bytes,
+    match file_signature(&path)? {
+      Some((_, signature)) => self.count_chat_event_lines(&path, signature),
+      None => Ok(0),
+    }
+  }
+
+  /// Read the live log's physical lines up to `end` as parsed events, one slot per line, split on `\n` only — the
+  /// domain `ndjson.parse_ndjson_range` numbers on the unarchived cold path.
+  ///
+  /// This is the head's mirror of [`Self::live_tail_lines_newline_split`]. A page that ends far inside a long log is
+  /// outside the tail window, so the read takes the lines from the file's start and stops at `end`: the first page of
+  /// the mock home's 144 MB log costs its own lines rather than the log's. A line's index matches the whole-file
+  /// read's, because the split is the same `\n` one and a final line without a terminator is still a line.
+  fn live_head_lines_newline_split(&self, session_id: &str, end: usize) -> StoreResult<Vec<Option<Arc<ChatEvent>>>> {
+    let path = self.chat_events_path(session_id);
+    let file = match fs::File::open(&path) {
+      Ok(file) => file,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
       Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
     };
-    Ok(bytes.split(|byte| *byte == b'\n').map(ndjson::parse_line_compact).map(|event| event.map(Arc::new)).collect())
+    let mut reader = std::io::BufReader::new(file);
+    let mut lines = Vec::with_capacity(end.min(1024));
+    let mut line = Vec::new();
+    let mut bytes_read = 0;
+    while lines.len() < end {
+      line.clear();
+      let read = std::io::BufRead::read_until(&mut reader, b'\n', &mut line)
+        .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      if read == 0 {
+        break;
+      }
+      bytes_read += read;
+      if line.last() == Some(&b'\n') {
+        line.pop();
+      }
+      lines.push(ndjson::parse_line_compact(&line).map(Arc::new));
+    }
+    #[cfg(test)]
+    {
+      lock(&self.event_read_caches, "event read cache mutex").live_range_bytes_read += bytes_read;
+    }
+    #[cfg(not(test))]
+    let _ = bytes_read;
+    Ok(lines)
   }
 
   /// The live log's physical lines from `first_line` to its end, parsed with one slot per line, or `None` when the
   /// tail window does not hold them.
   ///
   /// The page a reader opens first is the one that ends at the log's end, so reading the tail answers it without the
-  /// whole log: on a 144 MB log the whole-file parse behind [`Self::live_lines_newline_split`] is 386 ms of the
-  /// request, and the tail window is 512 KiB. The `\n` split keeps the blank lines the whole-file read keeps, so a
-  /// line's index is the same either way.
+  /// whole log: on the 144 MB mock-home log that parse is 386 ms of the request, and the tail window is 512 KiB. The
+  /// `\n` split keeps the blank lines the whole-file read keeps, so a line's index is the same either way.
   ///
   /// The count names how many lines the tail holds, so an append between the count and the read would shift which
   /// lines the window returns. The signature the count was taken under is checked again after the read; a log that
-  /// moved falls back to the whole-file read, whose indices come from the one buffer it reads.
+  /// moved falls back to [`Self::live_head_lines_newline_split`], whose indices come from the one stream it reads.
   fn live_tail_lines_newline_split(
     &self,
     session_id: &str,
@@ -2252,10 +2298,11 @@ mod tests {
       assert_eq!(ids(&warm_end), vec!["c"]);
     }
 
-    /// A page that ends at the log's end reads the tail window instead of the whole log, and its events match the
-    /// whole-file read's: a blank line, a malformed line and a final line without a newline each keep their index.
+    /// A page that ends at the log's end reads the tail window, and a page that ends far inside the log reads the
+    /// head: each read only its own lines, and both match the whole-file read's, where a blank line, a malformed line
+    /// and a final line without a newline each keep their index.
     #[tokio::test]
-    async fn an_unarchived_newest_page_reads_only_the_log_tail() {
+    async fn an_unarchived_page_reads_the_log_end_its_range_is_nearer() {
       let home = tempfile::tempdir().unwrap();
       let store = test_store(home.path());
       let session_id = "synthetic-session";
@@ -2273,7 +2320,12 @@ mod tests {
       total += 5;
       std::fs::write(&path, &body).unwrap();
 
-      let whole = store.live_lines_newline_split(session_id).unwrap();
+      let whole: Vec<Option<Arc<ChatEvent>>> = std::fs::read(&path)
+        .unwrap()
+        .split(|byte| *byte == b'\n')
+        .map(ndjson::parse_line_compact)
+        .map(|event| event.map(Arc::new))
+        .collect();
       assert_eq!(whole.len(), total, "physical lines");
       let want = |start: usize, end: usize| -> Vec<ChatEvent> {
         whole[start..end].iter().flatten().map(|event| (**event).clone()).collect()
@@ -2290,9 +2342,13 @@ mod tests {
       // A range that ends before the log's end keeps the whole-file numbering.
       let (middle, _) = store.load_chat_events_range(session_id, total - 60, total - 30).unwrap();
       assert_eq!(ids(&middle), ids(&want(total - 60, total - 30)));
-      // A page at the head is too far from the tail window for the tail read, and still matches.
+      // A page at the head is outside the tail window, so it reads the lines from the log's start and keeps the
+      // whole-file numbering without parsing the log.
+      let before = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read;
       let (head, _) = store.load_chat_events_range(session_id, 0, 3).unwrap();
+      let head_read = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read - before;
       assert_eq!(ids(&head), ids(&want(0, 3)));
+      assert!(head_read < TAIL_WINDOW_SIZE, "the head page read {head_read} bytes of a {} B log", body.len());
     }
 
     /// `fact_history` composition: the archived count is the total event count minus the live

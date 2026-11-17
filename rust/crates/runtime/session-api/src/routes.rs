@@ -688,9 +688,12 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
 
 /// A task-tree page sent with the compressed body a repeat request already deflated.
 ///
-/// A page holds its bytes across requests while the tree and its rows hold, and the transport middleware deflates
-/// every body afresh. On the 7,160-session mock home that deflate costs about two thirds of this route's latency.
-/// The memo answers a repeat with the bytes it already compressed.
+/// A page holds its bytes across requests while the tree and its rows hold, and deflating it again on every repeat
+/// costs about two thirds of this route's latency. The memo answers a repeat with the bytes it already compressed.
+///
+/// The memo keeps the body, so its compressed form is paid once per page version and takes the smaller level-9 form a
+/// kept body uses, the form the transport's own body memo sends. On the 7,160-session mock home that is 5,627 bytes
+/// of the page's 30,950, against the 7,401 bytes the per-response level-1 form spends.
 ///
 /// The middleware leaves a response that names its own `Content-Encoding` untouched, so this sender writes the
 /// headers the middleware would write. They are `Vary: Accept-Encoding` with the compressed body, and the plain
@@ -705,7 +708,7 @@ fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
     match cache.get(&body).cloned() {
       Some(compressed) => compressed,
       None => {
-        let compressed = charliebot_compat::compression::gzip_level_one(&body);
+        let compressed = charliebot_compat::compression::gzip_memoized_body(&body);
         cache.put(body, compressed.clone());
         compressed
       }
@@ -835,6 +838,11 @@ fn parse_session_ids(ids: &str) -> Vec<String> {
   api::parse_session_ids(ids)
 }
 
+/// One search answer: the body, compressed for a client that accepts gzip, from the memo that keeps its form.
+///
+/// The memo keeps the body, so its compressed form is paid once per version and takes the smaller level-9 form a
+/// kept body uses. On the 7,160-session mock home a search for `permission` is 16,063 bytes of its 256,488-byte
+/// answer, against the 22,512 bytes the per-response level-1 form spends.
 fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
   if !accepts_gzip(request.headers()) {
     return json_bytes_response(Bytes::from(body), false);
@@ -844,7 +852,7 @@ fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBody
     match cache.get(&body).cloned() {
       Some(compressed) => compressed,
       None => {
-        let compressed = charliebot_compat::compression::gzip_level_one(&body);
+        let compressed = charliebot_compat::compression::gzip_memoized_body(&body);
         cache.put(body, compressed.clone());
         compressed
       }
@@ -1215,6 +1223,18 @@ mod tests {
     let repeat =
       to_bytes(session_search(State(Arc::clone(&features)), search()).await.into_body(), usize::MAX).await.unwrap();
     assert_eq!(quiet, repeat, "a repeat query answers with the body it built");
+    let gzipped = Request::builder()
+      .uri("/api/sessions/search?q=walrus")
+      .header(header::ACCEPT_ENCODING, "gzip")
+      .body(Body::empty())
+      .unwrap();
+    let compressed =
+      to_bytes(session_search(State(Arc::clone(&features)), gzipped).await.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+      compressed.as_ref(),
+      charliebot_compat::compression::gzip_memoized_body(&quiet),
+      "the memo keeps the compressed form, so the answer takes the smaller kept-body level"
+    );
     let quiet: Value = serde_json::from_slice(&quiet).unwrap();
     assert_eq!(quiet[0]["thinking_since"], Value::Null);
 
@@ -1253,7 +1273,7 @@ mod tests {
     let content_length: usize = gzip.headers().get(header::CONTENT_LENGTH).unwrap().to_str().unwrap().parse().unwrap();
     let compressed = to_bytes(gzip.into_body(), usize::MAX).await.unwrap();
     assert_eq!(compressed.len(), content_length);
-    assert_eq!(compressed.as_ref(), charliebot_compat::compression::gzip_level_one(&identity));
+    assert_eq!(compressed.as_ref(), charliebot_compat::compression::gzip_memoized_body(&identity));
 
     let repeat = answer("gzip").await;
     let repeat = to_bytes(repeat.into_body(), usize::MAX).await.unwrap();

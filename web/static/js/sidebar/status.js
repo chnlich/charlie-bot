@@ -45,7 +45,7 @@ function isTaskTreeRow(session) {
 
 function recordRenderedSessionStatus(session) {
   renderedSessionStatuses[session.id] = (session && session.status) || 'active';
-  // The row's own activity as painted; the indicator aggregation reads it.
+  // The row's own activity as painted. The indicator aggregation reads it.
   ownIndicatorState[session.id] = getSessionIndicatorState(session);
   stampFactSeq('indicator', session.id);
   if (session && session.profile === 'worker') renderedWorkerRows.add(session.id);
@@ -70,7 +70,7 @@ function sidebarSessionIds() {
     ids.push(SESSION_ID);
   }
   // Delegated cards in the open chat read their child's live state from this
-  // poll; a child whose sidebar row is filtered out still rides the request.
+  // poll. A child whose sidebar row is filtered out still rides the request.
   document.querySelectorAll('.delegate-live-state[data-delegate-session]').forEach(el => {
     const sid = el.dataset.delegateSession;
     if (!sid || seen.has(sid)) return;
@@ -212,7 +212,7 @@ function getSessionIndicatorState(status) {
   if (status.has_running_tasks) return 'worker_only';
   // A task-tree row's fact-derived work verdict (idle | running | waiting)
   // when its sidebar state carries one. has_running_tasks already covered
-  // 'running'; the remaining verdict maps onto its own icon.
+  // 'running'. The remaining verdict maps onto its own icon.
   if (status.work_state === 'waiting') return 'waiting';
   return 'idle';
 }
@@ -231,8 +231,8 @@ function getSessionIndicatorState(status) {
 // unread mark or the activity indicator. A reply captured before the domain's
 // newest stamp is refused in that domain. A late reply then can neither erase
 // a newer unread fact nor revert a newer indicator state, a running_changed
-// frame included. Broadcasts are ordered by their channel and always apply;
-// applying one stamps it, so any reply captured earlier is refused.
+// frame included. Broadcasts are ordered by their channel and always apply.
+// Applying one stamps it, so any reply captured earlier is refused.
 //
 // The unread mark has this one owner: every row paints its dot and subtree
 // mark from sessionUnread, and only the functions below write it. A list paint
@@ -455,7 +455,7 @@ function effectiveIndicatorState(sid) {
   return subtreeStandInState(sid);
 }
 
-// The split the two unread marks read: the dot is the row's own fact; the
+// The split the two unread marks read: the dot is the row's own fact. The
 // subtree mark is the subtree's. One row's own unread outranks its subtree's.
 function ownUnread(sid) {
   return !!sessionUnread[sid];
@@ -475,8 +475,8 @@ function paintSessionIndicator(sid) {
   if (spinner) spinner.classList.toggle('hidden', state !== 'thinking');
   if (worker) worker.classList.toggle('hidden', state !== 'worker_only');
   if (clock) clock.classList.toggle('hidden', state !== 'waiting');
-  // The unread family reads the unread facts alone; no activity state gates
-  // it. The dot reads the row's own fact; the subtree mark yields to it and
+  // The unread family reads the unread facts alone. No activity state gates
+  // it. The dot reads the row's own fact. The subtree mark yields to it and
   // reads the subtree's.
   if (dot) dot.classList.toggle('hidden', !ownUnread(sid));
   if (subtreeMark) subtreeMark.classList.toggle('hidden',
@@ -499,7 +499,7 @@ function setSessionIndicator(sid, state) {
   refreshSessionIndicator(sid);
 }
 
-// A grouped paint renders each row with its own facts; the parent rows take
+// A grouped paint renders each row with its own facts. The parent rows take
 // their stand-in gear and their subtree marks here, once the rows exist.
 function refreshTreeIndicators() {
   Object.keys(ownIndicatorState).forEach(sid => {
@@ -511,7 +511,7 @@ function refreshTreeIndicators() {
 // painted (app.js's initial render, switchSession's winning generation, a
 // reply the displayed view rendered). The local fact clears first, stamped so
 // an older reply is refused, and the row repaints. The server-side flag clears
-// only through the POST; a bare data fetch never clears it. Fire-and-forget: a
+// only through the POST. A bare data fetch never clears it. Fire-and-forget: a
 // lost POST leaves the server flag set, and the next reply that carries it
 // paints the dot again, or reads it again on the displayed session.
 //
@@ -560,7 +560,7 @@ function applySessionStatus(sid, status, requestSeq) {
   // poll's snapshot can predate an unread_changed broadcast or a
   // running_changed frame the page already rendered.
   if (replyIsCurrent('unread', sid, requestSeq)) recordUnreadFact(sid, status.has_unread);
-  // The paused-worker fact lands before the repaint below reads it; the poll
+  // The paused-worker fact lands before the repaint below reads it. The poll
   // reply carries no profile, so the worker identity comes from the list
   // paint's renderedWorkerRows.
   recordPausedWorkerFact(sid, renderedWorkerRows.has(sid), !!(status && status.has_pending_trigger));
@@ -639,7 +639,7 @@ function pollSessionStatus() {
   statusPollInflight = true;
   const requestSeq = factSeqAtRequest();
   const ids = sidebarSessionIds();
-  // A poll scoped by filter answers a delta; a row the page has never held would not be in it, so a new id asks for
+  // A poll scoped by filter answers a delta. A row the page has never held would not be in it, so a new id asks for
   // the whole set once. The views that name their rows by id answer them in full anyway.
   const scoped = sidebarRowsRefreshable();
   const since = scoped && ids.every(sid => sid in appliedSessionStatus) ? statusPollToken : '';

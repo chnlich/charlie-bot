@@ -249,7 +249,7 @@ impl Store {
     aggregator: &Arc<Mutex<MessageAggregator>>,
   ) -> StoreResult<()> {
     let index = event
-      .get("event_index")
+      .get(event_types::EVENT_INDEX)
       .and_then(|value| value.as_u64())
       .ok_or_else(|| StoreError::new("feed_and_broadcast needs an event stamped with event_index"))?;
     let deltas = aggregator.lock().await.feed_at_absolute(event, index as usize)?;
@@ -320,7 +320,7 @@ impl Store {
     if !event.is_object() {
       return Err(StoreError::new("chat event must be a JSON object"));
     }
-    event.insert("event_index", json!(index));
+    event.insert(event_types::EVENT_INDEX, json!(index));
     Ok(())
   }
 

@@ -29,7 +29,7 @@ pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
   event_types::FROM_SESSION,
   event_types::FROM_SESSION_NAME,
   event_types::INPUT_MODE,
-  "event_index",
+  event_types::EVENT_INDEX,
 ];
 
 fn task_id_namespace() -> Uuid {

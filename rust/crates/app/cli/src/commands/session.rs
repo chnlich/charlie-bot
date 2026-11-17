@@ -695,7 +695,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
       let Some(block) = format_message_block(message) else { continue };
       // The header's anchor is re-taken while the first block's event index is None.
       if first.as_ref().is_none_or(|(_, _, event_index)| event_index.is_null()) {
-        first = Some((*page_start, position, message.get("event_index").cloned().unwrap_or(Value::Null)));
+        first = Some((*page_start, position, message.get(event_types::EVENT_INDEX).cloned().unwrap_or(Value::Null)));
       }
       blocks.push(block);
       printed += 1;
@@ -755,7 +755,7 @@ fn format_message_block(message: &Value) -> Option<String> {
     .filter(|timestamp| text_repr::is_truthy(timestamp))
     .map(text_repr::value_str)
     .unwrap_or_default();
-  let event_index = text_repr::value_str(message.get("event_index").unwrap_or(&Value::Null));
+  let event_index = text_repr::value_str(message.get(event_types::EVENT_INDEX).unwrap_or(&Value::Null));
   let mut lines = vec![format!("## {role} · {timestamp} · event {event_index}")];
   if !body.is_empty() {
     lines.push(body);

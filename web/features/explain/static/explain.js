@@ -76,7 +76,7 @@ function renderExplainButton(sessionId, eventIndex) {
 }
 
 // Paint every rendered round group's button from the active status map. Groups
-// the turn engine materializes later read the map at render time; this covers
+// the turn engine materializes later read the map at render time. This covers
 // the ones already in the DOM when a status load or WS frame lands.
 function applyExplainStatusesToDom(root) {
   root.querySelectorAll('.explain-toggle[data-explain-state]').forEach((btn) => {
@@ -93,7 +93,7 @@ function roundGroupFor(eventIndex) {
 }
 
 // The open panel of one round, or null. Everything's panel follows the
-// separator line; For you's lives in the round's panel slot after the reply.
+// separator line. For you's lives in the round's panel slot after the reply.
 function explainPanelFor(eventIndex) {
   const group = roundGroupFor(eventIndex);
   if (!group) return null;
@@ -143,7 +143,7 @@ function toggleForYouExplainPanel(btn, sessionId, eventIndex) {
 }
 
 // The panel body. The Everything panel insets itself to the separator line's
-// padding (mx-4); the For-you panel spans the list column, where the bubbles
+// padding (mx-4). The For-you panel spans the list column, where the bubbles
 // carry no inset.
 function buildExplainPanel(sessionId, eventIndex, inset) {
   const panel = document.createElement('div');
@@ -292,7 +292,7 @@ const toggleExplainPanelTracked = Chat.registerSeparatorPanel({
   toggle: toggleExplainPanel,
 });
 // Explain (btw-style) state change for one round: repaint the button from the
-// frame; a frame carries no body, so an open panel re-fetches the single entry.
+// frame. A frame carries no body, so an open panel re-fetches the single entry.
 registerWsMessageHandler(
   'explain_status',
   (ev) => updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend),

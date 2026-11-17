@@ -1817,7 +1817,7 @@ impl Store {
       self.apply_prompt_change(&guard, session_id, PromptScope::Node, body.as_deref()).await?;
     }
     self.invalidate_tree_index();
-    let event_type = if prompt_changed { event_types::PROMPT_CHANGED } else { "task_updated" };
+    let event_type = if prompt_changed { event_types::PROMPT_CHANGED } else { event_types::TASK_UPDATED };
     self.notify_task_tree_changed(session_id, Some(event_type)).await;
     self.read_metadata_fresh(session_id)?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
   }

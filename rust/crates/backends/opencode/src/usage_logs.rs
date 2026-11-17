@@ -16,7 +16,7 @@ use charliebot_core::paths;
 use charliebot_core::text_repr::{is_truthy, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::usage::{
-  QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
+  QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl, utc_isoformat,
 };
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -24,7 +24,6 @@ use serde_json::{Map, Value};
 use super::sqlite::open_read_only;
 use super::usage_quota::{OpenCodeQuotaAccount, OpenCodeQuotaState};
 use super::usage_sweep;
-use charliebot_agents::usage_time::utc_isoformat;
 
 /// The usage source's name: the ledger's source value and the usage page's card title.
 pub const USAGE_SOURCE: &str = "opencode";

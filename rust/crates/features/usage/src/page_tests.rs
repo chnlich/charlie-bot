@@ -110,7 +110,7 @@ fn read_page_ledger(features: &FeatureContext) -> LedgerRead {
 
 async fn page_body(features: &FeatureContext, read: &LedgerRead) -> String {
   let response = render(features, read, &parts("/token-usage"))
-    .unwrap_or_else(|failure| panic!("{}: {}", failure.kind(), failure.detail()));
+    .unwrap_or_else(|failure| panic!("{}: {}", failure.kind, failure.detail));
   assert_eq!(response.status(), StatusCode::OK);
   let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
   String::from_utf8(bytes.to_vec()).expect("the page is UTF-8")

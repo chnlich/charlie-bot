@@ -8,9 +8,15 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use charliebot_compat::responses::Failure;
 use charliebot_core::config::CharlieBotConfig;
 
 use crate::ledger::UsageLedger;
+
+/// The failure of an error with no class of its own: `Exception`, with the error's whole context chain as the detail.
+pub(crate) fn exception(error: anyhow::Error) -> Failure {
+  Failure::new("Exception", format!("{error:#}"))
+}
 
 /// The page's inputs besides the ledger's version: a change in any of them renders a different document.
 pub struct PageInputs {
@@ -76,14 +82,14 @@ impl PageMemo {
   ///
   /// The version is read before the body is built. A capture that commits while the body builds leaves the older
   /// version in the memo, so the next view rebuilds rather than serving rows the ledger has moved past.
-  pub fn body<E: From<anyhow::Error>>(
+  pub fn body(
     &mut self,
     ledger_path: &Path,
     inputs: PageInputs,
-    build: impl FnOnce(&mut UsageLedger) -> Result<String, E>,
-  ) -> Result<&str, E> {
-    self.connect(ledger_path)?;
-    let version = self.connection().data_version()?;
+    build: impl FnOnce(&mut UsageLedger) -> Result<String, Failure>,
+  ) -> Result<&str, Failure> {
+    self.connect(ledger_path).map_err(exception)?;
+    let version = self.connection().data_version().map_err(exception)?;
     let held = self.entry.as_ref().is_some_and(|entry| entry.version == version && entry.inputs.holds(&inputs));
     if !held {
       let html = build(self.connection_mut())?;
@@ -145,7 +151,7 @@ mod tests {
       memo
         .body(&path, inputs(query), |_| {
           builds.set(builds.get() + 1);
-          Ok::<String, anyhow::Error>(text.to_string())
+          Ok::<String, Failure>(text.to_string())
         })
         .expect("the body builds")
         .to_string()

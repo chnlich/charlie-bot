@@ -123,6 +123,15 @@ pub const TASK_TYPE_FIELD: &str = "task_type";
 /// The task-spec field holding a cold-read task's page, genre and trigger. The delegate request, the session create
 /// request and the stored task record carry the same name, so it is spelled once, here.
 pub const COLD_READ_FIELD: &str = "cold_read";
+/// The cold-read spec's field holding the page the task reads. The delegate route's schema and the artifact CLI's
+/// delegation carry the same name, so it is spelled once, here.
+pub const COLD_READ_PAGE_PATH_FIELD: &str = "page_path";
+/// The cold-read spec's field naming the page's genre. The delegate route's schema and the artifact CLI's delegation
+/// carry the same name, so it is spelled once, here.
+pub const COLD_READ_GENRE_FIELD: &str = "genre";
+/// The cold-read spec's field holding the trigger message the cold reader answers. The delegate route's schema and
+/// the artifact CLI's delegation carry the same name, so it is spelled once, here.
+pub const COLD_READ_TRIGGER_FIELD: &str = "trigger";
 /// The task-spec field naming who approves a task's delivery. The session create and patch requests and the stored
 /// task record carry the same name, so it is spelled once, here.
 pub const APPROVER_FIELD: &str = "approver";
@@ -1103,6 +1112,22 @@ mod tests {
       )
       .is_ok()
     );
+  }
+
+  #[test]
+  fn the_cold_read_spec_serializes_under_the_consts_its_routes_read() {
+    let spec = ColdReadSpec {
+      page_path: "artifacts/page.html".to_string(),
+      genre: "sitrep".to_string(),
+      trigger: "where are we?".to_string(),
+    };
+    let value = serde_json::to_value(&spec).expect("a cold-read spec serializes");
+    let mut keys: Vec<&str> =
+      value.as_object().expect("a cold-read spec is an object").keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let mut owned = [COLD_READ_PAGE_PATH_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_TRIGGER_FIELD];
+    owned.sort_unstable();
+    assert_eq!(keys, owned);
   }
 
   #[test]

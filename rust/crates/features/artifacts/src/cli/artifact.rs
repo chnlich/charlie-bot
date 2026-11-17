@@ -16,7 +16,9 @@ use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
-use charliebot_store::metadata::{COLD_READ_FIELD, TASK_TYPE_FIELD};
+use charliebot_store::metadata::{
+  COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD, TASK_TYPE_FIELD,
+};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_tasks::cold_read;
 use charliebot_tasks::routes as task_routes;
@@ -291,9 +293,9 @@ fn delegate_cold_read(
     (task_routes::DELEGATE_DESCRIPTION_FIELD): description,
     (TASK_TYPE_FIELD): COLD_READ_TASK_TYPE,
     (COLD_READ_FIELD): {
-      "page_path": paths::display(artifact),
-      "genre": args.genre,
-      "trigger": args.trigger,
+      (COLD_READ_PAGE_PATH_FIELD): paths::display(artifact),
+      (COLD_READ_GENRE_FIELD): args.genre,
+      (COLD_READ_TRIGGER_FIELD): args.trigger,
     },
     (task_routes::DELEGATE_REQUEST_ID_FIELD): request_id,
   });

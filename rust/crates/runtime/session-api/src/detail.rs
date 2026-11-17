@@ -1027,8 +1027,10 @@ fn active_backend_payload(
     cfg.backends.options.first().map_or("claude", |option| option.id.as_str()),
   );
   let active_option = cfg.get_backend_option(&active_backend);
+  // The payload only shows the binding, so it takes the read the sidebar listing already serves instead of
+  // fingerprinting the controller's tree for every payload.
   let dedicated = registry
-    .binding_for(&meta.id)
+    .binding_for_render(&meta.id)
     .map_err(|error| StoreError::new(error.to_string()))?
     .is_some_and(|binding| binding.dedicated_backend());
   let known_active = cfg.backends.pool(&active_backend).is_some() || active_option.is_some();

@@ -190,8 +190,8 @@ pub fn without_comments(source: &str) -> String {
 /// A run that holds a line terminator becomes one newline: the blank line after it and the indentation of the next
 /// line separate no tokens, and the newline the automatic semicolons need is still there. The run leaves no byte at
 /// all where the pair of bytes around it separates itself ([`terminator_stands`]) and no line of the legacy comment
-/// forms depends on the break ([`line_comment_line`]). A run of spaces and tabs becomes one space where the bytes on
-/// either side would otherwise run together, and nothing otherwise.
+/// forms depends on the break ([`legacy_comment_needs_break`]). A run of spaces and tabs becomes one space where the
+/// bytes on either side would otherwise run together, and nothing otherwise.
 fn copy_whitespace(out: &mut String, source: &str, start: usize) -> usize {
   let bytes = source.as_bytes();
   let mut end = start;

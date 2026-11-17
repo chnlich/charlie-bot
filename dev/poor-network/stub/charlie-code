@@ -31,9 +31,16 @@ replies=$POOR_NETWORK_REPLY_DIR
 if [ -n "$task_file" ] && grep -q 'bench-tools' "$task_file"; then
   piece="$replies/tools-0.ndjson"
 else
-  next=$(cat "$replies/next")
+  # Concurrent turns advance the rotation one at a time: the lock covers only this read and write, and the subshell
+  # releases it when it ends, so the turn's stream runs beside the other turns.
+  next=$(
+    exec 9> "$replies/next.lock"
+    flock 9
+    current=$(cat "$replies/next")
+    printf '%s\n' "$((current + 1))" > "$replies/next"
+    printf '%s' "$current"
+  )
   pieces=$(ls "$replies" | grep -c '^reply-')
-  printf '%s\n' "$((next + 1))" > "$replies/next"
   piece="$replies/reply-$((next % pieces)).ndjson"
 fi
 while IFS= read -r line; do

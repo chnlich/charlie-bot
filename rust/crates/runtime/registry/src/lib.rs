@@ -21,6 +21,7 @@ pub mod midturn_delivery;
 pub mod option_model;
 pub mod pages;
 pub mod registry;
+mod render_binding;
 pub mod route_claims;
 pub mod sequence;
 pub mod sidebar;

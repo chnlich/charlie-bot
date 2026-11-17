@@ -88,7 +88,19 @@ pub trait SequenceController: Send + Sync {
   fn reconcile_interrupted<'a>(&'a self, tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>>;
 
   /// The binding of `session_id`, if this controller binds it.
+  ///
+  /// A write path decides from the binding, so a controller whose binding read fingerprints mutable state reads it
+  /// fresh here. A read that only renders the binding asks [`Self::binding_for_render`] instead.
   fn binding(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>>;
+
+  /// The binding of `session_id` for a request that only renders it.
+  ///
+  /// A render shows the binding's facts and decides nothing from them, so a controller whose binding read
+  /// fingerprints mutable state answers this from the snapshot its listing already serves. The default answers as
+  /// [`Self::binding`] does: a controller that reads no such state has one answer.
+  fn binding_for_render(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
+    self.binding(session_id)
+  }
 
   /// Whether `meta` carries this controller's legacy ownership marker.
   fn owns_session(&self, meta: &SessionMetadata) -> bool;

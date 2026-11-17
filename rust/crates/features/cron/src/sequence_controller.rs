@@ -237,6 +237,13 @@ impl CronSequenceController {
       }
     }
   }
+
+  /// The binding of `session_id` among `tasks`, whether the caller read that list fresh or from the listing window.
+  fn cron_binding(&self, tasks: &[ScheduledTaskConfig], session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
+    let names = names_for_binding(tasks, session_id);
+    let name = names.first()?.clone();
+    Some(Arc::new(CronBinding { name, names, registry: self.registry.clone() }))
+  }
 }
 
 fn row_schedule_fields(
@@ -422,10 +429,12 @@ impl SequenceController for CronSequenceController {
   fn binding(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
     // A binding lookup reads the same loader snapshot the listing renders. The write paths that ask for a binding
     // decide from its names, so this read fingerprints the tree rather than serving a listing's cached snapshot.
-    let snapshot = self.read_snapshot_for_listing();
-    let names = names_for_binding(&snapshot.tasks, session_id);
-    let name = names.first()?.clone();
-    Some(Arc::new(CronBinding { name, names, registry: self.registry.clone() }))
+    self.cron_binding(&self.read_snapshot_for_listing().tasks, session_id)
+  }
+
+  fn binding_for_render(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
+    // A page shows the binding and decides nothing from it, so it serves the snapshot its sidebar listing read.
+    self.cron_binding(&self.listing_snapshot().tasks, session_id)
   }
 
   fn owns_session(&self, meta: &SessionMetadata) -> bool {
@@ -968,7 +977,7 @@ mod tests {
   use std::sync::Arc;
 
   use charliebot_core::event_types;
-  use charliebot_registry::sequence::{QuotaFailure, SequenceBinding};
+  use charliebot_registry::sequence::{QuotaFailure, SequenceBinding, SequenceController};
   use charliebot_store::metadata::{SCHEDULE_TASK, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
   use charliebot_store::{CreateTask, TaskCaller};
   use serde_json::Map;
@@ -1017,6 +1026,29 @@ mod tests {
     let first = controller.listing_snapshot();
     let second = controller.listing_snapshot();
     assert!(Arc::ptr_eq(&first, &second), "a listing read in the window keeps the snapshot the previous read took");
+  }
+
+  #[test]
+  fn a_render_binding_serves_the_snapshot_the_listing_read_took_while_a_write_reads_fresh() {
+    let (home, features) = feature_context();
+    features.registry.bind_feature_context(&features).unwrap();
+    let (sender, receiver) = watch::channel(None);
+    sender.send_replace(Some(Arc::downgrade(&features.registry)));
+    let controller = CronSequenceController::new(receiver);
+    let task = |session_id: &str| json!({"cron": "0 8 * * *", "handler": "synthetic_handler", "timezone": "UTC", "session_id": session_id});
+    write_cron(home.path(), "synthetic-task", task("synthetic-bound"));
+    // The listing's read takes the snapshot a render then answers from.
+    controller.listing_snapshot();
+    // A config edit moves the binding before the window ends.
+    write_cron(home.path(), "synthetic-task", task("synthetic-other-session"));
+    assert!(
+      controller.binding_for_render("synthetic-bound").is_some(),
+      "a render serves the snapshot the listing read inside its window"
+    );
+    assert!(
+      controller.binding("synthetic-bound").is_none(),
+      "a write path fingerprints the tree and sees the moved binding"
+    );
   }
 
   #[test]

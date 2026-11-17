@@ -109,6 +109,32 @@ pub struct ConfigSection {
   pub dump: fn(&SectionValue) -> Result<serde_json::Value, String>,
 }
 
+/// A config model that owns its section: the key its YAML parses from, and the key every error about it names.
+///
+/// [`ConfigSection::of`] derives the section's parse and dump from this trait. A section that inspects its raw YAML
+/// before the model sees it, or keeps the raw YAML as its value, declares its own `parse` and `dump` instead.
+pub trait SectionModel: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static {
+  const KEY: &'static str;
+}
+
+impl ConfigSection {
+  /// The section that `T` models, replacing the retired top-level keys `legacy_keys` names.
+  ///
+  /// The parse error carries [`SectionModel::KEY`] the way `charliebot config get <key>` reports the section.
+  pub fn of<T: SectionModel>(legacy_keys: &'static [(&'static str, &'static str)]) -> ConfigSection {
+    fn parse<T: SectionModel>(raw: &Value) -> Result<SectionValue, String> {
+      let model: T = serde_yaml::from_value(raw.clone()).map_err(|error| format!("{}: {error}", T::KEY))?;
+      Ok(Arc::new(model))
+    }
+    fn dump<T: SectionModel>(value: &SectionValue) -> Result<serde_json::Value, String> {
+      let model =
+        value.downcast_ref::<T>().ok_or_else(|| format!("the {} section holds an unexpected value", T::KEY))?;
+      serde_json::to_value(model).map_err(|error| error.to_string())
+    }
+    ConfigSection { key: T::KEY, legacy_keys, parse: parse::<T>, dump: dump::<T> }
+  }
+}
+
 /// The value a backend option's model holds for a type-specific field the entry omits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptionFieldDefault {

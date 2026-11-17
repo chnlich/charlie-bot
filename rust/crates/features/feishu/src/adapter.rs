@@ -12,6 +12,7 @@ use charliebot_chat_threads::summon::{FEISHU_NAMESPACE, namespaced_uuid};
 use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform};
 use charliebot_compat::http_client;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types::MENTION_ID;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -23,9 +24,7 @@ use tokio::sync::OnceCell;
 use crate::client::{BASE_URL, FeishuAPIError, FeishuClient, Page};
 use crate::config::FeishuConfig;
 use crate::event::{self, Inbound, Message};
-use crate::fields::{
-  CHAT_ID, CREATE_TIME, MENTION_ID, MESSAGE_ID, MESSAGE_TYPE, ROOT_ID, SENDER, SENDER_TYPE, THREAD_ID,
-};
+use crate::fields::{CHAT_ID, CREATE_TIME, MESSAGE_ID, MESSAGE_TYPE, ROOT_ID, SENDER, SENDER_TYPE, THREAD_ID};
 use crate::metadata::{FEISHU_ORIGIN, FeishuOrigin};
 use crate::owners;
 use crate::package::NAME;

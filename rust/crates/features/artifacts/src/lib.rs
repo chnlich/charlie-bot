@@ -11,6 +11,7 @@ pub mod plan_diff;
 mod plan_paths;
 mod plan_verbs;
 pub mod plans;
+mod sequence_diff;
 mod sidebar;
 #[cfg(test)]
 mod test_support;

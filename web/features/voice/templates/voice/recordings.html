@@ -52,11 +52,13 @@
   <h1>Recent recordings</h1>
   <p class="sub">One row per voice input recording run, across every session, newest first.</p>
   <table class="data">
+    {% if recordings %}
     <thead>
       <tr>
         <th>Recorded</th><th>Transcript or failure</th><th>Run / Input device</th><th>Playback / Peak / RMS</th>
       </tr>
     </thead>
+    {% endif %}
     <tbody>
       {% for row in recordings %}
       <tr>

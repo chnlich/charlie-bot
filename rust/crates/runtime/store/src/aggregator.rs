@@ -821,7 +821,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       "content": event.field("summary").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       "child_session_id": event.field("child_session_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       "outcome": event.field("outcome").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-      "result_refs": event.field("result_refs").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
+      (event_types::RESULT_REFS): event.field(event_types::RESULT_REFS).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
     }),
     event_types::RUN_HEADER => render_run_header(event)?,
     event_types::RUN_END => json!({
@@ -855,7 +855,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         "content": event.field("summary").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         TASK_STATE: task_state,
         "completed": event.field(TASK_STATE).and_then(EventFields::as_str_field) == Some("completed"),
-        "result_refs": event.field("result_refs").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
+        (event_types::RESULT_REFS): event.field(event_types::RESULT_REFS).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
         "raw_log_ref": event.field("raw_log_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "events_ref": event.field("events_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "result_ref": event.field("result_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),

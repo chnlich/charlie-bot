@@ -227,7 +227,7 @@ pub fn archived_close_event(
     ("request_id".to_string(), json!(request_id)),
     ("outcome".to_string(), json!("archived")),
     ("summary".to_string(), json!(summary)),
-    ("result_refs".to_string(), json!(result_refs)),
+    (event_types::RESULT_REFS.to_string(), json!(result_refs)),
     ("run_ids".to_string(), json!(run_ids)),
     ("report_to".to_string(), report_to.map_or(Value::Null, |parent| json!(parent))),
   ];

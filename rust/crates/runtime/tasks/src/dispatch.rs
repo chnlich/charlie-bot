@@ -665,7 +665,7 @@ impl Dispatcher {
         ("child_event_id".to_string(), Value::String(source_event_id)),
         ("outcome".to_string(), Value::String(outcome.to_string())),
         ("summary".to_string(), Value::String(summary.to_string())),
-        ("result_refs".to_string(), json!(result_refs.unwrap_or(&[]))),
+        (event_types::RESULT_REFS.to_string(), json!(result_refs.unwrap_or(&[]))),
       ],
     );
     let report = self.store.append_control_fact(guard, recipient, report).await?;
@@ -1044,7 +1044,7 @@ fn close_report_outcome(close: &Value) -> &str {
 
 fn close_result_refs(close: &Value) -> Vec<String> {
   close
-    .get("result_refs")
+    .get(event_types::RESULT_REFS)
     .and_then(Value::as_array)
     .map(|values| values.iter().map(|value| value_str(Some(value))).collect())
     .unwrap_or_default()

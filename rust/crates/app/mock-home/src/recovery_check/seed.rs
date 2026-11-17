@@ -7,7 +7,9 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED, TASK_SPEC_REF};
+use charliebot_core::event_types::{
+  INPUT_EVENT_IDS, RESULT_REFS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED, TASK_SPEC_REF,
+};
 use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_store::control_events::TASK_SPEC_HASH_FIELD;
 use charliebot_store::layout;
@@ -314,7 +316,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
           "request_id": uid(&format!("{label}/close")),
           "outcome": "completed",
           "summary": "Closed while its run was live.",
-          "result_refs": [],
+          (RESULT_REFS): [],
           "run_ids": [run_id],
           "report_to": null,
         }),

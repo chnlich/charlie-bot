@@ -995,7 +995,7 @@ async fn cancel_run(
 const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::optional("summary", FieldType::String),
-  Field::optional("result_refs", FieldType::StringList),
+  Field::optional(event_types::RESULT_REFS, FieldType::StringList),
   Field::optional("run_ids", FieldType::StringList),
   Field::optional(ARCHIVE_NON_CHILD_FIELD, FieldType::Boolean),
 ]);
@@ -1075,7 +1075,7 @@ async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Requ
   };
   let evidence = CompletionEvidence {
     summary: optional_validated_string(&fields, "summary"),
-    result_refs: optional_validated_string_list(&fields, "result_refs"),
+    result_refs: optional_validated_string_list(&fields, event_types::RESULT_REFS),
     run_ids: optional_validated_string_list(&fields, "run_ids"),
     ..CompletionEvidence::default()
   };

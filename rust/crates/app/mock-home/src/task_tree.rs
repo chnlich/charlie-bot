@@ -707,7 +707,7 @@ fn write_task_log(
           ("child_event_id".to_string(), Value::String(report.close_event_id.clone())),
           ("outcome".to_string(), json!(report.outcome)),
           ("summary".to_string(), json!(report.summary)),
-          ("result_refs".to_string(), json!([])),
+          (event_types::RESULT_REFS.to_string(), json!([])),
         ],
       ))?;
       inputs.push(report.id.clone());
@@ -750,7 +750,7 @@ fn write_task_log(
         ("request_id".to_string(), json!(close.request_id)),
         ("outcome".to_string(), json!(close.outcome)),
         ("summary".to_string(), json!(close.summary)),
-        ("result_refs".to_string(), json!([])),
+        (event_types::RESULT_REFS.to_string(), json!([])),
         ("run_ids".to_string(), json!(session.runs.iter().map(|run| run.id.as_str()).collect::<Vec<_>>())),
         (
           "report_to".to_string(),

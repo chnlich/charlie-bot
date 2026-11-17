@@ -129,6 +129,9 @@ pub const TASK_CLOSE_REQUESTED: &str = "task_close_requested";
 /// The run that owns a `task_close_requested` fact. Only that run acts on the request, and a later run's start voids
 /// it, so the writer and every reader name the field here.
 pub const OWNER_RUN_ID: &str = "owner_run_id";
+/// The results a task's work produced, as references such as `run:<id>` or `landed:<branch>@<sha>`. The close request,
+/// the close and child-report facts, and every reader name the field here.
+pub const RESULT_REFS: &str = "result_refs";
 pub const TASK_CLOSED: &str = "task_closed";
 pub const TASK_REOPENED: &str = "task_reopened";
 /// A task moved to another parent. The moved task's chat events carry it; the chat renders nothing for it.

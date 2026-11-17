@@ -4,10 +4,10 @@
 //! comments that explain them to an editor, and a browser runs those as nothing. They also carry the indentation
 //! that shows their nesting, the spaces between tokens, and the line terminators that separate statements, which the
 //! parser folds away. On the mock home's chat page those bytes sit in the scripts and the stylesheets: the strip
-//! leaves a 293,572-byte script tail whose gzip form is 77,548 bytes, and the page it belongs to travels in 95,443
-//! bytes. The strip is textual and keeps every other byte. That includes a `//` or `/*` that a string, a template
-//! literal or a regular expression holds. It also keeps the whitespace inside a template literal, which is part of
-//! the text it builds.
+//! leaves 295,759 B of script content whose gzip form is 79,648 B, and the page it belongs to travels in 95,941 B.
+//! The strip is textual and keeps every other byte. That includes a `//` or `/*` that a string, a template literal
+//! or a regular expression holds. It also keeps the whitespace inside a template literal, which is part of the text
+//! it builds.
 
 use crate::inlined_literal::{char_len, escape_end, string_end};
 
@@ -18,9 +18,10 @@ use crate::inlined_literal::{char_len, escape_end, string_end};
 /// bytes around it. A whitespace run becomes one newline when it holds a line terminator, [`needs_space`]'s space or
 /// nothing when it does not, and nothing where the bytes around it separate themselves ([`terminator_stands`]),
 /// unless a legacy comment form reads that break ([`legacy_comment_needs_break`]), so a blank line, a line's
-/// indentation and a statement's own end leave no byte and no two tokens join. The scanner follows the literals that
-/// can hold comment text or whitespace. A quoted string ends at its quote or its line's end, a template literal at
-/// its backtick, and a regex literal at its closing slash.
+/// indentation and a statement's own end leave no byte and no two tokens join. A break the copy already ends with is
+/// not written again ([`push_break`]), so the run after a spanning comment leaves no second terminator. The scanner
+/// follows the literals that can hold comment text or whitespace. A quoted string ends at its quote or its line's
+/// end, a template literal at its backtick, and a regex literal at its closing slash.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
@@ -57,7 +58,7 @@ pub fn without_comments(source: &str) -> String {
     if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
       let end = source[i + 2..].find("*/").map_or(bytes.len(), |end| i + 2 + end + 2);
       if spans_lines(&bytes[i..end]) {
-        out.push('\n');
+        push_break(&mut out);
       } else if continues_html_markup(&out, bytes.get(end).copied())
         || needs_space(out.as_bytes().last().copied(), bytes.get(end).copied())
       {
@@ -209,12 +210,24 @@ fn copy_whitespace(out: &mut String, source: &str, start: usize) -> usize {
     out.push(' ');
   } else if line_terminator {
     if terminator_stands(out.as_bytes().last().copied(), next) || legacy_comment_needs_break(out, bytes, end) {
-      out.push('\n');
+      push_break(out);
     }
   } else if needs_space(out.as_bytes().last().copied(), next) {
     out.push(' ');
   }
   end
+}
+
+/// One line terminator in place of a run of breaks.
+///
+/// A second terminator separates nothing the first one does not. The copy's last byte is a line terminator only when
+/// this rule wrote it: a quoted string ends at its line's end, a template literal at its backtick, and a regular
+/// expression at its slash, so a literal's own line terminator is never the copy's last byte. A legacy comment form
+/// that reads its line whole still finds the break it needs, because one terminator remains.
+fn push_break(out: &mut String) {
+  if !out.ends_with('\n') {
+    out.push('\n');
+  }
 }
 
 /// Whether a legacy comment form on either side of the run reads only while its line stays whole.
@@ -466,6 +479,14 @@ mod tests {
     assert_eq!(without_comments("f(\n a,\n b\n)"), "f(\na,b)");
     // A `}` that a `/` follows keeps the terminator: only the author knows whether it divides.
     assert_eq!(without_comments("x = {}\n/re/.test(s)"), "x={}\n/re/.test(s)");
+  }
+
+  #[test]
+  fn a_break_a_comment_wrote_leaves_the_run_after_it_unwritten() {
+    // A block comment that spans lines writes one terminator; the blank line that follows separates nothing more.
+    assert_eq!(without_comments("a();/* note\n*/  \n\nb();"), "a();\nb();");
+    // Two spanning comments write one terminator together.
+    assert_eq!(without_comments("a();/* one\n*//* two\n*/b();"), "a();\nb();");
   }
 
   #[test]

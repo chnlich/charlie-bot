@@ -901,12 +901,8 @@ impl Store {
       return Ok(());
     }
     // The appended line starts at the byte the log held before the append, and it is the next line after the held
-    // count. It opens a checkpoint only when its own number asks for one.
-    let line = index.count;
-    if line.is_multiple_of(LINE_INDEX_STRIDE) {
-      index.checkpoints.push((line, before.size));
-    }
-    index.count += 1;
+    // count.
+    index.record_append(before.size);
     lock(&self.event_read_caches, "event read cache mutex").count.record(path.to_path_buf(), after, index);
     Ok(())
   }
@@ -2603,6 +2599,28 @@ mod tests {
       assert_eq!(index.checkpoints.last(), Some(&(LINE_INDEX_STRIDE, before.size)));
       let (events, _) = store.load_chat_events_range(session_id, LINE_INDEX_STRIDE, LINE_INDEX_STRIDE + 1).unwrap();
       assert_eq!(ids(&events), vec!["appended"]);
+    }
+
+    /// A range-built index can leave its last checkpoint short of a multiple of the stride, so an appended line whose
+    /// own number is not a multiple still opens a checkpoint a stride after that one: every page starts less than a
+    /// stride from its checkpoint.
+    #[test]
+    fn an_append_opens_a_checkpoint_a_stride_after_the_last_one() {
+      let mut index = LineIndex { count: 129, checkpoints: vec![(0, 0), (1, 1), (65, 4096), (66, 4200)] };
+      index.record_append(8_192);
+      index.record_append(8_300);
+      index.record_append(8_400);
+      assert_eq!(index.count, 132);
+      let checkpoint_lines: Vec<usize> = index.checkpoints.iter().map(|(line, _)| *line).collect();
+      assert_eq!(checkpoint_lines, vec![0, 1, 65, 66, 130]);
+      for line in 0..index.count {
+        let (checkpoint, _) = index.checkpoint_at(line);
+        assert!(
+          line - checkpoint < LINE_INDEX_STRIDE,
+          "line {line} starts {} lines after checkpoint {checkpoint}",
+          line - checkpoint
+        );
+      }
     }
 
     #[test]

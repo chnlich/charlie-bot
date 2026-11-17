@@ -10,6 +10,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
 use bytes::Bytes;
+use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
 use charliebot_cli_common::route;
 use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::mimetypes;
@@ -439,7 +440,7 @@ fn chat_page(
     cfg.backends.pools.iter().map(|pool| json!({"id": pool.id, "label": pool.label})).collect::<Vec<_>>();
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
-  let active_pool_member = active_session.get("pool_member").cloned().unwrap_or(Value::Null);
+  let active_pool_member = active_session.get(POOL_MEMBER_FIELD).cloned().unwrap_or(Value::Null);
   let active_native_model = active_session.get(NATIVE_MODEL).cloned().unwrap_or(Value::Null);
   let active_backend_label = active_backend_label(&cfg, active_backend, &active_pool_member, &active_native_model);
   let backend_compact = compact_facts(&cfg, &state.features.registry)?;

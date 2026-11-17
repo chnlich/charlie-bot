@@ -1152,7 +1152,7 @@ impl TriggerManager {
         still_alive_label(&target.pid.to_string(), target.log.as_deref())
       })
       .collect();
-    Ok(WaitGroupOutcome { finished, still_alive, watch_failed, ..WaitGroupOutcome::default() })
+    Ok(WaitGroupOutcome { finished, still_alive, held: Vec::new(), remote_ends: Vec::new(), watch_failed })
   }
 
   async fn wait_with_remote_probe(
@@ -1263,7 +1263,7 @@ impl TriggerManager {
       .iter()
       .map(|(_, _, target)| still_alive_label(&format!("{}:{}", target.host, target.pid), target.log.as_deref()))
       .collect();
-    Ok(WaitGroupOutcome { finished, still_alive, remote_ends, watch_failed, ..WaitGroupOutcome::default() })
+    Ok(WaitGroupOutcome { finished, still_alive, held: Vec::new(), remote_ends, watch_failed })
   }
 
   async fn wait_with_sacct(&self, trigger: &PendingTrigger, targets: &[SlurmJob]) -> anyhow::Result<WaitGroupOutcome> {
@@ -1286,7 +1286,13 @@ impl TriggerManager {
     for (host, ids, _) in &groups {
       waits.push(self.wait_sacct_group(trigger, host.as_deref(), ids.clone()));
     }
-    let mut outcome = WaitGroupOutcome::default();
+    let mut outcome = WaitGroupOutcome {
+      finished: Vec::new(),
+      still_alive: Vec::new(),
+      held: Vec::new(),
+      remote_ends: Vec::new(),
+      watch_failed: false,
+    };
     while let Some(result) = waits.next().await {
       let group = result?;
       outcome.finished.extend(group.finished);
@@ -1311,8 +1317,11 @@ impl TriggerManager {
       tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, job_ids = ?remaining, "slurm_watch_no_sacct_skip");
       sleep(remaining_until(trigger.fire_at)).await;
       return Ok(WaitGroupOutcome {
+        finished: Vec::new(),
         still_alive: remaining.iter().map(|job_id| slurm_label(None, *job_id)).collect(),
-        ..WaitGroupOutcome::default()
+        held: Vec::new(),
+        remote_ends: Vec::new(),
+        watch_failed: false,
       });
     }
     let keys = match host {
@@ -1322,7 +1331,13 @@ impl TriggerManager {
       None => Vec::new(),
     };
     let mut session_watch = self.held.watch(&trigger.id, keys);
-    let mut outcome = WaitGroupOutcome::default();
+    let mut outcome = WaitGroupOutcome {
+      finished: Vec::new(),
+      still_alive: Vec::new(),
+      held: Vec::new(),
+      remote_ends: Vec::new(),
+      watch_failed: false,
+    };
     let mut step = 0;
     let mut last_success = Instant::now();
     let mut next_probe = Instant::now();
@@ -1523,7 +1538,6 @@ struct WaitOutcome {
 
 /// One Slurm wait group's answer: what it settled, what it still waits on, the held jobs that end the wait, and the
 /// remote ends it recorded. It also names whether a settled `--cmd` target ended without exit 0.
-#[derive(Default)]
 struct WaitGroupOutcome {
   finished: Vec<String>,
   still_alive: Vec<String>,
@@ -2484,7 +2498,7 @@ mod tests {
   use charliebot_registry::store_hooks;
   use charliebot_registry::{FeatureContext, Registry};
   use charliebot_store::compact::CompactValue;
-  use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
+  use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
   use charliebot_store::{ControlGuard, CreateTask, Store, StoreError, StoreResult, TaskCaller};
   use charliebot_tasks::completion::ArchiveAuthority;
   use charliebot_tasks::completion::TaskCompletion;
@@ -2601,7 +2615,15 @@ mod tests {
           request_id: format!("create-{session_id}"),
           task_parent_id: None,
           profile: TaskProfile::Manager,
-          task: Some(TaskSpec { goal: "Synthetic trigger test task".to_string(), ..TaskSpec::default() }),
+          task: Some(TaskSpec {
+            goal: "Synthetic trigger test task".to_string(),
+            repo_path: None,
+            base_branch: None,
+            task_type: None,
+            keep_worktree: false,
+            cold_read: None,
+            approver: TaskApprover::User,
+          }),
           name: Some("Synthetic trigger task".to_string()),
           backend: Some("synthetic".to_string()),
           group: None,

@@ -21,7 +21,7 @@ use charliebot_core::timefmt;
 use charliebot_store::trigger_files::{
   EXIT_FILE_FIELD, FIRE_AT_FIELD, LOCAL_PID_KIND, REMOTE_PID_KIND, SLURM_JOB_KIND,
 };
-use charliebot_store::{layout, trigger_files};
+use charliebot_store::{layout, metadata, trigger_files};
 use charliebot_triggers::triggers;
 use clap::{Arg, ArgMatches, Command};
 use serde_json::{Map, Value, json};
@@ -109,7 +109,7 @@ impl TriggerKey {
     let mut candidates = Vec::new();
     for (path, _) in files {
       // A file that cannot be read or parsed is skipped.
-      let Ok(stored) = trigger_files::read_trigger_value(&path) else { continue };
+      let Ok(stored) = metadata::read_metadata_value(&path) else { continue };
       if stored.get("status").and_then(Value::as_str) != Some("pending") {
         continue;
       }

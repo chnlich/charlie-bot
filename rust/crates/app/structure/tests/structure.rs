@@ -1759,8 +1759,8 @@ const FORMAT_TABLE: &[FormatRow] = &[
     kind: "trigger file",
     owner: "runtime/store",
     names: &["triggers_dir", "trigger_path", "iter_trigger_file_stats", "pending_trigger_state"],
-    hint: "Read it through `charliebot_store::trigger_files` (`read_trigger`, `read_trigger_value`), and write it \
-           through `write_trigger`.",
+    hint: "Read it through `charliebot_store::trigger_files::read_trigger`, a raw document through \
+           `charliebot_store::metadata::read_metadata_value`, and write it through `write_trigger`.",
   },
   FormatRow {
     kind: "improve loop state",

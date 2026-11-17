@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use charliebot_core::git::ancestry_args;
 use charliebot_store::layout;
-use charliebot_store::metadata::read_session_metadata;
+use charliebot_store::metadata::{read_metadata_value, read_session_metadata};
 use charliebot_store::run_records::{self, RunRecord};
 use charliebot_store::trigger_files;
 use serde::{Deserialize, Serialize};
@@ -1060,7 +1060,7 @@ fn pending_trigger_with_message(session_dir: &Path, message: &str) -> anyhow::Re
     return Ok(false);
   }
   for (path, _) in trigger_files::iter_trigger_file_stats(&triggers_dir)? {
-    let Ok(stored) = trigger_files::read_trigger_value(&path) else { continue };
+    let Ok(stored) = read_metadata_value(&path) else { continue };
     if stored.get("status").and_then(Value::as_str) == Some("pending")
       && stored.get("message").and_then(Value::as_str) == Some(message)
     {

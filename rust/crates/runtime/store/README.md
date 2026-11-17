@@ -14,6 +14,5 @@ The single writer for session metadata and chat event logs. `run_records` owns t
 - `trigger_files::PendingTrigger`
 - `trigger_files::fresh_uuid`
 - `trigger_files::trigger_path`
-- `trigger_files::read_trigger_value` and `trigger_files::TriggerReadError`
-- `trigger_files::read_trigger`
+- `trigger_files::read_trigger`, and `metadata::read_metadata_value` for a raw document, trigger files included
 - `trigger_files::write_trigger`

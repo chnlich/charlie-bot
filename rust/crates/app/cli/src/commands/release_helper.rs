@@ -1167,7 +1167,7 @@ fn frame_signature(frame: &Map<String, Value>) -> Value {
     }
     message.and_then(|message| message.get(key)).cloned().unwrap_or(Value::Null)
   };
-  json!([field("event_index"), field("role"), field("id")])
+  json!([field(event_types::EVENT_INDEX), field("role"), field("id")])
 }
 
 fn write_jsonl(path: &str, frames: &[Value]) -> Result<(), String> {
@@ -1283,8 +1283,8 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   }
   println!("PASS self-test empty run-summary fields preserved");
 
-  let nested = json!({"type": "message", "event_index": 3,
-    "message": {"event_index": 77, "role": "assistant", "id": "nested-id"}});
+  let nested = json!({"type": "message", (event_types::EVENT_INDEX): 3,
+    "message": {(event_types::EVENT_INDEX): 77, "role": "assistant", "id": "nested-id"}});
   if frame_signature(nested.as_object().expect("a frame object")) != json!([3, "assistant", "nested-id"]) {
     return Err("the frame signature used a nested event_index".to_string());
   }

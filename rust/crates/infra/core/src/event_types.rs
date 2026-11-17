@@ -43,6 +43,9 @@ pub const MESSAGE_CONTENT_POINTER: &str = "/message/content";
 /// The committed message's flag that the page already holds its content from the stream frames, so the message frame
 /// carries none of it.
 pub const MESSAGE_CONTENT_STREAMED: &str = "content_streamed";
+/// An event's ordinal in its session's event log: the message view and the stream frames carry it, and the fork and
+/// explain requests name the event they act on with it.
+pub const EVENT_INDEX: &str = "event_index";
 pub const MASTER_DONE: &str = "master_done";
 pub const ASSISTANT_ERROR: &str = "assistant_error";
 pub const QUOTA_EXHAUSTED: &str = "quota_exhausted";

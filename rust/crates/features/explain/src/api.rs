@@ -16,6 +16,7 @@ use axum::response::Response;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Kind, Loc, Source};
+use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
 use serde_json::{Value, json};
@@ -141,7 +142,7 @@ fn upto_param(query: &HashMap<String, String>) -> Result<i64, Box<FieldError>> {
 /// The fields of `ExplainRequest`: the divider's event index and the backend option id, both required. Unknown keys are
 /// ignored.
 const EXPLAIN_FIELDS: &[Field] =
-  &[Field::required("event_index", FieldType::Integer), Field::required("backend", FieldType::String)];
+  &[Field::required(event_types::EVENT_INDEX, FieldType::Integer), Field::required("backend", FieldType::String)];
 const EXPLAIN_BODY: BodyModel = BodyModel::required(EXPLAIN_FIELDS);
 
 /// The validated `ExplainRequest`.
@@ -156,10 +157,10 @@ impl ExplainRequest {
     let Some(Value::Object(mut fields)) = body.validate(&EXPLAIN_BODY)? else {
       unreachable!("a required model validates a body to its fields")
     };
-    let index = fields.remove("event_index").expect("a validated body carries event_index");
+    let index = fields.remove(event_types::EVENT_INDEX).expect("a validated body carries event_index");
     // The shared reader keeps integers above the signed 64-bit range as unsigned numbers; the divider index is an i64.
     let Some(event_index) = index.as_i64() else {
-      return Err(Box::new(validation::response(&[field_error("event_index", index, Kind::IntParsing)])));
+      return Err(Box::new(validation::response(&[field_error(event_types::EVENT_INDEX, index, Kind::IntParsing)])));
     };
     let backend = match fields.remove("backend") {
       Some(Value::String(backend)) => backend,

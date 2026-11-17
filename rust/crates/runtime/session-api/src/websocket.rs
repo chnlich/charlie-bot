@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::response::Response;
+use charliebot_core::event_types;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
 use charliebot_store::aggregator::MessageAggregator;
@@ -275,7 +276,7 @@ impl CatchupWalk {
       payload
         .as_object_mut()
         .expect("the message aggregator accepts only event objects")
-        .entry("event_index".to_string())
+        .entry(event_types::EVENT_INDEX.to_string())
         .or_insert_with(|| json!(global_index));
       self.frames.push(payload);
     }
@@ -296,7 +297,7 @@ fn draft_stream_frame(draft: &Value) -> Value {
   let mut frame = json!({
     "type": "stream",
     "reset": true,
-    "event_index": draft.get("event_index").cloned().unwrap_or(Value::Null),
+    (event_types::EVENT_INDEX): draft.get(event_types::EVENT_INDEX).cloned().unwrap_or(Value::Null),
   });
   let content = draft.get("content").and_then(Value::as_str).unwrap_or_default();
   if !content.is_empty() {
@@ -594,7 +595,7 @@ fn covered_by_replay(frame: &str, replayed_through: Option<usize>) -> bool {
   if value.get("type").and_then(Value::as_str) != Some("stream") {
     return false;
   }
-  value.get("event_index").and_then(Value::as_u64).is_some_and(|index| index < replayed_through as u64)
+  value.get(event_types::EVENT_INDEX).and_then(Value::as_u64).is_some_and(|index| index < replayed_through as u64)
 }
 
 async fn close_with_code(

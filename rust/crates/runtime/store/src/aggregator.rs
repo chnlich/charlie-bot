@@ -171,7 +171,7 @@ impl MessageAggregator {
     let mut message = json!({
       "role": "assistant",
       "content": self.assistant_buf.as_str(),
-      "event_index": self.last_event_index,
+      (event_types::EVENT_INDEX): self.last_event_index,
       "id": self.last_event_id.clone().unwrap_or_else(|| format!("legacy:{}", self.last_event_index)),
       "timestamp": self.last_assistant_timestamp.clone().unwrap_or(Value::Null),
     });
@@ -251,7 +251,7 @@ impl MessageAggregator {
         .field(event_types::INPUT_MODE)
         .map(EventFields::to_owned_value)
         .unwrap_or(Value::Null),
-      "event_index": index,
+      (event_types::EVENT_INDEX): index,
       "id": event_id,
       "timestamp": event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null),
     });
@@ -292,7 +292,7 @@ impl MessageAggregator {
           let mut plan_message = json!({
             "role": "plan",
             "content": plan,
-            "event_index": index,
+            (event_types::EVENT_INDEX): index,
             "id": event_id,
             "timestamp": event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null),
           });
@@ -302,7 +302,7 @@ impl MessageAggregator {
           let plan_message = json!({
             "role": "plan",
             "content": self.assistant_buf,
-            "event_index": index,
+            (event_types::EVENT_INDEX): index,
             "id": event_id,
             "timestamp": self.last_assistant_timestamp.clone().unwrap_or(Value::Null),
           });
@@ -574,7 +574,7 @@ impl MessageAggregator {
     if append.is_empty() && thinking_append.is_empty() && tools_from.is_none() {
       return Vec::new();
     }
-    let mut frame = json!({"type": "stream", "event_index": self.current_index});
+    let mut frame = json!({"type": "stream", (event_types::EVENT_INDEX): self.current_index});
     if !append.is_empty() {
       self.streamed_text_bytes = self.assistant_buf.len();
       self.streamed_text_utf16 += append.encode_utf16().count();
@@ -1178,7 +1178,7 @@ fn add_message_metadata<E: EventFields>(
   message
     .entry("timestamp".to_string())
     .or_insert_with(|| event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null));
-  message.insert("event_index".to_string(), json!(index));
+  message.insert(event_types::EVENT_INDEX.to_string(), json!(index));
   message.insert("id".to_string(), json!(event_id));
   Ok(())
 }

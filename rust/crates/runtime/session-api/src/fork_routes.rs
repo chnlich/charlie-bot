@@ -32,13 +32,17 @@ use crate::route_support::store_error;
 use crate::write_routes::{config, default_backend_id, resolve_requested_backend, typed};
 
 /// `models.ForkSessionRequest`: the fork body is optional, and each field has a default.
-const FORK_FIELDS: &[Field] =
-  &[Field::optional("event_index", FieldType::NullableInteger), Field::optional("backend", FieldType::NullableString)];
+const FORK_FIELDS: &[Field] = &[
+  Field::optional(event_types::EVENT_INDEX, FieldType::NullableInteger),
+  Field::optional("backend", FieldType::NullableString),
+];
 const FORK_BODY: BodyModel = BodyModel::optional(FORK_FIELDS);
 
 /// `models.EloneSessionRequest`: the elone body is required, and `event_index` has no default.
-const ELONE_FIELDS: &[Field] =
-  &[Field::required("event_index", FieldType::Integer), Field::optional("backend", FieldType::NullableString)];
+const ELONE_FIELDS: &[Field] = &[
+  Field::required(event_types::EVENT_INDEX, FieldType::Integer),
+  Field::optional("backend", FieldType::NullableString),
+];
 const ELONE_BODY: BodyModel = BodyModel::required(ELONE_FIELDS);
 
 #[derive(Default, Deserialize)]

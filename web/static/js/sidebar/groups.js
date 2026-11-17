@@ -11,10 +11,10 @@ const GROUP_SESSION_ROW_PX = 52;
 const SESSION_GROUP_HEADER_PX = 28;
 const SESSION_GROUP_LIMIT_TOGGLE_PX = 28;
 
-// The rows one group's preview paints, from the height its list holds and the groups that share it: each group's
-// header and "Show all" line come out first, and the groups split the rest, never below the minimum. The phone's
-// drawer has no height until it opens, and the archived panel's container grows with its rows, so both keep the
-// minimum.
+// The rows one group's preview paints come from the height its list holds and the groups that share it.
+// Each group's header and "Show all" line come out first, and the groups split the rest, never below the
+// minimum. The phone's drawer has no height until it opens, and the archived panel's container grows with
+// its rows, so both keep the minimum.
 function groupPreviewLimit(nav, groupCount) {
   const height = nav && nav === document.getElementById('session-list') ? nav.clientHeight : 0;
   if (!height) return GROUP_SESSION_PREVIEW_MIN;
@@ -305,11 +305,11 @@ function renderNewChildButton(s) {
 // takes no extra attributes.
 // The gear is the row's one always-visible control on a touch screen, and on a
 // pointer device it shows over the row's hover cover. Its glyph is then the
-// control's only mark, so it takes slate-400: on the open row's blue tint
-// rgb(26, 45, 88) slate-500 draws 2.82:1 and on the hovered row's cover
-// rgb(37, 49, 68) it draws 2.77:1, under the 3:1 floor WCAG 1.4.11 sets for a
-// component. slate-400 draws 5.23:1 and 5.14:1 there and 6.34:1 on the plain
-// row, the tone the row's time line keeps.
+// control's only mark, so it takes slate-400. On the open row's blue tint
+// rgb(26, 45, 88) slate-500 draws 2.82:1, and on the hovered row's cover
+// rgb(37, 49, 68) it draws 2.77:1. Both fall under the 3:1 floor WCAG 1.4.11
+// sets for a component. slate-400 draws 5.23:1 and 5.14:1 there and 6.34:1 on
+// the plain row, the tone the row's time line keeps.
 function renderSettingsButton(s, rowMenu) {
   const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';
   return `<button onclick="event.preventDefault(); event.stopPropagation(); sidebarControl('openSessionRowMenu', this, '${s.id}')"
@@ -405,9 +405,9 @@ function repaintRenderedRows() {
   renderSessionList(sessions, filter, options);
 }
 
-// The sidebar's list holds a fixed height, and the rows its preview paints follow that height: the phone's drawer
-// opening gives the list its first height, and a window resize changes it. A height that keeps the same row count
-// repaints nothing.
+// The sidebar's list holds a fixed height, and the rows its preview paints follow that height. The phone's
+// drawer opening gives the list its first height, and a window resize changes it. A height that keeps the same
+// row count repaints nothing.
 function watchSessionListHeight() {
   const nav = document.getElementById('session-list');
   if (!nav || typeof ResizeObserver !== 'function') return;
@@ -462,7 +462,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     // than groupPreviewLimit budgets for the list's height. The preview gives up its last row for it:
     // the header, the open row and the Show all line then stay inside the panel's height. At the
     // preview's floor the height fits fewer rows than the floor paints (a closed phone drawer reports
-    // no height at all), so the floor keeps its rows and the open row joins them still.
+    // no height at all). The floor keeps its rows, and the open row joins them still.
     const previewRoots =
       groupSessions.filter((root) => !groupPreviewLimitExemptions.some((predicate) => predicate(root)));
     const openRootRank = previewRoots.findIndex((root) => root.id === activeRootId);
@@ -529,7 +529,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         childrenOf
       );
     }).join('');
-    // A partial listing whose rows all fit the preview has no hidden row to stand the toggle at, so the toggle
+    // A partial listing whose rows all fit the preview has no hidden row to stand the toggle at. The toggle
     // stands after the rows it fetches, and the click loads the full listing. A page that carries rows past the
     // preview already placed it in front of them.
     const groupRowCount = countTreeRows(groupSessions, childrenOf);
@@ -997,9 +997,9 @@ function renderSessionList(sessions, filter, options = {}) {
     renderGroupedSessionList(sessions, filter, options);
     return;
   }
-  // A full search answer is the newest matches only, and the notice saying so stands above the first row: a
-  // reader who scans the rows first has already concluded that the match they want is not there, and below them
-  // the notice followed every row of the list.
+  // A full search answer is the newest matches only, and the notice saying so stands above the first row.
+  // A reader who scans the rows first has already concluded that the match they want is not there.
+  // Below them, the notice followed every row of the list.
   const capNotice = sessions.length >= SEARCH_MATCH_LIMIT
     ? renderEmptyNote('Showing the newest ' + SEARCH_MATCH_LIMIT + ' matches — narrow the search.')
     : '';

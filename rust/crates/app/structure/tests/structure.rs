@@ -1341,6 +1341,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::RUN_BACKEND`; the session listing and the chat page carry the backend a \
            live run resolved to under it.",
   },
+  OwnerRow {
+    name: "pool_member",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::model_pool::POOL_MEMBER_FIELD`; the chat page reads the member a pool session runs \
+           on under it.",
+  },
   OwnerRow { name: "Read", owner: "infra/core", hint: "Use `charliebot_core::event_types::READ_TOOL`." },
   OwnerRow { name: "Write", owner: "infra/core", hint: "Use `charliebot_core::event_types::WRITE_TOOL`." },
   OwnerRow { name: "Edit", owner: "infra/core", hint: "Use `charliebot_core::event_types::EDIT_TOOL`." },

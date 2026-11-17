@@ -62,7 +62,7 @@ async fn open(State(features): State<Arc<FeatureContext>>, Query(query): Query<H
   };
   let cfg = match features.config.get() {
     Ok(cfg) => cfg,
-    Err(error) => return responses::internal_error("ConfigError", error.to_string()),
+    Err(error) => return responses::internal_error(responses::CONFIG_ERROR_CLASS, error.to_string()),
   };
   let repo_root = match features.startup.require::<RepoRoot>() {
     Ok(repo_root) => repo_root,

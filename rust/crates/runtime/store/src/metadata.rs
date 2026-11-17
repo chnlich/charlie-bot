@@ -719,9 +719,10 @@ impl SessionMetadata {
 
 // The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns.
 // The readers below open, read and decode the file for every caller, so a change to the format, the location or the
-// bad-file handling happens here.
+// bad-file handling happens here. `read_metadata_value` is also the store's one whole-file decode of a stored JSON
+// document, which the trigger files read through.
 
-/// Why a metadata file could not be read or decoded. Like `chat_events::LogReadError`, the error carries the kind of
+/// Why a stored JSON file could not be read or decoded. Like `chat_events::LogReadError`, the error carries the kind of
 /// the failure, and the caller decides what a missing file and each failure mean.
 #[derive(Debug)]
 pub enum MetadataReadError {
@@ -761,8 +762,9 @@ pub(crate) fn read_metadata_text(path: &Path) -> Result<String, MetadataReadErro
   std::fs::read_to_string(path).map_err(MetadataReadError::Io)
 }
 
-/// Read a metadata file as its JSON value: the store's one decode of the file kind's text. A missing file is `Err`
-/// with `NotFound`, and a value that is not an object is still a value, so the caller decides what each means.
+/// Read a metadata file as its JSON value: the store's one decode of a stored JSON document's text, which the
+/// trigger files read through too. A missing file is `Err` with `NotFound`, and a value that is not an object is
+/// still a value, so the caller decides what each means.
 pub fn read_metadata_value(path: &Path) -> Result<Value, MetadataReadError> {
   let text = read_metadata_text(path)?;
   decode_metadata(&text).map_err(|error| MetadataReadError::Json(error.to_string()))

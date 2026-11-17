@@ -22,7 +22,7 @@ use charliebot_registry::usage::UsageSource;
 use charliebot_registry::{Registry, RegistryError, registration_step};
 
 pub use backend::CodexBackend;
-pub use host::CodexHost;
+pub use host::{CodexHost, codex_home};
 pub use resolver::{CodexSessionHost, CodexUsageResolver};
 pub use translate::FILE_WRITE;
 pub use usage_logs::{USAGE_SOURCE, session_id};
@@ -56,17 +56,19 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     translate_fallback: false,
   })?;
   registry.option_schema("codex", options::SCHEMA)?;
-  let sessions_dir = host.codex_home().join(rollout::CODEX_SESSIONS_DIR_NAME);
+  let sessions_dir = codex_home(host).join(rollout::CODEX_SESSIONS_DIR_NAME);
   registry
     .member_reading("codex", Arc::new(move |_cfg, _option, now| usage_quota::member_reading(&sessions_dir, now)))?;
-  let codex_home = host.codex_home();
-  registry
-    .usage_resolver("codex", Arc::new(move |usage_host| resolver::usage_resolver(codex_home.clone(), usage_host)))?;
+  let codex_home_dir = codex_home(host);
+  registry.usage_resolver(
+    "codex",
+    Arc::new(move |usage_host| resolver::usage_resolver(codex_home_dir.clone(), usage_host)),
+  )?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["codex-"],
     run_logs_only: false,
-    implementation: Some(Arc::new(usage_logs::CodexLogs::new(host.codex_home()))),
+    implementation: Some(Arc::new(usage_logs::CodexLogs::new(codex_home(host)))),
   })?;
   registry.attribute_backend_type("codex", USAGE_SOURCE)?;
   Ok(())
@@ -95,7 +97,7 @@ mod tests {
   fn host_paths_follow_the_home_directory() {
     let host = CodexHost { path: "/bin".to_string(), home: PathBuf::from("/synthetic/home") };
     assert_eq!(user_local_bin(&host.home), PathBuf::from("/synthetic/home/.local/bin"));
-    assert_eq!(host.codex_home(), PathBuf::from("/synthetic/home/.codex"));
+    assert_eq!(codex_home(&host), PathBuf::from("/synthetic/home/.codex"));
   }
 
   fn register_synthetic_host(registry: &mut Registry) -> Result<(), RegistryError> {

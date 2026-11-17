@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use charliebot_claude_code as claude_code;
 use charliebot_claude_code::ClaudeHost;
 use charliebot_codex as codex;
-use charliebot_codex::CodexHost;
+use charliebot_codex::{CodexHost, codex_home};
 use charliebot_core::home;
 use charliebot_core::paths::realpath;
 use charliebot_opencode as opencode;
@@ -160,7 +160,7 @@ fn sweep(root: &Path) -> Result<String, String> {
     cfg.charliebot_home.clone(),
     claude.home,
     claude.claude_config_dir,
-    codex_host.codex_home(),
+    codex_home(&codex_host),
     home::opencode_db().unwrap(),
   ];
   for path in stores {

@@ -51,8 +51,12 @@
   .detBody { display:inline-flex; flex-wrap:wrap; gap:8px; max-width:100% }
   p { margin:8px 0 }
   ul { margin:8px 0 0; padding-left:20px } li { margin:4px 0 }
+  /* A code chip states one value, and a chip whose text wrapped at its spaces drew two closed boxes
+     on two lines: the week range below read as two tokens at 1440 and at 390 px. A chip keeps its
+     text on one line. The longest chip here runs 33 characters, about 250 px at 12.5 px, inside the
+     phone's 342 px prose column. */
   code { font-family:var(--mono); background:var(--panel2); border:1px solid var(--bd);
-    border-radius:4px; padding:1px 5px; font-size:12.5px }
+    border-radius:4px; padding:1px 5px; font-size:12.5px; white-space:nowrap }
   .hero { display:grid; grid-template-columns:repeat(auto-fit,minmax(168px,1fr)); gap:12px; margin:0 0 4px }
   .heroCard { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 16px; min-width:0 }
   .heroCard .lab { font-size:12px; color:var(--mut); margin:0 0 2px }

@@ -593,6 +593,90 @@ async fn session_usage(
   responses::fast_json(StatusCode::OK, &Value::Object(payload))
 }
 
+/// The events pages this route keeps, each the body it built while its inputs still held their value.
+///
+/// A page is fixed by the lines it covers, and a page far inside a long log covers lines no append touches, so the
+/// same request answers the same bytes until the log is rewritten. Building it parses and projects the page's events
+/// on every request, and a reader who scrolls back and forth asks for the same pages again, so the memo serves the
+/// body it already built.
+#[derive(Default)]
+struct EventsPageMemo {
+  entries: Mutex<Vec<(EventsPageKey, Bytes)>>,
+}
+
+/// The pages one server keeps: a reader's last few pages, which its scrolling moves between.
+const EVENTS_PAGE_MEMO_ENTRIES: usize = 4;
+
+/// The longest body the memo keeps. A page at the route's widest limit stays inside it.
+const EVENTS_PAGE_MEMO_MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// The inputs an events page body reads: the session, the page's range in the absolute event index, the archive split
+/// that index counts, and the identity of the live log the range ends in.
+///
+/// An appended event moves the log's identity, so a page the new event can reach builds again. An archive write moves
+/// the offset, which names which events the range covers.
+struct EventsPageKey {
+  session_id: String,
+  before: i64,
+  limit: usize,
+  archive_offset: usize,
+  events: EventLogIdentity,
+}
+
+impl EventsPageKey {
+  /// Whether this key's inputs still hold these values.
+  fn matches(&self, inputs: &EventsPageInputs<'_>) -> bool {
+    self.session_id == inputs.session_id
+      && self.before == inputs.before
+      && self.limit == inputs.limit
+      && self.archive_offset == inputs.archive_offset
+      && self.events == inputs.events
+  }
+}
+
+/// One request's page inputs, borrowed from the values the request read, so a memo hit compares them without building
+/// the key it already holds.
+struct EventsPageInputs<'a> {
+  session_id: &'a str,
+  before: i64,
+  limit: usize,
+  archive_offset: usize,
+  events: EventLogIdentity,
+}
+
+static EVENTS_PAGE_MEMO: LazyLock<EventsPageMemo> = LazyLock::new(EventsPageMemo::default);
+
+impl EventsPageMemo {
+  /// The body this memo built for the request's inputs, moved to the newest slot.
+  fn served(&self, inputs: &EventsPageInputs<'_>) -> Option<Bytes> {
+    let mut entries = self.entries.lock().expect("the events page memo mutex is not poisoned");
+    let at = entries.iter().position(|(key, _)| key.matches(inputs))?;
+    let entry = entries.remove(at);
+    let body = entry.1.clone();
+    entries.push(entry);
+    Some(body)
+  }
+
+  /// Keeps `body` for the request's inputs, evicting the page served longest ago.
+  fn keep(&self, inputs: &EventsPageInputs<'_>, body: Bytes) {
+    if body.len() > EVENTS_PAGE_MEMO_MAX_BODY_BYTES {
+      return;
+    }
+    let key = EventsPageKey {
+      session_id: inputs.session_id.to_string(),
+      before: inputs.before,
+      limit: inputs.limit,
+      archive_offset: inputs.archive_offset,
+      events: inputs.events,
+    };
+    let mut entries = self.entries.lock().expect("the events page memo mutex is not poisoned");
+    entries.push((key, body));
+    while entries.len() > EVENTS_PAGE_MEMO_ENTRIES {
+      entries.remove(0);
+    }
+  }
+}
+
 async fn session_events(
   State(features): State<Arc<FeatureContext>>,
   AxumPath(session_id): AxumPath<String>,
@@ -626,11 +710,38 @@ async fn session_events(
   }
 
   let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
-  let payload = match events_range_page(&features.store, &session_id, archive_offset, before, limit) {
+  // A session reads its page from the live log, whose identity names the lines behind the answer. A session whose log
+  // is gone builds its page every time, because no identity would keep the memo honest.
+  let events = match live_event_log_identity(&features.store, &session_id) {
+    Ok(Some(events)) => events,
+    Ok(None) => return events_page_response(&features, &session_id, archive_offset, before, limit, None),
+    Err(error) => return store_error(error),
+  };
+  let inputs = EventsPageInputs { session_id: &session_id, before, limit, archive_offset, events };
+  if let Some(body) = EVENTS_PAGE_MEMO.served(&inputs) {
+    return responses::fast_json_shared(StatusCode::OK, body);
+  }
+  events_page_response(&features, &session_id, archive_offset, before, limit, Some(inputs))
+}
+
+/// The page's response, kept in the memo under `inputs` when the page has an identity to keep it under.
+fn events_page_response(
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  archive_offset: usize,
+  before: i64,
+  limit: usize,
+  inputs: Option<EventsPageInputs<'_>>,
+) -> Response {
+  let payload = match events_range_page(&features.store, session_id, archive_offset, before, limit) {
     Ok(payload) => payload,
     Err(error) => return store_error(error),
   };
-  responses::fast_json(StatusCode::OK, &payload)
+  let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&payload));
+  if let Some(inputs) = inputs {
+    EVENTS_PAGE_MEMO.keep(&inputs, body.clone());
+  }
+  responses::fast_json_shared(StatusCode::OK, body)
 }
 
 /// The messages of the page that ends at or before `before`, an absolute event index whose space counts the archived
@@ -2193,6 +2304,55 @@ backends:
       assert_eq!(page["next_before"], next_before, "before={before}, limit={limit}");
       assert_eq!(page["has_more"], next_before > 0, "before={before}, limit={limit}");
     }
+  }
+
+  async fn events_page_body(features: &Arc<FeatureContext>, session_id: &str, query: &str) -> Value {
+    let response = session_events(
+      State(Arc::clone(features)),
+      AxumPath(session_id.to_string()),
+      Request::builder()
+        .uri(format!("/api/sessions/{session_id}/events?{query}"))
+        .body(Body::empty())
+        .expect("the events request builds"),
+    )
+    .await;
+    let (status, body) = answer(response).await;
+    assert_eq!(status, StatusCode::OK);
+    body
+  }
+
+  /// The events page memo: a repeat request serves the body it built until the live log grows past what the page
+  /// covers, then the page rebuilds. A `before` past the log's end names the newest page, so an appended event lands
+  /// in it.
+  #[tokio::test]
+  async fn a_repeat_events_page_serves_its_body_until_the_log_grows() {
+    let (_home, features) = feature_context();
+    let meta = create_node(&features.store, "events-page-memo", None, TaskProfile::Manager).await;
+    for turn in 0..3 {
+      features
+        .store
+        .append_chat_event(
+          &meta.id,
+          json!({"type": "user", "id": format!("u{turn}"), "content": format!("question {turn}")}),
+        )
+        .await
+        .unwrap();
+    }
+    let page = events_page_body(&features, &meta.id, "before=1000&limit=40").await;
+    assert_eq!(page["messages"].as_array().unwrap().len(), 3);
+    assert_eq!(
+      events_page_body(&features, &meta.id, "before=1000&limit=40").await,
+      page,
+      "an unchanged log keeps the body it built"
+    );
+
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "id": "u3", "content": "question 3"}))
+      .await
+      .unwrap();
+    let grown = events_page_body(&features, &meta.id, "before=1000&limit=40").await;
+    assert_eq!(grown["messages"].as_array().unwrap().len(), 4, "a grown log rebuilds the page");
   }
 
   #[test]

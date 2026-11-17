@@ -48,6 +48,11 @@ pub fn fast_json_rendered(status: StatusCode, body: Vec<u8>) -> Response {
   bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(body))
 }
 
+/// The fast JSON response over a body a memo keeps: a repeat request hands out the one buffer it holds.
+pub fn fast_json_shared(status: StatusCode, body: Bytes) -> Response {
+  bytes_response(status, mimetypes_table::APPLICATION_JSON, body)
+}
+
 /// The error-status rendering: `{"detail": <reason phrase>}`.
 pub fn http_exception(status: StatusCode) -> Response {
   http_exception_with_detail(status, status.canonical_reason().expect("every raised status has a reason phrase"))

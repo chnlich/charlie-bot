@@ -402,7 +402,7 @@ impl CompactValue {
   /// Insert or replace one object field in insertion order: an existing key keeps its position.
   ///
   /// # Panics
-  /// Panics when this is not an object; call [`CompactValue::is_object`] first.
+  /// Panics when this is not an object. Call [`CompactValue::is_object`] first.
   pub fn insert(&mut self, name: &str, value: Value) {
     let value = Self::from_value(&value);
     let Self::Object(entries) = self else { panic!("insert targets an object") };
@@ -421,7 +421,7 @@ impl CompactValue {
     matches!(self, Self::Str(_))
   }
 
-  /// The element count of an array or object; other forms have no elements.
+  /// The element count of an array or object. Other forms have no elements.
   #[must_use]
   pub fn len(&self) -> usize {
     match self {
@@ -431,7 +431,7 @@ impl CompactValue {
     }
   }
 
-  /// Whether the value holds no elements; scalars are empty.
+  /// Whether the value holds no elements. Scalars are empty.
   #[must_use]
   pub fn is_empty(&self) -> bool {
     self.len() == 0

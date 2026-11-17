@@ -13,7 +13,7 @@ use crate::metadata::MetadataReadError;
 use crate::v1_session_conversion::{CONVERSION_SCRIPT, V1_SESSION_CONVERSION_GUIDANCE};
 
 /// The count of session directories whose metadata has no non-null `profile` field. The directories are read in
-/// parallel; the first unreadable one in directory order fails the count.
+/// parallel. The first unreadable one in directory order fails the count.
 pub fn count_v1_sessions(sessions_dir: &Path) -> Result<usize, String> {
   if !sessions_dir.is_dir() {
     return Ok(0);

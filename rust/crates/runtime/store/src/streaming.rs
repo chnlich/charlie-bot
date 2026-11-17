@@ -26,7 +26,7 @@ pub const APPEND: &str = "append";
 pub const LENGTH: &str = "length";
 
 /// The stream frame field holding the thinking text to append to the page's held thinking. A frame that extends the
-/// earlier thinking carries only the new text; a frame that replaces it carries the whole buffer.
+/// earlier thinking carries only the new text. A frame that replaces it carries the whole buffer.
 pub const THINKING_APPEND: &str = "thinking_append";
 
 /// The stream frame field holding the thinking's UTF-16 length after the frame.
@@ -276,7 +276,7 @@ fn flush_pending_frame(channel: &mut ChannelState) {
 }
 
 /// Merge a stream frame into the window's pending one. A stream frame carries only the text added since the
-/// previous frame, so the appended text of the two frames adds up; every other field takes the newer value.
+/// previous frame, so the appended text of the two frames adds up. Every other field takes the newer value.
 fn merge_stream_frames(mut previous: Value, next: Value) -> Value {
   let Some(next_object) = next.as_object() else { return next };
   let Some(previous_object) = previous.as_object_mut() else { return next };

@@ -158,7 +158,7 @@ impl Store {
     Ok(Some((cached.generation, Arc::clone(&cached.identity), events)))
   }
 
-  /// The cached live events, or the log file's identity while the cache is cold; a cold cache stays cold.
+  /// The cached live events, or the log file's identity while the cache is cold. A cold cache stays cold.
   ///
   /// The identity is read under the session lock that every append holds, so it names a file that holds every event
   /// appended before the read.
@@ -282,7 +282,7 @@ impl Store {
   /// count the transcript latency tests pin.
   pub fn read_ndjson_compact(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
     let events = ndjson::read_file_compact(path)?;
-    // The census counts the bytes of the file that holds the log; a log neither file holds contributes none.
+    // The census counts the bytes of the file that holds the log. A log neither file holds contributes none.
     let bytes = run_logs::stored_metadata(path).ok().flatten().map_or(0, |metadata| metadata.size());
     self.history_work.run_event_bytes_read.fetch_add(bytes, Ordering::Relaxed);
     Ok(events)
@@ -406,7 +406,7 @@ impl Store {
     Ok((out, start > 0))
   }
 
-  /// Read `[start, end)` without copying cached live events; archived histories retain the existing range reader.
+  /// Read `[start, end)` without copying cached live events. Archived histories retain the existing range reader.
   pub fn load_chat_events_shared_range_sync(
     &self,
     session_id: &str,
@@ -774,7 +774,7 @@ impl Store {
   /// `\n` split keeps the blank lines the whole-file read keeps, so a line's index is the same either way.
   ///
   /// The count names how many lines the tail holds, so an append between the count and the read would shift which
-  /// lines the window returns. The signature the count was taken under is checked again after the read; a log that
+  /// lines the window returns. The signature the count was taken under is checked again after the read. A log that
   /// moved falls back to [`Self::live_lines_from_checkpoint`], whose byte names the line the read starts at.
   fn live_tail_lines_newline_split(
     &self,
@@ -1016,7 +1016,7 @@ impl Store {
   }
 
   /// Logs a whole-log chat-events load of [`WHOLE_LOG_LOGGED_BYTES`] or more with its file, size and wall time, so a
-  /// slow boot names the log it waited on. One line per large load; grepping the event name counts them.
+  /// slow boot names the log it waited on. One line per large load. Grepping the event name counts them.
   fn log_whole_log_load(path: &Path, started: Instant) {
     let bytes = std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
     if bytes >= WHOLE_LOG_LOGGED_BYTES {
@@ -1469,7 +1469,7 @@ fn visit_file_facts_from_end_with_span<T>(
   Ok((value, walk.mapped_span()))
 }
 
-/// Visit one line when its type is in `types`; a line whose first bytes prove another type is skipped unparsed.
+/// Visit one line when its type is in `types`. A line whose first bytes prove another type is skipped unparsed.
 fn visit_line_facts<T>(line: &[u8], types: &[&str], visit: &mut impl FnMut(ChatEvent) -> Option<T>) -> Option<T> {
   let head = &line[..line.len().min(TYPE_HEAD_PROOF_BYTES)];
   if type_head_verdict(head, types) == Some(false) {
@@ -1544,7 +1544,7 @@ fn string_value_after_key(head: &[u8], mut cursor: usize) -> Option<(&[u8], usiz
 
 /// The last `take` physical lines of a log, split on `\n` only, or `None` when the tail window does not hold them.
 ///
-/// The first line of the window is dropped because the window may start inside it; a window that starts on a line
+/// The first line of the window is dropped because the window may start inside it. A window that starts on a line
 /// boundary loses one whole line to that rule, which only makes the caller's fallback likelier. A trailing newline
 /// leaves no line of its own, as in the whole-file read.
 fn read_ndjson_tail_physical_lines(

@@ -147,7 +147,7 @@ impl FactCheckpoint {
     let table_start = facts_end + 1;
     let lines_start = table_start.checked_add(usize::try_from(checkpoint.table_bytes).ok()?)?;
     let lines_end = lines_start.checked_add(usize::try_from(checkpoint.index_bytes).ok()?)?;
-    // A file shorter than its header names was torn by a writer that stopped; a longer one was extended by hand.
+    // A file shorter than its header names was torn by a writer that stopped. A longer one was extended by hand.
     if lines_end != bytes.len() || (lines_end > lines_start && bytes[lines_end - 1] != b'\n') {
       return None;
     }
@@ -289,7 +289,7 @@ fn encode_event(event: &SharedChatEvent, line: &mut String) {
 }
 
 /// The event lines the checkpoint file holds, in fold order. A chat-content stand-in is one [`STAND_IN_TAG`] line,
-/// which the resume builds without a JSON parse; any other event keeps its compact JSON line.
+/// which the resume builds without a JSON parse. Any other event keeps its compact JSON line.
 #[cfg(test)]
 pub(crate) fn encode_events<'a>(events: impl IntoIterator<Item = &'a SharedChatEvent>) -> String {
   let mut text = String::new();

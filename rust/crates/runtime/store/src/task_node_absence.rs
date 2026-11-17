@@ -129,7 +129,7 @@ fn file_holds_task_event(path: &Path) -> StoreResult<bool> {
       read += more;
       piece.truncate(read);
     }
-    // A piece that ends inside the log is scanned up to its last newline; a writer that truncated the log under the
+    // A piece that ends inside the log is scanned up to its last newline. A writer that truncated the log under the
     // read leaves no such line, and then the piece's bytes are all the scan has.
     let end = if offset + read == length {
       read
@@ -186,7 +186,7 @@ fn type_value(rest: &[u8], value: &mut [u8; MAX_EVENT_TYPE_LEN]) -> Option<usize
           b'u' => {
             let code = hex4(rest.get(index + 1..index + 5)?)?;
             index += 4;
-            // Only an ASCII escape can spell a type name; any other code unit is written as a byte no name holds.
+            // Only an ASCII escape can spell a type name. Any other code unit is written as a byte no name holds.
             u8::try_from(code).unwrap_or(0xff)
           }
           _ => return None,

@@ -74,7 +74,7 @@ pub trait SequenceListingFields: Send + Sync {
   /// The ids the controllers bind, or `None` when a controller reads every id a listing holds.
   ///
   /// A listing asks only about these ids instead of building one id string per listed session. The answer must name
-  /// every id [`listing_fields`](Self::listing_fields) would return a field for; `None` keeps the full listing.
+  /// every id [`listing_fields`](Self::listing_fields) would return a field for. `None` keeps the full listing.
   fn bound_listing_ids(&self) -> Option<Vec<String>> {
     None
   }
@@ -196,7 +196,7 @@ pub(crate) struct CachedSortedListing {
 }
 
 pub(crate) struct CachedSubtreeRoots {
-  /// The memoized metadata corpus the maps were built from; a different corpus rebuilds them.
+  /// The memoized metadata corpus the maps were built from. A different corpus rebuilds them.
   pub(crate) metadata_snapshot: Arc<Vec<Arc<SessionMetadata>>>,
   pub(crate) sequence: Arc<HashMap<String, String>>,
   pub(crate) views: Arc<HashMap<String, HashMap<String, String>>>,

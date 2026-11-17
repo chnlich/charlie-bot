@@ -42,7 +42,7 @@ pub use charliebot_core::run_kind::RunKind;
 
 pub use crate::layout::{DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RUNS_DIR_NAME, THREADS_DIR_NAME};
 pub const RUN_METADATA_NAME: &str = METADATA_FILE_NAME;
-// The log-file names live in `run_logs`, which resolves each name to its plain or compressed file; the readers that
+// The log-file names live in `run_logs`, which resolves each name to its plain or compressed file. The readers that
 // name a log file import them here.
 pub use crate::run_logs::{RAW_LOG_NAME, RUN_EVENTS_NAME};
 pub const STDOUT_LOG_NAME: &str = "stdout.log";
@@ -94,7 +94,7 @@ pub fn run_record_text(run: &RunRecord) -> String {
 }
 
 /// Write one run's metadata file as `record` rendered under `style`, replacing the file. The release helper's seed
-/// writes its own check's record this way, as a one-line JSON dump; the store's own saves write the model
+/// writes its own check's record this way, as a one-line JSON dump. The store's own saves write the model
 /// dump through `Store::write_run_record`.
 pub fn write_run_metadata(path: &Path, record: &Value, style: &JsonStyle) -> std::io::Result<()> {
   fs::write(path, text_repr::json_dumps(record, style))
@@ -102,7 +102,7 @@ pub fn write_run_metadata(path: &Path, record: &Value, style: &JsonStyle) -> std
 
 // The run event log (`events.jsonl`, `RUN_EVENTS_NAME`): one JSON value per line. This module owns the line's
 // bytes, its two decodes and the newest-first walk of a log. The strict decode fails a line that is not one JSON
-// value; the skip contract drops such a line.
+// value. The skip contract drops such a line.
 
 /// One persisted event as its log line: compact UTF-8 JSON and a newline.
 pub fn event_line(event: &Value) -> Vec<u8> {
@@ -112,7 +112,7 @@ pub fn event_line(event: &Value) -> Vec<u8> {
 }
 
 /// The one strict decode of a run event line: the line's JSON value. A blank line or a line that is not JSON is the
-/// caller's error to give; a value that is not an object is still a value.
+/// caller's error to give. A value that is not an object is still a value.
 pub fn decode_event_line(line: &str) -> Result<Value, serde_json::Error> {
   serde_json::from_str(line)
 }
@@ -135,7 +135,7 @@ pub fn parse_event_line(raw: &[u8]) -> Option<Value> {
 pub enum EventReadError {
   /// The file could not be opened or read. A `NotFound` error means the log is missing.
   Io(std::io::Error),
-  /// A line of the log is not one JSON value; the error is that line's parse error.
+  /// A line of the log is not one JSON value. The error is that line's parse error.
   Json(serde_json::Error),
 }
 
@@ -159,7 +159,7 @@ pub fn read_event_values(path: &Path) -> Result<Vec<Value>, EventReadError> {
   text.lines().map(|line| decode_event_line(line).map_err(EventReadError::Json)).collect()
 }
 
-/// A run event log's decompressed bytes under `run_logs` resolution; neither file existing is `NotFound`, so the
+/// A run event log's decompressed bytes under `run_logs` resolution. Neither file existing is `NotFound`, so the
 /// callers that read a missing log as "no events" keep that decision.
 fn read_log_bytes_or_missing(path: &Path) -> Result<Vec<u8>, EventReadError> {
   let Some(log) = run_logs::resolve(path) else {
@@ -208,7 +208,7 @@ pub struct EventScanStats {
 }
 
 impl<'k> NewestFirstEvents<'k> {
-  /// Read or map `path` for a walk of the events `keep_types` names; a missing log has no events.
+  /// Read or map `path` for a walk of the events `keep_types` names. A missing log has no events.
   pub fn open(path: &Path, keep_types: &'k [&'k str]) -> anyhow::Result<Self> {
     let map = run_logs::read_bytes(path).with_context(|| format!("opening event log {}", path.display()))?;
     let end = map.as_ref().map_or(0, |map| map.len());
@@ -523,7 +523,7 @@ pub struct StopResult {
 /// The result of a new stop request.
 pub type StopRequest = StopResult;
 
-/// The boundary of a run page cursor. The cursor is `s`, `i`, and `d` (only when descending); unknown keys are
+/// The boundary of a run page cursor. The cursor is `s`, `i`, and `d` (only when descending). Unknown keys are
 /// ignored.
 #[derive(Deserialize)]
 struct RunCursor {
@@ -533,7 +533,7 @@ struct RunCursor {
   d: Option<Value>,
 }
 
-/// The canonical run order, `(started_at, id)`; a run without a start time sorts as the earliest.
+/// The canonical run order, `(started_at, id)`. A run without a start time sorts as the earliest.
 pub fn run_sort_key(run: &RunRecord) -> (UtcDateTime, String) {
   let started_at = run
     .started_at
@@ -771,7 +771,7 @@ impl Store {
     self.node_state(session_id)?.display_state(&run, &mut HostBoot::default())
   }
 
-  /// Return every structural-change blocker in chronological run order; an empty list means none.
+  /// Return every structural-change blocker in chronological run order. An empty list means none.
   /// Callers collect all of them.
   pub fn run_blockers(&self, session_id: &str) -> StoreResult<Vec<RunBlocker>> {
     let mut blockers = Vec::new();
@@ -1308,7 +1308,7 @@ fn event_input_ids(event: &ChatEvent) -> Vec<String> {
 }
 
 /// The outcome of the run's last run_finished fact. None when the run has no finish fact or its last one carries no
-/// outcome; an outcome string outside the known set is an error.
+/// outcome. An outcome string outside the known set is an error.
 pub fn terminal_outcome<T: AsRef<ChatEvent>>(events: &[T], run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
   let event = finish_facts(events, run_id).next_back();
   match event.and_then(|event| event.get("outcome")).and_then(CompactValue::as_str) {
@@ -1321,7 +1321,7 @@ pub fn terminal_outcome<T: AsRef<ChatEvent>>(events: &[T], run_id: &str) -> Stor
 }
 
 /// Whether a durable `run_stop_requested` fact exists for the run, and for one request id when one is given. This is
-/// the pure fact scan behind the stop checks; the task tree reads the same facts through it.
+/// the pure fact scan behind the stop checks. The task tree reads the same facts through it.
 pub fn stop_requested_in_events<T: AsRef<ChatEvent>>(events: &[T], run_id: &str, request_id: Option<&str>) -> bool {
   events.iter().any(|event| {
     let event = event.as_ref();

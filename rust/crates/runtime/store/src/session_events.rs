@@ -411,7 +411,7 @@ mod tests {
     assert_eq!(seeded.len(), 2, "the aggregator seed holds the held append");
   }
 
-  /// Renderers under the given event types, each rendering nothing; the other hooks stay empty.
+  /// Renderers under the given event types, each rendering nothing. The other hooks stay empty.
   struct RendererHook(Vec<&'static str>);
 
   impl RuntimeEventHooks for RendererHook {
@@ -442,7 +442,7 @@ mod tests {
     }
   }
 
-  /// Drain every frame already queued on a subscription; a frame is queued before its send returns.
+  /// Drain every frame already queued on a subscription. A frame is queued before its send returns.
   async fn drain_frames(subscription: &mut Subscription) -> Vec<Value> {
     let mut frames = Vec::new();
     while let Ok(Some(frame)) = tokio::time::timeout(std::time::Duration::from_millis(1), subscription.recv()).await {
@@ -632,7 +632,7 @@ mod tests {
     assert_eq!(store.load_chat_events_sync("synthetic").unwrap().len(), 1);
   }
 
-  /// Counts the after-turn requests the store makes; it starts no work.
+  /// Counts the after-turn requests the store makes. It starts no work.
   #[derive(Default)]
   struct CountingAfterTurnHook {
     requests: AtomicUsize,
@@ -879,7 +879,7 @@ mod tests {
       .await
       .unwrap();
     let frames = drain_frames(&mut subscription).await;
-    // Only the new event's delta is broadcast; the four events persisted above stay silent.
+    // Only the new event's delta is broadcast. The four events persisted above stay silent.
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["type"], "message");
     assert_eq!(frames[0]["message"]["role"], "user");

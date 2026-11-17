@@ -1,7 +1,7 @@
 //! The layout of one session directory, `sessions/<id>/`: the paths the store builds inside it.
 //!
 //! Each function takes the session directory, so a caller holding only the sessions root joins the session id first.
-//! This module owns the directory names; `run_records` re-exports the ones it uses. The metadata file name is owned by
+//! This module owns the directory names. `run_records` re-exports the ones it uses. The metadata file name is owned by
 //! `charliebot_core::metadata_slot`.
 
 use std::path::{Path, PathBuf};

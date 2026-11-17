@@ -253,7 +253,7 @@ impl ToolRows {
       .attach_output(output, is_error);
   }
 
-  /// Change the row with this tool_use id. Returns the update frames of a committed draft that changed; the open
+  /// Change the row with this tool_use id. Returns the update frames of a committed draft that changed. The open
   /// draft changes in place and is rendered by the caller's next frame.
   pub fn update_row<F: FnOnce(&mut ToolRow)>(&mut self, id: &str, change: F) -> Vec<Value> {
     if let Some(row) = find_mut(&mut self.draft, id) {

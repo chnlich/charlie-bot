@@ -408,7 +408,7 @@ pub(crate) struct TreeIndex {
 
 /// What one session contributes to the tree index: the two files the index's metadata and task state come from.
 ///
-/// The metadata file carries the parent, the profile, the status and the archive offset; the live history's identity
+/// The metadata file carries the parent, the profile, the status and the archive offset. The live history's identity
 /// carries the newest lifecycle fact, and the archive segments the state walk reads behind it. The archive segments
 /// move only in the write that replaces the live log and raises the archive offset, so both of them are read here. Equal
 /// inputs on every session mean an equal index.
@@ -422,7 +422,7 @@ pub(crate) struct TreeIndexInput {
 /// The most ancestors one chain walk follows before it reports the chain as overlong.
 pub(crate) const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 
-/// The metadata of one indexed node; a node the index lacks answers its 404.
+/// The metadata of one indexed node. A node the index lacks answers its 404.
 pub(crate) fn index_meta<'a>(index: &'a TreeIndex, session_id: &str) -> StoreResult<&'a SessionMetadata> {
   index
     .metas

@@ -99,12 +99,14 @@ function roundButtonRows(entries) {
   return rows;
 }
 
-// The row an empty For you shows: one button that switches the view to Everything.
+// The row an empty For you shows: one button that switches the view to Everything. The line names
+// that view, because it is the pane's only pointer to the record, and the underline marks the button
+// at rest: the hover tone is the only other cue, and a touch screen has none.
 function buildEmptyLine() {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'for-you-empty block w-full py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors';
-  btn.textContent = 'Nothing for you yet';
+  btn.innerHTML = 'Nothing for you yet &middot; <span class="underline">open Everything</span>';
   btn.onclick = () => setChatView(EVERYTHING);
   return btn;
 }

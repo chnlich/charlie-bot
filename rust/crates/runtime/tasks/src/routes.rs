@@ -22,8 +22,9 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, COLD_READ_FIELD, ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD,
-  SessionMetadata, TASK_TYPE_FIELD, TaskProfile, TaskSpec, TaskType,
+  BASE_BRANCH_FIELD, COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD,
+  ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD, SessionMetadata, TASK_TYPE_FIELD, TaskProfile,
+  TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError, TaskCaller};
@@ -155,11 +156,11 @@ const DELEGATE_TASK_TYPE: &[&str] = TaskType::NAMES;
 pub const COLD_READ_SPEC_CLASS_NAME: &str = "ColdReadSpec";
 
 /// The fields of the store's `ColdReadSpec` model. The delegate route requires the model and the session create route
-/// accepts it as optional, so both read this one field list.
+/// accepts it as optional, so both read this one field list, and each field's name comes from the model's owner.
 pub const COLD_READ_FIELDS: &[Field] = &[
-  Field::required("page_path", FieldType::String),
-  Field::required("genre", FieldType::String),
-  Field::required("trigger", FieldType::String),
+  Field::required(COLD_READ_PAGE_PATH_FIELD, FieldType::String),
+  Field::required(COLD_READ_GENRE_FIELD, FieldType::String),
+  Field::required(COLD_READ_TRIGGER_FIELD, FieldType::String),
 ];
 const COLD_READ_BODY: BodyModel = BodyModel::required(COLD_READ_FIELDS).forbid_extra();
 const DELEGATE_INVOCATION_FIELDS: &[Field] = &[

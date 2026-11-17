@@ -16,11 +16,11 @@
    wider than the bubble inside it. On a phone the code box is 264 px at 390 px, and a 54-character
    command line is 408 px there, so the block shows its first 35 characters and cuts the rest at its
    edge — no ellipsis, no scrollbar and no other sign that the line continues. The chat's tool output
-   already wraps at every width (`whitespace-pre-wrap break-words` in rendering.js); a phone wraps a
+   already wraps at every width (`whitespace-pre-wrap break-words` in rendering.js). A phone wraps a
    fenced block the same way, at its spaces, and a token no space separates still breaks, as an
    inline code span's does. `word-break: normal` keeps the spaces as the break points the inherited
    break-all would ignore. Above 768 px the block keeps the scroll: there it holds the whole line,
-   and its scrollbar shows. No row, strip or label is added; the block grows the lines the text
+   and its scrollbar shows. No row, strip or label is added. The block grows the lines the text
    needs. */
 @media (max-width: 768px) {
   .prose-msg pre code { white-space: pre-wrap; word-break: normal; overflow-wrap: break-word; }
@@ -57,7 +57,7 @@
 .prose-msg th { word-break: keep-all; }
 .prose-msg td { word-break: normal; }
 /* A message bubble clips its overflow, so a message with a table scrolls
-   horizontally; a table wider than the bubble keeps every column reachable. */
+   horizontally. A table wider than the bubble keeps every column reachable. */
 .prose-msg:has(table) { overflow-x: auto; }
 /* A chat bubble keeps a readable measure on a wide window. The user bubble takes
    75% of the message pane and the agent bubble 90%. At 1440 px those shares draw
@@ -98,7 +98,7 @@
    rgba(100,116,139,.28) on the row renders 1.37:1 and rgba(100,116,139,.35) on the fold bar 1.51:1,
    under the 3:1 floor WCAG 1.4.11 sets for a control boundary. Both fills composite to the list's own
    slate-900, so the boundary is the only mark that the row or the bar opens. slate-500 draws 3.75:1
-   there at rest and slate-400 draws 6.96:1 under the pointer; on the hover fills they draw 3.19:1 and
+   there at rest and slate-400 draws 6.96:1 under the pointer. On the hover fills they draw 3.19:1 and
    5.92:1. */
 .turn-row, .turn-fold-bar { border-color: #64748b; }
 .turn-row:hover, .turn-fold-bar:hover { border-color: #94a3b8; }
@@ -167,7 +167,7 @@
    the spacers stand for. A space-y-3 margin on the spacer itself would add
    height no row owns. */
 #messages > .turn-spacer { margin-top: 0; }
-/* The turn engine is the scroll-anchoring authority; Chrome's own scroll
+/* The turn engine is the scroll-anchoring authority. Chrome's own scroll
    anchoring fights its spacer corrections, and its scroll corrections must
    not chain to the page. */
 #messages { overflow-anchor: none; overscroll-behavior: contain; }
@@ -176,12 +176,12 @@
    padding, so the half-drawn line starts exactly at the For you / Everything / Status labels' bottom edge: at
    390 px and 1440 px the two touch with no gap, and the switcher reads as drawn over the text. A bottom padding
    of the same 12 px the row already holds above the labels keeps the clipped line clear of them.
-   No row, strip or control is added; the labels keep their place. */
+   No row, strip or control is added. The labels keep their place. */
 #chat-view-toggle { padding-bottom: 0.75rem; }
 .turn-collapse:hover { color: #cbd5e1; }
 /* A round's controls — clone, Elon-e, explain, the two ratings and Collapse — draw a 14 px glyph in a
    2 px pad. That is an 18 px box, under the 24 px pointer floor. Each takes a 24 px box with its glyph
-   centred; the separator row grows 6 px and keeps its hairlines. */
+   centred. The separator row grows 6 px and keeps its hairlines. */
 .round-buttons > button,
 .turn-collapse {
   display: inline-flex;
@@ -230,7 +230,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The session search's clear control (index.html): the field's 14 px × in a 24 px box at its right
    end, the pointer floor the sidebar's other controls hold. The glyph is the control's only mark, so
    it takes slate-400, which draws 5.71:1 on the field's slate-800 and stays the tone the field's
-   placeholder keeps; the hover reads slate-200. The field's right padding holds the box clear of the
+   placeholder keeps. The hover reads slate-200. The field's right padding holds the box clear of the
    text. The control shows only while the field holds a query: :placeholder-shown is the empty field,
    so the idle sidebar carries no extra control. */
 #sidebar-search-clear {
@@ -242,19 +242,19 @@ body.resizing { cursor: col-resize; user-select: none; }
 #sidebar-search-clear:hover { color: #e2e8f0; background: rgba(148, 163, 184, 0.16); }
 #sidebar-search:placeholder-shown ~ #sidebar-search-clear { display: none; }
 /* The field's text ends at the control's box instead of running under it. The template keeps px-3,
-   whose right padding is the 12 px the left keeps; this rule widens that side only. */
+   whose right padding is the 12 px the left keeps. This rule widens that side only. */
 #sidebar-search { padding-right: 2rem; }
 /* The chat page's field placeholders read in the slate-400 tone. Their placeholder-slate-500 class draws
-   3.07:1 on the slate-800 field, under the 4.5:1 floor for text this size; slate-400 renders 5.71:1. */
+   3.07:1 on the slate-800 field, under the 4.5:1 floor for text this size. slate-400 renders 5.71:1. */
 #auth-key-input::placeholder, #sidebar-search::placeholder, #msg-input::placeholder { color: #94a3b8; }
 /* The chat page's fields carry the 3:1 boundary floor the diff page's fields meet. Their border-slate-600
    outline draws rgb(71, 85, 105): 2.15:1 on the sidebar and 2.36:1 on the page, and the field's slate-800
    fill differs from both surfaces by 1.11:1 and 1.22:1, so the outline is the only mark of the box.
-   slate-500 draws 3.42:1 and 3.07:1; the blue focus border still wins over this resting color. */
+   slate-500 draws 3.42:1 and 3.07:1. The blue focus border still wins over this resting color. */
 #new-session-backend:not(:focus), #sidebar-search:not(:focus), #msg-input:not(:focus) { border-color: #64748b; }
 /* The composer's attach and overflow controls draw the same bordered box as the microphone beside them.
    Their slate-600 boundary draws 2.36:1 on the input area's slate-900, under the 3:1 floor a control's
-   boundary meets; slate-500 draws 3.75:1, the tone the microphone and the message box rest at. The hover
+   boundary meets. slate-500 draws 3.75:1, the tone the microphone and the message box rest at. The hover
    step takes slate-400, as the microphone's does. The attach button is the menu's first child: a package
    appends its own entries after it, and those keep the border their own sheet sets. */
 #input-area #overflow-menu > button:first-child,
@@ -262,7 +262,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 #input-area #overflow-menu > button:first-child:hover,
 #input-area .overflow-toggle:hover { border-color: #94a3b8; }
 /* The Set Group dialog's field sits on a slate-700 fill. slate-500 renders 2.18:1 there and slate-400
-   4.04:1, both under the 4.5:1 floor for the 14 px hint; slate-300 renders 6.97:1. */
+   4.04:1, both under the 4.5:1 floor for the 14 px hint. slate-300 renders 6.97:1. */
 #new-group-input::placeholder { color: #cbd5e1; }
 /* A file link the server found nothing at. Sits next to the link it belongs to, and reads as a
    warning without hiding the link, which stays clickable. */
@@ -319,7 +319,7 @@ main > header > a[title="View JSONL events"]:hover {
 }
 /* The backend badge's switch (session-view.js) is a select whose text-xs line and px-1.5 py-0.5 pad
    draw a 22 px box, under the 24 px pointer floor the header's other controls hold. The select takes a
-   24 px box; the badge's 30 px box holds it without growing the header row. A label wider than the
+   24 px box. The badge's 30 px box holds it without growing the header row. A label wider than the
    badge's bound ellipsizes at its last whole character instead of losing half of one. */
 #backend-badge select { min-height: 24px; max-width: 100%; text-overflow: ellipsis; }
 @media (max-width: 768px) {
@@ -384,7 +384,7 @@ main > header > a[title="View JSONL events"]:hover {
    pointer floor), the row's flex gap is 8px and its horizontal padding 12px.
    One stack pitch is 30px. A hover-revealed box stretches over the row's full
    height, and its flex centering keeps that slot vertically centered in it. The offsets run
-   from the row's padding edge right-to-left in reverse DOM order;
+   from the row's padding edge right-to-left in reverse DOM order.
    nth-last-of-type keeps non-button trailing spans (the archived tree's
    active tag) out of the count. */
 .session-row { position: relative; }
@@ -511,7 +511,7 @@ body { overscroll-behavior: none; }
   .filter-pill { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }
 /* Child report card (rendering.js, child_report): a folded card clamps a long
-   report to three lines and hides its refs; data-folded="false" shows all of it. */
+   report to three lines and hides its refs. data-folded="false" shows all of it. */
 .child-report[data-folded="true"] .child-report-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .child-report[data-folded="true"] .child-report-refs { display: none; }
 .child-report[data-folded="true"] .child-report-less,
@@ -530,5 +530,5 @@ body { overscroll-behavior: none; }
 /* The pill draws its boundary rgba(191,219,254,.45) over its own slate-900/28 fill on the blue-600
    bubble: 1.57:1 against the bubble and 2.27:1 against the fill, under the 3:1 floor for a control
    boundary. blue-200 draws 3.64:1 against the bubble and 5.27:1 against the fill, and 7.10:1 on the
-   hover fill; the label keeps blue-50 at 6.88:1 on the fill. */
+   hover fill. The label keeps blue-50 at 6.88:1 on the fill. */
 .user-msg-more { border-color: #bfdbfe; }

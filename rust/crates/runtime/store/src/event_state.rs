@@ -42,6 +42,12 @@ impl LineIndex {
     self.checkpoints[index.saturating_sub(1)]
   }
 
+  /// The first checkpoint at or after `line`, which starts a line later than `line` does.
+  pub(crate) fn checkpoint_after(&self, line: usize) -> Option<(usize, u64)> {
+    let index = self.checkpoints.partition_point(|(checkpoint, _)| *checkpoint <= line);
+    self.checkpoints.get(index).copied()
+  }
+
   /// Count the line that `byte` starts, opening its checkpoint when its own number is a multiple of the stride or when
   /// the last checkpoint is already a stride behind it.
   ///
@@ -92,6 +98,8 @@ pub(crate) struct EventReadCaches {
   pub(crate) archive_events: StatSignatureMemo<PathBuf, Arc<Vec<SharedChatEvent>>>,
   pub(crate) live_ranges: BoundedMemo<PathBuf, LiveRangeMemo>,
   #[cfg(test)]
+  pub(crate) tail_window_reads: usize,
+  #[cfg(test)]
   pub(crate) tail_bytes_read: usize,
   #[cfg(test)]
   pub(crate) tail_lines_parsed: usize,
@@ -115,6 +123,8 @@ impl Default for EventReadCaches {
       archive_paths: StatSignatureMemo::new(ARCHIVE_MEMO_LIMIT),
       archive_events: StatSignatureMemo::new(ARCHIVE_MEMO_LIMIT),
       live_ranges: BoundedMemo::new(LIVE_RANGE_MEMO_LIMIT),
+      #[cfg(test)]
+      tail_window_reads: 0,
       #[cfg(test)]
       tail_bytes_read: 0,
       #[cfg(test)]

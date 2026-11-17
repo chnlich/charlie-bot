@@ -278,7 +278,8 @@ async function buildWarm(ctx, caseName) {
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_MS);
-    report = await warmReport(tab);
+    // The main side has no offline-shell warm event, so only the after side waits for the stored-copy report.
+    report = ctx.side === 'after' ? await warmReport(tab) : null;
     const now = Date.now();
     const record = { first_open_ms: now, sessions: { [session.id]: now } };
     await tab.evaluate(`localStorage.setItem('charliebot_opened_pages', ${JSON.stringify(JSON.stringify(record))})`);

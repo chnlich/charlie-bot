@@ -22,6 +22,13 @@ pub struct Failure {
   pub detail: String,
 }
 
+impl Failure {
+  /// The failure of `kind` with `detail`.
+  pub fn new(kind: impl Into<String>, detail: impl Into<String>) -> Self {
+    Self { kind: kind.into(), detail: detail.into() }
+  }
+}
+
 /// The failure class of a request that cannot read the server configuration: the `error` name its 500 logs, the same
 /// name `charliebot_core::config::ConfigError` carries.
 pub const CONFIG_ERROR_CLASS: &str = "ConfigError";

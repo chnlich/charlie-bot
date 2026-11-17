@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 use axum::response::Response;
+use charliebot_compat::responses::Failure;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
@@ -29,20 +30,20 @@ pub fn render(
   state: &State,
   now: OffsetDateTime,
   request: &Parts,
-) -> Result<Response, (String, String)> {
-  let cfg = features.config.get().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+) -> Result<Response, Failure> {
+  let cfg = features.config.get().map_err(|error| Failure::new("RuntimeError", error.to_string()))?;
   let logins = &cfg.section::<HostAuthConfig>("host_auth").browser_logins;
-  let mut context = context(state, now, logins).map_err(|error| ("Exception".to_string(), error.to_string()))?;
+  let mut context = context(state, now, logins).map_err(|error| Failure::new("Exception", error.to_string()))?;
   let templating =
-    features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+    features.startup.require::<Templating>().map_err(|error| Failure::new("RuntimeError", error.to_string()))?;
   // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
-  let asset_version = templating.static_asset_version().map_err(|error| ("OSError".to_string(), error.to_string()))?;
+  let asset_version = templating.static_asset_version().map_err(|error| Failure::new("OSError", error.to_string()))?;
   if let Some(object) = context.as_object_mut() {
     object.insert(STATIC_ASSET_VERSION_KEY.to_string(), Value::String(asset_version));
   }
   templating
     .render_page(features, TEMPLATE, &context, request)
-    .map_err(|error| (error.kind().to_string(), error.to_string()))
+    .map_err(|error| Failure::new(error.kind(), error.to_string()))
 }
 
 /// The template context of `host_auth_page`.

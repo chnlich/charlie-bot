@@ -50,7 +50,8 @@ fn login_action_name<'a>(path: &'a str, action: &str) -> Option<&'a str> {
 /// login readback: each idle login's row asks for its own.
 async fn host_auth_page(State(features): State<Arc<FeatureContext>>, request: Parts) -> Response {
   let rendered = tokio::task::spawn_blocking(move || {
-    let state_path = host_auth::default_state_path().map_err(|error| ("Exception".to_string(), error.to_string()))?;
+    let state_path =
+      host_auth::default_state_path().map_err(|error| responses::Failure::new("Exception", error.to_string()))?;
     let state = host_auth::load_state(&state_path);
     page::render(&features, &state, timestamps::utc_now(), &request)
   })
@@ -58,7 +59,7 @@ async fn host_auth_page(State(features): State<Arc<FeatureContext>>, request: Pa
   .expect("rendering the host-auth page does not panic");
   match rendered {
     Ok(response) => response,
-    Err((kind, detail)) => responses::internal_error(&kind, detail),
+    Err(failure) => responses::internal_error(&failure.kind, failure.detail),
   }
 }
 

@@ -158,7 +158,7 @@ impl SweepRow {
   }
 
   /// The row prepared for the apply pass: its verdict, the archive of a dirty worktree's changes, and the processes
-  /// that hold its path. `Skip` leaves the row unchanged; the other variants report what to remove.
+  /// that hold its path. `Skip` leaves the row unchanged. The other variants report what to remove.
   fn prepare_apply(mut self, roots: SweepRoots, now: DateTime<Utc>) -> (Result<PreparedApply>, HashSet<u32>) {
     let mut unreadable = HashSet::new();
     let result = (|| -> Result<PreparedApply> {
@@ -644,7 +644,7 @@ fn has_unsaved_repository(path: &Path) -> Result<bool> {
 }
 
 /// A walk over the scratch trees. It yields every entry below `path` in sorted order, and raises inspection
-/// errors. The root is never walked, because the caller lstats it itself; symlinked directories are listed but
+/// errors. The root is never walked, because the caller lstats it itself. Symlinked directories are listed but
 /// not descended.
 fn scratch_walk(path: &Path) -> Result<impl Iterator<Item = Result<DirEntry>>> {
   let walk = WalkDir::new(path).min_depth(1).sort_by_file_name().into_iter();

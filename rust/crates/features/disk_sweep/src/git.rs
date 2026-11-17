@@ -75,7 +75,7 @@ fn run_git(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result<Ou
     let stdin = child.stdin.take();
     // The input is written while the output is drained: a git that fills its stdout before it reads all of its stdin
     // would otherwise block both pipes. A git that exits before reading its input makes the write fail with a broken
-    // pipe; the exit status carries the error.
+    // pipe. The exit status carries the error.
     let write = async move {
       let Some(bytes) = input else {
         return Ok(());

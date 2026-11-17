@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use charliebot_core::event_types::{
-  AGENT_MESSAGE, EventFields, INPUT_EVENT_ID, MASTER_DONE, NUDGE_OF, WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS,
-  WEB_STATUS_CONFIRMED, WEB_STATUS_REMINDER,
+  AGENT_MESSAGE, EventFields, INPUT_EVENT_ID, MASTER_DONE, NUDGE_OF, OWNER_RUN_ID, WEB_REPLY, WEB_REPLY_NOTICE,
+  WEB_STATUS, WEB_STATUS_CONFIRMED, WEB_STATUS_REMINDER,
 };
 use charliebot_registry::FeatureContext;
 use charliebot_store::MessageProvenance;
@@ -240,7 +240,7 @@ async fn close_request_pending(features: &Arc<FeatureContext>, session_id: &str)
       facts.close_events.iter().map(|event| event.get("request_id").and_then(CompactValue::as_str)).collect();
     Ok(facts.close_requests.iter().any(|request| {
       let request_id = request.get("request_id").and_then(CompactValue::as_str);
-      request.get("owner_run_id").and_then(CompactValue::as_str) == newest_run_id && !closed.contains(&request_id)
+      request.get(OWNER_RUN_ID).and_then(CompactValue::as_str) == newest_run_id && !closed.contains(&request_id)
     }))
   })
   .await

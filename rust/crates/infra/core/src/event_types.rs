@@ -123,6 +123,9 @@ pub const SESSION_GROUP_CHANGED: &str = "session_group_changed";
 pub const TASK_TREE_CHANGED: &str = "task_tree_changed";
 pub const TASK_CREATED: &str = "task_created";
 pub const TASK_CLOSE_REQUESTED: &str = "task_close_requested";
+/// The run that owns a `task_close_requested` fact. Only that run acts on the request, and a later run's start voids
+/// it, so the writer and every reader name the field here.
+pub const OWNER_RUN_ID: &str = "owner_run_id";
 pub const TASK_CLOSED: &str = "task_closed";
 pub const TASK_REOPENED: &str = "task_reopened";
 /// A task moved to another parent. The moved task's chat events carry it; the chat renders nothing for it.

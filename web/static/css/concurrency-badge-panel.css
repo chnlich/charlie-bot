@@ -13,7 +13,7 @@ body.dark .cb-panel { border-color: #334155; background: #1e293b; color: #e2e8f0
 /* A standalone page's bar spans the page's content box, and the body's gutter is 14 px on home and token usage and
    24 px on host auth, the login page and voice recordings. Anchored to the badge there, the 92vw cap leaves the
    panel's left edge 2.9 px inside the content's left edge at 390 px, so the page's glyphs draw a sliver along the
-   panel's edge; on the 24 px gutters the edge lands 16 px out in the gutter instead. Under the cap the panel takes
+   panel's edge. On the 24 px gutters the edge lands 16 px out in the gutter instead. Under the cap the panel takes
    the bar's padding box, so its edges sit on the content's edges at both gutters. The anchor stops being the
    containing block, so the top measures from the bar: the panel starts 6 px below the bar's edge, where the badge's
    own box had put its top 3 px over the bar's bottom border. A wide window keeps the 420 px box on the badge. */

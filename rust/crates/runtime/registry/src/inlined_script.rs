@@ -13,10 +13,11 @@ use crate::inlined_literal::{char_len, escape_end, string_end};
 
 /// The JavaScript `source` with its comments and its insignificant whitespace removed.
 ///
-/// A line comment loses its text and keeps the newline that ends it. A block comment becomes one newline when it
-/// spans lines and, otherwise, the space [`needs_space`] asks for between the bytes around it. A whitespace run
-/// becomes one newline when it holds a line terminator, [`needs_space`]'s space or nothing when it does not, and
-/// nothing where the bytes around it separate themselves ([`terminator_stands`]), so a blank line, a line's
+/// A line comment loses its text, and the line terminator that ends it follows the whitespace rule below. A block
+/// comment becomes one newline when it spans lines and, otherwise, the space [`needs_space`] asks for between the
+/// bytes around it. A whitespace run becomes one newline when it holds a line terminator, [`needs_space`]'s space or
+/// nothing when it does not, and nothing where the bytes around it separate themselves ([`terminator_stands`]),
+/// unless a legacy comment form reads that break ([`legacy_comment_needs_break`]), so a blank line, a line's
 /// indentation and a statement's own end leave no byte and no two tokens join. The scanner follows the literals that
 /// can hold comment text or whitespace. A quoted string ends at its quote or its line's end, a template literal at
 /// its backtick, and a regex literal at its closing slash.
@@ -188,8 +189,9 @@ pub fn without_comments(source: &str) -> String {
 ///
 /// A run that holds a line terminator becomes one newline: the blank line after it and the indentation of the next
 /// line separate no tokens, and the newline the automatic semicolons need is still there. The run leaves no byte at
-/// all where the pair of bytes around it separates itself ([`terminator_stands`]). A run of spaces and tabs becomes
-/// one space where the bytes on either side would otherwise run together, and nothing otherwise.
+/// all where the pair of bytes around it separates itself ([`terminator_stands`]) and no line of the legacy comment
+/// forms depends on the break ([`line_comment_line`]). A run of spaces and tabs becomes one space where the bytes on
+/// either side would otherwise run together, and nothing otherwise.
 fn copy_whitespace(out: &mut String, source: &str, start: usize) -> usize {
   let bytes = source.as_bytes();
   let mut end = start;
@@ -206,13 +208,25 @@ fn copy_whitespace(out: &mut String, source: &str, start: usize) -> usize {
   if continues_html_markup(out, next) {
     out.push(' ');
   } else if line_terminator {
-    if terminator_stands(out.as_bytes().last().copied(), next) {
+    if terminator_stands(out.as_bytes().last().copied(), next) || legacy_comment_needs_break(out, bytes, end) {
       out.push('\n');
     }
   } else if needs_space(out.as_bytes().last().copied(), next) {
     out.push(' ');
   }
   end
+}
+
+/// Whether a legacy comment form on either side of the run reads only while its line stays whole.
+///
+/// The HTML-like script comments hold the rest of their line: `<!--` opens one anywhere, and `-->` is one only after
+/// a line terminator. So the break before a `-->` and the break that ends any such comment stay; joining either would
+/// fold the next line's code into the comment, and the first would read as a `--` and a `>`. A `#!` hashbang is a
+/// comment only at the source's first byte, and joining its line would extend it over the code after it.
+fn legacy_comment_needs_break(out: &str, bytes: &[u8], next: usize) -> bool {
+  let closes = bytes.get(next..).is_some_and(|rest| rest.starts_with(b"-->"));
+  let line = out.rsplit('\n').next().unwrap_or("");
+  closes || line.contains("-->") || line.contains("<!--") || (out.starts_with("#!") && !out.contains('\n'))
 }
 
 /// Whether a line terminator must stand between the bytes `prev` and `next`.
@@ -452,6 +466,18 @@ mod tests {
     assert_eq!(without_comments("f(\n a,\n b\n)"), "f(\na,b)");
     // A `}` that a `/` follows keeps the terminator: only the author knows whether it divides.
     assert_eq!(without_comments("x = {}\n/re/.test(s)"), "x={}\n/re/.test(s)");
+  }
+
+  #[test]
+  fn a_legacy_comment_form_keeps_the_breaks_its_line_needs() {
+    // `-->` is a comment only after a line terminator, and it holds the rest of its line.
+    assert_eq!(without_comments("if (ok) { work();\n-->\n}"), "if(ok){work();\n-->\n}");
+    assert_eq!(without_comments("a();\n--> note\nb();"), "a();\n-->note\nb();");
+    // `<!--` opens a comment that holds the rest of its line as well.
+    assert_eq!(without_comments("if (x) { work();\n<!--\n}"), "if(x){work();<!--\n}");
+    // A hashbang is one only at the source's first byte.
+    assert_eq!(without_comments("#!node\nrun();"), "#!node\nrun();");
+    assert_eq!(without_comments("\nrun();"), "run();");
   }
 
   #[test]

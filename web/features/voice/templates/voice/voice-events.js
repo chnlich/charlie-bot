@@ -64,7 +64,7 @@ function setVoiceButtonState(state) {
 }
 
 // One promise per key: a second caller joins a pending request. The stylesheet
-// and module start together; neither delays the other.
+// and module start together. Neither delays the other.
 function loadVoiceInput() {
   return Promise.all([
     loadPageStyles('voice', ['/static/features/voice/voice-overlay.css']),

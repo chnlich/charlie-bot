@@ -37,8 +37,8 @@
   const FILE_PATH = /\/(?:absolute_filepath|files|file)\//;
   const TOKEN = /[^\s]+/g;
 
-  // Whether a written link reaches this page's own server. The module links and probes only a same-origin URL; a link
-  // to another host or port is another server's, so it asks for nothing.
+  // Whether a written link reaches this page's own server. The module links and probes only a same-origin URL.
+  // A link to another host or port is another server's, so it asks for nothing.
   function sameOrigin(href) {
     try {
       return new URL(href, window.location.href).origin === window.location.origin;
@@ -79,7 +79,7 @@
     }
     if (!namesFileLink(root)) return;
     if (!pending.includes(root)) pending.push(root);
-    // The load reports its own failure; this root stays pending for the next need's retry.
+    // The load reports its own failure. This root stays pending for the next need's retry.
     load().catch(() => {});
   }
 

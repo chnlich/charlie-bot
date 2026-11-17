@@ -21,6 +21,9 @@ use backon::{BackoffBuilder, ExponentialBuilder};
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::headers::bearer_value;
+use charliebot_core::oauth::{
+  ACCESS_TOKEN_FIELD, CLIENT_ID_FIELD, EXPIRES_IN_FIELD, GRANT_TYPE_FIELD, REFRESH_TOKEN_FIELD, REFRESH_TOKEN_GRANT,
+};
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
@@ -316,7 +319,11 @@ impl ClaudeQuotaAccount {
       .http
       .client
       .post(&self.http.token_url)
-      .json(&json!({"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": CLIENT_ID}))
+      .json(&json!({
+        (GRANT_TYPE_FIELD): REFRESH_TOKEN_GRANT,
+        (REFRESH_TOKEN_FIELD): refresh_token,
+        (CLIENT_ID_FIELD): CLIENT_ID
+      }))
       .header(USER_AGENT, user_agent)
       .timeout(HTTP_OAUTH_TIMEOUT)
       .send()
@@ -348,11 +355,11 @@ impl ClaudeQuotaAccount {
     let token: Value = response.json().await.context("the token response is not JSON")?;
     let token = token.as_object().context("the token response is not a JSON object")?;
     let new_access = token
-      .get("access_token")
+      .get(ACCESS_TOKEN_FIELD)
       .and_then(Value::as_str)
       .context("the token response names no access_token")?
       .to_string();
-    let new_refresh = match token.get("refresh_token") {
+    let new_refresh = match token.get(REFRESH_TOKEN_FIELD) {
       Some(value) => value.clone(),
       None => json!(refresh_token),
     };
@@ -598,7 +605,7 @@ fn expires_at_ms(token: &Map<String, Value>) -> Option<i64> {
   if let Some(absolute) = token.get("expires_at").and_then(Value::as_f64) {
     return Some(if absolute > 1e11 { absolute as i64 } else { (absolute * 1000.0) as i64 });
   }
-  token.get("expires_in").and_then(Value::as_f64).map(|relative| ((now_seconds() + relative) * 1000.0) as i64)
+  token.get(EXPIRES_IN_FIELD).and_then(Value::as_f64).map(|relative| ((now_seconds() + relative) * 1000.0) as i64)
 }
 
 /// Replaces the renewed tokens in a credentials file. The file is read again and its other keys are kept in place.

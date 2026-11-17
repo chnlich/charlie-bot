@@ -22,6 +22,7 @@ pub mod logline;
 pub mod memo;
 pub mod metadata_slot;
 pub mod ndjson;
+pub mod oauth;
 pub mod os_error;
 pub mod pacific;
 pub mod parallel_walk;

@@ -314,9 +314,10 @@ async function warmShell(refresh = false) {
   const fetchedFiles = [];
   for (const ref of refs) {
     if (await files.match(ref)) continue;
-    // The warm stores the bodies, so it bypasses the HTTP cache like the shell fetch: a conditional request
-    // can come back as a bodyless 304 from the worker, which is not a file the warm can store.
-    const file = await fetch(ref, {credentials: 'same-origin', cache: 'no-store'});
+    // The warm stores the bodies. force-cache answers from the browser's HTTP cache with the body the page already
+    // loaded, so the file costs the link nothing and opens no connection; a file the cache lacks comes from the
+    // network. A default-mode request can come back as a bodyless 304 from the worker, which the warm cannot store.
+    const file = await fetch(ref, {credentials: 'same-origin', cache: 'force-cache'});
     if (file.status === 401) {
       if (refresh) await dropShell();
       await dropCopies();

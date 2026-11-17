@@ -582,7 +582,7 @@ fn capture_usage_rows_are_absolutely_correct() {
   assert_eq!((count_of(&counts, "Claude Code"), count_of(&counts, "Codex")), (3, 1));
   let rows = page_rows(&mut ledger);
   let claude = row(&rows, "Claude Code", NAME);
-  assert_eq!(claude.calls, 2); // one original + one subagent; the replay is deduped
+  assert_eq!(claude.calls, 2); // one original + one subagent. The replay is deduped
   assert_eq!(
     (claude.in_fresh.int(), claude.cache_write.int(), claude.cache_read.int(), claude.output.int()),
     (150, 30, 40, 35)
@@ -1497,7 +1497,7 @@ fn a_file_at_its_stored_signature_is_never_read() {
     ],
   );
   let counts = capture_round(&mut ledger, &config, &registry);
-  assert_eq!(count_of(&counts, "Claude Code"), 2); // the moved file reads again; only it does
+  assert_eq!(count_of(&counts, "Claude Code"), 2); // the moved file reads again. Only it does
   assert_eq!(count_of(&counts, "Codex"), 0);
   assert_eq!(reads(), vec![home.join("cli/claude/sess1.json")]);
 }

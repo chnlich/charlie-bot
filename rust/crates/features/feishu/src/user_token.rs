@@ -12,6 +12,10 @@ use charliebot_core::config;
 use charliebot_core::credentials::{self, Credentials};
 use charliebot_core::headers::CONTENT_TYPE;
 use charliebot_core::home;
+use charliebot_core::oauth::{
+  ACCESS_TOKEN_FIELD, AUTHORIZATION_CODE_GRANT, GRANT_TYPE_FIELD, REDIRECT_URI_FIELD, REFRESH_TOKEN_FIELD,
+  REFRESH_TOKEN_GRANT,
+};
 use charliebot_core::paths;
 use serde_json::{Value, json};
 
@@ -132,17 +136,17 @@ fn refresh(
 ) -> Result<Refreshed, CliExit> {
   let app_id = required(credentials, "app_id", home)?;
   let app_secret = required(credentials, "app_secret", home)?;
-  let current_refresh = required(credentials, "refresh_token", home)?;
+  let current_refresh = required(credentials, REFRESH_TOKEN_FIELD, home)?;
   let app_token = app_access_token(&app_id, &app_secret, endpoints, &[app_secret.as_str()], client)?;
   let redactions = [app_secret.as_str(), current_refresh.as_str(), app_token.as_str()];
-  let body = json!({"grant_type": "refresh_token", "refresh_token": current_refresh}).to_string();
+  let body = json!({(GRANT_TYPE_FIELD): REFRESH_TOKEN_GRANT, (REFRESH_TOKEN_FIELD): current_refresh}).to_string();
   let request = Request::new(reqwest::Method::POST, &endpoints.refresh_url)
     .header(CONTENT_TYPE, APPLICATION_JSON)
     .bearer(&app_token)
     .body(body.into_bytes());
   let payload = open_json(&request, "Feishu token refresh", &redactions, client)?;
-  let access = data_string(&payload, "access_token", "Feishu token refresh")?;
-  let refresh = data_string(&payload, "refresh_token", "Feishu token refresh")?;
+  let access = data_string(&payload, ACCESS_TOKEN_FIELD, "Feishu token refresh")?;
+  let refresh = data_string(&payload, REFRESH_TOKEN_FIELD, "Feishu token refresh")?;
   store_tokens(home, &access, &refresh)?;
   Ok(Refreshed { access, refresh })
 }
@@ -203,7 +207,7 @@ fn store_tokens(home: &Path, access: &str, refresh: &str) -> Result<(), CliExit>
   let text =
     String::from_utf8(original).map_err(|_| CliExit::error(format!("{} must use UTF-8", paths::display(&path))))?;
   let updated =
-    credentials::with_credential_values(&text, NAME, &[("user_access_token", access), ("refresh_token", refresh)])
+    credentials::with_credential_values(&text, NAME, &[("user_access_token", access), (REFRESH_TOKEN_FIELD, refresh)])
       .map_err(|error| CliExit::error(error.to_string()))?;
   credentials::write_credentials(home, updated.as_bytes()).map_err(|error| CliExit::error(error.to_string()))
 }
@@ -213,7 +217,7 @@ pub(crate) fn consent_url(home: &Path, scopes: &[String], endpoints: &Endpoints)
   let app_id = required(&credentials, "app_id", home)?;
   let query = urlencode(&[
     ("app_id".to_string(), app_id),
-    ("redirect_uri".to_string(), REDIRECT_URI.to_string()),
+    (REDIRECT_URI_FIELD.to_string(), REDIRECT_URI.to_string()),
     ("scope".to_string(), scopes.join(" ")),
   ]);
   Ok(format!("{}?{query}", endpoints.authorize_url))
@@ -226,14 +230,14 @@ pub(crate) fn exchange_code(home: &Path, code: &str, endpoints: &Endpoints) -> R
   let client = request::HttpClient::new()?;
   let app_token = app_access_token(&app_id, &app_secret, endpoints, &[app_secret.as_str()], &client)?;
   let redactions = [app_secret.as_str(), app_token.as_str(), code];
-  let body = json!({"grant_type": "authorization_code", "code": code}).to_string();
+  let body = json!({(GRANT_TYPE_FIELD): AUTHORIZATION_CODE_GRANT, "code": code}).to_string();
   let request = Request::new(reqwest::Method::POST, &endpoints.exchange_url)
     .header(CONTENT_TYPE, APPLICATION_JSON)
     .bearer(&app_token)
     .body(body.into_bytes());
   let payload = open_json(&request, "Feishu code exchange", &redactions, &client)?;
-  let access = data_string(&payload, "access_token", "Feishu code exchange")?;
-  let refresh = data_string(&payload, "refresh_token", "Feishu code exchange")?;
+  let access = data_string(&payload, ACCESS_TOKEN_FIELD, "Feishu code exchange")?;
+  let refresh = data_string(&payload, REFRESH_TOKEN_FIELD, "Feishu code exchange")?;
   store_tokens(home, &access, &refresh)
 }
 

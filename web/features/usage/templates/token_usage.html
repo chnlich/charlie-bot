@@ -182,7 +182,7 @@
 
   <h2><span class="n">1</span>Last week by model <span class="win">{{ ctx.week.label }} {{ zone }}</span></h2>
   <table class="data stack" id="tbl_week">
-    <thead><tr><th>Model</th><th class="l">Platform</th><th>API calls</th><th>Output</th><th>Total</th><th>Share of week</th></tr></thead>
+    {% if ctx.week.models %}<thead><tr><th>Model</th><th class="l">Platform</th><th>API calls</th><th>Output</th><th>Total</th><th>Share of week</th></tr></thead>{% endif %}
     <tbody>
     {%- if not ctx.rows %}<tr class="none"><td colspan="6">The ledger is empty; the next capture fills it.</td></tr>
     {%- elif not ctx.week.models %}<tr class="none"><td colspan="6">No records last week.</td></tr>{% endif %}
@@ -199,7 +199,7 @@
   <p style="color:var(--mut);font-size:13px;margin:0 0 10px">One row per model, in output order. Open a row for its sources,
   and open its accounts from there.</p>
   <table class="data stack" id="tbl_all">
-    <thead><tr><th>Model</th><th>Output</th><th>Total</th><th>Window</th></tr></thead>
+    {% if ctx.rows %}<thead><tr><th>Model</th><th>Output</th><th>Total</th><th>Window</th></tr></thead>{% endif %}
     <tbody>
     {%- if not ctx.rows %}<tr class="none"><td colspan="4">The ledger is empty; the next capture fills it.</td></tr>{% endif %}
     </tbody>

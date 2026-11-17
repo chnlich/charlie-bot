@@ -527,6 +527,18 @@ body { overscroll-behavior: none; }
 .user-msg-fold[data-folded="true"] .user-msg-less-label,
 .user-msg-fold[data-folded="false"] .user-msg-more-label { display: none; }
 .user-msg-more:hover { background: rgba(15, 23, 42, 0.5); }
+/* The bubble clips what runs past its edge, and the rule below makes the open message's control stick
+   to the message list's floor. overflow: hidden would make the bubble the control's scrollport, and a
+   scrollport that never scrolls never moves a sticky child; overflow: clip keeps the clip and leaves the
+   scrolling to the list. */
+.user-msg-bubble { overflow: clip; }
+/* An open message can run several screens past the list's floor, and its control folds the message again.
+   The control sticks to the floor while the message is open, so it stays in reach of the reader who just
+   opened the message and of the reader at its end. A closed message keeps it in the flow under the clamp.
+   Stuck over the message's text, the pill takes an opaque slate-800 fill: the translucent one let the text
+   under it read through the label, which renders blue-50 at 13.3:1 on the fill and 9.4:1 on the hover tone. */
+.user-msg-fold[data-folded="false"] .user-msg-more { position: sticky; bottom: 0.5rem; background: #1e293b; }
+.user-msg-fold[data-folded="false"] .user-msg-more:hover { background: #334155; }
 /* The pill draws its boundary rgba(191,219,254,.45) over its own slate-900/28 fill on the blue-600
    bubble: 1.57:1 against the bubble and 2.27:1 against the fill, under the 3:1 floor for a control
    boundary. blue-200 draws 3.64:1 against the bubble and 5.27:1 against the fill, and 7.10:1 on the

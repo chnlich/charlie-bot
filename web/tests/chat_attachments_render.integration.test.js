@@ -128,6 +128,10 @@ test('renderUserMessageBubble wraps every text in a fold that starts clamped and
   const multiline = Array.from({length: 11}, (_, i) => 'line ' + i).join('\n');
   for (const text of ['one line', multiline]) {
     const html = context.renderUserMessageBubble(text, null, null, null);
+    // The bubble's class names the box its overflow rule clips. The open fold's control sticks to the
+    // message list's floor, and a bubble that became its own scrollport would pin the control instead.
+    assert.match(html, /<div class="user-msg-bubble max-w-\[75%\]/);
+    assert.doesNotMatch(html, /overflow-hidden/);
     assert.match(html, /<div class="user-msg-fold" data-folded="true" data-overflows="false">/);
     assert.match(html, /<div class="user-msg-clamp whitespace-pre-wrap">/);
     // The fold's one control opens the clamp and folds it again: both labels ride in it, and styles.css picks

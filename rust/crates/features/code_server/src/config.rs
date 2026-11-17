@@ -3,9 +3,8 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::config::{ConfigSection, SectionModel};
 use charliebot_core::int_text;
 use charliebot_core::json_loads;
 use charliebot_core::paths;
@@ -32,20 +31,12 @@ fn default_config() -> String {
   format!("{CONFIGS_DIR_NAME}/code-server.yaml")
 }
 
+impl SectionModel for CodeServerConfig {
+  const KEY: &'static str = "code_server";
+}
+
 pub(crate) fn section() -> ConfigSection {
-  ConfigSection { key: "code_server", legacy_keys: LEGACY_KEYS, parse: parse_section, dump: dump_section }
-}
-
-/// Render the section as its model dumps it (`charliebot config get code_server`).
-fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
-  let settings = value.downcast_ref::<CodeServerConfig>().ok_or("the code_server section holds an unexpected value")?;
-  serde_json::to_value(settings).map_err(|error| error.to_string())
-}
-
-fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
-  let settings: CodeServerConfig =
-    serde_yaml::from_value(raw.clone()).map_err(|error| format!("code_server: {error}"))?;
-  Ok(Arc::new(settings))
+  ConfigSection::of::<CodeServerConfig>(LEGACY_KEYS)
 }
 
 /// `code_server_config_path`: `config` with `~` expanded, as given when absolute, else under the repository.
@@ -114,11 +105,11 @@ mod tests {
 
   #[test]
   fn a_section_without_keys_takes_the_defaults_and_an_unknown_key_is_refused() {
-    let defaults = parse_section(&serde_yaml::Value::Mapping(Default::default())).expect("defaults parse");
+    let defaults = (section().parse)(&serde_yaml::Value::Mapping(Default::default())).expect("defaults parse");
     let defaults = defaults.downcast_ref::<CodeServerConfig>().expect("the section holds its type");
     assert_eq!(defaults.bin, None);
     assert_eq!(defaults.config, "configs/code-server.yaml");
     let unknown: serde_yaml::Value = serde_yaml::from_str("bogus: 1").expect("the YAML parses");
-    assert!(parse_section(&unknown).is_err());
+    assert!((section().parse)(&unknown).is_err());
   }
 }

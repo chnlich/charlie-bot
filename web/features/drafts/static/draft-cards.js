@@ -7,7 +7,7 @@
 // operator's account. The one button posts the send route. The three draft
 // events are chat messages: the card is the `draft_registered` message, and a
 // later `draft_sent`, `draft_failed`, or replacing card updates it in place.
-// A sent or superseded card loses its button; a failed card keeps it, and an
+// A sent or superseded card loses its button. A failed card keeps it, and an
 // `unknown` failure tells the operator to check the target before resending.
 // ---------------------------------------------------------------------------
 (function() {
@@ -144,7 +144,7 @@
   }
 
   // The card button: POST the send route and apply its outcome. The server holds the send lock and
-  // owns the outcome event; this only reflects it immediately.
+  // owns the outcome event. This only reflects it immediately.
   async function sendDraft(sessionId, draftId, button) {
     if (button) button.disabled = true;
     const card = findCard(null, draftId);
@@ -206,7 +206,7 @@
     if (!engine || entry.msg.id == null) return false;
     if (!engine.entries.some((candidate) => candidate.msg && candidate.msg.id === entry.msg.id)) return false;
     engine.replaceMessage(entry.msg);
-    // replaceMessage rebuilds the list for Everything; the For-you view needs
+    // replaceMessage rebuilds the list for Everything. The For-you view needs
     // the reproject itself, and a second one is a no-op for Everything.
     engine.reproject('replace');
     return true;

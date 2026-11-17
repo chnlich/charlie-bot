@@ -164,6 +164,9 @@ pub const QUOTA_FAILOVER: &str = "quota_failover";
 pub const QUOTA_FAILOVER_REASON: &str = "reason";
 /// The `quota_failover` field naming the `backends.pools` entry that moved the work to another member.
 pub const QUOTA_FAILOVER_SET: &str = "set";
+/// The `quota_failover` field carrying the instant the member that failed recovers its quota, empty when the change
+/// names none.
+pub const QUOTA_FAILOVER_RECOVERS_AT: &str = "recovers_at";
 /// The `quota_failover` field carrying the handoff summary state of the retry the change started.
 pub const QUOTA_FAILOVER_SUMMARY: &str = "summary";
 /// The [`QUOTA_FAILOVER_SUMMARY`] value of a retry whose handoff summary was assembled.

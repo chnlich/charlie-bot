@@ -126,7 +126,7 @@ impl SlackClient {
     checked_payload(response, REACTIONS_ADD).await
   }
 
-  /// Remove the summon reaction. `no_reaction` already means the desired state.
+  /// The summon reaction's removal. `no_reaction` already means the desired state.
   pub(crate) async fn remove_reaction(&self, channel: &str, name: &str, ts: &str) -> Result<Value> {
     let body = json!({(CHANNEL): channel, "name": name, "timestamp": ts});
     let response = self.json_request(REACTIONS_REMOVE, &self.bot_token, body)?.send().await?;

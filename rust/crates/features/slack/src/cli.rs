@@ -100,8 +100,8 @@ struct DraftArgs {
   replaces: Option<String>,
 }
 
-/// Parse the Slack arguments and run one verb. Parser errors print and exit on their own (argparse-compatible: help 0,
-/// usage error 2).
+/// The Slack CLI entry point, which parses the arguments and runs one verb. Parser errors print and exit on their own
+/// (argparse-compatible: help 0, usage error 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let cli: SlackCli = cli_args::parse("charliebot slack", args);
   match cli.command {
@@ -113,7 +113,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   }
 }
 
-/// Register a Slack draft. The target is validated and the body read before anything is sent, so an unparseable
+/// The Slack draft registration. The target is validated and the body read before anything is sent, so an unparseable
 /// target registers nothing.
 fn draft(args: &DraftArgs) -> Result<(), CliExit> {
   let (target, body) = prepare_draft(args)?;

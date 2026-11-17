@@ -598,7 +598,7 @@ async fn session_usage(
 /// A page is fixed by the lines it covers, and a page far inside a long log covers lines no append touches, so the
 /// same request answers the same bytes until the log is rewritten. Building it parses and projects the page's events
 /// on every request, and a reader who scrolls back and forth asks for the same pages again, so the memo serves the
-/// body it already built.
+/// body it already built. A body past [`EVENTS_PAGE_MEMO_MAX_BODY_BYTES`] is not kept.
 #[derive(Default)]
 struct EventsPageMemo {
   entries: Mutex<Vec<(EventsPageKey, Bytes)>>,
@@ -607,7 +607,8 @@ struct EventsPageMemo {
 /// The pages one server keeps: a reader's last few pages, which its scrolling moves between.
 const EVENTS_PAGE_MEMO_ENTRIES: usize = 4;
 
-/// The longest body the memo keeps. A page at the route's widest limit stays inside it.
+/// The longest body the memo keeps. A page whose messages run large can pass it at any limit, and such a page builds
+/// on every request rather than holding megabytes of body per entry.
 const EVENTS_PAGE_MEMO_MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// The inputs an events page body reads: the session, the page's range in the absolute event index, the archive split

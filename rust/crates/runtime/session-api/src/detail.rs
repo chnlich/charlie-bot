@@ -62,7 +62,7 @@ static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
   Mutex::new(LruCache::new(NonZeroUsize::new(FILE_GZIP_MEMO_LIMIT).expect("the gzip memo limit is nonzero")))
 });
 
-/// Register the session detail, transcript, usage, events, and task-read routes.
+/// The session detail, transcript, usage, events, and task-read routes.
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
   Router::new()
     .route("/api/sessions/{session_id}/pending-triggers", get_only(pending_triggers))
@@ -84,7 +84,7 @@ pub struct BootstrapPayload {
   pub untrimmed_wire_bytes: usize,
 }
 
-/// Build the bootstrap payload for a session, shared with the future index-page owner.
+/// The bootstrap payload for a session, shared with the future index-page owner.
 ///
 /// The payload renders the session's message tail trimmed to [`FIRST_SCREEN_WIRE_BUDGET_BYTES`] on
 /// the wire, so the switch's own transfer sets its time on a slow link. The trim drops the tail's

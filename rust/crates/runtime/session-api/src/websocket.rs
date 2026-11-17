@@ -350,7 +350,7 @@ enum ClientFrame {
   Subscribe(SubscribeRequest),
 }
 
-/// Parse one client frame. A frame that does not claim to be a `subscribe` is `Other`. One that
+/// One parsed client frame. A frame that does not claim to be a `subscribe` is `Other`. One that
 /// claims it and cannot be served is `MalformedSubscribe`.
 fn parse_client_frame(text: &str) -> ClientFrame {
   let Ok(frame) = serde_json::from_str::<Value>(text) else {
@@ -388,7 +388,7 @@ fn catchup_complete_frame(session_id: &str, subscription: u64, event_total: usiz
   })
 }
 
-/// Handle one `subscribe` frame in the handshake's order: subscribe the new session before the
+/// One `subscribe` frame handled in the handshake's order: subscribe the new session before the
 /// read starts, drop the session the socket leaves, answer `subscribed`. Then replay from the
 /// frame's cursor and close with a `catchup_complete` carrying the read's event total. An unknown
 /// session or a failed read answers `error` and keeps the previous subscription. Returns `false`
@@ -473,7 +473,7 @@ async fn handle_subscribe(
   true
 }
 
-/// Answer one refused subscribe request, leaving the socket's subscription untouched. A malformed
+/// The answer to one refused subscribe request, leaving the socket's subscription untouched. A malformed
 /// frame whose subscription number did not parse answers `null` there, because no number it named
 /// can be trusted.
 async fn send_subscribe_error(

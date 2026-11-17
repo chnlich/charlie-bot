@@ -185,7 +185,7 @@ pub(crate) const ROUTE_PATTERNS: &[&str] = &[
   api::SESSION_PATH,
 ];
 
-/// Register every supported listing route below `/api/sessions`.
+/// Every supported listing route below `/api/sessions`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route(api::SESSIONS_PATH, refuse_other_methods(get(list_active).post(write_routes::create_session), "GET"))
@@ -686,7 +686,7 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
   }
 }
 
-/// Send a task-tree page, reusing the compressed body a repeat request already deflated.
+/// A task-tree page sent with the compressed body a repeat request already deflated.
 ///
 /// A page holds its bytes across requests while the tree and its rows hold, and the transport middleware deflates
 /// every body afresh. On the 7,160-session mock home that deflate costs about two thirds of this route's latency.

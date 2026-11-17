@@ -235,7 +235,7 @@ impl SearchMatch {
     body.as_ref().filter(|body| body.generation == generation).map(|body| Arc::clone(&body.bytes))
   }
 
-  /// Keep the body built for `generation` for the repeat requests that generation still answers.
+  /// The body built for `generation`, kept for the repeat requests that generation still answers.
   pub(crate) fn remember_body(&self, generation: u64, bytes: Arc<Vec<u8>>) {
     *self.body.lock().expect("search body mutex is not poisoned") = Some(SearchBody { generation, bytes });
   }
@@ -245,7 +245,7 @@ impl SearchMatch {
     self.verified_at.lock().expect("search verification mutex is not poisoned").elapsed() < interval
   }
 
-  /// Record that the watched files' signatures held just now.
+  /// The moment the watched files' signatures last held, recorded as the verification time.
   fn mark_verified(&self) {
     *self.verified_at.lock().expect("search verification mutex is not poisoned") = Instant::now();
   }
@@ -455,7 +455,7 @@ impl SearchMemos {
 
 static SEARCH_MEMOS: LazyLock<Mutex<SearchMemos>> = LazyLock::new(|| Mutex::new(SearchMemos::default()));
 
-/// Search every session name and active-session chat content, newest first.
+/// The search answer over every session name and active-session chat content, newest first.
 pub(crate) fn search_sessions(store: &Store, query: &str) -> StoreResult<SearchAnswer> {
   search_sessions_with_memos(store, query, &SEARCH_MEMOS)
 }
@@ -1315,7 +1315,7 @@ fn scan_unicode(file: &mut File, needle: &str, replace_invalid: bool) -> io::Res
   }
 }
 
-/// Split `jobs` across `workers` bins so the heaviest bin holds the least bytes it can.
+/// `jobs` split across `workers` bins so the heaviest bin holds the least bytes it can.
 ///
 /// The batches' files range over four orders of magnitude, and a batch waits on its heaviest worker. A file count per
 /// worker would hand one worker a 144 MB file beside its share of the small ones.

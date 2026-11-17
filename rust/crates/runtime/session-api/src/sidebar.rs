@@ -69,7 +69,7 @@ impl Drop for SidebarSweepFlight {
   }
 }
 
-/// Resolve only the sidebar fields selected by one listing or status route.
+/// The sidebar fields selected by one listing or status route, resolved.
 pub(crate) fn resolve_sidebar_state(
   store: &Arc<Store>,
   registry: &Arc<Registry>,
@@ -192,7 +192,8 @@ fn should_probe_synchronously(force_full: bool, force: bool, dirty: bool, has_sn
   if force_full && !force { dirty || !has_snapshot } else { force || dirty || !has_snapshot }
 }
 
-/// Count one sidebar read that answered from a memo, and schedule the periodic self-heal sweep when this poll is due.
+/// The count of one sidebar read that answered from a memo, with the periodic self-heal sweep scheduled when this
+/// poll is due.
 ///
 /// The poll count bounds how late an edit from outside the server can show. Every tenth poll sweeps the active
 /// sessions and stores what moved, which moves the sidebar generation that invalidates the memo. A route that

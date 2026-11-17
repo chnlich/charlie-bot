@@ -127,8 +127,8 @@ impl Snapshot {
   }
 }
 
-/// Answer one status poll against the shared snapshot. `filter` names the set whose membership is tracked, `members`
-/// that set, `ids` the request's sorted row set, and `payloads` one serialized row state per id.
+/// The answer to one status poll against the shared snapshot. `filter` names the set whose membership is tracked,
+/// `members` that set, `ids` the request's sorted row set, and `payloads` one serialized row state per id.
 pub fn record(
   filter: Option<&str>,
   members: &[String],

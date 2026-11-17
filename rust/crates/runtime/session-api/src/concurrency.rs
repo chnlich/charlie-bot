@@ -104,7 +104,7 @@ struct LiveCountMemo {
 /// reads the identities that would move if any input changed. It then serves the count it already derived.
 static LIVE_COUNT_MEMO: LazyLock<Mutex<Option<LiveCountMemo>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Count the sessions whose own row paints the spinner.
+/// The number of sessions whose own row paints the spinner.
 ///
 /// The rows are the ones the sidebar lists. They are the active sessions no sequence owns, less the ones a sidebar
 /// view owns other than the one whose descendants fill the Threads tab. A row counts when the busy table holds it or
@@ -237,7 +237,7 @@ const INSTANT_BYTES: usize = 104;
 /// The body's fixed fields: the range, the two range ends, the bucket width, the first record and the peak.
 const HISTORY_BODY_HEADROOM: usize = 192;
 
-/// Write `at` as `UtcDateTime::to_str` writes it, from `length`: `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`.
+/// `at` in RFC 3339 form, written at `length` as `UtcDateTime::to_str` writes it: `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`.
 ///
 /// Every instant the route carries holds a four-digit year. The store parses a timestamp as RFC 3339, whose year is
 /// four digits. A point is the clock less a lookback.
@@ -293,7 +293,7 @@ const TWO_DIGITS: [[u8; 2]; 100] = {
   table
 };
 
-/// Write the two digits of `value` (`0`-`99`) to `text` at `length`.
+/// The two digits of `value` (`0`-`99`), written to `text` at `length`.
 fn write_pair(text: &mut [u8], length: &mut usize, value: u32) {
   let pair = TWO_DIGITS[(value % 100) as usize];
   text[*length] = pair[0];
@@ -301,7 +301,7 @@ fn write_pair(text: &mut [u8], length: &mut usize, value: u32) {
   *length += 2;
 }
 
-/// Write `source` into `text` at `length`.
+/// `source`, written into `text` at `length`.
 fn write_bytes(text: &mut [u8], length: &mut usize, source: &[u8]) {
   let end = *length + source.len();
   text[*length..end].copy_from_slice(source);
@@ -309,7 +309,7 @@ fn write_bytes(text: &mut [u8], length: &mut usize, source: &[u8]) {
 }
 
 impl History {
-  /// Write the response body in the field order and text clients parse.
+  /// The response body in the field order and text clients parse.
   ///
   /// The generic serializer's per-entry dispatch and its per-field calls are the route's largest cost on a
   /// 2,016-point series. The fixed field names and the digits therefore go straight into one buffer.
@@ -387,7 +387,7 @@ fn push_decimal(body: &mut Vec<u8>, value: i64) {
 /// The decimal text's longest form: `-9223372036854775808`.
 const DECIMAL_CHARS: usize = 20;
 
-/// Write `value` in decimal at `text`'s `length`, with the sign a negative value needs.
+/// `value` in decimal at `text`'s `length`, with the sign a negative value needs.
 fn write_decimal(text: &mut [u8], length: &mut usize, value: i64) {
   let mut digits = [0u8; DECIMAL_CHARS];
   let mut index = digits.len();
@@ -871,14 +871,14 @@ mod tests {
     (session.to_string(), serde_json::from_value(value).expect("a test run record"))
   }
 
-  /// Write one session's metadata as the store reads it.
+  /// One session's metadata, written as the store reads it.
   fn write_session(store: &Store, meta: &SessionMetadata) {
     let path = store.metadata_path(&meta.id);
     fs::create_dir_all(path.parent().expect("a metadata file has a directory")).expect("a session directory");
     fs::write(&path, meta.to_json_string(&[], true)).expect("a metadata file");
   }
 
-  /// Write one running run record: the test process stands in for the launched run, so the liveness check passes.
+  /// One running run record: the test process stands in for the launched run, so the liveness check passes.
   fn write_running_run(store: &Store, session_id: &str, kind: &str) {
     let pid = std::process::id();
     let pid_start = proc_identity::read_pid_stat(pid).expect("the test process has a proc stat").pid_start;

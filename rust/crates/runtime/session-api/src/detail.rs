@@ -976,7 +976,7 @@ fn pending_input_events(
       .iter()
       .map(|event| event.to_value())
       .filter(|event| {
-        let input_id = event.get("id").map_or_else(|| "None".to_string(), value_str);
+        let input_id = text_repr::field_text(event.get("id"));
         !facts.confirmed_input_ids.contains(&input_id) && !claimed.contains(&input_id) && seen.insert(input_id)
       })
       .collect(),
@@ -997,10 +997,10 @@ fn pending_input_value(event: &Value) -> StoreResult<Value> {
     .get("content")
     .filter(|value| text_repr::is_truthy(value))
     .or_else(|| event.get("summary").filter(|value| text_repr::is_truthy(value)))
-    .map_or_else(String::new, value_str);
+    .map_or_else(String::new, |value| text_repr::field_text(Some(value)));
   Ok(json!({
-    "id": event.get("id").map_or_else(|| "None".to_string(), value_str),
-    "type": event.get("type").map_or_else(|| "None".to_string(), value_str),
+    "id": text_repr::field_text(event.get("id")),
+    "type": text_repr::field_text(event.get("type")),
     "timestamp": timestamp,
     "actor": event.get("actor").cloned().unwrap_or(Value::Null),
     "source_session_id": event.get("source_session_id").cloned().unwrap_or(Value::Null),
@@ -1182,15 +1182,6 @@ fn events_gzip_response(body: Bytes) -> Response {
 
 fn to_index(value: i64) -> usize {
   usize::try_from(value).unwrap_or(0)
-}
-
-fn value_str(value: &Value) -> String {
-  match value {
-    Value::String(value) => value.clone(),
-    Value::Null => "None".to_string(),
-    Value::Bool(value) => if *value { "True" } else { "False" }.to_string(),
-    _ => value.to_string(),
-  }
 }
 
 fn path_error(path: &Path, error: std::io::Error) -> StoreError {

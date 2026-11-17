@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 // One recording = one run object owning its mic stream, capture graph, local PCM
 // buffer, and at most one in-flight upload request. The page-level click handler
-// starts the mic request; this module claims the run slot when the module arrives.
+// starts the mic request. This module claims the run slot when the module arrives.
 // Every asynchronous continuation checks that the slot still belongs to it.
 //
 // The recording itself never touches the persistence path. The worklet's 16 kHz
@@ -142,7 +142,7 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
     }
 
     // The read position can step past the buffer's end by less than one input
-    // sample; that carry belongs to the next buffer's first sample. Capping the
+    // sample. That carry belongs to the next buffer's first sample. Capping the
     // consumed count at the buffer length keeps it, so the output count stays
     // the input duration at 16 kHz.
     const consumed = Math.min(Math.floor(this.sourcePosition), merged.length);
@@ -900,7 +900,7 @@ function insertVoiceText(run, text) {
 }
 
 // Match the visible preview to the backend final. A matching token anchors
-// its surrounding span; a preview-only span survives while a final-only span
+// its surrounding span. A preview-only span survives while a final-only span
 // wins when the backend rewrote those words.
 function mergeVoiceText(partialText, finalText) {
   const tokenPattern = /[A-Za-z0-9_]+(?:['.-][A-Za-z0-9_]+)*|\p{Script=Han}/gu;

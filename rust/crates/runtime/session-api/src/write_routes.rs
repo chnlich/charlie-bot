@@ -456,7 +456,7 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
     .ok_or_else(|| store_error(StoreError::not_found(SESSION_NOT_FOUND_DETAIL)))?;
   tracing::info!(target: LOG_TARGET, session_id, new_name = %name, "{}", event_types::SESSION_RENAMED);
   features.store.invalidate_tree_index();
-  features.store.notify_task_tree_changed(session_id, Some("task_updated")).await;
+  features.store.notify_task_tree_changed(session_id, Some(event_types::TASK_UPDATED)).await;
   let meta = response_metadata(&features.store, &meta).map_err(store_error)?;
   rename_response(&features.store, &meta)
 }

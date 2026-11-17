@@ -276,23 +276,6 @@ test('a warm whose shell fetch answers 401 reports no stored shell without an er
   assert.equal(await cache.match(BOOTSTRAP_URL), undefined, 'a 401 drops the stored first screen');
 });
 
-test('a shell file 401 clears copies without storing an incomplete shell', async () => {
-  const h = harness();
-  const html = '<link href="/static/css/private.css" rel="stylesheet">';
-  h.state.network = async (req) => (req.url === SHELL_URL
-    ? new Response(html, {status: 200})
-    : new Response('unauthorized', {status: 401}));
-  const cache = await h.caches.api.open('last-state-v1');
-  await cache.put(BOOTSTRAP_URL, firstScreen('private copy'));
-  const channel = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
-  assert.equal(channel.replies.length, 1);
-  assert.equal(channel.replies[0].stored, false);
-  assert.equal('error' in channel.replies[0], false);
-  assert.equal(await cache.match(SHELL_KEY), undefined, 'the shell is stored after its files');
-  assert.equal(await cache.match(BOOTSTRAP_URL), undefined, 'the 401 drops the stored first screen');
-});
-
 test('the retired form answers no message', async () => {
   const h = harness({enabled: false});
   h.state.network = async () => new Response('unexpected', {status: 200});
@@ -302,18 +285,13 @@ test('the retired form answers no message', async () => {
   assert.deepEqual(h.state.calls, [], 'a worker the switch retired fetches nothing');
 });
 
-test('warming stores the shell and the same-origin files it names, and drops the files it no longer names', async () => {
+test('warming stores the shell and fetches no file; the stored files the shell no longer names are dropped', async () => {
   const h = harness();
   const html = '<link href="/static/css/a.css?v=1" rel="stylesheet"><script src="/static/js/b.js"></script>' +
       '<script defer src="https://cdn.example/x.js"></script>';
-  // The browser answers a file request in the default cache mode with a bodyless 304 when it holds the file; the warm
-  // must store bodies, so only a force-cache request gets the body.
-  h.state.network = async (req, init) => {
+  h.state.network = async (req) => {
     if (req.url === SHELL_URL) return new Response(html, {status: 200});
-    if (!init || init.cache !== 'force-cache') return new Response(null, {status: 304});
-    if (req.url === ORIGIN + '/static/css/a.css?v=1') return new Response('a', {status: 200, headers: {ETag: '"a"'}});
-    if (req.url === ORIGIN + '/static/js/b.js') return new Response('b', {status: 200});
-    throw new Error('unexpected ' + req.url);
+    throw new Error('the warm fetched ' + req.url);
   };
   const files = h.caches.api;
   await (await files.open('last-state-files')).put(ORIGIN + '/static/old.css', new Response('old'));
@@ -321,12 +299,10 @@ test('warming stores the shell and the same-origin files it names, and drops the
   await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
   assert.equal(channel.replies.length, 1);
   assert.equal(channel.replies[0].stored, true);
-
+  assert.deepEqual(h.state.calls.map((call) => call.url), [SHELL_URL], 'the warm fetches the shell and no file');
   const stored = await (await files.open('last-state-files')).keys();
-  assert.deepEqual(stored.map((entry) => entry.url), [ORIGIN + '/static/css/a.css?v=1'],
-      'the file with an ETag is stored; the file without one is not, and the old file is dropped');
+  assert.deepEqual(stored.map((entry) => entry.url), [], 'the old file the shell does not name is dropped');
 });
-
 test('a first screen with no stored copy takes the network answer, however long it takes', async (t) => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();
@@ -572,14 +548,15 @@ test('a full store evicts the session opened longest ago and then stores the new
   assert.ok(keys.includes(BOOTSTRAP_URL), 'the new first screen is stored');
 });
 
-test('a refresh replaces the stored shell after storing its versioned files', async () => {
+test('a refresh replaces the stored shell and fetches no file', async () => {
   const h = harness();
   const store = await h.caches.api.open('last-state-v1');
   await store.put(SHELL_KEY, new Response('<html>old</html>'));
   const html = '<script src="/static/js/app.js?v=2"></script>';
-  h.state.network = async (req) => (req.url === SHELL_URL
-    ? new Response(html, {status: 200})
-    : new Response('new app', {status: 200, headers: {ETag: '"app-v2"'}}));
+  h.state.network = async (req) => {
+    if (req.url === SHELL_URL) return new Response(html, {status: 200});
+    throw new Error('the refresh fetched ' + req.url);
+  };
   const channel = messageChannel();
 
   await Promise.all(h.fire('message', {
@@ -589,17 +566,13 @@ test('a refresh replaces the stored shell after storing its versioned files', as
   assert.equal(channel.replies.length, 1);
   assert.equal(channel.replies[0].stored, true);
   assert.equal(await (await store.match(SHELL_KEY)).text(), html);
-  const files = await h.caches.api.open('last-state-files');
-  assert.equal(await (await files.match(ORIGIN + '/static/js/app.js?v=2')).text(), 'new app');
+  assert.deepEqual(h.state.calls.map((call) => call.url), [SHELL_URL]);
 });
-
 test('a failed shell refresh leaves the stored shell available to navigation', async () => {
   const h = harness();
   const store = await h.caches.api.open('last-state-v1');
   await store.put(SHELL_KEY, new Response('<html>current</html>'));
-  h.state.network = async (req) => (req.url === SHELL_URL
-    ? new Response('<link href="/static/css/new.css?v=2" rel="stylesheet">', {status: 200})
-    : new Response('busy', {status: 503}));
+  h.state.network = async () => new Response('busy', {status: 503});
   const channel = messageChannel();
 
   await Promise.all(h.fire('message', {
@@ -608,7 +581,7 @@ test('a failed shell refresh leaves the stored shell available to navigation', a
 
   assert.equal(channel.replies.length, 1);
   assert.equal(channel.replies[0].stored, false);
-  assert.match(channel.replies[0].error, /new\.css.*503/);
+  assert.match(channel.replies[0].error, /503/);
   const nav = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
   assert.equal(await nav.response.text(), '<html>current</html>');
 });
@@ -633,28 +606,37 @@ test('a 401 during refresh clears stored copies and the old shell', async () => 
   assert.equal(await store.match(BOOTSTRAP_URL), undefined);
 });
 
-test('a shell file 401 during refresh clears stored copies and the old shell', async () => {
+test('a shell file the page loads that the network answers 401 drops every stored copy', async () => {
   const h = harness();
   const store = await h.caches.api.open('last-state-v1');
-  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  await store.put(SHELL_KEY, new Response('<html>shell</html>'));
   await store.put(BOOTSTRAP_URL, firstScreen('private copy'));
-  h.state.network = async (req) => (req.url === SHELL_URL
-    ? new Response('<link href="/static/css/private.css?v=2" rel="stylesheet">', {status: 200})
-    : new Response('unauthorized', {status: 401}));
-  const channel = messageChannel();
+  h.state.network = async () => new Response('unauthorized', {status: 401});
 
-  await Promise.all(h.fire('message', {
-    data: {type: 'warm', refresh: true}, ports: [channel.port2],
-  }).waits);
+  const result = await answer(h, request(ORIGIN + '/static/css/private.css?v=2'));
 
-  assert.equal(channel.replies.length, 1);
-  assert.equal(channel.replies[0].stored, false);
-  assert.equal(channel.replies[0].unauthorized, true);
-  assert.equal('error' in channel.replies[0], false);
-  assert.equal(await store.match(SHELL_KEY), undefined);
+  assert.equal(result.response.status, 401, 'the page reads the 401 itself');
   assert.equal(await store.match(BOOTSTRAP_URL), undefined);
+  const files = await h.caches.api.open('last-state-files');
+  assert.equal(await files.match(ORIGIN + '/static/css/private.css?v=2'), undefined);
 });
 
+test('a shell file the page loads is stored from its answer, a 304 is fetched whole, and a stored file answers without the network', async () => {
+  const h = harness();
+  h.state.network = async (req, init) => (init && init.cache === 'no-store'
+    ? new Response('whole', {status: 200, headers: {ETag: '"b1"'}})
+    : new Response(null, {status: 304}));
+
+  const first = await answer(h, request(ORIGIN + '/static/js/b.js?v=1'));
+  assert.equal(await first.response.text(), 'whole', 'the 304 is fetched again, and the body reaches the page');
+  const files = await h.caches.api.open('last-state-files');
+  assert.equal(await (await files.match(ORIGIN + '/static/js/b.js?v=1')).text(), 'whole', 'the file is stored');
+  assert.equal(h.state.calls.length, 2, 'the 304 and its whole re-fetch');
+
+  const again = await answer(h, request(ORIGIN + '/static/js/b.js?v=1'));
+  assert.equal(await again.response.text(), 'whole');
+  assert.equal(h.state.calls.length, 2, 'the second load is answered from the worker');
+});
 test('a release drops the stores of older releases and keeps its own and the files store', async () => {
   const h = harness({version: 'v2'});
   await h.caches.api.open('last-state-v1');

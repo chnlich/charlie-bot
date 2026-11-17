@@ -177,6 +177,11 @@ pub const WATCH_TARGETS_FIELD: &str = "watch_targets";
 /// the `session trigger` command, so neither crate spells the name on its own.
 pub const DELAY_SECONDS_FIELD: &str = "delay_seconds";
 
+/// The response field of a registered trigger that holds the new trigger's id. The create route writes it, and the
+/// `session trigger` command reads it into its output and its launch record, so neither crate spells the name on its
+/// own.
+pub const TRIGGER_ID_FIELD: &str = "trigger_id";
+
 /// The longest wait, in seconds, that a scheduled-trigger registration accepts, for every trigger kind. The
 /// `session trigger` command checks `--max-wait` against the same limit, so neither crate spells it on its own.
 pub const MAX_TRIGGER_DELAY_SECONDS: i64 = 14_400;
@@ -2414,7 +2419,7 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
     watch_targets = %serde_json::to_string(&trigger.watch_targets).expect("watch targets serialize"),
     "trigger_scheduled"
   );
-  let mut body = json!({ "trigger_id": trigger.id, (FIRE_AT_FIELD): trigger.fire_at.to_isoformat_text() });
+  let mut body = json!({ (TRIGGER_ID_FIELD): trigger.id, (FIRE_AT_FIELD): trigger.fire_at.to_isoformat_text() });
   if !watch_probe.is_empty() {
     body["watch_probe"] = Value::Object(watch_probe);
   }
@@ -4260,7 +4265,7 @@ mod tests {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body.as_object().expect("object").len(), 2);
-    let id = body["trigger_id"].as_str().expect("trigger id");
+    let id = body[TRIGGER_ID_FIELD].as_str().expect("trigger id");
     assert!(body["fire_at"].as_str().is_some());
     assert_eq!(manager.load_trigger(SESSION_ID, id).await.expect("saved trigger").message, "scheduled wake");
   }
@@ -4403,7 +4408,7 @@ mod tests {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK, "{}", response_json(response).await);
-    let trigger_id = response_json(response).await["trigger_id"].as_str().expect("trigger id").to_string();
+    let trigger_id = response_json(response).await[TRIGGER_ID_FIELD].as_str().expect("trigger id").to_string();
     let file = features.store.session_dir(SESSION_ID).join("triggers").join(format!("{trigger_id}.json"));
     let record: Value =
       serde_json::from_slice(&std::fs::read(&file).expect("trigger file")).expect("JSON trigger file");

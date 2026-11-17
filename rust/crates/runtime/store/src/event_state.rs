@@ -16,9 +16,10 @@ pub(crate) const TAIL_WINDOW_SIZE: usize = 512 * 1024;
 pub(crate) const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 
 /// How many physical lines sit between two byte checkpoints of a log's line index. A checkpoint is a line number and
-/// a byte offset, so a stride this size keeps the index small and one seek reaches the page's lines: on the mock
-/// home's 144 MB log, about 130 checkpoints and a read that starts within two strides of the page.
-pub(crate) const LINE_INDEX_STRIDE: usize = 512;
+/// a byte offset, so the index holds one pair per stride and a seek lands one stride or less before the page: on the
+/// mock home's 144 MB log, about 1,020 checkpoints (16 KB of pairs) and a read of at most a stride of lines before the
+/// page it serves.
+pub(crate) const LINE_INDEX_STRIDE: usize = 64;
 
 /// A log's physical-line index: its line count and the byte where every [`LINE_INDEX_STRIDE`]-th line starts.
 ///

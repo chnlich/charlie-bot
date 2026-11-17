@@ -712,7 +712,7 @@ impl Store {
   ///
   /// The read starts at the line index's nearest checkpoint at or before `first_line`, so a page far inside a long log
   /// costs the lines from that checkpoint rather than the log's head: on the mock home's 144 MB log, a page 50,000
-  /// lines in reads a stride or two of lines before the page instead of the 50,000 before it. A line's index matches
+  /// lines in reads at most one stride of lines before the page instead of the 50,000 before it. A line's index matches
   /// the whole-file read's, because the split is the same `\n` one and a final line without a terminator is still a
   /// line. The returned pair carries the index of the first line read.
   fn live_lines_from_checkpoint(
@@ -2393,14 +2393,15 @@ mod tests {
       let (middle, _) = store.load_chat_events_range(session_id, total - 60, total - 30).unwrap();
       assert_eq!(ids(&middle), want(total - 60, total - 30));
       // A page far inside the log is outside the tail window, so the read seeks to the nearest checkpoint of its
-      // line index and reads its own lines: one line per slot, in the whole-file numbering.
+      // line index and reads its own lines: one line per slot, in the whole-file numbering, and the read is the page
+      // plus at most one stride.
       let before = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read;
       let start = total / 2;
       let (deep, _) = store.load_chat_events_range(session_id, start, start + 30).unwrap();
       let deep_read = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read - before;
       assert_eq!(ids(&deep), want(start, start + 30));
       assert!(
-        deep_read < (2 * LINE_INDEX_STRIDE + 32) * 128,
+        deep_read < (LINE_INDEX_STRIDE + 32) * 128,
         "the deep page read {deep_read} bytes of a {} B log",
         body.len()
       );

@@ -264,6 +264,16 @@ pub fn type_name(value: &Value) -> &'static str {
   }
 }
 
+/// The class name of the error a sequence read past its end raises. A route that reports the error names the class
+/// from here, and pairs it with [`LIST_INDEX_OUT_OF_RANGE`] or [`STRING_INDEX_OUT_OF_RANGE`].
+pub const INDEX_ERROR: &str = "IndexError";
+
+/// The text an [`INDEX_ERROR`] carries when a list index reads past the end.
+pub const LIST_INDEX_OUT_OF_RANGE: &str = "list index out of range";
+
+/// The text an [`INDEX_ERROR`] carries when a string index reads past the end.
+pub const STRING_INDEX_OUT_OF_RANGE: &str = "string index out of range";
+
 /// The text Python raises for a missing attribute on a value of class `class`:
 /// `'<class>' object has no attribute '<attribute>'`. [`type_name`] names the class of a loaded JSON value.
 pub fn no_attribute(class: &str, attribute: &str) -> String {

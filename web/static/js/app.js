@@ -16,13 +16,12 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  // The shell names no session; its URL does. The open requests that session's first screen before the sidebar
-  // list, which the shell fetches on its own (restoreSidebarFromUrl).
+  // The shell names no session; its URL does. The open requests that session's first screen, and the sidebar list
+  // (restoreSidebarFromUrl) follows the open: the list and its status poll are not bytes the first screen needs.
   const shellSessionId = SESSION_ID === null ? new URLSearchParams(location.search).get('session') : null;
   if (shellSessionId) {
     initPage();
-    openSession(shellSessionId, null);
-    restoreSidebarFromUrl();
+    openSession(shellSessionId, null).then(() => restoreSidebarFromUrl());
     return;
   }
 

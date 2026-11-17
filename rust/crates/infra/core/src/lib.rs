@@ -1,6 +1,7 @@
-//! The CharlieBot server's foundation: profile home, configuration, credentials, the home writer
-//! fence, run tokens, run kinds, structured logging, the session memo sentence, the process's TLS crypto provider,
-//! the text renderings the wire formats need, and the int reading their configs, flags and headers parse.
+//! The CharlieBot server's foundation: profile home, configuration, credentials, the OAuth token vocabulary,
+//! the home writer fence, run tokens, run kinds, structured logging, the session memo sentence, the process's TLS
+//! crypto provider, the text renderings the wire formats need, and the int reading their configs, flags and headers
+//! parse.
 
 pub mod cgroup;
 pub mod config;

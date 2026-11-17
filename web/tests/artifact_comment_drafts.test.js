@@ -564,7 +564,7 @@ test('a draft saved on a unique row attaches to the one other row that holds its
     'the one row that holds the sentence takes the draft');
 });
 
-test('two unattached drafts with equal stored locators each send the stored locator and before line', async () => {
+test('an unattached draft with a stored before sends no before line and no (k of m)', async () => {
   const storage = makeStorage();
   storage.setItem(DRAFT_KEY, JSON.stringify([
     {kind: 'block', quote: 'Shared sentence in two rows', context: 'Plan', comment: 'first note',
@@ -580,11 +580,9 @@ test('two unattached drafts with equal stored locators each send the stored loca
     '[Artifact comments · ' + ARTIFACT_PATH + '] (2)',
     '',
     '1. ▸ Plan › "Shared sentence in two rows"',
-    '   before "the words before"',
     '   ↳ first note',
     '',
     '2. ▸ Plan › "Shared sentence in two rows"',
-    '   before "the words before"',
     '   ↳ second note',
   ].join('\n'));
 });

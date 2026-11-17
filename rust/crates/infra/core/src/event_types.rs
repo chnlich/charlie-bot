@@ -141,6 +141,8 @@ pub const RUN_HEADER: &str = "run_header";
 pub const BACKEND_LABEL: &str = "backend_label";
 /// The run header's reference to the run's launch prompt file.
 pub const LAUNCH_PROMPT_REF: &str = "launch_prompt_ref";
+/// The run header's reference to the task spec file the run works from.
+pub const TASK_SPEC_REF: &str = "task_spec_ref";
 pub const RUN_END: &str = "run_end";
 /// The run's wall-clock length in seconds, in the `run_end` event that the worker transcript writes and the message
 /// aggregator renders as [`THINKING_SECONDS`].

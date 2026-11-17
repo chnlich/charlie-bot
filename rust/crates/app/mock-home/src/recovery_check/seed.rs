@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED};
+use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED, TASK_SPEC_REF};
 use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_store::control_events::TASK_SPEC_HASH_FIELD;
 use charliebot_store::layout;
@@ -189,7 +189,7 @@ fn run_record(run: RunRecord) -> Value {
     "kind": run.kind,
     (INPUT_EVENT_IDS): run.inputs,
     (TASK_SPEC_HASH_FIELD): null,
-    "task_spec_ref": null,
+    (TASK_SPEC_REF): null,
     (OBSERVATION_PROMPT_SNAPSHOT_REF): null,
     "retry_of_run_id": null,
     "review_of_run_id": null,

@@ -10,7 +10,7 @@
 // includes the same name.
 //
 // A web session's open starts the download only when its status has a waiting
-// item to count on the toggle; any other session downloads nothing until the
+// item to count on the toggle. Any other session downloads nothing until the
 // reader selects the Status view. The open the page asked for is kept here,
 // with any web_status message or descendant refresh that lands in the meantime,
 // and the module replays them when it runs.

@@ -67,7 +67,7 @@
   }
 
   // The bell: on the open session the tray expands in place and the answer is
-  // true; another session switches there first and takes false. The module's
+  // true. Another session switches there first and takes false. The module's
   // expand replay keeps that answer true once the tray arrives.
   function expandPendingTriggersTray(sid) {
     expandSession = sid;

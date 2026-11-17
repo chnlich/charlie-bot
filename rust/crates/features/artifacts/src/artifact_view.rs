@@ -42,7 +42,8 @@ async fn serve(features: &FeatureContext, request: &Parts, path: &str) -> ViewRe
     return Ok(None);
   }
 
-  let config = features.config.get().map_err(|error| internal_error("ConfigError", error.to_string()))?;
+  let config =
+    features.config.get().map_err(|error| internal_error(responses::CONFIG_ERROR_CLASS, error.to_string()))?;
   let sessions_dir = config.sessions_dir();
   let target_path = path.to_owned();
   let target_diff = diff_param.clone();

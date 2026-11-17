@@ -22,6 +22,10 @@ pub struct Failure {
   pub detail: String,
 }
 
+/// The failure class of a request that cannot read the server configuration: the `error` name its 500 logs, the same
+/// name `charliebot_core::config::ConfigError` carries.
+pub const CONFIG_ERROR_CLASS: &str = "ConfigError";
+
 /// The JSON response: compact separators, raw UTF-8.
 pub fn json(status: StatusCode, content: &Value) -> Response {
   bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(json::starlette_bytes(content)))

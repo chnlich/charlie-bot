@@ -94,7 +94,7 @@ async fn messages(State(features): State<Arc<FeatureContext>>, Path(backend_id):
 }
 
 async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Result<Response, Refusal> {
-  let cfg = features.config.get().map_err(|error| unhandled("ConfigError", error.to_string()))?;
+  let cfg = features.config.get().map_err(|error| unhandled(responses::CONFIG_ERROR_CLASS, error.to_string()))?;
   let option = cfg
     .get_backend_option(backend_id)
     .ok_or_else(|| detail(StatusCode::NOT_FOUND, format!("unknown backend id: {backend_id}")))?;
@@ -104,7 +104,8 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
       format!("backend '{backend_id}' is not type 'cc-openai-compatible' (got '{}')", option.backend_type),
     ));
   }
-  let fields = CcOpenAiOption::from_fields(&option.type_fields).map_err(|error| unhandled("ConfigError", error))?;
+  let fields = CcOpenAiOption::from_fields(&option.type_fields)
+    .map_err(|error| unhandled(responses::CONFIG_ERROR_CLASS, error))?;
   if fields.api_base.is_empty() {
     return Err(detail(StatusCode::BAD_REQUEST, format!("backend '{backend_id}' missing api_base")));
   }

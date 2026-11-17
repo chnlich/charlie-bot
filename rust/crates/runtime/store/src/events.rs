@@ -712,9 +712,10 @@ impl Store {
   ///
   /// The read starts at the line index's nearest checkpoint at or before `first_line`, so a page far inside a long log
   /// costs the lines from that checkpoint rather than the log's head: on the mock home's 144 MB log, a page 50,000
-  /// lines in reads at most one stride of lines before the page instead of the 50,000 before it. A line's index matches
+  /// lines in reads at most one stride of lines before the page instead of the 50,000 before it. The lines between that
+  /// checkpoint and the page are read past without parsing, because the caller discards them. A line's index matches
   /// the whole-file read's, because the split is the same `\n` one and a final line without a terminator is still a
-  /// line. The returned pair carries the index of the first line read.
+  /// line. The returned pair carries the index of the first line returned.
   fn live_lines_from_checkpoint(
     &self,
     session_id: &str,
@@ -736,10 +737,11 @@ impl Store {
     reader
       .seek(SeekFrom::Start(checkpoint_byte))
       .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    let mut lines = Vec::with_capacity(end.saturating_sub(checkpoint_line).min(1024));
+    let mut lines = Vec::with_capacity(end.saturating_sub(first_line).min(1024));
     let mut line = Vec::new();
     let mut bytes_read = 0;
-    while checkpoint_line + lines.len() < end {
+    let mut line_index = checkpoint_line;
+    while line_index < end {
       line.clear();
       let read = std::io::BufRead::read_until(&mut reader, b'\n', &mut line)
         .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
@@ -747,18 +749,26 @@ impl Store {
         break;
       }
       bytes_read += read;
+      if line_index < first_line {
+        // The page's own first line has not arrived yet, and this line is before it: the caller discards it.
+        line_index += 1;
+        continue;
+      }
       if line.last() == Some(&b'\n') {
         line.pop();
       }
       lines.push(ndjson::parse_line_compact(&line).map(Arc::new));
+      line_index += 1;
     }
     #[cfg(test)]
     {
-      lock(&self.event_read_caches, "event read cache mutex").live_range_bytes_read += bytes_read;
+      let mut caches = lock(&self.event_read_caches, "event read cache mutex");
+      caches.live_range_bytes_read += bytes_read;
+      caches.live_range_lines_parsed += lines.len();
     }
     #[cfg(not(test))]
     let _ = bytes_read;
-    Ok((Arc::new(lines), checkpoint_line))
+    Ok((Arc::new(lines), first_line))
   }
 
   /// The log's line index, through the count memo that every line count already reads.
@@ -771,7 +781,8 @@ impl Store {
   ///
   /// The page a reader opens first is the one that ends at the log's end, so reading the tail answers it without the
   /// whole log: on the 144 MB mock-home log that parse is 386 ms of the request, and the tail window is 512 KiB. The
-  /// `\n` split keeps the blank lines the whole-file read keeps, so a line's index is the same either way.
+  /// `\n` split keeps the blank lines the whole-file read keeps, so a line's index is the same either way. A page the
+  /// line index places before the window's first byte cannot be held by it, so that case returns without the read.
   ///
   /// The count names how many lines the tail holds, so an append between the count and the read would shift which
   /// lines the window returns. The signature the count was taken under is checked again after the read. A log that
@@ -783,7 +794,21 @@ impl Store {
   ) -> StoreResult<Option<Vec<Option<Arc<ChatEvent>>>>> {
     let path = self.chat_events_path(session_id);
     let Some((metadata, signature)) = file_signature(&path)? else { return Ok(None) };
-    let total = self.count_chat_event_lines(&path, signature)?;
+    let index = self.line_index(&path, signature)?;
+    // The window starts inside a line, and the read drops that line. The window therefore holds the page only when the
+    // page's first line starts after the window does. A checkpoint of a later line starts after that line does, so one
+    // at or before the window start proves the page is outside it without the 512 KiB read.
+    let window_start = metadata.len().saturating_sub(TAIL_WINDOW_SIZE as u64);
+    if let Some((_, byte)) = index.checkpoint_after(first_line)
+      && byte <= window_start
+    {
+      return Ok(None);
+    }
+    #[cfg(test)]
+    {
+      lock(&self.event_read_caches, "event read cache mutex").tail_window_reads += 1;
+    }
+    let total = index.count;
     let Some((lines, bytes_read)) =
       read_ndjson_tail_physical_lines(&path, metadata.len(), total.saturating_sub(first_line))?
     else {
@@ -2384,6 +2409,8 @@ mod tests {
       }
       let read = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read;
       assert!(read <= 5 * TAIL_WINDOW_SIZE, "the newest pages read {read} bytes of a {} B log", body.len());
+      let tail_reads = lock(&store.event_read_caches, "event read cache mutex").tail_window_reads;
+      assert!(tail_reads > 0, "the newest pages read the tail window");
 
       // A range that ends before the log's end keeps the whole-file numbering.
       let (middle, _) = store.load_chat_events_range(session_id, total - 60, total - 30).unwrap();
@@ -2392,15 +2419,23 @@ mod tests {
       // line index and reads its own lines: one line per slot, in the whole-file numbering, and the read is the page
       // plus at most one stride.
       let before = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read;
+      let tail_before = lock(&store.event_read_caches, "event read cache mutex").tail_window_reads;
+      let parsed_before = lock(&store.event_read_caches, "event read cache mutex").live_range_lines_parsed;
       let start = total / 2;
       let (deep, _) = store.load_chat_events_range(session_id, start, start + 30).unwrap();
-      let deep_read = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read - before;
+      let caches = lock(&store.event_read_caches, "event read cache mutex");
+      let deep_read = caches.live_range_bytes_read - before;
+      let tail_reads = caches.tail_window_reads - tail_before;
+      let parsed = caches.live_range_lines_parsed - parsed_before;
+      drop(caches);
       assert_eq!(ids(&deep), want(start, start + 30));
       assert!(
         deep_read < (LINE_INDEX_STRIDE + 32) * 128,
         "the deep page read {deep_read} bytes of a {} B log",
         body.len()
       );
+      assert_eq!(tail_reads, 0, "the deep page is outside the tail window, so its read is skipped");
+      assert_eq!(parsed, 30, "the deep page parses its own lines, not the stride before them");
       // The page at the log's start is one checkpoint away from it, and it matches too.
       let (head, _) = store.load_chat_events_range(session_id, 0, 3).unwrap();
       assert_eq!(ids(&head), want(0, 3));

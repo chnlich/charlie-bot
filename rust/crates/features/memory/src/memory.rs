@@ -96,10 +96,9 @@ impl Entry {
   }
 }
 
-/// One loaded store: the memory dir, the topics vocabulary and the parsed entries.
+/// One loaded store: the topics vocabulary and the parsed entries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Store {
-  pub memory_dir: PathBuf,
   pub topics: BTreeMap<String, Topic>,
   pub entries: Vec<Entry>,
 }
@@ -193,7 +192,7 @@ pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
     }
     entries.push(entry);
   }
-  Ok(Store { memory_dir: memory_dir.to_path_buf(), topics, entries })
+  Ok(Store { topics, entries })
 }
 
 /// The text of `path`, with universal newlines: `\r\n` and a lone `\r` turn into `\n`.

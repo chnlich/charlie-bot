@@ -142,7 +142,9 @@ async function unarchiveSession(id) {
 
 // The one confirmation dialog the sidebar's actions open: archive and permanent delete. The caller gives the heading,
 // the detail (plain text), the confirm button and what its confirm runs. Cancel, Escape and a click on the backdrop
-// close it and run nothing. Enter runs the confirm only where confirmOnEnter is set.
+// close it and run nothing. Enter runs the confirm only where confirmOnEnter is set. The detail caps its own height
+// and scrolls: a session's name can run past a thousand characters, and the dialog would otherwise stand taller than
+// the window, taking its heading and both buttons off screen.
 const CONFIRM_OVERLAY_ID = 'confirm-overlay';
 let confirmDialogKeyHandler = null;
 
@@ -171,7 +173,7 @@ function openConfirmDialog({iconPath = '', iconClass = '', heading, detail, conf
          onclick="event.stopPropagation()">
       ${icon}
       <p class="text-sm font-semibold text-slate-200 mb-1">${escapeHtml(heading)}</p>
-      <p class="text-xs text-slate-400 mb-4 break-words">${escapeHtml(detail)}</p>
+      <p class="text-xs text-slate-400 mb-4 break-words max-h-[70vh] overflow-y-auto">${escapeHtml(detail)}</p>
       <div class="flex gap-2 justify-center">
         <button id="confirm-cancel-btn" class="px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
         <button id="confirm-ok-btn" class="${okClass}">${escapeHtml(confirmLabel)}</button>

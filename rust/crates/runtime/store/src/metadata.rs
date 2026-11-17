@@ -120,6 +120,9 @@ pub const BASE_BRANCH_FIELD: &str = "base_branch";
 /// The task-spec field holding a task's kind. The delegate request, the session write request and the stored task
 /// record carry the same name, so it is spelled once, here.
 pub const TASK_TYPE_FIELD: &str = "task_type";
+/// The task-spec field naming who approves a task's delivery. The session create and patch requests and the stored
+/// task record carry the same name, so it is spelled once, here.
+pub const APPROVER_FIELD: &str = "approver";
 /// The response field holding a session's display name. The voice recordings page's rows carry the same name, so it
 /// is spelled once, here.
 pub const SESSION_NAME_FIELD: &str = "session_name";
@@ -195,6 +198,9 @@ pub enum TaskApprover {
 }
 
 impl TaskApprover {
+  /// The wire spellings of every approver, which a request schema accepts as choices.
+  pub const NAMES: &[&str] = &["user", "parent"];
+
   /// Whether this is the default approver, which a task record leaves out so that its canonical text stays as it was.
   pub fn is_user(&self) -> bool {
     *self == TaskApprover::User

@@ -20,8 +20,8 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_STATE,
-  TASK_TYPE_FIELD, TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
+  APPROVER_FIELD, BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD,
+  TASK_STATE, TASK_TYPE_FIELD, TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -38,7 +38,6 @@ use crate::detail::response_metadata;
 use crate::route_support::store_error;
 
 const LOG_TARGET: &str = "charliebot_session_api";
-const APPROVER_CHOICES: &[&str] = &["user", "parent"];
 const TASK_TYPE_CHOICES: &[&str] = TaskType::NAMES;
 const PROFILE_REQUIRED: &str = "profile must be 'manager' or 'worker'";
 const RENAME_REQUIRES_NAME: &str = "rename requires a non-empty name";
@@ -74,7 +73,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("profile", FieldType::NullableLiteral(TaskProfile::NAMES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("group", FieldType::NullableString),
-  Field::optional("approver", FieldType::Literal(APPROVER_CHOICES)),
+  Field::optional(APPROVER_FIELD, FieldType::Literal(TaskApprover::NAMES)),
 ];
 const CREATE_SESSION: BodyModel = BodyModel::required(CREATE_FIELDS);
 
@@ -86,7 +85,7 @@ const PATCH_FIELDS: &[Field] = &[
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("subtree_prompt", FieldType::NullableString),
   Field::optional("node_prompt", FieldType::NullableString),
-  Field::optional("approver", FieldType::Literal(APPROVER_CHOICES)),
+  Field::optional(APPROVER_FIELD, FieldType::Literal(TaskApprover::NAMES)),
 ];
 const PATCH_SESSION: BodyModel = BodyModel::required(PATCH_FIELDS).forbid_extra();
 

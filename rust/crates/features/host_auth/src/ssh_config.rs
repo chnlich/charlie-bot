@@ -59,7 +59,7 @@ impl Block {
     Block { patterns, hostname: None, collectable }
   }
 
-  /// Collect the block when it is collectable, carries a `HostName`, and its alias is new.
+  /// The block collected into `hosts` when it is collectable, carries a `HostName`, and its alias is new.
   fn flush(&self, hosts: &mut Vec<(String, String)>, seen: &mut HashSet<String>) {
     if !self.collectable {
       return;

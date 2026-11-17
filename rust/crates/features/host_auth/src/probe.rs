@@ -75,9 +75,9 @@ pub async fn probe_host_fresh(alias: String) -> io::Result<(i32, String)> {
   run_probe(&ssh::fresh_argv(&alias, &["true"]), PROBE_TIMEOUT).await
 }
 
-/// Run `argv`, read its stdout and stderr in full, and kill it when it outlives `timeout`. The output read before
-/// the kill is kept. The return code is `proc_status::code_of`'s: the exit code, or a killed process's negated signal
-/// number.
+/// `argv`'s run: its stdout and stderr read in full, and the process killed when it outlives `timeout`. The output
+/// read before the kill is kept. The return code is `proc_status::code_of`'s: the exit code, or a killed process's
+/// negated signal number.
 pub async fn run_probe(argv: &[String], timeout: Duration) -> io::Result<(i32, String)> {
   let (program, arguments) = argv.split_first().expect("an ssh argv names a program");
   let mut child = Command::new(program).args(arguments).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;

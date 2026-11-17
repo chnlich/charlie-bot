@@ -184,7 +184,7 @@ impl AttemptCore {
     }
   }
 
-  /// Signal the recorded pid from outside the driver. An unsignalable pid is a child the driver's own wait already
+  /// The recorded pid, signaled from outside the driver. An unsignalable pid is a child the driver's own wait already
   /// reaped.
   fn kill_child(&mut self) {
     if let Some(pid) = self.child_pid.take() {
@@ -588,7 +588,7 @@ fn spawn_readback(argv: &[String]) -> io::Result<Child> {
   spawn_command(command)
 }
 
-/// Spawn a merged-output command in its own process group.
+/// A spawned command in its own process group, with its output merged.
 fn spawn_command(mut command: tokio::process::Command) -> io::Result<Child> {
   // The child leads its own process group, so a readback's timeout can end every process it started.
   command.stdin(Stdio::null()).stdout(Stdio::piped()).process_group(0);
@@ -885,7 +885,7 @@ fn fail_start(core: &Arc<Mutex<AttemptCore>>, body: String) {
   let _ = core.lock().expect("the attempt record lock is never poisoned").link.send(LinkState::Failed(body));
 }
 
-/// End an attempt whose driver failed mid-run, so that no live slot or waiting click is left behind.
+/// An attempt ended after its driver failed mid-run, so that no live slot or waiting click is left behind.
 fn abandon(core: &Arc<Mutex<AttemptCore>>) {
   let phase = core.lock().expect("the attempt record lock is never poisoned").phase;
   match phase {

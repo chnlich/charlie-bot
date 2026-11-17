@@ -389,7 +389,7 @@ impl MemberChange {
       ("to".to_string(), json!(self.to)),
       (event_types::QUOTA_FAILOVER_REASON.to_string(), json!(self.reason)),
       (event_types::QUOTA_FAILOVER_SET.to_string(), json!(self.pool)),
-      ("recovers_at".to_string(), json!(self.recovers_at.clone().unwrap_or_default())),
+      (event_types::QUOTA_FAILOVER_RECOVERS_AT.to_string(), json!(self.recovers_at.clone().unwrap_or_default())),
     ]);
     if let Some(summary) = &self.summary {
       event.insert(event_types::QUOTA_FAILOVER_SUMMARY.to_string(), json!(summary));

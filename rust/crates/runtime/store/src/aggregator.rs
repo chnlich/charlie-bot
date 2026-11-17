@@ -760,7 +760,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     event_types::QUOTA_FAILOVER => {
       let from_backend = string_default(event, "from", "");
       let to_backend = string_default(event, "to", "");
-      let recovers_at = event.field("recovers_at").filter(|value| is_truthy(*value));
+      let recovers_at = event.field(event_types::QUOTA_FAILOVER_RECOVERS_AT).filter(|value| is_truthy(*value));
       let recovery =
         recovers_at.map_or_else(String::new, |value| format!("; {from_backend} recovers at {}", event_str(value)));
       let reason = event.field(event_types::QUOTA_FAILOVER_REASON).and_then(EventFields::as_str_field);

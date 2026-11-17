@@ -7,7 +7,8 @@ use charliebot_registry::FeatureContext;
 use crate::config::DiscordConfig;
 use crate::discord_listener::DiscordListener;
 
-/// Starts the Discord gateway and boot backfill when the bot token and an allowed user are configured.
+/// The Discord gateway service, which starts the gateway and boot backfill when the bot token and an allowed user are
+/// configured.
 pub(crate) type DiscordService = ChannelService<DiscordListener>;
 
 impl ChatChannel for DiscordListener {

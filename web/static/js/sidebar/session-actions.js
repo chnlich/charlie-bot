@@ -16,7 +16,7 @@ const MODAL_OVERLAY_CLASS = 'fixed inset-0 z-[9999] bg-black/60 flex items-cente
 const MODAL_DIALOG_CLASS = 'bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72';
 
 // The one trash-can outline: real deletion only -- the delete confirmation
-// below; the archived row's Delete permanently and the group header's Delete
+// below. The archived row's Delete permanently and the group header's Delete
 // group are menu items, not icons.
 const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>`;
 
@@ -53,7 +53,7 @@ async function removeSessionRowInline(sessionId) {
   }
 }
 
-// The title a session's row displays. The archive confirmation names the session by it; a session
+// The title a session's row displays. The archive confirmation names the session by it. A session
 // with no row on screen has no title to name, so the miss throws.
 function sessionDisplayTitle(sessionId) {
   const nameEl = document.getElementById('session-' + sessionId)?.querySelector('.session-name');
@@ -123,7 +123,7 @@ async function unarchiveSession(id) {
     if (!res.ok) throw new Error(await archiveRefusalDetail(res));
     // A task node's restore answers with the restored ids: the target plus
     // its archived ancestor chain, so the archived list drops them all. A
-    // legacy session's restore answers with the session metadata; its row is
+    // legacy session's restore answers with the session metadata. Its row is
     // the only one that leaves.
     let restored = [id];
     const body = await res.json().catch(() => null);  // an unreadable body keeps the single-row drop
@@ -189,7 +189,7 @@ function openConfirmDialog({iconPath = '', iconClass = '', heading, detail, conf
   });
   confirmDialogKeyHandler = (e) => {
     if (e.key === 'Escape') closeConfirmDialog();
-    // A held Enter repeats keydown; only the first press answers the dialog.
+    // A held Enter repeats keydown. Only the first press answers the dialog.
     if (confirmOnEnter && e.key === 'Enter' && !e.repeat) {
       e.preventDefault();
       confirm();
@@ -258,7 +258,7 @@ async function showGroupSelector(sessionId, currentGroup) {
   }).join('');
 
   // The Remove group row keeps the group rows' slate-300 label: slate-400 reads 4.04:1 on the
-  // row's slate-700 fill, under the 4.5:1 floor for its 14px text; slate-300 reads 6.97:1.
+  // row's slate-700 fill, under the 4.5:1 floor for its 14px text. Slate-300 reads 6.97:1.
   // The dialog's close button carries close_button.html's modal-close-btn class: that macro's rule gives a
   // phone's close control its 44 px box, and index.html calls the macro, so the rule is already on this page.
   // Without a visible control the dialog's only exits are the backdrop and the Escape key, and a phone has no
@@ -266,7 +266,7 @@ async function showGroupSelector(sessionId, currentGroup) {
   overlay.innerHTML = `
     <style>
       /* The New group name field draws its boundary at the 3:1 control floor on its slate-700 fill:
-         #94a3b8 reads 4.04:1 there (slate-500 reads 2.18:1) and 5.71:1 on the slate-800 dialog; the
+         #94a3b8 reads 4.04:1 there (slate-500 reads 2.18:1) and 5.71:1 on the slate-800 dialog. The
          #c084fc focus tone reads 3.92:1 on the fill, where purple-500 reads 2.62:1. The rule travels
          with this dialog's own markup, so it needs no rebuilt Tailwind sheet. */
       #new-group-input { border-color: #94a3b8 }
@@ -322,7 +322,7 @@ async function showGroupSelector(sessionId, currentGroup) {
     if (e.target === overlay) closeGroupModal();
   });
   // Close on Escape. The handler is a field rather than a local so that every close path, the backdrop and
-  // the dialog's own buttons included, unregisters it; a local would keep one listener per open until a
+  // the dialog's own buttons included, unregisters it. A local would keep one listener per open until a
   // later Escape press retires the whole pile.
   groupModalKeyHandler = (e) => {
     if (e.key === 'Escape') closeGroupModal();
@@ -342,8 +342,8 @@ async function setSessionGroup(sessionId, group) {
     });
     if (!res.ok) throw new Error(`Set group failed: ${res.status}`);
     if (currentFilter === 'archived') {
-      // The archived view updates the row and filter-strip counts in place;
-      // a refetch would rebuild the whole paginated list.
+      // The archived view updates the row and filter-strip counts in place.
+      // A refetch would rebuild the whole paginated list.
       applyArchivedGroupChange(sessionId, group);
       return;
     }

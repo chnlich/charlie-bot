@@ -158,8 +158,13 @@
     <div class="heroCard">
       <p class="lab">Output &middot; last week</p>
       <div class="val">{{ ctx.week.output }}</div>
-      <p class="foot">{% if ctx.week.models %}{{ ctx.week.output_exact }} tokens &middot; {{ ctx.week.calls }} API calls &middot; {{ ctx.week.models }} models{% else %}No records last week{% endif %}</p>
-      <p class="foot">Top &middot; {{ ctx.week.top_model or '—' }} &middot; {{ ctx.week.top_output }} output</p>
+      {% if ctx.week.models %}
+      <p class="foot">{{ ctx.week.output_exact }} tokens &middot; {{ ctx.week.calls }} API calls &middot; {{ ctx.week.models }} models</p>
+      <p class="foot">Top &middot; {{ ctx.week.top_model }} &middot; {{ ctx.week.top_output }} output</p>
+      {% else %}
+      {# A week with no record has no top model, so the card states the week's outcome alone. #}
+      <p class="foot">No records last week</p>
+      {% endif %}
     </div>
     <div class="heroCard">
       <p class="lab">Output &middot; all time</p>
@@ -175,8 +180,13 @@
     <div class="heroCard">
       <p class="lab">Week over week</p>
       <div class="val">{% if ctx.week.wow_total is none %}&mdash;{% else %}{{ "+" if ctx.week.wow_total >= 0 }}{{ "%.1f"|format(ctx.week.wow_total) }}%{% endif %}</div>
+      {% if ctx.week.wow_total is none %}
+      {# A change needs a figure the week before; with none there, the card states why it carries no percentage. #}
+      <p class="foot">The week before held no tokens, so no change can be measured.</p>
+      {% else %}
       <p class="foot">total, against {{ ctx.week.previous_total }}</p>
-      <p class="foot">output {% if ctx.week.wow_output is none %}&mdash;{% else %}{{ "+" if ctx.week.wow_output >= 0 }}{{ "%.1f"|format(ctx.week.wow_output) }}%{% endif %}, against {{ ctx.week.previous_output }}</p>
+      <p class="foot">{% if ctx.week.wow_output is none %}output: no output the week before{% else %}output {{ "+" if ctx.week.wow_output >= 0 }}{{ "%.1f"|format(ctx.week.wow_output) }}%, against {{ ctx.week.previous_output }}{% endif %}</p>
+      {% endif %}
     </div>
   </div>
 

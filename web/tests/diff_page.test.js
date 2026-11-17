@@ -548,6 +548,42 @@ test('a file row keeps the directory apart from the file name, with the full pat
   assert.deepEqual(topPath.children.map((node) => node.textContent), ['README.md']);
 });
 
+test('a zero line count draws no figure in its fixed-width column', async () => {
+  const addedOnly = loadDiffPage({
+    search: '?repo=/work/alpha&base=main&head=feature',
+    repos: [{label: 'alpha', path: '/work/alpha'}],
+    manifest: {
+      ...MANIFEST,
+      total_additions: 2,
+      total_deletions: 0,
+      files: [{path: 'added.py', status: 'A', additions: 2, deletions: 0}],
+    },
+  });
+  await settle();
+
+  const [addedRow] = addedOnly.elements.get('diff-output').children;
+  assert.deepEqual(addedRow.children[0].children[2].children.map((node) => node.textContent), ['+2', '']);
+  const [addedTotal] = addedOnly.elements.get('summary').children;
+  assert.deepEqual(addedTotal.children.map((node) => node.textContent), ['+2', '']);
+
+  const deletedOnly = loadDiffPage({
+    search: '?repo=/work/alpha&base=main&head=feature',
+    repos: [{label: 'alpha', path: '/work/alpha'}],
+    manifest: {
+      ...MANIFEST,
+      total_additions: 0,
+      total_deletions: 4,
+      files: [{path: 'gone.py', status: 'D', additions: 0, deletions: 4}],
+    },
+  });
+  await settle();
+
+  const [deletedRow] = deletedOnly.elements.get('diff-output').children;
+  assert.deepEqual(deletedRow.children[0].children[2].children.map((node) => node.textContent), ['', '-4']);
+  const [deletedTotal] = deletedOnly.elements.get('summary').children;
+  assert.deepEqual(deletedTotal.children.map((node) => node.textContent), ['', '-4']);
+});
+
 test('a move row names the path the move came from', async () => {
   const {elements} = loadDiffPage({
     search: '?repo=/work/alpha&base=main&head=feature',

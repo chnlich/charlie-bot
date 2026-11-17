@@ -707,14 +707,16 @@
     badge.classList.add('diff-file-badge');
 
     // The line counts sit in a fixed-width pair, so the + and - figures of every row line up in one column.
+    // A count of zero draws no figure: a red "-0" reads as a deletion that did not happen, and the fixed-width
+    // slot keeps the other figure in its column without it.
     const counts = document.createElement('span');
     counts.className = 'diff-file-counts flex font-mono text-xs whitespace-nowrap shrink-0';
     const add = document.createElement('span');
     add.className = 'w-10 text-right ' + ADDED_COUNT_CLASS;
-    add.textContent = `+${file.additions}`;
+    add.textContent = file.additions > 0 ? `+${file.additions}` : '';
     const del = document.createElement('span');
     del.className = 'ml-1.5 w-10 text-left text-red-600';
-    del.textContent = `-${file.deletions}`;
+    del.textContent = file.deletions > 0 ? `-${file.deletions}` : '';
     counts.append(add, del);
 
     const pathEl = document.createElement('span');
@@ -777,10 +779,10 @@
     count.textContent = `${data.total_files} ${data.total_files === 1 ? 'file' : 'files'} changed`;
     const add = document.createElement('span');
     add.className = 'ml-1.5 ' + ADDED_COUNT_CLASS;
-    add.textContent = `+${data.total_additions.toLocaleString('en-US')}`;
+    add.textContent = data.total_additions > 0 ? `+${data.total_additions.toLocaleString('en-US')}` : '';
     const del = document.createElement('span');
     del.className = 'ml-1.5 text-red-600';
-    del.textContent = `-${data.total_deletions.toLocaleString('en-US')}`;
+    del.textContent = data.total_deletions > 0 ? `-${data.total_deletions.toLocaleString('en-US')}` : '';
     count.append(add, del);
     const range = document.createElement('span');
     range.className = 'font-mono text-xs text-slate-500 break-words';

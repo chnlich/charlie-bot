@@ -318,7 +318,8 @@ fn delivery_event(
     match event.get("type").and_then(Value::as_str) {
       Some(event_types::TASK_CLOSED) => {
         summary = event.get("summary").filter(|value| !value.is_null()).map_or_else(String::new, value_str);
-        close_refs = event.get("result_refs").and_then(Value::as_array).into_iter().flatten().map(value_str).collect();
+        close_refs =
+          event.get(event_types::RESULT_REFS).and_then(Value::as_array).into_iter().flatten().map(value_str).collect();
         close_at =
           event.get("timestamp").map(value_str).ok_or_else(|| StoreError::new("task_closed fact has no timestamp"))?;
       }
@@ -339,7 +340,7 @@ fn delivery_event(
     "type": event_types::RUN_DELIVERY,
     TASK_STATE: task_state,
     "summary": summary,
-    "result_refs": close_refs,
+    (event_types::RESULT_REFS): close_refs,
     (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
     (OBSERVATION_EVENTS_REF): delivered.events_ref.as_deref().unwrap_or(""),
     (OBSERVATION_RESULT_REF): delivered.result_ref.as_deref().unwrap_or(""),
@@ -371,7 +372,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     match event.get("type").and_then(Value::as_str) {
       Some(event_types::TASK_CLOSED) => {
         closed_at = truthy_str(event.get("timestamp"));
-        if let Some(refs) = event.get("result_refs").and_then(Value::as_array) {
+        if let Some(refs) = event.get(event_types::RESULT_REFS).and_then(Value::as_array) {
           for reference in refs {
             let reference = value_str(reference);
             if let Some(value) = reference.strip_prefix("landed:") {

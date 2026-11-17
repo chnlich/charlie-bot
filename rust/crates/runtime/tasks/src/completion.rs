@@ -899,7 +899,7 @@ impl TaskCompletion {
         ("request_id".to_string(), json!(request_id)),
         (event_types::OWNER_RUN_ID.to_string(), json!(owner_run_id)),
         ("summary".to_string(), json!(evidence.summary)),
-        ("result_refs".to_string(), json!(evidence.result_refs)),
+        (event_types::RESULT_REFS.to_string(), json!(evidence.result_refs)),
         ("run_ids".to_string(), json!(evidence.run_ids)),
       ],
     );
@@ -1098,7 +1098,7 @@ impl TaskCompletion {
           ("request_id".to_string(), json!(request_id)),
           ("outcome".to_string(), json!(outcome)),
           ("summary".to_string(), json!(summary)),
-          ("result_refs".to_string(), json!(result_refs)),
+          (event_types::RESULT_REFS.to_string(), json!(result_refs)),
           ("run_ids".to_string(), json!(run_ids)),
           ("report_to".to_string(), report_to.map_or(Value::Null, |parent| json!(parent))),
         ];
@@ -2139,7 +2139,7 @@ fn evidence_from_close_request(request: &Value) -> StoreResult<CompletionEvidenc
   };
   Ok(CompletionEvidence {
     summary: string_field("summary"),
-    result_refs: strings_field("result_refs")?,
+    result_refs: strings_field(event_types::RESULT_REFS)?,
     run_ids: strings_field("run_ids")?,
     ..CompletionEvidence::default()
   })

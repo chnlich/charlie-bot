@@ -1113,6 +1113,9 @@ function renderMessage(msg, sessionId) {
     return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden\">"
       + escapeHtml(msg.content) + "</div></div>";
   }
+  // A `web_reply_check` line records the audit of one reply's text. The reply and its findings carry what the reader
+  // needs, so the marker draws nothing.
+  if (msg.role === "web_reply_check") return "";
   if (msg.role === "separator") {
     var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
     return "<div class=\"" + SEPARATOR_ROW_CLASS + "\""

@@ -80,7 +80,7 @@ fn parse_name_status(output: &str) -> Result<HashMap<String, char>, Response> {
     let letter = status.chars().next().expect("a non-empty status has a first character");
     let (path_index, step) = if letter == 'R' || letter == 'C' { (i + 2, 3) } else { (i + 1, 2) };
     let Some(path) = tokens.get(path_index) else {
-      return Err(responses::internal_error("IndexError", "list index out of range".to_string()));
+      return Err(responses::internal_error(text_repr::INDEX_ERROR, text_repr::LIST_INDEX_OUT_OF_RANGE.to_string()));
     };
     statuses.insert(path.to_string(), letter);
     i += step;
@@ -106,7 +106,7 @@ fn parse_numstat(output: &str) -> Result<Vec<NumstatEntry>, Response> {
     };
     let (path, old_path, step) = if path.is_empty() {
       let (Some(old), Some(new)) = (tokens.get(i + 1), tokens.get(i + 2)) else {
-        return Err(responses::internal_error("IndexError", "list index out of range".to_string()));
+        return Err(responses::internal_error(text_repr::INDEX_ERROR, text_repr::LIST_INDEX_OUT_OF_RANGE.to_string()));
       };
       (new.to_string(), Some(old.to_string()), 3)
     } else {

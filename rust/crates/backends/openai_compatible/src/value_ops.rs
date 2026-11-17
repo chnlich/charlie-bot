@@ -3,7 +3,10 @@
 //! `charliebot_core::json_loads` produced, and each error carries the text the route reports.
 
 use charliebot_core::json_loads::{self, LoadError};
-use charliebot_core::text_repr::{is_truthy, no_attribute, not_iterable, not_subscriptable, type_name};
+use charliebot_core::text_repr::{
+  INDEX_ERROR, LIST_INDEX_OUT_OF_RANGE, STRING_INDEX_OUT_OF_RANGE, is_truthy, no_attribute, not_iterable,
+  not_subscriptable, type_name,
+};
 use serde_json::{Map, Value};
 
 /// The proxy's event style: the compact ASCII JSON from its one owner in `charliebot_core::text_repr`.
@@ -65,12 +68,12 @@ pub fn first_item(value: &Value) -> ValueResult<Value> {
   match value {
     Value::Array(items) => match items.first() {
       Some(item) => Ok(item.clone()),
-      None => raised("IndexError", "list index out of range"),
+      None => raised(INDEX_ERROR, LIST_INDEX_OUT_OF_RANGE),
     },
     Value::Object(_) => raised("KeyError", "0"),
     Value::String(text) => match text.chars().next() {
       Some(character) => Ok(Value::String(character.to_string())),
-      None => raised("IndexError", "string index out of range"),
+      None => raised(INDEX_ERROR, STRING_INDEX_OUT_OF_RANGE),
     },
     other => raised("TypeError", not_subscriptable(type_name(other))),
   }

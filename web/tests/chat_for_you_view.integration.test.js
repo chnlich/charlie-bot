@@ -500,6 +500,14 @@ test('the empty state is one button row when no message shows', () => {
   assert.equal(rig.root.children[0].tagName, 'BUTTON');
 });
 
+test('a session with no message names the composer instead of opening Everything', () => {
+  const rig = forYouRig([]);
+  assert.deepEqual(rowsOf(rig.root), ['empty', 'holder']);
+  const row = rig.root.children[0];
+  assert.equal(row.tagName, 'P');
+  assert.match(row.textContent, /send one below/);
+});
+
 test('a click on the empty-state row switches to Everything, and the switch holds', () => {
   const rig = forYouRig([eMsg('assistant', 'a1', 'only work')]);
   rig.root.children[0].onclick();

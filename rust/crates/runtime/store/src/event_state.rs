@@ -31,7 +31,7 @@ pub(crate) const LINE_INDEX_STRIDE: usize = 64;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LineIndex {
   pub(crate) count: usize,
-  /// `(line, byte)` pairs in ascending order; the first is `(0, 0)`, and `byte` starts a line.
+  /// `(line, byte)` pairs in ascending order. The first is `(0, 0)`, and `byte` starts a line.
   pub(crate) checkpoints: Vec<(usize, u64)>,
 }
 
@@ -47,7 +47,7 @@ impl LineIndex {
   ///
   /// The count scan splits a large log into ranges, and each range numbers its checkpoints from its own first line, so
   /// the last checkpoint can sit anywhere within a stride of a multiple. A multiple alone would then leave the next
-  /// page almost two strides from its checkpoint; the gap rule keeps every page within one.
+  /// page almost two strides from its checkpoint. The gap rule keeps every page within one.
   pub(crate) fn record_append(&mut self, byte: u64) {
     let line = self.count;
     let last_checkpoint_line = self.checkpoints.last().map_or(0, |(checkpoint, _)| *checkpoint);

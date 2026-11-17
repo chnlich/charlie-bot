@@ -46,7 +46,7 @@ pub enum LineRule {
 pub struct LogLine {
   /// The line's 1-based number in its file, blank lines included.
   pub number: usize,
-  /// The line's text. A `Terminated` line keeps its `\n`; the other rules drop the terminator.
+  /// The line's text. A `Terminated` line keeps its `\n`. The other rules drop the terminator.
   pub text: String,
 }
 
@@ -94,11 +94,11 @@ impl fmt::Display for LogReadError {
 
 impl std::error::Error for LogReadError {}
 
-/// The lines of one read, in file order. A whole-file rule fails before its first line; `PerLine` fails at the line.
+/// The lines of one read, in file order. A whole-file rule fails before its first line. `PerLine` fails at the line.
 pub type LogLines = Box<dyn Iterator<Item = Result<LogLine, LogReadError>>>;
 
 /// The lines of the chat event log at `path`, split and read by `rule`. A missing file is `LogReadError::Io` with
-/// `NotFound`; the caller decides whether that means an empty log.
+/// `NotFound`. The caller decides whether that means an empty log.
 pub fn read_lines(path: &Path, rule: LineRule) -> Result<LogLines, LogReadError> {
   match rule {
     LineRule::PerLine => {
@@ -176,7 +176,7 @@ pub fn archive_files(session_dir: &Path) -> io::Result<Vec<PathBuf>> {
 }
 
 /// The chat event logs of a session in reading order: each archive in file-name order, then the live log when it is
-/// a file. A `data/archives` that is not a directory holds no archives; the live log still counts.
+/// a file. A `data/archives` that is not a directory holds no archives. The live log still counts.
 pub fn session_log_paths(session_dir: &Path) -> io::Result<Vec<PathBuf>> {
   let mut paths = if layout::archives_dir(session_dir).is_dir() { archive_files(session_dir)? } else { Vec::new() };
   let live = layout::chat_events_path(session_dir);

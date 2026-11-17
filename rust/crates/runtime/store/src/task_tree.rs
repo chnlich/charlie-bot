@@ -61,7 +61,7 @@ const LIFECYCLE_STATE_TYPES: &[&str] =
   &[event_types::CLONE_START, event_types::TASK_CLOSED, event_types::TASK_REOPENED];
 // The facts a node's Run verdicts read: terminal outcomes and stop requests.
 const RUN_FACT_TYPES: &[&str] = &[event_types::RUN_FINISHED, event_types::RUN_STOP_REQUESTED];
-// Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
+// Bound on the non-archived descendants one subtree walk may hold. Archived ones do not count.
 const TASK_DESCENDANT_NODE_LIMIT: usize = 1000;
 const SUCCESSOR_HOP_LIMIT: usize = 100;
 const TASK_FACTS_STOP_CHECK_INTERVAL: usize = 256;
@@ -91,7 +91,7 @@ pub enum TaskCaller {
   Agent { session_id: String },
 }
 
-/// The task fields of one PATCH body. A `None` field is absent from the body and changes nothing; `Some(None)` is an
+/// The task fields of one PATCH body. A `None` field is absent from the body and changes nothing. `Some(None)` is an
 /// explicit null, which clears the field where the model allows it. `name` has no explicit null: a `None` name
 /// changes nothing.
 #[derive(Clone, Debug, Default)]
@@ -122,7 +122,7 @@ impl PatchTask {
 /// boundary and the report deliveries through the store, so the dispatcher implements this trait and the caller passes
 /// it in.
 pub trait StructuralBlockers: Send + Sync {
-  /// The blockers of the node's unprocessed task inputs; empty when it has none.
+  /// The blockers of the node's unprocessed task inputs. Empty when it has none.
   fn pending_input_blockers(&self, session_id: &str) -> StoreResult<Vec<String>>;
   /// One blocker for each close report that the node still owes its fixed recipient.
   fn undelivered_report_blockers(&self, session_id: &str) -> StoreResult<Vec<String>>;
@@ -413,7 +413,7 @@ impl<'a> NodeReads<'a> {
 
   /// Derive the activity from the run records and, when a run is unsettled, the run facts at the pass's identity.
   ///
-  /// Returns whether the derivation read `/proc` for a launched run's liveness; such a verdict is not memoized.
+  /// Returns whether the derivation read `/proc` for a launched run's liveness. Such a verdict is not memoized.
   fn derive_activity(
     &mut self,
     session_id: &str,
@@ -486,7 +486,7 @@ impl Store {
   ///
   /// The memo answers what a fold of [`Store::load_all_facts`] answers because its key covers every input of that
   /// read: the live-cache generation and the archived extent. A list-identity key and suffix cursor keep the fold
-  /// incremental; `node_facts_cache` stays resident across recovery eviction. A load from disk takes a new
+  /// incremental. `node_facts_cache` stays resident across recovery eviction. A load from disk takes a new
   /// generation. Within one
   /// generation the cached list changes only by `append_chat_event` pushes, which the suffix fold extends.
   pub fn node_facts(&self, session_id: &str) -> StoreResult<Arc<NodeFacts>> {
@@ -749,7 +749,7 @@ impl Store {
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
   /// the archived extent are the ones it covers. The read parses no history. A cold read with no sealed state folds
   /// the log's fact checkpoint and the bytes past it when one covers the log, which memoizes the same facts and runs
-  /// under the log's identity; any other cold read loads the history.
+  /// under the log's identity. Any other cold read loads the history.
   fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     let (generation, list_identity, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
@@ -863,7 +863,7 @@ impl Store {
   /// Keep a node's state past the eviction of its cached events, keyed by the log file's identity.
   ///
   /// `evicted` holds the dropped list's generation and length and the identity of the file read under the same session
-  /// lock, so the file holds exactly the dropped list. A state memo that covers that whole list keeps its version; one
+  /// lock, so the file holds exactly the dropped list. A state memo that covers that whole list keeps its version. One
   /// that does not gives way to the node's [`NodeFacts`] memo when that one covers the whole list. A state keyed by a
   /// file outlives an eviction that finds the cache already cold. Anything else leaves the memo.
   pub(crate) fn seal_node_state(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity, Arc<()>)>) {
@@ -941,7 +941,7 @@ impl Store {
         })
       };
       if let Some(state) = sealed.transpose()? {
-        // Recovery already folded this file; use the same (inode, size, mtime) verdict before opening its tail again.
+        // Recovery already folded this file. Use the same (inode, size, mtime) verdict before opening its tail again.
         self
           .task_state_tail_cache
           .lock()
@@ -1081,7 +1081,7 @@ impl Store {
   ///
   /// An archived row stays navigable while running work lives at or below it: dropping it would sever the path to
   /// that work in a partial client tree. The row's own work state counts, so a running leaf below a retained archived
-  /// parent keeps that parent's child page visible; the row still reports `archived`.
+  /// parent keeps that parent's child page visible. The row still reports `archived`.
   ///
   /// `after` is the `(created_at, session_id)` of the previous page's last row, and `limit` is the page size. The page
   /// computes its own rows and the one row that proves `has_more`, never the parent's whole child list. On a home
@@ -1140,7 +1140,7 @@ impl Store {
       }
       rows.push(row);
     }
-    // A run record written during the pass leaves the rows a mix of two verdicts; no memo entry names that page.
+    // A run record written during the pass leaves the rows a mix of two verdicts. No memo entry names that page.
     if self.records_generation() == records_generation && !reads.proc_dependent {
       let (ids, identity_values) = reads.identities_read().into_iter().unzip();
       let rows = Arc::new(rows);
@@ -1163,7 +1163,7 @@ impl Store {
 
   /// The child ids a page can return, in order: one more than `limit` names the row that proves `has_more`.
   ///
-  /// The archived filter runs on a computed row, so this list may hold ids the page drops; the row pass reads any
+  /// The archived filter runs on a computed row, so this list may hold ids the page drops. The row pass reads any
   /// further id it needs one stat at a time.
   fn page_candidates(
     &self,
@@ -1578,7 +1578,7 @@ impl Store {
   }
 
   /// The live log's newest `prompt_changed` fact of `scope`. A cold cache whose log keeps the identity of a sealed boot
-  /// scan answers from that scan; any other read takes it from the live events.
+  /// scan answers from that scan. Any other read takes it from the live events.
   pub(crate) fn newest_live_prompt_change(
     &self,
     session_id: &str,
@@ -1695,7 +1695,7 @@ impl Store {
   /// Apply one PATCH of a task node with its structural guards (`TaskTreeManager.patch_task`).
   ///
   /// The operator may change every field. An agent may only reparent within its own subtree, with a body that sets
-  /// `task_parent_id` alone; the move keeps each moved session's subtree rules (`task_reparent`). Under the control
+  /// `task_parent_id` alone. The move keeps each moved session's subtree rules (`task_reparent`). Under the control
   /// lock the guards of every node that the change moves or restructures are collected before any write, so a refusal
   /// writes nothing. The field write is a fresh read-modify-write, so a rename that landed meanwhile is kept. Each
   /// prompt scope then swaps its reference and lands its fact. A changed parent leaves one `task_reparented` fact.
@@ -2179,7 +2179,7 @@ impl Store {
   /// rebuilds it.
   ///
   /// A rebuild walks every session of the home, so on the production-sized home it outlasts the request that
-  /// triggers it. The server installs this handle once, after it wraps the store in its `Arc`; a store without the
+  /// triggers it. The server installs this handle once, after it wraps the store in its `Arc`. A store without the
   /// handle keeps rebuilding on the reading thread.
   pub fn enable_tree_index_background_refresh(self: &Arc<Self>) {
     let _ = self.tree_index_self.set(Arc::downgrade(self));
@@ -2680,7 +2680,7 @@ fn descendant_ids_until(
 }
 
 /// Whether a node is archived, counting an archived ancestor. A store-level caller reads the build's verdict when the
-/// index holds it; a tree row reads its pass's states through [`NodeReads::archived`].
+/// index holds it. A tree row reads its pass's states through [`NodeReads::archived`].
 fn archived_of(
   store: &Store,
   index: &TreeIndex,
@@ -3066,7 +3066,7 @@ fn strip_heading(line: &str) -> &str {
 fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {
   let mut count = 0;
   for entry in fs::read_dir(sessions_dir).map_err(|error| path_error(sessions_dir, error))? {
-    // Path::is_dir follows symlinks; DirEntry::file_type would not.
+    // Path::is_dir follows symlinks. DirEntry::file_type would not.
     if entry.map_err(|error| path_error(sessions_dir, error))?.path().is_dir() {
       count += 1;
     }
@@ -5191,7 +5191,7 @@ pub(crate) mod tests {
     let store = make_store(home.path());
     let node = create_node(&store, "detail-tail", None, TaskProfile::Manager).await;
     append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
-    // The index build reads each node's lifecycle tail; the detail answers from that same memo.
+    // The index build reads each node's lifecycle tail. The detail answers from that same memo.
     assert_eq!(store.task_state_for_tree_index(&node.id).unwrap(), "completed");
 
     let tails = store.task_state_tail_read_count();

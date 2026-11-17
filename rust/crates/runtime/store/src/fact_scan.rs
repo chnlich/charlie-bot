@@ -4,7 +4,7 @@
 //! Chat content is nearly all of a long log's bytes, and the facts fold reads none of it. The scan parses each line
 //! with serde_json's own grammar, so it keeps and drops exactly the lines a full read keeps and drops. A line of a
 //! chat-content type ([`CHAT_CONTENT_TYPES`], and a `user` line whose `content` is not a string) becomes a stand-in
-//! event that holds only the line's string `id` and `type`; every other line is built in full. The fold reads nothing
+//! event that holds only the line's string `id` and `type`. Every other line is built in full. The fold reads nothing
 //! but `id` and `type` from a chat-content line, so the stand-in list folds to the full list's facts, and each event
 //! keeps its position.
 //!
@@ -121,11 +121,11 @@ struct FoldedNodeFacts {
 impl Store {
   /// Scan and fold a session's history outside its session lock: its archived events, then its live log. `None`
   /// when the archive does not hold `archive_offset` events, the session has no live log, or the log or the archive
-  /// offset changed during the scan; the node's reads then load the log themselves.
+  /// offset changed during the scan. The node's reads then load the log themselves.
   ///
   /// A checkpoint that still covers the log's prefix answers the scan from the facts it holds and the bytes past its
   /// offset, so the scan reads the folded state and the appended tail instead of the history the state covers. A
-  /// checkpoint that does not cover this log leaves the full scan to run, as a missing one does; a tail of an eighth of
+  /// checkpoint that does not cover this log leaves the full scan to run, as a missing one does. A tail of an eighth of
   /// the covered offset or more also takes the full scan, which rewrites the checkpoint, so a steady state of small
   /// appends keeps one checkpoint read per boot and the next full fold amortizes the write.
   pub fn scan_live_facts(&self, session_id: &str) -> StoreResult<Option<ScannedLiveFacts>> {
@@ -408,7 +408,7 @@ fn fold_checkpoint_and_tail(
   fold_appended_history(&mut facts, &mut runs, tail, archived + checkpoint.covered)?;
   #[cfg(test)]
   {
-    // The test-only visit count a whole-history fold accumulates; a checkpoint starts from the count its prefix covers.
+    // The test-only visit count a whole-history fold accumulates. A checkpoint starts from the count its prefix covers.
     runs.observed_events = archived + checkpoint.covered + tail.len();
   }
   Ok((facts, runs, changes))
@@ -607,7 +607,7 @@ impl<'de> DeserializeSeed<'de> for HeadKeySeed {
   }
 }
 
-/// `Some` when a value is a string, holding its text when the flag asks for it; any other value is parsed and dropped.
+/// `Some` when a value is a string, holding its text when the flag asks for it. Any other value is parsed and dropped.
 struct StrSeed(bool);
 
 impl<'de> DeserializeSeed<'de> for StrSeed {
@@ -773,7 +773,7 @@ mod tests {
     let scanned = open().unwrap();
     let scan = scanned.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
     assert!(scanned.seal_scanned_facts("synthetic", &scan).unwrap());
-    // The scan left a checkpoint; removing it makes the reference store fold the log itself, which this test compares.
+    // The scan left a checkpoint. Removing it makes the reference store fold the log itself, which this test compares.
     std::fs::remove_file(scanned.fact_checkpoint_path("synthetic")).unwrap();
     let cold = open().unwrap();
 
@@ -858,7 +858,7 @@ mod tests {
     assert_eq!(scanned.history_work().file_reads, 0, "the sealed facts answer without reading the log");
   }
 
-  /// A scanned line is kept exactly when a full read keeps it; a stand-in holds the full event's string id and type,
+  /// A scanned line is kept exactly when a full read keeps it. A stand-in holds the full event's string id and type,
   /// and every other kept line is the full event.
   #[test]
   fn scanned_lines_keep_what_a_full_read_keeps() {
@@ -1081,7 +1081,7 @@ mod tests {
     assert_eq!(scanned_value(&resumed), scanned_value(&full_scan));
   }
 
-  /// A matching checkpoint's read parses the appended tail's lines only, not the covered history's; the event index
+  /// A matching checkpoint's read parses the appended tail's lines only, not the covered history's. The event index
   /// still answers a membership test from its table, so an appended line that repeats a covered id folds as the whole
   /// log folds it.
   #[test]
@@ -1291,7 +1291,7 @@ mod tests {
     // event cache is cold and the whole-log load it may make is counted.
     //
     // The checkpoint keeps each chat-content line as its id and type, so the facts' event index compares by each
-    // event's id and type; every decision field, the task state and the run facts must match the whole-log fold.
+    // event's id and type. Every decision field, the task state and the run facts must match the whole-log fold.
     let state_value = |store: &Store| {
       let state = store.node_state("synthetic").unwrap();
       let mut task = task_value(&store.facts_of("synthetic").unwrap());

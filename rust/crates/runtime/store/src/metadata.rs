@@ -32,7 +32,7 @@ pub const SCHEDULE_PROJECT: &str = "schedule_project";
 /// The session-metadata field saying whether a failed bound-task run is allowed.
 pub const SCHEDULE_ALLOW_FAILURE: &str = "schedule_allow_failure";
 /// The session-listing field holding the name of the task bound to the session's schedule. The cron row fields write
-/// it, and the session listing fills `null` when no task is bound; it is computed per listing, so `SCHEDULE_FIELDS`
+/// it, and the session listing fills `null` when no task is bound. It is computed per listing, so `SCHEDULE_FIELDS`
 /// does not hold it.
 pub const SCHEDULE_TASK: &str = "schedule_task";
 /// Every schedule field name of a session, in the order session metadata writes them. The session listing and the cron
@@ -199,7 +199,7 @@ impl TaskType {
 }
 
 /// Who approves a task and takes over its delivery, persisted in `TaskSpec`. `User` holds a manager's self-archive
-/// until the user has opened the session; `Parent` closes it when its run ends.
+/// until the user has opened the session. `Parent` closes it when its run ends.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TaskApprover {
   #[default]
@@ -383,11 +383,11 @@ impl<'de> Deserialize<'de> for TaskSpec {
       cold_read: Option<ColdReadSpec>,
       #[serde(default)]
       approver: TaskApprover,
-      // The retired context-work flag. Sessions written while it existed still carry it; the read
+      // The retired context-work flag. Sessions written while it existed still carry it. The read
       // accepts it and drops it.
       #[serde(default, rename = "context_work")]
       _retired_context_work: Option<bool>,
-      // The retired acceptance and context-refs lists. Their Goal text replaced them; the read accepts
+      // The retired acceptance and context-refs lists. Their Goal text replaced them. The read accepts
       // them and drops them, so the next save omits them.
       #[serde(default, rename = "acceptance")]
       _retired_acceptance: Option<IgnoredAny>,
@@ -746,7 +746,7 @@ impl SessionMetadata {
 pub enum MetadataReadError {
   /// The file could not be opened or read as text.
   Io(std::io::Error),
-  /// The file's text is not one JSON value the reader accepts; the message is the decoder's own.
+  /// The file's text is not one JSON value the reader accepts. The message is the decoder's own.
   Json(String),
 }
 

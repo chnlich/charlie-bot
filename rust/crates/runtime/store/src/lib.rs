@@ -128,7 +128,7 @@ impl StoreError {
     Self::Archived(session_id.into())
   }
 
-  /// Construct a conflict with its blockers; its detail joins them with `; `.
+  /// Construct a conflict with its blockers. Its detail joins them with `; `.
   pub fn conflict(blockers: Vec<String>) -> Self {
     Self::Conflict(blockers)
   }

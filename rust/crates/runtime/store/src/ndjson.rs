@@ -30,7 +30,7 @@ pub(crate) fn parse_file_line(raw: &[u8], keys: &ParseKeys) -> Option<CompactVal
   parse_text_line(raw, |text| parse_file_text(text, keys))
 }
 
-/// One line's text parsed with the object keys taken from one file's `keys`; `None` for malformed JSON.
+/// One line's text parsed with the object keys taken from one file's `keys`. `None` for malformed JSON.
 pub(crate) fn parse_file_text(text: &str, keys: &ParseKeys) -> Option<CompactValue> {
   // `serde_json::from_str` is this deserialize followed by the check that only whitespace remains.
   let mut deserializer = serde_json::Deserializer::from_str(text);
@@ -70,7 +70,7 @@ pub(crate) fn reset_line_parses() {
 
 /// Parse every physical line into the compact event form, including a final line without `\n`.
 ///
-/// The file maps once and memchr supplies the line boundaries (an mmap plus zero-copy line slices); no
+/// The file maps once and memchr supplies the line boundaries (an mmap plus zero-copy line slices). No
 /// per-line buffer is allocated.
 pub(crate) fn read_file_compact(path: &Path) -> StoreResult<Vec<CompactValue>> {
   read_file_lines(path, parse_file_line)
@@ -102,7 +102,7 @@ pub(crate) fn read_file_compact_sized_until(
   Ok((parse_mapped_lines(&map, should_stop), map.len() as u64))
 }
 
-/// Read every physical line of `path` through `line`, including a final line without `\n`; a line that `line` answers
+/// Read every physical line of `path` through `line`, including a final line without `\n`. A line that `line` answers
 /// with `None` adds no event. The lines share one [`ParseKeys`], as a whole-file parse's lines do.
 pub(crate) fn read_file_lines(
   path: &Path,
@@ -197,7 +197,7 @@ fn lines_of(bytes: &[u8], line: &impl Fn(&[u8], &ParseKeys) -> Option<CompactVal
   events
 }
 
-/// Read or map one event log through `run_logs`, so a compressed log reads as its decompressed bytes; `None` covers
+/// Read or map one event log through `run_logs`, so a compressed log reads as its decompressed bytes. `None` covers
 /// a missing log and a log with no bytes.
 fn open_log_map(path: &Path) -> StoreResult<Option<fsutil::FileBytes>> {
   run_logs::read_bytes(path).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))

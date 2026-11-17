@@ -2188,7 +2188,7 @@ fn gate_cases() -> Vec<Value> {
       manager_profiles.clone(),
     );
   }
-  // A summon before the node's newest clone_start belongs to the source; one after it counts.
+  // A summon before the node's newest clone_start belongs to the source. One after it counts.
   add(
     "summon-before-clone-marker",
     "child",
@@ -2603,7 +2603,7 @@ fn message_aggregator_accepts_every_recorded_shape() {
 
 /// Compare a live frame feed with a recording whose stream frames are whole-draft snapshots. The live feed
 /// sends only the new text, so its appends are accumulated and each frame's draft is compared with that
-/// frame's recorded snapshot; every other frame must match exactly.
+/// frame's recorded snapshot. Every other frame must match exactly.
 fn assert_recorded_drafts(actual: Vec<Value>, recorded: Value) {
   let recorded = without_repeated_snapshots(recorded.as_array().unwrap());
   let mut actual = actual.into_iter();
@@ -2625,7 +2625,7 @@ fn assert_recorded_drafts(actual: Vec<Value>, recorded: Value) {
       thinking = extend_streamed(&thinking, append, live["thinking_length"].as_u64());
     }
     if let Some(frame_tools) = live.get("tools") {
-      // A live frame carries the rows from `tools_from` on; the page keeps the rows before it.
+      // A live frame carries the rows from `tools_from` on. The page keeps the rows before it.
       tools = match live["tools_from"].as_u64() {
         Some(from) => {
           let mut held = tools.as_array().cloned().unwrap_or_default();

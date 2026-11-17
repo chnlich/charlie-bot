@@ -4,8 +4,8 @@
 //! feature owns the task files: their name rules, field validation and prompt pointers. The store cannot depend on a
 //! feature crate, so this module decodes each task file the way the loader does and reads only its
 //! `session_id`. The configuration is the binding's single source: no session metadata carries a marker, and a
-//! disabled task keeps its `session_id`, so its binding counts. A file the read or decode rejects binds nothing;
-//! the loader rejects the same file and raises its own broken-file alert for it.
+//! disabled task keeps its `session_id`, so its binding counts. A file the read or decode rejects binds nothing.
+//! The loader rejects the same file and raises its own broken-file alert for it.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -92,7 +92,7 @@ mod tests {
       "name: paused\nsession_id: 22222222-2222-4222-8222-222222222222\nenabled: false\n",
     );
     task_file(home.path(), "autobind.yaml", "name: autobind\nsession_id: null\n");
-    // A file the decode rejects is no task's configuration; the loader alerts it.
+    // A file the decode rejects is no task's configuration. The loader alerts it.
     task_file(home.path(), "broken.yaml", "session_id: [unclosed\n");
     task_file(home.path(), "notes.txt", "session_id: 33333333-3333-4333-8333-333333333333\n");
 

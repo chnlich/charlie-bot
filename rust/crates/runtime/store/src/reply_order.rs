@@ -155,7 +155,7 @@ fn event_type(event: &ChatEvent) -> Option<&str> {
   event.get("type").and_then(CompactValue::as_str)
 }
 
-/// The event's log time, parsed; a missing or unparsable time is an error naming the event kind.
+/// The event's log time, parsed. A missing or unparsable time is an error naming the event kind.
 fn event_time(event: &ChatEvent, kind: &str) -> StoreResult<UtcDateTime> {
   let timestamp = event
     .get("timestamp")
@@ -257,7 +257,7 @@ mod tests {
       .to_string(),
     )
     .expect("run record");
-    // A resumed turn loses its master_done input ids; the run record still names what it received.
+    // A resumed turn loses its master_done input ids. The run record still names what it received.
     let events = [event(json!({"type": MASTER_DONE, "run_id": "resumed-run", "input_event_ids": []}))];
 
     let received = received_by_finished_turns(&store, session_id, &events).expect("the received ids read");

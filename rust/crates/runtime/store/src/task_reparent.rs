@@ -341,7 +341,7 @@ mod tests {
     let plain_root = create_node(&store, "plain-root", None, TaskProfile::Manager).await;
     let other = create_node(&store, "other", None, TaskProfile::Manager).await;
     let attached = create_node(&store, "attached", Some(&other.id), TaskProfile::Manager).await;
-    // `attached` sits in another line, and a cron task binds it; the outside root is bound, the plain root is not.
+    // `attached` sits in another line, and a cron task binds it. The outside root is bound, the plain root is not.
     bind_cron_task(home.path(), "attached", &attached.id, true);
     bind_cron_task(home.path(), "envelope", &tree.outside.id, true);
 

@@ -195,7 +195,7 @@ impl MessageAggregator {
   }
 
   /// Set whether a committed draft leaves out the text already sent in stream frames. The live feed sets this,
-  /// so a page that holds the draft is not sent it twice; a replay keeps the full text for a page that missed it.
+  /// so a page that holds the draft is not sent it twice. A replay keeps the full text for a page that missed it.
   pub fn set_omit_streamed_content(&mut self, omit: bool) {
     self.omit_streamed_content = omit;
   }
@@ -560,7 +560,7 @@ impl MessageAggregator {
       return Vec::new();
     }
     let append = self.assistant_buf[self.streamed_text_bytes..].to_string();
-    // An assistant event may replace the thinking instead of extending it; a replacement resends it whole.
+    // An assistant event may replace the thinking instead of extending it. A replacement resends it whole.
     let thinking_extends = self.thinking_buf.starts_with(self.streamed_thinking.as_str());
     let thinking_append = if thinking_extends {
       self.thinking_buf[self.streamed_thinking.len()..].to_string()
@@ -604,7 +604,7 @@ impl MessageAggregator {
 }
 
 /// The index of the first row of `current` that the rows streamed so far do not hold, when the rows changed. Rows
-/// never streamed start the suffix at 0; a draft whose rows equal the streamed ones changed none; rows only ever
+/// never streamed start the suffix at 0. A draft whose rows equal the streamed ones changed none. Rows only ever
 /// grow or change in place between commits, so a suffix that would shrink has no case.
 fn first_changed_row(streamed: Option<&Value>, current: Option<&Value>) -> Option<usize> {
   let Some(current_rows) = current.and_then(Value::as_array) else { return streamed.is_some().then_some(0) };
@@ -1276,7 +1276,7 @@ fn parse_int_string(value: &str) -> Option<String> {
   Some(if negative { format!("-{digits}") } else { digits.to_string() })
 }
 
-/// The text of a field value. A string is read in place; other shapes take the text `text_repr::value_str` renders.
+/// The text of a field value. A string is read in place. Other shapes take the text `text_repr::value_str` renders.
 fn event_str<E: EventFields>(value: &E) -> String {
   match value.as_str_field() {
     Some(text) => text.to_string(),
@@ -1342,7 +1342,7 @@ mod tests {
 
   /// The fixture's stream frames are whole-draft snapshots, which is the wire form of the Python aggregator
   /// they were recorded from. The live feed carries only new text, so the appends are accumulated here and the
-  /// draft at each frame must equal that frame's snapshot; every other frame must match exactly.
+  /// draft at each frame must equal that frame's snapshot. Every other frame must match exactly.
   fn assert_parity_frames(actual: Vec<Value>, expected: &[Value], case: &str) {
     let expected = without_repeated_snapshots(expected);
     let mut actual = actual.into_iter();
@@ -1368,7 +1368,7 @@ mod tests {
         thinking = extend_streamed(&thinking, append, frame["thinking_length"].as_u64());
       }
       if let Some(frame_tools) = frame.get("tools") {
-        // A live frame carries the rows from `tools_from` on; the page keeps the rows before it.
+        // A live frame carries the rows from `tools_from` on. The page keeps the rows before it.
         tools = match frame["tools_from"].as_u64() {
           Some(from) => {
             let mut held = tools.as_array().cloned().unwrap_or_default();

@@ -390,22 +390,46 @@ fn starred_response(features: &FeatureContext, request: &Request<Body>) -> Respo
 
 async fn list_groups(State(features): State<Arc<FeatureContext>>) -> Response {
   match blocking_store(move || list_group_names(&features)).await {
-    Ok(groups) => responses::fast_json(StatusCode::OK, &json!(groups)),
+    Ok(groups) => responses::fast_json(StatusCode::OK, &json!(*groups)),
     Err(error) => store_error(error),
   }
 }
 
+/// The names the last call returned, beside the row corpus it read them from.
+///
+/// The store serves a repeat call from one memoized corpus, whose rows it hands out as shared `Arc`s. One corpus
+/// holds one set of names, so a call over the corpus the last call read answers the list that call built. The entry
+/// holds the rows, so the address it keys on belongs to that corpus alone, and a rebuilt corpus never matches it.
+struct GroupNames {
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
+  names: Arc<Vec<String>>,
+}
+
+static GROUP_NAMES: Mutex<Option<GroupNames>> = Mutex::new(None);
+
 /// The sorted, distinct, nonempty group names of every stored session.
 ///
-/// The names come from the memoized metadata corpus, whose rows the listing memo shares as `Arc`s. A call therefore
-/// clones only the names it returns, not the metadata of the sessions that carry no group.
-fn list_group_names(features: &FeatureContext) -> charliebot_store::StoreResult<Vec<String>> {
+/// The names come from the memoized metadata corpus, whose rows the listing memo shares as `Arc`s. A call over the
+/// corpus the last call read returns the list that call built, because the walk picks the same field out of the same
+/// rows.
+///
+/// The walk reads the metadata of every session of the home, and the home keeps each session's metadata in its own
+/// allocation. A repeat call therefore costs a pass over the whole home to answer the same names.
+fn list_group_names(features: &FeatureContext) -> charliebot_store::StoreResult<Arc<Vec<String>>> {
   let (rows, _) = features.store.load_session_metas_snapshot_versioned(None)?;
+  if let Some(cached) = GROUP_NAMES.lock().expect("group names mutex is not poisoned").as_ref()
+    && Arc::ptr_eq(&cached.rows, &rows)
+  {
+    return Ok(Arc::clone(&cached.names));
+  }
   let mut groups: Vec<String> =
     rows.iter().filter_map(|meta| meta.group.as_ref().filter(|group| !group.is_empty()).cloned()).collect();
   groups.sort();
   groups.dedup();
-  Ok(groups)
+  let names = Arc::new(groups);
+  *GROUP_NAMES.lock().expect("group names mutex is not poisoned") =
+    Some(GroupNames { rows, names: Arc::clone(&names) });
+  Ok(names)
 }
 
 async fn session_status(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -928,6 +952,26 @@ mod tests {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["gone"], json!(["missing-session"]));
     assert_eq!(payload["sessions"]["name"], json!(["refresh-kept"]), "only the named row answers");
+  }
+
+  /// A group list read over the corpus the previous read used answers the list the previous read built, and a read
+  /// over a rebuilt corpus answers the rows' current groups.
+  #[tokio::test]
+  async fn a_group_list_repeats_its_names_over_the_corpus_it_read_and_rereads_a_rebuilt_corpus() {
+    let (_home, features) = crate::test_support::feature_context();
+    let first = crate::test_support::create_node(&features.store, "group-first", None, TaskProfile::Manager).await;
+    features.store.set_group(&first.id, Some("alpha")).await.expect("the first session takes a group");
+
+    let names = list_group_names(&features).expect("the corpus answers its names");
+    assert_eq!(names.as_slice(), ["alpha".to_string()]);
+    let repeated = list_group_names(&features).expect("the same corpus answers its names");
+    assert!(Arc::ptr_eq(&names, &repeated), "the corpus the last call read answers the list that call built");
+
+    let second = crate::test_support::create_node(&features.store, "group-second", None, TaskProfile::Manager).await;
+    features.store.set_group(&second.id, Some("beta")).await.expect("the second session takes a group");
+    let rebuilt = list_group_names(&features).expect("the rebuilt corpus answers its names");
+    assert_eq!(rebuilt.as_slice(), ["alpha".to_string(), "beta".to_string()]);
+    assert!(!Arc::ptr_eq(&names, &rebuilt), "a rebuilt corpus reads the rows again");
   }
 
   /// `filter=all` names the Workspace's rows and answers the same rows those ids name. An unknown filter is refused.

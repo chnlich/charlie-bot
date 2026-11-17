@@ -223,7 +223,7 @@ fn new_entry(alias: &str, hostname: &str) -> Map<String, Value> {
   entry
 }
 
-/// Rebuild the host list in config order. The config alone decides the set. An existing entry keeps
+/// `state`'s host list, rebuilt in config order. The config alone decides the set. An existing entry keeps
 /// its history and takes the config's `HostName`.
 fn merge_hosts(state: &mut State, host_list: &[(String, String)]) -> anyhow::Result<()> {
   let mut previous: HashMap<String, Map<String, Value>> = HashMap::new();
@@ -395,7 +395,7 @@ where
   Ok(login)
 }
 
-/// Record a confirmed renewal for the named host without changing its probe verdict.
+/// A confirmed renewal recorded for the named host, with its probe verdict unchanged.
 pub async fn record_host_renewal(state_path: &Path, alias: &str, renewed_at: OffsetDateTime) -> anyhow::Result<()> {
   let _slot = RoundSlot::wait().await;
   let mut state = read_state(state_path)?;

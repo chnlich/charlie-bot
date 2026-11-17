@@ -21,7 +21,7 @@ use crate::login_page;
 use crate::page;
 use crate::timestamps;
 
-/// Register host-auth routes with the application feature context as shared state.
+/// The host-auth routes, registered with the application feature context as shared state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/host-auth", get_only(host_auth_page))

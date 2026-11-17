@@ -23,7 +23,7 @@ const TEMPLATE: &str = "host_auth.html";
 /// A countdown under a day is highlighted.
 const AMBER_UNDER_SEC: f64 = 24.0 * 3600.0;
 
-/// Render the host-auth page with request data available to the registered template globals.
+/// The host-auth page, rendered with request data available to the registered template globals.
 pub fn render(
   features: &FeatureContext,
   state: &State,

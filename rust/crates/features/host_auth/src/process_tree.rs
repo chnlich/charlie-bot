@@ -28,7 +28,7 @@ pub fn helper_entry(args: &[OsString]) -> Option<u8> {
   }
 }
 
-/// Run the readback command while adopting any descendant whose own parent exits.
+/// The readback command's run, adopting any descendant whose own parent exits.
 fn supervise(args: &[OsString]) -> io::Result<u8> {
   let Some((program, arguments)) = args.split_first() else {
     eprintln!("readback supervisor needs a command");
@@ -53,7 +53,7 @@ fn supervise(args: &[OsString]) -> io::Result<u8> {
   Ok(code as u8)
 }
 
-/// Reap every orphaned descendant after the readback command ends.
+/// The orphaned descendants reaped after the readback command ends.
 fn reap_adopted_children() -> io::Result<()> {
   loop {
     let mut status = 0;

@@ -20,7 +20,7 @@ pub fn host_logins(features: &FeatureContext) -> anyhow::Result<Vec<HostLogin>> 
   host_auth::host_logins(&host_auth::read_state(&state_path(features)?)?)
 }
 
-/// Probe `alias` now over a new connection, write the verdict into the state, and return the host's record.
+/// The host's record from a probe of `alias` now over a new connection. The verdict is written into the state.
 pub fn probe_alias_now<'a>(features: &'a FeatureContext, alias: &'a str) -> BoxFuture<'a, anyhow::Result<HostLogin>> {
   Box::pin(async move {
     let state_path = state_path(features)?;

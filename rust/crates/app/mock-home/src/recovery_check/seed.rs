@@ -12,8 +12,8 @@ use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_store::control_events::TASK_SPEC_HASH_FIELD;
 use charliebot_store::layout;
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_PARENT_ID_FIELD,
-  TASK_TYPE_FIELD,
+  BASE_BRANCH_FIELD, COLD_READ_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD,
+  TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
 };
 use charliebot_store::run_records::{
   OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
@@ -165,7 +165,7 @@ fn session_meta(session_id: &str, case: &Case, index: usize) -> Value {
       (BASE_BRANCH_FIELD): null,
       (TASK_TYPE_FIELD): null,
       (KEEP_WORKTREE_FIELD): false,
-      "cold_read": null,
+      (COLD_READ_FIELD): null,
     },
   })
 }

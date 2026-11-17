@@ -74,15 +74,17 @@
        label follows the new path; the phone block below gives it the line under the path. */
     .diff-file-rename { margin-left: .5rem; color: #64748b; font-size: .75rem; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    /* A phone cannot hold a file row on one line, so it becomes a grid. The status, the file name and
-       the counts share the first line, and a path with a directory puts it on the second line under
-       the name. A file at the repository root has no second line to draw. Its row keeps one line,
-       where the old two-line grid spent a line on the counts alone. The name wraps rather than being
-       cut off, and the counts keep their fixed pair so the figures stay in one column of the list.
-       A move's source label takes the line under the path, or under the name when no directory is shown.
-       The same rule as Tailwind's max-sm, the width the row's utilities use. */
+    /* A phone cannot hold a file row on one line, so it becomes a grid. Every item starts at the top
+       of its rows, so the status, the caret and the counts keep the file's first text line while the
+       name wraps and a path or a move's source takes the lines under it. The status, the file name
+       and the counts share the first line, and a path with a directory puts it on the second line
+       under the name. A file at the repository root has no second line to draw. Its row keeps one
+       line, where the old two-line grid spent a line on the counts alone. The name wraps rather than
+       being cut off, and the counts keep their fixed pair so the figures stay in one column of the
+       list. A move's source label takes the line under the path, or under the name when no directory
+       is shown. The same rule as Tailwind's max-sm, the width the row's utilities use. */
     @media not all and (min-width: 640px) {
-      .diff-file-row { display: grid; column-gap: 0.75rem; row-gap: 0.125rem;
+      .diff-file-row { display: grid; align-items: start; column-gap: 0.75rem; row-gap: 0.125rem;
         grid-template-columns: auto auto minmax(0, 1fr) auto; }
       .diff-file-name { grid-column: 3; grid-row: 1; white-space: normal; word-break: break-all; }
       .diff-file-counts { grid-column: 4; grid-row: 1; }

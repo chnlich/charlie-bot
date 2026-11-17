@@ -149,6 +149,9 @@ pub const BACKEND_LABEL: &str = "backend_label";
 pub const LAUNCH_PROMPT_REF: &str = "launch_prompt_ref";
 /// The run header's reference to the task spec file the run works from.
 pub const TASK_SPEC_REF: &str = "task_spec_ref";
+/// The run header's flag for a run that never started: a failed state with no recorded start. The worker transcript
+/// writes it, and the message aggregator renders the launch failure from it.
+pub const LAUNCH_FAILED: &str = "launch_failed";
 pub const RUN_END: &str = "run_end";
 /// The run's wall-clock length in seconds, in the `run_end` event that the worker transcript writes and the message
 /// aggregator renders as [`THINKING_SECONDS`].

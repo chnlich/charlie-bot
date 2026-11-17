@@ -4,6 +4,8 @@
 //! The walk takes the longest block it can match, then recurses into the two gaps beside it, so the
 //! blocks are not necessarily the longest common subsequence. Adjacent blocks collapse into one equal
 //! run.
+//!
+//! The plan diff is this module's only caller: it compares the tokens of the plan's old and new page.
 
 use std::collections::HashMap;
 use std::hash::Hash;

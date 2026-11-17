@@ -267,7 +267,7 @@ fn run_header_event(
     "started_at": started,
     "timestamp": started.or(terminal),
     "launched": run.started_at.is_some(),
-    "launch_failed": FAILED_STATES.contains(&state) && run.started_at.is_none(),
+    (event_types::LAUNCH_FAILED): FAILED_STATES.contains(&state) && run.started_at.is_none(),
     (event_types::TASK_SPEC_REF): run.task_spec_ref.as_deref().unwrap_or(""),
     (event_types::LAUNCH_PROMPT_REF): launch_prompt_ref,
   })

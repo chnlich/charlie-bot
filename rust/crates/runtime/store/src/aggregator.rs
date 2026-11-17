@@ -933,7 +933,7 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
   let state = event.field("state").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
   let state_word = if state == "withheld" && event.field("withheld").is_some_and(is_truthy) {
     format!("withheld · {}", event_str(event.field("withheld").expect("checked field")))
-  } else if is_truthy(required_field(event, "launch_failed")?) {
+  } else if is_truthy(required_field(event, event_types::LAUNCH_FAILED)?) {
     "launch failed".to_string()
   } else {
     state.clone()
@@ -959,7 +959,7 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
     "error": event.field("error").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
     "tool_calls": event.field("tool_calls").map(EventFields::to_owned_value).unwrap_or(Value::Null),
     "launched": required_field(event, "launched")?.to_owned_value(),
-    "launch_failed": required_field(event, "launch_failed")?.to_owned_value(),
+    (event_types::LAUNCH_FAILED): required_field(event, event_types::LAUNCH_FAILED)?.to_owned_value(),
     (event_types::TASK_SPEC_REF): required_field(event, event_types::TASK_SPEC_REF)?.to_owned_value(),
     (event_types::LAUNCH_PROMPT_REF): required_field(event, event_types::LAUNCH_PROMPT_REF)?.to_owned_value(),
   }))

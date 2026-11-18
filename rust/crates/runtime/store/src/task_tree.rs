@@ -5095,8 +5095,8 @@ pub(crate) mod tests {
     assert!(store.task_tree_activity_call_count() > calls, "a new index build computes the page again");
   }
 
-  /// A repeat page answers from the memo alone until the store writes a history, and the validated page answers that
-  /// way again after the one validation the write costs.
+  /// A repeat page answers from the memo alone until the store writes or removes a history, and the page a validation
+  /// keeps answers the requests after it without another stat.
   #[tokio::test]
   async fn a_repeat_tree_page_reads_no_history_identity_until_the_store_writes_a_history() {
     let home = tempfile::tempdir().unwrap();
@@ -5122,7 +5122,6 @@ pub(crate) mod tests {
       store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
     assert!(identity_reads.load(Ordering::SeqCst) > 0, "a history write makes the page read the identities again");
     assert_eq!(validated.rows, first.rows);
-    *store.identity_hook.lock().unwrap() = None;
 
     let reads_after_validation = identity_reads.load(Ordering::SeqCst);
     let settled = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
@@ -5132,6 +5131,14 @@ pub(crate) mod tests {
       reads_after_validation,
       "the page a validation kept answers the requests after it without another stat"
     );
+
+    store.delete_session_permanently(&child.id).await.unwrap();
+    store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert!(
+      identity_reads.load(Ordering::SeqCst) > reads_after_validation,
+      "a session delete makes the page read the identities again"
+    );
+    *store.identity_hook.lock().unwrap() = None;
   }
 
   #[tokio::test]

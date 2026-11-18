@@ -480,6 +480,16 @@ function handleWSEvent(ev) {
 
   if (t === 'ping') return;
 
+  // The server folds a streamed draft's commit into the frame after it in the same event. The commit is the assistant
+  // message the page streamed, so the page rebuilds its role and streamed-content flag, and hands it to the message
+  // handler before the frame's own handler runs.
+  if (ev.commit) {
+    wsMessageHandlers.get('message').handler({
+      type: 'message',
+      message: Object.assign({}, ev.commit, {role: 'assistant', content_streamed: true}),
+    });
+  }
+
   const registered = wsMessageHandlers.get(t);
   if (registered && !registered.advancesCursor) {
     registered.handler(ev);

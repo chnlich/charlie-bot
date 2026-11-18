@@ -79,8 +79,8 @@ fn open_for_vacuum(db: &Path) -> rusqlite::Result<Connection> {
   Ok(connection)
 }
 
-/// The vacuum that returns the freed pages to the store. Without `force`, a store with no freelist is left as it is
-/// (`_vacuum_opencode_db`).
+/// The vacuum that returns the freed pages to the filesystem. Without `force`, a store with no freelist is left as
+/// it is (`_vacuum_opencode_db`).
 fn vacuum_db(connection: &Connection, force: bool) -> rusqlite::Result<()> {
   connection.pragma_update(None, "busy_timeout", SQLITE_LOCK_WAIT_MS)?;
   if !force && connection.query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))? == 0 {

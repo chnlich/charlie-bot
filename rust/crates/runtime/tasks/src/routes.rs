@@ -617,7 +617,6 @@ async fn delegate_bound_round(
     "backend": round.run_backend,
     "model": round.model.as_deref().unwrap_or_default(),
     "child_session_id": child.id,
-    "bound_task": bound_task,
   });
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, bound_task, "task_delegated_bound_round");

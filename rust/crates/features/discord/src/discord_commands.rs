@@ -1,7 +1,8 @@
 //! The Discord server-side commands behind `charliebot discord read` and
-//! `charliebot discord check`. A read pages the thread through the bot client, prepends the thread's starter when it
-//! lives in the parent channel, acks the unread messages it returns (Discord has no separate ack verb, so the read is
-//! the ack), and flags the pending summon's mention with `summon: true`. A linked channel is read without any mark.
+//! `charliebot discord check`. A read pages the thread through the bot client. It prepends the
+//! thread's starter when it lives in the parent channel. It acks the unread messages it returns:
+//! Discord has no separate ack verb, so the read is the ack. It flags the pending summon's mention
+//! with `summon: true`. A linked channel is read without any mark.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -77,7 +78,7 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
     Err(error) if api_status(&error) == Some(404) => None,
     Err(error) => return Err(discord_failure(error)),
   };
-  // One read feeds both the window and the unread flags: a message that lands after this fetch is simply not in the
+  // One read feeds both the window and the unread flags. A message that lands after this fetch is simply not in the
   // readback, never an id the window pick misses.
   let unread_ids: HashSet<String> = thread_entry::unread_after(
     &thread_messages,

@@ -228,7 +228,7 @@
         if (seq !== requestSeq) return;
         setStatus('');
         renderPeak(history.peak);
-        drawChart(history.points || []);
+        drawChart(history.points || [], history.peak != null);
       })
       .catch((error) => {
         if (seq !== requestSeq) return;
@@ -243,7 +243,16 @@
     label.textContent = peak ? `Peak ${peak.running} · ${instantLabel(peak.t)}` : '';
   }
 
-  function drawChart(data) {
+  // The note a range shows when no agent ran in it. The plot of an all-zero series draws only its zero line,
+  // and a reader cannot tell a flat week from a panel that never loaded; the range buttons beside the note
+  // name the span it covers.
+  function noRunNote() {
+    if (range === '24h') return 'No agent ran in the last 24 hours.';
+    if (range === '7d') return 'No agent ran in the last 7 days.';
+    return 'No agent ran in the recorded period.';
+  }
+
+  function drawChart(data, hasRun) {
     const container = byId('concurrency-chart');
     if (!container) return;
     points = data;
@@ -252,28 +261,27 @@
       container.innerHTML = '<p class="cb-empty">No run records yet.</p>';
       return;
     }
+    if (!hasRun) {
+      container.innerHTML = '<p class="cb-empty">' + noRunNote() + '</p>';
+      return;
+    }
     const width = Math.max(240, container.clientWidth || 360);
     const height = CHART_HEIGHT;
     // The top margin holds the peak label above the maximum gridline; the bottom margin holds the day labels
     // below the zero line. The plot spans the two margins and 0 sits on its floor, where the area fill ends.
     const plotTop = 12;
     const plotBottom = height - 18;
+    // Every drawn series holds a run, so its maximum is above zero and carries the gridline's axis label.
     const maximum = points.reduce((most, point) => Math.max(most, point.running), 0);
-    // The scale keeps a nonzero height for a series that is all zero. A nonzero maximum draws its gridline
-    // above the zero line and carries the axis label. An all-zero series draws only the zero line, and the
-    // label sits on that line, where the flat series lies.
-    const scale = Math.max(1, maximum);
     const step = points.length > 1 ? (width - 2) / (points.length - 1) : 0;
     const xAt = (index) => 1 + index * step;
-    const yAt = (value) => plotBottom - (plotBottom - plotTop) * (value / scale);
+    const yAt = (value) => plotBottom - (plotBottom - plotTop) * (value / maximum);
     const segments = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${xAt(index).toFixed(1)},${yAt(point.running).toFixed(1)}`);
     const area = `${segments.join('')}L${xAt(points.length - 1).toFixed(1)},${plotBottom}L1,${plotBottom}Z`;
     const first = points[0].t;
     const last = points[points.length - 1].t;
-    const axisTop = maximum > 0
-      ? `<line class="cb-grid" x1="1" y1="${yAt(scale)}" x2="${width - 1}" y2="${yAt(scale)}"></line>`
-        + `<text class="cb-axis" x="1" y="${yAt(scale) - 3}">${maximum}</text>`
-      : `<text class="cb-axis" x="1" y="${yAt(0) - 3}">0</text>`;
+    const axisTop = `<line class="cb-grid" x1="1" y1="${yAt(maximum)}" x2="${width - 1}" y2="${yAt(maximum)}"></line>`
+      + `<text class="cb-axis" x="1" y="${yAt(maximum) - 3}">${maximum}</text>`;
     container.innerHTML = `
       <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img"
            aria-label="Running agents over the last ${range === 'all' ? 'recorded period' : range}">

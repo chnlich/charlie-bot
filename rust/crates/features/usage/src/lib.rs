@@ -17,7 +17,6 @@ mod poller;
 mod sql;
 #[cfg(test)]
 mod test_support;
-mod utc_datetime;
 
 use std::sync::Arc;
 

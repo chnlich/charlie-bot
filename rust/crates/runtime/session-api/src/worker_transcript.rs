@@ -21,7 +21,7 @@ use charliebot_store::run_records::{
   HostBoot, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
   OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunKind, RunRecord,
 };
-use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
+use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult, path_error};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
 use lru::LruCache;
 use serde_json::{Value, json};
@@ -575,10 +575,6 @@ fn client_revision(
   ]);
   let text = text_repr::json_dumps(&payload, &text_repr::DEFAULT_JSON);
   Ok(control_events::sha256_hex(&text)[..24].to_string())
-}
-
-fn path_error(path: &Path, error: std::io::Error) -> StoreError {
-  StoreError::new(format!("{}: {error}", path.display()))
 }
 
 #[cfg(test)]

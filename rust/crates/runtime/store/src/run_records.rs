@@ -32,6 +32,7 @@ use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::held_run_lists::RunListHold;
 pub use crate::metadata::MetadataReadError;
 use crate::metadata::{BASE_BRANCH_FIELD, REPO_PATH_FIELD, UtcDateTime};
+use crate::path_error;
 pub use crate::run_facts::RunFacts;
 #[cfg(test)]
 use crate::run_facts::{CachedRunFacts, RunFactsMemo};
@@ -1259,10 +1260,6 @@ fn read_directory(path: &Path, missing_is_empty: bool) -> StoreResult<Vec<fs::Di
     Err(error) => return Err(path_error(path, error)),
   };
   entries.map(|entry| entry.map_err(|error| path_error(path, error))).collect()
-}
-
-fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
-  StoreError::new(format!("{}: {error}", path.display()))
 }
 
 fn require_session_match(session_id: &str, run: &RunRecord) -> StoreResult<()> {

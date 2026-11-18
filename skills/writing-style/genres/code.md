@@ -32,6 +32,8 @@ implementing; master includes them as constraints in task specs.
 - Group related state and behavior into a class or methods instead of
   scattered free functions; wrap external helpers behind a small in-house API.
 - Prefer an enum when a value has more than two states.
+- Name each code identifier, config field and environment variable with enough context for a newcomer to read
+  its meaning at a glance.
 - Store computed or derivable values on demand.
 - Pass every value explicitly at each call and construction site, structure fields included:
   neither add a default that lets a site omit what it passes, nor drop an explicit argument to lean on a default;

@@ -257,6 +257,8 @@ test('the wait after the network returns runs from the first request between the
     // The four returns wait 6, 2, 3 and 1 s: sorted 1, 2, 3, 6, so p50 is index 1 (2.0 s), p90 index 2 (3.0 s)
     // and max 6.0 s. Outages 5 and 6 have no request before the reconnect.
     assert.match(output, /\n  socket wait-after-return n=4 p50=2\.0s p90=3\.0s max=6\.0s no-request=2\n/);
+    // The no-request raw gaps are 5 and 4 s, so floor percentiles select 4 s and the max is 5 s.
+    assert.match(output, /\n  socket no-request raw-gap n=2 p50=4\.0s p90=4\.0s max=5\.0s\n/);
     assert.doesNotMatch(output, /100\.64\.0\.21/, 'the other device sent requests but no events, so it has no section');
   } finally {
     fs.rmSync(scratch, {recursive: true, force: true});

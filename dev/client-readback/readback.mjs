@@ -11,8 +11,8 @@
 // Per device the sections are:
 //   switch      completed session switches: elapsed p50/p90/p99 and the count over 5 s
 //   send        click-to-echo waits: p50/p90
-//   socket      network-caused disconnects: count, the reconnect-wait p50/p90/max, the wait-after-return
-//               p50/p90/max, and the count of disconnects with no request before the reconnect (no-request)
+//   socket      network-caused disconnects: count, the reconnect-wait p50/p90/max, wait-after-return
+//               p50/p90/max, the no-request count, and the no-request raw-gap p50/p90/max
 //   traffic     received bytes per tab-hour by endpoint (a tab-hour is the tab-time the traffic
 //               events' windows cover)
 //   page loads  the count of each load cause
@@ -26,11 +26,13 @@
 //               round trip is the least request-to-first-byte time, and the throughput is the bytes over
 //               the transfer time of the largest same-origin body. The bytes are the file's encoded body.
 //
-// The wait-after-return reads the request log's `http_request` lines too, whatever the window, because a
-// disconnect's gap can end after the window. The network returns at the arrival of the device's first request
-// (its `forwarded_for` address) after the disconnect and before the reconnect. The request log writes a line when
-// the response finishes, so an arrival is the line's time less `duration_ms`. A `/ws/` request is the socket's own
-// reconnect, so it never counts as a return.
+// The existing client socket diagnostic records socket-open and catch-up times, not when the network returns. The
+// wait-after-return reads the request log's `http_request` lines too, whatever the window, because a disconnect's
+// gap can end after the window. The network returns at the arrival of the device's first request (its
+// `forwarded_for` address) after the disconnect and before the reconnect. The request log writes a line when the
+// response finishes, so an arrival is the line's time less `duration_ms`. A `/ws/` request is the socket's own
+// reconnect, so it never counts as a return. This wait starts when the server sees that first request, omitting any
+// device-side wait before a request arrives. A disconnect with no request in its gap reports its raw gap instead.
 //
 // A percentile is the sorted sample's `floor(p * (n - 1))` element, the convention the research
 // scripts of the poor-network line use.
@@ -227,16 +229,19 @@ function summarizeDevice(events, arrivals) {
 
   // The network returned at the device's first arrival between the disconnect and the reconnect.
   const returnWaits = [];
-  let noRequest = 0;
+  const noRequestGaps = [];
   for (const event of disconnects) {
     if (orNull(event.fields.reconnect_at) === null) continue;
     const disconnectMs = Date.parse(event.fields.disconnect_at);
     const reconnectMs = Date.parse(event.fields.reconnect_at);
+    const gapSeconds = (reconnectMs - disconnectMs) / 1000;
+    if (!Number.isFinite(gapSeconds) || gapSeconds < 0) continue;
     const returned = arrivals.find((arrival) => arrival > disconnectMs && arrival < reconnectMs);
-    if (returned === undefined) noRequest += 1;
+    if (returned === undefined) noRequestGaps.push(gapSeconds);
     else returnWaits.push((reconnectMs - returned) / 1000);
   }
   returnWaits.sort((a, b) => a - b);
+  noRequestGaps.sort((a, b) => a - b);
 
   let tabSeconds = 0;
   const endpointBytes = new Map();
@@ -262,7 +267,7 @@ function summarizeDevice(events, arrivals) {
   }
 
   return {
-    completedElapsed, overSlow, echoWaits, disconnects, reconnectWaits, returnWaits, noRequest, tabSeconds,
+    completedElapsed, overSlow, echoWaits, disconnects, reconnectWaits, returnWaits, noRequestGaps, tabSeconds,
     endpointBytes, causes,
   };
 }
@@ -441,7 +446,13 @@ function main() {
         ? ` p50=${percentile(returnWaits, 0.5).toFixed(1)}s p90=${percentile(returnWaits, 0.9).toFixed(1)}s` +
           ` max=${returnWaits[returnWaits.length - 1].toFixed(1)}s`
         : '') +
-      ` no-request=${summary.noRequest}`);
+      ` no-request=${summary.noRequestGaps.length}`);
+    const noRequestGaps = summary.noRequestGaps;
+    console.log(`  socket no-request raw-gap n=${noRequestGaps.length}` +
+      (noRequestGaps.length
+        ? ` p50=${percentile(noRequestGaps, 0.5).toFixed(1)}s p90=${percentile(noRequestGaps, 0.9).toFixed(1)}s` +
+          ` max=${noRequestGaps[noRequestGaps.length - 1].toFixed(1)}s`
+        : ''));
 
     const tabHours = summary.tabSeconds / 3600;
     if (tabHours > 0) {

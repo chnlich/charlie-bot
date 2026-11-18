@@ -17,6 +17,8 @@ address the server logged (`forwarded_for`), and prints per device:
 - `socket wait-after-return` — the count and p50/p90/max of the wait after the
   network returned, and `no-request`, the count of disconnects with no request
   between the disconnect and the reconnect (see below)
+- `socket no-request raw-gap` — the count and p50/p90/max of disconnects whose
+  gap had no device request before the reconnect
 - `traffic` — received bytes per tab-hour by endpoint; a tab-hour is the
   tab-time the traffic events' `window_s` fields cover, so a tab that stayed
   hidden for hours still divides out
@@ -41,9 +43,10 @@ address the server logged (`forwarded_for`), and prints per device:
 ## Wait after the network returns
 
 The reconnect-wait counts from the disconnect, so it includes the outage. The
-wait-after-return counts from the moment the network returned, which the device
-shows by its first request. For each network disconnect that has a
-`reconnect_at`:
+existing client socket diagnostic records when the socket opens and when
+catch-up completes; it has no network-return timestamp. The wait-after-return
+therefore uses the first request from that device that the server sees after
+the disconnect. For each network disconnect that has a `reconnect_at`:
 
 - the return is the first request from the same `forwarded_for` address that
   arrives after `disconnect_at` and before `reconnect_at`;
@@ -53,6 +56,10 @@ The request log writes its `http_request` line when the response finishes, so
 the arrival is the line's time less its `duration_ms`. The socket's own upgrade
 (a `/ws/` path) is the reconnect itself, not a return, so the readback never
 counts it. A disconnect with no request in its gap is counted as `no-request`.
+Its raw gap (`reconnect_at - disconnect_at`) is reported on the `socket
+no-request raw-gap` line. Since the wait-after-return starts at the first
+request the server sees, it omits any device-side wait before that request
+arrives.
 Each socket event is one sample, as in the reconnect-wait, so a disconnect the
 client logged more than once counts more than once. The request lines come from
 every log file, whatever the window, because a gap can end after the window's

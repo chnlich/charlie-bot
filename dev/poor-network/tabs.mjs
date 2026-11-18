@@ -384,6 +384,16 @@ export class Tab {
     return counts;
   }
 
+  // Chrome reports no event for a request that a navigation cancels, so the requests of a replaced document end at the
+  // commit of the document that replaces it. A settle that waited on them would wait until its timeout.
+  endReplacedRequests(loaderId) {
+    for (const request of this.requests.values()) {
+      if (request.finishAt === null && request.failed === null && request.loaderId !== loaderId) {
+        request.failed = 'net::ERR_ABORTED: the document was replaced';
+      }
+    }
+  }
+
   // Routes one CDP event of this tab.
   handle(message, assets) {
     const at = Date.now();
@@ -398,6 +408,7 @@ export class Tab {
           status: null,
           wireStatus: null,
           failed: null,
+          loaderId: message.params.loaderId ?? null,
         });
         return;
       }
@@ -420,6 +431,11 @@ export class Tab {
             this.#readBody(message.params.requestId, request);
           }
         }
+        return;
+      }
+      case 'Page.frameNavigated': {
+        // The main frame's new document has committed: the requests of the document it replaces end with it.
+        if (!message.params.frame.parentId) this.endReplacedRequests(message.params.frame.loaderId);
         return;
       }
       case 'Network.loadingFailed': {

@@ -100,3 +100,19 @@ test('the tab records a request the host\'s network change dropped, and leaves o
   assert.equal(tab.networkChanged.length, 1, 'only the network-change error names the host\'s doing');
   assert.equal(tab.networkChanged[0].url, 'https://front.test/?session=s');
 });
+
+test('a committed navigation ends the requests of the document it replaces, and no other', () => {
+  const tab = new Tab('warm', { evaluate: async () => null });
+  const request = (requestId, loaderId) => ({
+    method: 'Network.requestWillBeSent',
+    params: { requestId, loaderId, request: { url: `https://front.test/${requestId}` } },
+  });
+  tab.handle(request('old-poll', 'loader-1'));
+  tab.handle(request('old-done', 'loader-1'));
+  tab.handle({ method: 'Network.loadingFinished', params: { requestId: 'old-done', encodedDataLength: 10 } });
+  tab.handle({ method: 'Page.frameNavigated', params: { frame: { id: 'main', loaderId: 'loader-2' } } });
+  tab.handle(request('new-doc', 'loader-2'));
+  assert.match(tab.requests.get('old-poll').failed, /document was replaced/);
+  assert.equal(tab.requests.get('old-done').failed, null);
+  assert.equal(tab.requests.get('new-doc').failed, null);
+});

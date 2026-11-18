@@ -466,6 +466,13 @@ async function measureOnce(ctx, cell, repetition) {
       frames: tab.frames.length,
       frameTypes,
       requests: tab.requests.size,
+      trace: {
+        ...tab.traceFrom(navStart),
+        workers: tabs.workerTrace(navStart),
+        // The link's bytes (both directions) at each proxy sample from the navigation on, as [ms, bytes].
+        linkBytes: timeline.filter((sample) => sample.t >= navStart)
+          .map((sample) => [sample.t - navStart, sample.sent + sample.received]),
+      },
       wsState,
       consoleTail: tab.consoleLines.slice(-8).map((line) => line.text),
       pageErrors: tab.pageErrors.slice(-4).map((line) => line.text),

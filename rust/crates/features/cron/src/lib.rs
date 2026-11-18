@@ -9,9 +9,13 @@ mod host_gate;
 mod loader;
 #[cfg(test)]
 mod page_tests;
+mod rounds;
+#[cfg(test)]
+mod rounds_tests;
 mod scheduler;
 pub mod seed;
 mod sequence_controller;
+mod session_input;
 mod steps;
 #[cfg(test)]
 mod test_support;
@@ -60,6 +64,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   )?;
   registry.startup_check("cron_backend_refs", loader::backend_refs_check)?;
   registry.derived_waiting_items(host_gate::derived_waiting_rows)?;
+  registry.bound_round(rounds::bound_round_readers())?;
   let (registry_sender, registry_receiver) = tokio::sync::watch::channel(None);
   registry.service(Arc::new(sequence_controller::BindingContextService::new(registry_sender)))?;
   registry.service(Arc::new(scheduler::SchedulerService::default()))?;

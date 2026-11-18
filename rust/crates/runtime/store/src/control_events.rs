@@ -12,6 +12,9 @@ const TASK_ID_NAMESPACE_NAME: &str = "charliebot/session-task-tree";
 pub const ACTOR_USER: &str = "user";
 pub const ACTOR_AGENT: &str = "agent";
 pub const ACTOR_SYSTEM: &str = "system";
+/// The prefix of the request id of every round that a scheduled task starts: `cron:<task>:<time>:leaf`. A delegation
+/// outside a bound task may not carry it, so a round in flight is only ever a scheduled task's.
+pub const CRON_REQUEST_ID_PREFIX: &str = "cron:";
 
 /// The field of a run record and a task-created event that carries the hash of the task spec.
 pub const TASK_SPEC_HASH_FIELD: &str = "task_spec_hash";

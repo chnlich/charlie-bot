@@ -1395,6 +1395,19 @@ impl Store {
     caller: TaskCaller,
     slot_values: Map<String, Value>,
   ) -> StoreResult<SessionMetadata> {
+    let guard = self.control_lock().await;
+    self.create_task_locked(&guard, request, caller, slot_values).await
+  }
+
+  /// Create a task node while the caller holds the tree control lock. A caller that checks the tree before creating
+  /// holds one guard across both, so no other creation lands between the check and this node.
+  pub async fn create_task_locked(
+    &self,
+    guard: &ControlGuard,
+    request: CreateTask,
+    caller: TaskCaller,
+    slot_values: Map<String, Value>,
+  ) -> StoreResult<SessionMetadata> {
     if request.request_id.is_empty() {
       return Err(StoreError::invalid(TASK_CREATE_REQUEST_ID_REQUIRED));
     }
@@ -1405,8 +1418,7 @@ impl Store {
       .session_id
       .clone()
       .unwrap_or_else(|| control_events::stable_task_id(request.task_parent_id.as_deref(), &request.request_id));
-    let guard = self.control_lock().await;
-    self.require_control_guard(&guard)?;
+    self.require_control_guard(guard)?;
 
     if let Some(existing) = self.read_metadata_fresh(&task_id)? {
       if matches!(caller, TaskCaller::Agent { .. }) {

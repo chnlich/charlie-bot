@@ -22,8 +22,8 @@ pub struct StepConfig {
   pub distinct_backend_from: Option<String>,
 }
 
-/// How a bound task's round reaches its session: admitted to the bound manager (`Master`), or started as the
-/// task's own worker run (`Worker`). An absent `mode` starts worker work.
+/// The input that a fire of a prompt task gives its bound session. `Master` sends the task's own prompt. `Worker`, and
+/// an absent `mode`, send the task's name and its category template, and the session decides the round.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskMode {
@@ -61,6 +61,13 @@ pub struct ScheduledTaskConfig {
   pub handler: Option<String>,
   #[serde(default)]
   pub steps: Option<Vec<StepConfig>>,
+}
+
+impl ScheduledTaskConfig {
+  /// Whether the task's one source is a prompt: a prompt task's fire reaches its bound session as a trigger input.
+  pub(crate) fn is_prompt(&self) -> bool {
+    self.prompt.as_deref().is_some_and(|prompt| !prompt.is_empty())
+  }
 }
 
 /// A cron file that could not be loaded.

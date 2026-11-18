@@ -36,7 +36,17 @@ const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
   branch is released at task end; 0 cleans up.
   --request-id: replay id; the same id returns the original child. Default: derived from the
   request content, so an identical spec re-delegated from the same session returns the existing
-  child; pass an explicit id for intentional same-spec siblings.
+  child; pass an explicit id for intentional same-spec siblings. An id that starts with `cron:` is
+  refused: that prefix belongs to scheduled rounds.
+
+Bound task (--bound-task <name>):
+
+  Starts a round of a scheduled prompt task that this session binds. The server builds the worker
+  from the task file: its prompt, repo, base branch, and backend.
+  --note adds a session note under the prompt; the task must name a repo.
+  Refused with --bound-task:
+  - --task-spec-file, --keep-worktree, --task-type, --repo, --base-branch, --backend, --request-id
+  The server answers 409 while a round of the task is in flight or the host awaits login approval.
 
 Task types (--task-type):
 
@@ -67,8 +77,18 @@ Backend selection (--backend):
   id runs every work Run and is never failed over; a pool id runs the work on the member the pool selects.
 "#;
 
-const LONG_OPTIONS: [&str; 8] =
-  ["session", "repo", "task-spec-file", "base-branch", "backend", "keep-worktree", "request-id", "task-type"];
+const LONG_OPTIONS: [&str; 10] = [
+  "session",
+  "repo",
+  "task-spec-file",
+  "base-branch",
+  "backend",
+  "keep-worktree",
+  "request-id",
+  "task-type",
+  "bound-task",
+  "note",
+];
 
 const TASK_SPEC_REQUIRED_HEADINGS: [&str; 6] =
   ["Goal", "Source Files", "Required Behavior", "Acceptance Tests", "Reviewer Checklist", "Out of Scope"];
@@ -81,20 +101,44 @@ struct DelegateCli {
     help = "Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)"
   )]
   session: Option<String>,
-  #[arg(long, help = "Git repo path (rules in the epilog)")]
+  #[arg(long, help = "Git repo path (rules in the epilog)", conflicts_with = "bound_task")]
   repo: Option<String>,
-  #[arg(long, required = true, help = "Markdown task spec (format in the epilog)")]
-  task_spec_file: String,
-  #[arg(long, help = "Worktree base branch (rules in the epilog)")]
+  #[arg(
+    long,
+    required_unless_present = "bound_task",
+    conflicts_with = "bound_task",
+    help = "Markdown task spec (format in the epilog)"
+  )]
+  task_spec_file: Option<String>,
+  #[arg(long, help = "Worktree base branch (rules in the epilog)", conflicts_with = "bound_task")]
   base_branch: Option<String>,
-  #[arg(long, help = "Backend option id from $CHARLIEBOT_HOME/config.yaml (rules in the epilog)")]
+  #[arg(
+    long,
+    help = "Backend option id from $CHARLIEBOT_HOME/config.yaml (rules in the epilog)",
+    conflicts_with = "bound_task"
+  )]
   backend: Option<String>,
-  #[arg(long, required = true, value_parser = clap::value_parser!(i32).range(0..=1), help = "0 or 1 (rule in the epilog)")]
-  keep_worktree: i32,
-  #[arg(long, help = "Replay id (v2 task-tree sessions; rule in the epilog)")]
+  #[arg(
+    long,
+    required_unless_present = "bound_task",
+    conflicts_with = "bound_task",
+    value_parser = clap::value_parser!(i32).range(0..=1),
+    help = "0 or 1 (rule in the epilog)"
+  )]
+  keep_worktree: Option<i32>,
+  #[arg(long, help = "Replay id (v2 task-tree sessions; rule in the epilog)", conflicts_with = "bound_task")]
   request_id: Option<String>,
-  #[arg(long, value_enum, default_value_t = TaskType::Implement, help = "Task profile (rules in the epilog)")]
-  task_type: TaskType,
+  #[arg(
+    long,
+    value_enum,
+    help = "Task profile (rules in the epilog); omitted, implement",
+    conflicts_with = "bound_task"
+  )]
+  task_type: Option<TaskType>,
+  #[arg(long, help = "Start a round of the named scheduled prompt task")]
+  bound_task: Option<String>,
+  #[arg(long, requires = "bound_task", help = "Add a session note; the task must have a repo")]
+  note: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -147,28 +191,40 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     );
   }
 
-  let task_type = cli.task_type.store_type().as_str();
-  if let Err(message) = validate_repo_and_branch(cli.task_type, cli.repo.as_deref(), cli.base_branch.as_deref()) {
+  let session_id = resolve::resolve_from_env(cli.session.as_deref())?;
+  if let Some(bound_task) = cli.bound_task.as_deref() {
+    let note = cli.note.as_deref().unwrap_or_default();
+    let mut payload = Map::new();
+    payload.insert(task_routes::DELEGATE_SESSION_ID_FIELD.to_string(), json!(session_id));
+    payload.insert(task_routes::DELEGATE_DESCRIPTION_FIELD.to_string(), json!(note));
+    payload.insert(task_routes::DELEGATE_BOUND_TASK_FIELD.to_string(), json!(bound_task));
+    let result = client::post(task_routes::DELEGATE_PATH, Value::Object(payload), None, &[])?;
+    return print_spawned(&result);
+  }
+
+  let task_type_arg = cli.task_type.unwrap_or(TaskType::Implement);
+  let task_type = task_type_arg.store_type().as_str();
+  if let Err(message) = validate_repo_and_branch(task_type_arg, cli.repo.as_deref(), cli.base_branch.as_deref()) {
     parser_error(&mut command, ErrorKind::ValueValidation, message);
   }
-  if cli.task_type != TaskType::Verify
+  if task_type_arg != TaskType::Verify
     && let Some(repo) = &cli.repo
   {
     args::validate_repo_path(&mut command, repo);
   }
 
-  let session_id = resolve::resolve_from_env(cli.session.as_deref())?;
-  let task_spec = files::read_required_text_file("--task-spec-file", &cli.task_spec_file)?;
+  let task_spec_file = cli.task_spec_file.as_deref().expect("clap requires --task-spec-file without --bound-task");
+  let task_spec = files::read_required_text_file("--task-spec-file", task_spec_file)?;
   validate_task_spec_markdown(&task_spec)?;
   let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   validate_requester_words(&task_spec, &home)?;
 
-  let keep_worktree = cli.keep_worktree == 1;
+  let keep_worktree = cli.keep_worktree.expect("clap requires --keep-worktree without --bound-task") == 1;
   let mut invocation = Map::new();
   invocation.insert(task_routes::DELEGATE_TASK_TYPE_FIELD.to_string(), json!(task_type));
   invocation.insert(task_routes::DELEGATE_REPO_PATH_FIELD.to_string(), optional_string(&cli.repo));
   invocation.insert(task_routes::DELEGATE_BASE_BRANCH_FIELD.to_string(), optional_string(&cli.base_branch));
-  invocation.insert(task_routes::DELEGATE_TASK_SPEC_FILE_FIELD.to_string(), json!(cli.task_spec_file));
+  invocation.insert(task_routes::DELEGATE_TASK_SPEC_FILE_FIELD.to_string(), json!(task_spec_file));
   invocation.insert(task_routes::DELEGATE_REVIEWER_CONTEXT_FILE_FIELD.to_string(), Value::Null);
   invocation.insert(KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
   invocation.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), optional_string(&cli.backend));
@@ -206,7 +262,11 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     ))
   };
   let result = client::post(task_routes::DELEGATE_PATH, Value::Object(payload), Some(Box::new(readback)), &[])?;
+  print_spawned(&result)
+}
 
+/// Report a started worker: its session and run ids, after the note that the completion arrives later.
+fn print_spawned(result: &Value) -> Result<(), CliExit> {
   eprintln!("Worker spawned in the background; the completion summary arrives as an async wake-up.");
   let session_id = result.get("session_id").ok_or_else(|| CliExit::error("the delegate response lacks session_id"))?;
   let run_id = result.get("run_id").ok_or_else(|| CliExit::error("the delegate response lacks run_id"))?;
@@ -505,7 +565,8 @@ mod tests {
   fn test_main_help_stays_bounded_and_names_every_delegation_fact() {
     let help = help_text();
     assert!(help.contains("Delegate a task to a CharlieBot worker agent"));
-    assert!(help.chars().count() <= 4100);
+    let char_count = help.chars().count();
+    assert!(char_count <= 4800, "help is {char_count} characters");
     for name in [
       "--session",
       "--repo",
@@ -515,6 +576,8 @@ mod tests {
       "--keep-worktree",
       "--request-id",
       "--task-type",
+      "--bound-task",
+      "--note",
     ] {
       assert!(help.contains(name), "{name} is missing from help");
     }

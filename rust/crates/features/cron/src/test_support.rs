@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
@@ -19,8 +18,7 @@ use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, Tas
 use charliebot_store::{CreateTask, Store, TaskCaller};
 use charliebot_tasks::test_support::recovery_support::rotation_pools;
 use futures_util::future::BoxFuture;
-use serde_json::Map;
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 use serde_yaml::Mapping;
 
 /// The id of the priority pool that the Auto-style tests of this crate name.
@@ -137,9 +135,23 @@ fn host_entries<'a>(hosts: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, Mapping)> 
 
 /// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type. The declared
 /// rotation pool `pool` holds every entry, and the call classes name it. `auto` adds one more pool.
+/// A feature context whose repo root is the checkout, so the session templates of the fires resolve.
 fn feature_context_with_entries(
   entries: &[(&str, Mapping)],
   auto: Option<PoolConfig>,
+) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  feature_context_at(entries, auto, repo_root())
+}
+
+/// A feature context whose repo root is `repo`, for a test that reads templates from a checkout of its own.
+pub fn feature_context_with_repo_root(repo: &Path) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  feature_context_at(&[("synthetic", Mapping::new())], None, repo.to_path_buf())
+}
+
+fn feature_context_at(
+  entries: &[(&str, Mapping)],
+  auto: Option<PoolConfig>,
+  repo: PathBuf,
 ) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let home = tempfile::tempdir().expect("temporary cron home");
   std::fs::create_dir_all(home.path().join("sessions")).expect("session directory provisions");
@@ -190,7 +202,8 @@ fn feature_context_with_entries(
     )
     .expect("test store opens"),
   );
-  std::fs::write(cfg.credentials_file(), "charliebot: {}\n").expect("credentials file writes");
+  std::fs::write(cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")
+    .expect("credentials file writes");
   let config_value = cfg.clone();
   let config = Arc::new(HotReload::new(
     cfg.config_file(),
@@ -223,14 +236,12 @@ fn feature_context_with_entries(
       startup.require::<charliebot_agents::model_pool::RotationPositions>().expect("the positions are in startup"),
     ))
     .expect("backend pool inserts");
-  startup
-    .insert(RepoRoot::new(Some(repo_root().into_os_string())).expect("repo root value"))
-    .expect("repo root inserts");
+  startup.insert(RepoRoot::new(Some(repo.into_os_string())).expect("repo root value")).expect("repo root inserts");
   let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
   (home, features)
 }
 
-fn repo_root() -> PathBuf {
+pub fn repo_root() -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("crate is nested under rust/crates").to_path_buf()
 }
 
@@ -378,39 +389,6 @@ fn host_probe_stub<'a>(features: &'a FeatureContext, alias: &'a str) -> BoxFutur
       .map(|(_, login)| login.clone())
       .ok_or_else(|| anyhow::anyhow!("no verdict is set for host {alias}"))
   })
-}
-
-pub fn init_repo_with_origin(dir: &Path) -> anyhow::Result<PathBuf> {
-  let origin = dir.join("origin.git");
-  let repo = dir.join("repo");
-  git(dir, &["init", "-q", "--bare", "-b", "main", origin.to_str().expect("synthetic origin path is UTF-8")])?;
-  git(
-    dir,
-    &[
-      "clone",
-      "-q",
-      origin.to_str().expect("synthetic origin path is UTF-8"),
-      repo.to_str().expect("synthetic repo path is UTF-8"),
-    ],
-  )?;
-  git(&repo, &["config", "user.email", "synthetic@example.test"])?;
-  git(&repo, &["config", "user.name", "Synthetic Test"])?;
-  std::fs::write(repo.join("seed.txt"), "synthetic seed\n")?;
-  git(&repo, &["add", "."])?;
-  git(&repo, &["commit", "-q", "-m", "synthetic seed"])?;
-  git(&repo, &["push", "-q", "origin", "main"])?;
-  Ok(repo)
-}
-
-fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
-  let output = Command::new("git").arg("-C").arg(dir).args(args).output()?;
-  anyhow::ensure!(
-    output.status.success(),
-    "git {args:?} failed in {}: {}",
-    dir.display(),
-    String::from_utf8_lossy(&output.stderr)
-  );
-  Ok(())
 }
 
 /// The commit SHA the fake origin's `main` points at.
@@ -565,4 +543,90 @@ async fn task_manager(
       )
       .await?,
   )
+}
+
+/// Write the cron.d host file of `task`, with its prompt in a prompt file that the file points to. The file holds the
+/// task's fields as the loader reads them back.
+pub fn write_task_file(home: &Path, task: &crate::config::ScheduledTaskConfig) -> PathBuf {
+  let mut body = Map::new();
+  body.insert("cron".to_string(), Value::String(task.cron.clone()));
+  body.insert("timezone".to_string(), Value::String(task.timezone.clone()));
+  body.insert("enabled".to_string(), Value::Bool(task.enabled));
+  if let Some(session_id) = &task.session_id {
+    body.insert("session_id".to_string(), Value::String(session_id.clone()));
+  }
+  if let Some(repo) = &task.repo {
+    body.insert("repo".to_string(), Value::String(repo.clone()));
+  }
+  if let Some(backend) = &task.backend {
+    body.insert("backend".to_string(), Value::String(backend.clone()));
+  }
+  if let Some(mode) = task.mode {
+    let mode = match mode {
+      crate::config::TaskMode::Master => "master",
+      crate::config::TaskMode::Worker => "worker",
+    };
+    body.insert("mode".to_string(), Value::String(mode.to_string()));
+  }
+  let prompt = home.join(format!("{}-prompt.md", task.name));
+  std::fs::write(&prompt, format!("{}\n", task.prompt.as_deref().unwrap_or_default())).unwrap();
+  body.insert("prompt_file".to_string(), Value::String(prompt.display().to_string()));
+  write_task(home, &task.name, &Value::Object(body))
+}
+
+/// Start a round of the task `task_name` in `session_id` through the tasks route, as a bound delegation whose note is
+/// `note` (empty for none). Returns the HTTP status and the response body.
+pub async fn bound_delegate(
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  task_name: &str,
+  note: &str,
+) -> (axum::http::StatusCode, Value) {
+  use axum::body::Body;
+  use axum::http::{Method, Request, header};
+  use tower::ServiceExt;
+  let body = json!({"session_id": session_id, "description": note, "bound_task": task_name}).to_string();
+  let request = Request::builder()
+    .method(Method::POST)
+    .uri(charliebot_tasks::routes::DELEGATE_PATH)
+    .header(header::AUTHORIZATION, "Bearer synthetic-access-key")
+    .header(header::CONTENT_TYPE, "application/json")
+    .body(Body::from(body))
+    .unwrap();
+  let router = charliebot_tasks::routes::routes(features);
+  let response = router.oneshot(request).await.unwrap();
+  let status = response.status();
+  let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+  (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+/// The worker leaf and its work run that a bound delegation starts for `task`, whose file is written first. Panics
+/// unless the delegation is accepted.
+pub async fn bound_round_leaf(
+  features: &Arc<FeatureContext>,
+  task: &crate::config::ScheduledTaskConfig,
+  note: &str,
+) -> (SessionMetadata, charliebot_store::run_records::RunRecord) {
+  let home = features.config.get().unwrap().charliebot_home.clone();
+  write_task_file(&home, task);
+  let session_id = task.session_id.as_deref().expect("a bound task names its session");
+  let (status, body) = bound_delegate(features, session_id, &task.name, note).await;
+  assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+  let leaf_id = body["session_id"].as_str().expect("the response names the worker").to_string();
+  let leaf = features.store.get_session(&leaf_id).await.unwrap().expect("the worker exists");
+  let run = features.store.list_run_records_sync(&leaf_id).unwrap().into_iter().next().expect("the worker has a run");
+  (leaf, run)
+}
+
+/// Provision the task execution adapter on `features`: the access key the bound delegations read, the recovery step
+/// that installs the adapter, and no dispatch executor, so a launched run stays queued in the test.
+pub async fn install_execution(features: &Arc<FeatureContext>) {
+  std::fs::write(
+    features.config.get().unwrap().credentials_file(),
+    "charliebot:\n  access_key: synthetic-access-key\n",
+  )
+  .unwrap();
+  charliebot_tasks::execution::pre_recovery_step(Arc::clone(features)).await.unwrap();
+  let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
+  dispatcher.set_executor(None);
 }

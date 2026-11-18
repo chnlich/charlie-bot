@@ -19,7 +19,7 @@ use charliebot_core::credentials::Credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, MetadataSlotValidator};
 use charliebot_core::paths;
-use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TaskSpec, ThreadMetadata, UtcDateTime};
 use charliebot_store::run_records::RunKind;
 use charliebot_store::{SharedChatEvent, Store};
 use futures_util::future::{BoxFuture, Shared};
@@ -183,6 +183,8 @@ pub struct Registry {
   pub(crate) host_logins: Ledger<HostLoginsFn>,
   /// The one probe of a host, which `features/host_auth` registers.
   pub(crate) host_probes: Ledger<HostProbeFn>,
+  /// The one set of readers that a bound delegate reads a scheduled task through, which `features/cron` registers.
+  pub(crate) bound_rounds: Ledger<BoundRoundReaders>,
   /// The one fork-assertion runner of a page, which `features/artifacts` registers.
   pub(crate) fork_assertions: Ledger<ForkAssertionsFn>,
   /// The one runner that DMs a user, which `features/slack` registers.
@@ -243,6 +245,7 @@ impl Registry {
       backend_cli_binaries,
       host_logins,
       host_probes,
+      bound_rounds,
       fork_assertions,
       user_dm,
       owner_dm,
@@ -306,6 +309,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, backend_cli_binaries);
     append_ledger_inventory(&mut inventory, host_logins);
     append_ledger_inventory(&mut inventory, host_probes);
+    append_ledger_inventory(&mut inventory, bound_rounds);
     append_ledger_inventory(&mut inventory, fork_assertions);
     append_ledger_inventory(&mut inventory, user_dm);
     append_ledger_inventory(&mut inventory, owner_dm);
@@ -587,6 +591,69 @@ pub type HostLoginsFn = fn(&FeatureContext) -> anyhow::Result<Vec<HostLogin>>;
 /// Probe one host now over a new connection, write the result back, and return the host's record
 /// (`host_auth.probe_alias_now`).
 pub type HostProbeFn = for<'a> fn(&'a FeatureContext, &'a str) -> BoxFuture<'a, anyhow::Result<HostLogin>>;
+
+/// The kind of a scheduled task, as a bound delegate reads it: a prompt task (its round runs a worker), a `mode: master`
+/// prompt task (its input is its own prompt), a steps task, or a handler task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduledKind {
+  Prompt,
+  Master,
+  Steps,
+  Handler,
+}
+
+/// What a bound delegate reads of a scheduled task before it starts a round.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledBinding {
+  /// The session the task's file binds, or `None` when the file names none.
+  pub session_id: Option<String>,
+  pub kind: ScheduledKind,
+  /// Whether the task names a repo. A session note needs one.
+  pub has_repo: bool,
+  /// The reason the task's host awaits login approval. Only a prompt task on a host can hold.
+  pub host_hold: Option<String>,
+}
+
+/// The round a bound delegate starts for a scheduled task: the worker's request id, its task spec, and the backends
+/// the worker's session and run keep.
+#[derive(Clone, Debug)]
+pub struct ScheduledRound {
+  pub request_id: String,
+  pub task_spec: TaskSpec,
+  /// The pool id the worker's session keeps, or `None` when the task names an options id.
+  pub session_backend: Option<String>,
+  /// The options id the work run launches on.
+  pub run_backend: String,
+  pub model: Option<String>,
+}
+
+/// The outcome of starting a scheduled task's round: the round, or the reason no member of its pool can take it now.
+#[derive(Clone, Debug)]
+pub enum ScheduledRoundStart {
+  Ready(Box<ScheduledRound>),
+  Exhausted(String),
+}
+
+/// The reader of a scheduled task's binding by name, or `None` when no valid task has that name.
+pub type ScheduledBindingFn =
+  for<'a> fn(&'a FeatureContext, &'a str) -> BoxFuture<'a, anyhow::Result<Option<ScheduledBinding>>>;
+
+/// The starter of a scheduled task's round for a note (`None` for no note): the round's request id, arrival time, task
+/// spec and backends. A task named by no valid file is an error.
+pub type ScheduledRoundFn =
+  for<'a> fn(&'a FeatureContext, &'a str, Option<&'a str>) -> BoxFuture<'a, anyhow::Result<ScheduledRoundStart>>;
+
+/// The reader of the round of `task` that a session's bound node holds in flight, as `(features, task, session)`: the
+/// worker session's id, or `None` when no round of the task runs there.
+pub type ScheduledRoundInFlightFn = fn(&FeatureContext, &str, &str) -> anyhow::Result<Option<String>>;
+
+/// The three readers a bound delegate reads a scheduled task through, registered together by `features/cron`.
+#[derive(Clone, Copy)]
+pub struct BoundRoundReaders {
+  pub binding: ScheduledBindingFn,
+  pub round: ScheduledRoundFn,
+  pub round_in_flight: ScheduledRoundInFlightFn,
+}
 
 /// The runner of one page's fork assertions, each failure as `(assertion name, detail)`. `None` means the page's file
 /// name carries no genre prefix, so no assertion set applies to it.
@@ -1517,6 +1584,22 @@ impl Registry {
       .next()
       .copied()
       .ok_or_else(|| anyhow::anyhow!("no package registers the host login reader"))
+  }
+
+  /// The registration of the bound-round readers of scheduled tasks.
+  pub fn bound_round(&mut self, readers: BoundRoundReaders) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.bound_rounds.insert_single(package, "bound_round", readers)
+  }
+
+  /// The registered bound-round readers; a server with none fails rather than starting a bound round it cannot check.
+  pub fn bound_round_readers(&self) -> anyhow::Result<BoundRoundReaders> {
+    self
+      .bound_rounds
+      .values()
+      .next()
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("no package registers the bound round readers"))
   }
 
   /// The registration of the probe of one host.

@@ -6,28 +6,30 @@ use std::time::Duration;
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
+use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceExecutor;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
-use charliebot_store::CompactValue;
 use charliebot_store::control_events::ACTOR_SYSTEM;
 use charliebot_store::metadata::{
   LAST_RUN_STATUS, LAST_SCHEDULED_CRON, LAST_SCHEDULED_RUN, SCHEDULED_TASK, SessionMetadata, SessionStatus,
   TASK_SCHEDULE_SLOTS, TaskApprover, TaskProfile, TaskSpec, UtcDateTime,
 };
-use charliebot_store::run_records::{HostBoot, RunDisplayState, RunKind, RunRecord, SequenceRef};
+use charliebot_store::run_records::{RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, TaskCaller};
 use chrono::{Datelike, LocalResult, Offset};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-use crate::config::{ScheduledTaskConfig, TaskMode, effective_backend};
-use crate::firing::{firing_ref, round_request_id, round_request_task};
-use crate::{host_gate, loader, steps};
+use crate::config::{ScheduledTaskConfig, effective_backend};
+use crate::firing::{firing_ref, round_request_id};
+use crate::{host_gate, loader, rounds, session_input, steps};
 
 const TICK_SECONDS: u64 = 60;
 const AUTO_BIND_PREFIX: &str = "scheduled-node:";
+/// The skip reason of a fire whose bound session is archived.
+const ARCHIVED_BINDING_SKIP: &str = "binding unavailable: archived";
 
 /// The shared scheduler runtime installed after recovery finishes. It keeps no per-round state: whether a round is in
 /// flight is read from the persisted runs (`round_in_flight`).
@@ -54,7 +56,7 @@ impl CronScheduler {
     self.tick_at(chrono::Utc::now()).await
   }
 
-  async fn tick_at(&self, now: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
+  pub(crate) async fn tick_at(&self, now: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
     let cfg = self.features.config.get()?;
     let snapshot = loader::load_snapshot(&self.features, &cfg)?;
     if snapshot.tasks.is_empty() {
@@ -189,7 +191,7 @@ impl CronScheduler {
     cfg: &CharlieBotConfig,
     now: chrono::DateTime<chrono::Utc>,
   ) -> anyhow::Result<()> {
-    let session = self.fireable_binding(task).await?;
+    let session = self.bound_session(task).await?;
     let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
     let now = now.with_timezone(&timezone);
     let last_cron = task_slot_string(&session, &task.name, LAST_SCHEDULED_CRON);
@@ -218,11 +220,7 @@ impl CronScheduler {
     if due > now {
       return Ok(());
     }
-    let skip = match self.round_in_flight(task, cfg)? {
-      Some(round) => Some(format!("previous round still running ({round})")),
-      None => host_gate::hold_reason(&self.features, task, cfg).await?,
-    };
-    if let Some(reason) = skip {
+    if let Some(reason) = self.skip_reason(task, cfg, &session).await? {
       self.record_skip(&session.id, &task.name, isoformat_text(&now)?, reason).await?;
       return Ok(());
     }
@@ -230,6 +228,29 @@ impl CronScheduler {
       .execute_task(task.clone(), Some(isoformat_text(&due)?), true, cfg.clone(), now.with_timezone(&chrono::Utc))
       .await?;
     Ok(())
+  }
+
+  /// The reason a due fire of `task` does not run, or `None` when it runs. An archived bound session skips it first,
+  /// since its inputs are no longer read (S2 b). Then the task's own work holds it: a prompt task's trigger input and
+  /// its round (S2 a). A host that awaits login approval holds it last (S2 c).
+  async fn skip_reason(
+    &self,
+    task: &ScheduledTaskConfig,
+    cfg: &CharlieBotConfig,
+    session: &SessionMetadata,
+  ) -> anyhow::Result<Option<String>> {
+    if self.features.store.task_state(&session.id)? != "open" {
+      return Ok(Some(ARCHIVED_BINDING_SKIP.to_string()));
+    }
+    if task.is_prompt()
+      && let Some(input) = rounds::trigger_input_in_flight(&self.features, task, &session.id)?
+    {
+      return Ok(Some(format!("previous round still running ({input})")));
+    }
+    if let Some(round) = rounds::round_in_flight(&self.features, task, &session.id, cfg)? {
+      return Ok(Some(format!("previous round still running ({round})")));
+    }
+    host_gate::hold_reason(&self.features, task, cfg).await
   }
 
   /// One due fire of `task_name` used up on its bound session, with the reason it did not run recorded.
@@ -288,21 +309,8 @@ impl CronScheduler {
       Some(value) => value,
       None => UtcDateTime::now().to_isoformat_text(),
     };
-    if task.mode == Some(TaskMode::Master) {
-      let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;
-      let input_id = firing_ref(&task, &firing);
-      dispatcher
-        .admit_input(
-          &session.id,
-          event_types::SCHEDULED_TRIGGER,
-          task.prompt.as_deref().unwrap_or_default(),
-          ACTOR_SYSTEM,
-          json!({(event_types::INPUT_ID): input_id}),
-        )
-        .await?;
-      dispatcher.dispatch_pending(&session.id).await?;
-      self.record_bound_fire(&session, &task, now).await?;
-      return Ok(TaskRunResult { session_id: session.id, thread_id: None });
+    if task.is_prompt() {
+      return self.admit_prompt_fire(&task, &session, &firing, now).await;
     }
     if let Some(handler) = task.handler.as_deref() {
       self.record_bound_fire(&session, &task, now).await?;
@@ -338,32 +346,27 @@ impl CronScheduler {
     let option = match steps::select_step_member(&self.features, &cfg, &configured_backend, &[])? {
       steps::StepMember::Selected(option) => option,
       steps::StepMember::Exhausted(message) => {
-        self.post_fire_error(&session, &message).await?;
+        self.post_fire_error(&session, &message, true).await?;
         self.record_bound_fire(&session, &task, now).await?;
         return Ok(TaskRunResult { session_id: session.id, thread_id: None });
       }
     };
     let backend = option.id.clone();
     let model = steps::option_model(&option);
-    let (leaf, run, prompt, steps) =
-      self.register_fire_work(&task, &session, &firing, session_backend, &backend, model.as_deref(), &cfg).await?;
+    let (leaf, run, first_prompt) =
+      self.register_steps_work(&task, &session, &firing, session_backend, &backend, model.as_deref()).await?;
     self.record_bound_fire(&session, &task, now).await?;
-    // A run without steps takes the work context, whose task text is the leaf goal (the cron prompt) and which
-    // prepares a worktree from the leaf's repo. A launch text would route it to the step context instead, which
-    // never prepares one.
-    let launch_text = steps.then_some(prompt);
     if scheduled {
       let executor = Arc::clone(&executor);
       let leaf_id = leaf.id.clone();
       let run_id = run.id.clone();
       let task_name = task.name.clone();
       let owner_ref = firing_ref(&task, &firing);
-      let step_count = task.steps.as_ref().map_or(0, Vec::len);
       let boundary = crate::boundary::subscribe_boundary(&leaf_id, &owner_ref);
       tokio::spawn(async move {
-        match executor.launch_and_settle(&leaf_id, &run_id, launch_text.as_deref()).await {
-          Ok(settlement) if settlement.withheld.is_none() && step_count > 0 => {
-            // A fire with steps keeps its task alive until the step boundary reports the chain settled.
+        match executor.launch_and_settle(&leaf_id, &run_id, Some(first_prompt.as_str())).await {
+          Ok(settlement) if settlement.withheld.is_none() => {
+            // A steps fire keeps its task alive until the step boundary reports the chain settled.
             wait_for_steps_boundary(boundary).await;
             crate::boundary::remove_boundary(&leaf_id, &owner_ref);
           }
@@ -375,30 +378,71 @@ impl CronScheduler {
         }
       });
     } else {
-      executor.launch(&leaf.id, &run.id, launch_text.as_deref()).await?;
+      executor.launch(&leaf.id, &run.id, Some(first_prompt.as_str())).await?;
     }
     Ok(TaskRunResult { session_id: session.id, thread_id: None })
   }
 
-  /// Post a fire's refusal to the bound session as an error that names the quota, so the user reads why nothing ran.
-  async fn post_fire_error(&self, session: &SessionMetadata, message: &str) -> anyhow::Result<()> {
-    self
-      .features
-      .store
-      .persist_and_broadcast(
-        &session.id,
-        json!({
-          "type": event_types::ASSISTANT_ERROR,
-          "content": message,
-          event_types::QUOTA_EXHAUSTED: true,
-        }),
-      )
-      .await?;
+  /// A prompt task's fire: its trigger input goes to the bound session, which decides whether and when the round runs
+  /// (S1). A template that cannot be read posts an error to the session and records a skip, and no worker starts.
+  async fn admit_prompt_fire(
+    &self,
+    task: &ScheduledTaskConfig,
+    session: &SessionMetadata,
+    firing: &str,
+    now: chrono::DateTime<chrono::Utc>,
+  ) -> anyhow::Result<TaskRunResult> {
+    let repo_root = self.features.startup.require::<RepoRoot>()?;
+    match session_input::trigger_text(repo_root.path(), task) {
+      Ok(text) => {
+        let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;
+        dispatcher
+          .admit_input(
+            &session.id,
+            event_types::SCHEDULED_TRIGGER,
+            &text,
+            ACTOR_SYSTEM,
+            json!({(event_types::INPUT_ID): firing_ref(task, firing)}),
+          )
+          .await?;
+        dispatcher.dispatch_pending(&session.id).await?;
+        self.record_bound_fire(session, task, now).await?;
+      }
+      Err(unreadable) => {
+        self
+          .post_fire_error(
+            session,
+            &format!("scheduled task '{}' did not run: {}", task.name, unreadable.message()),
+            false,
+          )
+          .await?;
+        let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
+        let skipped_at = isoformat_text(&now.with_timezone(&timezone))?;
+        self.record_skip(&session.id, &task.name, skipped_at, unreadable.reason()).await?;
+      }
+    }
+    Ok(TaskRunResult { session_id: session.id.clone(), thread_id: None })
+  }
+
+  /// Post a fire's refusal to the bound session as an error, so the user reads why nothing ran. A quota refusal also
+  /// carries the quota flag.
+  async fn post_fire_error(
+    &self,
+    session: &SessionMetadata,
+    message: &str,
+    quota_exhausted: bool,
+  ) -> anyhow::Result<()> {
+    let mut event = json!({"type": event_types::ASSISTANT_ERROR, "content": message});
+    if quota_exhausted {
+      event[event_types::QUOTA_EXHAUSTED] = json!(true);
+    }
+    self.features.store.persist_and_broadcast(&session.id, event).await?;
     Ok(())
   }
 
+  /// Register the worker leaf and its run of one steps fire, whose chain starts with the first step's prompt.
   #[allow(clippy::too_many_arguments)]
-  async fn register_fire_work(
+  async fn register_steps_work(
     &self,
     task: &ScheduledTaskConfig,
     parent: &SessionMetadata,
@@ -406,8 +450,7 @@ impl CronScheduler {
     session_backend: Option<&str>,
     backend: &str,
     model: Option<&str>,
-    _cfg: &CharlieBotConfig,
-  ) -> anyhow::Result<(SessionMetadata, RunRecord, String, bool)> {
+  ) -> anyhow::Result<(SessionMetadata, RunRecord, String)> {
     if parent.profile != TaskProfile::Manager {
       anyhow::bail!(
         "scheduled task '{}' cannot create a worker leaf under {}: the parent is not a manager task",
@@ -415,34 +458,19 @@ impl CronScheduler {
         parent.id
       );
     }
-    let steps = task.steps.as_ref().is_some_and(|steps| !steps.is_empty());
-    let task_spec_text = if steps {
-      Some(
-        task
-          .steps
-          .as_ref()
-          .expect("a scheduled-step run has step configuration")
-          .first()
-          .expect("a scheduled-step run has a first step")
-          .prompt
-          .as_deref()
-          .expect("validated scheduled steps have prompt text"),
-      )
-    } else {
-      task.prompt.as_deref()
-    };
-    let goal = if steps { format!("{} steps", task.name) } else { task.prompt.clone().unwrap_or_default() };
-    let request_id = round_request_id(task, firing);
+    let first_step =
+      task.steps.as_ref().and_then(|steps| steps.first()).expect("a scheduled-step run has a first step");
+    let prompt = first_step.prompt.clone().expect("validated scheduled steps have prompt text");
     let leaf = self
       .features
       .store
       .create_task(
         CreateTask {
-          request_id,
+          request_id: round_request_id(task, firing),
           task_parent_id: Some(parent.id.clone()),
           profile: TaskProfile::Worker,
           task: Some(TaskSpec {
-            goal,
+            goal: format!("{} steps", task.name),
             repo_path: task.repo.clone(),
             base_branch: None,
             task_type: None,
@@ -472,18 +500,12 @@ impl CronScheduler {
         )
         .await?;
     }
-    let run_request =
-      if steps { format!("{}:step:0", firing_ref(task, firing)) } else { format!("{}:work", firing_ref(task, firing)) };
+    let run_request = format!("{}:step:0", firing_ref(task, firing));
     let run_id = charliebot_store::control_events::stable_run_id(&leaf.id, &run_request);
-    let sequence_ref = if steps {
-      Some(SequenceRef { kind: "cron_steps".to_string(), owner_ref: firing_ref(task, firing), position: 0 })
-    } else {
-      None
-    };
     let record = RunRecord {
       id: run_id,
       session_id: leaf.id.clone(),
-      kind: if steps { RunKind::ScheduledStep } else { RunKind::Work },
+      kind: RunKind::ScheduledStep,
       input_event_ids: Vec::new(),
       task_spec_hash: None,
       task_spec_ref: None,
@@ -502,26 +524,24 @@ impl CronScheduler {
       base_branch: None,
       branch_name: None,
       worktree_path: None,
-      sequence_ref,
+      sequence_ref: Some(SequenceRef {
+        kind: "cron_steps".to_string(),
+        owner_ref: firing_ref(task, firing),
+        position: 0,
+      }),
       raw_log_ref: None,
       events_ref: None,
       result_ref: None,
     };
     let record = {
       let guard = self.features.store.control_lock().await;
-      self.features.store.register_run_locked(&guard, &leaf.id, record, task_spec_text).await?
+      self.features.store.register_run_locked(&guard, &leaf.id, record, Some(prompt.as_str())).await?
     };
-    let first_prompt = task
-      .steps
-      .as_ref()
-      .and_then(|steps| steps.first())
-      .and_then(|step| step.prompt.clone())
-      .or_else(|| task.prompt.clone())
-      .unwrap_or_default();
-    Ok((leaf, record, first_prompt, steps))
+    Ok((leaf, record, prompt))
   }
 
-  async fn fireable_binding(&self, task: &ScheduledTaskConfig) -> anyhow::Result<SessionMetadata> {
+  /// The session a task's file binds, which must exist. A prompt task's session must be a manager.
+  async fn bound_session(&self, task: &ScheduledTaskConfig) -> anyhow::Result<SessionMetadata> {
     let session_id = task
       .session_id
       .as_deref()
@@ -532,11 +552,17 @@ impl CronScheduler {
       .load_meta(session_id)
       .await?
       .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' bound session {session_id} does not exist", task.name))?;
-    if self.features.store.task_state(session_id)? != "open" {
-      anyhow::bail!("scheduled task '{}' bound task {session_id} is archived", task.name);
+    if task.is_prompt() && meta.profile != TaskProfile::Manager {
+      anyhow::bail!("scheduled task '{}' binds task {session_id}, which is not a manager", task.name);
     }
-    if task.mode == Some(TaskMode::Master) && meta.profile != TaskProfile::Manager {
-      anyhow::bail!("scheduled task '{}' (mode master) binds task {session_id}, which is not a manager", task.name);
+    Ok(meta)
+  }
+
+  /// The bound session of a fire that runs: it exists, is a manager when the task is a prompt task, and is open.
+  async fn fireable_binding(&self, task: &ScheduledTaskConfig) -> anyhow::Result<SessionMetadata> {
+    let meta = self.bound_session(task).await?;
+    if self.features.store.task_state(&meta.id)? != "open" {
+      anyhow::bail!("scheduled task '{}' bound task {} is archived", task.name, meta.id);
     }
     Ok(meta)
   }
@@ -563,61 +589,17 @@ impl CronScheduler {
     update_task_slot(&self.features, session_id, task_name, json!({LAST_RUN_STATUS: status})).await
   }
 
-  /// The worker session of a round this scheduler started for `task`, while that round is still in flight.
-  ///
-  /// A due tick and a manual fire both ask this. The rounds are the worker sessions bound under the task's node
-  /// whose creation fact names the task.
-  fn round_in_flight(&self, task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<Option<String>> {
-    let Some(node_id) = task.session_id.as_deref() else { return Ok(None) };
-    for leaf_id in self.features.store.child_ids(node_id)? {
-      if self.leaf_has_live_run(&leaf_id, task, cfg)? && self.round_task_of(&leaf_id)?.as_deref() == Some(&task.name) {
-        return Ok(Some(leaf_id));
-      }
-    }
-    Ok(None)
-  }
-
-  /// Whether a worker session's runs keep a round in flight: a run is running or queued, or its steps chain awaits
-  /// the next step. A withheld run is neither, so a run that never launched does not block the task.
-  fn leaf_has_live_run(
-    &self,
-    leaf_id: &str,
-    task: &ScheduledTaskConfig,
-    cfg: &CharlieBotConfig,
-  ) -> anyhow::Result<bool> {
-    let store = &self.features.store;
-    let runs = store.list_run_records_sync(leaf_id)?;
-    let node = store.node_state(leaf_id)?;
-    let mut boot = HostBoot::default();
-    for run in &runs {
-      if matches!(node.display_state(run, &mut boot)?, RunDisplayState::Running | RunDisplayState::Queued) {
-        return Ok(true);
-      }
-    }
-    let facts = store.run_facts(leaf_id)?;
-    Ok(store.task_state(leaf_id)? == "open" && steps::steps_chain_awaits_next_step(task, cfg, &runs, &facts)?)
-  }
-
-  /// The task a worker session was created for, read from its creation fact. `None` for a session no round created.
-  fn round_task_of(&self, session_id: &str) -> anyhow::Result<Option<String>> {
-    let events = self.features.store.load_all_facts(session_id)?;
-    let created =
-      events.iter().find(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_CREATED));
-    Ok(
-      created
-        .and_then(|event| event.get("request_id"))
-        .and_then(CompactValue::as_str)
-        .and_then(round_request_task)
-        .map(str::to_string),
-    )
-  }
-
   async fn run_now(&self, name: &str) -> Result<TaskRunResult, RunError> {
     let cfg = self.features.config.get().map_err(|error| RunError::Failed(error.to_string()))?;
     let snapshot = loader::load_snapshot(&self.features, &cfg).map_err(|error| RunError::Failed(error.to_string()))?;
     let task =
       snapshot.tasks.into_iter().find(|task| task.name == name).ok_or_else(|| RunError::Missing(name.to_string()))?;
-    if let Some(round) = self.round_in_flight(&task, &cfg).map_err(|error| RunError::Failed(format!("{error:#}")))? {
+    // A prompt task's input queues behind the turn that runs now, so only a steps task refuses a round in flight.
+    if let Some(session_id) = task.session_id.as_deref()
+      && !task.is_prompt()
+      && let Some(round) = rounds::round_in_flight(&self.features, &task, session_id, &cfg)
+        .map_err(|error| RunError::Failed(format!("{error:#}")))?
+    {
       return Err(RunError::RoundInFlight { task: name.to_string(), round });
     }
     self
@@ -957,16 +939,15 @@ mod tests {
   use charliebot_tasks::git::git_worktree_dir_name;
   use chrono::{TimeZone, Timelike, Utc};
   use serde_json::{Map, Value, json};
-  use std::collections::HashMap;
   use std::path::Path;
   use std::sync::Arc;
 
   use super::{CronExpression, CronScheduler, isoformat_text};
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{
-    AUTO_POOL_ID, FakeGit, GIT_PROGRAM_LOCK, auto_manager, child_manager, feature_context, feature_context_with_auto,
-    feature_context_with_host_backends, feature_context_with_launcher_backends, host_probe_count, manager,
-    set_host_login, write_prompted_task, write_task,
+    AUTO_POOL_ID, FakeGit, GIT_PROGRAM_LOCK, auto_manager, bound_round_leaf, child_manager, feature_context,
+    feature_context_with_auto, feature_context_with_host_backends, feature_context_with_launcher_backends,
+    host_probe_count, install_execution, manager, set_host_login, write_prompted_task, write_task,
   };
   use charliebot_registry::registry::HostLogin;
   use charliebot_tasks::test_support::process_guard::ProcessGroupGuard;
@@ -1347,127 +1328,6 @@ mod tests {
   }
 
   #[tokio::test]
-  #[ignore = "integration"]
-  async fn auto_bind_migration_registers_the_due_fire_leaf_under_its_node() {
-    // The launch below spawns real git, so no worktree test may install its fake git meanwhile.
-    let _git_lock = GIT_PROGRAM_LOCK.lock().await;
-    let (home, features) = feature_context();
-    let repo_home = tempfile::tempdir().unwrap();
-    let repo = crate::test_support::init_repo_with_origin(repo_home.path()).unwrap();
-    let task_name = "synthetic-migrated-task";
-    let mut legacy_extra = Map::new();
-    legacy_extra.insert(SCHEDULED_TASK.to_string(), json!(task_name));
-    let legacy = features
-      .store
-      .create_task(
-        CreateTask {
-          request_id: "synthetic-legacy-cron-session".to_string(),
-          task_parent_id: None,
-          profile: TaskProfile::Manager,
-          task: None,
-          name: Some(task_name.to_string()),
-          backend: Some("synthetic".to_string()),
-          group: None,
-          session_id: None,
-        },
-        TaskCaller::System,
-        legacy_extra,
-      )
-      .await
-      .unwrap();
-    write_task(
-      home.path(),
-      task_name,
-      &json!({"cron":"0 3 * * *","prompt":"Synthetic migration work","repo":repo,"backend":"synthetic","enabled":true}),
-    );
-    let mut task = ScheduledTaskConfig {
-      name: task_name.to_string(),
-      cron: "0 3 * * *".to_string(),
-      prompt_file: None,
-      repo: Some(repo.display().to_string()),
-      backend: Some("synthetic".to_string()),
-      timezone: "America/Los_Angeles".to_string(),
-      enabled: true,
-      project: None,
-      allow_failure: false,
-      session_id: None,
-      mode: None,
-      prompt: Some("Synthetic migration work".to_string()),
-      handler: None,
-      steps: None,
-    };
-    let scheduler = CronScheduler::new(Arc::clone(&features));
-    let old_by_task = HashMap::from([(task_name.to_string(), vec![Arc::new(legacy.clone())])]);
-    scheduler.auto_bind(&mut task, &features.config.get().unwrap(), &old_by_task).await.unwrap();
-
-    let node_id = task.session_id.as_deref().unwrap();
-    let node = features.store.get_session(node_id).await.unwrap().unwrap();
-    let (leaf, run, prompt, _) = scheduler
-      .register_fire_work(
-        &task,
-        &node,
-        "2026-06-08T03:00:00-07:00",
-        None,
-        "synthetic",
-        Some("synthetic-model"),
-        &features.config.get().unwrap(),
-      )
-      .await
-      .unwrap();
-
-    assert_eq!(leaf.task_parent_id.as_deref(), Some(node_id));
-    assert_eq!(leaf.task.as_ref().unwrap().task_type, None);
-    assert_eq!(leaf.task.as_ref().unwrap().repo_path.as_deref(), Some(repo.to_str().unwrap()));
-    assert_eq!(leaf.task.as_ref().unwrap().base_branch, None);
-    assert_eq!(run.backend.as_deref(), Some("synthetic"));
-    assert_eq!(run.model.as_deref(), Some("synthetic-model"));
-    let expected_hash = charliebot_store::control_events::sha256_hex("Synthetic migration work");
-    assert_eq!(run.task_spec_hash.as_deref(), Some(expected_hash.as_str()));
-    let task_spec_path = Path::new(run.task_spec_ref.as_deref().unwrap());
-    assert_eq!(task_spec_path.file_name().and_then(|name| name.to_str()), Some("task_spec.md"));
-    assert_eq!(std::fs::read_to_string(task_spec_path).unwrap(), "Synthetic migration work");
-    assert_eq!(prompt, "Synthetic migration work");
-    assert_eq!(features.store.get_session(&legacy.id).await.unwrap().unwrap().status, SessionStatus::Archived);
-    assert!(features.store.child_ids(&legacy.id).unwrap().is_empty());
-
-    std::fs::write(
-      features.config.get().unwrap().credentials_file(),
-      "charliebot:\n  access_key: synthetic-access-key\n",
-    )
-    .unwrap();
-    charliebot_tasks::execution::pre_recovery_step(Arc::clone(&features)).await.unwrap();
-    let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
-    dispatcher.set_executor(None);
-    let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
-    let process_guard = ProcessGroupGuard::new();
-    adapter.launch(&leaf.id, &run.id).unwrap();
-
-    let (finished_run, outcome) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-      loop {
-        let current = features.store.read_run_sync(&leaf.id, &run.id).unwrap().unwrap();
-        if let Some(pid) = current.pid {
-          process_guard.track(pid);
-        }
-        if let Some(outcome) =
-          charliebot_store::run_records::terminal_outcome(&features.store.load_all_facts(&leaf.id).unwrap(), &run.id)
-            .unwrap()
-        {
-          break (current, outcome);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-      }
-    })
-    .await
-    .expect("migrated repo-bound work run reaches a terminal fact");
-    assert_eq!(outcome, charliebot_store::run_records::RunOutcomeKind::Success);
-    assert_eq!(finished_run.kind, charliebot_store::run_records::RunKind::Work);
-    assert!(finished_run.pid.is_some());
-    assert!(finished_run.pid_start.is_some());
-    assert_eq!(finished_run.backend.as_deref(), Some("synthetic"));
-    assert_eq!(finished_run.model.as_deref(), Some("synthetic-model"));
-  }
-
-  #[tokio::test]
   async fn scheduled_step_run_pins_its_configured_prompt() {
     let (_home, features) = feature_context();
     let parent = manager(&features, "synthetic-step-task-spec-parent").await.unwrap();
@@ -1503,9 +1363,8 @@ mod tests {
       ]),
     };
     let scheduler = CronScheduler::new(Arc::clone(&features));
-    let cfg = features.config.get().unwrap();
-    let (leaf, run, prompt, _) = scheduler
-      .register_fire_work(&task, &parent, "2026-10-21T03:00:00-07:00", None, "synthetic", None, &cfg)
+    let (leaf, run, prompt) = scheduler
+      .register_steps_work(&task, &parent, "2026-10-21T03:00:00-07:00", None, "synthetic", None)
       .await
       .unwrap();
 
@@ -1520,102 +1379,6 @@ mod tests {
   /// A fire without `mode`, `handler` or `steps` is a work run on a type-less worker leaf, and no reviewer run follows
   /// it. The leaf's harness then must not promise one: it carries the type-less contract instead of the implement
   /// STOP line (`spawner_prompt::reviewer_run_follows` is the one decision both sides read).
-  #[tokio::test]
-  #[ignore = "integration"]
-  async fn fired_leaf_without_mode_handler_or_steps_harness_states_no_reviewer_contract() {
-    // The launch spawns real git, so no worktree test may install its fake git meanwhile.
-    let _git_lock = GIT_PROGRAM_LOCK.lock().await;
-    let (_home, features) = feature_context();
-    let repo_home = tempfile::tempdir().unwrap();
-    let repo = crate::test_support::init_repo_with_origin(repo_home.path()).unwrap();
-    let parent = manager(&features, "synthetic-leaf-harness-parent").await.unwrap();
-    let task = ScheduledTaskConfig {
-      name: "synthetic-leaf-harness".to_string(),
-      cron: "0 3 * * *".to_string(),
-      prompt_file: None,
-      repo: Some(repo.display().to_string()),
-      backend: Some("synthetic".to_string()),
-      timezone: "America/Los_Angeles".to_string(),
-      enabled: true,
-      project: None,
-      allow_failure: false,
-      session_id: Some(parent.id.clone()),
-      mode: None,
-      prompt: Some("Synthetic leaf harness work".to_string()),
-      handler: None,
-      steps: None,
-    };
-    let scheduler = CronScheduler::new(Arc::clone(&features));
-    let cfg = features.config.get().unwrap();
-    let (leaf, run, _prompt, _) = scheduler
-      .register_fire_work(&task, &parent, "2026-10-21T03:00:00-07:00", None, "synthetic", Some("synthetic-model"), &cfg)
-      .await
-      .unwrap();
-    assert_eq!(run.kind, RunKind::Work);
-    assert_eq!(leaf.task.as_ref().unwrap().task_type, None);
-
-    std::fs::write(
-      features.config.get().unwrap().credentials_file(),
-      "charliebot:\n  access_key: synthetic-access-key\n",
-    )
-    .unwrap();
-    charliebot_tasks::execution::pre_recovery_step(Arc::clone(&features)).await.unwrap();
-    let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
-    dispatcher.set_executor(None);
-    let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
-    let process_guard = ProcessGroupGuard::new();
-    adapter.launch(&leaf.id, &run.id).unwrap();
-
-    let harness_path = features.store.run_dir(&leaf.id, &run.id).join("harness_instructions.md");
-    let harness = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-      loop {
-        // The runner creates the file before it writes the text, so wait for the contract line and not for the file.
-        if let Ok(text) = std::fs::read_to_string(&harness_path)
-          && text.contains("No reviewer run follows this run.")
-        {
-          break text;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-      }
-    })
-    .await
-    .expect("the launched run writes its harness instructions");
-    assert!(!harness.contains("A reviewer will handle that"), "{harness}");
-    assert!(harness.contains("No reviewer run follows this run."), "{harness}");
-
-    let (finished_run, outcome) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-      loop {
-        let current = features.store.read_run_sync(&leaf.id, &run.id).unwrap().unwrap();
-        if let Some(pid) = current.pid {
-          process_guard.track(pid);
-        }
-        if let Some(outcome) =
-          charliebot_store::run_records::terminal_outcome(&features.store.load_all_facts(&leaf.id).unwrap(), &run.id)
-            .unwrap()
-        {
-          break (current, outcome);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-      }
-    })
-    .await
-    .expect("the fired work run reaches a terminal fact");
-    assert_eq!(outcome, charliebot_store::run_records::RunOutcomeKind::Success);
-    assert_eq!(finished_run.kind, RunKind::Work);
-
-    // The after-run branch reads the same decision the harness read: the type-less success registers no review run.
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-      loop {
-        let runs = features.store.list_run_records_sync(&leaf.id).unwrap();
-        assert!(!runs.iter().any(|record| record.kind == RunKind::Review), "a review run registered: {runs:?}");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-      }
-    })
-    .await
-    .unwrap_err();
-    assert_eq!(features.store.list_run_records_sync(&leaf.id).unwrap().len(), 1);
-  }
-
   #[tokio::test]
   async fn auto_bind_replays_each_durable_migration_boundary_to_one_node_and_binding() {
     for fail_after in ["create", "write"] {
@@ -1824,17 +1587,6 @@ mod tests {
     assert_eq!(rebound["session_id"].as_str(), Some(node_id.as_str()));
   }
 
-  async fn install_execution(features: &Arc<FeatureContext>) {
-    std::fs::write(
-      features.config.get().unwrap().credentials_file(),
-      "charliebot:\n  access_key: synthetic-access-key\n",
-    )
-    .unwrap();
-    charliebot_tasks::execution::pre_recovery_step(Arc::clone(features)).await.unwrap();
-    let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
-    dispatcher.set_executor(None);
-  }
-
   fn worker_task(name: &str, node_id: &str, repo: Option<&Path>) -> ScheduledTaskConfig {
     ScheduledTaskConfig {
       name: name.to_string(),
@@ -1855,20 +1607,26 @@ mod tests {
   }
 
   /// One task fired through the scheduler's launch path, returned with its worker leaf and the run once `done` holds.
+  /// A steps task fires through `execute_task`, scheduled or run now as `scheduled` says. A prompt task's round starts
+  /// through the bound delegation, which has no scheduled form, so `scheduled` does not apply to it.
   async fn fire_until(
     features: &Arc<FeatureContext>,
     task: ScheduledTaskConfig,
     scheduled: bool,
     done: fn(&FeatureContext, &str, &RunRecord) -> bool,
   ) -> (String, RunRecord) {
-    let node_id = task.session_id.clone().expect("the synthetic task is bound to a node");
-    let scheduler = CronScheduler::new(Arc::clone(features));
-    let cfg = (*features.config.get().unwrap()).clone();
-    scheduler
-      .execute_task(task, Some("2026-10-21T03:00:00-07:00".to_string()), scheduled, cfg, Utc::now())
-      .await
-      .unwrap();
-    let leaf_id = features.store.child_ids(&node_id).unwrap().first().cloned().expect("the fire created a worker leaf");
+    let leaf_id = if task.steps.is_some() {
+      let node_id = task.session_id.clone().expect("the synthetic task is bound to a node");
+      let scheduler = CronScheduler::new(Arc::clone(features));
+      let cfg = (*features.config.get().unwrap()).clone();
+      scheduler
+        .execute_task(task, Some("2026-10-21T03:00:00-07:00".to_string()), scheduled, cfg, Utc::now())
+        .await
+        .unwrap();
+      features.store.child_ids(&node_id).unwrap().first().cloned().expect("the fire created a worker leaf")
+    } else {
+      bound_round_leaf(features, &task, "").await.0.id
+    };
     let guard = ProcessGroupGuard::new();
     let mut tracked = false;
     let run = tokio::time::timeout(std::time::Duration::from_secs(15), async {
@@ -1923,7 +1681,7 @@ mod tests {
     .unwrap()
   }
 
-  async fn assert_repo_fire_prepares_a_worktree(scheduled: bool) {
+  async fn assert_repo_fire_prepares_a_worktree() {
     let _git_lock = GIT_PROGRAM_LOCK.lock().await;
     let git = FakeGit::install();
     let (_home, features) = feature_context();
@@ -1934,7 +1692,7 @@ mod tests {
     let node = manager(&features, "synthetic-worktree-node").await.unwrap();
     let task = worker_task("synthetic-worktree-task", &node.id, Some(&repo));
 
-    let (leaf_id, run) = fire_and_settle(&features, task, scheduled).await;
+    let (leaf_id, run) = fire_and_settle(&features, task, false).await;
 
     assert_eq!(run.kind, RunKind::Work);
     let worktree_path = run.worktree_path.clone().expect("a repo-backed work run records its worktree");
@@ -2017,20 +1775,7 @@ mod tests {
       handler: None,
       steps: None,
     };
-    let cfg = (*features.config.get().unwrap()).clone();
-    let scheduler = CronScheduler::new(Arc::clone(&features));
-    let (leaf, run, _, _) = scheduler
-      .register_fire_work(
-        &task,
-        &node,
-        "2026-10-21T03:00:00-07:00",
-        Some(AUTO_POOL_ID),
-        "member-a",
-        Some("member-a-model"),
-        &cfg,
-      )
-      .await
-      .unwrap();
+    let (leaf, run) = bound_round_leaf(&features, &task, "").await;
     // The child's run read a file before its quota error, so its events log holds the four summary parts.
     let events = [
       json!({"type":"assistant","message":{"content":[
@@ -2104,14 +1849,8 @@ mod tests {
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn a_scheduled_fire_without_steps_prepares_a_worktree_for_its_run() {
-    assert_repo_fire_prepares_a_worktree(true).await;
-  }
-
-  #[tokio::test]
-  #[ignore = "integration"]
-  async fn a_run_now_without_steps_prepares_a_worktree_for_its_run() {
-    assert_repo_fire_prepares_a_worktree(false).await;
+  async fn a_bound_round_without_steps_prepares_a_worktree_for_its_run() {
+    assert_repo_fire_prepares_a_worktree().await;
   }
 
   #[tokio::test]
@@ -2462,9 +2201,8 @@ mod tests {
     // Step 0 is registered and not yet launched: a queued run keeps the round in flight.
     let node = manager(&features, "synthetic-steps-passed-node").await.unwrap();
     let task = steps_task(&node.id);
-    let (leaf, step0, _, _) =
-      scheduler.register_fire_work(&task, &node, firing, None, "synthetic", None, &cfg).await.unwrap();
-    assert_eq!(scheduler.round_in_flight(&task, &cfg).unwrap(), Some(leaf.id.clone()));
+    let (leaf, step0, _) = scheduler.register_steps_work(&task, &node, firing, None, "synthetic", None).await.unwrap();
+    assert_eq!(crate::rounds::round_in_flight(&features, &task, &node.id, &cfg).unwrap(), Some(leaf.id.clone()));
 
     // Step 0 passed with exit 0 and step 1 is not registered yet: the chain awaits its next step. The round is
     // still in flight in the gap between the two steps.
@@ -2472,18 +2210,18 @@ mod tests {
     let passed = RunOutcome { exit_code: Some(0), ..RunOutcome::new(RunOutcomeKind::Success) };
     features.store.record_finish_locked(&guard, &leaf.id, &step0.id, passed).await.unwrap();
     drop(guard);
-    assert_eq!(scheduler.round_in_flight(&task, &cfg).unwrap(), Some(leaf.id.clone()));
+    assert_eq!(crate::rounds::round_in_flight(&features, &task, &node.id, &cfg).unwrap(), Some(leaf.id.clone()));
 
     // A failed step 0 settles the chain with a report, so its round is no longer in flight.
     let failed_node = manager(&features, "synthetic-steps-failed-node").await.unwrap();
     let failed_task = steps_task(&failed_node.id);
-    let (failed_leaf, failed_step0, _, _) =
-      scheduler.register_fire_work(&failed_task, &failed_node, firing, None, "synthetic", None, &cfg).await.unwrap();
+    let (failed_leaf, failed_step0, _) =
+      scheduler.register_steps_work(&failed_task, &failed_node, firing, None, "synthetic", None).await.unwrap();
     let guard = features.store.control_lock().await;
     let failed = RunOutcome { exit_code: Some(1), ..RunOutcome::new(RunOutcomeKind::Failed) };
     features.store.record_finish_locked(&guard, &failed_leaf.id, &failed_step0.id, failed).await.unwrap();
     drop(guard);
-    assert_eq!(scheduler.round_in_flight(&failed_task, &cfg).unwrap(), None);
+    assert_eq!(crate::rounds::round_in_flight(&features, &failed_task, &failed_node.id, &cfg).unwrap(), None);
   }
 
   #[tokio::test]

@@ -2,10 +2,15 @@
 
 Style for internal coordination messages (Slack, Linear, Feishu).
 
-## Channel messages
+## Messages and documents for colleagues
 
-Carry the ask or goal; private reasons stay internal. Default to "do"
-statements.
+Write each message or document for colleagues for its readers. Carry only what they act on:
+- the ask: the action, the invitation, or the request for comments;
+- the deadline;
+- the facts they need in order to act.
+
+Give the reason in one sentence at most. Keep the user's private reasons internal. Default to "do"
+statements. A link carries the detail.
 
 ## Requirement drafts
 

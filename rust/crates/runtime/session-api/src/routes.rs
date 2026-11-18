@@ -56,9 +56,10 @@ const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 /// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus. The
 /// overlay holds one entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key
 /// holds that overlay instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A
-/// request that names its filter and ids keys on those. `generation` names the sidebar state the body reads beyond
-/// the rows, and `since` the answer's own delta base. A page that holds the state of its last answer sends that
-/// answer's token back, so the same state answers with the same token.
+/// request that names its ids keys on [`IdSet`], one list shared while the `ids` string repeats, so its poll neither
+/// clones nor compares the strings either. `generation` names the sidebar state the body reads beyond the rows, and
+/// `since` the answer's own delta base. A page that holds the state of its last answer sends that answer's token
+/// back, so the same state answers with the same token.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum StatusKey {
   Listing {
@@ -71,7 +72,7 @@ enum StatusKey {
   Ids {
     filter: Option<String>,
     members: Vec<String>,
-    ids: Vec<String>,
+    ids: StatusIds,
     generation: u64,
     since: Option<String>,
     answer: StatusAnswer,
@@ -105,6 +106,99 @@ impl Eq for ListingOverlay {}
 impl Hash for ListingOverlay {
   fn hash<H: Hasher>(&self, state: &mut H) {
     Arc::as_ptr(&self.0).hash(state);
+  }
+}
+
+/// The request's own ids, parsed, deduped and sorted once per distinct `ids` query string.
+///
+/// A page polls one row set every few seconds, and its URL names the ids in one canonical order, so the string
+/// repeats while the view holds. Parsing it costs one allocation per id and one hash-set entry per id, and the key
+/// then hashes every id again; a repeat poll reads the list this memo kept instead.
+static NAMED_ID_SETS: LazyLock<Mutex<LruCache<String, Arc<Vec<String>>>>> = LazyLock::new(|| {
+  Mutex::new(LruCache::new(NonZeroUsize::new(NAMED_ID_SET_MEMO_LIMIT).expect("the id memo limit is nonzero")))
+});
+
+/// The cap on the `ids` strings the parse memo keeps, larger than the answer memo's because a page alternates a few
+/// row sets and each keeps its own parse.
+const NAMED_ID_SET_MEMO_LIMIT: usize = 8;
+
+/// One request's ids as a key part. It compares and hashes by address, and it holds the list so the address stays
+/// this list's alone while the entry lives.
+#[derive(Clone, Debug)]
+struct IdSet(Arc<Vec<String>>);
+
+impl PartialEq for IdSet {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+impl Eq for IdSet {}
+
+impl Hash for IdSet {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    Arc::as_ptr(&self.0).hash(state);
+  }
+}
+
+/// The row set one `Ids` answer carries, as a key part.
+///
+/// A request with no filter carries the ids it names, and the shared parse names those, so a repeat poll compares
+/// one address. A filter adds its own members to the set, and a membership that moved must produce a different key:
+/// that union is built here and compares by content.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum StatusIds {
+  Named(IdSet),
+  Union(Vec<String>),
+}
+
+impl StatusIds {
+  fn as_slice(&self) -> &[String] {
+    match self {
+      Self::Named(ids) => ids.as_slice(),
+      Self::Union(ids) => ids.as_slice(),
+    }
+  }
+
+  fn to_vec(&self) -> Vec<String> {
+    self.as_slice().to_vec()
+  }
+
+  fn is_empty(&self) -> bool {
+    self.as_slice().is_empty()
+  }
+}
+
+impl IdSet {
+  /// The parsed id list a request's `ids` value names, read from [`NAMED_ID_SETS`] when the string repeats.
+  fn of(raw: Option<&str>) -> Self {
+    let Some(raw) = raw else { return Self::empty() };
+    let mut memo = NAMED_ID_SETS.lock().expect("named id set memo mutex is not poisoned");
+    if let Some(ids) = memo.get(raw) {
+      return Self(Arc::clone(ids));
+    }
+    let ids = Arc::new(sorted_unique(parse_session_ids(raw)));
+    memo.put(raw.to_string(), Arc::clone(&ids));
+    Self(ids)
+  }
+
+  /// An empty id list, shared so the keys of the requests that name no id are one key.
+  fn empty() -> Self {
+    static EMPTY: LazyLock<IdSet> = LazyLock::new(|| IdSet(Arc::new(Vec::new())));
+    EMPTY.clone()
+  }
+
+  fn as_slice(&self) -> &[String] {
+    self.0.as_slice()
+  }
+
+  /// The ids as an owned list, for the parts of an answer that keep or extend it.
+  fn to_vec(&self) -> Vec<String> {
+    self.0.as_ref().clone()
+  }
+
+  fn iter(&self) -> std::slice::Iter<'_, String> {
+    self.0.iter()
   }
 }
 
@@ -481,8 +575,9 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   // set is kept apart: membership follows it alone, since two pages on one filter name different extra sessions.
   //
   // `all` is the Workspace's page, whose memoized derived overlay names the row corpus. Every other filter names its
-  // own rows. The key holds that overlay instead of 7,160 ids, so a repeat poll leaves the ids unbuilt.
-  let extra = raw_ids.map(parse_session_ids).unwrap_or_default();
+  // own rows. The key holds that overlay instead of 7,160 ids, so a repeat poll leaves the ids unbuilt. The ids the
+  // request itself names are parsed once per distinct `ids` string and shared from there.
+  let extra = IdSet::of(raw_ids);
   let force = match query.parse_bool("force", false) {
     Ok(force) => force,
     Err(response) => return *response,
@@ -504,13 +599,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       Ok(corpus) => {
         let overlay = ListingOverlay(corpus.derived);
         page = Some((corpus.rows, overlay.clone()));
-        StatusKey::Listing {
-          derived: overlay,
-          extra: sorted_unique(extra.clone()),
-          generation,
-          since: since.clone(),
-          answer,
-        }
+        StatusKey::Listing { derived: overlay, extra: extra.to_vec(), generation, since: since.clone(), answer }
       }
       Err(error) => return store_error(error),
     },
@@ -528,7 +617,13 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
           Err(error) => return store_error(error),
         },
       };
-      let ids = sorted_unique(members.iter().cloned().chain(extra.iter().cloned()).collect());
+      // A request that names no filter answers its own ids, so the shared list is the row set itself. A filter that
+      // adds its members changes the set, and that union is built here.
+      let ids = if members.is_empty() {
+        StatusIds::Named(extra.clone())
+      } else {
+        StatusIds::Union(sorted_unique(members.iter().cloned().chain(extra.iter().cloned()).collect()))
+      };
       if name.is_none() && ids.is_empty() {
         return responses::json(
           StatusCode::UNPROCESSABLE_ENTITY,
@@ -559,10 +654,10 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       Some((rows, _)) if answer == StatusAnswer::Set => rows.as_slice(),
       _ if sidebar_state::poll_begins_probe() => {
         let source = if answer == StatusAnswer::Named {
-          &extra
+          extra.as_slice()
         } else {
           match &key {
-            StatusKey::Ids { ids, .. } => ids,
+            StatusKey::Ids { ids, .. } => ids.as_slice(),
             StatusKey::Listing { .. } => unreachable!("a listing poll answers a named or a set answer"),
           }
         };
@@ -595,7 +690,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
         .expect("a listing poll keeps its page rows"),
       StatusKey::Ids { members, .. } => members.clone(),
     };
-    (sorted_unique(extra.clone()), members)
+    (extra.to_vec(), members)
   } else {
     match &page {
       Some((rows, _)) => {
@@ -605,7 +700,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
         (sorted_unique(requested), members)
       }
       None => match &key {
-        StatusKey::Ids { ids, members, .. } => (ids.clone(), members.clone()),
+        StatusKey::Ids { ids, members, .. } => (ids.to_vec(), members.clone()),
         StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
       },
     }
@@ -1080,6 +1175,30 @@ mod tests {
 
     let (code, _) = status("/api/sessions/status?filter=all&answer=unknown&ids=x".to_string()).await;
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+  }
+
+  /// The parse memo answers one request's ids to another request only when its string names them. A repeat poll
+  /// answers the same rows, and the same set named in another order answers those rows too rather than the list the
+  /// memo kept for the first string.
+  #[tokio::test]
+  async fn a_status_poll_naming_its_ids_answers_those_rows_whatever_order_the_string_names_them_in() {
+    let (_home, features) = crate::test_support::feature_context();
+    let first = crate::test_support::create_node(&features.store, "ids-first", None, TaskProfile::Manager).await;
+    let second = crate::test_support::create_node(&features.store, "ids-second", None, TaskProfile::Manager).await;
+    let status = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let (code, canonical) = status(format!("/api/sessions/status?ids={},{}", first.id, second.id)).await;
+    assert_eq!(code, StatusCode::OK);
+    let (_, repeated) = status(format!("/api/sessions/status?ids={},{}", first.id, second.id)).await;
+    assert_eq!(repeated["rows"], canonical["rows"], "a repeat poll reads the answer the first poll built");
+    let (_, permuted) = status(format!("/api/sessions/status?ids={},{}", second.id, first.id)).await;
+    assert_eq!(permuted["rows"], canonical["rows"], "another order names the same rows, not another string's list");
   }
 
   /// A poll that carries the token of the answer before it names only the row whose state moved. A task-tree change

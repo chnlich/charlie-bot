@@ -97,7 +97,7 @@ pub struct LoginState {
   pub last_approved_at: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub last_attempt: Option<AttemptRecord>,
-  #[serde(skip_serializing_if = "Option::is_none")]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub link_match: Option<LinkMatch>,
 }
 
@@ -218,6 +218,15 @@ mod tests {
     change_login(&mut state, "aws-sso", |record| *record = approved.clone()).unwrap();
     assert_eq!(login_state(&state, "aws-sso").unwrap(), approved);
     assert_eq!(login_state(&state, "other").unwrap(), LoginState::default());
+  }
+
+  #[test]
+  fn a_record_from_before_link_probes_defaults_to_no_match() {
+    let mut state = state_file::empty_state();
+    state.insert(LOGINS_KEY.to_string(), json!({"aws-sso": {"status": "needs_user"}}));
+    let record = login_state(&state, "aws-sso").expect("an existing record reads without link_match");
+    assert_eq!(record.status, Some(LoginStatus::NeedsUser));
+    assert_eq!(record.link_match, None);
   }
 
   #[test]

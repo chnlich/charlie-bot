@@ -4,7 +4,7 @@ Style for internal coordination messages (Slack, Linear, Feishu).
 
 ## Messages and documents for colleagues
 
-Write each message or document for colleagues for its readers. Carry only what they act on:
+Write each message or document for its readers. Carry only what they act on:
 - the ask: the action, the invitation, or the request for comments;
 - the deadline;
 - the facts they need in order to act.

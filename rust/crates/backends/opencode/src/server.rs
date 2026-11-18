@@ -453,7 +453,7 @@ impl Turn {
     }
   }
 
-  /// Unregister this turn and run its session cleanup.
+  /// The turn's finish, which unregisters the turn and runs its session cleanup.
   pub async fn finish(&self) -> anyhow::Result<()> {
     self.finish_inner(self.origin.interrupts_on_finish()).await
   }
@@ -1113,7 +1113,7 @@ impl OpenCodeServer {
     }
   }
 
-  /// Interrupt the named session and wait for its event before a later turn sends a prompt.
+  /// The interrupt of the named session, which waits for its event before a later turn sends a prompt.
   pub async fn interrupt(&self, session_id: &str) -> anyhow::Result<bool> {
     self.add_pending(session_id);
     let result = async {
@@ -1686,8 +1686,8 @@ async fn read_events(
   reason
 }
 
-/// Visit each complete line once, then remove their shared prefix once per response chunk, without rescanning or
-/// shifting the unread suffix for every line.
+/// A single visit over each complete line, which then removes their shared prefix once per response chunk, without
+/// rescanning or shifting the unread suffix for every line.
 fn visit_complete_lines(
   pending: &mut Vec<u8>,
   search_from: &mut usize,

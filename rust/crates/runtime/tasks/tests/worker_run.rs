@@ -21,7 +21,7 @@ use charliebot_agents::backend_pool;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_agents::model_pool;
 use charliebot_core::config::{
-  BackendOption, CallClass, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule, RoutingConfig,
+  BackendOption, CallClass, CallTarget, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule, RoutingConfig,
 };
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
@@ -2130,8 +2130,144 @@ async fn quota_failover_uses_the_pool_once_the_route_is_spent() -> anyhow::Resul
     .into_iter()
     .find(|record| record.retry_of_run_id.as_deref() == Some("run-work"))
     .expect("the quota failover registers a retry");
-  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, "fake2");
+  let meta = stack.store().load_task_meta(&worker.id).await?;
+  assert_eq!(meta.backend, ROTATION_POOL_ID, "the session stores the pool id");
+  assert_eq!(
+    meta.extra(model_pool::POOL_MEMBER_FIELD),
+    Some(&json!("fake2")),
+    "the session records the retry's member"
+  );
   Ok(())
+}
+
+/// The pool id a routed child's quota failover stores as its backend, and the two members that pool holds: a
+/// subscription member and a pay-as-you-go one.
+const CHEAP_POOL_ID: &str = "cheap";
+const CHEAP_SUBSCRIPTION_MEMBER: &str = "claude-haiku";
+const CHEAP_PAYG_MEMBER: &str = "codex-gpt-luna";
+
+/// The concrete subscription model the router routes a child to. It is outside the pool.
+const ROUTED_MODEL: &str = "claude-fable-5-2";
+
+/// A routed child whose subscription model runs out moves into `cheap`: its session stores the pool id and the
+/// pay-as-you-go member its retry runs on. Once the subscription member is selectable again, the session's next run
+/// returns to it, and the switch is recorded with the reason `subscription_reset`.
+#[tokio::test]
+#[ignore = "integration"]
+async fn quota_failover_of_a_routed_run_returns_to_the_subscription_member() -> anyhow::Result<()> {
+  // One script per launched process: the retry, the manager's report turn, the next run, and its report turn.
+  let scripts = Scripts::new(vec![
+    result_script("retry done"),
+    result_script("report noted"),
+    result_script("next turn done"),
+    result_script("report noted again"),
+  ]);
+  let options = [
+    (BACKEND_ID, None),
+    (ROUTED_MODEL, Some(PoolBilling::Subscription)),
+    (CHEAP_SUBSCRIPTION_MEMBER, Some(PoolBilling::Subscription)),
+    (CHEAP_PAYG_MEMBER, Some(PoolBilling::Payg)),
+  ]
+  .map(|(id, billing)| BackendOption { billing, ..scripts.option(id, BACKEND_TYPE) })
+  .to_vec();
+  let members =
+    [CHEAP_SUBSCRIPTION_MEMBER, CHEAP_PAYG_MEMBER].map(|backend| PoolMember { backend: backend.to_string() });
+  let cheap = PoolConfig {
+    id: CHEAP_POOL_ID.to_string(),
+    label: "Cheap".to_string(),
+    rule: PoolRule::Priority,
+    members: members.to_vec(),
+    visible: true,
+  };
+  let stack = Stack::start_with_auto(options, Vec::new(), cheap).await?;
+  stack.write_access_key()?;
+  let mut cfg = stack.cfg.as_ref().clone();
+  cfg.backends.calls = [(CallClass::Worker, CallTarget::Backend(CHEAP_POOL_ID.to_string()))].into_iter().collect();
+  stack.replace_config(cfg)?;
+
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "worker".to_string(),
+        task_parent_id: Some(manager.id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(spec("do the work", Some(TaskType::Implement))),
+        name: Some("Synthetic worker".to_string()),
+        backend: Some(ROUTED_MODEL.to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let route =
+    backend_pool::BackendRoute { backends: vec![ROUTED_MODEL.to_string()], reason: "design p=0.9".to_string() };
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .update_task_slot_fields_locked(
+      &guard,
+      &worker.id,
+      backend_pool::METADATA_OWNER,
+      Map::from_iter([("route".to_string(), json!(route))]),
+    )
+    .await?;
+  drop(guard);
+
+  // The subscription member is out, so the failover takes the pay-as-you-go member.
+  backend_availability(&stack.features)?.record(
+    CHEAP_SUBSCRIPTION_MEMBER,
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
+  let run = revision_run_on_quota(&stack, &worker.id, ROUTED_MODEL).await?;
+  stack.adapter.record_quota_failure_for_test(&worker.id, &run, None);
+  stack.adapter.after_worker_run_for_test(&worker.id, &run, "failed").await?;
+
+  let retry = stack
+    .run_records(&worker.id)?
+    .into_iter()
+    .find(|record| record.retry_of_run_id.as_deref() == Some(run.as_str()))
+    .expect("the quota failover registers a retry");
+  assert_eq!(retry.backend.as_deref(), Some(CHEAP_PAYG_MEMBER), "the retry runs the pay-as-you-go member");
+  let meta = stack.store().load_task_meta(&worker.id).await?;
+  assert_eq!(meta.backend, CHEAP_POOL_ID, "the session stores the pool id");
+  assert_eq!(meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!(CHEAP_PAYG_MEMBER)));
+  assert_eq!(stack.wait_terminal(&worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+  settle_node(&stack, &manager.id).await?;
+  settle_node(&stack, &worker.id).await?;
+
+  // The subscription member's recorded reset has passed, so the member is selectable again. The next input's run is
+  // the session's next turn, and that turn returns the session to the subscription member.
+  let reset_passed = UtcDateTime::parse("2020-01-02T03:04:00+00:00").expect("a fixed instant parses");
+  backend_availability(&stack.features)?.record(
+    CHEAP_SUBSCRIPTION_MEMBER,
+    Some(reset_passed),
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic reset passed",
+  )?;
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Continue the work.", "user", json!({})).await?;
+  let next = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  assert_eq!(stack.wait_terminal(&worker.id, &next).await?, RunOutcomeKind::Success);
+  let next_run = stack.store().read_run_sync(&worker.id, &next)?.expect("the next run is recorded");
+  assert_eq!(
+    next_run.backend.as_deref(),
+    Some(CHEAP_SUBSCRIPTION_MEMBER),
+    "the next run returns to the subscription member"
+  );
+  let switches = quota_failover_events(&stack, &worker.id)?;
+  assert_eq!(switches.len(), 2, "the failover and the return each write one event: {switches:?}");
+  assert_eq!(switches[1]["from"], CHEAP_PAYG_MEMBER);
+  assert_eq!(switches[1]["to"], CHEAP_SUBSCRIPTION_MEMBER);
+  assert_eq!(switches[1][event_types::QUOTA_FAILOVER_REASON], event_types::QUOTA_REASON_SUBSCRIPTION_RESET);
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 2)).await?;
+  settle_node(&stack, &manager.id).await?;
+  settle_node(&stack, &worker.id).await
 }
 
 /// Write the revision run's events log: a read with its result, then a bash call still in progress. The handoff note

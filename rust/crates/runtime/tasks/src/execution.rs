@@ -2093,8 +2093,8 @@ impl TaskExecutionAdapter {
   }
 
   /// Whether a run whose member spent its quota can move to a member of another pool. A pool-id session switches in its
-  /// own pool and never reaches this test. A run the router routed to a concrete model moves into the `backends.calls.
-  /// worker` pool; a run whose backend the request named stays where it is.
+  /// own pool and never reaches this test. A run the router routed to a concrete model moves its session into the
+  /// `backends.calls.worker` pool; a run whose backend the request named stays where it is.
   fn fails_over(&self, meta: &SessionMetadata, run: &RunRecord) -> bool {
     run.kind == RunKind::Work
       && matches!(
@@ -2115,7 +2115,8 @@ impl TaskExecutionAdapter {
   }
 
   /// Continue a failed run on the next member of its pool, as one retry run. A session whose backend is a pool id
-  /// switches in that pool; a run the router routed to a concrete model moves into the `backends.calls.worker` pool.
+  /// switches in that pool. A run the router routed to a concrete model moves its session into the
+  /// `backends.calls.worker` pool. The session then stores that pool id as backend and the member as `pool_member`.
   /// The caller has already recorded the spent member out.
   async fn fail_over_quota(
     &self,
@@ -2141,11 +2142,12 @@ impl TaskExecutionAdapter {
       MemberSwitch::Moved { member } => member,
       MemberSwitch::Exhausted(message) => return Ok(Failover::Exhausted(message)),
     };
-    // A run the router routed to a concrete model ran the child on that model; its session backend follows the retry,
-    // as it did before a pool id could be a session backend.
+    // A session whose backend is a concrete model takes the id of the pool it moved into. The member is recorded first:
+    // a pool id with no `pool_member` makes the next turn select fresh and write no switch event.
     if cfg.backends.pool(&meta.backend).is_none() {
+      model_pool::set_current_member(&self.features, &meta.id, &member).await?;
       let guard = self.features.store.control_lock().await;
-      self.features.store.set_node_backend_locked(&guard, &meta.id, &member).await?;
+      self.features.store.set_node_backend_locked(&guard, &meta.id, &pool_id).await?;
       drop(guard);
     }
     let retry = crate::task_sessions::create_retry(

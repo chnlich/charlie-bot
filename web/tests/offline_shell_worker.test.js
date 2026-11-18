@@ -690,6 +690,24 @@ test('a failed shell refresh leaves the stored shell available to navigation', a
   assert.equal(await nav.response.text(), '<html>current</html>');
 });
 
+test('a shell refresh names the stored shell by its tag: a 304 keeps it, and a 200 stores its own tag', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-v1');
+  await store.put(SHELL_KEY, new Response('<html>current</html>', {headers: {ETag: '"shell-1"'}}));
+  h.state.network = async () => new Response('<html>changed</html>', {status: 200, headers: {ETag: '"shell-2"'}});
+  const first = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm', refresh: true}, ports: [first.port2]}).waits);
+  assert.equal(h.state.calls.at(-1).init.headers['If-None-Match'], '"shell-1"', 'the refresh names the stored tag');
+  assert.equal(first.replies[0].stored, true);
+
+  h.state.network = async () => new Response(null, {status: 304});
+  const second = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm', refresh: true}, ports: [second.port2]}).waits);
+  assert.equal(h.state.calls.at(-1).init.headers['If-None-Match'], '"shell-2"', 'the 200 stored its own tag');
+  assert.equal(second.replies[0].stored, true);
+  assert.equal(await (await store.match(SHELL_KEY)).text(), '<html>changed</html>', 'the 304 keeps the stored shell');
+});
+
 test('a 401 during refresh clears stored copies and the old shell', async () => {
   const h = harness();
   const store = await h.caches.api.open('last-state-v1');

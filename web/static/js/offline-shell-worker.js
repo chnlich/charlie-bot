@@ -323,8 +323,13 @@ function shellStaticRefs(html) {
 // A refresh leaves the current shell in place until the replacement and its files are ready.
 async function warmShell(refresh = false) {
   const cache = await caches.open(COPY_CACHE);
-  if (!refresh && await cache.match(SHELL_KEY)) return {stored: true};
-  const response = await fetch('/?session=', {cache: 'no-store', credentials: 'same-origin'});
+  const stored = await cache.match(SHELL_KEY);
+  if (!refresh && stored) return {stored: true};
+  // A refresh revalidates the stored shell: its tag names the body the worker holds, and an unchanged page answers 304
+  // with no body, which keeps the stored shell.
+  const headers = refresh && stored ? {'If-None-Match': stored.headers.get('ETag')} : {};
+  const response = await fetch('/?session=', {cache: 'no-store', credentials: 'same-origin', headers});
+  if (response.status === 304) return {stored: true};
   if (response.status === 401) {
     if (refresh) await dropShell();
     await dropCopies();
@@ -363,7 +368,9 @@ async function warmShell(refresh = false) {
   const index = await readIndex(cache);
   index.files = refs;
   await writeIndex(cache, index);
-  await cache.put(SHELL_KEY, new Response(html, {headers: {'Content-Type': 'text/html; charset=utf-8'}}));
+  await cache.put(SHELL_KEY, new Response(html, {
+    headers: {'Content-Type': 'text/html; charset=utf-8', ETag: response.headers.get('ETag')},
+  }));
   return {stored: true};
 }
 

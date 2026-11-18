@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use charliebot_shell_harness as harness;
 use sha2::{Digest as _, Sha256};
 use world::{
-  CODEX_LOGIN, DIRECTION, GATEWAY_TOKEN, LOGIN_TOKEN, REVIEW_API_BASE, REVIEW_CONTEXT_WINDOW, REVIEW_CREDENTIAL,
-  REVIEW_KEY, REVIEW_MODEL, World,
+  CODEX_LOGIN, DIRECTION, GATEWAY_TOKEN, LOGIN_TOKEN, REVIEW_API_BASE, REVIEW_CREDENTIAL, REVIEW_KEY, REVIEW_MODEL,
+  World,
 };
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
@@ -247,15 +247,33 @@ fn the_gateway_member_gets_its_token_and_the_review_key_under_their_own_names() 
 
 #[test]
 #[ignore = "integration"]
-fn the_round_gets_the_review_options_model_api_base_and_context_window() {
+fn the_review_runs_charlie_code_on_the_review_options_model_and_api_base_with_no_flags() {
   let world = World::new();
-  let run = world.run(&world.env());
+  let task = world.sandbox.root().join("review-task.md");
+  fs::write(&task, "Review the diff.\nPR: 1 https://example.invalid/pull/1\n").expect("the review task file");
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_REVIEW_TASK".to_string(), task.display().to_string());
+  let run = world.run(&env);
   assert_eq!(run.code, 0, "{}", run.describe());
-  let env = world.claude_environment();
+  assert!(world.charlie_code_ran(), "the round's review did not run charlie-code:\n{}", run.describe());
+
+  // The review command names no model and no API base: charlie-code reads them from the round's environment.
+  let task = task.display().to_string();
+  let session_dir = world.remote_home.join("improve/perf/clc-sessions").display().to_string();
+  assert_eq!(
+    world.charlie_code_arguments_received(),
+    ["--json", "--task-file", task.as_str(), "--session-dir", session_dir.as_str()],
+    "{}",
+    run.describe()
+  );
+  let env = world.charlie_code_environment();
   let value = |name: &str| env.get(name).map(String::as_str);
-  assert_eq!(value("IMPROVE_REVIEW_MODEL"), Some(REVIEW_MODEL), "{}", run.describe());
-  assert_eq!(value("IMPROVE_REVIEW_API_BASE"), Some(REVIEW_API_BASE), "{}", run.describe());
-  assert_eq!(value("IMPROVE_REVIEW_CONTEXT_WINDOW"), Some(REVIEW_CONTEXT_WINDOW), "{}", run.describe());
+  let model = format!("openai/{REVIEW_MODEL}");
+  let api_base = format!("{REVIEW_API_BASE}/v1");
+  let review = digest(REVIEW_KEY);
+  assert_eq!(value("CHARLIE_CODE_MODEL"), Some(model.as_str()), "{}", run.describe());
+  assert_eq!(value("CHARLIE_CODE_API_BASE"), Some(api_base.as_str()), "{}", run.describe());
+  assert_eq!(value("CHARLIE_CODE_API_KEY_SHA256"), Some(review.as_str()), "{}", run.describe());
 }
 
 #[test]
@@ -312,7 +330,8 @@ const FOCUS_DIRECTION: &str = "focused";
 
 /// Runs the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway variables. The
 /// first form exports the launch environment before it starts the scope, so the review credential's name arrives here
-/// as `IMPROVE_REVIEW_CREDENTIAL`.
+/// as `IMPROVE_REVIEW_CREDENTIAL`, and the review model and API base as `IMPROVE_REVIEW_MODEL` and
+/// `IMPROVE_REVIEW_API_BASE`.
 fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
   let launch = world.remote_home.join("improve/launch").join(launch_id);
   fs::create_dir_all(&launch).expect("the launch directory");
@@ -327,6 +346,8 @@ fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
   env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
   env.insert("FAKE_SCOPE_ENV".to_string(), world.sandbox.root().join("scope-env.txt").display().to_string());
   env.insert("IMPROVE_REVIEW_CREDENTIAL".to_string(), REVIEW_CREDENTIAL.to_string());
+  env.insert("IMPROVE_REVIEW_MODEL".to_string(), REVIEW_MODEL.to_string());
+  env.insert("IMPROVE_REVIEW_API_BASE".to_string(), REVIEW_API_BASE.to_string());
   let mut command = harness::command("bash", &env);
   command.arg(harness::repo_root().join("dev/improve/remote-runner.sh")).args([
     "--in-scope",
@@ -1518,7 +1539,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
       launch.join("env"),
       format!(
         "IMPROVE_REVIEW_CREDENTIAL={REVIEW_CREDENTIAL}\0IMPROVE_REVIEW_MODEL={REVIEW_MODEL}\0\
-         IMPROVE_REVIEW_API_BASE={REVIEW_API_BASE}\0IMPROVE_REVIEW_CONTEXT_WINDOW={REVIEW_CONTEXT_WINDOW}\0"
+         IMPROVE_REVIEW_API_BASE={REVIEW_API_BASE}\0"
       ),
     )
     .expect("the launch environment");

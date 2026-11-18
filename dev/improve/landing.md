@@ -147,19 +147,19 @@ The review is one direct `charlie-code` run, outside the clone.
 The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
 
 The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
-The review option's model, API base and context window are in these environment variables:
+The command passes no `--model` or `--api-base` flag.
+`charlie-code` reads the review option's settings from these environment variables, which the runner sets whichever model runs the round:
 
-- `IMPROVE_REVIEW_MODEL`
-- `IMPROVE_REVIEW_API_BASE`
-- `IMPROVE_REVIEW_CONTEXT_WINDOW`
+- `CHARLIE_CODE_MODEL`: the review option's model with an `openai/` prefix.
+- `CHARLIE_CODE_API_BASE`: the review option's API base, ending in `/v1`.
+- `CHARLIE_CODE_API_KEY`: the review option's gateway key.
 
-`charlie-code`'s CLI contract maps `IMPROVE_REVIEW_MODEL`, `IMPROVE_REVIEW_API_BASE` and `IMPROVE_REVIEW_CONTEXT_WINDOW` to `--model`, `--api-base` and `--context-window`, respectively.
-Its gateway `--model` value prefixes `IMPROVE_REVIEW_MODEL` with `openai/`.
-Its API base ends in `/v1`.
+The review option is the `config.yaml` entry that names the review's model and API base.
+Its key sits in `credentials.yaml`, under the credential that the entry names.
+The context window is `charlie-code`'s default.
 
 The scratch directory sits outside the clone, so the reviewer's own git checkouts stay away from the clone's HEAD.
 The write boundary allows the scratch directory and the session directory, and denies every write outside the round's own directories.
-The runner puts the review option's gateway key in the round's environment as `CHARLIE_CODE_API_KEY`, whichever model runs the round.
 The review is the independent check that the topic is complete and correct.
 
 The reviewer's stdout is an NDJSON event stream.

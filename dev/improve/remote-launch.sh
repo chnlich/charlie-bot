@@ -16,7 +16,7 @@
 # The round path reads these inputs on this host and writes one directory:
 #   - for claude, the instructions file that --append-system-prompt-file names (codex carries its instructions in its
 #     arguments);
-#   - the review option's credential name, model, API base and context window in $CHARLIEBOT_HOME/config.yaml, and that
+#   - the review option's credential name, model and API base in $CHARLIEBOT_HOME/config.yaml, and that
 #     credential's api_key in $CHARLIEBOT_HOME/credentials.yaml;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which dev/improve/inflight-files.sh prints here;
@@ -45,7 +45,7 @@ readonly EVIDENCE_COPY_SECONDS=${IMPROVE_EVIDENCE_COPY_SECONDS:-60}
 # carries the round's prompt, and the remote command drops what it does not read. Only the main run passes that
 # standard input on to the remote agent.
 readonly SSH=(ssh -T -o BatchMode=yes -o ConnectTimeout=10)
-# The review option: the backend option whose model, API base, context window and credential the round's review uses.
+# The review option: the backend option whose model, API base and credential the round's review uses.
 # This script is the only place that names it.
 readonly REVIEW_OPTION='claude-code-kimi-k3.1-pro'
 
@@ -155,7 +155,7 @@ copy_evidence() {
 # are list items: an item starts at a `  - ` line and its fields sit four spaces in. A top-level key or a two-space key
 # ends the item before it.
 review_option_fields() {
-  awk -v id="$REVIEW_OPTION" -v names='model api_base context_window credential' '
+  awk -v id="$REVIEW_OPTION" -v names='model api_base credential' '
     function take(text,   key, value) {
       if (current == 0 || !match(text, /^[A-Za-z_]+:/)) return
       key = substr(text, 1, RLENGTH - 1)
@@ -226,7 +226,7 @@ declare -A review=()
 while IFS=$'\t' read -r field value; do
   review[$field]=$value
 done < <(review_option_fields)
-for field in model api_base context_window credential; do
+for field in model api_base credential; do
   [[ -n ${review[$field]-} ]] || fail 7 "the review option $REVIEW_OPTION names no $field in $PROFILE_HOME/config.yaml"
 done
 [[ -r $PROFILE_HOME/credentials.yaml ]] || fail 7 "the review credential's file is missing: $PROFILE_HOME/credentials.yaml"
@@ -330,7 +330,6 @@ records=(
   "IMPROVE_REVIEW_CREDENTIAL=${review[credential]}"
   "IMPROVE_REVIEW_MODEL=${review[model]}"
   "IMPROVE_REVIEW_API_BASE=${review[api_base]}"
-  "IMPROVE_REVIEW_CONTEXT_WINDOW=${review[context_window]}"
 )
 if [[ -n $member_token ]]; then
   records+=("ANTHROPIC_AUTH_TOKEN=$member_token")

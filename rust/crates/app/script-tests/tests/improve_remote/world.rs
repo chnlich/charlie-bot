@@ -150,6 +150,11 @@ if [[ -n ${FAKE_CLAUDE_WAIT_FOR:-} ]]; then
     sleep 0.1
   done
 fi
+# The round's review: the command the round's agent runs, with no model and no API base flag.
+if [[ -n ${FAKE_CLAUDE_REVIEW_TASK:-} ]]; then
+  charlie-code --json --task-file "$FAKE_CLAUDE_REVIEW_TASK" \
+    --session-dir "$HOME/improve/$IMPROVE_DIRECTION/clc-sessions"
+fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
 "#;
 
@@ -157,6 +162,19 @@ exit "${FAKE_CLAUDE_EXIT:-0}"
 const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with and the arguments it receives.
 printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}" >"$FAKE_CODEX_ENV"
 printf '%s\n' "$@" >"$FAKE_CODEX_ARGV"
+exit 0
+"#;
+
+/// Fake charlie-code: record the arguments and environment it receives. The key goes in as its digest.
+const CHARLIE_CODE: &str = r#"# Fake charlie-code: record the arguments and environment it receives.
+printf '%s\n' "$@" >"$FAKE_CHARLIE_CODE_ARGV"
+env | grep -v -e '^CHARLIE_CODE_API_KEY=' >"$FAKE_CHARLIE_CODE_ENV"
+if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then
+  printf 'CHARLIE_CODE_API_KEY_SHA256=%s\n' "$(printf '%s' "$CHARLIE_CODE_API_KEY" | sha256sum | cut -d' ' -f1)" \
+    >>"$FAKE_CHARLIE_CODE_ENV"
+else
+  printf 'CHARLIE_CODE_API_KEY_SHA256=unset\n' >>"$FAKE_CHARLIE_CODE_ENV"
+fi
 exit 0
 "#;
 
@@ -327,6 +345,9 @@ pub struct World {
   pub claude_inflight: PathBuf,
   /// Where the fake claude copies its standard input when a test asks for it, inside the round's boundary.
   pub claude_stdin: PathBuf,
+  /// Where the fake charlie-code writes its arguments and environment, inside the round's boundary.
+  pub charlie_code_argv: PathBuf,
+  pub charlie_code_env: PathBuf,
   /// Where the fake codex writes its `CODEX_HOME` and its arguments: this host's records, outside the round's boundary.
   pub codex_env: PathBuf,
   pub codex_argv: PathBuf,
@@ -423,7 +444,7 @@ impl World {
     for (name, body) in [
       ("claude", CLAUDE),
       ("codex", CODEX),
-      ("charlie-code", "exit 0\n"),
+      ("charlie-code", CHARLIE_CODE),
       ("systemd-run", SYSTEMD_RUN),
       ("systemctl", SYSTEMCTL),
       ("cargo", CARGO),
@@ -442,6 +463,8 @@ impl World {
       claude_env: evidence.join("claude-env.txt"),
       claude_inflight: evidence.join("claude-inflight.txt"),
       claude_stdin: evidence.join("claude-stdin.txt"),
+      charlie_code_argv: evidence.join("charlie-code-argv.txt"),
+      charlie_code_env: evidence.join("charlie-code-env.txt"),
       codex_env: sandbox.root().join("codex-env.txt"),
       codex_argv: sandbox.root().join("codex-argv.txt"),
       systemctl_log: sandbox.root().join("systemctl.log"),
@@ -499,6 +522,8 @@ impl World {
     env.insert("FAKE_CLAUDE_INFLIGHT".to_string(), self.claude_inflight.display().to_string());
     env.insert("FAKE_CODEX_ENV".to_string(), self.codex_env.display().to_string());
     env.insert("FAKE_CODEX_ARGV".to_string(), self.codex_argv.display().to_string());
+    env.insert("FAKE_CHARLIE_CODE_ARGV".to_string(), self.charlie_code_argv.display().to_string());
+    env.insert("FAKE_CHARLIE_CODE_ENV".to_string(), self.charlie_code_env.display().to_string());
     env.insert("FAKE_SYSTEMCTL_LOG".to_string(), self.systemctl_log.display().to_string());
     env.insert("FAKE_SYSTEMD_RUN_LOG".to_string(), self.systemd_run_log.display().to_string());
     env.insert("FAKE_SCOPE_STOPPED".to_string(), self.scope_stopped.display().to_string());
@@ -581,20 +606,24 @@ impl World {
   }
 
   pub fn claude_arguments_received(&self) -> Vec<String> {
-    fs::read_to_string(&self.claude_argv)
-      .expect("the fake claude recorded its arguments")
-      .lines()
-      .map(str::to_string)
-      .collect()
+    record_lines(&self.claude_argv)
   }
 
   pub fn claude_environment(&self) -> Env {
-    let text = fs::read_to_string(&self.claude_env).expect("the fake claude recorded its environment");
-    text
-      .lines()
-      .filter_map(|line| line.split_once('='))
-      .map(|(name, value)| (name.to_string(), value.to_string()))
-      .collect()
+    record_environment(&self.claude_env)
+  }
+
+  /// Whether the fake charlie-code ran at all.
+  pub fn charlie_code_ran(&self) -> bool {
+    self.charlie_code_argv.exists()
+  }
+
+  pub fn charlie_code_arguments_received(&self) -> Vec<String> {
+    record_lines(&self.charlie_code_argv)
+  }
+
+  pub fn charlie_code_environment(&self) -> Env {
+    record_environment(&self.charlie_code_env)
   }
 
   /// Whether the fake codex ran at all.
@@ -702,6 +731,21 @@ impl Default for World {
   fn default() -> Self {
     Self::new()
   }
+}
+
+/// The lines of a fake command's record of its arguments, one argument per line.
+fn record_lines(path: &Path) -> Vec<String> {
+  fs::read_to_string(path).expect("the fake command recorded its arguments").lines().map(str::to_string).collect()
+}
+
+/// The `NAME=value` lines of a fake command's record of its environment.
+fn record_environment(path: &Path) -> Env {
+  fs::read_to_string(path)
+    .expect("the fake command recorded its environment")
+    .lines()
+    .filter_map(|line| line.split_once('='))
+    .map(|(name, value)| (name.to_string(), value.to_string()))
+    .collect()
 }
 
 fn collect(root: &Path, dir: &Path, found: &mut Vec<String>) {

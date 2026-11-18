@@ -136,7 +136,7 @@ prepare_credentials() {
         review_credential=$value
         printf '%s\0' "$record" >>"$LAUNCH_DIR/env"
         ;;
-      IMPROVE_REVIEW_MODEL | IMPROVE_REVIEW_API_BASE | IMPROVE_REVIEW_CONTEXT_WINDOW)
+      IMPROVE_REVIEW_MODEL | IMPROVE_REVIEW_API_BASE)
         printf '%s\0' "$record" >>"$LAUNCH_DIR/env"
         ;;
       *) fail 1 "the launch sent an unexpected variable name: $name" ;;
@@ -416,16 +416,20 @@ record_memory_peak() {
 }
 
 # Export each round key under the name its tool reads. The review key is CHARLIE_CODE_API_KEY whichever member
-# runs the round. The member's own key is ANTHROPIC_AUTH_TOKEN when the server sent one; a subscription claude
-# has no such key and reads the host's Claude login, and a codex round runs under CODEX_HOME. The keys sit in the
-# credentials file that prepare wrote, and the launcher keeps them out of the environment file, so this is the one
-# place a key enters the round: the environment, with no argument and no other file that carries it.
+# runs the round. charlie-code takes the review option's model and API base from CHARLIE_CODE_MODEL and
+# CHARLIE_CODE_API_BASE, in the gateway's form: the model with an `openai/` prefix, and the base with `/v1` appended.
+# The member's own key is ANTHROPIC_AUTH_TOKEN when the server sent one; a subscription claude has no such key and
+# reads the host's Claude login, and a codex round runs under CODEX_HOME. The keys sit in the credentials file that
+# prepare wrote, and the launcher keeps them out of the environment file, so this is the one place a key enters the
+# round: the environment, with no argument and no other file that carries it.
 export_round_credentials() {
   local review_key member_key
   review_key=$(credential_key "$IMPROVE_REVIEW_CREDENTIAL")
   [[ -n $review_key ]] \
     || fail 1 "the round's credentials file holds no api_key for the review credential $IMPROVE_REVIEW_CREDENTIAL: $ROUND_HOME/credentials.yaml"
   export CHARLIE_CODE_API_KEY=$review_key
+  export CHARLIE_CODE_MODEL="openai/$IMPROVE_REVIEW_MODEL"
+  export CHARLIE_CODE_API_BASE="$IMPROVE_REVIEW_API_BASE/v1"
   if [[ $kind == codex ]]; then
     export CODEX_HOME=$CODEX_HOME_DIR
     return

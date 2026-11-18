@@ -101,11 +101,19 @@ function buildMovePickerDialog() {
   const dialog = document.createElement('div');
   dialog.className = chrome.dialog;
 
+  // The header names the operation and, under it, the session that moves. The session's name sets no bound, so it
+  // is the line that elides: the operation's words stay whole, the way the menu item that opened the dialog reads.
   const header = document.createElement('div');
-  header.className = 'flex items-center justify-between gap-2 mb-3';
-  const title = document.createElement('p');
-  title.className = 'text-sm text-slate-300 font-semibold min-w-0 truncate';
-  title.textContent = 'Move under…';
+  header.className = 'flex items-start justify-between gap-2 mb-3';
+  const title = document.createElement('div');
+  title.className = 'min-w-0';
+  const heading = document.createElement('p');
+  heading.className = 'session-move-heading text-sm text-slate-300 font-semibold';
+  heading.textContent = 'Move under…';
+  const subject = document.createElement('p');
+  subject.className = 'session-move-subject text-xs text-slate-400 truncate';
+  title.appendChild(heading);
+  title.appendChild(subject);
   const closeButton = document.createElement('button');
   closeButton.type = 'button';
   closeButton.title = 'Close';
@@ -149,7 +157,7 @@ function buildMovePickerDialog() {
       errors.appendChild(message);
     }
   };
-  return {overlay, title, search, list, showErrors};
+  return {overlay, heading, subject, search, list, showErrors};
 }
 
 async function openSessionMovePicker(sessionId) {
@@ -201,7 +209,7 @@ async function openSessionMovePicker(sessionId) {
     const rows = await fetchMoveRows();
     const moved = rows.find((row) => row.id === sessionId);
     if (!moved) throw new Error(`Session ${sessionId} is in neither session list`);
-    dialog.title.textContent = `Move “${moved.name}” under…`;
+    dialog.subject.textContent = `“${moved.name}”`;
     const candidates = moveCandidates(rows, moved);
     // Top level sits first and stays while the search narrows the sessions: it names no session.
     const renderChoices = () => {

@@ -118,7 +118,8 @@ impl Hash for ListingOverlay {
 ///
 /// The entries are found by comparing the request's own value, most recently served first, rather than by hashing
 /// it: the value runs to a few kilobytes, and comparing those bytes reaches the entry sooner than hashing them does.
-/// The cap is small, so a repeat poll meets its own entry first and a new value meets at most [`NAMED_ID_SET_MEMO_LIMIT`].
+/// The cap is small, so a repeat poll meets its own entry first and a new value meets at most
+/// [`NAMED_ID_SET_MEMO_LIMIT`].
 static NAMED_ID_SETS: LazyLock<Mutex<Vec<NamedIdSet>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// One kept parse: the `ids` value a request sent, and the id list it parsed to.

@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::route;
+use charliebot_cli_common::skew;
 use charliebot_core::cgroup::{
   self, SESSION_CGROUP_CREATED_EVENT, SESSION_CGROUP_ENABLED_EVENT, SESSION_CGROUP_SWEEP_REMOVED_EVENT,
 };
@@ -893,7 +894,7 @@ fn event(args: &[String]) -> Result<i32, String> {
 
 fn version_sha(args: &[String]) -> Result<i32, String> {
   let [path] = arguments::<1>(args, "version-sha")?;
-  match load_json(path)?.get("sha") {
+  match load_json(path)?.get(skew::SHA_FIELD) {
     Some(Value::String(sha)) if !sha.is_empty() => {
       println!("{sha}");
       Ok(0)

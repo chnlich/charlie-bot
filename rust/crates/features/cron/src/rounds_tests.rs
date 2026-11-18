@@ -12,6 +12,7 @@ use charliebot_store::metadata::{
 };
 use charliebot_store::run_records::{RunKind, RunRecord};
 use charliebot_store::{CompactValue, CreateTask, TaskCaller};
+use charliebot_tasks::test_support::process_guard::ProcessGroupGuard;
 use chrono::Utc;
 use serde_json::{Map, Value, json};
 
@@ -411,4 +412,40 @@ async fn a_bound_delegation_starts_a_round_whose_worker_is_named_by_its_round_re
     .unwrap()
     .to_string();
   assert!(request_id.starts_with("cron:synthetic-bound-round:") && request_id.ends_with(":leaf"), "{request_id}");
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn two_concurrent_bound_delegations_of_one_task_start_one_worker_and_refuse_the_other() {
+  let (_home, features) = feature_context();
+  install_execution(&features).await;
+  let node = manager(&features, "synthetic-concurrent-node").await.unwrap();
+  // A repo-less task: its round needs no worktree, and its prompt holds the worker's process open long enough for the
+  // second delegation to meet it in flight.
+  let _task = prompt_task(&features, "synthetic-concurrent", &node.id, None);
+  let processes = ProcessGroupGuard::new();
+
+  let (first, second) = tokio::join!(
+    bound_delegate(&features, &node.id, "synthetic-concurrent", ""),
+    bound_delegate(&features, &node.id, "synthetic-concurrent", ""),
+  );
+  let mut statuses = [first.0, second.0];
+  statuses.sort();
+  assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT], "one starts the round, the other is refused");
+  let accepted = if first.0 == StatusCode::OK { &first.1 } else { &second.1 };
+  let child = accepted["session_id"].as_str().expect("the accepted delegation names its worker");
+
+  // The held prompt keeps the run live; track its process so the test ends even on a later failure.
+  let pid = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+    loop {
+      if let Some(pid) = features.store.list_run_records_sync(child).unwrap().first().and_then(|run| run.pid) {
+        return pid;
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the accepted round launches its process");
+  processes.track(pid);
+  assert_eq!(features.store.child_ids(&node.id).unwrap(), vec![child.to_string()], "exactly one worker exists");
 }

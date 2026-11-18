@@ -1957,11 +1957,12 @@ mod tests {
     Utc.with_ymd_and_hms(2026, 6, 1, 0, minute, second).unwrap()
   }
 
-  /// A worker task bound to a fresh manager node, ticking every minute. Its rounds hold their process open.
-  async fn held_worker_task(features: &Arc<FeatureContext>, name: &str) -> (std::path::PathBuf, SessionMetadata) {
+  /// A prompt task bound to a fresh manager node, ticking every minute. Its round starts through the bound delegation,
+  /// and that round's process stays open.
+  async fn held_worker_task(features: &Arc<FeatureContext>, name: &str) -> (ScheduledTaskConfig, SessionMetadata) {
     let node = manager(features, &format!("{name}-node")).await.unwrap();
     let home = features.config.get().unwrap().charliebot_home.clone();
-    let path = write_prompted_task(
+    write_prompted_task(
       &home,
       name,
       &json!({
@@ -1969,7 +1970,19 @@ mod tests {
         "timezone": "UTC", "session_id": node.id, "backend": "synthetic",
       }),
     );
-    (path, node)
+    let task = crate::loader::read_snapshot(features, &features.config.get().unwrap())
+      .unwrap()
+      .0
+      .tasks
+      .into_iter()
+      .find(|task| task.name == name)
+      .expect("the written task loads");
+    (task, node)
+  }
+
+  /// The pending inputs of `session_id`, which a prompt fire queues there.
+  fn pending_inputs(features: &FeatureContext, session_id: &str) -> Vec<CompactValue> {
+    charliebot_tasks::dispatch::dispatcher(features).unwrap().pending_inputs(session_id).unwrap()
   }
 
   /// The number of rounds a node has started, each one a worker session bound under it.
@@ -2064,10 +2077,11 @@ mod tests {
   async fn a_due_tick_skips_while_the_previous_round_is_in_flight_and_consumes_the_delayed_occurrences() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
-    let (_path, node) = held_worker_task(&features, "code-health").await;
+    let (task, node) = held_worker_task(&features, "code-health").await;
     let processes = ProcessGroupGuard::new();
     let scheduler = CronScheduler::new(Arc::clone(&features));
-    scheduler.tick_at(utc_at(0, 30)).await.unwrap();
+    // The session starts the task's round itself; the due fires below all meet that round in flight.
+    bound_round_leaf(&features, &task, "").await;
     let (first_round, first_run) = wait_for_running_round(&features, &processes, &node.id).await;
 
     // Several due ticks arrived while the first round was still running: one judgment at 00:04 consumes the
@@ -2096,15 +2110,21 @@ mod tests {
       task_slot(&meta, "code-health", LAST_SCHEDULED_RUN).as_ref().and_then(Value::as_str),
       Some("2026-06-01T00:04:00+00:00")
     );
+    // The 00:05 fire starts no worker: a prompt fire queues its trigger input in the session, which decides the round.
     scheduler.tick_at(utc_at(5, 0)).await.unwrap();
-    assert_eq!(round_count(&features, &node.id), 2);
+    assert_eq!(round_count(&features, &node.id), 1, "a prompt fire starts no worker");
+    let triggers: Vec<CompactValue> = pending_inputs(&features, &node.id)
+      .into_iter()
+      .filter(|event| {
+        event.get("id").and_then(CompactValue::as_str).is_some_and(|id| id.starts_with("cron:code-health:"))
+      })
+      .collect();
+    assert_eq!(triggers.len(), 1, "the fire queues one trigger input");
     let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
     assert_eq!(
       task_slot(&meta, "code-health", LAST_SCHEDULED_RUN).as_ref().and_then(Value::as_str),
       Some("2026-06-01T00:05:00+00:00")
     );
-    let (second_round, second_run) = wait_for_running_round(&features, &processes, &node.id).await;
-    end_round(&features, &second_round, &second_run).await;
   }
 
   #[tokio::test]
@@ -2112,9 +2132,9 @@ mod tests {
   async fn a_round_in_flight_in_persisted_state_skips_a_due_tick_on_a_fresh_scheduler() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
-    let (_path, node) = held_worker_task(&features, "code-health").await;
+    let (task, node) = held_worker_task(&features, "code-health").await;
     let processes = ProcessGroupGuard::new();
-    CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
+    bound_round_leaf(&features, &task, "").await;
     let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
 
     // A restart gives the new scheduler no state of its own: the running round is still in flight in its runs.
@@ -2128,45 +2148,70 @@ mod tests {
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn a_scheduled_round_refuses_a_manual_fire_and_starts_no_run() {
+  async fn a_steps_round_refuses_a_manual_fire_and_starts_no_run() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
-    let (_path, node) = held_worker_task(&features, "code-health").await;
-    let processes = ProcessGroupGuard::new();
+    let node = manager(&features, "synthetic-steps-refuse-node").await.unwrap();
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let step_prompt = home.join("code-health-step.md");
+    std::fs::write(&step_prompt, "Run the scheduled step.\n").unwrap();
+    write_task(
+      &home,
+      "code-health",
+      &json!({
+        "cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node.id,
+        "backend": "synthetic",
+        "steps": [{"name": "work", "prompt_file": step_prompt.display().to_string()}],
+      }),
+    );
+    let task = crate::loader::read_snapshot(&features, &features.config.get().unwrap())
+      .unwrap()
+      .0
+      .tasks
+      .into_iter()
+      .find(|task| task.name == "code-health")
+      .expect("the written task loads");
     let scheduler = CronScheduler::new(Arc::clone(&features));
-    scheduler.tick_at(utc_at(0, 30)).await.unwrap();
-    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
+    let (round, _, _) =
+      scheduler.register_steps_work(&task, &node, "2026-06-01T00:00:00+00:00", None, "synthetic", None).await.unwrap();
 
-    let Err(super::RunError::RoundInFlight { task, round: refused }) = scheduler.run_now("code-health").await else {
-      panic!("a manual fire with a round in flight is refused");
+    let Err(super::RunError::RoundInFlight { task: task_name, round: refused }) =
+      scheduler.run_now("code-health").await
+    else {
+      panic!("a manual fire with a steps round in flight is refused");
     };
-    assert_eq!(task, "code-health");
-    assert_eq!(refused, round);
+    assert_eq!(task_name, "code-health");
+    assert_eq!(refused, round.id);
     assert_eq!(round_count(&features, &node.id), 1, "the refused fire started no round");
-    assert_eq!(features.store.list_run_records_sync(&round).unwrap().len(), 1);
-    end_round(&features, &round, &run).await;
+    assert_eq!(features.store.list_run_records_sync(&round.id).unwrap().len(), 1);
   }
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn a_manual_round_keeps_the_due_tick_from_starting_a_second_one() {
+  async fn a_manual_fire_queues_its_trigger_input_and_keeps_the_due_tick_from_starting_a_round() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
-    let (_path, node) = held_worker_task(&features, "code-health").await;
-    let processes = ProcessGroupGuard::new();
+    let (_task, node) = held_worker_task(&features, "code-health").await;
     let scheduler = CronScheduler::new(Arc::clone(&features));
     match scheduler.run_now("code-health").await {
       Ok(_) => {}
       Err(super::RunError::Failed(message)) => panic!("the manual fire failed: {message}"),
       Err(_) => panic!("the manual fire was refused"),
     }
-    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
+    let inputs = pending_inputs(&features, &node.id);
+    assert_eq!(inputs.len(), 1, "a manual prompt fire queues its trigger input: {inputs:?}");
+    assert!(
+      inputs[0].get("id").and_then(CompactValue::as_str).is_some_and(|id| id.starts_with("cron:code-health:")),
+      "{inputs:?}"
+    );
 
-    // The next occurrence after the manual fire is due two minutes later.
+    // The next occurrence after the manual fire is due two minutes later; the queued input of the task holds it.
     scheduler.tick_at(chrono::Utc::now() + chrono::Duration::minutes(2)).await.unwrap();
-    assert_eq!(skipped_events(&features, &node.id).len(), 1);
-    assert_eq!(round_count(&features, &node.id), 1, "the due tick started no second round");
-    end_round(&features, &round, &run).await;
+    let skips = skipped_events(&features, &node.id);
+    assert_eq!(skips.len(), 1, "{skips:?}");
+    let reason = skips[0].get("reason").and_then(CompactValue::as_str).unwrap();
+    assert!(reason.starts_with("previous round still running (input "), "{reason}");
+    assert_eq!(round_count(&features, &node.id), 0, "neither the manual fire nor the due tick started a worker");
   }
 
   #[tokio::test]
@@ -2317,14 +2362,13 @@ mod tests {
     assert_eq!(skipped_events(&features, &node.id).len(), 2);
     assert_eq!(round_count(&features, &node.id), 0);
 
-    // Approval lands: the next due minute probes ok, starts its worker and records no skip.
+    // Approval lands: the next due minute probes ok, reaches the bound session and records no skip.
     set_host_login(&home, gate_verdict("ok", "2026-06-01T00:02:10+00:00"));
     scheduler.tick_at(utc_at(2, 30)).await.unwrap();
     assert_eq!(skipped_events(&features, &node.id).len(), 2, "the fire that approval unblocks records no skip");
-    assert_eq!(round_count(&features, &node.id), 1, "the first fire after approval starts its worker");
-    let processes = ProcessGroupGuard::new();
-    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
-    end_round(&features, &round, &run).await;
+    assert_eq!(round_count(&features, &node.id), 0, "a prompt fire starts no worker");
+    let inputs = pending_inputs(&features, &node.id);
+    assert_eq!(inputs.len(), 1, "the unblocked fire reaches the bound session: {inputs:?}");
   }
 
   #[tokio::test]
@@ -2343,12 +2387,10 @@ mod tests {
         "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
       }),
     );
-    let processes = ProcessGroupGuard::new();
     CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
-    let (round, run) = wait_for_running_round(&features, &processes, &node.id).await;
     assert!(skipped_events(&features, &node.id).is_empty());
-    assert_eq!(round_count(&features, &node.id), 1);
-    end_round(&features, &round, &run).await;
+    assert_eq!(round_count(&features, &node.id), 0, "a prompt fire starts no worker");
+    assert_eq!(pending_inputs(&features, &node.id).len(), 1, "the fire reaches the bound session");
   }
 
   #[tokio::test]
@@ -2379,7 +2421,7 @@ mod tests {
     install_execution(&features).await;
     let home = features.config.get().unwrap().charliebot_home.clone();
     set_host_login(&home, gate_verdict("needs-okta", "2026-06-01T00:00:00+00:00"));
-    let (_path, plain) = held_worker_task(&features, "plain").await;
+    let (_task, plain) = held_worker_task(&features, "plain").await;
     let handled = manager(&features, "handled-node").await.unwrap();
     write_task(
       &home,
@@ -2389,12 +2431,10 @@ mod tests {
         "timezone": "UTC", "session_id": handled.id, "backend": GATED_BACKEND,
       }),
     );
-    let processes = ProcessGroupGuard::new();
     CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
-    let (round, run) = wait_for_running_round(&features, &processes, &plain.id).await;
     assert_eq!(host_probe_count(&home, GATED_ALIAS), 0, "no backend of these tasks names the host");
     assert!(skipped_events(&features, &handled.id).is_empty());
     assert_eq!(handler_results(&features, &handled.id), 1, "the handler runs despite the host's wait");
-    end_round(&features, &round, &run).await;
+    assert_eq!(pending_inputs(&features, &plain.id).len(), 1, "the plain fire reaches its bound session");
   }
 }

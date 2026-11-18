@@ -174,8 +174,14 @@
     <div class="heroCard">
       <p class="lab">Total &middot; last week</p>
       <div class="val">{{ ctx.week.total }}</div>
+      {% if ctx.rows %}
       <p class="foot">{{ ctx.week.total_exact }} &middot; {{ "%.1f"|format(ctx.week.share) }}% of all time</p>
       <p class="foot split">fresh {{ ctx.week.fresh }} &middot; cache write {{ ctx.week.cache_write }} &middot; cache read {{ ctx.week.cache_read }} &middot; unsplit {{ ctx.week.unsplit }} &middot; output {{ ctx.week.output }}</p>
+      {% else %}
+      {# A ledger with no row holds no all-time total to measure a share against and no parts to
+         split, so the card states the week's outcome alone, as the output card's empty branch does. #}
+      <p class="foot">No records last week</p>
+      {% endif %}
     </div>
     <div class="heroCard">
       <p class="lab">Week over week</p>

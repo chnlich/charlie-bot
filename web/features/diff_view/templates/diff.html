@@ -110,6 +110,14 @@
       .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line { padding-right: 0; width: 100%; }
       .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line .d2h-code-line-ctn {
         white-space: pre-wrap; overflow-wrap: anywhere; max-width: calc(100% - 1.5em); }
+      /* The library stylesheet middle-aligns the wrapped line's inline-block code text, and the
+         line box's baseline follows it down. The +/- prefix sits on that baseline, so a wrapped
+         added row drew its marker partway down the block and its first row drew none: a 40-word
+         added line drew the + on the fifth of its nine rows. Top-aligning the prefix keeps it on
+         the row's first line, where it sits on every one-line row. */
+      .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line .d2h-code-line-prefix {
+        vertical-align: top;
+      }
     }
   </style>
 </head>

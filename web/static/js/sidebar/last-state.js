@@ -56,6 +56,12 @@ function listStillPending(sessionId) {
   return catchUp !== null && catchUp.sessionId === sessionId && catchUp.listPending;
 }
 
+// Whether an open's catch-up has not ended: its socket replay and its list refresh still ride the link.
+function catchUpPending() {
+  return catchUp !== null;
+}
+registerStatusPollHold(catchUpPending);
+
 // Starts the catch-up of an open. A copy's open also starts the sidebar list refresh. A restart passes
 // the list state it inherits and starts no second refresh, since the first one still runs.
 function beginCatchUp({sessionId, storedPosition, copyBytes, listPending, readDot}) {

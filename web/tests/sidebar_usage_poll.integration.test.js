@@ -322,6 +322,27 @@ test('pollSessionStatus names the Workspace rows by filter when every session it
   assert.deepEqual(requested, ['/api/sessions/status?filter=all']);
 });
 
+test('pollSessionStatus sends no request while an open\'s catch-up is pending, and polls once it ends', async () => {
+  const requested = [];
+  let catchUpOpen = true;
+  const {context} = buildContext({
+    querySelectorAll: (selector) =>
+      selector === 'a[id^="session-"]' ? sessionAnchors(['session-a', 'session-b']) : [],
+  });
+  context.registerStatusPollHold(() => catchUpOpen);
+  context.fetch = async (url) => {
+    requested.push(url);
+    return {ok: true, headers: NO_STORED_COPY, json: async () => ({})};
+  };
+
+  assert.equal(await context.pollSessionStatus(), false);
+  assert.deepEqual(requested, []);
+
+  catchUpOpen = false;
+  await context.pollSessionStatus();
+  assert.deepEqual(requested, ['/api/sessions/status?filter=all']);
+});
+
 test('a session id list too long for one request is split and the results are merged', async () => {
   const ids = [];
   for (let i = 0; i < 400; i++) ids.push('session-' + String(i).padStart(4, '0') + '-'.repeat(20));

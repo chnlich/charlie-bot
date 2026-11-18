@@ -634,8 +634,16 @@ function resetSessionStatusPoll() {
   statusPollToken = '';
 }
 
+function anyRunningSession() {
+  return Object.values(appliedSessionStatus).some(st => st && st.has_running_tasks);
+}
+
 function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
+  // An open's catch-up owns the link until its socket replay lands. The poll's row set is a download beside that
+  // replay: on the poor-network bench's B open the first poll after the list copy paints named every row of the
+  // filter at 3.3 s (3.4 KB before the open's newest message). The first tick after the catch-up ends polls again.
+  if (statusPollHeld()) return Promise.resolve(anyRunningSession());
   statusPollInflight = true;
   const requestSeq = factSeqAtRequest();
   const ids = sidebarSessionIds();
@@ -653,7 +661,7 @@ function pollSessionStatus() {
         for (const sid of answer.gone || []) delete appliedSessionStatus[sid];
         if (scoped && answer.token) statusPollToken = answer.token;
       }
-      return Object.values(appliedSessionStatus).some(st => st && st.has_running_tasks);
+      return anyRunningSession();
     })
     .catch(err => {
       console.error('pollSessionStatus failed:', err);

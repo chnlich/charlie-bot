@@ -274,18 +274,19 @@ where
   Ok(true)
 }
 
-/// The link probe of a login whose row shows that it needs approval. The probe records its result only while the row
-/// still needs approval: a passing check that ends the need during the probe has already cleared the stored result, so
-/// the probe's answer about that need is dropped. A row in any other state is refused, so a probe never records a link
-/// failure for a login that works.
+/// The link probe of a login whose row shows that it needs approval. A passing check that ends the need during the probe
+/// drops its answer. The final state check and write share the round slot, so a passing check cannot race with a stale
+/// probe result. A row in any other state is refused, so a probe never records a link failure for a login that works.
 async fn probe_waiting_login(state_path: &Path, login: &BrowserLoginConfig) -> anyhow::Result<()> {
   if login_row_state(state_path, login)? != RowState::NeedsUser {
     bail!("login {} does not show as needing approval, so its link probe does not run", login.name);
   }
   let matched = browser_login::probe_link(login).await?;
-  if login_row_state(state_path, login)? == RowState::NeedsUser {
-    login_state::record_link_match(state_path, &login.name, matched).await?;
-  }
+  login_state::record_link_match_if(state_path, &login.name, matched, |state| {
+    let hosts = host_auth::host_entries(state)?;
+    Ok(login_row(state, &hosts, login, None)?.state == RowState::NeedsUser)
+  })
+  .await?;
   Ok(())
 }
 

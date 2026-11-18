@@ -3,8 +3,8 @@
 //! A login bound to a host reads its availability from `hosts[alias]`, so its record keeps the time of its last approval
 //! and its last attempt, and a `broken` status when the login cannot start. A login with no host keeps its check result
 //! as well. `link_match` holds the last link probe or started attempt. A fail marks the row broken only while its check
-//! says a login is needed, and a passing check clears it. Every write goes through [`update_login`]: the round slot,
-//! then an atomic save.
+//! says a login is needed, and a passing check clears it. Login-only updates go through [`update_state`]: the round
+//! slot, then an atomic save.
 
 use std::path::Path;
 
@@ -128,12 +128,27 @@ pub fn change_login(state: &mut State, name: &str, change: impl FnOnce(&mut Logi
   Ok(())
 }
 
-/// The one write path of a login's record: under the round slot, read the state, change the record, save atomically.
+/// Applies `change` to a login record through [`update_state`].
 pub async fn update_login(state_path: &Path, name: &str, change: impl FnOnce(&mut LoginState)) -> anyhow::Result<()> {
+  update_state(state_path, |state| {
+    change_login(state, name, change)?;
+    Ok((true, ()))
+  })
+  .await
+}
+
+/// The one write path for a login state: under the round slot, read, conditionally change, and save atomically.
+async fn update_state<T>(
+  state_path: &Path,
+  update: impl FnOnce(&mut State) -> anyhow::Result<(bool, T)>,
+) -> anyhow::Result<T> {
   let _slot = RoundSlot::wait().await;
   let mut state = state_file::read_state(state_path)?;
-  change_login(&mut state, name, change)?;
-  state_file::save_state(&state, state_path)
+  let (changed, result) = update(&mut state)?;
+  if changed {
+    state_file::save_state(&state, state_path)?;
+  }
+  Ok(result)
 }
 
 /// The approval time of a login, from its exit 0 or from a probe that approves its host.
@@ -145,6 +160,24 @@ pub async fn record_approval(state_path: &Path, name: &str, at: OffsetDateTime) 
 /// The result of a login's link probe or of an attempt that printed its link.
 pub async fn record_link_match(state_path: &Path, name: &str, matched: LinkMatch) -> anyhow::Result<()> {
   update_login(state_path, name, |record| record.link_match = Some(matched)).await
+}
+
+/// Records a link result only while `should_record` still holds under the round slot. The condition and write share
+/// one state read so a passing check cannot race with a stale probe result.
+pub async fn record_link_match_if(
+  state_path: &Path,
+  name: &str,
+  matched: LinkMatch,
+  should_record: impl FnOnce(&State) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+  update_state(state_path, |state| {
+    let should_record = should_record(state)?;
+    if should_record {
+      change_login(state, name, |record| record.link_match = Some(matched))?;
+    }
+    Ok((should_record, should_record))
+  })
+  .await
 }
 
 /// The result of a login's own check: its status, what it said, and when it ran.
@@ -281,6 +314,28 @@ mod tests {
     change_login(&mut state, "aws-sso", |record| record.link_match = Some(LinkMatch::Fail)).unwrap();
     clear_link_match(&mut state, "aws-sso").unwrap();
     assert_eq!(login_state(&state, "aws-sso").unwrap(), LoginState::default());
+  }
+
+  #[tokio::test]
+  async fn a_stale_link_probe_cannot_restore_a_failure_after_a_passing_check() {
+    let dir = tempfile::tempdir().expect("a temporary home");
+    let state_path = dir.path().join("host_auth.json");
+    let mut state = state_file::empty_state();
+    change_login(&mut state, "aws-sso", |record| record.status = Some(LoginStatus::NeedsUser)).unwrap();
+    state_file::save_state(&state, &state_path).expect("the initial state writes");
+
+    record_check(&state_path, "aws-sso", RowState::Ok, "valid".to_string(), OffsetDateTime::now_utc())
+      .await
+      .expect("the passing check records");
+    let recorded = record_link_match_if(&state_path, "aws-sso", LinkMatch::Fail, |state| {
+      Ok(login_state(state, "aws-sso")?.status == Some(LoginStatus::NeedsUser))
+    })
+    .await
+    .expect("the stale probe result is checked");
+
+    assert!(!recorded, "a passing check ends the need before the probe result is saved");
+    let state = state_file::read_state(&state_path).expect("the state reads");
+    assert_eq!(login_state(&state, "aws-sso").unwrap().link_match, None);
   }
 
   #[test]

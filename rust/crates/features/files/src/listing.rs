@@ -1,6 +1,6 @@
 //! The HTML page of one directory.
 //!
-//! The walk lists the directory and stats each child; a child that cannot be stat-ed is left out. The rows sort
+//! The walk lists the directory and stats each child. A child that cannot be stat-ed is left out. The rows sort
 //! directories first, then by lowercase name, and each row is escaped, quoted and appended in turn.
 
 use std::fs;

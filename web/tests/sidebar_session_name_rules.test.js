@@ -15,6 +15,7 @@ const vm = require('node:vm');
 const {readStatic} = require('./read_static');
 const {escapeHtml, escapeHtmlText} = require('./escape_html_stub');
 
+const UTILS_JS = readStatic('utils.js');
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
 const STATUS_JS = readStatic('sidebar/status.js');
@@ -43,6 +44,11 @@ function loadNameContext() {
   };
   context.globalThis = context;
   vm.createContext(context);
+  // utils.js first, as the page loads it ahead of every sidebar module: groups.js reads expandSessionColumns and
+  // sessionUpdatedMs from it. Its real time forms replace the stub above, so it lands back after its load.
+  const stubs = {relativeTime: context.relativeTime};
+  vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
+  Object.assign(context, stubs);
   vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
   vm.runInContext(STATUS_JS, context, {filename: 'status.js'});
   vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});

@@ -1,7 +1,7 @@
 //! The one "needs you" classification of a status row.
 //!
 //! A row's state is the state its latest check or attempt left. The page and `GET /api/host-auth/status` both read the
-//! states this module assigns, so a row that needs the user on the page needs them in the status JSON too.
+//! states this module assigns. A row that needs the user on the page needs them in the status JSON too.
 
 use anyhow::bail;
 
@@ -74,7 +74,7 @@ impl RowState {
 
 /// The state a finding leaves its row in. A probe that answers `needs-okta`, `needs-interactive-auth` or
 /// `router-rejected` needs the user. A check that cannot run, a start or a link probe that gives no link, and a check
-/// that fails after its login approved are broken: the login entry itself does not work.
+/// that fails after its login approved are broken. The login entry itself does not work.
 pub fn classify_row_attention(finding: Finding) -> anyhow::Result<RowState> {
   Ok(match finding {
     Finding::Probe(status) => match status {

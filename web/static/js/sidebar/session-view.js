@@ -656,6 +656,10 @@ async function switchSession(sessionId) {
   await openSession(sessionId, SESSION_ID);
 }
 
+// A switch in flight holds the status poll: its first-screen request owns the link until the view catches up, and the
+// catch-up's own hold (last-state.js) takes over from there.
+registerStatusPollHold(() => switching);
+
 // The open path: a switch passes the session it leaves; a boot without an embedded first screen passes null
 // (app.js), so the first-screen request leaves at once and the page paints nothing before it. The open
 // paints the first screen, then catches up (last-state.js) and posts the session's read only once current.

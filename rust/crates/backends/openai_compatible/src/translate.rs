@@ -183,7 +183,7 @@ fn convert_user_message(message: &Map<String, Value>) -> ValueResult<Vec<Value>>
     match block.get("type").and_then(Value::as_str) {
       Some("text") => user_parts.push(json!({"type": "text", "text": value_str(block.get("text"), "")})),
       Some("image") => user_parts.push(image_block_to_openai_part(block, "user image")?),
-      Some("tool_result") => {
+      Some(event_types::TOOL_RESULT) => {
         flush_user_parts(&mut converted, &mut user_parts);
         let Some(tool_use_id) = block.get(event_types::TOOL_USE_ID).filter(|id| is_truthy(id)) else {
           return value_error("tool_result block missing tool_use_id");
@@ -220,7 +220,7 @@ fn convert_assistant_message(message: &Map<String, Value>) -> ValueResult<Value>
     let block = require_dict(raw, "assistant content block")?;
     match block.get("type").and_then(Value::as_str) {
       Some("text") => text.push_str(&value_str(block.get("text"), "")),
-      Some("tool_use") => {
+      Some(event_types::TOOL_USE) => {
         let id = block.get("id").filter(|id| is_truthy(id));
         let name = block.get("name").filter(|name| is_truthy(name));
         let (Some(id), Some(name)) = (id, name) else {
@@ -352,7 +352,7 @@ pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str
         );
       }
     };
-    let mut tool_use = json!({"type": "tool_use", "id": tool_id, "name": name, "input": input});
+    let mut tool_use = json!({"type": event_types::TOOL_USE, "id": tool_id, "name": name, "input": input});
     if let Some(extra_content) = get(&tool_call, "extra_content")?.filter(|extra_content| !extra_content.is_null()) {
       tool_use["extra_content"] = extra_content.clone();
     }
@@ -521,7 +521,7 @@ impl OpenAiChatStream {
       )
     };
     let mut content_block = Map::new();
-    content_block.insert("type".to_string(), json!("tool_use"));
+    content_block.insert("type".to_string(), json!(event_types::TOOL_USE));
     content_block.insert("id".to_string(), id);
     content_block.insert("name".to_string(), name);
     content_block.insert("input".to_string(), json!({}));

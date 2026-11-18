@@ -206,7 +206,7 @@ impl RunWork {
       return;
     };
     for block in blocks {
-      if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+      if block.get("type").and_then(Value::as_str) == Some(event_types::TOOL_RESULT) {
         self.complete(block.get(event_types::TOOL_USE_ID).and_then(Value::as_str));
       }
     }

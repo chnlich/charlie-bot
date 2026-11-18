@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{
-  USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_CACHED_INPUT_TOKENS, USAGE_INPUT_TOKENS,
-  USAGE_OUTPUT_TOKENS,
+  RESULT, USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_CACHED_INPUT_TOKENS,
+  USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
 };
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::text_repr::is_truthy;
@@ -329,7 +329,7 @@ fn thread_records(
   let mut ids = HashSet::new();
   for line in &lines {
     let object = as_object(line, "thread event")?;
-    if is_type(object, "result") {
+    if is_type(object, RESULT) {
       results.push(object);
     } else if let Some(session) = session_text(object, "session_id") {
       ids.insert(session);
@@ -390,7 +390,7 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
       if let Some(named) = object.get("model").filter(|named| is_truthy(named)) {
         model = Some(named);
       }
-    } else if is_type(object, "result") {
+    } else if is_type(object, RESULT) {
       last_result = Some(object);
     }
   }
@@ -521,7 +521,7 @@ fn run_record(
 fn last_result(objects: &[Value]) -> anyhow::Result<Option<&Map<String, Value>>> {
   for value in objects.iter().rev() {
     let object = as_object(value, "run event")?;
-    if is_type(object, "result") {
+    if is_type(object, RESULT) {
       return Ok(Some(object));
     }
   }

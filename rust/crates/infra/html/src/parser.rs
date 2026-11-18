@@ -117,7 +117,7 @@ pub fn parse(source: &str, convert_charrefs: bool) -> Result<Vec<Event>, ParseEr
 }
 
 /// The events of a document, passed to `handler` as each is emitted. `feed(source)` followed by `close()` on a
-/// fresh parser tokenizes the document. The streamed form carries the byte offset alone; a consumer that needs
+/// fresh parser tokenizes the document. The streamed form carries the byte offset alone. A consumer that needs
 /// line and column positions calls `parse` instead.
 pub fn parse_with<F>(source: &str, convert_charrefs: bool, handler: F) -> Result<(), ParseError>
 where
@@ -681,7 +681,7 @@ fn previous_char_len(source: &str, end: usize) -> usize {
 }
 
 /// The offset to resume scanning at after a character or entity reference whose extent ends at `end_at`. A reference
-/// with a semicolon consumes it; one without leaves the delimiter for the next event.
+/// with a semicolon consumes it. One without leaves the delimiter for the next event.
 fn reference_end(source: &str, end_at: usize) -> usize {
   if source[..end_at].ends_with(';') { end_at } else { end_at - previous_char_len(source, end_at) }
 }

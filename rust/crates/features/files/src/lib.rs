@@ -112,8 +112,8 @@ fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Respons
 }
 
 /// The file answer for a regular file. It honors only the `Range` headers, so the conditional
-/// headers the static views read are removed first; the static answer would otherwise send a 304 for them. The
-/// static root is `/`, so the answer serves the resolved path wherever it lies.
+/// headers the static views read are removed first. The static answer would otherwise send a 304 for them.
+/// The static root is `/`, so the answer serves the resolved path wherever it lies.
 fn answer_file(fs_path: &FsPath, method: &Method, headers: &HeaderMap) -> Response {
   let Some(route_path) = fs_path.to_str() else {
     return responses::internal_error(FailureKind::UnicodeEncodeError.as_str(), format!("{fs_path:?} is not UTF-8"));

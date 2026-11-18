@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // The sidebar's "Move under…" picker (sidebar/session-move.js) in a headless
-// Chrome. The page loads the app's stylesheets and the picker's three scripts
+// Chrome. The page loads the app's stylesheets and the picker's scripts
 // from web/static. A stub server answers the two session lists and refuses the
 // move with two blockers. A page-side probe measures the choice rows, the
 // list that holds them and each block of the dialog, at a desktop width and a

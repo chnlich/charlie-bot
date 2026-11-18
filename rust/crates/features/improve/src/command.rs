@@ -371,8 +371,8 @@ pub struct Reservation<'a> {
   pub resolved_model: &'a str,
 }
 
-/// Reserve a loop id and persist its running state before any background work starts. The active lock is created
-/// exclusively, so a second reservation fails with the running loop's id.
+/// The reservation of a loop id and its running state, persisted before any background work starts. The active lock
+/// is created exclusively, so a second reservation fails with the running loop's id.
 pub fn reserve_loop_state(
   cfg: &CharlieBotConfig,
   session_id: &str,

@@ -130,7 +130,8 @@ fn message_text(message: Option<&Value>) -> String {
     .collect()
 }
 
-/// Stream the newest summary from a reverse event walk.
+/// The newest summary in a reverse event walk, or a fixed sentence that names the iteration and status when the walk
+/// holds none.
 pub fn extract_iteration_summary_from_events(
   events_newest_first: impl IntoIterator<Item = Value>,
   iteration: i64,

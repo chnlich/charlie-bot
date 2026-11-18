@@ -259,8 +259,8 @@ fn loop_backend(
   Ok((backend_id, model))
 }
 
-/// Fail a freshly reserved loop whose child was refused: the state is marked failed and the active lock cleared.
-/// The refused request then leaves no running loop that no controller owns.
+/// The failure path of a freshly reserved loop whose child was refused: the state is marked failed and the active
+/// lock cleared. The refused request then leaves no running loop that no controller owns.
 fn fail_reserved_loop(cfg: &CharlieBotConfig, session_id: &str, mut state: ImproveState) -> anyhow::Result<()> {
   state.status = LoopStatus::Failed;
   command::save_loop_state(cfg, session_id, &state)?;

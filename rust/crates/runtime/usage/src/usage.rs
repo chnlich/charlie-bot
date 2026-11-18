@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{self, EventFields, is_truthy};
 use charliebot_core::hot_reload::HotReload;
+use charliebot_core::text_repr;
 use charliebot_registry::backend::{ContextLimits, UsageResolver, UsageResolverHost};
 use charliebot_registry::usage::{CLAUDE_READING_KIND, SNAPSHOT_READING_KIND};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
@@ -109,7 +110,8 @@ impl UsageFold {
     )?;
     if tokens > 0 {
       self.chosen_prompt_tokens = tokens;
-      self.chosen_model = message.field("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
+      self.chosen_model =
+        message.field("model").filter(|value| is_truthy(*value)).map_or_else(String::new, event_field_text);
       self.post_compact_tokens = None;
       self.reading_kind = ReadingKind::Claude;
     }
@@ -289,7 +291,7 @@ impl UsageFold {
       }
       None => (None, None),
     };
-    let model = snapshot.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
+    let model = snapshot.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, event_field_text);
     Ok(usage_value(Some(token_sum), context_full, compact_at, &model))
   }
 
@@ -301,7 +303,7 @@ impl UsageFold {
         value => int_value(value),
       })
     };
-    let model = reading.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
+    let model = reading.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, event_field_text);
     usage_value(
       number(event_types::CONTEXT_TOKENS),
       number(event_types::CONTEXT_FULL),
@@ -588,17 +590,12 @@ fn number_value(value: &Value, field: &str) -> StoreResult<f64> {
   }
 }
 
-fn value_str<E: EventFields>(value: &E) -> String {
+/// A compact event field's text form, read through the owner in [`text_repr::field_text`].
+fn event_field_text<E: EventFields>(value: &E) -> String {
   if let Some(text) = value.as_str_field() {
     return text.to_string();
   }
-  if value.is_null() {
-    return "None".to_string();
-  }
-  if let Some(flag) = value.as_bool_field() {
-    return if flag { "True" } else { "False" }.to_string();
-  }
-  value.to_owned_value().to_string()
+  text_repr::field_text(Some(&value.to_owned_value()))
 }
 
 #[cfg(test)]

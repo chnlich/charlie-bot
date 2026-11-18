@@ -1,5 +1,5 @@
-//! Request and response helpers the session route modules share: the blocking-pool store call, the Starlette-style
-//! query string, and the store-error response.
+//! Helpers the session route modules share for requests and responses: the blocking-pool store call, the
+//! Starlette-style query string, and the store-error response.
 
 use axum::body::Body;
 use axum::http::Request;
@@ -10,7 +10,7 @@ use charliebot_store::{StoreError, StoreResult};
 /// The store error as its route's JSON response. `charliebot_registry::task_errors` owns the mapping.
 pub(crate) use charliebot_registry::task_errors::store_error;
 
-/// Run a handler's store work on the blocking pool, so a slow read holds no async worker.
+/// A handler's store work run on the blocking pool, so a slow read holds no async worker.
 pub(crate) async fn blocking_store<T, F>(work: F) -> StoreResult<T>
 where
   T: Send + 'static,
@@ -24,8 +24,8 @@ pub(crate) struct Query {
 }
 
 impl Query {
-  /// The query string's pairs, in order, decoded with `form_urlencoded::parse` semantics: `+` reads as a
-  /// space, `%XX` escapes decode with replacement, and a part without a value keeps its blank value.
+  /// The query string's pairs, in order, decoded with `form_urlencoded::parse` semantics. A `+` reads as a
+  /// space, a `%XX` escape decodes with replacement, and a part without a value keeps its blank value.
   pub(crate) fn new(request: &Request<Body>) -> Self {
     let values = form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
       .map(|(key, value)| (key.into_owned(), value.into_owned()))

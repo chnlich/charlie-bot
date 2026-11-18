@@ -10,6 +10,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
 use bytes::Bytes;
+use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
 use charliebot_cli_common::route;
 use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::mimetypes;
@@ -20,10 +21,10 @@ use charliebot_core::config::{CharlieBotConfig, HomeService};
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::paths;
 use charliebot_registry::Registry;
-use charliebot_registry::templating::{self, STATIC_ASSET_VERSION_KEY, Templating};
+use charliebot_registry::templating::{self, STATIC_ASSET_VERSION_KEY, TemplateGlobal, Templating};
 use charliebot_session_api::api as session_routes;
 use charliebot_session_api::{detail, listing};
-use charliebot_store::metadata::{NATIVE_MODEL, RUN_BACKEND, THINKING_SINCE};
+use charliebot_store::metadata::{NATIVE_MODEL, RUN_BACKEND, SessionMetadata, THINKING_SINCE};
 use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::join_all;
 use percent_encoding::percent_decode_str;
@@ -165,6 +166,7 @@ impl PageEncoding {
 }
 
 /// A page body's compressed form and the `Content-Encoding` it names.
+#[derive(Clone)]
 struct PageCompressed {
   encoding: &'static str,
   bytes: Bytes,
@@ -353,6 +355,101 @@ fn preload_answer(headers: &HeaderMap) -> Option<Response> {
   })
 }
 
+/// The chat page's finished answers, up to [`PAGE_BODY_MEMO_ENTRIES_PER_PAGE`] of them, each kept while every
+/// input that shaped it still holds.
+///
+/// A repeat page request re-checks the session row, its bootstrap and the sidebar text through their own memos,
+/// and then pays the page's context again: the session's response value, the backend facts, the context object
+/// and the template render. Those read the same values the memo can name, so the route keeps the answer beside
+/// the inputs it compared and serves it again. On the 7,160-session mock home the context and the render cost
+/// about 65 microseconds of the page's 150-microsecond handler.
+#[derive(Default)]
+struct IndexAnswerMemo {
+  entries: Vec<IndexAnswerEntry>,
+}
+
+struct IndexAnswerEntry {
+  key: IndexAnswerKey,
+  body: Bytes,
+  compressed: Option<PageCompressed>,
+}
+
+/// Every input that shapes one chat page answer.
+///
+/// The bootstrap and the sidebar text compare by the shared allocation their own memo keeps, so a repeat request
+/// proves them with a pointer. The session row, the template globals and the load errors compare by value: the
+/// store hands a caller its own copy of the row, and the globals carry the config and credentials a reload
+/// replaced. The config compares by pointer because a reload builds a new one, and the template revision names
+/// the template and static tree. The rest are the small values the request and the page state carry.
+#[derive(Clone)]
+struct IndexAnswerKey {
+  revision: u64,
+  encoding: PageEncoding,
+  method: String,
+  path: String,
+  query: String,
+  hostname: String,
+  auth_enabled: bool,
+  session: String,
+  meta: SessionMetadata,
+  bootstrap_text: Arc<String>,
+  bootstrap_session: Arc<Value>,
+  pending_draft: Value,
+  event_count: Value,
+  sidebar_text: Arc<String>,
+  config: Arc<CharlieBotConfig>,
+  globals: Vec<TemplateGlobal>,
+  load_errors: Vec<String>,
+}
+
+impl IndexAnswerKey {
+  /// Whether every input still names the value this key holds.
+  fn matches(&self, other: &Self) -> bool {
+    self.revision == other.revision
+      && self.encoding == other.encoding
+      && self.method == other.method
+      && self.path == other.path
+      && self.query == other.query
+      && self.hostname == other.hostname
+      && self.auth_enabled == other.auth_enabled
+      && self.session == other.session
+      && self.meta == other.meta
+      && Arc::ptr_eq(&self.bootstrap_text, &other.bootstrap_text)
+      && Arc::ptr_eq(&self.bootstrap_session, &other.bootstrap_session)
+      && self.pending_draft == other.pending_draft
+      && self.event_count == other.event_count
+      && Arc::ptr_eq(&self.sidebar_text, &other.sidebar_text)
+      && Arc::ptr_eq(&self.config, &other.config)
+      && self.globals == other.globals
+      && self.load_errors == other.load_errors
+  }
+}
+
+impl IndexAnswerMemo {
+  /// The answer for these inputs, or the one `build` renders and this memo keeps.
+  fn answer(
+    &mut self,
+    key: &IndexAnswerKey,
+    build: impl FnOnce() -> Result<(Bytes, Option<PageCompressed>), Failure>,
+  ) -> Result<(Bytes, Option<PageCompressed>), Failure> {
+    if let Some(at) = self.entries.iter().position(|entry| entry.key.matches(key)) {
+      // The answer served again is the newest, so an eviction takes the one served longest ago.
+      let entry = self.entries.remove(at);
+      let answer = (entry.body.clone(), entry.compressed.clone());
+      self.entries.push(entry);
+      return Ok(answer);
+    }
+    let (body, compressed) = build()?;
+    self.entries.push(IndexAnswerEntry { key: key.clone(), body: body.clone(), compressed: compressed.clone() });
+    if self.entries.len() > PAGE_BODY_MEMO_ENTRIES_PER_PAGE {
+      self.entries.remove(0);
+    }
+    Ok((body, compressed))
+  }
+}
+
+static INDEX_ANSWER_MEMO: LazyLock<Mutex<IndexAnswerMemo>> = LazyLock::new(|| Mutex::new(IndexAnswerMemo::default()));
+
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   if let Some(answer) = preload_answer(&request.headers) {
     return answer;
@@ -395,32 +492,23 @@ fn chat_page(
   session: Option<String>,
 ) -> Result<Response, Failure> {
   let mut load_errors = Vec::new();
-  let mut active_session = Value::Null;
-  let mut pending_draft = Value::Null;
-  let mut event_count = Value::from(0);
-  let mut bootstrap_text = None;
+  let mut meta = None;
+  let mut bootstrap = None;
   let mut clear_unread = None;
   if let Some(session_id) = session.as_deref().filter(|session_id| !session_id.is_empty()) {
     match state.features.store.get_session_cached_or_read_sync(session_id) {
-      Ok(Some(meta)) => {
-        active_session = state.features.store.session_metadata_value(&meta);
-        let bootstrap =
-          detail::page_bootstrap(&PAGE_BOOTSTRAP_MEMO, &state.features.store, &state.features.registry, &cfg, &meta);
-        match bootstrap {
-          Ok(bootstrap) => {
-            let bootstrap_session = bootstrap.session.as_object().expect("a bootstrap session is an object");
-            let active = active_session.as_object_mut().expect("session metadata serializes to an object");
-            for name in [RUN_BACKEND, THINKING_SINCE] {
-              if let Some(value) = bootstrap_session.get(name) {
-                active.insert(name.to_string(), value.clone());
-              }
-            }
-            pending_draft = bootstrap.pending_draft;
-            event_count = bootstrap.event_count;
-            bootstrap_text = Some(bootstrap.text);
+      Ok(Some(row)) => {
+        let loaded =
+          detail::page_bootstrap(&PAGE_BOOTSTRAP_MEMO, &state.features.store, &state.features.registry, &cfg, &row);
+        // The row identifies the open session whether or not its bootstrap loads: the page keeps showing it
+        // after a failed load, and only the bootstrap fields stay out.
+        meta = Some(row);
+        match loaded {
+          Ok(loaded) => {
             // The active row is marked read only when its bootstrap loaded; a failed load keeps
             // the unread mark.
             clear_unread = Some(session_id.to_string());
+            bootstrap = Some(loaded);
           }
           Err(error) => {
             tracing::error!(session_id, error = %error, "load_session_data_failed");
@@ -465,17 +553,104 @@ fn chat_page(
     }
   };
 
+  let encoding = PageEncoding::for_request(&request.headers);
+  let hostname = hostname()?;
+  let build = |meta: Option<&SessionMetadata>, bootstrap: Option<&detail::PageBootstrap>, load_errors: Vec<String>| {
+    index_answer(
+      state,
+      request,
+      &cfg,
+      auth_enabled,
+      &hostname,
+      encoding,
+      shell,
+      meta,
+      bootstrap,
+      Arc::clone(&initial_sessions_json),
+      load_errors,
+    )
+  };
+  let (body, compressed) = match (meta.as_ref(), bootstrap.as_ref()) {
+    (Some(meta), Some(bootstrap)) => {
+      let templating =
+        state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
+      let globals = templating.render_globals(&state.features).map_err(|error| failure(error.kind(), error))?;
+      let key = IndexAnswerKey {
+        revision: templating.revision(),
+        encoding,
+        method: request.method.as_str().to_string(),
+        path: request.uri.path().to_string(),
+        query: request.uri.query().unwrap_or("").to_string(),
+        hostname: hostname.clone(),
+        auth_enabled,
+        session: session.clone().unwrap_or_default(),
+        meta: meta.clone(),
+        bootstrap_text: Arc::clone(&bootstrap.text),
+        bootstrap_session: Arc::clone(&bootstrap.session),
+        pending_draft: bootstrap.pending_draft.clone(),
+        event_count: bootstrap.event_count.clone(),
+        sidebar_text: Arc::clone(&initial_sessions_json),
+        config: Arc::clone(&cfg),
+        globals,
+        load_errors: load_errors.clone(),
+      };
+      let mut memo = INDEX_ANSWER_MEMO.lock().expect("the index answer memo mutex is not poisoned");
+      memo.answer(&key, || build(Some(meta), Some(bootstrap), load_errors))?
+    }
+    _ => build(meta.as_ref(), bootstrap.as_ref(), load_errors)?,
+  };
+  Ok(page_response(body, compressed, StatusCode::OK))
+}
+
+/// The chat page's answer for the values the request read: the context the template renders from, and the body.
+///
+/// The session's response value, its bootstrap fields and the backend facts are built here rather than in
+/// [`chat_page`], so a request the answer memo answers builds none of them.
+#[allow(clippy::too_many_arguments)]
+fn index_answer(
+  state: &Arc<AppState>,
+  request: &Parts,
+  cfg: &Arc<CharlieBotConfig>,
+  auth_enabled: bool,
+  hostname: &str,
+  encoding: PageEncoding,
+  shell: bool,
+  meta: Option<&SessionMetadata>,
+  bootstrap: Option<&detail::PageBootstrap>,
+  sidebar_text: Arc<String>,
+  load_errors: Vec<String>,
+) -> Result<(Bytes, Option<PageCompressed>), Failure> {
+  let mut active_session = Value::Null;
+  let mut pending_draft = Value::Null;
+  let mut event_count = Value::from(0);
+  let mut bootstrap_text = None;
+  if let Some(meta) = meta {
+    active_session = state.features.store.session_metadata_value(meta);
+    // A bootstrap that failed to load leaves only its own fields out; the session row itself still renders.
+    if let Some(bootstrap) = bootstrap {
+      let bootstrap_session = bootstrap.session.as_object().expect("a bootstrap session is an object");
+      let active = active_session.as_object_mut().expect("session metadata serializes to an object");
+      for name in [RUN_BACKEND, THINKING_SINCE] {
+        if let Some(value) = bootstrap_session.get(name) {
+          active.insert(name.to_string(), value.clone());
+        }
+      }
+      pending_draft = bootstrap.pending_draft.clone();
+      event_count = bootstrap.event_count.clone();
+      bootstrap_text = Some(Arc::clone(&bootstrap.text));
+    }
+  }
   let default_backend_id = cfg.backends.new_session_backend().unwrap_or_else(|| "claude".to_string());
-  let active_backend = active_backend_id(&cfg, &active_session, &default_backend_id);
+  let active_backend = active_backend_id(cfg, &active_session, &default_backend_id);
   let active_option = cfg.get_backend_option(active_backend);
   let backend_pools =
     cfg.backends.pools.iter().map(|pool| json!({"id": pool.id, "label": pool.label})).collect::<Vec<_>>();
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
-  let active_pool_member = active_session.get("pool_member").cloned().unwrap_or(Value::Null);
+  let active_pool_member = active_session.get(POOL_MEMBER_FIELD).cloned().unwrap_or(Value::Null);
   let active_native_model = active_session.get(NATIVE_MODEL).cloned().unwrap_or(Value::Null);
-  let active_backend_label = active_backend_label(&cfg, active_backend, &active_pool_member, &active_native_model);
-  let backend_compact = compact_facts(&cfg, &state.features.registry)?;
+  let active_backend_label = active_backend_label(cfg, active_backend, &active_pool_member, &active_native_model);
+  let backend_compact = compact_facts(cfg, &state.features.registry)?;
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
     "session_bootstrap_json": SESSION_BOOTSTRAP_PLACEHOLDER,
@@ -498,14 +673,8 @@ fn chat_page(
     (detail::ACTIVE_BACKEND_TYPE_FIELD): active_option.map_or("", |option| option.backend_type.as_str()),
     "load_errors": load_errors,
   });
-  render_page_blocking(
-    state,
-    request,
-    "index.html",
-    context,
-    PageRuntime::Index { cfg, auth_enabled, sidebar_text: initial_sessions_json, bootstrap_text },
-    StatusCode::OK,
-  )
+  let runtime = PageRuntime::Index { cfg: Arc::clone(cfg), auth_enabled, sidebar_text, bootstrap_text };
+  page_answer(state, request, "index.html", context, &runtime, encoding, hostname)
 }
 
 /// The offline shell's worker script: the shell's worker source behind its config, the switch and the release version
@@ -577,6 +746,75 @@ async fn home_page(State(state): State<Arc<AppState>>, request: Parts) -> Respon
   .await
 }
 
+/// The events viewer's finished answers, up to [`EVENTS_ANSWER_MEMO_ENTRIES`], each kept while every input that
+/// shaped it still holds.
+///
+/// The viewer serializes its session row and renders its template on every request. A reader who comes back to the
+/// same viewer asks for the body the page served a moment ago, and the row, the template globals and the request
+/// line prove it. The body and its compressed form are kept whole, so a repeat request reads neither the row's
+/// response value nor the engine.
+#[derive(Default)]
+struct EventsAnswerMemo {
+  entries: Vec<EventsAnswerEntry>,
+}
+
+struct EventsAnswerEntry {
+  key: EventsAnswerKey,
+  body: Bytes,
+  compressed: Option<PageCompressed>,
+}
+
+/// Every input that shapes one events viewer answer.
+///
+/// The session row is the one `get_session` answered, and it is that row's value the page rendered before this memo,
+/// so a request whose row differs renders again. The row follows the store's own metadata cache window: the route
+/// serves the row the store hands out, as it did before the memo. The template globals compare by value, as the render
+/// memo compares them, so a reloaded config or credentials file still reaches the page.
+#[derive(Clone, PartialEq)]
+struct EventsAnswerKey {
+  revision: u64,
+  asset_version: String,
+  hostname: String,
+  encoding: PageEncoding,
+  method: String,
+  path: String,
+  query: String,
+  session_id: String,
+  events_url: String,
+  session: SessionMetadata,
+  globals: Vec<TemplateGlobal>,
+}
+
+impl EventsAnswerMemo {
+  /// The answer for these inputs, or the one `build` renders and this memo keeps.
+  fn answer(
+    &mut self,
+    key: &EventsAnswerKey,
+    build: impl FnOnce() -> Result<(Bytes, Option<PageCompressed>), Failure>,
+  ) -> Result<(Bytes, Option<PageCompressed>), Failure> {
+    if let Some(at) = self.entries.iter().position(|entry| entry.key == *key) {
+      // The answer served again is the newest, so an eviction takes the one served longest ago.
+      let entry = self.entries.remove(at);
+      let answer = (entry.body.clone(), entry.compressed.clone());
+      self.entries.push(entry);
+      return Ok(answer);
+    }
+    let (body, compressed) = build()?;
+    self.entries.push(EventsAnswerEntry { key: key.clone(), body: body.clone(), compressed: compressed.clone() });
+    if self.entries.len() > EVENTS_ANSWER_MEMO_ENTRIES {
+      self.entries.remove(0);
+    }
+    Ok((body, compressed))
+  }
+}
+
+static EVENTS_ANSWER_MEMO: LazyLock<Mutex<EventsAnswerMemo>> =
+  LazyLock::new(|| Mutex::new(EventsAnswerMemo::default()));
+
+/// The finished viewer answers one process keeps: a reader who moves between two sessions comes back to the viewer
+/// it opened a moment ago, and a single slot would render it again on every switch.
+const EVENTS_ANSWER_MEMO_ENTRIES: usize = 4;
+
 async fn events_viewer(
   State(state): State<Arc<AppState>>,
   AxumPath(session_id): AxumPath<String>,
@@ -592,13 +830,55 @@ async fn events_viewer(
       return render_events_unavailable(state, request, session_id, StatusCode::INTERNAL_SERVER_ERROR, "failed").await;
     }
   };
-  let session = state.features.store.session_metadata_value(&session);
-  let context = json!({
-    "session": session,
-    "session_id": session_id,
-    "events_url": route::fill(session_routes::SESSION_EVENTS_JSONL_PATH, &[session_id.as_str()]),
-  });
-  render_page(state, request, "events_viewer.html", context, PageRuntime::Events, StatusCode::OK).await
+  let rendered = tokio::task::spawn_blocking(move || events_page(&state, &request, &session_id, &session))
+    .await
+    .expect("the events viewer task does not panic");
+  match rendered {
+    Ok(response) => response,
+    Err(error) => responses::internal_error(&error.kind, error.detail),
+  }
+}
+
+/// The events viewer's answer for a session it can show.
+///
+/// A repeat request re-checks the session row and the template inputs, and then pays the page's context again: the
+/// row's response value, the context object and the template render. The answer memo keeps the finished body beside
+/// the inputs it read, so a request whose row and template inputs still hold serves that body without building the
+/// row or rendering the page.
+fn events_page(
+  state: &Arc<AppState>,
+  request: &Parts,
+  session_id: &str,
+  session: &SessionMetadata,
+) -> Result<Response, Failure> {
+  let templating =
+    state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
+  let encoding = PageEncoding::for_request(&request.headers);
+  let hostname = hostname()?;
+  let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
+  let globals = templating.render_globals(&state.features).map_err(|error| failure(error.kind(), error))?;
+  let key = EventsAnswerKey {
+    revision: templating.revision(),
+    asset_version,
+    hostname,
+    encoding,
+    method: request.method.as_str().to_string(),
+    path: request.uri.path().to_string(),
+    query: request.uri.query().unwrap_or("").to_string(),
+    session_id: session_id.to_string(),
+    events_url: route::fill(session_routes::SESSION_EVENTS_JSONL_PATH, &[session_id]),
+    session: session.clone(),
+    globals,
+  };
+  let answer = EVENTS_ANSWER_MEMO.lock().expect("the events answer memo mutex is not poisoned").answer(&key, || {
+    let context = json!({
+      "session": state.features.store.session_metadata_value(session),
+      "session_id": key.session_id,
+      "events_url": key.events_url,
+    });
+    page_answer(state, request, "events_viewer.html", context, &PageRuntime::Events, encoding, &key.hostname)
+  })?;
+  Ok(page_response(answer.0, answer.1, StatusCode::OK))
 }
 
 /// The events page's answer for a session it cannot show: the page keeps its top bar and states the outcome in its own
@@ -664,17 +944,31 @@ fn render_page_blocking(
   state: &Arc<AppState>,
   request: &Parts,
   name: &'static str,
-  mut context: Value,
+  context: Value,
   runtime: PageRuntime,
   status: StatusCode,
 ) -> Result<Response, Failure> {
   let encoding = PageEncoding::for_request(&request.headers);
+  let hostname = hostname()?;
+  let (body, compressed) = page_answer(state, request, name, context, &runtime, encoding, &hostname)?;
+  Ok(page_response(body, compressed, status))
+}
+
+/// One page's body, from the template and the body memo, with the values the page reads from the state it runs in.
+fn page_answer(
+  state: &Arc<AppState>,
+  request: &Parts,
+  name: &'static str,
+  mut context: Value,
+  runtime: &PageRuntime,
+  encoding: PageEncoding,
+  hostname: &str,
+) -> Result<(Bytes, Option<PageCompressed>), Failure> {
   let templating =
     state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
-  let hostname = hostname()?;
   let object = context.as_object_mut().expect("a page context is a JSON object");
-  object.insert("hostname".to_string(), Value::String(hostname));
-  match &runtime {
+  object.insert("hostname".to_string(), Value::String(hostname.to_string()));
+  match runtime {
     PageRuntime::Index { cfg, auth_enabled, .. } => {
       let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
       object.insert("sessions_root".to_string(), Value::String(paths::display(&cfg.sessions_dir())));
@@ -690,8 +984,7 @@ fn render_page_blocking(
   let template_html = templating
     .render_page_template(&state.features, name, &context, request)
     .map_err(|error| failure(error.kind(), error))?;
-  let (body, compressed) = page_body(name, &template_html, &runtime, encoding)?;
-  Ok(page_response(body, compressed, status))
+  page_body(name, &template_html, runtime, encoding)
 }
 
 /// The finished body of a page, with its compressed form when the client asked for one.
@@ -962,6 +1255,133 @@ mod tests {
       "Auto → retired · gpt-6-luna"
     );
     assert_eq!(active_backend_label(&cfg, "auto", &json!("retired"), &Value::Null), "Auto → retired");
+  }
+
+  /// A repeat page request serves the answer the memo kept, and a moved input renders again.
+  #[test]
+  fn a_repeat_page_answer_is_served_until_an_input_moves() {
+    use charliebot_store::metadata::TaskProfile;
+
+    let config = Arc::new(label_config());
+    let meta = SessionMetadata::new("synthetic", "Memo page", TaskProfile::Manager);
+    let bootstrap_text = Arc::new("{\"messages\":[]}".to_string());
+    let bootstrap_session = Arc::new(json!({"run_backend": null}));
+    let sidebar = Arc::new("{}".to_string());
+    let key = |sidebar: &Arc<String>, encoding, globals: Vec<TemplateGlobal>| IndexAnswerKey {
+      revision: 1,
+      encoding,
+      method: "GET".to_string(),
+      path: "/".to_string(),
+      query: "session=synthetic".to_string(),
+      hostname: "host".to_string(),
+      auth_enabled: false,
+      session: "synthetic".to_string(),
+      meta: meta.clone(),
+      bootstrap_text: Arc::clone(&bootstrap_text),
+      bootstrap_session: Arc::clone(&bootstrap_session),
+      pending_draft: Value::Null,
+      event_count: Value::from(0),
+      sidebar_text: Arc::clone(sidebar),
+      config: Arc::clone(&config),
+      globals,
+      load_errors: Vec::new(),
+    };
+    fn answer(memo: &mut IndexAnswerMemo, key: &IndexAnswerKey, builds: &mut usize) -> Bytes {
+      memo
+        .answer(key, || {
+          *builds += 1;
+          Ok((Bytes::from_static(b"page body"), None))
+        })
+        .unwrap()
+        .0
+    }
+
+    let mut memo = IndexAnswerMemo::default();
+    let mut builds = 0;
+    assert_eq!(
+      answer(&mut memo, &key(&sidebar, PageEncoding::Gzip, Vec::new()), &mut builds),
+      Bytes::from_static(b"page body")
+    );
+    assert_eq!(builds, 1);
+    assert_eq!(
+      answer(&mut memo, &key(&sidebar, PageEncoding::Gzip, Vec::new()), &mut builds),
+      Bytes::from_static(b"page body")
+    );
+    assert_eq!(builds, 1, "a repeat request serves the answer the memo kept");
+
+    assert_eq!(
+      answer(&mut memo, &key(&sidebar, PageEncoding::Identity, Vec::new()), &mut builds),
+      Bytes::from_static(b"page body")
+    );
+    assert_eq!(builds, 2, "another encoding renders its own body");
+
+    let moved_sidebar = Arc::new("{\"name\":[]}".to_string());
+    assert_eq!(
+      answer(&mut memo, &key(&moved_sidebar, PageEncoding::Gzip, Vec::new()), &mut builds),
+      Bytes::from_static(b"page body")
+    );
+    assert_eq!(builds, 3, "a moved sidebar renders again");
+
+    let globals = || {
+      vec![("voice_backends", charliebot_registry::templating::TemplateValue::from_serialize(json!(["code-server"])))]
+    };
+    assert_eq!(
+      answer(&mut memo, &key(&sidebar, PageEncoding::Gzip, globals()), &mut builds),
+      Bytes::from_static(b"page body")
+    );
+    assert_eq!(builds, 4, "a changed template global renders again");
+    assert_eq!(
+      answer(&mut memo, &key(&sidebar, PageEncoding::Gzip, globals()), &mut builds),
+      Bytes::from_static(b"page body")
+    );
+    assert_eq!(builds, 4, "the same globals serve the answer the memo kept");
+  }
+
+  /// A repeat events viewer request serves the answer the memo kept, and a moved row renders again.
+  #[test]
+  fn a_repeat_events_answer_is_served_until_the_row_moves() {
+    use charliebot_store::metadata::TaskProfile;
+
+    let session = SessionMetadata::new("synthetic", "Events page", TaskProfile::Manager);
+    let key = |session: &SessionMetadata, encoding| EventsAnswerKey {
+      revision: 1,
+      asset_version: "v1".to_string(),
+      hostname: "host".to_string(),
+      encoding,
+      method: "GET".to_string(),
+      path: "/sessions/synthetic/events".to_string(),
+      query: String::new(),
+      session_id: "synthetic".to_string(),
+      events_url: "/api/sessions/synthetic/events.jsonl".to_string(),
+      session: session.clone(),
+      globals: Vec::new(),
+    };
+    fn answer(memo: &mut EventsAnswerMemo, key: &EventsAnswerKey, builds: &mut usize) -> Bytes {
+      memo
+        .answer(key, || {
+          *builds += 1;
+          Ok((Bytes::from_static(b"events body"), None))
+        })
+        .unwrap()
+        .0
+    }
+
+    let mut memo = EventsAnswerMemo::default();
+    let mut builds = 0;
+    assert_eq!(answer(&mut memo, &key(&session, PageEncoding::Gzip), &mut builds), Bytes::from_static(b"events body"));
+    assert_eq!(builds, 1);
+    assert_eq!(answer(&mut memo, &key(&session, PageEncoding::Gzip), &mut builds), Bytes::from_static(b"events body"));
+    assert_eq!(builds, 1, "a repeat request serves the answer the memo kept");
+
+    assert_eq!(
+      answer(&mut memo, &key(&session, PageEncoding::Identity), &mut builds),
+      Bytes::from_static(b"events body")
+    );
+    assert_eq!(builds, 2, "another encoding renders its own body");
+
+    let renamed = SessionMetadata::new("synthetic", "Renamed page", TaskProfile::Manager);
+    assert_eq!(answer(&mut memo, &key(&renamed, PageEncoding::Gzip), &mut builds), Bytes::from_static(b"events body"));
+    assert_eq!(builds, 3, "a moved session row renders again");
   }
 
   #[test]

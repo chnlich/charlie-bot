@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { loadWebsocketContext } = require('./websocket_context_stub');
+const {loadWebsocketContext, CONNECT_DEADLINE_MS} = require('./websocket_context_stub');
 
 const BANNER_TEXT = 'This page is out of date. Reload to continue.';
 const RELOAD_GUARD_KEY = 'charliebot-stale-page-reload-at';
@@ -46,6 +46,8 @@ function buildHarness(clock) {
     // The offline-shell helper records a reload after refreshing the stored shell.
     reloadAfterRefreshingShell: () => reloaded.push(clock.now),
     setTimeout: (fn, ms) => {
+      // The connect deadline has its own tests (websocket_connect_handlers.test.js); this harness records the rest.
+      if (ms === CONNECT_DEADLINE_MS) return 0;
       timers.push({fn, ms});
       return timers.length;
     },

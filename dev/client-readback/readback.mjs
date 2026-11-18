@@ -11,7 +11,8 @@
 // Per device the sections are:
 //   switch      completed session switches: elapsed p50/p90/p99 and the count over 5 s
 //   send        click-to-echo waits: p50/p90
-//   socket      network-caused disconnects: count, and the reconnect-wait p50/p90/max
+//   socket      network-caused disconnects: count, the reconnect-wait p50/p90/max, wait-after-return
+//               p50/p90/max, the no-request count, and the no-request raw-gap p50/p90/max
 //   traffic     received bytes per tab-hour by endpoint (a tab-hour is the tab-time the traffic
 //               events' windows cover)
 //   page loads  the count of each load cause
@@ -24,6 +25,14 @@
 //               same bytes take over the CharlieBot link, from the same load's same-origin timings: the
 //               round trip is the least request-to-first-byte time, and the throughput is the bytes over
 //               the transfer time of the largest same-origin body. The bytes are the file's encoded body.
+//
+// The existing client socket diagnostic records socket-open and catch-up times, not when the network returns. The
+// wait-after-return reads the request log's `http_request` lines too, whatever the window, because a disconnect's
+// gap can end after the window. The network returns at the arrival of the device's first request (its
+// `forwarded_for` address) after the disconnect and before the reconnect. The request log writes a line when the
+// response finishes, so an arrival is the line's time less `duration_ms`. A `/ws/` request is the socket's own
+// reconnect, so it never counts as a return. This wait starts when the server sees that first request, omitting any
+// device-side wait before a request arrives. A disconnect with no request in its gap reports its raw gap instead.
 //
 // A percentile is the sorted sample's `floor(p * (n - 1))` element, the convention the research
 // scripts of the poor-network line use.
@@ -42,6 +51,10 @@ const FIELDS = {
     'forwarded_for'],
   traffic: ['kind', 'window_s', 'endpoints', 'visibility_state', 'client_ts', 'forwarded_for'],
 };
+
+// The fields of the request log's `http_request` line, in the order the server writes them.
+const REQUEST_FIELDS = ['method', 'path', 'status', 'duration_ms', 'client', 'forwarded_for', 'error'];
+const SOCKET_PATH_PREFIX = '/ws/';
 
 const TIMESTAMP_SPAN_MS = 24; // `2026-11-05 12:16:56.557Z`, the log line's first 24 characters
 const SLOW_SWITCH_MS = 5000;
@@ -104,45 +117,80 @@ function unlogValue(value) {
   return value;
 }
 
-// The `diag_client` events of one log file, as `{at, device, kind, fields}`. A line whose kind is
-// unknown, or whose fields the line's own kind does not carry, is skipped.
+// The message names of the lines this readback reads: the client events, and the request log's line for
+// each HTTP response.
+const MESSAGE = /\s(diag_client|http_request)\s/;
+
+// The `name=value` fields of a log line's text, which starts with a space so the first field matches
+// the same boundary as the rest. Values run to the next ` name=` boundary of the given names; a free-text
+// value (a switch's error) survives whole unless it names one of them.
+function parseFields(text, names) {
+  const boundaries = [];
+  let searchFrom = 0;
+  for (const name of names) {
+    const at = text.indexOf(` ${name}=`, searchFrom);
+    if (at === -1) continue;
+    boundaries.push({name, at});
+    searchFrom = at + name.length + 2;
+  }
+  const fields = {};
+  boundaries.forEach((boundary, index) => {
+    const valueEnd = index + 1 < boundaries.length ? boundaries[index + 1].at : text.length;
+    const value = unlogValue(text.slice(boundary.at + boundary.name.length + 2, valueEnd).trim());
+    if (fields[boundary.name] === undefined) fields[boundary.name] = value;
+  });
+  return fields;
+}
+
+// One request-log line as `{arrival, device, path}`. The arrival is the line's time less duration_ms,
+// because the request log writes the line when the response finishes.
+function requestOf(at, text) {
+  const fields = parseFields(text, REQUEST_FIELDS);
+  if (!isFiniteNumber(fields.duration_ms)) {
+    throw new Error(`duration_ms at ${new Date(at).toISOString()} is not a number`);
+  }
+  return {arrival: at - Number(fields.duration_ms), device: fields.forwarded_for, path: fields.path};
+}
+
+// The `diag_client` events and the request arrivals of one log file, as `{events: [{at, device, kind,
+// fields}], requests: [{arrival, device, path}]}`. A `diag_client` line whose kind is unknown, or whose
+// fields the line's own kind does not carry, is skipped. A socket upgrade (a `/ws/` path) is the
+// reconnect itself, so it is left out of the requests.
 function parseLog(file) {
   const events = [];
-  const lines = fs.readFileSync(file, 'utf8').split('\n');
-  for (const line of lines) {
-    const marker = line.indexOf('diag_client');
-    if (marker === -1) continue;
+  const requests = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    const message = MESSAGE.exec(line);
+    if (!message) continue;
     const at = parseTimestamp(line);
     if (Number.isNaN(at)) continue;
     // The console renderer pads the message column, so the fields start after the padding.
-    const rest = line.slice(marker + 'diag_client'.length).trim();
-    const kindMatch = /^kind=(\S+)/.exec(rest);
+    const text = ` ${line.slice(message.index + message[0].length).trim()}`;
+    if (message[1] === 'http_request') {
+      const request = requestOf(at, text);
+      if (!request.path.startsWith(SOCKET_PATH_PREFIX)) requests.push(request);
+      continue;
+    }
+    const kindMatch = /^ kind=(\S+)/.exec(text);
     const names = kindMatch && FIELDS[kindMatch[1]];
     if (!names) continue;
-    // Values run to the next ` name=` boundary of the kind's own field list; a free-text value
-    // (a switch's error) survives whole unless it names a field of this kind.
-    const boundaries = [];
-    let searchFrom = 0;
-    for (const name of names) {
-      const at = rest.indexOf(` ${name}=`, searchFrom);
-      if (at === -1) continue;
-      boundaries.push({name, at});
-      searchFrom = at + name.length + 2;
-    }
-    for (let index = 0; index < boundaries.length; index++) {
-      boundaries[index].valueEnd = index + 1 < boundaries.length ? boundaries[index + 1].at : rest.length;
-    }
-    const fields = {};
-    for (const boundary of boundaries) {
-      const key = boundary.name;
-      const value = unlogValue(rest.slice(boundary.at + key.length + 2, boundary.valueEnd).trim());
-      if (fields[key] === undefined) fields[key] = value;
-    }
+    const fields = parseFields(text, names);
     const device = fields.forwarded_for;
     if (!device) continue;
     events.push({at, device, kind: kindMatch[1], fields});
   }
-  return events;
+  return {events, requests};
+}
+
+// The request arrivals of each device with a section, in time order. The window does not apply to them.
+function arrivalsByDevice(requests, devices) {
+  const byDevice = new Map(devices.map((device) => [device, []]));
+  for (const request of requests) {
+    const arrivals = byDevice.get(request.device);
+    if (arrivals) arrivals.push(request.arrival);
+  }
+  for (const arrivals of byDevice.values()) arrivals.sort((a, b) => a - b);
+  return byDevice;
 }
 
 function percentile(sorted, p) {
@@ -155,7 +203,9 @@ function percentileText(sorted, unit = 'ms') {
   return `n=${sorted.length} p50=${percentile(sorted, 0.5)}${unit} p90=${percentile(sorted, 0.9)}${unit}`;
 }
 
-function summarizeDevice(events) {
+// `arrivals` are the device's request arrivals in time order. A disconnect with no reconnect has no gap to
+// measure, so it counts in neither the wait-after-return nor the no-request count.
+function summarizeDevice(events, arrivals) {
   const byKind = {switch: [], send: [], socket: [], page_load: [], traffic: []};
   for (const event of events) byKind[event.kind].push(event);
 
@@ -176,6 +226,22 @@ function summarizeDevice(events) {
     .map((event) => (Date.parse(event.fields.reconnect_at) - Date.parse(event.fields.disconnect_at)) / 1000)
     .filter((seconds) => Number.isFinite(seconds) && seconds >= 0)
     .sort((a, b) => a - b);
+
+  // The network returned at the device's first arrival between the disconnect and the reconnect.
+  const returnWaits = [];
+  const noRequestGaps = [];
+  for (const event of disconnects) {
+    if (orNull(event.fields.reconnect_at) === null) continue;
+    const disconnectMs = Date.parse(event.fields.disconnect_at);
+    const reconnectMs = Date.parse(event.fields.reconnect_at);
+    const gapSeconds = (reconnectMs - disconnectMs) / 1000;
+    if (!Number.isFinite(gapSeconds) || gapSeconds < 0) continue;
+    const returned = arrivals.find((arrival) => arrival > disconnectMs && arrival < reconnectMs);
+    if (returned === undefined) noRequestGaps.push(gapSeconds);
+    else returnWaits.push((reconnectMs - returned) / 1000);
+  }
+  returnWaits.sort((a, b) => a - b);
+  noRequestGaps.sort((a, b) => a - b);
 
   let tabSeconds = 0;
   const endpointBytes = new Map();
@@ -200,7 +266,10 @@ function summarizeDevice(events) {
     causes[event.fields.cause] = (causes[event.fields.cause] || 0) + 1;
   }
 
-  return {completedElapsed, overSlow, echoWaits, disconnects, reconnectWaits, tabSeconds, endpointBytes, causes};
+  return {
+    completedElapsed, overSlow, echoWaits, disconnects, reconnectWaits, returnWaits, noRequestGaps, tabSeconds,
+    endpointBytes, causes,
+  };
 }
 
 // A logged value that is absent or `null` is null; a number-looking value is its number.
@@ -338,11 +407,13 @@ function printCrossOrigin(pageLoads) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const events = args.logs.flatMap((log) => parseLog(log)).filter((event) => event.at >= args.from && event.at < args.to)
+  const logs = args.logs.map((log) => parseLog(log));
+  const events = logs.flatMap((log) => log.events).filter((event) => event.at >= args.from && event.at < args.to)
     .sort((a, b) => a.at - b.at);
   const devices = [...new Set(events.map((event) => event.device))]
     .filter((device) => args.device === null || device === args.device)
     .sort();
+  const arrivals = arrivalsByDevice(logs.flatMap((log) => log.requests), devices);
 
   if (devices.length === 0) {
     console.log(`no client events in ${args.windowText}${args.device ? ` for ${args.device}` : ''}`);
@@ -352,7 +423,7 @@ function main() {
 
   for (const device of devices) {
     const deviceEvents = events.filter((event) => event.device === device);
-    const summary = summarizeDevice(deviceEvents);
+    const summary = summarizeDevice(deviceEvents, arrivals.get(device));
     console.log(`== ${device}: ${deviceEvents.length} event${deviceEvents.length === 1 ? '' : 's'}`);
 
     console.log('  switch completed ' + percentileText(summary.completedElapsed) +
@@ -365,8 +436,23 @@ function main() {
     const waits = summary.reconnectWaits.map((seconds) => seconds.toFixed(1));
     console.log(`  socket network disconnects n=${summary.disconnects.length}` +
       (waits.length
-        ? ` reconnect-wait p50=${percentile(waits, 0.5)}s p90=${percentile(waits, 0.9)}s max=${waits[waits.length - 1]}s`
+        ? ` reconnect-wait p50=${percentile(waits, 0.5)}s p90=${percentile(waits, 0.9)}s` +
+          ` max=${waits[waits.length - 1]}s`
         : ' reconnect-wait n=0'));
+
+    const returnWaits = summary.returnWaits;
+    console.log(`  socket wait-after-return n=${returnWaits.length}` +
+      (returnWaits.length
+        ? ` p50=${percentile(returnWaits, 0.5).toFixed(1)}s p90=${percentile(returnWaits, 0.9).toFixed(1)}s` +
+          ` max=${returnWaits[returnWaits.length - 1].toFixed(1)}s`
+        : '') +
+      ` no-request=${summary.noRequestGaps.length}`);
+    const noRequestGaps = summary.noRequestGaps;
+    console.log(`  socket no-request raw-gap n=${noRequestGaps.length}` +
+      (noRequestGaps.length
+        ? ` p50=${percentile(noRequestGaps, 0.5).toFixed(1)}s p90=${percentile(noRequestGaps, 0.9).toFixed(1)}s` +
+          ` max=${noRequestGaps[noRequestGaps.length - 1].toFixed(1)}s`
+        : ''));
 
     const tabHours = summary.tabSeconds / 3600;
     if (tabHours > 0) {

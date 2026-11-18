@@ -45,8 +45,8 @@ struct ReadArgs {
   session: Option<String>,
 }
 
-/// Parse the Discord arguments and run one verb. Parser errors print and exit on their own (argparse-compatible: help
-/// 0, usage error 2).
+/// The Discord CLI entry point, which parses the arguments and runs one verb. Parser errors print and exit on their
+/// own (argparse-compatible: help 0, usage error 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let cli: DiscordCli = cli_args::parse("charliebot discord", args);
   match cli.command {

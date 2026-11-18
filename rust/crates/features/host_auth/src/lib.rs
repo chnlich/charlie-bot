@@ -3,16 +3,19 @@
 //! `/api/host-auth/*`, with the browser logins on that same page.
 
 mod api;
+mod attention;
 mod browser_login;
 mod config;
 mod host_auth;
-mod login_page;
+mod login_state;
 mod page;
 mod poller;
 mod probe;
 mod process_tree;
 mod readers;
+mod rows;
 mod ssh_config;
+mod state_file;
 mod timestamps;
 
 use std::sync::Arc;
@@ -26,11 +29,26 @@ use charliebot_registry::{Registry, RegistryError};
 /// test's round vanish. The tests that would otherwise collide share this lock.
 #[cfg(test)]
 pub(crate) mod test_support {
-  use std::sync::LazyLock;
+  use std::io;
+  use std::sync::{LazyLock, Mutex};
 
   pub(crate) fn round_slot_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(tokio::sync::Mutex::default);
     &LOCK
+  }
+
+  /// The answer of the single-host probe that a host-bound login's check runs under test: a return code and output.
+  /// The tests that set it hold `round_slot_lock`, so no two of them answer differently at once.
+  static BOUND_ANSWER: Mutex<(i32, String)> = Mutex::new((0, String::new()));
+
+  pub(crate) fn set_bound_answer(returncode: i32, output: &str) {
+    *BOUND_ANSWER.lock().expect("the answer lock is never poisoned") = (returncode, output.to_string());
+  }
+
+  /// The probe a host-bound login's check and a host row's check run under test. It answers from `BOUND_ANSWER`, so no
+  /// ssh runs.
+  pub(crate) async fn bound_probe(_alias: String) -> io::Result<(i32, String)> {
+    Ok(BOUND_ANSWER.lock().expect("the answer lock is never poisoned").clone())
   }
 }
 
@@ -52,7 +70,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.home_card(HomeCard {
     name: "Host login authorization",
     url: "/host-auth",
-    description: "Per-host ssh login state and the estimated Okta renewal deadline.",
+    description: "Per-host ssh login state and the browser logins that renew it.",
   })
 }
 

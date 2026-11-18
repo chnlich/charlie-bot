@@ -445,8 +445,9 @@ fn is_orphaned_renderer(process: &ProcessRecord) -> bool {
     })
 }
 
-/// End every orphaned renderer browser and remove its temp profile, logging `headless_renderer_orphans_ended` with the
-/// count. A failed kill or removal is logged with its path and error, and the sweep continues with the next browser.
+/// The sweep that ends every orphaned renderer browser and removes its temp profile, logging
+/// `headless_renderer_orphans_ended` with the count. A failed kill or removal is logged with its path and error, and
+/// the sweep continues with the next browser.
 pub(crate) fn end_orphaned_renderers() {
   let mut ended = 0;
   for orphan in read_process_records().into_iter().filter(is_orphaned_renderer) {
@@ -461,7 +462,8 @@ pub(crate) fn end_orphaned_renderers() {
   tracing::info!(count = ended, "headless_renderer_orphans_ended");
 }
 
-/// Kill `orphan`'s process group, wait for the group to exit, and remove the browser's user-data directory.
+/// The end of `orphan`: its process group is killed, the group's exit is waited for, and the browser's user-data
+/// directory is removed.
 fn end_orphaned_renderer(orphan: &ProcessRecord) -> anyhow::Result<()> {
   let group = read_process_group(orphan.pid)?;
   kill_browser_group(group)?;

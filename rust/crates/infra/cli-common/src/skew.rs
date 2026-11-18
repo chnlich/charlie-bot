@@ -9,6 +9,12 @@ use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 /// The version route `app/server` mounts. The skew probe sends its `GET` to the running server.
 pub const VERSION_PATH: &str = "/api/internal/version";
 
+/// The version response's field holding the running server's commit.
+pub const SHA_FIELD: &str = "sha";
+
+/// The version response's field holding the server's start time.
+pub const STARTED_AT_FIELD: &str = "started_at";
+
 /// A restart hint when the server and the repo sit at different SHAs, and `None` when either SHA
 /// is missing (a best-effort fetch failed) or when they match.
 pub fn compose_version_skew_hint(
@@ -60,7 +66,7 @@ fn best_effort_server_version(
     return (None, None);
   }
   match serde_json::from_slice::<serde_json::Value>(&response.body) {
-    Ok(info) => (string_field(&info, "sha"), string_field(&info, "started_at")),
+    Ok(info) => (string_field(&info, SHA_FIELD), string_field(&info, STARTED_AT_FIELD)),
     Err(_) => (None, None),
   }
 }

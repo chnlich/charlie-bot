@@ -438,13 +438,14 @@ test('without children rows the Status view ends at Waiting on you', async () =>
   assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting']);
 });
 
-test('a session with no status shows "No status yet" in the Status view, with the child rows beside it', async () => {
+test('a session with no status names what the Status view reports, with the child rows beside it', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {web_status: null});
   selectStatus(rig);
   assert.deepEqual(viewKinds(rig.panel), ['none', 'children']);
-  assert.equal(viewRow(rig.panel, 'none').textContent, 'No status yet');
+  assert.equal(viewRow(rig.panel, 'none').querySelectorAll('[data-status-none-note]').length, 1,
+    'the empty row states what the view reports and what fills it');
 });
 
 test('waiting ages show for own items and for descendant items in the Status view', async () => {

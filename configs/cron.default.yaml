@@ -1,4 +1,4 @@
-# Repo-owned default scheduled tasks. ./scripts/setup.sh seeds each entry into
+# Repo-owned default scheduled tasks. The server seeds each missing entry on every start into
 # its own host file $CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml (the job `name`
 # becomes the file name, and the host file body carries no `name` key), and
 # never touches a file that is already there. Host-specific fields (backend,
@@ -34,10 +34,11 @@ scheduled_tasks:
     timezone: local
     project: CharlieBot
     handler: cool_storage
-  # `mode: master` wakes the task's manager session with the prompt as a
-  # scheduled input, so the session delegates work itself; the scheduler
-  # binds the session on the first tick and writes its `session_id` into the
-  # seeded host file.
+  # `mode` sets the input a fire gives the bound session. `master` sends the
+  # task's prompt; an absent mode sends the task's name and its category
+  # template, and the session decides the round. The scheduler binds the
+  # session on the first tick and writes its `session_id` into the seeded
+  # host file.
   - name: proactive-agent
     cron: "0 7 * * *"
     project: CharlieBot

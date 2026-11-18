@@ -26,10 +26,17 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
-  // The new-session picker starts on the open session's backend, the value the
-  // page carries in ACTIVE_BACKEND_ID; the server leaves the choice to this write.
+  // The new-session picker starts on the open session's backend, the value the page carries in
+  // ACTIVE_BACKEND_ID; the server leaves the choice to this write. A session can carry a backend the config
+  // no longer lists. Writing an id the select does not hold leaves it with no chosen option, so the box draws
+  // empty and a create sends an empty backend. The picker takes the id only when the select lists it; an
+  // unlisted backend leaves the select on its first entry.
   const newSessionBackend = document.getElementById('new-session-backend');
-  if (newSessionBackend) newSessionBackend.value = globalThis.ACTIVE_BACKEND_ID;
+  if (newSessionBackend) {
+    const startBackend = Array.from(newSessionBackend.options)
+      .find((option) => option.value === globalThis.ACTIVE_BACKEND_ID);
+    if (startBackend) newSessionBackend.value = startBackend.value;
+  }
 
   // Initial chat render uses the server-embedded minimal bootstrap so refresh
   // and SPA switches share the same renderer without a duplicate /view fetch.

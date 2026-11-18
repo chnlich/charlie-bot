@@ -76,7 +76,7 @@ pub struct MessageLink {
   pub message_id: Option<String>,
 }
 
-/// Parse one discord.com channel or message link. Any other text fails with the message below.
+/// The `MessageLink` parsed from one discord.com channel or message link. Any other text fails with the message below.
 pub fn parse_message_link(url: &str) -> anyhow::Result<MessageLink> {
   let Some(captures) = MESSAGE_LINK.captures(url) else {
     bail!("not a discord.com channel/message link: {}", text_repr::str_repr(url));

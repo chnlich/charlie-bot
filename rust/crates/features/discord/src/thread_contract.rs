@@ -2,6 +2,7 @@
 //! and joins the part with the common docs.
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, ThreadPlatform};
+use charliebot_core::event_types::MENTION_ID;
 
 /// The command the reply-format contract names for posting a reply.
 pub const REPLY_COMMAND: &str = "charliebot discord reply";
@@ -26,8 +27,8 @@ pub const DISCORD: ThreadPlatform = ThreadPlatform {
   origin_field: "discord_origin",
   watermark_field: "discord_watermark_id",
   id_label: "id",
-  mention_key: "mention_id",
-  block_keys: &["guild_id", "channel_id", "thread_id", "mention_id"],
+  mention_key: MENTION_ID,
+  block_keys: &["guild_id", "channel_id", "thread_id", MENTION_ID],
   summon_line: "Discord 线程召唤",
 };
 

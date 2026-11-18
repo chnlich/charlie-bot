@@ -3,8 +3,8 @@
 // Settings menu opens it (session-menus.js). The picker lists the manager
 // sessions the moved session can go under. A pick sends one PATCH that sets the
 // moved session's task parent; "Top level" sends null. Each open reads both
-// full session lists, because a sidebar view loads only some rows: the
-// Workspace's GET /api/sessions/ and the Threads view's
+// session lists, because a sidebar view loads only some rows: the Workspace's
+// GET /api/sessions/?compact=move column form and the Threads view's
 // GET /api/sessions/chat-threads. A 200 closes the dialog, and the moved row
 // reaches every open tab through the task_tree_changed push. A 409 keeps the
 // dialog open and lists the server's blockers.
@@ -54,11 +54,16 @@ async function fetchSessionRows(url) {
 
 // The Workspace list and the Threads view's list, merged by id. A session is in one of them, so a row listed in both
 // keeps the later copy.
+//
+// The Workspace list travels in `compact=move`'s column form, which carries the four fields this picker reads and no
+// other. The column form is about a fifth of the row array's bytes for the same rows, and the picker is the only
+// caller that needs the parent and profile fields the sidebar's own list leaves out.
 async function fetchMoveRows() {
-  const [workspace, threads] = await Promise.all([
-    fetchSessionRows('/api/sessions/'),
+  const [columns, threads] = await Promise.all([
+    fetchSessionRows('/api/sessions/?compact=move'),
     fetchSessionRows('/api/sessions/chat-threads'),
   ]);
+  const workspace = Sidebar.expandSessionColumns(columns);
   const byId = new Map();
   for (const row of [...workspace, ...threads]) byId.set(row.id, row);
   return [...byId.values()];
@@ -96,11 +101,19 @@ function buildMovePickerDialog() {
   const dialog = document.createElement('div');
   dialog.className = chrome.dialog;
 
+  // The header names the operation and, under it, the session that moves. The session's name sets no bound, so it
+  // is the line that elides: the operation's words stay whole, the way the menu item that opened the dialog reads.
   const header = document.createElement('div');
-  header.className = 'flex items-center justify-between gap-2 mb-3';
-  const title = document.createElement('p');
-  title.className = 'text-sm text-slate-300 font-semibold min-w-0 truncate';
-  title.textContent = 'Move under…';
+  header.className = 'flex items-start justify-between gap-2 mb-3';
+  const title = document.createElement('div');
+  title.className = 'min-w-0';
+  const heading = document.createElement('p');
+  heading.className = 'session-move-heading text-sm text-slate-300 font-semibold';
+  heading.textContent = 'Move under…';
+  const subject = document.createElement('p');
+  subject.className = 'session-move-subject text-xs text-slate-400 truncate';
+  title.appendChild(heading);
+  title.appendChild(subject);
   const closeButton = document.createElement('button');
   closeButton.type = 'button';
   closeButton.title = 'Close';
@@ -144,7 +157,7 @@ function buildMovePickerDialog() {
       errors.appendChild(message);
     }
   };
-  return {overlay, title, search, list, showErrors};
+  return {overlay, heading, subject, search, list, showErrors};
 }
 
 async function openSessionMovePicker(sessionId) {
@@ -196,7 +209,7 @@ async function openSessionMovePicker(sessionId) {
     const rows = await fetchMoveRows();
     const moved = rows.find((row) => row.id === sessionId);
     if (!moved) throw new Error(`Session ${sessionId} is in neither session list`);
-    dialog.title.textContent = `Move “${moved.name}” under…`;
+    dialog.subject.textContent = `“${moved.name}”`;
     const candidates = moveCandidates(rows, moved);
     // Top level sits first and stays while the search narrows the sessions: it names no session.
     const renderChoices = () => {

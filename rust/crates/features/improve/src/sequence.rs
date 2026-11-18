@@ -19,7 +19,7 @@ use anyhow::{Context, bail};
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::event_types::{RUN_FINISHED, TASK_CLOSED};
+use charliebot_core::event_types::{RESULT_REFS, RUN_FINISHED, TASK_CLOSED};
 use charliebot_core::parallel_walk;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::str_methods::take_chars;
@@ -963,7 +963,7 @@ async fn loop_close_verdict(
   };
   let evidence = json!({
     "summary": format!("[Improve loop {loop_id}] {sentence}{end_error_part}{detail}"),
-    "result_refs": [format!("loop:{loop_id}")],
+    (RESULT_REFS): [format!("loop:{loop_id}")],
     "run_ids": successful_ids,
     "review_run_ids": [],
     "landing": landing,

@@ -29,7 +29,7 @@ use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::{
-  ARCHIVE_OFFSET, TASK_PARENT_ID_FIELD, TASK_STATE, TaskProfile, UtcDateTime, read_session_metadata,
+  APPROVER_FIELD, ARCHIVE_OFFSET, TASK_PARENT_ID_FIELD, TASK_STATE, TaskProfile, UtcDateTime, read_session_metadata,
 };
 use charliebot_store::{CALLER_SESSION_ID_FIELD, control_events, layout};
 use charliebot_tasks::completion::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, pending_archive_answer};
@@ -314,7 +314,7 @@ fn create(args: &CreateArgs) -> Result<(), CliExit> {
     payload
       .insert("request_id".to_string(), json!(args.request_id.clone().unwrap_or_else(control_events::new_request_id)));
     if let Some(approver) = &args.approver {
-      payload.insert("approver".to_string(), json!(approver));
+      payload.insert(APPROVER_FIELD.to_string(), json!(approver));
     }
   }
   let mut result = client::post(session_routes::SESSIONS_PATH, Value::Object(payload), None, &[])?;
@@ -469,7 +469,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
 fn set_approver(args: &SetApproverArgs) -> Result<(), CliExit> {
   let result = client::patch(
     &route::fill(session_routes::SESSION_PATH, &[args.session_id.as_str()]),
-    json!({ "approver": args.approver }),
+    json!({ (APPROVER_FIELD): args.approver }),
     None,
     &[],
   )?;
@@ -637,13 +637,13 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
   // the cursor backward paging starts from, in the events endpoint's own cursor space.
   let boot = client::get(&route::fill(session_routes::SESSION_BOOTSTRAP_PATH, &[session_id.as_str()]), None)?;
   let mut page_starts = vec![
-    field(&boot, "oldest_message_ordinal")?
+    field(&boot, session_routes::OLDEST_MESSAGE_ORDINAL_FIELD)?
       .as_i64()
-      .ok_or_else(|| CliExit::error("oldest_message_ordinal must be an integer"))?,
+      .ok_or_else(|| CliExit::error(format!("{} must be an integer", session_routes::OLDEST_MESSAGE_ORDINAL_FIELD)))?,
   ];
   let mut pages: Vec<Vec<Value>> = vec![field(&boot, "messages")?.as_array().cloned().unwrap_or_default()];
   let mut cursor = page_starts[0];
-  let mut has_more = text_repr::is_truthy(field(&boot, "has_more")?);
+  let mut has_more = text_repr::is_truthy(field(&boot, session_routes::HAS_MORE_FIELD)?);
   let mut separators = count_separators(&pages[0]);
   // --turns stops once the fetched pages hold one separator more than the requested turn count —
   // everything after the (N+1)-th last separator is then the last N complete turns plus the turn
@@ -657,11 +657,12 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
     let messages = field(&page, "messages")?.as_array().cloned().unwrap_or_default();
     separators += count_separators(&messages);
     pages.push(messages);
-    let next_before =
-      field(&page, "next_before")?.as_i64().ok_or_else(|| CliExit::error("next_before must be an integer"))?;
+    let next_before = field(&page, session_routes::NEXT_BEFORE_FIELD)?
+      .as_i64()
+      .ok_or_else(|| CliExit::error(format!("{} must be an integer", session_routes::NEXT_BEFORE_FIELD)))?;
     page_starts.push(next_before);
     cursor = next_before;
-    has_more = text_repr::is_truthy(field(&page, "has_more")?);
+    has_more = text_repr::is_truthy(field(&page, session_routes::HAS_MORE_FIELD)?);
   }
 
   let mut cut = 0usize;
@@ -695,7 +696,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
       let Some(block) = format_message_block(message) else { continue };
       // The header's anchor is re-taken while the first block's event index is None.
       if first.as_ref().is_none_or(|(_, _, event_index)| event_index.is_null()) {
-        first = Some((*page_start, position, message.get("event_index").cloned().unwrap_or(Value::Null)));
+        first = Some((*page_start, position, message.get(event_types::EVENT_INDEX).cloned().unwrap_or(Value::Null)));
       }
       blocks.push(block);
       printed += 1;
@@ -755,7 +756,7 @@ fn format_message_block(message: &Value) -> Option<String> {
     .filter(|timestamp| text_repr::is_truthy(timestamp))
     .map(text_repr::value_str)
     .unwrap_or_default();
-  let event_index = text_repr::value_str(message.get("event_index").unwrap_or(&Value::Null));
+  let event_index = text_repr::value_str(message.get(event_types::EVENT_INDEX).unwrap_or(&Value::Null));
   let mut lines = vec![format!("## {role} · {timestamp} · event {event_index}")];
   if !body.is_empty() {
     lines.push(body);

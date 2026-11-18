@@ -61,7 +61,7 @@ flowchart TB
 - Voice input with online speech transcription (Gemini and Muse backends)
 - Usage panels: external provider quotas and per-session context usage
 - File browser (`/absolute_filepath/`) and file uploads
-- Host login panel (`/host-auth`): a standing poller probes every ssh alias in the config, with a browser-login page for the hosts that need one
+- Host login panel (`/host-auth`): a standing poller probes every ssh alias in the config, with each browser login's start and check in the same table
 - Access-key auth
 
 ### Chat platforms

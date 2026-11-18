@@ -89,7 +89,7 @@ mod tests {
     control_events::stable_task_id(Some(SESSION_ID), REQUEST_ID)
   }
 
-  /// A home holding one child session's metadata; the returned tempdir keeps it alive.
+  /// A home holding one child session's metadata. The returned tempdir keeps it alive.
   fn home_with_child(metadata: Value) -> TempDir {
     let home = tempfile::tempdir().expect("a temp home");
     let session_dir = home.path().join("sessions").join(child_id());

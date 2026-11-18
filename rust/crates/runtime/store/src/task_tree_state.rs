@@ -1,6 +1,7 @@
 //! Task facts and cache records shared by Store and task-tree logic.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::CString;
 use std::ops::Index;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -375,18 +376,24 @@ pub struct TaskTreeRow {
 ///
 /// The rows change when the index build, a run record or any history the row pass read changes. The stored identities
 /// name exactly the histories that pass read, so a repeat request re-reads those and serves the rows when every
-/// identity still matches.
+/// identity still matches. Its history-change count tells the repeat request when no re-read is needed at all.
 pub(crate) struct CachedTreePage {
   /// The index build whose metadata and structure the rows were rendered from. A later build may carry the same
   /// revision while a rename or an unread flip changed a row's fields, so the identity is the build, not the revision.
   pub(crate) build_id: u64,
   pub(crate) records_generation: u64,
+  /// The store's live-history change count when the row pass started reading these histories.
+  pub(crate) history_changes: u64,
   pub(crate) parent_id: Option<String>,
   pub(crate) include_archived: bool,
   pub(crate) after: Option<(UtcDateTime, String)>,
   pub(crate) limit: usize,
-  /// The histories the row pass read, in read order, shared so a hit re-checks them without copying the list.
+  /// The histories the row pass read, in read order: the session ids the test hook names, and their paths relative to
+  /// the sessions directory.
+  ///
+  /// The paths are built with the page, so a hit stats them as they are instead of formatting one path per row.
   pub(crate) ids: Arc<Vec<String>>,
+  pub(crate) paths: Arc<Vec<CString>>,
   pub(crate) identity_values: Vec<Option<FileIdentity>>,
   /// The rendered rows, shared so a hit hands the same page out without cloning a row's strings.
   pub(crate) rows: Arc<Vec<TaskTreeRow>>,
@@ -408,7 +415,7 @@ pub(crate) struct TreeIndex {
 
 /// What one session contributes to the tree index: the two files the index's metadata and task state come from.
 ///
-/// The metadata file carries the parent, the profile, the status and the archive offset; the live history's identity
+/// The metadata file carries the parent, the profile, the status and the archive offset. The live history's identity
 /// carries the newest lifecycle fact, and the archive segments the state walk reads behind it. The archive segments
 /// move only in the write that replaces the live log and raises the archive offset, so both of them are read here. Equal
 /// inputs on every session mean an equal index.
@@ -422,7 +429,7 @@ pub(crate) struct TreeIndexInput {
 /// The most ancestors one chain walk follows before it reports the chain as overlong.
 pub(crate) const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 
-/// The metadata of one indexed node; a node the index lacks answers its 404.
+/// The metadata of one indexed node. A node the index lacks answers its 404.
 pub(crate) fn index_meta<'a>(index: &'a TreeIndex, session_id: &str) -> StoreResult<&'a SessionMetadata> {
   index
     .metas

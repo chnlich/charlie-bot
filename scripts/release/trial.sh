@@ -339,6 +339,7 @@ backends:
       type: charlie-code
       model: openai/glm-5.3-flash
       api_base: $TRIAL_API_BASE
+      prompt_overlay: none
 EOF
 if [[ -n $TRIAL_CREDENTIAL ]]; then
   printf '      credential: %s\n' "$TRIAL_CREDENTIAL" >>"$TRIAL_CB_HOME/config.yaml"

@@ -132,6 +132,8 @@ An understanding page lists the divergences of a request that admits several rea
   from `charliebot plan diff`.
 - A style finding on one passage stands for its pattern: sweep the whole artifact for that
   pattern and fold every fix into the same revision.
+- When the user names a text change for review, or a change touches the user's schema, show the original text
+  beside its diff. In either case, write every command out in full.
 - Only the user changes the goal. Versions answer feedback within the standing goal; a changed
   goal is a new plan — `charliebot plan present` opens the new lineage and the old one closes
   as superseded.

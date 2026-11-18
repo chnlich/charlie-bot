@@ -31,6 +31,9 @@ Prefer stateless solutions over state machines. Using a state machine requires e
   - the path it takes.
 - A plan may add a feature on top of the user's stated method.
   Each addition names the requirement that the user stated for it.
+- Build only the core in the first version.
+  Defer non-core work, including security hardening for internal services, to a separate task that the user raises.
+  When an outside party can reach a leaked credential, rotate it at once.
 - Before you add a name, setting or mechanism, reuse an existing one that serves.
   When you reuse an existing record, field set or interface, carry into the new path only the parts that the user's
   stated method names.

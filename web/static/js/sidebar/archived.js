@@ -147,7 +147,8 @@ function repaintWithoutRows(doomedIds) {
 
 // One request on the archived list: the active strip filter, and the keyset
 // cursor when the request follows another page.
-async function requestArchivedPage(limit, before, beforeId) {
+async function requestArchivedPage(limit, before, beforeId, epoch) {
+  const requestSeq = Sidebar.factSeqAtRequest();
   let qs = 'limit=' + limit;
   if (archivedState.group !== null) qs += '&group=' + encodeURIComponent(archivedState.group);
   if (before) {
@@ -156,7 +157,9 @@ async function requestArchivedPage(limit, before, beforeId) {
   }
   const res = await fetch('/api/sessions/archived?' + qs);
   if (!res.ok) throw new Error(`Archived fetch failed: ${res.status}`);
-  return res.json();
+  const page = await res.json();
+  if (epoch === archivedState.epoch) Sidebar.applyListingFacts(page.sessions, requestSeq);
+  return page;
 }
 
 async function fetchArchivedPage() {
@@ -164,7 +167,8 @@ async function fetchArchivedPage() {
   archivedState.loading = true;
   const epoch = archivedState.epoch;
   try {
-    const page = await requestArchivedPage(ARCHIVED_PAGE_LIMIT, archivedState.nextBefore, archivedState.nextBeforeId);
+    const page = await requestArchivedPage(
+        ARCHIVED_PAGE_LIMIT, archivedState.nextBefore, archivedState.nextBeforeId, epoch);
     if (epoch !== archivedState.epoch) return;
     archivedState.groups = page.groups;
     archivedState.hasMore = page.has_more;
@@ -213,7 +217,7 @@ async function refreshArchivedView() {
     let beforeId = null;
     let page;
     do {
-      page = await requestArchivedPage(ARCHIVED_REFRESH_PAGE_LIMIT, before, beforeId);
+      page = await requestArchivedPage(ARCHIVED_REFRESH_PAGE_LIMIT, before, beforeId, epoch);
       if (epoch !== archivedState.epoch) return;
       mergeArchivedRows(list, page.sessions);
       before = page.next_before;

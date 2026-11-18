@@ -141,7 +141,8 @@ fn view_task(rng: &mut Rng, language: Language) -> Value {
   let context_refs: Vec<String> = (0..rng.range(VIEW_ITEMS_MIN, VIEW_ITEMS_MAX))
     .map(|_| format!("workspace/synthetic/{:04x}/{:08x}.md", rng.below(65_536), rng.next_u64() as u32))
     .collect();
-  json!({"acceptance": acceptance, "context_refs": context_refs, (metadata::REPO_PATH_FIELD): "workspace/synthetic",
+  json!({(metadata::ACCEPTANCE_FIELD): acceptance, (metadata::CONTEXT_REFS_FIELD): context_refs,
+         (metadata::REPO_PATH_FIELD): "workspace/synthetic",
          (metadata::BASE_BRANCH_FIELD): "main"})
 }
 

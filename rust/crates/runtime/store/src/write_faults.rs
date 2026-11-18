@@ -33,7 +33,7 @@ pub fn inject_chat_append_fault(
 }
 
 /// Fail the first `times` run-record writes with `errno`. With `only_finished`, only a write that sets `ended_at`,
-/// a run's finish, is matched; otherwise every record write is.
+/// a run's finish, is matched. Otherwise every record write is.
 pub fn inject_run_record_write_fault(store: &Store, only_finished: bool, times: usize, errno: i32) -> WriteFault {
   store.write_faults.install(Target::RunRecord { only_finished }, times, errno)
 }

@@ -11,6 +11,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types::CONFIG_RELOAD_FAILED_EVENT;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::{Registry, RegistryError};
 use serde_json::{Value, json};
@@ -79,8 +80,11 @@ fn state_for(home: &Path, workspace: &Path, with_memory_root: bool) -> Arc<GitSt
     .expect("the config writes");
   let loader_registry = Arc::clone(&registry);
   let loader_home = home.to_path_buf();
-  let config =
-    HotReload::new(config_file, "config_reload_failed", Box::new(move || loader_registry.load_config(&loader_home)));
+  let config = HotReload::new(
+    config_file,
+    CONFIG_RELOAD_FAILED_EVENT,
+    Box::new(move || loader_registry.load_config(&loader_home)),
+  );
   Arc::new(GitState::new(Arc::new(config), registry))
 }
 

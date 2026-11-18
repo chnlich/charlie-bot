@@ -2,8 +2,9 @@
 //! and joins the part with the common docs.
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, ThreadPlatform};
+use charliebot_core::event_types::MENTION_ID;
 
-use crate::fields::{CHAT_ID, MENTION_ID, ROOT_ID};
+use crate::fields::{CHAT_ID, ROOT_ID};
 use crate::package::NAME;
 
 /// The command the reply-format contract names for posting a reply.

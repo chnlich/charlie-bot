@@ -96,10 +96,9 @@ impl Entry {
   }
 }
 
-/// One loaded store: the memory dir, the topics vocabulary and the parsed entries.
+/// One loaded store: the topics vocabulary and the parsed entries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Store {
-  pub memory_dir: PathBuf,
   pub topics: BTreeMap<String, Topic>,
   pub entries: Vec<Entry>,
 }
@@ -193,11 +192,11 @@ pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
     }
     entries.push(entry);
   }
-  Ok(Store { memory_dir: memory_dir.to_path_buf(), topics, entries })
+  Ok(Store { topics, entries })
 }
 
 /// The text of `path`, with universal newlines: `\r\n` and a lone `\r` turn into `\n`.
-fn read_text(path: &Path) -> anyhow::Result<String> {
+pub(crate) fn read_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
   Ok(str_methods::universal_newlines(&text))
 }
@@ -385,23 +384,28 @@ pub(crate) fn validate_entry(entry: &Entry, topics: &BTreeMap<String, Topic>) ->
 }
 
 /// The sorted entry files: each `*.md` directly under a directory of `entries/`.
-fn iter_entry_files(memory_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+pub(crate) fn iter_entry_files(memory_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
   let entries_dir = memory_dir.join(ENTRIES_DIRNAME);
   if !entries_dir.is_dir() {
     return Ok(Vec::new());
   }
   let mut files = Vec::new();
   for topic_dir in sorted_children(&entries_dir)? {
-    if !topic_dir.is_dir() {
-      continue;
-    }
-    for file in sorted_children(&topic_dir)? {
-      if file.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".md")) {
-        files.push(file);
-      }
+    if topic_dir.is_dir() {
+      files.extend(sorted_markdown_files(&topic_dir)?);
     }
   }
   Ok(files)
+}
+
+/// The sorted `*.md` files directly under `directory`.
+pub(crate) fn sorted_markdown_files(directory: &Path) -> anyhow::Result<Vec<PathBuf>> {
+  Ok(
+    sorted_children(directory)?
+      .into_iter()
+      .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".md")))
+      .collect(),
+  )
 }
 
 fn sorted_children(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {

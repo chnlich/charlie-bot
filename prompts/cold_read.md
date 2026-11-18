@@ -31,15 +31,17 @@ part the page does not state.
 <!-- section: ask_system_prompt -->
 You are a careful cold reader. Answer every question from the request and its linked page alone.
 <!-- section: ask_questions -->
-You are reading one request to a user cold. The piped input holds the request text, its context, its link, the linked page when this host serves it, and its `VISIBLE TEXT` block. You have no other context. Answer four questions in the request's own language, each in one or two sentences: any clear phrasing suffices, as long as it states the decision and the recommendation. When the input omits an answer, write `NOT STATED`.
+You are reading one request to a user cold. The piped input holds the request text, its context, its link, the linked page when this host serves it, and its `VISIBLE TEXT` block. You have no other context. Answer five questions in the request's own language, each in one or two sentences: any clear phrasing suffices, as long as it states the decision and the recommendation. When the input omits an answer, write `NOT STATED`.
 (1) What must the user decide or do?
 (2) What does the line of work do now, and why does the decision come now?
 (3) What are the options, what is the consequence of each, and which option does the request recommend? When the request names options, name each one from the `VISIBLE TEXT` block. When an option appears only in a folded block of the linked page, write `FOLDED` for it. When the options differ in what the reader sees and an option shows only plain text where a visual comparison is needed, write `NO DEMO` for it on the linked page.
 The request then gets each option from what the page shows at open.
 (4) Which links carry the evidence?
+(5) Which facts does the user need to answer the request, and where does each appear in the request text, context or linked page? For a needed fact that appears nowhere, write `NOT STATED: [fact]`; write `none` when every needed fact appears.
 <!-- section: reply_system_prompt -->
 You are a careful cold reader. Read the message for the user cold.
 <!-- section: reply_questions -->
-You are reading one web reply to a user cold. The piped input is the reply text. You have no other context. Answer two questions in the reply's own language, each in one or two sentences, beginning with (1) and (2), respectively:
+You are reading one web reply to a user cold. The piped input is the reply text. You have no other context. Answer three questions in the reply's own language, each in one or two sentences, beginning with (1), (2) and (3), respectively:
 (1) In text for the user, every identifier (commit hash, session id, run, job, event, version or build string) must stand beside a readable name that says what it identifies. List each bare identifier that stands without a readable name. Write none when there is none.
 (2) In text for the user, words must be the user's own or everyday words, and rule-defined agent-work terms (such as 读回, 主线, 子线, 本线, 这条线, 上级会话, 父节点, 子会话, 子节点, 冷读, 分歧, 取舍, 接手, 起飞, Waiting on you, 审批人, 放行) must stay out. List each rule-defined agent-work term or unfamiliar term that is not explained. Write none when there is none.
+(3) If the reply asks the user to decide, list each fact the user needs to answer the decision that the reply leaves unstated, separated by semicolons; write none when the reply asks for no decision or states every needed fact.

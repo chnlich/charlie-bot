@@ -83,6 +83,7 @@ impl PollHost for ServerHost {
 mod tests {
   use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME, CharlieBotConfig};
   use charliebot_core::credentials::load_credentials;
+  use charliebot_core::event_types::{CONFIG_RELOAD_FAILED_EVENT, CREDENTIALS_RELOAD_FAILED_EVENT};
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::Registry;
   use charliebot_registry::context::StartupState;
@@ -98,13 +99,13 @@ mod tests {
     let config_registry = Arc::clone(&registry);
     let config = Arc::new(HotReload::new(
       home.join(CONFIG_FILENAME),
-      "config_reload_failed",
+      CONFIG_RELOAD_FAILED_EVENT,
       Box::new(move || config_registry.load_config(&config_home)),
     ));
     let credentials_home = home.to_path_buf();
     let credentials = Arc::new(HotReload::new(
       home.join(CREDENTIALS_FILENAME),
-      "credentials_reload_failed",
+      CREDENTIALS_RELOAD_FAILED_EVENT,
       Box::new(move || load_credentials(&credentials_home)),
     ));
     let cfg: CharlieBotConfig = registry.load_config(home).unwrap();

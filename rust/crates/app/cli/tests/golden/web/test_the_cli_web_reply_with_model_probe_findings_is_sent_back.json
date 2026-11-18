@@ -15,7 +15,7 @@
   },
   "files": {
     "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [claude-light]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
-    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' '(1) 48838303 stands without a readable name' '(2) none'\n",
+    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' '(1) 48838303 stands without a readable name' '(2) none' '(3) none'\n",
     "reply.md": "运行 48838303 已完成。"
   },
   "responses": [
@@ -68,7 +68,7 @@
           "findings": [
             "48838303 stands without a readable name"
           ],
-          "answer": "(1) 48838303 stands without a readable name\n(2) none"
+          "answer": "(1) 48838303 stands without a readable name\n(2) none\n(3) none"
         }
       }
     ]

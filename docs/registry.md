@@ -111,11 +111,15 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 
 ### Config sections
 
-- Rust: `config_section(section: ConfigSection)`, where `ConfigSection { key, legacy_keys, parse }` and
-  `parse: fn(&serde_yaml::Value) -> Result<SectionValue, String>`. The parsed value is read with
+- Rust: `config_section(section: ConfigSection)`, where `ConfigSection { key, legacy_keys, parse, dump }`,
+  `parse: fn(&serde_yaml::Value) -> Result<SectionValue, String>` and
+  `dump: fn(&SectionValue) -> Result<serde_json::Value, String>`. The parsed value is read with
   `CharlieBotConfig::section::<T>(key)`, which panics on an unregistered key or a type mismatch. An absent section
   parses from an empty mapping, and a parse failure fails the config load.
-- Example: `registry.config_section(ConfigSection { key: "voice", legacy_keys: VOICE_LEGACY, parse: parse_voice })?;`
+- A section whose model serde reads whole declares `impl SectionModel for T { const KEY: &'static str = ...; }` and
+  builds with `ConfigSection::of::<T>(legacy_keys)`, which parses from the model's YAML and dumps the model as JSON. A
+  section that inspects its raw YAML first declares its own `parse`.
+- Example: `registry.config_section(ConfigSection::of::<FeishuConfig>(&[]))?;`
 
 ### Legacy config keys
 
@@ -243,10 +247,10 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   backend type and retains it.
 - Example:
   ```rust
-  let codex_home = host.codex_home();
+  let codex_home_dir = codex_home(host);
   registry.usage_resolver(
     "codex",
-    Arc::new(move |usage_host| resolver::usage_resolver(codex_home.clone(), usage_host)),
+    Arc::new(move |usage_host| resolver::usage_resolver(codex_home_dir.clone(), usage_host)),
   )?;
   ```
 

@@ -1528,8 +1528,6 @@ async function sendCommentsFor(bodyChildren, comments) {
 
 test('the same rec line in two forks locates its own fork and needs no occurrence suffix', async () => {
   const page = makeForkPage();
-  const firstBefore = page.fork1.q.textContent.slice(-32);
-  const secondBefore = page.fork2.q.textContent.slice(-32);
   const content = await sendCommentsFor(page.children, [
     {block: page.fork1.rec, text: '做'},
     {block: page.fork2.rec, text: '不做'},
@@ -1542,11 +1540,9 @@ test('the same rec line in two forks locates its own fork and needs no occurrenc
       '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
       '',
       '1. ▸ ' + HEADING_11_12 + ' › Q1 "要不要处理 Yuesheng 的请求：在 11/12（周四，…" › "' + REC_TEXT + '"',
-      '   before "' + firstBefore + '"',
       '   ↳ 做',
       '',
       '2. ▸ ' + HEADING_11_12 + ' › Q2 "要不要回应 FPT 的 CPU 容量答复：明年前没有容量，之…" › "' + REC_TEXT + '"',
-      '   before "' + secondBefore + '"',
       '   ↳ 不做',
     ].join('\n')
   );
@@ -1567,11 +1563,9 @@ test('two identical lines outside any fork under one heading get the (k of m) su
       '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
       '',
       '1. ▸ 已做 › "已记入当日清单" (1 of 2)',
-      '   before "已做"',
       '   ↳ ok one',
       '',
       '2. ▸ 已做 › "已记入当日清单" (2 of 2)',
-      '   before "已做已记入当日清单"',
       '   ↳ ok two',
     ].join('\n')
   );
@@ -1613,9 +1607,9 @@ test('a page with no repeated lines keeps the pre-change locator byte for byte',
 });
 
 // ---------------------------------------------------------------------------
-// The before line: a row whose quote repeats names itself by the words before
-// it. Pages here are synthetic; the whitespace between cells is a text node,
-// as the page source has it.
+// A row whose quote repeats is told apart by its (k of m) suffix alone: the
+// message carries no before line. Pages here are synthetic; the whitespace
+// between cells is a text node, as the page source has it.
 // ---------------------------------------------------------------------------
 
 function makeCell(text, tagName) {
@@ -1624,7 +1618,7 @@ function makeCell(text, tagName) {
   return cell;
 }
 
-test('five cells of one text each get their own message with their own before words', async () => {
+test('five cells of one text each get their own (k of m) locator and no before line', async () => {
   const table = makeElement();
   table.tagName = 'TABLE';
   const header = makeElement();
@@ -1655,30 +1649,25 @@ test('five cells of one text each get their own message with their own before wo
       '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (5)',
       '',
       '1. ▸ "09-30" (1 of 5)',
-      '   before "workspace 最早 alpha-scheduler "',
       '   ↳ c1',
       '',
       '2. ▸ "09-30" (2 of 5)',
-      '   before "uler 09-30 beta-renderer-engine "',
       '   ↳ c2',
       '',
       '3. ▸ "09-30" (3 of 5)',
-      '   before "erer-engine 09-30 gamma-indexer "',
       '   ↳ c3',
       '',
       '4. ▸ "09-30" (4 of 5)',
-      '   before "-indexer 09-30 delta-cache-core "',
       '   ↳ c4',
       '',
       '5. ▸ "09-30" (5 of 5)',
-      '   before "che-core 09-30 epsilon-kit-core "',
       '   ↳ c5',
     ].join('\n')
   );
 });
 
-test('the same sentence under two numbered questions with equal before words keeps each question label', async () => {
-  const SAME = '两个问题下面的同一句话，前面的三十二个字也都一样，所以它们的前文相同。';
+test('the same sentence under two numbered questions keeps each question label', async () => {
+  const SAME = '两个问题下面的同一句话，只靠问题标签分开。';
   const page = {fork1: makeFork('1', SAME), fork2: makeFork('2', SAME)};
   const heading = makeBlock(HEADING_11_12);
   heading.tagName = 'H2';
@@ -1686,18 +1675,15 @@ test('the same sentence under two numbered questions with equal before words kee
     {block: page.fork1.rec, text: '做'},
     {block: page.fork2.rec, text: '不做'},
   ]);
-  const before = '题下面的同一句话，前面的三十二个字也都一样，所以它们的前文相同。';
   assert.equal(
     content,
     [
       '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
       '',
-      '1. ▸ ' + HEADING_11_12 + ' › Q1 "两个问题下面的同一句话，前面的三十二个字也都一样，所以它们的…" › "' + REC_TEXT + '"',
-      '   before "' + before + '"',
+      '1. ▸ ' + HEADING_11_12 + ' › Q1 "' + SAME + '" › "' + REC_TEXT + '"',
       '   ↳ 做',
       '',
-      '2. ▸ ' + HEADING_11_12 + ' › Q2 "两个问题下面的同一句话，前面的三十二个字也都一样，所以它们的…" › "' + REC_TEXT + '"',
-      '   before "' + before + '"',
+      '2. ▸ ' + HEADING_11_12 + ' › Q2 "' + SAME + '" › "' + REC_TEXT + '"',
       '   ↳ 不做',
     ].join('\n')
   );

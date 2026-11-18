@@ -1189,6 +1189,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
   OwnerRow { name: "task_type", owner: "runtime/store", hint: "Use `charliebot_store::metadata::TASK_TYPE_FIELD`." },
   OwnerRow {
+    name: "context_refs",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::CONTEXT_REFS_FIELD`; the retired task-spec list keeps its name there.",
+  },
+  OwnerRow {
     name: "worktree_path",
     owner: "runtime/store",
     hint: "Use `charliebot_store::run_records::OBSERVATION_WORKTREE_PATH`.",
@@ -1341,6 +1346,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::RUN_BACKEND`; the session listing and the chat page carry the backend a \
            live run resolved to under it.",
   },
+  OwnerRow {
+    name: "pool_member",
+    owner: "runtime/agents",
+    hint: "Use `charliebot_agents::model_pool::POOL_MEMBER_FIELD`; the chat page reads the member a pool session runs \
+           on under it.",
+  },
   OwnerRow { name: "Read", owner: "infra/core", hint: "Use `charliebot_core::event_types::READ_TOOL`." },
   OwnerRow { name: "Write", owner: "infra/core", hint: "Use `charliebot_core::event_types::WRITE_TOOL`." },
   OwnerRow { name: "Edit", owner: "infra/core", hint: "Use `charliebot_core::event_types::EDIT_TOOL`." },
@@ -1393,6 +1404,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
 /// config key or a reply field with no separator would slip past it. These must match an exact string literal outside
 /// their owner so a raw field name cannot return unnoticed.
 const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
+  OwnerRow {
+    name: "acceptance",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::ACCEPTANCE_FIELD`; the retired task-spec list keeps its name there.",
+  },
   OwnerRow { name: "credential", owner: "infra/core", hint: "Use `charliebot_core::config::CREDENTIAL_KEY`." },
   OwnerRow { name: "api_key", owner: "infra/core", hint: "Use `charliebot_core::credentials::API_KEY_FIELD`." },
   OwnerRow {
@@ -1759,8 +1775,8 @@ const FORMAT_TABLE: &[FormatRow] = &[
     kind: "trigger file",
     owner: "runtime/store",
     names: &["triggers_dir", "trigger_path", "iter_trigger_file_stats", "pending_trigger_state"],
-    hint: "Read it through `charliebot_store::trigger_files` (`read_trigger`, `read_trigger_value`), and write it \
-           through `write_trigger`.",
+    hint: "Read it through `charliebot_store::trigger_files::read_trigger`, a raw document through \
+           `charliebot_store::metadata::read_metadata_value`, and write it through `write_trigger`.",
   },
   FormatRow {
     kind: "improve loop state",

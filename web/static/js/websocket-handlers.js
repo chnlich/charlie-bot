@@ -163,7 +163,10 @@ registerWsMessageHandler('stream', (ev) => {
     showStreaming({content: draft.content, thinking: draft.thinking, tools: draft.tools});
   }
 }, {advancesCursor: true});
+// The server sends no separator message for a round: master_done carries the separator's id, timestamp and index, so
+// the page draws the round's separator first, then stops the thinking.
 registerWsMessageHandler('master_done', (ev) => {
+  _commitMessage({role: 'separator', id: ev.id, timestamp: ev.timestamp, event_index: ev.event_index});
   if (!ev.still_thinking) {
     stopThinking({preserveSessionIndicator: true});
   }

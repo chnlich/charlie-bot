@@ -8,12 +8,13 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_chat_threads::channel_service::ChannelListener;
 use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
-use charliebot_chat_threads::summon::{DISCORD_NAMESPACE, namespaced_uuid};
+use charliebot_chat_threads::summon::{self, DISCORD_NAMESPACE};
 use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform};
 use charliebot_compat::http_client;
 use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Options, Receiver, Sender};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::BOT_TOKEN_FIELD;
+use charliebot_core::event_types::MENTION_ID;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
@@ -47,7 +48,7 @@ static MENTION_TOKEN_RE: LazyLock<Regex> =
 
 /// The deterministic session id of the Discord thread `thread_id` in `guild_id` (`summon_session_id`).
 pub fn summon_session_id(guild_id: &str, thread_id: &str) -> String {
-  namespaced_uuid(DISCORD_NAMESPACE, &format!("discord:{guild_id}:{thread_id}"))
+  summon::summon_session_id(DISCORD_NAMESPACE, &DISCORD, &[guild_id, thread_id])
 }
 
 /// Whether a message counts for the thread: a human's plain message or reply, from an account in `allowed_users`
@@ -234,12 +235,12 @@ fn adapter(bot: &Bot) -> Arc<dyn ThreadAdapter> {
   Arc::new(DiscordThreadAdapter::new(bot.clone()))
 }
 
-/// Refuse the reply while eligible thread messages sit above the session's watermark (`assert_thread_fresh`).
+/// The refusal of a reply while eligible thread messages sit above the session's watermark (`assert_thread_fresh`).
 pub async fn assert_thread_fresh(bot: &Bot, session_id: &str) -> Result<(), thread_entry::ThreadReplyError> {
   thread_entry::assert_thread_fresh(&adapter(bot), &bot.features, session_id).await
 }
 
-/// Advance the session's read watermark over `message_ids` and return the readback (`ack_messages`).
+/// The readback of the session's read watermark advanced over `message_ids` (`ack_messages`).
 pub async fn ack_messages(
   bot: &Bot,
   session_id: &str,
@@ -248,12 +249,12 @@ pub async fn ack_messages(
   thread_entry::ack_messages(&adapter(bot), &bot.features, session_id, message_ids).await
 }
 
-/// Post `text` to the session's Discord thread and return the readback the CLI prints (`post_reply`).
+/// The readback the CLI prints from posting `text` to the session's Discord thread (`post_reply`).
 pub async fn post_reply(bot: &Bot, session_id: &str, text: &str) -> Result<Value, thread_entry::ThreadReplyError> {
   post_reply_with_caller_context(bot, session_id, text, None, None).await
 }
 
-/// Post a reply bound to the verified caller's run request.
+/// A reply posted bound to the verified caller's run request.
 pub async fn post_reply_with_caller_context(
   bot: &Bot,
   session_id: &str,
@@ -285,7 +286,7 @@ impl ChannelListener for DiscordListener {
   }
 }
 
-/// Accept or drop one gateway `MESSAGE_CREATE` payload (`handle_message_create`).
+/// One gateway `MESSAGE_CREATE` payload accepted or dropped (`handle_message_create`).
 pub async fn handle_message_create(
   message: &Value,
   features: &Arc<FeatureContext>,
@@ -363,7 +364,7 @@ pub async fn handle_message_create(
     "guild_id": guild_id,
     "channel_id": channel_id,
     "thread_id": thread_id,
-    "mention_id": message_id,
+    (MENTION_ID): message_id,
   });
   Ok(Some(
     thread_entry::accept_summon(
@@ -422,13 +423,13 @@ pub async fn deliver_done(features: &Arc<FeatureContext>, session_id: &str, done
   Ok(thread_entry::deliver_done(&adapter(&bot), features, session_id, done).await?)
 }
 
-/// Report queued Discord summons lost across a restart (`backfill_lost_summons`).
+/// The queued Discord summons reported lost across a restart (`backfill_lost_summons`).
 pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> anyhow::Result<usize> {
   let bot = Bot::new(Arc::clone(features), crate::discord_client::BASE_URL);
   Ok(thread_entry::backfill_lost_summons(&adapter(&bot), features).await?)
 }
 
-/// Check the gateway intent and per-guild permissions once for a service start.
+/// The gateway intent and per-guild permissions checked once for a service start.
 async fn preflight(client: &DiscordClient) -> anyhow::Result<bool> {
   let application = client.get_current_application().await?;
   if !crate::discord_client::message_content_intent_enabled(application.flags) {
@@ -446,7 +447,7 @@ async fn preflight(client: &DiscordClient) -> anyhow::Result<bool> {
   Ok(true)
 }
 
-/// Run the Discord gateway listener until a stop close code arrives (`run_listener`).
+/// The Discord gateway listener's run, until a stop close code arrives (`run_listener`).
 async fn run_listener(features: Arc<FeatureContext>) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(&features), crate::discord_client::BASE_URL);
   let client = Arc::new(bot.client()?);
@@ -725,7 +726,7 @@ fn reconnect_backoff_after_drop(backoff: Duration, saw_ready: bool, initial_back
   if saw_ready { initial_backoff } else { backoff }
 }
 
-/// Re-run the shared thread follow backfill after each gateway READY.
+/// The shared thread follow backfill re-run after each gateway READY.
 async fn backfill_followed_threads(
   features: &Arc<FeatureContext>,
   client: Arc<DiscordClient>,

@@ -11,10 +11,10 @@ const GROUP_SESSION_ROW_PX = 52;
 const SESSION_GROUP_HEADER_PX = 28;
 const SESSION_GROUP_LIMIT_TOGGLE_PX = 28;
 
-// The rows one group's preview paints, from the height its list holds and the groups that share it: each group's
-// header and "Show all" line come out first, and the groups split the rest, never below the minimum. The phone's
-// drawer has no height until it opens, and the archived panel's container grows with its rows, so both keep the
-// minimum.
+// The rows one group's preview paints come from the height its list holds and the groups that share it.
+// Each group's header and "Show all" line come out first, and the groups split the rest, never below the
+// minimum. The phone's drawer has no height until it opens, and the archived panel's container grows with
+// its rows, so both keep the minimum.
 function groupPreviewLimit(nav, groupCount) {
   const height = nav && nav === document.getElementById('session-list') ? nav.clientHeight : 0;
   if (!height) return GROUP_SESSION_PREVIEW_MIN;
@@ -137,7 +137,7 @@ function loadFullListing(key) {
       // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
       if (currentFilter !== 'all' || searchListPainted) return;
       const sessions = Sidebar.expandSessionColumns(payload);
-      applyUnreadReply(sessions, requestSeq);
+      applyListingFacts(sessions, requestSeq);
       renderSessionList(sessions, 'all',
         {workspaceBadges: lastGroupedRenderArgs ? lastGroupedRenderArgs.workspaceBadges : ''});
     })
@@ -190,7 +190,7 @@ function registerSessionRowLine(render) {
 // Settings menu items of a normal row: rowAttrs(s) names the row facts the
 // items read, as {camelCaseKey: value}, and the Settings button carries each
 // as a data attribute. items(attrs, sessionId) builds the items from the
-// button's dataset at click time; they follow the core items.
+// button's dataset at click time. They follow the core items.
 function registerSessionMenuItems(source) {
   if (!source || typeof source.items !== 'function'
       || (source.rowAttrs !== undefined && typeof source.rowAttrs !== 'function')) {
@@ -305,11 +305,11 @@ function renderNewChildButton(s) {
 // takes no extra attributes.
 // The gear is the row's one always-visible control on a touch screen, and on a
 // pointer device it shows over the row's hover cover. Its glyph is then the
-// control's only mark, so it takes slate-400: on the open row's blue tint
-// rgb(26, 45, 88) slate-500 draws 2.82:1 and on the hovered row's cover
-// rgb(37, 49, 68) it draws 2.77:1, under the 3:1 floor WCAG 1.4.11 sets for a
-// component; slate-400 draws 5.23:1 and 5.14:1 there and 6.34:1 on the plain
-// row, the tone the row's time line keeps.
+// control's only mark, so it takes slate-400. On the open row's blue tint
+// rgb(26, 45, 88) slate-500 draws 2.82:1, and on the hovered row's cover
+// rgb(37, 49, 68) it draws 2.77:1. Both fall under the 3:1 floor WCAG 1.4.11
+// sets for a component. slate-400 draws 5.23:1 and 5.14:1 there and 6.34:1 on
+// the plain row, the tone the row's time line keeps.
 function renderSettingsButton(s, rowMenu) {
   const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';
   return `<button onclick="event.preventDefault(); event.stopPropagation(); sidebarControl('openSessionRowMenu', this, '${s.id}')"
@@ -405,9 +405,9 @@ function repaintRenderedRows() {
   renderSessionList(sessions, filter, options);
 }
 
-// The sidebar's list holds a fixed height, and the rows its preview paints follow that height: the phone's drawer
-// opening gives the list its first height, and a window resize changes it. A height that keeps the same row count
-// repaints nothing.
+// The sidebar's list holds a fixed height, and the rows its preview paints follow that height. The phone's
+// drawer opening gives the list its first height, and a window resize changes it. A height that keeps the same
+// row count repaints nothing.
 function watchSessionListHeight() {
   const nav = document.getElementById('session-list');
   if (!nav || typeof ResizeObserver !== 'function') return;
@@ -433,10 +433,10 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     nav.innerHTML = (options.workspaceBadges || '') + renderEmptyNote('No sessions yet');
     return;
   }
-  // Grouping follows the root rows; a child row nests under its parent
+  // Grouping follows the root rows. A child row nests under its parent
   // whatever its own group field says.
   const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
-  recordTreeShape(childrenOf, parentOf);
+  recordTreeShape(childrenOf, parentOf, isTreeNodeExpanded);
   revealActiveSessionOnce(parentOf);
   // The active session's root controls visibility for its whole subtree.
   let activeRootId = SESSION_ID;
@@ -462,7 +462,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     // than groupPreviewLimit budgets for the list's height. The preview gives up its last row for it:
     // the header, the open row and the Show all line then stay inside the panel's height. At the
     // preview's floor the height fits fewer rows than the floor paints (a closed phone drawer reports
-    // no height at all), so the floor keeps its rows and the open row joins them still.
+    // no height at all). The floor keeps its rows, and the open row joins them still.
     const previewRoots =
       groupSessions.filter((root) => !groupPreviewLimitExemptions.some((predicate) => predicate(root)));
     const openRootRank = previewRoots.findIndex((root) => root.id === activeRootId);
@@ -472,7 +472,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     let previewRank = 0;
     const groupRows = groupSessions.map((s) => {
       // An exempt root always shows and takes no rank, so the limit counts
-      // only the other roots; those past it are the extra rows.
+      // only the other roots. Those past it are the extra rows.
       const exempt = groupPreviewLimitExemptions.some((predicate) => predicate(s));
       const inPreview = !exempt && previewRank < previewRows;
       if (!exempt) previewRank += 1;
@@ -499,7 +499,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     // created there has no platform origin and would fall back to Workspace.
     // The gate derives from the filter, not the call options, so the in-place
     // repaints (removeSessionFromRenderedList, paintWorkspaceBadges) keep it
-    // hidden too; the Settings gear stays.
+    // hidden too. The Settings gear stays.
     const createInGroupButton = filter !== 'threads' ? `
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); sidebarControl('createSessionInGroup', this.dataset.groupName)"
@@ -529,7 +529,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         childrenOf
       );
     }).join('');
-    // A partial listing whose rows all fit the preview has no hidden row to stand the toggle at, so the toggle
+    // A partial listing whose rows all fit the preview has no hidden row to stand the toggle at. The toggle
     // stands after the rows it fetches, and the click loads the full listing. A page that carries rows past the
     // preview already placed it in front of them.
     const groupRowCount = countTreeRows(groupSessions, childrenOf);
@@ -538,7 +538,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       : groupRowCount;
     const fetchesMore = groupCount > groupRowCount;
 
-    // The header row sits on slate-850. The count is 12 px text there, so it takes slate-400 (6.3:1);
+    // The header row sits on slate-850. The count is 12 px text there, so it takes slate-400 (6.3:1).
     // slate-500 holds 3.4:1, under the 4.5:1 floor. The chevron and the hover actions are icons, which
     // the 3:1 non-text floor admits at slate-500.
     // The count carries thousands separators, as the app's other counts do, so a five-figure group
@@ -621,7 +621,7 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
   const model = label
     ? `<span class="session-backend truncate" title="${escapeHtmlAttr(label.full)}">${escapeHtml(label.display)}</span>`
     : '';
-  // A static row formats its time once at build; without data-time it stays
+  // A static row formats its time once at build. Without data-time it stays
   // outside updateRelativeTimes's [data-time] sweep, so a long archived list
   // never joins the periodic full-table refresh.
   const timeAttr = staticTime ? '' : ` data-time="${timeIso}"`;
@@ -633,7 +633,7 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
     + `</span>`;
 }
 
-// The page's initial rows carry updated_at as epoch minutes; every listing
+// The page's initial rows carry updated_at as epoch minutes. Every listing
 // route carries it as an ISO string. Both shapes reach the row renderer.
 function sessionUpdatedMs(session) {
   const value = session && session.updated_at;
@@ -660,8 +660,8 @@ let lastRevealedSessionId = null;
 const LEAF_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>`;
 
 // Roots are the rows without a parent in this list (a null parent, or a parent
-// that is archived or filtered out); every other row nests under its parent.
-// Roots keep the list order; children put logical sessions before worker
+// that is archived or filtered out). Every other row nests under its parent.
+// Roots keep the list order. Children put logical sessions before worker
 // leaves, each newest first. The server rejects cycles, so the walk ends.
 function buildSessionTree(sessions) {
   const ids = new Set(sessions.map(s => s.id));
@@ -721,7 +721,7 @@ function renderTreeLeadSlot() {
   return '<span class="w-3 h-3 flex-shrink-0" aria-hidden="true"></span>';
 }
 
-// The count includes direct children whose profile is not 'worker'; worker
+// The count includes direct children whose profile is not 'worker'. Worker
 // leaves stay nested but do not add to it. All and Threads hold every
 // unarchived child, so the count reflects active non-worker child sessions.
 function renderTreeChildCount(sessionId, nonWorkerChildCount) {
@@ -772,8 +772,8 @@ function renderSessionTree(s, filter, options, childrenOf) {
 }
 
 // Expansion is display only: child rows show or hide and the chevron rotates.
-// A row's icon reads facts only (status.js paints from states, the unread map
-// and the last grouped paint's tree), so no indicator repaint follows a toggle.
+// The subtree waiting mark is the one icon that reads the expansion, so the
+// toggle repaints the row's indicators. The other icons read facts only.
 function applyTreeNodeExpansion(sessionId, expanded) {
   if (expanded) treeExpandedNodes.add(sessionId); else treeExpandedNodes.delete(sessionId);
   const selectorId = CSS.escape(sessionId);
@@ -784,6 +784,7 @@ function applyTreeNodeExpansion(sessionId, expanded) {
     el.classList.toggle('rotate-90', expanded);
     el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   });
+  Sidebar.refreshSessionIndicator(sessionId);
 }
 
 function toggleTreeNode(sessionId) {
@@ -816,7 +817,7 @@ function renderSessionItem(s, filter, options = {}) {
   if (isContextRow) {
     actions = renderStarButton(s);
   } else if (isArchivedRow) {
-    // The archived row: three direct buttons; the group move and the delete
+    // The archived row: three direct buttons. The group move and the delete
     // moved into the archived Settings menu (openArchivedRowMenu in
     // session-menus.js).
     actions = `
@@ -830,7 +831,7 @@ function renderSessionItem(s, filter, options = {}) {
   } else if (isWorkerRow) {
     actions = renderArchiveButton(s);
   } else {
-    // A normal row (manager or legacy): four direct buttons; rename, group
+    // A normal row (manager or legacy): four direct buttons. Rename, group
     // move, Task & context and the registered items moved into the Settings
     // menu (openSessionRowMenu in session-menus.js).
     actions = `
@@ -839,22 +840,25 @@ function renderSessionItem(s, filter, options = {}) {
       ${renderArchiveButton(s)}
       ${renderSettingsButton(s)}`;
   }
-  const indicators = isArchivedRow ? '' : [
-      renderSessionIndicators(s),
-      renderPendingTriggerIndicator(s),
-      renderPendingPlanApprovalIndicator(s),
-      ...sessionRowBadges.map(render => render(s)),
+  const indicators = [
+      ...(isArchivedRow ? [] : [
+        renderSessionIndicators(s),
+        renderPendingTriggerIndicator(s),
+        renderPendingPlanApprovalIndicator(s),
+        ...sessionRowBadges.map(render => render(s)),
+      ]),
+      ...(s.status === 'archived' ? [] : [renderWaitingMarks(s)]),
   ].join('\n    ');
   // Every tree row leads with one 12px marker so a level's markers line up
   // in one column. A row with child tasks draws the chevron that expands
   // them. A row without any draws an inert slot of the same size. Its
   // leading edge still opens the session instead of hitting an expander
   // with nothing to show. A worker row draws the worker glyph
-  // instead, never a chevron. A flat row (the search results) draws neither;
-  // the Archived tab paints through this tree, so its rows lead with the same
+  // instead, never a chevron. A flat row (the search results) draws neither.
+  // The Archived tab paints through this tree, so its rows lead with the same
   // marker. The indicators follow the lead marker.
   // The count beside the chevron uses direct children whose profile is not
-  // 'worker'; worker leaves still nest, and the chevron title still counts
+  // 'worker'. Worker leaves still nest, and the chevron title still counts
   // every child task. Only the all and threads paints draw the count.
   const showChildCount = 'treeChildCount' in options
       && options.treeNonWorkerChildCount > 0
@@ -975,8 +979,8 @@ function renderSessionList(sessions, filter, options = {}) {
   lastListPaint = {sessions, filter, options};
   searchListPainted = (filter === 'search');
   // The grouped paints (Workspace and Later) nest rows and record their tree
-  // shape themselves; a flat paint shows each row's own facts.
-  recordTreeShape(new Map(), new Map());
+  // shape themselves. A flat paint shows each row's own facts.
+  recordTreeShape(new Map(), new Map(), isTreeNodeExpanded);
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
     const labels = {
@@ -997,9 +1001,9 @@ function renderSessionList(sessions, filter, options = {}) {
     renderGroupedSessionList(sessions, filter, options);
     return;
   }
-  // A full search answer is the newest matches only, and the notice saying so stands above the first row: a
-  // reader who scans the rows first has already concluded that the match they want is not there, and below them
-  // the notice followed every row of the list.
+  // A full search answer is the newest matches only, and the notice saying so stands above the first row.
+  // A reader who scans the rows first has already concluded that the match they want is not there.
+  // Below them, the notice followed every row of the list.
   const capNotice = sessions.length >= SEARCH_MATCH_LIMIT
     ? renderEmptyNote('Showing the newest ' + SEARCH_MATCH_LIMIT + ' matches — narrow the search.')
     : '';

@@ -10,6 +10,7 @@ use anyhow::{Context, ensure};
 use axum::Router;
 use axum::extract::State;
 use axum::response::Response;
+use charliebot_compat::responses::Failure;
 use charliebot_compat::{responses, routing};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::text_repr::{self, JsonStyle};
@@ -26,7 +27,7 @@ use crate::capture::{CHARLIE_BOT_SOURCE, host_name};
 use crate::count::Count;
 use crate::ledger::{LedgerRow, UsageLedger, default_ledger_path};
 use crate::pacific::{self, Week};
-use crate::page_memo::{PageInputs, PageMemo};
+use crate::page_memo::{PageInputs, PageMemo, exception};
 use crate::page_rows::{self, PageRow, canonical_model, compact, group_thousands};
 
 const TEMPLATE: &str = "token_usage.html";
@@ -59,25 +60,24 @@ async fn token_usage_viewer(State(features): State<Arc<FeatureContext>>, request
     .expect("rendering the token usage page does not panic");
   match rendered {
     Ok(response) => response,
-    Err(failure) => responses::internal_error(failure.kind(), failure.detail()),
+    Err(failure) => responses::internal_error(&failure.kind, failure.detail),
   }
 }
 
 /// One page response: the body the memo holds for this ledger version and these inputs, or a body this view renders
 /// and the memo keeps for the next one.
-fn view(features: &FeatureContext, request: &Parts) -> Result<Response, PageFailure> {
+fn view(features: &FeatureContext, request: &Parts) -> Result<Response, Failure> {
   let now = Timestamp::now();
-  let week = Week::last_before(now)?;
+  let week = Week::last_before(now).map_err(exception)?;
   let templating =
-    features.startup.require::<Templating>().map_err(|error| PageFailure::new("RuntimeError", error.to_string()))?;
+    features.startup.require::<Templating>().map_err(|error| Failure::new("RuntimeError", error.to_string()))?;
   // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
-  let asset_version =
-    templating.static_asset_version().map_err(|error| PageFailure::new("OSError", error.to_string()))?;
-  let config = features.config.get().map_err(|error| PageFailure::from(anyhow::Error::new(error)))?;
+  let asset_version = templating.static_asset_version().map_err(|error| Failure::new("OSError", error.to_string()))?;
+  let config = features.config.get().map_err(|error| exception(anyhow::Error::new(error)))?;
   let ledger_path = default_ledger_path(&config.charliebot_home);
   let inputs = PageInputs {
-    host: host_name()?,
-    week: week.label()?,
+    host: host_name().map_err(exception)?,
+    week: week.label().map_err(exception)?,
     config: Arc::clone(&config),
     template_revision: templating.revision(),
     asset_version: asset_version.clone(),
@@ -87,38 +87,12 @@ fn view(features: &FeatureContext, request: &Parts) -> Result<Response, PageFail
     let mut memo = PAGE_MEMO.lock().expect("the page memo mutex is not poisoned");
     memo
       .body(&ledger_path, inputs, |ledger| {
-        let read = read_in_ledger(ledger, now, week, &config)?;
+        let read = read_in_ledger(ledger, now, week, &config).map_err(exception)?;
         render_html(features, &read, request, &asset_version)
       })?
       .to_string()
   };
   Ok(templating.page_response(TEMPLATE, body, request))
-}
-
-/// A page failure in the error JSON's own terms: the kind it names and the detail it carries.
-pub(crate) struct PageFailure {
-  kind: String,
-  detail: String,
-}
-
-impl PageFailure {
-  fn new(kind: &str, detail: String) -> PageFailure {
-    PageFailure { kind: kind.to_string(), detail }
-  }
-
-  pub(crate) fn kind(&self) -> &str {
-    &self.kind
-  }
-
-  pub(crate) fn detail(&self) -> String {
-    self.detail.clone()
-  }
-}
-
-impl From<anyhow::Error> for PageFailure {
-  fn from(error: anyhow::Error) -> PageFailure {
-    PageFailure::new("Exception", format!("{error:#}"))
-  }
 }
 
 /// What `read_ledger` returns: the all-time rows, the last Pacific week and the week before it, each source's native
@@ -179,11 +153,10 @@ fn read_in_ledger(
 
 /// The page from one ledger read, rendered through the shared template engine.
 #[cfg(test)]
-fn render(features: &FeatureContext, read: &LedgerRead, request: &Parts) -> Result<Response, PageFailure> {
+fn render(features: &FeatureContext, read: &LedgerRead, request: &Parts) -> Result<Response, Failure> {
   let templating =
-    features.startup.require::<Templating>().map_err(|error| PageFailure::new("RuntimeError", error.to_string()))?;
-  let asset_version =
-    templating.static_asset_version().map_err(|error| PageFailure::new("OSError", error.to_string()))?;
+    features.startup.require::<Templating>().map_err(|error| Failure::new("RuntimeError", error.to_string()))?;
+  let asset_version = templating.static_asset_version().map_err(|error| Failure::new("OSError", error.to_string()))?;
   let html = render_html(features, read, request, &asset_version)?;
   Ok(templating.page_response(TEMPLATE, html, request))
 }
@@ -194,16 +167,16 @@ fn render_html(
   read: &LedgerRead,
   request: &Parts,
   asset_version: &str,
-) -> Result<String, PageFailure> {
-  let mut context = token_usage_context(read, &features.registry)?;
+) -> Result<String, Failure> {
+  let mut context = token_usage_context(read, &features.registry).map_err(exception)?;
   if let Some(object) = context.as_object_mut() {
     object.insert(STATIC_ASSET_VERSION_KEY.to_string(), Value::String(asset_version.to_string()));
   }
   let templating =
-    features.startup.require::<Templating>().map_err(|error| PageFailure::new("RuntimeError", error.to_string()))?;
+    features.startup.require::<Templating>().map_err(|error| Failure::new("RuntimeError", error.to_string()))?;
   templating
     .render_page_html(features, TEMPLATE, &context, request, &[])
-    .map_err(|error| PageFailure::new(error.kind(), error.to_string()))
+    .map_err(|error| Failure::new(error.kind(), error.to_string()))
 }
 
 /// The registered sources in registration order, then the sources whose usage lives only in CharlieBot's run

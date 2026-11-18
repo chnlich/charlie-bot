@@ -51,6 +51,10 @@ use crate::{inlined_script, inlined_style};
 /// credentials, and the engine reuses its value until either file moves ([`Templating::globals`]).
 pub type TemplateGlobal = (&'static str, Value);
 
+/// The value of one template global, so a caller outside this crate can build a [`TemplateGlobal`] to compare
+/// against [`Templating::render_globals`].
+pub use minijinja::value::Value as TemplateValue;
+
 /// The template context key that carries [`Templating::static_asset_version`]. A page context that serves a static
 /// asset inserts the version under it, and the page's template reads it to bust that asset's cache.
 pub const STATIC_ASSET_VERSION_KEY: &str = "static_asset_version";
@@ -342,6 +346,12 @@ impl Templating {
   /// that keeps a rendered page names the revision it built at.
   pub fn revision(&self) -> u64 {
     self.watch.revision()
+  }
+
+  /// The registered template globals of the feature context's current config and credentials, for a caller that
+  /// keeps a rendered page and must tell when the values it rendered with moved.
+  pub fn render_globals(&self, features: &FeatureContext) -> Result<Vec<TemplateGlobal>, RenderError> {
+    self.globals(features)
   }
 
   /// The gzip form of one page body: the bytes kept for this body, or a fresh deflate that is kept for the next
@@ -1220,7 +1230,7 @@ mod tests {
 
     let response = templating.render_page(&features, "scripted.html", &json!({}), &parts).unwrap();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(body, "<script>\nlet url='https://example.com';</script><style>.chat{display:flex}</style>");
+    assert_eq!(body, "<script>let url='https://example.com';</script><style>.chat{display:flex}</style>");
   }
 
   /// A repeat render answers from the compiled environment, and a template edited on disk moves the source list so

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
 use crate::browser_login;
-use crate::config::HostAuthConfig;
+use crate::config::{HostAuthConfig, browser_logins};
 use crate::host_auth::{self, RoundSlot, State};
 use crate::probe::{awaits_approval, probe_host_fresh};
 use crate::timestamps;
@@ -166,7 +166,9 @@ where
   let Some(_slot) = RoundSlot::claim() else {
     return Ok(());
   };
-  let state = host_auth::run_round_with_now(false, state_path, config_path, now, probe).await?;
+  let cfg = features.config.get()?;
+  let logins = browser_logins(&cfg);
+  let state = host_auth::run_round_with_now(false, state_path, config_path, &logins, now, probe).await?;
   dm_step(features, &state, state_path).await?;
   Ok(())
 }
@@ -245,6 +247,7 @@ mod tests {
 
   use charliebot_core::config::CharlieBotConfig;
   use charliebot_core::credentials::load_credentials;
+  use charliebot_core::event_types::{CONFIG_RELOAD_FAILED_EVENT, CREDENTIALS_RELOAD_FAILED_EVENT};
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::store_hooks::store_hooks;
   use charliebot_registry::{Registry, StartupState};
@@ -332,13 +335,13 @@ mod tests {
     let config_home = dir.path().to_path_buf();
     let config = Arc::new(HotReload::new(
       dir.path().join("config.yaml"),
-      "config_reload_failed",
+      CONFIG_RELOAD_FAILED_EVENT,
       Box::new(move || config_registry.load_config(&config_home)),
     ));
     let credentials_home = dir.path().to_path_buf();
     let credentials = Arc::new(HotReload::new(
       dir.path().join("credentials.yaml"),
-      "credentials_reload_failed",
+      CREDENTIALS_RELOAD_FAILED_EVENT,
       Box::new(move || load_credentials(&credentials_home)),
     ));
     let cfg: CharlieBotConfig = registry.load_config(dir.path()).expect("the config loads");
@@ -730,7 +733,7 @@ mod tests {
     save_state(&empty_state(), &env.state_path).unwrap();
 
     // Cron gate probes alias and writes verdict to state file without calling DM hook
-    host_auth::probe_alias_with(&env.state_path, &env.config_path, "login-a", |_alias| async move {
+    host_auth::probe_alias_with(&env.state_path, &env.config_path, "login-a", &[], |_alias| async move {
       Ok((1, "requires an additional check".to_string()))
     })
     .await

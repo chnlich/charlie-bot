@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::headless_render;
 
 const STYLE_VERBATIM: &str = "style-verbatim";
+const HEAD_TEXT: &str = "head-text";
 const SECTIONS_NUMBERED: &str = "sections-numbered";
 const SCHEMA_DROPPED: &str = "schema-dropped";
 const FOOT_PRESENT: &str = "foot-present";
@@ -140,6 +141,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
     "plan" => Some(&[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
+      HEAD_TEXT,
       SECTIONS_NUMBERED,
       SCHEMA_DROPPED,
       FOOT_PRESENT,
@@ -157,6 +159,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
     "understanding" => Some(&[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
+      HEAD_TEXT,
       SECTIONS_NUMBERED,
       FOOT_PRESENT,
       FORK_OPEN_SHAPE,
@@ -172,6 +175,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
     "sitrep" => Some(&[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
+      HEAD_TEXT,
       SECTIONS_NUMBERED,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
@@ -189,6 +193,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
     "debug" => Some(&[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
+      HEAD_TEXT,
       SECTIONS_NUMBERED,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
@@ -203,6 +208,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
     "explain" => Some(&[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
+      HEAD_TEXT,
       RENDER_PATH,
       SECTIONS_NUMBERED,
       EXPLAIN_TRIAD,
@@ -220,6 +226,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
     "waiting" => Some(&[
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
+      HEAD_TEXT,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
       FORK_DEMOS,
@@ -407,6 +414,7 @@ fn run_assertions_sync_with_user_text(
     let check: AssertionCheck = match *name {
       BYTE_INTEGRITY => check_byte_integrity,
       STYLE_VERBATIM => check_style_verbatim,
+      HEAD_TEXT => check_head_text,
       SECTIONS_NUMBERED => check_sections_numbered,
       SCHEMA_DROPPED => check_schema_dropped,
       FOOT_PRESENT => check_foot_present,
@@ -594,6 +602,41 @@ fn check_style_verbatim(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
   } else {
     Ok(vec![outcome(STYLE_VERBATIM, false, format!("<style> block differs from the genre template {template_rel}"))])
   }
+}
+
+/// `head-text`: non-whitespace text directly under the document root, `html` or `head` renders as page text, because
+/// the browser moves it into `body`. CSS left after a head's `</style>` is such text.
+fn check_head_text(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let mut failures = Vec::new();
+  for (index, node) in context.nodes.iter().enumerate() {
+    let container = match (index, node.tag.as_str()) {
+      (0, _) => "the document root",
+      (_, "html") => "<html>",
+      (_, "head") => "<head>",
+      _ => continue,
+    };
+    for child in &node.children {
+      let Child::Text(text) = child else { continue };
+      let collapsed = str_methods::collapse_whitespace(text);
+      if collapsed.is_empty() {
+        continue;
+      }
+      let snippet = collapsed.chars().take(60).collect::<String>();
+      failures.push(outcome(
+        HEAD_TEXT,
+        false,
+        format!(
+          "text {} sits directly in {container}, so the browser shows it as page text; move CSS into the page's \
+           <style> element and other head markup into its own element",
+          text_repr::str_repr(&snippet)
+        ),
+      ));
+    }
+  }
+  if failures.is_empty() {
+    failures.push(outcome(HEAD_TEXT, true, ""));
+  }
+  Ok(failures)
 }
 
 fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
@@ -1754,6 +1797,45 @@ mod tests {
     assert_eq!(result.detail, detail);
   }
 
+  const STRAY_HEAD_CSS_PAGE: &str = include_str!("../tests/data/understanding_stray_head_css.html");
+
+  fn head_text_outcomes(source: &str) -> Vec<AssertionOutcome> {
+    let nodes = parse_dom(source).unwrap();
+    let context =
+      Context { genre: "understanding", artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
+    check_head_text(&context).unwrap()
+  }
+
+  /// The stray-CSS page with its block moved above the style element's close, and the orphan `</style>` dropped.
+  fn with_stray_css_moved_into_style(page: &str) -> String {
+    let style_close = page.find("</style>").unwrap();
+    let head_close = page.find("</head>").unwrap();
+    let orphan_close = page[..head_close].rfind("</style>").unwrap();
+    let stray = &page[style_close + "</style>\n".len()..orphan_close];
+    format!("{}{}</style>\n{}", &page[..style_close], stray, &page[head_close..])
+  }
+
+  #[test]
+  fn head_text_fails_on_css_after_the_style_element() {
+    let outcomes = head_text_outcomes(STRAY_HEAD_CSS_PAGE);
+    assert_eq!(outcomes.len(), 1);
+    assert!(!outcomes[0].passed);
+    assert!(outcomes[0].detail.contains("<head>"), "{}", outcomes[0].detail);
+  }
+
+  #[test]
+  fn head_text_passes_when_the_css_sits_inside_the_style_element() {
+    let fixed = with_stray_css_moved_into_style(STRAY_HEAD_CSS_PAGE);
+    assert_eq!(head_text_outcomes(&fixed), vec![outcome(HEAD_TEXT, true, "")]);
+  }
+
+  #[test]
+  fn every_genre_runs_head_text() {
+    for genre in ARTIFACT_GENRES {
+      assert!(assertion_set(genre).unwrap().contains(&HEAD_TEXT), "{genre}");
+    }
+  }
+
   #[test]
   fn schema_dropped_fails_when_missing() {
     assert_schema_dropped_failure(&schema_dropped_page("<p>Schema body.</p>"), "missing p.dropped in 4.1 Schema");
@@ -1847,10 +1929,11 @@ mod tests {
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
       let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
-      // The fixture predates the fork and schema-dropped assertions, so those outcomes have no recorded counterpart.
+      // The fixture predates the fork, schema-dropped and head-text assertions, so those outcomes have no recorded
+      // counterpart.
       let actual = outcomes
         .iter()
-        .filter(|outcome| outcome.name != FORK_OPTIONS && outcome.name != FORK_DEMOS && outcome.name != SCHEMA_DROPPED)
+        .filter(|outcome| ![FORK_OPTIONS, FORK_DEMOS, SCHEMA_DROPPED, HEAD_TEXT].contains(&outcome.name.as_str()))
         .map(outcome_value)
         .collect::<Vec<_>>();
       let mut expected: Vec<Value> = serde_json::from_value(case["outcomes"].clone()).unwrap();
@@ -1903,7 +1986,7 @@ mod tests {
     let chrome = stub_chrome(directory.path(), 800);
     let page = repo_root().join(PLAN_TEMPLATE_PATH);
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
-    assert_eq!(outcomes.len(), 15);
+    assert_eq!(outcomes.len(), 16);
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 
@@ -2427,6 +2510,7 @@ mod tests {
       [
         BYTE_INTEGRITY,
         STYLE_VERBATIM,
+        HEAD_TEXT,
         FORK_OPEN_SHAPE,
         FORK_OPTIONS,
         FORK_DEMOS,
@@ -2774,7 +2858,7 @@ mod tests {
   fn test_shipped_explain_template_passes_its_explain_set() {
     let template = repo_root().join("prompts/explain_template.html");
     let outcomes = run_assertions_sync("explain", &template, "", &repo_root()).unwrap();
-    assert_eq!(outcomes.len(), 15, "{outcomes:#?}");
+    assert_eq!(outcomes.len(), 16, "{outcomes:#?}");
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 

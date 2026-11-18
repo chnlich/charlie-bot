@@ -898,7 +898,7 @@ impl Stack {
         ("request_id".to_string(), json!(request_id)),
         ("outcome".to_string(), json!("completed")),
         ("summary".to_string(), json!("synthetic close")),
-        ("result_refs".to_string(), json!([])),
+        (event_types::RESULT_REFS.to_string(), json!([])),
         ("run_ids".to_string(), json!([])),
         ("report_to".to_string(), Value::Null),
       ],
@@ -1162,7 +1162,7 @@ impl SyntheticLoop {
         tree.request_stop(child_id, &run.id, &format!("loop-close:{}", run.id)).await?;
       }
     }
-    let evidence = json!({"summary": close.summary, "result_refs": close.result_refs, "run_ids": []});
+    let evidence = json!({"summary": close.summary, (event_types::RESULT_REFS): close.result_refs, "run_ids": []});
     tree.completion().close_sequence_child(child_id, "synthetic-loop-close", &close.outcome, &evidence).await?;
     Ok(true)
   }

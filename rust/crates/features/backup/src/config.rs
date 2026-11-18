@@ -1,10 +1,9 @@
 //! The `backup:` config section: the restic repository a snapshot goes to and the file holding its password.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
-use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::config::{ConfigSection, SectionModel};
 use charliebot_core::home::DISPLAY_HOME;
 use charliebot_core::paths;
 use serde::{Deserialize, Serialize};
@@ -63,20 +62,13 @@ impl BackupConfig {
   }
 }
 
+impl SectionModel for BackupConfig {
+  const KEY: &'static str = NAME;
+}
+
 /// The registered `backup:` config section.
 pub fn section() -> ConfigSection {
-  ConfigSection { key: NAME, legacy_keys: &[], parse: parse_section, dump: dump_section }
-}
-
-/// The section rendered as its model dumps it (`charliebot config get backup`).
-fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
-  let settings = value.downcast_ref::<BackupConfig>().ok_or("the backup section holds an unexpected value")?;
-  serde_json::to_value(settings).map_err(|error| error.to_string())
-}
-
-fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
-  let settings: BackupConfig = serde_yaml::from_value(raw.clone()).map_err(|error| format!("{NAME}: {error}"))?;
-  Ok(Arc::new(settings))
+  ConfigSection::of::<BackupConfig>(&[])
 }
 
 /// `value` with `~` and `$CHARLIEBOT_HOME` expanded.

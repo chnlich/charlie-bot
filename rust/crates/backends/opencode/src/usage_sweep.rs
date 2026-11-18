@@ -39,8 +39,8 @@ pub fn sweep(db: &Path, proc_root: &Path, scope: &SweepScope) -> anyhow::Result<
   })
 }
 
-/// Vacuums the store, refusing past live writers unless `force`. A refusal is an error, raised before the store is
-/// touched for vacuum purposes (`_vacuum_opencode_store`).
+/// The vacuum of the store, refused while live writers remain unless `force`. A refusal is an error, raised before the
+/// store is touched for vacuum purposes (`_vacuum_opencode_store`).
 fn vacuum_store(db: &Path, proc_root: &Path, force: bool) -> anyhow::Result<()> {
   let writers = count_writers(proc_root)?;
   if writers > 0 && !force {
@@ -79,7 +79,8 @@ fn open_for_vacuum(db: &Path) -> rusqlite::Result<Connection> {
   Ok(connection)
 }
 
-/// Hands the freed pages back. Without `force`, a store with no freelist is left as it is (`_vacuum_opencode_db`).
+/// The vacuum that returns the freed pages to the filesystem. Without `force`, a store with no freelist is left as
+/// it is (`_vacuum_opencode_db`).
 fn vacuum_db(connection: &Connection, force: bool) -> rusqlite::Result<()> {
   connection.pragma_update(None, "busy_timeout", SQLITE_LOCK_WAIT_MS)?;
   if !force && connection.query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))? == 0 {

@@ -14,6 +14,8 @@ The codebase has a single user. Apply these principles:
   A component-local optimization keeps its speedup and the run working through model edits elsewhere.
 - **Superseded code**: delete it in the same change. A retry or a regenerated output overwrites its predecessor.
   Numbered artifacts compare distinct experiment legs.
+- **Known defects and stale docs**: when a change touches code with a known defect or a stale doc, fix that defect
+  or doc in the same change.
 - **Before the first release**: ship each change as new, with no compatibility path for the
   old form. The first release then carries one form.
 - **One owner per responsibility**: give each responsibility one owning module. When a change meets scattered

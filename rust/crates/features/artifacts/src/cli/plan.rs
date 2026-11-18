@@ -235,8 +235,8 @@ fn close_payload(session_id: &str, args: &CloseArgs) -> Value {
   json!({ "session_id": session_id, "plan_id": args.plan, "close_as": args.close_as })
 }
 
-/// Post one registering verb, answering a sent-but-lost call from the session's own registry, and add the verb's
-/// reminder when the server's response carries none.
+/// The post of one registering verb, answering a sent-but-lost call from the session's own registry and adding the
+/// verb's reminder when the server's response carries none.
 fn register(
   session_id: &str,
   verb: &str,

@@ -10,9 +10,9 @@
 const STATUS_QUERY_MAX_BYTES = 8192;
 
 // Status of every rendered sidebar row, keyed by session id. The status
-// poll skips archived rows through it. The server answers archived rows with
-// constant-False flags and no probe (rust/crates/runtime/session-api/src/sidebar.rs), so per-cycle request
-// volume tracks the active rows on screen, not the archived list length.
+// poll skips archived rows through it, so per-cycle request volume tracks the
+// active rows on screen, not the archived list length. If a caller names an
+// archived row, the server still answers its stored Waiting on you flag.
 const renderedSessionStatuses = {};
 
 // Rows painted with profile=worker: a leaf runs its own work, so its running
@@ -45,7 +45,7 @@ function isTaskTreeRow(session) {
 
 function recordRenderedSessionStatus(session) {
   renderedSessionStatuses[session.id] = (session && session.status) || 'active';
-  // The row's own activity as painted; the indicator aggregation reads it.
+  // The row's own activity as painted. The indicator aggregation reads it.
   ownIndicatorState[session.id] = getSessionIndicatorState(session);
   stampFactSeq('indicator', session.id);
   if (session && session.profile === 'worker') renderedWorkerRows.add(session.id);
@@ -70,7 +70,7 @@ function sidebarSessionIds() {
     ids.push(SESSION_ID);
   }
   // Delegated cards in the open chat read their child's live state from this
-  // poll; a child whose sidebar row is filtered out still rides the request.
+  // poll. A child whose sidebar row is filtered out still rides the request.
   document.querySelectorAll('.delegate-live-state[data-delegate-session]').forEach(el => {
     const sid = el.dataset.delegateSession;
     if (!sid || seen.has(sid)) return;
@@ -152,7 +152,12 @@ function pageLeftRowsOut() {
 }
 
 // The status answers: the token to send back, the rows that moved, and the ids that left the filter's set.
+// An open's catch-up owns the link until its socket replay lands. The poll's row set is a download beside that replay:
+// on the poor-network bench's B open the first poll after the list copy paints named every row of the filter at 3.3 s
+// (3.4 KB before the open's newest message). A held poll sends nothing and answers no rows, so the row state stays as
+// it is; the first tick after the hold ends polls again.
 async function fetchStatusUrls(urls) {
+  if (statusPollHeld()) return [];
   const responses = await Promise.all(urls.map(url => fetch(url)));
   const answers = [];
   for (const r of responses) {
@@ -212,7 +217,7 @@ function getSessionIndicatorState(status) {
   if (status.has_running_tasks) return 'worker_only';
   // A task-tree row's fact-derived work verdict (idle | running | waiting)
   // when its sidebar state carries one. has_running_tasks already covered
-  // 'running'; the remaining verdict maps onto its own icon.
+  // 'running'. The remaining verdict maps onto its own icon.
   if (status.work_state === 'waiting') return 'waiting';
   return 'idle';
 }
@@ -228,20 +233,24 @@ function getSessionIndicatorState(status) {
 // snapshot older than a fact this client already applied — a poll issued
 // before the flip, a row fetch answered before the read POST landed. Every
 // applied fact is stamped with a per-session sequence in its domain, the
-// unread mark or the activity indicator. A reply captured before the domain's
+// unread mark, the waiting mark or the activity indicator. A reply captured before the domain's
 // newest stamp is refused in that domain. A late reply then can neither erase
 // a newer unread fact nor revert a newer indicator state, a running_changed
-// frame included. Broadcasts are ordered by their channel and always apply;
-// applying one stamps it, so any reply captured earlier is refused.
+// frame included. Broadcasts are ordered by their channel and always apply.
+// Applying one stamps it, so any reply captured earlier is refused.
 //
 // The unread mark has this one owner: every row paints its dot and subtree
 // mark from sessionUnread, and only the functions below write it. A list paint
 // that reuses rows the page already holds reads the facts and applies none:
 // the Workspace badge repaint, the row refresh's merge, the inline delete. A
 // held row's has_unread then cannot bring back a dot a newer fact cleared.
+// The waiting mark has the same owner rule over sessionWaiting, in its own
+// domain: the listing rows and the status poll write it, and a row paints its
+// mark from the fact.
 const sessionUnread = {};
+const sessionWaiting = {};
 let factSeq = 0;
-const factSeqByDomain = {unread: {}, indicator: {}};
+const factSeqByDomain = {unread: {}, indicator: {}, waiting: {}};
 
 function stampFactSeq(domain, sessionId) {
   factSeqByDomain[domain][sessionId] = ++factSeq;
@@ -265,17 +274,29 @@ function readDisplayedSession() {
   if (SESSION_ID && !switching && ownUnread(SESSION_ID)) markSessionRead(SESSION_ID, null);
 }
 
-// The unread facts of one fetched row list, captured at requestSeq
-// (factSeqAtRequest before the fetch). Call it before the list paints.
-function applyUnreadReply(rows, requestSeq) {
+// The waiting fact: the session stores at least one Waiting on you item.
+function recordWaitingFact(sessionId, hasWaiting) {
+  sessionWaiting[sessionId] = !!hasWaiting;
+  stampFactSeq('waiting', sessionId);
+}
+
+// The facts of one fetched row list, captured at requestSeq (factSeqAtRequest
+// before the fetch). Call it before the list paints. An archived row stores no
+// waiting fact, whatever its web_status holds.
+function applyListingFacts(rows, requestSeq) {
   rows.forEach(row => {
     if (replyIsCurrent('unread', row.id, requestSeq)) recordUnreadFact(row.id, row.has_unread);
+    if (replyIsCurrent('waiting', row.id, requestSeq)) {
+      const stored = !!(row.web_status && row.web_status.waiting && row.web_status.waiting.length);
+      recordWaitingFact(row.id, row.status !== 'archived' && stored);
+    }
   });
 }
 
-// A removed row's fact leaves with it.
-function forgetUnreadFact(sessionId) {
+// A removed row's facts leave with it.
+function forgetSessionFacts(sessionId) {
   delete sessionUnread[sessionId];
+  delete sessionWaiting[sessionId];
 }
 
 function factSeqAtRequest() {
@@ -371,6 +392,26 @@ function renderPendingPlanApprovalIndicator(session) {
   return `<svg id="pending-plan-approval-${session.id}" class="w-3.5 h-3.5 text-blue-400 flex-shrink-0 ${hasPending ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Plan awaiting approval"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>`;
 }
 
+// The waiting marks: a solid square for the row's own Waiting on you fact and
+// a hollow square for the subtree mark. Each mark's look is its class string
+// below and nothing else, so a later change of look edits these strings only.
+// Both marks start hidden. paintSessionIndicator shows them from the facts.
+const WAITING_MARK_TITLE = 'Waiting on you';
+const WAITING_SUBTREE_MARK_TITLE = 'Waiting on you in a session below';
+const WAITING_MARK_CLASS = 'inline-flex items-center justify-center flex-shrink-0 w-[18px] h-[18px] rounded-[5px] '
+  + 'border border-orange-700 bg-orange-700 text-white text-xs font-extrabold leading-none select-none';
+const WAITING_SUBTREE_MARK_CLASS = 'inline-flex items-center justify-center flex-shrink-0 w-[18px] h-[18px] '
+  + 'rounded-[5px] border-2 border-orange-400 bg-transparent text-orange-500 text-xs font-extrabold leading-none '
+  + 'select-none';
+
+function renderWaitingMarks(session) {
+  const hidden = sessionWaiting[session.id] ? '' : ' hidden';
+  const own = `<span id="waiting-marker-${session.id}" title="${WAITING_MARK_TITLE}"`
+    + ` class="${WAITING_MARK_CLASS}${hidden}">!</span>`;
+  const subtree = `<span id="waiting-subtree-marker-${session.id}" title="${WAITING_SUBTREE_MARK_TITLE}"`
+    + ` class="${WAITING_SUBTREE_MARK_CLASS} hidden">!</span>`;
+  return own + subtree;
+}
 
 // Only the session rows carry the row tints. The list's own id
 // (`session-list`) also starts with the row-id prefix, so a bare prefix
@@ -406,10 +447,13 @@ function updateSidebarHighlight(newSessionId) {
 const ownIndicatorState = {};
 let lastTreeChildrenOf = new Map();
 let lastTreeParentOf = new Map();
+let lastTreeIsExpanded = () => false;
 
-function recordTreeShape(childrenOf, parentOf) {
+// isExpanded reads the grouped paint's expansion state. The subtree waiting mark is the only icon that reads it.
+function recordTreeShape(childrenOf, parentOf, isExpanded) {
   lastTreeChildrenOf = childrenOf;
   lastTreeParentOf = parentOf;
+  lastTreeIsExpanded = isExpanded;
 }
 
 // The children of the last grouped paint, for indicator aggregation.
@@ -429,6 +473,18 @@ function subtreeHasState(sid, state) {
 
 function subtreeUnread(sid) {
   return treeChildIds(sid).some(child => !!sessionUnread[child] || subtreeUnread(child));
+}
+
+// The waiting facts below the row, at any depth. An archived row's fact is
+// false, so it adds nothing and passes nothing up.
+function subtreeWaiting(sid) {
+  return treeChildIds(sid).some(child => !!sessionWaiting[child] || subtreeWaiting(child));
+}
+
+// The subtree waiting mark shows on a folded row with a listed row below that
+// holds the fact. Expanding the row hides it, and folding it again shows it.
+function subtreeWaitingMarkShown(sid) {
+  return subtreeWaiting(sid) && !lastTreeIsExpanded(sid);
 }
 
 // A paused worker anywhere below the row: the same walk as subtreeHasState,
@@ -455,7 +511,7 @@ function effectiveIndicatorState(sid) {
   return subtreeStandInState(sid);
 }
 
-// The split the two unread marks read: the dot is the row's own fact; the
+// The split the two unread marks read: the dot is the row's own fact. The
 // subtree mark is the subtree's. One row's own unread outranks its subtree's.
 function ownUnread(sid) {
   return !!sessionUnread[sid];
@@ -475,12 +531,17 @@ function paintSessionIndicator(sid) {
   if (spinner) spinner.classList.toggle('hidden', state !== 'thinking');
   if (worker) worker.classList.toggle('hidden', state !== 'worker_only');
   if (clock) clock.classList.toggle('hidden', state !== 'waiting');
-  // The unread family reads the unread facts alone; no activity state gates
-  // it. The dot reads the row's own fact; the subtree mark yields to it and
+  // The unread family reads the unread facts alone. No activity state gates
+  // it. The dot reads the row's own fact. The subtree mark yields to it and
   // reads the subtree's.
   if (dot) dot.classList.toggle('hidden', !ownUnread(sid));
   if (subtreeMark) subtreeMark.classList.toggle('hidden',
       ownUnread(sid) || !subtreeUnread(sid));
+  // The waiting marks read the waiting facts alone, as the unread dot does.
+  const waitingMark = document.getElementById('waiting-marker-' + sid);
+  const waitingSubtreeMark = document.getElementById('waiting-subtree-marker-' + sid);
+  if (waitingMark) waitingMark.classList.toggle('hidden', !sessionWaiting[sid]);
+  if (waitingSubtreeMark) waitingSubtreeMark.classList.toggle('hidden', !subtreeWaitingMarkShown(sid));
 }
 
 // Repaint one row and every ancestor whose gear or subtree mark may have
@@ -499,7 +560,7 @@ function setSessionIndicator(sid, state) {
   refreshSessionIndicator(sid);
 }
 
-// A grouped paint renders each row with its own facts; the parent rows take
+// A grouped paint renders each row with its own facts. The parent rows take
 // their stand-in gear and their subtree marks here, once the rows exist.
 function refreshTreeIndicators() {
   Object.keys(ownIndicatorState).forEach(sid => {
@@ -511,7 +572,7 @@ function refreshTreeIndicators() {
 // painted (app.js's initial render, switchSession's winning generation, a
 // reply the displayed view rendered). The local fact clears first, stamped so
 // an older reply is refused, and the row repaints. The server-side flag clears
-// only through the POST; a bare data fetch never clears it. Fire-and-forget: a
+// only through the POST. A bare data fetch never clears it. Fire-and-forget: a
 // lost POST leaves the server flag set, and the next reply that carries it
 // paints the dot again, or reads it again on the displayed session.
 //
@@ -560,7 +621,12 @@ function applySessionStatus(sid, status, requestSeq) {
   // poll's snapshot can predate an unread_changed broadcast or a
   // running_changed frame the page already rendered.
   if (replyIsCurrent('unread', sid, requestSeq)) recordUnreadFact(sid, status.has_unread);
-  // The paused-worker fact lands before the repaint below reads it; the poll
+  // The waiting fact repaints the row and its ancestors: their subtree marks read it.
+  if (replyIsCurrent('waiting', sid, requestSeq)) {
+    recordWaitingFact(sid, renderedSessionStatuses[sid] !== 'archived' && status.has_waiting_items);
+    refreshSessionIndicator(sid);
+  }
+  // The paused-worker fact lands before the repaint below reads it. The poll
   // reply carries no profile, so the worker identity comes from the list
   // paint's renderedWorkerRows.
   recordPausedWorkerFact(sid, renderedWorkerRows.has(sid), !!(status && status.has_pending_trigger));
@@ -640,14 +706,10 @@ function anyRunningSession() {
 
 function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
-  // An open's catch-up owns the link until its socket replay lands. The poll's row set is a download beside that
-  // replay: on the poor-network bench's B open the first poll after the list copy paints named every row of the
-  // filter at 3.3 s (3.4 KB before the open's newest message). The first tick after the catch-up ends polls again.
-  if (statusPollHeld()) return Promise.resolve(anyRunningSession());
   statusPollInflight = true;
   const requestSeq = factSeqAtRequest();
   const ids = sidebarSessionIds();
-  // A poll scoped by filter answers a delta; a row the page has never held would not be in it, so a new id asks for
+  // A poll scoped by filter answers a delta. A row the page has never held would not be in it, so a new id asks for
   // the whole set once. The views that name their rows by id answer them in full anyway.
   const scoped = sidebarRowsRefreshable();
   const since = scoped && ids.every(sid => sid in appliedSessionStatus) ? statusPollToken : '';
@@ -680,9 +742,10 @@ const API = {
   updateSidebarSessionName,
   getSessionIndicatorState,
   renderSessionIndicators,
+  renderWaitingMarks,
   recordUnreadFact,
-  applyUnreadReply,
-  forgetUnreadFact,
+  applyListingFacts,
+  forgetSessionFacts,
   factSeqAtRequest,
   replyIsCurrent,
   renderPendingTriggerIndicator,

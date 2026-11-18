@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // The core registration entries a package page part uses: registerTab
 // (tabs.js), registerWsMessageHandler (websocket.js),
-// Chat.registerMessagePostProcessor (chat/rendering.js) and
-// Chat.registerFileLinkFamily (chat/file-links.js). Each package registers its
-// tab, its event types and its chat rendering through them, so deleting a
-// package leaves no name of it in the core files.
+// Chat.registerMessagePostProcessor and Chat.registerMessageRoleRenderer
+// (chat/rendering.js) and Chat.registerFileLinkFamily (chat/file-links.js).
+// Each package registers its tab, its event types and its chat rendering
+// through them, so deleting a package leaves no name of it in the core files.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -217,6 +217,17 @@ test('a registered message post-processor runs over each rendered root', () => {
   assert.deepEqual(seen, ['root-1']);
   assert.throws(() => context.Chat.registerMessagePostProcessor(processor), /Duplicate message post-processor/);
   assert.throws(() => context.Chat.registerMessagePostProcessor(null), /Invalid message post-processor/);
+});
+
+test('a registered message role renders through its renderer, and an unknown role fails loudly', () => {
+  const context = loadChatRendering();
+  context.Chat.registerMessageRoleRenderer('pkg_message', () => '<div class="pkg"></div>');
+
+  assert.equal(context.renderMessage({role: 'pkg_message'}, 'sess-1'), '<div class="pkg"></div>');
+  assert.throws(
+    () => context.renderMessage({role: 'pkg_unrendered'}, 'sess-1'),
+    /Unknown message role: pkg_unrendered/,
+  );
 });
 
 test('the artifacts package registers its cards and its file link family', () => {

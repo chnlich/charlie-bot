@@ -383,8 +383,8 @@ See `charliebot --help` for CLI subcommands.
 Cron tasks live in `$CHARLIEBOT_HOME/config.d/cron.d/` (one file per job; manage through the
 `/api/cron` API; operational notes in the `charliebot` skill). Call `/api/cron` with your run
 token (`CHARLIEBOT_RUN_TOKEN`), the credential of this agent run. The access key is the user's credential.
-To run a scheduled task once now, POST `/api/cron/tasks/{name}/run`. The run takes the scheduled path and
-writes no chat event. To stop this session's improve loop, run `charliebot improve stop`.
+Each fire of a `prompt_file` cron task that the server does not skip reaches its bound session as a `[Scheduled trigger]` input. A `mode: master` task's input is its own prompt. Any other `prompt_file` task's input names the task on its first line and carries a category template. The session decides whether, when and with what note to run that task, through `charliebot delegate --bound-task <name>`; to run it later, it registers a delay with `charliebot session trigger`. The server skips a fire while an input, or a worker that an earlier fire or a `--bound-task` delegation started, is queued or running; while the task's host awaits login approval; or while the bound session is archived. A skipped fire records its reason and wakes no session. When the server cannot read the task's template, it also posts an error to the bound session.
+To run a scheduled task once now, POST `/api/cron/tasks/{name}/run`. A run of a `prompt_file` task queues its input behind the current turn and has no busy check. A run of a `steps` task writes no chat event. To stop this session's improve loop, run `charliebot improve stop`.
 To stop a running worker child, run `charliebot session cancel <worker id> --reason <text>`.
 The command stops the worker's runs and ends the delegation.
 A message from `charliebot session send` reaches a worker only after its current run ends.

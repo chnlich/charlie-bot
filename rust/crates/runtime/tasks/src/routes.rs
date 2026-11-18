@@ -18,12 +18,14 @@ use charliebot_core::config::CallClass;
 use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
+use charliebot_registry::registry::{ScheduledKind, ScheduledRoundStart};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD, SessionMetadata,
-  TASK_TYPE_FIELD, TaskProfile, TaskSpec, TaskType,
+  BASE_BRANCH_FIELD, COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD,
+  ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD, SessionMetadata, TASK_TYPE_FIELD, TaskProfile,
+  TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError, TaskCaller};
@@ -77,6 +79,8 @@ pub const DELEGATE_TASK_SPEC_FILE_FIELD: &str = "task_spec_file";
 pub const DELEGATE_REVIEWER_CONTEXT_FILE_FIELD: &str = "reviewer_context_file";
 pub const DELEGATE_BACKEND_FIELD: &str = "backend";
 pub const DELEGATE_REQUEST_ID_FIELD: &str = "request_id";
+/// The scheduled task whose round a delegation starts in its bound session.
+pub const DELEGATE_BOUND_TASK_FIELD: &str = "bound_task";
 
 /// The archive request's flag for archiving a parent task's children too. The route validates it and the CLI sets it,
 /// so the name is spelled once, here.
@@ -155,11 +159,11 @@ const DELEGATE_TASK_TYPE: &[&str] = TaskType::NAMES;
 pub const COLD_READ_SPEC_CLASS_NAME: &str = "ColdReadSpec";
 
 /// The fields of the store's `ColdReadSpec` model. The delegate route requires the model and the session create route
-/// accepts it as optional, so both read this one field list.
+/// accepts it as optional, so both read this one field list, and each field's name comes from the model's owner.
 pub const COLD_READ_FIELDS: &[Field] = &[
-  Field::required("page_path", FieldType::String),
-  Field::required("genre", FieldType::String),
-  Field::required("trigger", FieldType::String),
+  Field::required(COLD_READ_PAGE_PATH_FIELD, FieldType::String),
+  Field::required(COLD_READ_GENRE_FIELD, FieldType::String),
+  Field::required(COLD_READ_TRIGGER_FIELD, FieldType::String),
 ];
 const COLD_READ_BODY: BodyModel = BodyModel::required(COLD_READ_FIELDS).forbid_extra();
 const DELEGATE_INVOCATION_FIELDS: &[Field] = &[
@@ -186,11 +190,24 @@ const DELEGATE_BODY_FIELDS: &[Field] = &[
   ),
   Field::optional(DELEGATE_REQUEST_ID_FIELD, FieldType::NullableString),
   Field::optional(
-    "cold_read",
+    COLD_READ_FIELD,
     FieldType::NullableModel { class_name: COLD_READ_SPEC_CLASS_NAME, model: &COLD_READ_BODY },
   ),
+  Field::optional(DELEGATE_BOUND_TASK_FIELD, FieldType::NullableString),
 ];
 const DELEGATE_BODY: BodyModel = BodyModel::required(DELEGATE_BODY_FIELDS);
+/// The fields a bound delegation refuses when the request carries them, present or null. Each one has a default in
+/// the unbound path, so its presence is read from the body before the default is filled in.
+const BOUND_REFUSED_FIELDS: &[&str] = &[
+  DELEGATE_BACKEND_FIELD,
+  DELEGATE_TASK_TYPE_FIELD,
+  KEEP_WORKTREE_FIELD,
+  DELEGATE_REPO_PATH_FIELD,
+  DELEGATE_BASE_BRANCH_FIELD,
+  DELEGATE_REQUEST_ID_FIELD,
+  event_types::DELEGATE_INVOCATION,
+  COLD_READ_FIELD,
+];
 
 struct DelegateRequest {
   session_id: String,
@@ -203,6 +220,9 @@ struct DelegateRequest {
   delegate_invocation: Option<Value>,
   request_id: Option<String>,
   cold_read: Option<ColdReadSpec>,
+  bound_task: Option<String>,
+  /// The `BOUND_REFUSED_FIELDS` the body carries.
+  sent_refused_fields: Vec<&'static str>,
 }
 
 fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Response>> {
@@ -213,9 +233,10 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
     None => TaskType::Implement,
   };
   let cold_read = values
-    .get("cold_read")
+    .get(COLD_READ_FIELD)
     .filter(|value| !value.is_null())
     .map(|value| serde_json::from_value(value.clone()).expect("validated cold_read matches ColdReadSpec"));
+  let sent_refused_fields = BOUND_REFUSED_FIELDS.iter().copied().filter(|field| values.get(field).is_some()).collect();
   Ok(DelegateRequest {
     session_id: values[DELEGATE_SESSION_ID_FIELD].as_str().expect("validated session_id is a string").to_string(),
     description: values[DELEGATE_DESCRIPTION_FIELD].as_str().expect("validated description is a string").to_string(),
@@ -227,6 +248,8 @@ fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Res
     delegate_invocation: values.get(event_types::DELEGATE_INVOCATION).filter(|value| !value.is_null()).cloned(),
     request_id: optional_string(&values, DELEGATE_REQUEST_ID_FIELD),
     cold_read,
+    bound_task: optional_string(&values, DELEGATE_BOUND_TASK_FIELD),
+    sent_refused_fields,
   })
 }
 
@@ -235,6 +258,18 @@ fn optional_string(values: &Value, key: &str) -> Option<String> {
 }
 
 fn delegate_field_contract(request: &DelegateRequest) -> Result<(), String> {
+  if request.bound_task.is_some() {
+    if !request.sent_refused_fields.is_empty() {
+      return Err(format!("a bound delegation takes no {}", request.sent_refused_fields.join(", ")));
+    }
+    return Ok(());
+  }
+  if request.request_id.as_deref().is_some_and(|id| id.starts_with(control_events::CRON_REQUEST_ID_PREFIX)) {
+    return Err(format!(
+      "a request id starting with {} belongs to a scheduled task's round; delegate with bound_task instead",
+      control_events::CRON_REQUEST_ID_PREFIX
+    ));
+  }
   let task_type = request.task_type.as_str();
   if request.task_type == TaskType::ColdRead && request.cold_read.is_none() {
     return Err("cold-read delegations require cold_read".to_string());
@@ -326,6 +361,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
 
   if let Err(error) = features.store.check_task_authorization(&request.session_id) {
     return task_http_error(error);
+  }
+  if request.bound_task.is_some() {
+    return match delegate_bound_round(&features, &request, &caller_identity).await {
+      Ok(response) => responses::json(StatusCode::OK, &response),
+      Err(error) => delegate_error_response(error),
+    };
   }
   let task_spec = delegate_task_spec(&request);
   let cfg = match features.config.get() {
@@ -431,11 +472,18 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
   };
   match delegate_task_tree(&features, &request, &caller_identity, &task_spec, &subagent, route.as_ref()).await {
     Ok(response) => responses::json(StatusCode::OK, &response),
-    Err(DelegateError::Task(error)) => task_http_error(error),
-    Err(DelegateError::Internal(error)) => responses::internal_error("RuntimeError", error),
-    Err(DelegateError::AdapterMissing) => {
+    Err(error) => delegate_error_response(error),
+  }
+}
+
+fn delegate_error_response(error: DelegateError) -> Response {
+  match error {
+    DelegateError::Task(error) => task_http_error(error),
+    DelegateError::Internal(error) => responses::internal_error("RuntimeError", error),
+    DelegateError::AdapterMissing => {
       responses::json(StatusCode::SERVICE_UNAVAILABLE, &json!({ "detail": "task execution adapter is not installed" }))
     }
+    DelegateError::Refused(status, detail) => responses::json(status, &json!({ "detail": detail })),
   }
 }
 
@@ -443,6 +491,149 @@ enum DelegateError {
   Task(charliebot_store::StoreError),
   Internal(String),
   AdapterMissing,
+  /// A bound delegation the server refuses, with its status and the detail it answers.
+  Refused(StatusCode, String),
+}
+
+/// The task caller that a delegation's identity makes.
+fn task_caller(caller_identity: &CallerIdentity) -> TaskCaller {
+  match caller_identity {
+    CallerIdentity::Operator { .. } => TaskCaller::Operator,
+    CallerIdentity::Agent { claims } => TaskCaller::Agent { session_id: claims.session_id.clone() },
+  }
+}
+
+/// A bound delegation: the round of a prompt task that the calling session binds. The task's kind, session, note and
+/// host hold are checked first, each answering its refusal. The one-round check, the worker's creation and its run
+/// registration then share the tree control lock, so a second delegation of the task cannot start between them.
+async fn delegate_bound_round(
+  features: &FeatureContext,
+  request: &DelegateRequest,
+  caller_identity: &CallerIdentity,
+) -> Result<Value, DelegateError> {
+  let bound_task = request.bound_task.as_deref().expect("a bound delegation names its task");
+  let readers = features.registry.bound_round_readers().map_err(|error| DelegateError::Internal(error.to_string()))?;
+  let internal = |error: anyhow::Error| DelegateError::Internal(format!("{error:#}"));
+  let binding = (readers.binding)(features, bound_task).await.map_err(internal)?.ok_or_else(|| {
+    DelegateError::Refused(StatusCode::NOT_FOUND, format!("scheduled task {bound_task} does not exist"))
+  })?;
+  if binding.session_id.as_deref() != Some(request.session_id.as_str()) {
+    return Err(DelegateError::Refused(
+      StatusCode::FORBIDDEN,
+      format!("scheduled task {bound_task} is not bound to session {}", request.session_id),
+    ));
+  }
+  let kind_refusal = match binding.kind {
+    ScheduledKind::Prompt => None,
+    ScheduledKind::Master => Some("a mode: master task takes no bound delegation: its prompt goes to its session"),
+    ScheduledKind::Steps => Some("a steps task takes no bound delegation: the server runs its steps"),
+    ScheduledKind::Handler => Some("a handler task takes no bound delegation: the server runs its handler"),
+  };
+  if let Some(reason) = kind_refusal {
+    return Err(DelegateError::Refused(StatusCode::BAD_REQUEST, format!("scheduled task {bound_task}: {reason}")));
+  }
+  let note = Some(request.description.as_str()).filter(|note| !note.is_empty());
+  if note.is_some() && !binding.has_repo {
+    return Err(DelegateError::Refused(
+      StatusCode::BAD_REQUEST,
+      format!("scheduled task {bound_task} has no repo: a session note needs a repo task"),
+    ));
+  }
+  if let Some(reason) = binding.host_hold {
+    return Err(DelegateError::Refused(StatusCode::CONFLICT, reason));
+  }
+  // A round in flight is refused before a member of the pool is selected; the same check runs again under the lock.
+  if let Some(worker) = (readers.round_in_flight)(features, bound_task, &request.session_id).map_err(internal)? {
+    return Err(round_in_flight_refusal(bound_task, &worker));
+  }
+  let round = match (readers.round)(features, bound_task, note).await.map_err(internal)? {
+    ScheduledRoundStart::Ready(round) => round,
+    ScheduledRoundStart::Exhausted(message) => return Err(DelegateError::Refused(StatusCode::CONFLICT, message)),
+  };
+  let guard = features.store.control_lock().await;
+  if let Some(worker) = (readers.round_in_flight)(features, bound_task, &request.session_id).map_err(internal)? {
+    return Err(round_in_flight_refusal(bound_task, &worker));
+  }
+  let child = features
+    .store
+    .create_task_locked(
+      &guard,
+      CreateTask {
+        request_id: round.request_id.clone(),
+        task_parent_id: Some(request.session_id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(round.task_spec.clone()),
+        name: None,
+        backend: round.session_backend.clone(),
+        group: None,
+        session_id: None,
+      },
+      task_caller(caller_identity),
+      Default::default(),
+    )
+    .await?;
+  if round.session_backend.is_some() {
+    let member = serde_json::Map::from_iter([(model_pool::POOL_MEMBER_FIELD.to_string(), json!(round.run_backend))]);
+    features.store.update_task_slot_fields_locked(&guard, &child.id, model_pool::OWNER, member).await?;
+  }
+  let run_id = control_events::stable_run_id(&child.id, &format!("{}:work", round.request_id));
+  let record = charliebot_store::RunRecord {
+    id: run_id.clone(),
+    session_id: child.id.clone(),
+    kind: charliebot_store::RunKind::Work,
+    input_event_ids: Vec::new(),
+    task_spec_hash: None,
+    task_spec_ref: None,
+    prompt_snapshot_ref: None,
+    retry_of_run_id: None,
+    review_of_run_id: None,
+    backend: Some(round.run_backend.clone()),
+    model: round.model.clone(),
+    native_session_id: None,
+    pid: None,
+    pid_start: None,
+    started_at: None,
+    ended_at: None,
+    exit_code: None,
+    repo_path: round.task_spec.repo_path.clone(),
+    base_branch: None,
+    branch_name: None,
+    worktree_path: None,
+    sequence_ref: None,
+    raw_log_ref: None,
+    events_ref: None,
+    result_ref: None,
+  };
+  let task_spec_text = crate::execution::canonical_task_spec_text(Some(&round.task_spec))
+    .map_err(|error| DelegateError::Internal(error.to_string()))?;
+  features.store.register_run_locked(&guard, &child.id, record, task_spec_text.as_deref()).await?;
+  drop(guard);
+  let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(|_| DelegateError::AdapterMissing)?;
+  adapter.launch(&child.id, &run_id)?;
+  let task_event = json!({
+    "type": event_types::TASK_DELEGATED,
+    "thread_id": run_id,
+    "description": request.description,
+    "backend": round.run_backend,
+    "model": round.model.as_deref().unwrap_or_default(),
+    "child_session_id": child.id,
+  });
+  features.store.persist_and_broadcast(&request.session_id, task_event).await?;
+  tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, bound_task, "task_delegated_bound_round");
+  Ok(json!({
+    "session_id": child.id,
+    PARENT_SESSION_ID: request.session_id,
+    "run_id": run_id,
+    "thread_id": run_id,
+    "description": request.description,
+  }))
+}
+
+fn round_in_flight_refusal(bound_task: &str, worker: &str) -> DelegateError {
+  DelegateError::Refused(
+    StatusCode::CONFLICT,
+    format!("a round of scheduled task {bound_task} is in flight in worker {worker}; it starts nothing new"),
+  )
 }
 
 impl From<charliebot_store::StoreError> for DelegateError {
@@ -459,10 +650,7 @@ async fn delegate_task_tree(
   subagent: &SubagentBackend,
   route: Option<&BackendRoute>,
 ) -> Result<Value, DelegateError> {
-  let caller = match caller_identity {
-    CallerIdentity::Operator { .. } => TaskCaller::Operator,
-    CallerIdentity::Agent { claims } => TaskCaller::Agent { session_id: claims.session_id.clone() },
-  };
+  let caller = task_caller(caller_identity);
   let request_id = delegate_request_id(request);
   let name = if request.task_type == TaskType::ColdRead {
     let path = request.cold_read.as_ref().expect("cold-read field contract was checked").page_path.as_str();
@@ -994,7 +1182,7 @@ async fn cancel_run(
 const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::optional("summary", FieldType::String),
-  Field::optional("result_refs", FieldType::StringList),
+  Field::optional(event_types::RESULT_REFS, FieldType::StringList),
   Field::optional("run_ids", FieldType::StringList),
   Field::optional(ARCHIVE_NON_CHILD_FIELD, FieldType::Boolean),
 ]);
@@ -1074,7 +1262,7 @@ async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Requ
   };
   let evidence = CompletionEvidence {
     summary: optional_validated_string(&fields, "summary"),
-    result_refs: optional_validated_string_list(&fields, "result_refs"),
+    result_refs: optional_validated_string_list(&fields, event_types::RESULT_REFS),
     run_ids: optional_validated_string_list(&fields, "run_ids"),
     ..CompletionEvidence::default()
   };
@@ -1585,6 +1773,30 @@ mod tests {
     )
     .await;
     assert_eq!(unknown_session.status(), StatusCode::NOT_FOUND);
+  }
+
+  #[tokio::test]
+  async fn a_bound_delegation_refuses_each_field_the_unbound_path_defaults_and_a_cron_id_outside_one() {
+    let (_home, features) = feature_context();
+    let router = routes(&features);
+    for field in [
+      r#""backend":null"#,
+      r#""task_type":"implement""#,
+      r#""keep_worktree":false"#,
+      r#""repo_path":null"#,
+      r#""base_branch":null"#,
+      r#""request_id":"synthetic""#,
+      r#""delegate_invocation":null"#,
+      r#""cold_read":null"#,
+    ] {
+      let body = format!(r#"{{"session_id":"synthetic-missing","description":"","bound_task":"synthetic",{field}}}"#);
+      let response =
+        send_operator(&router, "/api/internal/delegate", body.into_bytes(), Some("application/json")).await;
+      assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{field}");
+    }
+    let cron_id = br#"{"session_id":"synthetic-missing","description":"synthetic","request_id":"cron:synthetic:2026-11-18T00:00:00.000000+00:00:leaf"}"#;
+    let response = send_operator(&router, "/api/internal/delegate", cron_id.to_vec(), Some("application/json")).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
   }
 
   #[tokio::test]

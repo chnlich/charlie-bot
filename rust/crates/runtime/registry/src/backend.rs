@@ -65,6 +65,7 @@ impl Registry {
       backend_cli_binaries: crate::registry::Ledger::new("backend launcher binary"),
       host_logins: crate::registry::Ledger::new("host login reader"),
       host_probes: crate::registry::Ledger::new("host probe"),
+      bound_rounds: crate::registry::Ledger::new("bound round readers"),
       fork_assertions: crate::registry::Ledger::new("fork assertions"),
       user_dm: crate::registry::Ledger::new("user dm"),
       owner_dm: crate::registry::Ledger::new("owner dm"),

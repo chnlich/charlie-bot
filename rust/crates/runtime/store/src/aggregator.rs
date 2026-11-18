@@ -171,7 +171,7 @@ impl MessageAggregator {
     let mut message = json!({
       "role": "assistant",
       "content": self.assistant_buf.as_str(),
-      "event_index": self.last_event_index,
+      (event_types::EVENT_INDEX): self.last_event_index,
       "id": self.last_event_id.clone().unwrap_or_else(|| format!("legacy:{}", self.last_event_index)),
       "timestamp": self.last_assistant_timestamp.clone().unwrap_or(Value::Null),
     });
@@ -195,7 +195,7 @@ impl MessageAggregator {
   }
 
   /// Set whether a committed draft leaves out the text already sent in stream frames. The live feed sets this,
-  /// so a page that holds the draft is not sent it twice; a replay keeps the full text for a page that missed it.
+  /// so a page that holds the draft is not sent it twice. A replay keeps the full text for a page that missed it.
   pub fn set_omit_streamed_content(&mut self, omit: bool) {
     self.omit_streamed_content = omit;
   }
@@ -251,7 +251,7 @@ impl MessageAggregator {
         .field(event_types::INPUT_MODE)
         .map(EventFields::to_owned_value)
         .unwrap_or(Value::Null),
-      "event_index": index,
+      (event_types::EVENT_INDEX): index,
       "id": event_id,
       "timestamp": event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null),
     });
@@ -292,7 +292,7 @@ impl MessageAggregator {
           let mut plan_message = json!({
             "role": "plan",
             "content": plan,
-            "event_index": index,
+            (event_types::EVENT_INDEX): index,
             "id": event_id,
             "timestamp": event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null),
           });
@@ -302,7 +302,7 @@ impl MessageAggregator {
           let plan_message = json!({
             "role": "plan",
             "content": self.assistant_buf,
-            "event_index": index,
+            (event_types::EVENT_INDEX): index,
             "id": event_id,
             "timestamp": self.last_assistant_timestamp.clone().unwrap_or(Value::Null),
           });
@@ -560,7 +560,7 @@ impl MessageAggregator {
       return Vec::new();
     }
     let append = self.assistant_buf[self.streamed_text_bytes..].to_string();
-    // An assistant event may replace the thinking instead of extending it; a replacement resends it whole.
+    // An assistant event may replace the thinking instead of extending it. A replacement resends it whole.
     let thinking_extends = self.thinking_buf.starts_with(self.streamed_thinking.as_str());
     let thinking_append = if thinking_extends {
       self.thinking_buf[self.streamed_thinking.len()..].to_string()
@@ -574,7 +574,7 @@ impl MessageAggregator {
     if append.is_empty() && thinking_append.is_empty() && tools_from.is_none() {
       return Vec::new();
     }
-    let mut frame = json!({"type": "stream", "event_index": self.current_index});
+    let mut frame = json!({"type": "stream", (event_types::EVENT_INDEX): self.current_index});
     if !append.is_empty() {
       self.streamed_text_bytes = self.assistant_buf.len();
       self.streamed_text_utf16 += append.encode_utf16().count();
@@ -604,7 +604,7 @@ impl MessageAggregator {
 }
 
 /// The index of the first row of `current` that the rows streamed so far do not hold, when the rows changed. Rows
-/// never streamed start the suffix at 0; a draft whose rows equal the streamed ones changed none; rows only ever
+/// never streamed start the suffix at 0. A draft whose rows equal the streamed ones changed none. Rows only ever
 /// grow or change in place between commits, so a suffix that would shrink has no case.
 fn first_changed_row(streamed: Option<&Value>, current: Option<&Value>) -> Option<usize> {
   let Some(current_rows) = current.and_then(Value::as_array) else { return streamed.is_some().then_some(0) };
@@ -760,7 +760,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     event_types::QUOTA_FAILOVER => {
       let from_backend = string_default(event, "from", "");
       let to_backend = string_default(event, "to", "");
-      let recovers_at = event.field("recovers_at").filter(|value| is_truthy(*value));
+      let recovers_at = event.field(event_types::QUOTA_FAILOVER_RECOVERS_AT).filter(|value| is_truthy(*value));
       let recovery =
         recovers_at.map_or_else(String::new, |value| format!("; {from_backend} recovers at {}", event_str(value)));
       let reason = event.field(event_types::QUOTA_FAILOVER_REASON).and_then(EventFields::as_str_field);
@@ -821,7 +821,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       "content": event.field("summary").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       "child_session_id": event.field("child_session_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       "outcome": event.field("outcome").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-      "result_refs": event.field("result_refs").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
+      (event_types::RESULT_REFS): event.field(event_types::RESULT_REFS).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
     }),
     event_types::RUN_HEADER => render_run_header(event)?,
     event_types::RUN_END => json!({
@@ -855,7 +855,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         "content": event.field("summary").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         TASK_STATE: task_state,
         "completed": event.field(TASK_STATE).and_then(EventFields::as_str_field) == Some("completed"),
-        "result_refs": event.field("result_refs").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
+        (event_types::RESULT_REFS): event.field(event_types::RESULT_REFS).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
         "raw_log_ref": event.field("raw_log_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "events_ref": event.field("events_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "result_ref": event.field("result_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
@@ -933,7 +933,7 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
   let state = event.field("state").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
   let state_word = if state == "withheld" && event.field("withheld").is_some_and(is_truthy) {
     format!("withheld · {}", event_str(event.field("withheld").expect("checked field")))
-  } else if is_truthy(required_field(event, "launch_failed")?) {
+  } else if is_truthy(required_field(event, event_types::LAUNCH_FAILED)?) {
     "launch failed".to_string()
   } else {
     state.clone()
@@ -959,8 +959,8 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
     "error": event.field("error").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
     "tool_calls": event.field("tool_calls").map(EventFields::to_owned_value).unwrap_or(Value::Null),
     "launched": required_field(event, "launched")?.to_owned_value(),
-    "launch_failed": required_field(event, "launch_failed")?.to_owned_value(),
-    "task_spec_ref": required_field(event, "task_spec_ref")?.to_owned_value(),
+    (event_types::LAUNCH_FAILED): required_field(event, event_types::LAUNCH_FAILED)?.to_owned_value(),
+    (event_types::TASK_SPEC_REF): required_field(event, event_types::TASK_SPEC_REF)?.to_owned_value(),
     (event_types::LAUNCH_PROMPT_REF): required_field(event, event_types::LAUNCH_PROMPT_REF)?.to_owned_value(),
   }))
 }
@@ -1178,7 +1178,7 @@ fn add_message_metadata<E: EventFields>(
   message
     .entry("timestamp".to_string())
     .or_insert_with(|| event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null));
-  message.insert("event_index".to_string(), json!(index));
+  message.insert(event_types::EVENT_INDEX.to_string(), json!(index));
   message.insert("id".to_string(), json!(event_id));
   Ok(())
 }
@@ -1276,7 +1276,7 @@ fn parse_int_string(value: &str) -> Option<String> {
   Some(if negative { format!("-{digits}") } else { digits.to_string() })
 }
 
-/// The text of a field value. A string is read in place; other shapes take the text `text_repr::value_str` renders.
+/// The text of a field value. A string is read in place. Other shapes take the text `text_repr::value_str` renders.
 fn event_str<E: EventFields>(value: &E) -> String {
   match value.as_str_field() {
     Some(text) => text.to_string(),
@@ -1342,7 +1342,7 @@ mod tests {
 
   /// The fixture's stream frames are whole-draft snapshots, which is the wire form of the Python aggregator
   /// they were recorded from. The live feed carries only new text, so the appends are accumulated here and the
-  /// draft at each frame must equal that frame's snapshot; every other frame must match exactly.
+  /// draft at each frame must equal that frame's snapshot. Every other frame must match exactly.
   fn assert_parity_frames(actual: Vec<Value>, expected: &[Value], case: &str) {
     let expected = without_repeated_snapshots(expected);
     let mut actual = actual.into_iter();
@@ -1368,7 +1368,7 @@ mod tests {
         thinking = extend_streamed(&thinking, append, frame["thinking_length"].as_u64());
       }
       if let Some(frame_tools) = frame.get("tools") {
-        // A live frame carries the rows from `tools_from` on; the page keeps the rows before it.
+        // A live frame carries the rows from `tools_from` on. The page keeps the rows before it.
         tools = match frame["tools_from"].as_u64() {
           Some(from) => {
             let mut held = tools.as_array().cloned().unwrap_or_default();

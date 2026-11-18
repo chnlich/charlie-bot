@@ -51,26 +51,24 @@ function deliver(socket, frames) {
 const REPLY = 'Here is the answer.';
 const PIECES = ['Here is ', 'the answer.'];
 
-// The live frames of one turn: the user message, then each streamed piece and its commit, then the
-// separator. A commit carries no text: the page holds that piece from its append.
+// The live frames of one turn, as the server sends them: the user message, then one stream frame per streamed
+// piece. Each piece's commit rides the frame after it in its event: the second piece's stream frame carries the
+// first piece's commit, and master_done carries the second's and draws the separator. A commit carries no text:
+// the page holds that piece from its append.
 function liveFrames() {
   const frames = [{type: 'message', message: {role: 'user', content: 'q1', event_index: 0}}];
+  const commit = (index) => ({id: `draft-${index}`, timestamp: `t${index}`, event_index: index});
   PIECES.forEach((piece, index) => {
     const eventIndex = index + 1;
-    frames.push({type: 'stream', append: piece, length: piece.length, event_index: eventIndex});
-    frames.push({
-      type: 'message',
-      message: {
-        role: 'assistant',
-        content_streamed: true,
-        event_index: eventIndex,
-        id: `draft-${eventIndex}`,
-        timestamp: `t${eventIndex}`,
-      },
-    });
+    const frame = {type: 'stream', append: piece, length: piece.length, event_index: eventIndex};
+    if (index > 0) frame.commit = commit(index);
+    frames.push(frame);
   });
-  frames.push({type: 'message', message: {role: 'separator', event_index: PIECES.length + 1}});
-  frames.push({type: 'master_done', still_thinking: false, event_index: PIECES.length + 1});
+  const last = PIECES.length;
+  frames.push({
+    type: 'master_done', still_thinking: false, id: `round-${last + 1}`, timestamp: `t${last + 1}`,
+    event_index: last + 1, commit: commit(last),
+  });
   return frames;
 }
 
@@ -100,8 +98,8 @@ function renderUnsplit(frames) {
 function pendingDraftAt(frames, k) {
   let text = '';
   for (const frame of frames.slice(0, k)) {
-    if (frame.type === 'message' && frame.message.role !== 'user') text = '';
-    else if (frame.type === 'stream') text += frame.append;
+    if (frame.commit || (frame.type === 'message' && frame.message.role !== 'user')) text = '';
+    if (frame.type === 'stream') text += frame.append;
   }
   return text;
 }
@@ -165,12 +163,15 @@ test('a page that joins after the reply ended shows the full text', () => {
   assert.deepEqual(screen(client.bubbles, client.preview), ['assistant:' + REPLY]);
 });
 
+// A commit with no following frame in its event stays a message of its own, and it carries no text.
 test('a commit without its appends still commits what the page streamed', () => {
-  const frames = liveFrames().slice(0, 2);
   const client = buildClient();
   const socket = connect(client);
-  deliver(socket, frames);
-  deliver(socket, [liveFrames()[2]]);
+  deliver(socket, liveFrames().slice(0, 2));
+  deliver(socket, [{
+    type: 'message',
+    message: {role: 'assistant', content_streamed: true, event_index: 1, id: 'draft-1', timestamp: 't1'},
+  }]);
   assert.deepEqual(screen(client.bubbles, client.preview), ['user:q1', 'assistant:' + PIECES[0]]);
 });
 

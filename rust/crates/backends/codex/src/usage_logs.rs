@@ -11,11 +11,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use charliebot_agents::usage_time::timestamp_of;
 use charliebot_core::text_repr::value_str;
 use charliebot_core::timefmt;
 use charliebot_registry::usage::{
-  QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
+  QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl, timestamp_of,
 };
 use memchr::{memmem, memrchr};
 use serde_json::{Map, Value};

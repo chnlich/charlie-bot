@@ -42,7 +42,7 @@ async fn reply(State(features): State<Arc<FeatureContext>>, request: Request<Bod
   };
   let _config = match features.config.get() {
     Ok(config) => config,
-    Err(error) => return responses::internal_error("ConfigError", error.to_string()),
+    Err(error) => return responses::internal_error(responses::CONFIG_ERROR_CLASS, error.to_string()),
   };
   let model = match body.validate(&REPLY_BODY) {
     Ok(model) => model,
@@ -82,7 +82,7 @@ async fn ack(State(features): State<Arc<FeatureContext>>, request: Request<Body>
   };
   let _config = match features.config.get() {
     Ok(config) => config,
-    Err(error) => return responses::internal_error("ConfigError", error.to_string()),
+    Err(error) => return responses::internal_error(responses::CONFIG_ERROR_CLASS, error.to_string()),
   };
   let model = match body.validate(&SLACK_ACK_BODY) {
     Ok(model) => model,

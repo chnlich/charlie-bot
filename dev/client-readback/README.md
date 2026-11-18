@@ -14,6 +14,11 @@ address the server logged (`forwarded_for`), and prints per device:
 - `send click-to-echo` — p50/p90
 - `socket network disconnects` — count and the reconnect-wait p50/p90/max
   (switch-caused closes are excluded by the event's own `cause` field)
+- `socket wait-after-return` — the count and p50/p90/max of the wait after the
+  network returned, and `no-request`, the count of disconnects with no request
+  between the disconnect and the reconnect (see below)
+- `socket no-request raw-gap` — the count and p50/p90/max of disconnects whose
+  gap had no device request before the reconnect
 - `traffic` — received bytes per tab-hour by endpoint; a tab-hour is the
   tab-time the traffic events' `window_s` fields cover, so a tab that stayed
   hidden for hours still divides out
@@ -35,6 +40,32 @@ address the server logged (`forwarded_for`), and prints per device:
   the transfer time of the largest same-origin body. `link` is the median over
   the loads that carry both.
 
+## Wait after the network returns
+
+The reconnect-wait counts from the disconnect, so it includes the outage. The
+existing client socket diagnostic records when the socket opens and when
+catch-up completes; it has no network-return timestamp. The wait-after-return
+therefore uses the first request from that device that the server sees after
+the disconnect. For each network disconnect that has a `reconnect_at`:
+
+- the return is the first request from the same `forwarded_for` address that
+  arrives after `disconnect_at` and before `reconnect_at`;
+- the wait after return is `reconnect_at` minus that arrival.
+
+The request log writes its `http_request` line when the response finishes, so
+the arrival is the line's time less its `duration_ms`. The socket's own upgrade
+(a `/ws/` path) is the reconnect itself, not a return, so the readback never
+counts it. A disconnect with no request in its gap is counted as `no-request`.
+Its raw gap (`reconnect_at - disconnect_at`) is reported on the `socket
+no-request raw-gap` line. Since the wait-after-return starts at the first
+request the server sees, it omits any device-side wait before that request
+arrives.
+Each socket event is one sample, as in the reconnect-wait, so a disconnect the
+client logged more than once counts more than once. The request lines come from
+every log file, whatever the window, because a gap can end after the window's
+end. `reconnect_at` is the browser's clock and the arrival is the server's, so a
+clock offset between them shows up in the wait.
+
 ## Usage
 
 ```sh
@@ -46,5 +77,5 @@ node dev/client-readback/readback.mjs --from ... --to ... --device 100.64.0.8 <l
 The window bounds are the log's own timestamps. A percentile is the sorted
 sample's `floor(p * (n - 1))` element.
 
-The contract test `web/tests/client_readback.test.mjs` runs this script on a
-fixture log and checks every section's numbers.
+The contract test `web/tests/client_readback.integration.test.mjs` runs this
+script on fixture logs and checks every section's numbers.

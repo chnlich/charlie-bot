@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::str_methods;
 use unicode_width::UnicodeWidthChar;
 
-use crate::memory::{ENTRIES_DIRNAME, STAGING_DIRNAME, TOPICS_FILENAME, Topic, parse_topics_text, validate_entry};
+use crate::memory::{STAGING_DIRNAME, TOPICS_FILENAME, Topic, parse_topics_text, validate_entry};
 
 pub(super) const BODY_LINE_COLUMN_LIMIT: usize = 120;
 
@@ -59,35 +58,11 @@ fn load_topics_for_lint(path: &Path) -> Result<Result<BTreeMap<String, Topic>, S
 }
 
 pub(super) fn entry_files(root: &Path) -> Result<Vec<PathBuf>, CliExit> {
-  let entries_dir = root.join(ENTRIES_DIRNAME);
-  if !entries_dir.is_dir() {
-    return Ok(Vec::new());
-  }
-  let mut files = Vec::new();
-  for topic_dir in sorted_children(&entries_dir)? {
-    if topic_dir.is_dir() {
-      files.extend(sorted_markdown_files(&topic_dir)?);
-    }
-  }
-  Ok(files)
+  crate::memory::iter_entry_files(root).map_err(|error| CliExit::error(format!("{error:#}")))
 }
 
 pub(super) fn sorted_markdown_files(directory: &Path) -> Result<Vec<PathBuf>, CliExit> {
-  Ok(
-    sorted_children(directory)?
-      .into_iter()
-      .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".md")))
-      .collect(),
-  )
-}
-
-fn sorted_children(directory: &Path) -> Result<Vec<PathBuf>, CliExit> {
-  let mut paths = fs::read_dir(directory)
-    .map_err(|error| CliExit::error(format!("list {}: {error}", directory.display())))?
-    .map(|entry| entry.map(|entry| entry.path()).map_err(|error| CliExit::error(error.to_string())))
-    .collect::<Result<Vec<_>, _>>()?;
-  paths.sort();
-  Ok(paths)
+  crate::memory::sorted_markdown_files(directory).map_err(|error| CliExit::error(format!("{error:#}")))
 }
 
 fn width_warnings(root: &Path, files: &[PathBuf]) -> Result<Vec<String>, CliExit> {
@@ -124,12 +99,13 @@ pub(super) fn display_width(line: &str) -> usize {
 }
 
 pub(super) fn read_text(path: &Path) -> Result<String, CliExit> {
-  let text = fs::read_to_string(path).map_err(|error| CliExit::error(format!("read {}: {error}", path.display())))?;
-  Ok(str_methods::universal_newlines(&text))
+  crate::memory::read_text(path).map_err(|error| CliExit::error(format!("{error:#}")))
 }
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
+
   use super::*;
 
   #[test]

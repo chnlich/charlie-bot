@@ -51,7 +51,7 @@ pub struct TurnRecord {
   pub model_limit: Option<Map<String, Value>>,
 }
 
-/// Invoke the relay subcommand before the server initializes its runtime.
+/// The relay subcommand's entry point, called before the server initializes its runtime.
 pub fn run_args(args: &[OsString]) -> anyhow::Result<()> {
   let [directory, parent_pid, parent_start] = args else {
     bail!("OpenCode relay needs a run directory, parent pid, and parent pid start");
@@ -146,7 +146,7 @@ pub fn server_directory() -> anyhow::Result<PathBuf> {
   Ok(home::charliebot_home_dir()?.join(home::OPENCODE_DIR_NAME).join(SERVER_DIRECTORY_NAME))
 }
 
-/// Pin a process identity for the relay's parent-death check.
+/// A pinned process identity for the relay's parent-death check.
 pub fn parent_identity() -> anyhow::Result<ProcessIdentity> {
   let identity = pin_process_identity(std::process::id());
   if identity.pid_start.is_none() {

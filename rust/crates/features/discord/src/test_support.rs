@@ -368,7 +368,7 @@ impl Home {
     self.features.store.create_task(request, TaskCaller::Operator, slots).await.expect("the session is created")
   }
 
-  /// Appends one chat event and returns it with its stamped id.
+  /// One chat event appended, returned with its stamped id.
   pub async fn append(&self, session_id: &str, event: Value) -> Value {
     self.features.store.persist_and_broadcast(session_id, event).await.expect("the chat event appends").to_value()
   }

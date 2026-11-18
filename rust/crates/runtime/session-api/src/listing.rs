@@ -16,15 +16,15 @@ use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS,
   RUN_BACKEND, SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
-  THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
+  TASK_PARENT_ID_FIELD, THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
 
-use crate::sidebar;
 pub use crate::sidebar::DerivedSidebarMap;
+use crate::sidebar::{self, SidebarFields};
 
 /// The fields one sidebar row renders: which derived facts it carries and whether it names the run's backend.
 #[derive(Clone, Copy)]
@@ -202,7 +202,7 @@ impl ActiveCorpusEntry {
   }
 }
 
-/// Fetch active, non-scheduled sessions, their sidebar overlays and their controller row fields.
+/// The active, non-scheduled sessions with their sidebar overlays and controller row fields.
 pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<ListingCorpus> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
@@ -223,7 +223,13 @@ pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> St
     return Ok(ListingCorpus { rows: rows.as_ref().clone(), derived, sequence_fields });
   }
   let listed = store.list_sessions(Some(SessionStatus::Active), None, Some(false))?;
-  let derived = sidebar::resolve_sidebar_state(store, registry, &listed.rows, true, true, true, false)?;
+  let derived = sidebar::resolve_sidebar_state(
+    store,
+    registry,
+    &listed.rows,
+    SidebarFields { running: true, trigger: true, plan: true, waiting: false },
+    false,
+  )?;
   // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so the build
   // itself can move an input. A build that moved one stores nothing: its overlays were read under the older
   // generation, and the next request rebuilds them under the newer one and stores them.
@@ -328,7 +334,7 @@ impl PageCorpusEntry {
   }
 }
 
-/// Read the sidebar corpus without rendering a row. A memo hit still polls the sidebar state, because the periodic
+/// The sidebar corpus read without rendering a row. A memo hit still polls the sidebar state, because the periodic
 /// self-heal sweep is what catches an edit from outside the server.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
   let corpus = page_corpus(store, registry)?;
@@ -490,6 +496,9 @@ pub const STARRED_PROJECTION: SidebarProjection = SidebarProjection {
 pub(crate) enum RowSchema {
   Page,
   Listing,
+  /// The session-move picker's rows: the id, name, profile and task parent its candidate walk reads, and no other
+  /// field.
+  Move,
 }
 
 impl RowSchema {
@@ -497,9 +506,24 @@ impl RowSchema {
     match self {
       RowSchema::Page => Ok(store.session_metadata_value(meta)),
       RowSchema::Listing => metadata_value(store, meta),
+      RowSchema::Move => {
+        let mut value = metadata_value(store, meta)?;
+        let object = value.as_object_mut().expect("session metadata serializes to an object");
+        object.retain(|field, _| MOVE_FIELDS.contains(&field.as_str()));
+        Ok(value)
+      }
     }
   }
+
+  /// Whether the row carries the sidebar's derived fields and the page's own form of them.
+  fn carries_page_form(self) -> bool {
+    !matches!(self, RowSchema::Move)
+  }
 }
+
+/// The fields the session-move picker reads. It labels a choice by name, keeps the manager rows, walks the task
+/// parents to drop the moved session's descendants, and names the chosen parent by id.
+const MOVE_FIELDS: [&str; 4] = [ID_FIELD, "name", "profile", TASK_PARENT_ID_FIELD];
 
 /// The page's whole sidebar text and the inputs it rendered from.
 struct WholePageText {
@@ -581,7 +605,7 @@ impl PageRowsMemo {
   }
 }
 
-/// Render the chat page's sidebar rows as their column text.
+/// The chat page's sidebar rows as their column text.
 ///
 /// `clear_unread` names the active session. Its row renders with `has_unread` false and is left out of the memo, so
 /// a later request that names another active session does not serve the marked row.
@@ -625,7 +649,7 @@ impl<'a> PageRowsScope<'a> {
   }
 }
 
-/// Render one row projection of the sidebar corpus as its column text.
+/// One row projection of the sidebar corpus as its column text.
 ///
 /// The text carries the fields of `projection` over the session value of `schema`, so each pair needs a memo of its
 /// own. A memo serves the pair it filled from, and another projection or schema renders other values.
@@ -756,7 +780,7 @@ const FIRST_SCREEN_KEY: &str = "$screen";
 
 /// The roots each group's first screen may carry: the most a sidebar of any window paints.
 ///
-/// The sidebar fills its own height with rows, so the number it paints follows the window:
+/// The sidebar fills its own height with rows, so the number it paints follows the window.
 /// `web/static/js/sidebar/groups.js` measures its list and takes the roots that fit, up to
 /// `GROUP_SESSION_PREVIEW_MAX`. The page carries this many roots per group, with their descendants, so a tall
 /// window has rows to paint without another request. A drift leaves spare rows in the page, or paints the rows
@@ -953,7 +977,7 @@ fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>
   text
 }
 
-/// Write one column's cells as their field's JSON text, with `null` where a row leaves the field out.
+/// One column's cells as their field's JSON text, with `null` where a row leaves the field out.
 fn write_plain_column(text: &mut String, rows: &[Arc<PageRowText>], field: &str) {
   for (index, row) in rows.iter().enumerate() {
     if index > 0 {
@@ -963,7 +987,7 @@ fn write_plain_column(text: &mut String, rows: &[Arc<PageRowText>], field: &str)
   }
 }
 
-/// Write the `id` column in [`UUID_ENCODING`]: every id's 16 bytes, in row order, as one base64url string. A home
+/// The `id` column in [`UUID_ENCODING`]: every id's 16 bytes, in row order, as one base64url string. A home
 /// whose rows are not all canonical UUIDs carries one cell per row instead, so a row's exact id text survives.
 fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
   let mut ids = Vec::with_capacity(rows.len() * 16);
@@ -986,7 +1010,7 @@ fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
   text.push('"');
 }
 
-/// Write the `id` column as one cell per row. A canonical UUID is its 16 bytes in base64url, and any other id is `~`
+/// The `id` column as one cell per row. A canonical UUID is its 16 bytes in base64url, and any other id is `~`
 /// and its text. A row that leaves the field out writes `null`.
 fn write_id_cells(text: &mut String, rows: &[Arc<PageRowText>]) {
   text.push('[');
@@ -1023,7 +1047,7 @@ fn canonical_uuid(id: &str) -> Option<[u8; 16]> {
   }
 }
 
-/// Write the `updated_at` column in [`DELTA_ENCODING`]: the first value as it stands, then each difference.
+/// The `updated_at` column in [`DELTA_ENCODING`]: the first value as it stands, then each difference.
 fn write_updated_at_column(text: &mut String, rows: &[Arc<PageRowText>]) {
   let mut previous: Option<i64> = None;
   for (index, row) in rows.iter().enumerate() {
@@ -1054,8 +1078,10 @@ fn page_client_value(
 ) -> StoreResult<Value> {
   let mut value = page_row_value(store, row, clear_unread, projection, schema)?;
   drop_falsy_fields(&mut value);
-  drop_unread_fields(&mut value);
-  compact_page_fields(&mut value, row.meta.updated_at);
+  if schema.carries_page_form() {
+    drop_unread_fields(&mut value);
+    compact_page_fields(&mut value, row.meta.updated_at);
+  }
   Ok(value)
 }
 
@@ -1068,13 +1094,15 @@ fn page_row_value(
   schema: RowSchema,
 ) -> StoreResult<Value> {
   let mut value = schema.value(store, &row.meta)?;
-  apply_sidebar_fields(&mut value, row, projection);
-  apply_listing_fields(&mut value, row.listing.clone().unwrap_or_default());
-  if clear_unread {
-    value
-      .as_object_mut()
-      .expect("a session metadata value is an object")
-      .insert(HAS_UNREAD.to_string(), Value::Bool(false));
+  if schema.carries_page_form() {
+    apply_sidebar_fields(&mut value, row, projection);
+    apply_listing_fields(&mut value, row.listing.clone().unwrap_or_default());
+    if clear_unread {
+      value
+        .as_object_mut()
+        .expect("a session metadata value is an object")
+        .insert(HAS_UNREAD.to_string(), Value::Bool(false));
+    }
   }
   Ok(value)
 }
@@ -1157,7 +1185,7 @@ fn is_falsy(value: &Value) -> bool {
   }
 }
 
-/// Render a page's sidebar rows with their controller fields and route-local body and gzip memos.
+/// A page's sidebar rows with their controller fields and route-local body and gzip memos.
 ///
 /// The page hands out the corpus as the listing memo's own allocation, so its row and overlay identities are the
 /// memo's. A repeat request proves the corpus unchanged with one pointer comparison.
@@ -1170,7 +1198,7 @@ pub fn sessions_list_page_response(
   sessions_list_response(request, store, page.rows(), Some(&page.rows), page.derived(), page.sequence_fields(), memos)
 }
 
-/// Render sidebar rows with their controller fields and route-local body and gzip memos.
+/// The sidebar rows with their controller fields and route-local body and gzip memos.
 ///
 /// `shared` names the allocation a memoized corpus was handed out as, when the caller holds one. A route that filters
 /// the corpus into a list of its own passes `None` and the source compares row by row.
@@ -1238,6 +1266,9 @@ pub fn sessions_list_response(
 /// row array. The row texts it joins are the page's own fields, so the sidebar decodes it with the same
 /// `expandSessionColumns` the page's inline listing takes. Its gzip memo reuses the previous body while the text
 /// keeps its allocation, and the row memo re-renders only the rows a corpus change moved.
+///
+/// One memo serves one form. The session-move picker reads four fields of the same corpus, so it asks for that form
+/// through a memo of its own and leaves the Workspace's columns untouched.
 #[derive(Default)]
 pub struct CompactListingMemo {
   rows: PageRowsMemo,
@@ -1249,21 +1280,32 @@ struct CompactListingBody {
   gzip: Bytes,
 }
 
+/// The row schema and projection one compact listing serves.
+#[derive(Clone, Copy)]
+pub enum ListingForm {
+  /// The Workspace's column form, which the sidebar decodes into the rows the full listing sends.
+  Sidebar,
+  /// The session-move picker's four columns.
+  Move,
+}
+
+impl ListingForm {
+  fn schema(self) -> RowSchema {
+    match self {
+      Self::Sidebar => RowSchema::Listing,
+      Self::Move => RowSchema::Move,
+    }
+  }
+}
+
 impl CompactListingMemo {
   /// The compact listing for this corpus, gzipped when the request accepts gzip.
-  pub fn response(&self, request: &Request<Body>, store: &Store, page: &PageRows) -> Response {
-    let text = match page_json_text(
-      store,
-      page,
-      None,
-      PageRowsScope::EveryRow,
-      &self.rows,
-      LISTING_PROJECTION,
-      RowSchema::Listing,
-    ) {
-      Ok(text) => text,
-      Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
-    };
+  pub fn response(&self, request: &Request<Body>, store: &Store, page: &PageRows, form: ListingForm) -> Response {
+    let text =
+      match page_json_text(store, page, None, PageRowsScope::EveryRow, &self.rows, LISTING_PROJECTION, form.schema()) {
+        Ok(text) => text,
+        Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
+      };
     let wants_gzip = accepts_gzip(request.headers());
     if !wants_gzip {
       return json_bytes_response(Bytes::copy_from_slice(text.as_bytes()), false);
@@ -1341,8 +1383,8 @@ pub fn row_refresh_text_for(
 /// The response key of the chat-thread flag: true for a session whose metadata names a chat thread.
 pub const THREAD_SESSION: &str = "thread_session";
 
-/// Render metadata as the response model does, excluding `task.goal`. The `thread_session` flag names a chat thread
-/// session, so the web client never reads the platform origin fields itself.
+/// The metadata rendered as the response model does, excluding `task.goal`. The `thread_session` flag names a chat
+/// thread session, so the web client never reads the platform origin fields itself.
 pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   let mut value = store.session_metadata_value(meta);
   let object = value.as_object_mut().expect("session metadata serializes to an object");
@@ -1353,7 +1395,7 @@ pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResu
   Ok(value)
 }
 
-/// Remove schedule model fields and apply the controller's row fields.
+/// `dump` with schedule model fields removed and the controller's row fields applied.
 pub fn apply_listing_fields(dump: &mut Value, fields: Map<String, Value>) {
   let object = dump.as_object_mut().expect("session metadata serializes to an object");
   for field in SCHEDULE_FIELDS {
@@ -1389,7 +1431,7 @@ pub(crate) fn listed_values(
     .collect()
 }
 
-/// Read every input that the rows of one listing render from.
+/// Every input that the rows of one listing render from.
 fn row_inputs(
   store: &Store,
   rows: &[Arc<SessionMetadata>],
@@ -1417,7 +1459,7 @@ fn row_inputs(
     .collect()
 }
 
-/// Render one listing row from its inputs.
+/// One listing row rendered from its inputs.
 fn render_row(store: &Store, row: &RowInputs, projection: SidebarProjection) -> StoreResult<Value> {
   let mut value = metadata_value(store, &row.meta)?;
   apply_sidebar_fields(&mut value, row, projection);
@@ -1731,7 +1773,7 @@ mod tests {
     let page = active_page_rows(&features.store, &features.registry).unwrap();
 
     let identity = Request::builder().uri("/api/sessions/?compact=1").body(Body::empty()).unwrap();
-    let response = memo.response(&identity, &features.store, &page);
+    let response = memo.response(&identity, &features.store, &page, ListingForm::Sidebar);
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = std::str::from_utf8(&body).expect("the identity body is UTF-8");
@@ -1745,12 +1787,53 @@ mod tests {
       .header(header::ACCEPT_ENCODING, "gzip")
       .body(Body::empty())
       .unwrap();
-    let first =
-      axum::body::to_bytes(memo.response(&gzip_request, &features.store, &page).into_body(), usize::MAX).await.unwrap();
-    let second =
-      axum::body::to_bytes(memo.response(&gzip_request, &features.store, &page).into_body(), usize::MAX).await.unwrap();
+    let first = axum::body::to_bytes(
+      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar).into_body(),
+      usize::MAX,
+    )
+    .await
+    .unwrap();
+    let second = axum::body::to_bytes(
+      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar).into_body(),
+      usize::MAX,
+    )
+    .await
+    .unwrap();
     assert_eq!(first, second, "a repeat request serves the compressed body the memo holds");
     assert_eq!(memo.body.lock().unwrap().as_ref().unwrap().gzip, first);
+  }
+
+  /// The move picker's column form carries the four fields its candidate walk reads, and nothing else.
+  #[tokio::test]
+  async fn the_move_listing_carries_the_fields_the_picker_reads() {
+    let (_home, features) = crate::test_support::feature_context();
+    let parent = crate::test_support::create_node(&features.store, "move-parent", None, TaskProfile::Manager).await;
+    let child =
+      crate::test_support::create_node(&features.store, "move-child", Some(&parent.id), TaskProfile::Manager).await;
+    let memo = CompactListingMemo::default();
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+
+    let request = Request::builder().uri("/api/sessions/?compact=move").body(Body::empty()).unwrap();
+    let response = memo.response(&request, &features.store, &page, ListingForm::Move);
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = std::str::from_utf8(&body).expect("the move body is UTF-8");
+    let rows = page_rows_of(text);
+    let names: Vec<&str> = rows.iter().filter_map(|row| row["name"].as_str()).collect();
+    assert!(names.contains(&"move-parent") && names.contains(&"move-child"), "both rows travel: {names:?}");
+    for row in &rows {
+      let fields: Vec<&str> = row.as_object().expect("a row is an object").keys().map(String::as_str).collect();
+      assert!(
+        fields.iter().all(|field| MOVE_FIELDS.contains(field)),
+        "the picker reads these four fields alone: {fields:?}"
+      );
+      assert!(fields.contains(&"id") && fields.contains(&"name") && fields.contains(&"profile"));
+    }
+    let parent_row = rows.iter().find(|row| row["name"] == "move-parent").expect("the parent travels");
+    assert!(parent_row.get("task_parent_id").is_none(), "a root row leaves its absent parent out");
+    let child_row = rows.iter().find(|row| row["name"] == "move-child").expect("the child travels");
+    assert_eq!(child_row["id"], child.id);
+    assert_eq!(child_row["task_parent_id"], parent.id);
   }
 
   /// A repeat page request serves the corpus the previous one built, and a session created after it joins the next

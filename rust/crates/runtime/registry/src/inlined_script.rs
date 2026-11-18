@@ -2,22 +2,26 @@
 //!
 //! A page inlines its scripts so the first paint waits for no second request. The same source files carry the
 //! comments that explain them to an editor, and a browser runs those as nothing. They also carry the indentation
-//! that shows their nesting, and the spaces between tokens, which the parser folds away. On the mock home's chat
-//! page, those sit in the scripts and the stylesheets. Leaving them out of the inline copy saves 67 KB of the page's
-//! 700 KB and 13 KB of its 164 KB gzip form, and the token spaces take another 2 KB off that form. The strip is
-//! textual and keeps every other byte. That includes a `//` or `/*` that a string, a template literal or a regular
-//! expression holds. It also keeps the whitespace inside a template literal, which is part of the text it builds.
+//! that shows their nesting, the spaces between tokens, and the line terminators that separate statements, which the
+//! parser folds away. On the mock home's chat page those bytes sit in the scripts and the stylesheets: the strip
+//! leaves 295,759 B of script content whose gzip form is 79,648 B, and the page it belongs to travels in 95,941 B.
+//! The strip is textual and keeps every other byte. That includes a `//` or `/*` that a string, a template literal
+//! or a regular expression holds. It also keeps the whitespace inside a template literal, which is part of the text
+//! it builds.
 
 use crate::inlined_literal::{char_len, escape_end, string_end};
 
 /// The JavaScript `source` with its comments and its insignificant whitespace removed.
 ///
-/// A line comment loses its text and keeps the newline that ends it. A block comment becomes one newline when it
-/// spans lines and, otherwise, the space [`needs_space`] asks for between the bytes around it. A whitespace run
-/// becomes one newline when it holds a line terminator, and [`needs_space`]'s space or nothing when it does not, so
-/// a blank line and a line's indentation leave no byte and no two tokens join. The scanner follows the literals that
-/// can hold comment text or whitespace. A quoted string ends at its quote or its line's end, a template literal at
-/// its backtick, and a regex literal at its closing slash.
+/// A line comment loses its text, and the line terminator that ends it follows the whitespace rule below. A block
+/// comment becomes one newline when it spans lines and, otherwise, the space [`needs_space`] asks for between the
+/// bytes around it. A whitespace run becomes one newline when it holds a line terminator, [`needs_space`]'s space or
+/// nothing when it does not, and nothing where the bytes around it separate themselves ([`terminator_stands`]),
+/// unless a legacy comment form reads that break ([`legacy_comment_needs_break`]), so a blank line, a line's
+/// indentation and a statement's own end leave no byte and no two tokens join. A break the copy already ends with is
+/// not written again ([`push_break`]), so the run after a spanning comment leaves no second terminator. The scanner
+/// follows the literals that can hold comment text or whitespace. A quoted string ends at its quote or its line's
+/// end, a template literal at its backtick, and a regex literal at its closing slash.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
@@ -54,7 +58,7 @@ pub fn without_comments(source: &str) -> String {
     if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
       let end = source[i + 2..].find("*/").map_or(bytes.len(), |end| i + 2 + end + 2);
       if spans_lines(&bytes[i..end]) {
-        out.push('\n');
+        push_break(&mut out);
       } else if continues_html_markup(&out, bytes.get(end).copied())
         || needs_space(out.as_bytes().last().copied(), bytes.get(end).copied())
       {
@@ -185,8 +189,10 @@ pub fn without_comments(source: &str) -> String {
 /// The shortest form of the whitespace run at `start`, and the index after it.
 ///
 /// A run that holds a line terminator becomes one newline: the blank line after it and the indentation of the next
-/// line separate no tokens, and the newline the automatic semicolons need is still there. A run of spaces and tabs
-/// becomes one space where the bytes on either side would otherwise run together, and nothing otherwise.
+/// line separate no tokens, and the newline the automatic semicolons need is still there. The run leaves no byte at
+/// all where the pair of bytes around it separates itself ([`terminator_stands`]) and no line of the legacy comment
+/// forms depends on the break ([`legacy_comment_needs_break`]). A run of spaces and tabs becomes one space where the
+/// bytes on either side would otherwise run together, and nothing otherwise.
 fn copy_whitespace(out: &mut String, source: &str, start: usize) -> usize {
   let bytes = source.as_bytes();
   let mut end = start;
@@ -199,14 +205,61 @@ fn copy_whitespace(out: &mut String, source: &str, start: usize) -> usize {
     }
     end += 1;
   }
-  if line_terminator {
-    out.push('\n');
-  } else if continues_html_markup(out, bytes.get(end).copied())
-    || needs_space(out.as_bytes().last().copied(), bytes.get(end).copied())
-  {
+  let next = bytes.get(end).copied();
+  if continues_html_markup(out, next) {
+    out.push(' ');
+  } else if line_terminator {
+    if terminator_stands(out.as_bytes().last().copied(), next) || legacy_comment_needs_break(out, bytes, end) {
+      push_break(out);
+    }
+  } else if needs_space(out.as_bytes().last().copied(), next) {
     out.push(' ');
   }
   end
+}
+
+/// One line terminator in place of a run of breaks.
+///
+/// A second terminator separates nothing the first one does not. The copy's last byte is a line terminator only when
+/// this rule wrote it: a quoted string ends at its line's end, a template literal at its backtick, and a regular
+/// expression at its slash, so a literal's own line terminator is never the copy's last byte. A legacy comment form
+/// that reads its line whole still finds the break it needs, because one terminator remains.
+fn push_break(out: &mut String) {
+  if !out.ends_with('\n') {
+    out.push('\n');
+  }
+}
+
+/// Whether a legacy comment form on either side of the run reads only while its line stays whole.
+///
+/// The HTML-like script comments hold the rest of their line: `<!--` opens one anywhere, and `-->` is one only after
+/// a line terminator. So the break before a `-->` and the break that ends any such comment stay; joining either would
+/// fold the next line's code into the comment, and the first would read as a `--` and a `>`. A `#!` hashbang is a
+/// comment only at the source's first byte, and joining its line would extend it over the code after it.
+fn legacy_comment_needs_break(out: &str, bytes: &[u8], next: usize) -> bool {
+  let closes = bytes.get(next..).is_some_and(|rest| rest.starts_with(b"-->"));
+  let line = out.rsplit('\n').next().unwrap_or("");
+  closes || line.contains("-->") || line.contains("<!--") || (out.starts_with("#!") && !out.contains('\n'))
+}
+
+/// Whether a line terminator must stand between the bytes `prev` and `next`.
+///
+/// A terminator keeps two tokens apart and gives the automatic-semicolon rule the line break it reads. A `;`, a `{`,
+/// a `}` or a `,` before the run ends a statement or continues an expression, so the parser never joins the bytes to
+/// its right. A `)`, `]`, `}`, `,` or `;` after the run cannot continue a statement either, and the rule inserts the
+/// semicolon before it without a line break. A pair that would run into one token keeps the terminator, and so does a
+/// `}` followed by a `/`, where only the author knows whether the slash divides or opens a regular expression.
+fn terminator_stands(prev: Option<u8>, next: Option<u8>) -> bool {
+  let (Some(prev), Some(next)) = (prev, next) else {
+    return false;
+  };
+  if merges_into_one_token(prev, next) {
+    return true;
+  }
+  if prev == b'}' && next == b'/' {
+    return true;
+  }
+  !(matches!(prev, b';' | b'{' | b'}' | b',') || matches!(next, b')' | b']' | b'}' | b',' | b';'))
 }
 
 /// Whether the copy so far ends an HTML construct that `next` would continue, so a space must stand between them.
@@ -403,17 +456,49 @@ mod tests {
 
   #[test]
   fn code_indentation_is_dropped_and_template_text_keeps_its_own() {
-    assert_eq!(without_comments("let a = 1;\n    let b = 2;\n"), "let a=1;\nlet b=2;\n");
+    assert_eq!(without_comments("let a = 1;\n    let b = 2;\n"), "let a=1;let b=2;");
     assert_eq!(without_comments("let s = `\n  indented text\n`;"), "let s=`\n  indented text\n`;");
     assert_eq!(without_comments("let s = `${a}\n  ${b}`;"), "let s=`${a}\n  ${b}`;");
     assert_eq!(without_comments("let s = `${a +\n    b}`;"), "let s=`${a+\nb}`;");
   }
 
   #[test]
-  fn a_line_terminator_run_keeps_one_newline() {
-    assert_eq!(without_comments("a();\n\n\nb();"), "a();\nb();");
-    assert_eq!(without_comments("a();\n   \n\t\nb();"), "a();\nb();");
-    assert_eq!(without_comments("a();\r\n\r\nb();"), "a();\nb();");
+  fn a_line_terminator_run_becomes_one_newline_where_it_separates() {
+    assert_eq!(without_comments("a()\n(b())"), "a()\n(b())");
+    assert_eq!(without_comments("return\nx"), "return\nx");
+    assert_eq!(without_comments("break\nlabel"), "break\nlabel");
+    assert_eq!(without_comments("let a = 1;\n   \n\t\nlet b = 2;"), "let a=1;let b=2;");
+    assert_eq!(without_comments("a();\r\n\r\nb();"), "a();b();");
+  }
+
+  #[test]
+  fn a_line_terminator_run_leaves_no_byte_beside_a_separating_byte() {
+    // A statement's own `;`, a block's braces and a list's `,` separate whatever follows them.
+    assert_eq!(without_comments("a();\n\n\nb();"), "a();b();");
+    assert_eq!(without_comments("if (x) {\n  a();\n}"), "if(x){a();}");
+    assert_eq!(without_comments("f(\n a,\n b\n)"), "f(\na,b)");
+    // A `}` that a `/` follows keeps the terminator: only the author knows whether it divides.
+    assert_eq!(without_comments("x = {}\n/re/.test(s)"), "x={}\n/re/.test(s)");
+  }
+
+  #[test]
+  fn a_break_a_comment_wrote_leaves_the_run_after_it_unwritten() {
+    // A block comment that spans lines writes one terminator; the blank line that follows separates nothing more.
+    assert_eq!(without_comments("a();/* note\n*/  \n\nb();"), "a();\nb();");
+    // Two spanning comments write one terminator together.
+    assert_eq!(without_comments("a();/* one\n*//* two\n*/b();"), "a();\nb();");
+  }
+
+  #[test]
+  fn a_legacy_comment_form_keeps_the_breaks_its_line_needs() {
+    // `-->` is a comment only after a line terminator, and it holds the rest of its line.
+    assert_eq!(without_comments("if (ok) { work();\n-->\n}"), "if(ok){work();\n-->\n}");
+    assert_eq!(without_comments("a();\n--> note\nb();"), "a();\n-->note\nb();");
+    // `<!--` opens a comment that holds the rest of its line as well.
+    assert_eq!(without_comments("if (x) { work();\n<!--\n}"), "if(x){work();<!--\n}");
+    // A hashbang is one only at the source's first byte.
+    assert_eq!(without_comments("#!node\nrun();"), "#!node\nrun();");
+    assert_eq!(without_comments("\nrun();"), "run();");
   }
 
   #[test]
@@ -453,8 +538,9 @@ mod tests {
   }
 
   #[test]
-  fn line_comments_leave_the_code_and_keep_their_newline() {
-    assert_eq!(without_comments("let a = 1; // one\nlet b = 2;\n"), "let a=1;\nlet b=2;\n");
+  fn line_comments_leave_the_code_and_their_newline_where_it_separates() {
+    assert_eq!(without_comments("let a = 1; // one\nlet b = 2;\n"), "let a=1;let b=2;");
+    assert_eq!(without_comments("let a = 1 // one\nlet b = 2;"), "let a=1\nlet b=2;");
     assert_eq!(without_comments("// only a comment"), "");
     assert_eq!(without_comments("a(); // trailing"), "a();");
   }
@@ -521,7 +607,7 @@ mod tests {
 
   #[test]
   fn a_line_comment_ends_at_any_line_terminator() {
-    assert_eq!(without_comments("// note\rcount += 1;"), "\ncount+=1;");
+    assert_eq!(without_comments("// note\rcount += 1;"), "count+=1;");
     assert_eq!(without_comments("// note\u{2028}count += 1;"), "\u{2028}count+=1;");
   }
 

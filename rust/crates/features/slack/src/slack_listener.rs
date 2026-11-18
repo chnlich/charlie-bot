@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use charliebot_chat_threads::channel_service::ChannelListener;
 use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
-use charliebot_chat_threads::summon::{SLACK_NAMESPACE, namespaced_uuid};
+use charliebot_chat_threads::summon::{self, SLACK_NAMESPACE};
 use charliebot_chat_threads::thread_entry::{
   self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform, ThreadReplyError,
 };
@@ -24,12 +24,12 @@ use crate::thread_contract::SLACK;
 
 const ACCEPTANCE_REACTION: &str = "eyes";
 
-/// Return the deterministic session id for a Slack thread.
+/// The deterministic session id for a Slack thread.
 pub fn summon_session_id(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
-  namespaced_uuid(SLACK_NAMESPACE, &format!("slack:{team_id}:{channel_id}:{thread_ts}"))
+  summon::summon_session_id(SLACK_NAMESPACE, &SLACK, &[team_id, channel_id, thread_ts])
 }
 
-/// Accept one allowed `app_mention`, persist the summon, and start its round.
+/// The acceptance of one allowed `app_mention`, which persists the summon and starts its round.
 pub async fn handle_app_mention(
   event: &Value,
   features: &Arc<FeatureContext>,
@@ -90,7 +90,7 @@ fn eligible_thread_message(message: &Value, allowed_user_ids: &[String]) -> bool
       .is_some_and(|user| allowed_user_ids.iter().any(|allowed| allowed == user))
 }
 
-/// Accept one thread message and arm its followed session when it is eligible.
+/// The acceptance of one thread message, which arms its followed session when the message is eligible.
 pub async fn handle_thread_message(
   event: &Value,
   features: &Arc<FeatureContext>,
@@ -132,13 +132,13 @@ pub async fn backfill_followed_threads(
   thread_entry::backfill_followed_threads(&adapter, features).await
 }
 
-/// Refuse a reply while eligible Slack messages remain above the session watermark.
+/// The freshness check on a reply, which fails while eligible Slack messages remain above the session watermark.
 pub async fn assert_thread_fresh(session_id: &str, features: &Arc<FeatureContext>) -> Result<(), ThreadReplyError> {
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::lazy(Arc::clone(features)));
   thread_entry::assert_thread_fresh(&adapter, features, session_id).await
 }
 
-/// Post the session's reply to its Slack thread.
+/// The posting of the session's reply to its Slack thread.
 pub async fn post_reply(
   session_id: &str,
   text: &str,
@@ -158,7 +158,7 @@ pub async fn ack_messages(
   thread_entry::ack_messages(&adapter, features, session_id, message_ids).await
 }
 
-/// Run the round-end audit after one `master_done` event.
+/// The round-end audit that runs after one `master_done` event.
 pub async fn deliver_done(
   session_id: &str,
   done: &Value,
@@ -168,7 +168,7 @@ pub async fn deliver_done(
   thread_entry::deliver_done(&adapter, features, session_id, done).await
 }
 
-/// Report queued Slack summons lost across a restart.
+/// The report of queued Slack summons lost across a restart.
 pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> Result<usize, ThreadReplyError> {
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::lazy(Arc::clone(features)));
   thread_entry::backfill_lost_summons(&adapter, features).await
@@ -187,7 +187,7 @@ impl ChannelListener for SlackListener {
   }
 }
 
-/// Run Socket Mode until the service cancels this task.
+/// The Socket Mode loop, which runs until the service cancels this task.
 pub async fn run_listener(features: Arc<FeatureContext>) -> Result<()> {
   let client = Arc::new(SlackClient::from_features(&features)?);
   let _trigger_manager = features.startup.require::<Arc<TriggerManager>>()?;

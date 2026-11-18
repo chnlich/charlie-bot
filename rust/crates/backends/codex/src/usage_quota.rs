@@ -18,7 +18,7 @@ use charliebot_registry::backend::MemberReading;
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
   PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization, mark_expired_windows,
-  member_reading_from_windows,
+  member_reading_from_windows, utc_isoformat,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -32,7 +32,6 @@ use super::pricing;
 use super::rollout::{self, token_count_payload, walk_files};
 use super::text::{empty_object, is_truthy, object_or_empty, splitlines};
 use super::usage_fields;
-use charliebot_agents::usage_time::utc_isoformat;
 
 const PROVIDER: &str = "codex";
 const PROVIDER_LABEL: &str = "Codex";

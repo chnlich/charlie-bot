@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use charliebot_backup::config::ResticSettings;
 use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
+use charliebot_core::event_types::{CONFIG_RELOAD_FAILED_EVENT, CREDENTIALS_RELOAD_FAILED_EVENT};
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
@@ -40,12 +41,12 @@ fn features_over(home: &Path) -> Arc<FeatureContext> {
   Arc::new(FeatureContext {
     config: Arc::new(HotReload::new(
       home.join(CONFIG_FILENAME),
-      "config_reload_failed",
+      CONFIG_RELOAD_FAILED_EVENT,
       Box::new(move || config_registry.load_config(&config_home)),
     )),
     credentials: Arc::new(HotReload::new(
       home.join(CREDENTIALS_FILENAME),
-      "credentials_reload_failed",
+      CREDENTIALS_RELOAD_FAILED_EVENT,
       Box::new(move || load_credentials(&credentials_home)),
     )),
     store: Arc::new(store),

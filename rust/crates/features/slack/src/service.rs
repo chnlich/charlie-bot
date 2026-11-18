@@ -7,7 +7,7 @@ use charliebot_registry::FeatureContext;
 use crate::config::SlackConfig;
 use crate::slack_listener::SlackListener;
 
-/// Starts Socket Mode and the boot backfill when Slack credentials and users are configured.
+/// The Slack service, which starts Socket Mode and the boot backfill when Slack credentials and users are configured.
 pub(crate) type SlackService = ChannelService<SlackListener>;
 
 impl ChatChannel for SlackListener {

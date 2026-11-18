@@ -20,8 +20,9 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_STATE,
-  TASK_TYPE_FIELD, TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
+  ACCEPTANCE_FIELD, APPROVER_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, CONTEXT_REFS_FIELD, KEEP_WORKTREE_FIELD,
+  REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_STATE, TASK_TYPE_FIELD, TaskApprover, TaskProfile,
+  TaskSpec, TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -38,7 +39,6 @@ use crate::detail::response_metadata;
 use crate::route_support::store_error;
 
 const LOG_TARGET: &str = "charliebot_session_api";
-const APPROVER_CHOICES: &[&str] = &["user", "parent"];
 const TASK_TYPE_CHOICES: &[&str] = TaskType::NAMES;
 const PROFILE_REQUIRED: &str = "profile must be 'manager' or 'worker'";
 const RENAME_REQUIRES_NAME: &str = "rename requires a non-empty name";
@@ -51,14 +51,14 @@ const COLD_READ_SPEC: BodyModel = BodyModel::optional(COLD_READ_FIELDS).forbid_e
 /// stay accepted: the record read drops them, so a request that still names them does not fail.
 const TASK_SPEC_FIELDS: &[Field] = &[
   Field::optional("goal", FieldType::String),
-  Field::optional("acceptance", FieldType::StringList),
-  Field::optional("context_refs", FieldType::StringList),
+  Field::optional(ACCEPTANCE_FIELD, FieldType::StringList),
+  Field::optional(CONTEXT_REFS_FIELD, FieldType::StringList),
   Field::optional(REPO_PATH_FIELD, FieldType::NullableString),
   Field::optional(BASE_BRANCH_FIELD, FieldType::NullableString),
   Field::optional(TASK_TYPE_FIELD, FieldType::NullableEnum(TASK_TYPE_CHOICES)),
   Field::optional(KEEP_WORKTREE_FIELD, FieldType::Boolean),
   Field::optional(
-    "cold_read",
+    COLD_READ_FIELD,
     FieldType::NullableModel { class_name: COLD_READ_SPEC_CLASS_NAME, model: &COLD_READ_SPEC },
   ),
 ];
@@ -74,7 +74,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("profile", FieldType::NullableLiteral(TaskProfile::NAMES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("group", FieldType::NullableString),
-  Field::optional("approver", FieldType::Literal(APPROVER_CHOICES)),
+  Field::optional(APPROVER_FIELD, FieldType::Literal(TaskApprover::NAMES)),
 ];
 const CREATE_SESSION: BodyModel = BodyModel::required(CREATE_FIELDS);
 
@@ -86,7 +86,7 @@ const PATCH_FIELDS: &[Field] = &[
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("subtree_prompt", FieldType::NullableString),
   Field::optional("node_prompt", FieldType::NullableString),
-  Field::optional("approver", FieldType::Literal(APPROVER_CHOICES)),
+  Field::optional(APPROVER_FIELD, FieldType::Literal(TaskApprover::NAMES)),
 ];
 const PATCH_SESSION: BodyModel = BodyModel::required(PATCH_FIELDS).forbid_extra();
 
@@ -151,7 +151,7 @@ where
 /// `TaskSpec._cold_read_matches_task_type`: a cold-read task carries `cold_read`, and no other task does.
 fn cold_read_matches_task_type(task: &Map<String, Value>) -> Option<String> {
   let task_type = task.get(TASK_TYPE_FIELD).and_then(Value::as_str);
-  let has_cold_read = task.get("cold_read").is_some_and(|value| !value.is_null());
+  let has_cold_read = task.get(COLD_READ_FIELD).is_some_and(|value| !value.is_null());
   if task_type == Some(TaskType::ColdRead.as_str()) {
     return (!has_cold_read).then(|| "a cold-read task requires cold_read".to_string());
   }
@@ -379,8 +379,8 @@ async fn switch(
     return Err(store_error(StoreError::invalid(binding.backend_lock_detail(&target))));
   }
 
-  // The pre-rule backfill: a held native id with no recorded producer gets the effective current backend first, so the
-  // next turn judges the id against the backend that produced it.
+  // The pre-rule backfill: a held native id with no recorded producer gets the effective current backend first.
+  // The next turn then judges the id against the backend that produced it.
   let holds_native_id = parent.cc_session_id.as_deref().is_some_and(|id| !id.is_empty());
   if holds_native_id && parent.native_backend.as_deref().is_none_or(str::is_empty) {
     features.store.persist_native_backend(session_id, &effective).await.map_err(store_error)?;
@@ -457,7 +457,7 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
     .ok_or_else(|| store_error(StoreError::not_found(SESSION_NOT_FOUND_DETAIL)))?;
   tracing::info!(target: LOG_TARGET, session_id, new_name = %name, "{}", event_types::SESSION_RENAMED);
   features.store.invalidate_tree_index();
-  features.store.notify_task_tree_changed(session_id, Some("task_updated")).await;
+  features.store.notify_task_tree_changed(session_id).await;
   let meta = response_metadata(&features.store, &meta).map_err(store_error)?;
   rename_response(&features.store, &meta)
 }
@@ -475,7 +475,7 @@ fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Respo
   Ok(detail)
 }
 
-/// Validate a body against `model` and return its declared fields. Any other shape answers 422.
+/// The declared fields of a body that validates against `model`. Any other shape answers 422.
 fn validated_object(body: &RequestBody, model: &BodyModel) -> Result<Map<String, Value>, Response> {
   match body.validate(model) {
     Ok(Some(Value::Object(values))) => Ok(values),
@@ -634,7 +634,7 @@ mod tests {
     assert_eq!(result["profile"], "manager");
     let session_id = result["id"].as_str().expect("created session id");
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("task tree notification")).unwrap();
-    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": session_id, "fact_type": "task_created"}));
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": session_id}));
     let events = features.store.load_chat_events_sync(session_id).expect("created chat events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["type"].as_str(), Some("task_created"));
@@ -659,7 +659,6 @@ mod tests {
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("task tree notification")).unwrap();
     assert_eq!(frame["type"], "task_tree_changed");
     assert_eq!(frame["session_id"], session_id);
-    assert_eq!(frame["fact_type"], "task_created");
     let events = features.store.load_chat_events_sync(session_id).expect("created chat events");
     assert_eq!(events[0]["type"].as_str(), Some("task_created"));
     assert_eq!(events[0]["request_id"].as_str(), Some("api-v2-root"));
@@ -863,7 +862,7 @@ mod tests {
     assert_eq!(detail["ancestors"], json!([]));
     assert_eq!(features.store.read_metadata_fresh(&node.id).expect("node read").expect("node").name, "Renamed");
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("rename tree notification")).unwrap();
-    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "task_updated"}));
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id}));
     assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("session_renamed")));
   }
 
@@ -939,7 +938,7 @@ mod tests {
     assert_eq!(detail["task_state"], "open");
     assert_eq!(detail["name"], "node");
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("prompt change tree notification")).unwrap();
-    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "prompt_changed"}));
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id}));
     let events = features.store.load_chat_events_sync(&node.id).expect("prompt change events");
     assert!(events.iter().any(|event| event["type"].as_str() == Some(event_types::PROMPT_CHANGED)));
   }

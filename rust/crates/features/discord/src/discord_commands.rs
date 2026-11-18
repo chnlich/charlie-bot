@@ -59,7 +59,7 @@ async fn pending_summon_ids(bot: &Bot, session_id: &str) -> Result<HashSet<Strin
   .map_err(ThreadReplyError::failure)
 }
 
-/// Read the session's own Discord thread, and ack the unread messages the window returns. The
+/// The readback of the session's own Discord thread, with the unread messages the window returns acked. The
 /// window starts at the earlier of the oldest unread message and the oldest pending summon's mention, or holds the
 /// newest `limit` messages when neither exists. The starter rides first, outside the count, when it lives in the parent
 /// channel: a 404 there means the thread has none.
@@ -118,7 +118,7 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   }))
 }
 
-/// Read the newest `limit` messages of the channel a discord.com link names. Nothing is marked read.
+/// The readback of the newest `limit` messages of the channel a discord.com link names. Nothing is marked read.
 /// A link that is not one refuses with 422, a channel the bot cannot see with 404.
 async fn read_linked_channel(bot: &Bot, url: &str, limit: usize) -> Result<Value, ThreadReplyError> {
   let link = parse_message_link(url)

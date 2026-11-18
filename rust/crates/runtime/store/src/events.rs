@@ -13,8 +13,8 @@ use serde_json::Value;
 use crate::chat_events::{decode_line, is_chat_events_archive};
 use crate::compact::CompactValue;
 use crate::event_state::{
-  LIVE_RANGE_WALK_BYTE_BUDGET, LiveRangeMemo, ParsedLiveLine, SharedLiveLines, TAIL_WINDOW_SIZE, TYPE_HEAD_PROOF_BYTES,
-  TailLineWalk,
+  LINE_INDEX_STRIDE, LIVE_RANGE_WALK_BYTE_BUDGET, LineIndex, LiveRangeMemo, ParsedLiveLine, SharedLiveLines,
+  TAIL_WINDOW_SIZE, TYPE_HEAD_PROOF_BYTES, TailLineWalk,
 };
 pub(crate) use crate::event_types::FileIdentity;
 pub use crate::event_types::{ChatEvent, SharedChatEvent};
@@ -93,7 +93,10 @@ impl Store {
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
     let before = file_signature(&path)?.map(|(_, signature)| signature);
-    let line_bytes = ndjson::append(&path, &event)?;
+    let appended = ndjson::append(&path, &event);
+    // The count moves after every attempt: an append whose sync fails can still have written its line.
+    self.note_history_change();
+    let line_bytes = appended?;
     self.record_appended_line_count(&path, before, line_bytes)?;
     let compact = ChatEvent::from_value(&event);
     if let Some(cached) = cache.as_mut() {
@@ -115,8 +118,7 @@ impl Store {
   ) -> StoreResult<ChatEvent> {
     self.require_control_guard(guard)?;
     let event = self.append_chat_event(session_id, event).await?;
-    let fact_type = event.get("type").and_then(CompactValue::as_str);
-    self.notify_task_tree_changed(session_id, fact_type).await;
+    self.notify_task_tree_changed(session_id).await;
     Ok(event)
   }
 
@@ -158,7 +160,7 @@ impl Store {
     Ok(Some((cached.generation, Arc::clone(&cached.identity), events)))
   }
 
-  /// The cached live events, or the log file's identity while the cache is cold; a cold cache stays cold.
+  /// The cached live events, or the log file's identity while the cache is cold. A cold cache stays cold.
   ///
   /// The identity is read under the session lock that every append holds, so it names a file that holds every event
   /// appended before the read.
@@ -282,7 +284,7 @@ impl Store {
   /// count the transcript latency tests pin.
   pub fn read_ndjson_compact(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
     let events = ndjson::read_file_compact(path)?;
-    // The census counts the bytes of the file that holds the log; a log neither file holds contributes none.
+    // The census counts the bytes of the file that holds the log. A log neither file holds contributes none.
     let bytes = run_logs::stored_metadata(path).ok().flatten().map_or(0, |metadata| metadata.size());
     self.history_work.run_event_bytes_read.fetch_add(bytes, Ordering::Relaxed);
     Ok(events)
@@ -379,13 +381,18 @@ impl Store {
             .take(rel_end.saturating_sub(rel_start))
             .map(|event| event.as_ref().clone())
             .collect(),
-          None => match self.live_tail_lines_newline_split(session_id, rel_start)? {
-            Some(lines) => slice_live_lines(&lines, 0, rel_end.saturating_sub(rel_start)),
-            None => {
-              let lines = self.live_lines_newline_split(session_id)?;
-              slice_live_lines(&lines, rel_start, rel_end)
+          None => {
+            // The tail window answers the newest page without parsing the log's head. A page past that window seeks
+            // to the line index's nearest checkpoint and reads from there, so it costs the lines from that
+            // checkpoint rather than every line before the page.
+            match self.live_tail_lines_newline_split(session_id, rel_start)? {
+              Some(lines) => slice_live_lines(&lines, 0, rel_end.saturating_sub(rel_start)),
+              None => {
+                let (lines, first_line) = self.live_lines_from_checkpoint(session_id, rel_start, rel_end)?;
+                slice_live_lines(&lines, rel_start.saturating_sub(first_line), rel_end.saturating_sub(first_line))
+              }
             }
-          },
+          }
         }
       };
       return Ok((events, start > 0));
@@ -401,7 +408,7 @@ impl Store {
     Ok((out, start > 0))
   }
 
-  /// Read `[start, end)` without copying cached live events; archived histories retain the existing range reader.
+  /// Read `[start, end)` without copying cached live events. Archived histories retain the existing range reader.
   pub fn load_chat_events_shared_range_sync(
     &self,
     session_id: &str,
@@ -702,29 +709,86 @@ impl Store {
     Ok((lines, 0))
   }
 
-  /// Read the live log as parsed events with one slot per physical line, split on `\n` only —
-  /// the domain `ndjson.parse_ndjson_range` numbers on the unarchived cold path.
-  fn live_lines_newline_split(&self, session_id: &str) -> StoreResult<Vec<Option<Arc<ChatEvent>>>> {
+  /// The live log's physical lines `[first_line, end)` as parsed events, one slot per line, split on `\n` only — the
+  /// domain `ndjson.parse_ndjson_range` numbers on the unarchived cold path.
+  ///
+  /// The read starts at the line index's nearest checkpoint at or before `first_line`, so a page far inside a long log
+  /// costs the lines from that checkpoint rather than the log's head: on the mock home's 144 MB log, a page 50,000
+  /// lines in reads at most one stride of lines before the page instead of the 50,000 before it. The lines between that
+  /// checkpoint and the page are read past without parsing, because the caller discards them. A line's index matches
+  /// the whole-file read's, because the split is the same `\n` one and a final line without a terminator is still a
+  /// line. The returned pair carries the index of the first line returned.
+  fn live_lines_from_checkpoint(
+    &self,
+    session_id: &str,
+    first_line: usize,
+    end: usize,
+  ) -> StoreResult<(SharedLiveLines, usize)> {
     let path = self.chat_events_path(session_id);
-    let bytes = match fs::read(&path) {
-      Ok(bytes) => bytes,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    let Some((_, signature)) = file_signature(&path)? else { return Ok((Arc::new(Vec::new()), first_line)) };
+    let index = self.live_line_index(&path, signature)?;
+    let (checkpoint_line, checkpoint_byte) = index.checkpoint_at(first_line);
+    let file = match fs::File::open(&path) {
+      Ok(file) => file,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        return Ok((Arc::new(Vec::new()), checkpoint_line));
+      }
       Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
     };
-    Ok(bytes.split(|byte| *byte == b'\n').map(ndjson::parse_line_compact).map(|event| event.map(Arc::new)).collect())
+    let mut reader = std::io::BufReader::new(file);
+    reader
+      .seek(SeekFrom::Start(checkpoint_byte))
+      .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    let mut lines = Vec::with_capacity(end.saturating_sub(first_line).min(1024));
+    let mut line = Vec::new();
+    let mut bytes_read = 0;
+    let mut line_index = checkpoint_line;
+    while line_index < end {
+      line.clear();
+      let read = std::io::BufRead::read_until(&mut reader, b'\n', &mut line)
+        .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      if read == 0 {
+        break;
+      }
+      bytes_read += read;
+      if line_index < first_line {
+        // The page's own first line has not arrived yet, and this line is before it: the caller discards it.
+        line_index += 1;
+        continue;
+      }
+      if line.last() == Some(&b'\n') {
+        line.pop();
+      }
+      lines.push(ndjson::parse_line_compact(&line).map(Arc::new));
+      line_index += 1;
+    }
+    #[cfg(test)]
+    {
+      let mut caches = lock(&self.event_read_caches, "event read cache mutex");
+      caches.live_range_bytes_read += bytes_read;
+      caches.live_range_lines_parsed += lines.len();
+    }
+    #[cfg(not(test))]
+    let _ = bytes_read;
+    Ok((Arc::new(lines), first_line))
+  }
+
+  /// The log's line index, through the count memo that every line count already reads.
+  fn live_line_index(&self, path: &Path, signature: FileSignature) -> StoreResult<LineIndex> {
+    self.line_index(path, signature)
   }
 
   /// The live log's physical lines from `first_line` to its end, parsed with one slot per line, or `None` when the
   /// tail window does not hold them.
   ///
   /// The page a reader opens first is the one that ends at the log's end, so reading the tail answers it without the
-  /// whole log: on a 144 MB log the whole-file parse behind [`Self::live_lines_newline_split`] is 386 ms of the
-  /// request, and the tail window is 512 KiB. The `\n` split keeps the blank lines the whole-file read keeps, so a
-  /// line's index is the same either way.
+  /// whole log: on the 144 MB mock-home log that parse is 386 ms of the request, and the tail window is 512 KiB. The
+  /// `\n` split keeps the blank lines the whole-file read keeps, so a line's index is the same either way. A page the
+  /// line index places before the window's first byte cannot be held by it, so that case returns without the read.
   ///
   /// The count names how many lines the tail holds, so an append between the count and the read would shift which
-  /// lines the window returns. The signature the count was taken under is checked again after the read; a log that
-  /// moved falls back to the whole-file read, whose indices come from the one buffer it reads.
+  /// lines the window returns. The signature the count was taken under is checked again after the read. A log that
+  /// moved falls back to [`Self::live_lines_from_checkpoint`], whose byte names the line the read starts at.
   fn live_tail_lines_newline_split(
     &self,
     session_id: &str,
@@ -732,7 +796,21 @@ impl Store {
   ) -> StoreResult<Option<Vec<Option<Arc<ChatEvent>>>>> {
     let path = self.chat_events_path(session_id);
     let Some((metadata, signature)) = file_signature(&path)? else { return Ok(None) };
-    let total = self.count_chat_event_lines(&path, signature)?;
+    let index = self.line_index(&path, signature)?;
+    // The window starts inside a line, and the read drops that line. The window therefore holds the page only when the
+    // page's first line starts after the window does. A checkpoint of a later line starts after that line does, so one
+    // at or before the window start proves the page is outside it without the 512 KiB read.
+    let window_start = metadata.len().saturating_sub(TAIL_WINDOW_SIZE as u64);
+    if let Some((_, byte)) = index.checkpoint_after(first_line)
+      && byte <= window_start
+    {
+      return Ok(None);
+    }
+    #[cfg(test)]
+    {
+      lock(&self.event_read_caches, "event read cache mutex").tail_window_reads += 1;
+    }
+    let total = index.count;
     let Some((lines, bytes_read)) =
       read_ndjson_tail_physical_lines(&path, metadata.len(), total.saturating_sub(first_line))?
     else {
@@ -773,20 +851,28 @@ impl Store {
   }
 
   /// Count physical lines through the 64-entry `(mtime_ns, size)` count memo.
+  fn count_chat_event_lines(&self, path: &Path, signature: FileSignature) -> StoreResult<usize> {
+    Ok(self.line_index(path, signature)?.count)
+  }
+
+  /// The log's line count and checkpoints, through the 64-entry `(mtime_ns, size)` count memo.
   ///
   /// A page's first open of a session counts the session's whole log, and the mock home's largest log is 144 MB: the
   /// read is 30 ms of the open, single-threaded. A log over [`PARALLEL_COUNT_MIN_BYTES`] is counted in contiguous
   /// ranges at once, one range per core up to [`MAX_COUNT_CORES`], because the count is one sum of newline bytes and
-  /// a range boundary never changes it.
-  fn count_chat_event_lines(&self, path: &Path, signature: FileSignature) -> StoreResult<usize> {
-    if let Some(count) =
+  /// a range boundary never changes it. The scan that counts the newlines also records where every
+  /// [`LINE_INDEX_STRIDE`]-th line starts, so a page far inside the log seeks there instead of reading the head.
+  fn line_index(&self, path: &Path, signature: FileSignature) -> StoreResult<LineIndex> {
+    if let Some(index) =
       lock(&self.event_read_caches, "event read cache mutex").count.fresh(&path.to_path_buf(), signature)
     {
-      return Ok(count);
+      return Ok(index);
     }
     let file = match fs::File::open(path) {
       Ok(file) => file,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        return Ok(LineIndex { count: 0, checkpoints: vec![(0, 0)] });
+      }
       Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
     };
     let ranges = if signature.size >= PARALLEL_COUNT_MIN_BYTES {
@@ -796,7 +882,7 @@ impl Store {
     } else {
       1
     };
-    let (total, bytes_read) = count_lines_in_ranges(&file, signature.size, ranges, path)?;
+    let (index, bytes_read) = count_lines_in_ranges(&file, signature.size, ranges, path)?;
     {
       let mut caches = lock(&self.event_read_caches, "event read cache mutex");
       #[cfg(test)]
@@ -805,9 +891,9 @@ impl Store {
       }
       #[cfg(not(test))]
       let _ = bytes_read;
-      caches.count.record(path.to_path_buf(), signature, total);
+      caches.count.record(path.to_path_buf(), signature, index.clone());
     }
-    Ok(total)
+    Ok(index)
   }
 
   /// Record the count this append makes, when the count memo holds the count of the file the append grew and the
@@ -826,7 +912,7 @@ impl Store {
     line_bytes: usize,
   ) -> StoreResult<()> {
     let Some(before) = before else { return Ok(()) };
-    let Some((held_signature, held_count)) =
+    let Some((held_signature, mut index)) =
       lock(&self.event_read_caches, "event read cache mutex").count.held(&path.to_path_buf())
     else {
       return Ok(());
@@ -841,16 +927,30 @@ impl Store {
     if !ends_with_newline(path, before.size)? {
       return Ok(());
     }
-    lock(&self.event_read_caches, "event read cache mutex").count.record(path.to_path_buf(), after, held_count + 1);
+    // The appended line starts at the byte the log held before the append, and it is the next line after the held
+    // count.
+    index.record_append(before.size);
+    lock(&self.event_read_caches, "event read cache mutex").count.record(path.to_path_buf(), after, index);
     Ok(())
   }
 
   /// Discard the parsed live-log cache after a rewrite.
   pub fn clear_chat_events_cache(&self, session_id: &str) {
+    self.note_history_change();
     let cache_entry = lock(&self.events_cache, "event cache mutex").get(session_id).cloned();
     let Some(cache_entry) = cache_entry else { return };
     let mut cache = lock(&cache_entry, "session event cache mutex");
     *cache = None;
+  }
+
+  /// Count one live-history change: a write this store attempted, or one a caller announced by clearing the parsed cache.
+  pub(crate) fn note_history_change(&self) {
+    self.history_changes.fetch_add(1, Ordering::Relaxed);
+  }
+
+  /// The number of live-history changes this store knows since it opened.
+  pub(crate) fn history_changes(&self) -> u64 {
+    self.history_changes.load(Ordering::Relaxed)
   }
 
   /// Drop a node's parsed live events and folded facts after a node pass releases its local references.
@@ -954,7 +1054,7 @@ impl Store {
   }
 
   /// Logs a whole-log chat-events load of [`WHOLE_LOG_LOGGED_BYTES`] or more with its file, size and wall time, so a
-  /// slow boot names the log it waited on. One line per large load; grepping the event name counts them.
+  /// slow boot names the log it waited on. One line per large load. Grepping the event name counts them.
   fn log_whole_log_load(path: &Path, started: Instant) {
     let bytes = std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
     if bytes >= WHOLE_LOG_LOGGED_BYTES {
@@ -1038,8 +1138,11 @@ impl Store {
       replacement.push_str(line);
       replacement.push('\n');
     }
-    fsutil::atomic_write_text(&live_path, &replacement)
-      .map_err(|error| StoreError::new(format!("{}: {error}", live_path.display())))?;
+    let rewritten = fsutil::atomic_write_text(&live_path, &replacement)
+      .map_err(|error| StoreError::new(format!("{}: {error}", live_path.display())));
+    // The count moves after every attempt: a rewrite whose later step fails can still have replaced the log.
+    self.note_history_change();
+    rewritten?;
     let archived_count = archived_raw.len() as i64;
     self
       .mutate_fresh(session_id, false, true, |meta: &mut SessionMetadata| {
@@ -1172,11 +1275,14 @@ const MAX_COUNT_CORES: usize = 8;
 /// The bytes one core counts at a time.
 const COUNT_CHUNK_BYTES: usize = 256 * 1024;
 
-/// The physical line count of the `len`-byte `file`, split across `ranges` contiguous ranges, and the bytes read.
+/// The line index of the `len`-byte `file`, split across `ranges` contiguous ranges, and the bytes read.
 ///
 /// The sum of newline bytes over the ranges is the file's count, because a range boundary never moves a newline. The
-/// file's last byte decides whether an unterminated final line adds one.
-fn count_lines_in_ranges(file: &fs::File, len: u64, ranges: usize, path: &Path) -> StoreResult<(usize, usize)> {
+/// file's last byte decides whether an unterminated final line adds one. Each range names the byte after every
+/// [`LINE_INDEX_STRIDE`]-th newline it reads, counting from its own first newline: the ranges meet at byte boundaries
+/// that need not fall on line starts, so the checkpoints of one range can sit up to a stride apart from its neighbour's,
+/// and every one of them still starts a line.
+fn count_lines_in_ranges(file: &fs::File, len: u64, ranges: usize, path: &Path) -> StoreResult<(LineIndex, usize)> {
   if ranges < 2 || len == 0 {
     return count_lines_in_one_read(file, len, path);
   }
@@ -1192,28 +1298,40 @@ fn count_lines_in_ranges(file: &fs::File, len: u64, ranges: usize, path: &Path) 
     handles
       .into_iter()
       .map(|handle| handle.join().expect("a count range does not panic"))
-      .collect::<Vec<std::io::Result<(usize, usize)>>>()
+      .collect::<Vec<std::io::Result<NewlineScan>>>()
   });
   let mut total = 0usize;
   let mut bytes_read = 0usize;
-  for count in counts {
-    let (count, read) = count.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    total += count;
-    bytes_read += read;
+  let mut checkpoints = vec![(0, 0)];
+  for scan in counts {
+    let scan = scan.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    for (k, byte) in scan.checkpoints.iter().enumerate() {
+      checkpoints.push((total + k * LINE_INDEX_STRIDE + 1, *byte));
+    }
+    total += scan.count;
+    bytes_read += scan.bytes;
   }
   if last_byte_of(file, len, path)?.is_some_and(|byte| byte != b'\n') {
     total += 1;
   }
-  Ok((total, bytes_read))
+  Ok((LineIndex { count: total, checkpoints }, bytes_read))
 }
 
-/// The newlines in the `start..end` byte range of `file`, and the bytes read.
-fn count_newlines_in_range(file: &fs::File, start: u64, end: u64) -> std::io::Result<(usize, usize)> {
+/// One range's newlines: how many it read, the bytes it read, and the byte after every [`LINE_INDEX_STRIDE`]-th
+/// newline counted from the range's first.
+struct NewlineScan {
+  count: usize,
+  bytes: usize,
+  checkpoints: Vec<u64>,
+}
+
+/// The newlines in the `start..end` byte range of `file`.
+fn count_newlines_in_range(file: &fs::File, start: u64, end: u64) -> std::io::Result<NewlineScan> {
   use std::os::unix::fs::FileExt;
 
   let mut chunk = vec![0u8; COUNT_CHUNK_BYTES];
   let mut position = start;
-  let mut total = 0usize;
+  let mut scan = NewlineScan { count: 0, bytes: 0, checkpoints: Vec::new() };
   while position < end {
     let want =
       usize::try_from((end - position).min(u64::try_from(COUNT_CHUNK_BYTES).expect("a chunk length fits u64")))
@@ -1222,20 +1340,27 @@ fn count_newlines_in_range(file: &fs::File, start: u64, end: u64) -> std::io::Re
     if read == 0 {
       break;
     }
-    total += memchr_iter(b'\n', &chunk[..read]).count();
+    for offset in memchr_iter(b'\n', &chunk[..read]) {
+      if scan.count.is_multiple_of(LINE_INDEX_STRIDE) {
+        scan.checkpoints.push(position + u64::try_from(offset).expect("an offset fits u64") + 1);
+      }
+      scan.count += 1;
+    }
     position += u64::try_from(read).expect("a read length fits u64");
   }
-  Ok((total, usize::try_from(position - start).expect("the read range fits usize")))
+  scan.bytes = usize::try_from(position - start).expect("the read range fits usize");
+  Ok(scan)
 }
 
-/// The line count of the whole `len`-byte `file` read into one buffer, and the bytes read.
-fn count_lines_in_one_read(file: &fs::File, len: u64, path: &Path) -> StoreResult<(usize, usize)> {
+/// The line index of the whole `len`-byte `file` read into one buffer, and the bytes read.
+fn count_lines_in_one_read(file: &fs::File, len: u64, path: &Path) -> StoreResult<(LineIndex, usize)> {
   use std::os::unix::fs::FileExt;
 
   let mut chunk = vec![0u8; 1024 * 1024];
   let mut total = 0usize;
   let mut bytes_read = 0usize;
   let mut last_byte = None;
+  let mut checkpoints = vec![(0, 0)];
   while u64::try_from(bytes_read).expect("a read length fits u64") < len {
     let remaining = len - u64::try_from(bytes_read).expect("a read length fits u64");
     let want = usize::try_from(remaining.min(COUNT_CHUNK_BYTES as u64)).expect("a chunk length fits usize");
@@ -1247,14 +1372,19 @@ fn count_lines_in_one_read(file: &fs::File, len: u64, path: &Path) -> StoreResul
       break;
     }
     let bytes = &chunk[..read];
-    total += memchr_iter(b'\n', bytes).count();
+    for newline in memchr_iter(b'\n', bytes) {
+      if total.is_multiple_of(LINE_INDEX_STRIDE) {
+        checkpoints.push((total + 1, offset + u64::try_from(newline).expect("an offset fits u64") + 1));
+      }
+      total += 1;
+    }
     last_byte = bytes.last().copied();
     bytes_read += read;
   }
   if last_byte.is_some_and(|byte| byte != b'\n') {
     total += 1;
   }
-  Ok((total, bytes_read))
+  Ok((LineIndex { count: total, checkpoints }, bytes_read))
 }
 
 /// The file's last byte, or `None` when the file is empty.
@@ -1380,7 +1510,7 @@ fn visit_file_facts_from_end_with_span<T>(
   Ok((value, walk.mapped_span()))
 }
 
-/// Visit one line when its type is in `types`; a line whose first bytes prove another type is skipped unparsed.
+/// Visit one line when its type is in `types`. A line whose first bytes prove another type is skipped unparsed.
 fn visit_line_facts<T>(line: &[u8], types: &[&str], visit: &mut impl FnMut(ChatEvent) -> Option<T>) -> Option<T> {
   let head = &line[..line.len().min(TYPE_HEAD_PROOF_BYTES)];
   if type_head_verdict(head, types) == Some(false) {
@@ -1455,7 +1585,7 @@ fn string_value_after_key(head: &[u8], mut cursor: usize) -> Option<(&[u8], usiz
 
 /// The last `take` physical lines of a log, split on `\n` only, or `None` when the tail window does not hold them.
 ///
-/// The first line of the window is dropped because the window may start inside it; a window that starts on a line
+/// The first line of the window is dropped because the window may start inside it. A window that starts on a line
 /// boundary loses one whole line to that rule, which only makes the caller's fallback likelier. A trailing newline
 /// leaves no line of its own, as in the whole-file read.
 fn read_ndjson_tail_physical_lines(
@@ -2252,10 +2382,11 @@ mod tests {
       assert_eq!(ids(&warm_end), vec!["c"]);
     }
 
-    /// A page that ends at the log's end reads the tail window instead of the whole log, and its events match the
-    /// whole-file read's: a blank line, a malformed line and a final line without a newline each keep their index.
+    /// A page that ends at the log's end reads the tail window, and a page far inside the log seeks to its line
+    /// index: each reads only its own lines and serves its slots in the whole-file numbering, where a blank line, a
+    /// malformed line and a final line without a newline each keep their index.
     #[tokio::test]
-    async fn an_unarchived_newest_page_reads_only_the_log_tail() {
+    async fn an_unarchived_page_reads_only_the_lines_it_serves() {
       let home = tempfile::tempdir().unwrap();
       let store = test_store(home.path());
       let session_id = "synthetic-session";
@@ -2264,35 +2395,66 @@ mod tests {
       std::fs::create_dir_all(path.parent().unwrap()).unwrap();
       let padding = "x".repeat(60);
       let mut body = String::new();
-      let mut total = 0usize;
-      while body.len() < 2 * TAIL_WINDOW_SIZE {
-        body.push_str(&format!("{{\"id\": \"e{total}\", \"content\": \"{padding}\"}}\n"));
-        total += 1;
+      let mut padded = 0usize;
+      while body.len() < 3 * TAIL_WINDOW_SIZE {
+        body.push_str(&format!("{{\"id\": \"e{padded}\", \"content\": \"{padding}\"}}\n"));
+        padded += 1;
       }
       body.push_str("{\"id\": \"last-a\"}\n\n{bad\n{\"id\": \"last-b\"}\n{\"id\": \"last-c\"}");
-      total += 5;
+      let total = padded + 5;
       std::fs::write(&path, &body).unwrap();
 
-      let whole = store.live_lines_newline_split(session_id).unwrap();
-      assert_eq!(whole.len(), total, "physical lines");
-      let want = |start: usize, end: usize| -> Vec<ChatEvent> {
-        whole[start..end].iter().flatten().map(|event| (**event).clone()).collect()
+      // The slots the file holds, by construction: the padded ids, then the tail's five slots of which two parse to
+      // nothing.
+      let want = |start: usize, end: usize| -> Vec<String> {
+        (start..end)
+          .filter_map(|slot| match slot {
+            slot if slot < padded => Some(format!("e{slot}")),
+            slot if slot == padded => Some("last-a".to_string()),
+            slot if slot == padded + 3 => Some("last-b".to_string()),
+            slot if slot == padded + 4 => Some("last-c".to_string()),
+            _ => None,
+          })
+          .collect()
       };
       for take in [1usize, 2, 3, 5, 40] {
         let start = total - take;
         let (events, has_more) = store.load_chat_events_range(session_id, start, total).unwrap();
-        assert_eq!(ids(&events), ids(&want(start, total)), "tail of {take} slots");
+        assert_eq!(ids(&events), want(start, total), "tail of {take} slots");
         assert_eq!(has_more, start > 0);
       }
       let read = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read;
       assert!(read <= 5 * TAIL_WINDOW_SIZE, "the newest pages read {read} bytes of a {} B log", body.len());
+      let tail_reads = lock(&store.event_read_caches, "event read cache mutex").tail_window_reads;
+      assert!(tail_reads > 0, "the newest pages read the tail window");
 
       // A range that ends before the log's end keeps the whole-file numbering.
       let (middle, _) = store.load_chat_events_range(session_id, total - 60, total - 30).unwrap();
-      assert_eq!(ids(&middle), ids(&want(total - 60, total - 30)));
-      // A page at the head is too far from the tail window for the tail read, and still matches.
+      assert_eq!(ids(&middle), want(total - 60, total - 30));
+      // A page far inside the log is outside the tail window, so the read seeks to the nearest checkpoint of its
+      // line index and reads its own lines: one line per slot, in the whole-file numbering, and the read is the page
+      // plus at most one stride.
+      let before = lock(&store.event_read_caches, "event read cache mutex").live_range_bytes_read;
+      let tail_before = lock(&store.event_read_caches, "event read cache mutex").tail_window_reads;
+      let parsed_before = lock(&store.event_read_caches, "event read cache mutex").live_range_lines_parsed;
+      let start = total / 2;
+      let (deep, _) = store.load_chat_events_range(session_id, start, start + 30).unwrap();
+      let caches = lock(&store.event_read_caches, "event read cache mutex");
+      let deep_read = caches.live_range_bytes_read - before;
+      let tail_reads = caches.tail_window_reads - tail_before;
+      let parsed = caches.live_range_lines_parsed - parsed_before;
+      drop(caches);
+      assert_eq!(ids(&deep), want(start, start + 30));
+      assert!(
+        deep_read < (LINE_INDEX_STRIDE + 32) * 128,
+        "the deep page read {deep_read} bytes of a {} B log",
+        body.len()
+      );
+      assert_eq!(tail_reads, 0, "the deep page is outside the tail window, so its read is skipped");
+      assert_eq!(parsed, 30, "the deep page parses its own lines, not the stride before them");
+      // The page at the log's start is one checkpoint away from it, and it matches too.
       let (head, _) = store.load_chat_events_range(session_id, 0, 3).unwrap();
-      assert_eq!(ids(&head), ids(&want(0, 3)));
+      assert_eq!(ids(&head), want(0, 3));
     }
 
     /// `fact_history` composition: the archived count is the total event count minus the live
@@ -2461,6 +2623,55 @@ mod tests {
       store.record_appended_line_count(&path, Some(before), 10).unwrap();
 
       assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 7);
+    }
+
+    /// The append's own line opens the index's next checkpoint, and a range that starts there reads from it.
+    #[test]
+    fn an_append_records_the_line_index_checkpoint_its_line_opens() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      let body: String = (0..LINE_INDEX_STRIDE).map(|line| format!("{{\"id\": \"{line}\"}}\n")).collect();
+      std::fs::write(&path, &body).unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), LINE_INDEX_STRIDE);
+      let before = file_signature(&path).unwrap().unwrap().1;
+      let appended = b"{\"id\": \"appended\"}\n";
+      let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+      std::io::Write::write_all(&mut file, appended).unwrap();
+
+      store.record_appended_line_count(&path, Some(before), appended.len()).unwrap();
+
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), LINE_INDEX_STRIDE + 1);
+      let signature = file_signature(&path).unwrap().unwrap().1;
+      let index = store.event_read_caches.lock().unwrap().count.fresh(&path, signature).unwrap();
+      assert_eq!(index.checkpoints.last(), Some(&(LINE_INDEX_STRIDE, before.size)));
+      let (events, _) = store.load_chat_events_range(session_id, LINE_INDEX_STRIDE, LINE_INDEX_STRIDE + 1).unwrap();
+      assert_eq!(ids(&events), vec!["appended"]);
+    }
+
+    /// A range-built index can leave its last checkpoint short of a multiple of the stride, so an appended line whose
+    /// own number is not a multiple still opens a checkpoint a stride after that one: every page starts less than a
+    /// stride from its checkpoint.
+    #[test]
+    fn an_append_opens_a_checkpoint_a_stride_after_the_last_one() {
+      let mut index = LineIndex { count: 129, checkpoints: vec![(0, 0), (1, 1), (65, 4096), (66, 4200)] };
+      index.record_append(8_192);
+      index.record_append(8_300);
+      index.record_append(8_400);
+      assert_eq!(index.count, 132);
+      let checkpoint_lines: Vec<usize> = index.checkpoints.iter().map(|(line, _)| *line).collect();
+      assert_eq!(checkpoint_lines, vec![0, 1, 65, 66, 130]);
+      for line in 0..index.count {
+        let (checkpoint, _) = index.checkpoint_at(line);
+        assert!(
+          line - checkpoint < LINE_INDEX_STRIDE,
+          "line {line} starts {} lines after checkpoint {checkpoint}",
+          line - checkpoint
+        );
+      }
     }
 
     #[test]
@@ -2632,28 +2843,43 @@ mod tests {
     }
 
     /// A count split across ranges is the count the whole file gives, for lines that cross every range boundary and
-    /// for a final line without a newline.
+    /// for a final line without a newline, and every range split's checkpoints name a real line start.
     #[test]
-    fn a_line_count_split_across_ranges_matches_the_whole_file() {
+    fn a_line_index_split_across_ranges_matches_the_whole_file() {
       let home = tempfile::tempdir().unwrap();
       let path = home.path().join("events.jsonl");
       let body: String = (0..10_000).map(|line| format!("{{\"i\": {line}}}\n")).collect();
       std::fs::write(&path, &body).unwrap();
-      let file = std::fs::File::open(&path).unwrap();
-      let len = u64::try_from(body.len()).unwrap();
-      let whole = count_lines_in_ranges(&file, len, 1, &path).unwrap();
-      assert_eq!(whole, (10_000, body.len()));
-      for ranges in [2, 3, 7, MAX_COUNT_CORES] {
-        assert_eq!(count_lines_in_ranges(&file, len, ranges, &path).unwrap(), whole);
+      let line_starts = |bytes: &[u8]| -> Vec<u64> {
+        let mut starts = vec![0u64];
+        starts.extend(memchr_iter(b'\n', bytes).map(|index| u64::try_from(index).unwrap() + 1));
+        starts
+      };
+      for ranges in [1, 2, 3, 7, MAX_COUNT_CORES] {
+        let file = std::fs::File::open(&path).unwrap();
+        let len = u64::try_from(body.len()).unwrap();
+        let (index, read) = count_lines_in_ranges(&file, len, ranges, &path).unwrap();
+        assert_eq!(index.count, 10_000, "{ranges} ranges");
+        assert_eq!(read, body.len(), "{ranges} ranges");
+        let starts = line_starts(body.as_bytes());
+        for (line, byte) in &index.checkpoints {
+          assert_eq!(starts[*line], *byte, "{ranges} ranges: line {line} starts at {byte}");
+        }
+        assert_eq!(index.checkpoints[0], (0, 0));
       }
 
       let unterminated = format!("{body}{{\"i\": 10000}}");
       std::fs::write(&path, &unterminated).unwrap();
       let file = std::fs::File::open(&path).unwrap();
       let len = u64::try_from(unterminated.len()).unwrap();
-      let expected = (10_001, unterminated.len());
-      assert_eq!(count_lines_in_ranges(&file, len, 1, &path).unwrap(), expected);
-      assert_eq!(count_lines_in_ranges(&file, len, 4, &path).unwrap(), expected);
+      let starts = line_starts(unterminated.as_bytes());
+      for ranges in [1, 4] {
+        let (index, _) = count_lines_in_ranges(&file, len, ranges, &path).unwrap();
+        assert_eq!(index.count, 10_001, "{ranges} ranges");
+        for (line, byte) in &index.checkpoints {
+          assert_eq!(starts[*line], *byte, "{ranges} ranges: line {line} starts at {byte}");
+        }
+      }
     }
   }
 }

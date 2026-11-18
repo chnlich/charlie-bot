@@ -11,6 +11,7 @@ use axum::response::Response;
 use charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_compat::mimetypes_table::APPLICATION_GZIP;
+use charliebot_compat::responses::Failure;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::urlquote::encode_pairs;
 use charliebot_compat::{responses, static_files, validation};
@@ -108,7 +109,7 @@ async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>,
   });
   match render_perfetto(&features, &context, &request) {
     Ok(response) => response,
-    Err((kind, detail)) => responses::internal_error(&kind, detail),
+    Err(failure) => responses::internal_error(&failure.kind, failure.detail),
   }
 }
 
@@ -179,12 +180,12 @@ fn serve_cached_trace(cache_path: &Path, headers: &HeaderMap) -> Response {
   response
 }
 
-fn render_perfetto(features: &FeatureContext, context: &Value, request: &Parts) -> Result<Response, (String, String)> {
+fn render_perfetto(features: &FeatureContext, context: &Value, request: &Parts) -> Result<Response, Failure> {
   let templating =
-    features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+    features.startup.require::<Templating>().map_err(|error| Failure::new("RuntimeError", error.to_string()))?;
   templating
     .render_page(features, "perfetto.html", context, request)
-    .map_err(|error| (error.kind().to_string(), error.to_string()))
+    .map_err(|error| Failure::new(error.kind(), error.to_string()))
 }
 
 /// The viewer with no trace selected: a page answer stays a page, so the page's own words say how
@@ -201,7 +202,7 @@ fn render_perfetto_empty(features: &FeatureContext, request: &Parts) -> Response
   });
   match render_perfetto(features, &context, request) {
     Ok(response) => response,
-    Err((kind, detail)) => responses::internal_error(&kind, detail),
+    Err(failure) => responses::internal_error(&failure.kind, failure.detail),
   }
 }
 

@@ -381,15 +381,21 @@ pub fn reply_probe_input(reply_text: &str, questions: &str) -> String {
   format!("{reply_text}\n\n{questions}")
 }
 
+/// The questions a web reply's cold read answers, in order: identifiers, agent-work terms, and the decision facts.
+const REPLY_QUESTION_COUNT: usize = 3;
+
 /// The findings parsed from a cold-read answer of a web reply (`parse_reply_findings`).
 pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
-  let mut answers: [Option<String>; 2] = [None, None];
+  let mut answers: [Option<String>; REPLY_QUESTION_COUNT] = Default::default();
   let mut active = None;
   for line in answer.lines() {
     let trimmed = line.trim();
-    let labelled = [("(1)", 0), ("1.", 0), ("（1）", 0), ("1、", 0), ("(2)", 1), ("2.", 1), ("（2）", 1), ("2、", 1)]
-      .into_iter()
-      .find_map(|(label, index)| trimmed.strip_prefix(label).map(|rest| (index, rest)));
+    let labelled = (0..REPLY_QUESTION_COUNT).find_map(|index| {
+      let number = index + 1;
+      [format!("({number})"), format!("{number}."), format!("（{number}）"), format!("{number}、")]
+        .into_iter()
+        .find_map(|label| trimmed.strip_prefix(label.as_str()).map(|rest| (index, rest)))
+    });
     if let Some((index, rest)) = labelled {
       anyhow::ensure!(
         answers[index].is_none(),
@@ -409,7 +415,7 @@ pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
   }
   anyhow::ensure!(
     answers.iter().all(Option::is_some),
-    "cold-read reply answer must answer questions (1) and (2); raw answer:\n{answer}"
+    "cold-read reply answer must answer questions (1), (2) and (3); raw answer:\n{answer}"
   );
 
   let mut findings = Vec::new();
@@ -904,10 +910,10 @@ BBBB
 
   #[test]
   fn reply_findings_parser_extracts_findings_and_ignores_none_answers() {
-    let clean = "(1) none\n(2) none";
+    let clean = "(1) none\n(2) none\n(3) none";
     assert!(parse_reply_findings(clean).unwrap().is_empty());
 
-    let with_findings = "(1) 0a1c1ef stands without a name.\n(2) 「读回」is a rule-defined agent term.";
+    let with_findings = "(1) 0a1c1ef stands without a name.\n(2) 「读回」is a rule-defined agent term.\n(3) none";
     assert_eq!(
       parse_reply_findings(with_findings).unwrap(),
       vec!["0a1c1ef stands without a name", "「读回」is a rule-defined agent term"]
@@ -915,8 +921,20 @@ BBBB
   }
 
   #[test]
+  fn reply_findings_parser_takes_a_missing_decision_fact_as_the_third_finding() {
+    let answer = "(1) none\n(2) none\n(3) The cost of option B is not stated; the deadline is missing.";
+
+    assert_eq!(
+      parse_reply_findings(answer).unwrap(),
+      vec!["The cost of option B is not stated; the deadline is missing"]
+    );
+  }
+
+  #[test]
   fn reply_findings_parser_accepts_chinese_answer_labels() {
-    for answer in ["（1）none\n（2）none", "（1）：none\n（2）：none", "1、none\n2、none"] {
+    let answers =
+      ["（1）none\n（2）none\n（3）none", "（1）：none\n（2）：none\n（3）：none", "1、none\n2、none\n3、none"];
+    for answer in answers {
       assert!(parse_reply_findings(answer).unwrap().is_empty(), "{answer}");
     }
   }
@@ -931,7 +949,7 @@ BBBB
     ];
 
     for answer in clean_answers {
-      let response = format!("(1) {answer}\n(2) none");
+      let response = format!("(1) {answer}\n(2) none\n(3) none");
       assert!(parse_reply_findings(&response).unwrap().is_empty(), "{response}");
     }
   }
@@ -939,7 +957,8 @@ BBBB
   #[test]
   fn reply_findings_parser_keeps_a_finding_when_a_later_sentence_says_none() {
     let answer = r#"(1) 有三个：一是 "session" stands bare. None.
-(2) none"#;
+(2) none
+(3) none"#;
 
     assert_eq!(parse_reply_findings(answer).unwrap(), [r#"有三个：一是 "session" stands bare. None"#]);
   }
@@ -947,6 +966,7 @@ BBBB
   #[test]
   fn reply_findings_parser_rejects_an_incomplete_answer() {
     assert!(parse_reply_findings("(1) none").is_err());
+    assert!(parse_reply_findings("(1) none\n(2) none").is_err());
     assert!(parse_reply_findings("No findings.").is_err());
   }
 

@@ -80,6 +80,8 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
       wrapWideChars: (html) => html,
       renderUserMessageBubble: () => '',
     });
+    // The chat's time label is utils.js's formatTimeLabel; the harness loads no utils.js, so a bubble's time is a stand-in.
+    context.formatTimeLabel = (value) => String(value);
     context.Chat.renderRoundRatingButtons = () => '';
     context.Chat.markFileLinks = () => {};
     vm.runInContext(readStatic('chat/rendering.js'), context, {filename: 'chat/rendering.js'});
@@ -285,4 +287,66 @@ test('a message_update for a message the list does not hold throws and leaves th
       () => deliverUpdate(page.socket, {...committedDraft(subagentOf('completed', 3)), id: 'draft-unknown'}),
       /message_update names no message in this list: draft-unknown/);
   assert.deepEqual(page.engine.entries.map((entry) => entry.msg), before);
+});
+
+// The page's view of a message, as a plain object: a test compares two pages whose scripts run in separate contexts,
+// and an object from one context does not deep-equal one from another.
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+// With rendering loaded, the page's appendMessageObject draws into the turn engine. This wrapper keeps each message
+// the page draws, in order, and passes it on. Attach it before the page's first frame.
+function recordDrawn(page) {
+  const drawn = [];
+  const draw = page.context.appendMessageObject;
+  page.context.appendMessageObject = (msg, sessionId, forceScroll) => {
+    drawn.push(msg);
+    return draw(msg, sessionId, forceScroll);
+  };
+  return drawn;
+}
+
+// A streamed draft that a commit closes. The standalone frame and the folded one carry the same commit, so the page
+// must draw the same message and keep the same text for the draft that follows.
+test('a commit folded into the next stream frame draws the message a standalone commit frame draws', () => {
+  const timestamp = '2026-11-18T02:14:07+00:00';
+  const standalone = buildPage([], 'session-a', {renderMessages: true});
+  const standaloneDrawn = recordDrawn(standalone);
+  standalone.socket.emitMessage({type: 'stream', event_index: 1, append: 'Hello', length: 5});
+  deliver(standalone.socket, {role: 'assistant', content_streamed: true, id: 'draft-1', timestamp, event_index: 1});
+  standalone.socket.emitMessage({type: 'stream', event_index: 2, append: 'World', length: 10});
+
+  const folded = buildPage([], 'session-a', {renderMessages: true});
+  const foldedDrawn = recordDrawn(folded);
+  folded.socket.emitMessage({type: 'stream', event_index: 1, append: 'Hello', length: 5});
+  folded.socket.emitMessage({
+    type: 'stream', event_index: 2, append: 'World', length: 10,
+    commit: {id: 'draft-1', timestamp, event_index: 1},
+  });
+
+  const markup = (page, drawn) => page.context.renderMessage(drawn.at(-1), 'session-a');
+  assert.equal(markup(folded, foldedDrawn), markup(standalone, standaloneDrawn));
+  assert.deepEqual(plain(foldedDrawn), plain(standaloneDrawn));
+  assert.deepEqual(plain(folded.context.takeStreamedDraft()), plain(standalone.context.takeStreamedDraft()));
+});
+
+// master_done carries the round separator's identity, so the separator it draws is the separator message the server
+// no longer sends.
+test('a round separator drawn from master_done matches the separator message', () => {
+  const timestamp = '2026-11-18T02:14:08.183460+00:00';
+  const message = {role: 'separator', thinking_seconds: 0, id: 'round-1', timestamp, event_index: 4};
+  const standalone = buildPage([], 'session-a', {renderMessages: true});
+  const standaloneDrawn = recordDrawn(standalone);
+  deliver(standalone.socket, message);
+
+  const fromDone = buildPage([], 'session-a', {renderMessages: true});
+  const fromDoneDrawn = recordDrawn(fromDone);
+  fromDone.socket.emitMessage({
+    type: 'master_done', still_thinking: false, id: 'round-1', timestamp, event_index: 4,
+  });
+
+  assert.equal(
+    fromDone.context.renderMessage(fromDoneDrawn.at(-1), 'session-a'),
+    standalone.context.renderMessage(standaloneDrawn.at(-1), 'session-a'));
 });

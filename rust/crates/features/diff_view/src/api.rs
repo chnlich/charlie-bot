@@ -388,7 +388,7 @@ impl GitState {
   }
 
   fn config(&self) -> Result<Arc<CharlieBotConfig>, Response> {
-    self.config.get().map_err(|error| responses::internal_error("ConfigError", error.to_string()))
+    self.config.get().map_err(|error| responses::internal_error(responses::CONFIG_ERROR_CLASS, error.to_string()))
   }
 }
 

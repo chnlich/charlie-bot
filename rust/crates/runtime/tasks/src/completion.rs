@@ -897,9 +897,9 @@ impl TaskCompletion {
       None,
       [
         ("request_id".to_string(), json!(request_id)),
-        ("owner_run_id".to_string(), json!(owner_run_id)),
+        (event_types::OWNER_RUN_ID.to_string(), json!(owner_run_id)),
         ("summary".to_string(), json!(evidence.summary)),
-        ("result_refs".to_string(), json!(evidence.result_refs)),
+        (event_types::RESULT_REFS.to_string(), json!(evidence.result_refs)),
         ("run_ids".to_string(), json!(evidence.run_ids)),
       ],
     );
@@ -1081,41 +1081,24 @@ impl TaskCompletion {
       archived_by,
       sequence_outcome,
     } = append;
-    let close_event = match outcome {
-      "archived" => control_events::archived_close_event(
-        session_id,
-        request_id,
-        summary,
-        report_to,
-        archived_with,
-        archived_by,
-        actor,
-        result_refs,
-        run_ids,
-      ),
-      "completed" | "cancelled" => {
-        let mut payload = vec![
-          ("request_id".to_string(), json!(request_id)),
-          ("outcome".to_string(), json!(outcome)),
-          ("summary".to_string(), json!(summary)),
-          ("result_refs".to_string(), json!(result_refs)),
-          ("run_ids".to_string(), json!(run_ids)),
-          ("report_to".to_string(), report_to.map_or(Value::Null, |parent| json!(parent))),
-        ];
-        if let Some(sequence_outcome) = sequence_outcome {
-          payload.push(("sequence_outcome".to_string(), json!(sequence_outcome)));
-        }
-        control_events::build_control_event(
-          event_types::TASK_CLOSED,
-          actor,
-          session_id,
-          Some(&control_events::stable_close_event_id(session_id, request_id)),
-          None,
-          payload,
-        )
-      }
+    let archived = match outcome {
+      "archived" => true,
+      "completed" | "cancelled" => false,
       other => return Err(StoreError::new(format!("unknown task close outcome: {other}"))),
     };
+    let close_event = control_events::close_event(control_events::CloseFact {
+      session_id,
+      request_id,
+      outcome,
+      summary,
+      result_refs,
+      run_ids,
+      report_to,
+      sequence_outcome: if archived { None } else { sequence_outcome },
+      archived_with: if archived { archived_with } else { None },
+      archived_by: if archived { archived_by } else { None },
+      actor,
+    });
     let close_event = self.store().append_control_fact(guard, session_id, close_event).await?;
     Self::spawn_session_browser_sweep(session_id);
     let report_outcome = sequence_outcome.unwrap_or(outcome);
@@ -1803,7 +1786,7 @@ impl TaskCompletion {
       if stop.is_some_and(StartupStop::is_cancelled) {
         return Ok(None);
       }
-      if request.get("owner_run_id").and_then(CompactValue::as_str) != Some(run_id) {
+      if request.get(event_types::OWNER_RUN_ID).and_then(CompactValue::as_str) != Some(run_id) {
         continue;
       }
       let Some(request_id) = request.get("request_id").and_then(CompactValue::as_str).filter(|value| !value.is_empty())
@@ -2139,7 +2122,7 @@ fn evidence_from_close_request(request: &Value) -> StoreResult<CompletionEvidenc
   };
   Ok(CompletionEvidence {
     summary: string_field("summary"),
-    result_refs: strings_field("result_refs")?,
+    result_refs: strings_field(event_types::RESULT_REFS)?,
     run_ids: strings_field("run_ids")?,
     ..CompletionEvidence::default()
   })

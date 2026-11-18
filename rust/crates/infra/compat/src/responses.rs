@@ -22,6 +22,17 @@ pub struct Failure {
   pub detail: String,
 }
 
+impl Failure {
+  /// The failure of `kind` with `detail`.
+  pub fn new(kind: impl Into<String>, detail: impl Into<String>) -> Self {
+    Self { kind: kind.into(), detail: detail.into() }
+  }
+}
+
+/// The failure class of a request that cannot read the server configuration: the `error` name its 500 logs, the same
+/// name `charliebot_core::config::ConfigError` carries.
+pub const CONFIG_ERROR_CLASS: &str = "ConfigError";
+
 /// The JSON response: compact separators, raw UTF-8.
 pub fn json(status: StatusCode, content: &Value) -> Response {
   bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(json::starlette_bytes(content)))
@@ -35,6 +46,11 @@ pub fn fast_json(status: StatusCode, content: &Value) -> Response {
 /// The fast JSON response over a body its route already serialized, so a rendered page skips the value tree.
 pub fn fast_json_rendered(status: StatusCode, body: Vec<u8>) -> Response {
   bytes_response(status, mimetypes_table::APPLICATION_JSON, Bytes::from(body))
+}
+
+/// The fast JSON response over a body a memo keeps: a repeat request hands out the one buffer it holds.
+pub fn fast_json_shared(status: StatusCode, body: Bytes) -> Response {
+  bytes_response(status, mimetypes_table::APPLICATION_JSON, body)
 }
 
 /// The error-status rendering: `{"detail": <reason phrase>}`.

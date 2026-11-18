@@ -9,6 +9,7 @@ use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_compat::static_files::StaticDirectory;
 use charliebot_core::config::{self, CharlieBotConfig, ConfigError};
 use charliebot_core::credentials::{self, Credentials};
+use charliebot_core::event_types::{CONFIG_RELOAD_FAILED_EVENT, CREDENTIALS_RELOAD_FAILED_EVENT};
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::pages::{
   package_static_directory, package_static_prefix, static_mount_prefix, web_static_directory,
@@ -63,7 +64,7 @@ pub fn config_cache(home: &Path, registry: Arc<Registry>) -> Arc<HotReload<Charl
   let home = home.to_path_buf();
   Arc::new(HotReload::new(
     home.join(config::CONFIG_FILENAME),
-    "config_reload_failed",
+    CONFIG_RELOAD_FAILED_EVENT,
     Box::new(move || registry.load_config(&home)),
   ))
 }
@@ -73,7 +74,7 @@ pub fn credentials_cache(home: &Path) -> Arc<HotReload<Credentials>> {
   let home = home.to_path_buf();
   Arc::new(HotReload::new(
     home.join(config::CREDENTIALS_FILENAME),
-    "credentials_reload_failed",
+    CREDENTIALS_RELOAD_FAILED_EVENT,
     Box::new(move || credentials::load_credentials(&home)),
   ))
 }

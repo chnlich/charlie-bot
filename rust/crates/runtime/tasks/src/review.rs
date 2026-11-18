@@ -6,7 +6,7 @@ use std::path::Path;
 use charliebot_agents::backend_pool::BackendRoute;
 use charliebot_agents::model_pool::Selector;
 use charliebot_core::config::{BackendOption, CallClass, CallTarget, CharlieBotConfig};
-use charliebot_core::event_types::MESSAGE_CONTENT_POINTER;
+use charliebot_core::event_types::{ASSISTANT, ERROR, MESSAGE_CONTENT_POINTER, RESULT};
 use charliebot_store::run_records::visit_events_from_end;
 use serde_json::Value;
 
@@ -66,13 +66,13 @@ pub async fn extract_review_context(session_id: &str, run_id: &str, worker_log_p
 pub fn worker_summary_from_events_log(events: &[Value]) -> Option<String> {
   for event in events.iter().rev() {
     match event.get("type").and_then(Value::as_str) {
-      Some("result") => {
+      Some(RESULT) => {
         if let Some(result) = event.get("result").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty())
         {
           return Some(result.to_string());
         }
       }
-      Some("assistant") => {
+      Some(ASSISTANT) => {
         if let Some(text) =
           assistant_event_text(event).map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
         {
@@ -88,7 +88,7 @@ pub fn worker_summary_from_events_log(events: &[Value]) -> Option<String> {
 /// Return the newest non-empty message or content from an error event.
 pub fn worker_error_from_events_log(events: &[Value]) -> Option<String> {
   events.iter().rev().find_map(|event| {
-    if event.get("type").and_then(Value::as_str) != Some("error") {
+    if event.get("type").and_then(Value::as_str) != Some(ERROR) {
       return None;
     }
     ["message", "content"].into_iter().find_map(|key| {
@@ -326,14 +326,14 @@ fn assistant_event_text(event: &Value) -> Option<String> {
 
 /// Return the newest worker summary directly from the run's events log, parsing only result and assistant events.
 pub fn read_worker_summary_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
-  let (summary, _) = visit_events_from_end(worker_log_path, &["result", "assistant"], |event| {
+  let (summary, _) = visit_events_from_end(worker_log_path, &[RESULT, ASSISTANT], |event| {
     worker_summary_from_events_log(std::slice::from_ref(&event))
   })?;
   Ok(summary)
 }
 
 pub(crate) fn read_worker_error_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
-  let (error, _) = visit_events_from_end(worker_log_path, &["error"], |event| {
+  let (error, _) = visit_events_from_end(worker_log_path, &[ERROR], |event| {
     worker_error_from_events_log(std::slice::from_ref(&event))
   })?;
   Ok(error)

@@ -12,6 +12,9 @@ const TASK_ID_NAMESPACE_NAME: &str = "charliebot/session-task-tree";
 pub const ACTOR_USER: &str = "user";
 pub const ACTOR_AGENT: &str = "agent";
 pub const ACTOR_SYSTEM: &str = "system";
+/// The prefix of the request id of every round that a scheduled task starts: `cron:<task>:<time>:leaf`. A delegation
+/// outside a bound task may not carry it, so a round in flight is only ever a scheduled task's.
+pub const CRON_REQUEST_ID_PREFIX: &str = "cron:";
 
 /// The field of a run record and a task-created event that carries the hash of the task spec.
 pub const TASK_SPEC_HASH_FIELD: &str = "task_spec_hash";
@@ -29,7 +32,7 @@ pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
   event_types::FROM_SESSION,
   event_types::FROM_SESSION_NAME,
   event_types::INPUT_MODE,
-  "event_index",
+  event_types::EVENT_INDEX,
 ];
 
 fn task_id_namespace() -> Uuid {
@@ -210,6 +213,52 @@ pub fn build_task_created_event(
   )
 }
 
+/// The fields of one task-close fact: its outcome and summary, the report recipient, and the archive or sequence
+/// detail its outcome carries.
+pub struct CloseFact<'a> {
+  pub session_id: &'a str,
+  pub request_id: &'a str,
+  pub outcome: &'a str,
+  pub summary: &'a str,
+  pub result_refs: &'a [String],
+  pub run_ids: &'a [String],
+  pub report_to: Option<&'a str>,
+  pub sequence_outcome: Option<&'a str>,
+  pub archived_with: Option<&'a str>,
+  pub archived_by: Option<&'a str>,
+  pub actor: &'a str,
+}
+
+/// Build the task-close fact from its fields. Every writer of a close fact passes through here, so the payload's
+/// field names and order stay the store's.
+pub fn close_event(fact: CloseFact<'_>) -> Value {
+  let mut payload = vec![
+    ("request_id".to_string(), json!(fact.request_id)),
+    ("outcome".to_string(), json!(fact.outcome)),
+    ("summary".to_string(), json!(fact.summary)),
+    (event_types::RESULT_REFS.to_string(), json!(fact.result_refs)),
+    ("run_ids".to_string(), json!(fact.run_ids)),
+    ("report_to".to_string(), fact.report_to.map_or(Value::Null, |parent| json!(parent))),
+  ];
+  if let Some(archived_with) = fact.archived_with {
+    payload.push(("archived_with".to_string(), json!(archived_with)));
+  }
+  if let Some(archived_by) = fact.archived_by {
+    payload.push(("archived_by".to_string(), json!(archived_by)));
+  }
+  if let Some(sequence_outcome) = fact.sequence_outcome {
+    payload.push(("sequence_outcome".to_string(), json!(sequence_outcome)));
+  }
+  build_control_event(
+    event_types::TASK_CLOSED,
+    fact.actor,
+    fact.session_id,
+    Some(&stable_close_event_id(fact.session_id, fact.request_id)),
+    None,
+    payload,
+  )
+}
+
 /// Build an archived task-close fact with its report recipient and the subtree that archives it.
 #[allow(clippy::too_many_arguments)]
 pub fn archived_close_event(
@@ -223,28 +272,19 @@ pub fn archived_close_event(
   result_refs: &[String],
   run_ids: &[String],
 ) -> Value {
-  let mut payload = vec![
-    ("request_id".to_string(), json!(request_id)),
-    ("outcome".to_string(), json!("archived")),
-    ("summary".to_string(), json!(summary)),
-    ("result_refs".to_string(), json!(result_refs)),
-    ("run_ids".to_string(), json!(run_ids)),
-    ("report_to".to_string(), report_to.map_or(Value::Null, |parent| json!(parent))),
-  ];
-  if let Some(archived_with) = archived_with {
-    payload.push(("archived_with".to_string(), json!(archived_with)));
-  }
-  if let Some(archived_by) = archived_by {
-    payload.push(("archived_by".to_string(), json!(archived_by)));
-  }
-  build_control_event(
-    event_types::TASK_CLOSED,
-    actor,
+  close_event(CloseFact {
     session_id,
-    Some(&stable_close_event_id(session_id, request_id)),
-    None,
-    payload,
-  )
+    request_id,
+    outcome: "archived",
+    summary,
+    result_refs,
+    run_ids,
+    report_to,
+    sequence_outcome: None,
+    archived_with,
+    archived_by,
+    actor,
+  })
 }
 
 #[cfg(test)]

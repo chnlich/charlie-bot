@@ -32,7 +32,7 @@ pub const SCHEDULE_PROJECT: &str = "schedule_project";
 /// The session-metadata field saying whether a failed bound-task run is allowed.
 pub const SCHEDULE_ALLOW_FAILURE: &str = "schedule_allow_failure";
 /// The session-listing field holding the name of the task bound to the session's schedule. The cron row fields write
-/// it, and the session listing fills `null` when no task is bound; it is computed per listing, so `SCHEDULE_FIELDS`
+/// it, and the session listing fills `null` when no task is bound. It is computed per listing, so `SCHEDULE_FIELDS`
 /// does not hold it.
 pub const SCHEDULE_TASK: &str = "schedule_task";
 /// Every schedule field name of a session, in the order session metadata writes them. The session listing and the cron
@@ -120,6 +120,27 @@ pub const BASE_BRANCH_FIELD: &str = "base_branch";
 /// The task-spec field holding a task's kind. The delegate request, the session write request and the stored task
 /// record carry the same name, so it is spelled once, here.
 pub const TASK_TYPE_FIELD: &str = "task_type";
+/// The task-spec field holding a cold-read task's page, genre and trigger. The delegate request, the session create
+/// request and the stored task record carry the same name, so it is spelled once, here.
+pub const COLD_READ_FIELD: &str = "cold_read";
+/// The cold-read spec's field holding the page the task reads. The delegate route's schema and the artifact CLI's
+/// delegation carry the same name, so it is spelled once, here.
+pub const COLD_READ_PAGE_PATH_FIELD: &str = "page_path";
+/// The cold-read spec's field naming the page's genre. The delegate route's schema and the artifact CLI's delegation
+/// carry the same name, so it is spelled once, here.
+pub const COLD_READ_GENRE_FIELD: &str = "genre";
+/// The cold-read spec's field holding the trigger message the cold reader answers. The delegate route's schema and
+/// the artifact CLI's delegation carry the same name, so it is spelled once, here.
+pub const COLD_READ_TRIGGER_FIELD: &str = "trigger";
+/// The task-spec field naming who approves a task's delivery. The session create and patch requests and the stored
+/// task record carry the same name, so it is spelled once, here.
+pub const APPROVER_FIELD: &str = "approver";
+/// The retired task-spec list of acceptance criteria. `TaskSpec`'s read accepts the key and drops it; the session
+/// create and patch requests import this name instead of each spelling it.
+pub const ACCEPTANCE_FIELD: &str = "acceptance";
+/// The retired task-spec list of context references. `TaskSpec`'s read accepts the key and drops it; the session
+/// create and patch requests import this name instead of each spelling it.
+pub const CONTEXT_REFS_FIELD: &str = "context_refs";
 /// The response field holding a session's display name. The voice recordings page's rows carry the same name, so it
 /// is spelled once, here.
 pub const SESSION_NAME_FIELD: &str = "session_name";
@@ -184,7 +205,7 @@ impl TaskType {
 }
 
 /// Who approves a task and takes over its delivery, persisted in `TaskSpec`. `User` holds a manager's self-archive
-/// until the user has opened the session; `Parent` closes it when its run ends.
+/// until the user has opened the session. `Parent` closes it when its run ends.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TaskApprover {
   #[default]
@@ -195,6 +216,9 @@ pub enum TaskApprover {
 }
 
 impl TaskApprover {
+  /// The wire spellings of every approver, which a request schema accepts as choices.
+  pub const NAMES: &[&str] = &["user", "parent"];
+
   /// Whether this is the default approver, which a task record leaves out so that its canonical text stays as it was.
   pub fn is_user(&self) -> bool {
     *self == TaskApprover::User
@@ -365,11 +389,11 @@ impl<'de> Deserialize<'de> for TaskSpec {
       cold_read: Option<ColdReadSpec>,
       #[serde(default)]
       approver: TaskApprover,
-      // The retired context-work flag. Sessions written while it existed still carry it; the read
+      // The retired context-work flag. Sessions written while it existed still carry it. The read
       // accepts it and drops it.
       #[serde(default, rename = "context_work")]
       _retired_context_work: Option<bool>,
-      // The retired acceptance and context-refs lists. Their Goal text replaced them; the read accepts
+      // The retired acceptance and context-refs lists. Their Goal text replaced them. The read accepts
       // them and drops them, so the next save omits them.
       #[serde(default, rename = "acceptance")]
       _retired_acceptance: Option<IgnoredAny>,
@@ -719,15 +743,16 @@ impl SessionMetadata {
 
 // The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns.
 // The readers below open, read and decode the file for every caller, so a change to the format, the location or the
-// bad-file handling happens here.
+// bad-file handling happens here. `read_metadata_value` is also the store's one whole-file decode of a stored JSON
+// document, which the trigger files read through.
 
-/// Why a metadata file could not be read or decoded. Like `chat_events::LogReadError`, the error carries the kind of
+/// Why a stored JSON file could not be read or decoded. Like `chat_events::LogReadError`, the error carries the kind of
 /// the failure, and the caller decides what a missing file and each failure mean.
 #[derive(Debug)]
 pub enum MetadataReadError {
   /// The file could not be opened or read as text.
   Io(std::io::Error),
-  /// The file's text is not one JSON value the reader accepts; the message is the decoder's own.
+  /// The file's text is not one JSON value the reader accepts. The message is the decoder's own.
   Json(String),
 }
 
@@ -761,8 +786,9 @@ pub(crate) fn read_metadata_text(path: &Path) -> Result<String, MetadataReadErro
   std::fs::read_to_string(path).map_err(MetadataReadError::Io)
 }
 
-/// Read a metadata file as its JSON value: the store's one decode of the file kind's text. A missing file is `Err`
-/// with `NotFound`, and a value that is not an object is still a value, so the caller decides what each means.
+/// Read a metadata file as its JSON value: the store's one decode of a stored JSON document's text, which the
+/// trigger files read through too. A missing file is `Err` with `NotFound`, and a value that is not an object is
+/// still a value, so the caller decides what each means.
 pub fn read_metadata_value(path: &Path) -> Result<Value, MetadataReadError> {
   let text = read_metadata_text(path)?;
   decode_metadata(&text).map_err(|error| MetadataReadError::Json(error.to_string()))
@@ -1092,6 +1118,22 @@ mod tests {
       )
       .is_ok()
     );
+  }
+
+  #[test]
+  fn the_cold_read_spec_serializes_under_the_consts_its_routes_read() {
+    let spec = ColdReadSpec {
+      page_path: "artifacts/page.html".to_string(),
+      genre: "sitrep".to_string(),
+      trigger: "where are we?".to_string(),
+    };
+    let value = serde_json::to_value(&spec).expect("a cold-read spec serializes");
+    let mut keys: Vec<&str> =
+      value.as_object().expect("a cold-read spec is an object").keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let mut owned = [COLD_READ_PAGE_PATH_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_TRIGGER_FIELD];
+    owned.sort_unstable();
+    assert_eq!(keys, owned);
   }
 
   #[test]

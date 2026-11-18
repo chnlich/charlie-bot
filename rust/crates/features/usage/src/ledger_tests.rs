@@ -582,7 +582,7 @@ fn agg_read_tracks_the_table_through_every_write_shape() {
   empty.ts.clear();
   empty.model = "model-empty".into();
   ledger.record_file(HOST, "/logs/m.jsonl", "sig-m", &[moved, fallback, empty]).unwrap();
-  ledger.model_rows().unwrap(); // the backfill; the aggregate serves from here
+  ledger.model_rows().unwrap(); // the backfill. The aggregate serves from here
   assert_served_on_the_table(&mut ledger);
 
   let mut moved_grown = record("rec-moved", RecordKind::Native, &["sess-m"]);
@@ -701,7 +701,7 @@ fn backfilled_aggregate_counts_later_same_group_day_writes() {
   let mut third = record("rec-3", RecordKind::Native, &["sess-c"]);
   third.output = 7;
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[first]).unwrap();
-  ledger.model_rows().unwrap(); // the backfill; the aggregate serves from here
+  ledger.model_rows().unwrap(); // the backfill. The aggregate serves from here
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", &[second, third]).unwrap();
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
@@ -890,7 +890,7 @@ fn in_unsplit_only_rewrite_keeps_the_aggregate_on_the_table() {
   let mut rewritten = first.clone();
   rewritten.in_unsplit = 7;
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[first]).unwrap();
-  ledger.model_rows().unwrap(); // the backfill; later reads serve the aggregate
+  ledger.model_rows().unwrap(); // the backfill. Later reads serve the aggregate
   ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", &[rewritten]).unwrap();
   let rows = ledger.model_rows().unwrap();
   assert_eq!(rows, table_rows(&ledger));

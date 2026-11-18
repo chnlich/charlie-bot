@@ -278,11 +278,27 @@
     return waiting;
   }
 
+  // The row an empty Status view shows. The toggle's one word names no subject, and the pane is
+  // otherwise blank at both widths, so the row names what the view reports and what fills it. The
+  // Waiting on you row also carries a host wait the server derives, so the note claims no report
+  // for that row.
+  function noStatusRow() {
+    const row = statusRow('none');
+    const line = document.createElement('p');
+    line.className = 'min-w-0 break-words text-slate-400';
+    line.dataset.statusNoneNote = 'true';
+    const lead = document.createElement('b');
+    lead.textContent = 'No status yet.';
+    line.appendChild(lead);
+    line.appendChild(textSpan('',
+      " The session's Goal and Now appear here once it reports them, and Waiting on you lists the items waiting on you."));
+    row.appendChild(line);
+    return row;
+  }
+
   function statusPanelBody(el) {
     if (!panelStatus) {
-      const none = statusRow('none');
-      none.appendChild(textSpan('text-slate-400', 'No status yet'));
-      el.appendChild(none);
+      el.appendChild(noStatusRow());
       const held = derivedFor(panelSessionId);
       if (held.length) el.appendChild(waitingRow(held));
     } else {

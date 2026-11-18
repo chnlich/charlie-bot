@@ -89,7 +89,7 @@ const LOG_LINES = [
   line('2026-02-14 09:00:00.100Z', 'kind=page_load response_end_ms=1 dom_content_loaded_ms=1 transfer_size=0 ' +
     'cause=open client_ts=2026-02-14T09:00:00Z forwarded_for=100.64.0.8'),
 
-  // A non-diag line: dropped.
+  // A request-log line: no event, so the event count and the sections ignore it.
   '2026-02-13 09:15:00.100Z [info     ] server/request_log.rs:58       http_request                   ' +
     'method=GET path=/api/sessions/ status=200 duration_ms=1 client=127.0.0.1 forwarded_for=100.64.0.8',
 ];
@@ -182,6 +182,84 @@ test('the page loads report the newest message by case, and each file beside its
     // The network load is 500 ms long; the cache hit is 2 ms long; both are 2500 bytes and 500 ms on the link.
     assert.match(output, new RegExp(`${CDN_FILE.replace(/[./]/g, (char) => `\\${char}`)} network n=1 p50=500ms ` +
       'p90=500ms \\| cache n=1 p50=2ms \\| bytes=2500 link=500ms \\(loads with link 2, unknown 0\\)'));
+  } finally {
+    fs.rmSync(scratch, {recursive: true, force: true});
+  }
+});
+
+// A request-log line the way the server writes it: the time the response finished, then the request and
+// the browser's forwarded address. Its arrival is that time less duration_ms.
+function requestLine(stamp, {path = '/api/sessions/status', status = 200, durationMs = 0, forwardedFor}) {
+  return `${stamp} [info     ] server/request_log.rs:42       http_request                   method=GET ` +
+    `path=${path} status=${status} duration_ms=${durationMs} client=127.0.0.1 forwarded_for=${forwardedFor}`;
+}
+
+// A socket event the way the server writes it, logged once the socket has reconnected.
+function socketLine(stamp, {cause = 'network', disconnectAt, reconnectAt, forwardedFor}) {
+  return line(stamp, `kind=socket disconnect_at=${disconnectAt} cause=${cause} close_code=1006 ` +
+    `reconnect_at=${reconnectAt} reconnect_count=1 catchup_at=${reconnectAt} catchup_bytes=100 ` +
+    `client_ts=${reconnectAt} forwarded_for=${forwardedFor}`);
+}
+
+// The wait-after-return by hand, for the device 100.64.0.20 (the other device is 100.64.0.21). Each outage's
+// first request arrives at a time the comment names; the reconnect comes after it by the wait named.
+const SOCKET_DEVICE = '100.64.0.20';
+const OTHER_DEVICE = '100.64.0.21';
+const WAIT_LOG_LINES = [
+  // Outage 1: the request arrives at 10:00:04.000 and its line, written after 500 ms, is at 10:00:04.500.
+  // The reconnect at 10:00:10.000 is 6.0 s after the return. The request from before the disconnect and
+  // the other device's request at 10:00:02.000 are no sign of this device's return.
+  requestLine('2026-02-13 09:59:59.000Z', {forwardedFor: SOCKET_DEVICE}),
+  requestLine('2026-02-13 10:00:02.000Z', {forwardedFor: OTHER_DEVICE}),
+  requestLine('2026-02-13 10:00:04.500Z', {durationMs: 500, forwardedFor: SOCKET_DEVICE}),
+  socketLine('2026-02-13 10:00:10.100Z', {disconnectAt: '2026-02-13T10:00:00.000Z',
+    reconnectAt: '2026-02-13T10:00:10.000Z', forwardedFor: SOCKET_DEVICE}),
+  // Outage 2: the request arrives at 10:05:01.000; the reconnect at 10:05:03.000 is 2.0 s after it.
+  requestLine('2026-02-13 10:05:01.000Z', {forwardedFor: SOCKET_DEVICE}),
+  socketLine('2026-02-13 10:05:03.100Z', {disconnectAt: '2026-02-13T10:05:00.000Z',
+    reconnectAt: '2026-02-13T10:05:03.000Z', forwardedFor: SOCKET_DEVICE}),
+  // Outage 3: the request arrives at 10:10:01.000; the reconnect at 10:10:04.000 is 3.0 s after it.
+  requestLine('2026-02-13 10:10:01.000Z', {forwardedFor: SOCKET_DEVICE}),
+  socketLine('2026-02-13 10:10:04.100Z', {disconnectAt: '2026-02-13T10:10:00.000Z',
+    reconnectAt: '2026-02-13T10:10:04.000Z', forwardedFor: SOCKET_DEVICE}),
+  // Outage 4: the request arrives at 10:15:08.000; the reconnect at 10:15:09.000 is 1.0 s after it.
+  requestLine('2026-02-13 10:15:08.000Z', {forwardedFor: SOCKET_DEVICE}),
+  socketLine('2026-02-13 10:15:09.100Z', {disconnectAt: '2026-02-13T10:15:00.000Z',
+    reconnectAt: '2026-02-13T10:15:09.000Z', forwardedFor: SOCKET_DEVICE}),
+  // Outage 5: no request between the disconnect and the reconnect; the next request follows the reconnect.
+  requestLine('2026-02-13 10:20:06.000Z', {forwardedFor: SOCKET_DEVICE}),
+  socketLine('2026-02-13 10:20:05.100Z', {disconnectAt: '2026-02-13T10:20:00.000Z',
+    reconnectAt: '2026-02-13T10:20:05.000Z', forwardedFor: SOCKET_DEVICE}),
+  // Outage 6: the only request in the gap is the socket's own upgrade, which is the reconnect, not a return.
+  requestLine('2026-02-13 10:25:03.950Z', {path: '/ws/sessions/0f0e1d2c-3b4a-5968-7789-aabbccddeeff', status: 101,
+    durationMs: 50, forwardedFor: SOCKET_DEVICE}),
+  socketLine('2026-02-13 10:25:04.100Z', {disconnectAt: '2026-02-13T10:25:00.000Z',
+    reconnectAt: '2026-02-13T10:25:04.000Z', forwardedFor: SOCKET_DEVICE}),
+  // A switch-caused close is no network outage, so its request is no sample.
+  requestLine('2026-02-13 10:30:01.000Z', {forwardedFor: SOCKET_DEVICE}),
+  socketLine('2026-02-13 10:30:02.100Z', {cause: 'switch', disconnectAt: '2026-02-13T10:30:00.000Z',
+    reconnectAt: '2026-02-13T10:30:02.000Z', forwardedFor: SOCKET_DEVICE}),
+];
+
+test('the wait after the network returns runs from the first request between the disconnect and the reconnect', () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'client-readback-test-'));
+  try {
+    const log = path.join(scratch, 'server.log');
+    fs.writeFileSync(log, WAIT_LOG_LINES.join('\n') + '\n');
+
+    const output = execFileSync(process.execPath, [READBACK,
+      '--from', '2026-02-13T09:00:00Z', '--to', '2026-02-13T11:00:00Z', log], {encoding: 'utf8'});
+
+    // The six network outages' reconnect waits are 10, 3, 4, 9, 5 and 4 s: sorted 3, 4, 4, 5, 9, 10, so
+    // p50 is index 2 (4.0 s), p90 index 4 (9.0 s) and max 10.0 s. The existing line is unchanged.
+    assert.match(output, /== 100\.64\.0\.20: 7 events/);
+    assert.match(output, /\n  socket network disconnects n=6 reconnect-wait p50=4\.0s p90=9\.0s max=10\.0s\n/);
+    // The four returns wait 6, 2, 3 and 1 s: sorted 1, 2, 3, 6, so p50 is index 1 (2.0 s), p90 index 2 (3.0 s)
+    // and max 6.0 s. Outages 5 and 6 have no request before the reconnect.
+    assert.match(output, /\n  socket wait-after-return n=4 p50=2\.0s p90=3\.0s max=6\.0s no-request=2\n/);
+    // The no-request raw gaps are 5 and 4 s, so floor percentiles select 4 s and the max is 5 s.
+    assert.match(output, /\n  socket no-request raw-gap n=2 p50=4\.0s p90=4\.0s max=5\.0s\n/);
+    assert.doesNotMatch(output, /100\.64\.0\.21/, 'the other device sent requests but no events, so it has no section');
   } finally {
     fs.rmSync(scratch, {recursive: true, force: true});
   }

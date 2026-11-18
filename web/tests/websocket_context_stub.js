@@ -20,6 +20,11 @@ const WEBSOCKET_JS = readStatic('websocket.js');
 const STREAM_DRAFT_JS = readStatic('stream-draft.js');
 const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
+// websocket.js's connect deadline, one timer per connect attempt. Harnesses that record timers leave it out.
+const CONNECT_DEADLINE_MS = 4000;
+
+let timerIds = 0;
+
 function loadWebsocketContext(extraContext) {
   const context = {
     eventCursor: 0,
@@ -45,6 +50,8 @@ function loadWebsocketContext(extraContext) {
     location: {protocol: 'http:', host: 'localhost:8000', reload: () => {}},
     console: {log: () => {}, error: () => {}},
     WebSocket: createFakeWebSocketClass(),
+    // Timers that never fire: a harness that needs one fires it itself.
+    setTimeout: () => ++timerIds,
     clearTimeout: () => {},
     hideStreaming: () => {},
     showStreaming: () => {},
@@ -103,4 +110,6 @@ function loadPageTimersOnce(context) {
   }
 }
 
-module.exports = { loadWebsocketContext, loadWebsocketModules, prepareWebsocketGlobals, loadPageTimersOnce };
+module.exports = {
+  loadWebsocketContext, loadWebsocketModules, prepareWebsocketGlobals, loadPageTimersOnce, CONNECT_DEADLINE_MS,
+};

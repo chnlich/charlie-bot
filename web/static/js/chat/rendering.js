@@ -86,10 +86,19 @@ const SUBAGENT_STATUS_CLASS = {
   stopped: 'text-slate-400',
 };
 
+// The color class of one subagent status. The store emits only the table's four values, so a status outside it
+// breaches that contract: the lookup throws rather than painting a card with no class.
+function subagentStatusClass(status) {
+  if (!Object.hasOwn(SUBAGENT_STATUS_CLASS, status)) {
+    throw new Error('Unknown subagent status: ' + status);
+  }
+  return SUBAGENT_STATUS_CLASS[status];
+}
+
 // The card of a subagent under the Agent row that started it. The header stays visible. The subagent's own rows
 // fold below it. The row count in the header is the subagent's tool uses, so the parent's count never includes them.
 function renderSubagentCard(subagent) {
-  var statusCls = SUBAGENT_STATUS_CLASS[subagent.status];
+  var statusCls = subagentStatusClass(subagent.status);
   var uses = subagent.tool_uses == null ? ''
     : '<span class="text-slate-500 whitespace-nowrap">' + subagent.tool_uses + ' tool call'
       + (subagent.tool_uses !== 1 ? 's' : '') + '</span>';
@@ -315,9 +324,9 @@ function messageSourceText(el) {
   return renderedNodeText(el);
 }
 
-// The markdown a one-line field cannot show is dropped from a text run: a heading's #, a list
-// marker, a link's target, emphasis markers and the backticks around inline code. Inline code
-// keeps its own text, so `__init__.py` keeps its underscores.
+// The markdown a one-line field cannot show is dropped from a text run. The dropped parts are a
+// heading's #, a list marker, a link's target, emphasis markers and the backticks around inline code.
+// Inline code keeps its own text, so `__init__.py` keeps its underscores.
 function stripInlineMarkdown(sample) {
   return sample
     .replace(/^(?:#{1,6}|[-*+>]|\d+[.)])\s+/, '')
@@ -399,12 +408,6 @@ function formatRunDuration(seconds) {
   return Number(seconds) === 0 ? '0s' : formatTurnDuration(seconds);
 }
 
-function formatTurnTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-}
-
 function turnRowField(className, text) {
   const span = document.createElement('span');
   span.className = className;
@@ -440,15 +443,16 @@ function buildTurnRowFromSpec(spec) {
   meta.className = 'turn-row-meta';
   meta.appendChild(turnRowField('turn-row-steps',
       spec.foldCount ? turnFoldLabel(spec.foldCount) : ''));
-  const ts = spec.headTs;
-  const time = turnRowField('turn-row-time', formatTurnTime(ts));
-  if (ts) time.setAttribute('title', formatBubbleTime(ts));
+  // The row states the turn's instant in the label the chat's bubbles print (utils.js
+  // formatTimeLabel), so the row and the bubble under it read alike. The day is part of that
+  // label: without it the two rows whose turn crosses local midnight read as one minute.
+  const time = turnRowField('turn-row-time', formatTimeLabel(spec.headTs));
   meta.appendChild(time);
   row.appendChild(meta);
 
-  // A folded turn is a button, and a phone has no hover or title tooltip to show it: the row ends
-  // in the disclosure caret the fold bar and the events rows carry, so a reader sees it opens. The
-  // row hides while the turn is open, so the caret always shows the closed state.
+  // A folded turn is a button, and a phone has no hover or title tooltip to show it. The row ends in
+  // the disclosure caret the fold bar and the events rows carry, so a reader sees it opens. The row
+  // hides while the turn is open, so the caret always shows the closed state.
   const caret = turnRowField('turn-row-caret', '▶');
   caret.setAttribute('aria-hidden', 'true');
   row.appendChild(caret);
@@ -1104,13 +1108,18 @@ function renderMessage(msg, sessionId) {
     return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden\">"
       + escapeHtml(msg.content) + "</div></div>";
   }
+  // A `web_reply_check` line records the audit of one reply's text. The reply and its findings carry what the reader
+  // needs, so the marker draws nothing.
+  if (msg.role === "web_reply_check") return "";
   if (msg.role === "separator") {
     var eventIndexAttr = msg.event_index != null ? " data-event-index=\"" + msg.event_index + "\"" : "";
     return "<div class=\"" + SEPARATOR_ROW_CLASS + "\""
       + messageIdentityAttrs(msg) + eventIndexAttr + ">"
       + separatorRowInnerHtml(sessionId, msg) + "</div>";
   }
-  return "";
+  // A role outside the core branches and the registry has no renderer, so the page cannot show the message
+  // whole. The branch names the missing role instead of dropping the message.
+  throw new Error('Unknown message role: ' + msg.role);
 }
 
 // A live message appends to the engine's store when the container is hosted.

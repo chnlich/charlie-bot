@@ -43,6 +43,9 @@ pub const MESSAGE_CONTENT_POINTER: &str = "/message/content";
 /// The committed message's flag that the page already holds its content from the stream frames, so the message frame
 /// carries none of it.
 pub const MESSAGE_CONTENT_STREAMED: &str = "content_streamed";
+/// An event's ordinal in its session's event log: the message view and the stream frames carry it, and the fork and
+/// explain requests name the event they act on with it.
+pub const EVENT_INDEX: &str = "event_index";
 pub const MASTER_DONE: &str = "master_done";
 pub const ASSISTANT_ERROR: &str = "assistant_error";
 pub const QUOTA_EXHAUSTED: &str = "quota_exhausted";
@@ -73,6 +76,9 @@ pub const FROM_SESSION: &str = "from_session";
 pub const FROM_SESSION_NAME: &str = "from_session_name";
 /// The key of an `agent_message` block that marks the message as a nudge and names the event it nudges.
 pub const NUDGE_OF: &str = "nudge_of";
+/// The key of a thread platform block that holds the id of the message that mentioned the bot. The platform package
+/// writes it, and the shared thread reader reads it.
+pub const MENTION_ID: &str = "mention_id";
 pub const WEB_REPLY: &str = "web_reply";
 pub const WEB_REPLY_NOTICE: &str = "web_reply_notice";
 pub const WEB_STATUS: &str = "web_status";
@@ -120,6 +126,12 @@ pub const SESSION_GROUP_CHANGED: &str = "session_group_changed";
 pub const TASK_TREE_CHANGED: &str = "task_tree_changed";
 pub const TASK_CREATED: &str = "task_created";
 pub const TASK_CLOSE_REQUESTED: &str = "task_close_requested";
+/// The run that owns a `task_close_requested` fact. Only that run acts on the request, and a later run's start voids
+/// it, so the writer and every reader name the field here.
+pub const OWNER_RUN_ID: &str = "owner_run_id";
+/// The results a task's work produced, as references such as `run:<id>` or `landed:<branch>@<sha>`. The close request,
+/// the close and child-report facts, and every reader name the field here.
+pub const RESULT_REFS: &str = "result_refs";
 pub const TASK_CLOSED: &str = "task_closed";
 pub const TASK_REOPENED: &str = "task_reopened";
 /// A task moved to another parent. The moved task's chat events carry it; the chat renders nothing for it.
@@ -135,6 +147,11 @@ pub const RUN_HEADER: &str = "run_header";
 pub const BACKEND_LABEL: &str = "backend_label";
 /// The run header's reference to the run's launch prompt file.
 pub const LAUNCH_PROMPT_REF: &str = "launch_prompt_ref";
+/// The run header's reference to the task spec file the run works from.
+pub const TASK_SPEC_REF: &str = "task_spec_ref";
+/// The run header's flag for a run that never started: a failed state with no recorded start. The worker transcript
+/// writes it, and the message aggregator renders the launch failure from it.
+pub const LAUNCH_FAILED: &str = "launch_failed";
 pub const RUN_END: &str = "run_end";
 /// The run's wall-clock length in seconds, in the `run_end` event that the worker transcript writes and the message
 /// aggregator renders as [`THINKING_SECONDS`].
@@ -164,6 +181,9 @@ pub const QUOTA_FAILOVER: &str = "quota_failover";
 pub const QUOTA_FAILOVER_REASON: &str = "reason";
 /// The `quota_failover` field naming the `backends.pools` entry that moved the work to another member.
 pub const QUOTA_FAILOVER_SET: &str = "set";
+/// The `quota_failover` field carrying the instant the member that failed recovers its quota, empty when the change
+/// names none.
+pub const QUOTA_FAILOVER_RECOVERS_AT: &str = "recovers_at";
 /// The `quota_failover` field carrying the handoff summary state of the retry the change started.
 pub const QUOTA_FAILOVER_SUMMARY: &str = "summary";
 /// The [`QUOTA_FAILOVER_SUMMARY`] value of a retry whose handoff summary was assembled.
@@ -229,6 +249,12 @@ pub const REQUEST_EXCEPTION_EVENT: &str = "Exception in ASGI application";
 pub const CC_CONTEXT_COMPACTED_EVENT: &str = "cc_context_compacted";
 /// The log event of a failed compaction notice: the store's compaction handler and the task worker both log it.
 pub const CC_CONTEXT_COMPACT_FAILED_EVENT: &str = "cc_context_compact_failed";
+/// The log event a hot-reloaded `config.yaml` writes when its reload fails: the server's state, the feature context
+/// and each feature's own config cache log it.
+pub const CONFIG_RELOAD_FAILED_EVENT: &str = "config_reload_failed";
+/// The log event a hot-reloaded `credentials.yaml` writes when its reload fails: the server's state, the feature
+/// context and each feature's own credentials cache log it.
+pub const CREDENTIALS_RELOAD_FAILED_EVENT: &str = "credentials_reload_failed";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

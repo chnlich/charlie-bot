@@ -261,19 +261,119 @@ async fn post_client_event(State(_features): State<Arc<FeatureContext>>, request
     Ok(_) => unreachable!("a required model validates a body to its fields"),
     Err(response) => return *response,
   };
-  log_client_event(kind, &values, &first_address(&parts.headers));
+  let forwarded_for = first_address(&parts.headers);
+  ClientEvent { values: &values, forwarded_for: &forwarded_for }.log(kind);
   responses::json(StatusCode::OK, &json!({"ok": true}))
 }
 
-/// The one `diag_client` line of the event's kind, its fields in declaration order and the
-/// browser's address last.
-fn log_client_event(kind: EventKind, values: &Map<String, Value>, forwarded_for: &str) {
-  match kind {
-    EventKind::Switch => log_switch(values, forwarded_for),
-    EventKind::Send => log_send(values, forwarded_for),
-    EventKind::Socket => log_socket(values, forwarded_for),
-    EventKind::PageLoad => log_page_load(values, forwarded_for),
-    EventKind::Traffic => log_traffic(values, forwarded_for),
+/// One validated client event's log line: the kind's field values and the browser's address.
+struct ClientEvent<'a> {
+  values: &'a Map<String, Value>,
+  forwarded_for: &'a str,
+}
+
+impl ClientEvent<'_> {
+  /// The one `diag_client` line of the event's kind, its fields in declaration order and the
+  /// browser's address last.
+  fn log(&self, kind: EventKind) {
+    match kind {
+      EventKind::Switch => self.switch(),
+      EventKind::Send => self.send(),
+      EventKind::Socket => self.socket(),
+      EventKind::PageLoad => self.page_load(),
+      EventKind::Traffic => self.traffic(),
+    }
+  }
+
+  fn switch(&self) {
+    let values = self.values;
+    let error = cut_error(optional_text_field_ref(values, "error"));
+    tracing::info!(
+      kind = EventKind::Switch.as_str(),
+      phase = %text_field(values, "phase"),
+      from_session = %LogValue::of(optional_text_field_ref(values, event_types::FROM_SESSION)),
+      to_session = %text_field(values, "to_session"),
+      generation = %integer_field(values, "generation").expect("a required integer validates to a value"),
+      winner_generation = %LogValue::of_int(integer_field(values, "winner_generation")),
+      elapsed_ms = %LogValue::of_int(integer_field(values, "elapsed_ms")),
+      error = %LogValue::of(error.as_deref()),
+      client_ts = %text_field(values, request_body::CLIENT_TS),
+      request_start = %LogValue::of_int(integer_field(values, "request_start")),
+      response_start = %LogValue::of_int(integer_field(values, "response_start")),
+      response_end = %LogValue::of_int(integer_field(values, "response_end")),
+      transfer_size = %LogValue::of_int(integer_field(values, "transfer_size")),
+      forwarded_for = %self.forwarded_for,
+      "diag_client"
+    );
+  }
+
+  fn send(&self) {
+    let values = self.values;
+    tracing::info!(
+      kind = EventKind::Send.as_str(),
+      request_id = %text_field(values, "request_id"),
+      click_to_response_ms = %LogValue::of_int(integer_field(values, "click_to_response_ms")),
+      click_to_echo_ms = %LogValue::of_int(integer_field(values, "click_to_echo_ms")),
+      retries = %integer_field(values, "retries").expect("a required integer validates to a value"),
+      client_ts = %text_field(values, request_body::CLIENT_TS),
+      forwarded_for = %self.forwarded_for,
+      "diag_client"
+    );
+  }
+
+  fn socket(&self) {
+    let values = self.values;
+    tracing::info!(
+      kind = EventKind::Socket.as_str(),
+      disconnect_at = %LogValue::of(optional_text_field_ref(values, "disconnect_at")),
+      cause = %LogValue::of(optional_text_field_ref(values, "cause")),
+      close_code = %LogValue::of_int(integer_field(values, "close_code")),
+      reconnect_at = %LogValue::of(optional_text_field_ref(values, "reconnect_at")),
+      reconnect_count = %LogValue::of_int(integer_field(values, "reconnect_count")),
+      subscription = %LogValue::of_int(integer_field(values, "subscription")),
+      session_id = %LogValue::of(optional_text_field_ref(values, "session_id")),
+      catchup_at = %LogValue::of(optional_text_field_ref(values, "catchup_at")),
+      catchup_bytes = %LogValue::of_int(integer_field(values, "catchup_bytes")),
+      client_ts = %text_field(values, request_body::CLIENT_TS),
+      forwarded_for = %self.forwarded_for,
+      "diag_client"
+    );
+  }
+
+  fn page_load(&self) {
+    let values = self.values;
+    tracing::info!(
+      kind = EventKind::PageLoad.as_str(),
+      response_end_ms = %integer_field(values, "response_end_ms")
+        .expect("a required integer validates to a value"),
+      dom_content_loaded_ms = %integer_field(values, "dom_content_loaded_ms")
+        .expect("a required integer validates to a value"),
+      transfer_size = %LogValue::of_int(integer_field(values, "transfer_size")),
+      cause = %text_field(values, "cause"),
+      newest_message_ms = %LogValue::of_int(integer_field(values, "newest_message_ms")),
+      current_ms = %LogValue::of_int(integer_field(values, "current_ms")),
+      open_case = %LogValue::of(optional_text_field_ref(values, "open_case")),
+      content_source = %LogValue::of(optional_text_field_ref(values, "content_source")),
+      offline_shell = %values.get("offline_shell").expect("a required boolean validates to a value"),
+      render_blocking = %values.get("render_blocking").expect("a required list validates to a value"),
+      same_origin = %values.get("same_origin").expect("a required list validates to a value"),
+      client_ts = %text_field(values, request_body::CLIENT_TS),
+      forwarded_for = %self.forwarded_for,
+      "diag_client"
+    );
+  }
+
+  fn traffic(&self) {
+    let values = self.values;
+    tracing::info!(
+      kind = EventKind::Traffic.as_str(),
+      window_s = %integer_field(values, "window_s").expect("a required integer validates to a value"),
+      endpoints = %values.get("endpoints").expect("a required field validates to a value"),
+      visibility_state = %text_field(values, "visibility_state"),
+      client_ts = %text_field(values, request_body::CLIENT_TS),
+      forwarded_for = %self.forwarded_for,
+      "diag_client"
+    );
   }
 }
 
@@ -320,92 +420,6 @@ impl std::fmt::Display for LogValue<'_> {
       Self::Null => formatter.write_str("null"),
     }
   }
-}
-
-fn log_switch(values: &Map<String, Value>, forwarded_for: &str) {
-  let error = cut_error(optional_text_field_ref(values, "error"));
-  tracing::info!(
-    kind = EventKind::Switch.as_str(),
-    phase = %text_field(values, "phase"),
-    from_session = %LogValue::of(optional_text_field_ref(values, event_types::FROM_SESSION)),
-    to_session = %text_field(values, "to_session"),
-    generation = %integer_field(values, "generation").expect("a required integer validates to a value"),
-    winner_generation = %LogValue::of_int(integer_field(values, "winner_generation")),
-    elapsed_ms = %LogValue::of_int(integer_field(values, "elapsed_ms")),
-    error = %LogValue::of(error.as_deref()),
-    client_ts = %text_field(values, request_body::CLIENT_TS),
-    request_start = %LogValue::of_int(integer_field(values, "request_start")),
-    response_start = %LogValue::of_int(integer_field(values, "response_start")),
-    response_end = %LogValue::of_int(integer_field(values, "response_end")),
-    transfer_size = %LogValue::of_int(integer_field(values, "transfer_size")),
-    forwarded_for = %forwarded_for,
-    "diag_client"
-  );
-}
-
-fn log_send(values: &Map<String, Value>, forwarded_for: &str) {
-  tracing::info!(
-    kind = EventKind::Send.as_str(),
-    request_id = %text_field(values, "request_id"),
-    click_to_response_ms = %LogValue::of_int(integer_field(values, "click_to_response_ms")),
-    click_to_echo_ms = %LogValue::of_int(integer_field(values, "click_to_echo_ms")),
-    retries = %integer_field(values, "retries").expect("a required integer validates to a value"),
-    client_ts = %text_field(values, request_body::CLIENT_TS),
-    forwarded_for = %forwarded_for,
-    "diag_client"
-  );
-}
-
-fn log_socket(values: &Map<String, Value>, forwarded_for: &str) {
-  tracing::info!(
-    kind = EventKind::Socket.as_str(),
-    disconnect_at = %LogValue::of(optional_text_field_ref(values, "disconnect_at")),
-    cause = %LogValue::of(optional_text_field_ref(values, "cause")),
-    close_code = %LogValue::of_int(integer_field(values, "close_code")),
-    reconnect_at = %LogValue::of(optional_text_field_ref(values, "reconnect_at")),
-    reconnect_count = %LogValue::of_int(integer_field(values, "reconnect_count")),
-    subscription = %LogValue::of_int(integer_field(values, "subscription")),
-    session_id = %LogValue::of(optional_text_field_ref(values, "session_id")),
-    catchup_at = %LogValue::of(optional_text_field_ref(values, "catchup_at")),
-    catchup_bytes = %LogValue::of_int(integer_field(values, "catchup_bytes")),
-    client_ts = %text_field(values, request_body::CLIENT_TS),
-    forwarded_for = %forwarded_for,
-    "diag_client"
-  );
-}
-
-fn log_page_load(values: &Map<String, Value>, forwarded_for: &str) {
-  tracing::info!(
-    kind = EventKind::PageLoad.as_str(),
-    response_end_ms = %integer_field(values, "response_end_ms")
-      .expect("a required integer validates to a value"),
-    dom_content_loaded_ms = %integer_field(values, "dom_content_loaded_ms")
-      .expect("a required integer validates to a value"),
-    transfer_size = %LogValue::of_int(integer_field(values, "transfer_size")),
-    cause = %text_field(values, "cause"),
-    newest_message_ms = %LogValue::of_int(integer_field(values, "newest_message_ms")),
-    current_ms = %LogValue::of_int(integer_field(values, "current_ms")),
-    open_case = %LogValue::of(optional_text_field_ref(values, "open_case")),
-    content_source = %LogValue::of(optional_text_field_ref(values, "content_source")),
-    offline_shell = %values.get("offline_shell").expect("a required boolean validates to a value"),
-    render_blocking = %values.get("render_blocking").expect("a required list validates to a value"),
-    same_origin = %values.get("same_origin").expect("a required list validates to a value"),
-    client_ts = %text_field(values, request_body::CLIENT_TS),
-    forwarded_for = %forwarded_for,
-    "diag_client"
-  );
-}
-
-fn log_traffic(values: &Map<String, Value>, forwarded_for: &str) {
-  tracing::info!(
-    kind = EventKind::Traffic.as_str(),
-    window_s = %integer_field(values, "window_s").expect("a required integer validates to a value"),
-    endpoints = %values.get("endpoints").expect("a required field validates to a value"),
-    visibility_state = %text_field(values, "visibility_state"),
-    client_ts = %text_field(values, request_body::CLIENT_TS),
-    forwarded_for = %forwarded_for,
-    "diag_client"
-  );
 }
 
 #[cfg(test)]
@@ -723,7 +737,8 @@ mod tests {
     let values = validate_event(body).expect("the event body is valid");
     let kind = EventKind::parse(values["kind"].as_str().expect("the kind validates to a string"))
       .expect("the envelope validated the kind");
-    log_client_event(kind, values.as_object().unwrap(), "100.64.0.8");
+    let event = ClientEvent { values: values.as_object().unwrap(), forwarded_for: "100.64.0.8" };
+    event.log(kind);
     let events = events.lock().unwrap();
     assert_eq!(events.len(), 1, "one diag_client event per call");
     events[0].clone()

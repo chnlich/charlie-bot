@@ -46,7 +46,7 @@ struct Fault {
   hits: Vec<Hit>,
 }
 
-/// The faults installed on one store. Every fault decides each write it matches on its own; a write that any of
+/// The faults installed on one store. Every fault decides each write it matches on its own. A write that any of
 /// them fails carries the errno of the first one in installation order.
 #[derive(Default)]
 pub(crate) struct WriteFaults {

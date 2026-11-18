@@ -143,8 +143,13 @@
       border-radius: 12px; padding: 20px 22px; }
     .events-unavailable h1 { margin: 0; font-size: 16px; font-weight: 600; color: #e2e8f0; }
     .events-unavailable p { margin: 8px 0 0; font-size: 14px; line-height: 1.6; color: #cbd5e1; }
-    .events-unavailable a { color: #7dd3fc; text-decoration: none; }
-    .events-unavailable a:hover { text-decoration: underline; }
+    /* The panel's sentence names two destinations: the chat page and the home page. #7dd3fc against the
+       paragraph's #cbd5e1 draws 1.12:1, under the 3:1 WCAG 1.4.1 asks of a distinction carried by color alone,
+       so the tint does not mark which words are links. The underline marks each link without color, and the
+       hover lightens to #bae6fd (12.26:1 on the panel's #172033, where the resting #7dd3fc draws 9.76:1) so
+       the pointer still reads a state change. */
+    .events-unavailable a { color: #7dd3fc; text-decoration: underline; text-underline-offset: 2px; }
+    .events-unavailable a:hover { color: #bae6fd; }
   </style>
 </head>
 <body class="dark bg-slate-900 text-slate-100 min-h-screen">
@@ -361,9 +366,17 @@
       return null;
     }
 
+    // The event's instant: the day beside the clock. The clock alone made a log that crosses local
+    // midnight read as one minute, because the rows printed "23:59:59" above "00:00:00" with no day
+    // anywhere. The day names the year only when the instant falls outside the current year, the
+    // rule the chat's bubbles and the sidebar's rows print (utils.js formatTimeLabel). The seconds
+    // stay, because the row names an exact instant.
     function timeText(time) {
       const pad = n => String(n).padStart(2, '0');
-      return `${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`;
+      const dateOptions = { month: 'short', day: 'numeric' };
+      if (time.getFullYear() !== new Date().getFullYear()) dateOptions.year = 'numeric';
+      const day = time.toLocaleDateString('en-US', dateOptions);
+      return `${day}, ${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`;
     }
 
     // -------------------------------------------------------------------------

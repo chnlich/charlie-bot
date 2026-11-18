@@ -239,7 +239,7 @@ impl Drop for SidebarGatePermit {
   }
 }
 
-/// Hold the sidebar gate until the returned permit drops.
+/// The sidebar gate permit, held until it drops.
 pub(crate) fn hold_sidebar_gate() -> SidebarGatePermit {
   SIDEBAR_GATE.acquire()
 }

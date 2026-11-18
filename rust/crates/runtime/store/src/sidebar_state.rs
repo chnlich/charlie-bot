@@ -13,6 +13,7 @@ use crate::lock::lock;
 use crate::metadata::SessionMetadata;
 
 pub const HAS_PENDING_PLAN_APPROVAL: &str = "has_pending_plan_approval";
+pub const HAS_WAITING_ITEMS: &str = "has_waiting_items";
 pub const TASK_TREE_ACTIVITY: &str = "task_tree_activity";
 const FORCE_FULL_EVERY: u64 = 10;
 const DERIVED_MAP_MEMO_LIMIT: usize = 4;
@@ -187,7 +188,7 @@ pub fn register_poll(force: bool) -> bool {
 /// A reader that builds the row set the probe reads asks this first, so a poll that begins no probe leaves that set
 /// unbuilt. The poll is counted here, and the [`register_poll`] that follows for the same poll answers from the
 /// reservation, so the two cannot name different polls. A caller whose poll ends before that call drops the
-/// reservation with [`forget_poll_reservation`]; a reservation that a later call takes in its place can only shift
+/// reservation with [`forget_poll_reservation`]. A reservation that a later call takes in its place can only shift
 /// which poll probes, never hand a probe an unbuilt set.
 pub fn poll_begins_probe() -> bool {
   let mut state = lock(state(), "sidebar state mutex");
@@ -230,7 +231,7 @@ mod tests {
       let counted = register_poll(false);
       assert_eq!(peeked, counted, "register_poll answers the poll the peek counted");
     }
-    // A poll that ends before its register still counted; the next due poll arrives one poll sooner for it.
+    // A poll that ends before its register still counted. The next due poll arrives one poll sooner for it.
     poll_begins_probe();
     forget_poll_reservation();
     for _ in 0..(FORCE_FULL_EVERY - 2) {

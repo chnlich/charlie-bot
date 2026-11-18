@@ -3,23 +3,20 @@
 //! Vocabulary:
 //!
 //! - A *login* is one `host_auth.browser_logins` entry.
-//! - An *attempt* is one login process started by one click, from the click until its outcome is recorded. The
-//!   readback phase is part of the attempt. A live attempt holds its login's slot. A click that starts a new attempt
-//!   ends the live one with the outcome REPLACED.
-//! - The *readback* is the login's check command. It exits 0 while the login is valid.
+//! - An *attempt* is one login process started by one click, from the click until its outcome is recorded. The check
+//!   that follows an approval is part of the attempt.
+//! - A *readback* is a login's check command. It exits 0 while the login is valid. A login bound to a host checks with
+//!   the single-host probe instead, so its readback is that probe.
 //!
-//! Only [`start_login`] starts a login command. The page runs readback commands alone. Records live in memory, in
-//! the two module maps: one live attempt per login name, and the last attempt that ended for it.
-//!
-//! A login with `use_pty` runs its command under a pseudo-terminal in a new session, so a keyboard-interactive
-//! prompt reaches that terminal rather than the server's. Such a login may name an `enter_after_pattern`, which
-//! writes one newline to the terminal on its first match. It may also name a `user_code_pattern`, whose first
-//! capture group is appended to the approval link as `user_code=`.
+//! Only [`start_login`] and [`probe_link`] start a login command. [`probe_link`] ends its command as soon as the link
+//! prints or its timeout passes, and never runs a readback or records an approval. The status table otherwise runs the
+//! checks alone, through [`check_readback`] and the host probe. An ended attempt is recorded in `host_auth.json` by
+//! `login_state`; a live attempt lives in memory, in the one map of live attempts keyed by login name.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -29,14 +26,15 @@ use std::time::Duration;
 use charliebot_core::proc_status;
 use regex::Regex;
 use tokio::io::unix::AsyncFd;
-use tokio::io::{AsyncRead, AsyncReadExt, Interest, ReadBuf};
-use tokio::process::{Child, ChildStdout};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, Interest, ReadBuf};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::watch;
 
 use crate::config::BrowserLoginConfig;
 use crate::host_auth;
-use crate::process_tree;
-use crate::timestamps;
+use crate::login_state::{self, AttemptRecord, LinkMatch, Outcome};
+use crate::process_tree::{self, ROUTE_ERROR_PREFIX};
+use crate::timestamps::{self, isoformat};
 use time::OffsetDateTime;
 
 /// The approval link must print within this many seconds of the click. The AWS CLI prints it after at most two
@@ -45,41 +43,13 @@ const START_TIMEOUT_SEC: u64 = 30;
 /// An AWS device code expires after 600 seconds. This limit only bounds a wedged child process.
 const HOLD_LIMIT_SEC: u64 = 30 * 60;
 const READBACK_TIMEOUT_SEC: u64 = 30;
-const PAGE_READBACK_TIMEOUT_SEC: u64 = 20;
 const OUTPUT_KEEP_LINES: usize = 200;
 const START_FAILURE_TAIL_LINES: usize = 20;
-/// The page shows at most this many characters of a readback run at page load.
+/// The status table shows, and the state file keeps, at most this many characters of a readback's output.
 pub const READBACK_SHOWN_CHARS: usize = 300;
 
 /// The 502 body of a start whose driver died before the link or the failure was known.
 const ABANDONED_START_BODY: &str = "the browser login ended before it gave an approval link";
-
-/// How an attempt ended. An attempt still in progress holds no outcome yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
-  Approved,
-  LoginFailed,
-  ReadbackFailed,
-  Replaced,
-  HoldLimit,
-  StartFailed,
-  RenewalRecordFailed,
-}
-
-impl Outcome {
-  /// The page's word for this outcome.
-  pub fn label(self) -> &'static str {
-    match self {
-      Outcome::Approved => "approved",
-      Outcome::LoginFailed => "login failed",
-      Outcome::ReadbackFailed => "readback failed",
-      Outcome::Replaced => "replaced",
-      Outcome::HoldLimit => "hold limit",
-      Outcome::StartFailed => "start failure",
-      Outcome::RenewalRecordFailed => "renewal record failed",
-    }
-  }
-}
 
 /// Where an attempt in progress stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,11 +70,13 @@ impl Phase {
   }
 }
 
-/// How a readback ended: its exit code and merged output, or the timeout that ended its process tree.
+/// How a readback ended: its exit code and merged output, the timeout that ended its process tree, or the reason it
+/// could not run at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Readback {
   Exited { code: i32, output: String },
   TimedOut { after_sec: u64 },
+  CannotRun { reason: String },
 }
 
 /// The text a readback shows once its timeout has ended it.
@@ -115,6 +87,16 @@ pub fn timeout_text(after_sec: u64) -> String {
 /// A start that produced no approval link. The string is the 502 body of the click that waited on it.
 #[derive(Debug, Clone)]
 pub struct StartFailed(pub String);
+
+/// Why a value was not given to a login.
+#[derive(Debug)]
+pub enum InputRefused {
+  /// The login is not waiting for input: no attempt is waiting for approval, it has no `input_prompt`, or its value
+  /// was already given.
+  NotAwaiting,
+  /// The login's input could not be written.
+  Write(io::Error),
+}
 
 /// The state the link watch of one attempt carries.
 #[derive(Debug, Clone)]
@@ -136,10 +118,33 @@ pub fn user_code_of(url: &str) -> &str {
   pattern.captures(url).and_then(|captures| captures.get(1)).map(|matched| matched.as_str()).unwrap_or("")
 }
 
-/// The record one attempt keeps and the page reads. The attempt's driver task is the only writer, and every access
-/// takes the mutex, so a page render never sees a half-written record.
+/// `missing_path`: the program or the script of an argv that has no file behind it. The program is the first argument,
+/// and the script is the first absolute path after it. Later absolute paths are data that a login may create, such as
+/// a token cache, so they never count. A bare program name is left to the spawn, which finds it on `PATH`.
+pub fn missing_path(argv: &[String]) -> Option<&str> {
+  let (program, arguments) = argv.split_first()?;
+  let script = arguments.iter().map(String::as_str).find(|arg| arg.starts_with('/'));
+  std::iter::once(program.as_str()).chain(script).find(|path| path.starts_with('/') && !Path::new(path).exists())
+}
+
+/// The files an attempt reads and writes: the host-auth state, and the ssh config that names the hosts its probe checks.
+#[derive(Clone)]
+struct AttemptPaths {
+  state: PathBuf,
+  ssh_config: PathBuf,
+}
+
+/// The stdin a login reads its input from, held until the input value is given.
+enum InputSink {
+  Pipe(ChildStdin),
+  Terminal(Arc<PtyMaster>),
+}
+
+/// The record one attempt keeps. The attempt's driver task is the only writer, and every access takes the mutex, so a
+/// status read never sees a half-written record.
 struct AttemptCore {
   login: BrowserLoginConfig,
+  paths: AttemptPaths,
   started_at: OffsetDateTime,
   phase: Phase,
   approval_url: Option<String>,
@@ -149,6 +154,10 @@ struct AttemptCore {
   readback_output: String,
   outcome: Option<Outcome>,
   finished_at: Option<OffsetDateTime>,
+  /// The input sink of a login with an `input_prompt`, open until its value is given or the attempt ends.
+  input: Option<InputSink>,
+  /// Whether this attempt accepted a value. Its output is not kept because the login may echo the value.
+  input_submitted: bool,
   /// The live child's pid: the login process, then the readback process. A kill from outside the driver — a click
   /// that replaces the attempt, or the server stop — signals it.
   child_pid: Option<u32>,
@@ -156,13 +165,13 @@ struct AttemptCore {
   link: watch::Sender<LinkState>,
   approval_url_matcher: Regex,
   user_code_matcher: Option<Regex>,
-  renewal_state_path: Option<PathBuf>,
 }
 
 impl AttemptCore {
-  fn new(login: &BrowserLoginConfig, link: watch::Sender<LinkState>, renewal_state_path: Option<PathBuf>) -> Self {
+  fn new(login: &BrowserLoginConfig, link: watch::Sender<LinkState>, paths: AttemptPaths) -> Self {
     AttemptCore {
       login: login.clone(),
+      paths,
       started_at: timestamps::utc_now(),
       phase: Phase::Starting,
       approval_url: None,
@@ -172,6 +181,8 @@ impl AttemptCore {
       readback_output: String::new(),
       outcome: None,
       finished_at: None,
+      input: None,
+      input_submitted: false,
       child_pid: None,
       link,
       approval_url_matcher: Regex::new(&login.approval_url_pattern)
@@ -180,11 +191,10 @@ impl AttemptCore {
         .user_code_pattern
         .as_deref()
         .map(|pattern| Regex::new(pattern).expect("the config validated the user-code pattern")),
-      renewal_state_path,
     }
   }
 
-  /// Signal the recorded pid from outside the driver. An unsignalable pid is a child the driver's own wait already
+  /// The recorded pid, signaled from outside the driver. An unsignalable pid is a child the driver's own wait already
   /// reaped.
   fn kill_child(&mut self) {
     if let Some(pid) = self.child_pid.take() {
@@ -196,36 +206,45 @@ impl AttemptCore {
     }
   }
 
-  /// A read-only copy of the fields the page renders.
-  fn snapshot(&self) -> AttemptSnapshot {
-    AttemptSnapshot {
-      phase: self.phase,
-      approval_url: self.approval_url.clone(),
-      started_at: self.started_at,
-      finished_at: self.finished_at,
-      outcome: self.outcome,
-      last_line: self.output.iter().rev().find(|line| !line.trim().is_empty()).cloned().unwrap_or_default(),
+  /// The attempt's record as the state file keeps it. It exists once the attempt has an outcome.
+  fn record(&self) -> Option<AttemptRecord> {
+    let (last_line, readback_output) = if self.input_submitted {
+      (String::new(), String::new())
+    } else {
+      (last_line(&self.output), shown_output(&self.readback_output))
+    };
+    Some(AttemptRecord {
+      outcome: self.outcome?,
+      started_at: isoformat(self.started_at),
+      finished_at: self.finished_at.map(isoformat),
+      last_line,
       readback_exit: self.readback_exit,
-      readback_output: self.readback_output.clone(),
-    }
+      readback_output,
+    })
   }
 }
 
-/// A read-only copy of an attempt's record fields, taken under the record's mutex.
+/// The output a status row shows: the text trimmed and cut to `READBACK_SHOWN_CHARS` characters.
+pub fn shown_output(text: &str) -> String {
+  text.trim().chars().take(READBACK_SHOWN_CHARS).collect()
+}
+
+/// The last output line that is not blank, or an empty string.
+fn last_line(output: &VecDeque<String>) -> String {
+  output.iter().rev().find(|line| !line.trim().is_empty()).cloned().unwrap_or_default()
+}
+
+/// A read-only copy of a live attempt's fields, taken under the record's mutex.
 #[derive(Clone, Debug, PartialEq)]
-pub struct AttemptSnapshot {
+pub struct LiveAttempt {
   pub phase: Phase,
   pub approval_url: Option<String>,
   pub started_at: OffsetDateTime,
-  pub finished_at: Option<OffsetDateTime>,
-  pub outcome: Option<Outcome>,
-  /// The last output line that is not blank, or an empty string.
-  pub last_line: String,
-  pub readback_exit: Option<i32>,
-  pub readback_output: String,
+  /// Whether the attempt waits for a value that the row's input box sends.
+  pub input_open: bool,
 }
 
-impl AttemptSnapshot {
+impl LiveAttempt {
   /// The device code the approval link carries. It is empty before the link is known.
   pub fn user_code(&self) -> &str {
     self.approval_url.as_deref().map(user_code_of).unwrap_or("")
@@ -241,47 +260,54 @@ struct LiveEntry {
 
 /// The live attempt of each login name. A newer attempt is always the live one.
 static LIVE: LazyLock<Mutex<HashMap<String, LiveEntry>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-/// The last attempt that ended, for each login name.
-static LAST: LazyLock<Mutex<HashMap<String, Arc<Mutex<AttemptCore>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Login names whose one-off link probe currently owns the login process slot.
+static LINK_PROBES: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// The login's attempt in progress, as a snapshot for the page.
-pub fn live_attempt(name: &str) -> Option<AttemptSnapshot> {
+/// Holds a login's process slot for one link probe. The probe is not a live attempt and never appears in a row.
+struct LinkProbeGuard(String);
+
+impl Drop for LinkProbeGuard {
+  fn drop(&mut self) {
+    LINK_PROBES.lock().expect("the link-probe set is never poisoned").remove(&self.0);
+  }
+}
+
+/// The login's attempt in progress, as a snapshot for the status table.
+pub fn live_attempt(name: &str) -> Option<LiveAttempt> {
   let core = {
     let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
     let entry = live.get(name)?;
     Arc::clone(&entry.core)
   };
-  Some(core.lock().expect("the attempt record lock is never poisoned").snapshot())
+  let state = core.lock().expect("the attempt record lock is never poisoned");
+  Some(LiveAttempt {
+    phase: state.phase,
+    approval_url: state.approval_url.clone(),
+    started_at: state.started_at,
+    input_open: state.input.is_some() && state.phase == Phase::WaitingForApproval,
+  })
 }
 
-/// The login's most recently ended attempt, as a snapshot for the page.
-pub fn last_attempt(name: &str) -> Option<AttemptSnapshot> {
-  let core = LAST.lock().expect("the last-attempt map lock is never poisoned").get(name)?.clone();
-  Some(core.lock().expect("the attempt record lock is never poisoned").snapshot())
-}
-
-/// `start_login`: start an attempt of *login* and return its approval link. A click during a start joins that start.
+/// `start_login`: start an attempt of *login* and return its approval link. A click during a start joins that start,
+/// while a click on a live attempt ends it with the outcome REPLACED. A live attempt holds its login's slot.
 ///
 /// The attempt is registered before the first await, so a click that arrives while this start waits joins it rather
 /// than starting a second process. Fails with the 502 body when the login gives no link or its state path is invalid.
+///
+/// A login with `use_pty` runs its command under a pseudo-terminal in a new session, so a keyboard-interactive prompt
+/// reaches that terminal rather than the server's. Such a login may name an `enter_after_pattern`, which writes one
+/// newline to the terminal on its first match, and a `user_code_pattern`, whose first capture group is appended to the
+/// approval link as `user_code=`.
 pub async fn start_login(login: &BrowserLoginConfig) -> Result<String, StartFailed> {
-  let renewal_state_path = if login.host.is_some() {
-    Some(
-      host_auth::default_state_path()
-        .map_err(|error| StartFailed(format!("could not resolve the host-auth state path: {error}")))?,
-    )
-  } else {
-    None
-  };
-  start_login_with_state_path(login, renewal_state_path).await
+  let state = host_auth::default_state_path()
+    .map_err(|error| StartFailed(format!("could not resolve the host-auth state path: {error}")))?;
+  let paths = AttemptPaths { state, ssh_config: host_auth::ssh_config_path() };
+  start_login_with_paths(login, paths).await
 }
 
-/// `start_login_with_state_path`: start an attempt with the state file used by a confirmed host renewal.
-async fn start_login_with_state_path(
-  login: &BrowserLoginConfig,
-  renewal_state_path: Option<PathBuf>,
-) -> Result<String, StartFailed> {
-  let mut link = match claim_slot(login, renewal_state_path) {
+/// `start_login_with_paths`: start an attempt, which records its outcome in the state file of `paths`.
+async fn start_login_with_paths(login: &BrowserLoginConfig, paths: AttemptPaths) -> Result<String, StartFailed> {
+  let mut link = match claim_slot(login, paths)? {
     Slot::Join(link) => link,
     Slot::Started { link, replaced } => {
       if let Some(core) = replaced {
@@ -302,17 +328,20 @@ enum Slot {
 
 /// The click's slot: the login's start in progress to join, or a new attempt registered in its slot. The check and the
 /// registration share one lock hold, so two clicks that arrive together cannot both start a process.
-fn claim_slot(login: &BrowserLoginConfig, renewal_state_path: Option<PathBuf>) -> Slot {
+fn claim_slot(login: &BrowserLoginConfig, paths: AttemptPaths) -> Result<Slot, StartFailed> {
   let mut live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
+  if LINK_PROBES.lock().expect("the link-probe set is never poisoned").contains(&login.name) {
+    return Err(StartFailed("a link probe is in progress for this login".to_string()));
+  }
   if let Some(entry) = live.get(&login.name).filter(|entry| matches!(&*entry.link.borrow(), LinkState::Pending)) {
-    return Slot::Join(entry.link.clone());
+    return Ok(Slot::Join(entry.link.clone()));
   }
   let replaced = live.remove(&login.name).map(|entry| entry.core);
   let (link, link_rx) = watch::channel(LinkState::Pending);
-  let core = Arc::new(Mutex::new(AttemptCore::new(login, link, renewal_state_path)));
+  let core = Arc::new(Mutex::new(AttemptCore::new(login, link, paths)));
   let driver = tokio::spawn(drive(Arc::clone(&core)));
   live.insert(login.name.clone(), LiveEntry { core, link: link_rx.clone(), driver });
-  Slot::Started { link: link_rx, replaced }
+  Ok(Slot::Started { link: link_rx, replaced })
 }
 
 /// The link watch's answer to a waiting click: the link, or the 502 body of a start that gave none.
@@ -324,22 +353,138 @@ async fn await_link(link: &mut watch::Receiver<LinkState>) -> Result<String, Sta
       LinkState::Pending => {}
     }
     if link.changed().await.is_err() {
-      // The sender lives in the attempt record, which the last-attempt map holds forever. A dropped sender means
+      // The sender lives in the attempt record, which the live map holds until the attempt ends. A dropped sender means
       // the driver died without resolving the link.
       return Err(StartFailed(ABANDONED_START_BODY.to_string()));
     }
   }
 }
 
-/// `page_readback`: run the login's readback once for the page and answer how it ended. The login never runs here.
+/// `give_input`: write one value and its newline to the login that waits for it, then drop the sink. A login with an
+/// `input_prompt` keeps that sink open while it waits for approval: its stdin pipe, or its terminal when `use_pty` is
+/// set. The value is written once; a second value finds no sink and is refused.
+pub async fn give_input(name: &str, value: String) -> Result<(), InputRefused> {
+  let core = {
+    let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
+    Arc::clone(&live.get(name).ok_or(InputRefused::NotAwaiting)?.core)
+  };
+  let sink = {
+    let mut state = core.lock().expect("the attempt record lock is never poisoned");
+    if state.phase != Phase::WaitingForApproval {
+      return Err(InputRefused::NotAwaiting);
+    }
+    let sink = state.input.take().ok_or(InputRefused::NotAwaiting)?;
+    state.input_submitted = true;
+    sink
+  };
+  let mut bytes = value.into_bytes();
+  bytes.push(b'\n');
+  let written = match sink {
+    InputSink::Pipe(mut stdin) => stdin.write_all(&bytes).await,
+    InputSink::Terminal(master) => master.write_terminal(&bytes).await,
+  };
+  written.map_err(InputRefused::Write)
+}
+
+/// `check_readback`: run a readback once and answer how it ended. The login never runs here.
 ///
 /// The capture runs as a task of its own, so its timeout ends the readback's process tree even when the request that
-/// asked for the readback has gone.
-pub async fn page_readback(login: &BrowserLoginConfig) -> io::Result<Readback> {
-  let child = spawn_readback(&login.readback_command)?;
-  tokio::spawn(finish_capture(child, Duration::from_secs(PAGE_READBACK_TIMEOUT_SEC)))
-    .await
-    .expect("the readback capture task does not panic")
+/// asked for the check has gone.
+pub async fn check_readback(argv: &[String]) -> Readback {
+  match start_readback(argv) {
+    Ok(child) => finish_readback(child).await,
+    Err(reason) => Readback::CannotRun { reason },
+  }
+}
+
+/// `start_readback`: the readback's child, or the reason it cannot run.
+fn start_readback(argv: &[String]) -> Result<Child, String> {
+  if let Some(path) = missing_path(argv) {
+    return Err(format!("missing file: {path}"));
+  }
+  spawn_readback(argv).map_err(|error| format!("could not start the readback command: {error}"))
+}
+
+/// `finish_readback`: the child's output and exit within the readback timeout. A supervisor's report that the command
+/// could not start is a readback that cannot run.
+async fn finish_readback(child: Child) -> Readback {
+  let capture = tokio::spawn(finish_capture(child, Duration::from_secs(READBACK_TIMEOUT_SEC)));
+  match capture.await.expect("the readback capture task does not panic") {
+    Ok(Readback::Exited { output, .. }) if output.starts_with(ROUTE_ERROR_PREFIX) => {
+      Readback::CannotRun { reason: output.strip_prefix(ROUTE_ERROR_PREFIX).unwrap_or_default().trim().to_string() }
+    }
+    Ok(readback) => readback,
+    Err(error) => Readback::CannotRun { reason: format!("the readback did not finish: {error}") },
+  }
+}
+
+/// `probe_link`: run the login's command until its approval link prints or the start timeout passes, then end its
+/// process tree. The login is not approved here: no readback runs, and the output is dropped with the probe. The probe
+/// is never registered as a live attempt, so its link reaches no row.
+pub async fn probe_link(login: &BrowserLoginConfig) -> io::Result<LinkMatch> {
+  probe_link_within(login, Duration::from_secs(START_TIMEOUT_SEC)).await
+}
+
+/// [`probe_link`] with its timeout as a parameter, so a test can run a silent login without waiting out the start
+/// timeout.
+async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io::Result<LinkMatch> {
+  if let Some(path) = missing_path(&login.login_command) {
+    tracing::warn!(login = %login.name, path, "browser_login_link_probe_missing_file");
+    return Ok(LinkMatch::Fail);
+  }
+  let _probe = claim_link_probe(&login.name)?;
+  let (mut child, mut output, _input) = match spawn_login(login) {
+    Ok(spawned) => spawned,
+    Err(error) => {
+      tracing::warn!(login = %login.name, error = %error, "browser_login_link_probe_not_started");
+      return Ok(LinkMatch::Fail);
+    }
+  };
+  let matcher = Regex::new(&login.approval_url_pattern).expect("the config validated the approval-url pattern");
+  let printed = tokio::time::timeout(timeout, link_printed(&matcher, &mut output)).await;
+  // The login leads its own process group or session, so the tree ends with its root, descendants included.
+  if let Some(pid) = child.id() {
+    process_tree::kill_tree(pid)?;
+  }
+  child.wait().await?;
+  match printed {
+    Ok(Ok(true)) => Ok(LinkMatch::Pass),
+    Ok(Ok(false)) => {
+      tracing::warn!(login = %login.name, "browser_login_link_probe_no_link");
+      Ok(LinkMatch::Fail)
+    }
+    Ok(Err(error)) => Err(error),
+    Err(_elapsed) => {
+      tracing::warn!(login = %login.name, "browser_login_link_probe_timed_out");
+      Ok(LinkMatch::Fail)
+    }
+  }
+}
+
+/// Claim a login's process slot for a link probe unless a full attempt already owns it.
+fn claim_link_probe(name: &str) -> io::Result<LinkProbeGuard> {
+  let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
+  if live.contains_key(name) {
+    return Err(io::Error::new(io::ErrorKind::WouldBlock, "a login attempt is in progress"));
+  }
+  let mut probes = LINK_PROBES.lock().expect("the link-probe set is never poisoned");
+  if !probes.insert(name.to_string()) {
+    return Err(io::Error::new(io::ErrorKind::WouldBlock, "a link probe is already in progress"));
+  }
+  Ok(LinkProbeGuard(name.to_string()))
+}
+
+/// Whether a line or partial line of the login's output matches the approval-link pattern. The output is read until it
+/// matches or ends, without answering an enter prompt.
+async fn link_printed(matcher: &Regex, output: &mut LoginReader) -> io::Result<bool> {
+  loop {
+    if output.seen_text().lines().any(|line| matcher.is_match(line)) {
+      return Ok(true);
+    }
+    if !output.read_chunk().await? {
+      return Ok(false);
+    }
+  }
 }
 
 /// `stop_all`: end every live attempt by killing its child — the driver's own paths then record each outcome — and
@@ -362,19 +507,35 @@ pub async fn stop_all() {
   }
 }
 
-/// One attempt, from its start to its recorded outcome. A driver whose run fails ends the attempt too.
+/// One attempt, from its start to its recorded outcome, then recorded in the state file. A driver whose run fails
+/// ends the attempt too.
 async fn drive(core: Arc<Mutex<AttemptCore>>) {
   if let Err(error) = run_attempt(&core).await {
     let login = core.lock().expect("the attempt record lock is never poisoned").login.name.clone();
     tracing::warn!(error = %error, login = %login, "browser_login_driver_failed");
     abandon(&core);
   }
+  let (paths, name, bound, record) = {
+    let state = core.lock().expect("the attempt record lock is never poisoned");
+    (state.paths.clone(), state.login.name.clone(), state.login.host.is_some(), state.record())
+  };
+  let record = record.expect("a driver that returns has recorded its outcome");
+  if let Err(error) = login_state::record_attempt(&paths.state, &name, bound, &record).await {
+    tracing::error!(error = %format!("{error:#}"), login = %name, "browser_login_attempt_record_failed");
+  }
+  // The live slot is released after the record is written, so a status poll that sees no attempt in progress reads the
+  // outcome as well.
+  LIVE.lock().expect("the live-attempt map lock is never poisoned").retain(|_, entry| !Arc::ptr_eq(&entry.core, &core));
 }
 
 /// The attempt's run, from the spawned login to its outcome, with the output read for the approval link.
 async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   let login = core.lock().expect("the attempt record lock is never poisoned").login.clone();
-  let (mut child, mut output) = match spawn_login(&login) {
+  if let Some(path) = missing_path(&login.login_command) {
+    fail_start(core, format!("missing file: {path}"));
+    return Ok(());
+  }
+  let (mut child, mut output, input) = match spawn_login(&login) {
     Ok(spawned) => spawned,
     // An executable that is missing or not runnable.
     Err(error) => {
@@ -382,6 +543,10 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
       return Ok(());
     }
   };
+  {
+    let mut state = core.lock().expect("the attempt record lock is never poisoned");
+    state.input = input;
+  }
   record_child(core, child.id());
   tracing::info!(login = %login.name, "browser_login_started");
 
@@ -406,7 +571,20 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   }
   let name = core.lock().expect("the attempt record lock is never poisoned").login.name.clone();
   tracing::info!(login = %name, "browser_login_link_found");
+  record_link_pass(core).await;
   hold(core, &mut child, &mut output).await
+}
+
+/// The link a started attempt printed, recorded as a pass: an earlier link-probe failure does not outlive a start that
+/// worked. A failed record is logged; the attempt goes on.
+async fn record_link_pass(core: &Arc<Mutex<AttemptCore>>) {
+  let (paths, name) = {
+    let state = core.lock().expect("the attempt record lock is never poisoned");
+    (state.paths.clone(), state.login.name.clone())
+  };
+  if let Err(error) = login_state::record_link_match(&paths.state, &name, LinkMatch::Pass).await {
+    tracing::error!(error = %format!("{error:#}"), login = %name, "browser_login_link_record_failed");
+  }
 }
 
 /// The approval link from the first matching output line, with the login's user code appended when its
@@ -458,7 +636,7 @@ fn with_user_code(link: String, user_code: Option<&str>) -> String {
   format!("{link}{separator}user_code={user_code}")
 }
 
-/// The login's output drained to its end and its exit awaited, within the hold limit. The readback runs after that.
+/// The login's output drained to its end and its exit awaited, within the hold limit. The check runs after that.
 async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut LoginReader) -> io::Result<()> {
   let login_exit =
     match tokio::time::timeout(Duration::from_secs(HOLD_LIMIT_SEC), drain_and_wait(core, child, output)).await {
@@ -488,8 +666,74 @@ async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut Lo
     end(core, Outcome::LoginFailed);
     return Ok(());
   }
+  record_approval(core).await;
   read_back(core).await
 }
+
+/// The approval of a login that exited 0, recorded before its check runs, so the approval shows even when the check is
+/// slow. A failed record is logged; the attempt goes on.
+async fn record_approval(core: &Arc<Mutex<AttemptCore>>) {
+  let (paths, name) = {
+    let state = core.lock().expect("the attempt record lock is never poisoned");
+    (state.paths.clone(), state.login.name.clone())
+  };
+  if let Err(error) = login_state::record_approval(&paths.state, &name, timestamps::utc_now()).await {
+    tracing::error!(error = %format!("{error:#}"), login = %name, "browser_login_approval_record_failed");
+  }
+}
+
+/// The check that follows an approval: the single-host probe for a host-bound login, else the login's readback. Its
+/// result is the attempt's readback, and an approved login whose check passes is approved.
+async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
+  let (login, paths) = {
+    let mut state = core.lock().expect("the attempt record lock is never poisoned");
+    state.phase = Phase::ReadingBack;
+    (state.login.clone(), state.paths.clone())
+  };
+  let (readback_exit, readback_output) = match &login.host {
+    Some(alias) => probe_bound_host(&paths, &login, alias).await,
+    None => match start_readback(&login.readback_command) {
+      Ok(child) => {
+        record_child(core, child.id());
+        match finish_readback(child).await {
+          Readback::Exited { code, output } => (Some(code), output),
+          Readback::TimedOut { after_sec } => (None, timeout_text(after_sec)),
+          Readback::CannotRun { reason } => (None, reason),
+        }
+      }
+      Err(reason) => (None, reason),
+    },
+  };
+  {
+    let mut state = core.lock().expect("the attempt record lock is never poisoned");
+    state.readback_exit = readback_exit;
+    state.readback_output = readback_output;
+    state.child_pid = None;
+  }
+  let outcome = if readback_exit == Some(0) { Outcome::Approved } else { Outcome::ReadbackFailed };
+  end(core, outcome);
+  Ok(())
+}
+
+/// The single-host probe of a host-bound login: its return code, and its detail as the output. A probe that cannot run
+/// is a failed check, and the reason is its output.
+async fn probe_bound_host(paths: &AttemptPaths, login: &BrowserLoginConfig, alias: &str) -> (Option<i32>, String) {
+  match host_auth::probe_alias_with(&paths.state, &paths.ssh_config, alias, std::slice::from_ref(login), bound_probe)
+    .await
+  {
+    Ok(answer) => (Some(answer.returncode), answer.login.detail),
+    Err(error) => {
+      tracing::error!(error = %format!("{error:#}"), login = %login.name, host = %alias, "browser_login_probe_failed");
+      (None, format!("the probe did not run: {error:#}"))
+    }
+  }
+}
+
+/// The probe a host-bound login's check runs. Tests answer it from a fixture, so no ssh runs.
+#[cfg(not(test))]
+use crate::probe::probe_host_fresh as bound_probe;
+#[cfg(test)]
+use crate::test_support::bound_probe;
 
 /// The output read to its end and the child's exit code.
 async fn drain_and_wait(
@@ -499,54 +743,6 @@ async fn drain_and_wait(
 ) -> io::Result<i32> {
   while read_line(core, output).await?.is_some() {}
   Ok(proc_status::code_of(child.wait().await?).expect("an exit status has a code or a signal"))
-}
-
-/// The readback: its command's run, and the confirmed renewal baseline recorded after a successful exit.
-async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
-  core.lock().expect("the attempt record lock is never poisoned").phase = Phase::ReadingBack;
-  let readback_command = core.lock().expect("the attempt record lock is never poisoned").login.readback_command.clone();
-  let child = match spawn_readback(&readback_command) {
-    Ok(child) => child,
-    Err(error) => {
-      core.lock().expect("the attempt record lock is never poisoned").readback_output =
-        format!("could not start the readback command: {error}");
-      end(core, Outcome::ReadbackFailed);
-      return Ok(());
-    }
-  };
-  record_child(core, child.id());
-  let readback = finish_capture(child, Duration::from_secs(READBACK_TIMEOUT_SEC)).await?;
-  let readback_exit = match &readback {
-    Readback::Exited { code, .. } => Some(*code),
-    Readback::TimedOut { .. } => None,
-  };
-  {
-    let mut state = core.lock().expect("the attempt record lock is never poisoned");
-    state.readback_exit = readback_exit;
-    state.readback_output = match readback {
-      Readback::Exited { output, .. } => output,
-      Readback::TimedOut { after_sec } => timeout_text(after_sec),
-    };
-    state.child_pid = None;
-  }
-  let (already_ended, login_name, host, state_path) = {
-    let state = core.lock().expect("the attempt record lock is never poisoned");
-    (state.outcome.is_some(), state.login.name.clone(), state.login.host.clone(), state.renewal_state_path.clone())
-  };
-  if already_ended {
-    return Ok(());
-  }
-  let succeeded = readback_exit == Some(0);
-  if succeeded && let Some(alias) = host {
-    let state_path = state_path.expect("a host renewal has a resolved host-auth state path");
-    if let Err(error) = host_auth::record_host_renewal(&state_path, &alias, timestamps::utc_now()).await {
-      tracing::error!(error = %format!("{error:#}"), login = %login_name, host = %alias, "browser_login_renewal_record_failed");
-      end(core, Outcome::RenewalRecordFailed);
-      return Ok(());
-    }
-  }
-  end(core, if succeeded { Outcome::Approved } else { Outcome::ReadbackFailed });
-  Ok(())
 }
 
 /// The next output line, appended to the attempt's tail. It is `None` once the output has ended.
@@ -562,12 +758,12 @@ async fn read_line(core: &Arc<Mutex<AttemptCore>>, output: &mut LoginReader) -> 
   Ok(Some(line))
 }
 
-/// A child running *argv* without a shell, in the server's environment, with stdin on /dev/null and output merged.
-fn spawn(argv: &[String]) -> io::Result<Child> {
+/// A child running *argv* without a shell, in the server's environment, with stdout and stderr merged and the given stdin.
+fn spawn(argv: &[String], stdin: Stdio) -> io::Result<Child> {
   let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
   let mut command = tokio::process::Command::new(program);
   command.args(arguments);
-  spawn_command(command)
+  spawn_command(command, stdin)
 }
 
 /// A readback under a dedicated subreaper so descendants stay discoverable after their parent exits.
@@ -585,13 +781,13 @@ fn spawn_readback(argv: &[String]) -> io::Result<Child> {
     command.arg(crate::process_tree::SUPERVISOR_ARG).args(argv);
     command
   };
-  spawn_command(command)
+  spawn_command(command, Stdio::null())
 }
 
-/// Spawn a merged-output command in its own process group.
-fn spawn_command(mut command: tokio::process::Command) -> io::Result<Child> {
+/// A spawned command in its own process group, with its output merged and the given stdin.
+fn spawn_command(mut command: tokio::process::Command, stdin: Stdio) -> io::Result<Child> {
   // The child leads its own process group, so a readback's timeout can end every process it started.
-  command.stdin(Stdio::null()).stdout(Stdio::piped()).process_group(0);
+  command.stdin(stdin).stdout(Stdio::piped()).process_group(0);
   // The child's own stderr writes into the same pipe as its stdout (`2>&1`).
   // SAFETY: `dup2` is async-signal-safe, and the closure runs between fork and exec with nothing else to touch.
   unsafe {
@@ -605,17 +801,22 @@ fn spawn_command(mut command: tokio::process::Command) -> io::Result<Child> {
   command.spawn()
 }
 
-/// The started login command and its output reader. `use_pty` runs it under a pseudo-terminal in a new session. Every
-/// other entry keeps stdin on /dev/null with stdout and stderr merged on a pipe.
-fn spawn_login(login: &BrowserLoginConfig) -> io::Result<(Child, LoginReader)> {
+/// The started login command, its output reader, and the input sink its `input_prompt` asks for. `use_pty` runs it under
+/// a pseudo-terminal in a new session. Every other entry keeps stdout and stderr merged on a pipe, with stdin on a pipe
+/// when it takes input and on /dev/null otherwise.
+fn spawn_login(login: &BrowserLoginConfig) -> io::Result<(Child, LoginReader, Option<InputSink>)> {
   let enter_after = login.enter_after_pattern.as_deref();
+  let takes_input = login.input_prompt.is_some();
   if login.use_pty {
-    let (child, master) = spawn_pty(&login.login_command)?;
-    Ok((child, LoginReader::new(OutputSource::Pty(master), enter_after)))
+    let (child, master) = spawn_pty(&login.login_command, !takes_input)?;
+    let sink = takes_input.then(|| InputSink::Terminal(Arc::clone(&master)));
+    Ok((child, LoginReader::new(OutputSource::Pty(master), enter_after), sink))
   } else {
-    let mut child = spawn(&login.login_command)?;
+    let stdin = if takes_input { Stdio::piped() } else { Stdio::null() };
+    let mut child = spawn(&login.login_command, stdin)?;
     let stdout = child.stdout.take().expect("the login child pipes its merged output");
-    Ok((child, LoginReader::new(OutputSource::Pipe(stdout), enter_after)))
+    let sink = takes_input.then(|| InputSink::Pipe(child.stdin.take().expect("the login child pipes its stdin")));
+    Ok((child, LoginReader::new(OutputSource::Pipe(stdout), enter_after), sink))
   }
 }
 
@@ -653,19 +854,27 @@ impl LoginReader {
         let line: Vec<u8> = self.pending.drain(..=position).collect();
         return Ok(Some(text_of(&line)));
       }
-      let mut chunk = [0u8; 4096];
-      let read = self.source.read(&mut chunk).await?;
-      if read == 0 {
+      if !self.read_chunk().await? {
         return Ok((!self.pending.is_empty()).then(|| text_of(&std::mem::take(&mut self.pending))));
-      }
-      self.pending.extend_from_slice(&chunk[..read]);
-      self.seen.extend_from_slice(&chunk[..read]);
-      if self.seen.len() > SEEN_KEEP_BYTES {
-        let excess = self.seen.len() - SEEN_KEEP_BYTES;
-        self.seen.drain(..excess);
       }
       self.answer_enter_prompt().await?;
     }
+  }
+
+  /// One output chunk, without answering the login's enter prompt.
+  async fn read_chunk(&mut self) -> io::Result<bool> {
+    let mut chunk = [0u8; 4096];
+    let read = self.source.read(&mut chunk).await?;
+    if read == 0 {
+      return Ok(false);
+    }
+    self.pending.extend_from_slice(&chunk[..read]);
+    self.seen.extend_from_slice(&chunk[..read]);
+    if self.seen.len() > SEEN_KEEP_BYTES {
+      let excess = self.seen.len() - SEEN_KEEP_BYTES;
+      self.seen.drain(..excess);
+    }
+    Ok(true)
   }
 
   /// One newline written to the terminal when the output first matches the enter pattern.
@@ -771,10 +980,14 @@ impl PtyMaster {
 }
 
 /// A child running *argv* under a pseudo-terminal of its own session, so ssh reads keyboard-interactive answers from
-/// `/dev/tty` on that terminal instead of on the server's own.
-fn spawn_pty(argv: &[String]) -> io::Result<(Child, Arc<PtyMaster>)> {
+/// `/dev/tty` on that terminal instead of on the server's own. With `echo` off the terminal does not echo what is typed
+/// into it, so a value typed for the login stays out of the login's output.
+fn spawn_pty(argv: &[String], echo: bool) -> io::Result<(Child, Arc<PtyMaster>)> {
   let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
   let (master, slave) = open_pty()?;
+  if !echo {
+    disable_echo(slave.as_raw_fd())?;
+  }
   let master = PtyMaster::new(master)?;
   let mut command = tokio::process::Command::new(program);
   command
@@ -826,6 +1039,21 @@ fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
   }
   // SAFETY: the descriptor is newly opened and no other owner holds it.
   Ok((master, unsafe { OwnedFd::from_raw_fd(slave) }))
+}
+
+/// Clears the terminal's echo of typed input.
+fn disable_echo(fd: libc::c_int) -> io::Result<()> {
+  // SAFETY: `termios` holds integers only, so the zeroed value is valid, and `tcgetattr` fills it for this descriptor.
+  let mut term: libc::termios = unsafe { std::mem::zeroed() };
+  if unsafe { libc::tcgetattr(fd, &mut term) } == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  term.c_lflag &= !libc::ECHO;
+  // SAFETY: `term` is the attribute set `tcgetattr` just read, with the echo flag cleared.
+  if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) } == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  Ok(())
 }
 
 fn read_bytes(fd: libc::c_int, buffer: &mut [u8]) -> io::Result<usize> {
@@ -885,7 +1113,7 @@ fn fail_start(core: &Arc<Mutex<AttemptCore>>, body: String) {
   let _ = core.lock().expect("the attempt record lock is never poisoned").link.send(LinkState::Failed(body));
 }
 
-/// End an attempt whose driver failed mid-run, so that no live slot or waiting click is left behind.
+/// An attempt ended after its driver failed mid-run, so that no live slot or waiting click is left behind.
 fn abandon(core: &Arc<Mutex<AttemptCore>>) {
   let phase = core.lock().expect("the attempt record lock is never poisoned").phase;
   match phase {
@@ -895,33 +1123,21 @@ fn abandon(core: &Arc<Mutex<AttemptCore>>) {
   }
 }
 
-/// *outcome* recorded on the attempt, with the live child killed if one runs and the login's live slot released.
-///
-/// An attempt that already ended keeps its record: a newer click ends a live attempt as REPLACED, and the replaced
-/// process's own exit then has nothing left to record.
+/// `end`: record *outcome* on the attempt and kill its live child, if one runs. The input sink closes with the attempt,
+/// so a value that never came is never written. An attempt that already ended keeps its record: a newer click ends a
+/// live attempt as REPLACED, and the replaced process's own exit then has nothing left to record.
 fn end(core: &Arc<Mutex<AttemptCore>>, outcome: Outcome) {
-  let (name, started_at) = {
+  let name = {
     let mut state = core.lock().expect("the attempt record lock is never poisoned");
     if state.outcome.is_some() {
       return;
     }
     state.kill_child();
+    state.input = None;
     state.outcome = Some(outcome);
     state.finished_at = Some(timestamps::utc_now());
-    (state.login.name.clone(), state.started_at)
+    state.login.name.clone()
   };
-  // A newer attempt is always the live one, so an older attempt's end clears neither the newer record nor the
-  // newer slot in the last-attempt map.
-  LIVE.lock().expect("the live-attempt map lock is never poisoned").retain(|_, entry| !Arc::ptr_eq(&entry.core, core));
-  {
-    let mut last = LAST.lock().expect("the last-attempt map lock is never poisoned");
-    let newer_recorded = last.get(&name).is_some_and(|existing| {
-      existing.lock().expect("the attempt record lock is never poisoned").started_at >= started_at
-    });
-    if !newer_recorded {
-      last.insert(name.clone(), Arc::clone(core));
-    }
-  }
   let state = core.lock().expect("the attempt record lock is never poisoned");
   tracing::info!(
     login = %name,
@@ -936,6 +1152,7 @@ fn end(core: &Arc<Mutex<AttemptCore>>, outcome: Outcome) {
 fn record_child(core: &Arc<Mutex<AttemptCore>>, pid: Option<u32>) {
   core.lock().expect("the attempt record lock is never poisoned").child_pid = pid;
 }
+
 #[cfg(test)]
 mod tests {
   use std::fs;
@@ -945,18 +1162,22 @@ mod tests {
 
   use tempfile::TempDir;
 
+  use serde_json::{Map, Value, json};
+
   use super::*;
+  use crate::host_auth::State;
+  use crate::login_state::LoginStatus;
+  use crate::process_tree::is_running;
 
   const LINK: &str = "https://device.sso.us-east-1.amazonaws.com/?user_code=7f3c9d21";
   /// The stub body that prints the approval link, in the shape the AWS CLI prints it.
   const PRINT_LINK: &str = "printf '%s\\n' 'https://device.sso.us-east-1.amazonaws.com/?user_code=7f3c9d21'";
+  const SSH_CONFIG: &str = "Host host1\n  HostName host1.example.internal\n";
   /// The tests share the module's records and the global stop, so they hold one lock for their whole run.
-  static SERIAL: std::sync::LazyLock<tokio::sync::Mutex<()>> = std::sync::LazyLock::new(tokio::sync::Mutex::default);
-
-  /// A login whose commands are stub scripts under a temporary home. The config names commands as argv, so the
-  /// stubs are executable shell scripts.
+  static SERIAL: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(tokio::sync::Mutex::default);
+  /// A login whose commands are stub scripts under a temporary home. Its state file and ssh config live there too.
   struct LoginStub {
-    _dir: TempDir,
+    dir: TempDir,
     login: BrowserLoginConfig,
   }
 
@@ -965,20 +1186,32 @@ mod tests {
       let dir = tempfile::tempdir().expect("temporary directory exists");
       let login_script = write_script(dir.path(), &format!("{name}-login"), login_body);
       let readback_script = write_script(dir.path(), &format!("{name}-readback"), readback_body);
-      LoginStub {
-        _dir: dir,
-        login: BrowserLoginConfig {
-          name: name.to_string(),
-          label: "AWS SSO".to_string(),
-          host: None,
-          login_command: vec![login_script],
-          approval_url_pattern: r"https://device\.sso\S*".to_string(),
-          readback_command: vec![readback_script],
-          use_pty: false,
-          enter_after_pattern: None,
-          user_code_pattern: None,
-        },
-      }
+      let login = BrowserLoginConfig {
+        name: name.to_string(),
+        label: "AWS SSO".to_string(),
+        host: None,
+        login_command: vec![login_script],
+        approval_url_pattern: r"https://device\.sso\S*".to_string(),
+        readback_command: vec![readback_script],
+        use_pty: false,
+        enter_after_pattern: None,
+        user_code_pattern: None,
+        input_prompt: None,
+        lifetime_sec: None,
+      };
+      LoginStub { dir, login }
+    }
+
+    /// The same stub, renewing the host `host1`.
+    fn bound_to_host1(mut self) -> Self {
+      self.login.host = Some("host1".to_string());
+      self
+    }
+
+    fn paths(&self) -> AttemptPaths {
+      let ssh_config = self.dir.path().join("ssh_config");
+      fs::write(&ssh_config, SSH_CONFIG).expect("the ssh config writes");
+      AttemptPaths { state: self.dir.path().join(host_auth::STATE_FILENAME), ssh_config }
     }
   }
 
@@ -989,19 +1222,34 @@ mod tests {
     path.to_str().expect("the temp path is UTF-8").to_string()
   }
 
-  /// The wait until `check` holds, bounded so a driver that never reaches its outcome fails the test.
+  /// The wait until `check` holds, bounded so a driver that never reaches its state fails the test.
   async fn until(check: impl Fn() -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while !check() {
-      assert!(tokio::time::Instant::now() < deadline, "the driver did not reach its outcome in time");
+      assert!(tokio::time::Instant::now() < deadline, "the driver did not reach its state in time");
       tokio::time::sleep(Duration::from_millis(10)).await;
     }
   }
 
-  fn state_with_host_baseline(path: &Path, baseline: &str) {
-    let mut state = host_auth::empty_state();
-    state.insert("hosts".to_string(), serde_json::json!([{"alias": "host1", "enrolled_observed_at": baseline}]));
-    host_auth::save_state(&state, path).expect("the host-auth state writes");
+  /// The stored record of `name`.
+  fn login_record(paths: &AttemptPaths, name: &str) -> login_state::LoginState {
+    let state = host_auth::read_state(&paths.state).expect("the state reads");
+    login_state::login_state(&state, name).expect("the record reads")
+  }
+
+  /// The attempt record of `name` once an attempt with `outcome` has ended and recorded, with its slot released.
+  async fn recorded_outcome(paths: &AttemptPaths, name: &str, outcome: Outcome) -> AttemptRecord {
+    until(|| login_record(paths, name).last_attempt.is_some_and(|attempt| attempt.outcome == outcome)).await;
+    until(|| live_attempt(name).is_none()).await;
+    login_record(paths, name).last_attempt.expect("the attempt is recorded")
+  }
+
+  fn host_entry<'a>(state: &'a State, alias: &str) -> &'a Map<String, Value> {
+    host_auth::host_entries(state)
+      .expect("the hosts read")
+      .into_iter()
+      .find(|entry| entry.get("alias") == Some(&json!(alias)))
+      .expect("the host is in the state")
   }
 
   #[test]
@@ -1039,121 +1287,216 @@ mod tests {
   async fn an_attempt_runs_the_login_the_link_and_the_readback_to_its_outcome() {
     let _serial = SERIAL.lock().await;
     let approved = LoginStub::new("approved", PRINT_LINK, "exit 0\n");
-    let link = start_login(&approved.login).await.expect("the login gives its link");
+    let paths = approved.paths();
+    let link = start_login_with_paths(&approved.login, paths.clone()).await.expect("the login gives its link");
     assert_eq!(link, LINK);
-    until(|| matches!(last_attempt("approved"), Some(snapshot) if snapshot.outcome == Some(Outcome::Approved))).await;
-    assert_eq!(last_attempt("approved").expect("the attempt ended").readback_exit, Some(0));
-    assert_eq!(live_attempt("approved"), None, "the ended attempt released its slot");
+    let attempt = recorded_outcome(&paths, "approved", Outcome::Approved).await;
+    assert_eq!(attempt.readback_exit, Some(0));
+    assert_eq!(login_record(&paths, "approved").status, Some(LoginStatus::Ok));
 
     let failed = LoginStub::new("readback-failed", PRINT_LINK, "echo 'okta session expired'; exit 2\n");
-    start_login(&failed.login).await.expect("the login gives its link");
-    until(
-      || matches!(last_attempt("readback-failed"), Some(snapshot) if snapshot.outcome == Some(Outcome::ReadbackFailed)),
-    )
-    .await;
-    let last = last_attempt("readback-failed").expect("the attempt ended");
-    assert_eq!(last.readback_exit, Some(2));
-    assert_eq!(last.readback_output.trim(), "okta session expired");
+    let paths = failed.paths();
+    start_login_with_paths(&failed.login, paths.clone()).await.expect("the login gives its link");
+    let attempt = recorded_outcome(&paths, "readback-failed", Outcome::ReadbackFailed).await;
+    assert_eq!(attempt.readback_exit, Some(2));
+    assert_eq!(attempt.readback_output.trim(), "okta session expired");
+    assert_eq!(
+      login_record(&paths, "readback-failed").status,
+      Some(LoginStatus::Broken),
+      "a check that fails after the login approved breaks the row"
+    );
   }
 
   #[tokio::test]
-  async fn the_page_readback_reports_the_merged_output_without_starting_a_login() {
+  async fn the_approval_is_recorded_before_a_slow_check_finishes() {
     let _serial = SERIAL.lock().await;
-    let stub = LoginStub::new("page-readback", PRINT_LINK, "echo valid; echo broken 1>&2\nexit 0\n");
-    let Readback::Exited { code, output } = page_readback(&stub.login).await.expect("the readback runs") else {
-      panic!("the readback ends within its limit");
-    };
-    assert_eq!(code, 0);
-    assert_eq!(output.trim(), "valid\nbroken", "the child's own stderr reaches the same capture");
+    let slow = LoginStub::new("slow-check", PRINT_LINK, "while [ ! -e \"$0.release\" ]; do sleep 0.01; done\nexit 0\n");
+    let paths = slow.paths();
+    start_login_with_paths(&slow.login, paths.clone()).await.expect("the login gives its link");
+    until(|| live_attempt("slow-check").is_some_and(|attempt| attempt.phase == Phase::ReadingBack)).await;
+    until(|| login_record(&paths, "slow-check").last_approved_at.is_some()).await;
+    assert!(
+      login_record(&paths, "slow-check").last_attempt.is_none(),
+      "the approval shows before the attempt's own record is written"
+    );
+    assert_eq!(login_record(&paths, "slow-check").link_match, Some(LinkMatch::Pass), "a started link passes its probe");
+    fs::write(format!("{}.release", slow.login.readback_command[0]), "").expect("the readback is released");
+    recorded_outcome(&paths, "slow-check", Outcome::Approved).await;
   }
 
-  #[tokio::test]
-  async fn a_successful_host_renewal_moves_the_estimated_expiry() {
-    let _serial = SERIAL.lock().await;
-    // The renewal record claims the process-wide round slot, which a poller test's round skips while it is held.
-    let _slot_lock = crate::test_support::round_slot_lock().lock().await;
-    let stub = LoginStub::new("renewal-recorded", PRINT_LINK, "echo valid\n");
-    let mut login = stub.login.clone();
-    login.host = Some("host1".to_string());
-    let state_path = stub._dir.path().join("host_auth.json");
-    let old_baseline = "2026-09-15T07:00:00+00:00";
-    state_with_host_baseline(&state_path, old_baseline);
-
+  #[test]
+  fn a_missing_program_or_script_is_named_and_a_later_data_path_is_not() {
+    let dir = tempfile::tempdir().expect("temporary directory exists");
+    let program = write_script(dir.path(), "program", "exit 0\n");
+    let script = write_script(dir.path(), "script", "exit 0\n");
+    let data = dir.path().join("token-cache").display().to_string();
+    let gone = dir.path().join("gone").display().to_string();
+    let argv = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect::<Vec<String>>();
     assert_eq!(
-      start_login_with_state_path(&login, Some(state_path.clone())).await.expect("the login gives its link"),
-      LINK
+      missing_path(&argv(&[&program, &script, &data])),
+      None,
+      "a data path that a login creates is not a script"
     );
-    until(|| matches!(last_attempt("renewal-recorded"), Some(snapshot) if snapshot.outcome == Some(Outcome::Approved)))
-      .await;
-
-    let attempt = last_attempt("renewal-recorded").expect("the attempt ended");
-    let state = host_auth::read_state(&state_path).expect("the host-auth state reads");
-    let entry = host_auth::host_entries(&state).expect("the host entries read")[0];
-    let baseline = host_auth::opt_str(entry, "enrolled_observed_at").expect("the baseline field reads").unwrap();
-    assert_ne!(baseline, old_baseline, "the successful renewal replaces the stale baseline");
-    let renewed_at = timestamps::parse(baseline).expect("the recorded baseline parses");
-    assert!(renewed_at >= attempt.started_at, "the baseline follows the renewal start");
-    assert!(renewed_at <= attempt.finished_at.expect("the attempt has an end time"));
-    let estimate = host_auth::derive_estimate(entry, renewed_at).expect("the renewed estimate derives");
-    assert_eq!(estimate.remaining_sec, Some(host_auth::TRUST_CACHE_TTL_SEC as f64));
-  }
-
-  #[tokio::test]
-  async fn a_failed_host_renewal_keeps_the_estimated_expiry() {
-    let _serial = SERIAL.lock().await;
-    let stub = LoginStub::new("renewal-failed", PRINT_LINK, "echo login expired; exit 1\n");
-    let mut login = stub.login.clone();
-    login.host = Some("host1".to_string());
-    let state_path = stub._dir.path().join("host_auth.json");
-    let old_baseline = "2026-09-15T07:00:00+00:00";
-    state_with_host_baseline(&state_path, old_baseline);
-
-    start_login_with_state_path(&login, Some(state_path.clone())).await.expect("the login gives its link");
-    until(
-      || matches!(last_attempt("renewal-failed"), Some(snapshot) if snapshot.outcome == Some(Outcome::ReadbackFailed)),
-    )
-    .await;
-
-    let state = host_auth::read_state(&state_path).expect("the host-auth state reads");
-    let entry = host_auth::host_entries(&state).expect("the host entries read")[0];
-    assert_eq!(
-      host_auth::opt_str(entry, "enrolled_observed_at").expect("the baseline field reads"),
-      Some(old_baseline),
-      "a failed readback leaves the baseline unchanged"
-    );
-    let old_expiry = host_auth::derive_estimate(entry, timestamps::utc_now()).expect("the old estimate derives");
-    assert_eq!(
-      old_expiry.expires_at.as_deref(),
-      Some("2026-09-22T07:00:00+00:00"),
-      "the failed renewal leaves the previous expiry estimate"
-    );
+    assert_eq!(missing_path(&argv(&[&program, &gone, &data])), Some(gone.as_str()), "a missing script is named");
+    assert_eq!(missing_path(&argv(&[&gone, &script])), Some(gone.as_str()), "a missing program is named");
+    assert_eq!(missing_path(&argv(&["ssh", "-o", "BatchMode=yes"])), None, "a bare program name is left to the spawn");
   }
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn a_failed_login_a_replaced_attempt_and_a_stop_end_their_attempts() {
+  async fn a_link_probe_passes_on_its_link_and_ends_the_whole_process_tree() {
     let _serial = SERIAL.lock().await;
-    // A login command that gives no link: the click gets the exit code and the output tail.
+    let stub = LoginStub::new(
+      "probe-linked",
+      &format!("echo $$ > \"$0.root\"\nsleep 600 &\necho $! > \"$0.child\"\n{PRINT_LINK}\nsleep 600\n"),
+      "touch \"$0.ran\"\nexit 0\n",
+    );
+    let matched = probe_link_within(&stub.login, Duration::from_secs(5)).await.expect("the probe runs");
+    assert_eq!(matched, LinkMatch::Pass);
+    let script = &stub.login.login_command[0];
+    for pid_file in [format!("{script}.root"), format!("{script}.child")] {
+      let pid: u32 =
+        fs::read_to_string(&pid_file).expect("the login recorded its pid").trim().parse().expect("the pid parses");
+      until(|| !is_running(pid)).await;
+    }
+    assert!(!stub.dir.path().join("probe-linked-readback.ran").exists(), "the probe ran no readback");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_link_probe_stops_before_answering_the_login_prompt() {
+    let _serial = SERIAL.lock().await;
+    let mut stub = LoginStub::new(
+      "probe-no-enter",
+      &format!(
+        "printf '%s\\n' '{LINK} Press Enter after approval'\nif IFS= read -r answer; then touch \"$0.entered\"; fi\nsleep 600\n"
+      ),
+      "exit 0\n",
+    );
+    stub.login.use_pty = true;
+    stub.login.enter_after_pattern = Some("Press Enter after approval".to_string());
+
+    let matched = probe_link_within(&stub.login, Duration::from_secs(5)).await.expect("the probe runs");
+
+    assert_eq!(matched, LinkMatch::Pass);
+    assert!(!Path::new(&format!("{}.entered", stub.login.login_command[0])).exists(), "the probe sent no Enter");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_link_probe_reserves_its_login_against_a_concurrent_start() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new(
+      "probe-reserves",
+      &format!(
+        "echo $$ >> \"$0.starts\"\nwhile [ ! -e \"$0.release\" ]; do sleep 0.001; done\n{PRINT_LINK}\nsleep 600\n"
+      ),
+      "exit 0\n",
+    );
+    let script = &stub.login.login_command[0];
+    let starts = format!("{script}.starts");
+    let login = stub.login.clone();
+    let probe = tokio::spawn(async move { probe_link_within(&login, Duration::from_secs(5)).await });
+    until(|| Path::new(&starts).exists()).await;
+
+    let failure = start_login_with_paths(&stub.login, stub.paths()).await.expect_err("a probe owns the process slot");
+
+    assert!(failure.0.contains("link probe is in progress"), "{failure:?}");
+    assert_eq!(fs::read_to_string(&starts).expect("the start count reads").lines().count(), 1);
+    fs::write(format!("{script}.release"), "").expect("the login is released");
+    assert_eq!(probe.await.expect("the probe task completes").expect("the probe ends"), LinkMatch::Pass);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_link_probe_that_prints_no_link_fails_at_its_timeout_and_ends_its_process() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new("probe-silent", "echo $$ > \"$0.root\"\nsleep 600\n", "exit 0\n");
+    let matched = probe_link_within(&stub.login, Duration::from_millis(60)).await.expect("the probe runs");
+    assert_eq!(matched, LinkMatch::Fail);
+    let pid: u32 = fs::read_to_string(format!("{}.root", stub.login.login_command[0]))
+      .expect("the login recorded its pid")
+      .trim()
+      .parse()
+      .expect("the pid parses");
+    until(|| !is_running(pid)).await;
+  }
+
+  #[tokio::test]
+  async fn a_check_reports_its_merged_output_and_a_missing_script_cannot_run() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new("check", PRINT_LINK, "exit 0\n");
+    let merged = write_script(stub.dir.path(), "merged", "echo valid; echo broken 1>&2\nexit 0\n");
+    let Readback::Exited { code, output } = check_readback(std::slice::from_ref(&merged)).await else {
+      panic!("the check ends within its limit");
+    };
+    assert_eq!(code, 0);
+    assert_eq!(output.trim(), "valid\nbroken", "the child's own stderr reaches the same capture");
+
+    let gone = stub.dir.path().join("gone.py").display().to_string();
+    let Readback::CannotRun { reason } = check_readback(&[merged, gone.clone()]).await else {
+      panic!("a check whose script is gone cannot run");
+    };
+    assert_eq!(reason, format!("missing file: {gone}"));
+  }
+
+  #[tokio::test]
+  async fn a_host_bound_login_records_its_approval_and_its_probe_answers_the_host() {
+    let _serial = SERIAL.lock().await;
+    let _slot_lock = crate::test_support::round_slot_lock().lock().await;
+    // The bound login's readback_command exits 9. Its check is the probe, so a readback that ran would fail the attempt.
+    let approved = LoginStub::new("bound-approved", PRINT_LINK, "exit 9\n").bound_to_host1();
+    let paths = approved.paths();
+    crate::test_support::set_bound_answer(0, "");
+    start_login_with_paths(&approved.login, paths.clone()).await.expect("the login gives its link");
+    let attempt = recorded_outcome(&paths, "bound-approved", Outcome::Approved).await;
+    assert_eq!(attempt.readback_exit, Some(0), "the probe's return code is the check's");
+    let record = login_record(&paths, "bound-approved");
+    assert!(record.last_approved_at.is_some(), "the login's exit 0 records the approval");
+    assert_eq!(record.status, None, "a host-bound login's availability is its host's");
+    let state = host_auth::read_state(&paths.state).expect("the state reads");
+    assert_eq!(host_entry(&state, "host1")["status"], json!("ok"));
+
+    let refused = LoginStub::new("bound-refused", PRINT_LINK, "exit 0\n").bound_to_host1();
+    let paths = refused.paths();
+    crate::test_support::set_bound_answer(255, "ssh: connect to host host1 port 22: Connection timed out");
+    start_login_with_paths(&refused.login, paths.clone()).await.expect("the login gives its link");
+    let attempt = recorded_outcome(&paths, "bound-refused", Outcome::ReadbackFailed).await;
+    assert_eq!(attempt.readback_exit, Some(255));
+    let state = host_auth::read_state(&paths.state).expect("the state reads");
+    assert_eq!(host_entry(&state, "host1")["status"], json!("unreachable"));
+    assert_eq!(
+      login_record(&paths, "bound-refused").status,
+      None,
+      "a failed probe of a host-bound login is the host's"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_start_without_a_link_and_a_missing_script_are_broken_and_a_refused_login_is_not() {
+    let _serial = SERIAL.lock().await;
     let failing = LoginStub::new("start-failed", "echo starting; exit 3\n", "exit 0\n");
-    let failure = start_login(&failing.login).await.expect_err("no link comes");
+    let paths = failing.paths();
+    let failure = start_login_with_paths(&failing.login, paths.clone()).await.expect_err("no link comes");
     assert_eq!(failure.0, "exit 3\nstarting");
-    until(|| matches!(last_attempt("start-failed"), Some(snapshot) if snapshot.outcome == Some(Outcome::StartFailed)))
-      .await;
+    recorded_outcome(&paths, "start-failed", Outcome::StartFailed).await;
+    let record = login_record(&paths, "start-failed");
+    assert_eq!(record.status, Some(LoginStatus::Broken));
+    assert_eq!(record.detail.as_deref(), Some("start failed: starting"));
 
-    // A click during a waiting attempt ends it as REPLACED and starts its own.
-    let stub = LoginStub::new("replaced", &format!("{PRINT_LINK}\nsleep 30\n"), "exit 0\n");
-    let first = start_login(&stub.login).await.expect("the first click gets its link");
-    assert_eq!(live_attempt("replaced").expect("the first attempt is live").phase, Phase::WaitingForApproval);
-    let second = start_login(&stub.login).await.expect("the second click starts its own attempt");
-    assert_eq!(second, first, "the same stub prints the same link");
-    let replaced = last_attempt("replaced").expect("the replaced attempt is recorded");
-    assert_eq!(replaced.outcome, Some(Outcome::Replaced));
+    let mut missing = LoginStub::new("missing", PRINT_LINK, "exit 0\n");
+    missing.login.login_command = vec![missing.dir.path().join("gone-login").display().to_string()];
+    let paths = missing.paths();
+    let failure = start_login_with_paths(&missing.login, paths.clone()).await.expect_err("the script is gone");
+    assert!(failure.0.starts_with("missing file: "), "{}", failure.0);
+    recorded_outcome(&paths, "missing", Outcome::StartFailed).await;
+    assert_eq!(login_record(&paths, "missing").status, Some(LoginStatus::Broken));
 
-    // The server stop kills the live child, and the driver records the outcome a cancelled driver would.
-    stop_all().await;
-    let stopped = last_attempt("replaced").expect("the stopped attempt is recorded");
-    assert_eq!(stopped.outcome, Some(Outcome::LoginFailed));
-    assert_eq!(live_attempt("replaced"), None);
+    let refused = LoginStub::new("login-refused", &format!("{PRINT_LINK}\nexit 1\n"), "exit 0\n");
+    let paths = refused.paths();
+    start_login_with_paths(&refused.login, paths.clone()).await.expect("the login gives its link");
+    recorded_outcome(&paths, "login-refused", Outcome::LoginFailed).await;
+    assert_eq!(login_record(&paths, "login-refused").status, None, "a login that did not finish keeps its status");
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1167,15 +1510,82 @@ mod tests {
       &format!("echo started >> \"$0.starts\"\nsleep 1\n{PRINT_LINK}\nexec sleep 30\n"),
       "exit 0\n",
     );
+    let paths = stub.paths();
     let clicks = (0..16).map(|_| {
       let login = stub.login.clone();
-      tokio::spawn(async move { start_login(&login).await })
+      let paths = paths.clone();
+      tokio::spawn(async move { start_login_with_paths(&login, paths).await })
     });
     for click in futures_util::future::join_all(clicks).await {
       assert_eq!(click.expect("the click task finishes").expect("the click gets the link"), LINK);
     }
-    let starts = fs::read_to_string(stub._dir.path().join("concurrent-login.starts")).expect("the login ran");
+    let starts = fs::read_to_string(stub.dir.path().join("concurrent-login.starts")).expect("the login ran");
     assert_eq!(starts.lines().count(), 1, "one start serves every click");
     stop_all().await;
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_replaced_attempt_records_nothing_and_a_stop_records_the_live_one() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new("replaced", &format!("{PRINT_LINK}\nexec sleep 30\n"), "exit 0\n");
+    let paths = stub.paths();
+    let first = start_login_with_paths(&stub.login, paths.clone()).await.expect("the first click gets its link");
+    until(|| live_attempt("replaced").is_some_and(|attempt| attempt.phase == Phase::WaitingForApproval)).await;
+    let second = start_login_with_paths(&stub.login, paths.clone()).await.expect("the second click starts its attempt");
+    assert_eq!(second, first, "the same stub prints the same link");
+
+    // The server stop kills the live child, and the driver records the outcome a cancelled driver would.
+    stop_all().await;
+    recorded_outcome(&paths, "replaced", Outcome::LoginFailed).await;
+    assert_eq!(live_attempt("replaced"), None);
+  }
+
+  #[tokio::test]
+  async fn a_value_reaches_the_login_once_and_no_record_keeps_it() {
+    let _serial = SERIAL.lock().await;
+    let value = "CODE-7F3C-9D21";
+    let body = format!(
+      "{PRINT_LINK}\nread -r typed\nprintf '%s' \"$typed\" > \"$0.got\"\nprintf 'echoed=%s\\n' \"$typed\"\nexit 0\n"
+    );
+    let mut stub = LoginStub::new("with-input", &body, "echo valid\n");
+    stub.login.input_prompt = Some("Paste the code".to_string());
+    let paths = stub.paths();
+    assert!(matches!(give_input("with-input", value.to_string()).await, Err(InputRefused::NotAwaiting)));
+    start_login_with_paths(&stub.login, paths.clone()).await.expect("the login gives its link");
+    until(|| live_attempt("with-input").is_some_and(|attempt| attempt.input_open)).await;
+    give_input("with-input", value.to_string()).await.expect("the value is given");
+    assert!(
+      matches!(give_input("with-input", "again".to_string()).await, Err(InputRefused::NotAwaiting)),
+      "the value is given once"
+    );
+    recorded_outcome(&paths, "with-input", Outcome::Approved).await;
+    let got = fs::read_to_string(stub.dir.path().join("with-input-login.got")).expect("the login read its value");
+    assert_eq!(got, value);
+    let state = fs::read_to_string(&paths.state).expect("the state reads");
+    assert!(!state.contains(value), "the value is in no state file");
+    let attempt = login_record(&paths, "with-input").last_attempt.expect("the attempt is recorded");
+    assert!(!attempt.last_line.contains(value), "the login's echo is not in the attempt record");
+    assert!(!attempt.readback_output.contains(value), "the readback record has no login output");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_pty_value_reaches_the_terminal_and_is_not_echoed_into_the_record() {
+    let _serial = SERIAL.lock().await;
+    let value = "CODE-PTY-4B2A";
+    let body = format!("{PRINT_LINK}\nread -r typed < /dev/tty\nprintf '%s' \"$typed\" > \"$0.got\"\nexit 0\n");
+    let mut stub = LoginStub::new("pty-input", &body, "echo valid\n");
+    stub.login.use_pty = true;
+    stub.login.input_prompt = Some("Paste the code".to_string());
+    let paths = stub.paths();
+    start_login_with_paths(&stub.login, paths.clone()).await.expect("the login gives its link");
+    until(|| live_attempt("pty-input").is_some_and(|attempt| attempt.input_open)).await;
+    give_input("pty-input", value.to_string()).await.expect("the value is given");
+    recorded_outcome(&paths, "pty-input", Outcome::Approved).await;
+    let got = fs::read_to_string(stub.dir.path().join("pty-input-login.got")).expect("the login read its value");
+    assert_eq!(got, value);
+    let state = fs::read_to_string(&paths.state).expect("the state reads");
+    assert!(!state.contains(value), "the echo of the value is in no record");
   }
 }

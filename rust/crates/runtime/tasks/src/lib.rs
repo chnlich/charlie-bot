@@ -6,7 +6,6 @@ mod backend_retry;
 pub mod cold_read;
 pub mod completion;
 pub mod dispatch;
-pub mod event_text;
 pub mod execution;
 pub mod git;
 pub mod handoff;

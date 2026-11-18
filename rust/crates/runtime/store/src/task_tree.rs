@@ -1,7 +1,7 @@
 //! Durable task nodes, fact-derived tree state, and delegation authorization.
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,7 @@ use crate::metadata::{
   EventRef, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE, TaskApprover,
   TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
 };
+use crate::path_error;
 use crate::run_facts::{CachedRunFacts, RunFacts};
 use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
 use crate::task_reparent;
@@ -61,7 +62,7 @@ const LIFECYCLE_STATE_TYPES: &[&str] =
   &[event_types::CLONE_START, event_types::TASK_CLOSED, event_types::TASK_REOPENED];
 // The facts a node's Run verdicts read: terminal outcomes and stop requests.
 const RUN_FACT_TYPES: &[&str] = &[event_types::RUN_FINISHED, event_types::RUN_STOP_REQUESTED];
-// Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
+// Bound on the non-archived descendants one subtree walk may hold. Archived ones do not count.
 const TASK_DESCENDANT_NODE_LIMIT: usize = 1000;
 const SUCCESSOR_HOP_LIMIT: usize = 100;
 const TASK_FACTS_STOP_CHECK_INTERVAL: usize = 256;
@@ -91,7 +92,7 @@ pub enum TaskCaller {
   Agent { session_id: String },
 }
 
-/// The task fields of one PATCH body. A `None` field is absent from the body and changes nothing; `Some(None)` is an
+/// The task fields of one PATCH body. A `None` field is absent from the body and changes nothing. `Some(None)` is an
 /// explicit null, which clears the field where the model allows it. `name` has no explicit null: a `None` name
 /// changes nothing.
 #[derive(Clone, Debug, Default)]
@@ -122,7 +123,7 @@ impl PatchTask {
 /// boundary and the report deliveries through the store, so the dispatcher implements this trait and the caller passes
 /// it in.
 pub trait StructuralBlockers: Send + Sync {
-  /// The blockers of the node's unprocessed task inputs; empty when it has none.
+  /// The blockers of the node's unprocessed task inputs. Empty when it has none.
   fn pending_input_blockers(&self, session_id: &str) -> StoreResult<Vec<String>>;
   /// One blocker for each close report that the node still owes its fixed recipient.
   fn undelivered_report_blockers(&self, session_id: &str) -> StoreResult<Vec<String>>;
@@ -279,8 +280,21 @@ struct TreePageKey<'a> {
 
 /// The identity of one session's live history file, resolved from the open sessions directory.
 fn history_identity_at(sessions_dir: &fs::File, session_id: &str) -> StoreResult<Option<FileIdentity>> {
+  FileIdentity::read_at_cstr(sessions_dir, &history_path(session_id)?)
+}
+
+/// One session's live history file, relative to the sessions directory.
+fn history_path(session_id: &str) -> StoreResult<CString> {
   let relative = format!("{session_id}/{}/{}", layout::DATA_DIR_NAME, layout::CHAT_EVENTS_FILE_NAME);
-  FileIdentity::read_at(sessions_dir, &relative)
+  CString::new(relative.as_str()).map_err(|_| StoreError::new(format!("{relative}: the path holds a NUL byte")))
+}
+
+/// The history paths of `ids`, in the argument order.
+///
+/// A page memo stores these with the page, so a repeat request stats the paths it read instead of formatting one path
+/// per row.
+fn history_paths(ids: &[String]) -> StoreResult<Vec<CString>> {
+  ids.iter().map(|session_id| history_path(session_id)).collect()
 }
 
 /// A shared task-tree index snapshot for read-only projections.
@@ -413,7 +427,7 @@ impl<'a> NodeReads<'a> {
 
   /// Derive the activity from the run records and, when a run is unsettled, the run facts at the pass's identity.
   ///
-  /// Returns whether the derivation read `/proc` for a launched run's liveness; such a verdict is not memoized.
+  /// Returns whether the derivation read `/proc` for a launched run's liveness. Such a verdict is not memoized.
   fn derive_activity(
     &mut self,
     session_id: &str,
@@ -486,7 +500,7 @@ impl Store {
   ///
   /// The memo answers what a fold of [`Store::load_all_facts`] answers because its key covers every input of that
   /// read: the live-cache generation and the archived extent. A list-identity key and suffix cursor keep the fold
-  /// incremental; `node_facts_cache` stays resident across recovery eviction. A load from disk takes a new
+  /// incremental. `node_facts_cache` stays resident across recovery eviction. A load from disk takes a new
   /// generation. Within one
   /// generation the cached list changes only by `append_chat_event` pushes, which the suffix fold extends.
   pub fn node_facts(&self, session_id: &str) -> StoreResult<Arc<NodeFacts>> {
@@ -749,7 +763,7 @@ impl Store {
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
   /// the archived extent are the ones it covers. The read parses no history. A cold read with no sealed state folds
   /// the log's fact checkpoint and the bytes past it when one covers the log, which memoizes the same facts and runs
-  /// under the log's identity; any other cold read loads the history.
+  /// under the log's identity. Any other cold read loads the history.
   fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     let (generation, list_identity, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
@@ -863,7 +877,7 @@ impl Store {
   /// Keep a node's state past the eviction of its cached events, keyed by the log file's identity.
   ///
   /// `evicted` holds the dropped list's generation and length and the identity of the file read under the same session
-  /// lock, so the file holds exactly the dropped list. A state memo that covers that whole list keeps its version; one
+  /// lock, so the file holds exactly the dropped list. A state memo that covers that whole list keeps its version. One
   /// that does not gives way to the node's [`NodeFacts`] memo when that one covers the whole list. A state keyed by a
   /// file outlives an eviction that finds the cache already cold. Anything else leaves the memo.
   pub(crate) fn seal_node_state(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity, Arc<()>)>) {
@@ -941,7 +955,7 @@ impl Store {
         })
       };
       if let Some(state) = sealed.transpose()? {
-        // Recovery already folded this file; use the same (inode, size, mtime) verdict before opening its tail again.
+        // Recovery already folded this file. Use the same (inode, size, mtime) verdict before opening its tail again.
         self
           .task_state_tail_cache
           .lock()
@@ -1081,7 +1095,7 @@ impl Store {
   ///
   /// An archived row stays navigable while running work lives at or below it: dropping it would sever the path to
   /// that work in a partial client tree. The row's own work state counts, so a running leaf below a retained archived
-  /// parent keeps that parent's child page visible; the row still reports `archived`.
+  /// parent keeps that parent's child page visible. The row still reports `archived`.
   ///
   /// `after` is the `(created_at, session_id)` of the previous page's last row, and `limit` is the page size. The page
   /// computes its own rows and the one row that proves `has_more`, never the parent's whole child list. On a home
@@ -1089,7 +1103,8 @@ impl Store {
   /// 7,160 rows therefore paid for the 7,060 it truncated away.
   ///
   /// The rows are computed under `tree_rows_lock`, which serializes page computations. A page whose stored
-  /// identities all still hold is served without that lock: it reads no history verdict, only the identities.
+  /// identities all still hold is served without that lock: a hit reads the store's history-change count alone, and the
+  /// identities only when a write moved that count.
   pub fn task_tree_page(
     &self,
     snapshot: &TaskTreeSnapshot,
@@ -1120,6 +1135,8 @@ impl Store {
     }
     let mut reads = NodeReads::new(self);
     let candidates = self.page_candidates(snapshot, parent_id, after, limit)?;
+    // Read before the identities, so the stamp names a change count the pass's identities already cover.
+    let history_changes = self.history_changes();
     let identities = self.history_identities(&candidates)?;
     reads.seed_identities(candidates, identities);
     let mut rows = Vec::new();
@@ -1140,18 +1157,22 @@ impl Store {
       }
       rows.push(row);
     }
-    // A run record written during the pass leaves the rows a mix of two verdicts; no memo entry names that page.
+    // A run record written during the pass leaves the rows a mix of two verdicts. No memo entry names that page.
     if self.records_generation() == records_generation && !reads.proc_dependent {
-      let (ids, identity_values) = reads.identities_read().into_iter().unzip();
+      let (ids, identity_values): (Vec<String>, Vec<Option<FileIdentity>>) =
+        reads.identities_read().into_iter().unzip();
+      let paths = Arc::new(history_paths(&ids)?);
       let rows = Arc::new(rows);
       *self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned") = Some(CachedTreePage {
         build_id,
         records_generation,
+        history_changes,
         parent_id: parent_id.map(str::to_string),
         include_archived,
         after: after_key,
         limit,
         ids: Arc::new(ids),
+        paths,
         identity_values,
         rows: Arc::clone(&rows),
         has_more,
@@ -1163,7 +1184,7 @@ impl Store {
 
   /// The child ids a page can return, in order: one more than `limit` names the row that proves `has_more`.
   ///
-  /// The archived filter runs on a computed row, so this list may hold ids the page drops; the row pass reads any
+  /// The archived filter runs on a computed row, so this list may hold ids the page drops. The row pass reads any
   /// further id it needs one stat at a time.
   fn page_candidates(
     &self,
@@ -1187,12 +1208,15 @@ impl Store {
     Ok(ids)
   }
 
-  /// The stored page for `key`, when every history it read still has the identity it was read at.
+  /// The stored page for `key`, when every history it read still holds the identity it was read at.
   ///
-  /// The identity read is the whole cost of a hit: the rows, their activity and their lifecycle states were derived
-  /// from exactly these histories, and the key's generations name every metadata and run-record write since.
+  /// The identity read is the cost of a validated hit: the rows, their activity and their lifecycle states were derived
+  /// from exactly these histories, and the key's generations name every metadata and run-record write since. A hit the
+  /// store has written no history for since the pass reads no identity at all, because the store writes every live
+  /// history in the home.
   fn memoized_tree_page(&self, key: TreePageKey<'_>) -> StoreResult<Option<TaskTreePage>> {
-    let (ids, identity_values, rows, has_more) = {
+    let history_changes = self.history_changes();
+    let (ids, paths, identity_values, stamped_changes, rows, has_more) = {
       let memo = self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned");
       let Some(memo) = memo.as_ref() else { return Ok(None) };
       if memo.build_id != key.build_id
@@ -1204,16 +1228,41 @@ impl Store {
       {
         return Ok(None);
       }
-      (Arc::clone(&memo.ids), memo.identity_values.clone(), Arc::clone(&memo.rows), memo.has_more)
+      (
+        Arc::clone(&memo.ids),
+        Arc::clone(&memo.paths),
+        memo.identity_values.clone(),
+        memo.history_changes,
+        Arc::clone(&memo.rows),
+        memo.has_more,
+      )
     };
-    let current = self.history_identities(ids.as_slice())?;
+    if history_changes == stamped_changes {
+      return Ok(Some(TaskTreePage { rows, has_more }));
+    }
+    let current = self.history_identities_at(&ids, &paths)?;
     if current != identity_values {
       return Ok(None);
     }
     if self.records_generation() != key.records_generation {
       return Ok(None);
     }
+    self.stamp_tree_page(&rows, history_changes);
     Ok(Some(TaskTreePage { rows, has_more }))
+  }
+
+  /// Record that the page holding `rows` still holds at `history_changes`.
+  ///
+  /// A validated hit whose histories did not move refreshes the count, so the requests after it answer without the
+  /// identity read that the change made necessary. The count was read before those identities, so a write landing
+  /// during the validation still counts as a change for the requests after it.
+  fn stamp_tree_page(&self, rows: &Arc<Vec<TaskTreeRow>>, history_changes: u64) {
+    let mut memo = self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned");
+    if let Some(memo) = memo.as_mut()
+      && Arc::ptr_eq(&memo.rows, rows)
+    {
+      memo.history_changes = history_changes;
+    }
   }
 
   fn tree_row(&self, index: &TreeIndex, reads: &mut NodeReads, session_id: &str) -> StoreResult<TaskTreeRow> {
@@ -1259,7 +1308,28 @@ impl Store {
 
   /// The history identities of `ids`, in the argument order.
   fn history_identities(&self, ids: &[String]) -> StoreResult<Vec<Option<FileIdentity>>> {
-    ids.iter().map(|session_id| self.history_identity(session_id)).collect()
+    self.history_identities_at(ids, &history_paths(ids)?)
+  }
+
+  /// The history identities at `paths`, in the argument order, resolved from the open sessions directory.
+  ///
+  /// A page validation stats a hundred of these on every repeat request, so it opens the directory once and stats the
+  /// stored paths as they are; a missing sessions directory holds no history.
+  #[cfg_attr(not(test), allow(unused_variables))]
+  fn history_identities_at(&self, ids: &[String], paths: &[CString]) -> StoreResult<Vec<Option<FileIdentity>>> {
+    let Some(sessions_dir) = self.sessions_dir_handle()? else { return Ok(vec![None; paths.len()]) };
+    ids
+      .iter()
+      .zip(paths)
+      .map(|(session_id, path)| {
+        #[cfg(test)]
+        self.run_identity_hook(session_id, IdentityStage::BeforeStat);
+        let identity = FileIdentity::read_at_cstr(&sessions_dir, path)?;
+        #[cfg(test)]
+        self.run_identity_hook(session_id, IdentityStage::AfterStat);
+        Ok(identity)
+      })
+      .collect()
   }
 
   #[cfg(test)]
@@ -1352,6 +1422,19 @@ impl Store {
     caller: TaskCaller,
     slot_values: Map<String, Value>,
   ) -> StoreResult<SessionMetadata> {
+    let guard = self.control_lock().await;
+    self.create_task_locked(&guard, request, caller, slot_values).await
+  }
+
+  /// Create a task node while the caller holds the tree control lock. A caller that checks the tree before creating
+  /// holds one guard across both, so no other creation lands between the check and this node.
+  pub async fn create_task_locked(
+    &self,
+    guard: &ControlGuard,
+    request: CreateTask,
+    caller: TaskCaller,
+    slot_values: Map<String, Value>,
+  ) -> StoreResult<SessionMetadata> {
     if request.request_id.is_empty() {
       return Err(StoreError::invalid(TASK_CREATE_REQUEST_ID_REQUIRED));
     }
@@ -1362,8 +1445,7 @@ impl Store {
       .session_id
       .clone()
       .unwrap_or_else(|| control_events::stable_task_id(request.task_parent_id.as_deref(), &request.request_id));
-    let guard = self.control_lock().await;
-    self.require_control_guard(&guard)?;
+    self.require_control_guard(guard)?;
 
     if let Some(existing) = self.read_metadata_fresh(&task_id)? {
       if matches!(caller, TaskCaller::Agent { .. }) {
@@ -1434,7 +1516,7 @@ impl Store {
     self.update_session_metadata_value_index(&fresh);
     // The creation fact is published by the rename above, which appends no control fact. The signal follows the
     // publication and the index invalidation, so a receiver can read the node at once (`task_sessions.create_task`).
-    self.notify_task_tree_changed(&task_id, Some(event_types::TASK_CREATED)).await;
+    self.notify_task_tree_changed(&task_id).await;
     Ok(fresh)
   }
 
@@ -1578,7 +1660,7 @@ impl Store {
   }
 
   /// The live log's newest `prompt_changed` fact of `scope`. A cold cache whose log keeps the identity of a sealed boot
-  /// scan answers from that scan; any other read takes it from the live events.
+  /// scan answers from that scan. Any other read takes it from the live events.
   pub(crate) fn newest_live_prompt_change(
     &self,
     session_id: &str,
@@ -1695,7 +1777,7 @@ impl Store {
   /// Apply one PATCH of a task node with its structural guards (`TaskTreeManager.patch_task`).
   ///
   /// The operator may change every field. An agent may only reparent within its own subtree, with a body that sets
-  /// `task_parent_id` alone; the move keeps each moved session's subtree rules (`task_reparent`). Under the control
+  /// `task_parent_id` alone. The move keeps each moved session's subtree rules (`task_reparent`). Under the control
   /// lock the guards of every node that the change moves or restructures are collected before any write, so a refusal
   /// writes nothing. The field write is a fresh read-modify-write, so a rename that landed meanwhile is kept. Each
   /// prompt scope then swaps its reference and lands its fact. A changed parent leaves one `task_reparented` fact.
@@ -1725,7 +1807,6 @@ impl Store {
       };
       task_reparent::check_agent_scope(&index, &self.cfg.charliebot_home, caller_task, session_id, new_parent)?;
     }
-    let prompt_changed = subtree_prompt.is_some() || node_prompt.is_some();
     let structural = task.is_some() || profile.is_some() || task_parent_id.is_some();
     let mut blockers = if structural { self.structural_blockers(session_id, guards)? } else { Vec::new() };
     let children = index.children.get(&Some(session_id.to_string())).map_or(0, Vec::len);
@@ -1817,8 +1898,7 @@ impl Store {
       self.apply_prompt_change(&guard, session_id, PromptScope::Node, body.as_deref()).await?;
     }
     self.invalidate_tree_index();
-    let event_type = if prompt_changed { event_types::PROMPT_CHANGED } else { "task_updated" };
-    self.notify_task_tree_changed(session_id, Some(event_type)).await;
+    self.notify_task_tree_changed(session_id).await;
     self.read_metadata_fresh(session_id)?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
   }
 
@@ -2179,7 +2259,7 @@ impl Store {
   /// rebuilds it.
   ///
   /// A rebuild walks every session of the home, so on the production-sized home it outlasts the request that
-  /// triggers it. The server installs this handle once, after it wraps the store in its `Arc`; a store without the
+  /// triggers it. The server installs this handle once, after it wraps the store in its `Arc`. A store without the
   /// handle keeps rebuilding on the reading thread.
   pub fn enable_tree_index_background_refresh(self: &Arc<Self>) {
     let _ = self.tree_index_self.set(Arc::downgrade(self));
@@ -2680,7 +2760,7 @@ fn descendant_ids_until(
 }
 
 /// Whether a node is archived, counting an archived ancestor. A store-level caller reads the build's verdict when the
-/// index holds it; a tree row reads its pass's states through [`NodeReads::archived`].
+/// index holds it. A tree row reads its pass's states through [`NodeReads::archived`].
 fn archived_of(
   store: &Store,
   index: &TreeIndex,
@@ -3066,16 +3146,12 @@ fn strip_heading(line: &str) -> &str {
 fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {
   let mut count = 0;
   for entry in fs::read_dir(sessions_dir).map_err(|error| path_error(sessions_dir, error))? {
-    // Path::is_dir follows symlinks; DirEntry::file_type would not.
+    // Path::is_dir follows symlinks. DirEntry::file_type would not.
     if entry.map_err(|error| path_error(sessions_dir, error))?.path().is_dir() {
       count += 1;
     }
   }
   Ok(count)
-}
-
-fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
-  StoreError::new(format!("{}: {error}", path.display()))
 }
 
 /// The unpublished create's staging directory name: `.task-{task_id}-{pid}-{uuid}.tmp`.
@@ -4331,27 +4407,21 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
-  async fn control_facts_and_task_creation_notify_the_sidebar_with_the_fact_type() {
+  async fn control_facts_and_task_creation_notify_the_sidebar_by_session() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let mut sidebar = store.subscribe(SIDEBAR_CHANNEL);
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
     let child = create_node(&store, "child", Some(&root.id), TaskProfile::Worker).await;
     for node in [&root.id, &child.id] {
-      assert_eq!(
-        next_sidebar_frame(&mut sidebar).await,
-        json!({"type": "task_tree_changed", "session_id": node, "fact_type": "task_created"})
-      );
+      assert_eq!(next_sidebar_frame(&mut sidebar).await, json!({"type": "task_tree_changed", "session_id": node}));
     }
 
     archive_node(&store, &root.id).await;
     archive_node(&store, &child.id).await;
 
     for node in [&root.id, &child.id] {
-      assert_eq!(
-        next_sidebar_frame(&mut sidebar).await,
-        json!({"type": "task_tree_changed", "session_id": node, "fact_type": "task_closed"})
-      );
+      assert_eq!(next_sidebar_frame(&mut sidebar).await, json!({"type": "task_tree_changed", "session_id": node}));
     }
   }
 
@@ -4906,6 +4976,8 @@ pub(crate) mod tests {
     let before =
       store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap().rows;
     assert_eq!(before[0].open_descendant_count, 1);
+    // An announced history change makes the read below validate the stored page instead of answering it outright.
+    store.clear_chat_events_cache(&root.id);
 
     let (paused_tx, paused_rx) = std::sync::mpsc::channel();
     let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
@@ -5021,6 +5093,52 @@ pub(crate) mod tests {
     let calls = store.task_tree_activity_call_count();
     store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
     assert!(store.task_tree_activity_call_count() > calls, "a new index build computes the page again");
+  }
+
+  /// A repeat page answers from the memo alone until the store writes or removes a history, and the page a validation
+  /// keeps answers the requests after it without another stat.
+  #[tokio::test]
+  async fn a_repeat_tree_page_reads_no_history_identity_until_the_store_writes_a_history() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "quiet-root", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "quiet-child", Some(&root.id), TaskProfile::Manager).await;
+
+    let first = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    let identity_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&identity_reads);
+    *store.identity_hook.lock().unwrap() = Some(Arc::new(move |_: &str, stage: IdentityStage| {
+      if stage == IdentityStage::BeforeStat {
+        counter.fetch_add(1, Ordering::SeqCst);
+      }
+    }));
+
+    let quiet = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert_eq!(quiet.rows, first.rows);
+    assert_eq!(identity_reads.load(Ordering::SeqCst), 0, "a page no history write names answers without a stat");
+
+    append(&store, &child.id, json!({"type": "user", "content": "hello"})).await;
+    let validated =
+      store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert!(identity_reads.load(Ordering::SeqCst) > 0, "a history write makes the page read the identities again");
+    assert_eq!(validated.rows, first.rows);
+
+    let reads_after_validation = identity_reads.load(Ordering::SeqCst);
+    let settled = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert_eq!(settled.rows, first.rows);
+    assert_eq!(
+      identity_reads.load(Ordering::SeqCst),
+      reads_after_validation,
+      "the page a validation kept answers the requests after it without another stat"
+    );
+
+    store.delete_session_permanently(&child.id).await.unwrap();
+    store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert!(
+      identity_reads.load(Ordering::SeqCst) > reads_after_validation,
+      "a session delete makes the page read the identities again"
+    );
+    *store.identity_hook.lock().unwrap() = None;
   }
 
   #[tokio::test]
@@ -5191,7 +5309,7 @@ pub(crate) mod tests {
     let store = make_store(home.path());
     let node = create_node(&store, "detail-tail", None, TaskProfile::Manager).await;
     append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
-    // The index build reads each node's lifecycle tail; the detail answers from that same memo.
+    // The index build reads each node's lifecycle tail. The detail answers from that same memo.
     assert_eq!(store.task_state_for_tree_index(&node.id).unwrap(), "completed");
 
     let tails = store.task_state_tail_read_count();

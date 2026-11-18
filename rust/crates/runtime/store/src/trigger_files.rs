@@ -4,9 +4,7 @@
 
 #[cfg(test)]
 use std::collections::HashMap;
-use std::fmt;
 use std::fs::{self, Metadata};
-use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -15,12 +13,11 @@ use anyhow::Context;
 use charliebot_core::fsutil;
 use charliebot_core::memo::BoundedMemo;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 
 use crate::layout;
 use crate::lock::lock;
-use crate::metadata::UtcDateTime;
+use crate::metadata::{UtcDateTime, read_metadata_value};
 use crate::read_memos::{FileSignature, StatSignatureMemo};
 
 const TRIGGER_META_MEMO_LIMIT: usize = 1024;
@@ -152,7 +149,7 @@ pub fn pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<U
     } else {
       #[cfg(test)]
       record_trigger_work(triggers_dir, false);
-      let trigger = match read_trigger_value(path) {
+      let trigger = match read_metadata_value(path) {
         Ok(trigger) => Arc::new(trigger),
         Err(error) => {
           tracing::debug!(path = %path.display(), error = %error, "trigger_meta_read_failed");
@@ -179,34 +176,6 @@ pub fn pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<U
 /// The trigger file of one trigger id, under the session directory's trigger directory.
 pub fn trigger_path(session_dir: &Path, trigger_id: &str) -> PathBuf {
   layout::triggers_dir(session_dir).join(format!("{trigger_id}.json"))
-}
-
-/// Why a trigger file could not be read as its document.
-#[derive(Debug)]
-pub enum TriggerReadError {
-  /// The file could not be opened or read. A `NotFound` error means the file is missing.
-  Io(io::Error),
-  /// The file is not one JSON document.
-  Json(serde_json::Error),
-}
-
-impl fmt::Display for TriggerReadError {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match self {
-      Self::Io(error) => write!(formatter, "{error}"),
-      Self::Json(error) => write!(formatter, "{error}"),
-    }
-  }
-}
-
-impl std::error::Error for TriggerReadError {}
-
-/// The trigger file at `path` as its JSON document: the store's one decode of the raw document, for the readers
-/// that check the record's fields one by one. A missing file is `Err` with `NotFound`, so the caller decides
-/// whether that means no record. A document that is not one JSON value is the parse error of the file.
-pub fn read_trigger_value(path: &Path) -> Result<Value, TriggerReadError> {
-  let text = fs::read_to_string(path).map_err(TriggerReadError::Io)?;
-  serde_json::from_str(&text).map_err(TriggerReadError::Json)
 }
 
 /// The trigger file at `path` as its trigger record. A missing file fails the read with the io error, and a file
@@ -373,18 +342,6 @@ mod tests {
     fs::rename(replacement, &path).unwrap();
     assert_eq!(pending_trigger_state(&triggers).0, 0);
     assert_eq!(trigger_work(&triggers), (2, 2));
-  }
-
-  /// The raw read: a missing file is `Err` with `NotFound`, and a file that is not one JSON value is the parse
-  /// error. A reader that skips bad files therefore decides from the error.
-  #[test]
-  fn read_trigger_value_reports_a_missing_file_and_a_bad_file() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("trigger.json");
-    assert!(matches!(read_trigger_value(&path).unwrap_err(), TriggerReadError::Io(error)
-      if error.kind() == std::io::ErrorKind::NotFound));
-    fs::write(&path, "{\"status\": \"pending\",\n").unwrap();
-    assert!(matches!(read_trigger_value(&path).unwrap_err(), TriggerReadError::Json(_)));
   }
 
   /// The typed read and the write round-trip the record: the write's bytes are the record's pretty serialization,

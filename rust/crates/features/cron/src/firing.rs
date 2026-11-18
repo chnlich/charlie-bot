@@ -3,8 +3,8 @@
 
 use crate::config::ScheduledTaskConfig;
 
-/// The prefix that marks a cron firing reference.
-const FIRING_REF_PREFIX: &str = "cron:";
+/// The prefix that marks a cron firing reference. A round's request id starts with it too.
+const FIRING_REF_PREFIX: &str = charliebot_store::control_events::CRON_REQUEST_ID_PREFIX;
 /// The suffix that marks a round's leaf request id.
 const ROUND_REQUEST_SUFFIX: &str = ":leaf";
 
@@ -12,6 +12,12 @@ const ROUND_REQUEST_SUFFIX: &str = ":leaf";
 /// ends at the first colon after the prefix.
 pub(crate) fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
   format!("{FIRING_REF_PREFIX}{}:{firing}", task.name)
+}
+
+/// The prefix of the input id of every trigger input that `task` fires: `cron:<task>:`. A task name carries no colon, so
+/// the prefix names exactly one task.
+pub(crate) fn input_prefix(task: &ScheduledTaskConfig) -> String {
+  format!("{FIRING_REF_PREFIX}{}:", task.name)
 }
 
 /// The task name and firing in a sequence's `owner_ref`, or `None` for a reference in another format.
@@ -57,6 +63,7 @@ mod tests {
   fn a_round_request_id_names_the_task_that_created_the_round() {
     let task = task("nightly");
     let request_id = round_request_id(&task, "2026-11-06T03:00:00-08:00");
+    assert_eq!(request_id, "cron:nightly:2026-11-06T03:00:00-08:00:leaf");
     assert_eq!(round_request_task(&request_id), Some("nightly"));
     assert_eq!(round_request_task(&firing_ref(&task, "2026-11-06T03:00:00-08:00")), None);
   }

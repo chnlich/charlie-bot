@@ -74,8 +74,22 @@ function showsInForYou(msg) {
   return SHOWN_ROLES.includes(msg.role) || isErrorRow(msg);
 }
 
+// The entries the last projection was handed. The engine passes every entry of the session to items()
+// before it asks for the empty row, so the row knows whether the session holds any message at all.
+let lastEntryCount = 0;
+
+// The empty-state row, the line inside it, and whether that line names the composer. The engine builds
+// the row once per session and keeps that node, so items() swaps the line when the session's entry count
+// changes. A session that starts empty and later receives messages For you hides must offer Everything,
+// where those messages are.
+let emptyRow = null;
+let emptyRowLine = null;
+let emptyRowNamesComposer = null;
+
 // The store's entries that For you shows, in order.
 function items(entries) {
+  lastEntryCount = entries.length;
+  if (emptyRow && emptyRowNamesComposer !== (lastEntryCount === 0)) renderEmptyRow();
   if (isWorker()) return [];
   return entries.filter((entry) => showsInForYou(entry.msg));
 }
@@ -99,14 +113,37 @@ function roundButtonRows(entries) {
   return rows;
 }
 
-// The row an empty For you shows: one button that switches the view to Everything.
+// The row an empty For you shows, built once per session. A session with no message at all has nothing
+// for the Everything view to show, so the row names the composer instead of opening a blank pane. A
+// session whose messages For you hides keeps one button that switches to Everything, where those
+// messages are. The line names that view, because it is the pane's only pointer to the record, and the
+// underline marks the button at rest. The hover tone is the only other cue, and a touch screen has none.
 function buildEmptyLine() {
+  emptyRow = document.createElement('div');
+  emptyRow.className = 'for-you-empty block w-full';
+  emptyRowLine = null;
+  emptyRowNamesComposer = null;
+  renderEmptyRow();
+  return emptyRow;
+}
+
+// The row's line for the session's current entry count.
+function renderEmptyRow() {
+  if (emptyRowLine) emptyRow.removeChild(emptyRowLine);
+  emptyRowNamesComposer = lastEntryCount === 0;
+  if (emptyRowNamesComposer) {
+    const line = document.createElement('p');
+    line.className = 'block w-full py-2 text-sm text-slate-400 text-center';
+    line.textContent = 'No messages yet · send one below';
+    emptyRowLine = emptyRow.appendChild(line);
+    return;
+  }
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'for-you-empty block w-full py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors';
-  btn.textContent = 'Nothing for you yet';
+  btn.className = 'block w-full py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors';
+  btn.innerHTML = 'Nothing for you yet &middot; <span class="underline">open Everything</span>';
   btn.onclick = () => setChatView(EVERYTHING);
-  return btn;
+  emptyRowLine = emptyRow.appendChild(btn);
 }
 
 // A web session: a manager session that no chat thread owns. The server sets

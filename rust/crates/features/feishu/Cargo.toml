@@ -22,7 +22,6 @@ prost.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -31,4 +30,5 @@ tracing.workspace = true
 charliebot-chat-threads = { workspace = true, features = ["test-support"] }
 charliebot-cli-common = { workspace = true, features = ["test-support"] }
 charliebot-core = { workspace = true, features = ["test-support"] }
+serde_yaml.workspace = true
 tempfile.workspace = true

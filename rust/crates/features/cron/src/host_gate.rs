@@ -1,10 +1,12 @@
 //! The host gate of a scheduled task, and the Waiting on you items that the gate's hosts derive.
 //!
-//! A worker fire of a task whose backend names a host (`host_auth_alias`) probes that host before it creates a worker.
+//! A fire of a task whose backend names a host (`host_auth_alias`) probes that host before the fire reaches its bound
+//! session. The session's round, a worker that the session dispatches, then logs into that host. A bound delegation
+//! of a prompt task checks the same probe through `hold_reason`, so one check holds both paths.
 //! A task on a `backends.pools` id is judged on the member the pool selects for the fire, read without moving the
 //! pool's rotation. The gate and the fire then agree on the member.
-//! A host that awaits the user's approval holds the fire: the fire records one skip and starts nothing, and no session
-//! wakes. Nothing is stored for the hold. The Waiting on you read derives one item per holder session and host
+//! A host that awaits the user's approval holds the fire: the fire records one skip, and no session turn starts. Nothing
+//! is stored for the hold. The Waiting on you read derives one item per holder session and host
 //! from the host state and the enabled tasks. The item shows while the host awaits approval and is gone once it does
 //! not. Master and handler tasks start no worker, so they probe no host.
 

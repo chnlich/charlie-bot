@@ -38,8 +38,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // number, so the session can tell which item a commented line belongs to
     // without opening the page.
     var QUESTION_HEAD_CHARS = 30;
-    // Characters of the page text that precede a row's first character. A row whose quote
-    // repeats on the page carries them, so its message and its draft name the row itself.
+    // Characters of the page text that precede a row's first character. A draft on a row whose
+    // quote repeats on the page stores them, so a reload finds that row again.
     var BEFORE_CHARS = 32;
     // The kind of one comment entry, which doubles as its dedup key and as the
     // persisted draft discriminator. A manual block comment has the BLOCK kind;
@@ -267,8 +267,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return tail;
     }
 
-    // The `before` value of one entry. An attached row whose quote repeats has the words before
-    // it; an unattached draft keeps the value it stored; any other entry has none (undefined).
+    // The `before` value a draft stores for one entry. An attached row whose quote repeats has the
+    // words before it; an unattached draft keeps the value it stored; any other entry has none
+    // (undefined).
     function beforeOfEntry(entry, quote) {
       if (!entry.el) return entry.before;
       return quoteRepeats(quote, entry.el) ? beforeOf(entry.el) : undefined;
@@ -840,7 +841,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       error.style.display = 'block';
     }
 
-    function buildCommentEntry(quote, context, comment, suffix, before) {
+    function buildCommentEntry(quote, context, comment, suffix) {
       if (quote === '') {
         return ('\u25B8 ' + context).split('\n').concat(('\u21B3 ' + comment).split('\n'));
       }
@@ -850,12 +851,11 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       // A quote spanning lines keeps its locator shape. The suffix rides the last
       // quote line, right of the closing quote.
       quoteLines[quoteLines.length - 1] += suffix || '';
-      var beforeLines = before === undefined ? [] : ['before "' + before + '"'];
-      return quoteLines.concat(beforeLines, ('\u21B3 ' + comment).split('\n'));
+      return quoteLines.concat(('\u21B3 ' + comment).split('\n'));
     }
 
-    function resolveEntryDraft(entry, suffix, before) {
-      return buildCommentEntry(entry.quote, entry.context, entry.comment, suffix, before);
+    function resolveEntryDraft(entry, suffix) {
+      return buildCommentEntry(entry.quote, entry.context, entry.comment, suffix);
     }
 
     // The occurrence suffix still to disambiguate. After the fork label, m rows on
@@ -883,7 +883,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       lines.push('');
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i];
-        var entryLines = resolveEntryDraft(entry, occurrenceSuffix(entry), beforeOfEntry(entry, entry.quote));
+        var entryLines = resolveEntryDraft(entry, occurrenceSuffix(entry));
         lines.push((i + 1) + '. ' + entryLines[0]);
         for (var j = 1; j < entryLines.length; j++) {
           lines.push('   ' + entryLines[j]);

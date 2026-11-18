@@ -258,15 +258,19 @@ function boundTaskSlot(s) {
 // A bound node's schedule lines, in every view: the next run (or Disabled),
 // then the truncated cron · timezone line, then the backend line naming the
 // member and model the records hold, then the Last line from the firing
-// bookkeeping. One markup home for every view's row.
+// bookkeeping. One markup home for every view's row. The secondary lines sit
+// on the sidebar's slate-850 (#172033), where slate-500 draws 3.42:1 — under
+// the 4.5:1 floor for 12 px text — and slate-400 draws 6.34:1 while staying
+// quieter than the row's name. The plain session row's time line keeps the
+// same tone.
 function renderSessionScheduleLine(s) {
   const disabled = s.schedule_enabled === false;
   const slot = boundTaskSlot(s);
-  let html = `<span class="block text-xs ${disabled ? 'text-slate-500' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`
-    + `<span class="block truncate text-xs text-slate-500" title="${escapeHtmlAttr(s.schedule_cron)} (${escapeHtmlAttr(s.schedule_timezone || '')})">${escapeHtml(s.schedule_cron)} · ${escapeHtml(s.schedule_timezone || '')}</span>`;
+  let html = `<span class="block text-xs ${disabled ? 'text-slate-400' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`
+    + `<span class="block truncate text-xs text-slate-400" title="${escapeHtmlAttr(s.schedule_cron)} (${escapeHtmlAttr(s.schedule_timezone || '')})">${escapeHtml(s.schedule_cron)} · ${escapeHtml(s.schedule_timezone || '')}</span>`;
   const backend = scheduledBackendText(s);
   if (backend) {
-    html += `<span class="session-backend block truncate text-xs text-slate-500" title="${escapeHtmlAttr(backend)}">${escapeHtml(backend)}</span>`;
+    html += `<span class="session-backend block truncate text-xs text-slate-400" title="${escapeHtmlAttr(backend)}">${escapeHtml(backend)}</span>`;
   }
   if (slot.last_run_status) {
     const lastClass = slot.last_run_status === LAST_RUN_STATUS.SUCCESS ? 'text-green-400'

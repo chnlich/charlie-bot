@@ -64,7 +64,6 @@ pub use run_records::{
   RetryRunFields, RunBlocker, RunDisplayState, RunFacts, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage,
   RunRecord, SequenceRef, StopRequest, StopResult,
 };
-pub use session_events::RAW_EVENTS_REPLACED_BY_DELTAS;
 pub use store::{
   AccountLabelKeeper, AnchorFieldReconciler, HistoryWork, SequenceArchiveHook, SequenceBindingMover,
   SequenceListingFields, Store, StoreHookFuture, StoreHooks,
@@ -78,6 +77,7 @@ pub use task_tree::{
 };
 
 use std::fmt;
+use std::path::Path;
 
 /// Store operation result.
 pub type StoreResult<T> = Result<T, StoreError>;
@@ -128,7 +128,7 @@ impl StoreError {
     Self::Archived(session_id.into())
   }
 
-  /// Construct a conflict with its blockers; its detail joins them with `; `.
+  /// Construct a conflict with its blockers. Its detail joins them with `; `.
   pub fn conflict(blockers: Vec<String>) -> Self {
     Self::Conflict(blockers)
   }
@@ -151,6 +151,11 @@ impl StoreError {
       _ => None,
     }
   }
+}
+
+/// The store error for a failure at `path`: the path, a colon, and the failure's display.
+pub fn path_error(path: &Path, error: impl fmt::Display) -> StoreError {
+  StoreError::new(format!("{}: {error}", path.display()))
 }
 
 impl fmt::Display for StoreError {

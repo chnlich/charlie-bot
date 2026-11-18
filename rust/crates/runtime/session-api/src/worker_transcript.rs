@@ -21,7 +21,7 @@ use charliebot_store::run_records::{
   HostBoot, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
   OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunKind, RunRecord,
 };
-use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
+use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult, path_error};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
 use lru::LruCache;
 use serde_json::{Value, json};
@@ -50,7 +50,7 @@ pub struct TranscriptEntry {
   states: BTreeMap<String, String>,
 }
 
-/// Load a memoized worker transcript, rebuilding after a run-file signature or task-state change.
+/// The memoized worker transcript, rebuilt after a run-file signature or task-state change.
 pub fn load_worker_transcript(store: &Store, session_id: &str) -> StoreResult<Arc<TranscriptEntry>> {
   let signature = worker_signature(store, session_id)?;
   let task_state = store.task_state(session_id)?;
@@ -267,8 +267,8 @@ fn run_header_event(
     "started_at": started,
     "timestamp": started.or(terminal),
     "launched": run.started_at.is_some(),
-    "launch_failed": FAILED_STATES.contains(&state) && run.started_at.is_none(),
-    "task_spec_ref": run.task_spec_ref.as_deref().unwrap_or(""),
+    (event_types::LAUNCH_FAILED): FAILED_STATES.contains(&state) && run.started_at.is_none(),
+    (event_types::TASK_SPEC_REF): run.task_spec_ref.as_deref().unwrap_or(""),
     (event_types::LAUNCH_PROMPT_REF): launch_prompt_ref,
   })
 }
@@ -317,14 +317,28 @@ fn delivery_event(
     let event = held.to_value();
     match event.get("type").and_then(Value::as_str) {
       Some(event_types::TASK_CLOSED) => {
-        summary = event.get("summary").filter(|value| !value.is_null()).map_or_else(String::new, value_str);
-        close_refs = event.get("result_refs").and_then(Value::as_array).into_iter().flatten().map(value_str).collect();
-        close_at =
-          event.get("timestamp").map(value_str).ok_or_else(|| StoreError::new("task_closed fact has no timestamp"))?;
+        summary = event
+          .get("summary")
+          .filter(|value| !value.is_null())
+          .map_or_else(String::new, |value| text_repr::field_text(Some(value)));
+        close_refs = event
+          .get(event_types::RESULT_REFS)
+          .and_then(Value::as_array)
+          .into_iter()
+          .flatten()
+          .map(|value| text_repr::field_text(Some(value)))
+          .collect();
+        close_at = event
+          .get("timestamp")
+          .map(|value| text_repr::field_text(Some(value)))
+          .ok_or_else(|| StoreError::new("task_closed fact has no timestamp"))?;
       }
       Some(event_types::RUN_FINISHED) => {
         if let Some(run_id) = event.get("run_id") {
-          outcomes.insert(value_str(run_id), event.get("outcome").map_or_else(String::new, value_str));
+          outcomes.insert(
+            text_repr::field_text(Some(run_id)),
+            event.get("outcome").map_or_else(String::new, |value| text_repr::field_text(Some(value))),
+          );
         }
       }
       _ => {}
@@ -339,7 +353,7 @@ fn delivery_event(
     "type": event_types::RUN_DELIVERY,
     TASK_STATE: task_state,
     "summary": summary,
-    "result_refs": close_refs,
+    (event_types::RESULT_REFS): close_refs,
     (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
     (OBSERVATION_EVENTS_REF): delivered.events_ref.as_deref().unwrap_or(""),
     (OBSERVATION_RESULT_REF): delivered.result_ref.as_deref().unwrap_or(""),
@@ -370,10 +384,10 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     let event = held.to_value();
     match event.get("type").and_then(Value::as_str) {
       Some(event_types::TASK_CLOSED) => {
-        closed_at = truthy_str(event.get("timestamp"));
-        if let Some(refs) = event.get("result_refs").and_then(Value::as_array) {
+        closed_at = text_repr::truthy_field_text(event.get("timestamp"));
+        if let Some(refs) = event.get(event_types::RESULT_REFS).and_then(Value::as_array) {
           for reference in refs {
-            let reference = value_str(reference);
+            let reference = text_repr::field_text(Some(reference));
             if let Some(value) = reference.strip_prefix("landed:") {
               landed = value.to_string();
             }
@@ -381,8 +395,8 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         }
       }
       Some(event_types::RUN_FINISHED) => {
-        let run_id = event.get("run_id").map(value_str).unwrap_or_else(|| "None".to_string());
-        outcomes.insert(run_id, truthy_str(event.get("outcome")));
+        let run_id = text_repr::field_text(event.get("run_id"));
+        outcomes.insert(run_id, text_repr::truthy_field_text(event.get("outcome")));
       }
       _ => {}
     }
@@ -457,9 +471,9 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     .map(|held| {
       let event = held.to_value();
       json!({
-        "run_id": truthy_str(event.get("run_id")),
-        "request_id": truthy_str(event.get("request_id")),
-        "timestamp": truthy_str(event.get("timestamp")),
+        "run_id": text_repr::truthy_field_text(event.get("run_id")),
+        "request_id": text_repr::truthy_field_text(event.get("request_id")),
+        "timestamp": text_repr::truthy_field_text(event.get("timestamp")),
       })
     })
     .unwrap_or(Value::Null);
@@ -490,7 +504,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     .map(|run| {
       let launch_prompt_path = store.run_dir(session_id, &run.id).join(LAUNCH_TEXT_FILENAME);
       json!({
-        "task_spec_ref": run.task_spec_ref.as_deref().unwrap_or(""),
+        (event_types::TASK_SPEC_REF): run.task_spec_ref.as_deref().unwrap_or(""),
         (event_types::LAUNCH_PROMPT_REF): if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() },
         (OBSERVATION_RAW_LOG_REF): run.raw_log_ref.as_deref().unwrap_or(""),
         (OBSERVATION_EVENTS_REF): run.events_ref.as_deref().unwrap_or(""),
@@ -561,32 +575,6 @@ fn client_revision(
   ]);
   let text = text_repr::json_dumps(&payload, &text_repr::DEFAULT_JSON);
   Ok(control_events::sha256_hex(&text)[..24].to_string())
-}
-
-fn value_str(value: &Value) -> String {
-  match value {
-    Value::String(value) => value.clone(),
-    Value::Null => "None".to_string(),
-    Value::Bool(value) => if *value { "True" } else { "False" }.to_string(),
-    _ => value.to_string(),
-  }
-}
-
-fn truthy_str(value: Option<&Value>) -> String {
-  let Some(value) = value else { return String::new() };
-  let truthy = match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  };
-  if truthy { value_str(value) } else { String::new() }
-}
-
-fn path_error(path: &Path, error: std::io::Error) -> StoreError {
-  StoreError::new(format!("{}: {error}", path.display()))
 }
 
 #[cfg(test)]

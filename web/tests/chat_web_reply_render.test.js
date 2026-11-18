@@ -4,11 +4,12 @@ const test = require('node:test');
 const {loadChatRendering} = require('./chat_rendering_context_stub');
 
 // ---------------------------------------------------------------------------
-// The two message roles the web reply channel adds to the chat: a web_reply is
-// the agent's message to the user (an agent-side bubble holding its markdown).
-// A web_reply_notice is a one-line centered notice of plain text. The error row
-// a failed turn writes (a system message whose text starts with "Error: ")
-// closes the file.
+// The message roles the web reply channel adds to the chat: a web_reply is the
+// agent's message to the user (an agent-side bubble holding its markdown). A
+// web_reply_notice is a one-line centered notice of plain text. A
+// web_reply_check is the audit marker of one reply's text and draws nothing.
+// The error row a failed turn writes (a system message whose text starts with
+// "Error: ") closes the file.
 // ---------------------------------------------------------------------------
 
 test('a web reply renders as an agent-side bubble around its markdown body', () => {
@@ -28,6 +29,13 @@ test('a web reply notice renders centered, with its text escaped as plain text',
   assert.ok(html.includes('justify-center'));
   assert.ok(!html.includes('<b>'), 'the notice text is not markup');
   assert.ok(html.includes('&lt;b&gt;no reply&lt;/b&gt;'));
+});
+
+test('a web reply check draws nothing and does not reach the unknown-role error', () => {
+  const context = loadChatRendering();
+  const html = context.renderMessage(
+      {role: 'web_reply_check', id: 'c1', content: 'web reply check', timestamp: null}, 'sess-1');
+  assert.equal(html, '');
 });
 
 // The usage lines and the reason that a failed charlie-code run writes to its error row.

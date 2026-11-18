@@ -1,32 +1,11 @@
-//! The codex package's process environment: the PATH that finds the codex binary, and the home directory.
+//! The codex backend's process environment: the CLI host every backend type reads, and the codex home under it.
 
 use std::path::PathBuf;
 
-use anyhow::Context;
-use charliebot_core::paths::DEFAULT_PATH;
+pub use charliebot_agents::cli_base::CliHost as CodexHost;
 
-/// The process environment the codex package reads: PATH to find the codex binary, and HOME for `~/.local/bin` and
-/// `~/.codex`. The user-local bin directory is [`charliebot_agents::cli_base::user_local_bin`] of this home.
-#[derive(Clone, Debug)]
-pub struct CodexHost {
-  pub path: String,
-  pub home: PathBuf,
-}
-
-impl CodexHost {
-  /// The host of the running server. PATH defaults to [`DEFAULT_PATH`] when unset. HOME must be set.
-  pub fn from_process() -> anyhow::Result<Self> {
-    let home = std::env::var("HOME").context("HOME must be set for the codex package")?;
-    let path = match std::env::var("PATH") {
-      Ok(path) => path,
-      Err(std::env::VarError::NotPresent) => DEFAULT_PATH.to_string(),
-      Err(error) => return Err(error).context("PATH must be valid Unicode for the codex package"),
-    };
-    Ok(Self { path, home: PathBuf::from(home) })
-  }
-
-  /// `Path.home() / ".codex"`: the default codex home that holds the rollouts.
-  pub fn codex_home(&self) -> PathBuf {
-    self.home.join(".codex")
-  }
+/// `~/.codex` of `host`: the codex home that holds the rollouts. The user-local bin directory is
+/// [`charliebot_agents::cli_base::user_local_bin`] of the same home.
+pub fn codex_home(host: &CodexHost) -> PathBuf {
+  host.home.join(".codex")
 }

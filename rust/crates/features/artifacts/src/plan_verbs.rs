@@ -441,9 +441,10 @@ fn candidate_ids(plans: &[Value], candidates: &[usize]) -> Result<String, VerbEr
 
 /// The number of the latest version. An empty list is the `IndexError` the verb reports.
 fn latest_version_number(plan: &Map<String, Value>) -> Result<Value, VerbError> {
-  let latest = versions_of(plan)?
-    .last()
-    .ok_or_else(|| VerbError::Failed { kind: "IndexError", detail: "list index out of range".to_string() })?;
+  let latest = versions_of(plan)?.last().ok_or_else(|| VerbError::Failed {
+    kind: text_repr::INDEX_ERROR,
+    detail: text_repr::LIST_INDEX_OUT_OF_RANGE.to_string(),
+  })?;
   plan_map(latest)?.get("v").cloned().ok_or_else(|| key_error("v"))
 }
 

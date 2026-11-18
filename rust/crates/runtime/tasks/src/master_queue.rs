@@ -139,7 +139,6 @@ impl MasterQueue {
       task_run,
       on_task_spawn,
       on_task_finish,
-      auto_trigger,
       backend_option,
       extra_claude_flags,
       uploaded_files,
@@ -158,7 +157,6 @@ impl MasterQueue {
       session_meta: Arc::new(Mutex::new(session_meta)),
       user_content,
       callbacks,
-      auto_trigger,
       backend_option,
       extra_claude_flags,
       task_run,
@@ -199,7 +197,6 @@ impl MasterQueue {
       session_meta: Arc::new(Mutex::new(session_meta)),
       user_content: String::new(),
       callbacks,
-      auto_trigger: false,
       backend_option: None,
       extra_claude_flags: None,
       task_run,
@@ -284,7 +281,6 @@ impl MasterQueue {
 
   async fn enqueue_and_notify(self: &Arc<Self>, item: WorkItem) -> anyhow::Result<()> {
     let session_id = item.session_metadata().id;
-    let auto_trigger = item.auto_trigger;
     let resumed_start = item.resume_record.as_ref().map(|record| record.started_at);
     let callbacks = item.callbacks.clone();
     let (thinking_since, created) = {
@@ -306,7 +302,7 @@ impl MasterQueue {
       (thinking_since, created)
     };
     if created {
-      broadcast_running_changed(&callbacks, &session_id, true, Some(thinking_since), auto_trigger).await?;
+      broadcast_running_changed(&callbacks, &session_id, true, Some(thinking_since)).await?;
     }
     Ok(())
   }
@@ -316,7 +312,7 @@ impl MasterQueue {
   async fn session_consumer(self: Arc<Self>, session_id: String, cancel: watch::Receiver<bool>) {
     let mut last_cc_session_id: Option<String> = None;
     let mut last_account_label: Option<String> = None;
-    let mut last_turn: Option<(SessionCallbacks, bool)> = None;
+    let mut last_turn: Option<SessionCallbacks> = None;
     let retired = loop {
       let mut item = {
         let mut state = self.state.lock().expect("master queue mutex is not poisoned");
@@ -324,20 +320,20 @@ impl MasterQueue {
           Some(item) => {
             state.current_items.insert(session_id.clone());
             state.running_turns.insert(session_id.clone(), Arc::clone(&item.session_meta));
-            last_turn = Some((item.callbacks.clone(), item.auto_trigger));
+            last_turn = Some(item.callbacks.clone());
             item
           }
           // The consumer pops its first item before it can retire: the enqueue that spawned it pushed that item.
           None => {
             let turn = last_turn.as_ref().expect("a consumer pops an item before it retires").clone();
             drop(state);
-            let active = (turn.0.task_tree_activity)(&session_id).map(|(active, _)| active);
+            let active = (turn.task_tree_activity)(&session_id).map(|(active, _)| active);
             let mut state = self.state.lock().expect("master queue mutex is not poisoned");
             match state.session_queues.get_mut(&session_id).and_then(VecDeque::pop_front) {
               Some(item) => {
                 state.current_items.insert(session_id.clone());
                 state.running_turns.insert(session_id.clone(), Arc::clone(&item.session_meta));
-                last_turn = Some((item.callbacks.clone(), item.auto_trigger));
+                last_turn = Some(item.callbacks.clone());
                 item
               }
               None => break Self::retire_locked(&mut state, &session_id, &turn, active),
@@ -373,13 +369,12 @@ impl MasterQueue {
       }
     };
 
-    let (callbacks, auto_trigger, active) = retired;
+    let (callbacks, active) = retired;
     if let Err(error) = &active {
       tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "task_tree_activity_failed");
     }
     let has_running_tasks = active.unwrap_or(false);
-    if let Err(error) = broadcast_running_changed(&callbacks, &session_id, has_running_tasks, None, auto_trigger).await
-    {
+    if let Err(error) = broadcast_running_changed(&callbacks, &session_id, has_running_tasks, None).await {
       tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "master_queue_running_changed_failed");
     }
   }
@@ -390,9 +385,9 @@ impl MasterQueue {
   fn retire_locked(
     state: &mut QueueState,
     session_id: &str,
-    turn: &(SessionCallbacks, bool),
+    turn: &SessionCallbacks,
     active: anyhow::Result<bool>,
-  ) -> (SessionCallbacks, bool, anyhow::Result<bool>) {
+  ) -> (SessionCallbacks, anyhow::Result<bool>) {
     state.session_consumers.remove(session_id);
     state.consumer_cancel.remove(session_id);
     state.current_items.remove(session_id);
@@ -403,18 +398,13 @@ impl MasterQueue {
         let _ = completion.send(Err(anyhow!("manager turn cancelled during server shutdown")));
       }
     }
-    let (callbacks, auto_trigger) = turn;
-    callbacks.features.store.clear_busy(session_id);
-    (callbacks.clone(), *auto_trigger, active)
+    turn.features.store.clear_busy(session_id);
+    (turn.clone(), active)
   }
 
   /// Retire the consumer after a cancelled turn, taking the queue mutex for the retirement section.
-  fn retire(
-    &self,
-    session_id: &str,
-    turn: &(SessionCallbacks, bool),
-  ) -> (SessionCallbacks, bool, anyhow::Result<bool>) {
-    let active = (turn.0.task_tree_activity)(session_id).map(|(active, _)| active);
+  fn retire(&self, session_id: &str, turn: &SessionCallbacks) -> (SessionCallbacks, anyhow::Result<bool>) {
+    let active = (turn.task_tree_activity)(session_id).map(|(active, _)| active);
     let mut state = self.state.lock().expect("master queue mutex is not poisoned");
     Self::retire_locked(&mut state, session_id, turn, active)
   }
@@ -752,7 +742,6 @@ async fn broadcast_running_changed(
   session_id: &str,
   has_running_tasks: bool,
   thinking_since: Option<UtcDateTime>,
-  auto_trigger: bool,
 ) -> anyhow::Result<()> {
   let mut fields = Map::new();
   fields.insert(HAS_RUNNING_TASKS.to_string(), json!(has_running_tasks));
@@ -760,7 +749,6 @@ async fn broadcast_running_changed(
     THINKING_SINCE.to_string(),
     thinking_since.map(|value| json!(value.to_isoformat_text())).unwrap_or(Value::Null),
   );
-  fields.insert("auto_trigger".to_string(), json!(auto_trigger));
   callbacks.features.store.broadcast_sidebar(session_id, event_types::RUNNING_CHANGED, fields).await?;
   Ok(())
 }
@@ -1119,7 +1107,6 @@ mod tests {
         Box::pin(async { Ok(()) })
       }),
       on_task_finish,
-      auto_trigger: false,
       backend_option: None,
       extra_claude_flags: None,
       uploaded_files: None,
@@ -1171,13 +1158,12 @@ mod tests {
       activity_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
       Ok((false, String::new()))
     });
-    let turn = (queue.session_callbacks(features, activity), false);
+    let turn = queue.session_callbacks(features, activity);
 
-    let (callbacks, auto_trigger, active) = queue.retire("synthetic-retire", &turn);
+    let (callbacks, active) = queue.retire("synthetic-retire", &turn);
 
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
     assert!(!active.unwrap());
-    assert!(!auto_trigger);
     assert_eq!(callbacks.features.store.busy_since("synthetic-retire"), None);
   }
 

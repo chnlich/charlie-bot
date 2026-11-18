@@ -27,12 +27,14 @@ use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use crate::api;
-use crate::listing::{self, CompactListingMemo, SessionsListMemos};
+use crate::listing::{self, CompactListingMemo, ListingForm, SessionsListMemos};
 use crate::route_support::{Query, blocking_store, store_error};
+use crate::sidebar::SidebarFields;
 use crate::{search, sidebar, status_delta, tree, write_routes};
 
 static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
 static COMPACT_LISTING_MEMO: LazyLock<CompactListingMemo> = LazyLock::new(CompactListingMemo::default);
+static MOVE_LISTING_MEMO: LazyLock<CompactListingMemo> = LazyLock::new(CompactListingMemo::default);
 const STATUS_BODY_MEMO_LIMIT: usize = 4;
 
 type StatusBodyCache = Mutex<LruCache<StatusKey, Arc<StatusBody>>>;
@@ -54,9 +56,11 @@ const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 /// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus. The
 /// overlay holds one entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key
 /// holds that overlay instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A
-/// request that names its filter and ids keys on those. `generation` names the sidebar state the body reads beyond
-/// the rows, and `since` the answer's own delta base. A page that holds the state of its last answer sends that
-/// answer's token back, so the same state answers with the same token.
+/// request that names ids and no filter keys on [`IdSet`], one list shared while the `ids` string repeats, so its
+/// poll neither clones nor compares the strings either; a filter that adds its members builds that union per request,
+/// as [`StatusIds`] states. `generation` names the sidebar state the body reads beyond the rows, and `since` the
+/// answer's own delta base. A page that holds the state of its last answer sends that answer's token back, so the same
+/// state answers with the same token.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum StatusKey {
   Listing {
@@ -69,7 +73,7 @@ enum StatusKey {
   Ids {
     filter: Option<String>,
     members: Vec<String>,
-    ids: Vec<String>,
+    ids: StatusIds,
     generation: u64,
     since: Option<String>,
     answer: StatusAnswer,
@@ -103,6 +107,99 @@ impl Eq for ListingOverlay {}
 impl Hash for ListingOverlay {
   fn hash<H: Hasher>(&self, state: &mut H) {
     Arc::as_ptr(&self.0).hash(state);
+  }
+}
+
+/// The request's own ids, parsed, deduped and sorted once per distinct `ids` query string.
+///
+/// A page polls one row set every few seconds, and its URL names the ids in one canonical order, so the string
+/// repeats while the view holds. Parsing it costs one allocation per id and one hash-set entry per id, and the key
+/// then hashes every id again; a repeat poll reads the list this memo kept instead.
+static NAMED_ID_SETS: LazyLock<Mutex<LruCache<String, Arc<Vec<String>>>>> = LazyLock::new(|| {
+  Mutex::new(LruCache::new(NonZeroUsize::new(NAMED_ID_SET_MEMO_LIMIT).expect("the id memo limit is nonzero")))
+});
+
+/// The cap on the `ids` strings the parse memo keeps, larger than the answer memo's because a page alternates a few
+/// row sets and each keeps its own parse.
+const NAMED_ID_SET_MEMO_LIMIT: usize = 8;
+
+/// One request's ids as a key part. It compares and hashes by address, and it holds the list so the address stays
+/// this list's alone while the entry lives.
+#[derive(Clone, Debug)]
+struct IdSet(Arc<Vec<String>>);
+
+impl PartialEq for IdSet {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+impl Eq for IdSet {}
+
+impl Hash for IdSet {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    Arc::as_ptr(&self.0).hash(state);
+  }
+}
+
+/// The row set one `Ids` answer carries, as a key part.
+///
+/// A request with no filter carries the ids it names, and the shared parse names those, so a repeat poll compares
+/// one address. A filter adds its own members to the set, and a membership that moved must produce a different key:
+/// that union is built here and compares by content.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum StatusIds {
+  Named(IdSet),
+  Union(Vec<String>),
+}
+
+impl StatusIds {
+  fn as_slice(&self) -> &[String] {
+    match self {
+      Self::Named(ids) => ids.as_slice(),
+      Self::Union(ids) => ids.as_slice(),
+    }
+  }
+
+  fn to_vec(&self) -> Vec<String> {
+    self.as_slice().to_vec()
+  }
+
+  fn is_empty(&self) -> bool {
+    self.as_slice().is_empty()
+  }
+}
+
+impl IdSet {
+  /// The parsed id list a request's `ids` value names, read from [`NAMED_ID_SETS`] when the string repeats.
+  fn of(raw: Option<&str>) -> Self {
+    let Some(raw) = raw else { return Self::empty() };
+    let mut memo = NAMED_ID_SETS.lock().expect("named id set memo mutex is not poisoned");
+    if let Some(ids) = memo.get(raw) {
+      return Self(Arc::clone(ids));
+    }
+    let ids = Arc::new(sorted_unique(parse_session_ids(raw)));
+    memo.put(raw.to_string(), Arc::clone(&ids));
+    Self(ids)
+  }
+
+  /// An empty id list, shared so the keys of the requests that name no id are one key.
+  fn empty() -> Self {
+    static EMPTY: LazyLock<IdSet> = LazyLock::new(|| IdSet(Arc::new(Vec::new())));
+    EMPTY.clone()
+  }
+
+  fn as_slice(&self) -> &[String] {
+    self.0.as_slice()
+  }
+
+  /// The ids as an owned list, for the parts of an answer that keep or extend it.
+  fn to_vec(&self) -> Vec<String> {
+    self.0.as_ref().clone()
+  }
+
+  fn iter(&self) -> std::slice::Iter<'_, String> {
+    self.0.iter()
   }
 }
 
@@ -185,7 +282,7 @@ pub(crate) const ROUTE_PATTERNS: &[&str] = &[
   api::SESSION_PATH,
 ];
 
-/// Register every supported listing route below `/api/sessions`.
+/// Every supported listing route below `/api/sessions`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route(api::SESSIONS_PATH, refuse_other_methods(get(list_active).post(write_routes::create_session), "GET"))
@@ -226,16 +323,29 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
     return response.unwrap_or_else(store_error);
   }
   // `compact=1` asks for the page's column form of the same rows, which the sidebar decodes with the page's own
-  // expander. Any other value keeps the row array the route has always sent.
-  let compact = query.get("compact") == Some("1");
+  // expander. `compact=move` asks for the four columns the session-move picker reads. A request naming no form keeps
+  // the row array, and one naming another form is refused rather than answered with a form it did not ask for.
+  let compact = match query.get("compact") {
+    None => None,
+    Some("1") => Some(ListingForm::Sidebar),
+    Some("move") => Some(ListingForm::Move),
+    Some(other) => {
+      return responses::json(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        &json!({"detail": format!("unknown compact form: {other}")}),
+      );
+    }
+  };
   let response = blocking_store(move || {
     // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
     // subtree roots or the overlays move.
     let page = listing::active_page_rows(&features.store, &features.registry)?;
-    Ok(if compact {
-      COMPACT_LISTING_MEMO.response(&request, &features.store, &page)
-    } else {
-      listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS)
+    Ok(match compact {
+      Some(ListingForm::Sidebar) => {
+        COMPACT_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Sidebar)
+      }
+      Some(ListingForm::Move) => MOVE_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Move),
+      None => listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS),
     })
   })
   .await;
@@ -305,8 +415,13 @@ fn archived_page_body(
     .filter(|(context_only, row)| !context_only && page_ids.contains(&row.id))
     .map(|(_, row)| Arc::new(row.clone()))
     .collect();
-  let status =
-    sidebar::resolve_sidebar_state(&features.store, &features.registry, &page_rows, true, true, false, false)?;
+  let status = sidebar::resolve_sidebar_state(
+    &features.store,
+    &features.registry,
+    &page_rows,
+    SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+    false,
+  )?;
   let mut session_values = Vec::with_capacity(merged.len());
   for (context_only, row) in merged {
     let mut value = listing::metadata_value(&features.store, &row)?;
@@ -333,8 +448,8 @@ fn archived_page_body(
     tail.groups.into_iter().map(|(group, total)| json!({"group": group, "total": total})).collect::<Vec<Value>>();
   let body = json!({
     "sessions": session_values,
-    "has_more": tail.has_more,
-    "next_before": tail.next_before,
+    (api::HAS_MORE_FIELD): tail.has_more,
+    (api::NEXT_BEFORE_FIELD): tail.next_before,
     "next_before_id": tail.next_before_id,
     "groups": groups,
   });
@@ -356,11 +471,16 @@ fn starred_response(features: &FeatureContext, request: &Request<Body>) -> Respo
     Ok(listed) => listed,
     Err(error) => return store_error(error),
   };
-  let derived =
-    match sidebar::resolve_sidebar_state(&features.store, &features.registry, &listed.rows, true, true, false, false) {
-      Ok(derived) => derived,
-      Err(error) => return store_error(error),
-    };
+  let derived = match sidebar::resolve_sidebar_state(
+    &features.store,
+    &features.registry,
+    &listed.rows,
+    SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+    false,
+  ) {
+    Ok(derived) => derived,
+    Err(error) => return store_error(error),
+  };
   if let Some(ids) = refresh {
     let text = match listing::row_refresh_text_for(
       &features.store,
@@ -390,22 +510,46 @@ fn starred_response(features: &FeatureContext, request: &Request<Body>) -> Respo
 
 async fn list_groups(State(features): State<Arc<FeatureContext>>) -> Response {
   match blocking_store(move || list_group_names(&features)).await {
-    Ok(groups) => responses::fast_json(StatusCode::OK, &json!(groups)),
+    Ok(groups) => responses::fast_json(StatusCode::OK, &json!(*groups)),
     Err(error) => store_error(error),
   }
 }
 
+/// The names the last call returned, beside the row corpus it read them from.
+///
+/// The store serves a repeat call from one memoized corpus, whose rows it hands out as shared `Arc`s. One corpus
+/// holds one set of names, so a call over the corpus the last call read answers the list that call built. The entry
+/// holds the rows, so the address it keys on belongs to that corpus alone, and a rebuilt corpus never matches it.
+struct GroupNames {
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
+  names: Arc<Vec<String>>,
+}
+
+static GROUP_NAMES: Mutex<Option<GroupNames>> = Mutex::new(None);
+
 /// The sorted, distinct, nonempty group names of every stored session.
 ///
-/// The names come from the memoized metadata corpus, whose rows the listing memo shares as `Arc`s. A call therefore
-/// clones only the names it returns, not the metadata of the sessions that carry no group.
-fn list_group_names(features: &FeatureContext) -> charliebot_store::StoreResult<Vec<String>> {
+/// The names come from the memoized metadata corpus, whose rows the listing memo shares as `Arc`s. A call over the
+/// corpus the last call read returns the list that call built, because the walk picks the same field out of the same
+/// rows.
+///
+/// The walk reads the metadata of every session of the home, and the home keeps each session's metadata in its own
+/// allocation. A repeat call therefore costs a pass over the whole home to answer the same names.
+fn list_group_names(features: &FeatureContext) -> charliebot_store::StoreResult<Arc<Vec<String>>> {
   let (rows, _) = features.store.load_session_metas_snapshot_versioned(None)?;
+  if let Some(cached) = GROUP_NAMES.lock().expect("group names mutex is not poisoned").as_ref()
+    && Arc::ptr_eq(&cached.rows, &rows)
+  {
+    return Ok(Arc::clone(&cached.names));
+  }
   let mut groups: Vec<String> =
     rows.iter().filter_map(|meta| meta.group.as_ref().filter(|group| !group.is_empty()).cloned()).collect();
   groups.sort();
   groups.dedup();
-  Ok(groups)
+  let names = Arc::new(groups);
+  *GROUP_NAMES.lock().expect("group names mutex is not poisoned") =
+    Some(GroupNames { rows, names: Arc::clone(&names) });
+  Ok(names)
 }
 
 async fn session_status(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -432,8 +576,9 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   // set is kept apart: membership follows it alone, since two pages on one filter name different extra sessions.
   //
   // `all` is the Workspace's page, whose memoized derived overlay names the row corpus. Every other filter names its
-  // own rows. The key holds that overlay instead of 7,160 ids, so a repeat poll leaves the ids unbuilt.
-  let extra = raw_ids.map(parse_session_ids).unwrap_or_default();
+  // own rows. The key holds that overlay instead of 7,160 ids, so a repeat poll leaves the ids unbuilt. The ids the
+  // request itself names are parsed once per distinct `ids` string and shared from there.
+  let extra = IdSet::of(raw_ids);
   let force = match query.parse_bool("force", false) {
     Ok(force) => force,
     Err(response) => return *response,
@@ -455,13 +600,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       Ok(corpus) => {
         let overlay = ListingOverlay(corpus.derived);
         page = Some((corpus.rows, overlay.clone()));
-        StatusKey::Listing {
-          derived: overlay,
-          extra: sorted_unique(extra.clone()),
-          generation,
-          since: since.clone(),
-          answer,
-        }
+        StatusKey::Listing { derived: overlay, extra: extra.to_vec(), generation, since: since.clone(), answer }
       }
       Err(error) => return store_error(error),
     },
@@ -479,7 +618,13 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
           Err(error) => return store_error(error),
         },
       };
-      let ids = sorted_unique(members.iter().cloned().chain(extra.iter().cloned()).collect());
+      // A request that names no filter answers its own ids, so the shared list is the row set itself. A filter that
+      // adds its members changes the set, and that union is built here.
+      let ids = if members.is_empty() {
+        StatusIds::Named(extra.clone())
+      } else {
+        StatusIds::Union(sorted_unique(members.iter().cloned().chain(extra.iter().cloned()).collect()))
+      };
       if name.is_none() && ids.is_empty() {
         return responses::json(
           StatusCode::UNPROCESSABLE_ENTITY,
@@ -510,10 +655,10 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       Some((rows, _)) if answer == StatusAnswer::Set => rows.as_slice(),
       _ if sidebar_state::poll_begins_probe() => {
         let source = if answer == StatusAnswer::Named {
-          &extra
+          extra.as_slice()
         } else {
           match &key {
-            StatusKey::Ids { ids, .. } => ids,
+            StatusKey::Ids { ids, .. } => ids.as_slice(),
             StatusKey::Listing { .. } => unreachable!("a listing poll answers a named or a set answer"),
           }
         };
@@ -546,7 +691,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
         .expect("a listing poll keeps its page rows"),
       StatusKey::Ids { members, .. } => members.clone(),
     };
-    (sorted_unique(extra.clone()), members)
+    (extra.to_vec(), members)
   } else {
     match &page {
       Some((rows, _)) => {
@@ -556,7 +701,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
         (sorted_unique(requested), members)
       }
       None => match &key {
-        StatusKey::Ids { ids, members, .. } => (ids.clone(), members.clone()),
+        StatusKey::Ids { ids, members, .. } => (ids.to_vec(), members.clone()),
         StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
       },
     }
@@ -573,11 +718,16 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     let present: HashSet<&str> = ids.iter().map(String::as_str).collect();
     members.into_iter().filter(|id| present.contains(id.as_str())).collect()
   };
-  let derived =
-    match sidebar::resolve_sidebar_state(&features.store, &features.registry, &sessions, true, true, true, force) {
-      Ok(derived) => derived,
-      Err(error) => return store_error(error),
-    };
+  let derived = match sidebar::resolve_sidebar_state(
+    &features.store,
+    &features.registry,
+    &sessions,
+    SidebarFields { running: true, trigger: true, plan: true, waiting: true },
+    force,
+  ) {
+    Ok(derived) => derived,
+    Err(error) => return store_error(error),
+  };
   let payloads = sessions.iter().map(|meta| status_row_payload(features, meta, derived.get(&meta.id))).collect();
   let delta = status_delta::record(filter, &members, &ids, payloads, since.as_deref());
   let body = Arc::new(StatusBody::new(Bytes::from(charliebot_compat::json::fast_json_bytes(&json!({
@@ -633,6 +783,10 @@ fn status_row_payload(
     sidebar_state::HAS_PENDING_PLAN_APPROVAL.to_string(),
     entry.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
   );
+  payload.insert(
+    sidebar_state::HAS_WAITING_ITEMS.to_string(),
+    entry.and_then(|row| row.get(sidebar_state::HAS_WAITING_ITEMS)).cloned().unwrap_or(Value::Bool(false)),
+  );
   if let Some(work_state) = entry.and_then(|row| row.get(WORK_STATE)) {
     payload.insert(WORK_STATE.to_string(), work_state.clone());
   }
@@ -662,11 +816,14 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
   }
 }
 
-/// Send a task-tree page, reusing the compressed body a repeat request already deflated.
+/// A task-tree page sent with the compressed body a repeat request already deflated.
 ///
-/// A page holds its bytes across requests while the tree and its rows hold, and the transport middleware deflates
-/// every body afresh. On the 7,160-session mock home that deflate costs about two thirds of this route's latency.
-/// The memo answers a repeat with the bytes it already compressed.
+/// A page holds its bytes across requests while the tree and its rows hold, and deflating it again on every repeat
+/// costs about two thirds of this route's latency. The memo answers a repeat with the bytes it already compressed.
+///
+/// The memo keeps the body, so its compressed form is paid once per page version. That form is the smaller level-9
+/// form a kept body uses, the form the transport's own body memo sends. On the 7,160-session mock home that is
+/// 5,627 bytes of the page's 30,950, against the 7,401 bytes the per-response level-1 form spends.
 ///
 /// The middleware leaves a response that names its own `Content-Encoding` untouched, so this sender writes the
 /// headers the middleware would write. They are `Vary: Accept-Encoding` with the compressed body, and the plain
@@ -681,7 +838,7 @@ fn tree_page_response(request: &Request<Body>, body: Vec<u8>) -> Response {
     match cache.get(&body).cloned() {
       Some(compressed) => compressed,
       None => {
-        let compressed = charliebot_compat::compression::gzip_level_one(&body);
+        let compressed = charliebot_compat::compression::gzip_memoized_body(&body);
         cache.put(body, compressed.clone());
         compressed
       }
@@ -720,7 +877,13 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   }
   let (answer, derived) = match blocking_store(move || {
     let answer = search::search_sessions(&store, &q)?;
-    let derived = sidebar::resolve_sidebar_state(&store, &registry, &answer.rows, true, true, false, false)?;
+    let derived = sidebar::resolve_sidebar_state(
+      &store,
+      &registry,
+      &answer.rows,
+      SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+      false,
+    )?;
     Ok((answer, derived))
   })
   .await
@@ -811,6 +974,11 @@ fn parse_session_ids(ids: &str) -> Vec<String> {
   api::parse_session_ids(ids)
 }
 
+/// One search answer: the body, compressed for a client that accepts gzip, from the memo that keeps its form.
+///
+/// The memo keeps the body, so its compressed form is paid once per version and takes the smaller level-9 form a
+/// kept body uses. On the 7,160-session mock home a search for `permission` is 16,063 bytes of its 256,488-byte
+/// answer, against the 22,512 bytes the per-response level-1 form spends.
 fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
   if !accepts_gzip(request.headers()) {
     return json_bytes_response(Bytes::from(body), false);
@@ -820,7 +988,7 @@ fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBody
     match cache.get(&body).cloned() {
       Some(compressed) => compressed,
       None => {
-        let compressed = charliebot_compat::compression::gzip_level_one(&body);
+        let compressed = charliebot_compat::compression::gzip_memoized_body(&body);
         cache.put(body, compressed.clone());
         compressed
       }
@@ -930,6 +1098,26 @@ mod tests {
     assert_eq!(payload["sessions"]["name"], json!(["refresh-kept"]), "only the named row answers");
   }
 
+  /// A group list read over the corpus the previous read used answers the list that read built. A read over a
+  /// rebuilt corpus answers the rows' current groups.
+  #[tokio::test]
+  async fn a_group_list_repeats_its_names_over_the_corpus_it_read_and_rereads_a_rebuilt_corpus() {
+    let (_home, features) = crate::test_support::feature_context();
+    let first = crate::test_support::create_node(&features.store, "group-first", None, TaskProfile::Manager).await;
+    features.store.set_group(&first.id, Some("alpha")).await.expect("the first session takes a group");
+
+    let names = list_group_names(&features).expect("the corpus answers its names");
+    assert_eq!(names.as_slice(), ["alpha".to_string()]);
+    let repeated = list_group_names(&features).expect("the same corpus answers its names");
+    assert!(Arc::ptr_eq(&names, &repeated), "the corpus the last call read answers the list that call built");
+
+    let second = crate::test_support::create_node(&features.store, "group-second", None, TaskProfile::Manager).await;
+    features.store.set_group(&second.id, Some("beta")).await.expect("the second session takes a group");
+    let rebuilt = list_group_names(&features).expect("the rebuilt corpus answers its names");
+    assert_eq!(rebuilt.as_slice(), ["alpha".to_string(), "beta".to_string()]);
+    assert!(!Arc::ptr_eq(&names, &rebuilt), "a rebuilt corpus reads the rows again");
+  }
+
   /// `filter=all` names the Workspace's rows and answers the same rows those ids name. An unknown filter is refused.
   #[tokio::test]
   async fn a_status_filter_names_the_workspace_rows_and_answers_as_their_ids_do() {
@@ -990,8 +1178,32 @@ mod tests {
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
   }
 
-  /// A poll that carries the token of the answer before it names only the row whose state moved, so a task-tree change
-  /// costs one row rather than the whole body.
+  /// The parse memo answers one request's ids to another request only when its string names them. A repeat poll
+  /// answers the same rows, and the same set named in another order answers those rows too rather than the list the
+  /// memo kept for the first string.
+  #[tokio::test]
+  async fn a_status_poll_naming_its_ids_answers_those_rows_whatever_order_the_string_names_them_in() {
+    let (_home, features) = crate::test_support::feature_context();
+    let first = crate::test_support::create_node(&features.store, "ids-first", None, TaskProfile::Manager).await;
+    let second = crate::test_support::create_node(&features.store, "ids-second", None, TaskProfile::Manager).await;
+    let status = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let (code, canonical) = status(format!("/api/sessions/status?ids={},{}", first.id, second.id)).await;
+    assert_eq!(code, StatusCode::OK);
+    let (_, repeated) = status(format!("/api/sessions/status?ids={},{}", first.id, second.id)).await;
+    assert_eq!(repeated["rows"], canonical["rows"], "a repeat poll reads the answer the first poll built");
+    let (_, permuted) = status(format!("/api/sessions/status?ids={},{}", second.id, first.id)).await;
+    assert_eq!(permuted["rows"], canonical["rows"], "another order names the same rows, not another string's list");
+  }
+
+  /// A poll that carries the token of the answer before it names only the row whose state moved. A task-tree change
+  /// then costs one row rather than the whole body.
   #[tokio::test]
   async fn a_status_poll_with_a_token_answers_only_the_rows_that_moved() {
     let (_home, features) = crate::test_support::feature_context();
@@ -1171,6 +1383,18 @@ mod tests {
     let repeat =
       to_bytes(session_search(State(Arc::clone(&features)), search()).await.into_body(), usize::MAX).await.unwrap();
     assert_eq!(quiet, repeat, "a repeat query answers with the body it built");
+    let gzipped = Request::builder()
+      .uri("/api/sessions/search?q=walrus")
+      .header(header::ACCEPT_ENCODING, "gzip")
+      .body(Body::empty())
+      .unwrap();
+    let compressed =
+      to_bytes(session_search(State(Arc::clone(&features)), gzipped).await.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+      compressed.as_ref(),
+      charliebot_compat::compression::gzip_memoized_body(&quiet),
+      "the memo keeps the compressed form, so the answer takes the smaller kept-body level"
+    );
     let quiet: Value = serde_json::from_slice(&quiet).unwrap();
     assert_eq!(quiet[0]["thinking_since"], Value::Null);
 
@@ -1209,7 +1433,7 @@ mod tests {
     let content_length: usize = gzip.headers().get(header::CONTENT_LENGTH).unwrap().to_str().unwrap().parse().unwrap();
     let compressed = to_bytes(gzip.into_body(), usize::MAX).await.unwrap();
     assert_eq!(compressed.len(), content_length);
-    assert_eq!(compressed.as_ref(), charliebot_compat::compression::gzip_level_one(&identity));
+    assert_eq!(compressed.as_ref(), charliebot_compat::compression::gzip_memoized_body(&identity));
 
     let repeat = answer("gzip").await;
     let repeat = to_bytes(repeat.into_body(), usize::MAX).await.unwrap();

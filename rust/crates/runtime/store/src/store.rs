@@ -74,7 +74,7 @@ pub trait SequenceListingFields: Send + Sync {
   /// The ids the controllers bind, or `None` when a controller reads every id a listing holds.
   ///
   /// A listing asks only about these ids instead of building one id string per listed session. The answer must name
-  /// every id [`listing_fields`](Self::listing_fields) would return a field for; `None` keeps the full listing.
+  /// every id [`listing_fields`](Self::listing_fields) would return a field for. `None` keeps the full listing.
   fn bound_listing_ids(&self) -> Option<Vec<String>> {
     None
   }
@@ -196,7 +196,7 @@ pub(crate) struct CachedSortedListing {
 }
 
 pub(crate) struct CachedSubtreeRoots {
-  /// The memoized metadata corpus the maps were built from; a different corpus rebuilds them.
+  /// The memoized metadata corpus the maps were built from. A different corpus rebuilds them.
   pub(crate) metadata_snapshot: Arc<Vec<Arc<SessionMetadata>>>,
   pub(crate) sequence: Arc<HashMap<String, String>>,
   pub(crate) views: Arc<HashMap<String, HashMap<String, String>>>,
@@ -482,6 +482,10 @@ pub struct Store {
   pub(crate) tree_index_metadata_reads: AtomicU64,
   pub(crate) control: ControlLock,
   pub(crate) records_generation: AtomicU64,
+  /// Counts the live-history changes this store knows: every append and rewrite it writes, and every change a caller
+  /// announces by clearing the parsed-events cache. The task-tree page memo stamps itself with this count, so a repeat
+  /// request whose stamp still holds serves its rows without a path walk per row.
+  pub(crate) history_changes: AtomicU64,
   pub(crate) control_event_ids: StdMutex<Option<VecDeque<String>>>,
   pub(crate) session_events: SessionEventState,
   pub(crate) streaming_manager: StreamingManager,
@@ -582,6 +586,7 @@ impl Store {
       tree_index_metadata_reads: AtomicU64::new(0),
       control: ControlLock::new(store_id),
       records_generation: AtomicU64::new(0),
+      history_changes: AtomicU64::new(0),
       control_event_ids: StdMutex::new(None),
       session_events: SessionEventState::default(),
       streaming_manager: StreamingManager::new(),

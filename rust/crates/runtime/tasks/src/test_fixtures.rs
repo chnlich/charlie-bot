@@ -182,7 +182,6 @@ pub fn work_item(queue: &Arc<MasterQueue>, features: &Arc<FeatureContext>, sessi
     session_meta: Arc::new(Mutex::new(session_meta)),
     user_content: "synthetic turn".to_string(),
     callbacks,
-    auto_trigger: false,
     backend_option: None,
     extra_claude_flags: None,
     task_run: TaskRunBinding {

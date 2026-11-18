@@ -152,11 +152,11 @@ function refreshCurrentList() {
 }
 
 // A listing's rows: the Workspace fetch answers with the page's column form, which expandSessionColumns restores,
-// and a filter that answers with a row array needs no expansion. The rows' unread facts land through the reply gate
+// and a filter that answers with a row array needs no expansion. The rows' facts land through the reply gate
 // at the fetch's requestSeq, before the list paints from the facts.
 function listingRows(payload, requestSeq) {
   const rows = Array.isArray(payload) ? payload : Sidebar.expandSessionColumns(payload);
-  applyUnreadReply(rows, requestSeq);
+  applyListingFacts(rows, requestSeq);
   return rows;
 }
 

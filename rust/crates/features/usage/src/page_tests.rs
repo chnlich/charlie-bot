@@ -110,7 +110,7 @@ fn read_page_ledger(features: &FeatureContext) -> LedgerRead {
 
 async fn page_body(features: &FeatureContext, read: &LedgerRead) -> String {
   let response = render(features, read, &parts("/token-usage"))
-    .unwrap_or_else(|failure| panic!("{}: {}", failure.kind(), failure.detail()));
+    .unwrap_or_else(|failure| panic!("{}: {}", failure.kind, failure.detail));
   assert_eq!(response.status(), StatusCode::OK);
   let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
   String::from_utf8(bytes.to_vec()).expect("the page is UTF-8")
@@ -129,9 +129,43 @@ fn const_value_start(body: &str, name: &str) -> usize {
 /// The rows the page's script feeds its charts and table from.
 fn data_rows(body: &str) -> Vec<Value> {
   let start = const_value_start(body, "DATA");
-  let end = start + body[start..].find(";\n").expect("the payload ends its statement");
+  let end = value_end(body, start);
   let payload: Value = serde_json::from_str(&body[start..end]).expect("the payload is JSON");
   payload["rows"].as_array().expect("the payload holds rows").clone()
+}
+
+/// The byte index after the JSON value that starts at `start`.
+///
+/// The statement terminator after the value does not name the value's end: the served script keeps a `;` beside the
+/// token before it and drops the line terminator, so the value's own matching bracket is what ends it. A bracket
+/// inside a string is part of the string.
+fn value_end(body: &str, start: usize) -> usize {
+  let mut depth = 0usize;
+  let mut in_string = false;
+  let mut escaped = false;
+  for (offset, &byte) in body.as_bytes()[start..].iter().enumerate() {
+    if in_string {
+      match byte {
+        _ if escaped => escaped = false,
+        b'\\' => escaped = true,
+        b'"' => in_string = false,
+        _ => {}
+      }
+    } else {
+      match byte {
+        b'"' => in_string = true,
+        b'{' | b'[' => depth += 1,
+        b'}' | b']' => {
+          depth -= 1;
+          if depth == 0 {
+            return start + offset + 1;
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+  panic!("the payload ends its value");
 }
 
 fn by_model(rows: &[Value]) -> BTreeMap<String, Value> {

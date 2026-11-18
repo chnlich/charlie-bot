@@ -21,11 +21,11 @@ pub const RETENTION_ARGS: &[&str] = &["--keep-daily", "3", "--keep-within-weekly
 pub fn exclude_patterns(home: &Path) -> Vec<String> {
   let home = home.to_string_lossy();
   vec![
-    // The profile's opencode store is the top-level directory only; a deeper part with the same name stays.
+    // The profile's opencode store is the top-level directory only. A deeper part with the same name stays.
     format!("{home}/{OPENCODE_DIR_NAME}"),
     ".git".to_string(),
     CLAUDE_CONFIG_DIR_NAME.to_string(),
-    // CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a snapshot.
+    // CREDENTIALS_FILENAME is the profile's secrets file. It must never ride a snapshot.
     CREDENTIALS_FILENAME.to_string(),
     "__pycache__".to_string(),
     "*.pyc".to_string(),

@@ -18,6 +18,10 @@ use charliebot_core::config;
 use charliebot_core::credentials::write_credentials;
 use charliebot_core::headers::{CONTENT_TYPE, FORM_URLENCODED};
 use charliebot_core::home;
+use charliebot_core::oauth::{
+  ACCESS_TOKEN_FIELD, AUTHORIZATION_CODE_GRANT, CLIENT_ID_FIELD, GRANT_TYPE_FIELD, REDIRECT_URI_FIELD,
+  REFRESH_TOKEN_FIELD, REFRESH_TOKEN_GRANT,
+};
 use charliebot_core::paths;
 use charliebot_core::str_methods;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -302,7 +306,7 @@ fn table_from_bytes(path: PathBuf, raw_bytes: &[u8]) -> Result<AccountTable, Cli
     let values = google_values(&document, section)?;
     validate_client_pair(section, &values)?;
     let description = validate_description(section, &values)?;
-    match values.get("refresh_token") {
+    match values.get(REFRESH_TOKEN_FIELD) {
       None | Some(Yaml::Null) | Some(Yaml::String(_)) => {}
       Some(_) => return Err(CliExit::usage(format!("credentials.{section}.refresh_token must be a string"))),
     }
@@ -413,7 +417,7 @@ fn google_values(data: &Mapping, section: &str) -> Result<Mapping, CliExit> {
 }
 
 fn validate_client_pair(section: &str, values: &Mapping) -> Result<(), CliExit> {
-  let has_client_id = values.contains_key("client_id");
+  let has_client_id = values.contains_key(CLIENT_ID_FIELD);
   let has_client_secret = values.contains_key("client_secret");
   if has_client_id != has_client_secret {
     return Err(CliExit::usage(format!("credentials.{section} must set client_id and client_secret together")));
@@ -527,10 +531,10 @@ fn account_for<'a>(table: &'a AccountTable, name: Option<&str>) -> Result<&'a Ac
 
 fn client_for(table: &AccountTable, account: Option<&Account>) -> Result<(String, String), CliExit> {
   let mut values = account.map(|account| &account.values).unwrap_or(&table.google);
-  if !values.contains_key("client_id") {
+  if !values.contains_key(CLIENT_ID_FIELD) {
     values = &table.google;
   }
-  let client_id = values.get("client_id").and_then(Yaml::as_str);
+  let client_id = values.get(CLIENT_ID_FIELD).and_then(Yaml::as_str);
   let client_secret = values.get("client_secret").and_then(Yaml::as_str);
   match (client_id, client_secret) {
     (Some(client_id), Some(client_secret)) if !client_id.trim().is_empty() && !client_secret.trim().is_empty() => {
@@ -544,7 +548,7 @@ fn client_for(table: &AccountTable, account: Option<&Account>) -> Result<(String
 }
 
 fn is_pending(account: &Account) -> bool {
-  match account.values.get("refresh_token") {
+  match account.values.get(REFRESH_TOKEN_FIELD) {
     Some(Yaml::String(refresh_token)) => refresh_token.trim().is_empty(),
     _ => true,
   }
@@ -566,8 +570,8 @@ fn consent_url(table: &AccountTable, name: &str, email: Option<&str>) -> Result<
   let (client_id, _) = client_for(table, table.by_name.get(name))?;
   let mut parameters = vec![
     ("response_type".to_string(), "code".to_string()),
-    ("client_id".to_string(), client_id),
-    ("redirect_uri".to_string(), REDIRECT_URI.to_string()),
+    (CLIENT_ID_FIELD.to_string(), client_id),
+    (REDIRECT_URI_FIELD.to_string(), REDIRECT_URI.to_string()),
     ("scope".to_string(), SCOPES.to_string()),
     ("access_type".to_string(), "offline".to_string()),
     ("prompt".to_string(), "consent select_account".to_string()),
@@ -626,19 +630,19 @@ fn add_account(
   let code = redirect_code(redirect_url, name)?;
   let (client_id, client_secret) = client_for(table, Some(&account))?;
   let form = urlencode(&[
-    ("client_id".to_string(), client_id.clone()),
+    (CLIENT_ID_FIELD.to_string(), client_id.clone()),
     ("client_secret".to_string(), client_secret.clone()),
     ("code".to_string(), code.clone()),
-    ("grant_type".to_string(), "authorization_code".to_string()),
-    ("redirect_uri".to_string(), REDIRECT_URI.to_string()),
+    (GRANT_TYPE_FIELD.to_string(), AUTHORIZATION_CODE_GRANT.to_string()),
+    (REDIRECT_URI_FIELD.to_string(), REDIRECT_URI.to_string()),
   ]);
   let exchange = Request::new(reqwest::Method::POST, &endpoints.token_url)
     .header(CONTENT_TYPE, FORM_URLENCODED)
     .body(form.into_bytes());
   let client = request::HttpClient::new()?;
   let payload = open_json(&client, &exchange, "Google authorization-code exchange", &[&client_secret, &code])?;
-  let refresh_token = required_response_string(&payload, "refresh_token", "Google authorization-code exchange")?;
-  let access_token = required_response_string(&payload, "access_token", "Google authorization-code exchange")?;
+  let refresh_token = required_response_string(&payload, REFRESH_TOKEN_FIELD, "Google authorization-code exchange")?;
+  let access_token = required_response_string(&payload, ACCESS_TOKEN_FIELD, "Google authorization-code exchange")?;
   let actual_email = profile_email(&client, &access_token, &endpoints.profile_url)?;
   // ASCII case folding; the compared addresses are ASCII.
   if !actual_email.eq_ignore_ascii_case(email.trim()) {
@@ -722,7 +726,7 @@ fn updated_content(
   description: Option<&str>,
   owner: Option<&str>,
 ) -> Result<(Vec<u8>, Mapping), CliExit> {
-  let mut write_values: Vec<(&str, &str)> = vec![("refresh_token", refresh_token)];
+  let mut write_values: Vec<(&str, &str)> = vec![(REFRESH_TOKEN_FIELD, refresh_token)];
   if let Some(description) = description {
     write_values.push(("description", description));
   }
@@ -1187,21 +1191,21 @@ fn mint_access_token(
   account: &Account,
   token_url: &str,
 ) -> Result<String, CliExit> {
-  let refresh_token = match account.values.get("refresh_token") {
+  let refresh_token = match account.values.get(REFRESH_TOKEN_FIELD) {
     Some(Yaml::String(refresh_token)) if !refresh_token.trim().is_empty() => refresh_token.clone(),
     _ => return Err(CliExit::error(format!("account {} is pending authorization", account.name))),
   };
   let (client_id, client_secret) = client_for(table, Some(account))?;
   let form = urlencode(&[
-    ("client_id".to_string(), client_id),
+    (CLIENT_ID_FIELD.to_string(), client_id),
     ("client_secret".to_string(), client_secret.clone()),
-    ("refresh_token".to_string(), refresh_token.clone()),
-    ("grant_type".to_string(), "refresh_token".to_string()),
+    (REFRESH_TOKEN_FIELD.to_string(), refresh_token.clone()),
+    (GRANT_TYPE_FIELD.to_string(), REFRESH_TOKEN_GRANT.to_string()),
   ]);
   let request =
     Request::new(reqwest::Method::POST, token_url).header(CONTENT_TYPE, FORM_URLENCODED).body(form.into_bytes());
   let payload = open_json(client, &request, "Google token refresh", &[&refresh_token, &client_secret])?;
-  required_response_string(&payload, "access_token", "Google token refresh")
+  required_response_string(&payload, ACCESS_TOKEN_FIELD, "Google token refresh")
 }
 
 fn profile_email(client: &request::HttpClient, access_token: &str, profile_url: &str) -> Result<String, CliExit> {

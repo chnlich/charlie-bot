@@ -39,7 +39,7 @@ const INITIAL_ROWS: i128 = 24;
 /// The terminal grid, in cells, that a connection starts its pty at.
 ///
 /// The client names it in the websocket query (`cols`, `rows`). The pty and its tmux session are created at
-/// this size, so the shell's first output wraps at the width the client shows; a resize that arrives after
+/// this size, so the shell's first output wraps at the width the client shows. A resize that arrives after
 /// the pty started makes tmux redraw what it already laid out, and a narrow client then sees the first line
 /// from its middle. A connection that names neither value takes the defaults.
 #[derive(Clone, Copy)]
@@ -55,7 +55,7 @@ impl Default for Grid {
 }
 
 impl Grid {
-  /// The grid the websocket query names. An absent value takes the default; a value outside `1..=65535`
+  /// The grid the websocket query names. An absent value takes the default. A value outside `1..=65535`
   /// refuses the connection, because the client's own contract is broken.
   pub(super) fn from_query(query: &str) -> Result<Grid, String> {
     Ok(Grid {
@@ -89,9 +89,9 @@ pub(super) fn tmux_session_name(session_id: &str) -> String {
 /// How `filtered_env` treats the inherited `TERM`.
 #[derive(Clone, Copy)]
 pub(super) enum TermEnv {
-  /// Keep the inherited `TERM`, for a tmux command that never draws on a client.
+  /// The inherited `TERM`, kept for a tmux command that never draws on a client.
   Inherit,
-  /// Replace `TERM` with the client terminal type, so an attached pty draws at the type the client shows.
+  /// The client terminal type in place of `TERM`, so an attached pty draws at the type the client shows.
   Replace,
 }
 
@@ -409,7 +409,7 @@ pub(super) async fn send_json(socket: &mut WebSocket, value: &Value) -> Result<(
   socket.send(Message::Text(text.into())).await
 }
 
-/// Relays the PTY and the socket until either one ends.
+/// The PTY-and-socket relay, which runs until either one ends.
 ///
 /// An `Err` returns without a close frame: the transport closes, no Close message is sent, and the client
 /// sees the connection end.

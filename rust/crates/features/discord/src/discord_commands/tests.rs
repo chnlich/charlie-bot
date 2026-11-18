@@ -36,7 +36,7 @@ async fn make_session(home: &Home, watermark: Option<String>) -> String {
   home.thread_session(&summon_session_id(GUILD, THREAD), origin(), watermark.as_deref()).await
 }
 
-/// Set the thread's messages, oldest first.
+/// The messages the fake serves for the thread, set oldest first.
 fn thread_messages(home: &Home, messages: &[Msg]) {
   home.fake().channels.insert(THREAD.to_string(), messages.iter().map(Msg::value).collect());
 }
@@ -68,7 +68,7 @@ fn summon_event(mention_id: &str) -> Value {
   })
 }
 
-/// Post `body` to `path` on the router. It returns the status and the JSON answer.
+/// The status and JSON answer of a POST of `body` to `path` on the router.
 async fn send(router: Router, path: &str, body: Value) -> (StatusCode, Value) {
   let request = Request::builder()
     .method(Method::POST)

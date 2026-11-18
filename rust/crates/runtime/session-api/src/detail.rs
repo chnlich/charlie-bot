@@ -27,7 +27,7 @@ use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
 use charliebot_store::trigger_files::{PendingTrigger, TriggerStatus};
-use charliebot_store::{MessageProjection, Store, StoreError, StoreResult, TaskFacts};
+use charliebot_store::{MessageProjection, Store, StoreError, StoreResult, TaskFacts, path_error};
 use charliebot_triggers::triggers::TriggerManager;
 use http::header::HeaderValue;
 use lru::LruCache;
@@ -458,7 +458,7 @@ fn live_event_log_identity(store: &Store, session_id: &str) -> StoreResult<Optio
   match fs::metadata(&path) {
     Ok(metadata) => Ok(Some((timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len()))),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-    Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
+    Err(error) => Err(path_error(&path, error)),
   }
 }
 
@@ -1302,10 +1302,6 @@ fn events_gzip_response(body: Bytes) -> Response {
 
 fn to_index(value: i64) -> usize {
   usize::try_from(value).unwrap_or(0)
-}
-
-fn path_error(path: &Path, error: std::io::Error) -> StoreError {
-  StoreError::new(format!("{}: {error}", path.display()))
 }
 
 #[cfg(test)]

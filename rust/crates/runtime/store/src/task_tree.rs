@@ -26,6 +26,7 @@ use crate::metadata::{
   EventRef, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE, TaskApprover,
   TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
 };
+use crate::path_error;
 use crate::run_facts::{CachedRunFacts, RunFacts};
 use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
 use crate::task_reparent;
@@ -3125,10 +3126,6 @@ fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {
     }
   }
   Ok(count)
-}
-
-fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
-  StoreError::new(format!("{}: {error}", path.display()))
 }
 
 /// The unpublished create's staging directory name: `.task-{task_id}-{pid}-{uuid}.tmp`.

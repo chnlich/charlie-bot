@@ -77,6 +77,7 @@ pub use task_tree::{
 };
 
 use std::fmt;
+use std::path::Path;
 
 /// Store operation result.
 pub type StoreResult<T> = Result<T, StoreError>;
@@ -150,6 +151,11 @@ impl StoreError {
       _ => None,
     }
   }
+}
+
+/// The store error for a failure at `path`: the path, a colon, and the failure's display.
+pub fn path_error(path: &Path, error: impl fmt::Display) -> StoreError {
+  StoreError::new(format!("{}: {error}", path.display()))
 }
 
 impl fmt::Display for StoreError {

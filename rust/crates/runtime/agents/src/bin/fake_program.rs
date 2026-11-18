@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use charliebot_agents::cli_base::program_path;
+use charliebot_core::paths::program_path;
 use serde::Deserialize;
 
 /// One step of a fake program. The variant names are the step keys of `probe.json`.

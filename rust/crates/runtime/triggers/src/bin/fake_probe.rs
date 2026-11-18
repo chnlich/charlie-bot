@@ -13,16 +13,19 @@
 //! leaves its one-based invocation index in `<role>.calls`. A test reads
 //! back how many processes ran and with what remote command.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use charliebot_core::paths::program_path;
 
 fn main() {
   let argv: Vec<String> = std::env::args().collect();
   let argv0 = argv.first().expect("the helper always receives argv[0]");
-  let link = resolve_link(argv0);
+  let link = program_path(OsStr::new(argv0));
   let role = link.file_name().expect("argv[0] names the role").to_string_lossy().into_owned();
   let data_path = link.with_file_name("probe.json");
   let body = fs::read_to_string(&data_path)
@@ -47,20 +50,6 @@ fn main() {
     std::io::stderr().write_all(stderr.as_bytes()).expect("write fake stderr");
   }
   std::process::exit(i32::try_from(exit).expect("probe behavior exit fits i32"));
-}
-
-/// The path of the link this helper was started through. A shell that finds a fake by name on `PATH` passes that
-/// bare name as argv[0], so the link is resolved the way the shell resolved it.
-fn resolve_link(argv0: &str) -> PathBuf {
-  let named = PathBuf::from(argv0);
-  if named.components().count() > 1 {
-    return named;
-  }
-  let paths = std::env::var_os("PATH").expect("a bare program name is found through PATH");
-  std::env::split_paths(&paths)
-    .map(|directory| directory.join(argv0))
-    .find(|candidate| candidate.is_file())
-    .unwrap_or_else(|| panic!("no fake program {argv0} on PATH"))
 }
 
 /// The remote command an ssh invocation names, run in a local `sh` with the fake programs' directory first on its

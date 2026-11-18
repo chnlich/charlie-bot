@@ -22,7 +22,7 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
 3. On worker success → review uses its configured target or the worker route fallback. It prefers a selectable backend
    outside the work run and earlier work-run backends, then tries the writer first and another previously used member.
    A reviewer that already failed this work run stays excluded from its retries.
-4. Reviewer: checks diff, fixes issues, then lands with `charliebot land`. When the base is the default branch and declares a `pull_request` workflow, `charliebot land` moves the base only after CI passes on the landed commit. Otherwise the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit 0 and leave the task branch's PR merged or closed; every other state leaves the change unlanded and names what holds it.
+4. A reviewer lands the task with `charliebot land`. When the base is the default branch and declares a `pull_request` workflow, the command moves the base only when its CI gate passes on the landed commit. When that gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit 0 and leave the task branch's PR merged or closed. Every other state leaves the change unlanded and names what holds it.
 5. On landing → master agent gets summary
 
 ### Merge-back failover
@@ -277,7 +277,7 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 
 - Server stdout logs are the only source for HTTP route-use events.
 - The server reloads prompt documents on each master run (`read_source_file` in `rust/crates/runtime/tasks/src/prompts/sources.rs` reads each file fresh). Static assets under `web/static` load on the next page load.
-- Each release is one commit on main. `scripts/release.sh` installs the server and CLI binaries that CI built for that commit, and the commit's slice units, after the binaries pass their sha256 check. It keeps the newest installs and the live release. It runs no trial and no rehearsal: the checks live on the switch.
+- Each release is one commit on main. `scripts/release.sh` installs the server and CLI binaries that CI built for that commit when their sha256 checks pass. It also installs the commit's slice units. It keeps the newest installs and the live release. It runs no trial and no rehearsal: the checks live on the switch.
 - A change is live when the commit of the live release contains it. This holds for server code and for files in the runtime checkout.
   Use `scripts/switch-server.sh rust <commit>` to switch the live Rust release.
   The script owns its preflight and checks.

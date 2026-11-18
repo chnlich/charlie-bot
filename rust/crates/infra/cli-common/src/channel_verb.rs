@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use crate::client;
 use crate::exit::CliExit;
-use crate::fields::{SESSION_ID, TEXT};
+use crate::fields::{LIMIT, SESSION_ID, TEXT};
 use crate::files;
 use crate::json_out;
 use crate::resolve;
@@ -73,7 +73,7 @@ pub fn post_read(
   let session_id = resolve::resolve_from_env(session)?;
   let mut payload = Map::new();
   payload.insert(SESSION_ID.to_string(), json!(session_id));
-  payload.insert("limit".to_string(), json!(limit));
+  payload.insert(LIMIT.to_string(), json!(limit));
   if let Some(extra) = extra {
     payload.extend(extra);
   }

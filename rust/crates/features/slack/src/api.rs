@@ -9,6 +9,7 @@ use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::thread_entry::{self, ThreadAdapter, ThreadDetail, ThreadReplyError};
 use charliebot_cli_common::channel_verb::REPLY_BODY;
+use charliebot_cli_common::fields::{SESSION_ID, TEXT};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -51,8 +52,8 @@ async fn reply(State(features): State<Arc<FeatureContext>>, request: Request<Bod
   let Some(Value::Object(fields)) = model else {
     unreachable!("a required Slack reply body validates to its declared fields")
   };
-  let session_id = text_field(&fields, "session_id");
-  let text = text_field(&fields, "text");
+  let session_id = text_field(&fields, SESSION_ID);
+  let text = text_field(&fields, TEXT);
   let identity = match caller::resolve_caller(&parts.headers, &features) {
     Ok(identity) => identity,
     Err(response) => return response,
@@ -91,7 +92,7 @@ async fn ack(State(features): State<Arc<FeatureContext>>, request: Request<Body>
   let Some(Value::Object(mut fields)) = model else {
     unreachable!("a required Slack ack body validates to its declared fields")
   };
-  let session_id = text_field(&fields, "session_id");
+  let session_id = text_field(&fields, SESSION_ID);
   let message_ids = take_string_list(&mut fields, "message_ids");
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(slack_listener::SlackThreadAdapter::lazy(Arc::clone(&features)));
   answer(execute_ack(&features, &adapter, &session_id, &message_ids).await)
@@ -154,7 +155,7 @@ fn take_string_list(fields: &mut Map<String, Value>, name: &str) -> Vec<String> 
 }
 
 const SLACK_ACK_FIELDS: &[Field] =
-  &[Field::required("session_id", FieldType::String), Field::required("message_ids", FieldType::StringList)];
+  &[Field::required(SESSION_ID, FieldType::String), Field::required("message_ids", FieldType::StringList)];
 const SLACK_ACK_BODY: BodyModel = BodyModel::required(SLACK_ACK_FIELDS).forbid_extra();
 
 #[cfg(test)]

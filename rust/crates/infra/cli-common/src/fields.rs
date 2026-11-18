@@ -8,3 +8,6 @@ pub const SESSION_ID: &str = "session_id";
 
 /// The field carrying the reply text a channel verb posts.
 pub const TEXT: &str = "text";
+
+/// The field carrying a read request's page size.
+pub const LIMIT: &str = "limit";

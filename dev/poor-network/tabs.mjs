@@ -589,9 +589,6 @@ export class Tabs {
   // record, so a trace can name the requests a worker sent for the page.
   #worker = new Tab('service worker', null);
   #workerSessions = new Set();
-  // Service worker targets the browser has destroyed. A worker that stops while it attaches fails its attach with
-  // "Inspected target navigated or closed"; that failure is expected for these targets only.
-  #destroyedWorkers = new Set();
 
   // `origin` is the TLS front's https origin; the page and its socket live there. `cdn` says where the CDN files come
   // from: `local` answers them in the browser from the assets, so they never cross the link; `link` lets the browser
@@ -607,9 +604,6 @@ export class Tabs {
     this.#cdn = cdn;
     browser.send('Target.setDiscoverTargets', { discover: true });
     browser.onMessage((message) => {
-      if (message.method === 'Target.targetDestroyed') {
-        this.#destroyedWorkers.add(message.params.targetId);
-      }
       if (message.method === 'Target.targetCreated' && message.params.targetInfo.type === 'service_worker' &&
           message.params.targetInfo.url.startsWith(this.#origin)) {
         const { targetId } = message.params.targetInfo;
@@ -619,7 +613,12 @@ export class Tabs {
             return browser.sendTo(sessionId, 'Network.enable');
           })
           .catch((error) => {
-            if (!this.#destroyedWorkers.has(targetId)) throw error;
+            if (error.message === 'Target.attachToTarget: Inspected target navigated or closed' ||
+                error.message === 'Network.enable: Inspected target navigated or closed') {
+              console.warn('service worker target ' + targetId + ' closed during ' + error.message.split(':')[0]);
+              return;
+            }
+            throw error;
           });
         return;
       }

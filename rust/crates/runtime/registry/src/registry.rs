@@ -173,10 +173,6 @@ pub struct Registry {
   /// The one reader of the derived Waiting on you items, which `features/cron` registers. Its rows have the open
   /// items' shape, and `features/web_reply` reads them through the registry.
   pub(crate) derived_waiting_items: Ledger<OpenWaitingItemsFn>,
-  /// The host each backend type's entries log into, keyed by the backend type, which the type's package registers.
-  /// The launcher binary each backend type's entries name, keyed by the backend type, which the type's package
-  /// registers. A launcher carries the run to the host it decides, so the server prepares no worktree for such an
-  /// entry's runs and their briefs name none.
   /// The one reader of the host login records, which `features/host_auth` registers.
   pub(crate) host_logins: Ledger<HostLoginsFn>,
   /// The one probe of a host, which `features/host_auth` registers.

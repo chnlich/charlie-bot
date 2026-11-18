@@ -333,8 +333,8 @@ fn archived_page_body(
     tail.groups.into_iter().map(|(group, total)| json!({"group": group, "total": total})).collect::<Vec<Value>>();
   let body = json!({
     "sessions": session_values,
-    "has_more": tail.has_more,
-    "next_before": tail.next_before,
+    (api::HAS_MORE_FIELD): tail.has_more,
+    (api::NEXT_BEFORE_FIELD): tail.next_before,
     "next_before_id": tail.next_before_id,
     "groups": groups,
   });

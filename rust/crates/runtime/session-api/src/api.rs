@@ -1,5 +1,6 @@
-//! The session route paths and websocket frame names that other crates use. The routers, `ROUTE_PATTERNS` and the
-//! websocket use these consts too, so each one is spelled once. A `{session_id}` parameter is filled by the caller.
+//! The session route paths, response field names and websocket frame names that other crates use. The routers,
+//! `ROUTE_PATTERNS`, the paginated responses and the websocket use these consts too, so each one is spelled once. A
+//! `{session_id}` parameter is filled by the caller.
 
 /// The session collection: `GET` lists the active sessions, `POST` creates one.
 pub const SESSIONS_PATH: &str = "/api/sessions/";
@@ -17,6 +18,13 @@ pub const SESSION_TREE_PARENT_ID_QUERY: &str = "parent_id";
 pub const SESSION_TREE_INCLUDE_ARCHIVED_QUERY: &str = "include_archived";
 pub const SESSION_TREE_LIMIT_QUERY: &str = "limit";
 pub const SESSION_TREE_CURSOR_QUERY: &str = "cursor";
+
+/// The fields that page a session response: the flag that older history remains, the cursor for the next older page,
+/// and the ordinal of the page's oldest message. The events route, the bootstrap payload and the sessions list write
+/// them, and the CLI's dialog reader reads them, so each is spelled once.
+pub const HAS_MORE_FIELD: &str = "has_more";
+pub const NEXT_BEFORE_FIELD: &str = "next_before";
+pub const OLDEST_MESSAGE_ORDINAL_FIELD: &str = "oldest_message_ordinal";
 
 /// The session replay websocket. A client connects with its cursor in the query string.
 pub const SESSION_WEBSOCKET_PATH: &str = "/ws/sessions/{session_id}";

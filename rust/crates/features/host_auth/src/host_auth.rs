@@ -79,8 +79,9 @@ pub fn apply_probe_result(entry: &mut Map<String, Value>, status: &str, detail: 
   status == STATUS_OK && matches!(previous.as_deref(), Some(STATUS_ROUTER_REJECTED | STATUS_NEEDS_INTERACTIVE_AUTH))
 }
 
-/// `fold_probe`: apply one probe to the host at `index`, and when it approves the host, record the approval on the
-/// login bound to that host. The record is part of the same state write.
+/// `fold_probe`: apply one probe to the host at `index`. A probe that approves the host records the approval on the
+/// login bound to that host, and an ok probe clears that login's stored link result. The records are part of the same
+/// state write.
 fn fold_probe(
   state: &mut State,
   logins: &[BrowserLoginConfig],
@@ -91,8 +92,13 @@ fn fold_probe(
   let entry = host_entry_mut(state, index)?;
   let alias = alias_of(entry)?.to_string();
   let approved = apply_probe_result(entry, verdict.0, verdict.1, probed);
-  if approved && let Some(name) = login_bound_to(logins, &alias) {
-    login_state::change_login(state, name, |record| record.last_approved_at = Some(probed.to_string()))?;
+  if let Some(name) = login_bound_to(logins, &alias) {
+    if approved {
+      login_state::change_login(state, name, |record| record.last_approved_at = Some(probed.to_string()))?;
+    }
+    if verdict.0 == STATUS_OK {
+      login_state::clear_link_match(state, name)?;
+    }
   }
   Ok(())
 }

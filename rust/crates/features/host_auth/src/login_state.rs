@@ -2,8 +2,9 @@
 //!
 //! A login bound to a host reads its availability from `hosts[alias]`, so its record keeps the time of its last approval
 //! and its last attempt, and a `broken` status when the login cannot start. A login with no host keeps its check result
-//! as well. `link_match` holds the last link probe or started attempt: a fail marks the row broken, and a readback
-//! refresh leaves it as it is. Every write goes through [`update_login`]: the round slot, then an atomic save.
+//! as well. `link_match` holds the last link probe or started attempt. A fail marks the row broken only while its check
+//! says a login is needed, and a passing check clears it. Every write goes through [`update_login`]: the round slot,
+//! then an atomic save.
 
 use std::path::Path;
 
@@ -156,12 +157,26 @@ pub async fn record_check(
 ) -> anyhow::Result<()> {
   let status = LoginStatus::of(state)?;
   let checked = isoformat(at);
-  update_login(state_path, name, |record| {
-    record.status = Some(status);
-    record.detail = Some(detail);
-    record.last_check_at = Some(checked);
-  })
-  .await
+  update_login(state_path, name, |record| settle_check(record, status, detail, checked)).await
+}
+
+/// `settle_check`: the record after a check. A passing check clears the stored link result, so a link failure from an
+/// earlier probe cannot break the row once the login needs approval.
+fn settle_check(record: &mut LoginState, status: LoginStatus, detail: String, checked: String) {
+  record.status = Some(status);
+  record.detail = Some(detail);
+  record.last_check_at = Some(checked);
+  if status == LoginStatus::Ok {
+    record.link_match = None;
+  }
+}
+
+/// Clears the stored link result of `name`, when one is stored. A passing host probe of the login's host calls it.
+pub fn clear_link_match(state: &mut State, name: &str) -> anyhow::Result<()> {
+  if login_state(state, name)?.link_match.is_some() {
+    change_login(state, name, |record| record.link_match = None)?;
+  }
+  Ok(())
 }
 
 /// A finished attempt: its record, and the status its outcome leaves the login with. A host-bound login's status follows
@@ -178,6 +193,9 @@ pub async fn record_attempt(state_path: &Path, name: &str, bound: bool, attempt:
       record.status = status;
       record.detail = Some(detail);
       record.last_check_at = attempt.finished_at.clone();
+      if status == Some(LoginStatus::Ok) {
+        record.link_match = None;
+      }
     }
   })
   .await
@@ -249,6 +267,20 @@ mod tests {
   fn a_host_bound_record_stores_no_check_fields() {
     let record = LoginState { last_approved_at: Some("2026-11-18T08:16:29+00:00".to_string()), ..Default::default() };
     assert_eq!(serde_json::to_value(&record).unwrap(), json!({"last_approved_at": "2026-11-18T08:16:29+00:00"}));
+  }
+
+  #[test]
+  fn a_passing_check_clears_the_stored_link_result_and_a_needing_one_keeps_it() {
+    let mut record = LoginState { link_match: Some(LinkMatch::Fail), ..Default::default() };
+    settle_check(&mut record, LoginStatus::NeedsUser, "not logged in".to_string(), "2026-11-18T16:00:00+00:00".into());
+    assert_eq!(record.link_match, Some(LinkMatch::Fail), "a check that needs approval keeps the link result");
+    settle_check(&mut record, LoginStatus::Ok, "valid".to_string(), "2026-11-18T16:05:00+00:00".into());
+    assert_eq!(record.link_match, None, "a passing check clears the link result");
+
+    let mut state = state_file::empty_state();
+    change_login(&mut state, "aws-sso", |record| record.link_match = Some(LinkMatch::Fail)).unwrap();
+    clear_link_match(&mut state, "aws-sso").unwrap();
+    assert_eq!(login_state(&state, "aws-sso").unwrap(), LoginState::default());
   }
 
   #[test]

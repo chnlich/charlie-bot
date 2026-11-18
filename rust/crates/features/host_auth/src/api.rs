@@ -135,8 +135,9 @@ async fn host_auth_row(State(features): State<Arc<FeatureContext>>, RoutePath(id
   }
 }
 
-/// The query of a row check. `link_probe=true` also runs the login's link probe, which the self-check asks for.
-/// The page's row refresh sends no query, so it checks the readback only.
+/// The query of a row check. `link_probe=true` also runs the login's link probe, which the self-check asks for, and
+/// only for a login whose row shows that it needs approval. The page's row refresh sends no query, so it checks the
+/// readback only.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckQuery {
@@ -343,6 +344,7 @@ mod tests {
     tree_name: String,
     missing_name: String,
     input_name: String,
+    link_name: String,
   }
 
   fn home(prefix: &str, templating: bool) -> Home {
@@ -351,6 +353,7 @@ mod tests {
     let (ok_name, failing_name, router_name) = (names("aws-sso"), names("failing-sso"), names("router-host1"));
     let (tree_name, missing_name, input_name, marked_name) =
       (names("tree"), names("missing"), names("input"), names("marked"));
+    let link_name = names("needing-link");
     let missing_readback = dir.path().join(format!("{prefix}-no-such-readback")).display().to_string();
     // The login leaves a marker when it runs, so a test shows whether a request started it.
     let login =
@@ -429,6 +432,11 @@ host_auth:
       login_command: [{login}]
       approval_url_pattern: 'https://device\\.sso\\S*'
       readback_command: [{marked_readback}]
+    - name: {link_name}
+      label: Needing SSO with a link
+      login_command: [{login}]
+      approval_url_pattern: 'https://device\\.sso\\S*'
+      readback_command: [{failing_readback}]
 "
     );
     fs::write(dir.path().join(CONFIG_FILENAME), config).expect("the config writes");
@@ -475,6 +483,7 @@ host_auth:
       tree_name,
       missing_name,
       input_name,
+      link_name,
     }
   }
 
@@ -640,7 +649,7 @@ host_auth:
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn a_link_probe_records_its_match_and_only_a_probe_starts_a_login() {
+  async fn a_link_probe_runs_only_for_a_login_that_needs_approval() {
     let _slot_lock = crate::test_support::round_slot_lock().lock().await;
     let home = home("link-probe", false);
     let _home_env = use_home(&home);
@@ -648,25 +657,37 @@ host_auth:
     let check = |id: &str, query: &str| format!("/api/host-auth/rows/{id}/check{query}");
     let ok_id = format!("login:{}", home.ok_name);
     let failing_id = format!("login:{}", home.failing_name);
+    let needing_id = format!("login:{}", home.link_name);
+    let state_path = host_auth::default_state_path().expect("the state path");
 
     // The page's row refresh sends no query: it checks the readback and starts no login.
     let (status, _, _) = call(home.router.clone(), Method::POST, &check(&ok_id, ""), "").await;
     assert_eq!(status, StatusCode::OK);
     assert!(!started.exists(), "a row refresh starts no login process");
 
-    // The self-check's probe starts the login, finds its link, and records the pass. No answer or state file holds the
-    // link.
-    let (status, _, body) = call(home.router.clone(), Method::POST, &check(&ok_id, "?link_probe=true"), "").await;
+    // A row that shows as working has no approval to find a link for: its probe is refused before any login starts, and
+    // records nothing.
+    let (status, _, _) = call(home.router.clone(), Method::POST, &check(&ok_id, "?link_probe=true"), "").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a working login's link probe is refused");
+    assert!(!started.exists(), "a refused probe starts no login");
+    let state = host_auth::read_state(&state_path).expect("the state reads");
+    assert_eq!(login_state::login_state(&state, &home.ok_name).expect("the record reads").link_match, None);
+
+    // A login that needs approval and prints its link records a pass, and its row still asks the user. No answer or
+    // state file holds the link.
+    let (status, _, body) = call(home.router.clone(), Method::POST, &check(&needing_id, "?link_probe=true"), "").await;
     assert_eq!(status, StatusCode::OK);
     assert!(started.exists(), "the link probe starts the login");
     assert!(!body.contains(LINK), "the answer holds no link");
-    let state_path = host_auth::default_state_path().expect("the state path");
+    let row: Value = serde_json::from_str(&body).expect("the row is JSON");
+    assert_eq!(row["state"], json!("needs_user"), "a link that prints leaves the row asking the user");
     assert!(!fs::read_to_string(&state_path).expect("the state reads").contains(LINK), "the state file holds no link");
     let state = host_auth::read_state(&state_path).expect("the state reads");
-    let record = login_state::login_state(&state, &home.ok_name).expect("the record reads");
+    let record = login_state::login_state(&state, &home.link_name).expect("the record reads");
     assert_eq!(record.link_match, Some(LinkMatch::Pass));
 
-    // A login that prints no link breaks its row, and a readback refresh does not clear that.
+    // A login that needs approval and prints no link breaks its row, and a readback refresh that still needs approval
+    // keeps that.
     let (status, _, body) = call(home.router.clone(), Method::POST, &check(&failing_id, "?link_probe=true"), "").await;
     assert_eq!(status, StatusCode::OK);
     let row: Value = serde_json::from_str(&body).expect("the row is JSON");
@@ -677,6 +698,17 @@ host_auth:
     let (_, status_body) = get_json(home.router.clone(), "/api/host-auth/status").await;
     let broken = status_body["summary"]["broken"].as_array().expect("the broken list");
     assert!(broken.contains(&json!(failing_id)), "the summary lists the broken row");
+
+    // A stored link failure that outlived a passing check does not break the working row, and the next passing check
+    // clears it.
+    login_state::record_link_match(&state_path, &home.ok_name, LinkMatch::Fail).await.expect("the link result records");
+    let (_, row) = get_json(home.router.clone(), &format!("/api/host-auth/rows/{ok_id}")).await;
+    assert_eq!(row["state"], json!("ok"), "a stored link failure does not break a row whose check passes");
+    let (status, _, _) = call(home.router.clone(), Method::POST, &check(&ok_id, ""), "").await;
+    assert_eq!(status, StatusCode::OK);
+    let state = host_auth::read_state(&state_path).expect("the state reads");
+    let record = login_state::login_state(&state, &home.ok_name).expect("the record reads");
+    assert_eq!(record.link_match, None, "a passing check clears the stored link result");
 
     // Only a login has a link to probe, and the route refuses a query key it does not know.
     let (status, _, _) = call(home.router.clone(), Method::POST, &check("host:host0", "?link_probe=true"), "").await;
@@ -691,6 +723,10 @@ host_auth:
     let home = home("bound-check", false);
     let _home_env = use_home(&home);
     crate::test_support::set_bound_answer(0, "exit 0");
+    let state_path = host_auth::default_state_path().expect("the state path");
+    login_state::record_link_match(&state_path, &home.router_name, LinkMatch::Fail)
+      .await
+      .expect("the link result records");
     let (status, _, body) =
       call(home.router.clone(), Method::POST, &format!("/api/host-auth/rows/login:{}/check", home.router_name), "")
         .await;
@@ -698,10 +734,11 @@ host_auth:
     let row: Value = serde_json::from_str(&body).expect("the row is JSON");
     assert_eq!(row["state"], json!("ok"), "the probe answered ok");
     assert!(!home.dir.path().join(format!("{}-router-marker.ran", home.prefix)).exists(), "no readback ran");
-    let state =
-      host_auth::read_state(&host_auth::default_state_path().expect("the state path")).expect("the state reads");
+    let state = host_auth::read_state(&state_path).expect("the state reads");
     let host = host_auth::host_entries(&state).expect("the hosts read");
     assert!(host.iter().any(|entry| entry["alias"] == json!("host1") && entry["status"] == json!("ok")));
+    let record = login_state::login_state(&state, &home.router_name).expect("the record reads");
+    assert_eq!(record.link_match, None, "a passing host probe clears the bound login's stored link result");
     assert!(row["expiry_text"].as_str().expect("the expiry text").is_empty(), "a row never approved shows no expiry");
   }
 
@@ -799,8 +836,8 @@ host_auth:
     let (status, body) = get_json(home.router.clone(), "/api/host-auth/status").await;
     assert_eq!(status, StatusCode::OK);
     let rows = body["rows"].as_array().expect("the rows are a list");
-    // Seven logins, and the one ssh host without a login: host0. host1 is renewed by a login, so it has no row of its own.
-    assert_eq!(rows.len(), 8);
+    // Eight logins, and the one ssh host without a login: host0. host1 is renewed by a login, so it has no row.
+    assert_eq!(rows.len(), 9);
     assert!(rows.iter().any(|row| row["id"] == json!("host:host0")));
     let needs = body["summary"]["needs_user"].as_array().expect("the needs-user list");
     let broken = body["summary"]["broken"].as_array().expect("the broken list");

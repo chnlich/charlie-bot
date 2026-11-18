@@ -22,7 +22,8 @@ pub enum Finding<'a> {
   CannotRun,
   /// A start that gave no approval link.
   StartFailed,
-  /// A link probe that found no approval link before its timeout, or whose login could not run.
+  /// A link probe that found no approval link before its timeout, or whose login could not run. A row takes this
+  /// finding only while its check says a login is needed.
   LinkNotFound,
 }
 

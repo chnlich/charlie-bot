@@ -1,8 +1,9 @@
 //! The status table's rows: one per configured browser login, then one per ssh host that no login renews.
 //!
 //! A row is built from the state file, the config and the live attempts, by the one function the page, the status route
-//! and the row route share. A row's state is the classification of its latest check, from `attention`, and a link probe
-//! that found no link overrides it. A check runs through [`check_row`], which persists its result before it answers.
+//! and the row route share. A row's state is the classification of its latest check, from `attention`. A stored link
+//! failure makes a row broken only while that check says a login is needed. A check runs through [`check_row`], which
+//! persists its result before it answers.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -92,9 +93,9 @@ fn host_of<'s>(hosts: &[&'s Map<String, Value>], alias: &str) -> anyhow::Result<
   Ok(None)
 }
 
-/// The row of a configured login. A link probe that found no link makes the row broken, whatever its check said. A
-/// host-bound login's availability is its host's probe, unless its own check stands broken, which a failed start does.
-/// A login with no host shows its own check.
+/// The row of a configured login. A host-bound login's availability is its host's probe, unless its own check stands
+/// broken, which a failed start does. A login with no host shows its own check. A stored link failure then breaks a row
+/// that needs a login: a login that works has nothing to approve, so its failure counts for nothing.
 fn login_row<'a>(
   state: &State,
   hosts: &[&Map<String, Value>],
@@ -119,12 +120,6 @@ fn login_row<'a>(
     record: record.clone(),
     live,
   };
-  if record.link_match == Some(LinkMatch::Fail) {
-    row.state = classify_row_attention(Finding::LinkNotFound)?;
-    row.detail = LINK_NOT_FOUND_DETAIL.to_string();
-    row.checked_at = record.last_check_at.clone();
-    return Ok(row);
-  }
   match (&login.host, host) {
     (Some(_), host) => match (record.status, host) {
       (Some(LoginStatus::Broken), _) => {
@@ -149,7 +144,18 @@ fn login_row<'a>(
       }
     }
   }
+  if row.state == RowState::NeedsUser && record.link_match == Some(LinkMatch::Fail) {
+    row.state = classify_row_attention(Finding::LinkNotFound)?;
+    row.detail = LINK_NOT_FOUND_DETAIL.to_string();
+  }
   Ok(row)
+}
+
+/// The state of `login`'s row as its stored check and host verdict leave it now, with a stored link failure applied.
+fn login_row_state(state_path: &Path, login: &BrowserLoginConfig) -> anyhow::Result<RowState> {
+  let state = host_auth::read_state(state_path)?;
+  let hosts = host_auth::host_entries(&state)?;
+  Ok(login_row(&state, &hosts, login, None)?.state)
 }
 
 /// The row of an ssh host that no login renews. Its state is the host's probe.
@@ -213,7 +219,8 @@ pub fn summary(rows: &[Value]) -> Value {
 
 /// `check_row`: run the row's check, persist what it found, and report whether the table has the row. A host row, and a
 /// host-bound login, check with the single-host probe that `probe` runs. A login with no host runs its readback. With
-/// `link_probe`, a login row also records its link probe, and a host row, which has no login, refuses the request.
+/// `link_probe`, a login row that shows as needing approval also records its link probe. A host row, which has no
+/// login, refuses the request, and so does a login row that shows any other state.
 pub async fn check_row<P, F>(
   state_path: &Path,
   config_path: &Path,
@@ -257,8 +264,7 @@ where
         }
       }
       if link_probe {
-        let matched = browser_login::probe_link(login).await?;
-        login_state::record_link_match(state_path, name, matched).await?;
+        probe_waiting_login(state_path, login).await?;
       }
     }
     RowId::Host(alias) => {
@@ -266,6 +272,21 @@ where
     }
   }
   Ok(true)
+}
+
+/// The link probe of a login whose row shows that it needs approval. The probe records its result only while the row
+/// still needs approval: a passing check that ends the need during the probe has already cleared the stored result, so
+/// the probe's answer about that need is dropped. A row in any other state is refused, so a probe never records a link
+/// failure for a login that works.
+async fn probe_waiting_login(state_path: &Path, login: &BrowserLoginConfig) -> anyhow::Result<()> {
+  if login_row_state(state_path, login)? != RowState::NeedsUser {
+    bail!("login {} does not show as needing approval, so its link probe does not run", login.name);
+  }
+  let matched = browser_login::probe_link(login).await?;
+  if login_row_state(state_path, login)? == RowState::NeedsUser {
+    login_state::record_link_match(state_path, &login.name, matched).await?;
+  }
+  Ok(())
 }
 
 /// The row's JSON. The page renders its first paint from these fields, and the row route answers them on each refresh.
@@ -428,6 +449,37 @@ mod tests {
     assert!(matches!(parse_id("host:host0"), Some(RowId::Host("host0"))));
     assert!(parse_id("hosts:host0").is_none());
     assert!(parse_id("host0").is_none());
+  }
+
+  #[test]
+  fn a_stored_link_failure_breaks_only_a_row_that_needs_a_login() {
+    let now = timestamps::parse("2026-11-18T16:00:00+00:00").expect("the stamp parses");
+    let config = |name: &str| -> BrowserLoginConfig {
+      serde_json::from_value(json!({
+        "name": name,
+        "label": name,
+        "login_command": ["/bin/true"],
+        "approval_url_pattern": "https://device\\.example\\S*",
+        "readback_command": ["/bin/true"],
+      }))
+      .expect("the login config parses")
+    };
+    let logins = vec![config("working"), config("needing")];
+    let mut state = crate::state_file::empty_state();
+    let checked = "2026-11-18T16:00:00+00:00";
+    state.insert(
+      "logins".to_string(),
+      json!({
+        "working": {"status": "ok", "detail": "valid", "last_check_at": checked, "link_match": "fail"},
+        "needing": {"status": "needs_user", "detail": "not logged in", "last_check_at": checked, "link_match": "fail"},
+      }),
+    );
+    let table = rows(&state, &logins, now).expect("the rows build");
+    let row_of = |id: &str| table.iter().find(|row| row["id"] == json!(id)).expect("the row is listed").clone();
+    assert_eq!(row_of("login:working")["state"], json!("ok"), "a passing check is not broken by its link failure");
+    let needing = row_of("login:needing");
+    assert_eq!(needing["state"], json!("broken"), "a row that needs a login with a failed link probe is broken");
+    assert_eq!(needing["detail"], json!(LINK_NOT_FOUND_DETAIL));
   }
 
   #[test]

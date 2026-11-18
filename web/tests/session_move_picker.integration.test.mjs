@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // The sidebar's "Move under…" picker (sidebar/session-move.js) in a headless
-// Chrome. The page loads the app's stylesheets and the picker's three scripts
+// Chrome. The page loads the app's stylesheets and the picker's scripts
 // from web/static. A stub server answers the two session lists and refuses the
 // move with two blockers. A page-side probe measures the choice rows, the
 // list that holds them and each block of the dialog, at a desktop width and a
@@ -31,7 +31,13 @@ const SHOTS_DIR = path.join(WEB_DIR, 'target', 'session-move-picker');
 // The stylesheets and scripts the picker's page loads, in page order. The page's config.js
 // runs auth code on load, so the page defines the one global the picker reads from it.
 const STYLESHEETS = ['css/styles.css', 'css/tailwind.css'];
-const PICKER_SCRIPTS = ['sidebar/namespace.js', 'sidebar/session-actions.js', 'sidebar/session-move.js'];
+// The picker reads its rows through the sidebar's own column expander (groups.js), so the page loads it too.
+const PICKER_SCRIPTS = [
+  'sidebar/namespace.js',
+  'sidebar/groups.js',
+  'sidebar/session-actions.js',
+  'sidebar/session-move.js',
+];
 
 // The dialog's blocks in order: the header, the search box, the choice list, the error list and the footer.
 const LIST_BLOCK = 2;
@@ -124,6 +130,18 @@ function sessionRows() {
   ];
 }
 
+// The rows as the route's `compact=move` column form: one cell array per field, in row order. These ids are not
+// canonical UUIDs, so each id is a `~` cell of its own text, which is the form the route writes for such a home.
+function columnForm(rows) {
+  return {
+    $encoded: {id: 'uuid-b64'},
+    id: rows.map((row) => `~${row.id}`),
+    name: rows.map((row) => row.name),
+    profile: rows.map((row) => row.profile),
+    task_parent_id: rows.map((row) => row.task_parent_id ?? null),
+  };
+}
+
 function pageHtml() {
   const links = STYLESHEETS.map((href) => `<link rel="stylesheet" href="/static/${href}">`).join('\n');
   const scripts = PICKER_SCRIPTS.map((src) => `<script src="/static/js/${src}"></script>`).join('\n');
@@ -160,7 +178,7 @@ function serveStatic(res, pathname) {
 // The stub server: the picker's page, the static files, the two session lists, and a PATCH that is refused with
 // blockers. Each PATCH body is recorded in state.patches.
 function startStubServer() {
-  const state = {patches: []};
+  const state = {patches: [], listingUrls: []};
   const server = http.createServer((req, res) => {
     const {pathname} = new URL(req.url, 'http://127.0.0.1');
     const sessionPath = /^\/api\/sessions\/([^/]+)$/.exec(pathname);
@@ -169,7 +187,8 @@ function startStubServer() {
     } else if (req.method === 'GET' && pathname.startsWith('/static/')) {
       serveStatic(res, pathname);
     } else if (req.method === 'GET' && pathname === '/api/sessions/') {
-      reply(res, 200, 'application/json', JSON.stringify(sessionRows()));
+      state.listingUrls.push(req.url);
+      reply(res, 200, 'application/json', JSON.stringify(columnForm(sessionRows())));
     } else if (req.method === 'GET' && pathname === '/api/sessions/chat-threads') {
       reply(res, 200, 'application/json', '[]');
     } else if (req.method === 'PATCH' && sessionPath) {
@@ -324,6 +343,11 @@ async function checkViewport(page, base, viewport, state) {
   // The moved session's row and its parent are out of the list; the list keeps the Top level row and every manager.
   assert.equal(open.rows.length, MANAGER_NAMES.length + 1, `${label}, open: the choice rows`);
   assertPicker(open, `${label}, open`);
+  assert.equal(
+    state.listingUrls.at(-1),
+    '/api/sessions/?compact=move',
+    `${label}, open: the picker reads the four-column form`,
+  );
   await saveScreenshot(page, `${label}-open.png`);
 
   await page.evaluate('pickerProbe.choose(1)');

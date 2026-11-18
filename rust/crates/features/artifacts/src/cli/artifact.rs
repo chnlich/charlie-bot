@@ -17,7 +17,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
 use charliebot_store::metadata::{
-  COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD, TASK_TYPE_FIELD,
+  COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD, TASK_TYPE_FIELD, TaskType,
 };
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_tasks::cold_read;
@@ -28,9 +28,6 @@ use sha2::{Digest, Sha256};
 use time::macros::format_description;
 
 use crate::artifact_check;
-
-/// The cold-read delegation's task type.
-const COLD_READ_TASK_TYPE: &str = "cold-read";
 
 #[derive(Parser)]
 #[command(name = "artifact", about = "Artifact checks")]
@@ -291,7 +288,7 @@ fn delegate_cold_read(
   let payload = json!({
     (task_routes::DELEGATE_SESSION_ID_FIELD): session_id,
     (task_routes::DELEGATE_DESCRIPTION_FIELD): description,
-    (TASK_TYPE_FIELD): COLD_READ_TASK_TYPE,
+    (TASK_TYPE_FIELD): TaskType::ColdRead.as_str(),
     (COLD_READ_FIELD): {
       (COLD_READ_PAGE_PATH_FIELD): paths::display(artifact),
       (COLD_READ_GENRE_FIELD): args.genre,
@@ -308,7 +305,7 @@ fn delegate_cold_read(
       &home,
       &parent,
       &readback_description,
-      Some(COLD_READ_TASK_TYPE),
+      Some(TaskType::ColdRead.as_str()),
       Some(&readback_request_id),
     ))
   };

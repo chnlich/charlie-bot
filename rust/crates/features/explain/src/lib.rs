@@ -19,33 +19,24 @@ use axum::routing::post;
 use charliebot_compat::routing::{get_only, refuse_other_methods};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 
+const EXPLAIN_PATH: &str = "/api/sessions/{session_id}/explain";
+const EXPLAIN_STATUS_PATH: &str = "/api/sessions/{session_id}/explain/status";
+
+/// The paths the explain router mounts. The registry answers the trailing-slash redirect's claim from them.
+const ROUTE_PATTERNS: &[&str] = &[EXPLAIN_PATH, EXPLAIN_STATUS_PATH];
+
 /// `register`: the router under `/api/sessions`.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router(routes, matches)
+  registry.router_patterns(routes, ROUTE_PATTERNS)
 }
 
 /// The explain routes, with the feature context as their state. The 405 body names the first route of a path that
 /// matches it, so the POST route's allow list answers the explain path, and the status path names its GET.
 fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route(
-      "/api/sessions/{session_id}/explain",
-      refuse_other_methods(post(api::post_explain).get(api::get_explain), "POST"),
-    )
-    .route("/api/sessions/{session_id}/explain/status", get_only(api::get_explain_status))
+    .route(EXPLAIN_PATH, refuse_other_methods(post(api::post_explain).get(api::get_explain), "POST"))
+    .route(EXPLAIN_STATUS_PATH, get_only(api::get_explain_status))
     .with_state(Arc::clone(features))
-}
-
-/// Whether a path is one of the explain routes, whatever the method. The server's trailing-slash redirect asks this
-/// of the slash-toggled path.
-fn matches(path: &str) -> bool {
-  let Some(rest) = path.strip_prefix("/api/sessions/") else {
-    return false;
-  };
-  match rest.split_once('/') {
-    Some((session_id, tail)) => !session_id.is_empty() && matches!(tail, "explain" | "explain/status"),
-    None => false,
-  }
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_cli_common::route;
 use charliebot_core::paths;
 use charliebot_core::posix_path;
 use charliebot_core::str_methods;
@@ -20,6 +21,7 @@ use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
+use crate::api;
 use crate::plan_diff;
 use crate::plans;
 
@@ -164,7 +166,7 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   };
   let session_id = resolve::resolve_from_env(session.as_deref())?;
   match verb {
-    Verb::List => json_out::print_result(&client::get(&format!("/api/sessions/{session_id}/plans"), None)?),
+    Verb::List => json_out::print_result(&client::get(&route::fill(api::PLANS_PATH, &[session_id.as_str()]), None)?),
     Verb::Diff(args) => json_out::print_result(&build_diff(&session_id, &args, host)?),
     Verb::Present(args) => {
       let (title, file) = (args.title.clone(), args.file.clone());
@@ -264,7 +266,7 @@ fn register(
 
 /// The registry listing the readbacks match against. A failed GET keeps its own client error.
 fn listing_plans(session_id: &str) -> Result<Option<Vec<Value>>, CliExit> {
-  let listing = client::get(&format!("/api/sessions/{session_id}/plans"), None)?;
+  let listing = client::get(&route::fill(api::PLANS_PATH, &[session_id]), None)?;
   Ok(match listing.get("plans") {
     Some(Value::Array(plans)) => Some(plans.clone()),
     _ => None,
@@ -344,7 +346,7 @@ fn readback_close(plans: &[Value], plan_id: i64, close_as: &str) -> Option<Value
 
 /// The registry through the list endpoint, the two version files off disk, the diff local.
 fn build_diff(session_id: &str, args: &DiffArgs, lazy_host: &LazyHost) -> Result<Value, CliExit> {
-  let listing = client::get(&format!("/api/sessions/{session_id}/plans"), None)?;
+  let listing = client::get(&route::fill(api::PLANS_PATH, &[session_id]), None)?;
   let plans: Vec<Value> = match listing.get("plans") {
     Some(Value::Array(plans)) => plans.clone(),
     _ => Vec::new(),

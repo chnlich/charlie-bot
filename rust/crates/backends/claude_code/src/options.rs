@@ -7,16 +7,11 @@ use serde_yaml::{Mapping, Value};
 /// backend launches `claude` too and reads the same field, so both backends import this name.
 pub const EFFORT_KEY: &str = "effort";
 
-/// The `cli_binary` key of a `backends.options[]` entry: the executable that replaces `claude`. The
-/// Anthropic-compatible backend replaces `claude` the same way, so both backends import this name.
-pub const CLI_BINARY_KEY: &str = "cli_binary";
-
 /// The `cc-claude` option's type-specific fields in `CcClaudeBackend`'s declaration order, each with the value the
 /// option model holds when an entry omits it. `charliebot config get backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(EFFORT_KEY, OptionFieldDefault::Null),
   OptionField::field("fast_mode", OptionFieldDefault::Bool(false)),
-  OptionField::field(CLI_BINARY_KEY, OptionFieldDefault::Null),
   OptionField::field("account_pool", OptionFieldDefault::Null),
 ];
 
@@ -27,7 +22,7 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
       return Err(format!("cc-claude option key must be a string: {key:?}"));
     };
     match name {
-      EFFORT_KEY | CLI_BINARY_KEY | "account_pool" => {
+      EFFORT_KEY | "account_pool" => {
         if !matches!(value, Value::Null | Value::String(_)) {
           return Err(format!("cc-claude option {name} must be a string or null"));
         }
@@ -59,12 +54,6 @@ pub(crate) fn fast_mode(fields: &Mapping) -> Result<bool, String> {
   }
 }
 
-/// The launcher binary an entry names, read through the registry by the run-venue decision. A launcher runs the
-/// entry's process where the launcher decides, so the server prepares no worktree for such an entry's runs.
-pub fn cli_binary(fields: &Mapping) -> Result<Option<String>, String> {
-  optional_text(fields, CLI_BINARY_KEY).map(|binary| binary.filter(|binary| !binary.is_empty()))
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -74,11 +63,10 @@ mod tests {
   }
 
   #[test]
-  fn cli_binary_parses_through_the_registry_reader() {
-    assert_eq!(cli_binary(&fields("effort: high\n")), Ok(None));
-    assert_eq!(cli_binary(&fields("cli_binary: /path/to/launcher\n")), Ok(Some("/path/to/launcher".to_string())));
-    assert_eq!(cli_binary(&fields("cli_binary: null\n")), Ok(None));
-    assert_eq!(cli_binary(&fields("cli_binary: ''\n")), Ok(None));
-    assert!(cli_binary(&fields("cli_binary: 42\n")).is_err());
+  fn a_launcher_or_host_key_fails_the_option_model_by_name() {
+    for key in ["cli_binary", "host_auth_alias"] {
+      let error = option_model(&fields(&format!("effort: high\n{key}: x\n"))).unwrap_err();
+      assert!(error.contains(key), "{error}");
+    }
   }
 }

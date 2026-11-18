@@ -121,6 +121,7 @@ pub async fn create_improve_child(
       keep_worktree: false,
       cold_read: None,
       approver: TaskApprover::User,
+      improve_host: None,
     }),
     name: Some(format!("Improve loop {loop_id}")),
     backend: backend.map(str::to_string),

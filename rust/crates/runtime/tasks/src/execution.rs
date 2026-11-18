@@ -824,7 +824,7 @@ impl TaskExecutionAdapter {
     } else if continued {
       self.batch_only_context(meta, run, &history).await?
     } else {
-      self.build_work_context(cfg, meta, run, option, task_type, &history).await?
+      self.build_work_context(cfg, meta, run, task_type, &history).await?
     };
     let mut prompt = context;
     if let Some(continuation) = continuation.as_ref().filter(|continuation| continuation.native_id.is_none()) {
@@ -1275,7 +1275,6 @@ impl TaskExecutionAdapter {
     cfg: &CharlieBotConfig,
     meta: &SessionMetadata,
     run: &RunRecord,
-    option: &BackendOption,
     task_type: TaskType,
     history: &ChatEventHistory,
   ) -> anyhow::Result<String> {
@@ -1294,7 +1293,7 @@ impl TaskExecutionAdapter {
       parts.push(prompts::render_task_body(&checkout, &description)?);
       return Ok(parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n"));
     };
-    if self.backend_runs_beyond_this_host(option)? {
+    if backend_runs_beyond_this_host(meta) {
       // The launcher decides where the process works, so this host prepares no worktree and the brief names none:
       // a path here would be a place that exists on this host only, and the round's protocol owns the real one.
       parts.push(prompts::render_task_body(&checkout, &description)?);
@@ -1372,18 +1371,6 @@ impl TaskExecutionAdapter {
     }
     parts.push(prompts::render_task_body(&checkout, step_prompt)?);
     Ok(parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n"))
-  }
-
-  /// Whether the run's process executes beyond this host. A backend entry that names a `cli_binary` replaces
-  /// `claude` with a launcher that carries the process to the host the launcher decides, so this host prepares no
-  /// worktree for such a run and its brief names none. A backend type that registers no launcher reader names no
-  /// launcher key, so its runs run here, in the worktree this host prepares. The option comes resolved
-  /// (`resolve_run_backend`), so a run that names no backend or an unconfigured one never reaches this decision.
-  fn backend_runs_beyond_this_host(&self, option: &BackendOption) -> anyhow::Result<bool> {
-    let Some(read) = self.features.registry.backend_cli_binary_reader(&option.backend_type) else {
-      return Ok(false);
-    };
-    read(&option.type_fields).map(|binary| binary.is_some()).map_err(anyhow::Error::msg)
   }
 
   async fn prepare_worktree(
@@ -2758,6 +2745,12 @@ impl TaskExecutionAdapter {
       }
     });
   }
+}
+
+/// Whether the run's process executes beyond this host: its task names an `improve_host`, and the improve launcher
+/// carries the process to that host. This host prepares no worktree for such a run, and its brief names none.
+fn backend_runs_beyond_this_host(meta: &SessionMetadata) -> bool {
+  meta.task.as_ref().is_some_and(|task| task.improve_host.is_some())
 }
 
 /// The member failure an Auto session's manager turn ended on, read from the finish extras. The recorder writes the

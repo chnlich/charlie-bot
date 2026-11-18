@@ -139,6 +139,9 @@ struct ActiveProcess {
   serve: Option<Arc<dyn ServeTransport>>,
 }
 
+/// The environment name the improve launcher reads the host of a round from.
+const IMPROVE_REMOTE_HOST_ENV: &str = "IMPROVE_REMOTE_HOST";
+
 /// One registered backend instance and its single raw-log launch.
 pub struct AgentRunner {
   backend_type: String,
@@ -212,6 +215,16 @@ impl AgentRunner {
     // After `prepare_env`: a backend that prepends a directory to PATH (codex, antigravity and charlie-code put
     // `~/.local/bin` first, where the personal gh lives) must not silently bypass the wrapper.
     crate::gh_wrapper::require_gh_wrapper(&mut final_env)?;
+    // A round that runs on another host starts through the improve launcher. The launcher takes the whole command as
+    // its arguments and reads the host from `IMPROVE_REMOTE_HOST`. Every backend type takes this one path.
+    let command = match &self.launch.remote_launch {
+      Some(remote) => {
+        let launcher = remote.launcher.to_str().context("the improve launcher path is not UTF-8")?;
+        final_env.insert(IMPROVE_REMOTE_HOST_ENV.to_string(), remote.host.clone());
+        std::iter::once(launcher.to_string()).chain(command).collect()
+      }
+      None => command,
+    };
     // A Serve type with no registered transport takes the raw-log path below.
     if transport == TransportKind::Serve
       && let Some(serve) = request.registry.serve_transport(&self.backend_type)
@@ -850,7 +863,7 @@ async fn prepare_cwd(
 mod tests {
   use std::fs;
 
-  use charliebot_registry::backend::FinalStdoutOutcome;
+  use charliebot_registry::backend::{FinalStdoutOutcome, RemoteLaunch};
   use serde_json::json;
 
   use super::*;
@@ -1670,6 +1683,49 @@ mod tests {
     let outcome = runner.run(request).await.unwrap();
 
     assert_eq!(outcome.exit_code, Some(0));
+  }
+
+  /// A round on another host starts through the improve launcher: the launcher is the spawned program, the whole command
+  /// is its arguments, and the host is in its environment. The stub launcher records what it received, then runs it.
+  #[tokio::test]
+  async fn a_round_on_another_host_starts_through_the_improve_launcher() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let launcher = root.path().join("remote-launch.sh");
+    let record = root.path().join("record.txt");
+    fs::write(
+      &launcher,
+      format!("#!/bin/sh\nprintf '%s\\n' \"$IMPROVE_REMOTE_HOST\" \"$@\" > '{}'\nexec \"$@\"\n", record.display()),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&launcher).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&launcher, permissions).unwrap();
+    let backend: Box<dyn AgentBackend> = Box::new(ShellBackend::new("printf 'ran\\n'"));
+    let runner = AgentRunner::new(
+      "shell",
+      backend,
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        remote_launch: Some(RemoteLaunch { launcher: launcher.clone(), host: "host3".to_string() }),
+        ..LaunchArgs::default()
+      },
+    );
+    let request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([("PATH".to_string(), "/bin:/usr/bin".to_string())]),
+      root.path().join("cgroups"),
+    );
+
+    let outcome = runner.run(request).await.unwrap();
+
+    assert_eq!(outcome.exit_code, Some(0));
+    assert_eq!(
+      fs::read_to_string(&record).unwrap().lines().collect::<Vec<_>>(),
+      ["host3", "/bin/sh", "-c", "printf 'ran\\n'"],
+    );
   }
 
   /// The signal that the blocking pool is full, and the release that empties it.

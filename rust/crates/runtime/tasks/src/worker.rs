@@ -33,7 +33,7 @@ use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timefmt;
 use charliebot_registry::backend::{
   BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch,
-  RetryAfter,
+  RemoteLaunch, RetryAfter,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
@@ -52,6 +52,9 @@ use crate::run_support::{
 
 /// The stash-guard `git` wrapper directory, under the checkout. It rides first on every child's PATH.
 const GIT_STASH_GUARD_DIR: &str = "rust/crates/runtime/tasks/git_stash_guard";
+
+/// The improve launcher a round starts through, under the served checkout.
+const IMPROVE_LAUNCHER_PATH: &str = "dev/improve/remote-launch.sh";
 /// The instructions file of a task run, kept beside its events log.
 pub const HARNESS_INSTRUCTIONS_NAME: &str = "harness_instructions.md";
 /// The diagnostics file of a run whose process outlives its result.
@@ -507,6 +510,25 @@ impl Worker {
     })
   }
 
+  /// The improve launcher and host this worker's round starts through, when its task names an `improve_host`. The
+  /// launcher is the one the served checkout ships.
+  fn remote_launch(&self) -> anyhow::Result<Option<RemoteLaunch>> {
+    let Some(meta) = &self.session_meta else {
+      return Ok(None);
+    };
+    let host = meta
+      .lock()
+      .expect("the session metadata mutex is not poisoned")
+      .task
+      .as_ref()
+      .and_then(|task| task.improve_host.clone());
+    let Some(host) = host else {
+      return Ok(None);
+    };
+    let checkout = self.features.startup.require::<RepoRoot>()?;
+    Ok(Some(RemoteLaunch { launcher: checkout.path().join(IMPROVE_LAUNCHER_PATH), host }))
+  }
+
   /// The backend of one process (`Worker._build_backend`). A launcher build fails loudly. A translate-only build falls
   /// back to the binary-free translate backend when the backend cannot be constructed.
   fn build_backend(&self, launch: Option<&Launch>, launcher: bool) -> anyhow::Result<BuiltBackend> {
@@ -517,6 +539,7 @@ impl Worker {
       instructions_file: Some(self.data_dir.join(HARNESS_INSTRUCTIONS_NAME)),
       log_dir: Some(self.data_dir.clone()),
       cgroup_session_id: Some(self.session_id.clone()),
+      remote_launch: self.remote_launch()?,
       ..LaunchArgs::default()
     };
     if let Some(option) = &self.backend_option {

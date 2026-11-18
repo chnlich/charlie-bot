@@ -21,12 +21,11 @@ use crate::firing::round_request_id;
 use crate::rounds::round_task_spec;
 use crate::scheduler::CronScheduler;
 use crate::test_support::{
-  HELD_ROUND_GOAL, archive_task, bound_delegate, bound_round_leaf, feature_context, feature_context_with_host_backends,
+  HELD_ROUND_GOAL, archive_task, bound_delegate, bound_round_leaf, feature_context, feature_context_with_login_hosts,
   feature_context_with_repo_root, install_execution, manager, repo_root, set_host_login, write_prompted_task,
   write_task,
 };
 
-const GATED_BACKEND: &str = "synthetic-host";
 const GATED_ALIAS: &str = "synthetic-login-host";
 const FIRING: &str = "2026-11-18T03:00:00+00:00";
 
@@ -351,7 +350,7 @@ async fn a_bound_delegation_is_refused_while_a_round_is_in_flight_and_while_the_
   assert!(body["detail"].as_str().unwrap().contains(&leaf), "{body}");
   assert_eq!(features.store.child_ids(&node.id).unwrap(), vec![leaf], "the refusal starts no second worker");
 
-  let (_gated_home, gated_features) = feature_context_with_host_backends(&[(GATED_BACKEND, GATED_ALIAS)]);
+  let (_gated_home, gated_features) = feature_context_with_login_hosts(&[GATED_ALIAS]);
   let gated_node = manager(&gated_features, "synthetic-gated-node").await.unwrap();
   let gated_home = gated_features.config.get().unwrap().charliebot_home.clone();
   set_host_login(
@@ -376,7 +375,7 @@ fn gated_prompt_task(features: &FeatureContext, node_id: &str) -> ScheduledTaskC
   write_prompted_task(
     &home,
     "synthetic-gated",
-    &json!({"cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id, "backend": GATED_BACKEND}),
+    &json!({"cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id, "improve_host": GATED_ALIAS}),
   );
   crate::loader::read_snapshot(features, &features.config.get().unwrap())
     .unwrap()

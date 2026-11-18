@@ -551,6 +551,7 @@ fn launch_with_instructions(content: Option<&str>, file: Option<PathBuf>, resume
     resume_session_id: resume.map(str::to_string),
     log_dir: None,
     cgroup_session_id: None,
+    remote_launch: None,
     backend_kwargs: Map::new(),
     manager_turn: false,
   }
@@ -1484,6 +1485,7 @@ async fn reused_run_directory_sends_only_the_new_prompt() {
     resume_session_id: None,
     log_dir: Some(directory),
     cgroup_session_id: None,
+    remote_launch: None,
     backend_kwargs: Map::new(),
     manager_turn: false,
   };
@@ -2081,6 +2083,7 @@ async fn recovered_translator_keeps_the_original_model_after_settings_change() {
     resume_session_id: None,
     log_dir: Some(directory),
     cgroup_session_id: None,
+    remote_launch: None,
     backend_kwargs: Map::new(),
     manager_turn: false,
   };

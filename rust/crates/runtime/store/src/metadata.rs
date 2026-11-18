@@ -365,6 +365,10 @@ pub struct TaskSpec {
   pub cold_read: Option<ColdReadSpec>,
   #[serde(default, skip_serializing_if = "TaskApprover::is_user")]
   pub approver: TaskApprover,
+  /// The ssh alias of the host a round of this task runs on, through the improve launcher. Absent, the round runs on
+  /// this host.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub improve_host: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for TaskSpec {
@@ -389,6 +393,8 @@ impl<'de> Deserialize<'de> for TaskSpec {
       cold_read: Option<ColdReadSpec>,
       #[serde(default)]
       approver: TaskApprover,
+      #[serde(default)]
+      improve_host: Option<String>,
       // The retired context-work flag. Sessions written while it existed still carry it. The read
       // accepts it and drops it.
       #[serde(default, rename = "context_work")]
@@ -416,6 +422,7 @@ impl<'de> Deserialize<'de> for TaskSpec {
       keep_worktree: fields.keep_worktree,
       cold_read: fields.cold_read,
       approver: fields.approver,
+      improve_host: fields.improve_host,
     })
   }
 }
@@ -1101,6 +1108,22 @@ mod tests {
       let text = session.to_json_string(&[], true);
       assert!(text.contains(&format!("\"probe\": {expected}\n")), "{input} rendered as {text}");
     }
+  }
+
+  /// A task spec with no `improve_host` writes no such field, so a session written before the key reads the same, and a
+  /// keyed spec round-trips its host.
+  #[test]
+  fn improve_host_is_written_only_when_set() {
+    let plain = TaskSpec { goal: "ship".to_string(), ..TaskSpec::default() };
+    let plain_json = serde_json::to_string(&plain).unwrap();
+    assert_eq!(
+      plain_json,
+      r#"{"goal":"ship","repo_path":null,"base_branch":null,"task_type":null,"keep_worktree":false,"cold_read":null}"#,
+    );
+    let keyed = TaskSpec { improve_host: Some("host3".to_string()), ..plain };
+    let keyed_json = serde_json::to_value(&keyed).unwrap();
+    assert_eq!(keyed_json["improve_host"], "host3");
+    assert_eq!(serde_json::from_value::<TaskSpec>(keyed_json).unwrap(), keyed);
   }
 
   #[test]

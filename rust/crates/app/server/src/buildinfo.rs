@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use charliebot_cli_common::skew::{SHA_FIELD, STARTED_AT_FIELD};
 use charliebot_core::{git, timefmt};
 use serde_json::{Value, json};
 
@@ -24,8 +25,8 @@ impl BuildInfo {
     }
   }
 
-  /// `{"sha": ..., "started_at": ...}`, in that key order.
+  /// The version response's object: the sha and start time under the field names `skew` owns, in that order.
   pub fn to_json(&self) -> Value {
-    json!({"sha": self.sha, "started_at": self.started_at})
+    json!({ (SHA_FIELD): self.sha, (STARTED_AT_FIELD): self.started_at })
   }
 }

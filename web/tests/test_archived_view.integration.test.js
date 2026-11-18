@@ -118,7 +118,7 @@ function anchorOpenTag(html, id) {
 function archivedContext(pages) {
   const nav = createElement();
   let call = 0;
-  const {context, fetchCalls} = buildContext({
+  const {context, elements, fetchCalls} = buildContext({
     elements: new Map([
       ['session-list', nav],
       ...buildSidebarFilterElements(),
@@ -130,7 +130,7 @@ function archivedContext(pages) {
       return {ok: true, async json() { return page; }};
     },
   });
-  return {context, nav, fetchCalls};
+  return {context, elements, nav, fetchCalls};
 }
 
 test('entering the archived tab renders one merged project-grouped tree with the strip', async () => {
@@ -159,6 +159,43 @@ test('entering the archived tab renders one merged project-grouped tree with the
   assert.match(rowHtml(rows.innerHTML, 'arch-000'), /title="Unarchive"/);
   assert.doesNotMatch(rows.innerHTML, /id="spinner-/);
   assert.doesNotMatch(rows.innerHTML, /id="unread-/);
+});
+
+test('archived listing facts clear an old waiting item before the context ancestor paints', async () => {
+  const parent = makeContextSession('parent', {
+    status: 'active',
+    profile: 'manager',
+    web_status: {waiting: [{text: 'Approve the deploy'}]},
+  });
+  const activeChild = makeSessionMeta('child', {
+    status: 'active',
+    profile: 'manager',
+    task_parent_id: 'parent',
+    web_status: {waiting: [{text: 'Approve the deploy'}]},
+  });
+  const archivedChild = makeArchivedSession('child', {
+    profile: 'manager',
+    task_parent_id: 'parent',
+    web_status: {waiting: [{text: 'Approve the deploy'}]},
+  });
+  const {context, elements, nav} = archivedContext([makePage([parent, archivedChild])]);
+  const parentOwnMark = createElement({className: 'hidden'});
+  const parentSubtreeMark = createElement({className: 'hidden'});
+  elements.set('waiting-marker-parent', parentOwnMark);
+  elements.set('waiting-subtree-marker-parent', parentSubtreeMark);
+
+  context.Sidebar.applyListingFacts([parent, activeChild], context.Sidebar.factSeqAtRequest());
+  context.renderSessionList([parent, activeChild], 'all');
+  assert.equal(parentSubtreeMark.classList.contains('hidden'), false);
+
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+
+  const parentRow = rowHtml(nav.children[1].innerHTML, 'parent');
+  assert.match(parentRow, /id="waiting-marker-parent"/);
+  assert.match(parentRow, /id="waiting-subtree-marker-parent"/);
+  assert.equal(parentOwnMark.classList.contains('hidden'), false, 'the active context row keeps its own item mark');
+  assert.equal(parentSubtreeMark.classList.contains('hidden'), true);
 });
 
 test('a delivered firing nests under its scheduled context node, and pages dedup', async () => {

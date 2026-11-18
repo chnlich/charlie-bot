@@ -29,6 +29,7 @@ use serde_json::{Map, Value, json};
 use crate::api;
 use crate::listing::{self, CompactListingMemo, ListingForm, SessionsListMemos};
 use crate::route_support::{Query, blocking_store, store_error};
+use crate::sidebar::SidebarFields;
 use crate::{search, sidebar, status_delta, tree, write_routes};
 
 static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
@@ -319,8 +320,13 @@ fn archived_page_body(
     .filter(|(context_only, row)| !context_only && page_ids.contains(&row.id))
     .map(|(_, row)| Arc::new(row.clone()))
     .collect();
-  let status =
-    sidebar::resolve_sidebar_state(&features.store, &features.registry, &page_rows, true, true, false, false)?;
+  let status = sidebar::resolve_sidebar_state(
+    &features.store,
+    &features.registry,
+    &page_rows,
+    SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+    false,
+  )?;
   let mut session_values = Vec::with_capacity(merged.len());
   for (context_only, row) in merged {
     let mut value = listing::metadata_value(&features.store, &row)?;
@@ -370,11 +376,16 @@ fn starred_response(features: &FeatureContext, request: &Request<Body>) -> Respo
     Ok(listed) => listed,
     Err(error) => return store_error(error),
   };
-  let derived =
-    match sidebar::resolve_sidebar_state(&features.store, &features.registry, &listed.rows, true, true, false, false) {
-      Ok(derived) => derived,
-      Err(error) => return store_error(error),
-    };
+  let derived = match sidebar::resolve_sidebar_state(
+    &features.store,
+    &features.registry,
+    &listed.rows,
+    SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+    false,
+  ) {
+    Ok(derived) => derived,
+    Err(error) => return store_error(error),
+  };
   if let Some(ids) = refresh {
     let text = match listing::row_refresh_text_for(
       &features.store,
@@ -611,11 +622,16 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     let present: HashSet<&str> = ids.iter().map(String::as_str).collect();
     members.into_iter().filter(|id| present.contains(id.as_str())).collect()
   };
-  let derived =
-    match sidebar::resolve_sidebar_state(&features.store, &features.registry, &sessions, true, true, true, force) {
-      Ok(derived) => derived,
-      Err(error) => return store_error(error),
-    };
+  let derived = match sidebar::resolve_sidebar_state(
+    &features.store,
+    &features.registry,
+    &sessions,
+    SidebarFields { running: true, trigger: true, plan: true, waiting: true },
+    force,
+  ) {
+    Ok(derived) => derived,
+    Err(error) => return store_error(error),
+  };
   let payloads = sessions.iter().map(|meta| status_row_payload(features, meta, derived.get(&meta.id))).collect();
   let delta = status_delta::record(filter, &members, &ids, payloads, since.as_deref());
   let body = Arc::new(StatusBody::new(Bytes::from(charliebot_compat::json::fast_json_bytes(&json!({
@@ -670,6 +686,10 @@ fn status_row_payload(
   payload.insert(
     sidebar_state::HAS_PENDING_PLAN_APPROVAL.to_string(),
     entry.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
+  );
+  payload.insert(
+    sidebar_state::HAS_WAITING_ITEMS.to_string(),
+    entry.and_then(|row| row.get(sidebar_state::HAS_WAITING_ITEMS)).cloned().unwrap_or(Value::Bool(false)),
   );
   if let Some(work_state) = entry.and_then(|row| row.get(WORK_STATE)) {
     payload.insert(WORK_STATE.to_string(), work_state.clone());
@@ -761,7 +781,13 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   }
   let (answer, derived) = match blocking_store(move || {
     let answer = search::search_sessions(&store, &q)?;
-    let derived = sidebar::resolve_sidebar_state(&store, &registry, &answer.rows, true, true, false, false)?;
+    let derived = sidebar::resolve_sidebar_state(
+      &store,
+      &registry,
+      &answer.rows,
+      SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+      false,
+    )?;
     Ok((answer, derived))
   })
   .await

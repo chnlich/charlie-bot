@@ -126,6 +126,13 @@ pub fn stored_goal(meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
   Ok(status.and_then(|status| status.goal))
 }
 
+/// Whether the session stores at least one Waiting on you item. An unreadable status is the failure this package raises
+/// for it.
+pub fn has_stored_waiting(meta: &SessionMetadata) -> anyhow::Result<bool> {
+  let status = stored_status(meta).map_err(status_failure)?;
+  Ok(status.is_some_and(|status| !status.waiting.is_empty()))
+}
+
 /// The status error as the failure a caller outside this package reports.
 fn status_failure(error: WebReplyError) -> anyhow::Error {
   match error {

@@ -13,6 +13,7 @@ use crate::lock::lock;
 use crate::metadata::SessionMetadata;
 
 pub const HAS_PENDING_PLAN_APPROVAL: &str = "has_pending_plan_approval";
+pub const HAS_WAITING_ITEMS: &str = "has_waiting_items";
 pub const TASK_TREE_ACTIVITY: &str = "task_tree_activity";
 const FORCE_FULL_EVERY: u64 = 10;
 const DERIVED_MAP_MEMO_LIMIT: usize = 4;

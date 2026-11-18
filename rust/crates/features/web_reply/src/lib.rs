@@ -10,6 +10,7 @@ mod json_input;
 pub mod metadata;
 mod plan_links;
 mod reply;
+mod sidebar;
 pub mod status;
 mod turn_contribution;
 
@@ -28,11 +29,12 @@ use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 use turn_contribution::WebReplyTurnContribution;
 
-/// `register`: the `/api/internal` router, then the turn contribution, then the
+/// `register`: the `/api/internal` router, then the turn and sidebar contributions, then the
 /// web-reply status field of each session.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)?;
   registry.turn_contribution(event_types::WEB_REPLY, Arc::new(WebReplyTurnContribution))?;
+  registry.sidebar_contribution(event_types::WEB_REPLY, Arc::new(sidebar::WebReplySidebar))?;
   registry.metadata_slot_with_validator(
     MetadataSlot {
       owner: event_types::WEB_REPLY,
@@ -145,9 +147,11 @@ fn matches(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+  use axum::body::Body;
   use charliebot_store::SESSION_NOT_FOUND_DETAIL;
-  use http::{Method, StatusCode};
+  use http::{Method, Request, StatusCode};
   use serde_json::json;
+  use tower::ServiceExt;
 
   use super::*;
 
@@ -350,5 +354,76 @@ mod tests {
     let code_findings = body["code_findings"].as_array().unwrap();
     assert_eq!(code_findings.len(), 1);
     assert!(code_findings[0].as_str().unwrap().contains("读回"));
+  }
+
+  /// The session-api routes of `home`, answered for one GET request.
+  async fn session_api_get(home: &test_support::Home, uri: &str) -> Value {
+    let request = Request::builder().uri(uri).body(Body::empty()).expect("the request builds");
+    let response =
+      charliebot_session_api::routes(&home.features).oneshot(request).await.expect("the router is infallible");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
+    serde_json::from_slice(&bytes).expect("the body is JSON")
+  }
+
+  /// The status poll answers each row's `has_waiting_items`. A status set that stores an item raises the flag on the
+  /// next delta poll, which answers that row alone. Clearing the items lowers it the same way, and the Workspace
+  /// listing's rows carry no such key.
+  #[tokio::test]
+  async fn the_status_poll_carries_the_waiting_flag_of_each_row() {
+    let home = test_support::Home::new();
+    let sid = home.manager("session", None).await;
+    let item = json!({
+      "text": "Approve the deploy",
+      "context": "The release is ready. Options are deploy or wait; deploy is recommended.",
+      "link": null,
+    });
+    let status_text = json!({"waiting": [item.clone()]}).to_string();
+
+    let full = session_api_get(&home, &format!("/api/sessions/status?ids={sid}")).await;
+    assert_eq!(full["rows"][&sid]["has_waiting_items"], json!(false));
+    let token = full["token"].as_str().expect("a poll names its state").to_string();
+
+    let (status, _) = home
+      .send(Method::POST, "/api/internal/web/status/unread", Some(json!({"session_id": sid, "text": status_text})))
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/ask-check",
+        Some(json!({"session_id": sid, "item": item.clone(), "backend": "haiku", "answer": "Deploy."})),
+      )
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) =
+      home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": status_text}))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let raised = session_api_get(&home, &format!("/api/sessions/status?ids={sid}&since={token}")).await;
+    assert_eq!(raised["rows"].as_object().expect("rows are an object").keys().collect::<Vec<_>>(), vec![&sid]);
+    assert_eq!(raised["rows"][&sid]["has_waiting_items"], json!(true));
+
+    home.features.store.archive_session(&sid).await.expect("the session archives").expect("the session exists");
+    let archived = session_api_get(&home, &format!("/api/sessions/status?ids={sid}")).await;
+    assert_eq!(archived["rows"][&sid]["has_waiting_items"], json!(true));
+    home.features.store.unarchive_session(&sid).await.expect("the session unarchives").expect("the session exists");
+    let token = archived["token"].as_str().expect("a full poll names its state").to_string();
+
+    let (status, _) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/status",
+        Some(json!({"session_id": sid, "text": json!({"waiting": []}).to_string()})),
+      )
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    let cleared = session_api_get(&home, &format!("/api/sessions/status?ids={sid}&since={token}")).await;
+    assert_eq!(cleared["rows"][&sid]["has_waiting_items"], json!(false));
+
+    let listing = session_api_get(&home, "/api/sessions/").await;
+    let row =
+      listing.as_array().expect("the Workspace listing is a row array").iter().find(|row| row["id"] == json!(sid));
+    assert!(row.expect("the manager is listed").get("has_waiting_items").is_none());
   }
 }

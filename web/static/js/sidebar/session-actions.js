@@ -30,7 +30,7 @@ const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" str
 // When it was the session being viewed, the view moves to the first remaining
 // rendered session.
 async function removeSessionRowInline(sessionId) {
-  forgetUnreadFact(sessionId);
+  forgetSessionFacts(sessionId);
   const repainted = Sidebar.removeSessionFromRenderedList(sessionId);
   if (!repainted) {
     const row = document.getElementById('session-' + sessionId);

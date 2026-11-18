@@ -115,7 +115,7 @@ function buildContext({fetchImpl, showToastImpl, archivedForgetSessionImpl = () 
     renderNoActiveSessionView: () => {},
     archivedForgetSession: archivedForgetSessionImpl,
     // status.js's removal seam: a removed row's unread fact leaves with it.
-    forgetUnreadFact: () => {},
+    forgetSessionFacts: () => {},
     switchSidebarFilter: () => {},
     document: makeDocument(rows),
   };

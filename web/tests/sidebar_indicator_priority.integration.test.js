@@ -654,3 +654,192 @@ test('the waiting clock and the descendant’s own dot show together; the mark r
   assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true},
       'the parent shows the subtree mark for the unread reply, no clock for the queued one');
 });
+
+// ---------------------------------------------------------------------------
+// Waiting on you marks: a row's own mark reads its fact, and a folded row's
+// subtree mark reads the facts below it. Both sit after the existing icons.
+// ---------------------------------------------------------------------------
+
+const WAITING_ITEMS = [{text: 'Approve the deploy', context: 'Deploy or wait.', link: null}];
+const stores = (id, parent, overrides = {}) => row(id, parent,
+    {web_status: {goal: null, now: null, waiting: WAITING_ITEMS}, ...overrides});
+
+// The class a rendered element carries in the row list's HTML: the state the last paint gave it.
+function renderedClass(nav, elementId) {
+  const match = nav.innerHTML.match(new RegExp(`<[a-z]+ id="${elementId}"[^>]*class="([^"]*)"`));
+  assert.ok(match, `no rendered element ${elementId}`);
+  return match[1];
+}
+const renderedHidden = (nav, elementId) => /\bhidden\b/.test(renderedClass(nav, elementId));
+
+test('a listing row with a stored item paints its marker, and a row without one paints none', () => {
+  const {context, nav} = buildSidebarIndicatorContext(['a', 'b']);
+  paintListReply(context, [stores('a', null), row('b', null, {web_status: {waiting: []}})], 'all');
+  assert.equal(renderedHidden(nav, 'waiting-marker-a'), false);
+  assert.equal(renderedHidden(nav, 'waiting-marker-b'), true);
+});
+
+test('a status poll row writes the fact and repaints the row and each ancestor, both ways', async () => {
+  const {context, waitingMarks} = buildSidebarIndicatorContext(['p', 'c', 'g']);
+  context.renderSessionList([row('p', null), row('c', 'p', {profile: 'manager'}), row('g', 'c')], 'all');
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}, {id: 'session-g'}] : []
+  );
+  let reply = {g: {has_running_tasks: false, has_unread: false, has_waiting_items: true}};
+  context.fetch = async () => ({ok: true, json: async () => statusAnswer(reply)});
+
+  await context.Sidebar.pollSessionStatus();
+  assert.deepEqual(waitingMarks('g'), {marker: true, subtree: false});
+  assert.deepEqual(waitingMarks('c'), {marker: false, subtree: true});
+  assert.deepEqual(waitingMarks('p'), {marker: false, subtree: true});
+
+  reply = {g: {has_running_tasks: false, has_unread: false, has_waiting_items: false}};
+  await context.Sidebar.pollSessionStatus();
+  assert.deepEqual(waitingMarks('g'), {marker: false, subtree: false});
+  assert.deepEqual(waitingMarks('c'), {marker: false, subtree: false}, 'the cleared row takes its ancestors’ marks');
+  assert.deepEqual(waitingMarks('p'), {marker: false, subtree: false});
+});
+
+// Each activity state: ids[0] is the row that stores an item, and `indicator` is the existing icon that must keep its
+// state beside the marker. A sub-task's gear is a stand-in the grouped paint lays on its parent, so that state reads
+// through shown() rather than the rendered markup.
+const ACTIVITY_STATES = [
+  {name: 'running', ids: ['r'], indicator: 'spinner-r', standIn: false,
+    rows: (withItem) => [(withItem ? stores : row)('r', null, {thinking_since: at(10)})]},
+  {name: 'sub-task running', ids: ['p', 'c'], indicator: 'worker-indicator-p', standIn: true,
+    rows: (withItem) => [(withItem ? stores : row)('p', null),
+      row('c', 'p', {profile: 'manager', has_running_tasks: true})]},
+  {name: 'queued', ids: ['q'], indicator: 'waiting-indicator-q', standIn: false,
+    rows: (withItem) => [(withItem ? stores : row)('q', null, {work_state: 'waiting'})]},
+  {name: 'pending trigger', ids: ['t'], indicator: 'pending-trigger-t', standIn: false,
+    rows: (withItem) => [(withItem ? stores : row)('t', null, {has_pending_trigger: true, pending_trigger_count: 1})]},
+];
+const EXISTING_ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread',
+  'pending-trigger', 'pending-plan-approval'];
+
+for (const state of ACTIVITY_STATES) {
+  test(`a row in the ${state.name} state shows its marker after the existing icons, which keep their state`, () => {
+    const plain = buildSidebarIndicatorContext(state.ids);
+    paintListReply(plain.context, state.rows(false), 'all');
+    const marked = buildSidebarIndicatorContext(state.ids);
+    paintListReply(marked.context, state.rows(true), 'all');
+    const own = state.ids[0];
+
+    for (const id of state.ids) {
+      assert.deepEqual(marked.shown(id), plain.shown(id), `the icons of ${id} keep their state with the marker`);
+      for (const kind of EXISTING_ICON_KINDS) {
+        if (!plain.nav.innerHTML.includes(`id="${kind}-${id}"`)) continue;
+        assert.equal(renderedClass(marked.nav, `${kind}-${id}`), renderedClass(plain.nav, `${kind}-${id}`),
+            `${kind}-${id} keeps its class with the marker`);
+      }
+    }
+    const stateShows = state.standIn ? marked.shown(own).gear : !renderedHidden(marked.nav, state.indicator);
+    assert.equal(stateShows, true, 'the state’s own icon shows');
+    assert.equal(renderedHidden(marked.nav, `waiting-marker-${own}`), false, 'the marker shows');
+    const html = marked.nav.innerHTML;
+    const marker = html.indexOf(`id="waiting-marker-${own}"`);
+    for (const kind of EXISTING_ICON_KINDS) {
+      const position = html.indexOf(`id="${kind}-${own}"`);
+      if (position !== -1) assert.ok(position < marker, `${kind}-${own} renders before the marker`);
+    }
+  });
+}
+
+test('a folded row holding an item, with a listed row below that holds one, shows both marks', () => {
+  const {context, nav, waitingMarks} = buildSidebarIndicatorContext(['p', 'c']);
+  paintListReply(context, [stores('p', null), stores('c', 'p', {profile: 'manager'})], 'all');
+  assert.equal(renderedHidden(nav, 'waiting-marker-p'), false);
+  assert.equal(renderedHidden(nav, 'waiting-marker-c'), false);
+  assert.equal(waitingMarks('p').subtree, true, 'the folded row shows its subtree mark beside its own');
+});
+
+test('a folded ancestor shows the subtree mark at every level; expanding hides it and folding brings it back', () => {
+  const {context, waitingMarks} = buildSidebarIndicatorContext(['p', 'c', 'g']);
+  paintListReply(context, [row('p', null), row('c', 'p', {profile: 'manager'}), stores('g', 'c')], 'all');
+  assert.deepEqual(waitingMarks('p'), {marker: false, subtree: true});
+  assert.deepEqual(waitingMarks('c'), {marker: false, subtree: true});
+
+  context.Sidebar.expandTreeNode('p');
+  assert.equal(waitingMarks('p').subtree, false, 'expanded: the root hides its subtree mark');
+  assert.equal(waitingMarks('c').subtree, true, 'the folded middle row keeps its own');
+
+  context.Sidebar.toggleTreeNode('p');
+  assert.equal(waitingMarks('p').subtree, true, 'folded again: the root shows the mark');
+
+  context.Sidebar.expandTreeNode('c');
+  assert.equal(waitingMarks('c').subtree, false, 'the middle row hides its mark when it expands');
+});
+
+test('an archived row shows no marker and gives its ancestors no subtree mark', () => {
+  const {context, nav, waitingMarks} = buildSidebarIndicatorContext(['p', 'a']);
+  paintListReply(context, [row('p', null),
+    row('a', 'p', {status: 'archived', profile: 'manager', web_status: {waiting: WAITING_ITEMS}})], 'starred');
+  assert.equal(nav.innerHTML.includes('waiting-marker-a'), false, 'an archived row renders no indicators');
+  assert.deepEqual(waitingMarks('p'), {marker: false, subtree: false});
+});
+
+test('an archived row stays clear when a status reply carries its stored item', async () => {
+  const {context, waitingMarks} = buildSidebarIndicatorContext(['p', 'a']);
+  context.SESSION_ID = 'a';
+  paintListReply(context, [row('p', null),
+    row('a', 'p', {status: 'archived', profile: 'manager', web_status: {waiting: WAITING_ITEMS}})], 'starred');
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-a'}] : []
+  );
+  context.fetch = async () => ({ok: true, json: async () => statusAnswer({
+    a: {has_running_tasks: false, has_unread: false, has_waiting_items: true},
+  })});
+
+  await context.Sidebar.pollSessionStatus();
+
+  assert.deepEqual(waitingMarks('p'), {marker: false, subtree: false});
+});
+
+test('a search result shows its marker and no subtree mark, since its rows are flat', () => {
+  const {context, nav, waitingMarks} = buildSidebarIndicatorContext(['s', 'c']);
+  paintListReply(context, [stores('s', null), stores('c', 's')], 'search');
+  assert.equal(renderedHidden(nav, 'waiting-marker-s'), false);
+  assert.equal(renderedHidden(nav, 'waiting-marker-c'), false);
+  assert.equal(renderedHidden(nav, 'waiting-subtree-marker-s'), true);
+  assert.equal(waitingMarks('s').subtree, false);
+});
+
+test('a Later row has no subtree mark for an unstarred child outside that listing', () => {
+  const {context, waitingMarks} = buildSidebarIndicatorContext(['p']);
+  paintListReply(context, [row('p', null, {starred: true})], 'starred');
+
+  assert.deepEqual(waitingMarks('p'), {marker: false, subtree: false});
+});
+
+test('a repaint from a held row object shows the current fact, not the web_status the row was listed with', () => {
+  const {context, nav} = buildSidebarIndicatorContext(['a']);
+  const held = [stores('a', null)];
+  paintListReply(context, held, 'all');
+  assert.equal(renderedHidden(nav, 'waiting-marker-a'), false);
+
+  context.Sidebar.forgetSessionFacts('a');
+  context.renderSessionList(held, 'all');
+  assert.equal(renderedHidden(nav, 'waiting-marker-a'), true, 'the cleared fact hides the mark on the held object');
+
+  context.Sidebar.applyListingFacts(held, context.factSeqAtRequest());
+  context.renderSessionList(held, 'all');
+  assert.equal(renderedHidden(nav, 'waiting-marker-a'), false, 'the fact a listing lands shows it again');
+});
+
+test('a status reply that a newer listing fact precedes leaves the fact in place', async () => {
+  const {context, nav} = buildSidebarIndicatorContext(['a']);
+  paintListReply(context, [row('a', null)], 'all');
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? [{id: 'session-a'}] : []
+  );
+  const pending = [];
+  context.fetch = (url) => new Promise((resolve) => pending.push(resolve));
+  const poll = context.Sidebar.pollSessionStatus();
+
+  const held = [stores('a', null)];
+  context.Sidebar.applyListingFacts(held, context.factSeqAtRequest());
+  pending.shift()({ok: true, json: async () => statusAnswer({a: {has_waiting_items: false}})});
+  await poll;
+  context.renderSessionList(held, 'all');
+  assert.equal(renderedHidden(nav, 'waiting-marker-a'), false, 'the older reply is refused; the listing fact stands');
+});

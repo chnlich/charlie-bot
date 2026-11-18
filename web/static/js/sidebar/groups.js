@@ -137,7 +137,7 @@ function loadFullListing(key) {
       // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
       if (currentFilter !== 'all' || searchListPainted) return;
       const sessions = Sidebar.expandSessionColumns(payload);
-      applyUnreadReply(sessions, requestSeq);
+      applyListingFacts(sessions, requestSeq);
       renderSessionList(sessions, 'all',
         {workspaceBadges: lastGroupedRenderArgs ? lastGroupedRenderArgs.workspaceBadges : ''});
     })
@@ -436,7 +436,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   // Grouping follows the root rows. A child row nests under its parent
   // whatever its own group field says.
   const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
-  recordTreeShape(childrenOf, parentOf);
+  recordTreeShape(childrenOf, parentOf, isTreeNodeExpanded);
   revealActiveSessionOnce(parentOf);
   // The active session's root controls visibility for its whole subtree.
   let activeRootId = SESSION_ID;
@@ -772,8 +772,8 @@ function renderSessionTree(s, filter, options, childrenOf) {
 }
 
 // Expansion is display only: child rows show or hide and the chevron rotates.
-// A row's icon reads facts only (status.js paints from states, the unread map
-// and the last grouped paint's tree), so no indicator repaint follows a toggle.
+// The subtree waiting mark is the one icon that reads the expansion, so the
+// toggle repaints the row's indicators. The other icons read facts only.
 function applyTreeNodeExpansion(sessionId, expanded) {
   if (expanded) treeExpandedNodes.add(sessionId); else treeExpandedNodes.delete(sessionId);
   const selectorId = CSS.escape(sessionId);
@@ -784,6 +784,7 @@ function applyTreeNodeExpansion(sessionId, expanded) {
     el.classList.toggle('rotate-90', expanded);
     el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   });
+  Sidebar.refreshSessionIndicator(sessionId);
 }
 
 function toggleTreeNode(sessionId) {
@@ -839,11 +840,14 @@ function renderSessionItem(s, filter, options = {}) {
       ${renderArchiveButton(s)}
       ${renderSettingsButton(s)}`;
   }
-  const indicators = isArchivedRow ? '' : [
-      renderSessionIndicators(s),
-      renderPendingTriggerIndicator(s),
-      renderPendingPlanApprovalIndicator(s),
-      ...sessionRowBadges.map(render => render(s)),
+  const indicators = [
+      ...(isArchivedRow ? [] : [
+        renderSessionIndicators(s),
+        renderPendingTriggerIndicator(s),
+        renderPendingPlanApprovalIndicator(s),
+        ...sessionRowBadges.map(render => render(s)),
+      ]),
+      ...(s.status === 'archived' ? [] : [renderWaitingMarks(s)]),
   ].join('\n    ');
   // Every tree row leads with one 12px marker so a level's markers line up
   // in one column. A row with child tasks draws the chevron that expands
@@ -976,7 +980,7 @@ function renderSessionList(sessions, filter, options = {}) {
   searchListPainted = (filter === 'search');
   // The grouped paints (Workspace and Later) nest rows and record their tree
   // shape themselves. A flat paint shows each row's own facts.
-  recordTreeShape(new Map(), new Map());
+  recordTreeShape(new Map(), new Map(), isTreeNodeExpanded);
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
     const labels = {

@@ -151,6 +151,7 @@ turn contribution	features.voice	voice
 turn contribution	backends.claude_code	claude_code
 sidebar contribution	features.artifacts	artifacts
 sidebar contribution	features.chat_threads	chat_threads
+sidebar contribution	features.web_reply	web_reply
 usage source	backends.antigravity	Antigravity
 usage source	backends.charlie_code	CLC
 usage source	backends.claude_code	Claude Code

@@ -1655,6 +1655,7 @@ dependencies = [
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
+ "charliebot-session-api",
  "charliebot-store",
  "charliebot-tasks",
  "charliebot-user-text-checks",

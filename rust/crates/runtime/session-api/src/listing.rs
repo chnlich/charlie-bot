@@ -23,8 +23,8 @@ use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
 
-use crate::sidebar;
 pub use crate::sidebar::DerivedSidebarMap;
+use crate::sidebar::{self, SidebarFields};
 
 /// The fields one sidebar row renders: which derived facts it carries and whether it names the run's backend.
 #[derive(Clone, Copy)]
@@ -223,7 +223,13 @@ pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> St
     return Ok(ListingCorpus { rows: rows.as_ref().clone(), derived, sequence_fields });
   }
   let listed = store.list_sessions(Some(SessionStatus::Active), None, Some(false))?;
-  let derived = sidebar::resolve_sidebar_state(store, registry, &listed.rows, true, true, true, false)?;
+  let derived = sidebar::resolve_sidebar_state(
+    store,
+    registry,
+    &listed.rows,
+    SidebarFields { running: true, trigger: true, plan: true, waiting: false },
+    false,
+  )?;
   // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so the build
   // itself can move an input. A build that moved one stores nothing: its overlays were read under the older
   // generation, and the next request rebuilds them under the newer one and stores them.

@@ -370,10 +370,12 @@ function buildSidebarFilterElements() {
   ]);
 }
 
-// The five indicator element kinds web/static/js/sidebar paints per row, one
+// The seven indicator element kinds web/static/js/sidebar paints per row, one
 // hidden element each as `<kind>-<id>`. An id or kind rename on either side
-// breaks the shown() lookup below.
-const SIDEBAR_ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread'];
+// breaks the shown() lookup below. The two waiting marks are read through
+// waitingMarks(), so shown() keeps its five icon kinds.
+const SIDEBAR_ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread',
+  'waiting-marker', 'waiting-subtree-marker'];
 
 function buildSidebarIndicatorElements(ids) {
   const els = new Map();
@@ -408,14 +410,19 @@ function buildSidebarIndicatorContext(ids) {
     dot: !elements.get('unread-' + id).classList.contains('hidden'),
     subtreeMark: !elements.get('subtree-unread-' + id).classList.contains('hidden'),
   });
-  return {context, nav, shown};
+  // The waiting marks' current state, as the repaints left it: the row's own mark and its subtree mark.
+  const waitingMarks = (id) => ({
+    marker: !elements.get('waiting-marker-' + id).classList.contains('hidden'),
+    subtree: !elements.get('waiting-subtree-marker-' + id).classList.contains('hidden'),
+  });
+  return {context, nav, shown, waitingMarks};
 }
 
 // A fetched row list landing on the page: its unread facts apply through the
 // reply gate at the request's sequence, then the list paints from the facts.
 // The page's fetch paths (filters.js listingRows) do the same two steps.
 function paintListReply(context, rows, filter) {
-  context.applyUnreadReply(rows, context.factSeqAtRequest());
+  context.applyListingFacts(rows, context.factSeqAtRequest());
   context.renderSessionList(rows, filter);
 }
 

@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime, UtcOffset};
 
 use crate::route_support::{Query, blocking_store, store_error};
-use crate::sidebar;
+use crate::sidebar::{self, SidebarFields};
 
 const NOW_PATH: &str = "/api/concurrency/now";
 const HISTORY_PATH: &str = "/api/concurrency/history";
@@ -124,7 +124,13 @@ pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreR
   }
   let mut listed = store.list_session_rows(Some(SessionStatus::Active), None, Some(false))?;
   listed.retain(|row| listed_in_a_tab(&roots, &row.id));
-  let derived = sidebar::resolve_sidebar_state(store, registry, &listed, true, false, false, false)?;
+  let derived = sidebar::resolve_sidebar_state(
+    store,
+    registry,
+    &listed,
+    SidebarFields { running: true, trigger: false, plan: false, waiting: false },
+    false,
+  )?;
   let mut count = LiveCount::default();
   for row in &listed {
     let has_running_tasks =

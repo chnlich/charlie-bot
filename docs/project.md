@@ -189,6 +189,9 @@ A local git repo at `$CHARLIEBOT_HOME/memory/` holds one durable fact or rule se
 
 ### 7.1 Web UI Layout
 - **Sessions (Sidebar)**: Multi-channel organization (like Slack). Each session = separate project/context.
+- **Session row indicators**: activity spinner, delegated-work gear, queued clock, unread and subtree-unread dots,
+  pending-trigger bell, pending-plan icon, solid orange square for a session's Waiting on you items, and an outlined
+  orange square on folded rows above them.
 - **Chat Interface**: Main area for Master Agent interaction (ChatGPT-like).
 - **Threads (Sub-Agents)**: Nested under sessions. Each thread = Claude Code Worker task. Users can drill down to view status/logs.
 

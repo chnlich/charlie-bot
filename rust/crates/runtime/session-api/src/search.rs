@@ -76,7 +76,7 @@ const SIGNATURE_BATCH_WORKERS: usize = 16;
 /// The fewest paths one pool worker takes, so a short batch does not pay a message per worker.
 ///
 /// A repeat query watches one file per returned row, 200 on the mock home. A chunk wakes its worker and the reply
-/// wakes the caller, so four chunks of 50 cost less CPU than eight of 25 while still cutting the batch's wall time.
+/// wakes the caller. Four chunks of 50 cost less CPU than eight of 25 while still cutting the batch's wall time.
 const SIGNATURE_BATCH_CHUNK_FLOOR: usize = 50;
 /// The batch length below which the signatures are read on the calling thread.
 ///
@@ -84,8 +84,9 @@ const SIGNATURE_BATCH_CHUNK_FLOOR: usize = 50;
 const SIGNATURE_BATCH_MIN_PATHS: usize = 32;
 /// The threads one content-scan batch may split across.
 ///
-/// A sparse needle's first query scans nearly every active session's chat file: 5.5 GB on the 7,160-session mock home,
-/// which one thread spends about 0.6 s on. The scans read different files and do not depend on each other.
+/// A sparse needle's first query scans nearly every active session's chat file. On the 7,160-session mock home
+/// that is 5.5 GB, which one thread spends about 0.6 s on. The scans read different files and do not depend on
+/// each other.
 const SCAN_BATCH_WORKERS: usize = 16;
 /// The fewest scans a batch runs on its own threads: starting them costs more than a short batch saves.
 const SCAN_BATCH_MIN_JOBS: usize = 32;
@@ -1018,8 +1019,9 @@ fn result_cutoff(matched: &mut [UtcDateTime], limit: usize) -> Option<UtcDateTim
 
 /// The trigrams a lowercase ASCII needle holds. A window with any other byte contributes none.
 ///
-/// Every window of the needle's own bytes is a window of any text that holds the needle, so an index that lacks one
-/// of these trigrams proves the needle absent. A window the index cannot encode proves nothing and is dropped.
+/// Every window of the needle's own bytes is a window of any text that holds the needle. An index that lacks one
+/// of these trigrams therefore proves the needle absent. A window the index cannot encode proves nothing and is
+/// dropped.
 fn needle_trigrams(needle: &str) -> Vec<usize> {
   if !needle.is_ascii() {
     return Vec::new();
@@ -1065,8 +1067,8 @@ fn needle_high_bigrams(needle: &str) -> Vec<usize> {
 
 /// The bit position of three letter codes, or None when one code is not a lowercase letter.
 ///
-/// Each code is checked: a later code that is not a letter would still sum below [`TRIGRAM_BITS`] and alias the bit of
-/// a letter sequence the text does not hold.
+/// Each code is checked before it enters the sum. A later code that is not a letter would still sum below
+/// [`TRIGRAM_BITS`] and alias the bit of a letter sequence the text does not hold.
 fn trigram_number(first: u8, second: u8, third: u8) -> Option<usize> {
   if first >= TRIGRAM_LETTERS || second >= TRIGRAM_LETTERS || third >= TRIGRAM_LETTERS {
     return None;
@@ -1201,8 +1203,8 @@ fn scan_content(path: &Path, needle: &str, start: u64, buffer: &mut ScanBuffer) 
     return scan_ascii(&mut file, needle.as_bytes(), buffer);
   }
   // Folding the text is the scan's expensive half. On the 7,160-session mock home, a Chinese needle spends four
-  // fifths of its user CPU in Unicode lowercase conversion and UTF-8 validation, against under 1% in the needle
-  // search. A needle folding cannot change reads the file's bytes directly instead.
+  // fifths of its user CPU in Unicode lowercase conversion and UTF-8 validation. The needle search itself spends
+  // under 1%. A needle folding cannot change reads the file's bytes directly instead.
   if uncased_alphanumeric(needle) {
     return scan_bytes(&mut file, needle.as_bytes(), false, buffer);
   }
@@ -1442,7 +1444,7 @@ mod tests {
     }
   }
 
-  /// A batch keeps the argument order across its threads: a signature that moved to another file's
+  /// A batch keeps the argument order across its threads. A signature that moved to another file's
   /// index would compare one candidate's file against another's and keep a stale verdict forever.
   ///
   /// The batch reads below the sessions directory, so its answers must match a direct path read: the

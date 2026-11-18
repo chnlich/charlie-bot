@@ -451,8 +451,8 @@ fn page_bootstrap_inputs<'a>(
 
 /// The identity of a session's live event log: the modification time in nanoseconds and the size.
 ///
-/// A payload that reads the log's tail holds this pair, so an appended event moves the pair and the memo serves the
-/// body it built before the append no longer.
+/// A payload that reads the log's tail holds this pair. An appended event moves the pair, so the memo no
+/// longer serves the body it built before the append.
 fn live_event_log_identity(store: &Store, session_id: &str) -> StoreResult<Option<EventLogIdentity>> {
   let path = store.chat_events_path(session_id);
   match fs::metadata(&path) {
@@ -595,9 +595,9 @@ async fn session_usage(
 
 /// The events pages this route keeps, each the body it built while its inputs still held their value.
 ///
-/// A page is fixed by the lines it covers, and a page far inside a long log covers lines no append touches, so the
+/// A page is fixed by the lines it covers. A page far inside a long log covers lines no append touches, so the
 /// same request answers the same bytes until the log is rewritten. Building it parses and projects the page's events
-/// on every request, and a reader who scrolls back and forth asks for the same pages again, so the memo serves the
+/// on every request. A reader who scrolls back and forth asks for the same pages again, so the memo serves the
 /// body it already built. A body past [`EVENTS_PAGE_MEMO_MAX_BODY_BYTES`] is not kept.
 #[derive(Default)]
 struct EventsPageMemo {
@@ -611,8 +611,8 @@ const EVENTS_PAGE_MEMO_ENTRIES: usize = 4;
 /// on every request rather than holding megabytes of body per entry.
 const EVENTS_PAGE_MEMO_MAX_BODY_BYTES: usize = 1024 * 1024;
 
-/// The inputs an events page body reads: the session, the page's range in the absolute event index, the archive split
-/// that index counts, and the identity of the live log the range ends in.
+/// The inputs an events page body reads are the session, the page's range in the absolute event index, and the
+/// archive split that index counts. The key also holds the identity of the live log the range ends in.
 ///
 /// An appended event moves the log's identity, so a page the new event can reach builds again. An archive write moves
 /// the offset, which names which events the range covers.

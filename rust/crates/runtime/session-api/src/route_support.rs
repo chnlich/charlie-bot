@@ -24,8 +24,8 @@ pub(crate) struct Query {
 }
 
 impl Query {
-  /// The query string's pairs, in order, decoded with `form_urlencoded::parse` semantics: `+` reads as a
-  /// space, `%XX` escapes decode with replacement, and a part without a value keeps its blank value.
+  /// The query string's pairs, in order, decoded with `form_urlencoded::parse` semantics. A `+` reads as a
+  /// space, a `%XX` escape decodes with replacement, and a part without a value keeps its blank value.
   pub(crate) fn new(request: &Request<Body>) -> Self {
     let values = form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
       .map(|(key, value)| (key.into_owned(), value.into_owned()))

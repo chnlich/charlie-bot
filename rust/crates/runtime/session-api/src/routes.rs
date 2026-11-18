@@ -705,9 +705,9 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
 /// A page holds its bytes across requests while the tree and its rows hold, and deflating it again on every repeat
 /// costs about two thirds of this route's latency. The memo answers a repeat with the bytes it already compressed.
 ///
-/// The memo keeps the body, so its compressed form is paid once per page version and takes the smaller level-9 form a
-/// kept body uses, the form the transport's own body memo sends. On the 7,160-session mock home that is 5,627 bytes
-/// of the page's 30,950, against the 7,401 bytes the per-response level-1 form spends.
+/// The memo keeps the body, so its compressed form is paid once per page version. That form is the smaller level-9
+/// form a kept body uses, the form the transport's own body memo sends. On the 7,160-session mock home that is
+/// 5,627 bytes of the page's 30,950, against the 7,401 bytes the per-response level-1 form spends.
 ///
 /// The middleware leaves a response that names its own `Content-Encoding` untouched, so this sender writes the
 /// headers the middleware would write. They are `Vary: Accept-Encoding` with the compressed body, and the plain
@@ -976,8 +976,8 @@ mod tests {
     assert_eq!(payload["sessions"]["name"], json!(["refresh-kept"]), "only the named row answers");
   }
 
-  /// A group list read over the corpus the previous read used answers the list the previous read built, and a read
-  /// over a rebuilt corpus answers the rows' current groups.
+  /// A group list read over the corpus the previous read used answers the list that read built. A read over a
+  /// rebuilt corpus answers the rows' current groups.
   #[tokio::test]
   async fn a_group_list_repeats_its_names_over_the_corpus_it_read_and_rereads_a_rebuilt_corpus() {
     let (_home, features) = crate::test_support::feature_context();
@@ -1056,8 +1056,8 @@ mod tests {
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
   }
 
-  /// A poll that carries the token of the answer before it names only the row whose state moved, so a task-tree change
-  /// costs one row rather than the whole body.
+  /// A poll that carries the token of the answer before it names only the row whose state moved. A task-tree change
+  /// then costs one row rather than the whole body.
   #[tokio::test]
   async fn a_status_poll_with_a_token_answers_only_the_rows_that_moved() {
     let (_home, features) = crate::test_support::feature_context();

@@ -252,6 +252,12 @@ pub const REQUEST_EXCEPTION_EVENT: &str = "Exception in ASGI application";
 pub const CC_CONTEXT_COMPACTED_EVENT: &str = "cc_context_compacted";
 /// The log event of a failed compaction notice: the store's compaction handler and the task worker both log it.
 pub const CC_CONTEXT_COMPACT_FAILED_EVENT: &str = "cc_context_compact_failed";
+/// The log event a hot-reloaded `config.yaml` writes when its reload fails: the server's state, the feature context
+/// and each feature's own config cache log it.
+pub const CONFIG_RELOAD_FAILED_EVENT: &str = "config_reload_failed";
+/// The log event a hot-reloaded `credentials.yaml` writes when its reload fails: the server's state, the feature
+/// context and each feature's own credentials cache log it.
+pub const CREDENTIALS_RELOAD_FAILED_EVENT: &str = "credentials_reload_failed";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

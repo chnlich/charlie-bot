@@ -324,9 +324,9 @@ function messageSourceText(el) {
   return renderedNodeText(el);
 }
 
-// The markdown a one-line field cannot show is dropped from a text run: a heading's #, a list
-// marker, a link's target, emphasis markers and the backticks around inline code. Inline code
-// keeps its own text, so `__init__.py` keeps its underscores.
+// The markdown a one-line field cannot show is dropped from a text run. The dropped parts are a
+// heading's #, a list marker, a link's target, emphasis markers and the backticks around inline code.
+// Inline code keeps its own text, so `__init__.py` keeps its underscores.
 function stripInlineMarkdown(sample) {
   return sample
     .replace(/^(?:#{1,6}|[-*+>]|\d+[.)])\s+/, '')
@@ -450,9 +450,9 @@ function buildTurnRowFromSpec(spec) {
   meta.appendChild(time);
   row.appendChild(meta);
 
-  // A folded turn is a button, and a phone has no hover or title tooltip to show it: the row ends
-  // in the disclosure caret the fold bar and the events rows carry, so a reader sees it opens. The
-  // row hides while the turn is open, so the caret always shows the closed state.
+  // A folded turn is a button, and a phone has no hover or title tooltip to show it. The row ends in
+  // the disclosure caret the fold bar and the events rows carry, so a reader sees it opens. The row
+  // hides while the turn is open, so the caret always shows the closed state.
   const caret = turnRowField('turn-row-caret', '▶');
   caret.setAttribute('aria-hidden', 'true');
   row.appendChild(caret);
@@ -1117,8 +1117,8 @@ function renderMessage(msg, sessionId) {
       + messageIdentityAttrs(msg) + eventIndexAttr + ">"
       + separatorRowInnerHtml(sessionId, msg) + "</div>";
   }
-  // A role outside the core branches and the registry has no renderer, so the page cannot show the message whole:
-  // the branch names the missing role instead of dropping the message.
+  // A role outside the core branches and the registry has no renderer, so the page cannot show the message
+  // whole. The branch names the missing role instead of dropping the message.
   throw new Error('Unknown message role: ' + msg.role);
 }
 

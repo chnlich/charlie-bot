@@ -80,9 +80,9 @@ function registerInputMode(mode, badgeHtml) {
 }
 
 // A user text folds by its rendered height. The clamp (styles.css, .user-msg-clamp) shows its first ten lines while
-// data-folded is "true", and the one control shows whenever the clamp hides some of the text: it opens the clamp and
-// folds it again, the way the child report's control does. Every text starts clamped and undecided, and the observer
-// below decides it once it is laid out.
+// data-folded is "true", and the one control shows whenever the clamp hides some of the text. The control opens the
+// clamp and folds it again, the way the child report's control does. Every text starts clamped and undecided, and
+// the observer below decides it once it is laid out.
 function renderUserTextHtml(text) {
   return '<div class="user-msg-fold" data-folded="true" data-overflows="false">'
     + `<div class="user-msg-clamp whitespace-pre-wrap">${escapeHtml(text)}</div>`
@@ -95,7 +95,7 @@ function renderUserTextHtml(text) {
 }
 
 // A clamp hides text exactly when its content is taller than its box. Only a folded clamp is decided, so opening a
-// message keeps the verdict that showed its control: the resize that unclamping causes re-enters here with the fold
+// message keeps the verdict that showed its control. The resize that unclamping causes re-enters here with the fold
 // open, and the return below leaves data-overflows alone. A clamp that left the page is dropped from the observer.
 function fitUserMessageClamp(clamp, sizes) {
   if (!clamp.isConnected) {

@@ -80,7 +80,7 @@ let lastEntryCount = 0;
 
 // The empty-state row, the line inside it, and whether that line names the composer. The engine builds
 // the row once per session and keeps that node, so items() swaps the line when the session's entry count
-// changes: a session that starts empty and later receives messages For you hides must offer Everything,
+// changes. A session that starts empty and later receives messages For you hides must offer Everything,
 // where those messages are.
 let emptyRow = null;
 let emptyRowLine = null;
@@ -117,7 +117,7 @@ function roundButtonRows(entries) {
 // for the Everything view to show, so the row names the composer instead of opening a blank pane. A
 // session whose messages For you hides keeps one button that switches to Everything, where those
 // messages are. The line names that view, because it is the pane's only pointer to the record, and the
-// underline marks the button at rest: the hover tone is the only other cue, and a touch screen has none.
+// underline marks the button at rest. The hover tone is the only other cue, and a touch screen has none.
 function buildEmptyLine() {
   emptyRow = document.createElement('div');
   emptyRow.className = 'for-you-empty block w-full';

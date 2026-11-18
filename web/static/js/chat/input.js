@@ -78,9 +78,9 @@ function waitForSendRetry(delay) {
 // The pending-send store: the texts this browser has not proved the server holds
 // ---------------------------------------------------------------------------
 // A send records its text and request id under charliebot-pending-send-<session> before the composer
-// clears, and its entry leaves the list on the first proof the server holds the message: the POST
-// response, the socket echo of its request id, or a loaded history that carries the id. Until then
-// the record is the only copy the browser keeps — the composer and the bubble live in the tab, so a
+// clears, and its entry leaves the list on the first proof the server holds the message. That proof is
+// the POST response, the socket echo of its request id, or a loaded history that carries the id. Until
+// then the record is the only copy the browser keeps. The composer and the bubble live in the tab, so a
 // reload, a closed tab or a crash in between loses the text. When a session renders
 // (charliebot:session-rendered), the entries the loaded history holds are dropped, the entries this
 // page instance recorded stay. Their POST is still carrying them, so a switch away and back must
@@ -135,9 +135,9 @@ function removePendingSend(sessionId, requestId) {
   if (remaining.length !== entries.length) writePendingSends(sessionId, remaining);
 }
 
-// A session render's reconciliation: an entry the loaded history carries is proof the server took it,
-// an entry this page instance recorded is still in flight in this tab, and the rest return to the
-// composer in click order, ahead of the draft, and become the draft.
+// A session render's reconciliation treats the store's entries three ways. An entry the loaded history
+// carries is proof the server took it. An entry this page instance recorded is still in flight in this
+// tab. The rest return to the composer in click order, ahead of the draft, and become the draft.
 function reconcilePendingSends(sessionId, messages) {
   const entries = readPendingSends(sessionId);
   if (!entries.length) return;
@@ -154,7 +154,7 @@ function reconcilePendingSends(sessionId, messages) {
   writePendingSends(sessionId, kept.filter((entry) => pendingSendsRecordedHere.has(entry.request_id)));
 }
 
-// The socket echo of a send's request id (websocket-handlers.js) is the first proof of receipt: it ends
+// The socket echo of a send's request id (websocket-handlers.js) is the first proof of receipt. It ends
 // the bubble's Sending… before the POST response does and clears the store entry.
 document.addEventListener('charliebot:client-send-echo', (event) => {
   setMessageDeliveryStatus({request_id: event.detail.request_id}, 'Sent');

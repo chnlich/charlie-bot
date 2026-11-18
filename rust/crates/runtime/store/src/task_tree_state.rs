@@ -376,12 +376,14 @@ pub struct TaskTreeRow {
 ///
 /// The rows change when the index build, a run record or any history the row pass read changes. The stored identities
 /// name exactly the histories that pass read, so a repeat request re-reads those and serves the rows when every
-/// identity still matches.
+/// identity still matches. Its history-change count tells the repeat request when no re-read is needed at all.
 pub(crate) struct CachedTreePage {
   /// The index build whose metadata and structure the rows were rendered from. A later build may carry the same
   /// revision while a rename or an unread flip changed a row's fields, so the identity is the build, not the revision.
   pub(crate) build_id: u64,
   pub(crate) records_generation: u64,
+  /// The store's live-history change count when the row pass started reading these histories.
+  pub(crate) history_changes: u64,
   pub(crate) parent_id: Option<String>,
   pub(crate) include_archived: bool,
   pub(crate) after: Option<(UtcDateTime, String)>,

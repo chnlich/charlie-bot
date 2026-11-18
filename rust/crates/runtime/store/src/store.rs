@@ -482,6 +482,10 @@ pub struct Store {
   pub(crate) tree_index_metadata_reads: AtomicU64,
   pub(crate) control: ControlLock,
   pub(crate) records_generation: AtomicU64,
+  /// Counts the live-history changes this store knows: every append and rewrite it writes, and every change a caller
+  /// announces by clearing the parsed-events cache. The task-tree page memo stamps itself with this count, so a repeat
+  /// request whose stamp still holds serves its rows without a path walk per row.
+  pub(crate) history_changes: AtomicU64,
   pub(crate) control_event_ids: StdMutex<Option<VecDeque<String>>>,
   pub(crate) session_events: SessionEventState,
   pub(crate) streaming_manager: StreamingManager,
@@ -582,6 +586,7 @@ impl Store {
       tree_index_metadata_reads: AtomicU64::new(0),
       control: ControlLock::new(store_id),
       records_generation: AtomicU64::new(0),
+      history_changes: AtomicU64::new(0),
       control_event_ids: StdMutex::new(None),
       session_events: SessionEventState::default(),
       streaming_manager: StreamingManager::new(),

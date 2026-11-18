@@ -1103,7 +1103,8 @@ impl Store {
   /// 7,160 rows therefore paid for the 7,060 it truncated away.
   ///
   /// The rows are computed under `tree_rows_lock`, which serializes page computations. A page whose stored
-  /// identities all still hold is served without that lock: it reads no history verdict, only the identities.
+  /// identities all still hold is served without that lock: a hit reads the store's history-change count alone, and the
+  /// identities only when a write moved that count.
   pub fn task_tree_page(
     &self,
     snapshot: &TaskTreeSnapshot,
@@ -1134,6 +1135,8 @@ impl Store {
     }
     let mut reads = NodeReads::new(self);
     let candidates = self.page_candidates(snapshot, parent_id, after, limit)?;
+    // Read before the identities, so the stamp names a change count the pass's identities already cover.
+    let history_changes = self.history_changes();
     let identities = self.history_identities(&candidates)?;
     reads.seed_identities(candidates, identities);
     let mut rows = Vec::new();
@@ -1163,6 +1166,7 @@ impl Store {
       *self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned") = Some(CachedTreePage {
         build_id,
         records_generation,
+        history_changes,
         parent_id: parent_id.map(str::to_string),
         include_archived,
         after: after_key,
@@ -1204,12 +1208,15 @@ impl Store {
     Ok(ids)
   }
 
-  /// The stored page for `key`, when every history it read still has the identity it was read at.
+  /// The stored page for `key`, when every history it read still holds the identity it was read at.
   ///
-  /// The identity read is the whole cost of a hit: the rows, their activity and their lifecycle states were derived
-  /// from exactly these histories, and the key's generations name every metadata and run-record write since.
+  /// The identity read is the cost of a validated hit: the rows, their activity and their lifecycle states were derived
+  /// from exactly these histories, and the key's generations name every metadata and run-record write since. A hit the
+  /// store has written no history for since the pass reads no identity at all, because the store writes every live
+  /// history in the home.
   fn memoized_tree_page(&self, key: TreePageKey<'_>) -> StoreResult<Option<TaskTreePage>> {
-    let (ids, paths, identity_values, rows, has_more) = {
+    let history_changes = self.history_changes();
+    let (ids, paths, identity_values, stamped_changes, rows, has_more) = {
       let memo = self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned");
       let Some(memo) = memo.as_ref() else { return Ok(None) };
       if memo.build_id != key.build_id
@@ -1225,10 +1232,14 @@ impl Store {
         Arc::clone(&memo.ids),
         Arc::clone(&memo.paths),
         memo.identity_values.clone(),
+        memo.history_changes,
         Arc::clone(&memo.rows),
         memo.has_more,
       )
     };
+    if history_changes == stamped_changes {
+      return Ok(Some(TaskTreePage { rows, has_more }));
+    }
     let current = self.history_identities_at(&ids, &paths)?;
     if current != identity_values {
       return Ok(None);
@@ -1236,7 +1247,22 @@ impl Store {
     if self.records_generation() != key.records_generation {
       return Ok(None);
     }
+    self.stamp_tree_page(&rows, history_changes);
     Ok(Some(TaskTreePage { rows, has_more }))
+  }
+
+  /// Record that the page holding `rows` still holds at `history_changes`.
+  ///
+  /// A validated hit whose histories did not move refreshes the count, so the requests after it answer without the
+  /// identity read that the change made necessary. The count was read before those identities, so a write landing
+  /// during the validation still counts as a change for the requests after it.
+  fn stamp_tree_page(&self, rows: &Arc<Vec<TaskTreeRow>>, history_changes: u64) {
+    let mut memo = self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned");
+    if let Some(memo) = memo.as_mut()
+      && Arc::ptr_eq(&memo.rows, rows)
+    {
+      memo.history_changes = history_changes;
+    }
   }
 
   fn tree_row(&self, index: &TreeIndex, reads: &mut NodeReads, session_id: &str) -> StoreResult<TaskTreeRow> {
@@ -4950,6 +4976,8 @@ pub(crate) mod tests {
     let before =
       store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap().rows;
     assert_eq!(before[0].open_descendant_count, 1);
+    // An announced history change makes the read below validate the stored page instead of answering it outright.
+    store.clear_chat_events_cache(&root.id);
 
     let (paused_tx, paused_rx) = std::sync::mpsc::channel();
     let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
@@ -5065,6 +5093,52 @@ pub(crate) mod tests {
     let calls = store.task_tree_activity_call_count();
     store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
     assert!(store.task_tree_activity_call_count() > calls, "a new index build computes the page again");
+  }
+
+  /// A repeat page answers from the memo alone until the store writes or removes a history, and the page a validation
+  /// keeps answers the requests after it without another stat.
+  #[tokio::test]
+  async fn a_repeat_tree_page_reads_no_history_identity_until_the_store_writes_a_history() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "quiet-root", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "quiet-child", Some(&root.id), TaskProfile::Manager).await;
+
+    let first = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    let identity_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&identity_reads);
+    *store.identity_hook.lock().unwrap() = Some(Arc::new(move |_: &str, stage: IdentityStage| {
+      if stage == IdentityStage::BeforeStat {
+        counter.fetch_add(1, Ordering::SeqCst);
+      }
+    }));
+
+    let quiet = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert_eq!(quiet.rows, first.rows);
+    assert_eq!(identity_reads.load(Ordering::SeqCst), 0, "a page no history write names answers without a stat");
+
+    append(&store, &child.id, json!({"type": "user", "content": "hello"})).await;
+    let validated =
+      store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert!(identity_reads.load(Ordering::SeqCst) > 0, "a history write makes the page read the identities again");
+    assert_eq!(validated.rows, first.rows);
+
+    let reads_after_validation = identity_reads.load(Ordering::SeqCst);
+    let settled = store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert_eq!(settled.rows, first.rows);
+    assert_eq!(
+      identity_reads.load(Ordering::SeqCst),
+      reads_after_validation,
+      "the page a validation kept answers the requests after it without another stat"
+    );
+
+    store.delete_session_permanently(&child.id).await.unwrap();
+    store.task_tree_page(&store.task_tree_snapshot().unwrap(), Some(&root.id), true, None, 100).unwrap();
+    assert!(
+      identity_reads.load(Ordering::SeqCst) > reads_after_validation,
+      "a session delete makes the page read the identities again"
+    );
+    *store.identity_hook.lock().unwrap() = None;
   }
 
   #[tokio::test]

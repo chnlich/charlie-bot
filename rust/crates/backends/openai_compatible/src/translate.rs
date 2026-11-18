@@ -306,14 +306,15 @@ fn stop_reason(finish_reason: Option<&Value>) -> Value {
   }
 }
 
-/// The Anthropic usage for an OpenAI usage object: the prompt and completion counts, and zero cache counts.
+/// The Anthropic usage for an OpenAI usage object: the prompt and completion counts, and zero cache counts. The
+/// field names are the event usage fields that `charliebot_core::event_types` owns.
 pub fn usage_from_openai(usage: Option<&Value>) -> ValueResult<Value> {
   let usage = usage.filter(|usage| is_truthy(usage)).cloned().unwrap_or_else(|| json!({}));
   Ok(json!({
-    "input_tokens": get(&usage, "prompt_tokens")?.cloned().unwrap_or_else(|| json!(0)),
-    "output_tokens": get(&usage, "completion_tokens")?.cloned().unwrap_or_else(|| json!(0)),
-    "cache_creation_input_tokens": 0,
-    "cache_read_input_tokens": 0,
+    (event_types::USAGE_INPUT_TOKENS): get(&usage, "prompt_tokens")?.cloned().unwrap_or_else(|| json!(0)),
+    (event_types::USAGE_OUTPUT_TOKENS): get(&usage, "completion_tokens")?.cloned().unwrap_or_else(|| json!(0)),
+    (event_types::USAGE_CACHE_CREATION_INPUT_TOKENS): 0,
+    (event_types::USAGE_CACHE_READ_INPUT_TOKENS): 0,
   }))
 }
 
@@ -428,10 +429,10 @@ impl OpenAiChatStream {
           "stop_reason": null,
           "stop_sequence": null,
           "usage": {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
+            (event_types::USAGE_INPUT_TOKENS): 0,
+            (event_types::USAGE_OUTPUT_TOKENS): 0,
+            (event_types::USAGE_CACHE_CREATION_INPUT_TOKENS): 0,
+            (event_types::USAGE_CACHE_READ_INPUT_TOKENS): 0,
           },
         },
       }),

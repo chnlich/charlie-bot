@@ -16,6 +16,9 @@ pub enum RunKind {
 }
 
 impl RunKind {
+  /// Every run kind, in declaration order.
+  pub const ALL: [Self; 5] = [Self::ManagerTurn, Self::Work, Self::Review, Self::Iteration, Self::ScheduledStep];
+
   /// The wire spelling of this run kind: the JSON value `RunRecord.kind` persists and the `kind` a turn
   /// contribution receives. It equals the serde spelling the derive produces.
   pub const fn as_str(self) -> &'static str {
@@ -27,6 +30,11 @@ impl RunKind {
       Self::ScheduledStep => "scheduled_step",
     }
   }
+
+  /// The run kind a wire spelling names, or `None` when the spelling names none.
+  pub fn parse(value: &str) -> Option<Self> {
+    Self::ALL.into_iter().find(|kind| kind.as_str() == value)
+  }
 }
 
 #[cfg(test)]
@@ -35,9 +43,17 @@ mod tests {
 
   #[test]
   fn the_wire_spelling_matches_the_serde_spelling() {
-    for kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration, RunKind::ScheduledStep] {
+    for kind in RunKind::ALL {
       let serde_value = serde_json::to_value(kind).expect("a run kind serializes");
       assert_eq!(serde_value, serde_json::Value::String(kind.as_str().to_string()));
     }
+  }
+
+  #[test]
+  fn every_wire_spelling_parses_back_to_its_kind() {
+    for kind in RunKind::ALL {
+      assert_eq!(RunKind::parse(kind.as_str()), Some(kind));
+    }
+    assert_eq!(RunKind::parse("cold_read"), None);
   }
 }

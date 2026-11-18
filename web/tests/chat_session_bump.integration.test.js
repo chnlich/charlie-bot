@@ -66,10 +66,16 @@ function expectedSteps(count) {
   return `${count} step${count === 1 ? '' : 's'}`;
 }
 
+// The row states the turn's instant in the chat's day-and-clock label: the day, the year only
+// outside the current year, and the 12-hour clock with minutes.
 function expectedTime(ts) {
   if (!ts) return '';
   const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const dateOptions = {month: 'short', day: 'numeric'};
+  if (d.getFullYear() !== new Date().getFullYear()) dateOptions.year = 'numeric';
+  const day = d.toLocaleDateString('en-US', dateOptions);
+  const clock = d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit', hour12: true});
+  return `${day}, ${clock}`;
 }
 
 function lastMatch(items, predicate) {

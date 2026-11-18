@@ -1298,10 +1298,11 @@ async fn follow_message_revives_an_archived_session_and_arms_after_the_unarchive
   assert_eq!(home.triggers("s1").await.len(), 1);
 }
 
-/// Whether a sidebar frame is the task-tree change that announces an unarchive.
+/// Whether a sidebar frame is the task-tree change that announces the unarchive of session s1. The frame names only
+/// its session.
 fn is_unarchive_frame(frame: &Value) -> bool {
   frame.get("type").and_then(Value::as_str) == Some("task_tree_changed")
-    && frame.to_string().contains("session_unarchived")
+    && frame.get("session_id").and_then(Value::as_str) == Some("s1")
 }
 
 #[tokio::test]

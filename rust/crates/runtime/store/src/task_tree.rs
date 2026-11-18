@@ -1477,7 +1477,7 @@ impl Store {
     self.update_session_metadata_value_index(&fresh);
     // The creation fact is published by the rename above, which appends no control fact. The signal follows the
     // publication and the index invalidation, so a receiver can read the node at once (`task_sessions.create_task`).
-    self.notify_task_tree_changed(&task_id, Some(event_types::TASK_CREATED)).await;
+    self.notify_task_tree_changed(&task_id).await;
     Ok(fresh)
   }
 
@@ -1768,7 +1768,6 @@ impl Store {
       };
       task_reparent::check_agent_scope(&index, &self.cfg.charliebot_home, caller_task, session_id, new_parent)?;
     }
-    let prompt_changed = subtree_prompt.is_some() || node_prompt.is_some();
     let structural = task.is_some() || profile.is_some() || task_parent_id.is_some();
     let mut blockers = if structural { self.structural_blockers(session_id, guards)? } else { Vec::new() };
     let children = index.children.get(&Some(session_id.to_string())).map_or(0, Vec::len);
@@ -1860,8 +1859,7 @@ impl Store {
       self.apply_prompt_change(&guard, session_id, PromptScope::Node, body.as_deref()).await?;
     }
     self.invalidate_tree_index();
-    let event_type = if prompt_changed { event_types::PROMPT_CHANGED } else { event_types::TASK_UPDATED };
-    self.notify_task_tree_changed(session_id, Some(event_type)).await;
+    self.notify_task_tree_changed(session_id).await;
     self.read_metadata_fresh(session_id)?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
   }
 
@@ -4374,27 +4372,21 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
-  async fn control_facts_and_task_creation_notify_the_sidebar_with_the_fact_type() {
+  async fn control_facts_and_task_creation_notify_the_sidebar_by_session() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let mut sidebar = store.subscribe(SIDEBAR_CHANNEL);
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
     let child = create_node(&store, "child", Some(&root.id), TaskProfile::Worker).await;
     for node in [&root.id, &child.id] {
-      assert_eq!(
-        next_sidebar_frame(&mut sidebar).await,
-        json!({"type": "task_tree_changed", "session_id": node, "fact_type": "task_created"})
-      );
+      assert_eq!(next_sidebar_frame(&mut sidebar).await, json!({"type": "task_tree_changed", "session_id": node}));
     }
 
     archive_node(&store, &root.id).await;
     archive_node(&store, &child.id).await;
 
     for node in [&root.id, &child.id] {
-      assert_eq!(
-        next_sidebar_frame(&mut sidebar).await,
-        json!({"type": "task_tree_changed", "session_id": node, "fact_type": "task_closed"})
-      );
+      assert_eq!(next_sidebar_frame(&mut sidebar).await, json!({"type": "task_tree_changed", "session_id": node}));
     }
   }
 

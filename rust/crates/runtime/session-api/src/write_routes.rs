@@ -457,7 +457,7 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
     .ok_or_else(|| store_error(StoreError::not_found(SESSION_NOT_FOUND_DETAIL)))?;
   tracing::info!(target: LOG_TARGET, session_id, new_name = %name, "{}", event_types::SESSION_RENAMED);
   features.store.invalidate_tree_index();
-  features.store.notify_task_tree_changed(session_id, Some(event_types::TASK_UPDATED)).await;
+  features.store.notify_task_tree_changed(session_id).await;
   let meta = response_metadata(&features.store, &meta).map_err(store_error)?;
   rename_response(&features.store, &meta)
 }
@@ -634,7 +634,7 @@ mod tests {
     assert_eq!(result["profile"], "manager");
     let session_id = result["id"].as_str().expect("created session id");
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("task tree notification")).unwrap();
-    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": session_id, "fact_type": "task_created"}));
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": session_id}));
     let events = features.store.load_chat_events_sync(session_id).expect("created chat events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["type"].as_str(), Some("task_created"));
@@ -659,7 +659,6 @@ mod tests {
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("task tree notification")).unwrap();
     assert_eq!(frame["type"], "task_tree_changed");
     assert_eq!(frame["session_id"], session_id);
-    assert_eq!(frame["fact_type"], "task_created");
     let events = features.store.load_chat_events_sync(session_id).expect("created chat events");
     assert_eq!(events[0]["type"].as_str(), Some("task_created"));
     assert_eq!(events[0]["request_id"].as_str(), Some("api-v2-root"));
@@ -863,7 +862,7 @@ mod tests {
     assert_eq!(detail["ancestors"], json!([]));
     assert_eq!(features.store.read_metadata_fresh(&node.id).expect("node read").expect("node").name, "Renamed");
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("rename tree notification")).unwrap();
-    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "task_updated"}));
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id}));
     assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("session_renamed")));
   }
 
@@ -939,7 +938,7 @@ mod tests {
     assert_eq!(detail["task_state"], "open");
     assert_eq!(detail["name"], "node");
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("prompt change tree notification")).unwrap();
-    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "prompt_changed"}));
+    assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id}));
     let events = features.store.load_chat_events_sync(&node.id).expect("prompt change events");
     assert!(events.iter().any(|event| event["type"].as_str() == Some(event_types::PROMPT_CHANGED)));
   }

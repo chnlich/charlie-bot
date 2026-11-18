@@ -313,7 +313,7 @@ impl Store {
     self.runtime_hooks.copy_on_fork(&self.session_dir(parent_id), &session_dir)?;
     // A contribution's copy lands after the metadata write, so a poll between the two re-probes the copied files.
     sidebar_state::mark_sidebar_dirty(&meta.id);
-    self.broadcast_task_tree_changed(&meta.id, Some(event_types::TASK_CREATED)).await?;
+    self.broadcast_task_tree_changed(&meta.id).await?;
     Ok(meta)
   }
 

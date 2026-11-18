@@ -764,9 +764,6 @@ impl TaskExecutionAdapter {
         },
         on_task_spawn,
         on_task_finish,
-        auto_trigger: events
-          .iter()
-          .any(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::SCHEDULED_TRIGGER)),
         backend_option: Some(option.clone()),
         extra_claude_flags: None,
         uploaded_files: (!uploaded_files.is_empty()).then_some(uploaded_files),
@@ -3426,7 +3423,6 @@ mod tests {
       },
       on_task_spawn: Arc::new(|_pid, _pid_start| Box::pin(async { Ok(()) })),
       on_task_finish: Arc::new(|_cc_session_id, _exit_code, _extras, _done_event| Box::pin(async { Ok(false) })),
-      auto_trigger: false,
       backend_option: None,
       extra_claude_flags: None,
       uploaded_files: None,

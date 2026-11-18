@@ -1679,7 +1679,7 @@ pub async fn accept_summon(
       let event = format!("{}_mention_session_unarchived", platform.name);
       tracing::info!(%event, thread = %thread, session = session_id);
       // The unarchive write alone notifies nobody: an open sidebar refetches only on a task-tree notification.
-      features.store.broadcast_task_tree_changed(session_id, Some("session_unarchived")).await?;
+      features.store.broadcast_task_tree_changed(session_id).await?;
     }
     Some(_) => {
       let event = format!("{}_mention_session_existing", platform.name);
@@ -1738,7 +1738,7 @@ pub async fn revive_and_arm_follow(
     features.store.unarchive_session(session_id).await?;
     let event = format!("{}_follow_session_unarchived", platform.name);
     tracing::info!(%event, session = session_id, thread = %log_fields);
-    features.store.broadcast_task_tree_changed(session_id, Some("session_unarchived")).await?;
+    features.store.broadcast_task_tree_changed(session_id).await?;
   }
   arm_follow_trigger(platform, features, session_id, floor, log_fields).await
 }

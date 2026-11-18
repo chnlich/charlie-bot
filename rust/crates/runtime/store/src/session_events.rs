@@ -16,22 +16,6 @@ use crate::{Store, StoreError, StoreResult};
 
 const AGGREGATOR_INIT_SLICE_EVENTS: usize = 256;
 
-/// Raw event types whose rendered content is carried by message or stream deltas.
-pub const RAW_EVENTS_REPLACED_BY_DELTAS: &[&str] = &[
-  "assistant",
-  "user",
-  event_types::SCHEDULED_TRIGGER,
-  event_types::CHILD_REPORT,
-  event_types::TASK_CLOSED,
-  event_types::TASK_REOPENED,
-  event_types::WEB_REPLY,
-  event_types::WEB_REPLY_NOTICE,
-  event_types::WEB_STATUS,
-  event_types::WEB_STATUS_CONFIRMED,
-  event_types::WEB_ASK_CHECK,
-  event_types::WEB_REPLY_CHECK,
-];
-
 impl Store {
   /// Append an event, aggregate its message frames, then broadcast raw side-effect events.
   pub async fn persist_and_broadcast(&self, session_id: &str, event: Value) -> StoreResult<ChatEvent> {
@@ -107,18 +91,17 @@ impl Store {
     self.broadcast(streaming::SIDEBAR_CHANNEL, Value::Object(frame)).await
   }
 
-  /// Notify sidebar subscribers that one task-tree fact changed.
-  pub async fn broadcast_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) -> StoreResult<()> {
-    let mut fields = Map::new();
-    fields.insert("fact_type".to_string(), event_type.map_or(Value::Null, |value| json!(value)));
-    self.broadcast_sidebar(session_id, event_types::TASK_TREE_CHANGED, fields).await
+  /// Notify sidebar subscribers that one task-tree fact changed. The frame names only the session: its readers refetch
+  /// the row, and the fact's kind has no reader.
+  pub async fn broadcast_task_tree_changed(&self, session_id: &str) -> StoreResult<()> {
+    self.broadcast_sidebar(session_id, event_types::TASK_TREE_CHANGED, Map::new()).await
   }
 
   /// Best-effort sidebar notification for one node's durable task fact. Call it after the fact is durable: a failure is
   /// logged and never fails the write.
-  pub async fn notify_task_tree_changed(&self, session_id: &str, event_type: Option<&str>) {
-    if let Err(error) = self.broadcast_task_tree_changed(session_id, event_type).await {
-      tracing::error!(session_id, event_type = ?event_type, %error, "task_tree_changed_broadcast_failed");
+  pub async fn notify_task_tree_changed(&self, session_id: &str) {
+    if let Err(error) = self.broadcast_task_tree_changed(session_id).await {
+      tracing::error!(session_id, %error, "task_tree_changed_broadcast_failed");
     }
   }
 
@@ -254,12 +237,8 @@ impl Store {
       .ok_or_else(|| StoreError::new("feed_and_broadcast needs an event stamped with event_index"))?;
     let deltas = aggregator.lock().await.feed_at_absolute(event, index as usize)?;
     let channel = streaming::session_channel(session_id);
-    for delta in deltas {
-      self.broadcast(&channel, delta).await?;
-    }
-    let event_type = event.get("type").and_then(CompactValue::as_str);
-    if !event_type.is_some_and(|event_type| RAW_EVENTS_REPLACED_BY_DELTAS.contains(&event_type)) {
-      self.broadcast(&channel, event.to_value()).await?;
+    for frame in streaming::socket_frames(&event.to_value(), index as usize, deltas)? {
+      self.broadcast(&channel, frame).await?;
     }
     Ok(())
   }
@@ -576,17 +555,16 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn sidebar_frames_are_public_and_task_tree_changes_include_the_fact_type() {
+  async fn sidebar_frames_are_public_and_task_tree_changes_name_the_session() {
     let (_home, store) = make_test_store();
     let mut subscription = store.subscribe(streaming::SIDEBAR_CHANNEL);
-    store.broadcast_task_tree_changed("synthetic", Some("run_finished")).await.unwrap();
+    store.broadcast_task_tree_changed("synthetic").await.unwrap();
     let frame: Value = serde_json::from_str(&subscription.recv().await.unwrap()).unwrap();
     assert_eq!(
       frame,
       json!({
         "type": "task_tree_changed",
         "session_id": "synthetic",
-        "fact_type": "run_finished",
       })
     );
   }

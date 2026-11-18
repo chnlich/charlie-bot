@@ -219,6 +219,7 @@ land in `events.jsonl` and the WebSocket stream: the Anthropic-endpoint backends
 cc-anthropic-compatible, cc-openai-compatible) pass lines through unchanged; the other backends translate their
 native streams into CC-compatible events with per-backend vocabularies (codex, for one, emits
 `thinking` and `file_write`).
+The WebSocket carries a shaped copy, not the event itself: `socket_frames` (`rust/crates/runtime/store/src/streaming.rs`) sends `master_done` and `result` with only the fields the page reads, draws the round separator from `master_done`, and folds each streamed-draft commit into the next frame of its event. `events.jsonl` keeps the full events.
 A raw log that stops growing while the process is still alive is what the server reports as stuck
 (the no-output silence report); thinking in progress is the `thinking` content.
 

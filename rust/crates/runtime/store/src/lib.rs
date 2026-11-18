@@ -64,7 +64,6 @@ pub use run_records::{
   RetryRunFields, RunBlocker, RunDisplayState, RunFacts, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage,
   RunRecord, SequenceRef, StopRequest, StopResult,
 };
-pub use session_events::RAW_EVENTS_REPLACED_BY_DELTAS;
 pub use store::{
   AccountLabelKeeper, AnchorFieldReconciler, HistoryWork, SequenceArchiveHook, SequenceBindingMover,
   SequenceListingFields, Store, StoreHookFuture, StoreHooks,

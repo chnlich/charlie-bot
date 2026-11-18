@@ -1,18 +1,38 @@
 //! The live stream: one broadcast channel per session view, the trailing window that merges a burst of stream frames
-//! into one, and the field names a stream frame carries.
+//! into one, the field names a stream frame carries, and the shaping of one event's output into the frames a page reads.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use charliebot_core::event_types;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{StoreError, StoreResult};
 
 /// Sidebar channel shared by every connected session view.
 pub const SIDEBAR_CHANNEL: &str = "sidebar";
+
+/// Raw event types whose rendered content is carried by message or stream deltas.
+pub const RAW_EVENTS_REPLACED_BY_DELTAS: &[&str] = &[
+  "assistant",
+  "user",
+  event_types::SCHEDULED_TRIGGER,
+  event_types::CHILD_REPORT,
+  event_types::TASK_CLOSED,
+  event_types::TASK_REOPENED,
+  event_types::WEB_REPLY,
+  event_types::WEB_REPLY_NOTICE,
+  event_types::WEB_STATUS,
+  event_types::WEB_STATUS_CONFIRMED,
+  event_types::WEB_ASK_CHECK,
+  event_types::WEB_REPLY_CHECK,
+];
+
+/// The frame field carrying a streamed draft's commit: the committed message's id, timestamp and event index. The page
+/// rebuilds the assistant message from it, so the frame does not repeat the message's role or streamed-content flag.
+pub const COMMIT: &str = "commit";
 
 /// The trailing stream-delta window.
 pub const STREAM_COALESCE_INTERVAL: Duration = Duration::from_millis(200);
@@ -168,8 +188,11 @@ impl StreamingManager {
     serializer: impl Fn(&Value) -> StoreResult<String>,
   ) -> StoreResult<()> {
     let event_type = frame.get("type").and_then(Value::as_str);
+    // A stream frame that carries a commit merges into no window: the commit must reach the page before the
+    // appends of any later frame, and a second commit could not share the frame's one commit field.
+    let carries_commit = frame.get(COMMIT).is_some();
 
-    if event_type == Some("stream") {
+    if event_type == Some("stream") && !carries_commit {
       let window_id = {
         let mut state = self.inner.state.lock().expect("streaming state mutex is not poisoned");
         let Some(channel_state) = state.channels.get_mut(channel) else { return Ok(()) };
@@ -202,7 +225,9 @@ impl StreamingManager {
     }
 
     let serialized = serializer(&frame)?;
-    let hides_preview = event_type.is_some_and(|event_type| PREVIEW_HIDING_TYPES.contains(&event_type));
+    // A commit hides the page's preview whether it arrives as its own message or inside a stream frame.
+    let hides_preview =
+      carries_commit || event_type.is_some_and(|event_type| PREVIEW_HIDING_TYPES.contains(&event_type));
     let mut state = self.inner.state.lock().expect("streaming state mutex is not poisoned");
     let Some(channel_state) = state.channels.get_mut(channel) else { return Ok(()) };
     // The pending appends were broadcast before this frame, so they reach the page first.
@@ -258,6 +283,109 @@ pub fn session_channel(session_id: &str) -> String {
 pub fn serialize_frame(frame: &Value) -> StoreResult<String> {
   serde_json::to_string(frame)
     .map_err(|error| StoreError::new(format!("websocket frame serialization failed: {error}")))
+}
+
+/// The socket frames of one event, shaped for the page that reads them. `deltas` are the aggregator's frames for the
+/// event, and `event` is the event with its absolute index `index`. The live feed and the catch-up replay both send
+/// every event through here, so the two paths carry the same fields.
+///
+/// A `master_done` frame keeps the fields the page reads, and its round separator is not sent: the page draws the
+/// separator from the frame's id, timestamp and index. A `result` frame keeps its index. Other raw events go out whole.
+/// An empty `uploaded_files` and a null `input_mode` on a user echo are left out, as the page reads them as absent. A
+/// streamed-draft commit folds into the frame that follows it in the same event (see [`fold_commits`]).
+pub fn socket_frames(event: &Value, index: usize, deltas: Vec<Value>) -> StoreResult<Vec<Value>> {
+  let mut frames = deltas;
+  for frame in &mut frames {
+    trim_user_echo(frame);
+  }
+  let event_type = event.get("type").and_then(Value::as_str);
+  if event_type == Some(event_types::MASTER_DONE) {
+    let position = frames
+      .iter()
+      .position(is_round_separator)
+      .ok_or_else(|| StoreError::new("master_done produced no round separator"))?;
+    let separator = frames.remove(position);
+    let round = &separator["message"];
+    frames.push(json!({
+      "type": event_types::MASTER_DONE,
+      event_types::STILL_THINKING: event.get(event_types::STILL_THINKING).cloned().unwrap_or(Value::Null),
+      "id": round["id"],
+      "timestamp": round["timestamp"],
+      event_types::EVENT_INDEX: index,
+    }));
+  } else if event_type == Some(event_types::RESULT) {
+    frames.push(json!({"type": event_types::RESULT, event_types::EVENT_INDEX: index}));
+  } else if !event_type.is_some_and(|event_type| RAW_EVENTS_REPLACED_BY_DELTAS.contains(&event_type)) {
+    let mut payload = event.clone();
+    let object = payload.as_object_mut().ok_or_else(|| StoreError::new("chat event must be a JSON object"))?;
+    object.entry(event_types::EVENT_INDEX).or_insert_with(|| json!(index));
+    frames.push(payload);
+  }
+  Ok(fold_commits(frames))
+}
+
+/// Whether a frame is a round separator: the separator a `master_done` renders, which has no kind. A run's end
+/// separator carries its kind and stays a message of its own.
+fn is_round_separator(frame: &Value) -> bool {
+  frame.get("type").and_then(Value::as_str) == Some("message")
+    && frame["message"]["role"] == "separator"
+    && frame["message"].get("kind").is_none()
+}
+
+/// Leaves out a user echo's empty `uploaded_files` and null `input_mode`.
+fn trim_user_echo(frame: &mut Value) {
+  if frame.get("type").and_then(Value::as_str) != Some("message") {
+    return;
+  }
+  let Some(message) = frame.get_mut("message").and_then(Value::as_object_mut) else { return };
+  if message.get("role").and_then(Value::as_str) != Some("user") {
+    return;
+  }
+  if message.get(event_types::UPLOADED_FILES).and_then(Value::as_array).is_some_and(Vec::is_empty) {
+    message.remove(event_types::UPLOADED_FILES);
+  }
+  if message.get(event_types::INPUT_MODE).is_some_and(Value::is_null) {
+    message.remove(event_types::INPUT_MODE);
+  }
+}
+
+/// Folds each streamed-draft commit into the frame after it in the same event, as the frame's [`COMMIT`] field. A
+/// commit with no following frame in its event stays a message frame of its own, and so does a commit followed by
+/// another commit.
+fn fold_commits(frames: Vec<Value>) -> Vec<Value> {
+  let mut shaped = Vec::with_capacity(frames.len());
+  let mut held: Option<Value> = None;
+  for frame in frames {
+    if is_streamed_commit(&frame) {
+      if let Some(previous) = held.replace(frame) {
+        shaped.push(previous);
+      }
+      continue;
+    }
+    match held.take() {
+      Some(commit) => shaped.push(with_commit(frame, &commit)),
+      None => shaped.push(frame),
+    }
+  }
+  shaped.extend(held);
+  shaped
+}
+
+/// Whether a frame is a `message` that commits a draft the page streamed. Only the live feed commits such a draft.
+fn is_streamed_commit(frame: &Value) -> bool {
+  frame.get("type").and_then(Value::as_str) == Some("message")
+    && frame["message"][event_types::MESSAGE_CONTENT_STREAMED] == json!(true)
+}
+
+/// Moves a streamed commit's fields, without its role and streamed-content flag, into `frame`'s commit field.
+fn with_commit(mut frame: Value, commit: &Value) -> Value {
+  let mut fields = commit["message"].clone();
+  if let Some(object) = fields.as_object_mut() {
+    object.remove("role");
+    object.remove(event_types::MESSAGE_CONTENT_STREAMED);
+  }
+  frame[COMMIT] = fields;
+  frame
 }
 
 fn send_to_channel(channel: &mut ChannelState, frame: String) {
@@ -460,5 +588,117 @@ mod tests {
       serialize_frame(&json!({"type": "message", "content": "café", "count": 1.0})).unwrap(),
       r#"{"type":"message","content":"café","count":1.0}"#
     );
+  }
+
+  fn streamed_commit(id: &str, index: u64) -> Value {
+    json!({"type": "message", "message": {
+      "role": "assistant", "content_streamed": true, "id": id, "timestamp": "t", "event_index": index,
+    }})
+  }
+
+  #[test]
+  fn master_done_keeps_its_page_fields_and_draws_its_round_from_the_separator() {
+    let event = json!({
+      "type": "master_done", "still_thinking": false, "run_id": "r", "backend": "b", "total_ms": 5,
+      "id": "m", "timestamp": "t", "event_index": 9,
+    });
+    let deltas = vec![
+      streamed_commit("draft", 7),
+      json!({"type": "message", "message": {
+        "role": "separator", "thinking_seconds": 0, "id": "m", "timestamp": "t", "event_index": 9,
+      }}),
+    ];
+    let frames = socket_frames(&event, 9, deltas).unwrap();
+    assert_eq!(
+      frames,
+      vec![json!({
+        "type": "master_done", "still_thinking": false, "id": "m", "timestamp": "t", "event_index": 9,
+        "commit": {"id": "draft", "timestamp": "t", "event_index": 7},
+      })]
+    );
+  }
+
+  #[test]
+  fn result_keeps_only_its_index() {
+    let event = json!({"type": "result", "result": "", "usage": {"input_tokens": 1}, "id": "x", "event_index": 4});
+    assert_eq!(socket_frames(&event, 4, Vec::new()).unwrap(), vec![json!({"type": "result", "event_index": 4})]);
+  }
+
+  #[test]
+  fn a_commit_with_no_following_frame_stays_a_message() {
+    let event = json!({"type": "assistant"});
+    let commit = streamed_commit("draft", 2);
+    assert_eq!(socket_frames(&event, 2, vec![commit.clone()]).unwrap(), vec![commit]);
+  }
+
+  #[test]
+  fn a_commit_folds_into_the_stream_frame_after_it_and_a_second_commit_stays_single() {
+    let event = json!({"type": "assistant"});
+    let deltas = vec![
+      streamed_commit("first", 1),
+      json!({"type": "stream", "event_index": 2, "append": "b"}),
+      streamed_commit("second", 2),
+    ];
+    assert_eq!(
+      socket_frames(&event, 2, deltas).unwrap(),
+      vec![
+        json!({"type": "stream", "event_index": 2, "append": "b",
+          "commit": {"id": "first", "timestamp": "t", "event_index": 1}}),
+        streamed_commit("second", 2),
+      ]
+    );
+  }
+
+  #[test]
+  fn a_user_echo_leaves_out_an_empty_upload_list_and_a_null_input_mode() {
+    let event = json!({"type": "user"});
+    let echo = |uploaded: Value, mode: Value| {
+      json!({"type": "message", "message": {
+        "role": "user", "content": "hi", "uploaded_files": uploaded, "input_mode": mode, "event_index": 3,
+      }})
+    };
+    let frames =
+      socket_frames(&event, 3, vec![echo(json!([]), Value::Null), echo(json!(["a.png"]), json!("voice"))]).unwrap();
+    assert_eq!(
+      frames,
+      vec![
+        json!({"type": "message", "message": {"role": "user", "content": "hi", "event_index": 3}}),
+        json!({"type": "message", "message": {
+          "role": "user", "content": "hi", "uploaded_files": ["a.png"], "input_mode": "voice", "event_index": 3,
+        }}),
+      ]
+    );
+  }
+
+  #[test]
+  fn other_raw_events_go_out_whole_with_their_index() {
+    let event = json!({"type": "backend_overlay_inactive", "backend": "b"});
+    assert_eq!(
+      socket_frames(&event, 5, Vec::new()).unwrap(),
+      vec![json!({"type": "backend_overlay_inactive", "backend": "b", "event_index": 5})]
+    );
+  }
+
+  #[tokio::test(start_paused = true)]
+  async fn a_stream_frame_with_a_commit_is_sent_at_once_and_closes_the_window() {
+    // Two commits in one window would share the frame's one commit field, so each commit goes out on its own.
+    let manager = StreamingManager::new();
+    let mut subscription = manager.subscribe("session:synthetic");
+    manager.broadcast("session:synthetic", json!({"type": "stream", "append": "a"})).await.unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(subscription.recv().await.unwrap(), r#"{"type":"stream","append":"a"}"#);
+    manager
+      .broadcast("session:synthetic", json!({"type": "stream", "append": "b", "commit": {"id": "c1"}}))
+      .await
+      .unwrap();
+    manager
+      .broadcast("session:synthetic", json!({"type": "stream", "append": "c", "commit": {"id": "c2"}}))
+      .await
+      .unwrap();
+    assert_eq!(subscription.recv().await.unwrap(), r#"{"type":"stream","append":"b","commit":{"id":"c1"}}"#);
+    assert_eq!(subscription.recv().await.unwrap(), r#"{"type":"stream","append":"c","commit":{"id":"c2"}}"#);
+    manager.broadcast("session:synthetic", json!({"type": "stream", "append": "d"})).await.unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(subscription.recv().await.unwrap(), r#"{"type":"stream","append":"d"}"#);
   }
 }

@@ -115,8 +115,7 @@ impl Store {
   ) -> StoreResult<ChatEvent> {
     self.require_control_guard(guard)?;
     let event = self.append_chat_event(session_id, event).await?;
-    let fact_type = event.get("type").and_then(CompactValue::as_str);
-    self.notify_task_tree_changed(session_id, fact_type).await;
+    self.notify_task_tree_changed(session_id).await;
     Ok(event)
   }
 

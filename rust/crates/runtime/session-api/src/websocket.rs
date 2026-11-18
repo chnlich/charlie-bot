@@ -8,8 +8,10 @@ use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
 use charliebot_store::aggregator::MessageAggregator;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_store::streaming::{self, APPEND, LENGTH, SocketHandle, Subscription, THINKING_APPEND, THINKING_LENGTH};
-use charliebot_store::{RAW_EVENTS_REPLACED_BY_DELTAS, SharedChatEvent, Store, StoreError, StoreResult};
+use charliebot_store::streaming::{
+  self, APPEND, LENGTH, SocketHandle, Subscription, THINKING_APPEND, THINKING_LENGTH, socket_frames,
+};
+use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -267,18 +269,7 @@ impl CatchupWalk {
       if (global_index as i128) < self.cursor {
         continue;
       }
-      self.frames.extend(deltas);
-      let event_type = event.get("type").and_then(Value::as_str);
-      if event_type.is_some_and(|event_type| RAW_EVENTS_REPLACED_BY_DELTAS.contains(&event_type)) {
-        continue;
-      }
-      let mut payload = event.clone();
-      payload
-        .as_object_mut()
-        .expect("the message aggregator accepts only event objects")
-        .entry(event_types::EVENT_INDEX.to_string())
-        .or_insert_with(|| json!(global_index));
-      self.frames.push(payload);
+      self.frames.extend(socket_frames(&event, global_index, deltas)?);
     }
     Ok(())
   }
@@ -870,6 +861,41 @@ mod tests {
     assert_eq!(rendered_turns(&live_frames), rendered_turns(&catchup_frames));
   }
 
+  #[tokio::test]
+  async fn live_and_catchup_send_a_round_end_with_the_same_page_fields() {
+    let (_home, features) = test_context();
+    let values: Vec<Value> = vec![
+      json!({"type": "user", "content": "question", "id": "u1", "timestamp": "t1", "uploaded_files": [], "input_mode": null}),
+      json!({"type": "master_done", "still_thinking": false, "run_id": "r1", "backend": "b", "total_ms": 5, "id": "m1", "timestamp": "t2"}),
+      json!({"type": "result", "result": "", "usage": {"input_tokens": 1}, "id": "x1", "timestamp": "t3"}),
+    ];
+    let mut live = charliebot_store::aggregator::MessageAggregator::new(0, true);
+    live.set_omit_streamed_content(true);
+    let mut live_frames = Vec::new();
+    for (index, event) in values.iter().enumerate() {
+      let deltas = live.feed_at_absolute(event, index).unwrap();
+      live_frames.extend(streaming::socket_frames(event, index, deltas).unwrap());
+    }
+    let events: Vec<SharedChatEvent> =
+      values.iter().map(|event| SharedChatEvent::new(charliebot_store::ChatEvent::from_value(event))).collect();
+    let catchup_frames = replay_events(&features.store, Arc::new(events), 0, 0).await.unwrap();
+
+    let round_end = |frames: &[Value]| -> Vec<Value> {
+      frames.iter().filter(|frame| matches!(frame["type"].as_str(), Some("master_done" | "result"))).cloned().collect()
+    };
+    assert_eq!(
+      round_end(&live_frames),
+      vec![
+        json!({"type": "master_done", "still_thinking": false, "id": "m1", "timestamp": "t2", "event_index": 1}),
+        json!({"type": "result", "event_index": 2}),
+      ]
+    );
+    assert_eq!(round_end(&live_frames), round_end(&catchup_frames));
+    assert!(live_frames.iter().chain(&catchup_frames).all(|frame| frame["message"]["role"] != "separator"));
+    let user_echo = live_frames.iter().find(|frame| frame["type"] == "message").unwrap();
+    assert!(user_echo["message"].get("uploaded_files").is_none() && user_echo["message"].get("input_mode").is_none());
+  }
+
   #[test]
   fn a_queued_frame_is_dropped_when_the_replay_already_covered_its_event() {
     let stream = json!({"type": "stream", "append": "x", "length": 1, "event_index": 3}).to_string();
@@ -1100,12 +1126,16 @@ mod tests {
           {
             streamed.push_str(append);
           }
-          if frame["type"] == "message"
-            && frame["message"][charliebot_core::event_types::MESSAGE_CONTENT_STREAMED] == true
-          {
+          // The streamed draft's commit is a message of its own, or the commit field of the frame after it in its event.
+          let commit = frame.get("commit").or_else(|| {
+            (frame["type"] == "message"
+              && frame["message"][charliebot_core::event_types::MESSAGE_CONTENT_STREAMED] == true)
+              .then_some(&frame["message"])
+          });
+          if let Some(commit) = commit {
             // The commit names the draft the page streamed and carries no second copy of its text.
             assert_eq!(streamed, "The synthetic stream trigger was handled.");
-            assert!(frame["message"].get("content").is_none());
+            assert!(commit.get("content").is_none());
             turn.abort();
             server.abort();
             let _ = server.await;

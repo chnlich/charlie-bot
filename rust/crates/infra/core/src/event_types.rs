@@ -124,9 +124,6 @@ pub const UNREAD_CHANGED: &str = "unread_changed";
 pub const SESSION_RENAMED: &str = "session_renamed";
 pub const SESSION_GROUP_CHANGED: &str = "session_group_changed";
 pub const TASK_TREE_CHANGED: &str = "task_tree_changed";
-/// A task's metadata changed without a landed fact of its own: the store's patch and the session-api's rename both
-/// announce the change under it.
-pub const TASK_UPDATED: &str = "task_updated";
 pub const TASK_CREATED: &str = "task_created";
 pub const TASK_CLOSE_REQUESTED: &str = "task_close_requested";
 /// The run that owns a `task_close_requested` fact. Only that run acts on the request, and a later run's start voids

@@ -16,7 +16,7 @@ use std::sync::{LazyLock, Mutex};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_core::{int_text, paths, text_repr, timefmt};
+use charliebot_core::{int_text, paths, posix_path, text_repr, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
@@ -110,7 +110,7 @@ pub fn serve(
   if method != Method::GET && method != Method::HEAD {
     return responses::http_exception(StatusCode::METHOD_NOT_ALLOWED);
   }
-  let relative = normpath(route_path.trim_start_matches('/'));
+  let relative = posix_path::normpath(route_path.trim_start_matches('/'));
   let full_path = paths::realpath(&served.path.join(&relative));
   if !paths::is_within(&full_path, &resolved_directory(&served.path))
     && !paths::is_within(&full_path, &reresolved_directory(&served.path))
@@ -174,21 +174,6 @@ fn directory_failure(directory: &Path) -> Option<Response> {
     )),
     Err(error) => Some(responses::internal_error("OSError", format!("{}: {error}", directory.display()))),
   }
-}
-
-/// Normalize a relative path: `.` and empty parts drop, `..` cancels a preceding name.
-fn normpath(path: &str) -> String {
-  let mut parts: Vec<&str> = Vec::new();
-  for part in path.split('/') {
-    match part {
-      "" | "." => {}
-      ".." if parts.last().is_some_and(|last| *last != "..") => {
-        parts.pop();
-      }
-      other => parts.push(other),
-    }
-  }
-  if parts.is_empty() { ".".to_string() } else { parts.join("/") }
 }
 
 /// The validators and type headers of one file, in `FileResponse`'s order.
@@ -537,14 +522,6 @@ mod tests {
   }
 
   #[test]
-  fn normpath_matches_posixpath() {
-    assert_eq!(normpath("css/styles.css"), "css/styles.css");
-    assert_eq!(normpath("a//b/./c/../d"), "a/b/d");
-    assert_eq!(normpath("../server.py"), "../server.py");
-    assert_eq!(normpath(""), ".");
-  }
-
-  #[test]
   fn ranges_parse_like_file_response() {
     assert!(matches!(parse_range_header("bytes=0-9", 100), Ok(ranges) if ranges == vec![(0, 10)]));
     assert!(matches!(parse_range_header("bytes=-10", 100), Ok(ranges) if ranges == vec![(90, 100)]));
@@ -579,6 +556,21 @@ mod tests {
     assert_eq!(&body(&served)[..], b"old body");
     std::fs::write(&file, "new body, longer").unwrap();
     assert_eq!(&body(&served)[..], b"new body, longer");
+  }
+
+  /// A path whose `..` parts climb out of the served directory answers 404, so no file above it is served.
+  #[test]
+  fn a_path_that_climbs_out_of_the_directory_is_not_found() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("static");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("app.js"), "served").unwrap();
+    std::fs::write(home.path().join("secret.txt"), "not served").unwrap();
+    let served = StaticDirectory::new(root);
+    for path in ["/../secret.txt", "/a/../../secret.txt"] {
+      let response = serve(&served, &MimeTypes::builtin(), path, &Method::GET, &HeaderMap::new());
+      assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+    }
   }
 
   /// A retargeted mount link serves from its new target: the memo's stale canonical path never refuses the file.

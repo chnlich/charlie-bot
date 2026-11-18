@@ -338,7 +338,25 @@ impl PageBodyMemo {
 
 static PAGE_BODY_MEMO: LazyLock<Mutex<PageBodyMemo>> = LazyLock::new(|| Mutex::new(PageBodyMemo::default()));
 
+/// The header a navigation preload carries. The offline shell worker answers a navigation from its stored shell and never
+/// reads the preload response, so the chat page answers a preload with no body.
+const NAVIGATION_PRELOAD: &str = "service-worker-navigation-preload";
+
+/// The body-less answer to a navigation preload, or `None` for any other request.
+fn preload_answer(headers: &HeaderMap) -> Option<Response> {
+  headers.contains_key(NAVIGATION_PRELOAD).then(|| {
+    Response::builder()
+      .status(StatusCode::NO_CONTENT)
+      .header(header::CACHE_CONTROL, "no-store")
+      .body(Body::empty())
+      .expect("a no-content response is valid")
+  })
+}
+
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
+  if let Some(answer) = preload_answer(&request.headers) {
+    return answer;
+  }
   let cfg = match state.config() {
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("ValueError", error.to_string()),
@@ -356,7 +374,12 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     .await
     .expect("the chat page task does not panic");
   match rendered {
-    Ok(response) => response,
+    Ok(mut response) => {
+      // The body answers a navigation without the preload header, so a cache keeps the page apart from the body-less
+      // answer to a preload.
+      response.headers_mut().append(header::VARY, HeaderValue::from_static("Service-Worker-Navigation-Preload"));
+      response
+    }
     Err(error) => responses::internal_error(&error.kind, error.detail),
   }
 }
@@ -1227,5 +1250,14 @@ mod tests {
   fn a_page_response_carries_the_status_its_caller_names() {
     let response = page_response(Bytes::from(page_html()), None, StatusCode::NOT_FOUND);
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  }
+
+  #[test]
+  fn a_navigation_preload_gets_no_body_and_a_plain_navigation_gets_no_special_answer() {
+    let mut preload = HeaderMap::new();
+    preload.insert(NAVIGATION_PRELOAD, HeaderValue::from_static("true"));
+    let answer = preload_answer(&preload).expect("a preload is answered without the page");
+    assert_eq!(answer.status(), StatusCode::NO_CONTENT);
+    assert!(preload_answer(&HeaderMap::new()).is_none());
   }
 }

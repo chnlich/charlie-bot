@@ -4,18 +4,16 @@
   {% include 'partials/standalone_base_styles.html' %}
   :root {
     --ok:#1baf7a; --warn:#d29922; --bad:#d1242f; --off:#8b949e;
-    --warn-soft:#7a5a00; --warn-tint:rgba(210,153,34,.16); --warn-line:rgba(210,153,34,.45);
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
       --ok:#199e70; --warn:#d8a13a; --bad:#e5534b; --off:#8b8b84;
-      --warn-soft:#e0be74; --warn-tint:rgba(210,153,34,.16); --warn-line:rgba(210,153,34,.45);
     }
   }
   :root[data-theme="dark"] {
     --ok:#199e70; --warn:#d8a13a; --bad:#e5534b; --off:#8b8b84;
-    --warn-soft:#e0be74; --warn-tint:rgba(210,153,34,.16); --warn-line:rgba(210,153,34,.45);
   }
+  [hidden] { display:none !important }
   .sub { color:var(--mut); margin:0 0 6px; font-size:13.5px; max-width:82ch }
   .facts { color:var(--mut); font-size:12px; margin:0 0 20px }
   /* A phone breaks the caption only between two facts, never inside one. */
@@ -23,51 +21,51 @@
   .bar { display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:space-between;
     background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px }
   .bar .line { font-size:14.5px }
-  .bar .line .hot { color:var(--bad); font-weight:640 }
-  .bar .line .soon { color:var(--warn); font-weight:640 }
   /* The label takes --panel, the surface ink. The dark theme's accent is a light blue, where white
      text renders 2.49:1, and --panel reads 7.0:1 on it. */
   .btn { font:inherit; font-size:13px; background:var(--acc); color:var(--panel); border:0; border-radius:8px;
     padding:8px 15px; cursor:pointer }
+  .btn.secondary { background:var(--panel2); color:var(--tx); border:1px solid var(--bd) }
+  .err { color:var(--bad); font-size:13px; margin:0 0 12px }
   table { width:100%; border-collapse:collapse; background:var(--panel);
     border:1px solid var(--bd); border-radius:12px; overflow:hidden }
   th { text-align:left; font-size:11.5px; font-weight:620; color:var(--mut); text-transform:uppercase;
     letter-spacing:.4px; padding:10px 14px; background:var(--panel2); border-bottom:1px solid var(--bd) }
   td { padding:12px 14px; border-bottom:1px solid var(--bd); vertical-align:top; font-size:13px }
   tr:last-child td { border-bottom:0 }
-  .alias { font-family:var(--mono); font-size:13px; font-weight:600; overflow-wrap:anywhere }
-  .fqdn { font-family:var(--mono); font-size:11.5px; color:var(--mut2); display:block;
-    overflow-wrap:anywhere }
+  .alias { display:block; font-family:var(--mono); font-size:13px; font-weight:600; overflow-wrap:anywhere }
+  .fqdn { font-family:var(--mono); font-size:11.5px; color:var(--mut2); display:block; overflow-wrap:anywhere }
   .st { display:inline-flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; white-space:nowrap }
-  .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto }
-  .st.ok { color:var(--ok) } .st.ok .dot { background:var(--ok) }
-  .st.okta { color:var(--bad) } .st.okta .dot { background:var(--bad) }
-  .st.iact { color:var(--warn) } .st.iact .dot { background:var(--warn) }
-  .st.down { color:var(--off) } .st.down .dot { background:var(--off) }
-  .cd { font-variant-numeric:tabular-nums; font-weight:620; font-size:14px }
+  .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; background:var(--off) }
+  tr[data-state="ok"] .dot { background:var(--ok) }
+  tr[data-state="needs_user"] .dot { background:var(--warn) }
+  tr[data-state="broken"] .dot { background:var(--bad) }
+  tr[data-state="ok"] .st { color:var(--ok) }
+  tr[data-state="needs_user"] .st { color:var(--warn) }
+  tr[data-state="broken"] .st { color:var(--bad) }
+  .det { font-family:var(--mono); font-size:11.5px; color:var(--mut); word-break:break-all; margin:6px 0 0 }
+  .at { font-size:11.5px; color:var(--mut2); font-variant-numeric:tabular-nums; margin:4px 0 0 }
+  .cd { font-variant-numeric:tabular-nums; font-weight:620; font-size:13px; margin:6px 0 0 }
   .cd.amber { color:var(--warn) }
-  .at { display:block; font-weight:400; font-size:11.5px; color:var(--mut2); font-variant-numeric:tabular-nums }
-  .none { color:var(--mut2); font-size:12.5px }
-  .ren { margin-top:6px }
-  .badge { display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.3px; border-radius:5px;
-    padding:1px 6px; background:var(--warn-tint); color:var(--warn-soft); border:1px solid var(--warn-line) }
-  .det { font-family:var(--mono); font-size:11.5px; color:var(--mut); word-break:break-all }
-  .next { margin-top:5px; font-size:12.5px; color:var(--tx) }
-  .next form { margin:8px 0 0 }
-  .cap { color:var(--mut); font-size:12.5px; max-width:86ch; margin:12px 0 0 }
-  /* A browser login is one card: its label, its state, its start control. The card is the page's block,
-     so it takes the same panel, border and radius as the summary bar. */
-  .login { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px }
-  .login h3 { margin:0 0 10px; font-size:15px }
-  .login .state { font-size:13px; margin:0 0 10px }
-  .login form { margin:8px 0 0 }
+  .busy { font-size:12.5px; color:var(--mut); margin:0 0 6px }
+  .next { font-size:12.5px; color:var(--tx) }
+  .live, .last { margin:8px 0 0; font-size:12.5px }
+  .live a { overflow-wrap:anywhere }
   .k { color:var(--mut); font-size:11.5px; font-weight:620; text-transform:uppercase; letter-spacing:.4px }
   pre { font-family:var(--mono); font-size:11.5px; color:var(--mut); white-space:pre-wrap; word-break:break-all;
     margin:6px 0 0 }
-  .legend { display:flex; flex-wrap:wrap; gap:18px; margin:14px 0 0; font-size:12.5px; color:var(--mut) }
-  .legend .k { display:inline-flex; align-items:center; gap:7px }
-  /* At 390 px each host takes a card, its cells stacked under their column label, as the recordings
-     table does, so the detail prose gets the full width of the screen. */
+  /* A field the row does not carry is an empty element, and an empty element takes no room. */
+  [data-f]:empty, pre:empty { display:none }
+  /* A row with a check or a login in progress shows only what that work can answer to. */
+  tr[data-busy]:not([data-busy=""]) [data-when-idle] { display:none }
+  form { margin:8px 0 0 }
+  form.input { display:flex; flex-wrap:wrap; gap:8px; align-items:center }
+  form.input input { font:inherit; font-size:13px; padding:6px 8px; min-width:16ch; background:var(--panel2);
+    color:var(--tx); border:1px solid var(--bd); border-radius:6px }
+  form.input .ferr { flex-basis:100%; color:var(--bad); font-size:12px }
+  .cap { color:var(--mut); font-size:12.5px; max-width:86ch; margin:12px 0 0 }
+  /* At 390 px each row takes a card, its cells stacked under their column label, so the detail prose gets the
+     full width of the screen. */
   @media (max-width: 820px) {
     table, tbody, tr, td { display:block; width:100% }
     thead { display:none }
@@ -88,174 +86,233 @@
 {% include 'partials/concurrency_badge.html' %}
 <div class="wrap">
   <h1>Host login authorization</h1>
-  <p class="sub">Where each host stands right now, and how long the Okta trust cache entry behind it is
-  estimated to last, so a renewal can be scheduled before a session is blocked rather than after.</p>
+  <p class="sub">One row per browser login, and one per ssh host that no login renews. Each row shows the state its
+  latest check left, and a check refreshes that row alone.</p>
   <p class="facts"><span>last probe &middot; {{ last_probe or "not yet" }}</span> &middot;
   <span>probe every &middot; {{ interval_label }} ({{ backoff_label }} once blocked)</span> &middot;
-  <span>trust cache lifetime &middot; {{ ttl_label }}</span> &middot;
   <span>remote writes &middot; none</span></p>
   <div class="bar">
-    <div class="line">
-      {%- if summary.blocked %}Blocked now: <span class="hot">{{ summary.blocked|join(", ") }}</span>. {% endif -%}
-      {%- if summary.soonest_alias %}Soonest estimated expiry: <span class="soon">{{ summary.soonest_alias }}, in {{ summary.soonest_remaining }}</span> (estimate, upper bound).{%- else %}No estimate available.{%- endif %}
-    </div>
-    <form method="post" action="/api/host-auth/probe"><button class="btn" type="submit">Probe now</button></form>
+    <div class="line" id="header-line"></div>
+    <form method="post" action="/api/host-auth/probe" data-probe><button class="btn" type="submit">Probe now</button></form>
   </div>
+  <p class="err" id="page-error" hidden></p>
 
-  {% if hosts %}
   <table>
     <thead>
       <tr>
-        <th style="width:17%">Host</th>
-        <th style="width:37%">Status</th>
-        <th>Detail and next step</th>
+        <th style="width:24%">Row</th>
+        <th style="width:34%">Status</th>
+        <th>Next step</th>
       </tr>
     </thead>
     <tbody>
-      {% for h in hosts %}
-      <tr>
-        <td data-l="Host"><span class="alias">{{ h.alias }}</span><span class="fqdn">{{ h.hostname }}</span></td>
-        <td data-l="Status">
-          <span class="st {{ h.status_class }}"><i class="dot"></i>{{ h.status_label }}</span>
-          <div class="ren">
-            {% if h.deadline_kind == "counting" %}
-            <span class="cd{% if h.under_24h %} amber{% endif %}">{{ h.remaining }}<span class="at">by {{ h.expires }}</span></span>
-            {% elif h.deadline_kind == "expired" %}
-            <span class="badge">ESTIMATE EXPIRED</span><span class="at">{{ h.expires }} has passed</span>
-            {% elif h.deadline_kind == "no_baseline" %}
-            <span class="none">Not estimated</span>
-            {% elif h.deadline_kind == "pending_okta" %}
-            <span class="none">Counting starts at the first probe that sees this host come back.</span>
-            {% else %}
-            <span class="none">Not applicable{% if h.status == "needs-interactive-auth" %}: this host is not held by the Okta cache{% endif %}.</span>
-            {% endif %}
-          </div>
+      {% for row in rows %}
+      <tr data-row="{{ row.id }}" data-row-url="{{ row.row_url }}" data-name="{{ row.name }}" data-state="{{ row.state }}"
+        data-busy="{{ row.busy }}">
+        <td data-l="Row">
+          <span class="alias">{{ row.label }}</span>
+          {% if row.kind == "login" %}<span class="fqdn">{{ row.name }}</span>{% endif %}
+          {% if row.hostname %}<span class="fqdn">{{ row.hostname }}</span>{% endif %}
+          {% if row.kind == "login" and row.alias %}<span class="fqdn">via {{ row.alias }}</span>{% endif %}
         </td>
-        <td data-l="Detail and next step">
-          <div class="det">{% for line in h.detail_lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
-          <div class="next">
-            {% if h.status == "needs-okta" %}
-            Run <code>{{ h.renew_cmd }}</code>, finish the browser check, then press <b>Probe now</b> here: the
-            countdown starts immediately.
-            {% elif h.deadline_kind == "counting" %}
-            {% if h.under_24h %}Baseline: renewal seen {{ h.baseline }}. Under a day left, so renew at a moment you
-            choose.{% else %}Baseline: renewal seen {{ h.baseline }}. A login pod restart can end it sooner.{% endif %}
-            {% elif h.deadline_kind == "expired" %}
-            The host still answers past its estimated deadline, so a renewal probably happened between two probes and
-            was not seen. The countdown stops and the baseline stays where it was: the estimate keeps its upper-bound
-            meaning rather than being quietly refreshed into an optimistic one.
-            {% elif h.deadline_kind == "no_baseline" %}
-            No blocked&rarr;direct transition observed yet, so there is nothing to count from. Either the cache is still
-            valid from a renewal made before this panel existed, or this host is not served by the cache at all.
-            {% elif h.status == "needs-interactive-auth" %}
-            {% if h.has_url %}Open that link, approve, then press <b>Probe now</b>.{% else %}Approve the check this
-            host asks for, then press <b>Probe now</b>.{% endif %}
-            {% elif h.status == "router-rejected" %}
-            {% if h.renew_login %}
-            This host's key was rejected by its login router. Starting the renewal login opens its approval page in
-            a new tab; approve there, then press <b>Probe now</b>.
-            <form method="post" action="/api/host-auth/logins/{{ h.renew_login }}/start" target="_blank">
-              <button class="btn" type="submit">Renew</button>
-            </form>
-            {% else %}
-            This host's key was rejected by its login router. No renewal login is configured for this host in
-            <code>host_auth.browser_logins</code>.
-            {% endif %}
-            {% else %}
-            Nothing to renew: the host answered nothing, so its authorization state is unknown.
-            {% endif %}
+        <td data-l="Status">
+          <span class="st"><i class="dot"></i><span data-f="state_label">{{ row.state_label }}</span></span>
+          <div class="det" data-f="detail">{{ row.detail }}</div>
+          <div class="at" data-f="checked_text">{{ row.checked_text }}</div>
+          <div class="cd{% if row.expiry_soon %} amber{% endif %}" data-f="expiry_text" data-amber="expiry_soon">{{ row.expiry_text }}</div>
+        </td>
+        <td data-l="Next step">
+          <div class="busy" data-f="busy_text">{{ row.busy_text }}</div>
+          <div class="next" data-f="next">{{ row.next }}</div>
+          <div class="live" data-show="live"{% if not row.live %} hidden{% endif %}>
+            <div class="k">In progress</div>
+            <div data-f="live_text">{{ row.live_text }}</div>
+            <a data-f="live_link" data-href="live_link" data-show="live_link" target="_blank" rel="noopener"{% if not row.live_link %} hidden{% endif %}>{{ row.live_link }}</a>
           </div>
+          <div class="last" data-show="last"{% if not row.last %} hidden{% endif %}>
+            <div class="at" data-f="last_text">{{ row.last_text }}</div>
+            <pre data-f="last_output">{{ row.last_output }}</pre>
+          </div>
+          {% if row.input_url %}
+          <form class="input" method="post" action="{{ row.input_url }}" data-input data-show="input_open"{% if not row.input_open %} hidden{% endif %}>
+            <span class="k">{{ row.input_prompt }}</span>
+            <input name="value" autocomplete="off" required>
+            <button class="btn" type="submit">Send</button>
+            <div class="ferr"></div>
+          </form>
+          {% endif %}
+          {% if row.start_url %}
+          <form method="post" action="{{ row.start_url }}" target="_blank" data-start data-when-idle>
+            <button class="btn" type="submit">Start login</button>
+          </form>
+          {% endif %}
+          <form method="post" action="{{ row.check_url }}" data-check data-when-idle>
+            <button class="btn secondary" type="submit">Check now</button>
+          </form>
         </td>
       </tr>
+      {% else %}
+      <tr><td colspan="3" class="cap">No browser login is configured, and the first probe has not listed a host yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 
-  <p class="cap"><b>What the renewal line means (estimate, upper bound).</b> The clock starts at a blocked&rarr;direct transition this panel
-  saw with its own probe, which means a cache entry had just been written only if you renewed through the browser
-  enrollment flow. Signing in with an Okta SSH CA certificate bypasses the cache entirely and makes the number wrong.
-  The figure is an upper bound in the other direction too: a login pod restart wipes the cache early, so the real
-  deadline is never later than shown and can be sooner.</p>
-
-  <div class="legend">
-    <span class="k"><i class="dot" style="background:var(--ok)"></i>Direct: ssh answered, exit 0</span>
-    <span class="k"><i class="dot" style="background:var(--bad)"></i>Needs Okta: renew the public key enrollment</span>
-    <span class="k"><i class="dot" style="background:var(--warn)"></i>Needs interactive auth: a human check in a browser or terminal</span>
-    <span class="k"><i class="dot" style="background:var(--warn)"></i>Needs renewal: the login router rejected this host's key</span>
-    <span class="k"><i class="dot" style="background:var(--off)"></i>Unreachable: no usable answer</span>
-  </div>
-  {% else %}
-  <p class="cap">No host is listed yet: the first probe round has not completed, or the ssh config names none.</p>
-  {% endif %}
-
-  <h2>Browser logins</h2>
-  <p class="cap">Each login starts with one click, when its code can be approved. Each card reads its own status back, so
-  a slow login leaves the others filled in.</p>
-  {% for login in logins %}
-  <section class="login">
-    <h3>{{ login.label }}</h3>
-    {% if login.live %}
-    <div class="state">
-      <div class="k">In progress &middot; {{ login.live.phase }}</div>
-      <div>User code <code>{{ login.live.user_code or "not in the link" }}</code></div>
-      <div>Approval link
-        {% if login.live.approval_url %}<a href="{{ login.live.approval_url }}" target="_blank" rel="noopener">{{ login.live.approval_url }}</a>{% else %}not printed yet{% endif %}</div>
-      <div class="at">Started {{ login.live.started_at }}</div>
-    </div>
-    {% else %}
-    <div class="state" data-readback-url="/api/host-auth/logins/{{ login.name }}/readback">
-      <div class="none">Reading back…</div>
-    </div>
-    {% endif %}
-    {% if login.last %}
-    <div class="state">
-      <div class="k">Last attempt &middot; {{ login.last.outcome }}</div>
-      <div class="at">Finished {{ login.last.finished_at }}</div>
-      {% if login.last.last_line %}<pre>{{ login.last.last_line }}</pre>{% endif %}
-      {% if login.last.readback_output is not none %}<pre>{{ login.last.readback_output }}</pre>{% endif %}
-    </div>
-    {% endif %}
-    <form method="post" action="/api/host-auth/logins/{{ login.name }}/start" target="_blank">
-      <button class="btn" type="submit">Start login</button>
-    </form>
-  </section>
-  {% else %}
-  <p class="cap">No browser logins are configured. Add entries under <code>host_auth.browser_logins</code> in config.yaml.</p>
-  {% endfor %}
+  <p class="cap">A row needs you when its check asks for a human step. It is broken when the login itself cannot run.
+  A host that a login renews takes its state from that host's probe. An expiry counts from the last approval, when the
+  login sets a lifetime.</p>
 </div>
 <script>
-  const readbacks = [];
-  const refreshAfterSeconds = {{ refresh_after_sec }};
-  for (const form of document.querySelectorAll('form[target="_blank"]')) {
-    form.addEventListener("submit", () => {
-      Promise.all(readbacks).then(() => setTimeout(() => location.reload(), 2000));
+  const POLL_MS = 1500;
+  const START_WINDOW_MS = 35000;
+  const followers = new Map();
+
+  // One JSON request. A failed answer throws its detail, or its text when it has no JSON detail.
+  async function request(url, init = {}) {
+    const response = await fetch(url, { ...init, headers: { accept: "application/json", ...init.headers } });
+    if (!response.ok) {
+      const isJson = response.headers.get("content-type")?.startsWith("application/json");
+      throw new Error(isJson ? (await response.json()).detail : await response.text());
+    }
+    return response.json();
+  }
+
+  function fail(error) {
+    const line = document.getElementById("page-error");
+    line.textContent = error.message;
+    line.hidden = false;
+  }
+
+  // Fills one row from its JSON. data-f takes the text, data-href the link target, data-show sets the visibility from a
+  // truthy field, and data-amber sets the amber class from one. The state and busy word sit on the row for the CSS.
+  function apply(tr, row) {
+    tr.dataset.state = row.state;
+    tr.dataset.busy = row.busy;
+    for (const el of tr.querySelectorAll("[data-f]")) {
+      el.textContent = row[el.dataset.f] ?? "";
+    }
+    for (const el of tr.querySelectorAll("[data-href]")) {
+      el.href = row[el.dataset.href] ?? "";
+    }
+    for (const el of tr.querySelectorAll("[data-show]")) {
+      el.hidden = !row[el.dataset.show];
+    }
+    for (const el of tr.querySelectorAll("[data-amber]")) {
+      el.classList.toggle("amber", Boolean(row[el.dataset.amber]));
+    }
+    refreshHeader();
+  }
+
+  // The header names the rows that need the user and the broken rows, from the state each row carries.
+  function refreshHeader() {
+    const named = (state) =>
+      [...document.querySelectorAll(`tr[data-row][data-state="${state}"]`)].map((tr) => tr.dataset.name);
+    const needs = named("needs_user");
+    const broken = named("broken");
+    const parts = [];
+    if (needs.length) parts.push(`Needs you: ${needs.join(", ")}.`);
+    if (broken.length) parts.push(`Broken: ${broken.join(", ")}.`);
+    document.getElementById("header-line").textContent =
+      parts.length ? parts.join(" ") : "No row needs you or is broken.";
+  }
+
+  // Refreshes one row from its URL every POLL_MS while the row is busy or the time `until` (a Date.now() value) is ahead.
+  function follow(tr, until) {
+    const id = tr.dataset.row;
+    if (followers.has(id)) {
+      followers.get(id).until = Math.max(followers.get(id).until, until);
+      return;
+    }
+    const entry = { until };
+    followers.set(id, entry);
+    const tick = () =>
+      request(tr.dataset.rowUrl)
+        .then((row) => {
+          apply(tr, row);
+          if (row.busy || Date.now() < entry.until) {
+            setTimeout(tick, POLL_MS);
+          } else {
+            followers.delete(id);
+          }
+        })
+        .catch((error) => {
+          followers.delete(id);
+          fail(error);
+        });
+    tick();
+  }
+
+  for (const form of document.querySelectorAll("form[data-check]")) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const tr = form.closest("tr");
+      tr.dataset.busy = "check";
+      tr.querySelector('[data-f="busy_text"]').textContent = "Checking.";
+      request(form.action, { method: "POST" })
+        .then((row) => apply(tr, row))
+        .catch((error) => {
+          fail(error);
+          follow(tr, 0);
+        });
     });
   }
-  // Each card fills from its own readback, so one slow login does not hold up another card.
-  for (const slot of document.querySelectorAll("[data-readback-url]")) {
-    const show = (head, text) => {
-      const label = document.createElement("div");
-      label.className = "k";
-      label.textContent = head;
-      const output = document.createElement("pre");
-      output.textContent = text;
-      slot.replaceChildren(label, output);
-    };
-    const readback = fetch(slot.dataset.readbackUrl, { headers: { accept: "application/json" } })
-      .then(async (response) => {
-        if (!response.ok) {
-          const body = await response.json();
-          throw new Error(body.detail);
-        }
-        const body = await response.json();
-        show(body.exit === null ? "Not logged in" : "Exit " + body.exit, body.output);
+
+  // A login opens its approval link in a new tab, so the row follows its attempt for as long as the start can take.
+  for (const form of document.querySelectorAll("form[data-start]")) {
+    form.addEventListener("submit", () => follow(form.closest("tr"), Date.now() + START_WINDOW_MS));
+  }
+
+  for (const form of document.querySelectorAll("form[data-input]")) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const field = form.elements.value;
+      const error = form.querySelector(".ferr");
+      error.textContent = "";
+      request(form.action, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: field.value }),
       })
-      .catch((error) => show("Readback failed", error.message));
-    readbacks.push(readback);
+        .then(() => {
+          field.value = "";
+          follow(form.closest("tr"), 0);
+        })
+        .catch((failure) => {
+          error.textContent = failure.message;
+        });
+    });
   }
-  if (refreshAfterSeconds > 0) {
-    Promise.all(readbacks).then(() => setTimeout(() => location.reload(), refreshAfterSeconds * 1000));
+
+  // The probe runs in the background, so the page reloads once the round it started has ended, and every row shows it.
+  function awaitProbe() {
+    request("/api/host-auth/status")
+      .then((body) => {
+        if (body.probe_running) {
+          setTimeout(awaitProbe, POLL_MS);
+        } else {
+          location.reload();
+        }
+      })
+      .catch(fail);
   }
+
+  document.querySelector("form[data-probe]").addEventListener("submit", (event) => {
+    event.preventDefault();
+    fetch(event.target.action, { method: "POST" })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`The probe answered ${response.status}.`);
+        }
+        setTimeout(awaitProbe, POLL_MS);
+      })
+      .catch(fail);
+  });
+
+  for (const tr of document.querySelectorAll("tr[data-row]")) {
+    if (tr.dataset.busy) {
+      follow(tr, 0);
+    }
+  }
+  refreshHeader();
 </script>
 </body>
 </html>

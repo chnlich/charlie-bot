@@ -199,7 +199,7 @@ rust/
 - `feishu` — the Feishu long-connection service, internal routes and thread verbs
 - `files` — the file server at `/absolute_filepath/{path}`
 - `github` — the `charliebot github` command group, its draft-target validation and the draft sender
-- `host_auth` — the host login panel at `/host-auth` and its browser-login page
+- `host_auth` — the host login status table at `/host-auth`
 - [`improve`](crates/features/improve/README.md) — the improve loop: `charliebot improve start` runs an iterative worker loop on the task tree as one sequence
 - `memory` — the labeled-entry memory store's server half and its turn contribution
 - `run_log_compaction` — the cron handler that stores a finished run's log files as `.zst` once a day old

@@ -7,6 +7,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::HostLogin;
 use futures_util::future::BoxFuture;
 
+use crate::config;
 use crate::host_auth;
 use crate::probe::probe_host_fresh;
 
@@ -20,10 +21,15 @@ pub fn host_logins(features: &FeatureContext) -> anyhow::Result<Vec<HostLogin>> 
   host_auth::host_logins(&host_auth::read_state(&state_path(features)?)?)
 }
 
-/// The host's record from a probe of `alias` now over a new connection. The verdict is written into the state.
+/// The host's record from a probe of `alias` now over a new connection. The verdict is written into the state, and a
+/// verdict that approves the host records the approval on its bound login.
 pub fn probe_alias_now<'a>(features: &'a FeatureContext, alias: &'a str) -> BoxFuture<'a, anyhow::Result<HostLogin>> {
   Box::pin(async move {
     let state_path = state_path(features)?;
-    host_auth::probe_alias_with(&state_path, &host_auth::ssh_config_path(), alias, probe_host_fresh).await
+    let cfg = features.config.get()?;
+    let logins = config::browser_logins(&cfg);
+    let answer =
+      host_auth::probe_alias_with(&state_path, &host_auth::ssh_config_path(), alias, &logins, probe_host_fresh).await?;
+    Ok(answer.login)
   })
 }

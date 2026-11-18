@@ -63,6 +63,16 @@ pub struct HostAuthConfig {
 /// The names a start route accepts, one URL segment without separators.
 const NAME_PATTERN: &str = r"^[a-z0-9-]+$";
 
+/// The browser logins of the config, in config order.
+pub fn browser_logins(cfg: &charliebot_core::config::CharlieBotConfig) -> Vec<BrowserLoginConfig> {
+  cfg.section::<HostAuthConfig>("host_auth").browser_logins.clone()
+}
+
+/// The name of the login that renews `alias`, if one does. Validation keeps one login per host.
+pub fn login_bound_to<'a>(logins: &'a [BrowserLoginConfig], alias: &str) -> Option<&'a str> {
+  logins.iter().find(|login| login.host.as_deref() == Some(alias)).map(|login| login.name.as_str())
+}
+
 pub fn section() -> ConfigSection {
   ConfigSection { key: "host_auth", legacy_keys: &[], parse: parse_section, dump: dump_section }
 }

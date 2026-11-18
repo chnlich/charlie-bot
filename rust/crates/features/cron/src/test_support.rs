@@ -323,7 +323,8 @@ fn host_auth_config(hosts: &[&str]) -> String {
     .map(|host| {
       format!(
         "    - name: {host}\n      label: {host}\n      host: {host}\n      login_command: [synthetic-login]\n      \
-         approval_url_pattern: synthetic\n      readback_command: [synthetic-readback]\n"
+         approval_url_pattern: synthetic\n      readback_command: [synthetic-readback]\n      input_prompt: \
+         synthetic-code\n      lifetime_sec: 86400\n"
       )
     })
     .collect();

@@ -615,7 +615,7 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
 mod tests {
   use std::path::Path;
 
-  use charliebot_core::config::CharlieBotConfig;
+  use charliebot_core::config::{CharlieBotConfig, HostAuthConfig};
   use serde_json::{Value, json};
 
   use super::{
@@ -745,6 +745,14 @@ mod tests {
 
     assert_eq!(snapshot.tasks.iter().map(|task| task.name.as_str()).collect::<Vec<_>>(), ["keyed"]);
     assert_eq!(snapshot.tasks[0].improve_host.as_deref(), Some("host3"));
+    let logins = &cfg
+      .section_value("host_auth")
+      .and_then(|value| value.downcast_ref::<HostAuthConfig>())
+      .expect("host_auth parses as HostAuthConfig")
+      .browser_logins;
+    assert_eq!(logins[0].host.as_deref(), Some("host3"));
+    assert_eq!(logins[0].input_prompt.as_deref(), Some("synthetic-code"), "the Phase 1 input_prompt survives the load");
+    assert_eq!(logins[0].lifetime_sec, Some(86400), "the Phase 1 lifetime_sec survives the load");
     assert_eq!(
       snapshot.errors.iter().map(|error| error.name.as_str()).collect::<Vec<_>>(),
       ["handler", "master", "other-host", "steps"]

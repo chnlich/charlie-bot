@@ -96,7 +96,10 @@
   </div>
   <p class="err" id="page-error" hidden></p>
 
+  {#- An empty body draws no column head: the head names columns that hold no cell. A phone already
+      hides it. -#}
   <table>
+    {% if rows %}
     <thead>
       <tr>
         <th style="width:24%">Row</th>
@@ -104,6 +107,7 @@
         <th>Next step</th>
       </tr>
     </thead>
+    {% endif %}
     <tbody>
       {% for row in rows %}
       <tr data-row="{{ row.id }}" data-row-url="{{ row.row_url }}" data-kind="{{ row.kind }}" data-name="{{ row.name }}" data-state="{{ row.state }}"

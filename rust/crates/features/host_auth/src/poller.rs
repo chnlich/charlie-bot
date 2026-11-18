@@ -245,6 +245,7 @@ mod tests {
 
   use charliebot_core::config::CharlieBotConfig;
   use charliebot_core::credentials::load_credentials;
+  use charliebot_core::event_types::{CONFIG_RELOAD_FAILED_EVENT, CREDENTIALS_RELOAD_FAILED_EVENT};
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::store_hooks::store_hooks;
   use charliebot_registry::{Registry, StartupState};
@@ -332,13 +333,13 @@ mod tests {
     let config_home = dir.path().to_path_buf();
     let config = Arc::new(HotReload::new(
       dir.path().join("config.yaml"),
-      "config_reload_failed",
+      CONFIG_RELOAD_FAILED_EVENT,
       Box::new(move || config_registry.load_config(&config_home)),
     ));
     let credentials_home = dir.path().to_path_buf();
     let credentials = Arc::new(HotReload::new(
       dir.path().join("credentials.yaml"),
-      "credentials_reload_failed",
+      CREDENTIALS_RELOAD_FAILED_EVENT,
       Box::new(move || load_credentials(&credentials_home)),
     ));
     let cfg: CharlieBotConfig = registry.load_config(dir.path()).expect("the config loads");

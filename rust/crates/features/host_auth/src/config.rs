@@ -38,6 +38,14 @@ pub struct BrowserLoginConfig {
   /// `user_code` query parameter, which the login card shows.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub user_code_pattern: Option<String>,
+  /// The label of the row's input box, shown while the login waits for approval. Setting it turns on in-row input:
+  /// the value goes to the login's stdin, or to its terminal when `use_pty` is set.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub input_prompt: Option<String>,
+  /// How long one approval lasts, in seconds. The row shows the expiry as the last approval plus this. Without it the
+  /// row shows only the last approval time.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub lifetime_sec: Option<u64>,
 }
 
 /// The `host_auth:` section: the host-auth panel's browser logins and Slack DM notification settings.
@@ -134,6 +142,12 @@ fn validate(settings: &HostAuthConfig) -> Result<(), String> {
         Ok(_) => {}
       }
     }
+    if login.input_prompt.as_deref().is_some_and(|prompt| prompt.trim().is_empty()) {
+      return Err(format!("browser_logins[{index}].input_prompt: must not be empty when set"));
+    }
+    if login.lifetime_sec == Some(0) {
+      return Err(format!("browser_logins[{index}].lifetime_sec: must be greater than 0 when set"));
+    }
   }
   Ok(())
 }
@@ -153,6 +167,8 @@ mod tests {
       use_pty: false,
       enter_after_pattern: None,
       user_code_pattern: None,
+      input_prompt: None,
+      lifetime_sec: None,
     }
   }
 
@@ -238,6 +254,33 @@ browser_logins:
     assert!(!login.use_pty, "a login without use_pty keeps the pipe the existing entries use");
     assert_eq!(login.enter_after_pattern, None);
     assert_eq!(login.user_code_pattern, None);
+    assert_eq!(login.input_prompt, None, "an entry without input_prompt takes no in-row input");
+    assert_eq!(login.lifetime_sec, None, "an entry without lifetime_sec shows only its last approval");
+  }
+
+  #[test]
+  fn an_empty_input_prompt_and_a_zero_lifetime_are_refused_by_name() {
+    let mut empty_prompt = login("router-host1", "https://\\S*");
+    empty_prompt.input_prompt = Some("   ".to_string());
+    assert_eq!(
+      validate(&HostAuthConfig { browser_logins: vec![empty_prompt], enable_slack_dm: false, slack_dm_user: None })
+        .expect_err("a blank input prompt is refused"),
+      "browser_logins[0].input_prompt: must not be empty when set"
+    );
+
+    let mut zero_lifetime = login("router-host1", "https://\\S*");
+    zero_lifetime.lifetime_sec = Some(0);
+    assert_eq!(
+      validate(&HostAuthConfig { browser_logins: vec![zero_lifetime], enable_slack_dm: false, slack_dm_user: None })
+        .expect_err("a zero lifetime is refused"),
+      "browser_logins[0].lifetime_sec: must be greater than 0 when set"
+    );
+
+    let mut both = login("router-host1", "https://\\S*");
+    both.input_prompt = Some("Paste the code".to_string());
+    both.lifetime_sec = Some(86400);
+    validate(&HostAuthConfig { browser_logins: vec![both], enable_slack_dm: false, slack_dm_user: None })
+      .expect("a prompt and a positive lifetime validate");
   }
 
   #[test]

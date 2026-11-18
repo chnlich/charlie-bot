@@ -278,6 +278,8 @@ mod tests {
       use_pty: true,
       enter_after_pattern: None,
       user_code_pattern: None,
+      input_prompt: None,
+      lifetime_sec: None,
     };
     let page = context(&state, now, &[login]).expect("the context builds");
     assert_eq!(page["hosts"][0]["status_label"], json!("Needs renewal"));

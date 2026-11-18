@@ -99,9 +99,18 @@ test('opening the dialog renders the task record and one row per assembled block
   assert.match(html, /Migrate users to the new schema/);
   assert.doesNotMatch(html, /Old columns readable|docs\/auth\.md/, 'the retired task fields stay off the dialog');
   assert.match(html, /manager_turn · 1,602 chars/, 'the run kind and the measured total');
-  assert.match(html, /base<\/span> prompts\/task_manager\.md[\s\S]*?>full<[\s\S]*?>1,200</);
-  assert.match(html, /tooling\/repo-layout<br>[\s\S]*?research\/branch-flow[\s\S]*?>index<[\s\S]*?>340</);
-  assert.match(html, /rule:evidence <span[^>]*>from root-1<\/span>[\s\S]*?>62</, 'a subtree rule names its owning node');
+  // One item per block, each carrying its own sources and its measured length.
+  // The block takes the dialog's full width, so the source tokens stay whole.
+  const items = [...html.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((m) => m[1]);
+  assert.equal(items.length, 3);
+  assert.match(items[0], /base<\/span> prompts\/task_manager\.md/);
+  assert.match(items[0], /1,200/);
+  assert.match(items[0], /full/);
+  assert.match(items[1], /tooling\/repo-layout<br>[\s\S]*?research\/branch-flow/);
+  assert.match(items[1], /340/);
+  assert.match(items[1], /index/);
+  assert.match(items[2], /rule:evidence <span[^>]*>from root-1<\/span>/, 'a subtree rule names its owning node');
+  assert.match(items[2], /62/);
   assert.doesNotMatch(html, /Launch overlay unavailable|\(none\)/);
 });
 

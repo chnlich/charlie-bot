@@ -235,9 +235,11 @@ function taskContextTaskHtml(session) {
   </div>`;
 }
 
+// The owning session starts its own line, so its identifier begins at the
+// item's left edge with the whole line width for itself.
 function promptSourceLabel(source) {
   const owner = source.source_session_id
-    ? ` <span class="${TASK_CONTEXT_MUTED}">from ${escapeHtml(source.source_session_id)}</span>` : '';
+    ? ` <span class="block ${TASK_CONTEXT_MUTED}">from ${escapeHtml(source.source_session_id)}</span>` : '';
   return `<span class="${TASK_CONTEXT_MUTED}">${escapeHtml(source.scope || '')}</span> ${escapeHtml(source.source_ref || '')}${owner}`;
 }
 
@@ -245,18 +247,21 @@ function formatCharCount(n) {
   return Number(n || 0).toLocaleString('en-US');
 }
 
-// The lower half: one row per assembled block (its sources, delivery and
-// measured length) under the run kind and the total the backend receives.
+// The lower half: one item per assembled block (its sources, delivery and
+// measured length) under the run kind and the total the backend receives. An
+// item takes the dialog's full width, so a source keeps its whole tokens; its
+// delivery and length sit on the next line, where they cannot squeeze a file
+// name or a UUID into a mid-token break.
 function taskContextPromptHtml(preview) {
   const blocks = Array.isArray(preview.blocks) ? preview.blocks : [];
-  const rows = blocks.map((block) => {
+  const items = blocks.map((block) => {
     const sources = (block.sources || []).map(promptSourceLabel).join('<br>') || TASK_CONTEXT_NONE;
     const chars = typeof block.text === 'string' ? block.text.length : 0;
-    return `<tr class="border-t border-slate-700/60 align-top">
-      <td class="py-1.5 pr-3 break-all">${sources}</td>
-      <td class="py-1.5 pr-3 text-slate-400">${escapeHtml(block.delivery || '')}</td>
-      <td class="py-1.5 text-right tabular-nums text-slate-400">${formatCharCount(chars)}</td>
-    </tr>`;
+    const delivery = block.delivery ? `${escapeHtml(block.delivery)} delivery · ` : '';
+    return `<li class="border-t border-slate-700/60 pt-1">
+      <div class="break-words">${sources}</div>
+      <div class="text-slate-400">${delivery}${formatCharCount(chars)} chars</div>
+    </li>`;
   }).join('');
   const total = typeof preview.char_count === 'number'
     ? preview.char_count
@@ -268,7 +273,7 @@ function taskContextPromptHtml(preview) {
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Next run context</div>
       <div class="text-xs text-slate-400">${escapeHtml(preview.kind || '')} · ${formatCharCount(total)} chars</div>
     </div>
-    <table class="w-full text-xs"><thead><tr class="${TASK_CONTEXT_MUTED} text-left"><th class="pb-1 font-normal">Source</th><th class="pb-1 font-normal">Delivery</th><th class="pb-1 font-normal text-right">Chars</th></tr></thead><tbody>${rows}</tbody></table>
+    <ul class="space-y-2 text-xs">${items}</ul>
     ${overlayNote}
   </div>`;
 }

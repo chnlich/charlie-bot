@@ -21,9 +21,9 @@ const SHELL_KEY = self.location.origin + '/shell';
 const INDEX_KEY = self.location.origin + '/index';
 const STORED_AT_HEADER = 'X-CharlieBot-Stored-At';
 const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
-// How long the network may take before a stored copy answers a first screen or a list. The
-// page's first paint budget is 1 s: navigation start to the request, plus rendering the message,
-// plus a 0.1 s margin. At the calibrated CPU rate (3.56 times the reference), the bench's A-link
+// How long the network may take before a stored sidebar list answers. The page's first paint budget
+// is 1 s: navigation start to the request, plus rendering the message, plus a 0.1 s margin. At the
+// calibrated CPU rate (3.56 times the reference), the bench's A-link
 // trace has the first-screen request issue 0.37 s after navigation start and the message paint
 // 0.03 s after the copy answers, so the cap is 1 − 0.37 − 0.03 − 0.1 = 0.50 s, clamped to the
 // plan's 0.4 s maximum.
@@ -107,17 +107,26 @@ async function answerFile(request) {
   return fetch(request);
 }
 
-// A first screen or a sidebar list. The network answers if it gives a usable 200 within the wait cap;
-// otherwise the stored copy answers and the network fetch for that request is aborted there: the page
-// has its answer, so the link goes to the requests the page itself still needs for this open. The
-// aborted fetch's refresh waits for the page's catchup-complete message, which reports the open's
-// catch-up done; the copy is refreshed then, when the link is the feature's own. Without a stored copy
-// the network answers, uncapped. The copy re-reads at every cap's end: a worker that just started can
-// match before the cache's disk index has settled, and the answer one cap later is the copy after all.
+// A first screen or a sidebar list. A stored first screen answers at once and sends no network request:
+// its event count is where the page's catch-up starts, so the copy and the catch-up make the screen, and the
+// network's answer replaces the copy at the catch-up's end (queueCopyRefresh). A sidebar list, and a first
+// screen whose first match misses, race the network: the network answers if it gives a usable 200
+// within the wait cap; otherwise the stored copy answers and the network fetch for that request is aborted
+// there, so the link goes to the requests the page itself still needs for this open. The aborted fetch's
+// refresh waits for the page's catchup-complete message. Without a stored copy the network answers, uncapped.
+// The copy re-reads at every cap's end: a worker that just started can match before the cache's disk index
+// has settled, and the answer one cap later is the copy after all.
 async function answerCopy(event, request) {
   const cache = await caches.open(COPY_CACHE);
   if (request.headers.get(NETWORK_ONLY_HEADER) === '1') {
     return networkAnswer(event, request);
+  }
+  if (isFirstScreenPath(new URL(request.url).pathname)) {
+    const copy = await cache.match(request.url);
+    if (copy) {
+      queueCopyRefresh(request.url);
+      return copy;
+    }
   }
   const controller = new AbortController();
   let networkSettled = false;

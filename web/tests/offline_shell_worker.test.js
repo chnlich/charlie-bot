@@ -341,37 +341,21 @@ test('a first screen with no stored copy takes the network answer, however long 
   assert.equal((await result.response.json()).body, 'network');
 });
 
-test('a slow network gives the stored copy at the wait cap, aborts its fetch, and the catch-up refresh replaces it', async (t) => {
-  t.mock.timers.enable({apis: ['setTimeout']});
+test('a stored first screen answers at once, sends no request, and the catch-up refresh replaces it', async () => {
   const h = harness();
   h.state.network = async () => firstScreen('one');
   await answer(h, request(BOOTSTRAP_URL));
 
-  const network = deferred();
-  h.state.network = () => network.promise.then(() => firstScreen('two'));
-  let answered = false;
+  h.state.network = async () => firstScreen('two');
   const callsAtHit = h.state.calls.length;
-  const slow = answerNow(h, request(BOOTSTRAP_URL)).then((result) => {
-    answered = true;
-    return result;
-  });
-  await flush();
-  t.mock.timers.tick(WAIT_CAP_MS - 1);
-  await flush();
-  assert.equal(answered, false, 'no answer before the wait cap');
-  t.mock.timers.tick(1);
-  const copy = await slow;
+  const copy = await answer(h, request(BOOTSTRAP_URL));
   assert.equal((await copy.response.json()).body, 'one');
   assert.ok(copy.response.headers.get(STORED_AT), 'a copy answer carries the time it was stored');
-  assert.equal(h.state.calls.length, callsAtHit + 1,
-      'the hit makes no network call beyond its own aborted fetch');
-  network.release();
-  await flush();
-  assert.equal(h.state.calls.length, callsAtHit + 1,
-      'the released network answers nothing: the fetch was aborted, not left running');
+  assert.equal(h.state.calls.length, callsAtHit, 'the hit sends no request: the first screen is not on the link twice');
 
   // The page reports the catch-up complete, and the refresh replaces the copy for the next open.
   await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
+  assert.equal(h.state.calls.length, callsAtHit + 1, 'the refresh is the one network request');
   const later = await answer(h, request(BOOTSTRAP_URL));
   assert.equal((await later.response.json()).body, 'two', 'the refreshed copy serves the next open');
 });
@@ -412,9 +396,8 @@ test('a copy hit answers from the copy when the network fails, and the refresh r
   h.state.network = async () => { throw new TypeError('offline'); };
   const callsAtHit = h.state.calls.length;
   const hit = await answer(h, request(BOOTSTRAP_URL));
-  assert.equal((await hit.response.json()).body, 'one', 'the copy answers the failed fetch');
-  assert.equal(h.state.calls.length, callsAtHit + 1,
-      'the hit makes no network call beyond its own failed fetch; the refresh waits for the catch-up');
+  assert.equal((await hit.response.json()).body, 'one', 'the copy answers the first screen while offline');
+  assert.equal(h.state.calls.length, callsAtHit, 'the hit sends no request; the refresh waits for the catch-up');
 
   h.state.network = async () => firstScreen('two');
   await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
@@ -453,54 +436,55 @@ test('a 401 during the catch-up refresh drops every copy', async () => {
   assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'the refresh 401 empties the copy store');
 });
 
-test('a fast network answer reaches the page as it is', async () => {
+test('a fast network answer for a list reaches the page as it is', async () => {
   const h = harness();
-  h.state.network = async () => firstScreen('one');
-  await answer(h, request(BOOTSTRAP_URL));
-  h.state.network = async () => firstScreen('two');
-  const result = await answer(h, request(BOOTSTRAP_URL));
+  h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answer(h, request(LIST_URL));
+  h.state.network = async () => new Response('["two"]', {status: 200, headers: {ETag: '"l2"'}});
+  const result = await answer(h, request(LIST_URL));
   assert.equal(result.response.headers.get(STORED_AT), null);
-  assert.equal((await result.response.json()).body, 'two');
+  assert.equal(await result.response.text(), '["two"]');
 });
 
-test('a network error or a 5xx answers from the stored copy', async () => {
+test('a network error or a 5xx for a list answers from the stored copy', async () => {
   const h = harness();
-  h.state.network = async () => firstScreen('one');
-  await answer(h, request(BOOTSTRAP_URL));
+  h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answer(h, request(LIST_URL));
 
   h.state.network = async () => { throw new TypeError('offline'); };
-  const offline = await answer(h, request(BOOTSTRAP_URL));
-  assert.equal((await offline.response.json()).body, 'one');
+  const offline = await answer(h, request(LIST_URL));
+  assert.equal(await offline.response.text(), '["one"]');
 
   h.state.network = async () => new Response('busy', {status: 503});
   const busy = await answer(h, request(LIST_URL));
-  assert.equal(busy.response.headers.get(STORED_AT), null, 'the list has no copy yet: the 5xx reaches the page');
-  assert.equal(busy.response.status, 503);
+  assert.equal(await busy.response.text(), '["one"]', 'the 5xx answers from the stored list');
 });
 
-test('a 401 drops every stored copy and reaches the page, and an offline page with no copy fails the request', async () => {
+test('a 401 drops every stored copy and reaches the page; an offline first screen with no copy fails', async () => {
   const h = harness();
+  h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answer(h, request(LIST_URL));
   h.state.network = async () => firstScreen('one');
   await answer(h, request(BOOTSTRAP_URL));
 
   h.state.network = async () => new Response('no', {status: 401});
-  const denied = await answer(h, request(BOOTSTRAP_URL));
+  const denied = await answer(h, request(LIST_URL));
   assert.equal(denied.response.status, 401);
 
   h.state.network = async () => { throw new TypeError('offline'); };
   await assert.rejects(answer(h, request(BOOTSTRAP_URL)), TypeError, 'the copy is gone, so the page sees the failure');
 });
 
-test('a revalidating 304 gives the stored copy: it names no body the page could read', async () => {
+test('a revalidating 304 for a list gives the stored copy: it names no body the page could read', async () => {
   const h = harness();
-  h.state.network = async () => firstScreen('one');
-  await answer(h, request(BOOTSTRAP_URL));
+  h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answer(h, request(LIST_URL));
 
   // The browser's HTTP cache revalidates against the worker's own subrequest, and the 304 lands inside
   // the wait cap. The copy carries the state that etag names.
-  h.state.network = async () => new Response(null, {status: 304, headers: {ETag: '"s1"'}});
-  const revalidated = await answer(h, request(BOOTSTRAP_URL));
-  assert.equal((await revalidated.response.json()).body, 'one', 'the copy answers the bodyless 304');
+  h.state.network = async () => new Response(null, {status: 304, headers: {ETag: '"l1"'}});
+  const revalidated = await answer(h, request(LIST_URL));
+  assert.equal(await revalidated.response.text(), '["one"]', 'the copy answers the bodyless 304');
   assert.notEqual(revalidated.response.headers.get(STORED_AT), null, 'the answer is the stored copy');
 });
 

@@ -21,12 +21,9 @@ const SHELL_KEY = self.location.origin + '/shell';
 const INDEX_KEY = self.location.origin + '/index';
 const STORED_AT_HEADER = 'X-CharlieBot-Stored-At';
 const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
-// How long the network may take before a stored sidebar list answers. The page's first paint budget
-// is 1 s: navigation start to the request, plus rendering the message, plus a 0.1 s margin. At the
-// calibrated CPU rate (3.56 times the reference), the bench's A-link
-// trace has the first-screen request issue 0.37 s after navigation start and the message paint
-// 0.03 s after the copy answers, so the cap is 1 − 0.37 − 0.03 − 0.1 = 0.50 s, clamped to the
-// plan's 0.4 s maximum.
+// The wait before a copy is read again. A worker that just started can match before the cache's disk index has
+// settled, so a copy's first match may miss although the copy is stored; one wait cap later the match answers. A
+// first screen's network race re-reads at each cap, and a sidebar list re-reads once before it asks the network.
 const WAIT_CAP_MS = 400;
 
 const SHELL_STATIC_REF = /<(?:link|script)\b[^>]*?\b(?:href|src)="(\/static\/[^"]+)"/g;
@@ -107,26 +104,30 @@ async function answerFile(request) {
   return fetch(request);
 }
 
-// A first screen or a sidebar list. A stored first screen answers at once and sends no network request:
-// its event count is where the page's catch-up starts, so the copy and the catch-up make the screen, and the
-// network's answer replaces the copy at the catch-up's end (queueCopyRefresh). A sidebar list, and a first
-// screen whose first match misses, race the network: the network answers if it gives a usable 200
-// within the wait cap; otherwise the stored copy answers and the network fetch for that request is aborted
-// there, so the link goes to the requests the page itself still needs for this open. The aborted fetch's
-// refresh waits for the page's catchup-complete message. Without a stored copy the network answers, uncapped.
-// The copy re-reads at every cap's end: a worker that just started can match before the cache's disk index
-// has settled, and the answer one cap later is the copy after all.
+// A first screen or a sidebar list. A stored copy answers at once and sends no network request: the copy's event
+// count is where the page's catch-up starts, and the network's answer replaces the copy at the catch-up's end
+// (queueCopyRefresh). A first screen whose first match misses races the network against the copy's re-read at each
+// wait cap: the network answers if it gives a usable 200 first; otherwise the copy answers and the network fetch is
+// aborted there. A sidebar list is not raced. Its copy is re-read once after the wait cap, and the network answers
+// only when that read misses too: a list the copy would beat is a fetch aborted mid-body, and the bytes it already
+// put on the link delay the requests that follow it. Without a stored copy the network answers.
 async function answerCopy(event, request) {
   const cache = await caches.open(COPY_CACHE);
   if (request.headers.get(NETWORK_ONLY_HEADER) === '1') {
     return networkAnswer(event, request);
   }
-  if (isFirstScreenPath(new URL(request.url).pathname)) {
-    const copy = await cache.match(request.url);
+  if (!isFirstScreenPath(new URL(request.url).pathname)) {
+    const copy = await cache.match(request.url) ?? await rereadAfterWaitCap(cache, request.url);
     if (copy) {
       queueCopyRefresh(request.url);
       return copy;
     }
+    return networkAnswer(event, request);
+  }
+  const copy = await cache.match(request.url);
+  if (copy) {
+    queueCopyRefresh(request.url);
+    return copy;
   }
   const controller = new AbortController();
   let networkSettled = false;
@@ -151,7 +152,12 @@ async function answerCopy(event, request) {
   }
 }
 
-// The abortable fetch of the copy race keeps its controller in answerCopy, where the race can stop it.
+async function rereadAfterWaitCap(cache, url) {
+  await waitCap(WAIT_CAP_MS);
+  return cache.match(url);
+}
+
+// The abortable fetch of the first screen's race keeps its controller in answerCopy, where the race can stop it.
 
 // One network answer for a request the worker sends to the network: a bodyless 304 — the browser's HTTP
 // cache held the entry and the revalidation matched, but a request the worker answers carries no cached

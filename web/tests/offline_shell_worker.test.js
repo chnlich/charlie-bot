@@ -436,56 +436,97 @@ test('a 401 during the catch-up refresh drops every copy', async () => {
   assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'the refresh 401 empties the copy store');
 });
 
-test('a fast network answer for a list reaches the page as it is', async () => {
+// A list answer with no copy at hand: its one re-read waits a wait cap on the fake clock, then the network answers.
+async function answerListWithCapWait(t, h, req) {
+  const pending = answer(h, req);
+  await flush();
+  await settleCaps(t, 1);
+  return pending;
+}
+
+
+test('a stored list answers from its copy at once, sends no request, and the catch-up refresh replaces it', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();
   h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
-  await answer(h, request(LIST_URL));
+  await answerListWithCapWait(t, h, request(LIST_URL));
   h.state.network = async () => new Response('["two"]', {status: 200, headers: {ETag: '"l2"'}});
-  const result = await answer(h, request(LIST_URL));
-  assert.equal(result.response.headers.get(STORED_AT), null);
-  assert.equal(await result.response.text(), '["two"]');
+  const callsAtHit = h.state.calls.length;
+  const copy = await answer(h, request(LIST_URL));
+  assert.equal(await copy.response.text(), '["one"]');
+  assert.ok(copy.response.headers.get(STORED_AT), 'a copy answer carries the time it was stored');
+  assert.equal(h.state.calls.length, callsAtHit, 'the hit sends no request: the list is not on the link twice');
+
+  await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
+  assert.equal(h.state.calls.length, callsAtHit + 1, 'the refresh is the one network request');
+  const later = await answer(h, request(LIST_URL));
+  assert.equal(await later.response.text(), '["two"]', 'the refreshed copy serves the next open');
 });
 
-test('a network error or a 5xx for a list answers from the stored copy', async () => {
+test('a list whose first match misses answers from its copy after one re-read, with no request', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();
   h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answerListWithCapWait(t, h, request(LIST_URL));
+  h.caches.api.firstMatchMisses.add(LIST_URL);
+  const callsAtHit = h.state.calls.length;
+  const pending = answer(h, request(LIST_URL));
+  await flush();
+  await settleCaps(t, 1);
+  const hit = await pending;
+  assert.equal(await hit.response.text(), '["one"]', 'the re-read finds the copy the index had not yet shown');
+  assert.equal(h.state.calls.length, callsAtHit, 'the re-read hit sends no request for the list');
+});
+
+
+test('a catch-up refresh that fails or answers 5xx leaves the stored list in place', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const h = harness();
+  h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answerListWithCapWait(t, h, request(LIST_URL));
   await answer(h, request(LIST_URL));
 
   h.state.network = async () => { throw new TypeError('offline'); };
-  const offline = await answer(h, request(LIST_URL));
-  assert.equal(await offline.response.text(), '["one"]');
-
+  await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
   h.state.network = async () => new Response('busy', {status: 503});
-  const busy = await answer(h, request(LIST_URL));
-  assert.equal(await busy.response.text(), '["one"]', 'the 5xx answers from the stored list');
+  await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
+  const after = await answer(h, request(LIST_URL));
+  assert.equal(await after.response.text(), '["one"]', 'the failed and 5xx refreshes keep the stored list');
 });
 
-test('a 401 drops every stored copy and reaches the page; an offline first screen with no copy fails', async () => {
+
+test('a 401 at the catch-up refresh drops every stored copy, including the list copy', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();
   h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
-  await answer(h, request(LIST_URL));
+  await answerListWithCapWait(t, h, request(LIST_URL));
   h.state.network = async () => firstScreen('one');
+  await answer(h, request(BOOTSTRAP_URL));
+  // Both copies answer their next opens, so both wait in the queue for the catch-up refresh.
+  await answer(h, request(LIST_URL));
   await answer(h, request(BOOTSTRAP_URL));
 
   h.state.network = async () => new Response('no', {status: 401});
-  const denied = await answer(h, request(LIST_URL));
-  assert.equal(denied.response.status, 401);
-
-  h.state.network = async () => { throw new TypeError('offline'); };
-  await assert.rejects(answer(h, request(BOOTSTRAP_URL)), TypeError, 'the copy is gone, so the page sees the failure');
+  await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
+  const store = await h.caches.api.open('last-state-v1');
+  assert.equal(await store.match(LIST_URL), undefined, 'the refresh 401 empties the list copy too');
+  assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'and the first-screen copy');
 });
 
-test('a revalidating 304 for a list gives the stored copy: it names no body the page could read', async () => {
+
+test('a revalidating 304 at the catch-up refresh leaves the stored list as it is', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();
   h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answerListWithCapWait(t, h, request(LIST_URL));
   await answer(h, request(LIST_URL));
 
-  // The browser's HTTP cache revalidates against the worker's own subrequest, and the 304 lands inside
-  // the wait cap. The copy carries the state that etag names.
+  // The refresh's 304 names no body, so it stores nothing and the copy answers the next open.
   h.state.network = async () => new Response(null, {status: 304, headers: {ETag: '"l1"'}});
-  const revalidated = await answer(h, request(LIST_URL));
-  assert.equal(await revalidated.response.text(), '["one"]', 'the copy answers the bodyless 304');
-  assert.notEqual(revalidated.response.headers.get(STORED_AT), null, 'the answer is the stored copy');
+  await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
+  const again = await answer(h, request(LIST_URL));
+  assert.equal(await again.response.text(), '["one"]', 'the bodyless 304 leaves the stored list');
+  assert.notEqual(again.response.headers.get(STORED_AT), null, 'the answer is the stored copy');
 });
 
 test('a 304 with no copy is fetched again past the HTTP cache, and the body reaches the page', async () => {
@@ -526,14 +567,18 @@ test('the worker answers only the listed GETs; writes, socket paths and the othe
   }
 });
 
-test('a copy-less list answers from the network without the cap', async (t) => {
+
+test('a copy-less list re-reads its copy after one wait cap, then takes the network answer', async (t) => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();
   const network = deferred();
   h.state.network = () => network.promise.then(() => new Response('[]', {status: 200, headers: {ETag: '"l"'}}));
   const pending = answer(h, request(LIST_URL));
   await flush();
-  t.mock.timers.tick(10 * WAIT_CAP_MS);
+  assert.equal(h.state.calls.length, 0, 'no request is sent before the re-read');
+  t.mock.timers.tick(WAIT_CAP_MS);
+  await flush();
+  assert.equal(h.state.calls.length, 1, 'the network is asked once the re-read has missed');
   network.release();
   const result = await pending;
   assert.equal(await result.response.text(), '[]');

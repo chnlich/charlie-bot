@@ -407,9 +407,16 @@ test('a copy hit answers from the copy when the network fails, and the refresh r
 
 test('a copy hit on one URL leaves the copies of other URLs queued for the same catch-up refresh', async () => {
   const h = harness();
-  h.state.network = async () => firstScreen('one');
-  await answer(h, request(BOOTSTRAP_URL));
-  await answer(h, request(LIST_URL));
+  h.state.network = async () => new Response('<html>shell</html>', {status: 200});
+  await Promise.all(h.fire('message', {
+    data: {
+      type: 'warm',
+      copies: [
+        {url: BOOTSTRAP_URL, body: {body: 'one'}},
+        {url: LIST_URL, body: ['one']},
+      ],
+    },
+  }).waits);
 
   h.state.network = async () => { throw new TypeError('offline'); };
   await answer(h, request(BOOTSTRAP_URL));

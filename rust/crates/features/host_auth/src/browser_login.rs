@@ -117,10 +117,13 @@ pub fn user_code_of(url: &str) -> &str {
   pattern.captures(url).and_then(|captures| captures.get(1)).map(|matched| matched.as_str()).unwrap_or("")
 }
 
-/// `missing_path`: the first argument that names an absolute path with no file behind it. A command whose script is gone
-/// cannot run, so the check names the file before it starts a process that would only fail.
+/// `missing_path`: the program or the script of an argv that has no file behind it. The program is the first argument,
+/// and the script is the first absolute path after it. Later absolute paths are data that a login may create, such as
+/// a token cache, so they never count. A bare program name is left to the spawn, which finds it on `PATH`.
 pub fn missing_path(argv: &[String]) -> Option<&str> {
-  argv.iter().map(String::as_str).find(|arg| arg.starts_with('/') && !Path::new(arg).exists())
+  let (program, arguments) = argv.split_first()?;
+  let script = arguments.iter().map(String::as_str).find(|arg| arg.starts_with('/'));
+  std::iter::once(program.as_str()).chain(script).find(|path| path.starts_with('/') && !Path::new(path).exists())
 }
 
 /// The files an attempt reads and writes: the host-auth state, and the ssh config that names the hosts its probe checks.
@@ -1212,6 +1215,24 @@ mod tests {
     );
     fs::write(format!("{}.release", slow.login.readback_command[0]), "").expect("the readback is released");
     recorded_outcome(&paths, "slow-check", Outcome::Approved).await;
+  }
+
+  #[test]
+  fn a_missing_program_or_script_is_named_and_a_later_data_path_is_not() {
+    let dir = tempfile::tempdir().expect("temporary directory exists");
+    let program = write_script(dir.path(), "program", "exit 0\n");
+    let script = write_script(dir.path(), "script", "exit 0\n");
+    let data = dir.path().join("token-cache").display().to_string();
+    let gone = dir.path().join("gone").display().to_string();
+    let argv = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect::<Vec<String>>();
+    assert_eq!(
+      missing_path(&argv(&[&program, &script, &data])),
+      None,
+      "a data path that a login creates is not a script"
+    );
+    assert_eq!(missing_path(&argv(&[&program, &gone, &data])), Some(gone.as_str()), "a missing script is named");
+    assert_eq!(missing_path(&argv(&[&gone, &script])), Some(gone.as_str()), "a missing program is named");
+    assert_eq!(missing_path(&argv(&["ssh", "-o", "BatchMode=yes"])), None, "a bare program name is left to the spawn");
   }
 
   #[tokio::test]

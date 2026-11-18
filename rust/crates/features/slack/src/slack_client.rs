@@ -33,9 +33,9 @@ pub(crate) const REACTIONS_REMOVE: &str = "reactions.remove";
 pub(crate) const SEARCH_MESSAGES: &str = "search.messages";
 pub(crate) const USERS_LIST: &str = "users.list";
 
-// The Slack Web API field names: the channel a call addresses, the message text, the thread timestamp that makes a
-// post a reply, and the users a conversation opens for. The client and the draft sender both build these bodies, so
-// both read the names from here.
+// The Slack Web API field names. `channel` is the channel a call addresses and `text` is the message text.
+// `thread_ts` makes a post a reply, and `users` names the group a conversation opens for. The client and the draft
+// sender both build these bodies, so both read the names from here.
 pub(crate) const CHANNEL: &str = "channel";
 pub(crate) const TEXT: &str = "text";
 pub(crate) const THREAD_TS: &str = "thread_ts";

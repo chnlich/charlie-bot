@@ -252,6 +252,7 @@ mod tests {
       resume_session_id: resume.map(str::to_string),
       log_dir: log_dir.map(Path::to_path_buf),
       cgroup_session_id: None,
+      remote_launch: None,
       backend_kwargs: Map::new(),
       manager_turn: false,
     }

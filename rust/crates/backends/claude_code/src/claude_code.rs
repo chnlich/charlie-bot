@@ -188,7 +188,6 @@ fn remember_warning(key: String) -> bool {
 pub struct ClaudeCodeBackend {
   model: Option<String>,
   effort: Option<String>,
-  cli_binary: Option<String>,
   fast_mode: bool,
   enable_subagents: bool,
   use_pre_tool_use_guards: bool,
@@ -211,7 +210,6 @@ impl ClaudeCodeBackend {
   pub(crate) fn from_launch(
     model: Option<String>,
     effort: Option<String>,
-    cli_binary: Option<String>,
     fast_mode: bool,
     enable_subagents: bool,
     claude_config_dir: Option<String>,
@@ -261,7 +259,6 @@ impl ClaudeCodeBackend {
     Ok(Self {
       model,
       effort: effort.filter(|value| !value.is_empty()),
-      cli_binary: cli_binary.filter(|value| !value.is_empty()),
       fast_mode,
       enable_subagents,
       use_pre_tool_use_guards,
@@ -282,7 +279,6 @@ impl ClaudeCodeBackend {
   /// Build the Claude command used by the raw-log runner.
   pub fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
     let mut command = headless_command(self.run_kind, self.enable_subagents);
-    command[0] = self.cli_binary.clone().unwrap_or_else(|| "claude".to_string());
     if let Some(session_id) = &self.claude_session_id {
       command.extend(["--session-id".to_string(), session_id.clone()]);
     }
@@ -598,16 +594,8 @@ impl AnthropicEndpointBackend {
     launch: LaunchArgs,
     cgroup_config: SessionCgroupConfig,
   ) -> anyhow::Result<Self> {
-    let backend = ClaudeCodeBackend::from_launch(
-      None,
-      effort,
-      None,
-      false,
-      enable_subagents,
-      claude_config_dir,
-      launch,
-      cgroup_config,
-    )?;
+    let backend =
+      ClaudeCodeBackend::from_launch(None, effort, false, enable_subagents, claude_config_dir, launch, cgroup_config)?;
     Ok(Self {
       backend,
       base_url,
@@ -629,13 +617,6 @@ impl AnthropicEndpointBackend {
   /// Merge `extra_body` into every request body as `CLAUDE_CODE_EXTRA_BODY`.
   pub fn with_extra_body(mut self, extra_body: Map<String, Value>) -> Self {
     self.extra_body = extra_body;
-    self
-  }
-
-  /// Replace the `claude` executable with `cli_binary`, as a `cc-claude` entry's own `cli_binary` does. The
-  /// replacement receives the arguments, environment, stdin and stdout that `claude` receives.
-  pub fn with_cli_binary(mut self, cli_binary: Option<String>) -> Self {
-    self.backend.cli_binary = cli_binary.filter(|value| !value.is_empty());
     self
   }
 
@@ -819,7 +800,6 @@ mod tests {
     let backend = ClaudeCodeBackend::from_launch(
       Some("claude-fable-5-1".to_string()),
       Some("high".to_string()),
-      Some("/synthetic/claude".to_string()),
       true,
       false,
       None,
@@ -831,6 +811,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: Map::new(),
         manager_turn: false,
       },
@@ -839,7 +820,7 @@ mod tests {
     .unwrap();
     let command = backend.build_command("prompt").unwrap();
     let settings = command[command.iter().position(|value| value == "--settings").unwrap() + 1].clone();
-    assert_eq!(command[0], "/synthetic/claude");
+    assert_eq!(command[0], "claude");
     assert!(command.windows(2).any(|pair| pair == ["--model", "claude-fable-5-1"]));
     assert!(command.windows(2).any(|pair| pair == ["--effort", "high"]));
     assert!(command.windows(2).any(|pair| pair == ["--resume", "resume-id"]));
@@ -860,7 +841,6 @@ mod tests {
     let backend = ClaudeCodeBackend::from_launch(
       None,
       None,
-      None,
       false,
       true,
       None,
@@ -872,6 +852,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: Some("manager-session".to_string()),
+        remote_launch: None,
         backend_kwargs: serde_json::json!({"run_kind": "manager_turn", "run_id": "manager-run", "can_delegate": true})
           .as_object()
           .unwrap()
@@ -961,7 +942,6 @@ mod tests {
     let backend = ClaudeCodeBackend::from_launch(
       None,
       None,
-      None,
       false,
       false,
       None,
@@ -973,6 +953,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: serde_json::json!({"run_kind": "manager_turn"}).as_object().unwrap().clone(),
         manager_turn: false,
       },
@@ -1002,6 +983,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: Map::new(),
         manager_turn: false,
       },
@@ -1044,7 +1026,6 @@ mod tests {
     let backend = ClaudeCodeBackend::from_launch(
       Some("claude-opus-4-8".to_string()),
       None,
-      None,
       false,
       false,
       None,
@@ -1056,6 +1037,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: Map::new(),
         manager_turn: false,
       },
@@ -1092,7 +1074,6 @@ mod tests {
     let mut backend = ClaudeCodeBackend::from_launch(
       Some("claude-haiku-5-5".to_string()),
       None,
-      None,
       false,
       false,
       None,
@@ -1104,6 +1085,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: Map::new(),
         manager_turn: false,
       },
@@ -1146,6 +1128,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: Map::new(),
         manager_turn: false,
       },
@@ -1261,7 +1244,6 @@ mod tests {
     let backend = ClaudeCodeBackend::from_launch(
       None,
       None,
-      None,
       false,
       false,
       None,
@@ -1273,6 +1255,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: Map::new(),
         manager_turn: false,
       },
@@ -1361,6 +1344,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: Map::new(),
         manager_turn: false,
       },
@@ -1395,6 +1379,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: Map::new(),
         manager_turn: false,
       },

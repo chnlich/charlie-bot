@@ -801,7 +801,6 @@ mod tests {
       let backend = ClaudeCodeBackend::from_launch(
         None,
         None,
-        None,
         false,
         false,
         None,
@@ -813,6 +812,7 @@ mod tests {
           resume_session_id: None,
           log_dir: None,
           cgroup_session_id: Some(meta.id.clone()),
+          remote_launch: None,
           backend_kwargs: launch.backend_kwargs.clone(),
           manager_turn: false,
         },

@@ -82,7 +82,9 @@ pub(crate) fn round_in_flight(
 }
 
 /// The task spec of a round of a prompt task: its prompt, with the session note (when given) under a `Session note`
-/// heading. The repo and base branch come from the task file; the approver is the user, and no review runs.
+/// heading. The repo and base branch come from the task file; the approver is the user, and no review runs. The
+/// `improve_host` of the task file goes into the spec, so the round's venue is the task's host on every path that
+/// starts a round.
 pub(crate) fn round_task_spec(task: &ScheduledTaskConfig, note: Option<&str>) -> TaskSpec {
   let mut goal = task.prompt.clone().unwrap_or_default();
   if let Some(note) = note.filter(|note| !note.is_empty()) {
@@ -98,6 +100,7 @@ pub(crate) fn round_task_spec(task: &ScheduledTaskConfig, note: Option<&str>) ->
     keep_worktree: false,
     cold_read: None,
     approver: TaskApprover::User,
+    improve_host: None,
   }
 }
 
@@ -173,8 +176,7 @@ fn binding_reader<'a>(
     let (snapshot, _reloaded) = loader::read_snapshot(features, &cfg)?;
     let Some(task) = find_task(&snapshot, name) else { return Ok(None) };
     let kind = scheduled_kind(task);
-    let host_hold =
-      if kind == ScheduledKind::Prompt { host_gate::hold_reason(features, task, &cfg).await? } else { None };
+    let host_hold = if kind == ScheduledKind::Prompt { host_gate::hold_reason(features, task).await? } else { None };
     Ok(Some(ScheduledBinding { session_id: task.session_id.clone(), kind, has_repo: task.repo.is_some(), host_hold }))
   })
 }

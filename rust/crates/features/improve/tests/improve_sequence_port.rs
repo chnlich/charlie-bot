@@ -166,6 +166,7 @@ impl LoopHarness {
           keep_worktree: false,
           cold_read: None,
           approver: TaskApprover::User,
+          improve_host: None,
         }),
       )
       .await?;
@@ -968,6 +969,7 @@ async fn an_improve_request_naming_a_pool_launches_on_its_member() -> anyhow::Re
         keep_worktree: false,
         cold_read: None,
         approver: TaskApprover::User,
+        improve_host: None,
       }),
     )
     .await?;

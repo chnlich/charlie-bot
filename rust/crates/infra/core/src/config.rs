@@ -14,7 +14,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 
 use crate::{paths, text_repr};
@@ -614,6 +614,49 @@ pub struct GithubConfig {
   /// text-carrying write.
   #[serde(default)]
   pub app_token_command: Option<String>,
+}
+
+/// One `host_auth.browser_logins` entry: a login that the host-auth page starts with one click. The model lives in
+/// core so that the cron loader can name the hosts the logins renew without depending on the host-auth feature.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserLoginConfig {
+  /// The URL segment of the start route, `/api/host-auth/logins/<name>/start`.
+  pub name: String,
+  /// The text the page shows for this login.
+  pub label: String,
+  /// The `/host-auth` row this login renews, named by its ssh alias. At most one login renews one row.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub host: Option<String>,
+  /// The login command as argv. It runs without a shell.
+  pub login_command: Vec<String>,
+  /// A regex. Its first match in the login output is the approval link, kept as matched and then given the user code.
+  pub approval_url_pattern: String,
+  /// The argv of a check that exits 0 while the login is valid. Its output shows on the page.
+  pub readback_command: Vec<String>,
+  /// Whether `login_command` runs under a pseudo-terminal in a new session. When it does, ssh reads
+  /// keyboard-interactive answers from `/dev/tty` on that terminal rather than on the server's own terminal.
+  #[serde(default)]
+  pub use_pty: bool,
+  /// A regex. Its first match in the login output writes one newline to the terminal. Requires `use_pty`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub enter_after_pattern: Option<String>,
+  /// A regex whose first capture group is the user code. The code is appended to the approval link as the
+  /// `user_code` query parameter, which the login card shows.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub user_code_pattern: Option<String>,
+}
+
+/// The `host_auth:` section: the host-auth panel's browser logins and Slack DM notification settings.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostAuthConfig {
+  #[serde(default)]
+  pub browser_logins: Vec<BrowserLoginConfig>,
+  #[serde(default)]
+  pub enable_slack_dm: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub slack_dm_user: Option<String>,
 }
 
 /// One profile's parsed `config.yaml`.

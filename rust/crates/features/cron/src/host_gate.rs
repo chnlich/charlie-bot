@@ -1,26 +1,23 @@
 //! The host gate of a scheduled task, and the Waiting on you items that the gate's hosts derive.
 //!
-//! A fire of a task whose backend names a host (`host_auth_alias`) probes that host before the fire reaches its bound
-//! session. The session's round, a worker that the session dispatches, then logs into that host. A bound delegation
-//! of a prompt task checks the same probe through `hold_reason`, so one check holds both paths.
-//! A task on a `backends.pools` id is judged on the member the pool selects for the fire, read without moving the
-//! pool's rotation. The gate and the fire then agree on the member.
+//! A prompt task that names an `improve_host` probes that host before the fire reaches its bound session. The session's
+//! round, a worker that the session dispatches, then logs into that host. A bound delegation of a prompt task checks the
+//! same probe through `hold_reason`, so one check holds both paths. The host is the task's own key, so the gate reads the
+//! same host whichever pool member a round selects.
 //! A host that awaits the user's approval holds the fire: the fire records one skip, and no session turn starts. Nothing
-//! is stored for the hold. The Waiting on you read derives one item per holder session and host
-//! from the host state and the enabled tasks. The item shows while the host awaits approval and is gone once it does
-//! not. Master and handler tasks start no worker, so they probe no host.
+//! is stored for the hold. The Waiting on you read derives one item per holder session and host from the host state and
+//! the enabled tasks. The item shows while the host awaits approval and is gone once it does not. Master, steps and
+//! handler tasks cannot name a host (the loader refuses the key on them), so they probe no host.
 
 use std::collections::HashSet;
 
 use anyhow::Context;
-use charliebot_agents::model_pool;
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::{HostLogin, OpenWaitingRow};
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
 
-use crate::config::{ScheduledTaskConfig, TaskMode, effective_backend};
+use crate::config::ScheduledTaskConfig;
 use crate::loader;
 
 /// The page where the user approves a host's login, which the derived item links to.
@@ -31,13 +28,12 @@ const HOST_AUTH_LINK: &str = "/host-auth";
 pub(crate) async fn hold_reason(
   features: &FeatureContext,
   task: &ScheduledTaskConfig,
-  cfg: &CharlieBotConfig,
 ) -> anyhow::Result<Option<String>> {
-  let Some(alias) = task_host(features, task, cfg).await? else {
+  let Some(alias) = task_host(task) else {
     return Ok(None);
   };
   let probe = features.registry.host_probe_reader()?;
-  let login = probe(features, &alias).await?;
+  let login = probe(features, alias).await?;
   Ok(login.awaits_approval.then(|| format!("host {} is {}: {}", login.alias, login.status, login.detail)))
 }
 
@@ -46,46 +42,9 @@ pub(crate) fn derived_waiting_rows(features: &FeatureContext) -> BoxFuture<'_, a
   Box::pin(derived_rows(features))
 }
 
-/// The alias of the host that a fire of `task` logs into, from its backend's `host_auth_alias`. `None` for a master or
-/// handler task, and for a backend type that names no host.
-async fn task_host(
-  features: &FeatureContext,
-  task: &ScheduledTaskConfig,
-  cfg: &CharlieBotConfig,
-) -> anyhow::Result<Option<String>> {
-  if task.mode == Some(TaskMode::Master) || task.handler.is_some() {
-    return Ok(None);
-  }
-  let Some(backend) = fire_backend_id(features, task, cfg).await? else {
-    return Ok(None);
-  };
-  let option = cfg
-    .get_backend_option(&backend)
-    .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' backend '{backend}' is not configured", task.name))?;
-  option_host(features, option).map_err(|error| anyhow::anyhow!("scheduled task '{}': {error}", task.name))
-}
-
-/// The alias of the host that `option` logs into, from its backend type's `host_auth_alias`. `None` for a backend type
-/// that names no host.
-fn option_host(features: &FeatureContext, option: &BackendOption) -> Result<Option<String>, String> {
-  let Some(read_alias) = features.registry.backend_host_alias_reader(&option.backend_type) else {
-    return Ok(None);
-  };
-  read_alias(&option.type_fields)
-}
-
-/// The backend a fire of `task` runs on: the task's configured option, or for a pool the member the pool selects for
-/// the fire. The pool's selection is read without moving its rotation, so the fire's own selection picks the same
-/// member. `None` when the pool has no selectable member, since the fire then ends with the exhausted error and runs
-/// nothing.
-async fn fire_backend_id(
-  features: &FeatureContext,
-  task: &ScheduledTaskConfig,
-  cfg: &CharlieBotConfig,
-) -> anyhow::Result<Option<String>> {
-  let configured = effective_backend(task, cfg)?;
-  let selector = model_pool::Selector::from_features(features, cfg)?;
-  Ok(selector.peek(&configured, &[])?.map(|option| option.id))
+/// The host a fire of `task` logs into: the task's `improve_host`. `None` for a task whose round runs on this host.
+fn task_host(task: &ScheduledTaskConfig) -> Option<&str> {
+  task.improve_host.as_deref()
 }
 
 /// One Waiting on you item per holder session and host that awaits approval, for each enabled task on that host whose bound
@@ -95,8 +54,8 @@ async fn derived_rows(features: &FeatureContext) -> anyhow::Result<Vec<OpenWaiti
   let (snapshot, _reloaded) = loader::read_snapshot(features, &cfg)?;
   let mut hosted = Vec::new();
   for task in snapshot.tasks.iter().filter(|task| task.enabled) {
-    if let Some(alias) = task_host(features, task, &cfg).await? {
-      hosted.push((task, alias));
+    if let Some(alias) = task_host(task) {
+      hosted.push((task, alias.to_string()));
     }
   }
   if hosted.is_empty() {
@@ -154,16 +113,13 @@ fn wait_row(holder_id: String, holder_name: String, login: &HostLogin) -> anyhow
 
 #[cfg(test)]
 mod tests {
-  use charliebot_agents::backend_availability;
   use charliebot_registry::registry::HostLogin;
   use charliebot_store::metadata::UtcDateTime;
   use serde_json::json;
 
-  use super::{derived_waiting_rows, fire_backend_id};
-  use crate::config::ScheduledTaskConfig;
+  use super::derived_waiting_rows;
   use crate::test_support::{
-    archive_task, auto_session, child_manager, feature_context_with_auto_host_backends,
-    feature_context_with_host_backends, manager, set_host_login, write_prompted_task,
+    archive_task, child_manager, feature_context_with_login_hosts, manager, set_host_login, write_prompted_task,
   };
 
   const SINCE: &str = "2026-11-01T21:43:00-07:00";
@@ -179,62 +135,23 @@ mod tests {
     }
   }
 
-  fn task(session_id: &str, backend: &str, enabled: bool) -> serde_json::Value {
+  fn task(session_id: &str, host: &str, enabled: bool) -> serde_json::Value {
     json!({
       "cron": "0 3 * * *", "mode": "worker", "enabled": enabled,
-      "timezone": "UTC", "session_id": session_id, "backend": backend,
+      "timezone": "UTC", "session_id": session_id, "improve_host": host,
     })
-  }
-
-  fn backend_task(backend: &str) -> ScheduledTaskConfig {
-    ScheduledTaskConfig {
-      name: "selection-test".to_string(),
-      cron: "0 3 * * *".to_string(),
-      prompt_file: None,
-      repo: None,
-      backend: Some(backend.to_string()),
-      timezone: "UTC".to_string(),
-      enabled: true,
-      project: None,
-      allow_failure: false,
-      session_id: None,
-      mode: None,
-      prompt: Some("synthetic task".to_string()),
-      handler: None,
-      steps: None,
-    }
-  }
-
-  #[tokio::test]
-  async fn model_and_singleton_pool_fires_peek_the_same_member_and_cooling() {
-    let (_home, features) = feature_context_with_auto_host_backends(&[], &["synthetic"]);
-    let cfg = features.config.get().unwrap();
-    let model = fire_backend_id(&features, &backend_task("synthetic"), &cfg).await.unwrap();
-    let pool = fire_backend_id(&features, &backend_task("auto"), &cfg).await.unwrap();
-    assert_eq!(model, pool);
-    assert_eq!(model.as_deref(), Some("synthetic"));
-
-    backend_availability::backend_availability(&features)
-      .unwrap()
-      .record("synthetic", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
-      .unwrap();
-    assert_eq!(fire_backend_id(&features, &backend_task("synthetic"), &cfg).await.unwrap(), None);
-    assert_eq!(fire_backend_id(&features, &backend_task("auto"), &cfg).await.unwrap(), None);
   }
 
   #[tokio::test]
   async fn a_host_wait_derives_one_item_per_holder_and_host_and_clears_when_the_host_answers_ok() {
-    let (_home, features) = feature_context_with_host_backends(&[
-      ("synthetic-host", "synthetic-login-host"),
-      ("synthetic-other", "synthetic-other-host"),
-    ]);
+    let (_home, features) = feature_context_with_login_hosts(&["synthetic-login-host", "synthetic-other-host"]);
     let home = features.config.get().unwrap().charliebot_home.clone();
     let root = manager(&features, "derive-root").await.unwrap();
     let node_a = child_manager(&features, &root.id, "derive-node-a").await.unwrap();
     let node_b = child_manager(&features, &root.id, "derive-node-b").await.unwrap();
-    write_prompted_task(&home, "task-a", &task(&node_a.id, "synthetic-host", true));
-    write_prompted_task(&home, "task-b", &task(&node_b.id, "synthetic-host", true));
-    write_prompted_task(&home, "task-c", &task(&node_b.id, "synthetic-other", true));
+    write_prompted_task(&home, "task-a", &task(&node_a.id, "synthetic-login-host", true));
+    write_prompted_task(&home, "task-b", &task(&node_b.id, "synthetic-login-host", true));
+    write_prompted_task(&home, "task-c", &task(&node_b.id, "synthetic-other-host", true));
 
     assert!(derived_waiting_rows(&features).await.unwrap().is_empty(), "no host has answered");
     set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
@@ -257,17 +174,17 @@ mod tests {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0].text, "Approve the ssh login to synthetic-other-host on /host-auth");
 
-    write_prompted_task(&home, "task-c", &task(&node_b.id, "synthetic-other", false));
+    write_prompted_task(&home, "task-c", &task(&node_b.id, "synthetic-other-host", false));
     assert!(derived_waiting_rows(&features).await.unwrap().is_empty(), "a disabled task holds no item");
   }
 
   #[tokio::test]
   async fn a_bound_session_without_an_open_parent_holds_its_own_item() {
-    let (_home, features) = feature_context_with_host_backends(&[("synthetic-host", "synthetic-login-host")]);
+    let (_home, features) = feature_context_with_login_hosts(&["synthetic-login-host"]);
     let home = features.config.get().unwrap().charliebot_home.clone();
     let root = manager(&features, "orphan-root").await.unwrap();
     let node = child_manager(&features, &root.id, "orphan-node").await.unwrap();
-    write_prompted_task(&home, "orphan", &task(&node.id, "synthetic-host", true));
+    write_prompted_task(&home, "orphan", &task(&node.id, "synthetic-login-host", true));
     set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
 
     let rows = derived_waiting_rows(&features).await.unwrap();
@@ -276,77 +193,5 @@ mod tests {
     archive_task(&features, &root.id).await;
     let rows = derived_waiting_rows(&features).await.unwrap();
     assert_eq!(rows.iter().map(|row| row.session_id.as_str()).collect::<Vec<_>>(), [node.id.as_str()], "{rows:?}");
-  }
-
-  #[tokio::test]
-  async fn a_pool_task_is_gated_on_the_member_the_pool_selects_for_its_fire() {
-    let (_home, features) = feature_context_with_auto_host_backends(
-      &[("synthetic-host", "synthetic-login-host")],
-      &["synthetic-host", "synthetic"],
-    );
-    let home = features.config.get().unwrap().charliebot_home.clone();
-    let node = auto_session(&features, "auto-first-fire").await.unwrap();
-    write_prompted_task(&home, "auto-first", &task(&node.id, "auto", true));
-    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
-
-    let rows = derived_waiting_rows(&features).await.unwrap();
-    assert_eq!(
-      rows.iter().map(|row| row.session_id.as_str()).collect::<Vec<_>>(),
-      [node.id.as_str()],
-      "the pool selects its first member, which names the host that awaits approval: {rows:?}"
-    );
-
-    backend_availability::backend_availability(&features)
-      .unwrap()
-      .record("synthetic-host", None, backend_availability::REASON_QUOTA_ERROR, "spent")
-      .unwrap();
-    let rows = derived_waiting_rows(&features).await.unwrap();
-    assert!(
-      rows.is_empty(),
-      "the pool selects 'synthetic' once the first member is out, and it names no host: {rows:?}"
-    );
-  }
-
-  #[tokio::test]
-  async fn a_pool_task_whose_selected_member_names_no_host_holds_no_item() {
-    let (_home, features) = feature_context_with_auto_host_backends(
-      &[("synthetic-host", "synthetic-login-host")],
-      &["synthetic", "synthetic-host"],
-    );
-    let home = features.config.get().unwrap().charliebot_home.clone();
-    let node = auto_session(&features, "auto-plain-first").await.unwrap();
-    write_prompted_task(&home, "auto-plain-first", &task(&node.id, "auto", true));
-    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
-
-    let rows = derived_waiting_rows(&features).await.unwrap();
-    assert!(
-      rows.is_empty(),
-      "the pool selects 'synthetic', which names no host, so the host's wait holds no item: {rows:?}"
-    );
-  }
-
-  #[tokio::test]
-  async fn a_rotate_pool_task_reads_its_member_without_moving_the_rotation() {
-    let (_home, features) = feature_context_with_host_backends(&[("synthetic-host", "synthetic-login-host")]);
-    let home = features.config.get().unwrap().charliebot_home.clone();
-    let node = manager(&features, "rotate-gate-node").await.unwrap();
-    write_prompted_task(&home, "rotate-gate", &task(&node.id, "pool", true));
-    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
-
-    // The rotation's first member is `synthetic`, which names no host. A read that moved the rotation would name
-    // `synthetic-login-host` on the second read and hold the task.
-    assert!(derived_waiting_rows(&features).await.unwrap().is_empty());
-    assert!(derived_waiting_rows(&features).await.unwrap().is_empty(), "a read leaves the rotation in place");
-  }
-
-  #[tokio::test]
-  async fn an_unknown_backend_id_still_fails_the_derived_rows() {
-    let (_home, features) = feature_context_with_host_backends(&[("synthetic-host", "synthetic-login-host")]);
-    let home = features.config.get().unwrap().charliebot_home.clone();
-    let node = manager(&features, "unknown-backend-node").await.unwrap();
-    write_prompted_task(&home, "unknown-backend", &task(&node.id, "missing-backend", true));
-
-    let error = derived_waiting_rows(&features).await.unwrap_err().to_string();
-    assert!(error.contains("missing-backend") && error.contains("backends.options"), "{error}");
   }
 }

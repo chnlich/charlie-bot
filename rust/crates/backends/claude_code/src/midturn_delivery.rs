@@ -60,6 +60,11 @@ mod tests {
   use charliebot_agents::runner::{AgentRunner, RunRequest};
   use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 
+  /// The PATH of a run whose `claude` is the stub at `stub`: the stub's directory, then the system directories.
+  fn stub_path(stub: &std::path::Path) -> String {
+    format!("{}:/usr/bin:/bin", stub.parent().expect("a stub sits in a directory").display())
+  }
+
   fn disabled_cgroup() -> SessionCgroupConfig {
     SessionCgroupConfig::disabled()
   }
@@ -73,6 +78,7 @@ mod tests {
       resume_session_id: None,
       log_dir: None,
       cgroup_session_id: None,
+      remote_launch: None,
       backend_kwargs: serde_json::Map::from_iter([
         ("midturn_delivery".to_string(), Value::Bool(true)),
         ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
@@ -112,7 +118,9 @@ mod tests {
     let run_id = "11111111-2222-3333-4444-555555555561";
     let message_id = "22222222-2222-3333-4444-555555555561";
     let marker = root.path().join("waiting-for-input");
-    let stub = root.path().join("claude-stream-json-stub");
+    let bin = root.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("claude");
     charliebot_shell_harness::write_executable(
       &stub,
       concat!(
@@ -130,7 +138,6 @@ mod tests {
     let backend = ClaudeCodeBackend::from_launch(
       None,
       None,
-      Some(stub.display().to_string()),
       false,
       false,
       None,
@@ -144,7 +151,7 @@ mod tests {
     let mut request = RunRequest::new(
       "Initial prompt".to_string(),
       root.path().join("cwd"),
-      AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root.path(), "/usr/bin:/bin") },
+      AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root.path(), &stub_path(&stub)) },
       SessionCgroupConfig::disabled(),
       Arc::new(Registry::new()),
     );
@@ -170,6 +177,7 @@ mod tests {
         resume_session_id: None,
         log_dir: Some(root.path().join("run")),
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: serde_json::Map::new(),
         manager_turn: false,
       },
@@ -229,7 +237,6 @@ mod tests {
     let backend = ClaudeCodeBackend::from_launch(
       None,
       None,
-      Some(stub.display().to_string()),
       false,
       false,
       None,
@@ -241,6 +248,7 @@ mod tests {
         resume_session_id: None,
         log_dir: Some(root.join("run")),
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: serde_json::Map::from_iter([
           ("midturn_delivery".to_string(), Value::Bool(true)),
           ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
@@ -255,7 +263,7 @@ mod tests {
     let mut request = RunRequest::new(
       prompt.to_string(),
       root.join("cwd"),
-      AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root, "/usr/bin:/bin") },
+      AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root, &stub_path(stub)) },
       SessionCgroupConfig::disabled(),
       Arc::new(Registry::new()),
     );
@@ -272,6 +280,7 @@ mod tests {
         resume_session_id: None,
         log_dir: Some(root.join("run")),
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: serde_json::Map::new(),
         manager_turn: false,
       },
@@ -295,7 +304,9 @@ mod tests {
     let transcript = root.path().join("transcript.jsonl");
     let skipped = root.path().join("skipped");
     let ran = root.path().join("ran");
-    let stub = root.path().join("claude-dedupe-stub");
+    let bin = root.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("claude");
     charliebot_shell_harness::write_executable(&stub, DEDUPE_STUB);
     let overlay = || {
       Env::from([

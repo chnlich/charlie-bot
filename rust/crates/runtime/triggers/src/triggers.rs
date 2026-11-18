@@ -2628,6 +2628,7 @@ mod tests {
             keep_worktree: false,
             cold_read: None,
             approver: TaskApprover::User,
+            improve_host: None,
           }),
           name: Some("Synthetic trigger task".to_string()),
           backend: Some("synthetic".to_string()),

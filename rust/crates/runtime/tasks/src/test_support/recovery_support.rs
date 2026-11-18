@@ -65,7 +65,6 @@ use tower::ServiceExt;
 
 /// The backend type every synthetic option of these tests uses.
 pub const BACKEND_TYPE: &str = "recovery_script";
-pub const SCRIPTED_LAUNCHER_FIELD: &str = "scripted_launcher";
 
 /// The option the synthetic nodes are created with.
 pub const BACKEND_ID: &str = "fake";
@@ -323,16 +322,7 @@ fn register_scripted_backend(registry: &mut Registry) -> Result<(), charliebot_r
     lifecycle: None,
     translate_fallback: false,
   })?;
-  // The scripted entries name a launcher the way `cc-anthropic-compatible` entries do, so a test can drive a run
-  // whose process the launcher carries away from this host.
-  registry.backend_cli_binary(BACKEND_TYPE, |fields| {
-    Ok(
-      fields
-        .get(YamlValue::String(SCRIPTED_LAUNCHER_FIELD.to_string()))
-        .and_then(YamlValue::as_str)
-        .map(str::to_string),
-    )
-  })
+  Ok(())
 }
 
 /// The recovery stack's registry: the scripted backend type, the synthetic loop controller and the backend pool's

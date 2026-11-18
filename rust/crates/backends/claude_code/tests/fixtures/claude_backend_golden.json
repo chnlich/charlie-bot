@@ -93,7 +93,7 @@
     },
     {
       "argv": [
-        "$BIN/claude",
+        "claude",
         "-p",
         "--output-format",
         "stream-json",

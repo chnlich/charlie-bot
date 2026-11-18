@@ -113,7 +113,12 @@ async fn create_task(
     Ok(repo) => repo,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  let task = match loader::validate_body(&name, Value::Object(body.clone()), repo.path()) {
+  let task = match loader::validate_body(
+    &name,
+    Value::Object(body.clone()),
+    repo.path(),
+    &crate::config::browser_login_hosts(&cfg),
+  ) {
     Ok(task) => task,
     Err(error) => return detail(StatusCode::CONFLICT, error),
   };
@@ -191,7 +196,7 @@ async fn update_task(
     Ok(repo) => repo,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  if let Err(error) = loader::load_file(&path, &name, repo.path()) {
+  if let Err(error) = loader::load_file(&path, &name, repo.path(), &crate::config::browser_login_hosts(&cfg)) {
     return detail(StatusCode::CONFLICT, error);
   }
   let original = match read_yaml_mapping(&path) {
@@ -208,7 +213,12 @@ async fn update_task(
     return response;
   }
   let candidate = apply_update(original, &values);
-  let candidate_task = match loader::validate_body(&name, Value::Object(candidate.clone()), repo.path()) {
+  let candidate_task = match loader::validate_body(
+    &name,
+    Value::Object(candidate.clone()),
+    repo.path(),
+    &crate::config::browser_login_hosts(&cfg),
+  ) {
     Ok(task) => task,
     Err(error) => return detail(StatusCode::CONFLICT, error),
   };
@@ -411,7 +421,7 @@ mod tests {
   use crate::scheduler::CronScheduler;
   use crate::test_support::{
     AUTO_POOL_ID, child_manager, feature_context, feature_context_with_auto, feature_context_with_extra_backends,
-    manager, write_prompted_task,
+    feature_context_with_login_hosts, manager, write_prompted_task,
   };
 
   async fn send(router: &axum::Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
@@ -459,17 +469,20 @@ mod tests {
         "cron": "0 8 * * *",
         "prompt_file": prompt,
         "backend": "synthetic",
+        "improve_host": "host3",
         "ignored": "discarded",
       }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(created["backend"], "synthetic");
+    assert!(created.get("improve_host").is_none());
 
     let (status, listed) = send(&router, "GET", "/api/cron/tasks", json!(null)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed[0]["name"], "synthetic-task");
     assert!(listed[0].get("prompt").is_none());
+    assert!(listed[0].get("improve_host").is_none());
 
     let (status, updated) =
       send(&router, "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": null, "enabled": false, "project": ""}))
@@ -487,6 +500,26 @@ mod tests {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(deleted["ok"], true);
     assert!(!path.exists());
+  }
+
+  #[tokio::test]
+  async fn list_shows_the_file_host_and_update_preserves_it() {
+    let (home, features) = feature_context_with_login_hosts(&["host3"]);
+    let path = write_prompted_task(home.path(), "hosted-task", &json!({"cron":"0 8 * * *", "improve_host":"host3"}));
+    let router = routes(&features);
+
+    let (status, listed) = send(&router, "GET", "/api/cron/tasks", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["name"], "hosted-task");
+    assert_eq!(listed[0]["improve_host"], "host3");
+
+    let (status, updated) =
+      send(&router, "PUT", "/api/cron/tasks/hosted-task", json!({"enabled": false, "improve_host": "host9"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["enabled"], false);
+    assert_eq!(updated["improve_host"], "host3");
+    let persisted = serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(persisted["improve_host"].as_str(), Some("host3"));
   }
 
   #[tokio::test]

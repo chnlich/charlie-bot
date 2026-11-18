@@ -250,7 +250,7 @@ impl CronScheduler {
     if let Some(round) = rounds::round_in_flight(&self.features, task, &session.id, cfg)? {
       return Ok(Some(format!("previous round still running ({round})")));
     }
-    host_gate::hold_reason(&self.features, task, cfg).await
+    host_gate::hold_reason(&self.features, task).await
   }
 
   /// One due fire of `task_name` used up on its bound session, with the reason it did not run recorded.
@@ -477,6 +477,7 @@ impl CronScheduler {
             keep_worktree: false,
             cold_read: None,
             approver: TaskApprover::User,
+            improve_host: None,
           }),
           name: Some(format!("{} · {}", task.name, firing)),
           backend: session_backend.map(str::to_string),
@@ -946,8 +947,8 @@ mod tests {
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{
     AUTO_POOL_ID, FakeGit, GIT_PROGRAM_LOCK, auto_manager, bound_round_leaf, child_manager, feature_context,
-    feature_context_with_auto, feature_context_with_host_backends, feature_context_with_launcher_backends,
-    host_probe_count, install_execution, manager, set_host_login, write_prompted_task, write_task,
+    feature_context_with_auto, feature_context_with_login_hosts, host_probe_count, install_execution, manager,
+    set_host_login, write_prompted_task, write_task,
   };
   use charliebot_registry::registry::HostLogin;
   use charliebot_tasks::test_support::process_guard::ProcessGroupGuard;
@@ -1361,6 +1362,7 @@ mod tests {
           distinct_backend_from: None,
         },
       ]),
+      improve_host: None,
     };
     let scheduler = CronScheduler::new(Arc::clone(&features));
     let (leaf, run, prompt) = scheduler
@@ -1603,6 +1605,7 @@ mod tests {
       prompt: Some("Synthetic scheduled work".to_string()),
       handler: None,
       steps: None,
+      improve_host: None,
     }
   }
 
@@ -1740,6 +1743,7 @@ mod tests {
       prompt: Some("Summarize the queue.".to_string()),
       handler: None,
       steps: None,
+      improve_host: None,
     };
 
     let (leaf_id, run) = fire_and_launch(&features, task, false).await;
@@ -1776,6 +1780,7 @@ mod tests {
       prompt: Some("Summarize the queue.".to_string()),
       handler: None,
       steps: None,
+      improve_host: None,
     };
     let (leaf, run) = bound_round_leaf(&features, &task, "").await;
     assert_eq!(run.backend.as_deref(), Some("member-a"), "the round runs on the member the pool selects");
@@ -1912,30 +1917,47 @@ mod tests {
     assert!(!launch.contains(&worktree_dir), "{launch}");
   }
 
-  /// A repo fire on a backend whose entry names a launcher runs where the launcher decides. The server prepares no
+  const LAUNCH_HOST: &str = "synthetic-launch-host";
+
+  /// The verdict of `LAUNCH_HOST` that lets a round start: the host answers ok.
+  fn launch_host_verdict() -> HostLogin {
+    HostLogin {
+      alias: LAUNCH_HOST.to_string(),
+      status: "ok".to_string(),
+      detail: "Synthetic login check".to_string(),
+      last_change_at: "2026-06-01T00:00:00+00:00".to_string(),
+      awaits_approval: false,
+    }
+  }
+
+  /// A repo round of a task that names an `improve_host` runs where the launcher decides. The server prepares no
   /// worktree for it and its brief names none: a worktree path here would be a place that is absent where the run
   /// executes, and the round's protocol on the launcher's host owns the working place.
   #[tokio::test]
   #[ignore = "integration"]
-  async fn a_repo_fire_on_a_launcher_backend_prepares_no_worktree_and_names_none() {
+  async fn a_repo_round_with_an_improve_host_prepares_no_worktree_and_names_none() {
     let _git_lock = GIT_PROGRAM_LOCK.lock().await;
     let git = FakeGit::install();
-    let (_home, features) = feature_context_with_launcher_backends(&["synthetic-launch"]);
+    let (_home, features) = feature_context_with_login_hosts(&[LAUNCH_HOST]);
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    set_host_login(&home, launch_host_verdict());
     install_execution(&features).await;
     let checkout_home = tempfile::tempdir().unwrap();
     let repo = checkout_home.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
     let node = manager(&features, "synthetic-launcher-node").await.unwrap();
     let task = ScheduledTaskConfig {
-      backend: Some("synthetic-launch".to_string()),
+      improve_host: Some(LAUNCH_HOST.to_string()),
       ..worker_task("synthetic-launcher-task", &node.id, Some(&repo))
     };
 
     let (leaf_id, run) = fire_and_settle(&features, task, true).await;
 
+    let leaf = features.store.get_session(&leaf_id).await.unwrap().unwrap();
+    assert_eq!(leaf.task.as_ref().and_then(|spec| spec.improve_host.as_deref()), Some(LAUNCH_HOST));
     assert_eq!(run.kind, RunKind::Work);
-    assert_eq!(run.worktree_path, None, "a launcher-backend run prepares no worktree");
-    assert_eq!(run.branch_name, None, "a launcher-backend run starts no branch");
+    assert_eq!(run.worktree_path, None, "an improve-host round prepares no worktree");
+    assert_eq!(run.branch_name, None, "an improve-host round starts no branch");
     let worktree_dir = features.config.get().unwrap().paths.worktree_dir.clone();
     let launch = launch_text(&features, &leaf_id, &run);
     assert!(launch.contains("Synthetic scheduled work"), "{launch}");
@@ -2311,7 +2333,6 @@ mod tests {
     assert_eq!(handler_results(&features, &node.id), 3);
   }
 
-  const GATED_BACKEND: &str = "synthetic-host";
   const GATED_ALIAS: &str = "synthetic-login-host";
   const GATED_DETAIL: &str = "Synthetic login check\nhttps://login.example.internal/check";
 
@@ -2326,9 +2347,9 @@ mod tests {
     }
   }
 
-  /// A feature context whose `GATED_BACKEND` entry logs into `GATED_ALIAS`.
+  /// A feature context whose config names `GATED_ALIAS` as a browser-login host.
   fn gated_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
-    feature_context_with_host_backends(&[(GATED_BACKEND, GATED_ALIAS)])
+    feature_context_with_login_hosts(&[GATED_ALIAS])
   }
 
   #[tokio::test]
@@ -2345,7 +2366,7 @@ mod tests {
       "gated",
       &json!({
         "cron": "* * * * *", "mode": "worker", "enabled": true,
-        "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
+        "timezone": "UTC", "session_id": node.id, "improve_host": GATED_ALIAS,
       }),
     );
     let root_facts = features.store.load_all_facts(&root.id).unwrap().len();
@@ -2387,7 +2408,7 @@ mod tests {
       "unreachable",
       &json!({
         "cron": "* * * * *", "mode": "worker", "enabled": true,
-        "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
+        "timezone": "UTC", "session_id": node.id, "improve_host": GATED_ALIAS,
       }),
     );
     CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
@@ -2407,7 +2428,7 @@ mod tests {
       "probe-error",
       &json!({
         "cron": "* * * * *", "mode": "worker", "enabled": true,
-        "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
+        "timezone": "UTC", "session_id": node.id, "improve_host": GATED_ALIAS,
       }),
     );
     // No verdict is set, so the stub's probe errors, as the real probe does for an alias the ssh config lacks.
@@ -2419,7 +2440,7 @@ mod tests {
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn a_task_whose_backend_names_no_host_and_a_handler_task_probe_no_host() {
+  async fn a_task_without_an_improve_host_and_a_handler_task_probe_no_host() {
     let (_home, features) = gated_context();
     install_execution(&features).await;
     let home = features.config.get().unwrap().charliebot_home.clone();
@@ -2431,11 +2452,11 @@ mod tests {
       "handled",
       &json!({
         "cron": "* * * * *", "handler": "synthetic_handler", "enabled": true,
-        "timezone": "UTC", "session_id": handled.id, "backend": GATED_BACKEND,
+        "timezone": "UTC", "session_id": handled.id,
       }),
     );
     CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
-    assert_eq!(host_probe_count(&home, GATED_ALIAS), 0, "no backend of these tasks names the host");
+    assert_eq!(host_probe_count(&home, GATED_ALIAS), 0, "no task of these names the host");
     assert!(skipped_events(&features, &handled.id).is_empty());
     assert_eq!(handler_results(&features, &handled.id), 1, "the handler runs despite the host's wait");
     assert_eq!(pending_inputs(&features, &plain.id).len(), 1, "the plain fire reaches its bound session");

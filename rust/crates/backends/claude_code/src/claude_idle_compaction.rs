@@ -331,6 +331,7 @@ pub fn build_idle_process(
     resume_session_id: None,
     log_dir: None,
     cgroup_session_id: Some(identity.session_id.clone()),
+    remote_launch: None,
     backend_kwargs,
     manager_turn: false,
   };

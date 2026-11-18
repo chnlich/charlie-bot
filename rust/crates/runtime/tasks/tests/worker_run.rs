@@ -35,13 +35,12 @@ use charliebot_tasks::prompts::{LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
 use charliebot_tasks::{cold_read, handoff, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, SCRIPTED_LAUNCHER_FIELD, Scripts, Stack, TOKEN_FIELD, cold_read_body,
-  init_repo_with_origin, last_child_report, post_delegate, result_script, scripted_type, settle_until, synthetic_git,
-  synthetic_run, write_sitrep,
+  BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, Scripts, Stack, TOKEN_FIELD, cold_read_body, init_repo_with_origin,
+  last_child_report, post_delegate, result_script, scripted_type, settle_until, synthetic_git, synthetic_run,
+  write_sitrep,
 };
 use serde_json::{Map, Value, json};
 use serde_yaml::Mapping;
-use serde_yaml::Value as YamlValue;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 /// The id of the priority pool that the Auto sessions of the failover tests run on.
@@ -302,35 +301,36 @@ async fn bare_branch_base_behind_starts_from_origin_tip() -> anyhow::Result<()> 
   Ok(())
 }
 
-/// A repository work run on a launcher backend runs where the launcher decides: the server prepares no worktree for
-/// it, starts no branch, and its brief names no path under this host's worktree directory, because such a path would
-/// be a place that is absent where the run executes. A run on this host's own backend keeps its worktree
-/// (`bare_branch_base_behind_starts_from_origin_tip`, and the cron fires' tests in `features/cron`).
+/// A repository work run whose task names an `improve_host` runs where the improve launcher decides: the server prepares
+/// no worktree for it, starts no branch, and its brief names no path under this host's worktree directory, because such
+/// a path would be a place that is absent where the run executes. A run without the key keeps its worktree
+/// (`bare_branch_base_behind_starts_from_origin_tip`, and the cron fires' tests in `features/cron`). The host is one
+/// that does not resolve, so the launcher ends the run in ssh's failure; the venue facts hold for that launch.
 #[tokio::test]
 #[ignore = "integration"]
-async fn a_repo_work_run_on_a_launcher_backend_prepares_no_worktree_and_names_none() -> anyhow::Result<()> {
+async fn a_repo_work_run_with_an_improve_host_prepares_no_worktree_and_names_none() -> anyhow::Result<()> {
+  const UNRESOLVED_HOST: &str = "synthetic-no-such-host.invalid";
   let scripts = Scripts::new(vec![result_script("worker done")]);
-  let mut option = scripts.option(BACKEND_ID, BACKEND_TYPE);
-  option
-    .type_fields
-    .insert(YamlValue::String(SCRIPTED_LAUNCHER_FIELD.to_string()), YamlValue::String("/path/to/launcher".to_string()));
+  let option = scripts.option(BACKEND_ID, BACKEND_TYPE);
   let stack = Stack::start_with(vec![option], vec![BACKEND_ID.to_string()]).await?;
   stack.write_access_key()?;
   let process_guard = StackProcessGuard::new(&stack);
   let dir = tempfile::tempdir()?;
   let (repo, _origin) = init_repo_with_origin(dir.path())?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
-  let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(implement_task(&repo, "ship it"))).await?;
+  let mut task = implement_task(&repo, "ship it");
+  task.improve_host = Some(UNRESOLVED_HOST.to_string());
+  let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(task)).await?;
 
   stack.dispatch.admit_input(&worker.id, event_types::USER, "do the thing", "user", json!({})).await?;
   let run = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
   process_guard.track_run(&worker.id, &run).await?;
-  assert_eq!(stack.wait_terminal(&worker.id, &run).await?, RunOutcomeKind::Success);
+  stack.wait_terminal(&worker.id, &run).await?;
   process_guard.track_all()?;
 
   let record = stack.store().read_run_sync(&worker.id, &run)?.expect("the run is recorded");
-  assert_eq!(record.worktree_path, None, "a launcher-backend run prepares no worktree");
-  assert_eq!(record.branch_name, None, "a launcher-backend run starts no branch");
+  assert_eq!(record.worktree_path, None, "an improve-host run prepares no worktree");
+  assert_eq!(record.branch_name, None, "an improve-host run starts no branch");
   let launch = std::fs::read_to_string(stack.store().run_dir(&worker.id, &run).join(LAUNCH_TEXT_FILENAME))?;
   assert!(launch.contains("ship it"), "{launch}");
   let worktree_dir = stack.cfg.paths.worktree_dir.clone();

@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use charliebot_chat_threads::channel_service::ChannelListener;
 use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
-use charliebot_chat_threads::summon::{SLACK_NAMESPACE, namespaced_uuid};
+use charliebot_chat_threads::summon::{self, SLACK_NAMESPACE};
 use charliebot_chat_threads::thread_entry::{
   self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform, ThreadReplyError,
 };
@@ -26,7 +26,7 @@ const ACCEPTANCE_REACTION: &str = "eyes";
 
 /// The deterministic session id for a Slack thread.
 pub fn summon_session_id(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
-  namespaced_uuid(SLACK_NAMESPACE, &format!("slack:{team_id}:{channel_id}:{thread_ts}"))
+  summon::summon_session_id(SLACK_NAMESPACE, &SLACK, &[team_id, channel_id, thread_ts])
 }
 
 /// The acceptance of one allowed `app_mention`, which persists the summon and starts its round.

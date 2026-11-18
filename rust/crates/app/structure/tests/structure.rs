@@ -1189,6 +1189,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
   OwnerRow { name: "task_type", owner: "runtime/store", hint: "Use `charliebot_store::metadata::TASK_TYPE_FIELD`." },
   OwnerRow {
+    name: "context_refs",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::CONTEXT_REFS_FIELD`; the retired task-spec list keeps its name there.",
+  },
+  OwnerRow {
     name: "worktree_path",
     owner: "runtime/store",
     hint: "Use `charliebot_store::run_records::OBSERVATION_WORKTREE_PATH`.",
@@ -1399,6 +1404,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
 /// config key or a reply field with no separator would slip past it. These must match an exact string literal outside
 /// their owner so a raw field name cannot return unnoticed.
 const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
+  OwnerRow {
+    name: "acceptance",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::ACCEPTANCE_FIELD`; the retired task-spec list keeps its name there.",
+  },
   OwnerRow { name: "credential", owner: "infra/core", hint: "Use `charliebot_core::config::CREDENTIAL_KEY`." },
   OwnerRow { name: "api_key", owner: "infra/core", hint: "Use `charliebot_core::credentials::API_KEY_FIELD`." },
   OwnerRow {

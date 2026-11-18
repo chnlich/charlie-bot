@@ -135,6 +135,12 @@ pub const COLD_READ_TRIGGER_FIELD: &str = "trigger";
 /// The task-spec field naming who approves a task's delivery. The session create and patch requests and the stored
 /// task record carry the same name, so it is spelled once, here.
 pub const APPROVER_FIELD: &str = "approver";
+/// The retired task-spec list of acceptance criteria. `TaskSpec`'s read accepts the key and drops it; the session
+/// create and patch requests import this name instead of each spelling it.
+pub const ACCEPTANCE_FIELD: &str = "acceptance";
+/// The retired task-spec list of context references. `TaskSpec`'s read accepts the key and drops it; the session
+/// create and patch requests import this name instead of each spelling it.
+pub const CONTEXT_REFS_FIELD: &str = "context_refs";
 /// The response field holding a session's display name. The voice recordings page's rows carry the same name, so it
 /// is spelled once, here.
 pub const SESSION_NAME_FIELD: &str = "session_name";

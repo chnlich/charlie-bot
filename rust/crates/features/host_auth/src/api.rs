@@ -639,6 +639,7 @@ host_auth:
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_link_probe_records_its_match_and_only_a_probe_starts_a_login() {
     let _slot_lock = crate::test_support::round_slot_lock().lock().await;
     let home = home("link-probe", false);

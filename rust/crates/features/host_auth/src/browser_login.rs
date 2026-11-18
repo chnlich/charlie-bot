@@ -1343,6 +1343,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_link_probe_passes_on_its_link_and_ends_the_whole_process_tree() {
     let _serial = SERIAL.lock().await;
     let stub = LoginStub::new(
@@ -1362,6 +1363,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_link_probe_stops_before_answering_the_login_prompt() {
     let _serial = SERIAL.lock().await;
     let mut stub = LoginStub::new(
@@ -1381,27 +1383,36 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_link_probe_reserves_its_login_against_a_concurrent_start() {
     let _serial = SERIAL.lock().await;
-    let stub = LoginStub::new("probe-reserves", "echo $$ >> \"$0.starts\"\nsleep 600\n", "exit 0\n");
+    let stub = LoginStub::new(
+      "probe-reserves",
+      &format!(
+        "echo $$ >> \"$0.starts\"\nwhile [ ! -e \"$0.release\" ]; do sleep 0.001; done\n{PRINT_LINK}\nsleep 600\n"
+      ),
+      "exit 0\n",
+    );
     let script = &stub.login.login_command[0];
     let starts = format!("{script}.starts");
     let login = stub.login.clone();
-    let probe = tokio::spawn(async move { probe_link_within(&login, Duration::from_secs(1)).await });
+    let probe = tokio::spawn(async move { probe_link_within(&login, Duration::from_secs(5)).await });
     until(|| Path::new(&starts).exists()).await;
 
     let failure = start_login_with_paths(&stub.login, stub.paths()).await.expect_err("a probe owns the process slot");
 
     assert!(failure.0.contains("link probe is in progress"), "{failure:?}");
     assert_eq!(fs::read_to_string(&starts).expect("the start count reads").lines().count(), 1);
-    assert_eq!(probe.await.expect("the probe task completes").expect("the probe ends"), LinkMatch::Fail);
+    fs::write(format!("{script}.release"), "").expect("the login is released");
+    assert_eq!(probe.await.expect("the probe task completes").expect("the probe ends"), LinkMatch::Pass);
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_link_probe_that_prints_no_link_fails_at_its_timeout_and_ends_its_process() {
     let _serial = SERIAL.lock().await;
     let stub = LoginStub::new("probe-silent", "echo $$ > \"$0.root\"\nsleep 600\n", "exit 0\n");
-    let matched = probe_link_within(&stub.login, Duration::from_secs(1)).await.expect("the probe runs");
+    let matched = probe_link_within(&stub.login, Duration::from_millis(60)).await.expect("the probe runs");
     assert_eq!(matched, LinkMatch::Fail);
     let pid: u32 = fs::read_to_string(format!("{}.root", stub.login.login_command[0]))
       .expect("the login recorded its pid")

@@ -93,8 +93,10 @@ impl Store {
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
     let before = file_signature(&path)?.map(|(_, signature)| signature);
-    let line_bytes = ndjson::append(&path, &event)?;
+    let appended = ndjson::append(&path, &event);
+    // The count moves after every attempt: an append whose sync fails can still have written its line.
     self.note_history_change();
+    let line_bytes = appended?;
     self.record_appended_line_count(&path, before, line_bytes)?;
     let compact = ChatEvent::from_value(&event);
     if let Some(cached) = cache.as_mut() {
@@ -941,7 +943,7 @@ impl Store {
     *cache = None;
   }
 
-  /// Count one live-history change: a write this store made, or one a caller announced by clearing the parsed cache.
+  /// Count one live-history change: a write this store attempted, or one a caller announced by clearing the parsed cache.
   pub(crate) fn note_history_change(&self) {
     self.history_changes.fetch_add(1, Ordering::Relaxed);
   }
@@ -1136,8 +1138,11 @@ impl Store {
       replacement.push_str(line);
       replacement.push('\n');
     }
-    fsutil::atomic_write_text(&live_path, &replacement)
-      .map_err(|error| StoreError::new(format!("{}: {error}", live_path.display())))?;
+    let rewritten = fsutil::atomic_write_text(&live_path, &replacement)
+      .map_err(|error| StoreError::new(format!("{}: {error}", live_path.display())));
+    // The count moves after every attempt: a rewrite whose later step fails can still have replaced the log.
+    self.note_history_change();
+    rewritten?;
     let archived_count = archived_raw.len() as i64;
     self
       .mutate_fresh(session_id, false, true, |meta: &mut SessionMetadata| {

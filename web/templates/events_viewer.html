@@ -285,9 +285,10 @@
     // -------------------------------------------------------------------------
     // Row summary
     // -------------------------------------------------------------------------
-    // A row previews its event on one line: the string content, the description, or the first
-    // message block that carries text — a typed answer, a tool call, or a tool result. A tool
-    // call or a tool result otherwise shows its badges alone, so a reader cannot tell what ran.
+    // A row previews its event on one line. That line is the string content, the description, or
+    // the first message block that carries text — a typed answer, a tool call, or a tool result.
+    // A tool call or a tool result otherwise shows its badges alone, so a reader cannot tell
+    // what ran.
     // A run's end writes no message, so its row names the run's own outcome instead: the exit code
     // and the seconds it thought. Without that the rows of one type read alike, and a failed run's
     // end cannot be told from a clean one without opening each row.
@@ -340,14 +341,14 @@
     // The one-line preview: whitespace collapsed, cut at PREVIEW_CHARS with an ellipsis so a cut
     // preview reads as cut rather than as the event's whole text.
     //
-    // The line breaker breaks a preview at its spaces alone, so a run longer than a phone's preview
-    // column — about 62 characters on the row's 358 px — moves whole to the next line. A tool call's
-    // row then spends the preview's first line on the name alone, 23 px of 358, and cuts the input,
-    // the text the row exists to show, at the second. A zero-width space after each run's own
-    // punctuation — a tool input's braces, brackets, commas and colons, prose's commas and
-    // semicolons — gives the run break points, so the first line fills with the input. The character
-    // draws nothing, and the cut lands before it goes in, so the preview keeps its PREVIEW_CHARS
-    // characters.
+    // The line breaker breaks a preview at its spaces alone. A run longer than a phone's preview
+    // column — about 62 characters on the row's 358 px — therefore moves whole to the next line.
+    // A tool call's row then spends the preview's first line on the name alone, 23 px of 358. The
+    // input, the text the row exists to show, is cut at the second line. A zero-width space after
+    // each run's own punctuation gives the run break points, so the first line fills with the
+    // input. The punctuation is a tool input's braces, brackets, commas and colons, and prose's
+    // commas and semicolons. The character draws nothing, and the cut lands before it goes in, so
+    // the preview keeps its PREVIEW_CHARS characters.
     const PREVIEW_BREAKS = /([{}[\],:;])/g;
 
     function previewText(ev) {
@@ -383,9 +384,9 @@
     // Render
     // -------------------------------------------------------------------------
     // The payload in its row: the highlighter's indented JSON, one block per line, offset by the
-    // line's own depth. A value longer than the row wraps inside the pre, and the wrap continued
-    // at the pre's left edge, where it read as a top-level line; the offset continues it under
-    // its own key. The line keeps its leading spaces, so a copied payload keeps its indentation,
+    // line's own depth. A value longer than the row wraps inside the pre. At the pre's left edge
+    // the wrap read as a top-level line. The offset continues it under its own key. The line
+    // keeps its leading spaces, so a copied payload keeps its indentation,
     // and the negative text-indent pulls the first line back over the space the padding already
     // holds. A string escapes its newlines, so each newline in this text separates two lines.
     function payloadHtml(ev) {
@@ -447,7 +448,7 @@
 
       // The badge's own text sets its width, so each row would start its time and
       // preview at a different x. The widest badge of this render sets the column
-      // the rest take (the .event-type rule above): the column reads 0 while the
+      // the rest take (the .event-type rule above). The column reads 0 while the
       // badges are measured at their content width, then the widest returns.
       list.style.setProperty('--event-type-col', '0');
       let widestType = 0;
@@ -501,10 +502,10 @@
     // -------------------------------------------------------------------------
     // Fetch JSONL
     // -------------------------------------------------------------------------
-    // Every event gets a key for the page's lifetime. A re-render rebuilds each row, and a load moves
-    // every event's place in the list, so the key is what names the same event across a render; a list
-    // position cannot. The key rides beside the event rather than on it: the row shows the event's own
-    // JSON, and a field added to the object would show up there.
+    // Every event gets a key for the page's lifetime. A re-render rebuilds each row, and a load
+    // moves every event's place in the list. The key is what names the same event across a
+    // render. A list position cannot. The key rides beside the event rather than on it: the row
+    // shows the event's own JSON, and a field added to the object would show up there.
     const eventKeys = new WeakMap();
     let nextEventKey = 0;
     function eventKey(ev) {
@@ -566,13 +567,14 @@
       return [...list.querySelectorAll('.event-row')].find((row) => row.getBoundingClientRect().bottom > bottom) || null;
     }
 
-    // Prepend the events before the loaded window. The control rides the sticky filter row, so a press
-    // can come at any scroll position. The re-render rebuilds every row and the loaded ones push the
-    // rest down, so the anchor row is found again by its key and the page follows its move: the reader
-    // keeps the rows they were reading, and a row that folds its payload on the way takes its own
-    // height with it. At the page's top the move is not followed, because the loaded rows open the list
-    // under the control there, earliest first, in the order the list reads; following it would leave
-    // them above the viewport, where the press would read as nothing.
+    // Prepend the events before the loaded window. The control rides the sticky filter row, so a
+    // press can come at any scroll position. The re-render rebuilds every row and the loaded ones
+    // push the rest down. The anchor row is found again by its key, and the page follows its move.
+    // The reader keeps the rows they were reading. A row that folds its payload on the way takes
+    // its own height with it. At the page's top the move is not followed, because the loaded rows
+    // open the list under the control there. They arrive earliest first, in the order the list
+    // reads. Following the move would leave them above the viewport, where the press would read as
+    // nothing.
     async function loadEarlier() {
       if (loadingEarlier || !(windowStart > 0)) return;
       loadingEarlier = true;
@@ -587,9 +589,9 @@
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
         const earlier = parseEvents(await res.text());
-        // The anchor is read once the rows are about to be replaced, after the fetch: a scroll made
-        // while the request was pending is part of the place a press keeps, not something the
-        // compensation undoes.
+        // The anchor is read once the rows are about to be replaced, after the fetch. A scroll
+        // made while the request was pending is part of the place a press keeps, not something
+        // the compensation undoes.
         const anchor = readerAnchor(list);
         const anchorKey = anchor ? anchor.dataset.key : null;
         const anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;

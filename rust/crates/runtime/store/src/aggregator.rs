@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::hooks::EventRenderer;
 use crate::message_events;
 use crate::metadata::{BASE_BRANCH_FIELD, TASK_STATE};
+use crate::run_display_state::RunDisplayState;
 use crate::streaming::{APPEND, LENGTH, THINKING_APPEND, THINKING_LENGTH};
 use crate::tool_rows::{SubagentStatus, ToolRow, ToolRows, Usage, tool_preview};
 use crate::{StoreError, StoreResult};
@@ -931,7 +932,7 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
     .map(event_str)
     .unwrap_or_default();
   let state = event.field("state").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
-  let state_word = if state == "withheld" && event.field("withheld").is_some_and(is_truthy) {
+  let state_word = if state == RunDisplayState::Withheld.as_str() && event.field("withheld").is_some_and(is_truthy) {
     format!("withheld · {}", event_str(event.field("withheld").expect("checked field")))
   } else if is_truthy(required_field(event, event_types::LAUNCH_FAILED)?) {
     "launch failed".to_string()

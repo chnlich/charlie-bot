@@ -33,6 +33,7 @@ use crate::held_run_lists::RunListHold;
 pub use crate::metadata::MetadataReadError;
 use crate::metadata::{BASE_BRANCH_FIELD, REPO_PATH_FIELD, UtcDateTime};
 use crate::path_error;
+pub use crate::run_display_state::RunDisplayState;
 pub use crate::run_facts::RunFacts;
 #[cfg(test)]
 use crate::run_facts::{CachedRunFacts, RunFactsMemo};
@@ -339,19 +340,6 @@ impl RunOutcome {
   }
 }
 
-/// A fact-derived run display value.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunDisplayState {
-  Queued,
-  Running,
-  Attention,
-  Stopped,
-  Withheld,
-  Success,
-  Failed,
-  Interrupted,
-}
-
 /// The host boot time, read from `/proc/stat` on first use: only a launched run without a terminal fact needs it.
 #[derive(Debug, Default)]
 pub struct HostBoot(Option<OffsetDateTime>);
@@ -464,22 +452,6 @@ impl RunFacts {
       None => !requests.is_empty(),
       Some(request_id) => requests.iter().any(|candidate| candidate.as_deref() == Some(request_id)),
     })
-  }
-}
-
-impl RunDisplayState {
-  /// The persisted UI spelling for this state.
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Self::Queued => "queued",
-      Self::Running => "running",
-      Self::Attention => "attention",
-      Self::Stopped => "stopped",
-      Self::Withheld => "withheld",
-      Self::Success => "success",
-      Self::Failed => "failed",
-      Self::Interrupted => "interrupted",
-    }
   }
 }
 

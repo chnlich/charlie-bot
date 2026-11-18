@@ -379,8 +379,8 @@ async fn switch(
     return Err(store_error(StoreError::invalid(binding.backend_lock_detail(&target))));
   }
 
-  // The pre-rule backfill: a held native id with no recorded producer gets the effective current backend first, so the
-  // next turn judges the id against the backend that produced it.
+  // The pre-rule backfill: a held native id with no recorded producer gets the effective current backend first.
+  // The next turn then judges the id against the backend that produced it.
   let holds_native_id = parent.cc_session_id.as_deref().is_some_and(|id| !id.is_empty());
   if holds_native_id && parent.native_backend.as_deref().is_none_or(str::is_empty) {
     features.store.persist_native_backend(session_id, &effective).await.map_err(store_error)?;

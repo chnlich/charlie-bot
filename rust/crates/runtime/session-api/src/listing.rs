@@ -515,7 +515,7 @@ impl RowSchema {
   }
 }
 
-/// The fields the session-move picker reads: it labels a choice by name, keeps the manager rows, walks the task
+/// The fields the session-move picker reads. It labels a choice by name, keeps the manager rows, walks the task
 /// parents to drop the moved session's descendants, and names the chosen parent by id.
 const MOVE_FIELDS: [&str; 4] = [ID_FIELD, "name", "profile", TASK_PARENT_ID_FIELD];
 
@@ -774,7 +774,7 @@ const FIRST_SCREEN_KEY: &str = "$screen";
 
 /// The roots each group's first screen may carry: the most a sidebar of any window paints.
 ///
-/// The sidebar fills its own height with rows, so the number it paints follows the window:
+/// The sidebar fills its own height with rows, so the number it paints follows the window.
 /// `web/static/js/sidebar/groups.js` measures its list and takes the roots that fit, up to
 /// `GROUP_SESSION_PREVIEW_MAX`. The page carries this many roots per group, with their descendants, so a tall
 /// window has rows to paint without another request. A drift leaves spare rows in the page, or paints the rows

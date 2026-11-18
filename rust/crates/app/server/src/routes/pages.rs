@@ -681,6 +681,75 @@ async fn home_page(State(state): State<Arc<AppState>>, request: Parts) -> Respon
   .await
 }
 
+/// The events viewer's finished answers, up to [`EVENTS_ANSWER_MEMO_ENTRIES`], each kept while every input that
+/// shaped it still holds.
+///
+/// The viewer serializes its session row and renders its template on every request. A reader who comes back to the
+/// same viewer asks for the body the page served a moment ago, and the row, the template globals and the request
+/// line prove it. The body and its compressed form are kept whole, so a repeat request reads neither the row's
+/// response value nor the engine.
+#[derive(Default)]
+struct EventsAnswerMemo {
+  entries: Vec<EventsAnswerEntry>,
+}
+
+struct EventsAnswerEntry {
+  key: EventsAnswerKey,
+  body: Bytes,
+  compressed: Option<PageCompressed>,
+}
+
+/// Every input that shapes one events viewer answer.
+///
+/// The session row is the one `get_session` answered, and it is that row's value the page rendered before this memo,
+/// so a request whose row differs renders again. The row follows the store's own metadata cache window: the route
+/// serves the row the store hands out, as it did before the memo. The template globals compare by value, as the render
+/// memo compares them, so a reloaded config or credentials file still reaches the page.
+#[derive(Clone, PartialEq)]
+struct EventsAnswerKey {
+  revision: u64,
+  asset_version: String,
+  hostname: String,
+  encoding: PageEncoding,
+  method: String,
+  path: String,
+  query: String,
+  session_id: String,
+  events_url: String,
+  session: SessionMetadata,
+  globals: Vec<TemplateGlobal>,
+}
+
+impl EventsAnswerMemo {
+  /// The answer for these inputs, or the one `build` renders and this memo keeps.
+  fn answer(
+    &mut self,
+    key: &EventsAnswerKey,
+    build: impl FnOnce() -> Result<(Bytes, Option<PageCompressed>), Failure>,
+  ) -> Result<(Bytes, Option<PageCompressed>), Failure> {
+    if let Some(at) = self.entries.iter().position(|entry| entry.key == *key) {
+      // The answer served again is the newest, so an eviction takes the one served longest ago.
+      let entry = self.entries.remove(at);
+      let answer = (entry.body.clone(), entry.compressed.clone());
+      self.entries.push(entry);
+      return Ok(answer);
+    }
+    let (body, compressed) = build()?;
+    self.entries.push(EventsAnswerEntry { key: key.clone(), body: body.clone(), compressed: compressed.clone() });
+    if self.entries.len() > EVENTS_ANSWER_MEMO_ENTRIES {
+      self.entries.remove(0);
+    }
+    Ok((body, compressed))
+  }
+}
+
+static EVENTS_ANSWER_MEMO: LazyLock<Mutex<EventsAnswerMemo>> =
+  LazyLock::new(|| Mutex::new(EventsAnswerMemo::default()));
+
+/// The finished viewer answers one process keeps: a reader who moves between two sessions comes back to the viewer
+/// it opened a moment ago, and a single slot would render it again on every switch.
+const EVENTS_ANSWER_MEMO_ENTRIES: usize = 4;
+
 async fn events_viewer(
   State(state): State<Arc<AppState>>,
   AxumPath(session_id): AxumPath<String>,
@@ -696,13 +765,55 @@ async fn events_viewer(
       return render_events_unavailable(state, request, session_id, StatusCode::INTERNAL_SERVER_ERROR, "failed").await;
     }
   };
-  let session = state.features.store.session_metadata_value(&session);
-  let context = json!({
-    "session": session,
-    "session_id": session_id,
-    "events_url": route::fill(session_routes::SESSION_EVENTS_JSONL_PATH, &[session_id.as_str()]),
-  });
-  render_page(state, request, "events_viewer.html", context, PageRuntime::Events, StatusCode::OK).await
+  let rendered = tokio::task::spawn_blocking(move || events_page(&state, &request, &session_id, &session))
+    .await
+    .expect("the events viewer task does not panic");
+  match rendered {
+    Ok(response) => response,
+    Err(error) => responses::internal_error(&error.kind, error.detail),
+  }
+}
+
+/// The events viewer's answer for a session it can show.
+///
+/// A repeat request re-checks the session row and the template inputs, and then pays the page's context again: the
+/// row's response value, the context object and the template render. The answer memo keeps the finished body beside
+/// the inputs it read, so a request whose row and template inputs still hold serves that body without building the
+/// row or rendering the page.
+fn events_page(
+  state: &Arc<AppState>,
+  request: &Parts,
+  session_id: &str,
+  session: &SessionMetadata,
+) -> Result<Response, Failure> {
+  let templating =
+    state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
+  let encoding = PageEncoding::for_request(&request.headers);
+  let hostname = hostname()?;
+  let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
+  let globals = templating.render_globals(&state.features).map_err(|error| failure(error.kind(), error))?;
+  let key = EventsAnswerKey {
+    revision: templating.revision(),
+    asset_version,
+    hostname,
+    encoding,
+    method: request.method.as_str().to_string(),
+    path: request.uri.path().to_string(),
+    query: request.uri.query().unwrap_or("").to_string(),
+    session_id: session_id.to_string(),
+    events_url: route::fill(session_routes::SESSION_EVENTS_JSONL_PATH, &[session_id]),
+    session: session.clone(),
+    globals,
+  };
+  let answer = EVENTS_ANSWER_MEMO.lock().expect("the events answer memo mutex is not poisoned").answer(&key, || {
+    let context = json!({
+      "session": state.features.store.session_metadata_value(session),
+      "session_id": key.session_id,
+      "events_url": key.events_url,
+    });
+    page_answer(state, request, "events_viewer.html", context, &PageRuntime::Events, encoding, &key.hostname)
+  })?;
+  Ok(page_response(answer.0, answer.1, StatusCode::OK))
 }
 
 /// The events page's answer for a session it cannot show: the page keeps its top bar and states the outcome in its own
@@ -1158,6 +1269,53 @@ mod tests {
       Bytes::from_static(b"page body")
     );
     assert_eq!(builds, 4, "the same globals serve the answer the memo kept");
+  }
+
+  /// A repeat events viewer request serves the answer the memo kept, and a moved row renders again.
+  #[test]
+  fn a_repeat_events_answer_is_served_until_the_row_moves() {
+    use charliebot_store::metadata::TaskProfile;
+
+    let session = SessionMetadata::new("synthetic", "Events page", TaskProfile::Manager);
+    let key = |session: &SessionMetadata, encoding| EventsAnswerKey {
+      revision: 1,
+      asset_version: "v1".to_string(),
+      hostname: "host".to_string(),
+      encoding,
+      method: "GET".to_string(),
+      path: "/sessions/synthetic/events".to_string(),
+      query: String::new(),
+      session_id: "synthetic".to_string(),
+      events_url: "/api/sessions/synthetic/events.jsonl".to_string(),
+      session: session.clone(),
+      globals: Vec::new(),
+    };
+    fn answer(memo: &mut EventsAnswerMemo, key: &EventsAnswerKey, builds: &mut usize) -> Bytes {
+      memo
+        .answer(key, || {
+          *builds += 1;
+          Ok((Bytes::from_static(b"events body"), None))
+        })
+        .unwrap()
+        .0
+    }
+
+    let mut memo = EventsAnswerMemo::default();
+    let mut builds = 0;
+    assert_eq!(answer(&mut memo, &key(&session, PageEncoding::Gzip), &mut builds), Bytes::from_static(b"events body"));
+    assert_eq!(builds, 1);
+    assert_eq!(answer(&mut memo, &key(&session, PageEncoding::Gzip), &mut builds), Bytes::from_static(b"events body"));
+    assert_eq!(builds, 1, "a repeat request serves the answer the memo kept");
+
+    assert_eq!(
+      answer(&mut memo, &key(&session, PageEncoding::Identity), &mut builds),
+      Bytes::from_static(b"events body")
+    );
+    assert_eq!(builds, 2, "another encoding renders its own body");
+
+    let renamed = SessionMetadata::new("synthetic", "Renamed page", TaskProfile::Manager);
+    assert_eq!(answer(&mut memo, &key(&renamed, PageEncoding::Gzip), &mut builds), Bytes::from_static(b"events body"));
+    assert_eq!(builds, 3, "a moved session row renders again");
   }
 
   #[test]

@@ -12,7 +12,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 
 use crate::attention::{Finding, RowState, classify_row_attention};
-use crate::host_auth::{self, RoundSlot, State};
+use crate::state_file::{self, RoundSlot, State};
 use crate::timestamps::isoformat;
 
 const LOGINS_KEY: &str = "logins";
@@ -119,9 +119,9 @@ pub fn change_login(state: &mut State, name: &str, change: impl FnOnce(&mut Logi
 /// The one write path of a login's record: under the round slot, read the state, change the record, save atomically.
 pub async fn update_login(state_path: &Path, name: &str, change: impl FnOnce(&mut LoginState)) -> anyhow::Result<()> {
   let _slot = RoundSlot::wait().await;
-  let mut state = host_auth::read_state(state_path)?;
+  let mut state = state_file::read_state(state_path)?;
   change_login(&mut state, name, change)?;
-  host_auth::save_state(&state, state_path)
+  state_file::save_state(&state, state_path)
 }
 
 /// The approval time of a login, from its exit 0 or from a probe that approves its host.
@@ -195,7 +195,7 @@ mod tests {
 
   #[test]
   fn an_absent_login_is_the_empty_record_and_a_stored_one_reads_back() {
-    let mut state = host_auth::empty_state();
+    let mut state = state_file::empty_state();
     assert_eq!(login_state(&state, "aws-sso").unwrap(), LoginState::default());
     let approved =
       LoginState { last_approved_at: Some("2026-11-18T08:16:29.928976+00:00".to_string()), ..Default::default() };
@@ -206,7 +206,7 @@ mod tests {
 
   #[test]
   fn a_malformed_record_is_an_error_naming_the_login() {
-    let mut state = host_auth::empty_state();
+    let mut state = state_file::empty_state();
     state.insert(LOGINS_KEY.to_string(), json!({"aws-sso": {"status": "sideways"}}));
     let error = login_state(&state, "aws-sso").expect_err("an unknown status is refused");
     assert!(format!("{error:#}").contains("aws-sso"), "{error:#}");
@@ -214,7 +214,7 @@ mod tests {
 
   #[test]
   fn a_present_logins_field_must_be_a_map() {
-    let mut state = host_auth::empty_state();
+    let mut state = state_file::empty_state();
     state.insert(LOGINS_KEY.to_string(), json!([]));
     let error = login_state(&state, "aws-sso").expect_err("a non-map logins field is not absent state");
     assert!(format!("{error:#}").contains("logins is not an object"), "{error:#}");

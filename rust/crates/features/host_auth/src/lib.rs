@@ -15,6 +15,7 @@ mod process_tree;
 mod readers;
 mod rows;
 mod ssh_config;
+mod state_file;
 mod timestamps;
 
 use std::sync::Arc;

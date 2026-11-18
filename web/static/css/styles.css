@@ -14,7 +14,7 @@
 .wc2ch { display: inline-block; white-space: pre; width: 2ch; }
 /* A fenced block's code element is the block's scroller: hljs's own `overflow-x: auto` keeps a line
    wider than the bubble inside it. On a phone the code box is 264 px at 390 px, and a 54-character
-   command line is 408 px there, so the block shows its first 35 characters and cuts the rest at its
+   command line is 408 px there. The block shows its first 35 characters and cuts the rest at its
    edge — no ellipsis, no scrollbar and no other sign that the line continues. The chat's tool output
    already wraps at every width (`whitespace-pre-wrap break-words` in rendering.js). A phone wraps a
    fenced block the same way, at its spaces, and a token no space separates still breaks, as an
@@ -81,8 +81,8 @@
 .turn-wrap[data-turn-open="false"] > :not(.turn-row) { display: none; }
 .turn-wrap[data-turn-open="true"] > .turn-row { display: none; }
 .turn-wrap > :not(.turn-row) + :not(.turn-row) { margin-top: 0.75rem; }
-/* The row's columns follow its content: the tag and the steps/time keep their own
-   width, the conclusion takes the width its text needs up to 45% of the row, and
+/* The row's columns follow its content. The tag and the steps/time keep their own
+   width. The conclusion takes the width its text needs, up to 45% of the row, and
    the title takes the rest. A short conclusion then hands its spare width to the
    title instead of holding an empty column beside a truncated title. */
 .turn-row {
@@ -94,12 +94,12 @@
   cursor: pointer;
 }
 .turn-row:hover { background: rgba(30, 41, 59, 0.85); border-color: rgba(148, 163, 184, 0.45); color: #cbd5e1; }
-/* The folded turn controls draw their boundary translucently over the message list's slate-900:
-   rgba(100,116,139,.28) on the row renders 1.37:1 and rgba(100,116,139,.35) on the fold bar 1.51:1,
-   under the 3:1 floor WCAG 1.4.11 sets for a control boundary. Both fills composite to the list's own
-   slate-900, so the boundary is the only mark that the row or the bar opens. slate-500 draws 3.75:1
-   there at rest and slate-400 draws 6.96:1 under the pointer. On the hover fills they draw 3.19:1 and
-   5.92:1. */
+/* The folded turn controls draw their boundary translucently over the message list's slate-900.
+   On the row rgba(100,116,139,.28) renders 1.37:1, and on the fold bar rgba(100,116,139,.35)
+   renders 1.51:1. Both sit under the 3:1 floor WCAG 1.4.11 sets for a control boundary. Both fills
+   composite to the list's own slate-900, so the boundary is the only mark that the row or the bar
+   opens. slate-500 draws 3.75:1 there at rest and slate-400 draws 6.96:1 under the pointer. On the
+   hover fills they draw 3.19:1 and 5.92:1. */
 .turn-row, .turn-fold-bar { border-color: #64748b; }
 .turn-row:hover, .turn-fold-bar:hover { border-color: #94a3b8; }
 /* A row with no conclusion drops the column, so the title takes its width. */
@@ -125,15 +125,15 @@
 /* The middle dot separates the step count from the time. A hex escape consumes
    its terminating space, so the trailing space is spelled `\0020`. */
 .turn-row-meta > span:not(:empty) ~ span:not(:empty)::before { content: " \00b7\0020"; }
-/* A folded turn is a button (rendering.js), and a phone has no hover to show it: the row ends in
+/* A folded turn is a button (rendering.js), and a phone has no hover to show it. The row ends in
    the disclosure caret the fold bar and the events rows carry. It keeps the row's secondary tone,
-   which renders 6.96:1 on the row, and takes its 10 px glyph plus the row's gap from the title,
-   which elides anyway. */
+   which renders 6.96:1 on the row. Its 10 px glyph and the row's gap come from the title, which
+   elides anyway. */
 .turn-row-caret { flex: 0 0 auto; color: #94a3b8; font-size: 0.625rem; line-height: 1; }
-/* A phone sets the conclusion on its own line: at 390 px the tag, the steps and the caret leave the
-   title about 170 px, and a 45% column beside it would cut the question and the answer to a few
-   characters each. The conclusion wraps under the question at the row's width, and its `order`
-   keeps it after the meta so the first line still ends in the steps, the time and the caret. */
+/* A phone sets the conclusion on its own line. At 390 px the tag, the steps and the caret leave the
+   title about 170 px. A 45% column beside it would cut the question and the answer to a few
+   characters each. The conclusion wraps under the question at the row's width. Its `order` keeps it
+   after the meta, so the first line still ends in the steps, the time and the caret. */
 @media (max-width: 820px) {
   .turn-row { flex-wrap: wrap; row-gap: 0.1rem; }
   .turn-row-conclusion { order: 1; flex: 1 0 100%; max-width: 100%; }
@@ -171,9 +171,9 @@
    anchoring fights its spacer corrections, and its scroll corrections must
    not chain to the page. */
 #messages { overflow-anchor: none; overscroll-behavior: contain; }
-/* The view switcher's bottom edge is the list's clip edge: #messages is its own scroll container, so a scrolled
+/* The view switcher's bottom edge is the list's clip edge. #messages is its own scroll container, so a scrolled
    conversation is cut through a line of glyphs exactly at the row's bottom. The row carries pt-3 and no bottom
-   padding, so the half-drawn line starts exactly at the For you / Everything / Status labels' bottom edge: at
+   padding, so the half-drawn line starts exactly at the For you / Everything / Status labels' bottom edge. At
    390 px and 1440 px the two touch with no gap, and the switcher reads as drawn over the text. A bottom padding
    of the same 12 px the row already holds above the labels keeps the clipped line clear of them.
    No row, strip or control is added. The labels keep their place. */
@@ -248,8 +248,8 @@ body.resizing { cursor: col-resize; user-select: none; }
    3.07:1 on the slate-800 field, under the 4.5:1 floor for text this size. slate-400 renders 5.71:1. */
 #auth-key-input::placeholder, #sidebar-search::placeholder, #msg-input::placeholder { color: #94a3b8; }
 /* The chat page's fields carry the 3:1 boundary floor the diff page's fields meet. Their border-slate-600
-   outline draws rgb(71, 85, 105): 2.15:1 on the sidebar and 2.36:1 on the page, and the field's slate-800
-   fill differs from both surfaces by 1.11:1 and 1.22:1, so the outline is the only mark of the box.
+   outline draws rgb(71, 85, 105), which renders 2.15:1 on the sidebar and 2.36:1 on the page. The field's
+   slate-800 fill differs from both surfaces by 1.11:1 and 1.22:1, so the outline is the only mark of the box.
    slate-500 draws 3.42:1 and 3.07:1. The blue focus border still wins over this resting color. */
 #new-session-backend:not(:focus), #sidebar-search:not(:focus), #msg-input:not(:focus) { border-color: #64748b; }
 /* The composer's attach and overflow controls draw the same bordered box as the microphone beside them.
@@ -301,7 +301,7 @@ body.resizing { cursor: col-resize; user-select: none; }
    icon was the whole box, and no boundary marked the target. The Menu button is glyph-only too on a
    phone, in a 36 px box. The link takes a 24 px box around the glyph and the header's
    bordered-control surface (index.html). The box is the control's only mark, so its border holds the
-   3:1 floor: slate-600 draws 2.15:1 on the header's slate-800/50 surface, slate-500 draws 3.42:1 at
+   3:1 floor. slate-600 draws 2.15:1 on the header's slate-800/50 surface, slate-500 draws 3.42:1 at
    rest and slate-400 draws 6.34:1 under the pointer. The backend badge beside it keeps slate-600,
    because it is a label and not a control. No row, strip or label is added: the header's tallest item
    still sets its height. On a phone, the box with its margins fills the 2.5rem the tab row
@@ -318,9 +318,9 @@ main > header > a[title="View JSONL events"]:hover {
   border-color: #94a3b8;
 }
 /* The backend badge's switch (session-view.js) is a select whose text-xs line and px-1.5 py-0.5 pad
-   draw a 22 px box, under the 24 px pointer floor the header's other controls hold. The select takes a
-   24 px box. The badge's 30 px box holds it without growing the header row. A label wider than the
-   badge's bound ellipsizes at its last whole character instead of losing half of one. */
+   draw a 22 px box. That box sits under the 24 px pointer floor the header's other controls hold. The
+   select takes a 24 px box. The badge's 30 px box holds it without growing the header row. A label
+   wider than the badge's bound ellipsizes at its last whole character instead of losing half of one. */
 #backend-badge select { min-height: 24px; max-width: 100%; text-overflow: ellipsis; }
 @media (max-width: 768px) {
   .input-row { flex-wrap: nowrap; }
@@ -336,7 +336,7 @@ main > header > a[title="View JSONL events"]:hover {
   /* Header on phones: the menu and the session name keep the first row, so the
      name shows its topic and number instead of the first few characters. The
      bounded backend badge, Compact and the concurrency badge share the second
-     row, and the badge's 144 px bound shows a pool's short label whole and
+     row. The badge's 144 px bound shows a pool's short label whole and
      ellipsizes a longer one. The tabs and the events link share the third, the
      link at its right end. */
   main > header { flex-wrap: wrap; }
@@ -519,8 +519,8 @@ body { overscroll-behavior: none; }
 .child-report-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(110, 231, 183, 0.75); }
 .child-report-toggle:hover { color: #a7f3d0; text-decoration: underline; }
 /* A user text folds by its rendered height (chat/attachments.js, fitUserMessageClamp). The clamp shows ten
-   lines while data-folded is "true", and the control appears whenever the clamp hides some of the text: it
-   opens the clamp and folds it again, and its label names the next action. */
+   lines while data-folded is "true", and the control appears whenever the clamp hides some of the text.
+   The control opens the clamp and folds it again, and its label names the next action. */
 .user-msg-fold[data-folded="true"] .user-msg-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; line-clamp: 10; overflow: hidden; }
 .user-msg-more { display: none; margin-top: 0.4rem; padding: 0.2rem 0.7rem; font-size: 0.72rem; font-weight: 600; color: #eff6ff; background: rgba(15, 23, 42, 0.28); border: 1px solid rgba(191, 219, 254, 0.45); border-radius: 9999px; cursor: pointer; }
 .user-msg-fold[data-overflows="true"] .user-msg-more { display: block; }
@@ -529,18 +529,19 @@ body { overscroll-behavior: none; }
 .user-msg-more:hover { background: rgba(15, 23, 42, 0.5); }
 /* The bubble clips what runs past its edge, and the rule below makes the open message's control stick
    to the message list's floor. overflow: hidden would make the bubble the control's scrollport, and a
-   scrollport that never scrolls never moves a sticky child; overflow: clip keeps the clip and leaves the
+   scrollport that never scrolls never moves a sticky child. overflow: clip keeps the clip and leaves the
    scrolling to the list. */
 .user-msg-bubble { overflow: clip; }
 /* An open message can run several screens past the list's floor, and its control folds the message again.
-   The control sticks to the floor while the message is open, so it stays in reach of the reader who just
+   The control sticks to the floor while the message is open. It stays in reach of the reader who just
    opened the message and of the reader at its end. A closed message keeps it in the flow under the clamp.
-   Stuck over the message's text, the pill takes an opaque slate-800 fill: the translucent one let the text
-   under it read through the label, which renders blue-50 at 13.3:1 on the fill and 9.4:1 on the hover tone. */
+   Stuck over the message's text, the pill takes an opaque slate-800 fill. The translucent one let the text
+   under it read through the label. That label renders blue-50 at 13.3:1 on the fill and 9.4:1 on the
+   hover tone. */
 .user-msg-fold[data-folded="false"] .user-msg-more { position: sticky; bottom: 0.5rem; background: #1e293b; }
 .user-msg-fold[data-folded="false"] .user-msg-more:hover { background: #334155; }
 /* The pill draws its boundary rgba(191,219,254,.45) over its own slate-900/28 fill on the blue-600
-   bubble: 1.57:1 against the bubble and 2.27:1 against the fill, under the 3:1 floor for a control
-   boundary. blue-200 draws 3.64:1 against the bubble and 5.27:1 against the fill, and 7.10:1 on the
-   hover fill. The label keeps blue-50 at 6.88:1 on the fill. */
+   bubble. The boundary renders 1.57:1 against the bubble and 2.27:1 against the fill, under the 3:1
+   floor for a control boundary. blue-200 draws 3.64:1 against the bubble and 5.27:1 against the fill,
+   and 7.10:1 on the hover fill. The label keeps blue-50 at 6.88:1 on the fill. */
 .user-msg-more { border-color: #bfdbfe; }

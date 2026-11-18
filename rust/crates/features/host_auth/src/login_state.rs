@@ -92,7 +92,11 @@ pub struct LoginState {
 
 /// The record of `name` in the state, or the empty record when none is stored.
 pub fn login_state(state: &State, name: &str) -> anyhow::Result<LoginState> {
-  match state.get(LOGINS_KEY).and_then(|logins| logins.get(name)) {
+  let Some(logins) = state.get(LOGINS_KEY) else {
+    return Ok(LoginState::default());
+  };
+  let logins = logins.as_object().context("the host-auth state's logins is not an object")?;
+  match logins.get(name) {
     None => Ok(LoginState::default()),
     Some(value) => serde_json::from_value(value.clone())
       .with_context(|| format!("the host-auth record of login {name} is malformed")),
@@ -206,6 +210,14 @@ mod tests {
     state.insert(LOGINS_KEY.to_string(), json!({"aws-sso": {"status": "sideways"}}));
     let error = login_state(&state, "aws-sso").expect_err("an unknown status is refused");
     assert!(format!("{error:#}").contains("aws-sso"), "{error:#}");
+  }
+
+  #[test]
+  fn a_present_logins_field_must_be_a_map() {
+    let mut state = host_auth::empty_state();
+    state.insert(LOGINS_KEY.to_string(), json!([]));
+    let error = login_state(&state, "aws-sso").expect_err("a non-map logins field is not absent state");
+    assert!(format!("{error:#}").contains("logins is not an object"), "{error:#}");
   }
 
   #[test]

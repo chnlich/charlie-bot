@@ -89,8 +89,7 @@
   <p class="sub">One row per browser login, and one per ssh host that no login renews. Each row shows the state its
   latest check left, and a check refreshes that row alone.</p>
   <p class="facts"><span>last probe &middot; {{ last_probe or "not yet" }}</span> &middot;
-  <span>probe every &middot; {{ interval_label }} ({{ backoff_label }} once blocked)</span> &middot;
-  <span>remote writes &middot; none</span></p>
+  <span>probe every &middot; {{ interval_label }} ({{ backoff_label }} once blocked)</span></p>
   <div class="bar">
     <div class="line" id="header-line"></div>
     <form method="post" action="/api/host-auth/probe" data-probe><button class="btn" type="submit">Probe now</button></form>
@@ -107,7 +106,7 @@
     </thead>
     <tbody>
       {% for row in rows %}
-      <tr data-row="{{ row.id }}" data-row-url="{{ row.row_url }}" data-name="{{ row.name }}" data-state="{{ row.state }}"
+      <tr data-row="{{ row.id }}" data-row-url="{{ row.row_url }}" data-kind="{{ row.kind }}" data-name="{{ row.name }}" data-state="{{ row.state }}"
         data-busy="{{ row.busy }}">
         <td data-l="Row">
           <span class="alias">{{ row.label }}</span>
@@ -165,6 +164,7 @@
   const POLL_MS = 1500;
   const START_WINDOW_MS = 35000;
   const followers = new Map();
+  const stateRank = { needs_user: 0, broken: 1, unreachable: 2, unchecked: 3, ok: 4 };
 
   // One JSON request. A failed answer throws its detail, or its text when it has no JSON detail.
   async function request(url, init = {}) {
@@ -199,7 +199,15 @@
     for (const el of tr.querySelectorAll("[data-amber]")) {
       el.classList.toggle("amber", Boolean(row[el.dataset.amber]));
     }
+    reorderRows();
     refreshHeader();
+  }
+
+  function reorderRows() {
+    const body = document.querySelector("tbody");
+    [...body.querySelectorAll("tr[data-row]")]
+      .sort((left, right) => stateRank[left.dataset.state] - stateRank[right.dataset.state])
+      .forEach((tr) => body.append(tr));
   }
 
   // The header names the rows that need the user and the broken rows, from the state each row carries.
@@ -208,11 +216,8 @@
       [...document.querySelectorAll(`tr[data-row][data-state="${state}"]`)].map((tr) => tr.dataset.name);
     const needs = named("needs_user");
     const broken = named("broken");
-    const parts = [];
-    if (needs.length) parts.push(`Needs you: ${needs.join(", ")}.`);
-    if (broken.length) parts.push(`Broken: ${broken.join(", ")}.`);
-    document.getElementById("header-line").textContent =
-      parts.length ? parts.join(" ") : "No row needs you or is broken.";
+    const list = (label, names) => `${label} (${names.length}): ${names.length ? names.join(", ") : "none"}.`;
+    document.getElementById("header-line").textContent = `${list("Needs you", needs)} ${list("Broken", broken)}`;
   }
 
   // Refreshes one row from its URL every POLL_MS while the row is busy or the time `until` (a Date.now() value) is ahead.
@@ -238,21 +243,29 @@
           followers.delete(id);
           fail(error);
         });
-    tick();
+    setTimeout(tick, POLL_MS);
+  }
+
+  function checkRow(tr) {
+    const form = tr.querySelector("form[data-check]");
+    tr.dataset.busy = "check";
+    tr.querySelector('[data-f="busy_text"]').textContent = "Checking.";
+    const checking = request(form.action, { method: "POST" });
+    follow(tr, 0);
+    return checking.then((row) => apply(tr, row));
+  }
+
+  async function refreshRows(rows) {
+    for (const tr of rows) {
+      await checkRow(tr);
+    }
   }
 
   for (const form of document.querySelectorAll("form[data-check]")) {
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const tr = form.closest("tr");
-      tr.dataset.busy = "check";
-      tr.querySelector('[data-f="busy_text"]').textContent = "Checking.";
-      request(form.action, { method: "POST" })
-        .then((row) => apply(tr, row))
-        .catch((error) => {
-          fail(error);
-          follow(tr, 0);
-        });
+      checkRow(tr).catch(fail);
     });
   }
 
@@ -307,12 +320,16 @@
       .catch(fail);
   });
 
+  const refresh = [];
   for (const tr of document.querySelectorAll("tr[data-row]")) {
     if (tr.dataset.busy) {
       follow(tr, 0);
+    } else if (tr.dataset.kind === "login") {
+      refresh.push(tr);
     }
   }
   refreshHeader();
+  refreshRows(refresh).catch(fail);
 </script>
 </body>
 </html>

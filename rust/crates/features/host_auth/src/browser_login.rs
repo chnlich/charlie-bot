@@ -161,6 +161,8 @@ struct AttemptCore {
   finished_at: Option<OffsetDateTime>,
   /// The input sink of a login with an `input_prompt`, open until its value is given or the attempt ends.
   input: Option<InputSink>,
+  /// Whether this attempt accepted a value. Its output is not kept because the login may echo the value.
+  input_submitted: bool,
   /// The live child's pid: the login process, then the readback process. A kill from outside the driver — a click
   /// that replaces the attempt, or the server stop — signals it.
   child_pid: Option<u32>,
@@ -185,6 +187,7 @@ impl AttemptCore {
       outcome: None,
       finished_at: None,
       input: None,
+      input_submitted: false,
       child_pid: None,
       link,
       approval_url_matcher: Regex::new(&login.approval_url_pattern)
@@ -210,13 +213,18 @@ impl AttemptCore {
 
   /// The attempt's record as the state file keeps it. It exists once the attempt has an outcome.
   fn record(&self) -> Option<AttemptRecord> {
+    let (last_line, readback_output) = if self.input_submitted {
+      (String::new(), String::new())
+    } else {
+      (last_line(&self.output), shown_output(&self.readback_output))
+    };
     Some(AttemptRecord {
       outcome: self.outcome?,
       started_at: isoformat(self.started_at),
       finished_at: self.finished_at.map(isoformat),
-      last_line: last_line(&self.output),
+      last_line,
       readback_exit: self.readback_exit,
-      readback_output: shown_output(&self.readback_output),
+      readback_output,
     })
   }
 }
@@ -349,7 +357,9 @@ pub async fn give_input(name: &str, value: String) -> Result<(), InputRefused> {
     if state.phase != Phase::WaitingForApproval {
       return Err(InputRefused::NotAwaiting);
     }
-    state.input.take().ok_or(InputRefused::NotAwaiting)?
+    let sink = state.input.take().ok_or(InputRefused::NotAwaiting)?;
+    state.input_submitted = true;
+    sink
   };
   let mut bytes = value.into_bytes();
   bytes.push(b'\n');
@@ -1328,7 +1338,9 @@ mod tests {
   async fn a_value_reaches_the_login_once_and_no_record_keeps_it() {
     let _serial = SERIAL.lock().await;
     let value = "CODE-7F3C-9D21";
-    let body = format!("{PRINT_LINK}\nread -r typed\nprintf '%s' \"$typed\" > \"$0.got\"\nexit 0\n");
+    let body = format!(
+      "{PRINT_LINK}\nread -r typed\nprintf '%s' \"$typed\" > \"$0.got\"\nprintf 'echoed=%s\\n' \"$typed\"\nexit 0\n"
+    );
     let mut stub = LoginStub::new("with-input", &body, "echo valid\n");
     stub.login.input_prompt = Some("Paste the code".to_string());
     let paths = stub.paths();
@@ -1345,6 +1357,9 @@ mod tests {
     assert_eq!(got, value);
     let state = fs::read_to_string(&paths.state).expect("the state reads");
     assert!(!state.contains(value), "the value is in no state file");
+    let attempt = login_record(&paths, "with-input").last_attempt.expect("the attempt is recorded");
+    assert!(!attempt.last_line.contains(value), "the login's echo is not in the attempt record");
+    assert!(!attempt.readback_output.contains(value), "the readback record has no login output");
   }
 
   #[tokio::test]

@@ -54,3 +54,18 @@ test("every top-level name the template reads is a key of the page context", () 
     }
   }
 });
+
+test("the page refreshes login rows one at a time and follows active rows", () => {
+  assert.match(template, /data-kind="\{\{ row\.kind \}\}"/);
+  assert.match(template, /async function refreshRows\(rows\)[\s\S]*?await checkRow\(tr\)/);
+  assert.match(template, /tr\.dataset\.kind === "login"/);
+  assert.match(template, /if \(tr\.dataset\.busy\)\s*\{\s*follow\(tr, 0\)/);
+  assert.match(template, /setTimeout\(tick, POLL_MS\)/);
+});
+
+test("row updates keep the status order and show counts with names in the header", () => {
+  assert.match(template, /function reorderRows\(\)/);
+  assert.match(template, /stateRank\[left\.dataset\.state\] - stateRank\[right\.dataset\.state\]/);
+  assert.match(template, /\$\{label\} \(\$\{names\.length\}\):/);
+  assert.match(template, /list\("Needs you", needs\).*list\("Broken", broken\)/);
+});

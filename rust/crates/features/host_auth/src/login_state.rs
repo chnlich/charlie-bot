@@ -1,6 +1,6 @@
 //! The per-login record in `host_auth.json`'s `logins` map, and the writes that keep it.
 //!
-//! A login bound to a host reads its availability from `hosts[alias]`, so its record keeps the time of its last approval
+//! A login bound to a host reads its availability from `hosts[alias]`. Its record keeps the time of its last approval
 //! and its last attempt, and a `broken` status when the login cannot start. A login with no host keeps its check result
 //! as well. `link_match` holds the last link probe or started attempt. A fail marks the row broken only while its check
 //! says a login is needed, and a passing check clears it. Login-only updates go through [`update_state`]: the round

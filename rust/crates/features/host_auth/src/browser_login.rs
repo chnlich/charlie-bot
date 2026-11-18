@@ -296,8 +296,8 @@ pub fn live_attempt(name: &str) -> Option<LiveAttempt> {
 ///
 /// A login with `use_pty` runs its command under a pseudo-terminal in a new session, so a keyboard-interactive prompt
 /// reaches that terminal rather than the server's. Such a login may name an `enter_after_pattern`, which writes one
-/// newline to the terminal on its first match, and a `user_code_pattern`, whose first capture group is appended to the
-/// approval link as `user_code=`.
+/// newline to the terminal on its first match. It may also name a `user_code_pattern`, whose first capture group is
+/// appended to the approval link as `user_code=`.
 pub async fn start_login(login: &BrowserLoginConfig) -> Result<String, StartFailed> {
   let state = host_auth::default_state_path()
     .map_err(|error| StartFailed(format!("could not resolve the host-auth state path: {error}")))?;

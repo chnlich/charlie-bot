@@ -182,7 +182,7 @@ function toolInputSummary(toolName, input) {
 }
 
 // A transcript time names the day and the clock time the reader acts on, in the
-// reader's own zone: the label the sidebar's session rows print (utils.js
+// reader's own zone. It is the label the sidebar's session rows print (utils.js
 // formatTimeLabel), with the year on an instant outside the current year. A
 // reader wondering when a message landed reads the minute. The seconds field and
 // the zone name are needless precision on every bubble, so the events viewer

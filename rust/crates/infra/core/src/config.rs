@@ -645,6 +645,14 @@ pub struct BrowserLoginConfig {
   /// `user_code` query parameter, which the login card shows.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub user_code_pattern: Option<String>,
+  /// The label of the row's input box, shown while the login waits for approval. Setting it turns on in-row input:
+  /// the value goes to the login's stdin, or to its terminal when `use_pty` is set.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub input_prompt: Option<String>,
+  /// How long one approval lasts, in seconds. The row shows the expiry as the last approval plus this. Without it the
+  /// row shows only the last approval time.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub lifetime_sec: Option<u64>,
 }
 
 /// The `host_auth:` section: the host-auth panel's browser logins and Slack DM notification settings.

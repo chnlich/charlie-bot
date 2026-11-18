@@ -1,7 +1,7 @@
 //! The memory package's turn contribution: the applicable memory joins a
 //! run's managed instructions.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
@@ -32,14 +32,19 @@ impl TurnContribution for MemoryTurn {
   }
 }
 
-/// The audience mapping: a manager takes the master selection, and every
-/// other kind the worker selection for its repo.
+/// The audience mapping: a manager turn takes the master selection, and every
+/// worker kind takes the worker selection for its repo. A spelling that names
+/// no run kind is an error.
 fn memory_selection_for(meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig) -> Result<Option<MemorySelection>> {
   let memory_dir = store_root::memory_dir(cfg);
-  if kind == RunKind::ManagerTurn.as_str() {
-    return memory::select_master_memory(&memory_dir);
+  let kind =
+    RunKind::parse(kind).with_context(|| format!("unknown run kind {kind:?}: no memory contribution serves it"))?;
+  match kind {
+    RunKind::ManagerTurn => memory::select_master_memory(&memory_dir),
+    RunKind::Work | RunKind::Review | RunKind::Iteration | RunKind::ScheduledStep => {
+      Ok(Some(memory::select_worker_memory(&memory_dir, repo_basename(meta))?))
+    }
   }
-  Ok(Some(memory::select_worker_memory(&memory_dir, repo_basename(meta))?))
 }
 
 /// The basename of the task's repo, or `""` for a task with no repo: a repo-less worker matches no repo topic.
@@ -154,5 +159,13 @@ mod tests {
     let segments = MemoryTurn.instruction_segments(&worker_meta(None), "review", &cfg, &checkout()).unwrap();
     assert!(segments.iter().all(|segment| segment.delivery != "full"));
     assert!(segments.iter().any(|segment| segment.delivery == "index"));
+  }
+
+  #[test]
+  fn an_unknown_run_kind_is_refused() {
+    let home = seeded_home();
+    let result =
+      MemoryTurn.instruction_segments(&worker_meta(None), "cold_read", &synthetic_config(home.path()), &checkout());
+    assert!(result.is_err());
   }
 }

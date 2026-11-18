@@ -637,13 +637,13 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
   // the cursor backward paging starts from, in the events endpoint's own cursor space.
   let boot = client::get(&route::fill(session_routes::SESSION_BOOTSTRAP_PATH, &[session_id.as_str()]), None)?;
   let mut page_starts = vec![
-    field(&boot, "oldest_message_ordinal")?
+    field(&boot, session_routes::OLDEST_MESSAGE_ORDINAL_FIELD)?
       .as_i64()
-      .ok_or_else(|| CliExit::error("oldest_message_ordinal must be an integer"))?,
+      .ok_or_else(|| CliExit::error(format!("{} must be an integer", session_routes::OLDEST_MESSAGE_ORDINAL_FIELD)))?,
   ];
   let mut pages: Vec<Vec<Value>> = vec![field(&boot, "messages")?.as_array().cloned().unwrap_or_default()];
   let mut cursor = page_starts[0];
-  let mut has_more = text_repr::is_truthy(field(&boot, "has_more")?);
+  let mut has_more = text_repr::is_truthy(field(&boot, session_routes::HAS_MORE_FIELD)?);
   let mut separators = count_separators(&pages[0]);
   // --turns stops once the fetched pages hold one separator more than the requested turn count —
   // everything after the (N+1)-th last separator is then the last N complete turns plus the turn
@@ -657,11 +657,12 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
     let messages = field(&page, "messages")?.as_array().cloned().unwrap_or_default();
     separators += count_separators(&messages);
     pages.push(messages);
-    let next_before =
-      field(&page, "next_before")?.as_i64().ok_or_else(|| CliExit::error("next_before must be an integer"))?;
+    let next_before = field(&page, session_routes::NEXT_BEFORE_FIELD)?
+      .as_i64()
+      .ok_or_else(|| CliExit::error(format!("{} must be an integer", session_routes::NEXT_BEFORE_FIELD)))?;
     page_starts.push(next_before);
     cursor = next_before;
-    has_more = text_repr::is_truthy(field(&page, "has_more")?);
+    has_more = text_repr::is_truthy(field(&page, session_routes::HAS_MORE_FIELD)?);
   }
 
   let mut cut = 0usize;

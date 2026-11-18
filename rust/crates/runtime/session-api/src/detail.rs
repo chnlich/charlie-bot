@@ -167,8 +167,8 @@ pub fn build_bootstrap_payload(
     };
     let mut payload = base.clone();
     payload.insert("messages".to_string(), Value::Array(messages));
-    payload.insert("oldest_message_ordinal".to_string(), Value::from(start));
-    payload.insert("has_more".to_string(), Value::Bool(start > 0));
+    payload.insert(api::OLDEST_MESSAGE_ORDINAL_FIELD.to_string(), Value::from(start));
+    payload.insert(api::HAS_MORE_FIELD.to_string(), Value::Bool(start > 0));
     Ok(Value::Object(payload))
   };
   // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes).
@@ -706,7 +706,11 @@ async fn session_events(
     let (messages, next_before, has_more) = transcript.projection.slice_before(to_index(before), limit);
     return responses::fast_json(
       StatusCode::OK,
-      &json!({"messages": messages, "has_more": has_more, "next_before": next_before}),
+      &json!({
+        "messages": messages,
+        (api::HAS_MORE_FIELD): has_more,
+        (api::NEXT_BEFORE_FIELD): next_before,
+      }),
     );
   }
 
@@ -762,7 +766,11 @@ fn events_range_page(
   let start = end.saturating_sub(limit);
   let (events, has_more) = store.load_chat_events_range(session_id, start, end)?;
   let messages = store.events_to_messages_at(&events, start)?;
-  Ok(json!({"messages": messages, "has_more": has_more, "next_before": start}))
+  Ok(json!({
+    "messages": messages,
+    (api::HAS_MORE_FIELD): has_more,
+    (api::NEXT_BEFORE_FIELD): start,
+  }))
 }
 
 async fn session_transcript(

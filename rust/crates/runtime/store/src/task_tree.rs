@@ -1,7 +1,7 @@
 //! Durable task nodes, fact-derived tree state, and delegation authorization.
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -279,8 +279,21 @@ struct TreePageKey<'a> {
 
 /// The identity of one session's live history file, resolved from the open sessions directory.
 fn history_identity_at(sessions_dir: &fs::File, session_id: &str) -> StoreResult<Option<FileIdentity>> {
+  FileIdentity::read_at_cstr(sessions_dir, &history_path(session_id)?)
+}
+
+/// One session's live history file, relative to the sessions directory.
+fn history_path(session_id: &str) -> StoreResult<CString> {
   let relative = format!("{session_id}/{}/{}", layout::DATA_DIR_NAME, layout::CHAT_EVENTS_FILE_NAME);
-  FileIdentity::read_at(sessions_dir, &relative)
+  CString::new(relative.as_str()).map_err(|_| StoreError::new(format!("{relative}: the path holds a NUL byte")))
+}
+
+/// The history paths of `ids`, in the argument order.
+///
+/// A page memo stores these with the page, so a repeat request stats the paths it read instead of formatting one path
+/// per row.
+fn history_paths(ids: &[String]) -> StoreResult<Vec<CString>> {
+  ids.iter().map(|session_id| history_path(session_id)).collect()
 }
 
 /// A shared task-tree index snapshot for read-only projections.
@@ -1142,7 +1155,9 @@ impl Store {
     }
     // A run record written during the pass leaves the rows a mix of two verdicts. No memo entry names that page.
     if self.records_generation() == records_generation && !reads.proc_dependent {
-      let (ids, identity_values) = reads.identities_read().into_iter().unzip();
+      let (ids, identity_values): (Vec<String>, Vec<Option<FileIdentity>>) =
+        reads.identities_read().into_iter().unzip();
+      let paths = Arc::new(history_paths(&ids)?);
       let rows = Arc::new(rows);
       *self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned") = Some(CachedTreePage {
         build_id,
@@ -1152,6 +1167,7 @@ impl Store {
         after: after_key,
         limit,
         ids: Arc::new(ids),
+        paths,
         identity_values,
         rows: Arc::clone(&rows),
         has_more,
@@ -1192,7 +1208,7 @@ impl Store {
   /// The identity read is the whole cost of a hit: the rows, their activity and their lifecycle states were derived
   /// from exactly these histories, and the key's generations name every metadata and run-record write since.
   fn memoized_tree_page(&self, key: TreePageKey<'_>) -> StoreResult<Option<TaskTreePage>> {
-    let (ids, identity_values, rows, has_more) = {
+    let (ids, paths, identity_values, rows, has_more) = {
       let memo = self.tree_page_memo.lock().expect("tree page memo mutex is not poisoned");
       let Some(memo) = memo.as_ref() else { return Ok(None) };
       if memo.build_id != key.build_id
@@ -1204,9 +1220,15 @@ impl Store {
       {
         return Ok(None);
       }
-      (Arc::clone(&memo.ids), memo.identity_values.clone(), Arc::clone(&memo.rows), memo.has_more)
+      (
+        Arc::clone(&memo.ids),
+        Arc::clone(&memo.paths),
+        memo.identity_values.clone(),
+        Arc::clone(&memo.rows),
+        memo.has_more,
+      )
     };
-    let current = self.history_identities(ids.as_slice())?;
+    let current = self.history_identities_at(&ids, &paths)?;
     if current != identity_values {
       return Ok(None);
     }
@@ -1259,7 +1281,28 @@ impl Store {
 
   /// The history identities of `ids`, in the argument order.
   fn history_identities(&self, ids: &[String]) -> StoreResult<Vec<Option<FileIdentity>>> {
-    ids.iter().map(|session_id| self.history_identity(session_id)).collect()
+    self.history_identities_at(ids, &history_paths(ids)?)
+  }
+
+  /// The history identities at `paths`, in the argument order, resolved from the open sessions directory.
+  ///
+  /// A page validation stats a hundred of these on every repeat request, so it opens the directory once and stats the
+  /// stored paths as they are; a missing sessions directory holds no history.
+  #[cfg_attr(not(test), allow(unused_variables))]
+  fn history_identities_at(&self, ids: &[String], paths: &[CString]) -> StoreResult<Vec<Option<FileIdentity>>> {
+    let Some(sessions_dir) = self.sessions_dir_handle()? else { return Ok(vec![None; paths.len()]) };
+    ids
+      .iter()
+      .zip(paths)
+      .map(|(session_id, path)| {
+        #[cfg(test)]
+        self.run_identity_hook(session_id, IdentityStage::BeforeStat);
+        let identity = FileIdentity::read_at_cstr(&sessions_dir, path)?;
+        #[cfg(test)]
+        self.run_identity_hook(session_id, IdentityStage::AfterStat);
+        Ok(identity)
+      })
+      .collect()
   }
 
   #[cfg(test)]

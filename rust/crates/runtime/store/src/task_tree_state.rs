@@ -1,6 +1,7 @@
 //! Task facts and cache records shared by Store and task-tree logic.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::CString;
 use std::ops::Index;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -385,8 +386,12 @@ pub(crate) struct CachedTreePage {
   pub(crate) include_archived: bool,
   pub(crate) after: Option<(UtcDateTime, String)>,
   pub(crate) limit: usize,
-  /// The histories the row pass read, in read order, shared so a hit re-checks them without copying the list.
+  /// The histories the row pass read, in read order: the session ids the test hook names, and their paths relative to
+  /// the sessions directory.
+  ///
+  /// The paths are built with the page, so a hit stats them as they are instead of formatting one path per row.
   pub(crate) ids: Arc<Vec<String>>,
+  pub(crate) paths: Arc<Vec<CString>>,
   pub(crate) identity_values: Vec<Option<FileIdentity>>,
   /// The rendered rows, shared so a hit hands the same page out without cloning a row's strings.
   pub(crate) rows: Arc<Vec<TaskTreeRow>>,

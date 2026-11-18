@@ -271,7 +271,7 @@ fn session_profile(config: &CharlieBotConfig, session_id: &str) -> Result<String
   }
 }
 
-/// POST the cold-read child and return the started line.
+/// The POST of the cold-read child, returning the started line.
 fn delegate_cold_read(
   args: &CheckArgs,
   artifact: &Path,

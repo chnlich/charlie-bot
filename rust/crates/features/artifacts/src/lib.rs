@@ -53,7 +53,7 @@ fn registered_fork_assertions(
   }))
 }
 
-/// Close the process-wide headless renderer.
+/// The close of the process-wide headless renderer.
 pub fn close_renderer() -> anyhow::Result<()> {
   headless_render::close_renderer()
 }
@@ -67,7 +67,7 @@ fn close_headless_renderer_at_shutdown(
   })
 }
 
-/// End the renderer browsers that an ended server or CLI left behind, on the blocking pool.
+/// The startup sweep that ends the renderer browsers an ended server or CLI left behind, on the blocking pool.
 fn sweep_headless_renderer_orphans_at_startup(
   _features: Arc<charliebot_registry::FeatureContext>,
 ) -> BoxFuture<'static, anyhow::Result<()>> {

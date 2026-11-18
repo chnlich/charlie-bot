@@ -51,7 +51,7 @@ fn pending_plan_approval(plans_path: &Path, session_id: &str) -> bool {
   read.plans.iter().any(|plan| plan.get("state").and_then(Value::as_str) == Some(AWAITING_APPROVAL_STATE))
 }
 
-/// Copies the parent's `plans.json` and every artifact it references into the child session.
+/// The copy of the parent's `plans.json` and every artifact it references into the child session.
 ///
 /// The child registry names each artifact by its path relative to the child session. A missing or outside-parent
 /// artifact logs a warning and does not abort the copy. A parent with no `plans.json` has nothing to copy.
@@ -182,7 +182,7 @@ fn set_version_file(data: &mut Value, reference: &Reference, file: &str) {
   data["plans"][reference.plan_index]["versions"][reference.version_index]["file"] = Value::String(file.to_string());
 }
 
-/// Copies the content, the permission bits, and the access and modification times.
+/// The copy of the content, the permission bits, and the access and modification times.
 fn copy2(source: &Path, destination: &Path) -> io::Result<()> {
   fs::copy(source, destination)?;
   let metadata = fs::metadata(source)?;

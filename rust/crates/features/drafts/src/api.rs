@@ -30,23 +30,15 @@ use crate::log::{self, Sendability};
 /// The send route's path pattern.
 pub const SEND_PATH: &str = "/api/sessions/{session_id}/drafts/{draft_id}/send";
 
+/// The paths the draft router mounts. The registry answers the trailing-slash redirect's claim from them.
+pub const ROUTE_PATTERNS: &[&str] = &[REGISTER_PATH, SEND_PATH];
+
 /// The draft routes with the feature context as their state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route(REGISTER_PATH, post_only(register))
     .route(SEND_PATH, post_only(send))
     .with_state(Arc::clone(features))
-}
-
-/// Whether a path is one of the draft routes, whatever the method.
-pub fn matches(path: &str) -> bool {
-  path == REGISTER_PATH || send_path_claims(path)
-}
-
-fn send_path_claims(path: &str) -> bool {
-  let Some(rest) = path.strip_prefix("/api/sessions/") else { return false };
-  let Some((session_id, rest)) = rest.split_once("/drafts/") else { return false };
-  !session_id.is_empty() && rest.strip_suffix("/send").is_some_and(|draft_id| !draft_id.is_empty())
 }
 
 const REGISTER_FIELDS: &[Field] = &[
@@ -268,6 +260,7 @@ mod tests {
   use axum::body::{Body, to_bytes};
   use axum::http::{Request as HttpRequest, StatusCode, header};
   use charliebot_core::run_token::{self, RunTokenClaims};
+  use charliebot_registry::route_claims::RouteClaims;
   use charliebot_store::run_records::{RunKind, RunRecord};
   use tower::ServiceExt;
 
@@ -315,12 +308,13 @@ mod tests {
 
   #[test]
   fn the_routes_claim_the_register_path_and_each_send_path() {
-    assert!(matches(REGISTER_PATH));
-    assert!(matches("/api/sessions/s/drafts/d/send"));
-    assert!(!matches("/api/sessions/s/drafts/d"));
-    assert!(!matches("/api/sessions//drafts/d/send"));
-    assert!(!matches("/api/sessions/s/drafts//send"));
-    assert!(!matches("/api/sessions/s/drafts/d/send/extra"));
+    let claims = RouteClaims::new(ROUTE_PATTERNS).expect("the draft route patterns are distinct");
+    assert!(claims.claims(REGISTER_PATH));
+    assert!(claims.claims("/api/sessions/s/drafts/d/send"));
+    assert!(!claims.claims("/api/sessions/s/drafts/d"));
+    assert!(!claims.claims("/api/sessions//drafts/d/send"));
+    assert!(!claims.claims("/api/sessions/s/drafts//send"));
+    assert!(!claims.claims("/api/sessions/s/drafts/d/send/extra"));
   }
 
   #[tokio::test]

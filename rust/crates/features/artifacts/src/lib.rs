@@ -29,7 +29,7 @@ pub const PACKAGE: &str = "features.artifacts";
 /// the sidebar contribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.file_view("artifacts", Arc::new(artifact_view::ArtifactView))?;
-  registry.router(api::routes, api::matches)?;
+  registry.router_patterns(api::routes, api::ROUTE_PATTERNS)?;
   registry.config_section(ConfigSection {
     key: "publish",
     legacy_keys: &[("publish_dir", "publish.dir"), ("public_base_url", "publish.public_base_url")],

@@ -16,7 +16,7 @@ use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS,
   RUN_BACKEND, SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
-  THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
+  TASK_PARENT_ID_FIELD, THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -517,7 +517,7 @@ impl RowSchema {
 
 /// The fields the session-move picker reads: it labels a choice by name, keeps the manager rows, walks the task
 /// parents to drop the moved session's descendants, and names the chosen parent by id.
-const MOVE_FIELDS: [&str; 4] = ["id", "name", "profile", "task_parent_id"];
+const MOVE_FIELDS: [&str; 4] = [ID_FIELD, "name", "profile", TASK_PARENT_ID_FIELD];
 
 /// The page's whole sidebar text and the inputs it rendered from.
 struct WholePageText {

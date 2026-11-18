@@ -27,6 +27,7 @@ use crate::test_support::{
 };
 
 const GATED_ALIAS: &str = "synthetic-login-host";
+const KEYED_HOST: &str = "synthetic-keyed-host";
 const FIRING: &str = "2026-11-18T03:00:00+00:00";
 
 /// Tick the scheduler two minutes past the start, so a task that runs every minute is due once.
@@ -62,13 +63,27 @@ fn text_of(event: &CompactValue, key: &str) -> String {
 
 /// A prompt task of the bound session `node_id` that runs every minute, from the task file.
 fn prompt_task(features: &FeatureContext, name: &str, node_id: &str, repo: Option<&str>) -> ScheduledTaskConfig {
-  let home = features.config.get().unwrap().charliebot_home.clone();
   let mut body =
     json!({"cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id, "backend": "synthetic"});
   if let Some(repo) = repo {
     body["repo"] = Value::String(repo.to_string());
   }
-  write_prompted_task(&home, name, &body);
+  written_prompt_task(features, name, &body)
+}
+
+/// A prompt task of the bound session `node_id` that runs every minute and names `host` as its `improve_host`.
+fn keyed_prompt_task(features: &FeatureContext, name: &str, node_id: &str, host: &str) -> ScheduledTaskConfig {
+  let body = json!({
+    "cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id, "backend": "synthetic",
+    "improve_host": host,
+  });
+  written_prompt_task(features, name, &body)
+}
+
+/// Write the task file `name` with `body` and its prompt, and return the task as the loader reads it.
+fn written_prompt_task(features: &FeatureContext, name: &str, body: &Value) -> ScheduledTaskConfig {
+  let home = features.config.get().unwrap().charliebot_home.clone();
+  write_prompted_task(&home, name, body);
   crate::loader::read_snapshot(features, &features.config.get().unwrap())
     .unwrap()
     .0
@@ -76,6 +91,21 @@ fn prompt_task(features: &FeatureContext, name: &str, node_id: &str, repo: Optio
     .into_iter()
     .find(|task| task.name == name)
     .expect("the written task loads")
+}
+
+/// Let `KEYED_HOST` answer ok, so a keyed round is not held for approval.
+fn keyed_host_answers_ok(features: &FeatureContext) {
+  let home = features.config.get().unwrap().charliebot_home.clone();
+  set_host_login(
+    &home,
+    HostLogin {
+      alias: KEYED_HOST.to_string(),
+      status: "ok".to_string(),
+      detail: "Synthetic login check".to_string(),
+      last_change_at: "2026-11-18T00:00:00+00:00".to_string(),
+      awaits_approval: false,
+    },
+  );
 }
 
 /// A round of `task` that is queued in `node`: a worker leaf named by the round's request id, with a registered run
@@ -401,6 +431,7 @@ async fn a_bound_delegation_starts_a_round_whose_worker_is_named_by_its_round_re
   assert!(spec.goal.contains("## Session note\n\nSynthetic session note"), "{}", spec.goal);
   assert_eq!(spec.base_branch, None);
   assert_eq!(spec.task_type, None);
+  assert_eq!(spec.improve_host, None, "a task file without the key starts a round with none");
   assert_eq!(run.kind, RunKind::Work);
   let created = features.store.load_all_facts(&leaf.id).unwrap();
   let request_id = created
@@ -447,4 +478,57 @@ async fn two_concurrent_bound_delegations_of_one_task_start_one_worker_and_refus
   .expect("the accepted round launches its process");
   processes.track(pid);
   assert_eq!(features.store.child_ids(&node.id).unwrap(), vec![child.to_string()], "exactly one worker exists");
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_bound_delegation_of_a_keyed_task_starts_a_round_whose_spec_names_the_host() {
+  let (_home, features) = feature_context_with_login_hosts(&[KEYED_HOST]);
+  install_execution(&features).await;
+  keyed_host_answers_ok(&features);
+  let node = manager(&features, "synthetic-keyed-delegation-node").await.unwrap();
+  let task = keyed_prompt_task(&features, "synthetic-keyed-delegation", &node.id, KEYED_HOST);
+
+  let (leaf, _run) = bound_round_leaf(&features, &task, "").await;
+
+  assert_eq!(leaf.task.as_ref().and_then(|spec| spec.improve_host.as_deref()), Some(KEYED_HOST));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_round_that_a_fire_starts_through_the_session_carries_the_improve_host() {
+  let (_home, features) = feature_context_with_login_hosts(&[KEYED_HOST]);
+  install_execution(&features).await;
+  keyed_host_answers_ok(&features);
+  let node = manager(&features, "synthetic-keyed-fire-node").await.unwrap();
+  let _task = keyed_prompt_task(&features, "synthetic-keyed-fire", &node.id, KEYED_HOST);
+
+  tick(&features).await;
+  assert_eq!(pending_inputs(&features, &node.id).len(), 1, "the fire reaches the bound session");
+
+  // The session's turn answers the trigger by delegating the task's round, as its round template asks.
+  let (status, body) = bound_delegate(&features, &node.id, "synthetic-keyed-fire", "").await;
+  assert_eq!(status, StatusCode::OK, "{body}");
+  let leaf_id = body["session_id"].as_str().expect("the response names the worker");
+  let leaf = features.store.get_session(leaf_id).await.unwrap().unwrap();
+  assert_eq!(leaf.task.as_ref().and_then(|spec| spec.improve_host.as_deref()), Some(KEYED_HOST));
+}
+
+#[tokio::test]
+async fn a_turn_of_the_bound_session_carries_no_improve_host() {
+  let (_home, features) = feature_context_with_login_hosts(&[KEYED_HOST]);
+  install_execution(&features).await;
+  keyed_host_answers_ok(&features);
+  let node = manager(&features, "synthetic-keyed-turn-node").await.unwrap();
+  let _task = keyed_prompt_task(&features, "synthetic-keyed-turn", &node.id, KEYED_HOST);
+
+  tick(&features).await;
+
+  assert_eq!(pending_inputs(&features, &node.id).len(), 1, "the fire queues the session's turn input");
+  let session = features.store.get_session(&node.id).await.unwrap().unwrap();
+  assert_eq!(
+    session.task.as_ref().and_then(|spec| spec.improve_host.as_deref()),
+    None,
+    "the bound session's turns run on this host; only the round worker carries the key"
+  );
 }

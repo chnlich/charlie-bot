@@ -34,7 +34,7 @@ fn terminal_websocket(_features: Arc<FeatureContext>, request: WebSocketRequest)
   })
 }
 
-/// Runs one attachment and logs its end: `terminal_ws_disconnected` from the disconnect guard,
+/// The serving of one attachment. Its end is logged: `terminal_ws_disconnected` from the disconnect guard,
 /// then the exception that escaped the handler.
 async fn serve_attachment(socket: WebSocket, grid: pty::Grid) {
   let outcome = {

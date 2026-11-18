@@ -46,8 +46,8 @@ pub(super) async fn ensure_terminal_session(grid: pty::Grid) -> Result<(), Strin
   Ok(())
 }
 
-/// Attaches the socket to the profile's terminal. An `Err` is an exception that escaped the handler after accept.
-/// The caller logs it and drops the socket.
+/// The attachment of the socket to the profile's terminal. An `Err` is an exception that escaped the handler after
+/// accept. The caller logs it and drops the socket.
 pub(super) async fn run_terminal_attachment(mut socket: WebSocket, grid: pty::Grid) -> Result<(), String> {
   if let Err(error) = ensure_terminal_session(grid).await {
     tracing::error!(error = %error, "terminal_ensure_session_failed");

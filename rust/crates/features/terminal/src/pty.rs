@@ -89,9 +89,9 @@ pub(super) fn tmux_session_name(session_id: &str) -> String {
 /// How `filtered_env` treats the inherited `TERM`.
 #[derive(Clone, Copy)]
 pub(super) enum TermEnv {
-  /// Keep the inherited `TERM`, for a tmux command that never draws on a client.
+  /// The inherited `TERM`, kept for a tmux command that never draws on a client.
   Inherit,
-  /// Replace `TERM` with the client terminal type, so an attached pty draws at the type the client shows.
+  /// The client terminal type in place of `TERM`, so an attached pty draws at the type the client shows.
   Replace,
 }
 
@@ -409,7 +409,7 @@ pub(super) async fn send_json(socket: &mut WebSocket, value: &Value) -> Result<(
   socket.send(Message::Text(text.into())).await
 }
 
-/// Relays the PTY and the socket until either one ends.
+/// The PTY-and-socket relay, which runs until either one ends.
 ///
 /// An `Err` returns without a close frame: the transport closes, no Close message is sent, and the client
 /// sees the connection end.

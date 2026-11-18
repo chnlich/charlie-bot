@@ -13,7 +13,7 @@
 //! checks alone, through [`check_readback`] and the host probe. An ended attempt is recorded in `host_auth.json` by
 //! `login_state`; a live attempt lives in memory, in the one map of live attempts keyed by login name.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -260,6 +260,17 @@ struct LiveEntry {
 
 /// The live attempt of each login name. A newer attempt is always the live one.
 static LIVE: LazyLock<Mutex<HashMap<String, LiveEntry>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Login names whose one-off link probe currently owns the login process slot.
+static LINK_PROBES: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Holds a login's process slot for one link probe. The probe is not a live attempt and never appears in a row.
+struct LinkProbeGuard(String);
+
+impl Drop for LinkProbeGuard {
+  fn drop(&mut self) {
+    LINK_PROBES.lock().expect("the link-probe set is never poisoned").remove(&self.0);
+  }
+}
 
 /// The login's attempt in progress, as a snapshot for the status table.
 pub fn live_attempt(name: &str) -> Option<LiveAttempt> {
@@ -296,7 +307,7 @@ pub async fn start_login(login: &BrowserLoginConfig) -> Result<String, StartFail
 
 /// `start_login_with_paths`: start an attempt, which records its outcome in the state file of `paths`.
 async fn start_login_with_paths(login: &BrowserLoginConfig, paths: AttemptPaths) -> Result<String, StartFailed> {
-  let mut link = match claim_slot(login, paths) {
+  let mut link = match claim_slot(login, paths)? {
     Slot::Join(link) => link,
     Slot::Started { link, replaced } => {
       if let Some(core) = replaced {
@@ -317,17 +328,20 @@ enum Slot {
 
 /// The click's slot: the login's start in progress to join, or a new attempt registered in its slot. The check and the
 /// registration share one lock hold, so two clicks that arrive together cannot both start a process.
-fn claim_slot(login: &BrowserLoginConfig, paths: AttemptPaths) -> Slot {
+fn claim_slot(login: &BrowserLoginConfig, paths: AttemptPaths) -> Result<Slot, StartFailed> {
   let mut live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
+  if LINK_PROBES.lock().expect("the link-probe set is never poisoned").contains(&login.name) {
+    return Err(StartFailed("a link probe is in progress for this login".to_string()));
+  }
   if let Some(entry) = live.get(&login.name).filter(|entry| matches!(&*entry.link.borrow(), LinkState::Pending)) {
-    return Slot::Join(entry.link.clone());
+    return Ok(Slot::Join(entry.link.clone()));
   }
   let replaced = live.remove(&login.name).map(|entry| entry.core);
   let (link, link_rx) = watch::channel(LinkState::Pending);
   let core = Arc::new(Mutex::new(AttemptCore::new(login, link, paths)));
   let driver = tokio::spawn(drive(Arc::clone(&core)));
   live.insert(login.name.clone(), LiveEntry { core, link: link_rx.clone(), driver });
-  Slot::Started { link: link_rx, replaced }
+  Ok(Slot::Started { link: link_rx, replaced })
 }
 
 /// The link watch's answer to a waiting click: the link, or the 502 body of a start that gave none.
@@ -418,6 +432,7 @@ async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io:
     tracing::warn!(login = %login.name, path, "browser_login_link_probe_missing_file");
     return Ok(LinkMatch::Fail);
   }
+  let _probe = claim_link_probe(&login.name)?;
   let (mut child, mut output, _input) = match spawn_login(login) {
     Ok(spawned) => spawned,
     Err(error) => {
@@ -446,14 +461,30 @@ async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io:
   }
 }
 
-/// Whether one line of the login's output matches the approval-link pattern. The output is read until it ends.
+/// Claim a login's process slot for a link probe unless a full attempt already owns it.
+fn claim_link_probe(name: &str) -> io::Result<LinkProbeGuard> {
+  let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
+  if live.contains_key(name) {
+    return Err(io::Error::new(io::ErrorKind::WouldBlock, "a login attempt is in progress"));
+  }
+  let mut probes = LINK_PROBES.lock().expect("the link-probe set is never poisoned");
+  if !probes.insert(name.to_string()) {
+    return Err(io::Error::new(io::ErrorKind::WouldBlock, "a link probe is already in progress"));
+  }
+  Ok(LinkProbeGuard(name.to_string()))
+}
+
+/// Whether a line or partial line of the login's output matches the approval-link pattern. The output is read until it
+/// matches or ends, without answering an enter prompt.
 async fn link_printed(matcher: &Regex, output: &mut LoginReader) -> io::Result<bool> {
-  while let Some(line) = output.next_line().await? {
-    if matcher.is_match(&line) {
+  loop {
+    if output.seen_text().lines().any(|line| matcher.is_match(line)) {
       return Ok(true);
     }
+    if !output.read_chunk().await? {
+      return Ok(false);
+    }
   }
-  Ok(false)
 }
 
 /// `stop_all`: end every live attempt by killing its child — the driver's own paths then record each outcome — and
@@ -823,19 +854,27 @@ impl LoginReader {
         let line: Vec<u8> = self.pending.drain(..=position).collect();
         return Ok(Some(text_of(&line)));
       }
-      let mut chunk = [0u8; 4096];
-      let read = self.source.read(&mut chunk).await?;
-      if read == 0 {
+      if !self.read_chunk().await? {
         return Ok((!self.pending.is_empty()).then(|| text_of(&std::mem::take(&mut self.pending))));
-      }
-      self.pending.extend_from_slice(&chunk[..read]);
-      self.seen.extend_from_slice(&chunk[..read]);
-      if self.seen.len() > SEEN_KEEP_BYTES {
-        let excess = self.seen.len() - SEEN_KEEP_BYTES;
-        self.seen.drain(..excess);
       }
       self.answer_enter_prompt().await?;
     }
+  }
+
+  /// One output chunk, without answering the login's enter prompt.
+  async fn read_chunk(&mut self) -> io::Result<bool> {
+    let mut chunk = [0u8; 4096];
+    let read = self.source.read(&mut chunk).await?;
+    if read == 0 {
+      return Ok(false);
+    }
+    self.pending.extend_from_slice(&chunk[..read]);
+    self.seen.extend_from_slice(&chunk[..read]);
+    if self.seen.len() > SEEN_KEEP_BYTES {
+      let excess = self.seen.len() - SEEN_KEEP_BYTES;
+      self.seen.drain(..excess);
+    }
+    Ok(true)
   }
 
   /// One newline written to the terminal when the output first matches the enter pattern.
@@ -1320,6 +1359,42 @@ mod tests {
       until(|| !is_running(pid)).await;
     }
     assert!(!stub.dir.path().join("probe-linked-readback.ran").exists(), "the probe ran no readback");
+  }
+
+  #[tokio::test]
+  async fn a_link_probe_stops_before_answering_the_login_prompt() {
+    let _serial = SERIAL.lock().await;
+    let mut stub = LoginStub::new(
+      "probe-no-enter",
+      &format!(
+        "printf '%s\\n' '{LINK} Press Enter after approval'\nif IFS= read -r answer; then touch \"$0.entered\"; fi\nsleep 600\n"
+      ),
+      "exit 0\n",
+    );
+    stub.login.use_pty = true;
+    stub.login.enter_after_pattern = Some("Press Enter after approval".to_string());
+
+    let matched = probe_link_within(&stub.login, Duration::from_secs(5)).await.expect("the probe runs");
+
+    assert_eq!(matched, LinkMatch::Pass);
+    assert!(!Path::new(&format!("{}.entered", stub.login.login_command[0])).exists(), "the probe sent no Enter");
+  }
+
+  #[tokio::test]
+  async fn a_link_probe_reserves_its_login_against_a_concurrent_start() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new("probe-reserves", "echo $$ >> \"$0.starts\"\nsleep 600\n", "exit 0\n");
+    let script = &stub.login.login_command[0];
+    let starts = format!("{script}.starts");
+    let login = stub.login.clone();
+    let probe = tokio::spawn(async move { probe_link_within(&login, Duration::from_secs(1)).await });
+    until(|| Path::new(&starts).exists()).await;
+
+    let failure = start_login_with_paths(&stub.login, stub.paths()).await.expect_err("a probe owns the process slot");
+
+    assert!(failure.0.contains("link probe is in progress"), "{failure:?}");
+    assert_eq!(fs::read_to_string(&starts).expect("the start count reads").lines().count(), 1);
+    assert_eq!(probe.await.expect("the probe task completes").expect("the probe ends"), LinkMatch::Fail);
   }
 
   #[tokio::test]

@@ -1,5 +1,5 @@
 //! The improve round's test world: a throwaway repository that holds the launcher, a profile home, a remote home and
-//! the stub commands of both sides. It also holds a local `claude` stub for a cron session's own turn.
+//! the stub commands of both sides.
 //!
 //! The repository is a real git repository with `origin/main`, so the launcher reads its commit and
 //! `dev/improve/inflight-files.sh` lists this repository's own worktrees only. The stub `ssh` records its arguments
@@ -35,13 +35,35 @@ pub const GITHUB_REPOSITORY: &str = "github.com/fixture-owner/fixture-repo";
 pub const SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
 /// The cron session: the task file binds it as `session_id`, and the round worker calls it its parent.
 pub const PARENT_ID: &str = "99999999-8888-7777-6666-555555555555";
+/// The gateway token of a gateway member: the server's `ANTHROPIC_AUTH_TOKEN`.
 pub const GATEWAY_TOKEN: &str = "synthetic-gateway-token";
-pub const API_KEY: &str = "synthetic-api-key";
+/// The review option's key, which the profile home's credentials file holds under the review credential.
+pub const REVIEW_KEY: &str = "synthetic-review-key";
+/// The review option's credential name, as `config.yaml` and `credentials.yaml` name it.
+pub const REVIEW_CREDENTIAL: &str = "aigw_charliebot_agents";
+/// The review option's model, API base and context window, as the profile home's `config.yaml` holds them.
+pub const REVIEW_MODEL: &str = "kimi-k3.1-pro";
+pub const REVIEW_API_BASE: &str = "https://aigw.example";
+pub const REVIEW_CONTEXT_WINDOW: &str = "409600";
+/// The host's Claude login for a subscription member: the whole content of its login file.
+pub const LOGIN_TOKEN: &str = "synthetic-subscription-login";
+/// The launcher host's own Claude login, which must not be forwarded to the improve host.
+pub const LOCAL_CLAUDE_OAUTH_TOKEN: &str = "synthetic-local-claude-oauth-token";
+/// The host's Codex login: the content of its `auth.json`.
+pub const CODEX_LOGIN: &str = "synthetic-codex-login";
 pub const RUN_TOKEN: &str = "synthetic-run-token";
 pub const REMOTE_HOST: &str = "improve.example.ts.net";
 pub const MOCK_HOME_VERSION: &str = "2";
 pub const LOCAL_CONFIG_DIR: &str = "/synthetic/local-claude-config";
 pub const INSTRUCTIONS: &str = "Improve one topic.\n";
+/// The gateway variables that a subscription member's launch environment does not carry.
+const GATEWAY_VARIABLES: [&str; 5] = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "CLAUDE_CODE_EXTRA_BODY",
+];
 
 const SSH: &str = r#"# Fake ssh: record every argument, then run the remote command locally under the remote home.
 record='--- call'$'\n'
@@ -106,13 +128,16 @@ if [[ -n ${IMPROVE_DIRECTION:-} ]]; then
   fi
 fi
 printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGV"
-# The record keeps the gateway variables out of the evidence: a real claude holds its environment in memory only, so
-# the record carries each variable's digest in its place.
-env | grep -v -e '^ANTHROPIC_AUTH_TOKEN=' -e '^CHARLIE_CODE_API_KEY=' >"$FAKE_CLAUDE_ENV"
-printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\nCHARLIE_CODE_API_KEY_SHA256=%s\n' \
-  "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)" \
-  "$(printf '%s' "${CHARLIE_CODE_API_KEY-}" | sha256sum | cut -d' ' -f1)" \
-  >>"$FAKE_CLAUDE_ENV"
+# The record keeps every key out of the evidence: a real claude holds its environment in memory only, so the record
+# carries each key's digest in its place, and `unset` for a key that the environment does not hold.
+env | grep -v -e '^ANTHROPIC_AUTH_TOKEN=' -e '^CHARLIE_CODE_API_KEY=' -e '^CLAUDE_CODE_OAUTH_TOKEN=' >"$FAKE_CLAUDE_ENV"
+for name in ANTHROPIC_AUTH_TOKEN CHARLIE_CODE_API_KEY CLAUDE_CODE_OAUTH_TOKEN; do
+  if [[ -n ${!name+x} ]]; then
+    printf '%s_SHA256=%s\n' "$name" "$(printf '%s' "${!name}" | sha256sum | cut -d' ' -f1)"
+  else
+    printf '%s_SHA256=unset\n' "$name"
+  fi
+done >>"$FAKE_CLAUDE_ENV"
 if [[ -n ${FAKE_CLAUDE_STDIN:-} ]]; then
   cat >"$FAKE_CLAUDE_STDIN"
 fi
@@ -126,6 +151,13 @@ if [[ -n ${FAKE_CLAUDE_WAIT_FOR:-} ]]; then
   done
 fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
+"#;
+
+/// Fake codex: record the `CODEX_HOME` it runs with and its arguments, outside the round's boundary.
+const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with and the arguments it receives.
+printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}" >"$FAKE_CODEX_ENV"
+printf '%s\n' "$@" >"$FAKE_CODEX_ARGV"
+exit 0
 "#;
 
 const MOCK_HOME: &str = r#"# Fake mock-home: record its calls and write a manifest as the completion marker.
@@ -189,7 +221,13 @@ esac
 exit 0
 "#;
 
+/// Fake improve-sandbox: no boundary. It runs the command after `--`, as the real program does. With
+/// `FAKE_SANDBOX_REFUSE=1` it refuses to start, as a kernel without Landlock does.
 const SANDBOX: &str = r#"# Fake improve-sandbox: no boundary. It runs the command after `--`, as the real program does.
+if [[ ${FAKE_SANDBOX_REFUSE:-0} == 1 ]]; then
+  printf 'improve-sandbox: Landlock is not enforced by this kernel\n' >&2
+  exit 1
+fi
 shift
 [[ ${1-} == -- ]] || exit 1
 shift
@@ -289,17 +327,14 @@ pub struct World {
   pub claude_inflight: PathBuf,
   /// Where the fake claude copies its standard input when a test asks for it, inside the round's boundary.
   pub claude_stdin: PathBuf,
+  /// Where the fake codex writes its `CODEX_HOME` and its arguments: this host's records, outside the round's boundary.
+  pub codex_env: PathBuf,
+  pub codex_argv: PathBuf,
   pub systemctl_log: PathBuf,
   pub systemd_run_log: PathBuf,
   pub scope_stopped: PathBuf,
   pub mock_home_log: PathBuf,
   pub mock_home_fixture: PathBuf,
-  /// Where the local claude of a cron session's own turn writes its arguments and environment: this
-  /// host's records, outside the round's boundary.
-  pub node_claude_argv: PathBuf,
-  pub node_claude_env: PathBuf,
-  /// Where the local claude copies its standard input when a test asks for it.
-  pub node_claude_stdin: PathBuf,
   /// The in-memory `$CLAUDE_CONFIG_DIR` of the launcher. It must not reach the round.
   pub local_config_dir: &'static str,
 }
@@ -315,7 +350,6 @@ impl World {
     let local_home = sandbox.dir("local");
     let remote_home = sandbox.dir("remote");
     let profile_home = sandbox.dir("profile");
-    let node_records = sandbox.dir("node");
     let git_env: Env = IDENTITY.iter().map(|(name, value)| ((*name).to_string(), (*value).to_string())).collect();
     git(&sandbox, &git_env, &repo, &["init", "-q", "-b", "main"]);
     git(&sandbox, &git_env, &repo, &["add", "-A"]);
@@ -335,8 +369,6 @@ impl World {
 
     sandbox.stub("gh", GH);
     sandbox.stub("ssh", SSH);
-    // The local claude that a cron session's own turn runs.
-    sandbox.stub("claude", CLAUDE);
 
     let instructions = sandbox.root().join("harness_instructions.md");
     fs::write(&instructions, INSTRUCTIONS).expect("the instructions file");
@@ -357,14 +389,25 @@ impl World {
     .expect("the cron task file");
     fs::write(profile_home.join("skills_leak_patterns.local.txt"), "# local patterns\nfictionalmarker\n")
       .expect("the leak pattern file");
-
-    let round_home = sandbox.dir("remote/improve/home");
+    // The review option as this host's config.yaml lists it: a list item whose fields sit four spaces in.
     fs::write(
-      round_home.join("config.yaml"),
-      "backends:\n  options:\n    - id: synthetic-review\n      type: cc-anthropic-compatible\n      model: synthetic-model\n      api_base: https://gw.example\n      context_window: 4096\n      credential: synthetic-gateway\n",
+      profile_home.join("config.yaml"),
+      format!(
+        "backends:\n  options:\n  - api_base: {REVIEW_API_BASE}\n    context_window: {REVIEW_CONTEXT_WINDOW}\n    \
+         credential: {REVIEW_CREDENTIAL}\n    id: claude-code-kimi-k3.1-pro\n    model: {REVIEW_MODEL}\n    \
+         type: cc-anthropic-compatible\n  - effort: high\n    id: claude-fable-5\n    model: claude-fable-5-1\n"
+      ),
     )
-    .expect("the round's config.yaml");
+    .expect("the profile home's config.yaml");
+    // A section before the review credential, so a test that reads the first api_key line reads the wrong key.
+    fs::write(
+      profile_home.join("credentials.yaml"),
+      format!("synthetic-decoy:\n  api_key: synthetic-decoy-key\n{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\n"),
+    )
+    .expect("the profile home's credentials.yaml");
+
     let round_root = sandbox.dir(&format!("remote/improve/{DIRECTION}"));
+    sandbox.dir("remote/improve/home");
     let clone = round_root.join("charlie-bot");
     fs::create_dir_all(&clone).expect("the direction clone");
     git(&sandbox, &git_env, &clone, &["init", "-q", "-b", "main"]);
@@ -379,6 +422,7 @@ impl World {
     let remote_bin = sandbox.dir("remote/.local/bin");
     for (name, body) in [
       ("claude", CLAUDE),
+      ("codex", CODEX),
       ("charlie-code", "exit 0\n"),
       ("systemd-run", SYSTEMD_RUN),
       ("systemctl", SYSTEMCTL),
@@ -398,14 +442,13 @@ impl World {
       claude_env: evidence.join("claude-env.txt"),
       claude_inflight: evidence.join("claude-inflight.txt"),
       claude_stdin: evidence.join("claude-stdin.txt"),
+      codex_env: sandbox.root().join("codex-env.txt"),
+      codex_argv: sandbox.root().join("codex-argv.txt"),
       systemctl_log: sandbox.root().join("systemctl.log"),
       systemd_run_log: sandbox.root().join("systemd-run.log"),
       scope_stopped: sandbox.root().join("scope-stopped"),
       mock_home_log,
       mock_home_fixture,
-      node_claude_argv: node_records.join("claude-argv.txt"),
-      node_claude_env: node_records.join("claude-env.txt"),
-      node_claude_stdin: node_records.join("claude-stdin.txt"),
       instructions,
       commit,
       sandbox,
@@ -421,7 +464,8 @@ impl World {
     self.repo.join("dev/improve/remote-launch.sh")
   }
 
-  /// The variables the launcher sees: a clean environment, like the server's child environment.
+  /// The variables the launcher sees: a clean environment, like the server's child environment. It is a gateway
+  /// claude's environment: the server set the gateway variables and the gateway token.
   pub fn env(&self) -> Env {
     let mut env = Env::new();
     env.insert("PATH".to_string(), format!("{}:/usr/local/bin:/usr/bin:/bin", self.sandbox.bin().display()));
@@ -434,11 +478,11 @@ impl World {
     env.insert("IMPROVE_EVIDENCE_COPY_SECONDS".to_string(), "30".to_string());
     env.insert("ANTHROPIC_BASE_URL".to_string(), "https://gateway.example".to_string());
     env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), GATEWAY_TOKEN.to_string());
-    env.insert("ANTHROPIC_API_KEY".to_string(), API_KEY.to_string());
     env.insert("ANTHROPIC_MODEL".to_string(), "synthetic-model".to_string());
     env.insert("ANTHROPIC_CUSTOM_HEADERS".to_string(), "x-tag: synthetic\nx-line: two".to_string());
     env.insert("CLAUDE_CODE_EXTRA_BODY".to_string(), "{\"cache\":true}".to_string());
     env.insert("CLAUDE_CONFIG_DIR".to_string(), self.local_config_dir.to_string());
+    env.insert("CLAUDE_CODE_OAUTH_TOKEN".to_string(), LOCAL_CLAUDE_OAUTH_TOKEN.to_string());
     env.insert("BASH_DEFAULT_TIMEOUT_MS".to_string(), "900000".to_string());
     env.insert("BASH_MAX_TIMEOUT_MS".to_string(), "900000".to_string());
     env.insert("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string());
@@ -453,6 +497,8 @@ impl World {
     env.insert("FAKE_CLAUDE_ARGV".to_string(), self.claude_argv.display().to_string());
     env.insert("FAKE_CLAUDE_ENV".to_string(), self.claude_env.display().to_string());
     env.insert("FAKE_CLAUDE_INFLIGHT".to_string(), self.claude_inflight.display().to_string());
+    env.insert("FAKE_CODEX_ENV".to_string(), self.codex_env.display().to_string());
+    env.insert("FAKE_CODEX_ARGV".to_string(), self.codex_argv.display().to_string());
     env.insert("FAKE_SYSTEMCTL_LOG".to_string(), self.systemctl_log.display().to_string());
     env.insert("FAKE_SYSTEMD_RUN_LOG".to_string(), self.systemd_run_log.display().to_string());
     env.insert("FAKE_SCOPE_STOPPED".to_string(), self.scope_stopped.display().to_string());
@@ -465,36 +511,64 @@ impl World {
     env
   }
 
-  /// The variables of a cron session's own turn: the world's environment with the cron session's id,
-  /// which a cron task file binds, and the local claude's records.
-  pub fn node_env(&self) -> Env {
+  /// The environment of a member that logs in on the host: the server strips the gateway variables from it.
+  pub fn host_login_env(&self) -> Env {
     let mut env = self.env();
-    env.insert("CHARLIEBOT_SESSION_ID".to_string(), PARENT_ID.to_string());
-    env.insert("FAKE_CLAUDE_ARGV".to_string(), self.node_claude_argv.display().to_string());
-    env.insert("FAKE_CLAUDE_ENV".to_string(), self.node_claude_env.display().to_string());
+    for name in GATEWAY_VARIABLES {
+      env.remove(name);
+    }
     env
   }
 
-  /// The command line the server builds for a worker run of this backend.
-  pub fn claude_arguments(&self) -> Vec<String> {
-    vec![
-      "-p".to_string(),
-      "--output-format".to_string(),
-      "stream-json".to_string(),
-      "--settings".to_string(),
-      "{\"disableClaudeAiConnectors\":true}".to_string(),
-      "--append-system-prompt-file".to_string(),
-      self.instructions.display().to_string(),
-      "--mcp-config".to_string(),
-      "{\"mcpServers\":{\"charliebot-web\":{\"url\":\"http://localhost:18499/api/web-search/mcp\"}}}".to_string(),
-    ]
+  /// The server's command line for a claude member: the binary, then the claude arguments.
+  pub fn agent_arguments(&self) -> Vec<String> {
+    let mut arguments = vec!["claude".to_string()];
+    arguments.extend(
+      [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--settings",
+        "{\"disableClaudeAiConnectors\":true}",
+        "--append-system-prompt-file",
+      ]
+      .map(str::to_string),
+    );
+    arguments.push(self.instructions.display().to_string());
+    arguments.extend(
+      ["--mcp-config", "{\"mcpServers\":{\"charliebot-web\":{\"url\":\"http://localhost:18499/api/web-search/mcp\"}}}"]
+        .map(str::to_string),
+    );
+    arguments
   }
 
-  /// One launcher command with the world's environment and the round's arguments.
-  pub fn launcher_command(&self, env: &Env) -> std::process::Command {
+  /// The server's command line for a codex member: the binary, then the codex arguments with the instructions in
+  /// `--config developer_instructions`, and no instructions file.
+  pub fn codex_arguments(&self) -> Vec<String> {
+    [
+      "codex",
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--config",
+      "developer_instructions=Improve one topic.",
+      "--",
+      "Improve one topic in the performance direction.",
+    ]
+    .map(str::to_string)
+    .to_vec()
+  }
+
+  /// One launcher command with the world's environment and the given command line.
+  pub fn launcher_command_for(&self, env: &Env, command_line: &[String]) -> std::process::Command {
     let mut command = harness::command("bash", env);
-    command.arg(self.launcher()).args(self.claude_arguments());
+    command.arg(self.launcher()).args(command_line);
     command
+  }
+
+  /// One launcher command for a claude member with the world's environment.
+  pub fn launcher_command(&self, env: &Env) -> std::process::Command {
+    self.launcher_command_for(env, &self.agent_arguments())
   }
 
   pub fn run(&self, env: &Env) -> harness::Run {
@@ -523,34 +597,58 @@ impl World {
       .collect()
   }
 
-  pub fn ssh_arguments(&self) -> String {
-    fs::read_to_string(&self.ssh_args).unwrap_or_default()
+  /// Whether the fake codex ran at all.
+  pub fn codex_ran(&self) -> bool {
+    self.codex_env.exists()
   }
 
-  /// Whether a cron session's own turn ran the local claude.
-  pub fn node_claude_ran(&self) -> bool {
-    self.node_claude_argv.exists()
+  /// The `CODEX_HOME` that the fake codex ran with, as its record holds it.
+  pub fn codex_home_received(&self) -> String {
+    fs::read_to_string(&self.codex_env)
+      .expect("the fake codex recorded its environment")
+      .lines()
+      .find_map(|line| line.strip_prefix("CODEX_HOME="))
+      .expect("the record names CODEX_HOME")
+      .to_string()
   }
 
-  pub fn node_claude_arguments(&self) -> Vec<String> {
-    fs::read_to_string(&self.node_claude_argv)
-      .expect("the local claude recorded its arguments")
+  pub fn codex_arguments_received(&self) -> Vec<String> {
+    fs::read_to_string(&self.codex_argv)
+      .expect("the fake codex recorded its arguments")
       .lines()
       .map(str::to_string)
       .collect()
   }
 
-  pub fn node_claude_environment(&self) -> Env {
-    fs::read_to_string(&self.node_claude_env)
-      .expect("the local claude recorded its environment")
-      .lines()
-      .filter_map(|line| line.split_once('='))
-      .map(|(name, value)| (name.to_string(), value.to_string()))
-      .collect()
+  pub fn ssh_arguments(&self) -> String {
+    fs::read_to_string(&self.ssh_args).unwrap_or_default()
   }
 
   pub fn systemctl_calls(&self) -> String {
     fs::read_to_string(&self.systemctl_log).unwrap_or_default()
+  }
+
+  /// Whether the runner started a systemd scope.
+  pub fn scope_started(&self) -> bool {
+    self.systemd_run_log.exists()
+  }
+
+  /// The host's Claude login file, which a subscription round reads.
+  pub fn claude_login_file(&self) -> PathBuf {
+    self.remote_home.join("improve/logins/claude-oauth-token")
+  }
+
+  /// Writes the host's Claude login file with no trailing newline, as the host's setup writes it.
+  pub fn write_claude_login(&self) {
+    fs::create_dir_all(self.claude_login_file().parent().expect("the logins directory")).expect("the logins directory");
+    fs::write(self.claude_login_file(), LOGIN_TOKEN).expect("the Claude login file");
+  }
+
+  /// Writes the host's Codex login file, `<remote home>/.codex/auth.json`.
+  pub fn write_codex_login(&self) {
+    let codex_home = self.remote_home.join(".codex");
+    fs::create_dir_all(&codex_home).expect("the Codex home");
+    fs::write(codex_home.join("auth.json"), CODEX_LOGIN).expect("the Codex login");
   }
 
   /// The launch directory, when the round left one behind.

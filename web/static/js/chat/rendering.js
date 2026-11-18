@@ -408,12 +408,6 @@ function formatRunDuration(seconds) {
   return Number(seconds) === 0 ? '0s' : formatTurnDuration(seconds);
 }
 
-function formatTurnTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-}
-
 function turnRowField(className, text) {
   const span = document.createElement('span');
   span.className = className;
@@ -449,9 +443,10 @@ function buildTurnRowFromSpec(spec) {
   meta.className = 'turn-row-meta';
   meta.appendChild(turnRowField('turn-row-steps',
       spec.foldCount ? turnFoldLabel(spec.foldCount) : ''));
-  const ts = spec.headTs;
-  const time = turnRowField('turn-row-time', formatTurnTime(ts));
-  if (ts) time.setAttribute('title', formatBubbleTime(ts));
+  // The row states the turn's instant in the label the chat's bubbles print (utils.js
+  // formatTimeLabel), so the row and the bubble under it read alike. The day is part of that
+  // label: without it the two rows whose turn crosses local midnight read as one minute.
+  const time = turnRowField('turn-row-time', formatTimeLabel(spec.headTs));
   meta.appendChild(time);
   row.appendChild(meta);
 

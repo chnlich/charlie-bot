@@ -107,8 +107,21 @@ const WORKSPACE_ROWS = [
   row('A', 'manager'),
 ];
 const THREADS_ROWS = [row('T', 'manager'), row('E', 'manager', 'T'), row('G', 'manager', 'D')];
+
+// The Workspace answer in the route's `compact=move` column form: one cell array per field, in row order. The ids are
+// not canonical UUIDs, so each id cell is `~` and its text, which is the form the route writes for such a home.
+function columnForm(rows) {
+  return {
+    $encoded: {id: 'uuid-b64'},
+    id: rows.map((entry) => `~${entry.id}`),
+    name: rows.map((entry) => entry.name),
+    profile: rows.map((entry) => entry.profile),
+    task_parent_id: rows.map((entry) => entry.task_parent_id ?? null),
+  };
+}
+
 const LIST_ANSWERS = {
-  'GET /api/sessions/': {status: 200, body: WORKSPACE_ROWS},
+  'GET /api/sessions/?compact=move': {status: 200, body: columnForm(WORKSPACE_ROWS)},
   'GET /api/sessions/chat-threads': {status: 200, body: THREADS_ROWS},
 };
 

@@ -27,12 +27,13 @@ use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use crate::api;
-use crate::listing::{self, CompactListingMemo, SessionsListMemos};
+use crate::listing::{self, CompactListingMemo, ListingForm, SessionsListMemos};
 use crate::route_support::{Query, blocking_store, store_error};
 use crate::{search, sidebar, status_delta, tree, write_routes};
 
 static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
 static COMPACT_LISTING_MEMO: LazyLock<CompactListingMemo> = LazyLock::new(CompactListingMemo::default);
+static MOVE_LISTING_MEMO: LazyLock<CompactListingMemo> = LazyLock::new(CompactListingMemo::default);
 const STATUS_BODY_MEMO_LIMIT: usize = 4;
 
 type StatusBodyCache = Mutex<LruCache<StatusKey, Arc<StatusBody>>>;
@@ -226,16 +227,29 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
     return response.unwrap_or_else(store_error);
   }
   // `compact=1` asks for the page's column form of the same rows, which the sidebar decodes with the page's own
-  // expander. Any other value keeps the row array the route has always sent.
-  let compact = query.get("compact") == Some("1");
+  // expander. `compact=move` asks for the four columns the session-move picker reads. A request naming no form keeps
+  // the row array, and one naming another form is refused rather than answered with a form it did not ask for.
+  let compact = match query.get("compact") {
+    None => None,
+    Some("1") => Some(ListingForm::Sidebar),
+    Some("move") => Some(ListingForm::Move),
+    Some(other) => {
+      return responses::json(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        &json!({"detail": format!("unknown compact form: {other}")}),
+      );
+    }
+  };
   let response = blocking_store(move || {
     // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
     // subtree roots or the overlays move.
     let page = listing::active_page_rows(&features.store, &features.registry)?;
-    Ok(if compact {
-      COMPACT_LISTING_MEMO.response(&request, &features.store, &page)
-    } else {
-      listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS)
+    Ok(match compact {
+      Some(ListingForm::Sidebar) => {
+        COMPACT_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Sidebar)
+      }
+      Some(ListingForm::Move) => MOVE_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Move),
+      None => listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS),
     })
   })
   .await;

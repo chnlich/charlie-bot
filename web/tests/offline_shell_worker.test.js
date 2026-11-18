@@ -327,6 +327,25 @@ test('warming stores the shell and the same-origin files it names, and drops the
       'the file with an ETag is stored; the file without one is not, and the old file is dropped');
 });
 
+test('a static file fetched on a cache miss is stored for the next request', async () => {
+  const h = harness();
+  const fileUrl = ORIGIN + '/static/features/cron/cron.js?v=1';
+  let calls = 0;
+  h.state.network = async () => {
+    calls += 1;
+    return new Response('feature()', {status: 200, headers: {ETag: '"asset"'}});
+  };
+
+  const first = await answer(h, request(fileUrl));
+  assert.equal(await first.response.text(), 'feature()');
+  const files = await h.caches.api.open('last-state-files');
+  assert.equal(await (await files.match(fileUrl)).text(), 'feature()');
+
+  const second = await answer(h, request(fileUrl));
+  assert.equal(await second.response.text(), 'feature()');
+  assert.equal(calls, 1, 'the next request uses the stored response');
+});
+
 test('a first screen with no stored copy takes the network answer, however long it takes', async (t) => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();

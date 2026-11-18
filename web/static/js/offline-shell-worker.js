@@ -67,7 +67,7 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname === '/' && url.searchParams.has('session') && request.mode === 'navigate') {
     event.respondWith(answerShell(request));
   } else if (url.pathname.startsWith('/static/')) {
-    event.respondWith(answerFile(request));
+    event.respondWith(answerFile(event, request));
   } else if (isFirstScreenPath(url.pathname) || isSidebarListRequest(url)) {
     event.respondWith(answerCopy(event, request));
   }
@@ -96,12 +96,14 @@ async function answerShell(request) {
   return fetch(request);
 }
 
-// A same-origin file of the shell: the stored file, or the network when it is not stored.
-async function answerFile(request) {
+// A same-origin file of the shell: the stored file, or an ETag-backed network answer that the next open can reuse.
+async function answerFile(event, request) {
   const cache = await caches.open(FILE_CACHE);
   const stored = await cache.match(request);
   if (stored) return stored;
-  return fetch(request);
+  const response = await fetch(request);
+  if (response.ok && response.headers.get('ETag')) event.waitUntil(cache.put(request, response.clone()));
+  return response;
 }
 
 // A first screen or a sidebar list. A stored copy answers at once and sends no network request: the copy's event

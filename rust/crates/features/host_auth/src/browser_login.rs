@@ -1203,7 +1203,7 @@ mod tests {
   #[tokio::test]
   async fn the_approval_is_recorded_before_a_slow_check_finishes() {
     let _serial = SERIAL.lock().await;
-    let slow = LoginStub::new("slow-check", PRINT_LINK, "sleep 1\nexit 0\n");
+    let slow = LoginStub::new("slow-check", PRINT_LINK, "while [ ! -e \"$0.release\" ]; do sleep 0.01; done\nexit 0\n");
     let paths = slow.paths();
     start_login_with_paths(&slow.login, paths.clone()).await.expect("the login gives its link");
     until(|| live_attempt("slow-check").is_some_and(|attempt| attempt.phase == Phase::ReadingBack)).await;
@@ -1212,6 +1212,7 @@ mod tests {
       login_record(&paths, "slow-check").last_attempt.is_none(),
       "the approval shows before the attempt's own record is written"
     );
+    fs::write(format!("{}.release", slow.login.readback_command[0]), "").expect("the readback is released");
     recorded_outcome(&paths, "slow-check", Outcome::Approved).await;
   }
 

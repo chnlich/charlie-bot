@@ -31,8 +31,10 @@ const SHOTS_DIR = path.join(WEB_DIR, 'target', 'session-move-picker');
 // The stylesheets and scripts the picker's page loads, in page order. The page's config.js
 // runs auth code on load, so the page defines the one global the picker reads from it.
 const STYLESHEETS = ['css/styles.css', 'css/tailwind.css'];
-// The picker reads its rows through the sidebar's own column expander (groups.js), so the page loads it too.
+// The picker reads its rows through the sidebar's own column expander (utils.js, which groups.js re-exports), so the
+// page loads both, in the page's order.
 const PICKER_SCRIPTS = [
+  'utils.js',
   'sidebar/namespace.js',
   'sidebar/groups.js',
   'sidebar/session-actions.js',

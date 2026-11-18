@@ -50,6 +50,7 @@ const VIEWPORTS = [
 ];
 
 const MOVED_ID = 'moved';
+const MOVED_NAME = 'Move a session under another session';
 const CURRENT_PARENT_ID = 'parent';
 // Fourteen manager rows the moved session can go under. A long label and a CJK label test the one-line rule.
 const MANAGER_NAMES = [
@@ -96,11 +97,17 @@ const PROBE_JS = `
     overflowY: getComputedStyle(el).overflowY,
     scrollHeight: el.scrollHeight,
     clientHeight: el.clientHeight,
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
   });
   window.pickerProbe = {
     measure() {
       const dialog = document.getElementById('session-move-overlay').firstElementChild;
       const blocks = [...dialog.children];
+      const line = (selector) => {
+        const el = dialog.querySelector(selector);
+        return el ? sized(el) : null;
+      };
       return {
         viewport: {
           width: innerWidth,
@@ -109,6 +116,10 @@ const PROBE_JS = `
         },
         dialog: box(dialog),
         blocks: blocks.map((el, index) => ({index, ...sized(el)})),
+        header: {
+          heading: line('.session-move-heading'),
+          subject: line('.session-move-subject'),
+        },
         rows: [...blocks[${LIST_BLOCK}].children].map(sized),
         errors: [...blocks[${ERROR_BLOCK}].children].map(sized),
       };
@@ -123,7 +134,7 @@ const PROBE_JS = `
 
 function sessionRows() {
   return [
-    {id: MOVED_ID, name: 'Move a session under another session', profile: 'manager', task_parent_id: CURRENT_PARENT_ID},
+    {id: MOVED_ID, name: MOVED_NAME, profile: 'manager', task_parent_id: CURRENT_PARENT_ID},
     {id: CURRENT_PARENT_ID, name: 'Current parent manager', profile: 'manager', task_parent_id: null},
     ...MANAGER_NAMES.map((name, index) => ({id: `mgr-${index}`, name, profile: 'manager', task_parent_id: null})),
     {id: 'worker', name: 'A worker leaf', profile: 'worker', task_parent_id: CURRENT_PARENT_ID},
@@ -316,8 +327,25 @@ function assertErrors(lines, label) {
   }
 }
 
+// The header names the operation and, under it, the session that moves. A session name sets no bound, so the name's
+// line is the one that elides: the operation's words print whole whatever the name's length.
+function assertHeader(m, label) {
+  const {heading, subject} = m.header;
+  assert.ok(heading, `${label}: the header names the operation`);
+  assert.ok(
+    heading.scrollWidth <= heading.clientWidth + 1,
+    `${label}: the operation's words are clipped (${heading.scrollWidth} > ${heading.clientWidth})`,
+  );
+  assert.ok(subject, `${label}: the header names the session that moves`);
+  assert.ok(
+    subject.label.includes(MOVED_NAME),
+    `${label}: the header names ${JSON.stringify(MOVED_NAME)}, not ${JSON.stringify(subject.label)}`,
+  );
+}
+
 function assertPicker(m, label) {
   assertDialogLayout(m, label);
+  assertHeader(m, label);
   assertRows(m.rows, label);
   const list = m.blocks[LIST_BLOCK];
   assert.equal(list.overflowY, 'auto', `${label}: the choice list does not scroll`);

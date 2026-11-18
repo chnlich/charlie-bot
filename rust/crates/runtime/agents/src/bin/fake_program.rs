@@ -12,13 +12,13 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+use charliebot_agents::cli_base::program_path;
 use serde::Deserialize;
 
 /// One step of a fake program. The variant names are the step keys of `probe.json`.
@@ -105,17 +105,4 @@ fn main() {
     }
   }
   panic!("probe steps {} for {role} end without an exit step", data_path.display());
-}
-
-/// The file the caller ran: `argv[0]` when it has a directory part, else the first `PATH` entry that holds it.
-fn program_path(invoked: &OsStr) -> PathBuf {
-  let path = Path::new(invoked);
-  if path.components().count() > 1 {
-    return path.to_path_buf();
-  }
-  let search = env::var_os("PATH").expect("a bare argv[0] is resolved on PATH");
-  env::split_paths(&search)
-    .map(|dir| dir.join(path))
-    .find(|candidate| candidate.is_file())
-    .unwrap_or_else(|| panic!("{} is on no PATH entry", path.display()))
 }

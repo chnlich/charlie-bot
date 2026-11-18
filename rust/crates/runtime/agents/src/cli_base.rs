@@ -86,6 +86,23 @@ pub fn resolve_binary(name: &str, path: &str, fallback_dir: &Path) -> anyhow::Re
   bail!("{name} binary not found on PATH or at {}", fallback.display())
 }
 
+/// The file the caller ran: `argv[0]` when it has a directory part, else the first `PATH` entry that holds it.
+///
+/// A fake program links its role name to one binary and finds its data file beside the link. The entry it ran is
+/// `argv[0]`, which the caller may spell bare for `PATH` resolution, so this resolves it the way the caller's own
+/// `exec` did.
+pub fn program_path(invoked: &OsStr) -> PathBuf {
+  let path = Path::new(invoked);
+  if path.components().count() > 1 {
+    return path.to_path_buf();
+  }
+  let search = std::env::var_os("PATH").expect("a bare argv[0] is resolved on PATH");
+  std::env::split_paths(&search)
+    .map(|dir| dir.join(path))
+    .find(|candidate| candidate.is_file())
+    .unwrap_or_else(|| panic!("{} is on no PATH entry", path.display()))
+}
+
 /// Prepends `dir` to the child PATH unless one of its entries is `dir` already (`base.prepend_path_dir`).
 pub fn prepend_path_dir(env: &mut Env, dir: &str) {
   let current = env.get("PATH").cloned().unwrap_or_default();

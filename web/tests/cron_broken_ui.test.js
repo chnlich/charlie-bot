@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const { readStatic, readPackageStatic } = require('./read_static');
 const { escapeHtml, escapeHtmlText } = require('./escape_html_stub');
 
+const UTILS_JS = readStatic('utils.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
 const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 
@@ -54,6 +55,11 @@ function loadGroups() {
   };
   context.globalThis = context;
   vm.createContext(context);
+  // utils.js first, as the page loads it ahead of groups.js, which reads expandSessionColumns and sessionUpdatedMs
+  // from it. Its real time forms replace the stubs above, so those land back after its load.
+  const stubs = {updateRelativeTimes: context.updateRelativeTimes, relativeTime: context.relativeTime};
+  vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
+  Object.assign(context, stubs);
   vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});
   return {context, elements};
 }

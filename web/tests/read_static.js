@@ -40,9 +40,20 @@ function scopedModules(prefix) {
   return files;
 }
 
+const UTILS_JS = readStatic('utils.js');
+
 // Run each file into the vm context in list order, labelling stack traces with
-// the real file name.
+// the real file name. The page loads utils.js ahead of every chat and sidebar
+// module, and a module that reads its column-form or time helpers fails to load
+// without them, so a harness that has not run utils.js yet runs it first. The
+// harness's own globals keep their values: its time forms and feature loaders
+// stand in for the ones utils.js defines.
 function runStaticModules(context, files) {
+  if (typeof context.expandSessionColumns !== 'function') {
+    const stubs = Object.entries(context);
+    vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
+    for (const [name, value] of stubs) context[name] = value;
+  }
   for (const file of files) {
     vm.runInContext(readStatic(file), context, {filename: file});
   }

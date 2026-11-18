@@ -57,7 +57,9 @@
 
   function mostRecentSessionId(items) {
     if (items.length === 0) return null;
-    return items.slice().sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0].id;
+    // The list's rows carry updated_at as the column form's epoch minutes, and a query session's detail row as an
+    // ISO string; sessionUpdatedMs (utils.js) reads both.
+    return items.slice().sort((a, b) => sessionUpdatedMs(b) - sessionUpdatedMs(a))[0].id;
   }
 
   // The line range an entry names: one line, or its first and last.
@@ -637,10 +639,12 @@
     refreshTray();
   }
 
+  // The target picker's rows: the sidebar's column form of the same corpus. It carries the id, name and updated_at
+  // this tray reads and no other field, at about a fifth of the row array's bytes for the same sessions.
   async function fetchSessions() {
-    const response = await fetch('/api/sessions/', { credentials: 'same-origin' });
+    const response = await fetch('/api/sessions/?compact=1', { credentials: 'same-origin' });
     if (!response.ok) throw new Error(`Session list fetch failed: HTTP ${response.status}`);
-    return response.json();
+    return expandSessionColumns(await response.json());
   }
 
   async function fetchQuerySession(id) {

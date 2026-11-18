@@ -252,7 +252,10 @@ fn run_summary_fields(value: &Value) -> Result<Vec<String>, String> {
 /// Whether one page of a runs response holds a queued or running run, then that page's next cursor.
 fn run_page_fields(value: &Value) -> Result<(bool, String), String> {
   let items = value.get("items").and_then(Value::as_array).ok_or("run response has no items list")?;
-  let active = items.iter().any(|item| matches!(run_state(item).as_str(), "queued" | "running"));
+  let active = items.iter().any(|item| {
+    let state = run_state(item);
+    state == run_records::RunDisplayState::Queued.as_str() || state == run_records::RunDisplayState::Running.as_str()
+  });
   Ok((active, or_default(value.get("next_cursor"))))
 }
 

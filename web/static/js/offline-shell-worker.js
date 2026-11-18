@@ -37,6 +37,10 @@ self.addEventListener('activate', (event) => {
 });
 
 async function activateCurrent() {
+  // With navigation preload on, the navigation's network request carries Service-Worker-Navigation-Preload. The chat page
+  // answers that request with no body (routes/pages.rs): this worker answers each stored-shell navigation from its copy
+  // and never reads the preload response.
+  await self.registration.navigationPreload.enable();
   for (const name of await caches.keys()) {
     if (name.startsWith(COPY_PREFIX) && name !== COPY_CACHE && name !== FILE_CACHE) {
       await caches.delete(name);

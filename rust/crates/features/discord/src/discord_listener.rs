@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_chat_threads::channel_service::ChannelListener;
 use charliebot_chat_threads::listener_connection::{CLOSE_TIMEOUT, INITIAL_BACKOFF, next_backoff};
-use charliebot_chat_threads::summon::{DISCORD_NAMESPACE, namespaced_uuid};
+use charliebot_chat_threads::summon::{self, DISCORD_NAMESPACE};
 use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform};
 use charliebot_compat::http_client;
 use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Options, Receiver, Sender};
@@ -48,7 +48,7 @@ static MENTION_TOKEN_RE: LazyLock<Regex> =
 
 /// The deterministic session id of the Discord thread `thread_id` in `guild_id` (`summon_session_id`).
 pub fn summon_session_id(guild_id: &str, thread_id: &str) -> String {
-  namespaced_uuid(DISCORD_NAMESPACE, &format!("discord:{guild_id}:{thread_id}"))
+  summon::summon_session_id(DISCORD_NAMESPACE, &DISCORD, &[guild_id, thread_id])
 }
 
 /// Whether a message counts for the thread: a human's plain message or reply, from an account in `allowed_users`

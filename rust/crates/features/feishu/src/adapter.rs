@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use charliebot_chat_threads::summon::{FEISHU_NAMESPACE, namespaced_uuid};
+use charliebot_chat_threads::summon::{self, FEISHU_NAMESPACE, namespaced_uuid};
 use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadMessage, ThreadPlatform};
 use charliebot_compat::http_client;
 use charliebot_core::config::CharlieBotConfig;
@@ -38,7 +38,7 @@ const SESSION_LABEL: &str = "Feishu · ";
 /// The deterministic session id of the Feishu thread a summon names (`summon_session_id`). Its key is known before the
 /// thread exists, because the summon's own message id stands in for the root until the first reply.
 pub fn summon_session_id(tenant_key: &str, chat_id: &str, root_id: &str) -> String {
-  namespaced_uuid(FEISHU_NAMESPACE, &format!("feishu:{tenant_key}:{chat_id}:{root_id}"))
+  summon::summon_session_id(FEISHU_NAMESPACE, &FEISHU, &[tenant_key, chat_id, root_id])
 }
 
 /// The composite id of one message: its creation time in milliseconds, a dash, and its `om_` id.

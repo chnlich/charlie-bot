@@ -94,6 +94,7 @@ impl Store {
     self.fail_chat_append(session_id, &event, &path)?;
     let before = file_signature(&path)?.map(|(_, signature)| signature);
     let line_bytes = ndjson::append(&path, &event)?;
+    self.note_history_change();
     self.record_appended_line_count(&path, before, line_bytes)?;
     let compact = ChatEvent::from_value(&event);
     if let Some(cached) = cache.as_mut() {
@@ -933,10 +934,21 @@ impl Store {
 
   /// Discard the parsed live-log cache after a rewrite.
   pub fn clear_chat_events_cache(&self, session_id: &str) {
+    self.note_history_change();
     let cache_entry = lock(&self.events_cache, "event cache mutex").get(session_id).cloned();
     let Some(cache_entry) = cache_entry else { return };
     let mut cache = lock(&cache_entry, "session event cache mutex");
     *cache = None;
+  }
+
+  /// Count one live-history change: a write this store made, or one a caller announced by clearing the parsed cache.
+  pub(crate) fn note_history_change(&self) {
+    self.history_changes.fetch_add(1, Ordering::Relaxed);
+  }
+
+  /// The number of live-history changes this store knows since it opened.
+  pub(crate) fn history_changes(&self) -> u64 {
+    self.history_changes.load(Ordering::Relaxed)
   }
 
   /// Drop a node's parsed live events and folded facts after a node pass releases its local references.

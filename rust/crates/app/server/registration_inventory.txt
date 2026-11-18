@@ -205,6 +205,7 @@ backend launcher binary	backends.claude_code	cc-claude
 backend launcher binary	backends.anthropic_compatible	cc-anthropic-compatible
 host login reader	features.host_auth	host_logins
 host probe	features.host_auth	host_probe
+bound round readers	features.cron	bound_round
 fork assertions	features.artifacts	fork_assertions
 user dm	features.slack	user_dm
 owner dm	features.slack	owner_dm

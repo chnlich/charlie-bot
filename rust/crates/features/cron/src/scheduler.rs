@@ -1758,7 +1758,9 @@ mod tests {
   async fn a_cron_child_quota_end_retries_on_the_next_auto_member() {
     let (_home, features) = feature_context_with_auto(&["member-a", "member-b"]);
     install_execution(&features).await;
-    let node = auto_manager(&features, "synthetic-auto-child-quota-node", "member-a").await.unwrap();
+    // The bound session holds member-b, so the priority pool selects member-a for the child: a load on one member
+    // leaves the round on the other.
+    let node = auto_manager(&features, "synthetic-auto-child-quota-node", "member-b").await.unwrap();
     let task = ScheduledTaskConfig {
       name: "synthetic-auto-child-quota".to_string(),
       cron: "0 3 * * *".to_string(),
@@ -1776,6 +1778,7 @@ mod tests {
       steps: None,
     };
     let (leaf, run) = bound_round_leaf(&features, &task, "").await;
+    assert_eq!(run.backend.as_deref(), Some("member-a"), "the round runs on the member the pool selects");
     // The child's run read a file before its quota error, so its events log holds the four summary parts.
     let events = [
       json!({"type":"assistant","message":{"content":[
@@ -1824,7 +1827,7 @@ mod tests {
     let node_meta = features.store.get_session(&node.id).await.unwrap().unwrap();
     assert_eq!(
       node_meta.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD),
-      Some(&json!("member-a")),
+      Some(&json!("member-b")),
       "the child's switch leaves the bound session's member alone"
     );
 

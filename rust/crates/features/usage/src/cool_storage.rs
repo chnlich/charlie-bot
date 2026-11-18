@@ -17,6 +17,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
+use charliebot_core::utc_datetime::instant_of_stamp;
 use charliebot_registry::usage::{
   CLAUDE_TRANSCRIPTS_CATEGORY, CODEX_ROLLOUTS_CATEGORY, CategoryResult, SWEEP_DIR_SCAN_FAILED_EVENT, SessionFacts,
   SweepScope,
@@ -35,7 +36,6 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
 use crate::capture::capture_into_default_ledger;
-use crate::utc_datetime;
 
 /// How long an archived session must sit idle to count as cold.
 const MIN_IDLE_DAYS: i64 = 14;
@@ -175,7 +175,7 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
   let Some(raw_updated) = meta.get("updated_at").filter(|value| text_repr::is_truthy(value)) else {
     return false;
   };
-  let Some(updated_at) = utc_datetime::parse(&text_repr::value_str(raw_updated)) else {
+  let Some(updated_at) = instant_of_stamp(&text_repr::value_str(raw_updated)) else {
     return false;
   };
   now.into_inner() - updated_at >= time::Duration::days(MIN_IDLE_DAYS)

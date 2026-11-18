@@ -8,9 +8,10 @@
 //! - A *readback* is a login's check command. It exits 0 while the login is valid. A login bound to a host checks with
 //!   the single-host probe instead, so its readback is that probe.
 //!
-//! Only [`start_login`] starts a login command. The status table runs the checks alone, through [`check_readback`] and
-//! the host probe. An ended attempt is recorded in `host_auth.json` by `login_state`; a live attempt lives in memory, in
-//! the one map of live attempts keyed by login name.
+//! Only [`start_login`] and [`probe_link`] start a login command. [`probe_link`] ends its command as soon as the link
+//! prints or its timeout passes, and never runs a readback or records an approval. The status table otherwise runs the
+//! checks alone, through [`check_readback`] and the host probe. An ended attempt is recorded in `host_auth.json` by
+//! `login_state`; a live attempt lives in memory, in the one map of live attempts keyed by login name.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -31,7 +32,7 @@ use tokio::sync::watch;
 
 use crate::config::BrowserLoginConfig;
 use crate::host_auth;
-use crate::login_state::{self, AttemptRecord, Outcome};
+use crate::login_state::{self, AttemptRecord, LinkMatch, Outcome};
 use crate::process_tree::{self, ROUTE_ERROR_PREFIX};
 use crate::timestamps::{self, isoformat};
 use time::OffsetDateTime;
@@ -403,6 +404,58 @@ async fn finish_readback(child: Child) -> Readback {
   }
 }
 
+/// `probe_link`: run the login's command until its approval link prints or the start timeout passes, then end its
+/// process tree. The login is not approved here: no readback runs, and the output is dropped with the probe. The probe
+/// is never registered as a live attempt, so its link reaches no row.
+pub async fn probe_link(login: &BrowserLoginConfig) -> io::Result<LinkMatch> {
+  probe_link_within(login, Duration::from_secs(START_TIMEOUT_SEC)).await
+}
+
+/// [`probe_link`] with its timeout as a parameter, so a test can run a silent login without waiting out the start
+/// timeout.
+async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io::Result<LinkMatch> {
+  if let Some(path) = missing_path(&login.login_command) {
+    tracing::warn!(login = %login.name, path, "browser_login_link_probe_missing_file");
+    return Ok(LinkMatch::Fail);
+  }
+  let (mut child, mut output, _input) = match spawn_login(login) {
+    Ok(spawned) => spawned,
+    Err(error) => {
+      tracing::warn!(login = %login.name, error = %error, "browser_login_link_probe_not_started");
+      return Ok(LinkMatch::Fail);
+    }
+  };
+  let matcher = Regex::new(&login.approval_url_pattern).expect("the config validated the approval-url pattern");
+  let printed = tokio::time::timeout(timeout, link_printed(&matcher, &mut output)).await;
+  // The login leads its own process group or session, so the tree ends with its root, descendants included.
+  if let Some(pid) = child.id() {
+    process_tree::kill_tree(pid)?;
+  }
+  child.wait().await?;
+  match printed {
+    Ok(Ok(true)) => Ok(LinkMatch::Pass),
+    Ok(Ok(false)) => {
+      tracing::warn!(login = %login.name, "browser_login_link_probe_no_link");
+      Ok(LinkMatch::Fail)
+    }
+    Ok(Err(error)) => Err(error),
+    Err(_elapsed) => {
+      tracing::warn!(login = %login.name, "browser_login_link_probe_timed_out");
+      Ok(LinkMatch::Fail)
+    }
+  }
+}
+
+/// Whether one line of the login's output matches the approval-link pattern. The output is read until it ends.
+async fn link_printed(matcher: &Regex, output: &mut LoginReader) -> io::Result<bool> {
+  while let Some(line) = output.next_line().await? {
+    if matcher.is_match(&line) {
+      return Ok(true);
+    }
+  }
+  Ok(false)
+}
+
 /// `stop_all`: end every live attempt by killing its child — the driver's own paths then record each outcome — and
 /// return once every driver finished.
 ///
@@ -487,7 +540,20 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   }
   let name = core.lock().expect("the attempt record lock is never poisoned").login.name.clone();
   tracing::info!(login = %name, "browser_login_link_found");
+  record_link_pass(core).await;
   hold(core, &mut child, &mut output).await
+}
+
+/// The link a started attempt printed, recorded as a pass: an earlier link-probe failure does not outlive a start that
+/// worked. A failed record is logged; the attempt goes on.
+async fn record_link_pass(core: &Arc<Mutex<AttemptCore>>) {
+  let (paths, name) = {
+    let state = core.lock().expect("the attempt record lock is never poisoned");
+    (state.paths.clone(), state.login.name.clone())
+  };
+  if let Err(error) = login_state::record_link_match(&paths.state, &name, LinkMatch::Pass).await {
+    tracing::error!(error = %format!("{error:#}"), login = %name, "browser_login_link_record_failed");
+  }
 }
 
 /// The approval link from the first matching output line, with the login's user code appended when its
@@ -1062,6 +1128,7 @@ mod tests {
   use super::*;
   use crate::host_auth::State;
   use crate::login_state::LoginStatus;
+  use crate::process_tree::is_running;
 
   const LINK: &str = "https://device.sso.us-east-1.amazonaws.com/?user_code=7f3c9d21";
   /// The stub body that prints the approval link, in the shape the AWS CLI prints it.
@@ -1213,6 +1280,7 @@ mod tests {
       login_record(&paths, "slow-check").last_attempt.is_none(),
       "the approval shows before the attempt's own record is written"
     );
+    assert_eq!(login_record(&paths, "slow-check").link_match, Some(LinkMatch::Pass), "a started link passes its probe");
     fs::write(format!("{}.release", slow.login.readback_command[0]), "").expect("the readback is released");
     recorded_outcome(&paths, "slow-check", Outcome::Approved).await;
   }
@@ -1233,6 +1301,39 @@ mod tests {
     assert_eq!(missing_path(&argv(&[&program, &gone, &data])), Some(gone.as_str()), "a missing script is named");
     assert_eq!(missing_path(&argv(&[&gone, &script])), Some(gone.as_str()), "a missing program is named");
     assert_eq!(missing_path(&argv(&["ssh", "-o", "BatchMode=yes"])), None, "a bare program name is left to the spawn");
+  }
+
+  #[tokio::test]
+  async fn a_link_probe_passes_on_its_link_and_ends_the_whole_process_tree() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new(
+      "probe-linked",
+      &format!("echo $$ > \"$0.root\"\nsleep 600 &\necho $! > \"$0.child\"\n{PRINT_LINK}\nsleep 600\n"),
+      "touch \"$0.ran\"\nexit 0\n",
+    );
+    let matched = probe_link_within(&stub.login, Duration::from_secs(5)).await.expect("the probe runs");
+    assert_eq!(matched, LinkMatch::Pass);
+    let script = &stub.login.login_command[0];
+    for pid_file in [format!("{script}.root"), format!("{script}.child")] {
+      let pid: u32 =
+        fs::read_to_string(&pid_file).expect("the login recorded its pid").trim().parse().expect("the pid parses");
+      until(|| !is_running(pid)).await;
+    }
+    assert!(!stub.dir.path().join("probe-linked-readback.ran").exists(), "the probe ran no readback");
+  }
+
+  #[tokio::test]
+  async fn a_link_probe_that_prints_no_link_fails_at_its_timeout_and_ends_its_process() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new("probe-silent", "echo $$ > \"$0.root\"\nsleep 600\n", "exit 0\n");
+    let matched = probe_link_within(&stub.login, Duration::from_secs(1)).await.expect("the probe runs");
+    assert_eq!(matched, LinkMatch::Fail);
+    let pid: u32 = fs::read_to_string(format!("{}.root", stub.login.login_command[0]))
+      .expect("the login recorded its pid")
+      .trim()
+      .parse()
+      .expect("the pid parses");
+    until(|| !is_running(pid)).await;
   }
 
   #[tokio::test]

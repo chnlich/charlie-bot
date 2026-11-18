@@ -2,7 +2,8 @@
 //!
 //! A login bound to a host reads its availability from `hosts[alias]`, so its record keeps the time of its last approval
 //! and its last attempt, and a `broken` status when the login cannot start. A login with no host keeps its check result
-//! as well. Every write goes through [`update_login`]: the round slot, then an atomic save.
+//! as well. `link_match` holds the last link probe or started attempt: a fail marks the row broken, and a readback
+//! refresh leaves it as it is. Every write goes through [`update_login`]: the round slot, then an atomic save.
 
 use std::path::Path;
 
@@ -64,6 +65,14 @@ impl LoginStatus {
   }
 }
 
+/// Whether a login printed its approval link: found by a link probe or a started attempt (`pass`), or not (`fail`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkMatch {
+  Pass,
+  Fail,
+}
+
 /// The last attempt of a login, as it ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttemptRecord {
@@ -88,6 +97,8 @@ pub struct LoginState {
   pub last_approved_at: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub last_attempt: Option<AttemptRecord>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub link_match: Option<LinkMatch>,
 }
 
 /// The record of `name` in the state, or the empty record when none is stored.
@@ -128,6 +139,11 @@ pub async fn update_login(state_path: &Path, name: &str, change: impl FnOnce(&mu
 pub async fn record_approval(state_path: &Path, name: &str, at: OffsetDateTime) -> anyhow::Result<()> {
   let approved = isoformat(at);
   update_login(state_path, name, |record| record.last_approved_at = Some(approved)).await
+}
+
+/// The result of a login's link probe or of an attempt that printed its link.
+pub async fn record_link_match(state_path: &Path, name: &str, matched: LinkMatch) -> anyhow::Result<()> {
+  update_login(state_path, name, |record| record.link_match = Some(matched)).await
 }
 
 /// The result of a login's own check: its status, what it said, and when it ran.

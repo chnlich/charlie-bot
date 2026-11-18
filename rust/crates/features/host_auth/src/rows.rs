@@ -1,8 +1,8 @@
 //! The status table's rows: one per configured browser login, then one per ssh host that no login renews.
 //!
 //! A row is built from the state file, the config and the live attempts, by the one function the page, the status route
-//! and the row route share. A row's state is the classification of its latest check, from `attention`. A check
-//! runs through [`check_row`], which persists its result before it answers.
+//! and the row route share. A row's state is the classification of its latest check, from `attention`, and a link probe
+//! that found no link overrides it. A check runs through [`check_row`], which persists its result before it answers.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -10,6 +10,7 @@ use std::io;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
+use anyhow::bail;
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 
@@ -17,8 +18,12 @@ use crate::attention::{Finding, RowState, classify_row_attention};
 use crate::browser_login::{self, LiveAttempt, Readback, timeout_text};
 use crate::config::{BrowserLoginConfig, login_bound_to};
 use crate::host_auth::{self, State};
-use crate::login_state::{self, LoginState, LoginStatus};
+use crate::login_state::{self, LinkMatch, LoginState, LoginStatus};
 use crate::timestamps::{self, LocalFormat, isoformat};
+
+/// The detail of a row whose link probe found no approval link.
+const LINK_NOT_FOUND_DETAIL: &str =
+  "The link probe found no approval link: the login command is missing, did not start, or printed no matching link.";
 
 /// A row's id: `login:<name>` for a configured login, `host:<alias>` for an ssh host that no login renews.
 enum RowId<'a> {
@@ -87,8 +92,9 @@ fn host_of<'s>(hosts: &[&'s Map<String, Value>], alias: &str) -> anyhow::Result<
   Ok(None)
 }
 
-/// The row of a configured login. A host-bound login's availability is its host's probe, unless its own check stands
-/// broken, which a failed start does. A login with no host shows its own check.
+/// The row of a configured login. A link probe that found no link makes the row broken, whatever its check said. A
+/// host-bound login's availability is its host's probe, unless its own check stands broken, which a failed start does.
+/// A login with no host shows its own check.
 fn login_row<'a>(
   state: &State,
   hosts: &[&Map<String, Value>],
@@ -96,11 +102,15 @@ fn login_row<'a>(
   live: Option<LiveAttempt>,
 ) -> anyhow::Result<Row<'a>> {
   let record = login_state::login_state(state, &login.name)?;
+  let host = match &login.host {
+    Some(alias) => host_of(hosts, alias)?,
+    None => None,
+  };
   let mut row = Row {
     id: format!("login:{}", login.name),
     name: login.name.clone(),
     alias: login.host.clone(),
-    hostname: None,
+    hostname: host.and_then(|entry| entry.get("hostname")).and_then(Value::as_str).map(str::to_string),
     login: Some(login),
     state: RowState::Unchecked,
     detail: String::new(),
@@ -109,27 +119,29 @@ fn login_row<'a>(
     record: record.clone(),
     live,
   };
-  match &login.host {
-    Some(alias) => {
-      let host = host_of(hosts, alias)?;
-      row.hostname = host.and_then(|entry| entry.get("hostname")).and_then(Value::as_str).map(str::to_string);
-      match (record.status, host) {
-        (Some(LoginStatus::Broken), _) => {
-          row.state = RowState::Broken;
-          row.detail = record.detail.clone().unwrap_or_default();
-          row.checked_at = record.last_check_at.clone();
-        }
-        (_, Some(entry)) => {
-          if let Some(status) = host_auth::opt_str(entry, "status")? {
-            row.state = classify_row_attention(Finding::Probe(status))?;
-            row.detail = host_auth::opt_str(entry, "detail")?.unwrap_or("").to_string();
-            row.checked_at = host_auth::opt_str(entry, "last_probe_at")?.map(str::to_string);
-          }
-        }
-        (_, None) => {}
+  if record.link_match == Some(LinkMatch::Fail) {
+    row.state = classify_row_attention(Finding::LinkNotFound)?;
+    row.detail = LINK_NOT_FOUND_DETAIL.to_string();
+    row.checked_at = record.last_check_at.clone();
+    return Ok(row);
+  }
+  match (&login.host, host) {
+    (Some(_), host) => match (record.status, host) {
+      (Some(LoginStatus::Broken), _) => {
+        row.state = RowState::Broken;
+        row.detail = record.detail.clone().unwrap_or_default();
+        row.checked_at = record.last_check_at.clone();
       }
-    }
-    None => {
+      (_, Some(entry)) => {
+        if let Some(status) = host_auth::opt_str(entry, "status")? {
+          row.state = classify_row_attention(Finding::Probe(status))?;
+          row.detail = host_auth::opt_str(entry, "detail")?.unwrap_or("").to_string();
+          row.checked_at = host_auth::opt_str(entry, "last_probe_at")?.map(str::to_string);
+        }
+      }
+      (_, None) => {}
+    },
+    (None, _) => {
       if let Some(status) = record.status {
         row.state = state_of_status(status);
         row.detail = record.detail.clone().unwrap_or_default();
@@ -200,12 +212,14 @@ pub fn summary(rows: &[Value]) -> Value {
 }
 
 /// `check_row`: run the row's check, persist what it found, and report whether the table has the row. A host row, and a
-/// host-bound login, check with the single-host probe that `probe` runs. A login with no host runs its readback.
+/// host-bound login, check with the single-host probe that `probe` runs. A login with no host runs its readback. With
+/// `link_probe`, a login row also records its link probe, and a host row, which has no login, refuses the request.
 pub async fn check_row<P, F>(
   state_path: &Path,
   config_path: &Path,
   logins: &[BrowserLoginConfig],
   id: &str,
+  link_probe: bool,
   probe: P,
 ) -> anyhow::Result<bool>
 where
@@ -215,12 +229,18 @@ where
   let Some(target) = parse_id(id) else {
     return Ok(false);
   };
+  if link_probe && !matches!(target, RowId::Login(_)) {
+    bail!("row {id} has no login whose link to probe");
+  }
   let _checking = CheckGuard::start(id);
   match target {
     RowId::Login(name) => {
       let Some(login) = logins.iter().find(|login| login.name == name) else {
         return Ok(false);
       };
+      if link_probe && browser_login::live_attempt(name).is_some() {
+        bail!("login {name} has an attempt in progress, so its link probe waits for that attempt");
+      }
       match &login.host {
         Some(alias) => {
           host_auth::probe_alias_with(state_path, config_path, alias, std::slice::from_ref(login), probe).await?;
@@ -235,6 +255,10 @@ where
           let detail = browser_login::shown_output(&detail);
           login_state::record_check(state_path, name, state, detail, timestamps::utc_now()).await?;
         }
+      }
+      if link_probe {
+        let matched = browser_login::probe_link(login).await?;
+        login_state::record_link_match(state_path, name, matched).await?;
       }
     }
     RowId::Host(alias) => {

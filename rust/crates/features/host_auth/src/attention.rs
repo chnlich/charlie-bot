@@ -22,6 +22,8 @@ pub enum Finding<'a> {
   CannotRun,
   /// A start that gave no approval link.
   StartFailed,
+  /// A link probe that found no approval link before its timeout, or whose login could not run.
+  LinkNotFound,
 }
 
 /// A row's state. `Unchecked` is a row that no check has answered yet, so [`classify_row_attention`] never returns it.
@@ -70,8 +72,8 @@ impl RowState {
 }
 
 /// The state a finding leaves its row in. A probe that answers `needs-okta`, `needs-interactive-auth` or
-/// `router-rejected` needs the user. A check that cannot run, a start that gives no link, and a check that fails
-/// after its login approved are broken: the login entry itself does not work.
+/// `router-rejected` needs the user. A check that cannot run, a start or a link probe that gives no link, and a check
+/// that fails after its login approved are broken: the login entry itself does not work.
 pub fn classify_row_attention(finding: Finding) -> anyhow::Result<RowState> {
   Ok(match finding {
     Finding::Probe(status) => match status {
@@ -82,7 +84,9 @@ pub fn classify_row_attention(finding: Finding) -> anyhow::Result<RowState> {
     },
     Finding::Check { exit: Some(0) } | Finding::CheckAfterApproval { exit: Some(0) } => RowState::Ok,
     Finding::Check { .. } => RowState::NeedsUser,
-    Finding::CheckAfterApproval { .. } | Finding::CannotRun | Finding::StartFailed => RowState::Broken,
+    Finding::CheckAfterApproval { .. } | Finding::CannotRun | Finding::StartFailed | Finding::LinkNotFound => {
+      RowState::Broken
+    }
   })
 }
 
@@ -96,6 +100,7 @@ mod tests {
     assert_eq!(classify_row_attention(Finding::StartFailed).unwrap(), RowState::Broken);
     assert_eq!(classify_row_attention(Finding::CheckAfterApproval { exit: Some(2) }).unwrap(), RowState::Broken);
     assert_eq!(classify_row_attention(Finding::CheckAfterApproval { exit: None }).unwrap(), RowState::Broken);
+    assert_eq!(classify_row_attention(Finding::LinkNotFound).unwrap(), RowState::Broken);
   }
 
   #[test]

@@ -42,7 +42,7 @@ const SESSION_REQUEST: &str = "improve-port-manager";
 const TEST_BACKEND_TYPE: &str = "improve_port_script";
 const QUOTA_RESET: &str = "2999-01-01T00:00:00Z";
 /// Write-class git limit for the loop tests. The test hook's 300 ms cap times out a `git worktree add` that a loaded
-/// host delays, and the loop then fails before its first run; this limit lets the add finish.
+/// host delays, and the loop then fails before its first run. This limit lets the add finish.
 const LOOP_GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 static QUOTA_REJECTED_HOMES: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));

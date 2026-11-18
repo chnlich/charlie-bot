@@ -1,12 +1,10 @@
-//! The `slack` verbs: reply on a session's own Slack thread, acknowledge read thread
-//! messages, send one authenticated Slack Web API request, download a message file, and register a draft of a
-//! message in the operator's name.
+//! The `slack` verbs: `reply`, `ack`, `request`, `download`, and `draft`.
 //!
 //! `reply` posts the file's text to the thread the session was summoned from and prints the server's readback. `ack`
 //! advances the session's read watermark and prints the readback. Every read message's id must be passed. `request`
 //! reads the token inside this process, sends one request and prints the response body. `download` reads one Slack
-//! file's bytes into a named path. The user token is read-only in this CLI: it admits only the read methods in
-//! `token::USER_READ_METHODS` and a GET of a file on Slack's file host, and the bot token keeps every method.
+//! file's bytes into a named path. The user token is read-only in this CLI. It admits only the read methods in
+//! `token::USER_READ_METHODS` and a GET of a file on Slack's file host. The bot token keeps every method.
 //! `draft` registers a channel post, thread reply, DM, or group DM whose card the operator approves. The server sends
 //! the card's body from the operator's own account.
 

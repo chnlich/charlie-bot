@@ -1,6 +1,6 @@
 //! The Slack draft target: a channel post, a thread reply, a DM, or a group DM.
 //!
-//! The CLI validates the flags with this module before it registers, and the server validates the same target again
+//! The CLI validates the flags with this module before it registers. The server validates the same target again
 //! when it writes the event, so both sides share one rule.
 
 use serde_json::{Map, Value, json};

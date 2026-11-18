@@ -4,22 +4,13 @@
 //!
 //! - A *login* is one `host_auth.browser_logins` entry.
 //! - An *attempt* is one login process started by one click, from the click until its outcome is recorded. The check
-//!   that follows an approval is part of the attempt. A live attempt holds its login's slot. A click that starts a new
-//!   attempt ends the live one with the outcome REPLACED.
+//!   that follows an approval is part of the attempt.
 //! - A *readback* is a login's check command. It exits 0 while the login is valid. A login bound to a host checks with
 //!   the single-host probe instead, so its readback is that probe.
 //!
 //! Only [`start_login`] starts a login command. The status table runs the checks alone, through [`check_readback`] and
 //! the host probe. An ended attempt is recorded in `host_auth.json` by `login_state`; a live attempt lives in memory, in
 //! the one map of live attempts keyed by login name.
-//!
-//! A login with `use_pty` runs its command under a pseudo-terminal in a new session, so a keyboard-interactive prompt
-//! reaches that terminal rather than the server's. Such a login may name an `enter_after_pattern`, which writes one
-//! newline to the terminal on its first match. It may also name a `user_code_pattern`, whose first capture group is
-//! appended to the approval link as `user_code=`.
-//!
-//! A login with an `input_prompt` keeps an input sink open while it waits for approval: its stdin pipe, or its terminal
-//! when `use_pty` is set. [`give_input`] writes one value to that sink and drops the sink, so a value is written once.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -282,10 +273,16 @@ pub fn live_attempt(name: &str) -> Option<LiveAttempt> {
   })
 }
 
-/// `start_login`: start an attempt of *login* and return its approval link. A click during a start joins that start.
+/// `start_login`: start an attempt of *login* and return its approval link. A click during a start joins that start,
+/// while a click on a live attempt ends it with the outcome REPLACED. A live attempt holds its login's slot.
 ///
 /// The attempt is registered before the first await, so a click that arrives while this start waits joins it rather
 /// than starting a second process. Fails with the 502 body when the login gives no link or its state path is invalid.
+///
+/// A login with `use_pty` runs its command under a pseudo-terminal in a new session, so a keyboard-interactive prompt
+/// reaches that terminal rather than the server's. Such a login may name an `enter_after_pattern`, which writes one
+/// newline to the terminal on its first match, and a `user_code_pattern`, whose first capture group is appended to the
+/// approval link as `user_code=`.
 pub async fn start_login(login: &BrowserLoginConfig) -> Result<String, StartFailed> {
   let state = host_auth::default_state_path()
     .map_err(|error| StartFailed(format!("could not resolve the host-auth state path: {error}")))?;
@@ -345,8 +342,9 @@ async fn await_link(link: &mut watch::Receiver<LinkState>) -> Result<String, Sta
   }
 }
 
-/// `give_input`: write one value and its newline to the login that waits for it, then drop the sink. The value is
-/// written once; a second value finds no sink and is refused.
+/// `give_input`: write one value and its newline to the login that waits for it, then drop the sink. A login with an
+/// `input_prompt` keeps that sink open while it waits for approval: its stdin pipe, or its terminal when `use_pty` is
+/// set. The value is written once; a second value finds no sink and is refused.
 pub async fn give_input(name: &str, value: String) -> Result<(), InputRefused> {
   let core = {
     let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");

@@ -366,9 +366,17 @@
       return null;
     }
 
+    // The event's instant: the day beside the clock. The clock alone made a log that crosses local
+    // midnight read as one minute, because the rows printed "23:59:59" above "00:00:00" with no day
+    // anywhere. The day names the year only when the instant falls outside the current year, the
+    // rule the chat's bubbles and the sidebar's rows print (utils.js formatTimeLabel). The seconds
+    // stay, because the row names an exact instant.
     function timeText(time) {
       const pad = n => String(n).padStart(2, '0');
-      return `${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`;
+      const dateOptions = { month: 'short', day: 'numeric' };
+      if (time.getFullYear() !== new Date().getFullYear()) dateOptions.year = 'numeric';
+      const day = time.toLocaleDateString('en-US', dateOptions);
+      return `${day}, ${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`;
     }
 
     // -------------------------------------------------------------------------

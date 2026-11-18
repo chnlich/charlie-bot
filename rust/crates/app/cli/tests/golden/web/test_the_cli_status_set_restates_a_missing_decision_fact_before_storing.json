@@ -1,0 +1,83 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "set",
+    "--file",
+    "{root}/status.json",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "PATH": "{root}/bin",
+    "HOME": "{root}/user",
+    "CHARLIEBOT_REPO_ROOT": "{repo}"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [claude-light]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' '(1) Deploy A or B.' '(2) The line is ready now.' '(3) Options A and B; NOT STATED for the consequence of each.' '(4) NOT STATED.' '(5) NOT STATED: the cost of option B'\n",
+    "status.json": "{\"waiting\": [{\"text\": \"Should we deploy A or B?\", \"context\": \"The line is ready now. Options are A or B; A is recommended.\", \"link\": null}]}"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": [
+          {
+            "text": "Should we deploy A or B?",
+            "context": "The line is ready now. Options are A or B; A is recommended.",
+            "link": null
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "item_sha256": "digest"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "Waiting on you: Should we deploy A or B?\nBackend: claude-light\n(1) Deploy A or B.\n(2) The line is ready now.\n(3) Options A and B; NOT STATED for the consequence of each.\n(4) NOT STATED.\n(5) NOT STATED: the cost of option B\n\nNothing was stored.\n",
+    "stderr": "",
+    "exit": 3,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"waiting\": [{\"text\": \"Should we deploy A or B?\", \"context\": \"The line is ready now. Options are A or B; A is recommended.\", \"link\": null}]}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/ask-check",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "item": {
+            "text": "Should we deploy A or B?",
+            "context": "The line is ready now. Options are A or B; A is recommended.",
+            "link": null
+          },
+          "backend": "claude-light",
+          "answer": "(1) Deploy A or B.\n(2) The line is ready now.\n(3) Options A and B; NOT STATED for the consequence of each.\n(4) NOT STATED.\n(5) NOT STATED: the cost of option B"
+        }
+      }
+    ]
+  }
+}

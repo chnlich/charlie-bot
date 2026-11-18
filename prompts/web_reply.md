@@ -63,7 +63,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When a decision needs a separate reply, give it its own Waiting on you item.
 - A separate reply comes from another person or at another time.
 - Write the decision or the action in the item's `text`, in one sentence.
-- Write in `context` what the line does now and why the decision comes now, in one or two sentences.
+- Each request for the user's decision—a web reply, a Waiting on you item, or the page
+  it links—carries every fact the user needs to answer without reading another session.
+  Write in `context` what the line does now and why the decision comes now, in one or two
+  sentences.
 - When a decision needs a page, write its options by the fork grammar in `prompts/plan_template.html`
   (BLOCK KIT, section 5).
 - When a decision needs a page, also write your recommendation and the evidence links on it.

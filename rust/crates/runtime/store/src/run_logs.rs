@@ -9,6 +9,7 @@ use std::fs::{self, File, Metadata};
 use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 
+use charliebot_core::event_types::SYSTEM;
 use charliebot_core::fsutil::{self, FileBytes};
 use serde_json::Value;
 
@@ -26,7 +27,7 @@ pub const COMPRESSED_SUFFIX: &str = ".zst";
 
 /// Whether `event` is a Claude Code thinking-token progress event.
 pub fn is_thinking_tokens_event(event: &Value) -> bool {
-  event.get("type").and_then(Value::as_str) == Some("system")
+  event.get("type").and_then(Value::as_str) == Some(SYSTEM)
     && event.get("subtype").and_then(Value::as_str) == Some("thinking_tokens")
 }
 

@@ -550,6 +550,25 @@ test('a network-only request reads no copy and waits for the network', async () 
   assert.equal((await result.response.json()).body, 'two');
 });
 
+test('a network-only list refresh consumes the queued copy refresh', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const h = harness();
+  h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answerListWithCapWait(t, h, request(LIST_URL));
+  await answer(h, request(LIST_URL));
+
+  h.state.network = async () => new Response('["two"]', {status: 200, headers: {ETag: '"l2"'}});
+  const callsBeforeRefresh = h.state.calls.length;
+  const refreshed = await answer(h, request(LIST_URL, {headers: {[NETWORK_ONLY]: '1'}}));
+  assert.equal(await refreshed.response.text(), '["two"]');
+  assert.equal(h.state.calls.length, callsBeforeRefresh + 1, 'the page refreshes the list once');
+
+  await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
+  assert.equal(h.state.calls.length, callsBeforeRefresh + 1, 'catch-up does not fetch the list a second time');
+  const later = await answer(h, request(LIST_URL));
+  assert.equal(await later.response.text(), '["two"]', 'the successful page refresh stores the current list');
+});
+
 test('the worker answers only the listed GETs; writes, socket paths and the other /api routes pass through', async () => {
   const h = harness();
   h.state.network = async () => new Response('x', {status: 200});

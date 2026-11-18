@@ -114,7 +114,9 @@ async function answerFile(request) {
 async function answerCopy(event, request) {
   const cache = await caches.open(COPY_CACHE);
   if (request.headers.get(NETWORK_ONLY_HEADER) === '1') {
-    return networkAnswer(event, request);
+    const response = await networkAnswer(event, request);
+    if (response.ok || response.status === 401) refreshQueue.delete(request.url);
+    return response;
   }
   if (!isFirstScreenPath(new URL(request.url).pathname)) {
     const copy = await cache.match(request.url) ?? await rereadAfterWaitCap(cache, request.url);

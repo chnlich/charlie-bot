@@ -9,8 +9,9 @@
 //!
 //! [`list_recordings`] answers the newest rows first, with the duration and the levels read from each row's WAV at
 //! request time. Each request reads the `voice/` directory of every session the session index names, and walks no
-//! other session. The first request of a home builds that index with one probe per session, and [`with_run_stem`]
-//! names its session in the index, so a recording this server stores appears on the next request.
+//! other session. The first request of a home builds that index with one probe per session.
+//! [`with_run_stem`] names its session in the index, so a recording this server stores appears on
+//! the next request.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -91,8 +92,8 @@ fn note_voice_session(sessions_dir: &Path, session_id: &str) {
 /// The stem of one run's files: the existing stem for `run_id`, or a fresh one this call creates.
 ///
 /// The caller holds the run's lock, so two resolvers never race. The resolution scans the directory for the run
-/// id's suffix on every file kind the run writes, including the `.wav.partial` and `.json.tmp` forms a crash can
-/// leave behind. Two different stems for one run id is a state this module never creates, so it is an error.
+/// id's suffix on every file kind the run writes. That includes the `.wav.partial` and `.json.tmp` forms a crash
+/// can leave behind. Two different stems for one run id is a state this module never creates, so it is an error.
 fn resolve_stem(voice_dir: &Path, run_id: &str) -> io::Result<PathBuf> {
   const SUFFIXES: [&str; 5] = [".wav", ".txt", ".json", ".wav.partial", ".json.tmp"];
   let run_suffix = format!("_{run_id}");
@@ -126,7 +127,7 @@ fn resolve_stem(voice_dir: &Path, run_id: &str) -> io::Result<PathBuf> {
   }
 }
 
-/// The timestamp prefix of a recording stem: UTC to the millisecond, then `Z`, in the format
+/// The timestamp prefix of a recording stem: UTC to the millisecond, then `Z`. The format is
 /// `datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`.
 fn voice_stem_format() -> Vec<time::format_description::FormatItem<'static>> {
   time::macros::format_description!("[year]-[month]-[day]T[hour][minute][second].[subsecond digits:3]Z").to_vec()

@@ -100,7 +100,7 @@ pub(crate) fn round_task_spec(task: &ScheduledTaskConfig, note: Option<&str>) ->
     keep_worktree: false,
     cold_read: None,
     approver: TaskApprover::User,
-    improve_host: None,
+    improve_host: task.improve_host.clone(),
   }
 }
 

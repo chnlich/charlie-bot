@@ -198,13 +198,13 @@ function eloneSession(sessionId, eventIndex) {
 // Task & context dialog (plan 4.2): a read-only view of a logical session's
 // Goal, the status Goal the session set. Below it sits the context its
 // next Run would assemble: GET /api/sessions/{id}/effective-prompt returns one
-// row per managed block with its sources, delivery and measured length. The
+// item per managed block with its sources, delivery and measured length. The
 // dialog shell shares the session-action modal's chrome in index.html. The
 // body is fetched on every open, so it shows the current configuration and
 // stores nothing.
 // ---------------------------------------------------------------------------
-// The dialog's muted tone: its empty values, source labels and prompt table header sit on the
-// modal's slate-800, where slate-500 renders 3.07:1. That is under the 4.5:1 floor for text
+// The dialog's muted tone: its empty values, source labels and each block's delivery line sit on
+// the modal's slate-800, where slate-500 renders 3.07:1. That is under the 4.5:1 floor for text
 // this size. Slate-400 renders 5.71:1 and stays quieter than the field values.
 const TASK_CONTEXT_MUTED = 'text-slate-400';
 const TASK_CONTEXT_NONE = `<span class="${TASK_CONTEXT_MUTED}">(none)</span>`;

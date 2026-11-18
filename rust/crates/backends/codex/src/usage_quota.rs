@@ -30,7 +30,7 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::pricing;
 use super::rollout::{self, token_count_payload, walk_files};
-use super::text::{empty_object, is_truthy, object_or_empty, splitlines};
+use super::text::{empty_object, is_truthy, object_or_empty, splitlines, text_of};
 use super::usage_fields;
 
 const PROVIDER: &str = "codex";
@@ -224,10 +224,6 @@ impl Inner {
     memo.retain(&live);
     Ok(sum_spend(&by_file, now))
   }
-}
-
-fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-  map.get(key).and_then(Value::as_str)
 }
 
 /// Why the newest plan-pool event is absent.
@@ -634,7 +630,7 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
     Some(Value::Object(payload)) => payload,
     Some(other) => bail!("payload must be an object, got {other}"),
   };
-  if rollout::text_of(&event, "type") == Some(rollout::TURN_CONTEXT) {
+  if text_of(&event, "type") == Some(rollout::TURN_CONTEXT) {
     if let Some(model) = payload.get("model").and_then(Value::as_str) {
       *current_model = model.to_string();
     }

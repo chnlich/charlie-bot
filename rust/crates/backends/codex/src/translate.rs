@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use super::pricing;
-use super::text::{count_or_zero, empty_object, is_truthy};
+use super::text::{count_or_zero, empty_object, is_truthy, text_of};
 use super::usage_fields;
 use charliebot_agents::event_builders::{
   make_error_event, make_result_event, make_system_message_event, make_text_event, make_tool_result_event,
@@ -243,10 +243,6 @@ impl Translate for CodexTranslator {
   fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
     self.translate_event(&raw)
   }
-}
-
-fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-  map.get(key).and_then(Value::as_str)
 }
 
 /// The item's key in the delta caches. An item without an id shares the empty-string key.

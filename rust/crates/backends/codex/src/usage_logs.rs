@@ -20,7 +20,7 @@ use memchr::{memmem, memrchr};
 use serde_json::{Map, Value};
 
 use super::rollout::{self, SESSION_META, TURN_CONTEXT, token_count_payload, walk_files};
-use super::text::{count_or_zero, is_truthy, object_or_empty};
+use super::text::{count_or_zero, is_truthy, object_or_empty, text_of};
 use super::usage_fields;
 use super::usage_quota::CodexQuotaAccount;
 use super::usage_sweep;
@@ -119,7 +119,7 @@ fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result
     }
   }
   let mut root = None;
-  if let Some(line) = lines.iter().find(|line| rollout::text_of(line, "type") == Some(SESSION_META)) {
+  if let Some(line) = lines.iter().find(|line| text_of(line, "type") == Some(SESSION_META)) {
     root = payload_root(line)?;
   }
   let mut seen = HashSet::new();
@@ -129,7 +129,7 @@ fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result
       if let Some(named) = payload_model(line)? {
         model = Some(named);
       }
-      if root.is_none() && rollout::text_of(line, "type") == Some(SESSION_META) {
+      if root.is_none() && text_of(line, "type") == Some(SESSION_META) {
         root = payload_root(line)?;
       }
       continue;
@@ -198,7 +198,7 @@ fn marker_lines(bytes: &[u8]) -> anyhow::Result<Vec<Map<String, Value>>> {
 }
 
 fn is_context(line: &Map<String, Value>) -> bool {
-  matches!(rollout::text_of(line, "type"), Some(SESSION_META | TURN_CONTEXT))
+  matches!(text_of(line, "type"), Some(SESSION_META | TURN_CONTEXT))
 }
 
 /// The truthy `model` a record's payload names, as text.

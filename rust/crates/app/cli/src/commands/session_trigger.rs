@@ -133,7 +133,7 @@ impl TriggerKey {
       .filter_map(|stored| Some((stored.get("created_at")?.as_str()?, stored)))
       .max_by_key(|(created_at, _)| *created_at)
       .map(|(_, stored)| stored)?;
-    Some(json!({ "trigger_id": newest.get("id")?, (FIRE_AT_FIELD): newest.get(FIRE_AT_FIELD)? }))
+    Some(json!({ (triggers::TRIGGER_ID_FIELD): newest.get("id")?, (FIRE_AT_FIELD): newest.get(FIRE_AT_FIELD)? }))
   }
 }
 
@@ -319,7 +319,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
     return Err(CliExit::usage("registration rejected: no pending trigger watching the started pid on readback"));
   }
 
-  let trigger_id = response_field(&result, "trigger_id")?.clone();
+  let trigger_id = response_field(&result, triggers::TRIGGER_ID_FIELD)?.clone();
   let fire_at = response_field(&result, FIRE_AT_FIELD)?.clone();
   let record = json!({
     "launch_id": launch_id,
@@ -331,7 +331,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
     "started_at": started_text,
     "log": launch.log,
     (EXIT_FILE_FIELD): launch.exit_file,
-    "trigger_id": trigger_id,
+    (triggers::TRIGGER_ID_FIELD): trigger_id,
   });
   let Value::Object(record) = record else { unreachable!("the record literal is an object") };
   let dir = launch_dir(sessions_dir, session_id, &launch_id);
@@ -341,7 +341,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
 
   // The output object: trigger_id and fire_at first, then the record's fields (its trigger_id keeps the first slot).
   let mut output = Map::new();
-  output.insert("trigger_id".to_string(), trigger_id);
+  output.insert(triggers::TRIGGER_ID_FIELD.to_string(), trigger_id);
   output.insert(FIRE_AT_FIELD.to_string(), fire_at);
   for (key, value) in record {
     output.insert(key, value);

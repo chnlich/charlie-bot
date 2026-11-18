@@ -348,7 +348,8 @@ function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweak
 // behind a pending timer. Call before createChatSidebarContext.
 function inlinePageTimers(context) {
   context.setInterval = () => 0;
-  context.setTimeout = (fn) => { fn(); return 0; };
+  // The connect deadline is checked by websocket_connect_handlers.test.js: fired inline, it would replace its attempt forever.
+  context.setTimeout = (fn, ms) => { if (ms === 4000) return 0; fn(); return 0; };
   context.clearInterval = () => {};
   context.clearTimeout = () => {};
 }

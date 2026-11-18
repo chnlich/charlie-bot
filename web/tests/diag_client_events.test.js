@@ -3,7 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const {readStatic, readPackageStatic} = require('./read_static');
-const {loadWebsocketContext} = require('./websocket_context_stub');
+const {loadWebsocketContext, CONNECT_DEADLINE_MS} = require('./websocket_context_stub');
 const {createFakeWebSocketClass} = require('./fake_websocket');
 
 // The wire path every client timing event posts to; an endpoint move on either
@@ -111,6 +111,8 @@ function buildClientEventsHarness() {
     // The cutoffs record instead of firing inline: a no-echo send's post is the
     // timer callback under test.
     setTimeout: (fn, ms) => {
+      // The connect deadline has its own tests (websocket_connect_handlers.test.js); this harness records the rest.
+      if (ms === CONNECT_DEADLINE_MS) return 0;
       timers.push({fn, ms});
       return timers.length;
     },
@@ -600,7 +602,7 @@ function buildTransportHarness() {
     SESSION_ID: 'session-a',
     WebSocket: createFakeWebSocketClass(),
     wsUrlWithToken: (path) => path,
-    setTimeout: (fn, ms) => { timers.push({fn, ms}); return timers.length; },
+    setTimeout: (fn, ms) => { if (ms === CONNECT_DEADLINE_MS) return 0; timers.push({fn, ms}); return timers.length; },
     clearTimeout: () => {},
     document: {
       getElementById: () => null,

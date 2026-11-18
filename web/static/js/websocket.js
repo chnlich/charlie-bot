@@ -44,6 +44,11 @@ const RECONNECT_QUICK_RETRY_MS = 250;
 const RECONNECT_QUICK_RETRY_LIMIT = 5;
 let quickRetryTimer = null;
 let quickRetriesLeft = RECONNECT_QUICK_RETRY_LIMIT;
+// A visible page replaces a connect attempt that has not opened within this many milliseconds with a fresh one. The
+// kernel retransmits a lost SYN on a backoff that can run past the link's return by seconds; a fresh attempt sends its
+// first SYN at once. The timer belongs to the attempt in progress, and the attempt's open, close or teardown clears it.
+const CONNECT_DEADLINE_MS = 4000;
+let connectDeadlineTimer = null;
 // Request ids identify the local optimistic sends whose server echoes are due.
 const pendingUserRequestIds = new Set();
 // The socket's own connect counter: it names a socket stale the moment a newer connect attempt
@@ -189,12 +194,17 @@ function cancelReconnect() {
   if (quickRetryTimer) { clearTimeout(quickRetryTimer); quickRetryTimer = null; }
 }
 
+function clearConnectDeadline() {
+  if (connectDeadlineTimer) { clearTimeout(connectDeadlineTimer); connectDeadlineTimer = null; }
+}
+
 // Close the page's socket and keep it closed. The no-session view calls this: with no session
 // displayed there is nothing to render, so an archived session's live output would spend the link
 // for nothing. The close is the page's own — it announces nothing and schedules no reconnect — and
 // the next session's open loads the page, whose first socket carries the server's snapshot.
 function closeSessionSocket() {
   cancelReconnect();
+  clearConnectDeadline();
   wsGeneration++;
   const socket = ws;
   ws = null;
@@ -268,6 +278,16 @@ function connectWS() {
   const socket = new WebSocket(wsUrl);
   ws = socket;
   wsOpen = false;
+  // The attempt this one replaces is cancelled with its deadline. A hidden page sets no deadline for this attempt.
+  clearConnectDeadline();
+  if (document.visibilityState !== 'hidden') {
+    connectDeadlineTimer = setTimeout(() => {
+      connectDeadlineTimer = null;
+      detachSocketHandlers(socket);
+      try { socket.close(); } catch {}
+      connectWS();
+    }, CONNECT_DEADLINE_MS);
+  }
   const replayBytesEncoder = new TextEncoder();
   replayBytes = 0;
   replayDone = false;
@@ -279,6 +299,7 @@ function connectWS() {
       try { socket.close(); } catch {}
       return;
     }
+    clearConnectDeadline();
     console.log('WS connected');
     wsOpen = true;
     reconnectDelay = 1000;
@@ -344,6 +365,7 @@ function connectWS() {
 
   socket.onclose = (event) => {
     if (isStaleSocket(socket, generation)) return;
+    clearConnectDeadline();
     if (wsOpen) {
       document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {
         detail: {cause: 'network', code: event ? event.code : null},

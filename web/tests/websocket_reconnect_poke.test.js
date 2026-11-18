@@ -9,7 +9,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { loadWebsocketContext } = require('./websocket_context_stub');
+const { loadWebsocketContext, CONNECT_DEADLINE_MS } = require('./websocket_context_stub');
 
 function buildContext() {
   const timers = [];
@@ -19,6 +19,8 @@ function buildContext() {
   const {context, FakeWebSocket} = loadWebsocketContext({
     SESSION_ID: 'session-a',
     setTimeout: (fn, ms) => {
+      // The connect deadline has its own tests (websocket_connect_handlers.test.js); this harness records the rest.
+      if (ms === CONNECT_DEADLINE_MS) return 0;
       timers.push({fn, ms});
       return timers.length;
     },

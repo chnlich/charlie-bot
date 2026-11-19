@@ -10,6 +10,7 @@ pub mod backend;
 pub mod caller;
 pub mod context;
 pub mod draft;
+pub mod icons;
 mod inlined_literal;
 mod inlined_markup;
 mod inlined_script;

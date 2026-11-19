@@ -111,6 +111,7 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 procfs = { version = "0.18", default-features = false }
 prost = "0.14"
 regex = "1"
+roxmltree = "0.21"
 rustix = { version = "1", features = ["process"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rubato = "5"

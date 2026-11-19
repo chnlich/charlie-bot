@@ -9,9 +9,17 @@ publish.workspace = true
 name = "charliebot-server"
 path = "src/main.rs"
 
+[features]
+# The global heap allocator is mimalloc, which returns freed pages to the OS. It is on by default; a build with
+# `--no-default-features` links glibc malloc.
+default = ["use-mimalloc"]
+use-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+
 [dependencies]
 axum.workspace = true
 bytes.workspace = true
+libmimalloc-sys = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
 charliebot-compat.workspace = true
 charliebot-agents.workspace = true
 charliebot-cli-common.workspace = true

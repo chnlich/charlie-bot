@@ -81,9 +81,11 @@ chrono = "0.4"
 chrono-tz = "0.10"
 data-encoding = "2"
 libc = "0.2"
+libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 memchr = "2"
 memmap2 = "0.9"
 mime-db = "1"
+mimalloc = "0.1"
 # The zlib-rs backend is the request path's deflate, chosen for its level-1 speed; the wire bytes are the same gzip
 # container either way.
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }

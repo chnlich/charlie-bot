@@ -107,9 +107,14 @@ impl BackendAvailability {
   /// for every member failure.
   ///
   /// A quota failure of a login-pooled option asks the pool first. While a login can still run the option's model, no
-  /// row is written and the kept record is logged. Otherwise the row runs until the pool's earliest reset for the model,
-  /// then the failure's stated reset, then [`DEFAULT_COOLDOWN`]. Every other failure runs until its stated reset, or
-  /// for [`DEFAULT_COOLDOWN`] when it states none. `None` means the row was kept.
+  /// row is written, the kept record is logged, and `None` is returned. Otherwise the row runs until the pool's
+  /// earliest reset for the model, then the failure's stated reset, then [`DEFAULT_COOLDOWN`]. Every other failure runs
+  /// until its stated reset, or for [`DEFAULT_COOLDOWN`] when it states none.
+  ///
+  /// Keep the later reset: an unexpired stored row whose `out_until` is later than the new one stays as it is, and
+  /// nothing is written. The stored instant is returned, so a shorter write never cuts a known later reset, whether it
+  /// states no reset (the default cooldown) or a short one (a judge timeout). The comparison runs under the same lock
+  /// as the write.
   ///
   /// The write is a read-merge-write under an exclusive file lock, so a row another process recorded since this one
   /// last read the file survives.
@@ -159,6 +164,21 @@ impl BackendAvailability {
     };
     let _lock = self.lock()?;
     let mut rows = Self::read_rows(&self.path)?;
+    if let Some(stored) = rows.get(backend_id)
+      && stored.out_until.into_inner() > UtcDateTime::now().into_inner()
+      && stored.out_until.into_inner() > out_until
+    {
+      let stored_until = stored.out_until.into_inner();
+      tracing::info!(
+        target: "charliebot_agents",
+        member = backend_id,
+        stored_until = %format_minutes(stored_until),
+        new_until = %format_minutes(out_until),
+        reason,
+        "backend_availability_later_kept"
+      );
+      return Ok(Some(stored_until));
+    }
     rows.insert(backend_id.to_string(), row);
     self.persist(&rows)?;
     drop(_lock);
@@ -366,5 +386,82 @@ mod tests {
     fs::write(home.path().join("state"), "a file where the directory belongs").unwrap();
     let error = BackendAvailability::load(home.path()).unwrap_err().to_string();
     assert_eq!(error, format!("could not read {}", display_state_path()));
+  }
+
+  #[test]
+  fn a_record_without_a_stated_reset_keeps_a_later_stored_row() {
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    let known_reset = UtcDateTime::now().into_inner() + Duration::minutes(80);
+    availability
+      .record(&cfg, &registry, "member", Some(known_reset.into()), REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap();
+    let kept = availability.record(&cfg, &registry, "member", None, REASON_QUOTA_ERROR, "a default cooldown").unwrap();
+
+    assert_eq!(kept, Some(known_reset));
+    let row = availability.row("member").unwrap();
+    assert_eq!(row.out_until.into_inner(), known_reset);
+    assert_eq!(row.detail, "quota is spent");
+  }
+
+  #[test]
+  fn a_judge_timeout_keeps_a_later_quota_row() {
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    let known_reset = UtcDateTime::now().into_inner() + Duration::hours(3);
+    availability
+      .record(&cfg, &registry, "member", Some(known_reset.into()), REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap();
+    let timeout_cooldown = UtcDateTime::now().into_inner() + Duration::minutes(5);
+    let kept = availability
+      .record(&cfg, &registry, "member", Some(timeout_cooldown.into()), REASON_TIMEOUT, "judge timed out")
+      .unwrap();
+
+    assert_eq!(kept, Some(known_reset));
+    let row = availability.row("member").unwrap();
+    assert_eq!(row.reason, REASON_QUOTA_ERROR);
+    assert_eq!(row.out_until.into_inner(), known_reset);
+  }
+
+  #[test]
+  fn a_later_record_replaces_a_shorter_row() {
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    availability.record(&cfg, &registry, "member", None, REASON_QUOTA_ERROR, "a default cooldown").unwrap();
+    let known_reset = UtcDateTime::now().into_inner() + Duration::minutes(80);
+    let replaced = availability
+      .record(&cfg, &registry, "member", Some(known_reset.into()), REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap();
+
+    assert_eq!(replaced, Some(known_reset));
+    let row = availability.row("member").unwrap();
+    assert_eq!(row.out_until.into_inner(), known_reset);
+    assert_eq!(row.detail, "quota is spent");
+  }
+
+  #[test]
+  fn an_expired_row_is_replaced_by_a_shorter_record() {
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    let expired = AvailabilityRow {
+      out_until: (UtcDateTime::now().into_inner() - Duration::minutes(10)).into(),
+      reason: REASON_QUOTA_ERROR.to_string(),
+      detail: "an old quota is spent".to_string(),
+      recorded_at: UtcDateTime::now(),
+    };
+    availability.persist(&HashMap::from([("member".to_string(), expired)])).unwrap();
+    let out_until = availability
+      .record(&cfg, &registry, "member", None, REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap()
+      .expect("an expired row is replaced by a written row");
+
+    let remaining = out_until - OffsetDateTime::now_utc();
+    assert!(remaining >= DEFAULT_COOLDOWN - Duration::seconds(5));
+    assert!(remaining <= DEFAULT_COOLDOWN + Duration::seconds(5));
+    assert_eq!(availability.row("member").unwrap().detail, "quota is spent");
   }
 }

@@ -196,13 +196,13 @@ async function openSessionMovePicker(sessionId) {
     }
     pending = false;
   };
-  // The label is the choice's full text, and CHOICE_CLASS may elide it, so the label is also the hover text.
+  // A session choice may elide its name, so its full name is also the hover text.
   const choiceButton = (label, parentId) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = CHOICE_CLASS;
     button.textContent = label;
-    button.title = label;
+    if (parentId !== null) button.title = label;
     button.addEventListener('click', () => pick(parentId));
     return button;
   };

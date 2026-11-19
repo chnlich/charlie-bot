@@ -2343,7 +2343,7 @@ mod tests {
       status: status.to_string(),
       detail: GATED_DETAIL.to_string(),
       last_change_at: since.to_string(),
-      awaits_approval: matches!(status, "needs-interactive-auth" | "needs-okta"),
+      awaits_approval: matches!(status, "needs-interactive-auth" | "needs-okta" | "router-rejected"),
     }
   }
 

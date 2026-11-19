@@ -50,7 +50,7 @@ pub fn classify(returncode: i32, output: &str) -> &'static str {
 
 /// `awaits_approval`: whether a verdict waits for the user to approve the host's login.
 pub fn awaits_approval(status: &str) -> bool {
-  matches!(status, STATUS_NEEDS_OKTA | STATUS_NEEDS_INTERACTIVE_AUTH)
+  matches!(status, STATUS_NEEDS_OKTA | STATUS_NEEDS_INTERACTIVE_AUTH | STATUS_ROUTER_REJECTED)
 }
 
 /// `build_detail`: the first output line, plus the first URL line that follows it. An empty output is named by its

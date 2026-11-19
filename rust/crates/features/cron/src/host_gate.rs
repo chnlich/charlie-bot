@@ -117,7 +117,8 @@ mod tests {
   use charliebot_store::metadata::UtcDateTime;
   use serde_json::json;
 
-  use super::derived_waiting_rows;
+  use super::{derived_waiting_rows, hold_reason};
+  use crate::loader;
   use crate::test_support::{
     archive_task, child_manager, feature_context_with_login_hosts, manager, set_host_login, write_prompted_task,
   };
@@ -131,7 +132,7 @@ mod tests {
       status: status.to_string(),
       detail: DETAIL.to_string(),
       last_change_at: since.to_string(),
-      awaits_approval: matches!(status, "needs-interactive-auth" | "needs-okta"),
+      awaits_approval: matches!(status, "needs-interactive-auth" | "needs-okta" | "router-rejected"),
     }
   }
 
@@ -193,5 +194,28 @@ mod tests {
     archive_task(&features, &root.id).await;
     let rows = derived_waiting_rows(&features).await.unwrap();
     assert_eq!(rows.iter().map(|row| row.session_id.as_str()).collect::<Vec<_>>(), [node.id.as_str()], "{rows:?}");
+  }
+
+  #[tokio::test]
+  async fn a_router_rejected_host_holds_every_fire_until_it_answers_ok() {
+    let (_home, features) = feature_context_with_login_hosts(&["synthetic-login-host"]);
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let root = manager(&features, "router-root").await.unwrap();
+    let node = child_manager(&features, &root.id, "router-node").await.unwrap();
+    write_prompted_task(&home, "router-task", &task(&node.id, "synthetic-login-host", true));
+    let cfg = features.config.get().unwrap();
+    let (snapshot, _reloaded) = loader::read_snapshot(&features, &cfg).unwrap();
+    let scheduled = snapshot
+      .tasks
+      .iter()
+      .find(|task| task.improve_host.as_deref() == Some("synthetic-login-host"))
+      .expect("the prompted task names the host");
+
+    set_host_login(&home, verdict("synthetic-login-host", "router-rejected", SINCE));
+    assert!(hold_reason(&features, scheduled).await.unwrap().is_some(), "a router rejection holds the fire");
+    assert!(hold_reason(&features, scheduled).await.unwrap().is_some(), "and so does each later fire");
+
+    set_host_login(&home, verdict("synthetic-login-host", "ok", "2026-11-19T10:00:00+00:00"));
+    assert!(hold_reason(&features, scheduled).await.unwrap().is_none(), "an ok host releases the fire");
   }
 }

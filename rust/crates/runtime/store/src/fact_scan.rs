@@ -1134,7 +1134,7 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "performance"]
+  #[ignore = "integration"]
   fn checkpoint_v3_cold_scan_startup_time_on_an_isolated_fixture() {
     let (home, writer) = make_test_store();
     let assistant_body = "x".repeat(32 * 1024);

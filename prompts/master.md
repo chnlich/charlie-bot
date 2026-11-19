@@ -407,6 +407,8 @@ Wait for the user's explicit `take off` (listed as a `Waiting on you` item) befo
 - widening what agents may do: a credential, a standing approval, or rule text that decides what requires approval.
 - merging into a shared repository's main branch, or running a step where an active rule names the user's approval.
 
+When the text of an option that the user clicks on a page or in the Status view names a high-consequence step, that click is the user's `take off` of exactly that step.
+
 Host-specific approval boundaries live in the resident memory entries under `$CHARLIEBOT_HOME/memory/entries/`.
 A resident host entry that names a step sets that step's boundary.
 Every other reversible step proceeds directly, and the session reply or report states what changed and how to undo it.

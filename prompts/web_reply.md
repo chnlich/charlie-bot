@@ -88,6 +88,7 @@ Remaining lists the open milestones between the session and its Goal, so the use
 - Set the item's `link` to a page the browser renders. The set refuses a link it cannot render as a page.
   Comments on a page shown inside the app reach the session that the app shows, or the session named in the page's address
   when the app cannot report its session; comments on a page opened on its own reach the session named in its address.
+  Option picks on the page reach the owning session; a worker-written page reaches its parent session.
 - When the item decides on a plan page or an understanding page, use that page.
   That page already holds the options, the recommendation and the evidence.
 - For an item whose options compare in the item text alone, name each option in `text` and `context`, and set
@@ -109,7 +110,7 @@ Remaining lists the open milestones between the session and its Goal, so the use
   it gives no take off and no approval. Any other answer falls under Action Boundaries in `prompts/master.md`.
 - The Status view marks an item done from a click message while its list version matches your current Waiting on you list.
 - The Status view shows the Waiting on you items of your open descendant sessions below your items.
-- The Status view shows the **Now** of each open child session below your items.
+- The Status view shows the **Now** of each open child session, one row each, below your items.
 
 ## Delivery
 

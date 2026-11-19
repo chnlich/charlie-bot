@@ -56,11 +56,22 @@ pub struct TurnInput {
   pub kind: Option<String>,
   /// The turn's exit code; a zero-output turn carries 1.
   pub exit_code: i64,
+  /// Whether the turn is the continuation of a block and exited with an error. Such a turn misses the entries that
+  /// blocked it again, so each of those entries answers its second miss rather than passing the turn.
+  pub continuation_failed: bool,
   /// The session's stored status payload (goal, now, updated_at, waiting), or null when it stores none.
   pub status: Value,
   /// The events since the previous `master_done`, in order, up to the call. An input the running run received carries
   /// `received_at`, the moment of its receipt.
   pub turn: Vec<Value>,
+}
+
+impl TurnInput {
+  /// Whether a check judges this turn's exit: a turn that exited cleanly, or a failed continuation, which a check
+  /// judges as a miss. Any other error exit is not judged, so the check passes it.
+  pub fn exit_is_judged(&self) -> bool {
+    self.exit_code == 0 || self.continuation_failed
+  }
 }
 
 /// A check command's answer, as the command prints it.
@@ -371,6 +382,8 @@ pub(crate) async fn checkpoint(
     session_id: session_id.to_string(),
     kind: owner.as_ref().map(|(kind, _)| (*kind).to_string()),
     exit_code,
+    // Past the pending check, a block in this turn has run its continuation, and this checkpoint judges that run.
+    continuation_failed: exit_code != 0 && log.turn.iter().any(is_block_record),
     status: log.status.clone(),
     turn: log.turn.clone(),
   };
@@ -490,6 +503,7 @@ mod tests {
       session_id: "synthetic-session".to_string(),
       kind: Some("web".to_string()),
       exit_code: 0,
+      continuation_failed: false,
       status: Value::Null,
       turn,
     }
@@ -638,6 +652,11 @@ mod tests {
   const GATE_PASSES_AFTER_CONTINUATION: &str =
     "grep -q continuation_ran && exit 0; printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'";
   const GATE_ALWAYS_BLOCKS: &str = "printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'";
+  /// Blocks, and on a failed continuation answers its second miss with a notice.
+  const GATE_NOTICES_A_FAILED_CONTINUATION: &str = concat!(
+    "if grep -q '\"continuation_failed\":true'; then printf '{\"systemMessage\":\"failed continuation\"}'; ",
+    "else printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'; fi"
+  );
 
   /// The event that `AttachingTurns` persists for each notice it attaches.
   const ATTACHED_NOTICE: &str = "test_attached_notice";
@@ -722,6 +741,25 @@ mod tests {
     assert_eq!(count_of(&turn, AGENT_MESSAGE), 1);
     let last_record = turn.iter().rev().find(|event| event["type"] == TURN_HOOKS).unwrap();
     assert_eq!(last_record["results"][0]["result"], "pass");
+  }
+
+  #[tokio::test]
+  async fn a_continuation_that_errors_reaches_its_block_as_the_second_miss() {
+    let home = tempfile::tempdir().unwrap();
+    let (features, meta) =
+      checkpoint_session(home.path(), &gate_list(GATE_NOTICES_A_FAILED_CONTINUATION), "turn-hooks-failed").await;
+    let session_id = &meta.id;
+
+    let first = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
+    assert_eq!(first, Checkpoint::Continue("gate: needs work".to_string()));
+    append(&features, session_id, json!({"type": "assistant_error", "id": "e1", "content": "Agent error"})).await;
+
+    // The continuation exited with an error: its checkpoint judges that block's second miss, passing with the notice.
+    assert_eq!(checkpoint(&features, session_id, &meta, 1, true).await.unwrap(), Checkpoint::Finish);
+    let turn = turn_events(&features, session_id);
+    let last_record = turn.iter().rev().find(|event| event["type"] == TURN_HOOKS).unwrap();
+    assert_eq!(last_record["results"][0]["result"], "pass");
+    assert_eq!(last_record["results"][0]["system_message"], "failed continuation");
   }
 
   #[tokio::test]

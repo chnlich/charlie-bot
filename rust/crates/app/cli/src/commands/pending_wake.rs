@@ -55,10 +55,10 @@ pub fn check(input: &TurnInput) -> Result<CheckResult, CliExit> {
   Ok(CheckResult::Block(BLOCK_REASON.to_string()))
 }
 
-/// The check's scope: a web session whose turn exited cleanly and left no close request.
+/// The check's scope: a web session whose turn exited cleanly or as a failed continuation, and left no close request.
 fn applies(input: &TurnInput) -> bool {
   input.kind.as_deref() == Some("web")
-    && input.exit_code == 0
+    && input.exit_is_judged()
     && !input.turn.iter().any(|event| event["type"] == TASK_CLOSE_REQUESTED)
 }
 

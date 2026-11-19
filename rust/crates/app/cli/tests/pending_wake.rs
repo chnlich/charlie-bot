@@ -296,7 +296,14 @@ fn run_check(sandbox: &Sandbox, input: &Value) -> Run {
 
 /// A turn input for the root session with the given kind, exit code, stored status and turn events.
 fn turn_input(kind: &str, exit_code: i64, status: Value, turn: Vec<Value>) -> Value {
-  json!({"session_id": ROOT, "kind": kind, "exit_code": exit_code, "status": status, "turn": turn})
+  json!({
+    "session_id": ROOT,
+    "kind": kind,
+    "exit_code": exit_code,
+    "continuation_failed": false,
+    "status": status,
+    "turn": turn,
+  })
 }
 
 /// A stored status with a goal and the given Waiting on you list.
@@ -518,5 +525,35 @@ async fn the_turn_end_runner_passes_the_second_miss_of_a_turn_with_the_notice() 
   assert!(
     matches!(&second[0].outcome, Outcome::Pass { notice: Some(notice) } if notice == EXPECTED_NOTICE),
     "{second:?}"
+  );
+}
+
+/// A block's continuation that exits with an error is the block's second miss: a web turn that leaves no wake gets the
+/// notice, not a silent pass.
+#[tokio::test]
+async fn a_failed_continuation_that_leaves_no_wake_gets_the_second_miss_notice() {
+  let sandbox = Sandbox::new(World::default());
+  let entry = Entry {
+    name: "pending-wake".to_string(),
+    command: format!(
+      "CHARLIEBOT_HOME={home} HOME={home} {bin} hook pending-wake",
+      home = sandbox.path().display(),
+      bin = env!("CARGO_BIN_EXE_charliebot"),
+    ),
+  };
+  let mut failed = turn_input("web", 1, status(json!([])), user_turn());
+  failed["continuation_failed"] = json!(true);
+  failed["turn"].as_array_mut().expect("the turn is a list").push(json!({
+    "type": "turn_hooks",
+    "id": "record-1",
+    "results": [{"name": "pending-wake", "result": "block", "reason": "pending-wake check: blocked"}],
+  }));
+  let input: TurnInput = serde_json::from_value(failed).expect("the turn input parses");
+
+  let outcome =
+    run_entries(std::slice::from_ref(&entry), &input, sandbox.path(), PROCESS_TIMEOUT).await.expect("the run");
+  assert!(
+    matches!(&outcome[0].outcome, Outcome::Pass { notice: Some(notice) } if notice == EXPECTED_NOTICE),
+    "{outcome:?}"
   );
 }

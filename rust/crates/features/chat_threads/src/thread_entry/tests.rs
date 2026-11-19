@@ -869,7 +869,14 @@ fn summon_received(id: &str, content: &str, received_at: &str) -> Value {
 
 /// The shared turn input of a FAKECHAT session holding `turn`.
 fn fakechat_turn(turn: Vec<Value>, exit_code: i64) -> TurnInput {
-  TurnInput { session_id: "s1".to_string(), kind: Some("fakechat".to_string()), exit_code, status: Value::Null, turn }
+  TurnInput {
+    session_id: "s1".to_string(),
+    kind: Some("fakechat".to_string()),
+    exit_code,
+    continuation_failed: false,
+    status: Value::Null,
+    turn,
+  }
 }
 
 /// The `turn_hooks` record of a turn whose entry `name` blocked once.

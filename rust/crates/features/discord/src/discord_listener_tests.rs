@@ -853,6 +853,7 @@ fn test_thread_check_blocks_a_summon_round_without_a_reply_then_notices_the_seco
     session_id: "discord-session".to_string(),
     kind: Some("discord".to_string()),
     exit_code: 0,
+    continuation_failed: false,
     status: Value::Null,
     turn: vec![summon],
   };

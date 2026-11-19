@@ -3,8 +3,9 @@
 //!
 //! Both are entries of the turn-end hook list. The `charliebot hook` command answers each one from the shared input
 //! (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason. A second
-//! miss passes: `web-reply` then shows the user the no-reply notice, and `web-status` passes quietly, as it always
-//! did. A turn with a close request, and a turn that exits with an error, pass both checks.
+//! miss passes: `web-reply` then shows the user the no-reply notice, and `web-status` passes quietly. A continuation
+//! that failed is a second miss too: `web-status` then shows its notice, so the failed turn never passes. A turn with a
+//! close request, and a turn that exits with an error other than a failed continuation, pass both checks.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -40,10 +41,18 @@ fn status_reminder_text() -> String {
   format!("Session status reminder: your last turn ended without a status set or confirm. {STATUS_SENTENCES}")
 }
 
-/// Whether the web checks apply to this turn: a web session whose turn exited cleanly and left no close request.
+/// The notice of a `web-status` miss that follows a failed continuation: the turn that answered the reminder ended in
+/// an error, so no status was set.
+const FAILED_CONTINUATION_STATUS_NOTICE: &str = concat!(
+  "Session status check: the continuation of your last turn ended in an error, so no status was set. ",
+  "The panel shows the state the last turn read back."
+);
+
+/// Whether the web checks apply to this turn: a web session whose turn exited cleanly or as a failed continuation, and
+/// left no close request.
 fn applies(input: &TurnInput) -> bool {
   input.kind.as_deref() == Some("web")
-    && input.exit_code == 0
+    && input.exit_is_judged()
     && !input.turn.iter().any(|event| event["type"] == TASK_CLOSE_REQUESTED)
 }
 
@@ -74,15 +83,22 @@ pub fn check_web_reply(input: &TurnInput) -> anyhow::Result<CheckResult> {
   Ok(CheckResult::Block(reasons.join("\n\n")))
 }
 
-/// The `web-status` entry: the turn ran a status set or confirm. The first miss blocks with the reminder; a miss after
-/// that passes.
+/// The `web-status` entry: the turn ran a status set or confirm. The first miss blocks with the reminder. A miss after
+/// that passes quietly, unless the turn is a failed continuation, which shows the notice that no status was set.
 pub fn check_web_status(input: &TurnInput) -> CheckResult {
   if !applies(input) {
     return CheckResult::Pass;
   }
   let recorded = input.turn.iter().any(|event| event["type"] == WEB_STATUS || event["type"] == WEB_STATUS_CONFIRMED);
-  if recorded || blocked_before(&input.turn, WEB_STATUS_ENTRY) {
+  if recorded {
     return CheckResult::Pass;
+  }
+  if blocked_before(&input.turn, WEB_STATUS_ENTRY) {
+    return if input.continuation_failed {
+      CheckResult::Notice(FAILED_CONTINUATION_STATUS_NOTICE.to_string())
+    } else {
+      CheckResult::Pass
+    };
   }
   CheckResult::Block(status_reminder_text())
 }
@@ -178,9 +194,15 @@ mod tests {
       session_id: "web-session".to_string(),
       kind: kind.map(str::to_string),
       exit_code,
+      continuation_failed: false,
       status: Value::Null,
       turn,
     }
+  }
+
+  /// The input of a turn that is the failed continuation of a block.
+  fn failed_continuation(turn: Vec<Value>) -> TurnInput {
+    TurnInput { continuation_failed: true, ..input(Some("web"), 1, turn) }
   }
 
   /// A user message received at `received_at`.
@@ -244,6 +266,23 @@ mod tests {
     let mut second = bare;
     second.push(block_record(WEB_STATUS_ENTRY));
     assert_eq!(check_web_status(&input(Some("web"), 0, second)), CheckResult::Pass);
+  }
+
+  #[test]
+  fn a_failed_continuation_misses_both_checks_again_and_never_passes() {
+    let mut turn = vec![user("u1", "q", "2026-01-01T00:00:01Z")];
+    turn.push(block_record(WEB_REPLY_ENTRY));
+    turn.push(block_record(WEB_STATUS_ENTRY));
+    let text = text_of(&check_web_status(&failed_continuation(turn.clone()))).to_string();
+    assert_eq!(text, FAILED_CONTINUATION_STATUS_NOTICE);
+    assert_eq!(
+      check_web_reply(&failed_continuation(turn.clone())).unwrap(),
+      CheckResult::Notice(reply::NOTICE_TEXT.to_string())
+    );
+
+    // A failed continuation that set its status before it ended still passes the status check.
+    turn.push(json!({"type": WEB_STATUS, "id": "s1"}));
+    assert_eq!(check_web_status(&failed_continuation(turn)), CheckResult::Pass);
   }
 
   #[test]

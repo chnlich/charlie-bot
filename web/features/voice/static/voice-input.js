@@ -297,7 +297,7 @@ async function toggleVoice(startRequest) {
   // converts a click into stop, an in-flight upload into a cancel, a failed
   // upload into a retry, and a stopped live recording into the upload. A stop
   // is idempotent: the recording flag clears before the first await.
-  if (run.recording) await stopRecording(run);
+  if (run.recording) await stopRecording(run, 'stop');
   else if (run.phase === VOICE_RUN_PHASE.UPLOADING || run.phase === VOICE_RUN_PHASE.DECODING) cancelVoiceUpload(run);
   else if (run.phase === VOICE_RUN_PHASE.RETRY) startUpload(run);
   else if (run.phase === VOICE_RUN_PHASE.STOP) {
@@ -453,7 +453,7 @@ async function startRecording(startRequest) {
     }
     console.error('Voice input failed:', err);
     showToast('Voice input failed: ' + err.message, true);
-    releaseVoiceRun(run);
+    releaseVoiceRun(run, 'left');
   }
 }
 
@@ -707,7 +707,7 @@ function handleVoiceWorkletMessage(run, event) {
         run.quietChunks = 0;
       }
     }
-    if (run.totalSamples >= VOICE_MAX_SAMPLES) stopRecording(run); // auto-stop enters the stop flow
+    if (run.totalSamples >= VOICE_MAX_SAMPLES) stopRecording(run, 'stop'); // auto-stop enters the stop flow
   }
 }
 
@@ -727,7 +727,7 @@ function flushVoiceWorklet(run) {
   });
 }
 
-async function stopRecording(run, end = 'stop') {
+async function stopRecording(run, end) {
   if (!run.recording) return;
   run.recording = false;
   run.stopping = true;
@@ -1365,7 +1365,7 @@ function discardVoiceRecording(run, message) {
 
 // End-of-run release for the run that owns the slot: tear down its resources,
 // free the slot, and reset the button and overlay. Callers add any toast.
-function releaseVoiceRun(run, end = 'left') {
+function releaseVoiceRun(run, end) {
   sendVoiceStartup(run, run.startup.end || end);
   abortVoiceRun(run);
   if (activeVoiceRun === run) activeVoiceRun = null;

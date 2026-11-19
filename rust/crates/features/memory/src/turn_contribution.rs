@@ -50,8 +50,8 @@ fn memory_selection_for(meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConf
 /// The basename of the task's repo, or `""` for a task with no repo: a repo-less worker matches no repo topic.
 fn repo_basename(meta: &SessionMetadata) -> &str {
   match meta.task.as_ref().and_then(|task| task.repo_path.as_deref()) {
-    Some(repo_path) if !repo_path.is_empty() => paths::name(repo_path),
-    _ => "",
+    None | Some("") => "",
+    Some(repo_path) => paths::name(repo_path),
   }
 }
 

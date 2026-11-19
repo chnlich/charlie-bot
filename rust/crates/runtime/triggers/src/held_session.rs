@@ -224,8 +224,8 @@ impl HeldSessions {
     HeldSessions { state: Arc::new(StdMutex::new(state)) }
   }
 
-  /// Watch `targets` for one trigger. The returned watch yields the ends the remote scripts report for them until it
-  /// is dropped. Dropping it removes its targets from every host's wait set.
+  /// The watch over `targets` for one trigger. The returned watch yields the ends the remote scripts report for them
+  /// until it is dropped. Dropping it removes its targets from every host's wait set.
   pub fn watch(&self, trigger_id: &str, targets: Vec<HeldTarget>) -> HeldWatch {
     let (tx, rx) = mpsc::unbounded_channel();
     let mut state = self.state.lock().expect("held session state is not poisoned");
@@ -269,7 +269,7 @@ impl HeldWatch {
     self.rx.recv().await.expect("the watch holds the sender its channel needs")
   }
 
-  /// Watch one target again after a readback found it still alive. The script dropped the target when it reported
+  /// The re-watch of one target after a readback found it still alive. The script dropped the target when it reported
   /// that end, and the registry dropped it from this watch's set with the end. Without this call only the
   /// interval probe watches the target. The reopened session checks the target on its first pass.
   pub fn resubscribe(&mut self, target: HeldTarget) {
@@ -308,7 +308,7 @@ impl Drop for HeldWatch {
   }
 }
 
-/// Bring one host's session in line with its watchers. No watcher closes the session. A changed wait set reopens it.
+/// The alignment of one host's session with its watchers. No watcher closes the session. A changed wait set reopens it.
 fn refresh(shared: &Arc<StdMutex<State>>, state: &mut State, host: &str) {
   let terminal_states = state.terminal_states;
   let argv = Arc::clone(&state.argv);

@@ -180,7 +180,8 @@ pub enum LaneStart {
   /// The first member in config order. The server starts here, so its callers share one rotation from the list head.
   #[default]
   Head,
-  /// A random member. A CLI process starts here, so that separate processes do not all begin on the first member.
+  /// A priority tier's first member. A CLI process starts each priority tier here, so separate processes do not all
+  /// begin on the first member.
   Random,
 }
 
@@ -225,13 +226,13 @@ impl RotationPositions {
 
   fn position(&self, pool_id: &str, lane: Lane) -> usize {
     let mut positions = self.positions.lock().expect("rotation position mutex is not poisoned");
-    *positions.entry((pool_id.to_string(), lane)).or_insert_with(|| self.first_position())
+    *positions.entry((pool_id.to_string(), lane)).or_insert_with(|| self.first_position(lane))
   }
 
-  fn first_position(&self) -> usize {
-    match self.start {
-      LaneStart::Head => 0,
-      LaneStart::Random => {
+  fn first_position(&self, lane: Lane) -> usize {
+    match (self.start, lane) {
+      (LaneStart::Head, _) | (_, Lane::Rotate) => 0,
+      (LaneStart::Random, Lane::Subscription | Lane::Payg) => {
         let mut bytes = [0u8; size_of::<usize>()];
         getrandom::fill(&mut bytes).expect("the OS random source is available");
         usize::from_ne_bytes(bytes)
@@ -910,6 +911,18 @@ backends:
       members: [member-a, member-b, member-c, member-d, member-e]
 ";
 
+  const ROTATE_CONFIG: &str = "\
+backends:
+  options:
+    - {id: member-a, label: Member A, type: synthetic, model: model-a}
+    - {id: member-b, label: Member B, type: synthetic, model: model-b}
+  pools:
+    - id: rotating
+      label: Rotating
+      rule: rotate
+      members: [member-a, member-b]
+";
+
   /// One priority pool over two subscriptions below the line, one near exhaustion, one spent, and three pay-as-you-go
   /// members. The readings are `test_reading`'s.
   const TIER_CONFIG: &str = "\
@@ -1135,6 +1148,18 @@ backends:
     let peeked = positions.peek(&selection).unwrap();
     assert_eq!(positions.peek(&selection).unwrap(), peeked, "a second read draws no new start");
     assert_eq!(positions.select(&selection).unwrap(), peeked, "the select takes the member the peek named");
+  }
+
+  #[tokio::test]
+  async fn random_cli_start_does_not_change_rotate_pool_order() {
+    let (_home, features) = fixture_with(ROTATE_CONFIG);
+    let cfg = loaded_cfg(&features);
+    let availability = availability(&features);
+    let positions = RotationPositions::new(LaneStart::Random);
+    let rotate = selection_pool_for_id(&cfg, "rotating").unwrap();
+    let selection = Selection::new(&cfg, &features.registry, &availability, &rotate, &[], UtcDateTime::now());
+    let selected = (0..4).map(|_| positions.select(&selection).unwrap().unwrap().backend).collect::<Vec<_>>();
+    assert_eq!(selected, ["member-a", "member-b", "member-a", "member-b"]);
   }
 
   #[tokio::test]

@@ -2,7 +2,6 @@
 //! `Authorization: Bot` header, the 429 policy in one place, and `DiscordAPIError` for a failed call. The helpers that
 //! reason about ids, links, the intent and the permission bits are pure functions.
 
-use std::fmt::{self, Display};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -103,31 +102,8 @@ pub fn missing_permissions(permissions: u64) -> Vec<&'static str> {
 }
 
 /// One failed Discord REST call: its method, path, HTTP status, Discord's error code (None when the body has none) and
-/// the human message. The bot token never appears in it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiscordAPIError {
-  pub method: String,
-  pub path: String,
-  pub status: u16,
-  pub code: Option<i64>,
-  pub message: String,
-}
-
-impl Display for DiscordAPIError {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let code = self.code.map_or_else(|| "None".to_string(), |code| code.to_string());
-    write!(
-      f,
-      "{} {} failed: HTTP {} code={code} message={}",
-      self.method,
-      self.path,
-      self.status,
-      text_repr::str_repr(&self.message)
-    )
-  }
-}
-
-impl std::error::Error for DiscordAPIError {}
+/// the human message. The bot token never appears in it. The shape is the shared platform API error.
+pub use charliebot_compat::api_error::ApiError as DiscordAPIError;
 
 /// The wait a 429 asks for: the body's `retry_after` seconds, else the `Retry-After` header, else zero.
 /// A header that is not a number fails the call.

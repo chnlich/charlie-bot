@@ -302,7 +302,18 @@ async function fetchJsonOrDetail(url) {
     const body = await res.json();
     if (body && body.detail) detail = String(body.detail);
   } catch (_) { /* a non-JSON error body keeps the status text */ }
-  return {ok: false, detail};
+  return {ok: false, status: res.status, detail};
+}
+
+// Whether the page's config carries the id a session's backend names. index.html hands the
+// page every configured backends.options and backends.pools id for its backend pickers, the
+// set the effective-prompt route resolves. An empty backend means the server picks its
+// default, and a page without that config (the test harness) leaves the answer to the server.
+function sessionBackendKnown(backend) {
+  if (typeof BACKEND_OPTIONS === 'undefined' || typeof BACKEND_POOLS === 'undefined') return true;
+  if (typeof backend !== 'string' || backend === '') return true;
+  if (Object.prototype.hasOwnProperty.call(BACKEND_OPTIONS, backend)) return true;
+  return BACKEND_POOLS.some((pool) => pool && pool.id === backend);
 }
 
 // Assembles the dialog body for one session: the task record from the
@@ -330,9 +341,20 @@ async function loadTaskContextModal(sessionId) {
   }
   setTaskContextModalBody(sessionId, taskHtml + taskContextNoteHtml('Loading next run context…'));
   const preview = await fetchJsonOrDetail('/api/sessions/' + sessionId + '/effective-prompt');
-  setTaskContextModalBody(sessionId, taskHtml + (preview.ok
-      ? taskContextPromptHtml(preview.data)
-      : taskContextNoteHtml('Next run context unavailable: ' + preview.detail)));
+  let contextHtml;
+  if (preview.ok) {
+    contextHtml = taskContextPromptHtml(preview.data);
+  } else if (preview.status === 400 && !sessionBackendKnown(session.backend)) {
+    // The route refuses an id its config does not hold with a 400 and the config validator's
+    // message, which names backends.options, backends.pools and every configured id. The reader
+    // of this dialog needs the fact, not the validator's vocabulary. Any other refusal keeps
+    // the server's detail, so an unrelated failure is not reported as a missing backend.
+    contextHtml = taskContextNoteHtml('Next run context unavailable: the session\'s backend \''
+      + session.backend + '\' is not configured on this server.');
+  } else {
+    contextHtml = taskContextNoteHtml('Next run context unavailable: ' + preview.detail);
+  }
+  setTaskContextModalBody(sessionId, taskHtml + contextHtml);
 }
 
 function openTaskContextModal(sessionId) {

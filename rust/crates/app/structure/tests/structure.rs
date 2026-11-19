@@ -1394,6 +1394,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `ThreadPlatform::watermark_key` in `charliebot_chat_threads::thread_entry`.",
   },
   OwnerRow {
+    name: "message_ids",
+    owner: "features/chat_threads",
+    hint: "Use `charliebot_chat_threads::thread_entry::MESSAGE_IDS`; the ack event and each platform's ack request \
+           name the ids there.",
+  },
+  OwnerRow {
     name: "author_id",
     owner: "features/chat_threads",
     hint: "Use `charliebot_chat_threads::thread_read::AUTHOR_ID`; every message view in a thread read names the \

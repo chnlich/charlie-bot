@@ -11,6 +11,7 @@ pub mod args;
 pub mod base_url;
 pub mod channel_verb;
 pub mod client;
+pub mod credentials;
 pub mod draft;
 pub mod exit;
 pub mod fields;

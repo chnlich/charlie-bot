@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use charliebot_cli_common::credentials::unavailable;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::request::{self, Request, RequestArgs};
 use charliebot_cli_common::urlencode::urlencode;
@@ -57,29 +58,20 @@ impl Endpoints {
 }
 
 pub(crate) fn home_dir() -> Result<PathBuf, CliExit> {
-  home::charliebot_home_dir().map_err(|_| credential_failure("user_access_token", None))
+  home::charliebot_home_dir().map_err(|_| unavailable(NAME, "user_access_token", None))
 }
 
 fn credentials_path(home: &Path) -> PathBuf {
   home.join(config::CREDENTIALS_FILENAME)
 }
 
-fn credential_failure(key: &str, path: Option<&Path>) -> CliExit {
-  let where_text = match path {
-    Some(path) => paths::display(path),
-    None => home::display_path(config::CREDENTIALS_FILENAME),
-  };
-  CliExit::contract(json!({"error": format!("credentials.feishu.{key} is unavailable in {where_text}")}), 3)
-}
-
 fn load(home: &Path) -> Result<Credentials, CliExit> {
-  credentials::load_credentials(home)
-    .map_err(|_| credential_failure("user_access_token", Some(&credentials_path(home))))
+  credentials::load_credentials(home).map_err(|_| unavailable(NAME, "user_access_token", Some(&credentials_path(home))))
 }
 
 /// One required credential value. An empty value cannot authenticate, so it counts as unset.
 fn required(credentials: &Credentials, key: &str, home: &Path) -> Result<String, CliExit> {
-  let failure = || credential_failure(key, Some(&credentials_path(home)));
+  let failure = || unavailable(NAME, key, Some(&credentials_path(home)));
   credentials
     .require(NAME, key)
     .map_err(|_| failure())

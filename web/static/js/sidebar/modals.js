@@ -302,7 +302,7 @@ async function fetchJsonOrDetail(url) {
     const body = await res.json();
     if (body && body.detail) detail = String(body.detail);
   } catch (_) { /* a non-JSON error body keeps the status text */ }
-  return {ok: false, detail};
+  return {ok: false, status: res.status, detail};
 }
 
 // Whether the page's config carries the id a session's backend names. index.html hands the
@@ -344,14 +344,15 @@ async function loadTaskContextModal(sessionId) {
   let contextHtml;
   if (preview.ok) {
     contextHtml = taskContextPromptHtml(preview.data);
-  } else if (sessionBackendKnown(session.backend)) {
-    contextHtml = taskContextNoteHtml('Next run context unavailable: ' + preview.detail);
-  } else {
-    // The route refuses an id its config does not hold with the config validator's message,
-    // which names backends.options, backends.pools and every configured id. The reader of this
-    // dialog needs the fact, not the validator's vocabulary.
+  } else if (preview.status === 400 && !sessionBackendKnown(session.backend)) {
+    // The route refuses an id its config does not hold with a 400 and the config validator's
+    // message, which names backends.options, backends.pools and every configured id. The reader
+    // of this dialog needs the fact, not the validator's vocabulary. Any other refusal keeps
+    // the server's detail, so an unrelated failure is not reported as a missing backend.
     contextHtml = taskContextNoteHtml('Next run context unavailable: the session\'s backend \''
       + session.backend + '\' is not configured on this server.');
+  } else {
+    contextHtml = taskContextNoteHtml('Next run context unavailable: ' + preview.detail);
   }
   setTaskContextModalBody(sessionId, taskHtml + contextHtml);
 }

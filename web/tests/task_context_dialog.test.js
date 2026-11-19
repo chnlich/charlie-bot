@@ -178,6 +178,20 @@ test('a refused preview for a backend the page config lacks names the backend al
   assert.doesNotMatch(html, /backends\.options|backends\.pools|valid ids/);
 });
 
+test('an unrelated refusal keeps the server detail even when the backend is unknown', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, {...DETAIL, backend: 'mock-backend'}),
+    '/api/sessions/s1/effective-prompt': jsonResponse(500, {detail: 'prompt assembly failed: template missing'}),
+  });
+  h.context.BACKEND_OPTIONS = {};
+  h.context.BACKEND_POOLS = [];
+
+  await h.context.openTaskContextModal('s1');
+
+  assert.match(h.body.innerHTML, /Next run context unavailable: prompt assembly failed: template missing/);
+  assert.doesNotMatch(h.body.innerHTML, /is not configured on this server/);
+});
+
 test('a configured backend keeps the server detail on a refused preview', async () => {
   const h = buildHarness({
     '/api/sessions/s1': jsonResponse(200, {...DETAIL, backend: 'synthetic'}),

@@ -2049,6 +2049,9 @@ mod tests {
     assert_eq!(row["id"], json!(meta.id));
     assert_eq!(row["name"], json!("falsy-row"));
     assert_eq!(row["profile"], json!("manager"));
+    // The waiting flag is a boolean on every page row, and the client reads it for the waiting marker, so a false
+    // flag stays in the row.
+    assert_eq!(row[HAS_WAITING_ITEMS], json!(false), "the page row carries the waiting flag as a boolean");
     // The page lists active sessions only, and the client reads an absent status as active.
     assert!(!row.contains_key("status"), "the page's rows carry the status its listing fixes");
     assert_eq!(

@@ -83,9 +83,7 @@ mod tests {
       backend_kwargs: serde_json::json!({"run_id": "worker-run"}).as_object().unwrap().clone(),
       ..LaunchArgs::default()
     };
-    AnthropicCompatibleFactory
-      .build(Some(&option(type_fields)), &cfg, launch)
-      .map_err(|error| format!("{error:#}"))
+    AnthropicCompatibleFactory.build(Some(&option(type_fields)), &cfg, launch).map_err(|error| format!("{error:#}"))
   }
 
   // The option's effort reaches the claude command as `--effort <value>`; an option without effort adds no flag.

@@ -280,8 +280,14 @@ mod tests {
   fn an_absent_login_is_the_empty_record_and_a_stored_one_reads_back() {
     let mut state = state_file::empty_state();
     assert_eq!(login_state(&state, "aws-sso").unwrap(), LoginState::default());
-    let approved =
-      LoginState { last_approved_at: Some("2026-11-18T08:16:29.928976+00:00".to_string()), ..Default::default() };
+    let approved = LoginState {
+      status: None,
+      detail: None,
+      last_check_at: None,
+      last_approved_at: Some("2026-11-18T08:16:29.928976+00:00".to_string()),
+      last_attempt: None,
+      link_match: None,
+    };
     change_login(&mut state, "aws-sso", |record| *record = approved.clone()).unwrap();
     assert_eq!(login_state(&state, "aws-sso").unwrap(), approved);
     assert_eq!(login_state(&state, "other").unwrap(), LoginState::default());
@@ -314,13 +320,27 @@ mod tests {
 
   #[test]
   fn a_host_bound_record_stores_no_check_fields() {
-    let record = LoginState { last_approved_at: Some("2026-11-18T08:16:29+00:00".to_string()), ..Default::default() };
+    let record = LoginState {
+      status: None,
+      detail: None,
+      last_check_at: None,
+      last_approved_at: Some("2026-11-18T08:16:29+00:00".to_string()),
+      last_attempt: None,
+      link_match: None,
+    };
     assert_eq!(serde_json::to_value(&record).unwrap(), json!({"last_approved_at": "2026-11-18T08:16:29+00:00"}));
   }
 
   #[test]
   fn a_passing_check_clears_the_stored_link_result_and_a_needing_one_keeps_it() {
-    let mut record = LoginState { link_match: Some(LinkMatch::Fail), ..Default::default() };
+    let mut record = LoginState {
+      status: None,
+      detail: None,
+      last_check_at: None,
+      last_approved_at: None,
+      last_attempt: None,
+      link_match: Some(LinkMatch::Fail),
+    };
     settle_check(&mut record, LoginStatus::NeedsUser, "not logged in".to_string(), "2026-11-18T16:00:00+00:00".into());
     assert_eq!(record.link_match, Some(LinkMatch::Fail), "a check that needs approval keeps the link result");
     settle_check(&mut record, LoginStatus::Ok, "valid".to_string(), "2026-11-18T16:05:00+00:00".into());

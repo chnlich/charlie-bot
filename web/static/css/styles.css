@@ -266,6 +266,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The Set Group dialog's field sits on a slate-700 fill. slate-500 renders 2.18:1 there and slate-400
    4.04:1, both under the 4.5:1 floor for the 14 px hint. slate-300 renders 6.97:1. */
 #new-group-input::placeholder { color: #cbd5e1; }
+/* The Move under picker's search field carries the same slate-700 fill, and its placeholder would take
+   the preflight gray-400: 4.08:1, under the 4.5:1 floor for its 14 px text. slate-300 renders 6.97:1
+   there, the tone the New group name field keeps. */
+#session-move-overlay input::placeholder { color: #cbd5e1; }
 /* A file link the server found nothing at. Sits next to the link it belongs to, and reads as a
    warning without hiding the link, which stays clickable. */
 .file-link-missing {

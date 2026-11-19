@@ -397,11 +397,21 @@ named scenario: the default run does not include it, and it takes its own repeti
   requests whose transfer overlapped the answer's, by count and `transferSize`, with the status polls counted apart.
 - **broadcast**: as idle, and after each query's first paint one window of `broadcast.windowMs` runs. The bench renames
   its background session at `k × windowMs / changesPerWindow` for k = 0 … 18, so the server broadcasts 19 changes in the
-  window. Each broadcast makes the page refetch the open query (`web/static/js/websocket-handlers.js`), and an answer
-  whose generation a newer refetch has overtaken is discarded unpainted (`web/static/js/sidebar/filters.js`). The window
-  records its renames, the `task_tree_changed` frames it received, and the answers and renders in its accounting span,
-  which runs from the first paint until the page is idle. Its `discarded` is the answers that ended in the span minus
-  the search renders in it.
+  window. Each broadcast makes the page call `handleSidebarSearch` for the open query (`refetchSessionList` in
+  `web/static/js/websocket-handlers.js`), and an answer whose generation a newer refetch has overtaken is discarded
+  unpainted (`web/static/js/sidebar/filters.js`). The window's accounting span runs from the first paint until the page
+  is idle and `windowSettleMs` has passed. Its fields:
+  - `task_tree_changed_frames`: the frames the bench's socket proxy received in the window; `renames`: the renames sent.
+  - `refetch_calls`: the page's search refetches that began in the span; `search_fetches`: the search requests that began
+    in it.
+  - `answers`: the search responses that ended in the span, and `answer_wire_bytes`, their `transferSize`. A response
+    the server answers `304` (unchanged body, `rust/crates/app/server/src/etag.rs`) has its headers as its `transferSize`
+    and its body from the browser's cache, so the wire bytes are the `transferSize`, not the `encodedBodySize`.
+  - `answer_paints`: the search renders in the span that painted an answer. A repaint redraws the list's last paint with
+    the same `sessions` object, so it is counted as `repaints` and not as a paint.
+  - `discarded` = `answers − answer_paints`: the responses that ended and did not paint. The run stops if the paints
+    exceed the answers, since every paint belongs to an answer that ended.
+  - `status_polls`, `status_bytes`, `bytes_by_path`: the requests that began in the span, as in the idle variant.
 
 The constants are `SEARCH` in `profile.mjs`. Each row states its source:
 
@@ -410,6 +420,7 @@ The constants are `SEARCH` in `profile.mjs`. Each row states its source:
 | `queries` | sidebar, plan, cron, hydeogen | the queries the search view types |
 | `repetitions` | 3 | per query and variant |
 | `clearSettleMs`, `loadSettleMs` | 2500, 4000 | the waits browser_search.js takes between searches and after the load |
+| `windowSettleMs` | 1000 | the view's own wait: the last answer's render and paint follow its response's end, and the drain's idle check does not wait for them |
 | `liveBeforeBodyBytes` | sidebar 116645.5, plan 66574, cron 60003, hydeogen 1887 | the median `encodedBodySize` of each query's search answer in the live before captures on the live release e8d6bc82: `browser_fast.json` (sidebar and plan, 5 runs each), `browser_slow.json` (sidebar and plan, 2 each), `browser_slow2.json` (sidebar 3, cron 3), `browser_slow_hydeogen.json` (hydeogen 2), in `~/scripts/20261119_sidebar_search_slow/` |
 | `bodyToleranceShare` | 0.1 | the view's acceptance: a checked query's median body lies within 10 % of its live body |
 | `checkedQueries` | sidebar, plan, cron | hydeogen is reported without a check |
@@ -441,11 +452,13 @@ hydeogen row is its measure. The run's own JSON has the measured medians and the
 table prints the same comparison.
 
 **Output.** `side.search` in the side JSON holds `records` (one per query, variant and repetition), `summary` (medians over
-the repetitions, the body check, and for broadcast the discards, renames, frames and status bytes of the windows), and the
+the repetitions, the body check, and for broadcast the discards, renames, frames, search fetches and status bytes of the
+windows), and the
 constants the run measured against. The run prints one table, `search view:`, after the side's table.
 
 The search view's tests are `search.test.mjs`: the window's offsets (19 renames, all inside the window), the e2e and overlap
-sums, the body check at its boundary, and the summary's medians and discard totals.
+sums, the body check at its boundary, the summary's medians and discard totals, the discard guard, and the page scripts'
+accounting (repaints apart from paints, and the span's counts) run in a sandbox whose globals stand in for the page's.
 
 ## Host requirements
 

@@ -172,6 +172,9 @@ export const SEARCH = Object.freeze({
   clearSettleMs: 2500,
   // The page's settle after its first load, before the first query (browser_search.js: 4 s).
   loadSettleMs: 4000,
+  // The wait after a broadcast window's drain, before its span is read: the last answer's render and paint follow the
+  // end of its response by a few frames, and the drain's idle check does not wait for them.
+  windowSettleMs: 1000,
   // The live before capture: the median `encodedBodySize` of each query's search response on the release that the
   // search fix starts from, over the browser captures browser_fast.json, browser_slow.json, browser_slow2.json and
   // browser_slow_hydeogen.json (sidebar 10 runs, plan 7, cron 3, hydeogen 9). The README names them.

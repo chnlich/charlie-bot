@@ -11,8 +11,9 @@
 // The broadcast variant also runs a window from the query's first paint. For the window the bench renames its background
 // session at SEARCH.broadcast's rate, and the server broadcasts each rename as task_tree_changed. Each broadcast makes the
 // page refetch the open query, and an answer whose generation a newer refetch has overtaken is discarded unpainted. The
-// window's accounting runs from the first paint until every answer the broadcasts started has ended, and it counts the
-// answers that ended there, the renders, and their difference: the discards.
+// window's accounting runs from the first paint until the page is idle. It counts the refetches the broadcasts caused,
+// the answers that ended there, the answers that painted (a repaint of the list's last paint is not one), and the
+// discards: the answers that ended and did not paint.
 
 import { SEARCH } from './profile.mjs';
 import { percentile } from './report.mjs';
@@ -41,12 +42,23 @@ const PAGE_INIT_SCRIPT = `(() => {
   }, true);
 })();`;
 
-// Runs once the page's scripts are in place: wraps the list's render, so each render and its paint is recorded.
-const WRAP_RENDER_SCRIPT = `(() => {
+// Runs once the page's scripts are in place. It wraps the list's render, so each render and its paint is recorded. A
+// repaint draws the list's last paint again with the same `sessions` object, so it is marked and is not an answer's
+// paint. It also wraps the search refetch, so each refetch a broadcast causes is recorded.
+export const WRAP_RENDER_SCRIPT = `(() => {
   window.__searchRenders = [];
+  window.__refetchCalls = [];
+  let lastSessions = null;
   const render = window.renderSessionList;
   window.renderSessionList = function (sessions, filter) {
-    const record = { filter, rows: sessions.length, t0: performance.now(), wall0: Date.now() };
+    const record = {
+      filter,
+      rows: sessions.length,
+      repaint: sessions === lastSessions,
+      t0: performance.now(),
+      wall0: Date.now(),
+    };
+    lastSessions = sessions;
     const out = render.apply(this, arguments);
     record.t1 = performance.now();
     window.__searchRenders.push(record);
@@ -56,6 +68,11 @@ const WRAP_RENDER_SCRIPT = `(() => {
     }, 0));
     return out;
   };
+  const refetch = window.handleSidebarSearch;
+  window.handleSidebarSearch = function (query) {
+    window.__refetchCalls.push(Date.now());
+    return refetch.apply(this, arguments);
+  };
 })()`;
 
 // The answer to the query typed after input `inputIndex`, once it has painted after render `renderIndex`; null until then.
@@ -64,7 +81,7 @@ const READ_ANSWER_SCRIPT = `(function (query, inputIndex, renderIndex) {
   const input = window.__searchInputs[inputIndex];
   if (!input) return null;
   const render = window.__searchRenders.slice(renderIndex)
-    .find((r) => r.filter === 'search' && r.t0 > input.t && r.paint !== undefined);
+    .find((r) => r.filter === 'search' && !r.repaint && r.t0 > input.t && r.paint !== undefined);
   if (!render) return null;
   const name = '${SEARCH_PATH}?q=' + encodeURIComponent(query);
   const entries = performance.getEntriesByType('resource');
@@ -84,9 +101,11 @@ const READ_ANSWER_SCRIPT = `(function (query, inputIndex, renderIndex) {
   };
 })`;
 
-// The page's view of the wall-clock span [start, end): the search renders that began in it, the search answers that
-// ended in it, and the bytes of every request that began in it, by path with the ids replaced.
-const READ_SPAN_SCRIPT = `(function (start, end) {
+// The page's view of the wall-clock span [start, end): the refetches the broadcasts caused, the search requests that began
+// in it, the search answers that ended in it with their wire bytes, the search renders that began in it (answer paints
+// and repaints apart), and the bytes of every request that began in it, by path with the ids replaced. A 304 answer's
+// transferSize is its headers only; its body is the browser's cached copy, so the wire bytes are the transferSize.
+export const READ_SPAN_SCRIPT = `(function (start, end) {
   const wall = (time) => performance.timeOrigin + time;
   const inSpan = (time) => time >= start && time < end;
   const entries = performance.getEntriesByType('resource');
@@ -98,10 +117,14 @@ const READ_SPAN_SCRIPT = `(function (start, end) {
     bytesByPath[path] = (bytesByPath[path] || 0) + entry.transferSize;
   }
   const polls = started.filter((e) => new URL(e.name).pathname === '${STATUS_PATH}');
+  const renders = window.__searchRenders.filter((r) => r.filter === 'search' && inSpan(r.wall0));
   return {
-    renders: window.__searchRenders.filter((r) => r.filter === 'search' && inSpan(r.wall0)).length,
+    refetch_calls: window.__refetchCalls.filter((time) => inSpan(time)).length,
+    search_fetches: started.filter((e) => e.name.includes('${SEARCH_PATH}?')).length,
     answers: answers.length,
-    answer_body_bytes: answers.reduce((sum, e) => sum + e.encodedBodySize, 0),
+    answer_wire_bytes: answers.reduce((sum, e) => sum + e.transferSize, 0),
+    answer_paints: renders.filter((r) => !r.repaint).length,
+    repaints: renders.filter((r) => r.repaint).length,
     status_polls: polls.length,
     status_bytes: polls.reduce((sum, e) => sum + e.transferSize, 0),
     bytes_by_path: bytesByPath,
@@ -169,6 +192,7 @@ async function broadcastWindow(ctx, tab, tabs, firstPaintWall) {
     .filter((frame) => frame.type === 'task_tree_changed' && frame.at >= firstPaintWall && frame.at < windowEnd).length;
   const sent = await renames;
   await tabs.waitIdle(DRAIN_TIMEOUT_MS);
+  await sleep(SEARCH.windowSettleMs);
   const settledWall = Date.now();
   const span = await tab.evaluate(`(${READ_SPAN_SCRIPT})(${firstPaintWall}, ${settledWall})`);
   return {
@@ -176,14 +200,18 @@ async function broadcastWindow(ctx, tab, tabs, firstPaintWall) {
     span_ms: settledWall - firstPaintWall,
     renames: sent,
     task_tree_changed_frames: frames,
-    answers: span.answers,
-    renders: span.renders,
-    discarded: span.answers - span.renders,
-    answer_body_bytes: span.answer_body_bytes,
-    status_polls: span.status_polls,
-    status_bytes: span.status_bytes,
-    bytes_by_path: span.bytes_by_path,
+    ...span,
+    discarded: windowDiscards(span),
   };
+}
+
+// A window's discards: the answers that ended in its span and did not paint. Every paint in the span belongs to an answer
+// that ended in it, so more paints than answers is an accounting fault, and the run stops on it.
+export function windowDiscards(span) {
+  if (span.answer_paints > span.answers) {
+    throw new Error(`the window painted ${span.answer_paints} answers but only ${span.answers} ended in its span`);
+  }
+  return span.answers - span.answer_paints;
 }
 
 // One query's record from its answer: the e2e time, the body and wire bytes, and the overlap.
@@ -252,6 +280,7 @@ export function summarizeSearch(records) {
         row.discarded_median = median(windows.map((window) => window.discarded));
         row.renames_median = median(windows.map((window) => window.renames));
         row.frames_median = median(windows.map((window) => window.task_tree_changed_frames));
+        row.fetches_median = median(windows.map((window) => window.search_fetches));
         row.window_status_bytes_median = median(windows.map((window) => window.status_bytes));
       }
       rows.push(row);
@@ -309,7 +338,7 @@ export function formatSearch(search) {
   const bytes = (value) => (value === null ? '-' : `${Math.round(value)}`);
   const seconds = (value) => (value === null ? '-' : (value / 1000).toFixed(2));
   const header = ['variant', 'query', 'reps', 'e2e s', 'body B', 'live B', 'delta', 'check', 'overlap B', 'status B',
-    'discards', 'renames', 'frames'];
+    'discards', 'renames', 'frames', 'fetches'];
   const lines = [
     `search view: ${SEARCH.repetitions} repetitions per query; body check ±${SEARCH.bodyToleranceShare * 100}% of the ` +
       'live before body on sidebar, plan and cron (hydeogen reported only)',
@@ -330,6 +359,7 @@ export function formatSearch(search) {
       row.variant === 'broadcast' ? `${row.discarded_total} total` : '-',
       row.variant === 'broadcast' ? bytes(row.renames_median) : '-',
       row.variant === 'broadcast' ? bytes(row.frames_median) : '-',
+      row.variant === 'broadcast' ? bytes(row.fetches_median) : '-',
     ];
     lines.push(cells.map((cell) => cell.padEnd(10)).join(' ').trimEnd());
   }

@@ -1,9 +1,9 @@
 //! API list prices: the standard per-token rates, in USD per million tokens, of the models the usage ledger and the
 //! Codex backend name. This module owns every per-token rate in the repository.
 //!
-//! A row holds the provider's published standard rate in effect on its `read_on` day. Promotions, free periods,
-//! off-peak discounts and batch or flex tiers are not rates here. Where a provider prices a long prompt higher, the row
-//! takes the base tier, because the ledger keeps no prompt length.
+//! A row holds the provider's published standard list rate. Promotions and free-period rates are excluded, even when
+//! in effect on the `read_on` day, as are off-peak discounts and batch or flex tiers. Where a provider prices a long
+//! prompt higher, the row takes the base tier, because the ledger keeps no prompt length.
 //!
 //! The ledger keeps four token categories: uncached input, cache read (the provider's cached input), cache write and
 //! output. A row's comment states the rule for a category the ledger merges with another the provider prices
@@ -135,7 +135,7 @@ static LIST_PRICES: &[ListPrice] = &[
     source_url: ANTHROPIC,
     read_on: READ_ON,
   },
-  // Google's standard paid tier text, image and video rates. Flash's introductory price ends 2026-12-31; Argon and
+  // Google's standard paid tier has one input rate. Flash's introductory price ends 2026-12-31; Argon and
   // Carbon's ends 2026-11-30. Context-cache storage is excluded, and no cache-write rate is published.
   ListPrice {
     model: "gemini-3.8-flash",

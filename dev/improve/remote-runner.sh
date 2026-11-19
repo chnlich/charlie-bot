@@ -326,7 +326,8 @@ round_is_live() {
   return 1
 }
 
-# Whether a process's command line names this launch id as an argument.
+# Whether a process's command line names this launch id as an argument. The launcher heartbeat holds it from before
+# `--prepare` until the wrapper finishes, so a concurrent start cannot sweep this launch's prepared credential.
 launch_is_referenced() {
   local launch=$1 proc argument
   local -a arguments=()
@@ -507,6 +508,16 @@ check_runner_directory() {
   [[ $(stat -c %u -- "$path") == "$(id -u)" ]] || fail 1 "$path is not owned by the runner's user"
 }
 
+# Validate an existing Codex path before a start sweep can remove auth.json through it. A missing path is made by the
+# runner after this check; a dangling symbolic link still fails the -L check.
+check_existing_runner_directory() {
+  local path=$1
+  [[ ! -L $path ]] || fail 1 "$path is a symbolic link, so the round does not write its Codex login under it"
+  if [[ -e $path ]]; then
+    check_runner_directory "$path"
+  fi
+}
+
 # The round's Codex home: the auth.json of this round's member-credential record, mode 600, in a directory this
 # round creates. The directory stays after the round; the round's auth.json goes when the round ends.
 prepare_codex_home() {
@@ -603,7 +614,10 @@ export TMPDIR="$ROUND_TMPDIR"
 export IMPROVE_LAUNCH_DIR="$LAUNCH_DIR"
 export IMPROVE_DIRECTION="$direction"
 export PATH="$RUNNER_ROOT/bin:$HOME_DIR/.local/bin:$HOME_DIR/.cargo/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
+check_existing_runner_directory "$ROUND_TMP"
 mkdir -p -- "$ROUND_ROOT/evidence" "$ROUND_ROOT/clc-sessions" "$ROUND_TMP" "$ROUND_TMPDIR" "$ROUND_HOME" "$CLAUDE_CONFIG_DIR"
+check_runner_directory "$ROUND_TMP"
+check_existing_runner_directory "$CODEX_HOME_TARGET"
 if [[ ! -e $ROUND_ROOT/memory-peaks.tsv ]]; then
   printf 'launch\tmemory_peak_bytes\n' >"$ROUND_ROOT/memory-peaks.tsv"
 fi

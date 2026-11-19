@@ -115,9 +115,15 @@ impl Hash for ListingOverlay {
 /// A page polls one row set every few seconds, and its URL names the ids in one canonical order, so the string
 /// repeats while the view holds. Parsing it costs one allocation per id and one hash-set entry per id, and the key
 /// then hashes every id again; a repeat poll reads the list this memo kept instead.
-static NAMED_ID_SETS: LazyLock<Mutex<LruCache<String, Arc<Vec<String>>>>> = LazyLock::new(|| {
-  Mutex::new(LruCache::new(NonZeroUsize::new(NAMED_ID_SET_MEMO_LIMIT).expect("the id memo limit is nonzero")))
-});
+///
+/// The entries are found by comparing the request's own value, most recently served first, rather than by hashing
+/// it: the value runs to a few kilobytes, and comparing those bytes reaches the entry sooner than hashing them does.
+/// The cap is small, so a repeat poll meets its own entry first and a new value meets at most
+/// [`NAMED_ID_SET_MEMO_LIMIT`].
+static NAMED_ID_SETS: LazyLock<Mutex<Vec<NamedIdSet>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// One kept parse: the `ids` value a request sent, and the id list it parsed to.
+type NamedIdSet = (String, Arc<Vec<String>>);
 
 /// The cap on the `ids` strings the parse memo keeps, larger than the answer memo's because a page alternates a few
 /// row sets and each keeps its own parse.
@@ -175,11 +181,14 @@ impl IdSet {
   fn of(raw: Option<&str>) -> Self {
     let Some(raw) = raw else { return Self::empty() };
     let mut memo = NAMED_ID_SETS.lock().expect("named id set memo mutex is not poisoned");
-    if let Some(ids) = memo.get(raw) {
-      return Self(Arc::clone(ids));
+    if let Some(index) = memo.iter().position(|(kept, _)| kept == raw) {
+      let (kept, ids) = memo.remove(index);
+      memo.insert(0, (kept, Arc::clone(&ids)));
+      return Self(ids);
     }
     let ids = Arc::new(sorted_unique(parse_session_ids(raw)));
-    memo.put(raw.to_string(), Arc::clone(&ids));
+    memo.insert(0, (raw.to_string(), Arc::clone(&ids)));
+    memo.truncate(NAMED_ID_SET_MEMO_LIMIT);
     Self(ids)
   }
 

@@ -7,6 +7,9 @@ use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, Tra
 use super::translate::GeminiTranslator;
 use charliebot_agents::cli_base::{framed_prompt, strip_google_api_keys};
 
+/// Gemini appends this short query to the prompt text it reads from stdin.
+const STDIN_PROMPT_QUERY: &str = "Follow the task prompt supplied on stdin.";
+
 /// The `gemini` stream-json backend of one launch.
 pub struct GeminiBackend {
   gemini_bin: String,
@@ -28,15 +31,15 @@ impl GeminiBackend {
     }
   }
 
-  /// The stream-json command. The prompt follows `-p` as one argv element, so a prompt that begins with a dash stays
-  /// a prompt. Gemini has no system-prompt flag, so the instructions are framed into the prompt.
-  fn argv(&self, prompt: &str) -> Vec<String> {
+  /// The stream-json command. Gemini reads the framed prompt from stdin as context, and `-p` supplies only a short
+  /// instruction to follow that context.
+  fn argv(&self) -> Vec<String> {
     let mut command = vec![
       self.gemini_bin.clone(),
       "-m".to_string(),
       self.model.clone(),
       "-p".to_string(),
-      framed_prompt(self.instructions_content.as_deref(), prompt),
+      STDIN_PROMPT_QUERY.to_string(),
       "-o".to_string(),
       "stream-json".to_string(),
       "-y".to_string(),
@@ -59,8 +62,8 @@ impl AgentBackend for GeminiBackend {
     Ok(())
   }
 
-  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
-    Ok(self.argv(prompt))
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    Ok(self.argv())
   }
 
   /// The environment with the Google API keys stripped, so the CLI bills through its OAuth login.
@@ -68,8 +71,8 @@ impl AgentBackend for GeminiBackend {
     Ok(strip_google_api_keys(&env))
   }
 
-  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
-    None
+  fn stdin_prompt(&self, prompt: &str) -> Option<String> {
+    Some(framed_prompt(self.instructions_content.as_deref(), prompt))
   }
 
   fn translator(&self) -> Box<dyn Translate> {
@@ -90,7 +93,7 @@ mod tests {
   }
 
   #[test]
-  fn argv_frames_the_instructions_and_splices_the_resume_and_extra_flags() {
+  fn argv_splices_the_resume_and_extra_flags_and_has_a_small_stdin_query() {
     let backend = backend(LaunchArgs {
       extra_flags: vec!["--approval-mode".to_string(), "yolo".to_string()],
       buffer_limit: None,
@@ -108,7 +111,7 @@ mod tests {
       "-m",
       "gemini-test-model",
       "-p",
-      "<system-instructions>\nUse concise answers.\n</system-instructions>\n\nHello",
+      STDIN_PROMPT_QUERY,
       "-o",
       "stream-json",
       "-y",
@@ -118,37 +121,73 @@ mod tests {
       "--approval-mode",
       "yolo",
     ];
-    assert_eq!(backend.argv("Hello"), expected);
+    assert_eq!(backend.argv(), expected);
+    assert_eq!(
+      AgentBackend::stdin_prompt(&backend, "Hello").as_deref(),
+      Some("<system-instructions>\nUse concise answers.\n</system-instructions>\n\nHello")
+    );
   }
 
   #[test]
-  fn a_dash_prefixed_prompt_stays_the_value_of_p() {
-    assert_eq!(
-      backend(LaunchArgs {
-        extra_flags: Vec::new(),
-        buffer_limit: None,
-        instructions_content: None,
-        instructions_file: None,
-        resume_session_id: None,
-        log_dir: None,
-        cgroup_session_id: None,
-        remote_launch: None,
-        backend_kwargs: serde_json::Map::new(),
-        manager_turn: false,
-      })
-      .argv("--watch-pid only local"),
-      [
-        "/usr/bin/gemini",
-        "-m",
-        "gemini-test-model",
-        "-p",
-        "--watch-pid only local",
-        "-o",
-        "stream-json",
-        "-y",
-        "--sandbox=false",
-      ]
-    );
+  fn a_200_kib_prompt_uses_stdin_and_no_argv_element_carries_it() {
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let prompt = "\u{fc}".repeat(100 * 1024);
+    let backend = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
+    });
+    let argv = AgentBackend::build_command(&backend, &prompt).unwrap();
+    assert_eq!(argv[3], "-p");
+    assert_eq!(argv[4], STDIN_PROMPT_QUERY);
+    assert!(argv.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "{argv:?}");
+    assert!(argv.iter().all(|argument| !argument.contains(&prompt)), "{argv:?}");
+    assert_eq!(AgentBackend::stdin_prompt(&backend, &prompt).as_deref(), Some(prompt.as_str()));
+  }
+
+  /// A 200 KiB prompt reaches the launcher stub unchanged on stdin, and no argv element exceeds 128 KiB.
+  #[ignore = "integration"]
+  #[test]
+  fn a_200_kib_prompt_reaches_the_child_on_stdin_unchanged() {
+    use std::fs;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let root = tempfile::tempdir().unwrap();
+    let argv_file = root.path().join("argv");
+    let prompt_file = root.path().join("prompt");
+    let stub = root.path().join("gemini");
+    fs::write(&stub, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_CAPTURE\"\ncat > \"$PROMPT_CAPTURE\"\n").unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    let backend = GeminiBackend::from_launch(stub.display().to_string(), "gemini-test-model", LaunchArgs::default());
+    let prompt = "\u{fc}".repeat(100 * 1024);
+    let argv = AgentBackend::build_command(&backend, &prompt).unwrap();
+    let stdin_prompt = AgentBackend::stdin_prompt(&backend, &prompt).unwrap();
+    let mut child = Command::new(&argv[0])
+      .args(&argv[1..])
+      .env("ARGV_CAPTURE", &argv_file)
+      .env("PROMPT_CAPTURE", &prompt_file)
+      .stdin(Stdio::piped())
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()
+      .unwrap();
+    child.stdin.take().unwrap().write_all(stdin_prompt.as_bytes()).unwrap();
+    assert!(child.wait().unwrap().success());
+
+    let arguments: Vec<String> = fs::read_to_string(argv_file).unwrap().lines().map(str::to_string).collect();
+    assert!(arguments.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "{arguments:?}");
+    assert!(arguments.iter().all(|argument| !argument.contains(&prompt)), "{arguments:?}");
+    assert_eq!(fs::read_to_string(prompt_file).unwrap(), prompt);
   }
 
   #[test]

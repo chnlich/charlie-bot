@@ -967,6 +967,7 @@ dependencies = [
  "charliebot-registry",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "tracing",
 ]
 

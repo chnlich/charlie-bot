@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -77,6 +80,8 @@ pub struct CodexBackend {
   extra_flags: Vec<String>,
   instructions_content: Option<String>,
   instructions_file: Option<PathBuf>,
+  instructions_profile_name: Option<String>,
+  instructions_profile_file: Mutex<Option<DeveloperInstructionsProfileFile>>,
   manager_turn: bool,
   resume_session_id: Option<String>,
 }
@@ -97,6 +102,8 @@ impl CodexBackend {
       .into_string()
       .map_err(|path| anyhow::anyhow!("the codex binary path is not valid Unicode: {}", Path::new(&path).display()))?;
     let manager_turn = launch.manager_turn;
+    let instructions_profile_name =
+      launch.instructions_file.as_ref().map(|_| format!("charliebot-{}", uuid::Uuid::new_v4().simple()));
     Ok(Self {
       model: model.to_string(),
       codex_bin,
@@ -108,23 +115,25 @@ impl CodexBackend {
       extra_flags: launch.extra_flags,
       instructions_content: launch.instructions_content,
       instructions_file: launch.instructions_file,
+      instructions_profile_name,
+      instructions_profile_file: Mutex::new(None),
       manager_turn,
       resume_session_id: launch.resume_session_id.filter(|id| !id.is_empty()),
     })
   }
 
-  /// The `--config` pair that carries a worker or review run's instructions. A manager turn carries none.
+  /// The config profile that carries a worker or review run's instructions. A manager turn carries none.
   ///
-  /// `developer_instructions` takes the instructions text. `project_doc_fallback_filenames` lets Codex read the
-  /// repository's CLAUDE.md when its worktree has no AGENTS.md.
+  /// The profile keeps the developer instructions in their original role without putting their text in argv.
+  /// `project_doc_fallback_filenames` lets Codex read the repository's CLAUDE.md when its worktree has no AGENTS.md.
   fn instructions_config_args(&self) -> anyhow::Result<Vec<String>> {
     if self.instructions_file.is_none() {
       return Ok(Vec::new());
     }
-    let content = self.instructions_content.as_deref().map(toml_string_value).unwrap_or_else(|| "null".to_string());
+    let profile_name = self.instructions_profile_name.as_ref().context("Codex instructions profile has no name")?;
     Ok(vec![
-      "--config".to_string(),
-      format!("developer_instructions={content}"),
+      "--profile".to_string(),
+      profile_name.clone(),
       "--config".to_string(),
       format!(r#"project_doc_fallback_filenames=["{CLAUDE_INSTRUCTIONS_FILE_NAME}"]"#),
     ])
@@ -186,6 +195,40 @@ impl CodexBackend {
   fn prepare_env(&self, mut env: Env) -> Env {
     prepend_path_dir(&mut env, &self.user_local_bin);
     env
+  }
+
+  /// Writes the Codex profile under the child environment's CODEX_HOME so `--profile` reads the full instructions.
+  fn prepare_instructions_profile(&self, env: &Env) -> anyhow::Result<()> {
+    let Some(profile_name) = &self.instructions_profile_name else { return Ok(()) };
+    let home = codex_home(env)?;
+    let path = home.join(format!("{profile_name}.config.toml"));
+    let mut profile = self.instructions_profile_file.lock().expect("Codex instructions profile lock is not poisoned");
+    if let Some(existing) = profile.as_ref() {
+      if existing.path != path {
+        bail!(
+          "Codex instructions profile was prepared under {}, but the child CODEX_HOME resolves to {}",
+          existing.path.display(),
+          path.display()
+        );
+      }
+      return Ok(());
+    }
+
+    let instructions = self.instructions_content.as_deref().unwrap_or("null");
+    let contents = format!("developer_instructions = {}\n", toml_string_value(instructions));
+    let mut temporary = tempfile::Builder::new()
+      .prefix(".charliebot-codex-profile-")
+      .tempfile_in(&home)
+      .with_context(|| format!("creating a temporary Codex instructions profile under {}", home.display()))?;
+    temporary
+      .write_all(contents.as_bytes())
+      .with_context(|| format!("writing the temporary Codex instructions profile for {}", path.display()))?;
+    temporary
+      .persist_noclobber(&path)
+      .map_err(|error| error.error)
+      .with_context(|| format!("installing the temporary Codex instructions profile at {}", path.display()))?;
+    *profile = Some(DeveloperInstructionsProfileFile { path });
+    Ok(())
   }
 
   /// `codex exec --json` with the configured model and effort, for one prompt and no tools. Codex has no system-prompt
@@ -281,7 +324,9 @@ impl AgentBackend for CodexBackend {
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
-    Ok(CodexBackend::prepare_env(self, env))
+    let env = CodexBackend::prepare_env(self, env);
+    self.prepare_instructions_profile(&env)?;
+    Ok(env)
   }
 
   fn stdin_prompt(&self, prompt: &str) -> Option<String> {
@@ -313,6 +358,30 @@ pub fn toml_string_value(text: &str) -> String {
   let mut value = String::new();
   text.serialize(toml::ser::ValueSerializer::new(&mut value)).expect("a string serializes as a TOML value");
   value
+}
+
+/// The Codex home the child reads profiles from, following its CODEX_HOME then HOME/.codex resolution.
+fn codex_home(env: &Env) -> anyhow::Result<PathBuf> {
+  match env.get("CODEX_HOME") {
+    Some(home) => Ok(PathBuf::from(home)),
+    None => env
+      .get("HOME")
+      .map(|home| Path::new(home).join(".codex"))
+      .context("the Codex child environment has neither CODEX_HOME nor HOME"),
+  }
+}
+
+/// A per-run Codex profile, removed when its backend is dropped.
+struct DeveloperInstructionsProfileFile {
+  path: PathBuf,
+}
+
+impl Drop for DeveloperInstructionsProfileFile {
+  fn drop(&mut self) {
+    if let Err(error) = fs::remove_file(&self.path) {
+      tracing::warn!(target: "charliebot_agents", path = %self.path.display(), error = %error, "codex_profile_remove_failed");
+    }
+  }
 }
 
 /// The assistant text, the first structured error and the exit code: the first two read from the one-shot's stdout
@@ -437,7 +506,10 @@ mod tests {
   }
 
   #[test]
-  fn instructions_file_without_content_serializes_none_as_toml_null() {
+  fn instructions_file_without_content_keeps_the_null_text_in_a_profile() {
+    let root = tempfile::tempdir().unwrap();
+    let codex_home = root.path().join(".codex");
+    fs::create_dir(&codex_home).unwrap();
     let launch =
       LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
     let backend = CodexBackend::from_launch(
@@ -449,7 +521,64 @@ mod tests {
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
-    assert!(backend.build_command().unwrap().contains(&"developer_instructions=null".to_string()));
+    let command = backend.build_command().unwrap();
+    let profile_index = command.iter().position(|argument| argument == "--profile").unwrap();
+    let profile_name = &command[profile_index + 1];
+    assert!(!command.iter().any(|argument| argument.contains("developer_instructions=")), "{command:?}");
+
+    AgentBackend::prepare_env(
+      &backend,
+      Env::from([
+        ("HOME".to_string(), root.path().to_string_lossy().into_owned()),
+        ("CODEX_HOME".to_string(), codex_home.display().to_string()),
+        ("PATH".to_string(), "/usr/bin".to_string()),
+      ]),
+    )
+    .unwrap();
+
+    let profile = fs::read_to_string(codex_home.join(format!("{profile_name}.config.toml"))).unwrap();
+    let decoded: toml::Table = toml::from_str(&profile).unwrap();
+    assert_eq!(decoded["developer_instructions"].as_str(), Some("null"));
+  }
+
+  #[test]
+  fn a_200_kib_developer_instruction_uses_a_profile_file_and_no_argv_element_carries_it() {
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let root = tempfile::tempdir().unwrap();
+    let codex_home = root.path().join(".codex");
+    fs::create_dir(&codex_home).unwrap();
+    let instructions = "\u{fc}".repeat(100 * 1024);
+    let backend = CodexBackend::from_launch(
+      PathBuf::from("/synthetic/bin/codex"),
+      Path::new("/synthetic/home/.local/bin"),
+      "gpt-5.5",
+      &CodexOptions::default(),
+      LaunchArgs {
+        instructions_content: Some(instructions.clone()),
+        instructions_file: Some(PathBuf::from("/synthetic/instructions.md")),
+        ..LaunchArgs::default()
+      },
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+    let command = backend.build_command().unwrap();
+    AgentBackend::prepare_env(
+      &backend,
+      Env::from([
+        ("HOME".to_string(), root.path().to_string_lossy().into_owned()),
+        ("CODEX_HOME".to_string(), codex_home.display().to_string()),
+        ("PATH".to_string(), "/usr/bin".to_string()),
+      ]),
+    )
+    .unwrap();
+
+    let profile_index = command.iter().position(|argument| argument == "--profile").unwrap();
+    let profile_name = &command[profile_index + 1];
+    let profile_path = codex_home.join(format!("{profile_name}.config.toml"));
+    let profile: toml::Table = toml::from_str(&fs::read_to_string(profile_path).unwrap()).unwrap();
+    assert!(command.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "{command:?}");
+    assert!(command.iter().all(|argument| !argument.contains(&instructions)), "{command:?}");
+    assert_eq!(profile["developer_instructions"].as_str(), Some(instructions.as_str()));
   }
 
   /// A prompt past Linux's per-argument limit reaches codex on stdin, and no argv element carries it. The check covers

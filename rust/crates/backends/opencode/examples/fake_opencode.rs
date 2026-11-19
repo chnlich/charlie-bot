@@ -360,8 +360,14 @@ fn run_once(settings: &Settings) {
   let data_home = PathBuf::from(std::env::var_os("XDG_DATA_HOME").expect("a one-shot sets XDG_DATA_HOME"));
   fs::create_dir_all(data_home.join("opencode/shell")).expect("the shell directory is created");
   let args: Vec<String> = std::env::args().skip(2).collect();
+  let prompt_file = args
+    .iter()
+    .position(|argument| argument == "--file")
+    .map(|index| args.get(index + 1).expect("--file is followed by its path"));
+  let prompt_file_text = prompt_file.map(|path| fs::read_to_string(path).expect("the attached prompt file reads"));
   settings.record(json!({
     "run_args": args,
+    "prompt_file_text": prompt_file_text,
     "xdg_data_home": data_home,
     "xdg_state_home": std::env::var("XDG_STATE_HOME").ok(),
     "xdg_cache_home": std::env::var("XDG_CACHE_HOME").ok(),

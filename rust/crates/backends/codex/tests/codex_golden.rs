@@ -564,10 +564,28 @@ fn check_argv(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec<
       "instructions_target": backend.instructions_target().map(|(file, event)| json!([file, event])),
     });
     let mut python_case = python_case.clone();
+    normalize_profile_instructions_arg(rust["argv"].as_array_mut().unwrap(), &fx.codex_home());
     normalize_developer_instructions_arg(rust["argv"].as_array_mut().unwrap());
     normalize_developer_instructions_arg(python_case["argv"].as_array_mut().unwrap());
     expect_eq(failures, &format!("argv {}", text(&case["id"])), &rust, &python_case);
   }
+}
+
+/// Convert the generated profile back to its equivalent config override for comparison with the recorded reference.
+fn normalize_profile_instructions_arg(argv: &mut Vec<Value>, codex_home: &Path) {
+  let Some(index) = argv.iter().position(|argument| argument.as_str() == Some("--profile")) else { return };
+  let profile_name = argv[index + 1].as_str().expect("the --profile value is text");
+  let profile_path = codex_home.join(format!("{profile_name}.config.toml"));
+  let profile: toml::Table = toml::from_str(&fs::read_to_string(profile_path).expect("the Codex profile reads"))
+    .expect("the Codex profile is valid TOML");
+  let instructions = profile["developer_instructions"].as_str().expect("the profile has developer instructions");
+  argv.splice(
+    index..=index + 1,
+    [
+      Value::String("--config".to_string()),
+      Value::String(format!("developer_instructions={}", serde_json::to_string(instructions).unwrap())),
+    ],
+  );
 }
 
 /// Codex parses the `developer_instructions` `-c` value as TOML, so compare the text it reads instead of quoting bytes.

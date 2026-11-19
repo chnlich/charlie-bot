@@ -1969,6 +1969,7 @@ async fn prompt_waits_for_an_earlier_interrupt_to_settle() {
 #[ignore = "integration"]
 #[tokio::test]
 async fn one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line() {
+  const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
   let harness = Harness::new(json!({
     "run_lines": [{"type": "text", "part": {"text": "  answer  "}}],
     "run_exit": 0
@@ -1983,13 +1984,20 @@ async fn one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line()
     SessionCgroupConfig::disabled(),
   );
   let empty_env = Env::new();
+  let prompt = "\u{fc}".repeat(100 * 1024);
   let answer =
-    backend.one_shot_text(&empty_env, "prompt", "system", Some(Duration::from_secs(3))).unwrap().await.unwrap();
+    backend.one_shot_text(&empty_env, &prompt, "system", Some(Duration::from_secs(3))).unwrap().await.unwrap();
   assert_eq!(answer, "answer");
   let first = harness.logs().into_iter().find(|entry| entry.get("run_args").is_some()).unwrap();
   let args = first["run_args"].as_array().unwrap();
   assert_eq!(args[0], "--standalone");
   assert!(args.iter().any(|argument| argument == "--standalone"));
+  assert!(args.iter().all(|argument| argument.as_str().unwrap().len() <= MAX_ARGUMENT_BYTES), "{args:?}");
+  assert!(args.iter().all(|argument| !argument.as_str().unwrap().contains(&prompt)), "{args:?}");
+  assert_eq!(
+    first["prompt_file_text"].as_str(),
+    Some(charliebot_agents::one_shot::frame_system_prompt("system", &prompt).as_str())
+  );
   let data = PathBuf::from(first["xdg_data_home"].as_str().unwrap());
   let state = PathBuf::from(first["xdg_state_home"].as_str().unwrap());
   let cache = PathBuf::from(first["xdg_cache_home"].as_str().unwrap());

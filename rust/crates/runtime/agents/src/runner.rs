@@ -261,11 +261,8 @@ impl AgentRunner {
       request.cgroup_config.clone(),
     );
     if transport == TransportKind::FinalStdout {
-      if stdin_prompt.is_some() {
-        bail!("a final-stdout backend takes its prompt in argv, not on stdin");
-      }
       drop(backend);
-      return self.run_final_stdout(request, &spec, &log_dir).await;
+      return self.run_final_stdout(request, &spec, &log_dir, stdin_prompt).await;
     }
     let gated = request.child_waits_for_spawn_callback;
     let (mut spawned, gate) = spawn::spawn_raw_log(
@@ -525,6 +522,7 @@ impl AgentRunner {
     request: RunRequest,
     spec: &SpawnSpec,
     log_dir: &Path,
+    stdin_prompt: Option<String>,
   ) -> anyhow::Result<RunOutcome> {
     let mut spec = final_stdout::prepare(spec, log_dir, &self.launch, request.final_stdout_supervisor.as_deref())?;
     if request.child_waits_for_spawn_callback {
@@ -534,14 +532,12 @@ impl AgentRunner {
       spec.args = args;
     }
     let gated = request.child_waits_for_spawn_callback;
-    let (mut spawned, gate) = spawn::spawn_raw_log(
-      &spec,
-      Path::new("/dev/null"),
-      &log_dir.join(STDERR_LOG_NAME),
-      RawStdin::Null,
-      move |child| gated.then(|| SpawnGate::arm(child)),
-    )
-    .await?;
+    let stdin_mode = if stdin_prompt.is_some() { RawStdin::Piped } else { RawStdin::Null };
+    let (mut spawned, gate) =
+      spawn::spawn_raw_log(&spec, Path::new("/dev/null"), &log_dir.join(STDERR_LOG_NAME), stdin_mode, move |child| {
+        gated.then(|| SpawnGate::arm(child))
+      })
+      .await?;
     if gate.is_some() {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
@@ -556,6 +552,16 @@ impl AgentRunner {
     if let Some(gate) = gate {
       gate.open()?;
     }
+    let stdin_task = match stdin_prompt {
+      Some(prompt) => {
+        let mut stdin = spawned.child.stdin.take().context("final-stdout agent stdin was not piped")?;
+        Some(tokio::spawn(async move {
+          stdin.write_all(prompt.as_bytes()).await?;
+          stdin.shutdown().await
+        }))
+      }
+      None => None,
+    };
     let cgroup = spawned.cgroup.take();
     let (sender, receiver) = watch::channel(None);
     tokio::spawn(reap_child(spawned.child, sender));
@@ -576,6 +582,7 @@ impl AgentRunner {
         hang_diagnostics: None,
       });
     }
+    let stdin_error = finish_stdin(stdin_task, request.cleanup_timeout, identity.pid).await.err();
     let observed_exit = wait_for_exit(&active, request.cleanup_timeout).await?;
     let outcome = final_stdout::materialize(self.backend.lock().await.as_mut(), log_dir, observed_exit)?;
     let process_exit_code = final_stdout::process_exit_code(log_dir, observed_exit)?;
@@ -609,6 +616,9 @@ impl AgentRunner {
     self.clear_active(&active);
     if let Some(guard_error) = outcome.guard_error {
       bail!(guard_error);
+    }
+    if let Some(error) = stdin_error {
+      return Err(error);
     }
     Ok(RunOutcome { exit_code: Some(outcome.exit_code), stderr_text, cgroup_exit_report, hang_diagnostics: None })
   }

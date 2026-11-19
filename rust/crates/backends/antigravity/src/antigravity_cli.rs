@@ -63,12 +63,13 @@ impl AntigravityBackend {
     }
   }
 
-  /// The `--print` command. The framed prompt is the value of `--print=`, one argv element, so a prompt that begins
-  /// with a dash stays a prompt.
-  fn argv(&self, prompt: &str) -> Vec<String> {
+  /// The headless command. Antigravity's text input format reads the framed prompt from stdin.
+  fn argv(&self) -> Vec<String> {
     let mut command = vec![
       self.agy_bin.clone(),
-      format!("--print={}", framed_prompt(self.instructions_content.as_deref(), prompt)),
+      "--print".to_string(),
+      "--input-format".to_string(),
+      "text".to_string(),
       "--print-timeout".to_string(),
       self.print_timeout.clone(),
       SKIP_PERMISSIONS_FLAG.to_string(),
@@ -175,16 +176,16 @@ impl AgentBackend for AntigravityBackend {
     Ok(())
   }
 
-  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
-    Ok(self.argv(prompt))
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    Ok(self.argv())
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
     Ok(self.child_env(env))
   }
 
-  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
-    None
+  fn stdin_prompt(&self, prompt: &str) -> Option<String> {
+    Some(framed_prompt(self.instructions_content.as_deref(), prompt))
   }
 
   fn translator(&self) -> Box<dyn Translate> {
@@ -272,7 +273,10 @@ mod tests {
     )
   }
 
-  async fn capture_run(root: &Path) -> anyhow::Result<(charliebot_agents::runner::RunOutcome, Vec<Value>)> {
+  async fn capture_run(
+    root: &Path,
+    prompt: &str,
+  ) -> anyhow::Result<(charliebot_agents::runner::RunOutcome, Vec<Value>)> {
     let runner = AgentRunner::new(
       "antigravity",
       Box::new(capture_backend(root)),
@@ -290,7 +294,7 @@ mod tests {
       },
     );
     let mut request = RunRequest::new(
-      "test".into(),
+      prompt.to_string(),
       root.to_path_buf(),
       AgentBaseEnvironment { values: charliebot_agents::gh_wrapper::stub_environment(root, "/bin:/usr/bin") },
       SessionCgroupConfig::disabled(),
@@ -326,7 +330,7 @@ mod tests {
   #[ignore = "subprocess server for restart tests"]
   fn capturing_server_subprocess_entry() {
     let root = std::env::var_os("CHARLIEBOT_TEST_AGY_ROOT").unwrap();
-    tokio::runtime::Runtime::new().unwrap().block_on(capture_run(Path::new(&root))).unwrap();
+    tokio::runtime::Runtime::new().unwrap().block_on(capture_run(Path::new(&root), "test")).unwrap();
   }
 
   async fn wait_until(mut condition: impl FnMut() -> bool) {
@@ -355,6 +359,26 @@ mod tests {
     fs::write(root.join("reply.json"), SUCCESS).unwrap();
     symlink(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/final_stdout_agy.sh"), root.join("agy"))
       .unwrap();
+  }
+
+  #[ignore = "integration"]
+  #[tokio::test]
+  async fn a_200_kib_prompt_reaches_agy_on_stdin_and_no_argv_element_carries_it() {
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let root = tempfile::tempdir().unwrap();
+    stage_capture(root.path());
+    fs::write(root.path().join("release"), "").unwrap();
+    let prompt = "\u{fc}".repeat(100 * 1024);
+
+    let (outcome, _) = capture_run(root.path(), &prompt).await.unwrap();
+
+    assert_eq!(outcome.exit_code, Some(0));
+    assert_eq!(fs::read(root.path().join("received_prompt")).unwrap(), prompt.as_bytes());
+    let context: Value =
+      serde_json::from_slice(&fs::read(root.path().join("logs/final_stdout.context.json")).unwrap()).unwrap();
+    let command = context["command"].as_array().unwrap();
+    assert!(command.iter().all(|argument| argument.as_str().unwrap().len() <= MAX_ARGUMENT_BYTES), "{command:?}");
+    assert!(command.iter().all(|argument| !argument.as_str().unwrap().contains(&prompt)), "{command:?}");
   }
 
   async fn cut_server(root: &Path) -> u32 {
@@ -410,7 +434,7 @@ mod tests {
     let uninterrupted = tempfile::tempdir().unwrap();
     stage_capture(uninterrupted.path());
     fs::write(uninterrupted.path().join("release"), "").unwrap();
-    let (expected, events) = capture_run(uninterrupted.path()).await.unwrap();
+    let (expected, events) = capture_run(uninterrupted.path(), "test").await.unwrap();
     let restarted = tempfile::tempdir().unwrap();
     stage_capture(restarted.path());
     let pid = cut_server(restarted.path()).await;
@@ -478,7 +502,7 @@ mod tests {
   }
 
   #[test]
-  fn argv_passes_the_prompt_as_the_print_value_and_splices_the_conversation() {
+  fn argv_uses_text_input_and_splices_the_conversation() {
     let resumed = backend(LaunchArgs {
       extra_flags: vec!["--sandbox".to_string()],
       buffer_limit: None,
@@ -493,7 +517,9 @@ mod tests {
     });
     let expected: Vec<&str> = vec![
       "/usr/bin/agy",
-      "--print=continue",
+      "--print",
+      "--input-format",
+      "text",
       "--print-timeout",
       "1h",
       "--dangerously-skip-permissions",
@@ -505,27 +531,33 @@ mod tests {
       "conv-abc",
       "--sandbox",
     ];
-    assert_eq!(resumed.argv("continue"), expected);
-    assert_eq!(
-      backend(LaunchArgs {
-        extra_flags: Vec::new(),
-        buffer_limit: None,
-        instructions_content: None,
-        instructions_file: None,
-        resume_session_id: None,
-        log_dir: None,
-        cgroup_session_id: None,
-        remote_launch: None,
-        backend_kwargs: Map::new(),
-        manager_turn: false,
-      })
-      .argv("--dash-prefixed prompt")[1],
-      "--print=--dash-prefixed prompt"
-    );
+    assert_eq!(resumed.argv(), expected);
   }
 
   #[test]
-  fn the_instructions_are_framed_into_the_print_value() {
+  fn a_200_kib_prompt_uses_stdin_and_no_argv_element_carries_it() {
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let prompt = "\u{fc}".repeat(100 * 1024);
+    let backend = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: Map::new(),
+      manager_turn: false,
+    });
+    let argv = AgentBackend::build_command(&backend, &prompt).unwrap();
+    assert!(argv.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "{argv:?}");
+    assert!(argv.iter().all(|argument| !argument.contains(&prompt)), "{argv:?}");
+    assert_eq!(AgentBackend::stdin_prompt(&backend, &prompt).as_deref(), Some(prompt.as_str()));
+  }
+
+  #[test]
+  fn the_instructions_are_framed_into_stdin() {
     let instructed = backend(LaunchArgs {
       extra_flags: Vec::new(),
       buffer_limit: None,
@@ -539,8 +571,8 @@ mod tests {
       manager_turn: false,
     });
     assert_eq!(
-      instructed.argv("do the work")[1],
-      format!("--print={}", frame_system_prompt("Build stuff.", "do the work"))
+      AgentBackend::stdin_prompt(&instructed, "do the work").as_deref(),
+      Some(frame_system_prompt("Build stuff.", "do the work").as_str())
     );
   }
 

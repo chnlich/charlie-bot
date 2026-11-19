@@ -1029,6 +1029,9 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   }
   let framed = charliebot_agents::one_shot::frame_system_prompt(&system, &prompt);
   let root = oneshot_root()?;
+  let prompt_file = root.path().join("launch-prompt.md");
+  fs::write(&prompt_file, framed)
+    .with_context(|| format!("writing the opencode prompt file {}", prompt_file.display()))?;
   let mut env = base_env;
   env.extend(host.extra_env.clone());
   env.insert(
@@ -1051,10 +1054,12 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   args.push("--standalone".into());
   args.push("--format".into());
   args.push("json".into());
+  args.push("--file".into());
+  args.push(prompt_file.to_string_lossy().into_owned().into());
   args.push("-m".into());
   args.push(model.into());
   args.push("--".into());
-  args.push(framed.into());
+  args.push("Follow the task prompt in the attached file.".into());
   let spec = SpawnSpec::new(
     host.program.program.as_os_str(),
     args,

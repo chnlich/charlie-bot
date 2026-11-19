@@ -58,7 +58,7 @@ pub fn supervise(args: &[OsString]) -> anyhow::Result<()> {
   }?;
   let status = Command::new(program)
     .args(arguments)
-    .stdin(Stdio::null())
+    .stdin(Stdio::inherit())
     .stdout(stdout)
     .stderr(stderr)
     .status()

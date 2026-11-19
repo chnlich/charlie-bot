@@ -505,7 +505,8 @@ fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Cr
     }
     _ => None,
   };
-  // expiresAt is deliberately not read: renewal keys off the server's 401, never a local expiry check.
+  // expiresAt is not read here: renewal keys off the server's 401, never a local expiry check. A keyed round's start
+  // reads it in claude_accounts, which decides only whether the login may start.
   quota.warned.lock().expect("the warnings are not poisoned").credentials.retain(|(_, known)| known != path);
   Ok(Some(Credentials { access_token, refresh_token }))
 }

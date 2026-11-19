@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
-  BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, IdleArmContext, Launch, LaunchContext, LaunchKind, LaunchRefused,
-  LaunchWatch, MemberFailure,
+  BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, IMPROVE_TOKEN_MIN_SECONDS, IdleArmContext, Launch, LaunchContext,
+  LaunchKind, LaunchRefused, LaunchWatch, MemberFailure,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::RunKind;
@@ -254,11 +254,21 @@ impl ClaudeCodeLifecycle {
         .pooled_launch(ctx, holder, Some(session_id.to_string()), None, 0)
         .map_err(|error| refused(error, MemberFailure::Other, None));
     }
+    // A keyed round ships its login's token to its host, so a login whose token lives too little for the round is
+    // left out. When that is the only reason no login is usable, the round fails as a token shortage: no member is
+    // recorded out, because its other logins may serve other rounds.
+    let keyed = keyed_round(ctx);
+    let short = if keyed {
+      claude_accounts::short_token_logins(&ctx.cfg, account_pool.as_deref(), None)
+        .map_err(|error| refused(error, MemberFailure::Other, None))?
+    } else {
+      HashSet::new()
+    };
     let account = claude_accounts::select(
       &self.state,
       &ctx.cfg,
       Some(&ctx.option.model),
-      &HashSet::new(),
+      &short,
       None,
       None,
       account_pool.as_deref(),
@@ -266,11 +276,24 @@ impl ClaudeCodeLifecycle {
     )
     .map_err(|error| refused(error, MemberFailure::Other, None))?;
     let Some(account) = account else {
-      let message = claude_relay::pool_exhausted_message(&self.state, &ctx.cfg, None, account_pool.as_deref())
-        .map_err(|error| refused(error, MemberFailure::Other, None))?;
       let no_login =
         claude_accounts::no_usable_login(&self.state, &ctx.cfg, Some(&ctx.option.model), None, account_pool.as_deref())
           .map_err(|error| refused(error, MemberFailure::Other, None))?;
+      if keyed && !short.is_empty() && no_login.failure != MemberFailure::Quota {
+        let mut labels = short.iter().map(String::as_str).collect::<Vec<_>>();
+        labels.sort_unstable();
+        return Err(LaunchRefused {
+          message: format!(
+            "no login of the pool has {IMPROVE_TOKEN_MIN_SECONDS} seconds of access-token life for this round; \
+             short: {}",
+            labels.join(", ")
+          ),
+          failure: MemberFailure::TokenShort,
+          resets_at: None,
+        });
+      }
+      let message = claude_relay::pool_exhausted_message(&self.state, &ctx.cfg, None, account_pool.as_deref())
+        .map_err(|error| refused(error, MemberFailure::Other, None))?;
       return Err(LaunchRefused { message, failure: no_login.failure, resets_at: no_login.recovers_at });
     };
     self.pooled_launch(ctx, account, None, None, 0).map_err(|error| refused(error, MemberFailure::Other, None))
@@ -359,6 +382,15 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
     native_id: Option<&'a str>,
   ) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
     Box::pin(async move {
+      // A keyed round forwards its login's token once, when it starts. A relay would need a second login's token on the
+      // host, which the round does not carry, so the round ends here.
+      if keyed_round(ctx) {
+        return Err(LaunchRefused {
+          message: "a round on another host cannot move to another login: its token is forwarded once".to_string(),
+          failure: MemberFailure::Other,
+          resets_at: None,
+        });
+      }
       let pooled = Self::pooled_state(launch).ok_or_else(|| LaunchRefused {
         message: "Claude relay launch has no account state".to_string(),
         failure: MemberFailure::Other,
@@ -461,6 +493,12 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
   fn assign_thread_native_id(&self, thread: &mut ThreadMetadata, native_id: Option<&str>) {
     claude_metadata::set_session_id(thread, native_id);
   }
+}
+
+/// Whether the run is a keyed round: its task names an improve host, and the round's login travels to that host.
+fn keyed_round(ctx: &LaunchContext) -> bool {
+  let meta = ctx.session_meta.lock().expect("launch metadata mutex is not poisoned");
+  meta.task.as_ref().is_some_and(|task| task.improve_host.is_some())
 }
 
 fn refused(

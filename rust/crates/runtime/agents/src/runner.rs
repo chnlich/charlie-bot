@@ -12,7 +12,8 @@ use anyhow::{Context, bail};
 use charliebot_core::proc_status;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
-  AgentBackend, Env, ExitedProbe, LaunchArgs, RetryAfter, ServeTransport, ServeTurnArgs, TransportKind,
+  AgentBackend, Env, ExitedProbe, IMPROVE_TOKEN_MIN_SECONDS, LaunchArgs, RetryAfter, ServeTransport, ServeTurnArgs,
+  TransportKind,
 };
 use charliebot_store::run_logs::AGENT_STDOUT_LOG_NAME;
 use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
@@ -142,6 +143,9 @@ struct ActiveProcess {
 /// The environment name the improve launcher reads the host of a round from.
 const IMPROVE_REMOTE_HOST_ENV: &str = "IMPROVE_REMOTE_HOST";
 
+/// The environment name the improve launcher reads the least access-token life of a round's login from.
+const IMPROVE_TOKEN_MIN_SECONDS_ENV: &str = "IMPROVE_TOKEN_MIN_SECONDS";
+
 /// One registered backend instance and its single raw-log launch.
 pub struct AgentRunner {
   backend_type: String,
@@ -221,6 +225,7 @@ impl AgentRunner {
       Some(remote) => {
         let launcher = remote.launcher.to_str().context("the improve launcher path is not UTF-8")?;
         final_env.insert(IMPROVE_REMOTE_HOST_ENV.to_string(), remote.host.clone());
+        final_env.insert(IMPROVE_TOKEN_MIN_SECONDS_ENV.to_string(), IMPROVE_TOKEN_MIN_SECONDS.to_string());
         std::iter::once(launcher.to_string()).chain(command).collect()
       }
       None => command,

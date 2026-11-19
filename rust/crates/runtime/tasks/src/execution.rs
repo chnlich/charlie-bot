@@ -140,6 +140,9 @@ pub struct TaskExecutionAdapter {
   pub(crate) launches: Arc<Mutex<LaunchState>>,
   pub(crate) recovery: Arc<RecoveryState>,
   quota_failures: Arc<Mutex<HashMap<LaunchKey, QuotaFailure>>>,
+  /// The members a failover chain has left, keyed by the retry run the failover registered. A token shortage records no
+  /// member out, so the chain carries the members its earlier runs left to the next switch.
+  failover_left: Arc<Mutex<HashMap<LaunchKey, Vec<String>>>>,
 }
 
 struct RunContinuation {
@@ -184,6 +187,7 @@ impl TaskExecutionAdapter {
       launches: Arc::new(Mutex::new(LaunchState::default())),
       recovery: Arc::new(RecoveryState::default()),
       quota_failures: Arc::new(Mutex::new(HashMap::new())),
+      failover_left: Arc::new(Mutex::new(HashMap::new())),
     }
   }
 
@@ -970,8 +974,8 @@ impl TaskExecutionAdapter {
     self.after_worker_run(meta, &fresh, &durable).await
   }
 
-  /// Record the error that ended a worker run. A refused launch keeps its own event, and a member failure the shared
-  /// classification records enters the failure map that decides the failover. Every other error is logged.
+  /// Record the error that ended a worker run. A refused launch keeps its own event, and a member failure that fails
+  /// over enters the failure map that decides the failover. Every other error is logged.
   async fn record_worker_error(
     &self,
     meta: &SessionMetadata,
@@ -982,9 +986,12 @@ impl TaskExecutionAdapter {
     let run_id = run.id.as_str();
     if let Some(refusal) = error.downcast_ref::<LaunchRefused>() {
       tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %refusal.message, failure = ?refusal.failure, "task_run_launch_refused");
-      if let Some(reason) = refusal.failure.availability_reason() {
-        let failure =
-          QuotaFailure { resets_at: refusal.resets_at, message: refusal.message.clone(), reason: reason.to_string() };
+      if refusal.failure.fails_over() {
+        let failure = QuotaFailure {
+          resets_at: refusal.resets_at,
+          message: refusal.message.clone(),
+          reason: refusal.failure.availability_reason().map(str::to_string),
+        };
         self
           .quota_failures
           .lock()
@@ -1001,8 +1008,11 @@ impl TaskExecutionAdapter {
         .transpose()?
         .map(|value| UtcDateTime::parse(&value))
         .transpose()?;
-      let reason = quota.failure().availability_reason().expect("a run-ending member failure records a reason");
-      let failure = QuotaFailure { resets_at, message: quota.to_string(), reason: reason.to_string() };
+      let failure = QuotaFailure {
+        resets_at,
+        message: quota.to_string(),
+        reason: quota.failure().availability_reason().map(str::to_string),
+      };
       self
         .quota_failures
         .lock()
@@ -1565,7 +1575,7 @@ impl TaskExecutionAdapter {
     let failure = QuotaFailure {
       resets_at,
       message: "synthetic quota error".to_string(),
-      reason: backend_availability::REASON_QUOTA_ERROR.to_string(),
+      reason: Some(backend_availability::REASON_QUOTA_ERROR.to_string()),
     };
     self
       .quota_failures
@@ -1602,12 +1612,16 @@ impl TaskExecutionAdapter {
     }
 
     let quota_failure = self.take_quota_failure(session_id, &run.id);
-    // Any run that ended on a member failure records that member out with the shared classification's reason. That
-    // holds whether a pool chose the member or the request named it: one out record is shared by every pool that
+    let failover_left = self.take_failover_left(session_id, &run.id);
+    // Any run that ended on a member failure which records the member out, with the shared classification's reason.
+    // That holds whether a pool chose the member or the request named it: one out record is shared by every pool that
     // lists it.
-    if let (Some(failure), Some(backend)) = (quota_failure.as_ref(), run.backend.as_deref()) {
+    if let Some(failure) = quota_failure.as_ref()
+      && let Some(reason) = failure.reason.as_deref()
+      && let Some(backend) = run.backend.as_deref()
+    {
       let availability = backend_availability::backend_availability(&self.features)?;
-      availability.record(backend, failure.resets_at, &failure.reason, &failure.message)?;
+      availability.record(backend, failure.resets_at, reason, &failure.message)?;
     }
 
     if run.kind == RunKind::Review {
@@ -1642,7 +1656,7 @@ impl TaskExecutionAdapter {
     if matches!(durable_outcome, "failed" | "interrupted") {
       let mut summary = None;
       if let Some(failure) = quota_failure.as_ref().filter(|_| durable_outcome == "failed") {
-        match self.fail_over_quota(meta, run, failure, HandoffSource::WorkerRun { run }).await? {
+        match self.fail_over_quota(meta, run, failure, HandoffSource::WorkerRun { run }, failover_left).await? {
           Failover::Moved => return Ok(()),
           Failover::Exhausted(message) => summary = Some(message),
           Failover::NoMember => {}
@@ -2070,6 +2084,16 @@ impl TaskExecutionAdapter {
       .cloned()
   }
 
+  /// Remove and return the members the failover chain left before one run, empty for a run that began no chain.
+  fn take_failover_left(&self, session_id: &str, run_id: &str) -> Vec<String> {
+    self
+      .failover_left
+      .lock()
+      .expect("failover chain map is not poisoned")
+      .remove(&(session_id.to_string(), run_id.to_string()))
+      .unwrap_or_default()
+  }
+
   /// Remove and return the quota failure recorded for one run, distinguishing no failure from an unknown reset.
   pub fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<QuotaFailure> {
     self
@@ -2104,13 +2128,15 @@ impl TaskExecutionAdapter {
   /// Continue a failed run on the next member of its pool, as one retry run. A session whose backend is a pool id
   /// switches in that pool. A run the router routed to a concrete model moves its session into the
   /// `backends.calls.worker` pool. The session then stores that pool id as backend and the member as `pool_member`.
-  /// The caller has already recorded the spent member out.
+  /// The caller has already recorded a member that records out. `left` are the members the failover chain left before
+  /// this run; this run's member joins them.
   async fn fail_over_quota(
     &self,
     meta: &SessionMetadata,
     run: &RunRecord,
     failure: &QuotaFailure,
     source: HandoffSource<'_>,
+    mut left: Vec<String>,
   ) -> anyhow::Result<Failover> {
     let cfg = self.features.config.get()?;
     let from = run
@@ -2124,7 +2150,8 @@ impl TaskExecutionAdapter {
       None => None,
     };
     let Some(pool_id) = pool_id else { return Ok(Failover::NoMember) };
-    let switch = auto_switch::switch_member(&self.features, &pool_id, meta, source, from, failure).await?;
+    left.push(from.to_string());
+    let switch = auto_switch::switch_member(&self.features, &pool_id, meta, source, from, failure, &left).await?;
     let member = match switch {
       MemberSwitch::Moved { member } => member,
       MemberSwitch::Exhausted(message) => return Ok(Failover::Exhausted(message)),
@@ -2147,6 +2174,11 @@ impl TaskExecutionAdapter {
       Some(run.input_event_ids.clone()),
     )
     .await?;
+    self
+      .failover_left
+      .lock()
+      .expect("failover chain map is not poisoned")
+      .insert((meta.id.clone(), retry.id.clone()), left);
     tracing::warn!(
       target: "charliebot_tasks",
       session_id = %meta.id,
@@ -2449,14 +2481,16 @@ impl TaskExecutionAdapter {
       .store
       .read_run_sync(&meta.id, run_id)?
       .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, &meta.id)))?;
-    if let Some(backend) = run.backend.as_deref().filter(|backend| !backend.is_empty()) {
+    if let (Some(backend), Some(reason)) =
+      (run.backend.as_deref().filter(|backend| !backend.is_empty()), failure.reason.as_deref())
+    {
       let availability = backend_availability::backend_availability(&self.features)?;
-      availability.record(backend, failure.resets_at, &failure.reason, &failure.message)?;
+      availability.record(backend, failure.resets_at, reason, &failure.message)?;
     }
     if self.features.config.get()?.backends.pool(&meta.backend).is_none() {
       return Ok(());
     }
-    match self.fail_over_quota(meta, &run, &failure, HandoffSource::ManagerRun { run: &run }).await? {
+    match self.fail_over_quota(meta, &run, &failure, HandoffSource::ManagerRun { run: &run }, Vec::new()).await? {
       Failover::Moved => Ok(()),
       Failover::Exhausted(message) => {
         self
@@ -2762,7 +2796,7 @@ fn auto_quota_failure(extras: &Map<String, Value>) -> Option<QuotaFailure> {
     .get(master_run::FINISH_QUOTA_RESETS_AT)
     .and_then(Value::as_str)
     .and_then(|text| UtcDateTime::parse(text).ok());
-  Some(QuotaFailure { resets_at, message, reason })
+  Some(QuotaFailure { resets_at, message, reason: Some(reason) })
 }
 
 /// The failed run an Auto switch retry continues, with the reason its fresh conversation starts, when this run is a

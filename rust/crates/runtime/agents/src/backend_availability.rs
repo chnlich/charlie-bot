@@ -41,6 +41,10 @@ pub fn is_recorded_reason(reason: &str) -> bool {
   RECORDED_REASONS.contains(&reason)
 }
 
+/// The reason a switch names when its member failed for a token shortage. No record carries it: the member stays
+/// selectable for other rounds, and only the switch's own event names the reason.
+pub const REASON_TOKEN_SHORT: &str = "token_short";
+
 /// Why the member a switch left is out, as the switch note states it.
 pub fn switch_cause(reason: &str) -> &'static str {
   match reason {
@@ -48,6 +52,7 @@ pub fn switch_cause(reason: &str) -> &'static str {
     REASON_ACCESS_REFUSED => "the member refused access",
     REASON_TIMEOUT => "the member timed out",
     REASON_ITERATION_FAILURE => "the member's iteration failed",
+    REASON_TOKEN_SHORT => "the member's login has too little token life for one round",
     _ => "the member is unavailable",
   }
 }

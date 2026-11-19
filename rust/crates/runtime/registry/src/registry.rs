@@ -701,6 +701,15 @@ pub type UsageResolverConstructor = Arc<dyn Fn(&UsageResolverHost) -> Arc<dyn Us
 /// layer and the Claude factory read it, so they match this name instead of spelling it.
 pub const EXTRA_FLAGS_BACKEND_KWARG: &str = "extra_flags";
 
+/// The least access-token life, in seconds, that a keyed round's login must have to start. The server selects the
+/// Claude login with it, and the launcher reads it from `IMPROVE_TOKEN_MIN_SECONDS` for its own check. Four hours
+/// covers the longest round seen, with an hour's margin for the build before the round starts.
+pub const IMPROVE_TOKEN_MIN_SECONDS: u64 = 14_400;
+
+/// The exit code of the improve launcher when the round's login has less access-token life than
+/// [`IMPROVE_TOKEN_MIN_SECONDS`]. The round starts nothing, and the run moves to another member.
+pub const IMPROVE_TOKEN_SHORT_EXIT: i32 = 8;
+
 /// Where a round's agent process starts: the improve launcher of the served checkout, which carries the process to
 /// `host` and runs it there.
 #[derive(Clone, Debug, PartialEq, Eq)]

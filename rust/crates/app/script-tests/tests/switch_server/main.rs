@@ -750,6 +750,7 @@ const WORKER_BRANCH: &str = "charliebot/worker-branch";
 /// raises run against a started release, because the scan reads the running build's registrations.
 fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
   let mut world = World::new();
+  let helper_selection_marker = world.root().join("helper-selected");
   let release = world.releases.join(&world.rust_sha);
   let backend = match case {
     "opencode-run" => Some("oc-deepseek-flash"),
@@ -776,9 +777,16 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
       seed_improve_loop(&world, controller.expect("a controller process"), status);
       world.start_release();
     }
-    "dirty-clone" => fs::write(world.clone.join("scripts/start-server.sh"), "# local edit\n").expect("the local edit"),
+    "dirty-clone" => {
+      fs::write(world.clone.join("scripts/start-server.sh"), "# local edit\n").expect("the local edit");
+      fs::write(world.clone.join("untracked-worker-file"), "local content\n").expect("the untracked local file");
+    }
     "feature-branch" => {
       world.git(&world.clone, &["checkout", "-q", "-b", WORKER_BRANCH]);
+      replace_charliebot(
+        &world.releases.join(&world.rust_sha),
+        &format!("touch {}\nexit 2\n", quote(&helper_selection_marker)),
+      );
     }
     "launcher-preflight" => {
       world.env.insert("SYSTEMD_RUN_REFUSE_ALL".to_string(), "1".to_string());
@@ -807,10 +815,12 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
     let output = format!("{}{}", run.stdout, run.stderr);
     assert!(output.contains(WORKER_BRANCH), "{}", world.report(&run));
     assert_eq!(world.git(&world.clone, &["symbolic-ref", "HEAD"]), format!("refs/heads/{WORKER_BRANCH}"));
+    assert!(!helper_selection_marker.exists(), "release helper selected before branch refusal: {}", world.report(&run));
   }
   if case == "dirty-clone" {
     let output = format!("{}{}", run.stdout, run.stderr);
     assert!(output.contains("scripts/start-server.sh"), "{}", world.report(&run));
+    assert!(output.contains("untracked-worker-file"), "{}", world.report(&run));
   }
   if case == "user-manager" {
     let output = format!("{}{}", run.stdout, run.stderr);

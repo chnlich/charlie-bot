@@ -1363,20 +1363,21 @@ config_check() {
 }
 
 preflight() {
-  PREV_CURRENT="$(readlink "$CURRENT" 2> /dev/null || true)"
-  [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
-  (cd "$RELEASE_DIR" && sha256sum -c sha256sums.txt) || fail "$RELEASE_DIR does not match its sha256sums.txt"
-  helper_binary   # exits 2 when neither release carries the subcommand, before anything changes
-  "$SYSTEMD_USER" --check || fail "the user manager did not answer"
-  OLD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   # The reset below moves the branch that HEAD names, so a commit that exists only on another branch drops out of the
   # clone. A detached HEAD names no branch; main is the one branch the switch may move.
   local head_ref dirty
   if head_ref="$(git -C "$REPO_ROOT" symbolic-ref -q HEAD)" && [ "$head_ref" != refs/heads/main ]; then
     fail "runtime clone $REPO_ROOT has branch ${head_ref#refs/heads/} checked out; check out main or detach HEAD first"
   fi
-  dirty="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
+  dirty="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)"
   [ -z "$dirty" ] || fail "runtime clone $REPO_ROOT has local changes: ${dirty//$'\n'/; }"
+
+  PREV_CURRENT="$(readlink "$CURRENT" 2> /dev/null || true)"
+  [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
+  (cd "$RELEASE_DIR" && sha256sum -c sha256sums.txt) || fail "$RELEASE_DIR does not match its sha256sums.txt"
+  helper_binary   # exits 2 when neither release carries the subcommand, before anything changes
+  "$SYSTEMD_USER" --check || fail "the user manager did not answer"
+  OLD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   git -C "$REPO_ROOT" fetch --quiet origin || fail "cannot fetch origin in $REPO_ROOT"
   git -C "$REPO_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2> /dev/null \
     || fail "target commit $TARGET_SHA is not in the runtime clone after fetching origin"

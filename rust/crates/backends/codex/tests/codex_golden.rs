@@ -25,6 +25,7 @@ use charliebot_core::config::{
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs, UsageResolver};
 use charliebot_registry::usage::{PANEL_FETCHED_AT, QuotaAccount, RecordKind, UsageRecord, UsageSourceImpl};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use serde_yaml::Mapping;
 use time::format_description::well_known::Rfc3339;
@@ -579,12 +580,13 @@ fn normalize_profile_instructions_arg(argv: &mut Vec<Value>, codex_home: &Path) 
   let profile: toml::Table = toml::from_str(&fs::read_to_string(profile_path).expect("the Codex profile reads"))
     .expect("the Codex profile is valid TOML");
   let instructions = profile["developer_instructions"].as_str().expect("the profile has developer instructions");
+  let mut serialized = String::new();
+  instructions
+    .serialize(toml::ser::ValueSerializer::new(&mut serialized))
+    .expect("the developer instructions serialize as TOML");
   argv.splice(
     index..=index + 1,
-    [
-      Value::String("--config".to_string()),
-      Value::String(format!("developer_instructions={}", serde_json::to_string(instructions).unwrap())),
-    ],
+    [Value::String("--config".to_string()), Value::String(format!("developer_instructions={serialized}"))],
   );
 }
 

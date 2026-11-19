@@ -25,7 +25,11 @@ function registerSidebarFilter(filter) {
   sidebarFiltersByName[normalized.name] = normalized;
 }
 
-registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/?compact=1', restoreFromUrl: false});
+// The Workspace paints group previews, so it asks for the rows a preview shows and each group's whole count. A
+// reader who expands a group fetches the full listing (groups.js, loadFullListing). The row refresh adds its ids to
+// this URL, and the route answers that branch before it reads the form.
+registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/?compact=1&screen=1',
+  restoreFromUrl: false});
 registerSidebarFilter({name: 'starred', label: 'Later', url: '/api/sessions/starred'});
 registerSidebarFilter({name: 'archived', label: 'Archive', url: '/api/sessions/archived'});
 
@@ -99,15 +103,19 @@ function switchSidebarFilter(filter) {
   if (filter === 'all') {
     // The Workspace badges and the session list load in parallel, so badges
     // and list paint together in the one render call.
+    // The open session's own row stays painted after the switch, whatever its rank in the list.
+    const url = typeof SESSION_ID !== 'undefined' && SESSION_ID
+      ? registeredFilter.url + '&active=' + encodeURIComponent(SESSION_ID)
+      : registeredFilter.url;
     Promise.all([
-      fetch(registeredFilter.url).then(res => {
+      fetch(url).then(res => {
         if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
         return res.json();
       }),
       loadWorkspaceBadges(),
     ])
       .then(([payload, workspaceBadges]) => renderSessionList(listingRows(payload, requestSeq), filter,
-          {workspaceBadges}))
+          {workspaceBadges, listing: payload.$screen || null}))
       .catch(err => console.error('Filter fetch failed:', err));
     return;
   }

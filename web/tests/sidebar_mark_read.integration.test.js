@@ -166,11 +166,11 @@ function buildOpenSocketPage({unread}) {
     const boot = url.match(/^\/api\/sessions\/([^/]+)\/bootstrap/);
     if (boot) return ok('bootstrap', bootstrapPayload(boot[1], 0, false));
     if (url.startsWith('/api/sessions/status?')) return ok('status', statusAnswer(url));
-    const ids = url.match(/^\/api\/sessions\/\?compact=1&ids=(.+)$/);
+    const ids = url.match(/^\/api\/sessions\/\?compact=1&screen=1&ids=(.+)$/);
     if (ids) {
       return ok('rows', {sessions: sessionColumns(decodeURIComponent(ids[1]).split(',').map(row)), gone: []});
     }
-    if (url === '/api/sessions/?compact=1') return ok('list', sessionColumns(SESSION_IDS.map(row)));
+    if (url === '/api/sessions/?compact=1&screen=1&active=session-b') return ok('list', sessionColumns(SESSION_IDS.map(row)));
     return ok('other', {});
   }
 

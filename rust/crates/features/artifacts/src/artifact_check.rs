@@ -878,6 +878,80 @@ fn quoted_spans(text: &str) -> Vec<&str> {
   spans
 }
 
+/// One open fork of a page, read as a pick: its question number, its named options as they show at open, and the
+/// name the recommendation quotes. The page script reads the same grammar in
+/// `web/features/artifacts/static/artifact-comments.js`; the fixture `tests/data/plan_template_forks.json` pins both
+/// readings to one output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PageFork {
+  pub n: String,
+  pub options: Vec<PageForkOption>,
+  pub rec: Option<String>,
+}
+
+/// One named option: the name, which is the button text, and the option line as the page writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PageForkOption {
+  pub name: String,
+  pub text: String,
+}
+
+/// The forks of `html` a reader can pick: open, outside every closed fold, with a question number and at least two
+/// named options. A fork without them has no pick.
+pub fn page_forks(html: &str) -> anyhow::Result<Vec<PageFork>> {
+  let nodes = parse_dom(html)?;
+  let mut forks = Vec::new();
+  for (_, fork) in open_forks(&nodes) {
+    if folded_ancestor(&nodes, fork, None) {
+      continue;
+    }
+    let Some(n) = fork_number(&nodes, fork) else { continue };
+    let options: Vec<PageForkOption> = visible_option_lines(&nodes, fork)
+      .into_iter()
+      .filter_map(|line| {
+        let text = str_methods::collapse_whitespace(&option_line_text(&nodes, line));
+        let name = option_name(&text)?.to_owned();
+        Some(PageForkOption { name, text })
+      })
+      .collect();
+    if options.len() < 2 {
+      continue;
+    }
+    let rec = find(&nodes, fork, "p", &["rec"]).first().and_then(|&rec| {
+      let text = str_methods::collapse_whitespace(&element_text(&nodes, rec));
+      quoted_spans(&text).into_iter().find(|span| options.iter().any(|option| option.name == *span)).map(str::to_owned)
+    });
+    forks.push(PageFork { n, options, rec });
+  }
+  Ok(forks)
+}
+
+/// The number span of the first question line of a fork that carries one.
+fn fork_number(nodes: &[Element], fork: usize) -> Option<String> {
+  find(nodes, fork, "p", &["q"]).into_iter().find_map(|question| {
+    let span = *find(nodes, question, "span", &["fn"]).first()?;
+    let number = str_methods::collapse_whitespace(&element_text(nodes, span));
+    (!number.is_empty()).then_some(number)
+  })
+}
+
+/// The text of an option line without its `div.demo` and `p.no-demo`, which draw or explain the option and name none.
+fn option_line_text(nodes: &[Element], line: usize) -> String {
+  fn append(nodes: &[Element], element: usize, output: &mut String) {
+    for child in &nodes[element].children {
+      match child {
+        Child::Element(child)
+          if nodes[*child].classes.contains("demo") || nodes[*child].classes.contains("no-demo") => {}
+        Child::Element(child) => append(nodes, *child, output),
+        Child::Text(text) => output.push_str(text),
+      }
+    }
+  }
+  let mut text = String::new();
+  append(nodes, line, &mut text);
+  text
+}
+
 fn check_fork_options(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let mut failures = Vec::new();
   for (index, fork) in open_forks(&context.nodes) {
@@ -2298,6 +2372,35 @@ mod tests {
     let page = fork_page_in_details("<details>", "<p class=\"resolved\">Resolved: keep the file.</p>");
     let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
     assert!(outcomes[0].passed, "{outcomes:#?}");
+  }
+
+  /// The plan template's forks are the expected output the browser's parser reads too.
+  #[test]
+  fn the_plan_template_forks_match_the_shared_fixture() {
+    let forks = page_forks(include_str!("../../../../../prompts/plan_template.html")).expect("the template parses");
+    let expected: serde_json::Value =
+      serde_json::from_str(include_str!("../tests/data/plan_template_forks.json")).expect("the fixture is JSON");
+    assert_eq!(serde_json::to_value(&forks).expect("the forks serialize"), expected);
+  }
+
+  #[test]
+  fn an_option_inside_a_closed_details_is_not_a_pick() {
+    let page = "<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Which one?</p><ul>\
+      <li>「keep」: keep the file.</li><li>「drop」: drop the file.</li></ul>\
+      <details><ul><li>「hidden」: a folded choice.</li></ul></details></div>";
+    let forks = page_forks(page).expect("the page parses");
+    let names: Vec<&str> = forks[0].options.iter().map(|option| option.name.as_str()).collect();
+    assert_eq!(names, ["keep", "drop"]);
+  }
+
+  #[test]
+  fn a_pick_option_text_leaves_out_its_demo() {
+    let page = "<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Which one?</p><ul>\
+      <li>「keep」: keep the file.<div class=\"demo\"><span class=\"who\">Ann</span></div></li>\
+      <li>「drop」: drop the file.</li></ul></div>";
+    let forks = page_forks(page).expect("the page parses");
+    let texts: Vec<&str> = forks[0].options.iter().map(|option| option.text.as_str()).collect();
+    assert_eq!(texts, ["「keep」: keep the file.", "「drop」: drop the file."]);
   }
 
   #[test]

@@ -730,7 +730,7 @@ mod tests {
       .unwrap();
     }
     let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
-    let mut ctx = context(cfg, LaunchKind::Task, None, None, None);
+    let ctx = context(cfg, LaunchKind::Task, None, None, None);
     ctx.session_meta.lock().unwrap().task =
       Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
 
@@ -750,7 +750,7 @@ mod tests {
     let account = root.path().join("account");
     account_credentials(&account);
     let cfg = config(&home, &[("a", &account)]);
-    let mut ctx = context(cfg, LaunchKind::Task, None, None, None);
+    let ctx = context(cfg, LaunchKind::Task, None, None, None);
     ctx.session_meta.lock().unwrap().task =
       Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
     let launch =

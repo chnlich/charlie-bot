@@ -185,7 +185,9 @@ The round keeps it as `events.ndjson` in the scratch directory and takes the ver
 
 One foreground tool call ends at 15 minutes, the round's per-call tool limit.
 A review of any length completes: the round waits for it past that limit and reads back its outcome.
-The round chooses how to wait.
+A round has no wake: its host runs no CharlieBot server, so no trigger registers for it.
+Every wait of a round, for every member, stays inside the round's run
+until its review verdict is posted and its merge or no-PR outcome is reached.
 
 Post the verdict as one pull-request comment through the posting script:
 

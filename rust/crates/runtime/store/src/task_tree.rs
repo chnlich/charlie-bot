@@ -1073,7 +1073,7 @@ impl Store {
       if self.task_state(&descendant_id)? != "open" {
         continue;
       }
-      open.push(meta);
+      open.push(meta.as_ref().clone());
     }
     Ok(open)
   }

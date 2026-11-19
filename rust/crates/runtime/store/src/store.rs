@@ -676,16 +676,22 @@ impl Store {
   }
 
   /// Return cached metadata when fresh, reading and populating the cache only on a miss.
-  pub fn get_session_cached_or_read_sync(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
+  ///
+  /// The cache hands out its own allocation, so a caller that reads many rows in one request shares each row's
+  /// metadata instead of deep-cloning it. The status poll reads every painted row on each rebuild, and cloning a
+  /// session's metadata map per row was a fifth of that route's CPU. The metadata behind the pointer never moves: a
+  /// cache entry is replaced with a new allocation, never written in place, so an `Arc` a caller holds keeps the
+  /// content it read.
+  pub fn get_session_cached_or_read_sync(&self, session_id: &str) -> StoreResult<Option<Arc<SessionMetadata>>> {
     if let Some(meta) = self.fresh_cached_meta(session_id)? {
-      return Ok(Some(meta.as_ref().clone()));
+      return Ok(Some(meta));
     }
     let path = self.metadata_path(session_id);
     let signature = stat_signature(&path);
     let meta = self.read_metadata_path(&path)?;
     let mut cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
     if let Some(entry) = cache.get(session_id) {
-      return Ok(Some(entry.value.as_ref().clone()));
+      return Ok(Some(Arc::clone(&entry.value)));
     }
     let Some(meta) = meta else { return Ok(None) };
     let meta = Arc::new(meta);
@@ -693,7 +699,7 @@ impl Store {
       session_id.to_string(),
       CachedMetadata { value: Arc::clone(&meta), at: Instant::now(), signature, identity: Arc::new(()) },
     );
-    Ok(Some(meta.as_ref().clone()))
+    Ok(Some(meta))
   }
 
   /// Return the directory where the live event log is stored.
@@ -1794,6 +1800,23 @@ mod tests {
     store.metadata_cache.lock().unwrap().get_mut(&meta.id).unwrap().at =
       Instant::now() - METADATA_CACHE_TTL - Duration::from_secs(1);
     assert_eq!(store.get_session(&meta.id).await.unwrap().unwrap().name, "fresh metadata");
+  }
+
+  #[test]
+  fn cached_metadata_reads_share_the_cache_allocation() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg =
+      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
+    let store = Store::new(cfg, Vec::new(), explicit_test_hooks()).unwrap();
+    let meta = SessionMetadata::new("synthetic-id", "seed", crate::metadata::TaskProfile::Manager);
+    let path = store.metadata_path(&meta.id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, meta.to_json_string(&[], true)).unwrap();
+
+    let first = store.get_session_cached_or_read_sync(&meta.id).unwrap().unwrap();
+    let second = store.get_session_cached_or_read_sync(&meta.id).unwrap().unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(second.name, "seed");
   }
 
   #[test]

@@ -993,7 +993,7 @@ fn fresh_sessions(
   let mut rows = Vec::new();
   for id in ids {
     if let Some(meta) = features.store.get_session_cached_or_read_sync(id)? {
-      rows.push(Arc::new(meta));
+      rows.push(meta);
     }
   }
   Ok(rows)

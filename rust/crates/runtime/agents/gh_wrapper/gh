@@ -14,24 +14,28 @@
 #     -F/--body-file or -t/--subject, release create and edit with notes
 #     (-n/--notes, -F/--notes-file, --generate-notes, --notes-from-tag) or a
 #     title, discussion create and edit with a title or body, discussion
-#     comment with a body, and gh api whose method is not GET (gh defaults to
-#     POST when fields are given; -X/--method overrides).
+#     comment with a body, gh api whose method is not GET (gh defaults to
+#     POST when fields are given; -X/--method overrides), and gh api graphql
+#     whose document is a mutation (any method).
 #   - Every other call passes through unchanged, with no token lookup. That
 #     includes every write whose target is not a repository, such as gist
 #     create and gist edit.
 #
 # With a token command configured, gh api graphql is classified by its document instead of its method: a
-# document whose operations are all queries passes through unchanged, while a
-# document with a mutation or subscription operation, or one whose operation
-# type cannot be read (an unreadable @file, --input, stdin, two query fields),
-# is refused.
+# document whose operations are all queries passes through unchanged; a document
+# with a mutation operation is a text-carrying write and takes the write path
+# below. A subscription, or a document whose operation type cannot be read (an
+# unreadable @file, --input, stdin, two query fields), is refused, and the
+# error names the operation type the wrapper read.
 #
 # If the token command is unset, every call passes through to the real gh,
 # which uses the host's stored login. For a text-carrying write with a command,
 # the target repository is -R/--repo when given,
 # otherwise the repository gh resolves from the current directory; gh api
 # takes the repos/<owner>/<repo>/ prefix of its path, with {owner} and {repo}
-# expanded as gh expands them. The wrapper then calls the token command named
+# expanded as gh expands them, and a GraphQL mutation, whose document names no
+# repository, takes the repository gh resolves from the current directory. The
+# wrapper then calls the token command named
 # by $CHARLIEBOT_GH_APP_TOKEN_CMD (the host config's github.app_token_command,
 # which the server passes to each agent process when it spawns it)
 #   - exit 0: run the real gh with GH_TOKEN set to the printed token;
@@ -40,7 +44,9 @@
 #
 # A text-carrying write whose target the wrapper cannot resolve is refused
 # before anything runs, with an error that names the -R flag and the REST
-# form. The wrapper never sets GH_TOKEN for a call outside the text-carrying
+# form. An unresolved GraphQL mutation is refused with an error that names
+# GraphQL and the checkout, and gives no -R advice: gh api takes no -R flag.
+# The wrapper never sets GH_TOKEN for a call outside the text-carrying
 # set and never falls back to the personal login after a token error.
 
 set -u
@@ -141,9 +147,21 @@ if [ -z "$TOKEN_CMD" ]; then
 fi
 
 # The repository gh itself resolves from the current directory, read through
-# the real gh as the personal login: a read-only call.
+# the real gh as the personal login: a read-only call. Its repo view takes the
+# checkout's remote and ignores GH_REPO (gh 2.101.0).
 cwd_repo() {
   "$real_gh" repo view --json nameWithOwner -q .nameWithOwner
+}
+
+# Print the owner/repo that cwd_repo resolves, or fail. Every write's repository resolution goes through it, so a
+# name the token command would not take is refused in one place.
+cwd_owner_repo() {
+  resolved_repo=$(cwd_repo) || return 1
+  case $resolved_repo in
+    */*/*|*'/') return 1 ;;
+    */*) printf '%s\n' "$resolved_repo" ;;
+    *) return 1 ;;
+  esac
 }
 
 # Refuse a text-carrying write whose target the wrapper cannot resolve.
@@ -153,13 +171,31 @@ refuse() {
   exit 1
 }
 
-# Print query, mutation or unknown for the GraphQL document on stdin.
+# Refuse a GraphQL mutation that no source resolves. A GraphQL document names no repository and gh api takes no -R,
+# so the checkout is the only source.
+refuse_graphql_mutation() {
+  printf '%s\n' \
+    'gh-wrapper: cannot resolve the target repository of this GraphQL mutation; run it from a checkout of the target repository' >&2
+  exit 1
+}
+
+# Refuse a gh api graphql call whose operation type the wrapper does not run. The message names the type it read.
+refuse_graphql_operation() {
+  printf '%s\n' \
+    "gh-wrapper: refusing this gh api graphql call: the wrapper read its operation type as $1; only query and mutation documents run" >&2
+  exit 1
+}
+
+# Print query, mutation, subscription or unknown for the GraphQL document on stdin.
 #
 # Comments and string literals (single and block) are skipped, so a keyword
-# inside either does not count. A top-level mutation or subscription keyword
-# makes the document non-query; a top-level query keyword or an anonymous
-# selection set (`{`) makes it a query; a fragment definition is not an
-# operation. Any other shape is unknown, which the caller refuses.
+# inside either does not count. An operation keyword counts only where a
+# top-level definition starts, so a query named mutation reads as a query. A
+# definition that starts with any other word makes the document unknown. A
+# top-level subscription keyword makes it a subscription, which wins over a
+# mutation keyword. A top-level query keyword or an anonymous selection set
+# (`{`) makes it a query; a fragment definition is not an operation. A document
+# with no operation is unknown.
 graphql_document_kind() {
   awk '
     { text = text $0 "\n" }
@@ -169,7 +205,10 @@ graphql_document_kind() {
       paren = 0
       fragment = 0
       operation = 0
-      kind = "unknown"
+      mutation = 0
+      subscription = 0
+      unknown = 0
+      at_definition = 1
       i = 1
       while (i <= n) {
         c = substr(text, i, 1)
@@ -199,12 +238,16 @@ graphql_document_kind() {
             else operation = 1
           }
           depth++
+          at_definition = 0
           i++
           continue
         }
         if (c == "}") {
           if (depth > 0) depth--
-          if (depth == 0) fragment = 0
+          if (depth == 0 && paren == 0) {
+            fragment = 0
+            at_definition = 1
+          }
           i++
           continue
         }
@@ -213,17 +256,23 @@ graphql_document_kind() {
         if (c ~ /[A-Za-z_]/) {
           start = i
           while (i <= n && substr(text, i, 1) ~ /[A-Za-z0-9_]/) i++
-          if (depth == 0 && paren == 0) {
+          if (depth == 0 && paren == 0 && at_definition) {
             word = substr(text, start, i - start)
-            if (word == "mutation" || word == "subscription") kind = "mutation"
-            else if (word == "query") { operation = 1; fragment = 0 }
+            if (word == "mutation") mutation = 1
+            else if (word == "subscription") subscription = 1
+            else if (word == "query") operation = 1
             else if (word == "fragment") fragment = 1
+            else unknown = 1
+            at_definition = 0
           }
           continue
         }
         i++
       }
-      if (kind != "mutation" && operation) kind = "query"
+      if (unknown || !(operation || mutation || subscription)) kind = "unknown"
+      else if (subscription) kind = "subscription"
+      else if (mutation) kind = "mutation"
+      else kind = "query"
       printf "%s\n", kind
     }
   '
@@ -714,13 +763,15 @@ case $cmd in
     if [ -z "$method" ]; then
       method=GET
     fi
-    # The GraphQL rule holds for every method: a query document passes, and any other document is refused.
+    # The GraphQL document's operation decides for every method: a query passes, a mutation is a write, and a
+    # subscription or an unreadable document is refused with the operation type it read.
     if [ "$path" = graphql ]; then
-      kind=$(graphql_call_kind)
-      [ -n "$kind" ] || kind=unknown
-      if [ "$kind" != query ]; then
-        refuse
-      fi
+      graphql_kind=$(graphql_call_kind)
+      case $graphql_kind in
+        query) ;;
+        mutation) is_text=1 ;;
+        *) refuse_graphql_operation "$graphql_kind" ;;
+      esac
     else
       case $method in
         [Gg][Ee][Tt]) ;;
@@ -739,16 +790,16 @@ if [ "$cmd" = api ]; then
   if [ -z "$path" ]; then
     refuse
   fi
+  # A GraphQL document names no repository, so its target is the repository the checkout resolves, as {owner}/{repo}
+  # expand to.
+  if [ "$path" = graphql ]; then
+    owner_repo=$(cwd_owner_repo) || refuse_graphql_mutation
+  fi
   case $path in
     *'{owner}'*|*'{repo}'*)
-      cwd=$(cwd_repo) || refuse
-      case $cwd in
-        */*/*|*'/') refuse ;;
-        */*) ;;
-        *) refuse ;;
-      esac
-      owner_part=${cwd%%/*}
-      repo_part=${cwd#*/}
+      checkout=$(cwd_owner_repo) || refuse
+      owner_part=${checkout%%/*}
+      repo_part=${checkout#*/}
       path=$(printf '%s' "$path" | sed -e "s/{owner}/$owner_part/" -e "s/{repo}/$repo_part/")
       ;;
   esac
@@ -778,7 +829,7 @@ else
     esac
     owner_repo=$repo_flag
   else
-    owner_repo=$(cwd_repo) || refuse
+    owner_repo=$(cwd_owner_repo) || refuse
   fi
 fi
 

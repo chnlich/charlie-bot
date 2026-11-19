@@ -453,6 +453,10 @@ esac
       (vec!["pr", "merge", "-R", "o/r", "12", "-db", "subject line"], "o/r"),
       (vec!["pr", "close", "-R", "o/r", "12", "-dc", "done"], "o/r"),
       (vec!["api", "-iXDELETE", "repos/o/r/git/refs/heads/x"], "o/r"),
+      (vec!["api", "graphql", "-f", "query=mutation { x }"], "stub-owner/stub-repo"),
+      (vec!["api", "-X", "POST", "graphql", "-f", "query=mutation { x }"], "stub-owner/stub-repo"),
+      (vec!["api", "-X", "GET", "graphql", "-f", "query=mutation { x }"], "stub-owner/stub-repo"),
+      (vec!["api", "graphql", "-f", "query=query { a } mutation { b }"], "stub-owner/stub-repo"),
     ];
 
     for (args, target) in &cases {
@@ -502,6 +506,8 @@ esac
       // GraphQL documents whose operations are all queries.
       vec!["api", "graphql", "-f", "query={viewer{login}}"],
       vec!["api", "graphql", "-f", "query=query Q($mutation: Int) { viewer { login } }"],
+      // An operation named mutation is still a query.
+      vec!["api", "graphql", "-f", "query=query mutation { viewer { login } }"],
       vec!["api", "graphql", "-F", "query=query { viewer { login } }"],
       vec!["api", "-X", "POST", "graphql", "-f", "query=# mutation in a comment\nquery { viewer { login } }"],
       vec!["api", "-X", "POST", "graphql", "-f", "query=query { search(type: ISSUE, query: \"mutation\") { x } }"],
@@ -602,7 +608,6 @@ esac
   #[ignore = "integration"]
   fn an_unresolvable_target_is_refused_before_anything_runs() {
     for args in [
-      vec!["api", "graphql", "-f", "query=mutation{x}"],
       vec!["api", "-X", "POST", "/user"],
       vec!["api", "-f", "k=v"],
       vec!["pr", "create", "-R", "github.com/o/r", "--title", "t"],
@@ -620,32 +625,33 @@ esac
     }
   }
 
-  /// A GraphQL document with a mutation or subscription operation, or one whose operation type cannot be read, is
-  /// refused before anything runs.
+  /// A GraphQL document that is neither a query nor a mutation is refused before anything runs, and the error names
+  /// the operation type the wrapper read.
   #[test]
   #[ignore = "integration"]
-  fn graphql_documents_that_are_not_query_only_are_refused() {
-    let cases: Vec<Vec<&str>> = vec![
-      vec!["api", "graphql", "-f", "query=mutation { x }"],
-      vec!["api", "-X", "POST", "graphql", "-f", "query=subscription { x }"],
-      vec!["api", "graphql", "-f", "query=query { a } mutation { b }"],
-      vec!["api", "graphql", "-X", "POST"],
-      vec!["api", "graphql", "--input", "body.json"],
-      vec!["api", "graphql", "-f", "query=query { a }", "--input", "body.json"],
-      vec!["api", "graphql", "-F", "query=@/synthetic/unreadable-query.graphql"],
-      vec!["api", "-X", "GET", "graphql", "-f", "query=mutation { x }"],
+  fn graphql_documents_that_are_neither_query_nor_mutation_are_refused() {
+    let cases: Vec<(Vec<&str>, &str)> = vec![
+      (vec!["api", "graphql", "-f", "query=subscription { x }"], "subscription"),
+      (vec!["api", "-X", "POST", "graphql", "-f", "query=subscription { x }"], "subscription"),
+      (vec!["api", "graphql", "-f", "query=mutation { x } subscription { y }"], "subscription"),
+      (vec!["api", "graphql", "-f", "query=foo mutation { x }"], "unknown"),
+      (vec!["api", "graphql", "-X", "POST"], "unknown"),
+      (vec!["api", "graphql", "--input", "body.json"], "unknown"),
+      (vec!["api", "graphql", "-f", "query=query { a }", "--input", "body.json"], "unknown"),
+      (vec!["api", "graphql", "-F", "query=@/synthetic/unreadable-query.graphql"], "unknown"),
       // Two query fields: gh's order for them is not read, so the document is unknown whichever one is a mutation.
-      vec!["api", "graphql", "-f", "query={viewer{login}}", "-F", "query=@/synthetic/mutation.graphql"],
-      vec!["api", "graphql", "-f", "query={viewer{login}}", "-f", "query={viewer{name}}"],
+      (vec!["api", "graphql", "-f", "query={viewer{login}}", "-F", "query=@/synthetic/mutation.graphql"], "unknown"),
+      (vec!["api", "graphql", "-f", "query={viewer{login}}", "-f", "query={viewer{name}}"], "unknown"),
     ];
 
-    for args in &cases {
+    for (args, operation) in &cases {
       let stubs = Stubs::start();
       let output = stubs.run(args, &[]);
 
       assert_eq!(output.status.code(), Some(1), "{args:?}");
       let stderr = String::from_utf8_lossy(&output.stderr);
-      assert!(stderr.contains("repos/<owner>/<repo>"), "{args:?}: {stderr}");
+      assert!(stderr.contains(&format!("operation type as {operation};")), "{args:?}: {stderr}");
+      assert!(!stderr.contains("-R"), "{args:?}: {stderr}");
       assert!(stubs.record().is_empty(), "{args:?}");
       assert!(stubs.token_record().is_empty(), "{args:?}");
     }
@@ -742,5 +748,59 @@ esac
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("-R"), "{stderr}");
+  }
+
+  /// A GraphQL mutation whose checkout resolves no repository is refused before the token command or real gh runs.
+  /// The message names GraphQL and the checkout, and gives no -R advice.
+  #[test]
+  #[ignore = "integration"]
+  fn a_graphql_mutation_without_a_checkout_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let record = root.path().join("gh.record");
+    let token_record = root.path().join("token.record");
+    write_executable(
+      &bin.join("gh"),
+      &format!(
+        r#"#!/bin/sh
+if [ "$1 $2" = 'repo view' ]; then
+  exit 4
+fi
+for a in "$@"; do
+  printf 'argv:%s\n' "$a" >> '{record}'
+done
+"#,
+        record = record.display()
+      ),
+    );
+    write_executable(
+      &bin.join("token-cmd"),
+      &format!(
+        r#"#!/bin/sh
+for a in "$@"; do
+  printf 'argv:%s\n' "$a" >> '{token_record}'
+done
+printf 'stub-app-token\n'
+"#,
+        token_record = token_record.display()
+      ),
+    );
+
+    let output = Command::new(script())
+      .args(["api", "graphql", "-f", "query=mutation { x }"])
+      .current_dir(root.path())
+      .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+      .env(TOKEN_COMMAND_VAR, bin.join("token-cmd"))
+      .output()
+      .expect("the wrapper script runs");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("GraphQL"), "{stderr}");
+    assert!(stderr.contains("checkout"), "{stderr}");
+    assert!(!stderr.contains("-R"), "{stderr}");
+    assert!(fs::read_to_string(&record).unwrap_or_default().is_empty(), "the real gh ran");
+    assert!(fs::read_to_string(&token_record).unwrap_or_default().is_empty(), "the token command ran");
   }
 }

@@ -1516,7 +1516,6 @@ impl Store {
     let fresh = self
       .read_metadata_fresh(&task_id)?
       .ok_or_else(|| StoreError::new(format!("created task {task_id} is missing")))?;
-    self.update_session_metadata_value_index(&fresh);
     // The creation fact is published by the rename above, which appends no control fact. The signal follows the
     // publication and the index invalidation, so a receiver can read the node at once (`task_sessions.create_task`).
     self.notify_task_tree_changed(&task_id).await;

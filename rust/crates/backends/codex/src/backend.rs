@@ -125,23 +125,24 @@ impl CodexBackend {
     })
   }
 
-  /// The config profile that carries a worker or review run's instructions. A manager turn carries none.
+  /// The config flags that carry a worker or review run's instructions. A manager turn carries none.
   ///
-  /// The profile keeps the developer instructions in their original role without putting their text in argv.
+  /// When `instructions_content` is present, its text goes into a `--profile` before `exec`'s subcommand, so this
+  /// helper emits only `project_doc_fallback_filenames` (plus `developer_instructions=null` when content is absent).
   /// `project_doc_fallback_filenames` lets Codex read the repository's CLAUDE.md when its worktree has no AGENTS.md.
-  fn instructions_config_args(&self) -> anyhow::Result<Vec<String>> {
+  fn instructions_config_args(&self) -> Vec<String> {
     if self.instructions_file.is_none() {
-      return Ok(Vec::new());
+      return Vec::new();
     }
     let mut args = match &self.instructions_profile_name {
-      Some(profile_name) => vec!["--profile".to_string(), profile_name.clone()],
+      Some(_) => Vec::new(),
       None => vec!["--config".to_string(), "developer_instructions=null".to_string()],
     };
     args.extend([
       "--config".to_string(),
       format!(r#"project_doc_fallback_filenames=["{CLAUDE_INSTRUCTIONS_FILE_NAME}"]"#),
     ]);
-    Ok(args)
+    args
   }
 
   fn model_config_args(&self) -> Vec<String> {
@@ -171,7 +172,7 @@ impl CodexBackend {
     args
   }
 
-  /// The `codex exec` head of the streaming and one-shot paths.
+  /// The `codex exec` head of the one-shot path.
   fn exec_command_head(&self) -> Vec<String> {
     let mut command = vec![self.codex_bin.clone(), "exec".to_string()];
     command.extend(self.exec_args());
@@ -179,13 +180,20 @@ impl CodexBackend {
   }
 
   /// The streaming command. The prompt goes to stdin (`stdin_prompt`), and the command ends with the `-` prompt
-  /// argument. A resume splices `resume` after `exec` and the session id after the exec flags, which is the form
-  /// `codex exec resume <flags> <session-id>` takes.
+  /// argument. `--profile` is an `exec` option (not accepted after `resume`), so it precedes `resume` when present.
+  /// A resume places `resume` after `exec` (and `--profile`) and the session id after the exec flags, which is the
+  /// form `codex exec [--profile <name>] resume <flags> <session-id>` takes.
   pub fn build_command(&self) -> anyhow::Result<Vec<String>> {
-    let mut command = self.exec_command_head();
-    command.extend(self.instructions_config_args()?);
+    let mut command = vec![self.codex_bin.clone(), "exec".to_string()];
+    if let Some(profile_name) = &self.instructions_profile_name {
+      command.extend(["--profile".to_string(), profile_name.clone()]);
+    }
+    if self.resume_session_id.is_some() {
+      command.push("resume".to_string());
+    }
+    command.extend(self.exec_args());
+    command.extend(self.instructions_config_args());
     if let Some(session_id) = &self.resume_session_id {
-      command.insert(2, "resume".to_string());
       command.push(session_id.clone());
     }
     command.extend(bash_guard_hook_args());
@@ -221,6 +229,7 @@ impl CodexBackend {
 
     let instructions = self.instructions_content.as_deref().context("Codex instructions profile has no text")?;
     let contents = format!("developer_instructions = {}\n", toml_string_value(instructions));
+    fs::create_dir_all(&home).with_context(|| format!("creating the Codex home directory {}", home.display()))?;
     let mut temporary = tempfile::Builder::new()
       .prefix(".charliebot-codex-profile-")
       .tempfile_in(&home)
@@ -581,6 +590,37 @@ mod tests {
     assert!(command.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "{command:?}");
     assert!(command.iter().all(|argument| !argument.contains(&instructions)), "{command:?}");
     assert_eq!(profile["developer_instructions"].as_str(), Some(instructions.as_str()));
+  }
+
+  /// `codex exec resume` rejects `--profile` after `resume`, so a resumed run with developer instructions emits
+  /// `--profile <name>` on `codex exec` before `resume`.
+  #[test]
+  fn resumed_run_with_instructions_places_profile_before_resume() {
+    let session_id = "0195c4f2-3c1a-7b0e-9d2e-1a2b3c4d5e6f";
+    let backend = CodexBackend::from_launch(
+      PathBuf::from("/synthetic/bin/codex"),
+      Path::new("/synthetic/home/.local/bin"),
+      "gpt-5.5",
+      &CodexOptions::default(),
+      LaunchArgs {
+        instructions_content: Some("Worker rules.".to_string()),
+        instructions_file: Some(PathBuf::from("/synthetic/instructions.md")),
+        resume_session_id: Some(session_id.to_string()),
+        ..LaunchArgs::default()
+      },
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+
+    let command = backend.build_command().unwrap();
+    let profile_index = command.iter().position(|argument| argument == "--profile").unwrap();
+    let resume_index = command.iter().position(|argument| argument == "resume").unwrap();
+    let session_index = command.iter().position(|argument| argument == session_id).unwrap();
+    assert_eq!(command[1], "exec");
+    assert_eq!(profile_index, 2);
+    assert_eq!(resume_index, 4);
+    assert!(session_index > resume_index, "{command:?}");
+    assert_eq!(command.last().map(String::as_str), Some("-"), "{command:?}");
   }
 
   /// A prompt past Linux's per-argument limit reaches codex on stdin, and no argv element carries it. The check covers

@@ -575,7 +575,8 @@ fn check_argv(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec<
 /// Convert the generated profile back to its equivalent config override for comparison with the recorded reference.
 fn normalize_profile_instructions_arg(argv: &mut Vec<Value>, codex_home: &Path) {
   let Some(index) = argv.iter().position(|argument| argument.as_str() == Some("--profile")) else { return };
-  let profile_name = argv[index + 1].as_str().expect("the --profile value is text");
+  let profile_name = argv[index + 1].as_str().expect("the --profile value is text").to_string();
+  argv.drain(index..=index + 1);
   let profile_path = codex_home.join(format!("{profile_name}.config.toml"));
   let profile: toml::Table = toml::from_str(&fs::read_to_string(profile_path).expect("the Codex profile reads"))
     .expect("the Codex profile is valid TOML");
@@ -584,8 +585,13 @@ fn normalize_profile_instructions_arg(argv: &mut Vec<Value>, codex_home: &Path) 
   instructions
     .serialize(toml::ser::ValueSerializer::new(&mut serialized))
     .expect("the developer instructions serialize as TOML");
+  let insert_at = argv
+    .iter()
+    .position(|argument| argument.as_str().is_some_and(|text| text.starts_with("project_doc_fallback_filenames=")))
+    .expect("a profile run carries project_doc_fallback_filenames")
+    - 1;
   argv.splice(
-    index..=index + 1,
+    insert_at..insert_at,
     [Value::String("--config".to_string()), Value::String(format!("developer_instructions={serialized}"))],
   );
 }

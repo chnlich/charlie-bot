@@ -179,6 +179,26 @@ fn han_text(rng: &mut Rng, count: usize) -> String {
     .collect()
 }
 
+/// The `web_status` of a session whose goal is `goal`. The search match sets and the default shape's newest rows
+/// write it.
+fn web_status_of(goal: String) -> Value {
+  json!({"goal": goal, "now": "", "waiting": []})
+}
+
+/// The rows of a default home that carry a `web_status` goal. The live store had 5 of its newest 200 listing rows
+/// with a goal at implementation, and the goal's length is the median of those 5 goals, in characters.
+const NEWEST_WEB_STATUS_ROWS: usize = 5;
+const NEWEST_WEB_STATUS_GOAL_CHARS: usize = 143;
+
+/// Gives a goal to the newest `NEWEST_WEB_STATUS_ROWS` of `rows`. The listing orders its rows by `updated_at`, newest
+/// first, and then by `id`, newest first, so the newest rows are those that come first in that order.
+fn give_newest_web_status(rows: &mut [SessionMetadata], rng: &mut Rng) {
+  rows.sort_by(|left, right| (&right.updated_at, &right.id).cmp(&(&left.updated_at, &left.id)));
+  for row in rows.iter_mut().take(NEWEST_WEB_STATUS_ROWS) {
+    row.web_status = Some(web_status_of(han_text(rng, NEWEST_WEB_STATUS_GOAL_CHARS)));
+  }
+}
+
 /// Writes the `search` shape's match sets into `home`: archived sessions named for each query, each with a task spec, a
 /// `web_status` goal of the set's size, and an empty chat file. The active list the bench counts leaves archived sessions
 /// out, and a search answer reads a name hit's chat file only when it has no name hits to fill the answer.
@@ -206,7 +226,7 @@ fn write_search_matches(home: &Path, rng: &mut Rng, language: Language) -> Resul
         has_unread: false,
         starred: false,
         task: Some(view_task(rng, language)),
-        web_status: Some(json!({"goal": goal, "now": "", "waiting": []})),
+        web_status: Some(web_status_of(goal)),
       };
       write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
       let chat = layout::chat_events_path(&session_dir);
@@ -217,12 +237,15 @@ fn write_search_matches(home: &Path, rng: &mut Rng, language: Language) -> Resul
 }
 
 /// Writes the sessions and the manifest into `home`, and returns the total event-log bytes. The view and search shapes
-/// add a task spec to each session; the other shapes write the same bytes. The search shape adds its match sets after
-/// the view's sessions, which the manifest does not list: the bench counts the active sessions, and these are archived.
+/// add a task spec to each session; the other shapes write the same bytes. The default shape gives the newest rows a
+/// `web_status` goal; the view and search shapes keep their bytes, because the bench reads them. The search shape adds
+/// its match sets after the view's sessions, which the manifest does not list: the bench counts the active sessions,
+/// and these are archived.
 fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: Language) -> Result<u64> {
   let view = matches!(shape, Shape::View | Shape::Search);
   let (mut rng, text, sizes) = planned_home(sessions, seed, language);
   let mut manifest_sessions = Vec::with_capacity(sessions);
+  let mut listed = Vec::with_capacity(sessions);
   let mut total = 0;
   for size in sizes {
     let id = session_id(&mut rng);
@@ -248,9 +271,15 @@ fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: L
       task: view.then(|| view_task(&mut rng, language)),
       web_status: None,
     };
-    write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
+    listed.push(metadata);
     manifest_sessions.push(ManifestSession { id, event_log_bytes: log_bytes, last_message: final_text });
     total += log_bytes;
+  }
+  if shape == Shape::Default {
+    give_newest_web_status(&mut listed, &mut rng);
+  }
+  for metadata in &listed {
+    write_json(&layout::metadata_path(&home.join(&metadata.id)), metadata, b"  ")?;
   }
   if shape == Shape::Search {
     write_search_matches(home, &mut rng, language)?;
@@ -259,4 +288,44 @@ fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: L
     Manifest { seed, session_count: sessions, event_log_bytes: total, sessions: manifest_sessions, shape, language };
   write_json(&home.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// A stamp in the form `stamp` writes, `second` seconds into one minute.
+  fn at(second: u32) -> String {
+    format!("2026-11-19T00:00:{second:02}.000000Z")
+  }
+
+  /// A listing row that differs from the others only in its id and its `updated_at`.
+  fn row(id: &str, second: u32) -> SessionMetadata {
+    SessionMetadata {
+      id: id.to_string(),
+      name: String::new(),
+      status: "active",
+      profile: "manager",
+      backend: "mock-backend",
+      created_at: at(second),
+      updated_at: at(second),
+      schema_version: 2,
+      has_unread: false,
+      starred: false,
+      task: None,
+      web_status: None,
+    }
+  }
+
+  #[test]
+  fn the_newest_listing_rows_take_the_web_status_goal() {
+    // Listing order is `updated_at` then `id`, both newest first: b, c, a, e, f, d, g. The first five take a goal.
+    let listed = [("a", 5), ("c", 5), ("b", 9), ("d", 1), ("e", 3), ("f", 2), ("g", 0)];
+    let mut rows: Vec<SessionMetadata> = listed.into_iter().map(|(id, second)| row(id, second)).collect();
+    give_newest_web_status(&mut rows, &mut Rng::new(1));
+    let carrying: Vec<&str> = rows.iter().filter(|row| row.web_status.is_some()).map(|row| row.id.as_str()).collect();
+    assert_eq!(carrying, ["b", "c", "a", "e", "f"]);
+    let goal = rows[0].web_status.as_ref().expect("the newest row carries a goal")["goal"].as_str().expect("a goal");
+    assert_eq!(goal.chars().count(), NEWEST_WEB_STATUS_GOAL_CHARS);
+  }
 }

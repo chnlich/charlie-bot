@@ -199,12 +199,10 @@ function updateSidebarSessionName(sessionId, name) {
   // The row paints the title the next list repaint would give it. Under a named
   // Threads group header the title drops that label (sessionRowTitle, whose
   // header the row's own group container carries). Everywhere else the title is
-  // the name. The full name stays the row's data for the rename field.
+  // the name. The hover text is the full name, as renderSessionRowShell paints it.
   const group = link.closest('.session-group');
-  const title = sessionRowTitle({name}, currentFilter, group ? group.dataset.sgroupKey : '');
-  if (title === name) link.removeAttribute('data-full-name');
-  else link.dataset.fullName = name;
-  nameEl.textContent = title;
+  nameEl.textContent = sessionRowTitle({name}, currentFilter, group ? group.dataset.sgroupKey : '');
+  nameEl.title = name;
 }
 
 function getSessionIndicatorState(status) {

@@ -23,7 +23,8 @@ const {escapeHtml} = require('./escape_html_stub');
 function makeElement(id, {name = ''} = {}) {
   const listeners = new Map();
   const buttons = new Map();
-  const nameEl = {textContent: name};
+  // The name span carries the full name as its title, as renderSessionRowShell paints it.
+  const nameEl = {textContent: name, title: name};
   let html = '';
   const element = {
     id,

@@ -539,10 +539,9 @@ function switchTargetName(sessionId) {
   const nameEl = row ? row.querySelector('.session-name') : null;
   // The session's full name, not the row's rendered title: a grouped Threads
   // title drops its header's label (sessionRowTitle), and the opening notice
-  // and the chat header the click moves name the session's own name.
-  return (row && row.dataset && row.dataset.fullName)
-    || (nameEl && nameEl.textContent)
-    || sessionId;
+  // and the chat header the click moves name the session's own name. The name
+  // span's title holds that full name (renderSessionRowShell).
+  return (nameEl && nameEl.title) || sessionId;
 }
 
 // The switch's one awaited request: the target's bootstrap. A network failure or a 5xx retries

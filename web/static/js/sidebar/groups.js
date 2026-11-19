@@ -334,21 +334,20 @@ function sessionRowActiveClass(isActive) {
 // after the name span — and actions the trailing button column. The anchor's
 // session-row class is the plain-CSS hook styles.css's hover reveal keys on
 // (positioning context for the row's out-of-flow action buttons).
-// A title the row rule shortened (sessionRowTitle) carries its full name in
-// data-full-name, the way the row menu's Settings button carries its row facts.
-// The rename field and the opening notice read it off the anchor at click
-// time, and every other row's text is already the full name.
+// The name span's title is the full name on every row. A title the row rule
+// shortened (sessionRowTitle) reads whole on hover, and the rename field, the
+// switch notice and the archive confirmation read the name from the same
+// attribute. updateSidebarSessionName keeps it current on rename.
 function renderSessionRowShell(s, {filter, title, activeClass, options, indicators, line, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
-  const fullNameAttrs = title === s.name ? '' : ` data-full-name="${escapeHtmlAttr(s.name)}"`;
   return `<a href="/?session=${s.id}&filter=${filter}"
      class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}" ondblclick="sidebarControl('startRename', event, '${s.id}')"
      onclick="event.preventDefault(); sidebarControl('switchSession', '${s.id}')"
-     id="session-${s.id}"${fullNameAttrs}${extraAttrs}>
+     id="session-${s.id}"${extraAttrs}>
     ${indicators}
     <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(title)}</span>
+      <span class="truncate block session-name" title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
       ${line}
     </span>
     ${actions}

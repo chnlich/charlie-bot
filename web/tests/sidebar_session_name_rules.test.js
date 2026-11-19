@@ -4,11 +4,14 @@
 // without the header's label. status.js's updateSidebarSessionName — the one
 // write the commit-rename path and the session_renamed websocket handler both
 // funnel into — repaints the title the next list repaint would give it, and
-// keeps the full name as the row's data (data-full-name) for the rename field.
+// keeps the full name as the name span's title, the row's hover text and the
+// rename field's source.
 // One vm context loads namespace.js, status.js and groups.js in the page's
 // order, so the rule's writer and its render-side reader meet the same function.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -56,19 +59,15 @@ function loadNameContext() {
 }
 
 // One session-row anchor as startRename's and updateSidebarSessionName's DOM:
-// the name span, and the group container the row sits in (null for a row
-// outside any group).
-function rowElement({title, groupKey}) {
-  const nameEl = {textContent: title};
+// the name span, which holds the row's title and the full name as its title,
+// and the group container the row sits in (null for a row outside any group).
+// The name defaults to the title: a row whose title is not shortened.
+function rowElement({title, name = title, groupKey}) {
+  const nameEl = {textContent: title, title: name};
   const groupEl = groupKey === undefined ? null : {dataset: {sgroupKey: groupKey}};
   const row = {
-    dataset: {},
     querySelector: (sel) => (sel === '.session-name' ? nameEl : null),
     closest: (sel) => (sel === '.session-group' ? groupEl : null),
-    removeAttribute(name) {
-      if (name === 'data-full-name') delete row.dataset.fullName;
-      else throw new Error(`removeAttribute: unexpected attribute ${name}`);
-    },
   };
   return {row, nameEl};
 }
@@ -86,10 +85,11 @@ test('the title rule: a grouped Threads row drops the header label, every other 
     'a title that does not start with its header keeps itself');
 });
 
-test('a live rename repaints the shortened title and keeps the full name as data', () => {
+test('a live rename repaints the shortened title and the hover text is the new full name', () => {
   const context = loadNameContext();
   const elements = new Map();
-  const {row, nameEl} = rowElement({title: '2026-11-10 12:17', groupKey: 'Slack #docs-review'});
+  const {row, nameEl} = rowElement({title: '2026-11-10 12:17', name: 'Slack #docs-review 2026-11-10 12:17',
+    groupKey: 'Slack #docs-review'});
   elements.set('session-s1', row);
   context.document.getElementById = (id) => elements.get(id) || null;
   context.currentFilter = 'threads';
@@ -97,20 +97,21 @@ test('a live rename repaints the shortened title and keeps the full name as data
   context.updateSidebarSessionName('s1', 'Slack #docs-review 2026-11-10 12:17');
 
   assert.equal(nameEl.textContent, '2026-11-10 12:17', 'the title reads like the next list repaint');
-  assert.equal(row.dataset.fullName, 'Slack #docs-review 2026-11-10 12:17', 'the full name stays the data');
+  assert.equal(nameEl.title, 'Slack #docs-review 2026-11-10 12:17', 'the hover text is the full name');
 
   // A rename away from the label: the next repaint would show the whole name,
-  // so the live write shows it too and drops the data attribute.
+  // so the live write shows it too, and the hover text follows the new name.
   context.updateSidebarSessionName('s1', 'Renamed thread');
 
   assert.equal(nameEl.textContent, 'Renamed thread');
-  assert.equal(row.dataset.fullName, undefined, 'a full-title row carries no data-full-name');
+  assert.equal(nameEl.title, 'Renamed thread', 'the hover text follows the rename');
 });
 
 test('a live rename of a child row follows the rule its root’s header sets', () => {
   const context = loadNameContext();
   const elements = new Map();
-  const {row, nameEl} = rowElement({title: '2026-11-08 09:30', groupKey: 'Slack #docs-review'});
+  const {row, nameEl} = rowElement({title: '2026-11-08 09:30', name: 'Slack #docs-review 2026-11-08 09:30',
+    groupKey: 'Slack #docs-review'});
   elements.set('session-s1', row);
   context.document.getElementById = (id) => elements.get(id) || null;
   context.currentFilter = 'threads';
@@ -118,7 +119,7 @@ test('a live rename of a child row follows the rule its root’s header sets', (
   context.updateSidebarSessionName('s1', 'Slack #docs-review 2026-11-08 09:30');
 
   assert.equal(nameEl.textContent, '2026-11-08 09:30');
-  assert.equal(row.dataset.fullName, 'Slack #docs-review 2026-11-08 09:30');
+  assert.equal(nameEl.title, 'Slack #docs-review 2026-11-08 09:30');
 });
 
 test('a live rename outside Threads, and outside any group, writes the full name', () => {
@@ -134,11 +135,37 @@ test('a live rename outside Threads, and outside any group, writes the full name
   context.updateSidebarSessionName('ws', 'Slack #docs-review 2026-11-10 12:17');
   assert.equal(workspace.nameEl.textContent, 'Slack #docs-review 2026-11-10 12:17',
     'the Workspace keeps the full name, whatever the row’s header');
-  assert.equal(workspace.row.dataset.fullName, undefined);
+  assert.equal(workspace.nameEl.title, 'Slack #docs-review 2026-11-10 12:17');
 
   context.currentFilter = 'threads';
   context.updateSidebarSessionName('ug', 'Slack #ops-misc 2026-11-09 10:20');
   assert.equal(ungrouped.nameEl.textContent, 'Slack #ops-misc 2026-11-09 10:20',
     'the keyless bucket keeps the full name');
-  assert.equal(ungrouped.row.dataset.fullName, undefined);
+  assert.equal(ungrouped.nameEl.title, 'Slack #ops-misc 2026-11-09 10:20');
+});
+
+// The chat header is the other writer of the session name. displayed-session.js paints the displayed session's full
+// name into #header-session-name, and the template does not truncate that heading, so the header wraps the name.
+test('the chat header paints the full session name, and the template does not truncate it', () => {
+  const headerEl = {textContent: ''};
+  const context = {
+    PAGE_HOSTNAME: 'localhost:8000',
+    SESSION_ID: 's1',
+    SESSION_NAME: 'Short name',
+    document: {
+      title: '',
+      getElementById: (id) => (id === 'header-session-name' ? headerEl : null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(readStatic('chat/displayed-session.js'), context, {filename: 'chat/displayed-session.js'});
+
+  const longName = `${'A long session name, '.repeat(7)}${'x'.repeat(40)}`;
+  context.refreshDisplayedSessionName('s1', longName);
+  assert.equal(headerEl.textContent, longName);
+
+  const html = fs.readFileSync(path.join(__dirname, '..', 'templates', 'index.html'), 'utf8');
+  const header = html.match(/<h2 class="([^"]*)"\s+id="header-session-name">/);
+  assert.ok(header, 'index.html renders the header name heading');
+  assert.ok(!header[1].split(/\s+/).includes('truncate'), 'the header name wraps instead of truncating');
 });

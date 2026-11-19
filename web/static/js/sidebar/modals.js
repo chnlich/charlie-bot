@@ -16,26 +16,27 @@ function startRename(e, id) {
   const linkRect = link ? link.getBoundingClientRect() : null;
   const linkUsable = !fromHeader && !!(linkRect && linkRect.width);
   const anchor = linkUsable ? link : header;
-  const valueEl = linkUsable ? (link.querySelector('.session-name') || header) : header;
+  const nameEl = linkUsable ? link.querySelector('.session-name') : null;
+  const valueEl = nameEl || header;
   if (!anchor || !valueEl) return;
   renameSessionId = id;
   const rect = anchor.getBoundingClientRect();
   const valueRect = valueEl.getBoundingClientRect();
   const input = document.getElementById('rename-input');
-  // The field takes the name line's own height. The row's second line — the time and the backend — stays
-  // below it and readable while the name is edited.
+  // The field takes the name line's own height: one line of the name, so a header name that wraps keeps its other
+  // lines readable below the field. The row's second line — the time and the backend — stays below it too.
   input.style.top = valueRect.top + 'px';
   input.style.left = rect.left + 'px';
   input.style.width = rect.width + 'px';
-  input.style.height = valueRect.height + 'px';
+  input.style.height = Math.min(valueRect.height, parseFloat(getComputedStyle(valueEl).lineHeight)) + 'px';
   input.style.paddingTop = '0px';
   input.style.paddingBottom = '0px';
   // The field prefills the session's full name, not the row's rendered title:
   // a grouped Threads title drops its header's label (sessionRowTitle), and
-  // Enter on an untouched field must keep the name. The shortened row carries
-  // its full name in data-full-name (renderSessionRowShell, kept current by
-  // updateSidebarSessionName); every other row's text is the name itself.
-  input.value = linkUsable && link.dataset.fullName ? link.dataset.fullName : valueEl.textContent;
+  // Enter on an untouched field must keep the name. The row's name span carries
+  // the full name as its title (renderSessionRowShell, kept current by
+  // updateSidebarSessionName); the header's text is the name itself.
+  input.value = nameEl ? nameEl.title : valueEl.textContent;
   input.classList.remove('hidden');
   input.focus();
   input.select();
@@ -315,6 +316,7 @@ async function loadTaskContextModal(sessionId) {
   const titleEl = document.getElementById('task-context-modal-title');
   if (titleEl && taskContextModalSession === sessionId) {
     titleEl.textContent = 'Task & context · ' + (session.name || sessionId);
+    titleEl.title = titleEl.textContent;
   }
   const taskHtml = taskContextTaskHtml(session);
   if (!session.profile) {
@@ -335,7 +337,10 @@ function openTaskContextModal(sessionId) {
   const overlay = document.getElementById('task-context-modal-overlay');
   const titleEl = document.getElementById('task-context-modal-title');
   const bodyEl = document.getElementById('task-context-modal-body');
-  if (titleEl) titleEl.textContent = 'Task & context';
+  if (titleEl) {
+    titleEl.textContent = 'Task & context';
+    titleEl.removeAttribute('title');
+  }
   if (bodyEl) bodyEl.innerHTML = taskContextNoteHtml('Loading…');
   if (overlay) {
     overlay.classList.remove('hidden');

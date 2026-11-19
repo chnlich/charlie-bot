@@ -53,12 +53,13 @@ async function removeSessionRowInline(sessionId) {
   }
 }
 
-// The title a session's row displays. The archive confirmation names the session by it. A session
-// with no row on screen has no title to name, so the miss throws.
-function sessionDisplayTitle(sessionId) {
+// The full name of a session's row. The archive confirmation names the session by it, whole, where a
+// Threads row's title drops its header's label. A session with no row on screen has no name to show, so
+// the miss throws.
+function sessionRowFullName(sessionId) {
   const nameEl = document.getElementById('session-' + sessionId)?.querySelector('.session-name');
   if (!nameEl) throw new Error('No sidebar row shows session ' + sessionId);
-  return nameEl.textContent;
+  return nameEl.title;
 }
 
 // Every archive control calls this: the row's Archive button (groups.js) and the touch row
@@ -67,7 +68,7 @@ function sessionDisplayTitle(sessionId) {
 function archiveSession(id) {
   Sidebar.openConfirmDialog({
     heading: 'Archive session?',
-    detail: sessionDisplayTitle(id),
+    detail: sessionRowFullName(id),
     confirmLabel: 'Archive',
     confirmClass: 'bg-blue-600 hover:bg-blue-500',
     confirmOnEnter: true,

@@ -1090,7 +1090,8 @@ function renderMessage(msg, sessionId) {
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-300\">"
       + "<div class=\"flex items-center gap-2 mb-1 text-indigo-300 font-semibold\">"
       + "<span class=\"px-1.5 py-0.5 rounded bg-indigo-900 text-[10px] tracking-wide\">AGENT</span>"
-      + "<span class=\"truncate\">" + escapeHtml(msg.from_session_name || "") + "</span>"
+      + "<span class=\"truncate\" title=\"" + escapeHtmlAttr(msg.from_session_name || "") + "\">"
+      + escapeHtml(msg.from_session_name || "") + "</span>"
       + "</div>"
       + "<div class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</div>"
       + timeDiv() + "</div></div>";

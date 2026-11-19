@@ -15,7 +15,7 @@ use charliebot_store::metadata::{TaskApprover, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunRecord};
 use futures_util::future::BoxFuture;
 
-use crate::config::{ScheduledTaskConfig, TaskMode, effective_backend};
+use crate::config::{ScheduledTaskConfig, TaskMode};
 use crate::firing::{input_prefix, round_request_id, round_request_task};
 use crate::steps::StepMember;
 use crate::{host_gate, loader, steps};
@@ -23,6 +23,64 @@ use crate::{host_gate, loader, steps};
 /// The reader set that `runtime.tasks` reads scheduled tasks through, registered once by this crate.
 pub(crate) fn bound_round_readers() -> BoundRoundReaders {
   BoundRoundReaders { binding: binding_reader, round: round_reader, round_in_flight: round_in_flight_reader }
+}
+
+/// The member kinds that the improve launcher accepts, one per line. The launch script, the remote runner, the login
+/// readback and this check all read this one file.
+const MEMBER_KINDS_TEXT: &str = include_str!("../../../../../dev/improve/member_kinds.txt");
+
+/// The member kinds that a keyed round may run, read from the kind list text. A list with no kind is an error.
+pub(crate) fn member_kinds() -> anyhow::Result<Vec<&'static str>> {
+  parse_member_kinds(MEMBER_KINDS_TEXT)
+}
+
+pub(crate) fn parse_member_kinds(text: &str) -> anyhow::Result<Vec<&str>> {
+  let kinds = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>();
+  anyhow::ensure!(!kinds.is_empty(), "dev/improve/member_kinds.txt lists no member kind");
+  Ok(kinds)
+}
+
+/// The member kind of a backend type: `claude` for the three types whose command starts with `claude`, `codex` for the
+/// codex type, and `None` for any other type, which no keyed round may run on.
+pub(crate) fn member_kind(backend_type: &str) -> Option<&'static str> {
+  match backend_type {
+    "cc-claude" | "cc-anthropic-compatible" | "cc-openai-compatible" => Some("claude"),
+    "codex" => Some("codex"),
+    _ => None,
+  }
+}
+
+/// Why a session on `backend` cannot take a fire or a round of a task: the id names no current option or pool id, or,
+/// for a task bound with `improve_host`, a member of the backend has no member kind the improve launcher accepts.
+/// `None` when the session can take it.
+pub(crate) fn session_backend_refusal(
+  cfg: &CharlieBotConfig,
+  backend: &str,
+  keyed: bool,
+) -> anyhow::Result<Option<String>> {
+  if let Err(reason) = cfg.backends.check_backend_id(backend) {
+    return Ok(Some(reason));
+  }
+  if !keyed {
+    return Ok(None);
+  }
+  let kinds = member_kinds()?;
+  let members = match cfg.backends.pool(backend) {
+    Some(pool) => pool.members.iter().map(|member| member.backend.as_str()).collect(),
+    None => vec![backend],
+  };
+  for member in members {
+    let option = cfg
+      .get_backend_option(member)
+      .ok_or_else(|| anyhow::anyhow!("backend '{member}' is not a configured backends.options id"))?;
+    if !member_kind(&option.backend_type).is_some_and(|kind| kinds.contains(&kind)) {
+      return Ok(Some(format!(
+        "backend '{member}' (type '{}') has no member kind that the improve launcher accepts; a round runs only claude or codex",
+        option.backend_type
+      )));
+    }
+  }
+  Ok(None)
 }
 
 /// The trigger input of `task` that is still queued in `session_id`, or claimed by a live run there. Returns the input
@@ -71,8 +129,12 @@ pub(crate) fn round_in_flight(
   session_id: &str,
   cfg: &CharlieBotConfig,
 ) -> anyhow::Result<Option<String>> {
+  let session = features
+    .store
+    .get_session_cached_or_read_sync(session_id)?
+    .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' bound session {session_id} does not exist", task.name))?;
   for leaf_id in features.store.child_ids(session_id)? {
-    if leaf_has_live_run(features, &leaf_id, task, cfg)?
+    if leaf_has_live_run(features, &leaf_id, task, cfg, &session.backend)?
       && round_task_of(features, &leaf_id)?.as_deref() == Some(&task.name)
     {
       return Ok(Some(leaf_id));
@@ -124,6 +186,7 @@ fn leaf_has_live_run(
   leaf_id: &str,
   task: &ScheduledTaskConfig,
   cfg: &CharlieBotConfig,
+  session_backend: &str,
 ) -> anyhow::Result<bool> {
   let store = &features.store;
   let runs: Vec<RunRecord> = store.list_run_records_sync(leaf_id)?;
@@ -135,7 +198,10 @@ fn leaf_has_live_run(
     }
   }
   let facts = store.run_facts(leaf_id)?;
-  Ok(store.task_state(leaf_id)? == "open" && steps::steps_chain_awaits_next_step(task, cfg, &runs, &facts)?)
+  Ok(
+    store.task_state(leaf_id)? == "open"
+      && steps::steps_chain_awaits_next_step(task, cfg, session_backend, &runs, &facts)?,
+  )
 }
 
 /// The task a worker session was created for, read from its creation fact. `None` for a session no round created.
@@ -186,10 +252,20 @@ fn round_reader<'a>(
     let (snapshot, _reloaded) = loader::read_snapshot(features, &cfg)?;
     let task =
       find_task(&snapshot, name).ok_or_else(|| anyhow::anyhow!("scheduled task '{name}' is not a valid task file"))?;
-    let configured = effective_backend(task, &cfg)?;
+    let session_id =
+      task.session_id.as_deref().ok_or_else(|| anyhow::anyhow!("scheduled task '{name}' has no session binding"))?;
+    let session = features
+      .store
+      .load_meta(session_id)
+      .await?
+      .ok_or_else(|| anyhow::anyhow!("scheduled task '{name}' bound session {session_id} does not exist"))?;
+    let configured = session.backend;
+    if let Some(reason) = session_backend_refusal(&cfg, &configured, task.improve_host.is_some())? {
+      return Ok(ScheduledRoundStart::Refused(reason));
+    }
     let option = match steps::select_step_member(features, &cfg, &configured, &[])? {
       StepMember::Selected(option) => option,
-      StepMember::Exhausted(message) => return Ok(ScheduledRoundStart::Exhausted(message)),
+      StepMember::Exhausted(message) => return Ok(ScheduledRoundStart::Refused(message)),
     };
     let session_backend = cfg.backends.pool(&configured).is_some().then(|| configured.clone());
     Ok(ScheduledRoundStart::Ready(Box::new(ScheduledRound {

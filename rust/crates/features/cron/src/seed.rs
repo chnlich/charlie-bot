@@ -8,7 +8,6 @@ use charliebot_core::home_init;
 use charliebot_core::repo_root::CONFIGS_DIR_NAME;
 use serde_json::Value;
 
-use crate::config::effective_backend;
 use crate::loader;
 
 /// One seeded entry's report: the job name and whether its host file was `created`, already `exists`, or in a dry
@@ -65,11 +64,23 @@ pub fn seed_default_cron_tasks(
       report.push(SeedReport { name, status: home_init::SEED_EXISTS });
       continue;
     }
+    let (_, body) = split_entry(entry)?;
+    // A dry run on a home without config.yaml reads no backend ids: the layout writes that file only in the real run,
+    // and the real run checks the ids of the file it just wrote.
+    if !dry_run || cfg.config_file().exists() {
+      let missing = missing_step_backend_ids(cfg, &body);
+      if !missing.is_empty() {
+        return Err(format!(
+          "default cron entry {name:?} names backend ids that the host config does not hold, so its file is \
+           not seeded: {}",
+          missing.join(", ")
+        ));
+      }
+    }
     if dry_run {
       report.push(SeedReport { name, status: home_init::SEED_WOULD_CREATE });
       continue;
     }
-    let (_, body) = split_entry(entry)?;
     // Persist the pointer unchanged: the pointed file owns the prompt body,
     // and this host file carries only its path.
     loader::write_task_file(&path, &body).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -84,14 +95,14 @@ pub fn setup_step(cfg: &CharlieBotConfig, repo_root: &Path, dry_run: bool) -> Re
   // Per-task created/exists for repo-default cron entries, keyed on whether the
   // per-job host file config.d/cron.d/<name>.yaml exists. The dry-run runs the
   // same validation as the real run and writes nothing, so the preview fails
-  // exactly where the real run would.
+  // where the real run would; the one exception is the backend-id check on a
+  // home without config.yaml (see seed_default_cron_tasks).
   for item in seed_default_cron_tasks(cfg, repo_root, dry_run)? {
     println!("  cron {}: {}", item.name, item.status);
   }
 
-  // Effective scheduled task list: name / cron / resolved timezone / resolved
-  // backend. If backend resolution raises (e.g. empty backends.options on a fresh
-  // host), print the reason instead of aborting setup.
+  // Effective scheduled task list: name / cron / resolved timezone. A task's backend belongs to its bound session,
+  // which setup may not have yet.
   println!("  effective scheduled tasks:");
   let (snapshot, _) =
     loader::load_snapshot_for_paths(&loader::cron_dir(cfg), repo_root, &crate::config::browser_login_hosts(cfg))
@@ -100,13 +111,22 @@ pub fn setup_step(cfg: &CharlieBotConfig, repo_root: &Path, dry_run: bool) -> Re
     println!("    (none)");
   }
   for task in &snapshot.tasks {
-    let backend = match effective_backend(task, cfg) {
-      Ok(backend) => backend,
-      Err(error) => format!("unresolved: {error}"),
-    };
-    println!("    - {} | cron={} | tz={} | backend={}", task.name, task.cron, task.timezone, backend);
+    println!("    - {} | cron={} | tz={}", task.name, task.cron, task.timezone);
   }
   Ok(())
+}
+
+/// The backend ids that the steps of a default entry name and the host config does not hold, in step order.
+fn missing_step_backend_ids(cfg: &CharlieBotConfig, body: &Value) -> Vec<String> {
+  body
+    .get("steps")
+    .and_then(Value::as_array)
+    .into_iter()
+    .flatten()
+    .filter_map(|step| step.get("backend").and_then(Value::as_str))
+    .filter(|backend| cfg.backends.check_backend_id(backend).is_err())
+    .map(str::to_string)
+    .collect()
 }
 
 /// One default entry's name and the body without it, or the error that names an entry that is not a mapping or
@@ -139,6 +159,8 @@ mod tests {
   use std::fs;
 
   use super::*;
+  use charliebot_core::config::BackendOption;
+  use serde_json::json;
 
   /// The committed checkout, whose `configs/cron.default.yaml` and prompt files the server reads at start.
   fn checkout_root() -> PathBuf {
@@ -165,7 +187,20 @@ mod tests {
   }
 
   fn cfg(home: &Path) -> CharlieBotConfig {
-    charliebot_core::config::load_config(home, &Default::default()).expect("the empty config loads")
+    let mut cfg = charliebot_core::config::load_config(home, &Default::default()).expect("the empty config loads");
+    for id in ["claude-opus", "claude-fable"] {
+      cfg.backends.options.push(BackendOption {
+        id: id.to_string(),
+        label: id.to_string(),
+        prompt_overlay: None,
+        billing: None,
+        model: format!("{id}-model"),
+        backend_type: "synthetic".to_string(),
+        type_fields: Default::default(),
+        visible: true,
+      });
+    }
+    cfg
   }
 
   /// The default table's entries, each with its `name`.
@@ -200,7 +235,7 @@ mod tests {
     let cfg = cfg(home.path());
     fs::create_dir_all(loader::cron_dir(&cfg)).expect("the cron directory");
     let owner_file = loader::cron_path(&cfg, "proactive-agent");
-    let owner_text = "# paused by the owner\nproject: CharlieBot\ncron: \"0 7 * * *\"\n\
+    let owner_text = "# paused by the owner\ncron: \"0 7 * * *\"\n\
       prompt_file: prompts/cron/proactive_agent/prompt.md\nmode: master\nenabled: false\n";
     fs::write(&owner_file, owner_text).expect("the owner's host file");
 
@@ -243,11 +278,10 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "integration"]
   fn a_real_run_writes_one_host_file_per_default_entry_and_the_rerun_reports_exists() {
     let repo = repo_with_defaults();
-    let home = tempfile::tempdir().expect("a temp home");
-    let cfg = cfg(home.path());
+    let (_home, features) = crate::test_support::feature_context_with_extra_backends(&["claude-opus", "claude-fable"]);
+    let cfg = features.config.get().expect("the test config loads");
 
     let report = seed_default_cron_tasks(&cfg, repo.path(), false).expect("the first seed");
     assert_eq!(
@@ -259,12 +293,17 @@ mod tests {
     assert!(body.contains("cron: 27 6 * * *"), "{body}");
     assert!(!body.lines().any(|line| line.starts_with("name:")), "the host file carries no name key: {body}");
     assert!(body.contains("prompt_file: prompts/cron/memory_curator/memory_selector.md"), "{body}");
-    // The seeded body carries the entry's `project`, so the scheduler binds the
-    // task's session into that group.
+    let curator_value: Value = serde_yaml::from_str(&body).expect("the seeded host file is YAML");
+    assert!(curator_value.get("project").is_none(), "the task file carries no project: {body}");
+    assert!(curator_value.get("backend").is_none(), "the task file carries no task backend: {body}");
+    assert_eq!(curator_value["steps"][0]["backend"], "claude-opus");
+    assert_eq!(curator_value["steps"][1]["backend"], "claude-fable");
     for name in ["memory-curator", "storage-cool", "proactive-agent"] {
       let path = loader::cron_path(&cfg, name);
       let body = fs::read_to_string(&path).expect("the seeded host file");
-      assert!(body.contains("project: CharlieBot"), "the seeded {name} carries the default entry's project: {body}");
+      let value: Value = serde_yaml::from_str(&body).expect("the seeded host file is YAML");
+      assert!(value.get("project").is_none(), "the seeded {name} carries no project: {body}");
+      assert!(value.get("backend").is_none(), "the seeded {name} carries no task backend: {body}");
     }
 
     let report = seed_default_cron_tasks(&cfg, repo.path(), false).expect("the second seed");
@@ -272,6 +311,35 @@ mod tests {
       report.iter().map(|item| (item.name.as_str(), item.status)).collect::<Vec<_>>(),
       [("memory-curator", "exists"), ("storage-cool", "exists"), ("proactive-agent", "exists")]
     );
+  }
+
+  #[test]
+  fn a_default_entry_names_only_the_backend_ids_the_host_config_holds() {
+    let (_home, features) = crate::test_support::feature_context();
+    let cfg = features.config.get().unwrap();
+    let body = json!({"steps": [
+      {"name": "selector", "backend": "synthetic"},
+      {"name": "reviewer", "backend": "gone-id"},
+    ]});
+    assert_eq!(missing_step_backend_ids(&cfg, &body), ["gone-id"]);
+  }
+
+  #[test]
+  fn a_missing_default_step_backend_id_refuses_the_seed_before_writing_memory_curator() {
+    let repo = repo_with_defaults();
+    for (present, missing) in [("claude-fable", "claude-opus"), ("claude-opus", "claude-fable")] {
+      let (_home, features) = crate::test_support::feature_context_with_extra_backends(&[present]);
+      let cfg = features.config.get().expect("the test config loads");
+
+      let error = seed_default_cron_tasks(&cfg, repo.path(), false).expect_err("the missing backend refuses the seed");
+
+      assert!(error.contains(missing), "the error names {missing}: {error}");
+      assert!(!error.contains(present), "the error does not name configured id {present}: {error}");
+      assert!(
+        !loader::cron_path(&cfg, "memory-curator").exists(),
+        "the seed does not write memory-curator when {missing} is missing"
+      );
+    }
   }
 
   #[test]

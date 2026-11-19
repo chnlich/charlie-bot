@@ -612,11 +612,12 @@ pub struct ScheduledRound {
   pub model: Option<String>,
 }
 
-/// The outcome of starting a scheduled task's round: the round, or the reason no member of its pool can take it now.
+/// The outcome of starting a scheduled task's round: the round, or the reason it cannot start now, carried as its text.
 #[derive(Clone, Debug)]
 pub enum ScheduledRoundStart {
   Ready(Box<ScheduledRound>),
-  Exhausted(String),
+  /// The reason this round cannot start now.
+  Refused(String),
 }
 
 /// The reader of a scheduled task's binding by name, or `None` when no valid task has that name.

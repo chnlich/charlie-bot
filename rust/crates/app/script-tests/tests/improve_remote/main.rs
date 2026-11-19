@@ -389,8 +389,7 @@ fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
 
 /// [`run_in_scope`] with `extra` variables set over its environment, such as a `PATH` that names a stub.
 fn run_in_scope_with(world: &World, launch_id: &str, kind: &str, extra: &[(&str, String)]) -> harness::Run {
-  let launch = world.remote_home.join("improve/launch").join(launch_id);
-  fs::create_dir_all(&launch).expect("the launch directory");
+  let launch = world.stage_launch(launch_id);
   fs::write(launch.join("args"), "").expect("the launch arguments file");
   fs::create_dir_all(format!("/tmp/improve-{FOCUS_DIRECTION}-tmp")).expect("the round's TMPDIR");
   fs::create_dir_all(world.remote_home.join("improve").join(FOCUS_DIRECTION)).expect("the round root");
@@ -430,8 +429,7 @@ fn the_in_scope_runner_selects_each_key_by_its_credential_name() {
   )
   .expect("the fixture credentials file");
   let launch_id = "20261101T090000Z-1-300";
-  let launch = world.remote_home.join("improve/launch").join(launch_id);
-  fs::create_dir_all(&launch).expect("the launch directory");
+  let launch = world.stage_launch(launch_id);
   write_member_credential(&launch, &[("ANTHROPIC_AUTH_TOKEN", FOCUSED_MEMBER_TOKEN)]);
 
   let run = run_in_scope(&world, launch_id, "claude");
@@ -498,8 +496,7 @@ fn a_missing_review_key_exits_7_before_any_input_is_sent() {
 fn a_round_without_its_written_review_key_exits_7_before_inventory_or_scope() {
   let world = World::new();
   let launch_id = "20261101T090200Z-1-302";
-  let launch = world.remote_home.join("improve/launch").join(launch_id);
-  fs::create_dir_all(&launch).expect("the launch directory");
+  let launch = world.stage_launch(launch_id);
   fs::write(launch.join("env"), format!("IMPROVE_REVIEW_CREDENTIAL={REVIEW_CREDENTIAL}\0"))
     .expect("the launch environment");
   fs::write(world.remote_home.join("improve/home/credentials.yaml"), "synthetic-decoy:\n  api_key: decoy-value\n")
@@ -801,8 +798,7 @@ fn forwarded_codex_login(exp: i64) -> String {
 
 /// Make a codex launch's directory with its member credential holding `forwarded`, the login the launch carries.
 fn codex_in_scope_fixture(world: &World, launch_id: &str, forwarded: &str) {
-  let launch = world.remote_home.join("improve/launch").join(launch_id);
-  fs::create_dir_all(&launch).expect("the launch directory");
+  let launch = world.stage_launch(launch_id);
   write_member_credential(&launch, &[("IMPROVE_CODEX_AUTH", forwarded)]);
   fs::write(
     world.remote_home.join("improve/home/credentials.yaml"),
@@ -2051,8 +2047,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
       world.git(&clone, &["config", "core.hooksPath", "dev/git-hooks"]);
     }
     let launch_id = format!("20261102T090000Z-1-40{index}");
-    let launch = world.remote_home.join("improve/launch").join(&launch_id);
-    fs::create_dir_all(&launch).expect("the launch directory");
+    let launch = world.stage_launch(&launch_id);
     harness::copy_file(&harness::repo_root().join("dev/improve/remote-runner.sh"), &launch.join("remote-runner.sh"));
     // The launcher sends the rule script beside the runner, so the runner's clone scan sources it.
     harness::copy_file(&harness::repo_root().join("dev/improve/inflight-files.sh"), &launch.join("inflight-files.sh"));

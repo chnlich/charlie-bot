@@ -12,6 +12,7 @@ paths = [
   "rust/crates/app/server/src/login_page.html",
   "rust/crates/infra/html/src/html5_entities.json",
   "prompts/failure_triage_judge.md",
+  "dev/improve/member_kinds.txt",
 ]
 rust = "binary_id(charliebot-structure::structure)"
 

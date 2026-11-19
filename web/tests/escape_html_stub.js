@@ -5,7 +5,7 @@
 // textContent -> innerHTML round-trip escapes only `& < >` — `escapeHtmlText`
 // mirrors that one-for-one. Use it for sandbox `escapeHtml` globals. Production
 // interpolates the output into single-quoted JS inside onclick attributes (the
-// cron badge's openCronEditor, sidebar/groups.js startRename), so a
+// cron badge's openCronErrorView, sidebar/groups.js startRename), so a
 // quote-escaping fake hides a break the browser would hit.
 // `escapeHtml` keeps the `"` and `'` escapes for constructing expected values
 // in attribute assertions (`href="..."` regexes) and, wrapped as

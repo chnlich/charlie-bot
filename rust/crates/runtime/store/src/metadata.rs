@@ -27,8 +27,6 @@ pub const SCHEDULE_ENABLED: &str = "schedule_enabled";
 pub const SCHEDULE_NEXT_RUN: &str = "schedule_next_run";
 /// The session-metadata field holding the timezone the bound task's cron expression is read in.
 pub const SCHEDULE_TIMEZONE: &str = "schedule_timezone";
-/// The session-metadata field holding the project the bound task's schedule runs in.
-pub const SCHEDULE_PROJECT: &str = "schedule_project";
 /// The session-metadata field saying whether a failed bound-task run is allowed.
 pub const SCHEDULE_ALLOW_FAILURE: &str = "schedule_allow_failure";
 /// The session-listing field holding the name of the task bound to the session's schedule. The cron row fields write
@@ -37,8 +35,8 @@ pub const SCHEDULE_ALLOW_FAILURE: &str = "schedule_allow_failure";
 pub const SCHEDULE_TASK: &str = "schedule_task";
 /// Every schedule field name of a session, in the order session metadata writes them. The session listing and the cron
 /// row fields read these names from here.
-pub const SCHEDULE_FIELDS: [&str; 6] =
-  [SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEDULE_PROJECT, SCHEDULE_ALLOW_FAILURE];
+pub const SCHEDULE_FIELDS: [&str; 5] =
+  [SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEDULE_ALLOW_FAILURE];
 /// The cron slot's field naming the task bound to the session's schedule.
 pub const SCHEDULED_TASK: &str = "scheduled_task";
 /// The cron slot's field holding each bound task's schedule state, keyed by task name. Its value is an object whose
@@ -556,8 +554,6 @@ pub struct SessionMetadata {
   #[serde(default)]
   pub schedule_timezone: Option<String>,
   #[serde(default)]
-  pub schedule_project: Option<String>,
-  #[serde(default)]
   pub schedule_allow_failure: Option<bool>,
   #[serde(default)]
   pub parent_session_id: Option<String>,
@@ -628,7 +624,6 @@ impl SessionMetadata {
       schedule_enabled: None,
       schedule_next_run: None,
       schedule_timezone: None,
-      schedule_project: None,
       schedule_allow_failure: None,
       parent_session_id: None,
       successor_session_id: None,
@@ -719,7 +714,6 @@ impl SessionMetadata {
       push(&mut declared, SCHEDULE_ENABLED, &self.schedule_enabled);
       push(&mut declared, SCHEDULE_NEXT_RUN, &self.schedule_next_run);
       push(&mut declared, SCHEDULE_TIMEZONE, &self.schedule_timezone);
-      push(&mut declared, SCHEDULE_PROJECT, &self.schedule_project);
       push(&mut declared, SCHEDULE_ALLOW_FAILURE, &self.schedule_allow_failure);
     }
     push(&mut declared, PARENT_SESSION_ID, &self.parent_session_id);
@@ -1006,7 +1000,6 @@ mod tests {
       "schedule_enabled",
       "schedule_next_run",
       "schedule_timezone",
-      "schedule_project",
       "schedule_allow_failure",
       "parent_session_id",
       "successor_session_id",
@@ -1057,7 +1050,6 @@ mod tests {
       ("schedule_enabled", Value::Null),
       ("schedule_next_run", Value::Null),
       ("schedule_timezone", Value::Null),
-      ("schedule_project", Value::Null),
       ("schedule_allow_failure", Value::Null),
       ("parent_session_id", Value::Null),
       ("successor_session_id", Value::Null),

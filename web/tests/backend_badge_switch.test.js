@@ -71,6 +71,24 @@ function headerFixtures() {
 }
 
 // ---------------------------------------------------------------------------
+// 0. A session on a backend the config holds as neither an option nor a pool
+//    names its id and marks that the config does not hold it.
+// ---------------------------------------------------------------------------
+test('a session on a backend the config does not hold shows its id marked as not in config', () => {
+  const elements = headerFixtures();
+  const context = loadSessionContext({
+    elements,
+    SESSION_ID: 'session-a',
+    BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5' },
+  });
+  context.setSwitchableBackends(['gone-id']);
+  context.setActiveBackendId('gone-id');
+  context.updateActiveBackendBadges();
+  const label = elements.get('backend-badge').textContent;
+  assert.ok(label.startsWith('gone-id') && label.includes('not in config'), label);
+});
+
+// ---------------------------------------------------------------------------
 // 1. Read-only badge when the same-domain list holds only the current backend.
 // ---------------------------------------------------------------------------
 test('updateActiveBackendBadges keeps a read-only badge for a single-backend domain', () => {

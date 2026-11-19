@@ -1,9 +1,10 @@
 cron: 27 6 * * *
 timezone: local
-project: CharlieBot
 steps:
 - name: selector
   prompt_file: prompts/cron/memory_curator/memory_selector.md
+  backend: claude-opus
 - name: reviewer
   prompt_file: prompts/cron/memory_curator/memory_reviewer.md
+  backend: claude-fable
   distinct_backend_from: selector

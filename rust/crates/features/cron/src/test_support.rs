@@ -26,6 +26,11 @@ use serde_yaml::Mapping;
 
 /// The id of the priority pool that the Auto-style tests of this crate name.
 pub const AUTO_POOL_ID: &str = "auto";
+/// The `cc-claude` option of the login-host fixtures. A keyed round runs only on a member kind that the improve launcher
+/// accepts, so a keyed task's session must hold this option.
+pub const KEYED_BACKEND_ID: &str = "claude";
+/// The `gemini` option of the login-host fixtures, a type that no keyed round may run on.
+pub const NON_KEYED_BACKEND_ID: &str = "gemini";
 
 /// The priority pool `auto` over `members`, each billed as a subscription, in config order.
 fn auto_pool(members: &[&str]) -> PoolConfig {
@@ -43,8 +48,10 @@ pub fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
 }
 
 pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  let entries: Vec<(&str, Mapping)> =
-    std::iter::once("synthetic").chain(extra_backend_ids.iter().copied()).map(|id| (id, Mapping::new())).collect();
+  let entries: Vec<(&str, &str, Mapping)> = std::iter::once("synthetic")
+    .chain(extra_backend_ids.iter().copied())
+    .map(|id| (id, "synthetic", Mapping::new()))
+    .collect();
   feature_context_with_entries(&entries, None, &[])
 }
 
@@ -56,8 +63,18 @@ pub fn feature_context_with_auto(members: &[&str]) -> (tempfile::TempDir, Arc<Fe
 
 /// A feature context whose config names `hosts` as browser-login hosts (`host_auth.browser_logins[].host`), so that a
 /// task's `improve_host` may name any of them.
+/// The second option is `claude`, a `cc-claude` type: the member kind that a keyed task's session holds (see
+/// [`keyed_manager`]). The third is `gemini`, a type no keyed round may run on.
 pub fn feature_context_with_login_hosts(hosts: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  feature_context_with_entries(&[("synthetic", Mapping::new())], None, hosts)
+  feature_context_with_entries(
+    &[
+      ("synthetic", "synthetic", Mapping::new()),
+      (KEYED_BACKEND_ID, "cc-claude", Mapping::new()),
+      (NON_KEYED_BACKEND_ID, "gemini", Mapping::new()),
+    ],
+    None,
+    hosts,
+  )
 }
 
 /// [`feature_context_with_auto`] with the browser-login hosts of [`feature_context_with_login_hosts`].
@@ -65,7 +82,7 @@ pub fn feature_context_with_auto_login_hosts(
   members: &[&str],
   hosts: &[&str],
 ) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  let entries: Vec<(&str, Mapping)> = members.iter().map(|id| (*id, Mapping::new())).collect();
+  let entries: Vec<(&str, &str, Mapping)> = members.iter().map(|id| (*id, "synthetic", Mapping::new())).collect();
   feature_context_with_entries(&entries, Some(auto_pool(members)), hosts)
 }
 
@@ -116,7 +133,7 @@ pub async fn auto_manager(
 /// rotation pool `pool` holds every entry, and the call classes name it. `auto` adds one more pool.
 /// A feature context whose repo root is the checkout, so the session templates of the fires resolve.
 fn feature_context_with_entries(
-  entries: &[(&str, Mapping)],
+  entries: &[(&str, &str, Mapping)],
   auto: Option<PoolConfig>,
   login_hosts: &[&str],
 ) -> (tempfile::TempDir, Arc<FeatureContext>) {
@@ -125,11 +142,11 @@ fn feature_context_with_entries(
 
 /// A feature context whose repo root is `repo`, for a test that reads templates from a checkout of its own.
 pub fn feature_context_with_repo_root(repo: &Path) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  feature_context_at(&[("synthetic", Mapping::new())], None, &[], repo.to_path_buf())
+  feature_context_at(&[("synthetic", "synthetic", Mapping::new())], None, &[], repo.to_path_buf())
 }
 
 fn feature_context_at(
-  entries: &[(&str, Mapping)],
+  entries: &[(&str, &str, Mapping)],
   auto: Option<PoolConfig>,
   login_hosts: &[&str],
   repo: PathBuf,
@@ -161,7 +178,7 @@ fn feature_context_at(
   // A worker launch is withheld below `server.min_free_disk_gib`. The production default of 10 GiB can exceed a CI
   // runner's free disk, so this fixture pins the check off; the tasks crate tests the withhold itself.
   cfg.server.min_free_disk_gib = 0;
-  for (id, type_fields) in entries {
+  for (id, backend_type, type_fields) in entries {
     cfg.backends.options.push(BackendOption {
       id: id.to_string(),
       label: id.to_string(),
@@ -169,12 +186,12 @@ fn feature_context_at(
       // The members of the Auto fixtures are subscriptions; the other fixtures' options never reach a priority pool.
       billing: Some(PoolBilling::Subscription),
       model: format!("{id}-model"),
-      backend_type: "synthetic".to_string(),
+      backend_type: backend_type.to_string(),
       type_fields: type_fields.clone(),
       visible: true,
     });
   }
-  let (rotation, calls) = rotation_pools(entries.iter().map(|(id, _)| id.to_string()).collect());
+  let (rotation, calls) = rotation_pools(entries.iter().map(|(id, _, _)| id.to_string()).collect());
   cfg.backends.pools = rotation;
   cfg.backends.calls = calls;
   cfg.backends.pools.extend(auto);
@@ -466,7 +483,22 @@ esac
 }
 
 pub async fn manager(features: &FeatureContext, request_id: &str) -> anyhow::Result<SessionMetadata> {
-  task_manager(features, None, request_id).await
+  task_manager(features, None, request_id, "synthetic").await
+}
+
+/// A manager session on the keyed backend, the shape a session of a task with `improve_host` holds in a login-host
+/// fixture.
+pub async fn keyed_manager(features: &FeatureContext, request_id: &str) -> anyhow::Result<SessionMetadata> {
+  task_manager(features, None, request_id, KEYED_BACKEND_ID).await
+}
+
+/// A child manager session on the keyed backend under `parent_id`.
+pub async fn keyed_child_manager(
+  features: &FeatureContext,
+  parent_id: &str,
+  request_id: &str,
+) -> anyhow::Result<SessionMetadata> {
+  task_manager(features, Some(parent_id), request_id, KEYED_BACKEND_ID).await
 }
 
 /// A manager session under `parent_id`, the shape a task tree gives a child.
@@ -475,7 +507,7 @@ pub async fn child_manager(
   parent_id: &str,
   request_id: &str,
 ) -> anyhow::Result<SessionMetadata> {
-  task_manager(features, Some(parent_id), request_id).await
+  task_manager(features, Some(parent_id), request_id, "synthetic").await
 }
 
 /// One task session archived as the completion owner's archive writes it: one closed fact on the session.
@@ -520,6 +552,7 @@ async fn task_manager(
   features: &FeatureContext,
   parent_id: Option<&str>,
   request_id: &str,
+  backend: &str,
 ) -> anyhow::Result<SessionMetadata> {
   Ok(
     features
@@ -540,7 +573,7 @@ async fn task_manager(
             improve_host: None,
           }),
           name: Some("Synthetic cron manager".to_string()),
-          backend: Some("synthetic".to_string()),
+          backend: Some(backend.to_string()),
           group: None,
           session_id: None,
         },
@@ -563,9 +596,6 @@ pub fn write_task_file(home: &Path, task: &crate::config::ScheduledTaskConfig) -
   }
   if let Some(repo) = &task.repo {
     body.insert("repo".to_string(), Value::String(repo.clone()));
-  }
-  if let Some(backend) = &task.backend {
-    body.insert("backend".to_string(), Value::String(backend.clone()));
   }
   if let Some(host) = &task.improve_host {
     body.insert("improve_host".to_string(), Value::String(host.clone()));

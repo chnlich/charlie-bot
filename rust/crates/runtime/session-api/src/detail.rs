@@ -22,8 +22,8 @@ use charliebot_core::event_types;
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::text_repr;
 use charliebot_core::timefmt;
+use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
-use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
@@ -94,7 +94,6 @@ pub struct BootstrapPayload {
 /// included — always renders on the first screen.
 pub fn build_bootstrap_payload(
   store: &Store,
-  registry: &Registry,
   cfg: &CharlieBotConfig,
   meta: &SessionMetadata,
 ) -> StoreResult<BootstrapPayload> {
@@ -150,7 +149,7 @@ pub fn build_bootstrap_payload(
   if let Some(summary) = worker_summary {
     base.insert(event_types::WORKER_SUMMARY.to_string(), summary);
   }
-  base.extend(active_backend_payload(store, &response_meta, cfg, registry)?);
+  base.extend(active_backend_payload(store, &response_meta, cfg)?);
 
   // The payload of one trim step: the tail kept from slot `drop` on, its paging cursor moved onto
   // the first kept slot, and `has_more` true whenever older history remains.
@@ -343,12 +342,11 @@ static BOOTSTRAP_BODY_MEMO: LazyLock<BootstrapBodyMemo> = LazyLock::new(Bootstra
 fn bootstrap_body(
   memo: &BootstrapBodyMemo,
   store: &Store,
-  registry: &Registry,
   cfg: &Arc<CharlieBotConfig>,
   meta: &SessionMetadata,
   accepts_gzip: bool,
 ) -> StoreResult<(Bytes, Option<Bytes>, usize)> {
-  let inputs = page_bootstrap_inputs(store, registry, cfg, meta)?;
+  let inputs = page_bootstrap_inputs(store, cfg, meta)?;
   let mut entry = memo.entry.lock().expect("the bootstrap body memo mutex is not poisoned");
   let cached = match &inputs {
     Some(inputs) => match entry.as_ref() {
@@ -360,7 +358,7 @@ fn bootstrap_body(
   let (body, mut gzip, untrimmed, held) = match cached {
     Some(cached) => (cached.0, cached.1, cached.2, true),
     None => {
-      let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
+      let payload = build_bootstrap_payload(store, cfg, meta)?;
       let body = Bytes::from(charliebot_compat::json::fast_json_bytes(&payload.value));
       let untrimmed = payload.untrimmed_wire_bytes;
       let held = inputs.is_some();
@@ -390,11 +388,10 @@ fn bootstrap_body(
 pub fn page_bootstrap(
   memo: &PageBootstrapMemo,
   store: &Store,
-  registry: &Registry,
   cfg: &Arc<CharlieBotConfig>,
   meta: &SessionMetadata,
 ) -> StoreResult<PageBootstrap> {
-  let inputs = page_bootstrap_inputs(store, registry, cfg, meta)?;
+  let inputs = page_bootstrap_inputs(store, cfg, meta)?;
   if let Some(inputs) = &inputs {
     let mut entries = memo.entries.lock().expect("the page bootstrap memo mutex is not poisoned");
     if let Some(at) = entries.iter().position(|(cached_key, _)| cached_key.matches(inputs)) {
@@ -405,7 +402,7 @@ pub fn page_bootstrap(
       return Ok(bootstrap);
     }
   }
-  let payload = build_bootstrap_payload(store, registry, cfg, meta)?;
+  let payload = build_bootstrap_payload(store, cfg, meta)?;
   let bootstrap = PageBootstrap {
     text: Arc::new(charliebot_compat::jinja::tojson_text(&payload.value)),
     session: Arc::new(payload.value["session"].clone()),
@@ -428,7 +425,6 @@ pub fn page_bootstrap(
 /// session kind is memoized.
 fn page_bootstrap_inputs<'a>(
   store: &Store,
-  registry: &Registry,
   cfg: &'a Arc<CharlieBotConfig>,
   meta: &'a SessionMetadata,
 ) -> StoreResult<Option<PageBootstrapInputs<'a>>> {
@@ -438,7 +434,7 @@ fn page_bootstrap_inputs<'a>(
   let Some(events) = live_event_log_identity(store, &meta.id)? else { return Ok(None) };
   // The payload renders the displayed backend from the row's own backend, its profile and its bound picker entries,
   // so the row itself carries every input this payload reads.
-  let backend = active_backend_payload(store, meta, cfg, registry)?;
+  let backend = active_backend_payload(store, meta, cfg)?;
   Ok(Some(PageBootstrapInputs {
     session_id: &meta.id,
     meta,
@@ -520,12 +516,9 @@ async fn session_bootstrap(
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   let store = Arc::clone(&features.store);
-  let registry = Arc::clone(&features.registry);
   let wants_gzip = accepts_gzip(request.headers());
-  let result = tokio::task::spawn_blocking(move || {
-    bootstrap_body(&BOOTSTRAP_BODY_MEMO, &store, &registry, &cfg, &meta, wants_gzip)
-  })
-  .await;
+  let result =
+    tokio::task::spawn_blocking(move || bootstrap_body(&BOOTSTRAP_BODY_MEMO, &store, &cfg, &meta, wants_gzip)).await;
   match result {
     Ok(Ok((_body, Some(gzip), untrimmed))) => bootstrap_response(gzip, Some("gzip"), untrimmed),
     Ok(Ok((body, None, untrimmed))) => bootstrap_response(body, None, untrimmed),
@@ -587,7 +580,7 @@ async fn session_usage(
     Err(error) => return store_error(error),
   };
   response_meta.thinking_since = features.store.busy_since(&session_id);
-  match active_backend_payload(&features.store, &response_meta, &cfg, &features.registry) {
+  match active_backend_payload(&features.store, &response_meta, &cfg) {
     Ok(fields) => payload.extend(fields),
     Err(error) => return store_error(error),
   }
@@ -1139,7 +1132,6 @@ fn active_backend_payload(
   store: &Store,
   meta: &SessionMetadata,
   cfg: &CharlieBotConfig,
-  registry: &Registry,
 ) -> StoreResult<Map<String, Value>> {
   let live_run_backend = (meta.profile == TaskProfile::Worker).then(|| store.run_backend(&meta.id)).flatten();
   let active_backend = displayed_backend_id(
@@ -1148,39 +1140,12 @@ fn active_backend_payload(
     cfg.backends.options.first().map_or("claude", |option| option.id.as_str()),
   );
   let active_option = cfg.get_backend_option(&active_backend);
-  // The payload only shows the binding, so it takes the read the sidebar listing already serves instead of
-  // fingerprinting the controller's tree for every payload.
-  let dedicated = registry
-    .binding_for_render(&meta.id)
-    .map_err(|error| StoreError::new(error.to_string()))?
-    .is_some_and(|binding| binding.dedicated_backend());
   let known_active = cfg.backends.pool(&active_backend).is_some() || active_option.is_some();
-  let switchable = if !known_active {
-    Vec::new()
-  } else if dedicated {
-    // The switch route's lock judges a target by its member set (`same_continuation_domain`), and the menu lists
-    // what it would pass. The route takes the active id as a no-op, so it stays listed.
-    let mut switchable = Vec::new();
-    for id in cfg
-      .backends
-      .options
-      .iter()
-      .map(|option| option.id.as_str())
-      .chain(cfg.backends.pools.iter().map(|pool| pool.id.as_str()))
-    {
-      if id == active_backend
-        || crate::backend_lock::same_continuation_domain(&active_backend, id, cfg, registry)
-          .map_err(|error| StoreError::new(error.to_string()))?
-      {
-        switchable.push(id.to_string());
-      }
-    }
-    switchable
-  } else {
-    let mut switchable: Vec<String> = cfg.backends.options.iter().map(|option| option.id.clone()).collect();
-    switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));
-    switchable
-  };
+  // A session whose backend names no configured id keeps that id first, marked "(not in config)" by the page, so the
+  // picker shows the current value and lists the configured choices after it.
+  let mut switchable: Vec<String> = if known_active { Vec::new() } else { vec![active_backend.clone()] };
+  switchable.extend(cfg.backends.options.iter().map(|option| option.id.clone()));
+  switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));
   // The pickers list only the config's visible entries. The session's own active entry stays exempt, so the
   // header menu still shows it as the current value.
   let switchable: Vec<String> =
@@ -1312,9 +1277,7 @@ mod tests {
   use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, TaskCaller};
 
   use super::*;
-  use crate::test_support::{
-    answer, create_node, feature_context, feature_context_with_auto, feature_context_with_config, json_request,
-  };
+  use crate::test_support::{answer, create_node, feature_context, feature_context_with_auto};
 
   const AUTO_CONFIG: &str = "\
 backends:
@@ -1366,7 +1329,7 @@ backends:
     assert_eq!(payload["pool_member"], "synthetic-a");
 
     let cfg = features.config.get().expect("the test config loads");
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
     assert_eq!(backend["active_backend"], "auto");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto"]));
   }
@@ -1377,7 +1340,7 @@ backends:
     let meta = create_node(&features.store, "plain-option-node", None, TaskProfile::Manager).await;
     let cfg = features.config.get().expect("the test config loads");
 
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
     assert_eq!(backend["active_backend"], "synthetic-a");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto"]));
   }
@@ -1407,7 +1370,7 @@ backends:
     let meta = create_node(&features.store, "two-pools-node", None, TaskProfile::Manager).await;
     let cfg = features.config.get().expect("the test config loads");
 
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
     assert_eq!(backend["active_backend"], "synthetic-a");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto", "light"]));
   }
@@ -1440,7 +1403,7 @@ backends:
     let meta = create_node(&features.store, "visibility-node", None, TaskProfile::Manager).await;
     let cfg = features.config.get().expect("the test config loads");
 
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
     assert_eq!(backend["active_backend"], "synthetic-a");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "auto"]));
   }
@@ -1470,7 +1433,7 @@ backends:
       .expect("the hidden-active node");
     let cfg = features.config.get().expect("the test config loads");
 
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
     assert_eq!(backend["active_backend"], "synthetic-b");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto"]));
   }
@@ -1500,59 +1463,9 @@ backends:
       .expect("the hidden-pool node");
     let cfg = features.config.get().expect("the test config loads");
 
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
     assert_eq!(backend["active_backend"], "light");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "auto", "light"]));
-  }
-
-  #[tokio::test]
-  async fn a_dedicated_lock_keeps_the_pools_out_of_the_switch_list() {
-    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
-    let request = CreateTask {
-      request_id: "locked-plain-option-node".to_string(),
-      task_parent_id: None,
-      profile: TaskProfile::Manager,
-      task: None,
-      name: Some("Locked plain option".to_string()),
-      backend: Some("synthetic-a".to_string()),
-      group: None,
-      session_id: Some("sequence-locked-node".to_string()),
-    };
-    let meta = features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the locked node");
-    let cfg = features.config.get().expect("the test config loads");
-
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
-    assert_eq!(backend["switchable_backends"], json!(["synthetic-a"]));
-  }
-
-  #[tokio::test]
-  async fn a_dedicated_pool_session_lists_only_its_pools_as_switchable() {
-    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
-    let request = CreateTask {
-      request_id: "locked-auto-node".to_string(),
-      task_parent_id: None,
-      profile: TaskProfile::Manager,
-      task: None,
-      name: Some("Locked Auto".to_string()),
-      backend: Some("auto".to_string()),
-      group: None,
-      session_id: Some("sequence-locked-node".to_string()),
-    };
-    let meta = features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the locked node");
-    features
-      .store
-      .update_slot_fields(
-        &meta.id,
-        charliebot_agents::model_pool::OWNER,
-        Map::from_iter([("pool_member".to_string(), json!("synthetic-a"))]),
-      )
-      .await
-      .expect("the member is recorded");
-    let cfg = features.config.get().expect("the test config loads");
-
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
-    assert_eq!(backend["active_backend"], "auto");
-    assert_eq!(backend["switchable_backends"], json!(["auto"]));
   }
 
   #[tokio::test]
@@ -1561,72 +1474,36 @@ backends:
     let meta = create_node(&features.store, "plain-no-pool-node", None, TaskProfile::Manager).await;
     let cfg = features.config.get().expect("the test config loads");
 
-    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b"]));
   }
 
-  /// The menu's lock config: `twin` options share one domain (`TwinLifecycle`), the `synthetic` option keeps its
-  /// own, and the pools mix the two kinds.
-  const LOCK_DOMAIN_CONFIG: &str = "\
-backends:
-  options:
-    - {id: twin-a, label: Twin A, type: twin, model: model-a}
-    - {id: twin-b, label: Twin B, type: twin, model: model-b}
-    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-c}
-  pools:
-    - {id: twins, label: Twins, rule: rotate, members: [twin-a, twin-b]}
-    - {id: mixed, label: Mixed, rule: rotate, members: [twin-a, synthetic-a]}
-    - {id: twin-b-only, label: Twin B only, rule: rotate, members: [twin-b]}
-    - {id: synthetic-a-only, label: A only, rule: rotate, members: [synthetic-a]}
-";
-
-  /// The menu lists what the locked switch route would pass: for every configured id the two reach the same
-  /// verdict, because the menu asks the route's `same_continuation_domain`.
   #[tokio::test]
-  async fn the_switch_menu_matches_the_locked_route_for_every_configured_id() {
-    let (_home, features) = feature_context_with_config(LOCK_DOMAIN_CONFIG);
-    let request = CreateTask {
-      request_id: "sequence-locked-node".to_string(),
-      task_parent_id: None,
-      profile: TaskProfile::Manager,
-      task: None,
-      name: Some("Locked node".to_string()),
-      backend: Some("twin-a".to_string()),
-      group: None,
-      session_id: Some("sequence-locked-node".to_string()),
-    };
-    let node = features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the locked node");
+  async fn a_session_on_an_unconfigured_backend_lists_its_id_first() {
+    let (_home, features) = feature_context();
+    let meta = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "unconfigured-backend-node".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Unconfigured backend".to_string()),
+          backend: Some("gone-id".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .expect("the node");
     let cfg = features.config.get().expect("the test config loads");
 
-    let backend = active_backend_payload(&features.store, &node, &cfg, &features.registry).expect("the backend reads");
-    assert_eq!(backend["switchable_backends"], json!(["twin-a", "twin-b", "twins", "twin-b-only"]));
-
-    for id in ["twin-a", "twin-b", "twins", "twin-b-only", "mixed", "synthetic-a", "synthetic-a-only"] {
-      let (headers, body) = json_request(json!({"backend": id}));
-      let (status, _refusal) = answer(
-        crate::write_routes::switch_backend(State(Arc::clone(&features)), AxumPath(node.id.clone()), headers, body)
-          .await,
-      )
-      .await;
-      let route_allows = status == StatusCode::OK;
-      let menu_lists =
-        backend["switchable_backends"].as_array().expect("the menu is a list").iter().any(|listed| listed == id);
-      assert_eq!(
-        menu_lists, route_allows,
-        "id {id}: route answered {status}, menu lists {:?}",
-        backend["switchable_backends"]
-      );
-      if menu_lists {
-        // An allowed switch moved the node. Put it back, so the next id judges against `twin-a` again.
-        let (headers, body) = json_request(json!({"backend": "twin-a"}));
-        let (status, detail) = answer(
-          crate::write_routes::switch_backend(State(Arc::clone(&features)), AxumPath(node.id.clone()), headers, body)
-            .await,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{detail}");
-      }
-    }
+    let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
+    assert_eq!(backend["active_backend"], "gone-id");
+    assert_eq!(backend["switchable_backends"], json!(["gone-id", "synthetic-a", "synthetic-b"]));
   }
 
   fn run(id: &str, inputs: &[&str], pid: Option<u32>) -> RunRecord {
@@ -1707,9 +1584,8 @@ backends:
       .await
       .unwrap();
     let after = bootstrap_body(&features, &meta.id, false).await;
-    let fresh = charliebot_compat::json::fast_json_bytes(
-      &build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap().value,
-    );
+    let fresh =
+      charliebot_compat::json::fast_json_bytes(&build_bootstrap_payload(&features.store, &cfg, &meta).unwrap().value);
     assert_ne!(after, plain, "a new event rebuilds the body");
     assert_eq!(after, fresh, "the rebuilt body matches a fresh payload");
   }
@@ -1729,11 +1605,10 @@ backends:
       .unwrap();
     let memo = PageBootstrapMemo::default();
     let cfg = features.config.get().expect("the test config loads");
-    let page_bootstrap_text =
-      |memo: &PageBootstrapMemo| page_bootstrap(memo, &features.store, &features.registry, &cfg, &meta).unwrap();
+    let page_bootstrap_text = |memo: &PageBootstrapMemo| page_bootstrap(memo, &features.store, &cfg, &meta).unwrap();
 
     let first = page_bootstrap_text(&memo);
-    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg, &meta).unwrap();
     assert_eq!(first.text.as_str(), charliebot_compat::jinja::tojson_text(&payload.value));
     assert_eq!(*first.session, payload.value["session"]);
 
@@ -1747,7 +1622,7 @@ backends:
       .await
       .unwrap();
     let after = page_bootstrap_text(&memo);
-    let payload_after = build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta).unwrap();
+    let payload_after = build_bootstrap_payload(&features.store, &cfg, &meta).unwrap();
     assert_eq!(after.text.as_str(), charliebot_compat::jinja::tojson_text(&payload_after.value));
     assert_ne!(after.text.as_str(), first.text.as_str(), "a new event rebuilds the text");
   }
@@ -1762,7 +1637,7 @@ backends:
       crate::test_support::create_node(&features.store, "page-bootstrap-b", None, TaskProfile::Manager).await;
     let memo = PageBootstrapMemo::default();
     let cfg = features.config.get().expect("the test config loads");
-    let served = |session: &SessionMetadata| page_bootstrap(&memo, &features.store, &features.registry, &cfg, session);
+    let served = |session: &SessionMetadata| page_bootstrap(&memo, &features.store, &cfg, session);
 
     let first_a = served(&first).unwrap();
     let first_b = served(&second).unwrap();
@@ -1860,7 +1735,7 @@ backends:
         .unwrap();
       features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
     }
-    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
     let kept = messages.len();
     let total_events = features.store.load_chat_events_sync(&meta.id).unwrap().len();
@@ -1915,7 +1790,7 @@ backends:
       append_fixture_turn(&features.store, &meta.id, turn, 700, with_reply).await;
     }
     let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
-    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
     let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
     assert!(start > 0, "the tail starts past the history's first event");
@@ -1975,7 +1850,7 @@ backends:
     }
     let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
     assert_eq!(total, 2 * turns + 1, "the fixture's log is its two events per turn and the node's own event");
-    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
     assert_eq!(messages.len(), BOOTSTRAP_MESSAGE_LIMIT, "the second read fills the message budget");
     let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
@@ -1997,7 +1872,7 @@ backends:
       crate::test_support::create_node(&features.store, "trim-oversized-turn", None, TaskProfile::Manager).await;
     append_fixture_turn(&features.store, &meta.id, 1, 1_600, true).await;
     append_fixture_turn(&features.store, &meta.id, 2, 20_000, true).await;
-    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 3, "the newest turn's three events render");
     assert_eq!(messages[0]["content"], json!(fixture_text(2, 20_000)));
@@ -2024,7 +1899,7 @@ backends:
     fs::write(&path, lines).unwrap();
     features.store.clear_chat_events_cache(&meta.id);
 
-    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     assert_eq!(payload.value["oldest_message_ordinal"], json!(0), "the tail starts at the log's first line");
     assert_eq!(payload.value["has_more"], json!(false));
     let messages = payload.value["messages"].as_array().unwrap();
@@ -2051,7 +1926,7 @@ backends:
         features.store.append_chat_event(&meta.id, event).await.unwrap();
       }
     }
-    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
     assert_eq!(messages.len(), BOOTSTRAP_MESSAGE_LIMIT, "the first screen carries the budget's messages");
     let total_events = features.store.load_chat_events_sync(&meta.id).unwrap().len();
@@ -2085,7 +1960,7 @@ backends:
       .unwrap()
       .parse::<usize>()
       .unwrap();
-    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     assert_eq!(untrimmed, payload.untrimmed_wire_bytes);
   }
 
@@ -2178,10 +2053,10 @@ backends:
     let (_home, features) = feature_context();
     features.store.note_run_backend(&worker.id, "synthetic-retired-backend");
     let cfg = features.config.get().expect("the test config loads");
-    let payload = active_backend_payload(&features.store, &worker, &cfg, &features.registry).unwrap();
+    let payload = active_backend_payload(&features.store, &worker, &cfg).unwrap();
     assert_eq!(payload["active_backend"], "synthetic-retired-backend");
     assert_eq!(payload["active_backend_type"], "");
-    assert_eq!(payload["switchable_backends"], json!([]));
+    assert_eq!(payload["switchable_backends"], json!(["synthetic-retired-backend", "synthetic-a", "synthetic-b"]));
   }
 
   const TRIGGER_SESSION_ID: &str = "synthetic-trigger-session";

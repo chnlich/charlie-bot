@@ -1,73 +1,15 @@
-  {% from 'partials/close_button.html' import close_button %}
-  {# The scheduled-task modal's literals: form_label_class for its labels,
-     cron_field_class for its input/select fields. Each literal stays a
-     complete token run: Tailwind extracts class candidates from source text,
-     never split across template syntax. #}
-  {% set form_label_class = 'block text-xs text-slate-400 mb-1' %}
-  {% set cron_field_class = 'w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200' %}
-  <div id="cron-modal" class="diff-modal-overlay hidden">
-    <style>
-      /* The editor's text and select fields draw their boundary at the 3:1 control floor on the dialog's
-         slate-800 paint: the field fill and the dialog are the same color, so the outline is the only mark
-         of the box, and border-slate-600 draws 1.93:1 there. #94a3b8 draws 5.71:1. The rule travels in
-         this dialog's own markup, so it needs no rebuilt Tailwind sheet. */
-      #cron-modal input[type="text"],
-      #cron-modal select { border-color: #94a3b8; }
-    </style>
-    <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">
-      <div class="diff-modal-header">
-        <span class="text-sm font-semibold text-slate-200" id="cron-modal-title">Edit Scheduled Task</span>
-        {{ close_button('closeCronModal()', '', close_btn_class) }}
-      </div>
-      <div class="diff-modal-body" style="padding: 1rem; overflow-y: auto; flex: 1;">
-        <form class="flex flex-col gap-3 h-full">
-          <div id="cron-error-box" class="hidden whitespace-pre-wrap break-words rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs px-3 py-2"></div>
-          <div>
-            <label class="{{ form_label_class }}">Name</label>
-            <input id="cron-name" type="text" class="{{ cron_field_class }}" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Cron Expression</label>
-            <input id="cron-expr" type="text" class="{{ cron_field_class }} font-mono" placeholder="0 2 * * *" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Prompt file (path to the file owning the prompt body)</label>
-            <input id="cron-prompt-file" type="text" class="{{ cron_field_class }} font-mono" placeholder="prompts/example.md" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Repo (optional)</label>
-            <input id="cron-repo" type="text" class="{{ cron_field_class }}" placeholder="~/workspace/my-repo" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Backend</label>
-            <select id="cron-backend" class="{{ cron_field_class }}">
-              <option value="">Inherit / default</option>
-              {% for entry in picker_entries %}
-              <option value="{{ entry.id }}">{{ entry.label }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Project (optional)</label>
-            <input id="cron-project" type="text" class="{{ cron_field_class }}" placeholder="e.g. research-project" />
-          </div>
-          <div>
-            <label class="{{ form_label_class }}">Timezone</label>
-            <input id="cron-timezone" type="text" class="{{ cron_field_class }}" value="America/Los_Angeles" />
-          </div>
-          {#- The Enabled control is the modal's only small target: a 16 px box in a 24 px label row clears the
-              24 px pointer floor, as the events viewer's Expand all does. -#}
-          <div class="flex items-center gap-2">
-            <input id="cron-enabled" type="checkbox" checked class="h-4 w-4 rounded bg-slate-800 border-slate-600" />
-            <label for="cron-enabled" class="py-1 text-xs text-slate-400">Enabled</label>
-          </div>
-        </form>
-      </div>
-      <div class="diff-modal-footer">
-        <button onclick="deleteCronTask()" id="cron-delete-btn" class="px-4 py-1.5 text-sm rounded-lg bg-red-800 hover:bg-red-700 text-slate-200 font-medium hidden">Delete</button>
-        <div class="flex-1"></div>
-        <button onclick="closeCronModal()" class="px-4 py-1.5 text-sm rounded-lg bg-slate-600 hover:bg-slate-500 text-slate-200 font-medium">Cancel</button>
-        <button onclick="saveCronTask()" id="cron-save-btn" class="px-4 py-1.5 text-sm rounded-lg bg-green-700 hover:bg-green-600 text-slate-200 font-medium">Save</button>
-      </div>
+{% from 'partials/close_button.html' import close_button %}
+{#- The task error view: the one modal the Workspace error badge opens. It shows a task that failed to load, its
+    error and file path, and it holds no form or control. The agent deletes a failed file. -#}
+<div id="cron-modal" class="diff-modal-overlay hidden">
+  <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">
+    <div class="diff-modal-header">
+      <span class="text-sm font-semibold text-slate-200">Scheduled task failed to load</span>
+      {{ close_button('closeCronModal()', '', close_btn_class) }}
+    </div>
+    <div class="diff-modal-body" style="padding: 1rem; overflow-y: auto; flex: 1;">
+      <div id="cron-error-box" class="whitespace-pre-wrap break-words rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs px-3 py-2"></div>
+      <p class="mt-3 text-xs text-slate-400">To delete this task, ask this session's agent.</p>
     </div>
   </div>
+</div>

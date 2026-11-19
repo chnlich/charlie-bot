@@ -42,21 +42,10 @@ async fn list_tasks(State(features): State<Arc<FeatureContext>>) -> Response {
   };
   let mut rows = Vec::with_capacity(snapshot.tasks.len() + snapshot.errors.len());
   for task in snapshot.tasks {
-    let mut value = match serde_json::to_value(task) {
-      Ok(value) => value,
+    match serde_json::to_value(task) {
+      Ok(value) => rows.push(value),
       Err(error) => return responses::internal_error("TypeError", error.to_string()),
-    };
-    if let Some(object) = value.as_object_mut() {
-      object.remove("prompt");
-      if let Some(steps) = object.get_mut("steps").and_then(Value::as_array_mut) {
-        for step in steps {
-          if let Some(step) = step.as_object_mut() {
-            step.remove("prompt");
-          }
-        }
-      }
     }
-    rows.push(value);
   }
   for error in snapshot.errors {
     rows.push(json!({
@@ -93,11 +82,6 @@ async fn create_task(
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  if let Some(backend) = values.get("backend").and_then(Value::as_str).filter(|value| !value.is_empty())
-    && let Err(error) = cfg.backends.check_backend_id(backend)
-  {
-    return detail(StatusCode::BAD_REQUEST, error);
-  }
   let requested_session = values.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
   if let CallerIdentity::Agent { claims } = &caller
     && let Err(response) = agent_binding::authorize_create(&features, &claims.session_id, requested_session).await
@@ -125,7 +109,7 @@ async fn create_task(
   if let CallerIdentity::Agent { claims } = &caller
     && requested_session.is_none()
   {
-    let session = match agent_binding::create_bound_session(&features, &cfg, &claims.session_id, &task).await {
+    let session = match agent_binding::create_bound_session(&features, &claims.session_id, &task).await {
       Ok(session) => session,
       Err(response) => return response,
     };
@@ -185,13 +169,6 @@ async fn update_task(
   if !path.exists() {
     return detail(StatusCode::NOT_FOUND, format!("Task \"{name}\" not found"));
   }
-  if let Some(backend) = values.get("backend")
-    && !backend.is_null()
-    && let Some(backend) = backend.as_str().filter(|value| !value.is_empty())
-    && let Err(error) = cfg.backends.check_backend_id(backend)
-  {
-    return detail(StatusCode::BAD_REQUEST, error);
-  }
   let repo = match features.startup.require::<RepoRoot>() {
     Ok(repo) => repo,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
@@ -222,36 +199,6 @@ async fn update_task(
     Ok(task) => task,
     Err(error) => return detail(StatusCode::CONFLICT, error),
   };
-  if values.contains_key("backend")
-    && let Some(session_id) = candidate_task.session_id.as_deref()
-  {
-    let default_backend = cfg.backends.new_session_backend();
-    let target = candidate_task.backend.as_deref().or(default_backend.as_deref());
-    let Some(target) = target else {
-      return detail(
-        StatusCode::CONFLICT,
-        "scheduled task backend resolution requires a configured backends.options entry".to_string(),
-      );
-    };
-    match features.store.get_session(session_id).await {
-      Ok(Some(node)) if node.backend != target => {
-        if features.store.busy_since(session_id).is_some() {
-          return detail(
-            StatusCode::CONFLICT,
-            format!(
-              "scheduled task '{name}' backend switch from '{}' to '{target}' is blocked because node '{session_id}' has running work; retry when it is idle",
-              node.backend
-            ),
-          );
-        }
-        if let Err(error) = features.store.switch_backend(session_id, target).await {
-          return responses::internal_error("RuntimeError", error.to_string());
-        }
-      }
-      Ok(_) => {}
-      Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-    }
-  }
   if values.get("enabled") == Some(&Value::Bool(true))
     && let Some(session_id) = candidate_task.session_id.as_deref()
   {
@@ -318,10 +265,7 @@ async fn run_task(State(features): State<Arc<FeatureContext>>, Path(name): Path<
 fn create_file_body(values: &Map<String, Value>) -> Map<String, Value> {
   let mut body = Map::new();
   for (key, value) in values {
-    if key != "name"
-      && (!value.is_null() || matches!(key.as_str(), "cron" | "enabled"))
-      && !(key == "backend" && value.as_str().is_some_and(str::is_empty))
-    {
+    if key != "name" && (!value.is_null() || matches!(key.as_str(), "cron" | "enabled")) {
       body.insert(key.clone(), value.clone());
     }
   }
@@ -337,18 +281,14 @@ fn apply_update(mut task: Map<String, Value>, request: &Map<String, Value>) -> M
       task.insert(key.to_string(), value.clone());
     }
   }
-  for key in ["repo", "project"] {
-    if let Some(value) = request.get(key).filter(|value| !value.is_null()) {
-      task.insert(key.to_string(), if value.as_str() == Some("") { Value::Null } else { value.clone() });
-    }
+  if let Some(value) = request.get("repo").filter(|value| !value.is_null()) {
+    task.insert("repo".to_string(), if value.as_str() == Some("") { Value::Null } else { value.clone() });
   }
-  for key in ["backend", "session_id"] {
-    if let Some(value) = request.get(key) {
-      if value.as_str().is_some_and(|value| !value.is_empty()) {
-        task.insert(key.to_string(), value.clone());
-      } else {
-        task.remove(key);
-      }
+  if let Some(value) = request.get("session_id") {
+    if value.as_str().is_some_and(|value| !value.is_empty()) {
+      task.insert("session_id".to_string(), value.clone());
+    } else {
+      task.remove("session_id");
     }
   }
   task
@@ -420,8 +360,7 @@ mod tests {
   }
   use crate::scheduler::CronScheduler;
   use crate::test_support::{
-    AUTO_POOL_ID, child_manager, feature_context, feature_context_with_auto, feature_context_with_extra_backends,
-    feature_context_with_login_hosts, manager, write_prompted_task,
+    child_manager, feature_context, feature_context_with_login_hosts, manager, write_prompted_task,
   };
 
   async fn send(router: &axum::Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
@@ -469,31 +408,38 @@ mod tests {
         "cron": "0 8 * * *",
         "prompt_file": prompt,
         "backend": "synthetic",
+        "project": "synthetic-project",
         "improve_host": "host3",
         "ignored": "discarded",
       }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(created["backend"], "synthetic");
+    assert!(created.get("backend").is_none(), "the create API takes no backend");
+    assert!(created.get("project").is_none(), "the create API takes no project");
     assert!(created.get("improve_host").is_none());
 
     let (status, listed) = send(&router, "GET", "/api/cron/tasks", json!(null)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed[0]["name"], "synthetic-task");
-    assert!(listed[0].get("prompt").is_none());
+    assert_eq!(listed[0]["prompt"].as_str().map(str::trim), Some("Synthetic scheduled prompt"));
     assert!(listed[0].get("improve_host").is_none());
 
-    let (status, updated) =
-      send(&router, "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": null, "enabled": false, "project": ""}))
-        .await;
+    let (status, updated) = send(
+      &router,
+      "PUT",
+      "/api/cron/tasks/synthetic-task",
+      json!({"backend": "synthetic", "enabled": false, "project": "x"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert!(updated.get("backend").is_none());
+    assert!(updated.get("project").is_none());
     assert_eq!(updated["enabled"], false);
-    assert_eq!(updated["project"], Value::Null);
     let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
     let persisted = serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert!(persisted.get("backend").is_none());
+    assert!(persisted.get("project").is_none());
     assert_eq!(persisted.get("enabled").and_then(serde_yaml::Value::as_bool), Some(false));
 
     let (status, deleted) = send(&router, "DELETE", "/api/cron/tasks/synthetic-task", json!(null)).await;
@@ -557,34 +503,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn create_refuses_a_backend_missing_from_the_options() {
-    let (home, features) = feature_context();
-    let prompt = home.path().join("synthetic-prompt.md");
-    std::fs::write(&prompt, "Synthetic prompt\n").unwrap();
-    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
-
-    let (status, response) = send(
-      &routes(&features),
-      "POST",
-      "/api/cron/tasks",
-      json!({
-        "name": "synthetic-task",
-        "cron": "0 8 * * *",
-        "prompt_file": prompt,
-        "backend": "missing-backend",
-      }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-      response["detail"],
-      "backend 'missing-backend' is not a backends.options or backends.pools id; valid ids: ['pool', 'synthetic']"
-    );
-    assert!(!path.exists());
-  }
-
-  #[tokio::test]
   async fn manual_handler_run_auto_binds_once_and_records_the_result() {
     let (home, features) = feature_context();
     features.startup.insert(CronScheduler::new(Arc::clone(&features))).unwrap();
@@ -610,91 +528,6 @@ mod tests {
     assert!(events.iter().any(|event| event["type"].as_str() == Some(charliebot_core::event_types::HANDLER_RESULT)));
     let projection = features.store.get_message_projection(session_id).unwrap();
     assert!(projection.is_some());
-  }
-
-  #[tokio::test]
-  async fn cron_editor_switches_backend_on_the_bound_node_without_creating_a_session() {
-    let (home, features) = feature_context_with_extra_backends(&["synthetic-alt"]);
-    let node = manager(&features, "synthetic-bound-node").await.unwrap();
-    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
-    std::fs::write(
-      &path,
-      crate::yaml::dump(&json!({
-        "cron": "0 8 * * *",
-        "handler": "synthetic_handler",
-        "session_id": node.id,
-        "backend": "synthetic",
-      }))
-      .unwrap(),
-    )
-    .unwrap();
-
-    let (status, updated) =
-      send(&routes(&features), "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": "synthetic-alt"})).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(updated["backend"], "synthetic-alt");
-    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic-alt");
-    let sessions = features.store.list_sessions(None, None, None).unwrap();
-    assert_eq!(sessions.rows.iter().map(|session| session.id.as_str()).collect::<Vec<_>>(), [node.id.as_str()]);
-    assert_eq!(
-      serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(path).unwrap()).unwrap()["backend"],
-      "synthetic-alt"
-    );
-  }
-
-  #[tokio::test]
-  async fn cron_editor_saves_a_pool_backend_on_the_bound_node() {
-    let (home, features) = feature_context_with_auto(&["synthetic", "synthetic-alt"]);
-    let node = manager(&features, "synthetic-pool-bound-node").await.unwrap();
-    assert_eq!(node.backend, "synthetic");
-    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
-    std::fs::write(
-      &path,
-      crate::yaml::dump(&json!({
-        "cron": "0 8 * * *",
-        "handler": "synthetic_handler",
-        "session_id": node.id,
-        "backend": "synthetic",
-      }))
-      .unwrap(),
-    )
-    .unwrap();
-
-    let (status, updated) =
-      send(&routes(&features), "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": AUTO_POOL_ID})).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(updated["backend"], AUTO_POOL_ID);
-    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, AUTO_POOL_ID);
-    assert_eq!(
-      serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(path).unwrap()).unwrap()["backend"],
-      AUTO_POOL_ID
-    );
-  }
-
-  #[tokio::test]
-  async fn cron_editor_refuses_a_busy_backend_switch_before_writing_yaml() {
-    let (home, features) = feature_context_with_extra_backends(&["synthetic-alt"]);
-    let node = manager(&features, "synthetic-busy-bound-node").await.unwrap();
-    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
-    let original = crate::yaml::dump(&json!({
-      "cron": "0 8 * * *",
-      "handler": "synthetic_handler",
-      "session_id": node.id,
-      "backend": "synthetic",
-    }))
-    .unwrap();
-    std::fs::write(&path, &original).unwrap();
-    features.store.mark_busy(&node.id, charliebot_store::metadata::UtcDateTime::now()).unwrap();
-
-    let (status, body) =
-      send(&routes(&features), "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": "synthetic-alt"})).await;
-
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert!(body["detail"].as_str().is_some_and(|detail| detail.contains("running work")));
-    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
-    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic");
   }
 
   #[tokio::test]
@@ -760,7 +593,6 @@ mod tests {
         "handler": "synthetic_handler",
         "session_id": "synthetic-bound-node",
         "mode": "worker",
-        "project": "synthetic-project",
         "allow_failure": true,
         "enabled": false,
       }))
@@ -773,7 +605,6 @@ mod tests {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed[0]["session_id"], "synthetic-bound-node");
     assert_eq!(listed[0]["mode"], "worker");
-    assert_eq!(listed[0]["project"], "synthetic-project");
     assert_eq!(listed[0]["allow_failure"], true);
     assert_eq!(listed[0]["enabled"], false);
   }
@@ -879,6 +710,9 @@ mod tests {
     let node = features.store.get_session(session_id).await.unwrap().unwrap();
     assert_eq!(node.task_parent_id.as_deref(), Some(caller.id.as_str()));
     assert_eq!(node.profile, TaskProfile::Manager);
+    let expected_backend = features.config.get().unwrap().backends.new_session_backend().unwrap();
+    assert_eq!(node.backend, expected_backend);
+    assert_eq!(node.group.as_deref(), None);
     let persisted = serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(persisted.get("session_id").and_then(serde_yaml::Value::as_str), Some(session_id));
   }

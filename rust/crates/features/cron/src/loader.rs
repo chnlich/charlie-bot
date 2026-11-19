@@ -591,13 +591,11 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
       .map(PathBuf::from)
       .ok_or_else(|| format!("{} is not set", charliebot_core::repo_root::REPO_ROOT_ENV))?;
     let Ok(task) = load_file(&path, stem, &repo, &login_hosts) else { continue };
-    for (entry, backend) in std::iter::once(("backend".to_string(), task.backend.as_deref())).chain(
-      task.steps.iter().flatten().map(|step| (format!("steps '{}' backend", step.name), step.backend.as_deref())),
-    ) {
-      if let Some(backend) = backend.filter(|backend| !backend.is_empty())
+    for step in task.steps.iter().flatten() {
+      if let Some(backend) = step.backend.as_deref().filter(|backend| !backend.is_empty())
         && let Err(error) = cfg.backends.check_backend_id(backend)
       {
-        problems.push(format!("{}: {entry}: {error}", path.display()));
+        problems.push(format!("{}: steps '{}' backend: {error}", path.display(), step.name));
       }
     }
   }
@@ -790,6 +788,18 @@ mod tests {
   }
 
   #[test]
+  fn a_task_file_with_a_task_level_backend_or_project_fails_to_load() {
+    let home = tempfile::tempdir().unwrap();
+    let prompt = write_prompt(home.path(), "prompt.md", "Prompt");
+    for key in ["backend", "project"] {
+      let mut body = json!({"cron":"0 3 * * *", "prompt_file":prompt});
+      body[key] = json!("synthetic");
+      let error = validate_body("keyed", body, home.path(), &[]).unwrap_err();
+      assert!(error.contains(&format!("unknown field `{key}`")), "{error}");
+    }
+  }
+
+  #[test]
   fn step_source_and_distinct_backend_validation_matches_the_loader() {
     let home = tempfile::tempdir().unwrap();
     let first = write_prompt(home.path(), "first.md", "First prompt");
@@ -816,11 +826,21 @@ mod tests {
     ]));
     let loaded = validate_body("chained", distinct, home.path(), &[]).unwrap();
     assert_eq!(loaded.steps.as_ref().unwrap()[1].distinct_backend_from.as_deref(), Some("selector"));
-    let unset = task(json!([
+    // Both steps of a pair name their own backend: a file that leaves either out fails to load.
+    let source_unset = task(json!([
       {"name":"selector","prompt_file":first},
+      {"name":"reviewer","prompt_file":second,"backend":"synthetic-b","distinct_backend_from":"selector"}
+    ]));
+    assert!(
+      validate_body("chained", source_unset, home.path(), &[]).unwrap_err().contains("must name its own backend")
+    );
+    let reviewer_unset = task(json!([
+      {"name":"selector","prompt_file":first,"backend":"synthetic-a"},
       {"name":"reviewer","prompt_file":second,"distinct_backend_from":"selector"}
     ]));
-    assert!(validate_body("chained", unset, home.path(), &[]).is_ok());
+    assert!(
+      validate_body("chained", reviewer_unset, home.path(), &[]).unwrap_err().contains("must name its own backend")
+    );
 
     // Identical backend ids load here: whether they conflict depends on the config, which backend_refs_check reads.
     for invalid in [

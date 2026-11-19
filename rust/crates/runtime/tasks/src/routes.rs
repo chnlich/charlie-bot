@@ -540,7 +540,7 @@ async fn delegate_bound_round(
   }
   let round = match (readers.round)(features, bound_task, note).await.map_err(internal)? {
     ScheduledRoundStart::Ready(round) => round,
-    ScheduledRoundStart::Exhausted(message) => return Err(DelegateError::Refused(StatusCode::CONFLICT, message)),
+    ScheduledRoundStart::Refused(message) => return Err(DelegateError::Refused(StatusCode::CONFLICT, message)),
   };
   let guard = features.store.control_lock().await;
   if let Some(worker) = (readers.round_in_flight)(features, bound_task, &request.session_id).map_err(internal)? {

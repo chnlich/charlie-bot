@@ -59,6 +59,8 @@ const WORKTREES_DIR: &str = ".worktrees";
 const LAB_REPO: &str = "/nonexistent/charliebot-lab-repo";
 /// The cron task that sequence runs name. No lab home configures it, so the cron controller logs it as missing.
 const LAB_CRON_TASK: &str = "lab-sequence";
+/// The cron task files beside the sessions. Its dot keeps it out of the seed copy, which takes only visible directories.
+const CRON_DIR: &str = ".cron.d";
 /// The plan's stream is separate from the content stream, so `reset` can replay the plan without writing content.
 const PLAN_STREAM: u64 = 0x7461_736b_7472_6565;
 /// The session ids' stream. A parent's log names its children's ids, so the plan holds every id before a log is written.
@@ -968,6 +970,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     total += log.bytes;
   }
   write_imported_chat(staging)?;
+  write_cron_fixture(staging, &plan)?;
   write_marker_seed(staging, &plan)?;
   write_live_runs(staging, &plan)?;
   let manifest = Manifest {
@@ -980,6 +983,27 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
   };
   session::write_json(&staging.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
+}
+
+/// Two cron task files that bind the first planned manager session: one enabled, one disabled, both `mode: master` on
+/// the repo's `prompts/cron/failure_triage.md`. The enabled task fires once a year, so no improve round sees it fire.
+fn write_cron_fixture(staging: &Path, plan: &HomePlan) -> Result<()> {
+  let manager = plan
+    .sessions
+    .iter()
+    .find(|session| session.profile == TaskProfile::Manager)
+    .context("the plan holds no manager session to bind the cron fixture to")?;
+  let dir = staging.join(CRON_DIR);
+  fs::create_dir(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+  for (name, enabled) in [("mock-yearly-review", true), ("mock-paused-review", false)] {
+    let body = format!(
+      "cron: \"0 0 1 1 *\"\nprompt_file: prompts/cron/failure_triage.md\nmode: master\nenabled: {enabled}\nsession_id: {}\n",
+      manager.id
+    );
+    let path = dir.join(format!("{name}.yaml"));
+    fs::write(&path, body).with_context(|| format!("cannot write {}", path.display()))?;
+  }
+  Ok(())
 }
 
 /// The id of the imported chat that `write_home` adds after the planned sessions. It has no task, no run directory and

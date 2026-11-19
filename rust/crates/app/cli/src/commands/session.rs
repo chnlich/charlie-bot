@@ -94,7 +94,7 @@ struct CreateArgs {
   #[arg(long)]
   backend: Option<String>,
   /// Group name to assign after creation (optional)
-  #[arg(long)]
+  #[arg(long, conflicts_with = "parent")]
   group: Option<String>,
   /// Parent task id (optional; v2 task create)
   #[arg(long)]

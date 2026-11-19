@@ -155,6 +155,18 @@ const TASK_ID: &str = "4f1c2a0e-7b1d-5c3e-9a2f-1d2e3f4a5b6c";
 const PARENT_ID: &str = "9a8b7c6d-5e4f-5a3b-8c2d-1e0f9a8b7c6d";
 
 #[test]
+fn create_refuses_group_with_parent_before_creating() {
+  let stub = StubApi::start();
+  let sandbox = Sandbox::new(stub.port);
+
+  let (code, stderr) = sandbox.run(&["create", "--parent", PARENT_ID, "--profile", "manager", "--group", "nested"]);
+
+  assert_eq!(code, Some(2), "{stderr}");
+  assert!(stderr.contains("--group"), "{stderr}");
+  assert!(stub.requests().is_empty(), "creating a nested session with a group sent a request");
+}
+
+#[test]
 #[ignore = "integration"]
 fn set_approver_patches_the_task_with_the_approver() {
   let stub = StubApi::start();

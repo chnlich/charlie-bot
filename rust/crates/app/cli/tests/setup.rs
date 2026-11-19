@@ -108,7 +108,7 @@ fn the_runner_calls_each_step_in_registration_order_and_writes_the_scratch_home_
     .iter()
     .find(|line| line.starts_with("    - memory-curator | cron=27 6 * * * | tz="))
     .expect("memory-curator is listed");
-  assert!(curator.contains("| backend="), "{curator}");
+  assert!(!curator.contains("backend"), "the task summary names no backend: {curator}");
   assert!(lines.iter().any(|line| line.starts_with("    - storage-cool | cron=30 4 * * * | tz=")));
   assert!(lines.iter().any(|line| line.starts_with("    - proactive-agent | cron=0 7 * * * | tz=")));
 }

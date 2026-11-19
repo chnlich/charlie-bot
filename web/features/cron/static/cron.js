@@ -1,78 +1,205 @@
 // ---------------------------------------------------------------------------
-// Scheduled tasks (cron): the task editor, the Workspace error badge, a bound
-// node's clock badge and schedule lines, and the schedule menu items. The
-// sidebar reaches all of it through the entries this file registers with.
+// Scheduled tasks (cron): the read-only task panel under a bound session's
+// header, the error view of a task that failed to load, the Workspace error
+// badge, and a bound node's clock badge and schedule lines. Every task setting
+// is changed by the session's agent through /api/cron or the task file; no
+// control here writes one. The sidebar reaches this file through the entries it
+// registers with.
 // ---------------------------------------------------------------------------
 (function() {
   const Sidebar = globalThis.Sidebar;
 
 // ---------------------------------------------------------------------------
-// Cron task editor modal
+// Read-only task panel
 // ---------------------------------------------------------------------------
-let cronEditMode = null; // 'edit' or 'add'
-let cronOriginalName = null;
-// The node a create-mode editor binds: set by Add schedule / New scheduled
-// task, saved with the task, and cleared by any other open path. An edit-mode
-// save never sends it (the PUT body leaves the task's binding untouched).
-let cronAddSessionId = null;
+// The panel lists the tasks bound to the active session, read from GET
+// /api/cron/tasks. It sends no write request and has no input, select, or
+// button. It redraws when the active session changes; no timer polls it.
+function cronPanelValue(value) {
+  return value === null || value === undefined || value === '' ? '—' : String(value);
+}
 
-// Fields (besides the always-readonly name) that a broken task locks down: a
-// broken file's truth is the raw yaml on disk, never an edit form.
-const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone'];
-
-// Switch the modal between the broken read-only error view (task.broken) and
-// the normal editable form. Broken: every field read-only, Enabled disabled and
-// rendering the file's raw value (indeterminate when the file was
-// unparseable). The full load error + path sit in the error box, Save hidden,
-// Delete kept.
-function applyCronBrokenView(task) {
-  const isBroken = !!(task && task.broken);
-  CRON_EDITABLE_FIELD_IDS.forEach(id => { document.getElementById(id).readOnly = isBroken; });
-  document.getElementById('cron-backend').disabled = isBroken;
-  const enabledEl = document.getElementById('cron-enabled');
-  enabledEl.disabled = isBroken;
-  enabledEl.indeterminate = isBroken && task.enabled === null;
-  if (isBroken) enabledEl.checked = task.enabled === true;
-  document.getElementById('cron-save-btn').classList.toggle('hidden', isBroken);
-  const errorBox = document.getElementById('cron-error-box');
-  if (isBroken) {
-    errorBox.textContent = `Load failed: ${task.error}\nFile: ${task.path}`;
-    errorBox.classList.remove('hidden');
-  } else {
-    errorBox.textContent = '';
-    errorBox.classList.add('hidden');
+function cronNumericValues(field, maximum) {
+  const values = [];
+  for (const part of field.split(',')) {
+    const match = part.match(/^(\d+)(?:-(\d+))?$/);
+    if (!match) return null;
+    const first = Number(match[1]);
+    const last = Number(match[2] || match[1]);
+    if (first > last || last > maximum) return null;
+    for (let value = first; value <= last; value++) values.push(value);
   }
+  return [...new Set(values)];
 }
 
-// The Backend dropdown lists the entries the page renders from the picker list (visible options, then visible pools).
-// A task bound to a hidden option or pool has no entry there, so the editor adds one and selects it. An open-then-save
-// then sends the task's own backend id. The added entry is kept in cronHiddenBackendOption, and the next open removes
-// it. "Inherit / default" stays the only way to send null.
-let cronHiddenBackendOption = null;
+function cronList(values, names, padNumbers = false) {
+  const labels = values.map((value) => names ? names[value] : (padNumbers ? String(value).padStart(2, '0') : String(value)));
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
+}
 
-function selectCronBackend(backendId) {
-  const select = document.getElementById('cron-backend');
-  if (cronHiddenBackendOption) cronHiddenBackendOption.remove();
-  cronHiddenBackendOption = null;
-  if (backendId && !Array.from(select.options).some((option) => option.value === backendId)) {
-    cronHiddenBackendOption = document.createElement('option');
-    cronHiddenBackendOption.value = backendId;
-    cronHiddenBackendOption.textContent = cronBackendLabel(backendId);
-    select.appendChild(cronHiddenBackendOption);
+function cronFieldDescription(field, values, names, padNumbers = false) {
+  if (/^\d+-\d+$/.test(field)) {
+    return `${names ? names[values[0]] : (padNumbers ? String(values[0]).padStart(2, '0') : values[0])}`
+      + ` through ${names ? names[values[values.length - 1]] : (padNumbers ? String(values[values.length - 1]).padStart(2, '0') : values[values.length - 1])}`;
   }
-  select.value = backendId || '';
+  return cronList(values, names, padNumbers);
 }
 
-// The label a backend id carries in the full lists, which name every option and pool, hidden ones included. An id in
-// neither list keeps its own id as the label: the save sends it, and the server refuses it with its own message.
-function cronBackendLabel(backendId) {
-  if (Object.hasOwn(BACKEND_OPTIONS, backendId)) return BACKEND_OPTIONS[backendId];
-  const pool = BACKEND_POOLS.find((candidate) => candidate.id === backendId);
-  return pool ? pool.label : backendId;
+function cronTimeDescription(minute, hour) {
+  const minutes = minute === '*' ? null : cronNumericValues(minute, 59);
+  if (minute === '*' && hour === '*') return {fixed: false, text: 'Every minute'};
+  if (minute === '0' && hour === '*') return {fixed: false, text: 'Every hour'};
+  if (!minutes) return null;
+  if (hour === '*') {
+    return {fixed: false, text: `At minute${minutes.length === 1 ? '' : 's'} ${cronList(minutes, null, true)} past every hour`};
+  }
+  const hours = cronNumericValues(hour, 23);
+  if (!hours) return null;
+  if (hours.length === 1 && minutes.length === 1) {
+    return {
+      fixed: true,
+      text: `${String(hours[0]).padStart(2, '0')}:${String(minutes[0]).padStart(2, '0')}`,
+    };
+  }
+  const minuteText = `${minutes.length === 1 ? 'minute' : 'minutes'} ${cronList(minutes, null, true)} past`;
+  if (/^\d+-\d+$/.test(hour)) {
+    return {
+      fixed: false,
+      text: `At ${minuteText} each hour from ${String(hours[0]).padStart(2, '0')}:00 through `
+        + `${String(hours[hours.length - 1]).padStart(2, '0')}:00`,
+    };
+  }
+  return {fixed: false, text: `At ${minuteText} hour${hours.length === 1 ? '' : 's'} ${cronList(hours, null, true)}`};
 }
 
-async function openCronEditor(taskName) {
-  cronAddSessionId = null;
+function cronScheduleTitle(cron) {
+  const raw = cronPanelValue(cron);
+  const fields = raw.trim().split(/\s+/);
+  if (fields.length !== 5) return raw;
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields;
+  const time = cronTimeDescription(minute, hour);
+  if (!time) return raw;
+
+  if (dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    if (time.text === 'Every minute' || time.text === 'Every hour') return time.text;
+    return time.fixed ? `Every day at ${time.text}` : `${time.text} every day`;
+  }
+
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  if (dayOfMonth === '*' && month === '*' && dayOfWeek !== '*') {
+    const values = cronNumericValues(dayOfWeek, 7);
+    if (!values) return raw;
+    const normalized = [...new Set(values.map((value) => value % 7))];
+    const days = cronFieldDescription(dayOfWeek, normalized, weekdays);
+    return time.fixed ? `Every ${days} at ${time.text}` : `${time.text} on ${days}`;
+  }
+
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  if (dayOfWeek === '*' && /^\d+$/.test(dayOfMonth) && /^\d+$/.test(month)) {
+    const dayNumber = Number(dayOfMonth);
+    const monthNumber = Number(month);
+    if (dayNumber >= 1 && dayNumber <= 31 && monthNumber >= 1 && monthNumber <= 12) {
+      return time.fixed
+        ? `Every ${months[monthNumber - 1]} ${dayNumber} at ${time.text}`
+        : `${time.text} every ${months[monthNumber - 1]} ${dayNumber}`;
+    }
+  }
+  if (dayOfWeek === '*' && month === '*' && /^\d+$/.test(dayOfMonth)) {
+    const dayNumber = Number(dayOfMonth);
+    if (dayNumber >= 1 && dayNumber <= 31) {
+      return time.fixed ? `On day ${dayNumber} of every month at ${time.text}` : `${time.text} on day ${dayNumber} of every month`;
+    }
+  }
+  return raw;
+}
+
+function renderCronPanelRow(label, value) {
+  return `<div class="flex gap-2"><span class="w-28 flex-shrink-0 text-slate-400">${escapeHtml(label)}</span>`
+    + `<span class="min-w-0 break-words text-slate-200">${escapeHtml(cronPanelValue(value))}</span></div>`;
+}
+
+function renderCronPanelPrompt(label, prompt) {
+  return `<div class="flex flex-col gap-1"><span class="text-slate-400">${escapeHtml(label)}</span>`
+    + `<pre class="whitespace-pre-wrap break-words rounded bg-slate-900/60 px-2 py-1 font-mono text-slate-200">${escapeHtml(cronPanelValue(prompt))}</pre></div>`;
+}
+
+// One task's block: the schedule as its title, then every setting in the order the file lists them, then each step
+// of a steps task. The task's name sits in small type, since agents address the task by it.
+function renderCronPanelTask(task) {
+  const disabled = task.enabled === false;
+  let html = `<div class="flex flex-col gap-1.5 border-b border-slate-700/50 pb-2 last:border-b-0">`
+    + `<div class="flex items-baseline gap-2"><span class="text-sm font-medium text-slate-200">${escapeHtml(cronScheduleTitle(task.cron))}</span>`
+    + (disabled ? '<span class="text-amber-400">Disabled</span>' : '')
+    + `</div><span class="font-mono text-[11px] text-slate-400">${escapeHtml(task.name)}</span>`
+    + renderCronPanelRow('Session ID', task.session_id)
+    + renderCronPanelRow('Cron', task.cron)
+    + renderCronPanelRow('Timezone', task.timezone)
+    + renderCronPanelRow('Enabled', task.enabled ? 'yes' : 'no')
+    + renderCronPanelRow('Prompt file', task.prompt_file)
+    + renderCronPanelPrompt('Prompt', task.prompt)
+    + renderCronPanelRow('Repo', task.repo)
+    + renderCronPanelRow('Allow failure', task.allow_failure ? 'yes' : 'no')
+    + renderCronPanelRow('Mode', task.mode)
+    + renderCronPanelRow('Handler', task.handler)
+    + renderCronPanelRow('Improve host', task.improve_host);
+  for (const step of task.steps || []) {
+    html += `<div class="flex flex-col gap-1 rounded border border-slate-700/50 px-2 py-1.5">`
+      + renderCronPanelRow('Step', step.name)
+      + renderCronPanelRow('Backend', step.backend)
+      + renderCronPanelRow('Distinct from', step.distinct_backend_from)
+      + renderCronPanelRow('Prompt file', step.prompt_file)
+      + renderCronPanelPrompt('Prompt', step.prompt)
+      + '</div>';
+  }
+  return html + '</div>';
+}
+
+async function renderCronPanel() {
+  const panel = document.getElementById('cron-session-panel');
+  if (!panel) return;
+  const body = document.getElementById('cron-session-panel-body');
+  const sessionId = SESSION_ID;
+  panel.classList.add('hidden');
+  body.textContent = '';
+  let tasks = [];
+  let error = null;
+  if (sessionId) {
+    try {
+      const res = await fetch('/api/cron/tasks');
+      if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
+      tasks = (await res.json()).filter((task) => task.session_id === sessionId);
+    } catch (err) {
+      console.error('Cron panel fetch failed:', err);
+      error = err;
+    }
+  }
+  // A session switch that landed during the fetch owns the panel now.
+  if (sessionId !== SESSION_ID) return;
+  if (error) {
+    body.textContent = `Could not load scheduled tasks: ${error}`;
+    panel.classList.remove('hidden');
+    return;
+  }
+  panel.classList.toggle('hidden', tasks.length === 0);
+  body.innerHTML = tasks.map(renderCronPanelTask).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Task error view
+// ---------------------------------------------------------------------------
+// The modal shows one task that failed to load: the load error and the file
+// path. It has no form and no control; the agent deletes the file.
+function showCronErrorView(task) {
+  document.getElementById('cron-error-box').textContent = `Load failed: ${task.error}\nFile: ${task.path}`;
+  document.getElementById('cron-modal').classList.remove('hidden');
+}
+
+async function openCronErrorView(taskName) {
   let task;
   try {
     const res = await fetch('/api/cron/tasks');
@@ -88,105 +215,11 @@ async function openCronEditor(taskName) {
     alert('Task "' + taskName + '" not found');
     return;
   }
-  cronEditMode = 'edit';
-  cronOriginalName = taskName;
-  document.getElementById('cron-modal-title').textContent = 'Edit Scheduled Task';
-  document.getElementById('cron-name').value = task.name;
-  document.getElementById('cron-name').readOnly = true;
-  document.getElementById('cron-expr').value = task.cron || '';
-  document.getElementById('cron-prompt-file').value = task.prompt_file || '';
-  document.getElementById('cron-repo').value = task.repo || '';
-  selectCronBackend(task.backend);
-  document.getElementById('cron-project').value = task.project || '';
-  document.getElementById('cron-timezone').value = task.timezone || 'America/Los_Angeles';
-  document.getElementById('cron-enabled').checked = task.enabled !== false;
-  applyCronBrokenView(task);
-  document.getElementById('cron-delete-btn').classList.remove('hidden');
-  document.getElementById('cron-modal').classList.remove('hidden');
-}
-
-function openCronAdder(options = {}) {
-  cronEditMode = 'add';
-  cronOriginalName = null;
-  cronAddSessionId = options.sessionId || null;
-  document.getElementById('cron-modal-title').textContent = 'New Scheduled Task';
-  document.getElementById('cron-name').value = '';
-  document.getElementById('cron-name').readOnly = false;
-  document.getElementById('cron-expr').value = '';
-  document.getElementById('cron-prompt-file').value = '';
-  document.getElementById('cron-repo').value = '';
-  selectCronBackend(null);
-  document.getElementById('cron-project').value = options.project || '';
-  document.getElementById('cron-timezone').value = 'America/Los_Angeles';
-  document.getElementById('cron-enabled').checked = true;
-  applyCronBrokenView(null);
-  document.getElementById('cron-delete-btn').classList.add('hidden');
-  document.getElementById('cron-modal').classList.remove('hidden');
+  showCronErrorView(task);
 }
 
 function closeCronModal() {
   document.getElementById('cron-modal').classList.add('hidden');
-}
-
-// Cron-modal mutations share one failure surface: alert on transport error or
-// non-OK response and leave the modal open. A null return means the caller
-// stops before the close-and-refresh.
-async function cronModalRequest(promise) {
-  let res;
-  try {
-    res = await promise;
-  } catch (err) {
-    alert('Failed: ' + err);
-    return null;
-  }
-  if (!res.ok) {
-    alert('Failed: ' + await res.text());
-    return null;
-  }
-  return res;
-}
-
-async function saveCronTask() {
-  const name = document.getElementById('cron-name').value.trim();
-  const cron = document.getElementById('cron-expr').value.trim();
-  const prompt_file = document.getElementById('cron-prompt-file').value.trim() || null;
-  const repo = document.getElementById('cron-repo').value.trim() || null;
-  const backend = document.getElementById('cron-backend').value || null;
-  const project = document.getElementById('cron-project').value.trim() || null;
-  const timezone = document.getElementById('cron-timezone').value.trim();
-  const enabled = document.getElementById('cron-enabled').checked;
-
-  let promise;
-  if (cronEditMode === 'edit') {
-    promise = fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({cron, prompt_file, repo, backend, project, timezone, enabled}),
-    });
-  } else {
-    promise = fetch('/api/cron/tasks', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      // A created task with a prefilled binding is born bound (its node
-      // exists); a null binding drops out of the body and the scheduler's
-      // auto-bind creates the node.
-      body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled, session_id: cronAddSessionId}),
-    });
-  }
-  if ((await cronModalRequest(promise)) === null) return;
-  closeCronModal();
-  // The saved schedule shows on its node row in the view the editor was opened from.
-  switchSidebarFilter(currentFilter);
-}
-
-async function deleteCronTask() {
-  const name = cronOriginalName;
-  if (!confirm(`Delete task "${name}"?`)) return;
-  const promise = fetch(`/api/cron/tasks/${encodeURIComponent(name)}`, {method: 'DELETE'});
-  if ((await cronModalRequest(promise)) === null) return;
-  closeCronModal();
-  // Deletion archives nothing: the node stays, its clock row goes.
-  switchSidebarFilter(currentFilter);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,14 +227,14 @@ async function deleteCronTask() {
 // ---------------------------------------------------------------------------
 // Global cron load-failure badge, rendered at the top of Workspace from the
 // broken cron entries the filter fetch hands the renderer (name order).
-// Clicking it opens the cron editor on the first broken task. Empty when
+// Clicking it opens the error view on the first broken task. Empty when
 // nothing is broken.
 function renderCronErrorBadge(brokenTasks) {
   const broken = brokenTasks || [];
   if (!broken.length) return '';
   return `<div class="mx-3 my-2 px-3 py-2 rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs cursor-pointer"
        role="button" title="Open the first failed task"
-       onclick="openCronEditor('${escapeHtml(broken[0].name)}')">${cbIcon('warning', 12)} ${broken.length} scheduled tasks failed to load</div>`;
+       onclick="openCronErrorView('${escapeHtml(broken[0].name)}')">${cbIcon('warning', 12)} ${broken.length} scheduled tasks failed to load</div>`;
 }
 
 // The Workspace error badge rides this fetch: a failed cron pull yields no
@@ -221,8 +254,9 @@ async function fetchBrokenCronTasks() {
 // A bound node's clock badge: blue while the task is enabled, grey with the
 // Disabled line when it is not. One markup home for every view's row.
 function renderScheduledBadge(s) {
+  const schedule = `${s.schedule_cron} · ${s.schedule_timezone || ''}`;
   return cbIcon('scheduled', 12, `flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}`,
-    `title="Scheduled: ${escapeHtmlAttr(s.schedule_task)}"`);
+    `title="Scheduled: ${escapeHtmlAttr(schedule)}"`);
 }
 
 // The `last_run_status` values the scheduler stores for a schedule's last firing; the cron crate's
@@ -283,20 +317,6 @@ function renderSessionScheduleLine(s) {
   return html;
 }
 
-// The group header's clock button: a scheduled task is born bound. The
-// manager node is created in that group first. Then the cron editor opens in
-// create mode, with the node prefilled as the binding and the task's project
-// set to the group.
-async function createScheduledTaskInGroup(group) {
-  try {
-    const node = await Sidebar.createSessionNode(null, group);
-    if (typeof Sidebar.expandSessionGroup === 'function') Sidebar.expandSessionGroup(group);
-    openCronAdder({sessionId: node.id, project: group});
-  } catch (err) {
-    console.error('Create scheduled task failed:', err);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Sidebar registrations
 // ---------------------------------------------------------------------------
@@ -310,36 +330,20 @@ registerGroupPreviewLimitExemption((s) => !!s.schedule_task);
 // view.
 registerSessionRowBadge((s) => (s.schedule_task ? renderScheduledBadge(s) : ''));
 registerSessionRowLine((s) => (s.schedule_task ? renderSessionScheduleLine(s) : null));
-// The row's Settings menu: a bound row edits its task, while an unbound
-// manager adds one bound to the row.
-registerSessionMenuItems({
-  rowAttrs: (s) => ({scheduleTask: s.schedule_task || ''}),
-  items: (attrs, sessionId) => {
-    if (attrs.scheduleTask) {
-      return [{label: 'Edit schedule…', onSelect: () => openCronEditor(attrs.scheduleTask)}];
-    }
-    if (attrs.profile === 'manager') {
-      return [{label: 'Add schedule…', onSelect: () => openCronAdder({sessionId})}];
-    }
-    return [];
-  },
-});
-// The named group header's menu leads with the scheduled-task creation.
-registerGroupMenuItem({label: 'New scheduled task', onSelect: createScheduledTaskInGroup});
 
 const GLOBALS = {
-  openCronEditor,
-  openCronAdder,
+  openCronErrorView,
   closeCronModal,
-  saveCronTask,
-  deleteCronTask,
 };
-Sidebar.wire(GLOBALS, {applyCronBrokenView});
+Sidebar.wire(GLOBALS, {showCronErrorView, renderCronPanel});
 
-// The page fetches this module after its document, so the sidebar's rows were already painted without the schedule
-// badge and line registered above. Its Workspace badge list was sampled before this module's loader registered.
-// Repaint the rows the sidebar still shows, then re-read the Workspace badges with this module's loader in the list.
+// The panel follows the active session: it redraws at each switch. The page fetches this module after its document,
+// so the first draw runs here when the document has already parsed.
+document.addEventListener('charliebot:active-session-changed', renderCronPanel);
 if (document.readyState !== 'loading') {
+  renderCronPanel();
+  // The sidebar's rows were already painted without the schedule badge and line registered above. Repaint the rows
+  // the sidebar still shows, then re-read the Workspace badges with this module's loader in the list.
   Sidebar.repaintRenderedRows();
   Sidebar.refreshWorkspaceBadges();
 }

@@ -22,7 +22,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-use crate::config::{ScheduledTaskConfig, effective_backend};
+use crate::config::ScheduledTaskConfig;
 use crate::firing::{firing_ref, round_request_id};
 use crate::{host_gate, loader, rounds, session_input, steps};
 
@@ -80,13 +80,6 @@ impl CronScheduler {
       }
     }
     for task in &tasks {
-      if task.session_id.is_some()
-        && let Err(error) = self.align_backend(task, &cfg).await
-      {
-        tracing::error!(task = %task.name, error = %error, "scheduler_backend_align_error");
-      }
-    }
-    for task in &tasks {
       if !task.enabled || task.session_id.is_none() {
         continue;
       }
@@ -106,7 +99,6 @@ impl CronScheduler {
     cfg: &CharlieBotConfig,
     old_by_task: &HashMap<String, Vec<Arc<SessionMetadata>>>,
   ) -> anyhow::Result<()> {
-    let backend = effective_backend(task, cfg)?;
     let node = self
       .features
       .store
@@ -117,8 +109,8 @@ impl CronScheduler {
           profile: TaskProfile::Manager,
           task: None,
           name: Some(task.name.clone()),
-          backend: Some(backend.clone()),
-          group: task.project.clone(),
+          backend: None,
+          group: None,
           session_id: None,
         },
         TaskCaller::System,
@@ -149,7 +141,7 @@ impl CronScheduler {
     write_cron_key(cfg, &task.name, "session_id", Value::String(node.id.clone()))?;
     task.session_id = Some(node.id.clone());
     self.archive_legacy(&task.name, old_by_task).await?;
-    tracing::info!(task = %task.name, session = %node.id, backend, "scheduled_task_auto_bound");
+    tracing::info!(task = %task.name, session = %node.id, "scheduled_task_auto_bound");
     Ok(())
   }
 
@@ -168,21 +160,32 @@ impl CronScheduler {
     Ok(())
   }
 
-  async fn align_backend(&self, task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<()> {
-    let session_id = task.session_id.as_deref().expect("the task binding pass supplied a session id");
-    let backend = effective_backend(task, cfg)?;
-    let Some(node) = self.features.store.get_session(session_id).await? else {
-      anyhow::bail!("scheduled task '{}' bound node {session_id} not found", task.name);
-    };
-    if node.backend == backend {
-      return Ok(());
+  /// The reason the bound session's backend cannot take a fire of `task`, or `None`. A task that takes no session backend
+  /// (a handler) is never refused here.
+  fn fire_backend_refusal(
+    task: &ScheduledTaskConfig,
+    cfg: &CharlieBotConfig,
+    session: &SessionMetadata,
+  ) -> anyhow::Result<Option<String>> {
+    if !task.uses_session_backend() {
+      return Ok(None);
     }
-    if self.features.store.busy_since(session_id).is_some() {
-      anyhow::bail!("scheduled node {session_id} is busy while aligning backend to '{backend}'");
-    }
-    self.features.store.switch_backend(session_id, &backend).await?;
-    tracing::info!(task = %task.name, session = %session_id, backend, "scheduled_node_backend_aligned");
-    Ok(())
+    rounds::session_backend_refusal(cfg, &session.backend, task.improve_host.is_some())
+  }
+
+  /// Refuse one fire of `task` whose bound session's backend cannot take it. The reason is posted to the session, the
+  /// fire counts as used so the next tick does not retry it, and the task's last run records as failed. No trigger
+  /// input is queued and no worker starts.
+  async fn refuse_fire(
+    &self,
+    session: &SessionMetadata,
+    task: &ScheduledTaskConfig,
+    now: chrono::DateTime<chrono::Utc>,
+    reason: &str,
+  ) -> anyhow::Result<()> {
+    self.post_fire_error(session, &format!("scheduled task '{}' did not run: {reason}", task.name), false).await?;
+    self.record_bound_fire(session, task, now).await?;
+    self.update_status(&session.id, &task.name, "failed").await
   }
 
   async fn maybe_run(
@@ -220,6 +223,10 @@ impl CronScheduler {
     if due > now {
       return Ok(());
     }
+    if let Some(reason) = Self::fire_backend_refusal(task, cfg, &session)? {
+      self.refuse_fire(&session, task, now.with_timezone(&chrono::Utc), &reason).await?;
+      return Ok(());
+    }
     if let Some(reason) = self.skip_reason(task, cfg, &session).await? {
       self.record_skip(&session.id, &task.name, isoformat_text(&now)?, reason).await?;
       return Ok(());
@@ -230,9 +237,11 @@ impl CronScheduler {
     Ok(())
   }
 
-  /// The reason a due fire of `task` does not run, or `None` when it runs. An archived bound session skips it first,
-  /// since its inputs are no longer read (S2 b). Then the task's own work holds it: a prompt task's trigger input and
-  /// its round (S2 a). A host that awaits login approval holds it last (S2 c).
+  /// The reason a due fire of `task` does not run, or `None` when it runs. Before this check, `maybe_run` checks the
+  /// backend of the bound session for a task that takes one (a handler does not), and fails such a fire rather than
+  /// skipping it. An archived bound session skips it next, since its inputs are no longer read (S2 b). Then the task's
+  /// own work holds it: a prompt task's trigger input and its round (S2 a). A host that awaits login approval holds it
+  /// last (S2 c).
   async fn skip_reason(
     &self,
     task: &ScheduledTaskConfig,
@@ -309,6 +318,11 @@ impl CronScheduler {
       Some(value) => value,
       None => UtcDateTime::now().to_isoformat_text(),
     };
+    // A due fire was checked in `maybe_run`; a run started now is checked here.
+    if !scheduled && let Some(reason) = Self::fire_backend_refusal(&task, &cfg, &session)? {
+      self.refuse_fire(&session, &task, now, &reason).await?;
+      return Ok(TaskRunResult { session_id: session.id, thread_id: None });
+    }
     if task.is_prompt() {
       return self.admit_prompt_fire(&task, &session, &firing, now).await;
     }
@@ -339,7 +353,9 @@ impl CronScheduler {
     }
     let adapter = self.features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>()?;
     let executor: Arc<dyn SequenceExecutor> = adapter.clone();
-    let configured_backend = effective_backend(&task, &cfg)?;
+    let first_step =
+      task.steps.as_ref().and_then(|steps| steps.first()).expect("a scheduled-step run has a first step");
+    let configured_backend = steps::step_backend_id(first_step.backend.as_deref(), &session.backend);
     // A pool fire selects its member now, and the fire's child keeps the pool id as its backend while its run runs on
     // that member. A pool with no selectable member ends the fire here, with the error posted to the bound session.
     let session_backend = cfg.backends.pool(&configured_backend).is_some().then_some(configured_backend.as_str());
@@ -946,9 +962,9 @@ mod tests {
   use super::{CronExpression, CronScheduler, isoformat_text};
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{
-    AUTO_POOL_ID, FakeGit, GIT_PROGRAM_LOCK, auto_manager, bound_round_leaf, child_manager, feature_context,
-    feature_context_with_auto, feature_context_with_login_hosts, host_probe_count, install_execution, manager,
-    set_host_login, write_prompted_task, write_task,
+    AUTO_POOL_ID, FakeGit, GIT_PROGRAM_LOCK, auto_manager, bound_round_leaf, feature_context,
+    feature_context_with_auto, feature_context_with_login_hosts, host_probe_count, install_execution,
+    keyed_child_manager, keyed_manager, manager, set_host_login, write_prompted_task, write_task,
   };
   use charliebot_registry::registry::HostLogin;
   use charliebot_tasks::test_support::process_guard::ProcessGroupGuard;
@@ -1074,8 +1090,8 @@ mod tests {
   }
 
   /// A file-based task in `mode: master` with no `session_id` loads, and one
-  /// tick auto-binds it: the scheduler creates the manager session, writes the
-  /// id back into the host file, and the node sits open in the task's group.
+  /// tick auto-binds it: the scheduler creates the manager session on the ordinary new-session backend, leaves it
+  /// ungrouped, and writes its id back into the host file.
   #[tokio::test]
   async fn tick_binds_task_with_mode_and_no_session_id_after_one_tick() {
     let (home, features) = feature_context();
@@ -1088,6 +1104,8 @@ mod tests {
     assert!(!session_id.is_empty());
     let node = features.store.get_session(session_id).await.unwrap().expect("the bound session exists");
     assert_eq!(node.profile, TaskProfile::Manager);
+    let expected_backend = features.config.get().unwrap().backends.new_session_backend().unwrap();
+    assert_eq!(node.backend, expected_backend);
     assert_eq!(node.group.as_deref(), None);
     assert_eq!(features.store.task_state(session_id).unwrap(), "open");
 
@@ -1337,10 +1355,8 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: None,
-      backend: Some("synthetic".to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
-      project: None,
       allow_failure: false,
       session_id: Some(parent.id.clone()),
       mode: Some(TaskMode::Worker),
@@ -1485,45 +1501,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn edited_yaml_backend_is_aligned_on_the_next_tick_without_rebinding() {
-    let (home, features) = crate::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
-    let node = crate::test_support::manager(&features, "synthetic-edit-backend-node").await.unwrap();
-    let path = write_task(
-      home.path(),
-      "synthetic-edit-backend",
-      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","session_id":node.id,"backend":"synthetic","enabled":false}),
-    );
-    let scheduler = CronScheduler::new(Arc::clone(&features));
-    scheduler.tick().await.unwrap();
-    let mut body = serde_yaml::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    body.as_object_mut().unwrap().insert("backend".to_string(), json!("synthetic-alt"));
-    std::fs::write(&path, crate::yaml::dump(&body).unwrap()).unwrap();
-
-    scheduler.tick().await.unwrap();
-
-    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic-alt");
-    assert_eq!(features.store.list_sessions(None, None, None).unwrap().rows.len(), 1);
-    let persisted: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(persisted["session_id"].as_str(), Some(node.id.as_str()));
-  }
-
-  #[tokio::test]
-  async fn scheduler_aligns_a_bound_node_backend_in_place() {
-    let (home, features) = crate::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
-    let node = crate::test_support::manager(&features, "synthetic-align-backend-node").await.unwrap();
-    write_task(
-      home.path(),
-      "synthetic-align-backend",
-      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","session_id":node.id,"backend":"synthetic-alt","enabled":false}),
-    );
-
-    CronScheduler::new(Arc::clone(&features)).tick().await.unwrap();
-
-    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic-alt");
-    assert_eq!(features.store.list_sessions(None, None, None).unwrap().rows.len(), 1);
-  }
-
-  #[tokio::test]
   async fn an_upcoming_occurrence_preserves_last_run_and_does_not_catch_up() {
     let (home, features) = feature_context();
     let node = crate::test_support::manager(&features, "synthetic-no-catchup-node").await.unwrap();
@@ -1595,10 +1572,8 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: repo.map(|path| path.display().to_string()),
-      backend: Some("synthetic".to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
-      project: None,
       allow_failure: false,
       session_id: Some(node_id.to_string()),
       mode: Some(TaskMode::Worker),
@@ -1733,10 +1708,8 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: None,
-      backend: Some(AUTO_POOL_ID.to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
-      project: None,
       allow_failure: false,
       session_id: Some(node.id.clone()),
       mode: Some(TaskMode::Worker),
@@ -1770,10 +1743,8 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: None,
-      backend: Some(AUTO_POOL_ID.to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
-      project: None,
       allow_failure: false,
       session_id: Some(node.id.clone()),
       mode: Some(TaskMode::Worker),
@@ -1945,7 +1916,7 @@ mod tests {
     let checkout_home = tempfile::tempdir().unwrap();
     let repo = checkout_home.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
-    let node = manager(&features, "synthetic-launcher-node").await.unwrap();
+    let node = keyed_manager(&features, "synthetic-launcher-node").await.unwrap();
     let task = ScheduledTaskConfig {
       improve_host: Some(LAUNCH_HOST.to_string()),
       ..worker_task("synthetic-launcher-task", &node.id, Some(&repo))
@@ -1992,7 +1963,7 @@ mod tests {
       name,
       &json!({
         "cron": "* * * * *", "mode": "worker", "enabled": true,
-        "timezone": "UTC", "session_id": node.id, "backend": "synthetic",
+        "timezone": "UTC", "session_id": node.id,
       }),
     );
     let task = crate::loader::read_snapshot(features, &features.config.get().unwrap())
@@ -2185,7 +2156,6 @@ mod tests {
       "code-health",
       &json!({
         "cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node.id,
-        "backend": "synthetic",
         "steps": [{"name": "work", "prompt_file": step_prompt.display().to_string()}],
       }),
     );
@@ -2360,7 +2330,7 @@ mod tests {
     let home = features.config.get().unwrap().charliebot_home.clone();
     set_host_login(&home, gate_verdict("needs-interactive-auth", "2026-06-01T00:00:00+00:00"));
     let root = manager(&features, "gate-root").await.unwrap();
-    let node = child_manager(&features, &root.id, "gate-node").await.unwrap();
+    let node = keyed_child_manager(&features, &root.id, "gate-node").await.unwrap();
     write_prompted_task(
       &home,
       "gated",
@@ -2402,7 +2372,7 @@ mod tests {
     install_execution(&features).await;
     let home = features.config.get().unwrap().charliebot_home.clone();
     set_host_login(&home, gate_verdict("unreachable", "2026-06-01T00:00:00+00:00"));
-    let node = manager(&features, "gate-unreachable-node").await.unwrap();
+    let node = keyed_manager(&features, "gate-unreachable-node").await.unwrap();
     write_prompted_task(
       &home,
       "unreachable",
@@ -2422,7 +2392,7 @@ mod tests {
     let (_home, features) = gated_context();
     install_execution(&features).await;
     let home = features.config.get().unwrap().charliebot_home.clone();
-    let node = manager(&features, "gate-error-node").await.unwrap();
+    let node = keyed_manager(&features, "gate-error-node").await.unwrap();
     write_prompted_task(
       &home,
       "probe-error",

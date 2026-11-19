@@ -34,10 +34,8 @@ pub struct QuotaFailure {
 /// task whose session id names the node.
 pub trait SequenceBinding: Send + Sync {
   fn name(&self) -> &str;
-  /// True when the sequence gives the node a backend of its own.
-  fn dedicated_backend(&self) -> bool;
-  /// The error detail when a backend switch to `target_backend` is refused.
-  fn backend_lock_detail(&self, target_backend: &str) -> String;
+  /// The reason a backend switch of the node to `backend` is refused, or `None` when the switch may proceed.
+  fn backend_refusal(&self, cfg: &CharlieBotConfig, backend: &str) -> anyhow::Result<Option<String>>;
   /// The node's wake duties, which return an optional turn-input prefix.
   fn on_wake<'a>(
     &'a self,

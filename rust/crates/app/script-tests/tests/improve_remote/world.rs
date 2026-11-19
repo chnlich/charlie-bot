@@ -441,7 +441,7 @@ impl World {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");
-    for name in ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh"] {
+    for name in ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh", "member_kinds.txt"] {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }
     let local_home = sandbox.dir("local");
@@ -777,6 +777,15 @@ impl World {
   /// The CODEX_HOME that a codex round of this world uses on the host: a directory under the direction's /tmp root.
   pub fn codex_home_directory(&self) -> PathBuf {
     PathBuf::from(format!("/tmp/improve-{}/codex-home", self.direction))
+  }
+
+  /// A launch directory the runner reads, created as the launcher's payload creates it: the member kind list
+  /// that the payload carries sits beside the runner.
+  pub fn stage_launch(&self, launch_id: &str) -> PathBuf {
+    let launch = self.remote_home.join("improve/launch").join(launch_id);
+    fs::create_dir_all(&launch).expect("the launch directory");
+    harness::copy_file(&self.repo.join("dev/improve/member_kinds.txt"), &launch.join("member_kinds.txt"));
+    launch
   }
 
   /// The launch directory, when the round left one behind.

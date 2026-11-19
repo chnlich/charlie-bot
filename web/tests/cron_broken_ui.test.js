@@ -66,14 +66,16 @@ function loadGroups() {
 }
 
 
-// cron.js is an IIFE over the sidebar's registration entries; the sandbox
-// records what it registers, so each test drives a part the way core does.
-function loadCron(fetch, readyState = 'complete') {
+// cron.js is an IIFE over the sidebar's registration entries and the page's
+// active session; the sandbox records what it registers and which session is
+// active, so each test drives a part the way the page does.
+function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session'} = {}) {
   const elements = {};
   const registered = {
     workspaceBadges: [], rowBadges: [], rowLines: [], menuItems: [], groupMenuItems: [], previewLimitExemptions: [],
   };
   const repaints = [];
+  const listeners = {};
   const context = {
     Sidebar: {
       wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); },
@@ -81,10 +83,14 @@ function loadCron(fetch, readyState = 'complete') {
       refreshWorkspaceBadges() { repaints.push('badges'); },
     },
     console: {error: () => {}},
-    document: {readyState, getElementById: (id) => elements[id] || (elements[id] = makeEl())},
+    document: {
+      readyState,
+      getElementById: (id) => elements[id] || (elements[id] = makeEl()),
+      addEventListener: (type, listener) => { listeners[type] = listener; },
+    },
     escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
-    JSON_HEADERS: {'Content-Type': 'application/json'},
+    SESSION_ID: sessionId,
     currentFilter: 'all',
     switchSidebarFilter: () => {},
     fetch,
@@ -99,7 +105,7 @@ function loadCron(fetch, readyState = 'complete') {
   vm.createContext(context);
   runIconModule(context);
   vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
-  return {context, elements, registered, repaints};
+  return {context, elements, registered, repaints, listeners};
 }
 
 // A fetch that answers every request with *tasks* and records each request.
@@ -123,8 +129,8 @@ test('the Workspace view shows the global failure badge the cron loader resolves
 
   const html = elements['session-list'].innerHTML;
   assert.ok(html.includes('2 scheduled tasks failed to load'), html);
-  // Clicking opens the cron editor on the first broken task by name order.
-  assert.ok(html.includes("openCronEditor('a-broken')"), html);
+  // Clicking opens the error view on the first broken task by name order.
+  assert.ok(html.includes("openCronErrorView('a-broken')"), html);
   // Even with zero sessions the badge pages the maintainer.
   assert.ok(html.indexOf('2 scheduled tasks failed to load') < html.indexOf('No sessions yet'), html);
 });
@@ -151,99 +157,23 @@ test('no badge when nothing is broken', () => {
   assert.ok(!elements['session-list'].innerHTML.includes('scheduled tasks failed to load'), elements['session-list'].innerHTML);
 });
 
-test('applyCronBrokenView locks the form and shows the full error for a broken task', () => {
-  const {context, elements} = loadCron();
-  context.Sidebar.applyCronBrokenView({
-    broken: true, error: 'yaml exploded', path: '/home/u/.charliebot/config.d/cron.d/x.yaml', enabled: false,
-  });
+test('the error view shows the load error and the file path of a failed task, and no form', async () => {
+  const {context, elements} = loadCron(tasksFetch([
+    {name: 'x', error: 'yaml exploded', broken: true, path: '/home/u/.charliebot/config.d/cron.d/x.yaml', enabled: false},
+  ]));
+  await context.Sidebar.openCronErrorView('x');
 
-  for (const id of ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone']) {
-    assert.equal(elements[id].readOnly, true, id);
-  }
-  assert.equal(elements['cron-backend'].disabled, true);
-  assert.equal(elements['cron-enabled'].disabled, true);
-  assert.equal(elements['cron-enabled'].checked, false);
-  assert.equal(elements['cron-enabled'].indeterminate, false);
-  assert.ok(elements['cron-save-btn'].classList.contains('hidden'));
-  assert.ok(!elements['cron-error-box'].classList.contains('hidden'));
-  assert.ok(elements['cron-error-box'].textContent.includes('yaml exploded'));
-  assert.ok(elements['cron-error-box'].textContent.includes('/home/u/.charliebot/config.d/cron.d/x.yaml'));
-});
-
-test('an unparseable file greys the enabled box (indeterminate)', () => {
-  const {context, elements} = loadCron();
-  context.Sidebar.applyCronBrokenView({broken: true, error: 'syntax', path: '/x.yaml', enabled: null});
-
-  assert.equal(elements['cron-enabled'].disabled, true);
-  assert.equal(elements['cron-enabled'].checked, false);
-  assert.equal(elements['cron-enabled'].indeterminate, true);
-});
-
-test('applyCronBrokenView(null) restores the editable form for normal tasks', () => {
-  const {context, elements} = loadCron();
-  context.Sidebar.applyCronBrokenView({broken: true, error: 'boom', path: '/x.yaml', enabled: true});
-  context.Sidebar.applyCronBrokenView(null);
-
-  for (const id of ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone']) {
-    assert.equal(elements[id].readOnly, false, id);
-  }
-  assert.equal(elements['cron-backend'].disabled, false);
-  assert.equal(elements['cron-enabled'].disabled, false);
-  assert.equal(elements['cron-enabled'].indeterminate, false);
-  assert.ok(!elements['cron-save-btn'].classList.contains('hidden'));
-  assert.ok(elements['cron-error-box'].classList.contains('hidden'));
-  assert.equal(elements['cron-error-box'].textContent, '');
-});
-
-test('the schedule items: a bound row edits its task, an unbound manager adds one bound to the row', async () => {
-  const requests = [];
-  const {context, elements, registered} = loadCron(tasksFetch([{name: 'task-cron1', cron: '0 9 * * *', enabled: true}],
-                                                              requests));
-  assert.equal(registered.menuItems.length, 1);
-  const source = registered.menuItems[0];
-  // The row fact the items read rides the Settings button as data-schedule-task.
-  assert.deepEqual({...source.rowAttrs({schedule_task: 'task-cron1'})}, {scheduleTask: 'task-cron1'});
-  assert.deepEqual({...source.rowAttrs({})}, {scheduleTask: ''});
-  const labels = (attrs) => [...source.items(attrs, 'r1')].map((item) => item.label);
-  assert.deepEqual(labels({scheduleTask: 'task-cron1'}), ['Edit schedule\u2026']);
-  assert.deepEqual(labels({profile: 'manager'}), ['Add schedule\u2026']);
-  assert.deepEqual(labels({}), []);
-
-  // Edit opens the editor on the bound task.
-  await source.items({scheduleTask: 'task-cron1'}, 'r1')[0].onSelect();
-  assert.deepEqual(requests.map((req) => req.url), ['/api/cron/tasks']);
-  assert.equal(elements['cron-name'].value, 'task-cron1');
+  const box = elements['cron-error-box'].textContent;
+  assert.ok(box.includes('yaml exploded'), box);
+  assert.ok(box.includes('/home/u/.charliebot/config.d/cron.d/x.yaml'), box);
   assert.ok(!elements['cron-modal'].classList.contains('hidden'));
-
-  // Add opens the adder, and its save binds the new task to the row.
-  source.items({profile: 'manager'}, 'r1')[0].onSelect();
-  assert.equal(elements['cron-modal-title'].textContent, 'New Scheduled Task');
-  elements['cron-name'].value = 'nightly';
-  await context.Sidebar.saveCronTask();
-  assert.equal(requests[1].url, '/api/cron/tasks');
-  assert.equal(JSON.parse(requests[1].opts.body).session_id, 'r1');
 });
 
-test('New scheduled task creates a manager node in the group, then opens the adder bound to it', async () => {
-  const requests = [];
-  const {context, elements, registered} = loadCron(tasksFetch([], requests));
-  const created = [];
-  const expanded = [];
-  context.Sidebar.createSessionNode = async (taskParentId, group) => {
-    created.push([taskParentId, group]);
-    return {id: 'n1'};
-  };
-  context.Sidebar.expandSessionGroup = (group) => expanded.push(group);
-  assert.deepEqual(registered.groupMenuItems.map((item) => item.label), ['New scheduled task']);
+test('the cron module registers no schedule menu item, so no row or group menu offers an editor', () => {
+  const {registered} = loadCron();
 
-  await registered.groupMenuItems[0].onSelect('alpha');
-
-  assert.deepEqual(created, [[null, 'alpha']]);
-  assert.deepEqual(expanded, ['alpha']);
-  assert.equal(elements['cron-project'].value, 'alpha');
-  assert.ok(!elements['cron-modal'].classList.contains('hidden'));
-  await context.Sidebar.saveCronTask();
-  assert.equal(JSON.parse(requests[0].opts.body).session_id, 'n1');
+  assert.equal(registered.menuItems.length, 0);
+  assert.equal(registered.groupMenuItems.length, 0);
 });
 
 // The page fetches cron.js after its document, so the sidebar's rows are painted before the schedule badge and line
@@ -255,6 +185,90 @@ test('a cron module fetched after the document repaints the rows and re-reads th
 });
 
 test('a cron module that lands while the page still parses repaints nothing', () => {
-  const {repaints} = loadCron(tasksFetch([]), 'loading');
+  const {repaints} = loadCron(tasksFetch([]), {readyState: 'loading'});
   assert.equal(repaints.length, 0);
+});
+
+const BOUND_TASKS = [
+  {name: 'weekly', cron: '0 7 * * 1', timezone: 'UTC', enabled: true, session_id: 's1', prompt_file: 'p.md',
+    prompt: 'Summarize the day', repo: null, allow_failure: true, mode: 'master', handler: null,
+    improve_host: 'host3', steps: null},
+  {name: 'boba-order', cron: '3,33 8-12 * * 1-5', timezone: 'America/Los_Angeles', enabled: true,
+    session_id: 's1', prompt: 'Check the order'},
+  {name: 'elsewhere', cron: '0 5 * * *', timezone: 'UTC', enabled: true, session_id: 's2', prompt: 'Other session'},
+  {name: 'paused', cron: '0 17 15 12 *', timezone: 'UTC', enabled: false, session_id: 's1', prompt: 'Wait',
+    steps: [{name: 'work', backend: 'claude-opus', distinct_backend_from: null, prompt_file: 'w.md',
+      prompt: 'Do the work'}]},
+];
+
+test('the panel lists the tasks bound to the active session, with every setting and its prompt text', async () => {
+  const requests = [];
+  const {context, elements} = loadCron(tasksFetch(BOUND_TASKS, requests), {sessionId: 's1'});
+  // The module's own load draws the panel once; this test counts the draw it asks for.
+  requests.length = 0;
+
+  await context.Sidebar.renderCronPanel();
+
+  assert.deepEqual(requests.map((req) => req.url), ['/api/cron/tasks']);
+  const html = elements['cron-session-panel-body'].innerHTML;
+  assert.ok(html.includes('weekly') && html.includes('paused'), html);
+  assert.ok(!html.includes('elsewhere'), 'a task bound to another session is not listed');
+  assert.ok(html.includes('Every Monday at 07:00'), 'the weekly schedule has a readable title');
+  assert.ok(
+    html.includes('At minutes 03 and 33 past each hour from 08:00 through 12:00 on Monday through Friday'),
+    'a weekday schedule with minute and hour ranges has a readable title',
+  );
+  assert.ok(html.includes('Every December 15 at 17:00'), 'the yearly schedule has a readable title');
+  for (const text of ['s1', 'Summarize the day', 'UTC', 'p.md', 'host3', 'Do the work', 'claude-opus']) {
+    assert.ok(html.includes(text), `${text} is shown: ${html}`);
+  }
+  assert.ok(html.includes('Disabled'), 'a disabled task keeps its block, marked disabled');
+  assert.doesNotMatch(html, /<(input|select|button|textarea)\b/, 'the panel holds no control');
+  assert.ok(!elements['cron-session-panel'].classList.contains('hidden'));
+});
+
+test('the panel stays hidden for a session that no task binds', async () => {
+  const {context, elements} = loadCron(tasksFetch(BOUND_TASKS), {sessionId: 'no-tasks'});
+
+  await context.Sidebar.renderCronPanel();
+
+  assert.ok(elements['cron-session-panel'].classList.contains('hidden'));
+  assert.equal(elements['cron-session-panel-body'].innerHTML, '');
+});
+
+test('the panel redraws for the session that becomes active', async () => {
+  const {context, elements, listeners} = loadCron(tasksFetch(BOUND_TASKS), {sessionId: 's1'});
+  assert.ok(listeners['charliebot:active-session-changed'], 'the panel listens for session switches');
+
+  context.SESSION_ID = 's2';
+  await listeners['charliebot:active-session-changed']();
+
+  const html = elements['cron-session-panel-body'].innerHTML;
+  assert.ok(html.includes('elsewhere') && !html.includes('weekly'), html);
+});
+
+test('a session switch clears the old panel while its task list is loading', async () => {
+  const {context, elements, listeners} = loadCron(tasksFetch(BOUND_TASKS), {readyState: 'loading', sessionId: 's1'});
+  await context.Sidebar.renderCronPanel();
+  assert.ok(!elements['cron-session-panel'].classList.contains('hidden'));
+
+  context.SESSION_ID = 'no-tasks';
+  let finishFetch;
+  context.fetch = () => new Promise((resolve) => { finishFetch = resolve; });
+  const pending = listeners['charliebot:active-session-changed']();
+  assert.ok(elements['cron-session-panel'].classList.contains('hidden'));
+  assert.equal(elements['cron-session-panel-body'].textContent, '');
+
+  finishFetch({ok: true, json: async () => BOUND_TASKS});
+  await pending;
+  assert.ok(elements['cron-session-panel'].classList.contains('hidden'));
+});
+
+test('a failed task-list fetch is visible instead of looking like an unbound session', async () => {
+  const {context, elements} = loadCron(async () => { throw new Error('network unavailable'); }, {sessionId: 's1'});
+
+  await context.Sidebar.renderCronPanel();
+
+  assert.ok(!elements['cron-session-panel'].classList.contains('hidden'));
+  assert.equal(elements['cron-session-panel-body'].textContent, 'Could not load scheduled tasks: Error: network unavailable');
 });

@@ -943,7 +943,7 @@ impl RunProcess for ResumeProcess<'_> {
           if watch.is_some() {
             tracing::info!(
               target: "charliebot_tasks",
-              thread = %self.worker.thread_id,
+              run_id = %self.worker.thread_id,
               account = launch.account_label.as_deref(),
               "account_watch_attached"
             );

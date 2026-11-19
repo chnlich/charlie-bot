@@ -2322,9 +2322,26 @@ impl TaskExecutionAdapter {
     let session_id = meta.id.as_str();
     let run_id = run.id.as_str();
     let run_dir = self.features.store.run_dir(session_id, run_id);
+    let held_native_id = match run.native_session_id.as_deref() {
+      Some(native_id) => Some(native_id.to_string()),
+      None => self.native_session_id(&run_dir.join(run_records::RAW_LOG_NAME), option).await?,
+    };
+    if run.native_session_id.is_none()
+      && let Some(native_id) = held_native_id.as_deref()
+    {
+      self
+        .features
+        .store
+        .record_observation(
+          session_id,
+          run_id,
+          Map::from_iter([(OBSERVATION_NATIVE_SESSION_ID.to_string(), json!(native_id))]),
+        )
+        .await?;
+    }
     let mut thread = worker_binding(run_id, session_id, run);
     let lifecycle = self.features.registry.lifecycle_for(&option.backend_type)?;
-    lifecycle.assign_thread_native_id(&mut thread, run.native_session_id.as_deref());
+    lifecycle.assign_thread_native_id(&mut thread, held_native_id.as_deref());
     let mut worker = Worker::new(
       Arc::clone(&self.features),
       WorkerSpec {
@@ -2338,7 +2355,7 @@ impl TaskExecutionAdapter {
         on_spawned: None,
         instructions_content: None,
         session_meta: Some(meta.clone()),
-        held_native_id: run.native_session_id.clone(),
+        held_native_id,
         run_kind: run.kind,
       },
     )?;

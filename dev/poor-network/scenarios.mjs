@@ -1,4 +1,4 @@
-// The six scenarios of the README. Each repetition starts from a fresh browser profile behind a fresh proxy, so
+// The scenarios of the README. Each repetition starts from a fresh browser profile behind a fresh proxy, so
 // the page's own cache and state never carry from one repetition to the next. A repetition returns the raw numbers of
 // its scenario; report.mjs turns them into the medians, the targets and the verdicts.
 //

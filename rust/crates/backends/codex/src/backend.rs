@@ -17,7 +17,7 @@ use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use super::options::CodexOptions;
 use super::text::is_truthy;
@@ -28,11 +28,16 @@ use charliebot_agents::one_shot::{assistant_text, frame_system_prompt};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{
-  AgentChild, AgentPipeReader, SpawnSpec, SpawnedChild, parse_backend_line, spawn_one_shot,
+  AgentChild, AgentPipeReader, AgentPipeWriter, ChildStdin, SpawnSetup, SpawnSpec, SpawnedChild, parse_backend_line,
+  spawn_with_setup,
 };
 
 /// The log event that reports writing the instructions file.
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "codex_wrote_agents_md";
+
+/// The prompt argument that makes `codex exec` read the prompt from stdin. The prompt is not an argv element, so its
+/// size is not bound by the kernel's per-argument limit of 128 KiB.
+const STDIN_PROMPT_ARG: &str = "-";
 
 /// The stderr a one-shot keeps for its error message. Later bytes are read and dropped.
 const MAX_ONE_SHOT_STDERR_BYTES: usize = 4 * 1024;
@@ -159,9 +164,10 @@ impl CodexBackend {
     command
   }
 
-  /// The streaming command. A resume splices `resume` after `exec` and the session id after the exec flags, which is
-  /// the form `codex exec resume <flags> <session-id>` takes.
-  pub fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
+  /// The streaming command. The prompt goes to stdin (`stdin_prompt`), and the command ends with the `-` prompt
+  /// argument. A resume splices `resume` after `exec` and the session id after the exec flags, which is the form
+  /// `codex exec resume <flags> <session-id>` takes.
+  pub fn build_command(&self) -> anyhow::Result<Vec<String>> {
     let mut command = self.exec_command_head();
     command.extend(self.instructions_config_args()?);
     if let Some(session_id) = &self.resume_session_id {
@@ -173,8 +179,7 @@ impl CodexBackend {
       command.extend(session_memo_hook_args());
     }
     command.extend(self.extra_flags.iter().cloned());
-    command.push("--".to_string());
-    command.push(prompt.to_string());
+    command.push(STDIN_PROMPT_ARG.to_string());
     Ok(command)
   }
 
@@ -184,8 +189,8 @@ impl CodexBackend {
   }
 
   /// `codex exec --json` with the configured model and effort, for one prompt and no tools. Codex has no system-prompt
-  /// flag, so the system prompt is framed into the prompt. The text is the assistant messages of the agent_message
-  /// items. A structured error event, a nonzero exit or an empty answer fails the call.
+  /// flag, so the system prompt is framed into the prompt, which goes to stdin. The text is the assistant messages of
+  /// the agent_message items. A structured error event, a nonzero exit or an empty answer fails the call.
   async fn run_one_shot(
     &self,
     base_env: &Env,
@@ -194,8 +199,8 @@ impl CodexBackend {
     timeout: Option<Duration>,
   ) -> anyhow::Result<String> {
     let mut command = self.exec_command_head();
-    command.push("--".to_string());
-    command.push(frame_system_prompt(system, prompt));
+    command.push(STDIN_PROMPT_ARG.to_string());
+    let framed = frame_system_prompt(system, prompt);
     // The one-shot runs codex with its shell tools, so it takes the runner's spawn check: `prepare_env` puts the
     // user's `~/.local/bin` first, where the personal gh lives.
     let mut env = self.prepare_env(base_env.clone());
@@ -209,10 +214,14 @@ impl CodexBackend {
       self.cgroup_config.clone(),
     );
     let SpawnedChild { mut child, cgroup: _cgroup } =
-      spawn_one_shot(&spec, None).await.context("spawning the codex one-shot")?;
+      spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ParentSideTurnTree)
+        .await
+        .context("spawning the codex one-shot")?;
     let pid = child.id().context("codex one-shot did not expose its process id")?;
+    let stdin = child.stdin.take().context("codex one-shot stdin was not piped")?;
     let stdout = child.stdout.take().context("codex one-shot stdout was not piped")?;
     let stderr = child.stderr.take().context("codex one-shot stderr was not piped")?;
+    let stdin_task = tokio::spawn(write_prompt(stdin, framed));
     let stderr_task = tokio::spawn(read_bounded_stderr(stderr));
     let mut translator = CodexTranslator::new(&self.model);
 
@@ -221,6 +230,7 @@ impl CodexBackend {
         Ok(result) => result,
         Err(elapsed) => {
           kill_process_group(pid, Signal::SIGKILL);
+          stdin_task.abort();
           let wait_result = child.wait().await.context("reaping the timed-out codex one-shot");
           stderr_task.abort();
           let stderr_result = match stderr_task.await {
@@ -236,6 +246,9 @@ impl CodexBackend {
       },
       None => collect(&mut child, stdout, &mut translator).await,
     };
+    // The child has exited by now, so the writer has finished or failed on a broken pipe. That writer error is reported
+    // after the child's own failure, because an early exit is what breaks the pipe.
+    let stdin_result = stdin_task.await.context("waiting for the codex one-shot stdin writer")?;
     let (text, structured_error, returncode) = collected?;
     let stderr = stderr_task.await.context("waiting for the codex one-shot stderr reader")??;
     let stderr_text = str_methods::strip(&String::from_utf8_lossy(&stderr)).to_string();
@@ -249,6 +262,7 @@ impl CodexBackend {
     if text.is_empty() {
       bail!("Codex one-shot returned no assistant text{detail}");
     }
+    stdin_result.context("writing the codex one-shot prompt to stdin")?;
     Ok(text)
   }
 }
@@ -262,16 +276,16 @@ impl AgentBackend for CodexBackend {
     Ok(())
   }
 
-  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
-    CodexBackend::build_command(self, prompt)
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    CodexBackend::build_command(self)
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
     Ok(CodexBackend::prepare_env(self, env))
   }
 
-  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
-    None
+  fn stdin_prompt(&self, prompt: &str) -> Option<String> {
+    Some(prompt.to_string())
   }
 
   fn translator(&self) -> Box<dyn Translate> {
@@ -343,6 +357,12 @@ async fn collect(
   Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, exit_code))
 }
 
+/// Writes the whole prompt to a child's stdin and closes it, so `codex exec` reads the prompt to its end.
+async fn write_prompt(mut stdin: AgentPipeWriter, prompt: String) -> std::io::Result<()> {
+  stdin.write_all(prompt.as_bytes()).await?;
+  stdin.shutdown().await
+}
+
 /// The child's first bytes of stderr, read to the end so it never blocks on a full pipe.
 async fn read_bounded_stderr(mut stderr: AgentPipeReader) -> anyhow::Result<Vec<u8>> {
   let mut captured = Vec::new();
@@ -403,8 +423,7 @@ mod tests {
       .unwrap()
     };
 
-    let manager_argv =
-      backend(LaunchArgs { manager_turn: true, ..LaunchArgs::default() }).build_command("prompt").unwrap();
+    let manager_argv = backend(LaunchArgs { manager_turn: true, ..LaunchArgs::default() }).build_command().unwrap();
     let hooks: Vec<&String> =
       manager_argv.iter().filter(|argument| argument.starts_with("hooks.SessionStart=")).collect();
     assert_eq!(hooks.len(), 1, "{manager_argv:?}");
@@ -413,7 +432,7 @@ mod tests {
 
     let worker_launch =
       LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
-    let worker_argv = backend(worker_launch).build_command("prompt").unwrap();
+    let worker_argv = backend(worker_launch).build_command().unwrap();
     assert!(!worker_argv.iter().any(|argument| argument.contains("SessionStart")), "{worker_argv:?}");
   }
 
@@ -430,7 +449,90 @@ mod tests {
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
-    assert!(backend.build_command("prompt").unwrap().contains(&"developer_instructions=null".to_string()));
+    assert!(backend.build_command().unwrap().contains(&"developer_instructions=null".to_string()));
+  }
+
+  /// A prompt past Linux's per-argument limit reaches codex on stdin, and no argv element carries it. The check covers
+  /// a fresh run and a resume, the two streaming forms.
+  #[test]
+  fn a_200_kib_prompt_is_read_from_stdin_and_no_argv_element_carries_it() {
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let prompt = "\u{fc}".repeat(100 * 1024);
+    assert_eq!(prompt.len(), 200 * 1024);
+    let resume = LaunchArgs {
+      resume_session_id: Some("0195c4f2-3c1a-7b0e-9d2e-1a2b3c4d5e6f".to_string()),
+      ..LaunchArgs::default()
+    };
+    for launch in [LaunchArgs::default(), resume] {
+      let backend = CodexBackend::from_launch(
+        PathBuf::from("/synthetic/bin/codex"),
+        Path::new("/synthetic/home/.local/bin"),
+        "gpt-5.5",
+        &CodexOptions::default(),
+        launch,
+        SessionCgroupConfig::disabled(),
+      )
+      .unwrap();
+      let argv = AgentBackend::build_command(&backend, &prompt).unwrap();
+      assert_eq!(argv.last().map(String::as_str), Some("-"), "{argv:?}");
+      assert!(argv.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "an argv element is over 128 KiB");
+      assert_eq!(AgentBackend::stdin_prompt(&backend, &prompt).as_deref(), Some(prompt.as_str()));
+    }
+  }
+
+  /// The one-shot writes the framed prompt to the child's stdin unchanged. The stub records its argv and stdin.
+  #[ignore = "integration"]
+  #[tokio::test]
+  async fn one_shot_sends_a_200_kib_prompt_on_stdin() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let root = tempfile::tempdir().unwrap();
+    let wrapper_dir = root.path().join("wrapper");
+    let local_bin = root.path().join("local-bin");
+    fs::create_dir_all(&wrapper_dir).unwrap();
+    fs::create_dir_all(&local_bin).unwrap();
+    let gh = wrapper_dir.join("gh");
+    fs::write(&gh, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let recorded_argv = root.path().join("argv");
+    let recorded_stdin = root.path().join("stdin");
+    let codex = root.path().join("codex");
+    let script = format!(
+      r#"#!/bin/sh
+printf '%s\n' "$@" > '{}'
+cat > '{}'
+printf '%s\n' '{{"type":"item.completed","item":{{"id":"m1","type":"agent_message","text":"ok"}}}}'
+"#,
+      recorded_argv.display(),
+      recorded_stdin.display()
+    );
+    fs::write(&codex, script).unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let base_env = Env::from([
+      ("PATH".to_string(), format!("{}:/usr/bin:/bin", wrapper_dir.display())),
+      (gh_wrapper::WRAPPER_PATH_VAR.to_string(), gh.display().to_string()),
+    ]);
+    let mut backend = CodexBackend::from_launch(
+      codex,
+      &local_bin,
+      "gpt-5.5",
+      &CodexOptions::default(),
+      LaunchArgs::default(),
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+    let prompt = "\u{fc}".repeat(100 * 1024);
+    let system = "Reply with ok.";
+
+    assert_eq!(backend.one_shot_text(&base_env, &prompt, system, None).unwrap().await.unwrap(), "ok");
+
+    let argv = fs::read_to_string(&recorded_argv).unwrap();
+    let arguments: Vec<&str> = argv.lines().collect();
+    assert_eq!(arguments.last(), Some(&"-"), "{arguments:?}");
+    assert!(arguments.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "an argv element is over 128 KiB");
+    assert_eq!(fs::read_to_string(&recorded_stdin).unwrap(), frame_system_prompt(system, &prompt));
   }
 
   #[ignore = "integration"]
@@ -455,6 +557,8 @@ mod tests {
     let codex = root.path().join("codex");
     let script = format!(
       r#"#!/bin/sh
+# codex reads its prompt from stdin before it answers.
+cat > /dev/null
 printf '%s\n' "$PATH" > '{}'
 printf '%s\n' '{{"type":"item.completed","item":{{"id":"m1","type":"agent_message","text":"ok"}}}}'
 "#,
@@ -504,6 +608,8 @@ printf '%s\n' '{{"type":"item.completed","item":{{"id":"m1","type":"agent_messag
       "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.";
     let script = format!(
       r#"#!/bin/sh
+# codex reads its prompt from stdin before it answers.
+cat > /dev/null
 printf '%s\n' '{{"type":"item.completed","item":{{"id":"item_0","type":"error","message":"{notice}"}}}}'
 printf '%s\n' '{{"type":"item.completed","item":{{"id":"item_1","type":"error","message":"{notice}"}}}}'
 printf '%s\n' '{{"type":"item.completed","item":{{"id":"m1","type":"agent_message","text":"ok"}}}}'

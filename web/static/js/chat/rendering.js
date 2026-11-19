@@ -245,16 +245,16 @@ function turnFoldLabel(count) {
   return count + ' step' + (count === 1 ? '' : 's');
 }
 
-// The bar's content: its label and the disclosure mark for its state.
-function turnFoldBarHtml(count, expanded) {
+// The bar's content: its label and the collapsed disclosure chevron. The bar's aria-expanded turns the
+// chevron open in styles.css, so the chevron element stays put and its turn animates.
+function turnFoldBarHtml(count) {
   return '<span class="turn-fold-label">' + turnFoldLabel(count) + '</span>'
-    + Chat.disclosureIcon(expanded, 14, 'turn-fold-chevron');
+    + cbIcon('disclosure', 14, 'turn-fold-chevron');
 }
 
 function setTurnFoldBarExpanded(btn, expanded) {
   btn.setAttribute('aria-expanded', String(expanded));
   btn.setAttribute('title', expanded ? 'Collapse steps' : 'Expand steps');
-  btn.innerHTML = turnFoldBarHtml(Number(btn.dataset.turnFoldCount), expanded);
 }
 
 function buildTurnFoldBar(turnKey, count) {
@@ -264,6 +264,7 @@ function buildTurnFoldBar(turnKey, count) {
   btn.dataset.turnFoldKey = turnKey;
   btn.dataset.turnFoldCount = String(count);
   btn.onclick = function() { toggleTurnFold(this); };
+  btn.innerHTML = turnFoldBarHtml(count);
   setTurnFoldBarExpanded(btn, false);
   return btn;
 }

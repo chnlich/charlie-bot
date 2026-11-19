@@ -81,6 +81,8 @@
   font-size: 0.75rem; transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .turn-fold-bar:hover { background: rgba(30, 41, 59, 0.7); border-color: rgba(148, 163, 184, 0.45); color: #cbd5e1; }
+.turn-fold-chevron { width: 0.875rem; height: 0.875rem; transition: transform 0.15s; }
+.turn-fold-bar[aria-expanded="true"] .turn-fold-chevron { transform: rotate(90deg); }
 /* Turn outline fold — one finished turn per wrapper: folded shows the row and
    hides the span, open does the reverse. */
 .turn-wrap[data-turn-open="false"] > :not(.turn-row) { display: none; }

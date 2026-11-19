@@ -21,7 +21,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
+| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open,search` (default the first four). `open` runs its own cells, see below. `search` runs its own repetitions and variants, see "Search view". |
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
@@ -385,6 +385,68 @@ not compared with the page's own `page_load` numbers in the same run.
 time, the five values in repetition order, the catch-up median, the bytes to the newest message and after the load, how
 many repetitions reached the newest message, and the page reloads across its repetitions.
 
+## Search view (`--scenarios search`)
+
+The search view types each query of the sidebar's search box at the bench link and records the answer to each. It is a
+named scenario: the default run does not include it, and it takes its own repetitions (three per query), not
+`--repetitions`. It runs two variants, each repetition in a fresh browser profile behind a fresh proxy:
+
+- **idle**: the box is cleared and the query typed, and nothing else changes on the server. Recorded per query: `e2e_ms`,
+  the answer's paint minus its input event on the page's clock; `body_bytes`, the answer's `encodedBodySize`, the body
+  compressed as it crosses the link; `wire_bytes`, its `transferSize`, headers included; and `overlap`, the other
+  requests whose transfer overlapped the answer's, by count and `transferSize`, with the status polls counted apart.
+- **broadcast**: as idle, and after each query's first paint one window of `broadcast.windowMs` runs. The bench renames
+  its background session at `k × windowMs / changesPerWindow` for k = 0 … 18, so the server broadcasts 19 changes in the
+  window. Each broadcast makes the page refetch the open query (`web/static/js/websocket-handlers.js`), and an answer
+  whose generation a newer refetch has overtaken is discarded unpainted (`web/static/js/sidebar/filters.js`). The window
+  records its renames, the `task_tree_changed` frames it received, and the answers and renders in its accounting span,
+  which runs from the first paint until the page is idle. Its `discarded` is the answers that ended in the span minus
+  the search renders in it.
+
+The constants are `SEARCH` in `profile.mjs`. Each row states its source:
+
+| Constant | Value | Source |
+|---|---|---|
+| `queries` | sidebar, plan, cron, hydeogen | the queries the search view types |
+| `repetitions` | 3 | per query and variant |
+| `clearSettleMs`, `loadSettleMs` | 2500, 4000 | the waits browser_search.js takes between searches and after the load |
+| `liveBeforeBodyBytes` | sidebar 116645.5, plan 66574, cron 60003, hydeogen 1887 | the median `encodedBodySize` of each query's search answer in the live before captures on the live release e8d6bc82: `browser_fast.json` (sidebar and plan, 5 runs each), `browser_slow.json` (sidebar and plan, 2 each), `browser_slow2.json` (sidebar 3, cron 3), `browser_slow_hydeogen.json` (hydeogen 2), in `~/scripts/20261119_sidebar_search_slow/` |
+| `bodyToleranceShare` | 0.1 | the view's acceptance: a checked query's median body lies within 10 % of its live body |
+| `checkedQueries` | sidebar, plan, cron | hydeogen is reported without a check |
+| `broadcast` | 19 changes, 60004 ms | `watch_ws.json`: 19 `task_tree_changed` frames in a 60.004 s window |
+
+The live numbers are the bench's own capture method (`encodedBodySize` from Resource Timing). A cross-check with the
+curl capture of the same release (`plan/shapes_run2.json`, `before_wire_gzip`: sidebar 116265, plan 64647, cron 63140)
+lies within the same 10 % for each checked query.
+
+**How the mock rows produce the match sets.** A run that names `search` takes the search home (`<data version>-search-<sessions>`
+under `~/improve/mock-home/`), the view home plus the match sets of `SEARCH_MATCH_SETS` in `rust/crates/app/mock-home/src/generate.rs`.
+The sets are archived sessions, so the active list the bench counts is unchanged: 124 rows, as the view. Each set's
+sessions are named `<query> match NNN` and stamped 30 days after the view's own sessions, so the answer's newest-200 cap
+(`SEARCH_RESULT_LIMIT`, 200 rows) takes the set and no view session:
+
+| Query | Sessions | Goal characters per session |
+|---|---|---|
+| sidebar | 200 | 229 |
+| plan | 200 | 119 |
+| cron | 200 | 105 |
+| hydeogen | 2 | 250 |
+
+A search row's size is its metadata, and the page's own `task` spec does not reach it, so the row's large field is the
+session's `web_status` goal. The goal is a run of seeded Han characters; each takes three bytes, and gzip keeps about
+2.3 bytes of each per row, so the character count sets the answer's compressed body. sidebar, plan and cron were tuned on
+a trial serving the search home: their gzip wire bytes came to 117226, 66948 and 60474, against the live medians above.
+hydeogen is reported only: its count, 250, was estimated from a trial at 290 characters (2187 bytes), and the run's
+hydeogen row is its measure. The run's own JSON has the measured medians and the check, and the `check` column of the
+table prints the same comparison.
+
+**Output.** `side.search` in the side JSON holds `records` (one per query, variant and repetition), `summary` (medians over
+the repetitions, the body check, and for broadcast the discards, renames, frames and status bytes of the windows), and the
+constants the run measured against. The run prints one table, `search view:`, after the side's table.
+
+The search view's tests are `search.test.mjs`: the window's offsets (19 renames, all inside the window), the e2e and overlap
+sums, the body check at its boundary, and the summary's medians and discard totals.
+
 ## Host requirements
 
 Linux with user systemd, `node` 20 or later, `cargo`, `git`, `openssl`, `flock`, and a Chrome build. The trial needs a
@@ -423,7 +485,7 @@ dev/remote-run/run.sh env POOR_NETWORK_CHROME=/path/to/chrome node --test \
   dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
   dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
   dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/open.test.mjs \
-  dev/poor-network/lock.test.mjs
+  dev/poor-network/lock.test.mjs dev/poor-network/search.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
@@ -446,4 +508,5 @@ navigation as its start, that the newest message counts at the first document th
 starting record come from the first document, and that each reload is recorded with its cause. One of them drives a
 Chrome against a page that reloads once and holds an iframe, through a forward proxy: the cause reaches the tab from the
 reloaded document, and the frame adds no document. The lock tests check that one concurrent side attempt holds the bench
-lock and the next waits for it, and that the bench code names the lock path only in `lock.sh`.
+lock and the next waits for it, and that the bench code names the lock path only in `lock.sh`. The search tests check the search view's arithmetic (see "Search
+view").

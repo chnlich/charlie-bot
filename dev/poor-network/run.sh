@@ -195,10 +195,16 @@ fi
 # sized to the live view's rows (the view shape).
 mock_version=$("$mock_bin" version)
 mock_sessions=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS - profile.DEFAULT_CRON_ROWS)))' "file://$BENCH_DIR/profile.mjs")
-mock_home="$HOME/improve/mock-home/$mock_version-view-$mock_sessions"
+# A run that names the search scenario takes the search home instead: the view home's sessions plus the search view's match
+# sets (archived sessions named for each query). The default homes keep their own names and bytes.
+home_shape=view
+case ",$scenarios," in
+  *,search,*) home_shape=search ;;
+esac
+mock_home="$HOME/improve/mock-home/$mock_version-$home_shape-$mock_sessions"
 if [[ ! -d $mock_home ]]; then
-  echo "poor-network: generating the view home of $mock_sessions sessions at $mock_home"
-  "$mock_bin" generate "$mock_home" --sessions "$mock_sessions" --shape view
+  echo "poor-network: generating the $home_shape home of $mock_sessions sessions at $mock_home"
+  "$mock_bin" generate "$mock_home" --sessions "$mock_sessions" --shape "$home_shape"
 fi
 
 node "$BENCH_DIR/reply.mjs" "$tree" "$run_dir/replies"

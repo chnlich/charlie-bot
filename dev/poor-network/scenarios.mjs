@@ -86,7 +86,7 @@ async function withCleanup(body, cleanup) {
 }
 
 // One repetition's browser, proxy and tabs, torn down on every path.
-async function withLink(ctx, label, tabNames, body) {
+export async function withLink(ctx, label, tabNames, body) {
   const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: ctx.frontPort } });
   const proxyPort = await proxy.start();
   const profile = `${ctx.runDir}/profile-${label}-${randomTag()}`;

@@ -160,3 +160,26 @@ export const LIVE_CPU_TAIL = Object.freeze({
   loads: 13,
   medianMs: 297,
 });
+
+// The sidebar search view (search.mjs, `--scenarios search`). The search box takes each query of `queries` in turn, once
+// per repetition, in two variants. Idle: nothing else changes on the server. Broadcast: the server sends
+// `task_tree_changed` at `broadcast`'s rate for one window that starts at the query's first result; each broadcast makes
+// the page refetch the open query, and a refetch that a newer query has overtaken is discarded unpainted.
+export const SEARCH = Object.freeze({
+  queries: Object.freeze(['sidebar', 'plan', 'cron', 'hydeogen']),
+  repetitions: 3,
+  // The wait after the box is cleared, before the next query is typed (browser_search.js: 2.5 s).
+  clearSettleMs: 2500,
+  // The page's settle after its first load, before the first query (browser_search.js: 4 s).
+  loadSettleMs: 4000,
+  // The live before capture: the median `encodedBodySize` of each query's search response on the release that the
+  // search fix starts from, over the browser captures browser_fast.json, browser_slow.json, browser_slow2.json and
+  // browser_slow_hydeogen.json (sidebar 10 runs, plan 7, cron 3, hydeogen 9). The README names them.
+  liveBeforeBodyBytes: Object.freeze({ sidebar: 116645.5, plan: 66574, cron: 60003, hydeogen: 1887 }),
+  // A query's median body must lie within this share of its live before body. hydeogen is reported without a check.
+  bodyToleranceShare: 0.1,
+  checkedQueries: Object.freeze(['sidebar', 'plan', 'cron']),
+  // The broadcast window: `changesPerWindow` task_tree_changed broadcasts over `windowMs`, the live watch's rate
+  // (watch_ws.json: 19 frames in 60.004 s). Separate from TASK_TREE_LOAD, which the other scenarios use.
+  broadcast: Object.freeze({ changesPerWindow: 19, windowMs: 60004 }),
+});

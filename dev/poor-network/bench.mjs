@@ -39,6 +39,7 @@ import {
   viewBackgroundRep,
 } from './scenarios.mjs';
 import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
+import { formatSearch, searchScenario } from './search.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 import { sleep } from './tabs.mjs';
@@ -59,6 +60,8 @@ const DEFAULT_SCENARIOS = Object.freeze(['background', 'held', 'reset', 'stream'
 // The open scenario runs its own cells, five repetitions each, in cell order, so it is not one of the per-repetition
 // scenarios above. It is selected by name only: the default run keeps the four scenarios of README.md.
 const OPEN_SCENARIO = 'open';
+// The sidebar search view runs its own repetitions and variants (search.mjs). Like open, it is selected by name only.
+const SEARCH_SCENARIO = 'search';
 
 // The sessions the bench needs are created on the trial's backend option, which scripts/release/trial.sh writes as
 // charlie-code-release-trial; the charlie-code binary behind it is the stub that run.sh puts on PATH. Index 1 is the
@@ -114,7 +117,7 @@ function parseArgs(argv) {
   }
   const named = new Set(args.scenarios.split(','));
   for (const name of named) {
-    if (!(name in SCENARIOS) && name !== OPEN_SCENARIO) {
+    if (!(name in SCENARIOS) && name !== OPEN_SCENARIO && name !== SEARCH_SCENARIO) {
       throw new Error(`unknown scenario ${name}`);
     }
   }
@@ -126,7 +129,11 @@ function parseArgs(argv) {
   }
   // The scenarios run in SCENARIOS' order, so a view scenario's starred rows never reach the six scenarios' own. The
   // open scenario runs after them: it is not one of the per-repetition scenarios.
-  args.scenarios = [...Object.keys(SCENARIOS).filter((name) => named.has(name)), ...named.has(OPEN_SCENARIO) ? [OPEN_SCENARIO] : []];
+  args.scenarios = [
+    ...Object.keys(SCENARIOS).filter((name) => named.has(name)),
+    ...named.has(OPEN_SCENARIO) ? [OPEN_SCENARIO] : [],
+    ...named.has(SEARCH_SCENARIO) ? [SEARCH_SCENARIO] : [],
+  ];
   return args;
 }
 
@@ -269,8 +276,8 @@ function makeCertificate(dir) {
 }
 
 function buildSide({
-  args, startedAt, finishedAt, status, error, results, openResult, assets, sessions, view, otherViews, replyBytes,
-  chromeVersion,
+  args, startedAt, finishedAt, status, error, results, openResult, searchResult, assets, sessions, view, otherViews,
+  replyBytes, chromeVersion,
 }) {
   const side = {
     side: args.side,
@@ -310,6 +317,7 @@ function buildSide({
     },
     reps: results,
     open: openResult,
+    search: searchResult,
     metrics: {},
     calibration: null,
   };
@@ -350,6 +358,8 @@ async function main() {
   const results = Object.fromEntries(Object.keys(SCENARIOS).map((name) => [name, []]));
   // The open scenario fills this object cell by cell, so a failure part-way leaves the cells measured so far.
   const openResult = { cpu: null, reference: null, cells: [], releases: 0 };
+  // The search view fills this object once its repetitions end, so a side that fails before then leaves it null.
+  let searchResult = null;
   let status = 'measured';
   let error = null;
   let front = null;
@@ -386,6 +396,10 @@ async function main() {
         await openScenario(ctx, args.repetitions, openResult, args.openConditions, args.openCpuRate ?? null);
         continue;
       }
+      if (name === SEARCH_SCENARIO) {
+        searchResult = await searchScenario(ctx);
+        continue;
+      }
       for (let repetition = 1; repetition <= args.repetitions; repetition++) {
         process.stderr.write(`[${args.side}] ${name} repetition ${repetition}/${args.repetitions}\n`);
         const from = trials.mark();
@@ -416,6 +430,7 @@ async function main() {
     error,
     results,
     openResult,
+    searchResult,
     assets: ctx.assets,
     sessions: ctx.sessions,
     view: ctx.view,
@@ -435,6 +450,9 @@ async function main() {
   await new Promise((resolve) => process.stdout.write(`${formatSide(side)}\n`, resolve));
   if (openResult.cpu !== null) {
     await new Promise((resolve) => process.stdout.write(`${formatOpen(openResult)}\n`, resolve));
+  }
+  if (searchResult !== null) {
+    await new Promise((resolve) => process.stdout.write(`${formatSearch(searchResult)}\n`, resolve));
   }
   process.exit(0);
 }

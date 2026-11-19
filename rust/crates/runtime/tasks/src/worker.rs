@@ -809,12 +809,14 @@ impl RunProcess for WorkerProcess<'_> {
         // The improve launcher marks its token-life exit before it starts the round. Match both the code and marker,
         // because a remote agent can exit with the same numeric code during an ordinary run.
         let result = match result {
-          Ok((exit_code, stderr)) if is_improve_token_short_exit(exit_code, &stderr) => match self.worker.remote_launch()? {
-            Some(_) => {
-              Err(QuotaExhaustedError::with_failure(stderr, None, backend_pool::MemberFailure::TokenShort).into())
+          Ok((exit_code, stderr)) if is_improve_token_short_exit(exit_code, &stderr) => {
+            match self.worker.remote_launch()? {
+              Some(_) => {
+                Err(QuotaExhaustedError::with_failure(stderr, None, backend_pool::MemberFailure::TokenShort).into())
+              }
+              None => Ok((exit_code, stderr)),
             }
-            None => Ok((exit_code, stderr)),
-          },
+          }
           other => other,
         };
         let Err(error) = result else { return result };

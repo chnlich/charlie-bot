@@ -706,7 +706,8 @@ mod tests {
     }
     let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
     let mut ctx = context(cfg, LaunchKind::Task, None, None, None);
-    ctx.session_meta.lock().unwrap().task = Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+    ctx.session_meta.lock().unwrap().task =
+      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
 
     let refusal = match ClaudeCodeLifecycle::new().place(&ctx).await {
       Err(refusal) => refusal,
@@ -725,8 +726,10 @@ mod tests {
     account_credentials(&account);
     let cfg = config(&home, &[("a", &account)]);
     let mut ctx = context(cfg, LaunchKind::Task, None, None, None);
-    ctx.session_meta.lock().unwrap().task = Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
-    let launch = Launch { backend_kwargs: Map::new(), resume_id: None, prompt: None, account_label: None, private: None };
+    ctx.session_meta.lock().unwrap().task =
+      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+    let launch =
+      Launch { backend_kwargs: Map::new(), resume_id: None, prompt: None, account_label: None, private: None };
 
     let refusal = match ClaudeCodeLifecycle::new().next_launch(&ctx, &launch, None).await {
       Err(refusal) => refusal,

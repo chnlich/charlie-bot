@@ -312,7 +312,7 @@ function renderSettingsButton(s, rowMenu) {
           data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
           data-profile="${escapeHtmlAttr(s.profile || '')}"${renderSessionMenuAttrs(s)}
           class="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-slate-300 transition-opacity flex-shrink-0">
-    ${cbIcon('settings', 14)}
+    ${cbIcon('settings', 14, 'block')}
   </button>`;
 }
 
@@ -496,13 +496,13 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); sidebarControl('createSessionInGroup', this.dataset.groupName)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-green-400 transition-opacity" title="New session in group">
-        ${cbIcon('add', 12)}
+        ${cbIcon('add', 12, 'block')}
       </button>` : '';
     const groupActions = key && options.groupActions !== false ? `${createInGroupButton}
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); sidebarControl('openGroupHeaderMenu', this)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity" title="Settings">
-        ${cbIcon('settings', 12)}
+        ${cbIcon('settings', 12, 'block')}
       </button>` : '';
 
     // The limit toggle sits in front of the first row it hides. Expanding then

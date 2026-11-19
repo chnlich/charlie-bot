@@ -277,7 +277,7 @@ async function showGroupSelector(sessionId, currentGroup) {
         <p class="text-sm text-slate-300 font-semibold">Set Group</p>
         <button id="group-modal-close" type="button" title="Close"
                 class="text-slate-500 hover:text-slate-300 p-1 modal-close-btn">
-          ${cbIcon('close', 16)}
+          ${cbIcon('close', 16, 'block')}
         </button>
       </div>
       <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">

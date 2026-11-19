@@ -2,8 +2,10 @@
     and its X icon, so every close button stays identical. Each call site
     passes its own click target, title and resting classes; an empty title
     renders no attribute.
-    The X is the icon module's close at 16 px; the phone rule below sets its
-    box to 20 px.
+    The X is the icon module's close at 16 px, drawn `block`: the button's
+    layout is not flex, so an inline icon would sit on a text line and add
+    that line's descender space to the 24 px box. The phone rule below sets
+    its box to 20 px.
 
     A phone's icon buttons carry a 20 px glyph: the header's menu button and
     the composer's attach and mic do. The composer's take the 44 px box
@@ -27,6 +29,6 @@
   }
 </style>
 <button onclick="{{ onclick }}" class="{{ btn_class }} modal-close-btn"{% if title %} title="{{ title }}"{% endif %}>
-  {{ icon('close', 16) }}
+  {{ icon('close', 16, 'block') }}
 </button>
 {%- endmacro %}

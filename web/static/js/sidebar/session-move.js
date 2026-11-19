@@ -116,7 +116,7 @@ function buildMovePickerDialog() {
   closeButton.type = 'button';
   closeButton.title = 'Close';
   closeButton.className = CLOSE_BUTTON_CLASS;
-  closeButton.innerHTML = cbIcon('close', 16);
+  closeButton.innerHTML = cbIcon('close', 16, 'block');
   closeButton.addEventListener('click', closeSessionMovePicker);
   header.appendChild(title);
   header.appendChild(closeButton);

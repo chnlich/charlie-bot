@@ -883,22 +883,25 @@ fn quoted_spans(text: &str) -> Vec<&str> {
 /// `web/features/artifacts/static/artifact-comments.js`; the fixture `tests/data/plan_template_forks.json` pins both
 /// readings to one output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PageFork {
-  pub n: String,
-  pub options: Vec<PageForkOption>,
-  pub rec: Option<String>,
+#[cfg(test)]
+struct PageFork {
+  n: String,
+  options: Vec<PageForkOption>,
+  rec: Option<String>,
 }
 
 /// One named option: the name, which is the button text, and the option line as the page writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PageForkOption {
-  pub name: String,
-  pub text: String,
+#[cfg(test)]
+struct PageForkOption {
+  name: String,
+  text: String,
 }
 
 /// The forks of `html` a reader can pick: open, outside every closed fold, with a question number and at least two
 /// named options. A fork without them has no pick.
-pub fn page_forks(html: &str) -> anyhow::Result<Vec<PageFork>> {
+#[cfg(test)]
+fn page_forks(html: &str) -> anyhow::Result<Vec<PageFork>> {
   let nodes = parse_dom(html)?;
   let mut forks = Vec::new();
   for (_, fork) in open_forks(&nodes) {
@@ -927,6 +930,7 @@ pub fn page_forks(html: &str) -> anyhow::Result<Vec<PageFork>> {
 }
 
 /// The number span of the first question line of a fork that carries one.
+#[cfg(test)]
 fn fork_number(nodes: &[Element], fork: usize) -> Option<String> {
   find(nodes, fork, "p", &["q"]).into_iter().find_map(|question| {
     let span = *find(nodes, question, "span", &["fn"]).first()?;
@@ -936,6 +940,7 @@ fn fork_number(nodes: &[Element], fork: usize) -> Option<String> {
 }
 
 /// The text of an option line without its `div.demo` and `p.no-demo`, which draw or explain the option and name none.
+#[cfg(test)]
 fn option_line_text(nodes: &[Element], line: usize) -> String {
   fn append(nodes: &[Element], element: usize, output: &mut String) {
     for child in &nodes[element].children {

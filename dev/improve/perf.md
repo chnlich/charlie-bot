@@ -12,16 +12,13 @@ Your branch prefix is `improve/perf/`.
 
 ## Topics
 
-Measure each GET route that the pages call, on the mock home described below.
-Take the slowest route by median latency as the topic, or take startup, memory or CPU, or take the page whose cold load takes the longest under the slow-network profile.
-The slowest route is the one a user waits on, so cutting it is the change a user feels.
-The slow-network load is the wait a user on a slow link feels, where the page's bytes and fetch count set most of the time.
-The mock home has the production number of sessions, so the numbers show the load that a user meets.
+Topics rank by the user's wait in seconds only: a page by its slow-network load seconds, and a GET route by its slow-network transfer seconds.
+Byte-class and ratio-class scenarios, the `TARGETS` of `dev/poor-network/profile.mjs`, do not rank.
+The poor-network bench still decides whether a round whose change can move such a scenario takes that scenario as its topic.
 
 ## Poor-network scenarios
 
-A round whose change can move a scenario of the poor-network bench takes that scenario as its topic.
-It runs the scenario before and after its change, on host3. The bench takes its own lock, so no other bench run on the host measures beside it.
+A round that takes a scenario as its topic runs it before and after its change, on host3. The bench takes its own lock, so no other bench run on the host measures beside it.
 The bench's entry is `dev/poor-network/run.sh`: it runs a named scenario set on both sides and prints the bench's verdict for each scenario.
 The target of a scenario is in `TARGETS` of `dev/poor-network/profile.mjs`, and the bench's verdict decides; this prompt copies no target value.
 Run only the scenarios the change can move, with the background scenario at 3 repetitions, so the check stays inside the round's time.
@@ -30,6 +27,7 @@ A round that turns a scenario the bench passed on the before side into a failing
 ## Mock home
 
 The runner supplies the complete shared mock home before the round starts.
+The mock home has the production number of sessions, so the numbers show the load that a user meets.
 Its directory is `~/improve/mock-home/<version>/`, where `<version>` is the output of `mock-home version`.
 Read that directory throughout the round.
 The round only reads the shared mock home.
@@ -68,21 +66,32 @@ Both sides then see the same host load, so the change is the only difference.
 
 ## Measures
 
+One latency rule serves every metric: keep the median of the kept requests.
+A warm target is pre-warmed, so its warm-up requests are not kept; a cold target's samples are its first requests, and each one counts.
+
 Measure latency this way: send 5 warm-up requests, then 50 requests, and keep the median of the 50.
 The warm-up keeps first-request cost out of the sample, and the median keeps one slow request out.
+
+Measure the sidebar search route, `GET /api/sessions/search`, with the words of `SEARCH_WORDS`, the fixed word list of the mock home: one common word, one word that hits 200 rows, and one rare word.
+Each word is one query, measured with the latency rule above.
+The broadcast window of the search route is kept apart from the other scenarios: 19 events over 60.004 s (source `SS/watch_ws.json`).
+The shared constant `TASK_TREE_LOAD` (19 events over 75 s, `dev/poor-network/profile.mjs:38–41`) stays unchanged.
+
+Measure the cold query this way: restart the server before each cold sample, so every content entry is cleared, rather than change a file's signature, which would rewrite mock-home files and move the other samples.
+Take 10 cold samples per round and keep their median; a cold sample is a query word that this server has not answered in this round.
 
 Measure slow-network page loading this way: send every load of this measure through the bench's shaping proxy, which holds the bench's link profile, so the loads and the poor-network bench measure one link model.
 The link's values live only in `LINK` of `dev/poor-network/profile.mjs`; this measure names none of them and takes them from that file.
 The proxy's entry is `dev/poor-network/relay.mjs`, which carries the trial server's tunnels; the round stops it before its trial ends, and when the host cannot run that entry, name the defect instead of fitting another relay in.
 
-A load fetches the page's document and then the static files the served document references, in document order, accepting gzip as the latency measure does.
+A load fetches the page's document and then the GET API responses the page calls and the static files the served document references, in document order, accepting gzip as the latency measure does.
 A cold load opens one connection per fetch, and a warm load fetches the whole page on one connection.
 Cold is what a first visit pays per fetch, and warm is what a kept-alive connection saves.
-The load's time runs from the document request's start to the last byte of the last fetch, so it is the wait until the page is usable in this model.
-The load's bytes are the fetches' response bodies, summed at the client, so they count what crossed the link.
+The load's time runs from the document request's start to the last response's last byte, so it is the wait until the page is usable in this model.
+The load's bytes are the sum of all response bodies, summed at the client, so they count what crossed the link.
 
 The pages are the chat page with the mock home's largest session id open, the events viewer of that session, and the home page.
-Send 5 warm-up loads per page, then 10 cold and 10 warm loads, and keep the median of each 10.
+Send 10 cold loads per page first, then 5 warm-up loads and 10 warm loads, and keep the median of the 10 cold loads and of the 10 warm loads.
 
 Measure startup this way: after the trial exits, read the first line of `server-1.log` in its evidence directory, and the first `http_request` line with `"status":200`; subtract the first timestamp from the second.
 The first line is the server's own first log line, written just after the process starts, so the difference is the run's startup time rather than a wall clock the measuring shell reads.

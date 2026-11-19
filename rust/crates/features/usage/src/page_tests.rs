@@ -842,3 +842,19 @@ fn list_price_equivalent_leaves_out_a_category_without_a_published_rate() {
   let models = week_payload(&context);
   assert!(models["gemini-3.8-flash"]["usd"].is_null(), "the row has a cache-write category without a published rate");
 }
+
+#[test]
+fn list_price_equivalent_includes_ledger_aliases() {
+  let last = vec![
+    row(CC, "deepseek-v4-1-flash-1017-max", [1_000_000, 0, 1_000_000, 0, 1_000_000], vec![]),
+    row(CC, "gemini-4-argon-high", [1_000_000, 0, 0, 0, 1_000_000], vec![]),
+    row(CC, "swe-2-max", [1_000_000, 0, 0, 0, 1_000_000], vec![]),
+  ];
+  let context = priced_week(last, vec![]);
+  assert_eq!(context["ctx"]["week"]["usd_left_out"], "0");
+  assert_usd(printed_dollars(&context["ctx"]["week"]["usd"]), 43.51, "week total rounded to cents");
+  let models = week_payload(&context);
+  assert_usd(models["deepseek-v4-1-flash-1017-max"]["usd"].as_f64().unwrap(), 1.506, "DeepSeek alias");
+  assert_usd(models["gemini-4-argon-high"]["usd"].as_f64().unwrap(), 24.0, "Gemini alias");
+  assert_usd(models["swe-2-max"]["usd"].as_f64().unwrap(), 18.0, "SWE alias");
+}

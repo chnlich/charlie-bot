@@ -56,11 +56,22 @@ impl ListPrice {
   }
 }
 
-/// The row of `model`, matched on its lower-case name, or `None` when the table has no row for it.
+/// The row of `model`, matched on its lower-case name or a known ledger alias.
 pub fn lookup(model: &str) -> Option<&'static ListPrice> {
   let lowered = model.to_lowercase();
-  LIST_PRICES.iter().find(|price| price.model == lowered)
+  let name = ALIASES.iter().find(|(alias, _)| *alias == lowered).map_or(lowered.as_str(), |(_, name)| *name);
+  LIST_PRICES.iter().find(|price| price.model == name)
 }
+
+// These are model spellings, not prefix rules: a new version or effort name must be verified before it shares a rate.
+const ALIASES: &[(&str, &str)] = &[
+  ("swe-2-max", "swe-2"),
+  ("gemini-4-argon-high", "gemini-4-argon"),
+  ("gemini-4-hydrogen-high", "gemini-4-hydrogen"),
+  ("gemini-3.8-flash-high", "gemini-3.8-flash"),
+  ("deepseek-v4-1-flash-1017-max", "deepseek-flash"),
+  ("deepseek-v4.1-flash", "deepseek-flash"),
+];
 
 const ANTHROPIC: &str = "https://platform.claude.com/docs/en/about-claude/pricing";
 const GOOGLE: &str = "https://aistudio.google.com/docs/pricing";
@@ -124,32 +135,32 @@ static LIST_PRICES: &[ListPrice] = &[
     source_url: ANTHROPIC,
     read_on: READ_ON,
   },
-  // Google's rates for the text, image and video input of the standard paid tier. Context-cache storage fees are not
-  // in these rates, and the page publishes no cache-write rate for these models.
+  // Google's standard paid tier text, image and video rates. Flash's introductory price ends 2026-12-31; Argon and
+  // Carbon's ends 2026-11-30. Context-cache storage is excluded, and no cache-write rate is published.
   ListPrice {
     model: "gemini-3.8-flash",
-    input: 0.75,
-    cache_read: 0.075,
+    input: 1.50,
+    cache_read: 0.15,
     cache_write: None,
-    output: 3.75,
+    output: 7.50,
     source_url: GOOGLE,
     read_on: READ_ON,
   },
   ListPrice {
     model: "gemini-4-argon",
-    input: 2.00,
-    cache_read: 0.10,
+    input: 4.00,
+    cache_read: 0.20,
     cache_write: None,
-    output: 10.00,
+    output: 20.00,
     source_url: GOOGLE,
     read_on: READ_ON,
   },
   ListPrice {
     model: "gemini-4-carbon",
-    input: 2.00,
-    cache_read: 0.10,
+    input: 4.00,
+    cache_read: 0.20,
     cache_write: None,
-    output: 10.00,
+    output: 20.00,
     source_url: GOOGLE,
     read_on: READ_ON,
   },
@@ -230,6 +241,16 @@ static LIST_PRICES: &[ListPrice] = &[
     source_url: OPENAI,
     read_on: READ_ON,
   },
+  // OpenAI publishes 30-minute and 12-hour writes separately; the ledger merges them, so use the 30-minute rate.
+  ListPrice {
+    model: "gpt-6.1-terra",
+    input: 1.00,
+    cache_read: 0.05,
+    cache_write: Some(1.25),
+    output: 5.00,
+    source_url: "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+    read_on: READ_ON,
+  },
   ListPrice {
     model: "gpt-5.5",
     input: 5.00,
@@ -296,6 +317,16 @@ static LIST_PRICES: &[ListPrice] = &[
     source_url: OPENAI,
     read_on: "2026-06-01",
   },
+  // SWE-2's list rate after the free period. Devin publishes no cache-write rate for SWE-2.
+  ListPrice {
+    model: "swe-2",
+    input: 3.00,
+    cache_read: 0.30,
+    cache_write: None,
+    output: 15.00,
+    source_url: DEVIN,
+    read_on: READ_ON,
+  },
   // Devin's rates after the SWE-2 Flash free period, which ends 2026-12-04 18:00 UTC. The three SWE-2 Flash variants
   // share them.
   ListPrice {
@@ -320,5 +351,26 @@ mod tests {
     let distinct = names.len();
     names.dedup();
     assert_eq!(names.len(), distinct, "a model name appears in two rows, so the lookup would shadow one of them");
+  }
+
+  #[test]
+  fn ledger_aliases_resolve_to_their_published_model() {
+    for (alias, model) in ALIASES {
+      assert!(std::ptr::eq(lookup(alias).unwrap(), lookup(model).unwrap()), "{alias}");
+    }
+    assert!(lookup("gemini-4-argon-unknown").is_none());
+  }
+
+  #[test]
+  fn new_list_prices_use_published_rates() {
+    for (name, input, read, write, output) in [
+      ("gpt-6.1-terra", 1.0, 0.05, Some(1.25), 5.0),
+      ("swe-2-max", 3.0, 0.30, None, 15.0),
+      ("gemini-4-argon-high", 4.0, 0.20, None, 20.0),
+      ("gemini-3.8-flash-high", 1.5, 0.15, None, 7.5),
+    ] {
+      let price = lookup(name).unwrap();
+      assert_eq!((price.input, price.cache_read, price.cache_write, price.output), (input, read, write, output));
+    }
   }
 }

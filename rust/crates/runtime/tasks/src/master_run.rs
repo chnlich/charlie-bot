@@ -1038,6 +1038,24 @@ pub(crate) fn build_fresh_translate(
   crate::midturn_delivery::fresh_translate(features, cfg, option, meta, run_id, Some(log_dir))
 }
 
+/// The conversation a re-attached turn runs on: the id the follow learned, the session's recorded id, or the id the
+/// run's recorded events carry. A first turn cut before its finish has not persisted its id in the session metadata,
+/// so its raw log is the only record until the turn ends; the worker's re-attach reads the same source.
+fn resolved_native_id(
+  callback_cc_session_id: &Arc<Mutex<Option<String>>>,
+  metadata: &SessionMetadata,
+  events: &[Value],
+) -> Option<String> {
+  let followed = callback_cc_session_id.lock().expect("native session id mutex is not poisoned").clone();
+  followed.filter(|id| !id.is_empty()).or_else(|| metadata.cc_session_id.clone().filter(|id| !id.is_empty())).or_else(
+    || {
+      events.iter().find_map(|event| {
+        event.get("session_id").and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_string)
+      })
+    },
+  )
+}
+
 pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
   let metadata = item.session_metadata();
   let record = item.resume_record.as_ref().context("resume item has no recorded run")?.clone();
@@ -1238,83 +1256,90 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
       }
     }
     // The survivor's exit is in hand, so the launch loop may relay it. The relay watch observes the events the follow
-    // delivered, as a live turn's watch observes each event as it arrives.
-    let context =
-      turn_launch_context(Arc::clone(&tracking), item, option.clone(), cwd.clone(), metadata.cc_session_id.clone())?;
-    let lifecycle = features.registry.lifecycle_for(&option.backend_type)?;
-    let env = build_master_env(item);
-    let mut survivor = SurvivorProcess {
-      observed: stream_events.lock().expect("resume event mutex is not poisoned").clone(),
-      exit_code,
-      stderr: stderr.clone(),
-      turn: TurnProcess {
-        item: &mut *item,
-        features: Arc::clone(&features),
-        option: option.clone(),
-        cwd,
-        env,
-        tracker: Arc::clone(&tracker),
-        cc_session_id: Arc::clone(&callback_cc_session_id),
-        error_event_messages: Vec::new(),
-        log_dir: log_dir.clone(),
-        record_persisted: Arc::new(AtomicBool::new(false)),
-        cancelled: Arc::new(Mutex::new(None)),
-        last_exit_code: None,
-        relay_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        was_built: false,
-        automatic_retries: 0,
-        quota_resets_at: None,
-      },
-    };
-    let launches = launch_loop::run_launches(
-      &context,
-      lifecycle.as_ref(),
-      &mut survivor,
-      {
-        let cc_session_id = Arc::clone(&callback_cc_session_id);
-        move || cc_session_id.lock().expect("native session id mutex is not poisoned").clone()
-      },
-      |_: usize| {},
-    )
-    .await;
-    match launches {
-      Ok(count) => {
-        relays = count;
-        if count > 0 {
-          exit_code = survivor.turn.last_exit_code.unwrap_or(1);
-          error_msg = None;
-          if exit_code != 0 {
-            let relayed_stderr = read_stderr_tail(&stderr_path).await?;
-            error_msg =
-              charliebot_agents::runs::select_error_hint(&survivor.turn.error_event_messages, &relayed_stderr);
-            if survivor.turn.automatic_retries == backend_retry::MAX_AUTOMATIC_RETRIES {
-              error_msg = error_msg.map(|message| backend_retry::exhausted_message(&message));
+    // delivered, as a live turn's watch observes each event as it arrives. A turn with no conversation id has nothing
+    // to continue on another login, so it builds no watch and keeps its follow-only behavior (plan section 6).
+    let held_native_id = resolved_native_id(&callback_cc_session_id, &metadata, &events);
+    if let Some(native_id) = held_native_id.as_ref() {
+      *callback_cc_session_id.lock().expect("native session id mutex is not poisoned") = Some(native_id.clone());
+    }
+    if held_native_id.is_some() {
+      let context =
+        turn_launch_context(Arc::clone(&tracking), item, option.clone(), cwd.clone(), held_native_id.clone())?;
+      let lifecycle = features.registry.lifecycle_for(&option.backend_type)?;
+      let env = build_master_env(item);
+      let mut survivor = SurvivorProcess {
+        observed: stream_events.lock().expect("resume event mutex is not poisoned").clone(),
+        exit_code,
+        stderr: stderr.clone(),
+        turn: TurnProcess {
+          item: &mut *item,
+          features: Arc::clone(&features),
+          option: option.clone(),
+          cwd,
+          env,
+          tracker: Arc::clone(&tracker),
+          cc_session_id: Arc::clone(&callback_cc_session_id),
+          error_event_messages: Vec::new(),
+          log_dir: log_dir.clone(),
+          record_persisted: Arc::new(AtomicBool::new(false)),
+          cancelled: Arc::new(Mutex::new(None)),
+          last_exit_code: None,
+          relay_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+          was_built: false,
+          automatic_retries: 0,
+          quota_resets_at: None,
+        },
+      };
+      let launches = launch_loop::run_launches(
+        &context,
+        lifecycle.as_ref(),
+        &mut survivor,
+        {
+          let cc_session_id = Arc::clone(&callback_cc_session_id);
+          move || cc_session_id.lock().expect("native session id mutex is not poisoned").clone()
+        },
+        |_: usize| {},
+      )
+      .await;
+      match launches {
+        Ok(count) => {
+          relays = count;
+          if count > 0 {
+            exit_code = survivor.turn.last_exit_code.unwrap_or(1);
+            error_msg = None;
+            if exit_code != 0 {
+              let relayed_stderr = read_stderr_tail(&stderr_path).await?;
+              error_msg =
+                charliebot_agents::runs::select_error_hint(&survivor.turn.error_event_messages, &relayed_stderr);
+              if survivor.turn.automatic_retries == backend_retry::MAX_AUTOMATIC_RETRIES {
+                error_msg = error_msg.map(|message| backend_retry::exhausted_message(&message));
+              }
             }
           }
         }
-      }
-      Err(error) => {
-        if error.downcast_ref::<TurnCancelled>().is_some() {
-          // The relayed turn already ended its process: a covered one was let go, an uncovered one terminated.
-          let covered = survivor.turn.cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
-          tracing::warn!(target: "charliebot_tasks", session = %metadata.id, covered, "master_cc_resume_relay_cancelled");
-          cancelled = true;
-          let_go = covered;
-          error_msg = None;
-          exit_code = 1;
-        } else if let Some(refusal) = error.downcast_ref::<charliebot_registry::backend::LaunchRefused>() {
-          tracing::error!(target: "charliebot_tasks", session = %metadata.id, error = %refusal, failure = ?refusal.failure, "master_cc_resume_launch_refused");
-          error_msg = Some(refusal.to_string());
-          failure = Some(refusal.failure);
-          refusal_resets_at = refusal.resets_at.map(UtcDateTime::into_inner);
-        } else {
-          tracing::error!(target: "charliebot_tasks", session = %metadata.id, error = %error, "master_cc_resume_crashed");
-          error_msg = Some(error.to_string());
+        Err(error) => {
+          if error.downcast_ref::<TurnCancelled>().is_some() {
+            // The relayed turn already ended its process: a covered one was let go, an uncovered one terminated.
+            let covered = survivor.turn.cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
+            tracing::warn!(target: "charliebot_tasks", session = %metadata.id, covered, "master_cc_resume_relay_cancelled");
+            cancelled = true;
+            let_go = covered;
+            error_msg = None;
+            exit_code = 1;
+          } else if let Some(refusal) = error.downcast_ref::<charliebot_registry::backend::LaunchRefused>() {
+            tracing::error!(target: "charliebot_tasks", session = %metadata.id, error = %refusal, failure = ?refusal.failure, "master_cc_resume_launch_refused");
+            error_msg = Some(refusal.to_string());
+            failure = Some(refusal.failure);
+            refusal_resets_at = refusal.resets_at.map(UtcDateTime::into_inner);
+          } else {
+            tracing::error!(target: "charliebot_tasks", session = %metadata.id, error = %error, "master_cc_resume_crashed");
+            error_msg = Some(error.to_string());
+          }
         }
       }
+      was_built = survivor.turn.was_built;
+      quota_resets_at = survivor.turn.quota_resets_at;
     }
-    was_built = survivor.turn.was_built;
-    quota_resets_at = survivor.turn.quota_resets_at;
   }
   let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
   if was_built {

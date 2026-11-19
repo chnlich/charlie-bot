@@ -156,6 +156,55 @@ test('a refused preview keeps the task record and names the server detail', asyn
   assert.match(h.body.innerHTML, /Next run context unavailable: session backend gone is not configured/);
 });
 
+// The route answers a backend id its config does not hold with the config validator's
+// message, which names backends.options, backends.pools and every configured id. The
+// dialog's reader needs the fact instead.
+const UNCONFIGURED_BACKEND_DETAIL =
+  "backend 'mock-backend' is not a backends.options or backends.pools id; valid ids: ['pool']";
+
+test('a refused preview for a backend the page config lacks names the backend alone', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, {...DETAIL, backend: 'mock-backend'}),
+    '/api/sessions/s1/effective-prompt': jsonResponse(400, {detail: UNCONFIGURED_BACKEND_DETAIL}),
+  });
+  h.context.BACKEND_OPTIONS = {synthetic: {id: 'synthetic', label: 'Synthetic'}};
+  h.context.BACKEND_POOLS = [{id: 'pool', label: 'Pool'}];
+
+  await h.context.openTaskContextModal('s1');
+
+  const html = h.body.innerHTML;
+  assert.match(html, /Migrate users to the new schema/);
+  assert.match(html, /Next run context unavailable: the session's backend 'mock-backend' is not configured on this server\./);
+  assert.doesNotMatch(html, /backends\.options|backends\.pools|valid ids/);
+});
+
+test('a configured backend keeps the server detail on a refused preview', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, {...DETAIL, backend: 'synthetic'}),
+    '/api/sessions/s1/effective-prompt': jsonResponse(400, {detail: UNCONFIGURED_BACKEND_DETAIL}),
+  });
+  h.context.BACKEND_OPTIONS = {synthetic: {id: 'synthetic', label: 'Synthetic'}};
+  h.context.BACKEND_POOLS = [];
+
+  await h.context.openTaskContextModal('s1');
+
+  assert.match(h.body.innerHTML, /Next run context unavailable: backend 'mock-backend' is not a backends\.options/);
+});
+
+test('a successful preview renders for a backend the page config lacks', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, {...DETAIL, backend: 'mock-backend'}),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  });
+  h.context.BACKEND_OPTIONS = {};
+  h.context.BACKEND_POOLS = [];
+
+  await h.context.openTaskContextModal('s1');
+
+  assert.match(h.body.innerHTML, /manager_turn · 1,602 chars/);
+  assert.doesNotMatch(h.body.innerHTML, /Next run context unavailable/);
+});
+
 test('a heading-bearing goal renders as prose, never a literal heading marker', async () => {
   const h = buildHarness({
     '/api/sessions/s1': jsonResponse(200, {

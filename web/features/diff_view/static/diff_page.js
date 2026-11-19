@@ -707,7 +707,7 @@
     badge.classList.add('diff-file-badge');
 
     // The line counts sit in a fixed-width pair, so the + and - figures of every row line up in one column.
-    // A count of zero draws no figure: a red "-0" reads as a deletion that did not happen, and the fixed-width
+    // A count of zero draws no figure. A red "-0" reads as a deletion that did not happen, and the fixed-width
     // slot keeps the other figure in its column without it.
     const counts = document.createElement('span');
     counts.className = 'diff-file-counts flex font-mono text-xs whitespace-nowrap shrink-0';

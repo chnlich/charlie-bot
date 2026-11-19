@@ -1,5 +1,5 @@
-//! The one refusal for a credential the CLI could not read. Every verb that reads `credentials.yaml` answers with
-//! this body and exit code 3, so the reader meets one message whatever verb it ran.
+//! The one refusal for a credential a `charliebot` verb cannot read. A verb that answers a missing credential this
+//! way formats it here, so the user reads one message whichever verb ran.
 
 use std::path::Path;
 

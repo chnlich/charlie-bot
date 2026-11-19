@@ -167,3 +167,110 @@ test('postCommentMessage stops on a 4xx and preserves the auth and HTTP messages
   await assert.rejects(badRequest.postCommentMessage('s', 'c'), {message: 'Comment post failed: HTTP 409'});
   assert.equal(attempts, 1);
 });
+
+// The undo window runs on a clock the test owns: each setTimeout call queues its step, and the test runs them.
+function loadCommentPostWithClock(fetchImpl) {
+  const timers = [];
+  const cleared = [];
+  let requestSequence = 0;
+  const makeEventTarget = () => {
+    const listeners = new Map();
+    return {
+      addEventListener(name, listener) {
+        const registered = listeners.get(name) || [];
+        registered.push(listener);
+        listeners.set(name, registered);
+      },
+      removeEventListener(name, listener) {
+        const registered = listeners.get(name) || [];
+        listeners.set(name, registered.filter((current) => current !== listener));
+      },
+      dispatch(name) {
+        for (const listener of listeners.get(name) || []) listener();
+      },
+    };
+  };
+  const context = {
+    fetch: fetchImpl,
+    crypto: {randomUUID: () => `comment-request-${++requestSequence}`},
+    window: makeEventTarget(),
+    document: makeEventTarget(),
+    setTimeout: (callback, delay) => {
+      timers.push({callback, delay});
+      return timers.length;
+    },
+    clearTimeout: (id) => { cleared.push(id); },
+  };
+  vm.createContext(context);
+  vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
+  return {context, timers, cleared};
+}
+
+const ACCEPTED = async () => ({ok: true, status: 202, json: async () => ({input_event_id: 'event-1'})});
+
+test('startUndoableSend waits five seconds, then runs post once inside the timer and settles with its result', async () => {
+  const {context, timers} = loadCommentPostWithClock(ACCEPTED);
+  let posts = 0;
+  const handle = context.startUndoableSend(async () => {
+    posts += 1;
+    return {input_event_id: 'event-1'};
+  });
+  assert.deepEqual(timers.map((timer) => timer.delay), [5000]);
+  assert.equal(posts, 0);
+
+  timers.shift().callback();
+
+  assert.equal(posts, 1, 'post runs when the window closes, with no extra tick');
+  assert.equal(handle.sending, true);
+  assert.equal(handle.cancel(), false, 'cancel after the post has begun returns false');
+  assert.deepEqual(await handle.sent, {input_event_id: 'event-1'});
+});
+
+test('cancel inside the window posts nothing and settles null', async () => {
+  const {context, timers, cleared} = loadCommentPostWithClock(ACCEPTED);
+  let posts = 0;
+  const handle = context.startUndoableSend(async () => {
+    posts += 1;
+  });
+  assert.equal(handle.cancel(), true);
+
+  assert.deepEqual(cleared, [1], 'the pending timer is cleared');
+  assert.equal(await handle.sent, null);
+  assert.equal(handle.cancel(), false, 'a second cancel finds the window already closed');
+  assert.equal(posts, 0);
+  assert.equal(timers.length, 1, 'only the window timer was ever queued');
+});
+
+test('pagehide cancels before the post', async () => {
+  const {context, cleared} = loadCommentPostWithClock(ACCEPTED);
+  let posts = 0;
+  const handle = context.startUndoableSend(async () => {
+    posts += 1;
+  });
+  context.window.dispatch('pagehide');
+
+  assert.equal(await handle.sent, null);
+  assert.deepEqual(cleared, [1]);
+  assert.equal(posts, 0);
+});
+
+test('session-view teardown cancels before the post', async () => {
+  const {context, cleared} = loadCommentPostWithClock(ACCEPTED);
+  let posts = 0;
+  const handle = context.startUndoableSend(async () => {
+    posts += 1;
+  });
+  context.document.dispatch('charliebot:session-view-teardown');
+
+  assert.equal(await handle.sent, null);
+  assert.deepEqual(cleared, [1]);
+  assert.equal(posts, 0);
+});
+
+test('a failed post rejects the undo window with the post error', async () => {
+  const {context, timers} = loadCommentPostWithClock(async () => ({ok: false, status: 409}));
+  const handle = context.startUndoableSend(() => context.postCommentMessage('s', 'c'));
+  timers.shift().callback();
+
+  await assert.rejects(handle.sent, {message: 'Comment post failed: HTTP 409'});
+});

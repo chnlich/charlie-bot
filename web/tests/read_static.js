@@ -26,10 +26,12 @@ function readPackageStatic(kind, name, ...parts) {
 // Script paths the chat page carries in document order, relative to web/static/js. The page includes each core
 // script into the document, so the vm harnesses derive their module lists from the include tags and a script
 // added to or reordered on the page cannot drift from what the harnesses load. The page's scripts are the tail
-// partial it names after its markup, so the partial's tags follow index.html's.
+// partial it names after its markup, so the partial's tags follow index.html's. A script the page loads by a
+// versioned src tag counts with the included ones.
 function indexScriptPaths() {
   const html = fs.readFileSync(INDEX_HTML, 'utf8') + fs.readFileSync(CHAT_SCRIPTS, 'utf8');
-  return [...html.matchAll(/<script>\{% include 'js\/([^']+)' %\}<\/script>/g)].map((m) => m[1]);
+  return [...html.matchAll(/<script>\{% include 'js\/([^']+)' %\}<\/script>|<script src="\/static\/js\/([^"?]+)\?v=/g)]
+    .map((m) => m[1] || m[2]);
 }
 
 function scopedModules(prefix) {

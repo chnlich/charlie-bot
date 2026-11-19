@@ -49,6 +49,49 @@ function buildClickMessage(header, entries) {
   return lines.join('\n');
 }
 
+// The one delayed send of every click (a Status completion, a page pick): the message waits
+// COMMENT_UNDO_MS for Undo, then post runs once. The handle's sent promise settles with post's
+// result, or with null when cancel() wins the window; cancel() returns false once post has begun.
+// Leaving the page or tearing down the session view cancels an open window.
+const COMMENT_UNDO_MS = 5000;
+
+function startUndoableSend(post) {
+  let state = 'undo';
+  let resolveSent = null;
+  let rejectSent = null;
+  const sent = new Promise((resolve, reject) => {
+    resolveSent = resolve;
+    rejectSent = reject;
+  });
+  function cancelOnLeave() {
+    cancel();
+  }
+  function removeLeaveListeners() {
+    window.removeEventListener('pagehide', cancelOnLeave);
+    document.removeEventListener('charliebot:session-view-teardown', cancelOnLeave);
+  }
+  function cancel() {
+    if (state !== 'undo') return false;
+    state = 'cancelled';
+    clearTimeout(timer);
+    removeLeaveListeners();
+    resolveSent(null);
+    return true;
+  }
+  window.addEventListener('pagehide', cancelOnLeave);
+  document.addEventListener('charliebot:session-view-teardown', cancelOnLeave);
+  const timer = setTimeout(() => {
+    state = 'sending';
+    removeLeaveListeners();
+    (async () => post())().then(resolveSent, rejectSent);
+  }, COMMENT_UNDO_MS);
+  return {
+    sent,
+    cancel,
+    get sending() { return state === 'sending'; },
+  };
+}
+
 // One tray toast at a time: showing a new one removes the previous. Each tray
 // passes its own CSS class prefix, mount (a page layer marks nodes through
 // injectRoot; the diff page appends straight to body) and removal

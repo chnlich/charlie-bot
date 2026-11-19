@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use charliebot_cli_common::args as cli_args;
+use charliebot_cli_common::credentials::unavailable;
 use charliebot_cli_common::exit::{self, CliExit};
 use charliebot_cli_common::http;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::home;
-use charliebot_core::paths;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
@@ -40,8 +40,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   match cli.command {
     LinearCommand::Request(args) => {
       let request_body = read_request(args.file.as_deref())?;
-      let home = home::charliebot_home_dir()
-        .map_err(|_| credential_failure(Path::new(&home::display_path(config::CREDENTIALS_FILENAME))))?;
+      let home = home::charliebot_home_dir().map_err(|_| unavailable("linear", credentials::API_KEY_FIELD, None))?;
       let response = execute_graphql(&request_body, GRAPHQL_ENDPOINT, &home)?;
       std::io::stdout().write_all(&response).map_err(|_| CliExit::error("could not write the Linear response"))?;
       Ok(())
@@ -117,15 +116,11 @@ fn execute_graphql(body: &[u8], endpoint: &str, home: &Path) -> Result<Vec<u8>, 
 
 fn read_api_key(home: &Path) -> Result<String, CliExit> {
   let path = home.join(config::CREDENTIALS_FILENAME);
-  let loaded = credentials::load_credentials(home).map_err(|_| credential_failure(&path))?;
-  loaded.require("linear", credentials::API_KEY_FIELD).map_err(|_| credential_failure(&path))
-}
-
-fn credential_failure(path: &Path) -> CliExit {
-  CliExit::contract(
-    json!({"error": format!("credentials.linear.api_key is unavailable in {}", paths::display(path))}),
-    3,
-  )
+  let loaded =
+    credentials::load_credentials(home).map_err(|_| unavailable("linear", credentials::API_KEY_FIELD, Some(&path)))?;
+  loaded
+    .require("linear", credentials::API_KEY_FIELD)
+    .map_err(|_| unavailable("linear", credentials::API_KEY_FIELD, Some(&path)))
 }
 
 fn response_failure(

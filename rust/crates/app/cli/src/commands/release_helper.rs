@@ -1275,7 +1275,7 @@ fn self_test(args: &[String]) -> Result<i32, String> {
 
   let events = vec![
     json!({"id": "user-1", "type": event_types::USER}),
-    json!({"id": "nudge-1", "type": "agent_message", (event_types::WEB_REPLY): {(event_types::NUDGE_OF): "user-1"}}),
+    json!({"id": "nudge-1", "type": event_types::AGENT_MESSAGE, (event_types::WEB_REPLY): {(event_types::NUDGE_OF): "user-1"}}),
   ];
   let runs = vec![
     json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]}),

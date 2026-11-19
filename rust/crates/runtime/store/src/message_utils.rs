@@ -30,7 +30,7 @@ pub fn build_scheduled_trigger_event(content: &str) -> ChatEvent {
 /// The persisted event for a message relayed from another session.
 pub fn build_agent_message_event(text: &str, provenance: MessageProvenance) -> ChatEvent {
   json!({
-    "type": "agent_message",
+    "type": event_types::AGENT_MESSAGE,
     "content": text,
     (event_types::FROM_SESSION): provenance.from_session,
     (event_types::FROM_SESSION_NAME): provenance.from_session_name,

@@ -22,8 +22,8 @@ Each fire of the failure-triage cron task starts one failure-triage batch.
   action.
 - A 「按推荐」 reply answers every open item on the linked page with that item's recommended action.
 - A per-item answer overrides the recommended action of the item it names.
-- A batch that finds an open item as its own Waiting on you item moves it onto the linked page with its recommended
-  action. The batch then removes that separate Waiting on you item.
+- On the first batch after this rule takes effect, move every existing open item and its recommended action onto the
+  linked page, then remove each item's separate Waiting on you item.
 - A later batch that repeats the signature updates the item's class, count, date, and recommended action, and opens no
   second item.
   A judge known_pattern verdict in that update includes the heading the scan cites.

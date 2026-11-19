@@ -56,11 +56,11 @@ const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 /// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus. The
 /// overlay holds one entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key
 /// holds that overlay instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A
-/// request that names ids and no filter keys on [`IdSet`], one list shared while the `ids` string repeats, so its
-/// poll neither clones nor compares the strings either; a filter that adds its members builds that union per request,
-/// as [`StatusIds`] states. `generation` names the sidebar state the body reads beyond the rows, and `since` the
-/// answer's own delta base. A page that holds the state of its last answer sends that answer's token back, so the same
-/// state answers with the same token.
+/// request that names ids and no filter keys on [`IdSet`] instead. That list is shared while the `ids` string
+/// repeats, so its poll neither clones nor compares the strings either. A filter that adds its members builds that
+/// union per request, as [`StatusIds`] states. `generation` names the sidebar state the body reads beyond the rows,
+/// and `since` the answer's own delta base. A page that holds the state of its last answer sends that answer's token
+/// back, so the same state answers with the same token.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum StatusKey {
   Listing {
@@ -113,11 +113,11 @@ impl Hash for ListingOverlay {
 /// The request's own ids, parsed, deduped and sorted once per distinct `ids` query string.
 ///
 /// A page polls one row set every few seconds, and its URL names the ids in one canonical order, so the string
-/// repeats while the view holds. Parsing it costs one allocation per id and one hash-set entry per id, and the key
-/// then hashes every id again; a repeat poll reads the list this memo kept instead.
+/// repeats while the view holds. Parsing it costs one allocation per id and one hash-set entry per id, and hashing
+/// the key then hashes every id again. A repeat poll reads the list this memo kept instead.
 ///
 /// The entries are found by comparing the request's own value, most recently served first, rather than by hashing
-/// it: the value runs to a few kilobytes, and comparing those bytes reaches the entry sooner than hashing them does.
+/// it. The value runs to a few kilobytes, and comparing those bytes reaches the entry sooner than hashing them does.
 /// The cap is small, so a repeat poll meets its own entry first and a new value meets at most
 /// [`NAMED_ID_SET_MEMO_LIMIT`].
 static NAMED_ID_SETS: LazyLock<Mutex<Vec<NamedIdSet>>> = LazyLock::new(|| Mutex::new(Vec::new()));
@@ -1111,7 +1111,7 @@ mod tests {
 
   /// `screen=1` answers the sidebar's first-screen form: the page's columns with each group's whole row count under
   /// `$screen`. The every-row form carries that key only when it leaves rows out, so the pair differs by the key
-  /// alone here, and a request naming a screen on another form is refused.
+  /// alone here. A request naming a screen on another form is refused.
   #[tokio::test]
   async fn a_screen_request_answers_the_first_screen_form_and_another_form_refuses_one() {
     let (_home, features) = crate::test_support::feature_context();
@@ -1234,7 +1234,7 @@ mod tests {
   }
 
   /// The parse memo answers one request's ids to another request only when its string names them. A repeat poll
-  /// answers the same rows, and the same set named in another order answers those rows too rather than the list the
+  /// answers the same rows. The same set named in another order answers those rows too, rather than the list the
   /// memo kept for the first string.
   #[tokio::test]
   async fn a_status_poll_naming_its_ids_answers_those_rows_whatever_order_the_string_names_them_in() {

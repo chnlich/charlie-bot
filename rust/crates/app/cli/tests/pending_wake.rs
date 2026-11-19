@@ -25,6 +25,18 @@ const PROCESS_TIMEOUT: Duration = Duration::from_secs(20);
 /// The session tree's default page size, which the stub serves.
 const PAGE: usize = 100;
 const ROOT: &str = "root-session";
+const EXPECTED_BLOCK_REASON: &str = concat!(
+  "pending-wake check: a turn that ends with the task open leaves the line in one of these states:\n",
+  "- When the work can go on now, continue it in this turn or in a delegated task.\n",
+  "- When a job, a restart or another session is still waited on, set a trigger that fires within four hours ",
+  "and checks the awaited state.\n",
+  "- When a wait on the user exists, list each one in Waiting on you.\n",
+  "- When the work is delivered, send it with a close request.\n",
+  "- When the line cannot go on, list one Waiting on you item that says the line has stopped, why, ",
+  "and the reply that restarts it.",
+);
+const EXPECTED_NOTICE: &str =
+  "pending-wake check: this turn left no wake, so the line has stopped. A reply restarts it.";
 
 /// One open child row of the synthetic session tree.
 #[derive(Clone)]
@@ -299,8 +311,11 @@ fn user_turn() -> Vec<Value> {
 
 /// The first miss of the check, as the turn-end runner records it.
 fn block_record() -> Value {
-  let reason = "pending-wake check: a turn that ends with the task open leaves the line in one of these states:";
-  json!({"type": "turn_hooks", "id": "record-1", "results": [{"name": "pending-wake", "result": "block", "reason": reason}]})
+  json!({
+    "type": "turn_hooks",
+    "id": "record-1",
+    "results": [{"name": "pending-wake", "result": "block", "reason": EXPECTED_BLOCK_REASON}],
+  })
 }
 
 fn stdout_json(run: &Run) -> Value {
@@ -316,8 +331,7 @@ fn a_turn_that_leaves_no_wake_is_blocked_once_with_the_check_text() {
   let answer = stdout_json(&run);
   assert_eq!(answer["decision"], "block", "{answer}");
   let reason = answer["reason"].as_str().expect("a block names its reason");
-  assert!(reason.starts_with("pending-wake check:"), "{reason}");
-  assert_eq!(reason.lines().count(), 6, "the lead line and its five states: {reason}");
+  assert_eq!(reason, EXPECTED_BLOCK_REASON);
 }
 
 #[test]
@@ -414,7 +428,7 @@ fn a_miss_after_a_block_in_the_same_turn_passes_with_the_notice_only() {
   let answer = stdout_json(&run);
   let keys: Vec<&str> = answer.as_object().expect("the notice is an object").keys().map(String::as_str).collect();
   assert_eq!(keys, ["systemMessage"], "{answer}");
-  assert!(answer["systemMessage"].as_str().is_some_and(|notice| !notice.is_empty()), "{answer}");
+  assert_eq!(answer["systemMessage"], EXPECTED_NOTICE);
 }
 
 /// The turn-end runner's entry run: the second miss of a turn sees the first miss's `turn_hooks` record in its input,
@@ -460,5 +474,8 @@ async fn the_turn_end_runner_passes_the_second_miss_of_a_turn_with_the_notice() 
   let second = run_entries(std::slice::from_ref(&entry), &second_input, sandbox.path(), PROCESS_TIMEOUT)
     .await
     .expect("the second run");
-  assert!(matches!(&second[0].outcome, Outcome::Pass { notice: Some(notice) } if !notice.is_empty()), "{second:?}");
+  assert!(
+    matches!(&second[0].outcome, Outcome::Pass { notice: Some(notice) } if notice == EXPECTED_NOTICE),
+    "{second:?}"
+  );
 }

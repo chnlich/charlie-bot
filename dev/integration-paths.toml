@@ -84,6 +84,11 @@ rust = "package(charliebot-opencode)"
 paths = ["web/**"]
 node = ["web/tests/*.integration.test.*"]
 
+# The icon rule's scan reads web/, the prompt templates and the Rust sources, so a change to any of them selects it.
+[[entry]]
+paths = ["rust/crates/**/*.rs", "prompts/*_template.html"]
+node = ["web/tests/icon_rule.integration.test.js"]
+
 [[entry]]
 paths = ["dev/poor-network/**"]
 node = ["dev/poor-network/*.integration.test.*"]

@@ -1,10 +1,19 @@
 // ---------------------------------------------------------------------------
-// The icon scan behind web/tests/icon_rule.test.js. It reads the scanned sources and returns every icon-like
-// use that the six detection rules of plan 4.2 find, before the test's exception list applies. A finding names
-// its file, line, rule, matched text (the source text as written) and the source line it sits on.
+// The icon scan behind the icon rule tests. It reads the scanned sources and returns every icon-like
+// use that the six detection rules of plan 4.2 find, before the tests' exception list applies. A finding names
+// its file, line, rule, matched text (the source text as written) and the source line it sits on. This module
+// also holds the failure text the icon rule's four tests print.
 // ---------------------------------------------------------------------------
 const fs = require('node:fs');
 const path = require('node:path');
+
+// The failure text: a count, one line per problem, and the guidance sentence.
+const GUIDE = '图标从图标模块取：模板 icon(key, size)，脚本 cbIcon(key, size)，Rust Icons::svg(key, size)；' +
+  '新意思在 web/static/icons/icons.json 加一行，并用 dev/icons/fetch-lucide.sh 取文件';
+
+function failure(headline, report) {
+  return `${headline}:\n${report.join('\n')}\n${GUIDE}`;
+}
 
 const GLYPHS = new Set(['▸', '▾', '▴', '▶', '⚠', '✓', '✗', '✕', '×', '›', '↳', '↑', '↓', '→', '…']);
 const NAMED_ENTITIES = {
@@ -338,4 +347,4 @@ function iconCallSites(root) {
   return sites;
 }
 
-module.exports = { scanIconUses, iconCallSites, scannedFiles, GLYPHS, ROUNDED_FULL };
+module.exports = { scanIconUses, iconCallSites, failure, GUIDE };

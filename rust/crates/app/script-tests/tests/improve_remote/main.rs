@@ -377,6 +377,7 @@ exit 0
 
 /// The direction of the focused export checks. Its TMPDIR name no real direction's round shares.
 const FOCUS_DIRECTION: &str = "focused";
+const SYMLINK_DIRECTION: &str = "symlink_review";
 
 /// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway
 /// variables and the Codex home. The first form exports the launch environment before it starts the scope, so the
@@ -944,8 +945,8 @@ fi
 #[test]
 #[ignore = "integration"]
 fn a_start_refuses_a_codex_parent_symlink_before_removing_its_target_login() {
-  let world = World::new();
-  let round_tmp = PathBuf::from(format!("/tmp/improve-{DIRECTION}"));
+  let world = World::new_with_direction(SYMLINK_DIRECTION);
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{SYMLINK_DIRECTION}"));
   assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
   let target = world.sandbox.dir("elsewhere");
   let auth = target.join("codex-home/auth.json");
@@ -965,8 +966,8 @@ fn a_start_refuses_a_codex_parent_symlink_before_removing_its_target_login() {
 #[test]
 #[ignore = "integration"]
 fn a_start_refuses_a_codex_home_symlink_before_removing_its_target_login() {
-  let world = World::new();
-  let round_tmp = PathBuf::from(format!("/tmp/improve-{DIRECTION}"));
+  let world = World::new_with_direction(SYMLINK_DIRECTION);
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{SYMLINK_DIRECTION}"));
   assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
   fs::create_dir(&round_tmp).expect("the round directory");
   let target = world.sandbox.dir("elsewhere");

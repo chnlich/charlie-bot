@@ -11,9 +11,10 @@
    was opened for in its title, and the dialog's body reads that session's task
    and next run context. The title is the dialog's only statement of which
    session that is. Its one line holds about 33 characters at the dialog's phone
-   width, where "Task & context · permission boundary review / #544" needs 48:
-   the ellipsis then leaves the session's "#544" out, and the full text sits in
-   the title attribute, which a phone has no hover to show. The title takes at
+   width, where the title's 50 characters ("Task & context · permission boundary
+   review / #544") run past the box: the ellipsis then leaves the session's
+   "#544" out, and the full text sits in the title attribute, which a phone has
+   no hover to show. The title takes at
    most two lines, so the name and its number read whole, and a name past that
    keeps two lines instead of pushing the dialog's body down. No row, strip or
    label is added: a title that fits one line still takes one. */

@@ -891,11 +891,11 @@ impl RunProcess for WorkerProcess<'_> {
         // The improve launcher marks its token-life exit before it starts the round. Match both the code and marker,
         // because a remote agent can exit with the same numeric code during an ordinary run.
         let result = match result {
-          Ok((exit_code, stderr)) if is_improve_token_short_exit(exit_code, &stderr) => {
-            match self.worker.remote_launch()? {
-              Some(_) => {
-                Err(QuotaExhaustedError::with_failure(stderr, None, backend_pool::MemberFailure::TokenShort).into())
-              }
+          Ok((exit_code, stderr)) => {
+            let is_remote_launch =
+              is_improve_token_short_exit(exit_code, &stderr) && self.worker.remote_launch()?.is_some();
+            match improve_token_short_failure(exit_code, &stderr, is_remote_launch) {
+              Some(failure) => Err(failure.into()),
               None => Ok((exit_code, stderr)),
             }
           }
@@ -975,6 +975,14 @@ impl RunProcess for ResumeProcess<'_> {
 
 fn is_improve_token_short_exit(exit_code: i32, stderr: &str) -> bool {
   exit_code == IMPROVE_TOKEN_SHORT_EXIT && stderr.lines().any(|line| line.starts_with(IMPROVE_TOKEN_SHORT_MARKER))
+}
+
+fn improve_token_short_failure(exit_code: i32, stderr: &str, is_remote_launch: bool) -> Option<QuotaExhaustedError> {
+  if is_remote_launch && is_improve_token_short_exit(exit_code, stderr) {
+    Some(QuotaExhaustedError::with_failure(stderr, None, backend_pool::MemberFailure::TokenShort))
+  } else {
+    None
+  }
 }
 
 /// The events log of one run, held open for the whole run, and the broadcast channel of its thread.
@@ -1329,9 +1337,25 @@ mod improve_exit_tests {
   use super::*;
 
   #[test]
-  fn token_short_requires_the_launcher_marker_as_well_as_exit_code_eight() {
-    assert!(is_improve_token_short_exit(8, "improve launch: token-short: access token life is short"));
-    assert!(!is_improve_token_short_exit(8, "agent finished with exit code 8"));
-    assert!(!is_improve_token_short_exit(1, "improve launch: token-short: access token life is short"));
+  fn a_marked_exit_eight_on_a_remote_launch_maps_to_token_short() {
+    let stderr = "improve launch: token-short: access token life is short";
+    let failure = improve_token_short_failure(8, stderr, true).expect("the launcher refusal maps to a member failure");
+
+    assert_eq!(failure.failure(), backend_pool::MemberFailure::TokenShort);
+    assert_eq!(failure.resets_at, None);
+    assert_eq!(failure.to_string(), stderr);
+  }
+
+  #[test]
+  fn an_unmarked_exit_eight_or_a_local_exit_does_not_map_to_token_short() {
+    assert!(improve_token_short_failure(8, "agent finished with exit code 8", true).is_none());
+    assert!(
+      improve_token_short_failure(8, "improve launch: token-short: short", false).is_none(),
+      "a local agent does not use the improve launcher's exit contract"
+    );
+    assert!(
+      improve_token_short_failure(1, "improve launch: token-short: short", true).is_none(),
+      "the stderr marker cannot override another exit code"
+    );
   }
 }

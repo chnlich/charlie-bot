@@ -30,10 +30,15 @@ const SETTLE_TIMEOUT_MS = 300000;
 // about three minutes to end, and the wait for them has its own bound.
 const DRAIN_TIMEOUT_MS = 600000;
 
-// Runs in each document before the page's own scripts: the resource timing buffer must hold a window's entries, and the
-// input events of the search box are timed on the page's clock.
+// Runs in each document before the page's own scripts. The resource entries go to an observer's log, not read from the
+// resource timing buffer: the page's diagnostics clear that buffer every minute (client-events.js, TRAFFIC_FLUSH_MS), and
+// a read of the buffer would miss the answers that ended before a clear. The input events of the search box are timed on
+// the page's clock.
 const PAGE_INIT_SCRIPT = `(() => {
-  performance.setResourceTimingBufferSize(100000);
+  window.__resources = [];
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) window.__resources.push(entry);
+  }).observe({ type: 'resource' });
   window.__searchInputs = [];
   document.addEventListener('input', (event) => {
     if (event.target && event.target.id === 'sidebar-search') {
@@ -84,7 +89,7 @@ const READ_ANSWER_SCRIPT = `(function (query, inputIndex, renderIndex) {
     .find((r) => r.filter === 'search' && !r.repaint && r.t0 > input.t && r.paint !== undefined);
   if (!render) return null;
   const name = '${SEARCH_PATH}?q=' + encodeURIComponent(query);
-  const entries = performance.getEntriesByType('resource');
+  const entries = window.__resources;
   const entry = entries.find((e) => e.name.includes(name) && e.startTime > input.t && e.responseEnd <= render.t0);
   if (!entry) return null;
   return {
@@ -108,7 +113,7 @@ const READ_ANSWER_SCRIPT = `(function (query, inputIndex, renderIndex) {
 export const READ_SPAN_SCRIPT = `(function (start, end) {
   const wall = (time) => performance.timeOrigin + time;
   const inSpan = (time) => time >= start && time < end;
-  const entries = performance.getEntriesByType('resource');
+  const entries = window.__resources;
   const answers = entries.filter((e) => e.name.includes('${SEARCH_PATH}?') && inSpan(wall(e.responseEnd)));
   const started = entries.filter((e) => inSpan(wall(e.startTime)));
   const bytesByPath = {};

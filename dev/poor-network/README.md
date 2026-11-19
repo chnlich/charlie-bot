@@ -413,6 +413,10 @@ named scenario: the default run does not include it, and it takes its own repeti
     exceed the answers, since every paint belongs to an answer that ended.
   - `status_polls`, `status_bytes`, `bytes_by_path`: the requests that began in the span, as in the idle variant.
 
+The view reads each request's resource entry from an observer's log (`window.__resources`), not from the browser's
+resource timing buffer. The page's diagnostics clear that buffer every 60 s (`TRAFFIC_FLUSH_MS` in
+`web/features/diag/templates/diag/client-events.js`), so a buffer read misses the answers that ended before a clear.
+
 The constants are `SEARCH` in `profile.mjs`. Each row states its source:
 
 | Constant | Value | Source |

@@ -146,7 +146,9 @@ test('the span counts the answers that ended in it, the search requests and pain
     entry('/api/sessions/search?q=plan', 9500, 12000, 300),
     entry('/api/sessions/status', 950, 980, 300),
   ];
-  const sandbox = pageSandbox({ performance: { timeOrigin: origin, getEntriesByType: () => entries } });
+  // The entries are in the observer's log, and the resource timing buffer is empty, as after the page's clear.
+  const sandbox = pageSandbox({ performance: { timeOrigin: origin } });
+  sandbox.__resources = entries;
   sandbox.__searchRenders = [
     { filter: 'search', repaint: false, wall0: origin + 500 },
     { filter: 'search', repaint: true, wall0: origin + 600 },

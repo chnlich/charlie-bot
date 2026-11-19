@@ -91,12 +91,14 @@
   // click reaches them. Each include of one is replaced by a loader under web/templates that calls
   // deferSidebarInteractions. The first control call or forwarded global loads the whole group. Each
   // module's own registerSidebarControl and Sidebar.wire then replace the forwards.
+  const SESSION_ACTIONS_SCRIPT = '/static/js/sidebar/session-actions.js';
+  const SESSION_MOVE_SCRIPT = '/static/js/sidebar/session-move.js';
   const INTERACTION_SCRIPTS = [
     '/static/js/sidebar/row-menu.js',
     '/static/js/sidebar/modals.js',
-    '/static/js/sidebar/session-actions.js',
+    SESSION_ACTIONS_SCRIPT,
     '/static/js/sidebar/session-menus.js',
-    '/static/js/sidebar/session-move.js',
+    SESSION_MOVE_SCRIPT,
   ];
   const INTERACTION_CONTROLS = [
     'startRename', 'archiveSession', 'unarchiveSession', 'openPendingTriggers',
@@ -117,13 +119,26 @@
   let interactionLoad = null;
   let interactionsDeferred = false;
 
+  // One memo entry per file: a loaded file never reloads, and a failed file retries alone.
+  function loadInteractionScript(path) {
+    return loadPageScripts('sidebar-interactions:' + path, [path]);
+  }
+
+  // The stylesheet and the scripts download in one round trip, and the scripts run in completion order. The interaction
+  // files read no binding that another one registers at load, with one exception: the move picker reads
+  // Sidebar.modalChrome at click time, and session-actions.js registers it when it runs. So the picker's file starts
+  // once session-actions.js has run.
   function loadSidebarInteractions() {
     if (interactionLoad === null) {
-      const loading = loadPageStyles('sidebar-interactions', ['/static/css/sidebar-interactions.css'])
-        .catch((error) => console.error(error.message))
-        .then(() => loadPageScripts('sidebar-interactions', INTERACTION_SCRIPTS));
+      const loading = Promise.all([
+        loadPageStyles('sidebar-interactions', ['/static/css/sidebar-interactions.css'])
+          .catch((error) => console.error(error.message)),
+        ...INTERACTION_SCRIPTS.filter((path) => path !== SESSION_MOVE_SCRIPT).map(loadInteractionScript),
+        loadInteractionScript(SESSION_ACTIONS_SCRIPT).then(() => loadInteractionScript(SESSION_MOVE_SCRIPT)),
+      ]);
       interactionLoad = loading;
-      // A failed download clears the memo so the next click retries. The caller logs the failure.
+      // A failed download clears the memo so the next click retries. The failed file's own entry clears in
+      // loadPageScripts, so the retry asks for that file alone. The caller logs the failure.
       loading.catch(() => { if (interactionLoad === loading) interactionLoad = null; });
     }
     return interactionLoad;

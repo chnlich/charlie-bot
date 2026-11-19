@@ -33,8 +33,6 @@ function loadModals(dom, fetchImpl) {
     // loads modals.js alone, and the commit path calls both.
     updateSidebarSessionName: () => {},
     refreshDisplayedSessionName: () => {},
-    // The field's height is one line of the name: text-sm paints a 20px line.
-    getComputedStyle: () => ({lineHeight: '20px'}),
   };
   context.globalThis = context;
   vm.createContext(context);
@@ -105,6 +103,8 @@ test('prefill reads the live row text: a renamed session prefills its new name',
   assert.equal(dom.input.style.height, '20px');
   assert.equal(dom.input.style.paddingTop, '0px');
   assert.equal(dom.input.style.paddingBottom, '0px');
+  // select() leaves the caret at the end of a long name; the field opens on the name's start instead.
+  assert.equal(dom.input.scrollLeft, 0, 'the field opened scrolled to the end of a long name');
   // updateSidebarSessionName (status.js) and the session_renamed websocket
   // handler both funnel into this one write: the title text and the full name
   // as the title. A non-shortened row's title is its name.
@@ -161,8 +161,8 @@ test('zero-width row rect (hidden row) falls back to the header instead of corne
 });
 
 test('a chat-header click opens the field on the header name line, not on the session row', () => {
-  // A header name that wraps is 100px tall; the field takes one line of it, not the whole block.
-  const dom = makeDom({rowName: 'row text', headerName: 'header name', headerHeight: 100});
+  // The header name is one line tall; the field covers that line, not the row's.
+  const dom = makeDom({rowName: 'row text', headerName: 'header name', headerHeight: 20});
   const context = loadModals(dom);
   // The header's onclick handler sits on the div that holds the heading.
   context.startRename({
@@ -171,7 +171,7 @@ test('a chat-header click opens the field on the header name line, not on the se
   }, 's1');
   assert.equal(dom.input.value, 'header name');
   assert.equal(dom.input.style.width, '400px', 'the field took the row width instead of the header name line');
-  assert.equal(dom.input.style.height, '20px', 'the field covers the first line of a wrapped header name');
+  assert.equal(dom.input.style.height, '20px', 'the field covers the header name line');
 });
 
 // The page's document carries a loader in place of modals.js, because the module loads on the first sidebar

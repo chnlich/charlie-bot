@@ -23,12 +23,12 @@ function startRename(e, id) {
   const rect = anchor.getBoundingClientRect();
   const valueRect = valueEl.getBoundingClientRect();
   const input = document.getElementById('rename-input');
-  // The field takes the name line's own height: one line of the name, so a header name that wraps keeps its other
-  // lines readable below the field. The row's second line — the time and the backend — stays below it too.
+  // The field takes the name line's height, so the row's second line — the time and the backend — stays visible
+  // below it.
   input.style.top = valueRect.top + 'px';
   input.style.left = rect.left + 'px';
   input.style.width = rect.width + 'px';
-  input.style.height = Math.min(valueRect.height, parseFloat(getComputedStyle(valueEl).lineHeight)) + 'px';
+  input.style.height = valueRect.height + 'px';
   input.style.paddingTop = '0px';
   input.style.paddingBottom = '0px';
   // The field prefills the session's full name, not the row's rendered title:
@@ -40,6 +40,9 @@ function startRename(e, id) {
   input.classList.remove('hidden');
   input.focus();
   input.select();
+  // select() leaves the caret at the name's end, which scrolls a long name past its beginning. Scrolling back to
+  // the start opens the field on the name's opening.
+  input.scrollLeft = 0;
 }
 
 function handleRenameKey(e) {

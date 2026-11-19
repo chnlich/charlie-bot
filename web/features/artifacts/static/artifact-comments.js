@@ -118,7 +118,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // editing: picks change; countdown: the undo window is open; sending: the post is in flight, retried
     // on a network error or 5xx; sent: the buttons stay off until a reload.
     var pickStage = 'editing';
-    var pickLeft = 0;
     var pickCountdown = null;
     var picks = [];
     var pickBar = null;
@@ -1785,8 +1784,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         }
       }
       var picked = pickedCount();
-      if (pickStage === 'countdown') pickLabel.textContent = 'Sending in ' + pickLeft + ' s';
-      else if (pickStage === 'sending') pickLabel.textContent = 'Sending';
+      if (pickStage === 'countdown' || pickStage === 'sending') pickLabel.textContent = 'Sending';
       else pickLabel.textContent = 'Picked ' + picked + '/' + picks.length;
       pickRestButton.disabled = !(editable && restAvailable);
       pickSendButton.disabled = !(editable && picked > 0);
@@ -1803,7 +1801,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       pickStage = 'countdown';
       pickCountdown = startUndoableCommentSend(pickTargetSessionId(), message, function(left) {
         pickStage = left === 0 ? 'sending' : 'countdown';
-        pickLeft = left;
         renderPicks();
       });
       pickCountdown.sent.then(function(result) {

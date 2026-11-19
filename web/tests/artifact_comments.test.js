@@ -1892,7 +1892,7 @@ test('Undo inside the five-second window posts nothing and returns the bar to th
   const [fork] = body.children.filter((child) => child.className === 'fork');
   clickElement(pickButton(fork, 'keep'));
   clickElement(pickBarButton(body, 'Send'));
-  assert.equal(pickLabel(body), 'Sending in 5 s', 'the countdown shows at once');
+  assert.equal(pickLabel(body), 'Sending', 'the undo window uses the approved state label');
   assert.equal(pickButton(fork, 'drop').disabled, true, 'the picks hold during the countdown');
   clickElement(pickBarButton(body, 'Undo'));
   await flushPromises(3);

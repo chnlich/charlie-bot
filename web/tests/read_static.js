@@ -60,23 +60,30 @@ function runStaticModules(context, files) {
   }
 }
 
-// The icon module the page inlines ahead of every script: the table icon_script() emits, then icons.js.
-// The page's include list skips it, because its tag sits behind icon_script(). The table is built here from
-// the committed icons.json and the Lucide files, so the shapes match what the server renders.
-function iconTableScript() {
+// The meaning table the page carries: each meaning's Lucide file, its fill flag when set, and the children of the
+// file's <svg> root. The children are read as the server reads them (svg_children in
+// rust/crates/runtime/registry/src/icons.rs), so a test's markup matches the server's. The table is built from the
+// committed icons.json and the Lucide files.
+function iconTable() {
   const iconsDir = path.join(__dirname, '..', 'static', 'icons');
   const meanings = JSON.parse(fs.readFileSync(path.join(iconsDir, 'icons.json'), 'utf8'));
   const table = {};
   for (const [key, meaning] of Object.entries(meanings)) {
     const source = fs.readFileSync(path.join(iconsDir, 'lucide', `${meaning.lucide}.svg`), 'utf8');
-    const shapes = source.replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/^[\s\S]*?<svg[^>]*>/, '')
-      .replace(/<\/svg>[\s\S]*$/, '');
+    const start = source.indexOf('>', source.indexOf('<svg')) + 1;
+    const end = source.lastIndexOf('</svg>');
+    const shapes = source.slice(start, end);
     table[key] = meaning.fill === true
       ? {lucide: meaning.lucide, fill: true, shapes}
       : {lucide: meaning.lucide, shapes};
   }
-  return `window.CB_ICON_TABLE = ${JSON.stringify(table)};`;
+  return table;
+}
+
+// The icon module the page inlines ahead of every script: the table icon_script() emits, then icons.js.
+// The page's include list skips it, because its tag sits behind icon_script().
+function iconTableScript() {
+  return `window.CB_ICON_TABLE = ${JSON.stringify(iconTable())};`;
 }
 
 // Runs the icon module into a vm context once: cbIcon and the table it reads. A context without a window
@@ -98,5 +105,6 @@ module.exports = {
   sidebarModules: () => scopedModules('sidebar/'),
   runStaticModules,
   runIconModule,
+  iconTable,
   iconTableScript,
 };

@@ -15,9 +15,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
+const {readStatic, runIconModule} = require('./read_static');
 const {escapeHtml} = require('./escape_html_stub');
-const { loadIconModule } = require('./icon_module');
 
 // One element of the harness document. Writing innerHTML registers each <button id> the markup names, so the
 // confirmation's buttons are elements a test can answer; fire() runs an element's click or key listeners.
@@ -123,7 +122,7 @@ function buildContext({fetchImpl, showToastImpl, archivedForgetSessionImpl = () 
   };
   context.globalThis = context;
   vm.createContext(context);
-  loadIconModule(context);
+  runIconModule(context);
   // namespace.js first, as on the page: it supplies Sidebar.wire and the
   // currentFilter state the actions module reads.
   vm.runInContext(readStatic('sidebar/namespace.js'), context, {filename: 'namespace.js'});

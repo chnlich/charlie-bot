@@ -20,10 +20,13 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 
 import {CdpConnection, Page} from '../../dev/poor-network/chrome.mjs';
-import {iconTable} from './icon_module.js';
+
+const require = createRequire(import.meta.url);
+const {iconTable} = require('./read_static');
 
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STATIC_DIR = path.join(WEB_DIR, 'static');

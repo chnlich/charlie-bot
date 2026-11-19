@@ -4,7 +4,10 @@ import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import { iconTable, loadIconModule } from './icon_module.js';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { iconTable, runIconModule } = require('./read_static');
 
 const ICON_TABLE = iconTable();
 
@@ -175,7 +178,7 @@ function loadExtUsageScript(options = {}) {
   const pageTimersPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../static/js/page-timers.js');
   const pageTimersSource = fs.readFileSync(pageTimersPath, 'utf8');
   vm.createContext(context);
-  loadIconModule(context);
+  runIconModule(context);
   // page-timers.js loads first, matching the script order in index.html — the
   // strip's refresh timers register through it.
   vm.runInContext(pageTimersSource, context, { filename: pageTimersPath });

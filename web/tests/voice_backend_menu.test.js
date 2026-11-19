@@ -7,8 +7,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readPackageStatic} = require('./read_static');
-const { iconTable, loadIconModule } = require('./icon_module');
+const {iconTable, readPackageStatic, runIconModule} = require('./read_static');
 
 // A row's check mark: the done icon's Lucide shapes, read from the icon table the page loads.
 const CHECK_SHAPES = iconTable().done.shapes;
@@ -94,7 +93,7 @@ function buildHarness({stored = null, defaultBackend = 'batch', backends = BACKE
     window: {innerWidth: 1024, location: {href: ''}, addEventListener() {}, removeEventListener() {}},
   };
   vm.createContext(sandbox);
-  loadIconModule(sandbox);
+  runIconModule(sandbox);
   // Page order: the voice-events part registers the badge, the mic title and
   // the ⋯ entry, and the recording module loads after it.
   vm.runInContext(VOICE_EVENTS_JS, sandbox, {filename: 'voice-events.js'});

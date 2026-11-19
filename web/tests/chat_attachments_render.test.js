@@ -2,11 +2,10 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
+const {readStatic, runIconModule} = require('./read_static');
 const { createClassList } = require('./dom_element_stub');
 
 const { escapeHtml } = require('./escape_html_stub');
-const { loadIconModule } = require('./icon_module');
 
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
 const DISPLAYED_SESSION_JS = readStatic('chat/displayed-session.js');
@@ -63,7 +62,7 @@ function loadFileUploadScript(fetchImpl) {
   };
 
   vm.createContext(context);
-  loadIconModule(context);
+  runIconModule(context);
   // The displayed-session module rides the page ahead of file-upload.js; its
   // bind answers the upload's composer target.
   vm.runInContext(DISPLAYED_SESSION_JS, context, {filename: 'chat/displayed-session.js'});

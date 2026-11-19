@@ -130,15 +130,12 @@ pub(super) fn tmux_binary() -> Result<PathBuf, String> {
 }
 
 fn os_error(error: &io::Error, path: Option<&Path>) -> String {
-  let Some(errno) = error.raw_os_error() else {
+  let Some(line) = charliebot_core::os_error::errno_line_of(error) else {
     return error.to_string();
   };
-  let message = error.to_string();
-  let suffix = format!(" (os error {errno})");
-  let description = message.strip_suffix(&suffix).unwrap_or(&message);
   match path {
-    Some(path) => format!("[Errno {errno}] {description}: '{}'", path.display()),
-    None => format!("[Errno {errno}] {description}"),
+    Some(path) => format!("{line}: '{}'", path.display()),
+    None => line,
   }
 }
 
@@ -260,7 +257,8 @@ impl PtyAttachment {
         libc::execve(path.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
         let error_number = *libc::__errno_location();
         let description = std::ffi::CStr::from_ptr(libc::strerror(error_number)).to_string_lossy();
-        let error = format!("tmux exec failed: [Errno {error_number}] {description}: '{}'\n", binary.display());
+        let line = charliebot_core::os_error::errno_line(error_number, &description);
+        let error = format!("tmux exec failed: {line}: '{}'\n", binary.display());
         libc::write(libc::STDERR_FILENO, error.as_ptr().cast(), error.len());
         libc::_exit(1);
       },

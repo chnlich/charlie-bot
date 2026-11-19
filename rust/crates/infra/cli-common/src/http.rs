@@ -64,12 +64,9 @@ fn os_error_message(error: &reqwest::Error) -> String {
   let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
   while let Some(current) = source {
     if let Some(io_error) = current.downcast_ref::<std::io::Error>()
-      && let Some(errno) = io_error.raw_os_error()
+      && let Some(line) = charliebot_core::os_error::errno_line_of(io_error)
     {
-      let text = io_error.to_string();
-      let suffix = format!(" (os error {errno})");
-      let strerror = text.strip_suffix(&suffix).unwrap_or(&text);
-      return format!("[Errno {errno}] {strerror}");
+      return line;
     }
     source = current.source();
   }

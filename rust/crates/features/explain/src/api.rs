@@ -152,7 +152,7 @@ struct ExplainRequest {
 }
 
 impl ExplainRequest {
-  /// Validates the body against `EXPLAIN_BODY` and reads its two fields.
+  /// The body validated against `EXPLAIN_BODY`, with its two fields read out.
   fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
     let Some(Value::Object(mut fields)) = body.validate(&EXPLAIN_BODY)? else {
       unreachable!("a required model validates a body to its fields")

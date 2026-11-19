@@ -658,8 +658,10 @@ impl Templating {
         .map_err(|error| Error::new(ErrorKind::InvalidOperation, error.to_string()))?;
       Ok(Value::from_safe_string(svg))
     });
-    environment.add_function("icon_script", move || {
-      let script = icons.script(None).map_err(|error| Error::new(ErrorKind::InvalidOperation, error.to_string()))?;
+    environment.add_function("icon_script", move |keys: Option<Vec<String>>| {
+      let keys: Option<Vec<&str>> = keys.as_deref().map(|keys| keys.iter().map(String::as_str).collect());
+      let script =
+        icons.script(keys.as_deref()).map_err(|error| Error::new(ErrorKind::InvalidOperation, error.to_string()))?;
       Ok(Value::from_safe_string(script))
     });
     let repo_root = self.repo_root.clone();
@@ -1536,11 +1538,17 @@ mod tests {
     fs::create_dir_all(&lucide).unwrap();
     fs::write(templates.join("icons.html"), "{{ icon('close', 8, 'custom', 'data-test=\"yes\"') }}{{ icon_script() }}")
       .unwrap();
+    fs::write(templates.join("icons-subset.html"), "{{ icon_script(['close']) }}").unwrap();
     fs::write(icons.join("LICENSE"), "ISC\n").unwrap();
-    fs::write(icons.join("icons.json"), r#"{"close":{"lucide":"x"}}"#).unwrap();
+    fs::write(icons.join("icons.json"), r#"{"close":{"lucide":"x"},"open":{"lucide":"plus"}}"#).unwrap();
     fs::write(
       lucide.join("x.svg"),
       "<!-- @license lucide-static v1.76.0 - ISC -->\n<svg viewBox=\"0 0 24 24\"><path d=\"M1 2\"/></svg>\n",
+    )
+    .unwrap();
+    fs::write(
+      lucide.join("plus.svg"),
+      "<!-- @license lucide-static v1.76.0 - ISC -->\n<svg viewBox=\"0 0 24 24\"><path d=\"M5 6\"/></svg>\n",
     )
     .unwrap();
 
@@ -1551,6 +1559,11 @@ mod tests {
     assert!(first.contains("stroke-width=\"3\""));
     assert!(first.contains("data-test=\"yes\""));
     assert!(first.contains("window.CB_ICON_TABLE ="));
+    assert!(first.contains("\"open\":"));
+    // A template that names its icons gets a table of those alone, so a page pays only for the icons its scripts use.
+    let subset = templating.render("icons-subset.html", &json!({}), Vec::new(), first_revision).unwrap();
+    assert!(subset.contains("\"close\":"));
+    assert!(!subset.contains("\"open\":"));
     assert!(templating.icons().unwrap().svg("close", 12, "", "").unwrap().contains("stroke-width=\"2\""));
 
     fs::write(

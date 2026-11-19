@@ -243,7 +243,9 @@
   <div id="error-msg" class="hidden text-center py-16 text-red-400 text-sm"></div>
   <div id="empty-msg" class="hidden text-center py-16 text-slate-400 text-sm">No events found.</div>
 
-  <script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
+  {#- The icons this page's scripts name: the event rows' two carets. Every other icon on the page is drawn
+      server-side by the `icon` call, so the table carries the carets alone instead of the whole set. -#}
+  <script>{{ icon_script(['disclosure', 'disclosure-open']) }}{% include 'js/icons.js' %}</script>
   <script>{% include 'partials/json-highlight.js' %}</script>
   <script>
     // -------------------------------------------------------------------------

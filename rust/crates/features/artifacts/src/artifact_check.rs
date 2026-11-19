@@ -878,59 +878,59 @@ fn quoted_spans(text: &str) -> Vec<&str> {
   spans
 }
 
-/// One open fork of a page, read as a pick: its question number, its named options as they show at open, and the
+/// One open question of a page, read as a pick: its question number, its named options as they show at open, and the
 /// name the recommendation quotes. The page script reads the same grammar in
-/// `web/features/artifacts/static/artifact-comments.js`; the fixture `tests/data/plan_template_forks.json` pins both
-/// readings to one output.
+/// `web/features/artifacts/static/artifact-comments.js`, which keeps only the questions with options; the fixture
+/// `tests/data/plan_template_forks.json` pins both readings to one output for the plan template.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[cfg(test)]
-struct PageFork {
-  n: String,
-  options: Vec<PageForkOption>,
-  rec: Option<String>,
+pub struct PageFork {
+  /// The question's number, or an empty string when the question has none.
+  pub n: String,
+  pub options: Vec<PageForkOption>,
+  pub rec: Option<String>,
 }
 
 /// One named option: the name, which is the button text, and the option line as the page writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[cfg(test)]
-struct PageForkOption {
-  name: String,
-  text: String,
+pub struct PageForkOption {
+  pub name: String,
+  pub text: String,
 }
 
-/// The forks of `html` a reader can pick: open, outside every closed fold, with a question number and at least two
-/// named options. A fork without them has no pick.
-#[cfg(test)]
-fn page_forks(html: &str) -> anyhow::Result<Vec<PageFork>> {
+/// The open questions of `html` in page order, each with its options. A question has options only when the page shows
+/// it (outside every closed fold), numbers it, and names at least two options; any other open question lists none, so
+/// a reader can tell that the page holds a question it cannot pick.
+pub fn page_forks(html: &str) -> anyhow::Result<Vec<PageFork>> {
   let nodes = parse_dom(html)?;
   let mut forks = Vec::new();
   for (_, fork) in open_forks(&nodes) {
-    if folded_ancestor(&nodes, fork, None) {
-      continue;
-    }
-    let Some(n) = fork_number(&nodes, fork) else { continue };
-    let options: Vec<PageForkOption> = visible_option_lines(&nodes, fork)
-      .into_iter()
-      .filter_map(|line| {
-        let text = str_methods::collapse_whitespace(&option_line_text(&nodes, line));
-        let name = option_name(&text)?.to_owned();
-        Some(PageForkOption { name, text })
-      })
-      .collect();
+    let n = fork_number(&nodes, fork);
+    let shown = n.is_some() && !folded_ancestor(&nodes, fork, None);
+    let mut options: Vec<PageForkOption> = if shown {
+      visible_option_lines(&nodes, fork)
+        .into_iter()
+        .filter_map(|line| {
+          let text = str_methods::collapse_whitespace(&option_line_text(&nodes, line));
+          let name = option_name(&text)?.to_owned();
+          Some(PageForkOption { name, text })
+        })
+        .collect()
+    } else {
+      Vec::new()
+    };
     if options.len() < 2 {
-      continue;
+      options.clear();
     }
     let rec = find(&nodes, fork, "p", &["rec"]).first().and_then(|&rec| {
       let text = str_methods::collapse_whitespace(&element_text(&nodes, rec));
       quoted_spans(&text).into_iter().find(|span| options.iter().any(|option| option.name == *span)).map(str::to_owned)
     });
-    forks.push(PageFork { n, options, rec });
+    forks.push(PageFork { n: n.unwrap_or_default(), options, rec });
   }
   Ok(forks)
 }
 
 /// The number span of the first question line of a fork that carries one.
-#[cfg(test)]
 fn fork_number(nodes: &[Element], fork: usize) -> Option<String> {
   find(nodes, fork, "p", &["q"]).into_iter().find_map(|question| {
     let span = *find(nodes, question, "span", &["fn"]).first()?;
@@ -940,7 +940,6 @@ fn fork_number(nodes: &[Element], fork: usize) -> Option<String> {
 }
 
 /// The text of an option line without its `div.demo` and `p.no-demo`, which draw or explain the option and name none.
-#[cfg(test)]
 fn option_line_text(nodes: &[Element], line: usize) -> String {
   fn append(nodes: &[Element], element: usize, output: &mut String) {
     for child in &nodes[element].children {
@@ -2406,6 +2405,17 @@ mod tests {
     let forks = page_forks(page).expect("the page parses");
     let texts: Vec<&str> = forks[0].options.iter().map(|option| option.text.as_str()).collect();
     assert_eq!(texts, ["「keep」: keep the file.", "「drop」: drop the file."]);
+  }
+
+  #[test]
+  fn an_open_question_that_cannot_be_picked_is_listed_with_no_options() {
+    let page = "<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Folded?</p>\
+      <details><ul><li>「keep」: keep it.</li><li>「drop」: drop it.</li></ul></details></div>\
+      <div class=\"fork\"><p class=\"q\">Unnumbered?</p><ul>\
+      <li>「keep」: keep it.</li><li>「drop」: drop it.</li></ul></div>";
+    let forks = page_forks(page).expect("the page parses");
+    assert_eq!(forks.len(), 2, "both open questions are listed, so a reader sees the page holds more than it can pick");
+    assert!(forks.iter().all(|fork| fork.options.is_empty() && fork.rec.is_none()));
   }
 
   #[test]

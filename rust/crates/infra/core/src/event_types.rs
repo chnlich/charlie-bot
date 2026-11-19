@@ -255,6 +255,9 @@ pub const CONFIG_RELOAD_FAILED_EVENT: &str = "config_reload_failed";
 /// The log event a hot-reloaded `credentials.yaml` writes when its reload fails: the server's state, the feature
 /// context and each feature's own credentials cache log it.
 pub const CREDENTIALS_RELOAD_FAILED_EVENT: &str = "credentials_reload_failed";
+/// The log event a spawned background task writes when its future fails: the thread entry's logged spawn and the
+/// store's after-turn hook both write it.
+pub const BACKGROUND_TASK_FAILED_EVENT: &str = "background_task_failed";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

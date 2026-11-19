@@ -622,8 +622,8 @@ impl ServeWorld {
     fs::write(repo.join("README.md"), "serve trial\n").expect("the README");
 
     let mut env = sandbox.env();
-    // The server requires the checkout's web assets, cron defaults and prompts, and agent gh wrapper. The trial's
-    // archive is this repository's commit.
+    // The server requires the checkout's web assets, cron defaults and prompts, the agent gh wrapper and the agent
+    // ssh guard. The trial's archive is this repository's commit.
     let source_repo = harness::repo_root();
     let mut copy = harness::command("cp", &env);
     copy.arg("-r").arg(source_repo.join("web")).arg(source_repo.join("configs")).arg(&repo);
@@ -638,6 +638,11 @@ impl ServeWorld {
     harness::copy_file(
       &source_repo.join("rust/crates/runtime/agents/gh_wrapper/gh"),
       &repo.join("rust/crates/runtime/agents/gh_wrapper/gh"),
+    );
+    fs::create_dir_all(repo.join("rust/crates/runtime/agents/ssh_guard")).expect("the ssh guard directory");
+    harness::copy_file(
+      &source_repo.join("rust/crates/runtime/agents/ssh_guard/ssh"),
+      &repo.join("rust/crates/runtime/agents/ssh_guard/ssh"),
     );
     for (name, value) in [
       ("GIT_AUTHOR_NAME", "serve-test"),

@@ -472,11 +472,14 @@ fn run_case(case_path: &Path) -> Result<(), String> {
     .map(|item| substitute(item))
     .collect();
 
-  // The CLI's host builder places the agent gh wrapper first on PATH; give the case's checkout one, and give the
-  // process a PATH when the case does not set one.
+  // The CLI's host builder places the agent gh wrapper and the ssh guard first on PATH; give the case's checkout
+  // both, and give the process a PATH when the case does not set one.
   let wrapper = temp.path().join("repo/rust/crates/runtime/agents/gh_wrapper/gh");
   std::fs::create_dir_all(wrapper.parent().unwrap()).map_err(|error| format!("{}: {error}", wrapper.display()))?;
   charliebot_shell_harness::write_executable(&wrapper, "#!/bin/sh\n");
+  let ssh_guard = temp.path().join("repo/rust/crates/runtime/agents/ssh_guard/ssh");
+  std::fs::create_dir_all(ssh_guard.parent().unwrap()).map_err(|error| format!("{}: {error}", ssh_guard.display()))?;
+  charliebot_shell_harness::write_executable(&ssh_guard, "#!/bin/sh\n");
 
   let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot"));
   let stdin = case.get("stdin").and_then(Value::as_str).map(substitute);

@@ -218,6 +218,9 @@ pub fn short_token_logins(
   let moment = now_or(now);
   let mut short = HashSet::new();
   for account in pool_accounts(cfg, account_pool)? {
+    if !credentials_present(&account) {
+      continue;
+    }
     if let Err(reason) = token_life_suffices(&account, moment) {
       tracing::warn!(
         target: "charliebot_agents",
@@ -1452,6 +1455,7 @@ mod tests {
     let one_short = login("one_short", Some((seconds + min - 1) * 1000));
     let unnamed = login("unnamed", None);
     let nonnumeric = login("nonnumeric", None);
+    let missing_credentials = root.path().join("missing_credentials");
     fs::write(
       nonnumeric.join(login_dirs::CREDENTIALS_FILE),
       json!({"claudeAiOauth": {"accessToken": "synthetic", "expiresAt": "soon"}}).to_string(),
@@ -1459,7 +1463,13 @@ mod tests {
     .unwrap();
     let cfg = config(
       &home,
-      &[("at_minimum", &at_minimum), ("one_short", &one_short), ("unnamed", &unnamed), ("nonnumeric", &nonnumeric)],
+      &[
+        ("at_minimum", &at_minimum),
+        ("one_short", &one_short),
+        ("unnamed", &unnamed),
+        ("nonnumeric", &nonnumeric),
+        ("missing_credentials", &missing_credentials),
+      ],
     );
 
     let short = short_token_logins(&cfg, None, Some(now)).unwrap();

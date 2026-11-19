@@ -287,7 +287,12 @@
     // A run's end writes no message, so its row names the run's own outcome instead: the exit code
     // and the seconds it thought. Without that the rows of one type read alike, and a failed run's
     // end cannot be told from a clean one without opening each row.
-    const PREVIEW_CHARS = 120;
+    //
+    // The row's own width ends a preview, not a character count: the desk row's line elides at its
+    // column's end and the phone's two-line box at its second line. The bound below only keeps an
+    // event of thousands of characters out of the row whole. It stands above either width's
+    // capacity, so a reader never sees the bound itself.
+    const PREVIEW_BOUND_CHARS = 600;
 
     function toolResultText(content) {
       if (typeof content === 'string') return content;
@@ -333,8 +338,8 @@
       return runEndText(ev);
     }
 
-    // The one-line preview: whitespace collapsed, cut at PREVIEW_CHARS with an ellipsis so a cut
-    // preview reads as cut rather than as the event's whole text.
+    // The one-line preview: whitespace collapsed. The row's width cuts it, and the row's end shows
+    // the ellipsis that reads as cut rather than as the event's whole text.
     //
     // The line breaker breaks a preview at its spaces alone. A run longer than a phone's preview
     // column — about 62 characters on the row's 358 px — therefore moves whole to the next line.
@@ -342,14 +347,13 @@
     // input, the text the row exists to show, is cut at the second line. A zero-width space after
     // each run's own punctuation gives the run break points, so the first line fills with the
     // input. The punctuation is a tool input's braces, brackets, commas and colons, and prose's
-    // commas and semicolons. The character draws nothing, and the cut lands before it goes in, so
-    // the preview keeps its PREVIEW_CHARS characters.
+    // commas and semicolons. The character draws nothing, and the bound applies before it goes in,
+    // so every break point stands on the event's own text.
     const PREVIEW_BREAKS = /([{}[\],:;])/g;
 
     function previewText(ev) {
       const text = summaryText(ev).replace(/\s+/g, ' ').trim();
-      const cut = text.length > PREVIEW_CHARS ? text.slice(0, PREVIEW_CHARS) + '…' : text;
-      return cut.replace(PREVIEW_BREAKS, '$1\u200b');
+      return text.slice(0, PREVIEW_BOUND_CHARS).replace(PREVIEW_BREAKS, '$1\u200b');
     }
 
     // The event's time: a `ts` epoch in seconds, or the ISO `timestamp` most event types write.

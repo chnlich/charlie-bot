@@ -17,6 +17,7 @@
 //! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
 //! page packages and `configs/` the server serves.
 
+mod allocator;
 mod app;
 mod auth;
 mod buildinfo;
@@ -115,6 +116,7 @@ fn stop_sequence(reason: StopReason) -> Vec<StopAction> {
 }
 
 fn main() -> ExitCode {
+  allocator::configure();
   let args: Vec<_> = std::env::args_os().skip(1).collect();
   if let Some(code) = charliebot_packages::helper_entry::run(&args) {
     return ExitCode::from(code);

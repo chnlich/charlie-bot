@@ -127,8 +127,8 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
     document.dispatch('visibilitychange');
   };
   page.urlsStarting = (prefix) => page.requests.map((request) => request.url).filter((url) => url.startsWith(prefix));
-  page.rowUrls = () => page.urlsStarting('/api/sessions/?compact=1&ids=');
-  page.fullListCount = () => page.requests.filter((request) => request.url === '/api/sessions/?compact=1').length;
+  page.rowUrls = () => page.urlsStarting('/api/sessions/?compact=1&screen=1&ids=');
+  page.listLoadCount = () => page.requests.filter((request) => request.url === '/api/sessions/?compact=1&screen=1&active=session-a').length;
   return page;
 }
 
@@ -169,16 +169,16 @@ test('a row archived while the socket was closed leaves the list when it reopens
 
   page.connect();
   page.socket().emitOpen();
-  assert.equal(page.fullListCount(), 0, "a page load's first socket reloads nothing");
+  assert.equal(page.listLoadCount(), 0, "a page load's first socket reloads nothing");
 
   // The network close, and the reopen its backoff lands.
   page.socket().emitClose({code: 1006});
   page.runTimers();
   page.socket().emitOpen();
-  assert.equal(page.fullListCount(), 1, 'the reopen reloads the list the gap could have changed');
+  assert.equal(page.listLoadCount(), 1, 'the reopen reloads the list the gap could have changed');
 
   page.requests
-      .filter((request) => request.url === '/api/sessions/?compact=1')
+      .filter((request) => request.url === '/api/sessions/?compact=1&screen=1&active=session-a')
       .forEach((request) => request.respond([manager]));
   await flush();
   assert.doesNotMatch(page.nav.innerHTML, /id="session-w"/, 'the archived row left the list');
@@ -197,7 +197,7 @@ test('a task_tree_changed frame inside a switch window still refreshes its row',
   vm.runInContext('holdSessionFrames("c")', page.context);
   page.frame({type: 'message', message: {role: 'user', content: 'left session frame', event_index: 9}});
   page.frame({type: 'task_tree_changed', session_id: 'w'});
-  assert.deepEqual(page.rowUrls(), ['/api/sessions/?compact=1&ids=w'],
+  assert.deepEqual(page.rowUrls(), ['/api/sessions/?compact=1&screen=1&ids=w'],
       'the switch window dropped the session frame and served the sidebar frame');
   page.requests.filter((request) => request.url.includes('&ids='))
       .forEach((request) => request.respond({sessions: {}, gone: ['w']}));
@@ -227,7 +227,7 @@ test('a row id dropped from the queue on another view still leaves on the return
   page.elements.get('sidebar-search').value = '';
   page.context.handleSidebarSearch('');
   page.requests
-      .filter((request) => request.url === '/api/sessions/?compact=1')
+      .filter((request) => request.url === '/api/sessions/?compact=1&screen=1&active=session-a')
       .forEach((request) => request.respond([manager]));
   await flush();
   assert.doesNotMatch(page.nav.innerHTML, /id="session-w"/, 'the return to the Workspace leaves no stale row');
@@ -239,7 +239,7 @@ test('a task-tree frame fetches its row, and frames that arrive in flight form t
   page.socket().emitOpen();
 
   page.frame({type: 'task_tree_changed', session_id: 'session-x'});
-  assert.deepEqual(page.rowUrls(), ['/api/sessions/?compact=1&ids=session-x']);
+  assert.deepEqual(page.rowUrls(), ['/api/sessions/?compact=1&screen=1&ids=session-x']);
 
   page.frame({type: 'task_tree_changed', session_id: 'session-y'});
   page.frame({type: 'task_tree_changed', session_id: 'session-z'});
@@ -248,10 +248,10 @@ test('a task-tree frame fetches its row, and frames that arrive in flight form t
   answerRows(page);
   await flush();
   assert.deepEqual(page.rowUrls(), [
-    '/api/sessions/?compact=1&ids=session-x',
-    '/api/sessions/?compact=1&ids=session-y,session-z',
+    '/api/sessions/?compact=1&screen=1&ids=session-x',
+    '/api/sessions/?compact=1&screen=1&ids=session-y,session-z',
   ]);
-  assert.equal(page.fullListCount(), 0, 'a task-tree frame never refetches the whole list');
+  assert.equal(page.listLoadCount(), 0, 'a task-tree frame never refetches the whole list');
 });
 
 test('a hidden tab requests no row or cron list until it is visible, then requests each once', async () => {
@@ -267,7 +267,7 @@ test('a hidden tab requests no row or cron list until it is visible, then reques
   assert.equal(page.cronLoads, 0);
 
   page.show();
-  assert.deepEqual(page.rowUrls(), ['/api/sessions/?compact=1&ids=session-x,session-y']);
+  assert.deepEqual(page.rowUrls(), ['/api/sessions/?compact=1&screen=1&ids=session-x,session-y']);
   assert.equal(page.cronLoads, 1, 'the cron task list loads once for the two frames');
 });
 
@@ -285,8 +285,8 @@ test('a row fetch that answers after the tab hid starts no further request until
 
   page.show();
   assert.deepEqual(page.rowUrls(), [
-    '/api/sessions/?compact=1&ids=session-x',
-    '/api/sessions/?compact=1&ids=session-y',
+    '/api/sessions/?compact=1&screen=1&ids=session-x',
+    '/api/sessions/?compact=1&screen=1&ids=session-y',
   ]);
 });
 
@@ -297,7 +297,7 @@ test('every reopen that follows a close reloads the list once', async () => {
   page.socket().emitClose({code: 1006});
   page.runTimers();
   page.socket().emitOpen();
-  assert.equal(page.fullListCount(), 1, 'the reopened socket reloads the list');
+  assert.equal(page.listLoadCount(), 1, 'the reopened socket reloads the list');
 });
 
 test('a stale-page close reloads a hidden tab once it is visible', () => {
@@ -322,7 +322,7 @@ test('a starred-view row change fetches that row alone from the starred view', a
 
   assert.deepEqual(page.urlsStarting('/api/sessions/starred'), ['/api/sessions/starred?ids=session-x'],
       'the starred view answers the named row alone');
-  assert.equal(page.fullListCount(), 0, 'a task-tree frame never refetches the whole list');
+  assert.equal(page.listLoadCount(), 0, 'a task-tree frame never refetches the whole list');
   assert.equal(page.urlsStarting('/api/sessions/starred').length, 1);
 });
 
@@ -338,7 +338,7 @@ test('a threads-view row change fetches that row alone from the threads view', a
 
   assert.deepEqual(page.urlsStarting('/api/sessions/chat-threads'), ['/api/sessions/chat-threads?ids=session-x'],
       'the Threads view answers the named row alone');
-  assert.equal(page.fullListCount(), 0, 'a task-tree frame never refetches the whole list');
+  assert.equal(page.listLoadCount(), 0, 'a task-tree frame never refetches the whole list');
 });
 
 test('a view change and a reconnect after a network loss still load the whole list', async () => {

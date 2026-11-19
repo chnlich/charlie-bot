@@ -345,15 +345,35 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
       );
     }
   };
+  // `screen=1` asks the sidebar's column form for the rows it paints before the reader expands a group, with each
+  // group's whole row count under `$screen`. Only that form carries the counts, so another form's request naming it
+  // is refused rather than answered with a form the request did not ask for.
+  let screen = match query.get("screen") {
+    None => false,
+    Some("1") if matches!(compact, Some(ListingForm::Sidebar)) => true,
+    Some(other) => {
+      let detail = if matches!(compact, Some(ListingForm::Sidebar)) {
+        format!("unknown screen form: {other}")
+      } else {
+        "screen names the rows a group preview paints, which only compact=1 carries".to_string()
+      };
+      return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": detail}));
+    }
+  };
+  // The open session the first screen keeps visible, whatever its rank in the list. A page names it so the reader's
+  // own row stays painted after a filter switch.
+  let active = query.get("active").map(str::to_string);
   let response = blocking_store(move || {
     // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
     // subtree roots or the overlays move.
     let page = listing::active_page_rows(&features.store, &features.registry)?;
     Ok(match compact {
       Some(ListingForm::Sidebar) => {
-        COMPACT_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Sidebar)
+        COMPACT_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Sidebar, screen, active.as_deref())
       }
-      Some(ListingForm::Move) => MOVE_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Move),
+      Some(ListingForm::Move) => {
+        MOVE_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Move, false, None)
+      }
       None => listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS),
     })
   })
@@ -1087,6 +1107,32 @@ mod tests {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert!(payload.is_array(), "a request without compact keeps the row array");
+  }
+
+  /// `screen=1` answers the sidebar's first-screen form: the page's columns with each group's whole row count under
+  /// `$screen`. The every-row form carries that key only when it leaves rows out, so the pair differs by the key
+  /// alone here, and a request naming a screen on another form is refused.
+  #[tokio::test]
+  async fn a_screen_request_answers_the_first_screen_form_and_another_form_refuses_one() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "screen-route", None, TaskProfile::Manager).await;
+
+    let screen = Request::builder().uri("/api/sessions/?compact=1&screen=1").body(Body::empty()).unwrap();
+    let (status, payload) = crate::test_support::answer(list_active(State(Arc::clone(&features)), screen).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["$screen"]["partial"], json!(false), "one row fits the first screen");
+    assert_eq!(payload["$screen"]["counts"][""], json!(1), "the keyless group counts its whole tree");
+    assert_eq!(payload["name"], json!(["screen-route"]));
+
+    let every = Request::builder().uri("/api/sessions/?compact=1").body(Body::empty()).unwrap();
+    let (status, payload) = crate::test_support::answer(list_active(State(Arc::clone(&features)), every).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(payload.get("$screen").is_none(), "the every-row form carries no first-screen key");
+    assert_eq!(payload["name"], json!(["screen-route"]), "both forms carry the one row");
+
+    let move_screen = Request::builder().uri("/api/sessions/?compact=move&screen=1").body(Body::empty()).unwrap();
+    let response = list_active(State(features), move_screen).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "only the sidebar form carries counts");
   }
 
   /// A row refresh answers the named rows in the compact form, and names each id the Workspace no longer lists.

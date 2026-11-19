@@ -1268,11 +1268,15 @@ pub fn sessions_list_response(
 /// keeps its allocation, and the row memo re-renders only the rows a corpus change moved.
 ///
 /// One memo serves one form. The session-move picker reads four fields of the same corpus, so it asks for that form
-/// through a memo of its own and leaves the Workspace's columns untouched.
+/// through a memo of its own and leaves the Workspace's columns untouched. The first-screen form keeps a memo of its
+/// own too: the sidebar asks for it on every filter switch, and a request pair that alternated the two forms would
+/// re-render the full listing each time.
 #[derive(Default)]
 pub struct CompactListingMemo {
   rows: PageRowsMemo,
   body: Mutex<Option<CompactListingBody>>,
+  screen_rows: PageRowsMemo,
+  screen_body: Mutex<Option<CompactListingBody>>,
 }
 
 struct CompactListingBody {
@@ -1300,17 +1304,33 @@ impl ListingForm {
 
 impl CompactListingMemo {
   /// The compact listing for this corpus, gzipped when the request accepts gzip.
-  pub fn response(&self, request: &Request<Body>, store: &Store, page: &PageRows, form: ListingForm) -> Response {
-    let text =
-      match page_json_text(store, page, None, PageRowsScope::EveryRow, &self.rows, LISTING_PROJECTION, form.schema()) {
-        Ok(text) => text,
-        Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
-      };
+  ///
+  /// `screen` answers the rows the sidebar paints before the reader expands a group, with each group's whole row
+  /// count under `$screen`. The reader who expands one asks for the full form. `active` names the session the page
+  /// shows, whose root the first screen keeps visible whatever its rank in the list.
+  pub fn response(
+    &self,
+    request: &Request<Body>,
+    store: &Store,
+    page: &PageRows,
+    form: ListingForm,
+    screen: bool,
+    active: Option<&str>,
+  ) -> Response {
+    let (scope, rows_memo, body_memo) = if screen {
+      (PageRowsScope::FirstScreen { active }, &self.screen_rows, &self.screen_body)
+    } else {
+      (PageRowsScope::EveryRow, &self.rows, &self.body)
+    };
+    let text = match page_json_text(store, page, None, scope, rows_memo, LISTING_PROJECTION, form.schema()) {
+      Ok(text) => text,
+      Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
+    };
     let wants_gzip = accepts_gzip(request.headers());
     if !wants_gzip {
       return json_bytes_response(Bytes::copy_from_slice(text.as_bytes()), false);
     }
-    let mut body = self.body.lock().expect("the compact listing memo mutex is not poisoned");
+    let mut body = body_memo.lock().expect("the compact listing memo mutex is not poisoned");
     if let Some(cached) = body.as_ref()
       && Arc::ptr_eq(&cached.text, &text)
     {
@@ -1773,7 +1793,7 @@ mod tests {
     let page = active_page_rows(&features.store, &features.registry).unwrap();
 
     let identity = Request::builder().uri("/api/sessions/?compact=1").body(Body::empty()).unwrap();
-    let response = memo.response(&identity, &features.store, &page, ListingForm::Sidebar);
+    let response = memo.response(&identity, &features.store, &page, ListingForm::Sidebar, false, None);
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = std::str::from_utf8(&body).expect("the identity body is UTF-8");
@@ -1788,13 +1808,13 @@ mod tests {
       .body(Body::empty())
       .unwrap();
     let first = axum::body::to_bytes(
-      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar).into_body(),
+      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar, false, None).into_body(),
       usize::MAX,
     )
     .await
     .unwrap();
     let second = axum::body::to_bytes(
-      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar).into_body(),
+      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar, false, None).into_body(),
       usize::MAX,
     )
     .await
@@ -1814,7 +1834,7 @@ mod tests {
     let page = active_page_rows(&features.store, &features.registry).unwrap();
 
     let request = Request::builder().uri("/api/sessions/?compact=move").body(Body::empty()).unwrap();
-    let response = memo.response(&request, &features.store, &page, ListingForm::Move);
+    let response = memo.response(&request, &features.store, &page, ListingForm::Move, false, None);
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = std::str::from_utf8(&body).expect("the move body is UTF-8");

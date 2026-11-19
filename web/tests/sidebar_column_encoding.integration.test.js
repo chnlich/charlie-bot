@@ -111,7 +111,7 @@ test('the Workspace fetch asks for the compact listing and paints its rows', asy
   await flush();
   await flush();
 
-  assert.deepEqual(urls, ['/api/sessions/?compact=1']);
+  assert.deepEqual(urls, ['/api/sessions/?compact=1&screen=1&active=none']);
   assert.deepEqual(rowIds(nav.innerHTML), [UUID]);
 });
 

@@ -71,14 +71,14 @@ const KIMI: &str = "https://platform.kimi.ai/docs/pricing/chat";
 const DEVIN: &str = "https://docs.devin.ai/desktop/models";
 const READ_ON: &str = "2026-11-19";
 
-/// Every priced model. A ledger model with no row reads N/A on the usage page.
+/// Every priced model. A ledger model with no row reads N/A on the usage page. `lookup` is the table's only reader
+/// outside this module.
 ///
 /// Anthropic: the ledger adds 5-minute and 1-hour cache writes into one count, so every cache write is priced at the
 /// 5-minute rate. A 1-hour write costs 1.6 times that rate on these rows, so the 1-hour share is understated.
 /// Claude Haiku 5.5 prices a prompt over 100,000 tokens higher. The ledger keeps no prompt length, so every Haiku 5.5
 /// token is priced at the up-to-100,000 rate, which understates the longer prompts.
-///
-pub static LIST_PRICES: &[ListPrice] = &[
+static LIST_PRICES: &[ListPrice] = &[
   ListPrice {
     model: "claude-fable-5-2",
     input: 8.00,

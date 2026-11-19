@@ -14,14 +14,22 @@ or a credential.
 
 ```sh
 node browser_search.js <base-url> out/slow.json 3 sidebar plan cron hydeogen
+WARM_UP=0 node browser_search.js <base-url> out/cold.json 1 hydeogen
 node browser_measure_slowwatch.js <base-url> out/slowwatch.json 3 60.004 19 sidebar --confirm-renames
 ```
+
+Before its timed repeats, each query runs once untimed, so the repeats measure a warm server. `WARM_UP=0` skips that
+warm-up: the one timed search is then the first a freshly started server answers for its term, a cold sample.
+`--confirm-renames` never targets the live server. Pass it only against an isolated verification server; the
+post-release live run is observation only and runs `browser_search.js` without the flag.
 
 Each output file carries one entry per repeat under `runs`. `e2e_ms` is the paint minus the input event, and the
 `counters` of a run are the deltas of `window.sidebarSearchCounters` over that search.
 
 ## Environment
 
+- `WARM_UP`: `1` (default) warms each query once before its timed repeats; `0` times the first search instead. Any
+  other value stops the run.
 - `CHARLIEBOT_ACCESS_KEY`: the server's access key, when the server asks for one. It is sent as the access-key cookie,
   the local storage key, the bearer header and the rename requests. The output files never record it.
 - `PLAYWRIGHT_MODULE`: the Playwright module to load. Default: `playwright`, resolved from this directory.

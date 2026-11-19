@@ -8,6 +8,8 @@
 //   CHROME_BIN             the Chrome binary to launch (default: the binary Playwright bundles)
 //   CHARLIEBOT_ACCESS_KEY  the server's access key, when the server asks for one. It is sent to the server and never
 //                          written to the output.
+//   WARM_UP                1 (default) sends one untimed search per query term before its timed repeats. 0 times the
+//                          first search after the server starts, which is a cold sample.
 
 'use strict';
 
@@ -15,6 +17,15 @@ const SLOW = { offline: false, latency: 300, downloadThroughput: 12500, uploadTh
 
 function accessKeyFromEnvironment() {
   return process.env.CHARLIEBOT_ACCESS_KEY || '';
+}
+
+// Whether the runner warms each query term before its timed searches. Any value but 0 or 1 stops the run.
+function warmUpFromEnvironment() {
+  const value = process.env.WARM_UP ?? '1';
+  if (value !== '0' && value !== '1') {
+    throw new Error(`WARM_UP must be 0 or 1, got '${value}'`);
+  }
+  return value === '1';
 }
 
 // Opens the server's page in a throttled, read-only browser. `sessionId` opens that session; without it the page opens
@@ -234,6 +245,7 @@ function startTaskTreeLoad({ baseUrl, accessKey, sessionId, baseName, changes, w
 module.exports = {
   SLOW,
   accessKeyFromEnvironment,
+  warmUpFromEnvironment,
   openPage,
   oneSearch,
   readCounters,

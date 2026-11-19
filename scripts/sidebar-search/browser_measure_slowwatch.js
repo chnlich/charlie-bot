@@ -7,7 +7,10 @@
 // open tab, so the page refreshes its search as it would under a live turn.
 //
 // Usage: node browser_measure_slowwatch.js <base-url> <out.json> <reps> <window-seconds> <changes> <query>
-//        --confirm-renames
+//          --confirm-renames
+// --confirm-renames sends the rename PATCH requests to <base-url>. It never targets the live server: pass it only
+// against an isolated verification server. The post-release live run is observation only and runs browser_search.js,
+// without this flag.
 // The access key, when the server asks for one, comes from CHARLIEBOT_ACCESS_KEY.
 'use strict';
 
@@ -15,6 +18,7 @@ const fs = require('fs');
 const {
   SLOW,
   accessKeyFromEnvironment,
+  warmUpFromEnvironment,
   openPage,
   oneSearch,
   readCounters,
@@ -23,20 +27,24 @@ const {
   startTaskTreeLoad,
 } = require('./measure_common');
 
+const USAGE = 'usage: node browser_measure_slowwatch.js <base-url> <out.json> <reps> <window-seconds> <changes> '
+  + '<query> --confirm-renames\n'
+  + '  --confirm-renames sends rename PATCH requests to <base-url>; it never targets the live server.';
+
 async function main() {
   const [baseUrl, out, repsArg, windowArg, changesArg, query, confirmation] = process.argv.slice(2);
   if (confirmation !== '--confirm-renames') {
-    console.error('refusing to send rename PATCH requests without --confirm-renames');
+    console.error(`refusing to send rename PATCH requests without --confirm-renames\n${USAGE}`);
     process.exit(2);
   }
   if (!baseUrl || !out || !repsArg || !windowArg || !changesArg || !query || process.argv.length !== 9) {
-    console.error('usage: node browser_measure_slowwatch.js <base-url> <out.json> <reps> <window-seconds> <changes> '
-      + '<query> --confirm-renames');
+    console.error(USAGE);
     process.exit(2);
   }
   const reps = Number(repsArg);
   const windowSeconds = Number(windowArg);
   const changes = Number(changesArg);
+  const warmUp = warmUpFromEnvironment();
   const accessKey = accessKeyFromEnvironment();
   // The renames go to the first row of the query's answer. A rename of a row outside the answer leaves the
   // answer's body unchanged, and the page then repaints nothing.
@@ -47,6 +55,7 @@ async function main() {
     base_url: baseUrl,
     reps,
     query,
+    warm_up: warmUp,
     window_seconds: windowSeconds,
     changes,
     link: SLOW,
@@ -56,6 +65,7 @@ async function main() {
   };
   try {
     await page.cdp.send('Network.emulateNetworkConditions', SLOW);
+    if (warmUp) await oneSearch(page.page, query);
     for (let rep = 0; rep < reps; rep += 1) {
       const first = await oneSearch(page.page, query);
       first.rep = rep;

@@ -184,7 +184,7 @@ fn run_scoped_audience(home_dir: &Path, token: &str) -> Result<String, CliExit> 
   match profile {
     Some("manager") => Ok("master".to_string()),
     Some("worker") => Ok("worker".to_string()),
-    _ => exit_error(&format!(
+    None | Some(_) => exit_error(&format!(
       "error: run token references session {}, which is not a task-tree node in this instance",
       claims.session_id
     )),

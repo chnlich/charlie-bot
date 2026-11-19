@@ -517,7 +517,7 @@ mod tests {
 
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{ContextStateFn, EmitFn, LaunchArgs, RecordAccountFn, RunningTurnsFn};
-  use charliebot_store::metadata::{TaskProfile, UtcDateTime};
+  use charliebot_store::metadata::{TaskProfile, TaskSpec, UtcDateTime};
   use charliebot_store::run_records::RunKind;
   use serde_json::json;
 
@@ -687,6 +687,54 @@ mod tests {
     assert!(ctx.running_turns.is_none());
     assert_eq!(launch.backend_kwargs["claude_session_id"], "task-session");
     assert_eq!(launch.account_label.as_deref(), Some("a"));
+  }
+
+  #[tokio::test]
+  async fn a_keyed_task_with_only_short_logins_is_refused_as_token_short() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    let expires_at_ms = UtcDateTime::now().into_inner().unix_timestamp() * 1000;
+    for account in [&account_a, &account_b] {
+      fs::create_dir_all(account).unwrap();
+      fs::write(
+        account.join(login_dirs::CREDENTIALS_FILE),
+        json!({"claudeAiOauth": {"accessToken": "synthetic", "expiresAt": expires_at_ms}}).to_string(),
+      )
+      .unwrap();
+    }
+    let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
+    let mut ctx = context(cfg, LaunchKind::Task, None, None, None);
+    ctx.session_meta.lock().unwrap().task = Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+
+    let refusal = match ClaudeCodeLifecycle::new().place(&ctx).await {
+      Err(refusal) => refusal,
+      Ok(_) => panic!("the task started without a login that has enough token life"),
+    };
+
+    assert_eq!(refusal.failure, MemberFailure::TokenShort);
+    assert!(refusal.message.contains("no login of the pool has"), "the refusal does not name the token-life condition");
+  }
+
+  #[tokio::test]
+  async fn a_keyed_task_refuses_a_relay_before_preparing_another_login() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account = root.path().join("account");
+    account_credentials(&account);
+    let cfg = config(&home, &[("a", &account)]);
+    let mut ctx = context(cfg, LaunchKind::Task, None, None, None);
+    ctx.session_meta.lock().unwrap().task = Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+    let launch = Launch { backend_kwargs: Map::new(), resume_id: None, prompt: None, account_label: None, private: None };
+
+    let refusal = match ClaudeCodeLifecycle::new().next_launch(&ctx, &launch, None).await {
+      Err(refusal) => refusal,
+      Ok(_) => panic!("the keyed task started a second login relay"),
+    };
+
+    assert_eq!(refusal.failure, MemberFailure::Other);
+    assert!(refusal.message.contains("token is forwarded once"), "the relay refusal does not name its boundary");
   }
 
   #[tokio::test]

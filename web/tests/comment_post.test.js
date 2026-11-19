@@ -120,6 +120,18 @@ test('buildClickMessage owns the shared numbered reference and answer format', (
     '1. ▸ Waiting on you · session session-a · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #2',
     '   ↳ Done',
   ].join('\n'));
+
+  const twoQuestions = context.buildClickMessage('[Status · Waiting on you]', [{
+    reference: 'Waiting on you · session session-a · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #2',
+    answer: ['Q1 「keep」: keep the file.', 'Q2 「now」: act now.'],
+  }]);
+  assert.equal(twoQuestions, [
+    '[Status · Waiting on you]',
+    '',
+    '1. ▸ Waiting on you · session session-a · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #2',
+    '   ↳ Q1 「keep」: keep the file.',
+    '   ↳ Q2 「now」: act now.',
+  ].join('\n'));
 });
 
 test('postCommentMessage retries a network error and a 5xx with one request id', async () => {

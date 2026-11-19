@@ -33,17 +33,21 @@ async function postCommentMessage(sessionId, content) {
   }
 }
 
-// One numbered click message: each reference and answer keeps its own lines beneath the shared arrow markers.
+// One numbered click message: each reference keeps its own lines beneath the shared arrow markers. An entry's answer
+// is one string or an array of them, and each answer gets its own arrow line.
 function buildClickMessage(header, entries) {
   if (entries.length === 0) return header + '\n\n';
   const lines = [header, ''];
   for (let i = 0; i < entries.length; i++) {
     const referenceLines = entries[i].reference.split('\n');
-    const answerLines = entries[i].answer.split('\n');
     lines.push((i + 1) + '. ▸ ' + referenceLines[0]);
     for (let j = 1; j < referenceLines.length; j++) lines.push('   ' + referenceLines[j]);
-    lines.push('   ↳ ' + answerLines[0]);
-    for (let j = 1; j < answerLines.length; j++) lines.push('   ' + answerLines[j]);
+    const answers = Array.isArray(entries[i].answer) ? entries[i].answer : [entries[i].answer];
+    for (const answer of answers) {
+      const answerLines = answer.split('\n');
+      lines.push('   ↳ ' + answerLines[0]);
+      for (let j = 1; j < answerLines.length; j++) lines.push('   ' + answerLines[j]);
+    }
     if (i < entries.length - 1) lines.push('');
   }
   return lines.join('\n');

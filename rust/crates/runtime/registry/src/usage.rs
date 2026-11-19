@@ -74,6 +74,13 @@ pub const SNAPSHOT_CACHE_READ_TOKENS: &str = "cache_read";
 /// The tokens a snapshot reading counts as written into the provider's prompt cache.
 pub const SNAPSHOT_CACHE_WRITE_TOKENS: &str = "cache_write";
 
+/// The codex rollout event that opens a thread: the codex translator reads the run's native session from its
+/// `thread_id`, and the usage capture reads the same id from the same line.
+pub const CODEX_THREAD_STARTED: &str = "thread.started";
+/// The codex rollout event that closes one turn: it carries the turn's `usage` object, which the codex translator
+/// translates and the usage capture sums into a fallback record.
+pub const CODEX_TURN_COMPLETED: &str = "turn.completed";
+
 /// The log event an external usage reader emits once per limit window it cannot classify. Every reader's alert
 /// matches this one name.
 pub const UNKNOWN_LIMIT_SHAPE_EVENT: &str = "ext_usage_unknown_limit_shape";

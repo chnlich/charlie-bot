@@ -9,6 +9,7 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr::{DEFAULT_JSON, json_dumps, value_str};
 use charliebot_core::web_search::TOOL_NAME;
 use charliebot_registry::backend::Translate;
+use charliebot_registry::usage::{CODEX_THREAD_STARTED, CODEX_TURN_COMPLETED};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
@@ -68,13 +69,13 @@ impl CodexTranslator {
     };
     let event_type = text_of(event, "type").unwrap_or("");
     match event_type {
-      "thread.started" => {
+      CODEX_THREAD_STARTED => {
         let thread_id = event.get("thread_id").cloned().unwrap_or_else(|| json!(""));
         self.thread_id = thread_id.as_str().filter(|id| !id.is_empty()).map(str::to_string);
         Ok(vec![json!({"type": event_types::SESSION_ATTACHED, "session_id": thread_id})])
       }
       "turn.started" => Ok(Vec::new()),
-      "turn.completed" => self.turn_completed(event),
+      CODEX_TURN_COMPLETED => self.turn_completed(event),
       "turn.failed" | "error" => Ok(vec![make_error_event(&failure_message(event_type, event))]),
       "item.started" | "item.updated" | "item.completed" => self.translate_item(event),
       _ => {

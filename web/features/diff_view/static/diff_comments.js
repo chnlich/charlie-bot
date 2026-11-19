@@ -139,6 +139,7 @@
       .${PREFIX}-line > .d2h-code-linenumber,
       .${PREFIX}-line > .d2h-code-side-linenumber { height: 24px; }
       .${PREFIX}-add {
+        display: inline-flex; align-items: center; justify-content: center;
         position: absolute; left: 2px; top: 50%; transform: translateY(-50%); z-index: 2;
         width: 24px; height: 24px; border: 0; border-radius: 5px; padding: 0;
         background: #2563eb; color: white; font: bold 14px/24px system-ui, sans-serif;

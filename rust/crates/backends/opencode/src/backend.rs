@@ -918,7 +918,8 @@ impl OpenCodeTranslator {
         Ok(Vec::new())
       }
       "session.compaction.started" => {
-        let pre_tokens = self.last_step_tokens.as_ref().and_then(|tokens| tokens.get("input")).and_then(Value::as_i64);
+        let pre_tokens =
+          self.last_step_tokens.as_ref().and_then(|tokens| tokens.get(SNAPSHOT_INPUT_TOKENS)).and_then(Value::as_i64);
         Ok(vec![event_builders::make_compact_boundary_event(required_string(data, "reason")?, pre_tokens)])
       }
       "session.compaction.ended" => {

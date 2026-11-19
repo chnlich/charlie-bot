@@ -33,6 +33,11 @@ impl ClaudeCliLifecycle {
     let Some(session_id) = session_id else {
       return Ok(None);
     };
+    // A keyed round keeps its conversation on the improve host, so no local login holds its transcript. The held id
+    // resumes there, and the host's `claude --resume` fails the round when the transcript is missing.
+    if keyed_round(ctx) {
+      return Ok(Some(session_id.to_string()));
+    }
     if !claude_accounts::transcript_matches(config_dir, session_id)?.is_empty() {
       return Ok(Some(session_id.to_string()));
     }
@@ -232,7 +237,11 @@ impl ClaudeCodeLifecycle {
 
   async fn place_task(&self, ctx: &LaunchContext) -> Result<Launch, LaunchRefused> {
     let account_pool = claude_accounts::option_pool(&ctx.option);
-    if let Some(session_id) = ctx.held_native_id.as_deref().filter(|value| !value.is_empty()) {
+    let keyed = keyed_round(ctx);
+    let held = ctx.held_native_id.as_deref().filter(|value| !value.is_empty());
+    // A run that stays on this host resumes the login that holds its transcript. A keyed round keeps its transcript
+    // on the improve host, so it picks its login by the ordinary pool choice and resumes the held id there.
+    if !keyed && let Some(session_id) = held {
       let holder = claude_accounts::find_transcript_account(&ctx.cfg, session_id)
         .map_err(|error| refused(error, MemberFailure::Other, None))?;
       let Some(holder) = holder else {
@@ -257,7 +266,6 @@ impl ClaudeCodeLifecycle {
     // A keyed round ships its login's token to its host, so a login whose token lives too little for the round is
     // left out. When that is the only reason no login is usable, the round fails as a token shortage: no member is
     // recorded out, because its other logins may serve other rounds.
-    let keyed = keyed_round(ctx);
     let short = if keyed {
       claude_accounts::short_token_logins(&ctx.cfg, account_pool.as_deref(), None)
         .map_err(|error| refused(error, MemberFailure::Other, None))?
@@ -302,7 +310,9 @@ impl ClaudeCodeLifecycle {
       .map_err(|error| refused(error, MemberFailure::Other, None))?;
       return Err(LaunchRefused { message, failure: no_login.failure, resets_at: no_login.recovers_at });
     };
-    self.pooled_launch(ctx, account, None, None, 0).map_err(|error| refused(error, MemberFailure::Other, None))
+    self
+      .pooled_launch(ctx, account, held.map(str::to_string), None, 0)
+      .map_err(|error| refused(error, MemberFailure::Other, None))
   }
 }
 
@@ -741,6 +751,62 @@ mod tests {
 
     assert_eq!(refusal.failure, MemberFailure::TokenShort);
     assert!(refusal.message.contains("no login of the pool has"), "the refusal does not name the token-life condition");
+  }
+
+  /// Credentials whose access token lives longer than a keyed round needs.
+  fn long_lived_credentials(path: &Path) {
+    fs::create_dir_all(path).unwrap();
+    let expires_at_ms = (UtcDateTime::now().into_inner().unix_timestamp() + 86_400) * 1000;
+    fs::write(
+      path.join(login_dirs::CREDENTIALS_FILE),
+      json!({"claudeAiOauth": {"accessToken": "synthetic", "expiresAt": expires_at_ms}}).to_string(),
+    )
+    .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_keyed_task_keeps_its_held_conversation_on_the_pooled_path() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    long_lived_credentials(&account_a);
+    long_lived_credentials(&account_b);
+    let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
+    let held = "held-conversation";
+
+    // An unkeyed run searches the local logins for the transcript, finds none, and refuses the task.
+    let unkeyed = context(cfg.clone(), LaunchKind::Task, None, Some(held), None);
+    let refusal = match ClaudeCodeLifecycle::new().place(&unkeyed).await {
+      Err(refusal) => refusal,
+      Ok(_) => panic!("the unkeyed task resumed a conversation that no local login holds"),
+    };
+    assert!(refusal.message.contains("has no transcript on any pool login"), "{}", refusal.message);
+
+    // A keyed run keeps the id: its transcript is on the improve host, and the run forwards a chosen login's token.
+    let keyed = context(cfg, LaunchKind::Task, None, Some(held), None);
+    keyed.session_meta.lock().unwrap().task =
+      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+    let launch = ClaudeCodeLifecycle::new().place(&keyed).await.unwrap();
+    assert_eq!(launch.resume_id.as_deref(), Some(held));
+    assert!(launch.account_label.is_some(), "the keyed task picks its login by the ordinary pool choice");
+  }
+
+  #[test]
+  fn a_keyed_run_keeps_its_held_conversation_on_the_plain_path() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = unpooled_config(&root.path().join("home"));
+    let config_dir = root.path().join("claude-default");
+    let held = "held-conversation";
+    let ctx = context(cfg, LaunchKind::Task, None, Some(held), None);
+
+    // An unkeyed run drops the id that no local login holds, and logs `master_cc_resume_transcript_missing`.
+    assert_eq!(ClaudeCliLifecycle.checked_resume_id_for(&ctx, &config_dir).unwrap(), None);
+
+    // A keyed run keeps the id: its transcript is on the improve host, so no local search decides.
+    ctx.session_meta.lock().unwrap().task =
+      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+    assert_eq!(ClaudeCliLifecycle.checked_resume_id_for(&ctx, &config_dir).unwrap().as_deref(), Some(held));
   }
 
   #[tokio::test]

@@ -46,9 +46,11 @@
      do. Enter and Space then give the chip the same visible focus the rest of the
      page shows. */
   .detBtn:focus-visible { outline:2px solid var(--acc); outline-offset:2px }
-  .detBtn .det-open, button.tg .tg-open { display:none }
-  .detBtn[aria-expanded="true"] .det-closed, button.tg[aria-expanded="true"] .tg-closed { display:none }
-  .detBtn[aria-expanded="true"] .det-open, button.tg[aria-expanded="true"] .tg-open { display:inline-block }
+  .detBtn .det-chev { display:inline-block }
+  .detBtn[aria-expanded="true"] .det-chev { transform:rotate(90deg) }
+  button.tg .tg-open { display:none }
+  button.tg[aria-expanded="true"] .tg-closed { display:none }
+  button.tg[aria-expanded="true"] .tg-open { display:inline-block }
   .detBody { display:inline-flex; flex-wrap:wrap; gap:8px; max-width:100% }
   p { margin:8px 0 }
   ul { margin:8px 0 0; padding-left:20px } li { margin:4px 0 }
@@ -142,7 +144,7 @@
   ledger ({{ as_of }}).</p>
   <div class="meta">
     {% if ctx.rows %}<span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }} {{ zone }}</span>{% endif %}
-    <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details {{ icon('disclosure', 12, 'det-closed') }}{{ icon('disclosure-open', 12, 'det-open') }}</button>
+    <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details {{ icon('disclosure', 7, 'det-chev') }}</button>
     <span class="mtag">generated &middot; {{ generated }}</span>
     <span class="detBody" id="usage-details" hidden>
       <span class="mtag">sources &middot; {{ ctx.usage_sources|join(' / ') }} local logs</span>

@@ -30,8 +30,8 @@ use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, PARENT_SESSION_ID, REPO_PATH_FIELD};
 use charliebot_store::run_records::{
-  OBSERVATION_BRANCH_NAME, OBSERVATION_REPO_PATH, OBSERVATION_WORKTREE_PATH, RUN_EVENTS_NAME, event_line,
-  read_run_metadata,
+  ENDED_AT_FIELD, OBSERVATION_BRANCH_NAME, OBSERVATION_REPO_PATH, OBSERVATION_WORKTREE_PATH, RUN_EVENTS_NAME,
+  event_line, read_run_metadata,
 };
 use charliebot_tasks::master_run::MASTER_CC_RESUMING_EVENT;
 use charliebot_tasks::routes as task_routes;
@@ -203,8 +203,9 @@ fn recovery_logs(home: &Path, adopt: bool) -> io::Result<()> {
       MetadataReadError::Io(error) => error,
       error @ MetadataReadError::Json(_) => io::Error::other(error.to_string()),
     })?;
-    let ended_at =
-      meta.get("ended_at").ok_or_else(|| io::Error::other(format!("{} has no ended_at", path.display())))?;
+    let ended_at = meta
+      .get(ENDED_AT_FIELD)
+      .ok_or_else(|| io::Error::other(format!("{} has no {ENDED_AT_FIELD}", path.display())))?;
     if ended_at.is_null() {
       if adopt {
         log("task_recovery_resume", json!({"session_id": meta["session_id"], "run_id": meta["id"]}));
@@ -480,7 +481,7 @@ impl Server {
     let cwd = task[OBSERVATION_WORKTREE_PATH].as_str().unwrap_or(repo).to_string();
     let run_dir = layout::runs_dir(&sessions_dir_in(&self.home).join(CHILD_SESSION)).join(TASK_RUN);
     fs::create_dir_all(&run_dir)?;
-    let metadata = json!({"id": TASK_RUN, "backend": "fake-backend", "ended_at": "2026-11-03T00:00:00Z"});
+    let metadata = json!({"id": TASK_RUN, "backend": "fake-backend", (ENDED_AT_FIELD): "2026-11-03T00:00:00Z"});
     fs::write(layout::metadata_path(&run_dir), metadata.to_string())?;
     let mut events = event_line(&json!({"type": "system", "subtype": "init", "cwd": cwd}));
     events.extend(first_command_lines(&self.behavior.first_command)?);

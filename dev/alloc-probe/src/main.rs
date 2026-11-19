@@ -1,9 +1,10 @@
 //! Allocator probe: the server's per-append event-write churn, reduced to a standalone program.
 //!
-//! Each append re-reads the session's whole `chat_events.jsonl` and parses every line to a `serde_json::Value`
-//! tree, the way aggregator seeding and the fact scans do. The 64 most recently appended parsed sessions stay in an
-//! LRU, as the projection and transcript memos keep them. Eight worker threads share the appends, so glibc creates
-//! several arenas as the tokio workers do.
+//! Each append re-reads the session's whole `chat_events.jsonl` and parses every line to a `serde_json::Value` tree.
+//! This intentionally repeats the transient allocation pattern of aggregator history seeding and fact scans as a
+//! stress model; the server does not re-parse the full log on every append. The 64 most recently appended parsed
+//! sessions stay in an LRU, as the projection and transcript memos keep them. Eight worker threads share the appends,
+//! and each session's appends are serialized as they are by the server.
 //!
 //! The probe prints, in kB from /proc/self/status:
 //!   PEAK_RSS          VmHWM after the workload (the peak, reset before the workload starts)
@@ -104,7 +105,8 @@ fn load_parsed(path: &Path) -> Vec<Value> {
 }
 
 /// One append: re-parse the whole log, write one event line, and keep the parsed list in the LRU.
-fn append(dir: &Path, lru: &Lru, session: usize, seq: usize) {
+fn append(dir: &Path, lru: &Lru, session_locks: &[Mutex<()>], session: usize, seq: usize) {
+  let _session_guard = session_locks[session].lock().expect("session lock");
   let path = session_path(dir, session);
   let mut events = load_parsed(&path);
   let line = event_line(session, seq);
@@ -130,6 +132,7 @@ fn main() {
   // Reset the peak to the current RSS so PEAK_RSS covers the workload only (clear_refs value 5).
   fs::write("/proc/self/clear_refs", "5").expect("reset peak RSS");
   let lru: Lru = Mutex::new(VecDeque::new());
+  let session_locks: Vec<_> = (0..SESSIONS).map(|_| Mutex::new(())).collect();
   let next = AtomicUsize::new(0);
   thread::scope(|scope| {
     for _ in 0..THREADS {
@@ -140,7 +143,7 @@ fn main() {
             break;
           }
           let session = op.wrapping_mul(2_654_435_761) % SESSIONS;
-          append(&dir, &lru, session, op);
+          append(&dir, &lru, &session_locks, session, op);
         }
       });
     }

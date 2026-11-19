@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
@@ -12,9 +11,8 @@ use charliebot_core::event_types::{
 };
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::text_repr::is_truthy;
-use charliebot_core::timefmt;
 use charliebot_registry::Registry;
-use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
+use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl, file_signature};
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, read_metadata_object};
 use charliebot_store::run_logs as run_log_files;
@@ -135,7 +133,7 @@ pub fn capture_charliebot(
   let mut live = LiveSessions::default();
   let mut written = 0;
   for (kind, path, metadata) in charliebot_logs(sessions_dir)? {
-    let signature = format!("p2:{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
+    let signature = format!("p2:{}", file_signature(&metadata));
     let path_text = path_text(&path)?;
     if captured.get(path_text) == Some(&signature) {
       continue;
@@ -160,7 +158,7 @@ pub fn capture_runs(
   let mut live = LiveSessions::default();
   let mut written = 0;
   for (path, metadata) in run_logs(sessions_dir)? {
-    let signature = format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
+    let signature = file_signature(&metadata);
     let path_text = path_text(&path)?;
     if captured.get(path_text) == Some(&signature) {
       continue;
@@ -192,8 +190,7 @@ fn capture_source(
     let path_text = path_text(&path)?;
     let metadata = fs::metadata(&path).with_context(|| format!("statting {}", path.display()))?;
     let previous = captured.get(path_text);
-    let stat_signature =
-      format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len());
+    let stat_signature = file_signature(&metadata);
     if previous == Some(&stat_signature) {
       continue;
     }

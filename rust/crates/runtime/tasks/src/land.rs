@@ -1038,16 +1038,15 @@ async fn gh_stdout(workdir: &Path, args: &[&str]) -> anyhow::Result<Vec<u8>> {
   Ok(output.stdout)
 }
 
-/// The wake the waiting state registers: one `charliebot session trigger --cmd` per head sha whose
-/// `--cmd` watches the PR's checks through to their end, capped at the 90-minute timeout. A
-/// pending trigger for this head sha already sitting in the session's triggers directory is left
-/// alone, so repeated `land` calls never stack wakes.
+/// The wake the waiting state registers: one `charliebot session trigger --cmd` per head sha, running
+/// `ci_gate_watch_command`. A pending trigger for this head sha already sitting in the session's
+/// triggers directory is left alone, so repeated `land` calls never stack wakes.
 async fn ensure_waiting_trigger(ctx: &TaskLanding, repo: &str, pr_number: i64, sha: &str) -> anyhow::Result<()> {
   let message = trigger_message(sha);
   if pending_trigger_with_message(&ctx.session_dir, &message)? {
     return Ok(());
   }
-  let cmd = format!("gh pr checks {pr_number} --repo {repo} --watch --fail-fast");
+  let cmd = ci_gate_watch_command(repo, pr_number, sha);
   let max_wait = TIMEOUT_SECS.to_string();
   let mut command = tokio::process::Command::new("charliebot");
   command
@@ -1067,6 +1066,31 @@ async fn ensure_waiting_trigger(ctx: &TaskLanding, repo: &str, pr_number: i64, s
     Ok(Err(error)) => anyhow::bail!("charliebot session trigger failed to start: {error}"),
     Err(_) => anyhow::bail!("charliebot session trigger timed out after {}s", GH_TIMEOUT.as_secs()),
   }
+}
+
+/// Seconds between the CI gate's polls for the first check on a head sha.
+const CHECK_REGISTRATION_POLL_SECS: u64 = 10;
+/// Seconds the CI gate's watch may run past `TIMEOUT_SECS`. `start_and_register` in
+/// `rust/crates/app/cli/src/commands/session_trigger.rs` starts the watch before it posts the
+/// registration that sets the wake's clock. A watch bounded at exactly `TIMEOUT_SECS` would exit
+/// first and wake as a failed watch; this margin lets the trigger's timeout end the wait instead.
+const CI_WATCH_BOUND_MARGIN_SECS: i64 = 120;
+
+/// The CI gate's watch command for one head sha. An empty check list right after a push means GitHub
+/// has not registered the checks yet, so the command polls until the head sha has a check run or a
+/// commit status. It then watches the PR's checks to their end with fail-fast: exit 0 when every check
+/// passes, exit 1 at the first failure. The whole command ends at `TIMEOUT_SECS + CI_WATCH_BOUND_MARGIN_SECS`,
+/// so a PR that never gets a check wakes as the trigger's timeout.
+fn ci_gate_watch_command(repo: &str, pr_number: i64, sha: &str) -> String {
+  let bound = TIMEOUT_SECS + CI_WATCH_BOUND_MARGIN_SECS;
+  let registered = format!(
+    "[ \"$(gh api repos/{repo}/commits/{sha}/check-runs --jq .total_count)\" != 0 ] || \
+     [ \"$(gh api repos/{repo}/commits/{sha}/status --jq .total_count)\" != 0 ]"
+  );
+  format!(
+    "timeout {bound} sh -c 'until {registered}; do sleep {CHECK_REGISTRATION_POLL_SECS}; done; \
+     gh pr checks {pr_number} --repo {repo} --watch --fail-fast'"
+  )
 }
 
 /// The wake label of one head sha's checks; the dedup key of the landing's triggers.
@@ -1744,6 +1768,65 @@ mod tests {
   fn the_trigger_message_caps_at_the_head_sha_prefix() {
     let sha = "e".repeat(40);
     assert_eq!(trigger_message(&sha), "ci gate eeeeeeeeeeee");
+  }
+
+  /// The stub `gh` of the watch command. `api` reports the check-run count: `GH_REGISTRATION_POLLS` empty
+  /// polls, then one check run. `pr checks` records the poll count it started after and exits `GH_WATCH_EXIT`.
+  const GH_WATCH_STUB: &str = r#"
+case "$1 $2" in
+  "api "*/check-runs)
+    polls=$(($(cat "$GH_STATE/polls" 2>/dev/null || echo 0) + 1))
+    echo "$polls" > "$GH_STATE/polls"
+    if [ "$polls" -gt "$GH_REGISTRATION_POLLS" ]; then echo 1; else echo 0; fi
+    ;;
+  "api "*/status) echo 0 ;;
+  "pr checks")
+    cat "$GH_STATE/polls" > "$GH_STATE/watch-started-after"
+    exit "$GH_WATCH_EXIT"
+    ;;
+  *) echo "unexpected gh $*" >&2; exit 2 ;;
+esac
+"#;
+
+  /// Runs the CI gate's watch command against the stub `gh` with a stub `sleep` that returns at once. Returns
+  /// the run and the number of registration polls the watch started after.
+  fn run_ci_gate_watch(registration_polls: u32, watch_exit: u8) -> (charliebot_shell_harness::Run, u32) {
+    let sandbox = charliebot_shell_harness::Sandbox::new();
+    let state = sandbox.dir("state");
+    sandbox.stub("gh", GH_WATCH_STUB);
+    sandbox.stub("sleep", "exit 0\n");
+    let mut env = sandbox.env();
+    env.insert("GH_STATE".to_string(), state.display().to_string());
+    env.insert("GH_REGISTRATION_POLLS".to_string(), registration_polls.to_string());
+    env.insert("GH_WATCH_EXIT".to_string(), watch_exit.to_string());
+    let cmd = ci_gate_watch_command("acme/widgets", 7, &"a".repeat(40));
+    let mut command = charliebot_shell_harness::command("bash", &env);
+    command.arg("-c").arg(&cmd);
+    let run = charliebot_shell_harness::run(&mut command);
+    let started_after = std::fs::read_to_string(state.join("watch-started-after"))
+      .unwrap_or_else(|error| panic!("the watch never started: {error}\n{}", run.describe()));
+    (run, started_after.trim().parse().expect("the poll count is a number"))
+  }
+
+  #[test]
+  fn an_empty_check_list_then_passing_checks_ends_completed() {
+    let (run, started_after) = run_ci_gate_watch(2, 0);
+    assert_eq!(run.code, 0, "{}", run.describe());
+    assert_eq!(started_after, 3, "the watch starts once the head sha has its first check");
+  }
+
+  #[test]
+  fn an_empty_check_list_then_a_failing_check_ends_failed() {
+    let (run, started_after) = run_ci_gate_watch(2, 1);
+    assert_eq!(run.code, 1, "{}", run.describe());
+    assert_eq!(started_after, 3, "the watch starts once the head sha has its first check");
+  }
+
+  #[test]
+  fn passing_checks_from_the_start_end_completed() {
+    let (run, started_after) = run_ci_gate_watch(0, 0);
+    assert_eq!(run.code, 0, "{}", run.describe());
+    assert_eq!(started_after, 1);
   }
 
   #[test]

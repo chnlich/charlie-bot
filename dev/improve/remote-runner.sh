@@ -3,17 +3,18 @@
 #
 #   remote-runner.sh <launch id> <direction> <CLI commit> <member kind>
 #   remote-runner.sh --in-scope <launch id> <direction> <member kind>
-#   remote-runner.sh --prepare <launch id>     (the review key and the member token on standard input)
+#   remote-runner.sh --prepare <launch id>     (the review key and the member's login on standard input)
 #
 # The member kind is `claude` or `codex`: the agent the round runs.
 #
 # dev/improve/remote-launch.sh sends this file, with the round's arguments and inputs, into
 # ~/improve/launch/<launch id>/ and runs the remaining forms over ssh. `--prepare` reads the round's
-# keys from its standard input and writes each one into ~/improve/home/credentials.yaml under its
-# credential's name, the only file that holds a key. The first form checks the round's dependencies,
-# prepares the round's environment, then starts the round's scope through systemd-run; the scope runs
-# the `--in-scope` form, which empties TMPDIR, runs the member's agent under the write-only Landlock
-# boundary and records the scope's memory peak.
+# records from its standard input. The review key goes into ~/improve/home/credentials.yaml under its
+# credential's name, written through a temporary file and renamed over it. The member's login goes
+# into the launch's member-credential file (mode 600), which only this launch reads. The first form
+# checks the round's dependencies, prepares the round's environment, then starts the round's scope
+# through systemd-run; the scope runs the `--in-scope` form, which empties TMPDIR, runs the member's
+# agent under the write-only Landlock boundary and records the scope's memory peak.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
@@ -89,17 +90,17 @@ readonly HOME_DIR=${HOME:-}
 readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
 readonly ROUND_HOME="$HOME_DIR/improve/home"
 readonly RUNNER_ROOT="$HOME_DIR/improve/runner"
-# The Claude login of a subscription round: a long-lived token that the host keeps in this file.
-readonly CLAUDE_TOKEN_FILE="$HOME_DIR/improve/logins/claude-oauth-token"
-# The CODEX_HOME of a codex round, the host's own Codex login. The write boundary does not yet allow this
-# directory. A change to the directory a round may write sets this value and that boundary together.
-readonly CODEX_HOME_DIR="$HOME_DIR/.codex"
+# The member's login file of this launch: the records `--prepare` wrote, each `NAME=value` with a NUL after it.
+readonly MEMBER_CREDENTIAL="$LAUNCH_DIR/member-credential"
 [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] || fail 1 "the launch directory is not under the improve root: $LAUNCH_DIR"
 if [[ $mode != prepare ]]; then
   [[ -d $LAUNCH_DIR ]] || fail 1 "the launch directory is missing: $LAUNCH_DIR"
   readonly ROUND_ROOT="$HOME_DIR/improve/$direction"
   readonly ROUND_TMP="/tmp/improve-$direction"
   readonly ROUND_TMPDIR="/tmp/improve-$direction-tmp"
+  # The CODEX_HOME of a codex round. It sits under ROUND_TMP, which the write boundary already allows; only its
+  # auth.json lives for one round.
+  readonly CODEX_HOME_TARGET="$ROUND_TMP/codex-home"
 fi
 
 # The variables the launcher forwarded. The launcher writes only these names, and a name outside
@@ -118,20 +119,27 @@ read_launch_env() {
   done <"$LAUNCH_DIR/env"
 }
 
-# Read the round's keys from standard input and write them into the round's credentials file, each
-# under its credential's name: the review key under the review credential, and the member token under
-# ANTHROPIC_AUTH_TOKEN. The keys arrive on standard input so no key reaches a command line, and this
-# file is the only one that holds them. The review settings are not secrets: they join the launch
-# environment, which the first form exports. Each record is selected by its name.
+# Read the round's records from standard input. The review key goes into the round's credentials file under its
+# credential's name. That file is replaced through a temporary file renamed over it, so a parallel launch never
+# leaves it half written. The member's record (a login or a gateway token) goes into this launch's member-credential
+# file, which no other launch reads. The records arrive on standard input so no key or token reaches a command line.
+# The review settings are not secrets: they join the launch environment, which the first form exports. Each record is
+# selected by its name.
 prepare_credentials() {
-  local record name value review_credential= review_key= member_token=
-  local target="$ROUND_HOME/credentials.yaml"
+  local record name value review_credential= review_key= member_record=
+  local target="$ROUND_HOME/credentials.yaml" staged
+  umask 077
+  : >"$MEMBER_CREDENTIAL"
   while IFS= read -r -d '' record; do
     name=${record%%=*}
     value=${record#*=}
     case $name in
       CHARLIE_CODE_API_KEY) review_key=$value ;;
-      ANTHROPIC_AUTH_TOKEN) member_token=$value ;;
+      CLAUDE_CODE_OAUTH_TOKEN | ANTHROPIC_AUTH_TOKEN | IMPROVE_CODEX_AUTH)
+        [[ -z $member_record ]] || fail 1 'the launch sent more than one member record'
+        member_record=$name
+        printf '%s\0' "$record" >>"$MEMBER_CREDENTIAL"
+        ;;
       IMPROVE_REVIEW_CREDENTIAL)
         review_credential=$value
         printf '%s\0' "$record" >>"$LAUNCH_DIR/env"
@@ -144,14 +152,27 @@ prepare_credentials() {
   done
   [[ -n $review_credential ]] || fail 1 'the launch named no review credential'
   [[ -n $review_key ]] || fail 1 'the launch sent no review key'
+  [[ -n $member_record ]] || fail 1 'the launch sent no member record'
   mkdir -p -- "$ROUND_HOME"
-  umask 077
-  : >"$target"
-  printf '%s:\n  api_key: %s\n' "$review_credential" "$review_key" >>"$target"
-  if [[ -n $member_token ]]; then
-    printf 'ANTHROPIC_AUTH_TOKEN:\n  api_key: %s\n' "$member_token" >>"$target"
-  fi
-  chmod 600 "$target"
+  staged=$(mktemp -- "$ROUND_HOME/credentials.yaml.XXXXXXXX") \
+    || fail 1 'cannot make the credentials file in the round home'
+  printf '%s:\n  api_key: %s\n' "$review_credential" "$review_key" >"$staged"
+  mv -f -- "$staged" "$target"
+}
+
+# The value of the first record named `name` in this launch's member-credential file. Nothing is printed and the
+# status is 1 when the file holds no such record.
+member_record_value() {
+  local wanted=$1 record name
+  [[ -f $MEMBER_CREDENTIAL ]] || return 1
+  while IFS= read -r -d '' record; do
+    name=${record%%=*}
+    if [[ $name == "$wanted" ]]; then
+      printf '%s' "${record#*=}"
+      return 0
+    fi
+  done <"$MEMBER_CREDENTIAL"
+  return 1
 }
 
 # The api_key under one top-level section of the round's credentials file, found by the section's name.
@@ -305,6 +326,41 @@ round_is_live() {
   return 1
 }
 
+# Whether a process's command line names this launch id as an argument.
+launch_is_referenced() {
+  local launch=$1 proc argument
+  local -a arguments=()
+  for proc in /proc/[0-9]*/cmdline; do
+    [[ -r $proc ]] || continue
+    arguments=()
+    while IFS= read -r -d '' argument; do
+      arguments+=("$argument")
+    done <"$proc"
+    for argument in "${arguments[@]}"; do
+      [[ $argument == "$launch" ]] && return 0
+    done
+  done
+  return 1
+}
+
+# Remove what an earlier launch left behind when it died: the member-credential file of a launch whose processes
+# are gone, and the round's Codex auth.json when no live round holds the direction. Both files hold a login, so
+# they do not wait for a later start of their own launch. This runs before the round's scope starts, so a live
+# round's files stay.
+sweep_launch_files() {
+  local member launch
+  for member in "$HOME_DIR"/improve/launch/*/member-credential; do
+    [[ -f $member ]] || continue
+    launch=$(basename -- "$(dirname -- "$member")")
+    if ! launch_is_referenced "$launch"; then
+      rm -f -- "$member"
+    fi
+  done
+  if ! round_is_live "$direction"; then
+    rm -f -- "$CODEX_HOME_TARGET/auth.json"
+  fi
+}
+
 # The hooks of a round call `charliebot`, and the round's boundary and mock data come from the same
 # commit. The three programs build together from the commit this host's runtime clone runs, in a
 # checkout the runner owns. Their build inputs are the runner's own too: CARGO_HOME, TMPDIR, and the
@@ -418,10 +474,10 @@ record_memory_peak() {
 # Export each round key under the name its tool reads. The review key is CHARLIE_CODE_API_KEY whichever member
 # runs the round. charlie-code takes the review option's model and API base from CHARLIE_CODE_MODEL and
 # CHARLIE_CODE_API_BASE, in the gateway's form: the model with an `openai/` prefix, and the base with `/v1` appended.
-# The member's own key is ANTHROPIC_AUTH_TOKEN when the server sent one; a subscription claude has no such key and
-# reads the host's Claude login, and a codex round runs under CODEX_HOME. The keys sit in the credentials file that
-# prepare wrote, and the launcher keeps them out of the environment file, so this is the one place a key enters the
-# round: the environment, with no argument and no other file that carries it.
+# The member's own credential is its record in the launch's member-credential file: ANTHROPIC_AUTH_TOKEN for a gateway
+# member, CLAUDE_CODE_OAUTH_TOKEN for a subscription claude, and for a codex round IMPROVE_CODEX_AUTH, which becomes the
+# round's auth.json under CODEX_HOME. The review key comes from the credentials file that prepare wrote. The values
+# enter the round's environment here, with no argument and no other file that carries them.
 export_round_credentials() {
   local review_key member_key
   review_key=$(credential_key "$IMPROVE_REVIEW_CREDENTIAL")
@@ -431,15 +487,43 @@ export_round_credentials() {
   export CHARLIE_CODE_MODEL="openai/$IMPROVE_REVIEW_MODEL"
   export CHARLIE_CODE_API_BASE="$IMPROVE_REVIEW_API_BASE/v1"
   if [[ $kind == codex ]]; then
-    export CODEX_HOME=$CODEX_HOME_DIR
+    prepare_codex_home
+    export CODEX_HOME=$CODEX_HOME_TARGET
     return
   fi
-  member_key=$(credential_key ANTHROPIC_AUTH_TOKEN)
-  if [[ -n $member_key ]]; then
+  if member_key=$(member_record_value ANTHROPIC_AUTH_TOKEN); then
     export ANTHROPIC_AUTH_TOKEN=$member_key
   else
-    export CLAUDE_CODE_OAUTH_TOKEN=$(<"$CLAUDE_TOKEN_FILE")
+    export CLAUDE_CODE_OAUTH_TOKEN=$(member_record_value CLAUDE_CODE_OAUTH_TOKEN)
   fi
+}
+
+# A directory the round writes under: a real directory that this runner's user owns. A symbolic link or another
+# owner's directory stops the round before it writes a login.
+check_runner_directory() {
+  local path=$1
+  [[ ! -L $path ]] || fail 1 "$path is a symbolic link, so the round does not write its Codex login under it"
+  [[ -d $path ]] || fail 1 "$path is not a directory"
+  [[ $(stat -c %u -- "$path") == "$(id -u)" ]] || fail 1 "$path is not owned by the runner's user"
+}
+
+# The round's Codex home: the auth.json of this round's member-credential record, mode 600, in a directory this
+# round creates. The directory stays after the round; the round's auth.json goes when the round ends.
+prepare_codex_home() {
+  local auth
+  auth=$(member_record_value IMPROVE_CODEX_AUTH) || fail 1 "the launch holds no Codex login: $MEMBER_CREDENTIAL"
+  check_runner_directory "$ROUND_TMP"
+  if [[ -e $CODEX_HOME_TARGET ]]; then
+    check_runner_directory "$CODEX_HOME_TARGET"
+  else
+    ( umask 077 && mkdir -- "$CODEX_HOME_TARGET" ) || fail 1 "cannot create the Codex home: $CODEX_HOME_TARGET"
+    check_runner_directory "$CODEX_HOME_TARGET"
+  fi
+  # noclobber makes the write create the file: it refuses an existing file or link, so the file is the new one.
+  rm -f -- "$CODEX_HOME_TARGET/auth.json"
+  ( umask 077 && set -C && printf '%s\n' "$auth" >"$CODEX_HOME_TARGET/auth.json" ) \
+    || fail 1 "cannot write the round's Codex login: $CODEX_HOME_TARGET/auth.json"
+  chmod 600 "$CODEX_HOME_TARGET/auth.json"
 }
 
 run_in_scope() {
@@ -473,10 +557,12 @@ check_round_dependencies() {
   [[ -n $(credential_key "$IMPROVE_REVIEW_CREDENTIAL") ]] \
     || fail 7 "the round's credentials file holds no api_key for the review credential $IMPROVE_REVIEW_CREDENTIAL"
   if [[ $kind == claude ]]; then
-    [[ -n $(credential_key ANTHROPIC_AUTH_TOKEN) || -s $CLAUDE_TOKEN_FILE ]] \
-      || fail 7 "the round has no Claude login: $CLAUDE_TOKEN_FILE is missing or empty"
+    { member_record_value ANTHROPIC_AUTH_TOKEN || member_record_value CLAUDE_CODE_OAUTH_TOKEN; } >/dev/null \
+      || fail 7 "the round has no Claude login: $MEMBER_CREDENTIAL holds neither ANTHROPIC_AUTH_TOKEN" \
+        "nor CLAUDE_CODE_OAUTH_TOKEN"
   else
-    [[ -s $CODEX_HOME_DIR/auth.json ]] || fail 7 "the round has no Codex login: $CODEX_HOME_DIR/auth.json is missing or empty"
+    member_record_value IMPROVE_CODEX_AUTH >/dev/null \
+      || fail 7 "the round has no Codex login: $MEMBER_CREDENTIAL holds no IMPROVE_CODEX_AUTH record"
   fi
   [[ ! -e $HOME_DIR/.charliebot ]] \
     || fail 7 "$HOME_DIR/.charliebot exists; the round's profile home is $ROUND_HOME, and no live profile home may sit beside it"
@@ -489,8 +575,14 @@ check_boundary_starts() {
     || fail 7 "the write boundary does not start, so the round does not start: ${output:-improve-sandbox printed no diagnostic}"
 }
 
+# Whether this launch owns the round's Codex auth.json. It turns on right before this launch's scope starts, and off again
+# when systemd-run refuses the scope as already loaded: a refused launch never owns the live round's file.
+OWNS_CODEX_AUTH=0
 cleanup_launch_dir() {
   [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] && rm -rf -- "$LAUNCH_DIR"
+  if (( OWNS_CODEX_AUTH )); then
+    rm -f -- "$CODEX_HOME_TARGET/auth.json"
+  fi
   return 0
 }
 trap cleanup_launch_dir EXIT
@@ -549,18 +641,23 @@ elif systemctl --user is-active --quiet "improve-$direction.scope"; then
     printf '%s stopped the stale scope improve-%s.scope: its round is over\n' "$STDERR_PREFIX" "$direction" >&2
   fi
 fi
+sweep_launch_files
 ensure_mock_home "$commit"
 # The scope bounds the round's memory: the round and every process it starts, the trial server
 # included, die inside it instead of pushing another owner's build into swap. The scope's stderr
 # is held in a file, so a refused scope can be named, and it is printed once the scope ends.
 scope_stderr="$LAUNCH_DIR/scope.stderr"
 scope_status=0
+if [[ $kind == codex ]]; then
+  OWNS_CODEX_AUTH=1
+fi
 systemd-run --user --scope --unit "improve-$direction" \
   -p "MemoryMax=$UNIT_MEMORY_MAX" -p MemorySwapMax=0 -- \
   bash "$LAUNCH_DIR/remote-runner.sh" --in-scope "$launch_id" "$direction" "$kind" 2>"$scope_stderr" || scope_status=$?
 cat -- "$scope_stderr" >&2 || true
 if (( scope_status != 0 )); then
   if grep -q 'already loaded' "$scope_stderr"; then
+    OWNS_CODEX_AUTH=0
     fail 5 "the previous round still runs: unit improve-$direction.scope exists"
   fi
   exit "$scope_status"

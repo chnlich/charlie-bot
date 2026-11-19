@@ -15,6 +15,22 @@ On a hit, the round removes the matched content from the text, rewrites it, and 
 The script sends nothing on a hit, so the posted text is always text that passed.
 `gh pr merge`, `gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round.
 
+## The round's login and the launch's exit codes
+
+The launch forwards the member's login for one round only.
+A subscription member's access token travels to the host with the round, and its refresh token stays on the launching host.
+The host keeps the token in the launch's `member-credential` file, mode 600, and the runner removes that file when the round ends.
+
+- A Claude subscription round receives the token as `CLAUDE_CODE_OAUTH_TOKEN`.
+- A codex round runs under `CODEX_HOME=/tmp/improve-<direction>/codex-home`, whose `auth.json` holds the access token and an empty `refresh_token`.
+  The runner owns that directory: a round neither deletes nor writes it.
+- A gateway member receives its token as `ANTHROPIC_AUTH_TOKEN`.
+
+The launch exits 8 before it contacts the host when the login's access token has less life left than `IMPROVE_TOKEN_MIN_SECONDS`, and its stderr names the login and the minutes left.
+The launch exits 7 when a round dependency is missing, and its stderr names the missing item.
+Neither exit starts a round.
+An exit 8 moves the round to another pool member when the pool has one; an exit 7 does not, because another member would miss the same item.
+
 ## Step 1: set the clone
 
 The whole round runs on the remote host, in the direction's own clone, `~/improve/<direction>/charlie-bot`.
@@ -25,7 +41,7 @@ Two rounds of one direction never run together: the runner's scope name, `improv
 
 Record the round start in UTC with `date -u +%Y%m%dT%H%MZ`; Step 5 names the evidence directory with it.
 
-At round start, delete what an earlier round left under `/tmp/improve-<direction>/`.
+At round start, delete what an earlier round left under `/tmp/improve-<direction>/`, except `codex-home/`: the runner owns it.
 Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
 An earlier round's scratch holds large copies, so the next round removes it before it starts.
 
@@ -319,7 +335,7 @@ When the main run passed, start at step 1 of the outside-diff steps above.
 Delete each completed review's scratch directory, through the exact path `mktemp` returned.
 Copies of session data and other large scratch live only there, and deleting by a rebuilt path risks the wrong directory.
 The evidence directory stays: it holds the round's screenshots and measurement logs.
-An earlier round's leftovers under `/tmp/improve-<direction>/` are deleted at the next round's start (Step 1).
+An earlier round's leftovers under `/tmp/improve-<direction>/` are deleted at the next round's start (Step 1), except `codex-home/`.
 The runner empties `/tmp/improve-<direction>-tmp/` when the next round's scope starts, so a killed round's TMPDIR does not grow.
 
 ## Step 9: report once at the end

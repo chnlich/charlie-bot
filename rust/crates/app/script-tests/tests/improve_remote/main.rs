@@ -9,16 +9,18 @@
 mod world;
 
 use std::fs;
+use std::io::Write as _;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use charliebot_shell_harness as harness;
+use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use world::{
-  CODEX_LOGIN, DIRECTION, GATEWAY_TOKEN, LOGIN_TOKEN, REVIEW_API_BASE, REVIEW_CREDENTIAL, REVIEW_KEY, REVIEW_MODEL,
-  World,
+  CODEX_REFRESH_TOKEN, DIRECTION, GATEWAY_TOKEN, LOGIN_REFRESH_TOKEN, LOGIN_TOKEN, REVIEW_API_BASE, REVIEW_CREDENTIAL,
+  REVIEW_KEY, REVIEW_MODEL, World,
 };
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
@@ -276,11 +278,26 @@ fn the_review_runs_charlie_code_on_the_review_options_model_and_api_base_with_no
   assert_eq!(value("CHARLIE_CODE_API_KEY_SHA256"), Some(review.as_str()), "{}", run.describe());
 }
 
+/// The expiry, in milliseconds since the epoch, of a login whose access token lasts `hours` more hours.
+fn expiry_ms(hours: i64) -> i64 {
+  (world::now_seconds() + hours * 3600) * 1000
+}
+
+/// Write a launch's member-credential file as `--prepare` writes it: each record as `NAME=value` and a NUL.
+fn write_member_credential(launch: &Path, records: &[(&str, &str)]) {
+  let mut bytes = Vec::new();
+  for (name, value) in records {
+    bytes.extend_from_slice(format!("{name}={value}").as_bytes());
+    bytes.push(0);
+  }
+  fs::write(launch.join("member-credential"), bytes).expect("the launch's member credential");
+}
+
 #[test]
 #[ignore = "integration"]
-fn a_subscription_claude_reads_its_login_file_and_gets_no_gateway_token() {
+fn a_subscription_claude_forwards_its_access_token_and_no_refresh_token() {
   let world = World::new();
-  world.write_claude_login();
+  world.write_claude_login(expiry_ms(10));
   let run = world.run(&world.host_login_env());
   assert_eq!(run.code, 0, "{}", run.describe());
   let env = world.claude_environment();
@@ -290,38 +307,71 @@ fn a_subscription_claude_reads_its_login_file_and_gets_no_gateway_token() {
   assert_eq!(value("CLAUDE_CODE_OAUTH_TOKEN_SHA256"), Some(login.as_str()), "{}", run.describe());
   assert_eq!(value("ANTHROPIC_AUTH_TOKEN_SHA256"), Some("unset"), "{}", run.describe());
   assert_eq!(value("CHARLIE_CODE_API_KEY_SHA256"), Some(review.as_str()), "{}", run.describe());
-  // The login file is the only copy of the login on this host and on the remote home.
+  // The access token reaches no ssh argument and no file on either home once the round ends. The refresh token
+  // reaches nothing but the login file on this host.
+  let arguments = world.ssh_arguments();
+  assert!(!arguments.contains(LOGIN_TOKEN), "the access token reached an ssh argument:\n{arguments}");
+  assert!(!arguments.contains(LOGIN_REFRESH_TOKEN), "the refresh token reached an ssh argument:\n{arguments}");
   assert!(
-    !world.ssh_arguments().contains(LOGIN_TOKEN),
-    "the login reached an ssh argument:\n{}",
-    world.ssh_arguments()
+    files_holding(&world, &world.local_home, LOGIN_TOKEN).is_empty(),
+    "the access token reached this host's files"
   );
-  assert!(files_holding(&world, &world.local_home, LOGIN_TOKEN).is_empty(), "the login reached this host's files");
-  assert_eq!(files_holding(&world, &world.remote_home, LOGIN_TOKEN), ["improve/logins/claude-oauth-token"]);
+  assert!(files_holding(&world, &world.remote_home, LOGIN_TOKEN).is_empty(), "the access token outlived the round");
+  assert!(
+    files_holding(&world, &world.remote_home, LOGIN_REFRESH_TOKEN).is_empty(),
+    "the refresh token reached the remote home"
+  );
 }
 
 #[test]
 #[ignore = "integration"]
-fn a_codex_member_runs_under_the_runners_codex_home_with_its_arguments() {
+fn a_codex_member_runs_under_its_round_codex_home_with_the_forwarded_login() {
   let world = World::new();
-  world.write_codex_login();
+  let exp = world::now_seconds() + 200 * 3600;
+  world.write_codex_login(exp);
   let arguments = world.codex_arguments();
   let run = harness::run(&mut world.launcher_command_for(&world.host_login_env(), &arguments));
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.codex_ran(), "the fake codex did not run:\n{}", run.describe());
   assert!(!world.claude_ran(), "a codex member ran claude:\n{}", run.describe());
-  let codex_home = world.remote_home.join(".codex").display().to_string();
+  let codex_home = world.codex_home_directory().display().to_string();
   assert_eq!(world.codex_home_received(), codex_home, "{}", run.describe());
   assert_eq!(world.codex_arguments_received(), arguments[1..].to_vec(), "{}", run.describe());
-  assert_eq!(files_holding(&world, &world.remote_home, CODEX_LOGIN), [".codex/auth.json"]);
+
+  // The login the round's codex found: the host's auth.json with an empty refresh token, mode 600.
+  let found = fs::read_to_string(&world.codex_auth).expect("the login the fake codex found");
+  let mut expected: Value = serde_json::from_str(&world::codex_login_json(exp)).expect("the fixture login is JSON");
+  expected["tokens"]["refresh_token"] = json!("");
+  assert_eq!(
+    serde_json::from_str::<Value>(&found).expect("the forwarded login is JSON"),
+    expected,
+    "{}",
+    run.describe()
+  );
+  assert_eq!(fs::read_to_string(&world.codex_auth_mode).expect("the login's mode").trim(), "600");
+
+  // The round removed its login when it ended, and the refresh token stayed on this host.
+  assert!(!world.codex_home_directory().join("auth.json").exists(), "the round left its login behind");
+  assert!(
+    files_holding(&world, &world.remote_home, CODEX_REFRESH_TOKEN).is_empty(),
+    "the refresh token reached the remote home"
+  );
+  assert!(!world.ssh_arguments().contains(CODEX_REFRESH_TOKEN), "the refresh token reached an ssh argument");
 }
 
 /// The stub improve-sandbox of the focused export checks: it records the digests of the two gateway variables it
 /// receives, so the assertion holds no token value.
-const SCOPE_ENV_STUB: &str = r#"# Fake improve-sandbox: record the digests of the two gateway variables, then exit.
-printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\nCHARLIE_CODE_API_KEY_SHA256=%s\n' \
-  "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)" \
-  "$(printf '%s' "${CHARLIE_CODE_API_KEY-}" | sha256sum | cut -d' ' -f1)" >"$FAKE_SCOPE_ENV"
+const SCOPE_ENV_STUB: &str = r#"# Fake improve-sandbox: record the digests of the two gateway variables, the CODEX_HOME it runs with and the login
+# file under it with that file's mode, then exit.
+{
+  printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\nCHARLIE_CODE_API_KEY_SHA256=%s\nCODEX_HOME=%s\n' \
+    "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)" \
+    "$(printf '%s' "${CHARLIE_CODE_API_KEY-}" | sha256sum | cut -d' ' -f1)" "${CODEX_HOME-unset}"
+} >"$FAKE_SCOPE_ENV"
+if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
+  cp -- "$CODEX_HOME/auth.json" "$FAKE_SCOPE_AUTH"
+  printf 'CODEX_AUTH_MODE=%s\n' "$(stat -c %a -- "$CODEX_HOME/auth.json")" >>"$FAKE_SCOPE_ENV"
+fi
 exit 0
 "#;
 
@@ -329,10 +379,15 @@ exit 0
 const FOCUS_DIRECTION: &str = "focused";
 
 /// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway
-/// variables. The first form exports the launch environment before it starts the scope, so the review
-/// credential's name arrives here as `IMPROVE_REVIEW_CREDENTIAL`. The review model and API base arrive as
+/// variables and the Codex home. The first form exports the launch environment before it starts the scope, so the
+/// review credential's name arrives here as `IMPROVE_REVIEW_CREDENTIAL`. The review model and API base arrive as
 /// `IMPROVE_REVIEW_MODEL` and `IMPROVE_REVIEW_API_BASE`.
 fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
+  run_in_scope_with(world, launch_id, kind, &[])
+}
+
+/// [`run_in_scope`] with `extra` variables set over its environment, such as a `PATH` that names a stub.
+fn run_in_scope_with(world: &World, launch_id: &str, kind: &str, extra: &[(&str, String)]) -> harness::Run {
   let launch = world.remote_home.join("improve/launch").join(launch_id);
   fs::create_dir_all(&launch).expect("the launch directory");
   fs::write(launch.join("args"), "").expect("the launch arguments file");
@@ -345,9 +400,13 @@ fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
   env.insert("HOME".to_string(), world.remote_home.display().to_string());
   env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
   env.insert("FAKE_SCOPE_ENV".to_string(), world.sandbox.root().join("scope-env.txt").display().to_string());
+  env.insert("FAKE_SCOPE_AUTH".to_string(), world.sandbox.root().join("scope-auth.json").display().to_string());
   env.insert("IMPROVE_REVIEW_CREDENTIAL".to_string(), REVIEW_CREDENTIAL.to_string());
   env.insert("IMPROVE_REVIEW_MODEL".to_string(), REVIEW_MODEL.to_string());
   env.insert("IMPROVE_REVIEW_API_BASE".to_string(), REVIEW_API_BASE.to_string());
+  for (name, value) in extra {
+    env.insert((*name).to_string(), value.clone());
+  }
   let mut command = harness::command("bash", &env);
   command.arg(harness::repo_root().join("dev/improve/remote-runner.sh")).args([
     "--in-scope",
@@ -362,18 +421,19 @@ fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
 #[ignore = "integration"]
 fn the_in_scope_runner_selects_each_key_by_its_credential_name() {
   let world = World::new();
-  // The decoy section comes first and the member's section comes before the review's, so a read by line position
-  // exports the decoy, and a read by name exports each key under the tool that reads it.
+  // The decoy section comes first and the review's comes after it, so a read by line position exports the decoy,
+  // and a read by name exports each key under the tool that reads it. The member's token is its own record.
   fs::write(
     world.remote_home.join("improve/home/credentials.yaml"),
-    format!(
-      "synthetic-decoy:\n  api_key: decoy-value\nANTHROPIC_AUTH_TOKEN:\n  api_key: {FOCUSED_MEMBER_TOKEN}\n\
-       {REVIEW_CREDENTIAL}:\n  api_key: {FOCUSED_REVIEW_KEY}\n"
-    ),
+    format!("synthetic-decoy:\n  api_key: decoy-value\n{REVIEW_CREDENTIAL}:\n  api_key: {FOCUSED_REVIEW_KEY}\n"),
   )
   .expect("the fixture credentials file");
+  let launch_id = "20261101T090000Z-1-300";
+  let launch = world.remote_home.join("improve/launch").join(launch_id);
+  fs::create_dir_all(&launch).expect("the launch directory");
+  write_member_credential(&launch, &[("ANTHROPIC_AUTH_TOKEN", FOCUSED_MEMBER_TOKEN)]);
 
-  let run = run_in_scope(&world, "20261101T090000Z-1-300", "claude");
+  let run = run_in_scope(&world, launch_id, "claude");
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let text = fs::read_to_string(world.sandbox.root().join("scope-env.txt"))
@@ -464,18 +524,18 @@ fn a_round_without_its_written_review_key_exits_7_before_inventory_or_scope() {
 
 #[test]
 #[ignore = "integration"]
-fn a_subscription_claude_without_its_login_exits_7_and_starts_no_scope() {
+fn a_subscription_claude_without_its_login_exits_7_before_any_input_is_sent() {
   let world = World::new();
   let run = world.run(&world.host_login_env());
-  assert_refused_before_start(&world, &run, &world.claude_login_file().display().to_string());
+  assert_refused_before_input(&world, &run, &world.claude_login_file().display().to_string());
 }
 
 #[test]
 #[ignore = "integration"]
-fn a_codex_member_without_its_login_exits_7_and_starts_no_scope() {
+fn a_codex_member_without_its_login_exits_7_before_any_input_is_sent() {
   let world = World::new();
   let run = harness::run(&mut world.launcher_command_for(&world.host_login_env(), &world.codex_arguments()));
-  assert_refused_before_start(&world, &run, &world.remote_home.join(".codex/auth.json").display().to_string());
+  assert_refused_before_input(&world, &run, &world.local_home.join(".codex/auth.json").display().to_string());
 }
 
 #[test]
@@ -641,23 +701,358 @@ fn no_key_value_reaches_an_ssh_argument_or_any_file_but_the_credentials_file() {
     "the launcher's own Claude login reached the round"
   );
 
+  // The credentials file holds the review key only. The gateway token lived in the launch's member-credential file,
+  // which the round removed when it ended.
   let credentials = world.remote_home.join("improve/home/credentials.yaml");
   let text = fs::read_to_string(&credentials).expect("the runner wrote the credentials file");
-  assert!(text.contains(GATEWAY_TOKEN) && text.contains(REVIEW_KEY), "a key is absent from {credentials:?}: {text}");
+  assert!(
+    text.contains(REVIEW_KEY) && !text.contains(GATEWAY_TOKEN),
+    "the credentials file holds the wrong keys: {text}"
+  );
   let mode = fs::metadata(&credentials).expect("credentials metadata").permissions().mode() & 0o777;
   assert_eq!(mode, 0o600, "{credentials:?} has mode {mode:o}");
-  for key in [GATEWAY_TOKEN, REVIEW_KEY] {
-    assert!(files_holding(&world, &world.local_home, key).is_empty(), "a key reached this host's files");
-    assert_eq!(
-      files_holding(&world, &world.remote_home, key),
-      ["improve/home/credentials.yaml"],
-      "a key reached a file other than the credentials file"
-    );
-  }
+  assert!(files_holding(&world, &world.local_home, GATEWAY_TOKEN).is_empty(), "a key reached this host's files");
+  assert!(files_holding(&world, &world.local_home, REVIEW_KEY).is_empty(), "a key reached this host's files");
+  assert_eq!(
+    files_holding(&world, &world.remote_home, REVIEW_KEY),
+    ["improve/home/credentials.yaml"],
+    "the review key reached a file other than the credentials file"
+  );
+  assert!(files_holding(&world, &world.remote_home, GATEWAY_TOKEN).is_empty(), "the gateway token outlived the round");
   for key in [world::RUN_TOKEN, world::LOCAL_CLAUDE_OAUTH_TOKEN] {
     assert!(files_holding(&world, &world.local_home, key).is_empty(), "a key reached this host's files");
     assert!(files_holding(&world, &world.remote_home, key).is_empty(), "a key reached the remote host's files");
   }
+}
+
+/// The assertion that the launcher refused a launch with exit 8 before it sent any input: the login's token has less
+/// life than a round needs, and stderr names the login and says no round started.
+fn assert_short_before_input(world: &World, run: &harness::Run, login: &Path) {
+  assert_eq!(run.code, 8, "{}", run.describe());
+  let message = stderr(run);
+  assert!(
+    message.contains(&login.display().to_string()) && message.contains("min of access-token life left"),
+    "the refusal does not name the login and its life: {message}"
+  );
+  assert!(!message.contains("401") && !message.contains("403"), "the refusal names an auth status: {message}");
+  assert!(world.ssh_arguments().is_empty(), "the short login sent input:\n{}", world.ssh_arguments());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_subscription_login_that_does_not_parse_exits_7_naming_the_file_before_any_input() {
+  let world = World::new();
+  fs::create_dir_all(&world.claude_login_dir).expect("the Claude login directory");
+  fs::write(world.claude_login_file(), "{\"claudeAiOauth\":").expect("the truncated login");
+  let run = world.run(&world.host_login_env());
+  assert_refused_before_input(&world, &run, &world.claude_login_file().display().to_string());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_subscription_login_without_a_numeric_expiry_exits_7_naming_the_file_before_any_input() {
+  let world = World::new();
+  fs::create_dir_all(&world.claude_login_dir).expect("the Claude login directory");
+  fs::write(world.claude_login_file(), r#"{"claudeAiOauth":{"accessToken":"synthetic","expiresAt":"soon"}}"#)
+    .expect("the login without a numeric expiry");
+  let run = world.run(&world.host_login_env());
+  assert_refused_before_input(&world, &run, &world.claude_login_file().display().to_string());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_subscription_login_with_less_than_four_hours_of_token_life_exits_8_before_any_input() {
+  let world = World::new();
+  world.write_claude_login(expiry_ms(3));
+  let run = world.run(&world.host_login_env());
+  assert_short_before_input(&world, &run, &world.claude_login_file());
+  assert!(!world.claude_ran(), "a short login started claude:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_codex_login_with_less_than_four_hours_of_token_life_exits_8_before_any_input() {
+  let world = World::new();
+  world.write_codex_login(world::now_seconds() + 2 * 3600);
+  let run = harness::run(&mut world.launcher_command_for(&world.host_login_env(), &world.codex_arguments()));
+  assert_short_before_input(&world, &run, &world.local_home.join(".codex/auth.json"));
+  assert!(!world.codex_ran(), "a short login started codex:\n{}", run.describe());
+}
+
+/// The forwarded form of a codex login whose access token expires at `exp`: the refresh token is the empty string,
+/// as the launch sends it.
+fn forwarded_codex_login(exp: i64) -> String {
+  let mut login: Value = serde_json::from_str(&world::codex_login_json(exp)).expect("the fixture login is JSON");
+  login["tokens"]["refresh_token"] = json!("");
+  login.to_string()
+}
+
+/// Make a codex launch's directory with its member credential holding `forwarded`, the login the launch carries.
+fn codex_in_scope_fixture(world: &World, launch_id: &str, forwarded: &str) {
+  let launch = world.remote_home.join("improve/launch").join(launch_id);
+  fs::create_dir_all(&launch).expect("the launch directory");
+  write_member_credential(&launch, &[("IMPROVE_CODEX_AUTH", forwarded)]);
+  fs::write(
+    world.remote_home.join("improve/home/credentials.yaml"),
+    format!("{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\n"),
+  )
+  .expect("the round's credentials file");
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_in_scope_codex_round_runs_under_a_codex_home_holding_its_login_at_mode_600() {
+  let world = World::new();
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{FOCUS_DIRECTION}"));
+  assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
+  let launch_id = "20261101T090300Z-1-303";
+  let forwarded = forwarded_codex_login(world::now_seconds() + 200 * 3600);
+  codex_in_scope_fixture(&world, launch_id, &forwarded);
+  fs::create_dir(&round_tmp).expect("the round's directory");
+
+  let run = run_in_scope(&world, launch_id, "codex");
+
+  let scope_env = fs::read_to_string(world.sandbox.root().join("scope-env.txt")).unwrap_or_default();
+  let found = fs::read_to_string(world.sandbox.root().join("scope-auth.json")).ok();
+  let _ = fs::remove_dir_all(&round_tmp);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(scope_env.contains(&format!("CODEX_HOME={}\n", round_tmp.join("codex-home").display())), "{scope_env}");
+  assert!(scope_env.contains("CODEX_AUTH_MODE=600\n"), "the login is not mode 600:\n{scope_env}");
+  let found = found.expect("the stub improve-sandbox copied the login");
+  assert_eq!(
+    serde_json::from_str::<Value>(&found).expect("the round's login is JSON"),
+    serde_json::from_str::<Value>(&forwarded).expect("the forwarded login is JSON"),
+    "the round's login is not the forwarded one"
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_codex_round_refuses_a_round_directory_that_is_a_symbolic_link() {
+  let world = World::new();
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{FOCUS_DIRECTION}"));
+  assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
+  let target = world.sandbox.dir("elsewhere");
+  std::os::unix::fs::symlink(&target, &round_tmp).expect("the symbolic link");
+  let launch_id = "20261101T090400Z-1-304";
+  codex_in_scope_fixture(&world, launch_id, &forwarded_codex_login(world::now_seconds() + 200 * 3600));
+
+  let run = run_in_scope(&world, launch_id, "codex");
+
+  let _ = fs::remove_file(&round_tmp);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains(&format!("{} is a symbolic link", round_tmp.display())), "{}", run.describe());
+  assert!(!target.join("codex-home").exists(), "a Codex home was made through the link");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_codex_round_refuses_a_codex_home_that_is_a_symbolic_link() {
+  let world = World::new();
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{FOCUS_DIRECTION}"));
+  assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
+  fs::create_dir(&round_tmp).expect("the round's directory");
+  let target = world.sandbox.dir("elsewhere");
+  let codex_home = round_tmp.join("codex-home");
+  std::os::unix::fs::symlink(&target, &codex_home).expect("the symbolic link");
+  let launch_id = "20261101T090500Z-1-305";
+  codex_in_scope_fixture(&world, launch_id, &forwarded_codex_login(world::now_seconds() + 200 * 3600));
+
+  let run = run_in_scope(&world, launch_id, "codex");
+
+  let _ = fs::remove_dir_all(&round_tmp);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains(&format!("{} is a symbolic link", codex_home.display())), "{}", run.describe());
+  assert!(!target.join("auth.json").exists(), "a login was written through the link");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_codex_round_refuses_a_codex_home_another_user_owns() {
+  let world = World::new();
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{FOCUS_DIRECTION}"));
+  assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
+  fs::create_dir_all(round_tmp.join("codex-home")).expect("the Codex home");
+  // A stat that reports another owner for the Codex home only; the round's own directory keeps its real owner.
+  let stub = world.sandbox.dir("owner-stub");
+  harness::write_executable(
+    &stub.join("stat"),
+    r#"#!/usr/bin/env bash
+# Reports uid 0 for the Codex home, and the real owner for every other path.
+if [[ $* == *codex-home* ]]; then
+  printf '0\n'
+else
+  command -p stat "$@"
+fi
+"#,
+  );
+  let launch_id = "20261101T090600Z-1-306";
+  codex_in_scope_fixture(&world, launch_id, &forwarded_codex_login(world::now_seconds() + 200 * 3600));
+  let path = format!("{}:/usr/local/bin:/usr/bin:/bin", stub.display());
+
+  let run = run_in_scope_with(&world, launch_id, "codex", &[("PATH", path)]);
+
+  let _ = fs::remove_dir_all(&round_tmp);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains("codex-home is not owned by the runner's user"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_duplicate_codex_fire_leaves_the_live_login_and_removes_its_own_launch_directory() {
+  let world = World::new();
+  world.write_codex_login(world::now_seconds() + 200 * 3600);
+  let mut leader = spawn_live_round(&world, DIRECTION);
+  let live_login = world.codex_home_directory().join("auth.json");
+  fs::create_dir_all(live_login.parent().expect("the Codex home")).expect("the live round's Codex home");
+  fs::write(&live_login, "LIVE-CODEX-LOGIN").expect("the live round's login");
+  let mut env = world.host_login_env();
+  env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
+
+  let run = harness::run(&mut world.launcher_command_for(&env, &world.codex_arguments()));
+
+  stop_live_round(&mut leader);
+  let kept = fs::read_to_string(&live_login);
+  let _ = fs::remove_file(&live_login);
+  assert_eq!(run.code, 5, "{}", run.describe());
+  assert_eq!(kept.expect("the live round's login"), "LIVE-CODEX-LOGIN", "the duplicate fire changed the live login");
+  assert!(!world.codex_ran(), "the duplicate fire started codex:\n{}", run.describe());
+  let launches: Vec<String> = fs::read_dir(world.remote_home.join("improve/launch"))
+    .expect("the launch directories")
+    .map(|entry| entry.expect("a launch directory entry").file_name().to_string_lossy().into_owned())
+    .collect();
+  assert_eq!(launches, ["20261103T120000Z-9-900"], "the duplicate fire left its launch directory");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_start_removes_a_dead_launchs_member_credential_and_keeps_a_live_launchs() {
+  let world = World::new();
+  let dead = world.remote_home.join("improve/launch/20261001T000000Z-7-70");
+  fs::create_dir_all(&dead).expect("the dead launch's directory");
+  write_member_credential(&dead, &[("ANTHROPIC_AUTH_TOKEN", "synthetic-dead-launch-token")]);
+  let mut leader = spawn_live_round(&world, "ux");
+  let live = world.remote_home.join("improve/launch/20261103T120000Z-9-900/member-credential");
+  write_member_credential(
+    live.parent().expect("the live launch's directory"),
+    &[("ANTHROPIC_AUTH_TOKEN", "synthetic-live-launch-token")],
+  );
+
+  let run = world.run(&world.env());
+
+  let live_kept = live.exists();
+  stop_live_round(&mut leader);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(!dead.join("member-credential").exists(), "a start kept a dead launch's member credential");
+  assert!(live_kept, "a start removed a live launch's member credential");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_start_removes_an_idle_directions_codex_login_and_keeps_a_live_rounds() {
+  let world = World::new();
+  let login = world.codex_home_directory().join("auth.json");
+  fs::create_dir_all(world.codex_home_directory()).expect("the Codex home");
+  fs::write(&login, "IDLE-CODEX-LOGIN").expect("the idle login");
+
+  let idle_run = world.run(&world.env());
+
+  assert_eq!(idle_run.code, 0, "{}", idle_run.describe());
+  assert!(!login.exists(), "a start kept an idle direction's Codex login");
+
+  let mut leader = spawn_live_round(&world, DIRECTION);
+  fs::write(&login, "LIVE-CODEX-LOGIN").expect("the live round's login");
+  let live_run = world.run(&world.env());
+  let kept = fs::read_to_string(&login);
+  stop_live_round(&mut leader);
+  let _ = fs::remove_file(&login);
+
+  assert_eq!(live_run.code, 0, "{}", live_run.describe());
+  assert_eq!(kept.expect("the live round's login"), "LIVE-CODEX-LOGIN", "a start removed a live round's login");
+}
+
+#[test]
+#[ignore = "integration"]
+fn two_launches_prepared_at_once_keep_their_own_member_records_and_the_review_key() {
+  let world = World::new();
+  let first = "20261101T100000Z-1-400";
+  let second = "20261101T100000Z-2-401";
+  let launches = world.remote_home.join("improve/launch");
+  fs::create_dir_all(launches.join(first)).expect("the first launch directory");
+  fs::create_dir_all(launches.join(second)).expect("the second launch directory");
+  let review = [
+    ("CHARLIE_CODE_API_KEY", REVIEW_KEY),
+    ("IMPROVE_REVIEW_CREDENTIAL", REVIEW_CREDENTIAL),
+    ("IMPROVE_REVIEW_MODEL", REVIEW_MODEL),
+    ("IMPROVE_REVIEW_API_BASE", REVIEW_API_BASE),
+  ];
+  let first_member = ("ANTHROPIC_AUTH_TOKEN", "synthetic-first-gateway-token");
+  let second_member = ("IMPROVE_CODEX_AUTH", "{\"synthetic\":\"second-launch\"}");
+  let children: Vec<_> = [(first, first_member), (second, second_member)]
+    .into_iter()
+    .map(|(launch_id, member)| {
+      let mut records = review.to_vec();
+      records.push(member);
+      prepare_in_background(&world, launch_id, &records)
+    })
+    .collect();
+  for child in children {
+    let output = child.wait_with_output().expect("the prepare call finished");
+    assert!(output.status.success(), "prepare failed: {}", String::from_utf8_lossy(&output.stderr));
+  }
+
+  assert_eq!(
+    member_records(&launches.join(first).join("member-credential")),
+    ["ANTHROPIC_AUTH_TOKEN=synthetic-first-gateway-token"]
+  );
+  assert_eq!(
+    member_records(&launches.join(second).join("member-credential")),
+    ["IMPROVE_CODEX_AUTH={\"synthetic\":\"second-launch\"}"]
+  );
+  let credentials =
+    fs::read_to_string(world.remote_home.join("improve/home/credentials.yaml")).expect("the review credentials file");
+  assert_eq!(credentials, format!("{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\n"));
+  for launch_id in [first, second] {
+    let mode = fs::metadata(launches.join(launch_id).join("member-credential"))
+      .expect("the member credential")
+      .permissions()
+      .mode();
+    assert_eq!(mode & 0o777, 0o600, "the member credential of {launch_id} has mode {mode:o}");
+  }
+}
+
+/// Start `--prepare` for one launch with its records on standard input, and return the running child.
+fn prepare_in_background(world: &World, launch_id: &str, records: &[(&str, &str)]) -> std::process::Child {
+  let mut env = harness::Env::new();
+  env.insert("HOME".to_string(), world.remote_home.display().to_string());
+  env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
+  let mut command = harness::command("bash", &env);
+  command
+    .arg(harness::repo_root().join("dev/improve/remote-runner.sh"))
+    .args(["--prepare", launch_id])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+  let mut child = command.spawn().expect("the prepare call starts");
+  let mut bytes = Vec::new();
+  for (name, value) in records {
+    bytes.extend_from_slice(format!("{name}={value}").as_bytes());
+    bytes.push(0);
+  }
+  if let Some(mut stdin) = child.stdin.take() {
+    stdin.write_all(&bytes).expect("the records reach the prepare call");
+  }
+  child
+}
+
+/// The records of a member-credential file, each as its `NAME=value` text.
+fn member_records(path: &Path) -> Vec<String> {
+  let bytes = fs::read(path).expect("the member credential file");
+  bytes
+    .split(|byte| *byte == 0)
+    .filter(|record| !record.is_empty())
+    .map(|record| String::from_utf8_lossy(record).into_owned())
+    .collect()
 }
 
 #[test]
@@ -1503,7 +1898,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
   let mock_home_barrier = world.sandbox.dir("mock-home-barrier");
   fs::write(
     world.remote_home.join("improve/home/credentials.yaml"),
-    format!("{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\nANTHROPIC_AUTH_TOKEN:\n  api_key: {GATEWAY_TOKEN}\n"),
+    format!("{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\n"),
   )
   .expect("the round's credentials file");
   // The round home keeps the pattern file of the previous round, as the host's does. Both
@@ -1536,6 +1931,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     // The launcher sends the rule script beside the runner, so the runner's clone scan sources it.
     harness::copy_file(&harness::repo_root().join("dev/improve/inflight-files.sh"), &launch.join("inflight-files.sh"));
     fs::write(launch.join("args"), "").expect("the launch arguments");
+    write_member_credential(&launch, &[("ANTHROPIC_AUTH_TOKEN", GATEWAY_TOKEN)]);
     fs::write(
       launch.join("env"),
       format!(

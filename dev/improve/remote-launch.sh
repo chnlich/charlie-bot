@@ -18,6 +18,8 @@
 #     arguments);
 #   - the review option's credential name, model and API base in $CHARLIEBOT_HOME/config.yaml, and that
 #     credential's api_key in $CHARLIEBOT_HOME/credentials.yaml;
+#   - the member's login: the gateway token in the environment, or a subscription member's access token in
+#     $CLAUDE_CONFIG_DIR/.credentials.json, or a codex member's login in ~/.codex/auth.json;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which dev/improve/inflight-files.sh prints here;
 #   - the worker session's metadata.json, for task_parent_id;
@@ -26,13 +28,16 @@
 # It writes only ~/improve/<direction>/evidence/.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file; 3 the host asks for a Tailscale
-# approval or cannot be reached; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
-# of this direction still runs; 6 the round's direction cannot be read; 7 a round dependency is missing, and stderr names
-# it. Codes 3 to 7 start no agent and no scope.
+# approval or cannot be reached; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous
+# round of this direction still runs; 6 the round's direction cannot be read; 7 a round dependency is missing, and
+# stderr names it; 8 the member's login has less access-token life than a round needs, and stderr names the login
+# and its minutes left. Codes 3 to 8 start no agent and no scope, and codes 7 and 8 send nothing to the host.
 #
-# The token values reach the host on ssh's standard input only, so no token value appears in any process command line or
-# in an input file: the runner writes them into ~/improve/home/credentials.yaml, the one file that holds them.
-# CHARLIEBOT_RUN_TOKEN stays here: the remote host has no server that it could call.
+# The member's login is forwarded for one round: a subscription member sends its access token, the one the Claude CLI
+# or Codex reads, and the refresh token stays on this host. The token reaches the host on ssh's standard input only, so
+# no token value appears in any process command line or in an input file. The runner writes it into the launch's
+# member-credential file (mode 600), which the runner removes when the round ends. CHARLIEBOT_RUN_TOKEN stays here:
+# the remote host has no server that it could call.
 set -euo pipefail
 
 readonly STDERR_PREFIX='improve launch:'
@@ -69,6 +74,9 @@ readonly TEMP_ROOT=${TMPDIR:-/tmp}
 [[ $TEMP_ROOT == /* ]] || fail 1 'TMPDIR must be an absolute path'
 [[ -n $REMOTE_HOST ]] || fail 1 'IMPROVE_REMOTE_HOST is not set; it names the improve host in host config'
 [[ -n $SESSION_ID ]] || fail 6 'CHARLIEBOT_SESSION_ID is not set, so the round has no direction'
+# The least access-token life, in seconds, that a round may start with. The server sets it beside IMPROVE_REMOTE_HOST.
+readonly TOKEN_MIN_SECONDS=${IMPROVE_TOKEN_MIN_SECONDS:-}
+[[ $TOKEN_MIN_SECONDS =~ ^[0-9]+$ ]] || fail 1 'IMPROVE_TOKEN_MIN_SECONDS is not set to a whole number of seconds'
 
 # The value of one top-level YAML key in a file, unquoted, without a trailing comment.
 yaml_value() {
@@ -186,6 +194,16 @@ section_api_key() {
   ' "$1"
 }
 
+# Exit 8 when a subscription login's access token lives fewer seconds than a round needs. The first argument is the
+# token's remaining life in seconds, the second names the login file. The message gives whole minutes and no token.
+check_token_life() {
+  local seconds_left=$1 login_file=$2
+  if (( seconds_left < TOKEN_MIN_SECONDS )); then
+    fail 8 "the $kind login in $login_file has $(( seconds_left > 0 ? seconds_left / 60 : 0 )) min of access-token" \
+      "life left; a round needs $(( TOKEN_MIN_SECONDS / 60 )) min. No round started."
+  fi
+}
+
 # ---------- 1. The member kind and the review inputs ----------
 # Every check in this section runs before the first ssh call, so a missing input sends nothing and starts nothing.
 agent_binary=${1-}
@@ -215,7 +233,7 @@ if [[ $kind == claude ]]; then
 fi
 
 # The member token is the gateway token that the server put in the environment. A claude member whose environment
-# names a gateway (ANTHROPIC_BASE_URL) must carry it. A subscription member carries none: its login stays on the host.
+# names a gateway (ANTHROPIC_BASE_URL) must carry it. A subscription member carries none: section 1b reads its login.
 member_token=${ANTHROPIC_AUTH_TOKEN-}
 if [[ $kind == claude && -n ${ANTHROPIC_BASE_URL-} && -z $member_token ]]; then
   fail 7 'the round has no member token: the gateway member sent no ANTHROPIC_AUTH_TOKEN'
@@ -232,6 +250,48 @@ done
 [[ -r $PROFILE_HOME/credentials.yaml ]] || fail 7 "the review credential's file is missing: $PROFILE_HOME/credentials.yaml"
 review_key=$(section_api_key "$PROFILE_HOME/credentials.yaml" "${review[credential]}")
 [[ -n $review_key ]] || fail 7 "credentials.yaml holds no api_key for the review credential ${review[credential]}"
+
+# ---------- 1b. The member's login ----------
+# The member's record goes to the host on the prepare channel. A gateway member sends its token. A subscription member
+# sends its access token, which the host's round uses for its own life only: this section reads it once here, and checks
+# its life before the first ssh call. A login with less life than IMPROVE_TOKEN_MIN_SECONDS exits 8 and sends nothing.
+now=$(date +%s)
+if [[ $kind == codex ]]; then
+  codex_login="$HOME_DIR/.codex/auth.json"
+  [[ -f $codex_login ]] || fail 7 "the round has no Codex login: $codex_login is missing"
+  codex_record=$(jq -ce '
+    if ([.auth_mode, .last_refresh, .tokens.access_token, .tokens.id_token, .tokens.account_id]
+        | all(type == "string" and length > 0))
+    then {auth_mode, OPENAI_API_KEY: null, last_refresh,
+          tokens: {access_token: .tokens.access_token, id_token: .tokens.id_token,
+                   account_id: .tokens.account_id, refresh_token: ""}}
+    else error("the login lacks a field") end' "$codex_login" 2>/dev/null) \
+    || fail 7 "the round's Codex login is not a complete auth.json: $codex_login"
+  codex_expiry=$(jq -r '.tokens.access_token | split(".")[1] | @base64d | fromjson | .exp' "$codex_login" 2>/dev/null) \
+    || codex_expiry=
+  [[ $codex_expiry =~ ^[0-9]+$ ]] || fail 7 "the round's Codex access token names no numeric exp: $codex_login"
+  check_token_life $(( codex_expiry - now )) "$codex_login"
+  member_record="IMPROVE_CODEX_AUTH=$codex_record"
+elif [[ -n $member_token ]]; then
+  member_record="ANTHROPIC_AUTH_TOKEN=$member_token"
+else
+  [[ -n ${CLAUDE_CONFIG_DIR-} ]] \
+    || fail 7 'the round has no Claude login: the subscription member names no CLAUDE_CONFIG_DIR'
+  claude_login="$CLAUDE_CONFIG_DIR/.credentials.json"
+  [[ -f $claude_login ]] || fail 7 "the round has no Claude login: $claude_login is missing"
+  claude_login_fields=$(jq -r '
+    .claudeAiOauth
+    | select((.accessToken | type) == "string" and (.accessToken | length) > 0 and (.expiresAt | type) == "number")
+    | [.accessToken, (.expiresAt | tostring)] | @tsv' "$claude_login" 2>/dev/null) \
+    || fail 7 "the round's Claude login is not readable JSON: $claude_login"
+  [[ -n $claude_login_fields ]] \
+    || fail 7 "the round's Claude login names no access token or no numeric expiresAt: $claude_login"
+  access_token=${claude_login_fields%%$'\t'*}
+  expires_ms=${claude_login_fields#*$'\t'}
+  [[ $expires_ms =~ ^[0-9]+$ ]] || fail 7 "the round's Claude login names no whole-number expiresAt: $claude_login"
+  check_token_life $(( expires_ms / 1000 - now )) "$claude_login"
+  member_record="CLAUDE_CODE_OAUTH_TOKEN=$access_token"
+fi
 
 # ---------- 2. Round preflight ----------
 set +e
@@ -289,10 +349,10 @@ fi
 
 # The forwarded variables: the gateway and model settings of this backend, which start with
 # ANTHROPIC_ or CLAUDE_, and the two Bash timeouts the round needs. CLAUDE_CONFIG_DIR is the
-# worker's own config directory here, CLAUDE_CODE_OAUTH_TOKEN is the host's own login, and
-# CHARLIEBOT_RUN_TOKEN authenticates to a server that the remote host does not have. The tokens
-# travel on the `--prepare` channel instead of this file, so the launch directory holds no token.
-# Values go into a file, never a command line.
+# worker's own config directory here, CLAUDE_CODE_OAUTH_TOKEN is the member's login, which section 1b
+# reads, and CHARLIEBOT_RUN_TOKEN authenticates to a server that the remote host does not have. The
+# member's tokens travel on the `--prepare` channel instead of this file, so the launch directory holds
+# no token. Values go into a file, never a command line.
 forwarded_name() {
   case $1 in
     ANTHROPIC_AUTH_TOKEN | ANTHROPIC_API_KEY) return 1 ;;
@@ -322,18 +382,17 @@ send_status=$?
 set -e
 (( send_status == 0 )) || fail 3 "cannot send the round's inputs to $REMOTE_HOST; approve the connection on the /host-auth page"
 
-# The review key, the review option's settings and the member token, when the server sent one, go to the host on this
-# channel's standard input alone. The runner selects each value by its name and writes the keys into the round's
-# credentials file. The launching shell holds them in memory until this call sends them.
+# The review key, the review option's settings and the member's record from section 1b go to the host on this
+# channel's standard input alone. The runner selects each value by its name: the review key goes into the round's
+# credentials file, and the member's record into the launch's member-credential file. The launching shell holds them
+# in memory until this call sends them.
 records=(
   "CHARLIE_CODE_API_KEY=$review_key"
   "IMPROVE_REVIEW_CREDENTIAL=${review[credential]}"
   "IMPROVE_REVIEW_MODEL=${review[model]}"
   "IMPROVE_REVIEW_API_BASE=${review[api_base]}"
+  "$member_record"
 )
-if [[ -n $member_token ]]; then
-  records+=("ANTHROPIC_AUTH_TOKEN=$member_token")
-fi
 set +e
 printf '%s\0' "${records[@]}" |
   "${SSH[@]}" "$REMOTE_HOST" "bash \$HOME/improve/launch/$launch_id/remote-runner.sh --prepare $launch_id" 3>&-
@@ -342,7 +401,7 @@ set -e
 if (( prepare_status == 255 )); then
   fail 3 "cannot reach the improve host $REMOTE_HOST; approve the connection on the /host-auth page"
 fi
-(( prepare_status == 0 )) || fail 1 "the runner could not write the round's credentials.yaml on $REMOTE_HOST"
+(( prepare_status == 0 )) || fail 1 "the runner could not write the round's credentials on $REMOTE_HOST"
 
 # ---------- 5. Start ----------
 # The heartbeat reads its standard input on the remote side. EOF tells it that the launcher is

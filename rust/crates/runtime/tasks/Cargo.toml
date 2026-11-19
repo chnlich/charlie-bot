@@ -55,4 +55,5 @@ charliebot-store = { workspace = true, features = ["write-faults"] }
 charliebot-tasks = { path = ".", features = ["test-hooks", "test-fixtures"] }
 charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
+shlex.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

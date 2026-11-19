@@ -855,14 +855,15 @@ async fn turn_end_block_continues_through_run_launches() -> anyhow::Result<()> {
   std::fs::create_dir_all(checkout.join("hooks"))?;
   std::fs::create_dir_all(checkout.join("prompts"))?;
   std::fs::write(checkout.join("prompts/web_reply.md"), "Synthetic web reply rules")?;
-  std::fs::write(
-    checkout.join("hooks/turn_end.json"),
-    r#"[
-      {"name":"web-reply","command":"charliebot hook web-reply"},
-      {"name":"web-status","command":"charliebot hook web-status"},
-      {"name":"thread-reply","command":"charliebot hook thread-reply"}
-    ]"#,
-  )?;
+  // The served list runs `charliebot hook <check>` from PATH. This list names the workspace build of that binary by
+  // its path, so the checks the test runs are this tree's, whatever `charliebot` the host's PATH holds or lacks.
+  let charliebot = charliebot_shell_harness::built_binary("charliebot");
+  let charliebot = shlex::try_quote(charliebot.to_str().context("the built charliebot path is UTF-8")?)?;
+  let entries: Vec<Value> = ["web-reply", "web-status", "thread-reply"]
+    .into_iter()
+    .map(|name| json!({"name": name, "command": format!("{charliebot} hook {name}")}))
+    .collect();
+  std::fs::write(checkout.join("hooks/turn_end.json"), serde_json::to_string(&entries)?)?;
 
   let prompt_capture = temp.path().join("backend-prompts.jsonl");
   let script = scripted_process(

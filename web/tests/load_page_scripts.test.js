@@ -94,7 +94,7 @@ test('a featured stylesheet loads once per key, and a failed link retries', asyn
   await retry;
 });
 
-// The sidebar's interaction bundle (sidebar/namespace.js) on the same loader: one stylesheet and five scripts start
+// The sidebar's interaction bundle (sidebar/namespace.js) on the same loader: one stylesheet and four scripts start
 // in one batch, the move picker's file waits for session-actions.js, and a failed file retries alone.
 const NAMESPACE_JS = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'sidebar', 'namespace.js'), 'utf8');
 

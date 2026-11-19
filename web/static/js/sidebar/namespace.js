@@ -124,7 +124,7 @@
     return loadPageScripts('sidebar-interactions:' + path, [path]);
   }
 
-  // The stylesheet and the scripts download in one round trip, and the scripts run in completion order. The interaction
+  // The stylesheet and four of the scripts start together, and the scripts run in completion order. The interaction
   // files read no binding that another one registers at load, with one exception: the move picker reads
   // Sidebar.modalChrome at click time, and session-actions.js registers it when it runs. So the picker's file starts
   // once session-actions.js has run.

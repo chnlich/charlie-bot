@@ -8,15 +8,17 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
 use charliebot_compat::compression::accepts_gzip;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS,
-  RUN_BACKEND, SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
-  TASK_PARENT_ID_FIELD, THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NATIVE_MODEL, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT,
+  ROUND_RATINGS, RUN_BACKEND, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_FIELDS,
+  SCHEDULE_NEXT_RUN, SCHEDULE_TASK, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
+  TASK_PARENT_ID_FIELD, TASK_SCHEDULE_SLOTS, THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::{HAS_PENDING_PLAN_APPROVAL, HAS_WAITING_ITEMS};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -1440,8 +1442,8 @@ pub const SEARCH_FIELDS: [&str; 27] = [
   "group",
   TASK_PARENT_ID_FIELD,
   "backend",
-  "pool_member",
-  "native_model",
+  POOL_MEMBER_FIELD,
+  NATIVE_MODEL,
   THINKING_SINCE,
   HAS_RUNNING_TASKS,
   WORK_STATE,
@@ -1453,11 +1455,11 @@ pub const SEARCH_FIELDS: [&str; 27] = [
   HAS_WAITING_ITEMS,
   SCHEDULE_TASK,
   SCHEDULE_ENABLED,
-  "schedule_cron",
-  "schedule_timezone",
-  "schedule_next_run",
-  "schedule_allow_failure",
-  "task_schedule_slots",
+  SCHEDULE_CRON,
+  SCHEDULE_TIMEZONE,
+  SCHEDULE_NEXT_RUN,
+  SCHEDULE_ALLOW_FAILURE,
+  TASK_SCHEDULE_SLOTS,
 ];
 
 /// The search answer's rows in the sidebar's column form, with exactly [`SEARCH_FIELDS`] as its columns.

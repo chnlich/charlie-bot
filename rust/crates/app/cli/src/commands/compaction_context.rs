@@ -1,14 +1,22 @@
 //! The Claude SessionStart compaction hook.
 //!
-//! `compaction-context --session SID --slot N` re-attaches the skills a manager session read
-//! before Claude compacted: it scans `sessions/<sid>/data/chat_events.jsonl` for Skill, Read and
-//! Bash tool calls that name a skill directory, reads each skill's current `SKILL.md`, splits the
-//! re-attached text into at most six 9,000-character parts at line ends, and prints the slot's
-//! SessionStart hook JSON. The first part opens with the session memo sentence, so the new context
-//! names the memo even when the session read no skill. A skill too large to fit is listed in the
-//! first part instead of being partially attached; a skill whose file no longer resolves is
-//! reported on stderr as unresolved. A failure (unreadable log, invalid event JSON, unreadable
-//! skill) prints the error line and exits 1; a slot past the last part prints only the stderr line.
+//! `compaction-context --session SID --slot N` re-attaches what a session carried before Claude
+//! compacted. A manager session (no `--run`) gets the skills it read: the command scans
+//! `sessions/<sid>/data/chat_events.jsonl` for Skill, Read and Bash tool calls that name a skill
+//! directory, reads each skill's current `SKILL.md`, and splits the re-attached text into at most six
+//! 9,000-character parts at line ends. The first part opens with the session memo sentence, so the new
+//! context names the memo even when the session read no skill. A skill too large to fit is listed in
+//! the first part instead of being partially attached; a skill whose file no longer resolves is
+//! reported on stderr as unresolved.
+//!
+//! A worker run (`--run RID`) gets its task spec first: the first part opens with the task header, then
+//! the text of `sessions/<sid>/data/runs/<rid>/task_spec.md`, then the skills as above. A run that
+//! pinned no task spec gets skills only. A task spec that does not fit in the six parts is cut at a
+//! character, and the last part then carries one line with the restored count, the total count and the
+//! file's full path.
+//!
+//! A failure (unreadable log, invalid event JSON, unreadable skill or task spec) prints the error line
+//! and exits 1; a slot past the last part prints only the stderr line.
 //!
 //! `compaction-context --memo-only` prints the memo sentence alone. The Codex backend installs it
 //! as the SessionStart compact hook of a manager turn, which re-attaches no skills.
@@ -34,6 +42,7 @@ use charliebot_core::session_memo::SESSION_MEMO_NOTE;
 use charliebot_core::text_repr::{is_truthy, str_repr};
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
+use charliebot_store::run_records::RUN_TASK_SPEC_NAME;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use fancy_regex::Regex;
 use serde_json::{Value, json};
@@ -43,6 +52,9 @@ const MAX_PART_CHARS: usize = 9000;
 
 /// The split yields at most one part per slot the SessionStart hook installs.
 const MAX_PARTS: usize = claude_launch::COMPACTION_CONTEXT_SLOTS;
+
+/// The line that opens a worker run's restored task spec.
+const TASK_SPEC_HEADER: &str = "This run's task as delegated, restored after compaction:";
 
 #[derive(Parser)]
 #[command(name = "compaction-context", about = "Restore skills read by a Claude manager session after compaction")]
@@ -56,6 +68,9 @@ struct CompactionContextCli {
   /// Print the session memo sentence alone, with no re-attached skill text
   #[arg(long)]
   memo_only: bool,
+  /// Worker run whose pinned task spec is restored ahead of its skills; a manager's hook names no run
+  #[arg(long)]
+  run: Option<String>,
 }
 
 /// One skill read the log records: the skill name, the concrete `.../skills/<name>/SKILL.md` path
@@ -94,14 +109,14 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   }
   let session = cli.session.as_deref().expect("the skill mode requires a session id");
   let slot = cli.slot.expect("the skill mode requires a slot");
-  if let Err(error) = run(session, slot) {
+  if let Err(error) = run(session, slot, cli.run.as_deref()) {
     eprintln!("session={session} slot={slot} characters=0 skills=- error={error}");
     std::process::exit(1);
   }
   Ok(())
 }
 
-fn run(session: &str, slot: i64) -> Result<(), String> {
+fn run(session: &str, slot: i64, run_id: Option<&str>) -> Result<(), String> {
   let home = home::charliebot_home_dir().map_err(|error| error.to_string())?;
   let repo = repo_root::RepoRoot::new(std::env::var_os(repo_root::REPO_ROOT_ENV))
     .map_err(|error| error.to_string())?
@@ -109,8 +124,12 @@ fn run(session: &str, slot: i64) -> Result<(), String> {
     .to_path_buf();
   let session_dir = config::sessions_dir_in(&home).join(session);
   let events_path = layout::chat_events_path(&session_dir);
+  let restore = match run_id {
+    Some(run_id) => Restore::Task(read_task_spec(&session_dir, run_id)?),
+    None => Restore::Memo,
+  };
   let (skills, unresolved) = load_skill_texts(&events_path, &home, &repo)?;
-  let (parts, included, omitted) = context_parts(&skills)?;
+  let (parts, included, omitted) = context_parts(&restore, &skills)?;
   let part = if slot <= parts.len() as i64 { parts[(slot - 1) as usize].clone() } else { String::new() };
   if !part.is_empty() {
     print!("{}", json_out::render(&hook_json(&part), None));
@@ -699,15 +718,93 @@ fn splitlines_keepends(text: &str) -> Vec<&str> {
   lines
 }
 
-/// The memo sentence and every re-attached skill's block, packed greedily into at most `MAX_PARTS` parts of at most
-/// `MAX_PART_CHARS` characters, split only at line ends. `None` when a line does not fit a part.
-fn partition(skills: &[&SkillText], omitted: &[&SkillText]) -> Option<Vec<String>> {
+/// What a compaction restores before the skills: the memo sentence for a manager session, or a worker run's
+/// task spec.
+enum Restore {
+  Memo,
+  /// The run's pinned task spec, or `None` when the run pinned none.
+  Task(Option<TaskSpec>),
+}
+
+/// A worker run's pinned task spec: its text, and the file it is read from.
+struct TaskSpec {
+  text: String,
+  path: PathBuf,
+}
+
+impl Restore {
+  /// The text the first part opens with. The skills follow it.
+  fn lead(&self, skills: &[SkillText]) -> Result<String, String> {
+    match self {
+      Restore::Memo => Ok(format!("{SESSION_MEMO_NOTE}\n")),
+      Restore::Task(None) => Ok(String::new()),
+      Restore::Task(Some(spec)) => task_lead(spec, skills),
+    }
+  }
+}
+
+/// The run's task spec file, or `None` when the run pinned none.
+fn read_task_spec(session_dir: &Path, run_id: &str) -> Result<Option<TaskSpec>, String> {
+  let path = layout::runs_dir(session_dir).join(run_id).join(RUN_TASK_SPEC_NAME);
+  let bytes = match std::fs::read(&path) {
+    Ok(bytes) => bytes,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(charliebot_core::os_error::text(&error, &str_repr(&paths::display(&path)))),
+  };
+  Ok(Some(TaskSpec { text: decode_utf8(&bytes)?, path }))
+}
+
+/// The task lead: the header, then the first `restored` characters of the task spec, then the note line when
+/// `restored` is short of the whole text. The lead keeps room for the name line of every skill, so a skill left
+/// out still has its name in the output.
+fn task_lead(spec: &TaskSpec, skills: &[SkillText]) -> Result<String, String> {
+  let total = spec.text.chars().count();
+  let all_skills: Vec<&SkillText> = skills.iter().collect();
+  let packs = |restored: usize| partition(&task_text(spec, restored), &[], &all_skills).is_some();
+  if packs(total) {
+    return Ok(task_text(spec, total));
+  }
+  if !packs(0) {
+    return Err("the task spec header and the skill names exceed the six parts".to_string());
+  }
+  // `packs(low)` holds and `packs(high)` does not; the search narrows the cut to the largest count that packs.
+  let (mut low, mut high) = (0, total);
+  while high - low > 1 {
+    let middle = (low + high) / 2;
+    if packs(middle) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  Ok(task_text(spec, low))
+}
+
+/// The header, the first `restored` characters of the task spec, and the note line when the text is cut.
+fn task_text(spec: &TaskSpec, restored: usize) -> String {
+  let total = spec.text.chars().count();
+  let mut text = format!("{TASK_SPEC_HEADER}\n{}", spec.text.chars().take(restored).collect::<String>());
+  if restored < total {
+    text.push_str(&format!(
+      "\nRestored {restored} of {total} characters of the task spec. The full text is at {}.\n",
+      spec.path.display()
+    ));
+  } else if !text.ends_with('\n') {
+    text.push('\n');
+  }
+  text
+}
+
+/// The lead text, then the skill lines, packed greedily into at most `MAX_PARTS` parts of at most `MAX_PART_CHARS`
+/// characters. The lead splits at any character; the skill lines split only at line ends. `None` when a skill line
+/// does not fit a part, or when the parts run out.
+fn partition(lead: &str, skills: &[&SkillText], omitted: &[&SkillText]) -> Option<Vec<String>> {
   let names = if skills.is_empty() {
     "none".to_string()
   } else {
     skills.iter().map(|skill| format!("{} ({})", skill.name, skill.path.display())).collect::<Vec<_>>().join(", ")
   };
-  let mut lines = vec![format!("{SESSION_MEMO_NOTE}\n")];
+  let mut lines = Vec::new();
   if !skills.is_empty() || !omitted.is_empty() {
     lines.push(format!("Re-attached skills: {names}\n"));
     if !omitted.is_empty() {
@@ -719,21 +816,58 @@ fn partition(skills: &[&SkillText], omitted: &[&SkillText]) -> Option<Vec<String
     }
   }
 
-  let mut parts = vec![String::new()];
+  let mut slots = Slots::new();
+  for character in lead.chars() {
+    slots.push_char(character)?;
+  }
   for line in &lines {
+    slots.push_line(line)?;
+  }
+  Some(slots.parts)
+}
+
+/// The output parts being filled in order: each holds at most `MAX_PART_CHARS` characters, and at most `MAX_PARTS`
+/// parts exist.
+struct Slots {
+  parts: Vec<String>,
+  filled: usize,
+}
+
+impl Slots {
+  fn new() -> Self {
+    Self { parts: vec![String::new()], filled: 0 }
+  }
+
+  fn push_char(&mut self, character: char) -> Option<()> {
+    if self.filled == MAX_PART_CHARS {
+      self.open_next()?;
+    }
+    self.parts.last_mut().expect("parts is never empty").push(character);
+    self.filled += 1;
+    Some(())
+  }
+
+  fn push_line(&mut self, line: &str) -> Option<()> {
     let length = line.chars().count();
     if length > MAX_PART_CHARS {
       return None;
     }
-    if parts.last().expect("parts is never empty").chars().count() + length > MAX_PART_CHARS {
-      if parts.len() == MAX_PARTS {
-        return None;
-      }
-      parts.push(String::new());
+    if self.filled + length > MAX_PART_CHARS {
+      self.open_next()?;
     }
-    parts.last_mut().expect("parts is never empty").push_str(line);
+    self.parts.last_mut().expect("parts is never empty").push_str(line);
+    self.filled += length;
+    Some(())
   }
-  Some(parts)
+
+  fn open_next(&mut self) -> Option<()> {
+    if self.parts.len() == MAX_PARTS {
+      return None;
+    }
+    self.parts.push(String::new());
+    self.filled = 0;
+    Some(())
+  }
 }
 
 /// The greedy fit, then the last included skills drop out until the remainder packs. The name and
@@ -741,23 +875,24 @@ fn partition(skills: &[&SkillText], omitted: &[&SkillText]) -> Option<Vec<String
 /// The answer: the parts, the skills they re-attach, and the skills left out.
 type ContextParts = (Vec<String>, Vec<SkillText>, Vec<SkillText>);
 
-fn context_parts(skills: &[SkillText]) -> Result<ContextParts, String> {
+fn context_parts(restore: &Restore, skills: &[SkillText]) -> Result<ContextParts, String> {
+  let lead = restore.lead(skills)?;
   let mut included: Vec<SkillText> = Vec::new();
   let mut omitted: Vec<SkillText> = Vec::new();
   for skill in skills {
     let mut trial: Vec<&SkillText> = included.iter().collect();
     trial.push(skill);
-    if partition(&trial, &omitted.iter().collect::<Vec<_>>()).is_none() {
+    if partition(&lead, &trial, &omitted.iter().collect::<Vec<_>>()).is_none() {
       omitted.push(skill.clone());
     } else {
       included.push(skill.clone());
     }
   }
-  let mut parts = partition(&included.iter().collect::<Vec<_>>(), &omitted.iter().collect::<Vec<_>>());
+  let mut parts = partition(&lead, &included.iter().collect::<Vec<_>>(), &omitted.iter().collect::<Vec<_>>());
   while parts.is_none() && !included.is_empty() {
     let last = included.pop().expect("included is not empty");
     omitted.push(last);
-    parts = partition(&included.iter().collect::<Vec<_>>(), &omitted.iter().collect::<Vec<_>>());
+    parts = partition(&lead, &included.iter().collect::<Vec<_>>(), &omitted.iter().collect::<Vec<_>>());
   }
   let parts = parts.ok_or_else(|| "the skill name and path list exceeds the 9,000-character first part".to_string())?;
   Ok((parts, included, omitted))
@@ -869,7 +1004,7 @@ mod tests {
     let path = temp.path().join("skills").join("one").join("SKILL.md");
     let skills = [skill_text("one", &path, "Skill text\n")];
 
-    let (parts, _included, _omitted) = context_parts(&skills).unwrap();
+    let (parts, _included, _omitted) = context_parts(&Restore::Memo, &skills).unwrap();
 
     assert!(parts[0].starts_with(&format!("{SESSION_MEMO_NOTE}\n")), "{}", parts[0]);
     assert!(parts[0].contains("Re-attached skills: one ("));
@@ -878,11 +1013,50 @@ mod tests {
 
   #[test]
   fn test_first_part_opens_with_the_memo_sentence_without_a_skill() {
-    let (parts, included, omitted) = context_parts(&[]).unwrap();
+    let (parts, included, omitted) = context_parts(&Restore::Memo, &[]).unwrap();
 
     assert_eq!(parts, [format!("{SESSION_MEMO_NOTE}\n")]);
     assert!(included.is_empty());
     assert!(omitted.is_empty());
+  }
+
+  /// A worker's first part opens with the task header and carries the whole 2,583-character task spec in one part,
+  /// ahead of the skills.
+  #[test]
+  fn test_worker_first_part_opens_with_the_task_spec_before_the_skills() {
+    let temp = tempfile::tempdir().unwrap();
+    let spec_text = format!("{{\"goal\":\"{}\"}}", "g".repeat(2583 - 11));
+    let spec = TaskSpec { text: spec_text.clone(), path: temp.path().join("task_spec.md") };
+    let skill = skill_text("one", &temp.path().join("skills").join("one").join("SKILL.md"), "Skill text\n");
+
+    let (parts, included, omitted) = context_parts(&Restore::Task(Some(spec)), &[skill]).unwrap();
+
+    assert_eq!(parts.len(), 1, "{parts:?}");
+    assert!(parts[0].starts_with(&format!("{TASK_SPEC_HEADER}\n{spec_text}\n")), "{}", parts[0]);
+    assert!(!parts[0].contains("Restored "), "{}", parts[0]);
+    assert_eq!(included.len(), 1);
+    assert!(omitted.is_empty());
+  }
+
+  /// A 60,000-character task spec fills all six parts, and the last part names the restored count, the total count
+  /// and the file's path. The restored count is the characters of the spec in the parts.
+  #[test]
+  fn test_worker_task_spec_past_six_parts_is_cut_and_the_last_part_names_the_count_and_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("task_spec.md");
+    // A character that the header, the note and the temporary path never hold, so counting it counts the spec.
+    let spec = TaskSpec { text: "é".repeat(60_000), path: path.clone() };
+
+    let (parts, _included, _omitted) = context_parts(&Restore::Task(Some(spec)), &[]).unwrap();
+
+    assert_eq!(parts.len(), MAX_PARTS);
+    assert!(parts.iter().all(|part| part.chars().count() <= MAX_PART_CHARS));
+    let restored = parts.concat().matches('é').count();
+    assert!(restored > 50_000 && restored < 60_000, "restored {restored}");
+    let last = &parts[MAX_PARTS - 1];
+    assert!(last.contains(&restored.to_string()) && last.contains("60000"), "{last}");
+    assert!(last.contains(&path.display().to_string()), "{last}");
+    assert!(!parts[0].contains("60000"), "{}", parts[0]);
   }
 
   #[test]
@@ -894,7 +1068,7 @@ mod tests {
       &format!("{}\n{}\n", "A".repeat(4499), "B".repeat(4499)),
     );
 
-    let (parts, included, omitted) = context_parts(&[skill]).unwrap();
+    let (parts, included, omitted) = context_parts(&Restore::Memo, &[skill]).unwrap();
 
     assert_eq!(parts.len(), 2);
     assert!(parts.iter().all(|part| part.chars().count() <= 9000));
@@ -920,7 +1094,7 @@ mod tests {
       }))
       .collect();
 
-    let (parts, included, omitted) = context_parts(&skills).unwrap();
+    let (parts, included, omitted) = context_parts(&Restore::Memo, &skills).unwrap();
     let rendered = parts.join("");
 
     assert!(parts.len() <= 6);

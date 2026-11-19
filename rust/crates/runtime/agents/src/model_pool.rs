@@ -1072,8 +1072,11 @@ backends:
   async fn with_no_selectable_subscription_the_pay_as_you_go_members_rotate() {
     let (_home, features) = fixture_with(TIER_CONFIG);
     let availability = availability(&features);
+    let cfg = loaded_cfg(&features);
     for subscription in ["chatgpt", "claude-sub", "near"] {
-      availability.record(subscription, None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+      availability
+        .record(&cfg, &features.registry, subscription, None, backend_availability::REASON_QUOTA_ERROR, "spent")
+        .unwrap();
     }
     let picks = (0..4).map(|_| pick(&features, "cheap", &[]).unwrap()).collect::<Vec<_>>();
     assert_eq!(picks, ["payg-a", "payg-b", "payg-c", "payg-a"]);
@@ -1088,7 +1091,16 @@ backends:
     assert_eq!(picks, ["chatgpt", "claude-sub", "chatgpt"]);
 
     // With every subscription gone, only the pay-as-you-go member that is neither cooling nor excluded takes turns.
-    availability(&features).record("payg-b", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "payg-b",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     let excluded = ["chatgpt", "claude-sub", "near", "payg-c"];
     assert_eq!(pick(&features, "cheap", &excluded), Some("payg-a".to_string()));
     assert_eq!(pick(&features, "cheap", &excluded), Some("payg-a".to_string()));

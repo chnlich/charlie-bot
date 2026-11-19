@@ -73,6 +73,10 @@ pub const WORK_STATE: &str = "work_state";
 /// The field holding a task's lifecycle state: the task detail, the run-delivery event and the close readback carry
 /// it. The store's fact checkpoint and the session routes import this name instead of each spelling it.
 pub const TASK_STATE: &str = "task_state";
+/// The task detail's field holding the prompt rules that apply to the task: its subtree and node refs and the count of
+/// descendants the subtree rule reaches. The store's task detail and the session rename response carry the same name,
+/// so it is spelled once, here.
+pub const PROMPT_RULES_FIELD: &str = "prompt_rules";
 /// The session-metadata field holding the document's schema version: `2` for every session a current server writes.
 /// The store's declared-field lists, the session listing's page-row field drop and the mock home's session seed carry
 /// the same name, so it is spelled once, here.

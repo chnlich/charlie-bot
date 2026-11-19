@@ -6,6 +6,8 @@
 // Environment:
 //   PLAYWRIGHT_MODULE      the playwright module to load (default: 'playwright', resolved from this directory)
 //   CHROME_BIN             the Chrome binary to launch (default: the binary Playwright bundles)
+//   CHROME_TMPDIR          the TMPDIR Chrome runs with (default: the inherited one). Under a trial, set it to a short
+//                          directory: the trial's TMPDIR is long, and Chrome's socket path must stay under 108 bytes.
 //   CHARLIEBOT_ACCESS_KEY  the server's access key, when the server asks for one. It is sent to the server and never
 //                          written to the output.
 //   WARM_UP                1 (default) sends one untimed search per query term before its timed repeats. 0 times the
@@ -124,7 +126,16 @@ async function waitForClearRequests(page, net, mark, timeoutMs = 120000) {
 async function openPage(baseUrl, { accessKey = '', sessionId = '' } = {}) {
   const base = new URL(baseUrl);
   const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, headless: true });
+  // Chrome's process-singleton socket lives under TMPDIR, and a sockaddr_un path is short. A trial points TMPDIR into
+  // its tree, so CHROME_TMPDIR names a short directory for Chrome. The flags match the bench's Chrome (dev/poor-network).
+  const env = { ...process.env };
+  if (process.env.CHROME_TMPDIR) env.TMPDIR = process.env.CHROME_TMPDIR;
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROME_BIN || undefined,
+    headless: true,
+    env,
+    args: ['--no-sandbox'],
+  });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   if (accessKey) {
     await context.addCookies([{

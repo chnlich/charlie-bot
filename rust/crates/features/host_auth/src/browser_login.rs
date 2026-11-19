@@ -11,7 +11,7 @@
 //! Only [`start_login`] and [`probe_link`] start a login command. [`probe_link`] ends its command as soon as the link
 //! prints or its timeout passes, and never runs a readback or records an approval. The status table otherwise runs the
 //! checks alone, through [`check_readback`] and the host probe. An ended attempt is recorded in `host_auth.json` by
-//! `login_state`; a live attempt lives in memory, in the one map of live attempts keyed by login name.
+//! `login_state`. A live attempt lives in memory, in the one map of live attempts keyed by login name.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
@@ -363,7 +363,7 @@ async fn await_link(link: &mut watch::Receiver<LinkState>) -> Result<String, Sta
 
 /// `give_input`: write one value and its newline to the login that waits for it, then drop the sink. A login with an
 /// `input_prompt` keeps that sink open while it waits for approval: its stdin pipe, or its terminal when `use_pty` is
-/// set. The value is written once; a second value finds no sink and is refused.
+/// set. The value is written once. A second value finds no sink and is refused.
 pub async fn give_input(name: &str, value: String) -> Result<(), InputRefused> {
   let core = {
     let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
@@ -577,7 +577,7 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
 }
 
 /// The link a started attempt printed, recorded as a pass: an earlier link-probe failure does not outlive a start that
-/// worked. A failed record is logged; the attempt goes on.
+/// worked. A failed record is logged. The attempt goes on.
 async fn record_link_pass(core: &Arc<Mutex<AttemptCore>>) {
   let (paths, name) = {
     let state = core.lock().expect("the attempt record lock is never poisoned");
@@ -672,7 +672,7 @@ async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut Lo
 }
 
 /// The approval of a login that exited 0, recorded before its check runs, so the approval shows even when the check is
-/// slow. A failed record is logged; the attempt goes on.
+/// slow. A failed record is logged. The attempt goes on.
 async fn record_approval(core: &Arc<Mutex<AttemptCore>>) {
   let (paths, name) = {
     let state = core.lock().expect("the attempt record lock is never poisoned");

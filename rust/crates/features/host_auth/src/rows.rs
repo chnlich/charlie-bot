@@ -291,7 +291,7 @@ async fn probe_waiting_login(state_path: &Path, login: &BrowserLoginConfig) -> a
 }
 
 /// The row's JSON. The page renders its first paint from these fields, and the row route answers them on each refresh.
-/// Every text field is ready to show; a field the row lacks is an empty string, a null, or `false`.
+/// Every text field is ready to show. A field the row lacks is an empty string, a null, or `false`.
 fn row_json(row: &Row, now: OffsetDateTime) -> anyhow::Result<Value> {
   let lifetime = row.login.and_then(|login| login.lifetime_sec);
   let (expiry, expiry_soon) = expiry_text(lifetime, row.approved_at.as_deref(), row.state, now)?;

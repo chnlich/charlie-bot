@@ -213,9 +213,9 @@ pub fn clear_link_match(state: &mut State, name: &str) -> anyhow::Result<()> {
   Ok(())
 }
 
-/// A finished attempt: its record, and the status its outcome leaves the login with. A host-bound login's status follows
-/// its outcome only when the start failed or the login approved again; its availability stays the host's. A replaced
-/// attempt records nothing: the attempt that replaced it records its own.
+/// A finished attempt: its record, and the status its outcome leaves the login with. A host-bound login's
+/// status follows its outcome only when the start failed or the login approved again. Its availability
+/// stays the host's. A replaced attempt records nothing: the attempt that replaced it records its own.
 pub async fn record_attempt(state_path: &Path, name: &str, bound: bool, attempt: &AttemptRecord) -> anyhow::Result<()> {
   if attempt.outcome == Outcome::Replaced {
     return Ok(());

@@ -286,10 +286,7 @@ mod tests {
       inject_artifact_ui("<body>one</body>tail</body>", "S", "v1", "v2", icon_script),
       format!("<body>one</body>tail{tags}\n</body>")
     );
-    assert_eq!(
-      inject_artifact_ui("<p>page</p>", "S", "v1", "v2", icon_script),
-      format!("<p>page</p>\n{tags}\n")
-    );
+    assert_eq!(inject_artifact_ui("<p>page</p>", "S", "v1", "v2", icon_script), format!("<p>page</p>\n{tags}\n"));
   }
 
   #[test]

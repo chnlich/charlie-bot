@@ -55,7 +55,7 @@ flowchart TB
 ### Web UI
 
 - Streaming chat over WebSockets, with a sessions sidebar that has groups, filters, and search; star / archive / fork sessions
-- Per-session reading views: For you shows the replies addressed to you, and Status shows the session's Goal, Now and Waiting on you items
+- Per-session reading views: For you shows the replies addressed to you, and Status shows the session's Goal, Remaining, Now and Waiting on you items
 - Worker (thread) and plan panels; HTML artifact viewer with line-anchored comments; GitHub-style diff viewer
 - Perfetto trace viewer, built-in web terminal (tmux), and the explain panel
 - Voice input with online speech transcription (Gemini and Muse backends)

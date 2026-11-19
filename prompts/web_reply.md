@@ -1,7 +1,7 @@
 # Web reply and session status
 
 The web reply is the message that the user reads in the For-you view of this session.
-The session status is the Goal, Now and Waiting on you of this session, as the Status Block section defines them.
+The session status is the Goal, Remaining, Now and Waiting on you of this session, as the Status Block section defines them.
 The Status view of the session page shows the session status.
 The Everything view shows the full output of each turn.
 The For-you view shows your web replies and hides the rest of your turn output.
@@ -35,7 +35,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## When to set the session status
 
-- At the end of each turn, run one status command. When Goal, Now or Waiting on you differs from the state that this
+- At the end of each turn, run one status command. When Goal, Remaining, Now or Waiting on you differs from the state that this
   turn read back, run `charliebot web status set`. Otherwise, run `charliebot web status confirm`.
 - The server reminds the session once when a turn ends without either command.
 - A child session keeps its own progress in its own **Now**.
@@ -47,6 +47,18 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When a done click leaves its item unsettled, keep the item and write the reason in its context with a status set.
 - When the session's goal is delivered and no Waiting on you item remains, archive your task as
   prompts/task_manager.md says. The user's next message reopens the task.
+
+## Remaining
+
+Remaining lists the open milestones between the session and its Goal, so the user reads the distance to the Goal without asking.
+
+- While no close request is pending, a web session with a Goal holds at least one Remaining item.
+- `web status set` and `confirm` store a status that has a Goal and no Remaining, and echo `remaining_missing: true`. When a status command echoes `remaining_missing: true`, set `remaining` in the same turn.
+- Write each open milestone as one item, in the order the work reaches it. The last item is the Goal's completion condition.
+- In each item, write its state and what it waits on: a job, a worker, a child session or the user.
+- Date an item only from a basis: a user deadline, a scheduled run or a dated prerequisite. Otherwise, state in the item that it has no date.
+- When this turn's events show a milestone change, set `remaining` again in this turn. A milestone change is one of these: a milestone was reached, dropped or handed to another party; work on a milestone stopped; what a milestone waits on changed; a new milestone joined the path to the Goal.
+- In the turn that delivers the Goal, send the close request, then set `remaining` to an empty list.
 
 ## Form
 
@@ -110,9 +122,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When the readback sets `over_budget`, keep the posted reply as the answer of this turn.
 - Write the changed session status fields to a JSON file.
   Each field that the file leaves out keeps its stored value.
-- The JSON object takes any of the keys `goal`, `now` and `waiting`.
+- The JSON object takes any of the keys `goal`, `now`, `waiting` and `remaining`.
+- `remaining` is a list of strings, one per open milestone.
 - `waiting` is a list of objects with the keys `text`, `context` and `link`.
-- When the file holds `waiting`, run `charliebot web status show` right before you write the file, and write the
+- When the file holds `waiting` or `remaining`, run `charliebot web status show` right before you write the file, and write the
   whole list from it: each item that stays, and each new or changed item. Each set replaces the whole list.
 - Then run `charliebot web status set --file <path>`.
 - The command refuses a link to an older version of a plan, or to a closed plan, and names the newest file.
@@ -127,7 +140,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
   - When an item asks about a reversible step that Action Boundaries in `prompts/master.md` allow directly, remove
     the item, carry out the step, and state how to undo it in the web reply.
 - The command stores the status once the reader has read every item as it stands, and prints the stored session
-  status with `now_chars` and `now_over_budget`.
+  status with `now_chars`, `now_over_budget` and `remaining_missing`.
 - `charliebot web status confirm` records the confirmation and cold reads nothing. It refuses a stale stored plan
   link and names the newest file.
 - After a context reset, read the session status with `charliebot web status show`.

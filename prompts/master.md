@@ -84,11 +84,13 @@ An e2e handover is an approval item of its own, next to the pre take off in `ski
 ## Status Block
 
 The user returns to each session after a gap.
-The session status lets the user resume at a glance. It has three fields:
+The session status lets the user resume at a glance. It has four fields:
 
 - **Goal**: the session's one goal, in one sentence that states its boundary, any e2e handover that covers it with
   the user message that gave it, and its completion conditions when it has any. When your parent wrote the approver,
   the boundary and the handover in your first message, the Goal keeps them.
+- **Remaining**: the open milestones between the session and its Goal, in the order the work reaches them.
+  `prompts/web_reply.md` holds its form.
 - **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
 - **Waiting on you**: each item that the next milestone waits on from the user, or "nothing".
 

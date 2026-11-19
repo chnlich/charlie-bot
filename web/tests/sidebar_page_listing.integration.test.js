@@ -149,7 +149,7 @@ test('a stored page listing keeps its first-screen counts and Show all toggle', 
   await flush();
 
   const html = nav.innerHTML;
-  assert.deepEqual(fetchRequests, ['/api/sessions/?compact=1']);
+  assert.deepEqual(fetchRequests, ['/api/sessions/?compact=1&screen=1&active=row-5']);
   assert.deepEqual(rowIds(html), ['row-1', 'row-2', 'row-3', 'row-4', 'row-5']);
   assert.match(html, /text-slate-400 ml-auto">8</, 'the stored first screen carries the whole group count');
   assert.match(html, /session-group-limit-toggle/);

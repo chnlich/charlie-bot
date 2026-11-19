@@ -18,10 +18,10 @@ use super::sqlite::open_read_only;
 /// The report line of the store's free pages.
 const FREELIST: &str = "opencode-freelist";
 
-/// The `timeout` of the vacuum's connection, until its busy_timeout pragma (`timeouts.SQLITE_LOCK_WAIT_SECONDS`).
+/// The `timeout` of the vacuum's connection, until its busy_timeout pragma.
 const SQLITE_LOCK_WAIT_SECONDS: Duration = Duration::from_secs(5);
 
-/// The `busy_timeout` of the vacuum, in milliseconds (`timeouts.SQLITE_LOCK_WAIT_MS`).
+/// The `busy_timeout` of the vacuum, in milliseconds.
 const SQLITE_LOCK_WAIT_MS: i64 = 2000;
 
 /// The argv of a live writer. CharlieBot starts an opencode server with exactly this argv.
@@ -40,7 +40,7 @@ pub fn sweep(db: &Path, proc_root: &Path, scope: &SweepScope) -> anyhow::Result<
 }
 
 /// The vacuum of the store, refused while live writers remain unless `force`. A refusal is an error, raised before the
-/// store is touched for vacuum purposes (`_vacuum_opencode_store`).
+/// store is touched for vacuum purposes.
 fn vacuum_store(db: &Path, proc_root: &Path, force: bool) -> anyhow::Result<()> {
   let writers = count_writers(proc_root)?;
   if writers > 0 && !force {
@@ -80,7 +80,7 @@ fn open_for_vacuum(db: &Path) -> rusqlite::Result<Connection> {
 }
 
 /// The vacuum that returns the freed pages to the filesystem. Without `force`, a store with no freelist is left as
-/// it is (`_vacuum_opencode_db`).
+/// it is.
 fn vacuum_db(connection: &Connection, force: bool) -> rusqlite::Result<()> {
   connection.pragma_update(None, "busy_timeout", SQLITE_LOCK_WAIT_MS)?;
   if !force && connection.query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))? == 0 {
@@ -89,7 +89,7 @@ fn vacuum_db(connection: &Connection, force: bool) -> rusqlite::Result<()> {
   connection.execute_batch("VACUUM")
 }
 
-/// The live `opencode serve` processes under `proc_root`, not counting this process (`_count_opencode_writers`).
+/// The live `opencode serve` processes under `proc_root`, not counting this process.
 fn count_writers(proc_root: &Path) -> anyhow::Result<usize> {
   let own_pid = std::process::id();
   let mut count = 0;
@@ -124,8 +124,8 @@ fn contains_serve(cmdline: &[u8]) -> bool {
   memmem::find(&spaced, SERVE_CMDLINE).is_some()
 }
 
-/// The store's free pages in bytes, which a manual vacuum hands back (`_opencode_freelist_bytes`). A failed read is
-/// logged and reads as no free pages.
+/// The store's free pages in bytes, which a manual vacuum hands back. A failed read is logged and reads as no free
+/// pages.
 fn freelist_bytes(db: &Path) -> u64 {
   if !db.exists() {
     return 0;
@@ -139,7 +139,7 @@ fn freelist_bytes(db: &Path) -> u64 {
   }
 }
 
-/// One integer pragma of the store, or `None` after a logged failure (`_opencode_query`).
+/// One integer pragma of the store, or `None` after a logged failure.
 fn pragma_value(db: &Path, pragma: &str) -> Option<i64> {
   match open_read_only(db).and_then(|connection| connection.query_row(pragma, [], |row| row.get(0))) {
     Ok(value) => Some(value),

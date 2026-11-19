@@ -28,7 +28,7 @@ use super::usage_sweep;
 /// The usage source's name: the ledger's source value and the usage page's card title.
 pub const USAGE_SOURCE: &str = "opencode";
 
-/// The one account of the opencode database (`_ACCOUNT`).
+/// The one account of the opencode database.
 const ACCOUNT: &str = "default";
 
 /// The row prefilter: a blob without a `tokens` key carries no token counts. The classes are ASCII, as SQLite's LIKE
@@ -103,7 +103,7 @@ pub fn read(path: &Path, _account: &str, previous: Option<&str>) -> anyhow::Resu
 }
 
 /// The file state of a store, `<main size>:<main mtime_ns>:<wal size>:<wal mtime_ns>`. An absent WAL file reads
-/// `0:0` (`_file_state`).
+/// `0:0`.
 fn file_state(path: &Path) -> anyhow::Result<String> {
   let main = fs::metadata(path).with_context(|| format!("statting {}", path.display()))?;
   let mut wal_path = path.as_os_str().to_owned();
@@ -118,8 +118,7 @@ fn file_state(path: &Path) -> anyhow::Result<String> {
   Ok(format!("{main_size}:{main_mtime}:{wal_size}:{wal_mtime}"))
 }
 
-/// The file state and max `time_updated` of a stored signature in the current format, or `None` for any other format
-/// (`_stored_state`).
+/// The file state and max `time_updated` of a stored signature in the current format, or `None` for any other format.
 fn stored_state(previous: Option<&str>) -> anyhow::Result<Option<(String, i64)>> {
   let Some(previous) = previous else {
     return Ok(None);
@@ -135,7 +134,7 @@ fn stored_state(previous: Option<&str>) -> anyhow::Result<Option<(String, i64)>>
   Ok(Some((parts[..4].join(":"), floor)))
 }
 
-/// The ledger record of one assistant row, or `None` when the row contributes nothing (`_record`).
+/// The ledger record of one assistant row, or `None` when the row contributes nothing.
 fn record(message_id: &str, session_id: &str, data: &str) -> anyhow::Result<Option<UsageRecord>> {
   if !TOKENS_KEY.is_match(data) {
     return Ok(None);

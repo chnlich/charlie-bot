@@ -53,202 +53,199 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
   })
 }
 
-/// The session's pending summons' composite mention ids. A mention is a string id. Any other value fails the read.
-async fn pending_summon_ids(bot: &Bot, session_id: &str) -> Result<HashSet<String>, ThreadReplyError> {
-  let events = thread_entry::load_chat_events(&bot.features, session_id).await?;
-  thread_entry::pending_summon_mention_ids(&FEISHU, &bot.features.store, session_id, &events, |mention| {
-    mention.as_str().context("a summon's mention id is not a string").map(str::to_string)
-  })
-  .map_err(ThreadReplyError::failure)
-}
+impl Bot {
+  /// The session's pending summons' composite mention ids. A mention is a string id. Any other value fails the read.
+  async fn pending_summon_ids(&self, session_id: &str) -> Result<HashSet<String>, ThreadReplyError> {
+    let events = thread_entry::load_chat_events(&self.features, session_id).await?;
+    thread_entry::pending_summon_mention_ids(&FEISHU, &self.features.store, session_id, &events, |mention| {
+      mention.as_str().context("a summon's mention id is not a string").map(str::to_string)
+    })
+    .map_err(ThreadReplyError::failure)
+  }
 
-/// The read of the session's topic, which acks the unread messages the window returns. The window starts at the
-/// earlier of the oldest unread message and the oldest pending summon's message, or holds the newest `limit` messages
-/// when neither exists. The summon's root message rides first, outside the count, when the thread's listing does not
-/// carry it.
-pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Value, ThreadReplyError> {
-  let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
-  let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
-  let watermark = session.meta.extra(FEISHU.watermark_field).and_then(Value::as_str).map(str::to_string);
-  let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
-  let adapter = Arc::new(FeishuThreadAdapter::new(bot.clone()));
-  let thread_messages =
-    adapter.thread_messages(&origin.root_id, origin.thread_id.as_deref()).await.map_err(api_failure)?;
-  for message in &thread_messages {
-    require_thread_message_group(message, &origin.chat_id)?;
-  }
-  let root = root_message(bot, &origin, &thread_messages).await.map_err(api_failure)?;
-  if let Some(root) = &root {
-    require_thread_message_group(root, &origin.chat_id)?;
-  }
-  let pending = pending_summon_ids(bot, session_id).await?;
-  let unread_ids: HashSet<String> = thread_entry::unread_after(
-    &thread_messages,
-    |message| message.eligible,
-    |message| message.id.as_str(),
-    watermark.as_deref(),
-    IdOrdering::TimeThenId,
-  )
-  .into_iter()
-  .map(|message| message.id.clone())
-  .collect();
-  let window = thread_read::read_window(
-    &adapter,
-    &bot.features,
-    session_id,
-    thread_read::ThreadRead {
-      messages: &thread_messages,
-      unread_ids: &unread_ids,
-      pending: &pending,
-      watermark: watermark.as_deref(),
-      limit,
-    },
-    |message| message.id.as_str(),
-  )
-  .await?;
-  let mut messages = Vec::new();
-  if let Some(root) = root {
-    messages.push(message_view(&root, false, pending.contains(&root.id), allowed));
-  }
-  messages.extend(
-    thread_messages[window.first..window.last]
-      .iter()
-      .map(|message| message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed)),
-  );
-  Ok(json!({
-    (thread_read::MESSAGES): messages,
-    (FEISHU.watermark_key()): window.watermark,
-    (thread_read::MORE_UNREAD): window.more_unread,
-  }))
-}
-
-/// The read of up to `limit` messages from the session group's main chat, newest first, without changing the topic
-/// watermark.
-pub async fn read_chat(
-  bot: &Bot,
-  session_id: &str,
-  limit: usize,
-  page: Option<&str>,
-) -> Result<Value, ThreadReplyError> {
-  let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
-  let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
-  let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
-  let client = bot.client().map_err(ThreadReplyError::failure)?;
-  let mut messages = Vec::with_capacity(limit);
-  let mut page_token = page.map(str::to_string);
-  let next_page = loop {
-    let page_size = (limit - messages.len()).min(PAGE_SIZE);
-    let page = client.chat_messages(&origin.chat_id, page_size, page_token.as_deref()).await.map_err(api_failure)?;
-    for item in &page.items {
-      require_item_group(item, &origin.chat_id)?;
+  /// The read of the session's topic, which acks the unread messages the window returns. The window starts at the
+  /// earlier of the oldest unread message and the oldest pending summon's message, or holds the newest `limit` messages
+  /// when neither exists. The summon's root message rides first, outside the count, when the thread's listing does not
+  /// carry it.
+  pub async fn read_thread(&self, session_id: &str, limit: usize) -> Result<Value, ThreadReplyError> {
+    let session = thread_entry::require_thread_session(&FEISHU, &self.features, session_id).await?;
+    let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
+    let watermark = session.meta.extra(FEISHU.watermark_field).and_then(Value::as_str).map(str::to_string);
+    let config = self.config().map_err(ThreadReplyError::failure)?;
+    let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
+    let adapter = Arc::new(FeishuThreadAdapter::new(self.clone()));
+    let thread_messages =
+      adapter.thread_messages(&origin.root_id, origin.thread_id.as_deref()).await.map_err(api_failure)?;
+    for message in &thread_messages {
+      require_thread_message_group(message, &origin.chat_id)?;
+    }
+    let root = self.root_message(&origin, &thread_messages).await.map_err(api_failure)?;
+    if let Some(root) = &root {
+      require_thread_message_group(root, &origin.chat_id)?;
+    }
+    let pending = self.pending_summon_ids(session_id).await?;
+    let unread_ids: HashSet<String> = thread_entry::unread_after(
+      &thread_messages,
+      |message| message.eligible,
+      |message| message.id.as_str(),
+      watermark.as_deref(),
+      IdOrdering::TimeThenId,
+    )
+    .into_iter()
+    .map(|message| message.id.clone())
+    .collect();
+    let window = thread_read::read_window(
+      &adapter,
+      &self.features,
+      session_id,
+      thread_read::ThreadRead {
+        messages: &thread_messages,
+        unread_ids: &unread_ids,
+        pending: &pending,
+        watermark: watermark.as_deref(),
+        limit,
+      },
+      |message| message.id.as_str(),
+    )
+    .await?;
+    let mut messages = Vec::new();
+    if let Some(root) = root {
+      messages.push(message_view(&root, false, pending.contains(&root.id), allowed));
     }
     messages.extend(
-      page
-        .items
+      thread_messages[window.first..window.last]
         .iter()
-        .map(|item| thread_message(item).map_err(ThreadReplyError::failure))
-        .collect::<Result<Vec<_>, _>>()?,
+        .map(|message| message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed)),
     );
-    if messages.len() >= limit || page.next_page_token.is_none() {
-      break page.next_page_token;
-    }
-    page_token = page.next_page_token;
-  };
-  let pending = pending_summon_ids(bot, session_id).await?;
-  let mut output = json!({
-    (thread_read::MESSAGES): messages
-      .iter()
-      .map(|message| message_view(message, false, pending.contains(&message.id), allowed))
-      .collect::<Vec<_>>(),
-  });
-  if let Some(token) = next_page {
-    output["next_page"] = json!(token);
+    Ok(json!({
+      (thread_read::MESSAGES): messages,
+      (FEISHU.watermark_key()): window.watermark,
+      (thread_read::MORE_UNREAD): window.more_unread,
+    }))
   }
-  Ok(output)
-}
 
-/// The read of up to `limit` messages in one topic of the session's group, oldest first, without changing its
-/// watermark.
-pub async fn read_topic(
-  bot: &Bot,
-  session_id: &str,
-  thread_id: &str,
-  limit: usize,
-  page: Option<&str>,
-) -> Result<Value, ThreadReplyError> {
-  let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
-  let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
-  let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
-  let client = bot.client().map_err(ThreadReplyError::failure)?;
-  let cursor = page.map(|token| decode_topic_page_cursor(token, thread_id)).transpose()?.unwrap_or(TopicPageCursor {
-    thread_id: thread_id.to_string(),
-    page_token: None,
-    buffered_message_id: None,
-  });
-  let mut page_token = cursor.page_token;
-  let mut buffered_message_id = None;
-  let mut messages = Vec::with_capacity(limit);
-  if let Some(message_id) = cursor.buffered_message_id {
-    let item = client.message(&message_id).await.map_err(api_failure)?;
-    require_item_group(&item, &origin.chat_id)?;
-    messages.push(thread_message(&item).map_err(ThreadReplyError::failure)?);
-  }
-  let mut first_page = page.is_none();
-  while messages.len() < limit && (first_page || page_token.is_some()) {
-    let page_size = (limit - messages.len()).min(PAGE_SIZE);
-    let response =
-      client.thread_messages_sized(thread_id, page_size, page_token.as_deref()).await.map_err(api_failure)?;
-    for item in &response.items {
-      require_item_group(item, &origin.chat_id)?;
-    }
-    if first_page {
-      let root_id = response
-        .items
-        .iter()
-        .find_map(|item| item.get(ROOT_ID).filter(|value| !value.is_null()))
-        .map(|value| {
-          value.as_str().context("a Feishu topic message has a non-string root_id").map_err(ThreadReplyError::failure)
-        })
-        .transpose()?;
-      if let Some(root_id) = root_id
-        && !response.items.iter().any(|item| item.get(MESSAGE_ID).and_then(Value::as_str) == Some(root_id))
-      {
-        let root = client.message(root_id).await.map_err(api_failure)?;
-        require_item_group(&root, &origin.chat_id)?;
-        messages.push(thread_message(&root).map_err(ThreadReplyError::failure)?);
+  /// The read of up to `limit` messages from the session group's main chat, newest first, without changing the topic
+  /// watermark.
+  pub async fn read_chat(&self, session_id: &str, limit: usize, page: Option<&str>) -> Result<Value, ThreadReplyError> {
+    let session = thread_entry::require_thread_session(&FEISHU, &self.features, session_id).await?;
+    let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
+    let config = self.config().map_err(ThreadReplyError::failure)?;
+    let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
+    let client = self.client().map_err(ThreadReplyError::failure)?;
+    let mut messages = Vec::with_capacity(limit);
+    let mut page_token = page.map(str::to_string);
+    let next_page = loop {
+      let page_size = (limit - messages.len()).min(PAGE_SIZE);
+      let page = client.chat_messages(&origin.chat_id, page_size, page_token.as_deref()).await.map_err(api_failure)?;
+      for item in &page.items {
+        require_item_group(item, &origin.chat_id)?;
       }
-      first_page = false;
-    }
-    messages.extend(
-      response
-        .items
+      messages.extend(
+        page
+          .items
+          .iter()
+          .map(|item| thread_message(item).map_err(ThreadReplyError::failure))
+          .collect::<Result<Vec<_>, _>>()?,
+      );
+      if messages.len() >= limit || page.next_page_token.is_none() {
+        break page.next_page_token;
+      }
+      page_token = page.next_page_token;
+    };
+    let pending = self.pending_summon_ids(session_id).await?;
+    let mut output = json!({
+      (thread_read::MESSAGES): messages
         .iter()
-        .map(|item| thread_message(item).map_err(ThreadReplyError::failure))
-        .collect::<Result<Vec<_>, _>>()?,
-    );
-    page_token = response.next_page_token;
-    if messages.len() > limit {
-      let overflow = messages.pop().expect("a topic page over the limit has a last message");
-      buffered_message_id = Some(message_id_of(&overflow.id).map_err(ThreadReplyError::failure)?.to_string());
+        .map(|message| message_view(message, false, pending.contains(&message.id), allowed))
+        .collect::<Vec<_>>(),
+    });
+    if let Some(token) = next_page {
+      output["next_page"] = json!(token);
     }
+    Ok(output)
   }
-  if messages.is_empty() {
-    return Err(ThreadReplyError::refused(StatusCode::NOT_FOUND, "the topic has no message in this session's group"));
+
+  /// The read of up to `limit` messages in one topic of the session's group, oldest first, without changing its
+  /// watermark.
+  pub async fn read_topic(
+    &self,
+    session_id: &str,
+    thread_id: &str,
+    limit: usize,
+    page: Option<&str>,
+  ) -> Result<Value, ThreadReplyError> {
+    let session = thread_entry::require_thread_session(&FEISHU, &self.features, session_id).await?;
+    let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
+    let config = self.config().map_err(ThreadReplyError::failure)?;
+    let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
+    let client = self.client().map_err(ThreadReplyError::failure)?;
+    let cursor = page.map(|token| decode_topic_page_cursor(token, thread_id)).transpose()?.unwrap_or(TopicPageCursor {
+      thread_id: thread_id.to_string(),
+      page_token: None,
+      buffered_message_id: None,
+    });
+    let mut page_token = cursor.page_token;
+    let mut buffered_message_id = None;
+    let mut messages = Vec::with_capacity(limit);
+    if let Some(message_id) = cursor.buffered_message_id {
+      let item = client.message(&message_id).await.map_err(api_failure)?;
+      require_item_group(&item, &origin.chat_id)?;
+      messages.push(thread_message(&item).map_err(ThreadReplyError::failure)?);
+    }
+    let mut first_page = page.is_none();
+    while messages.len() < limit && (first_page || page_token.is_some()) {
+      let page_size = (limit - messages.len()).min(PAGE_SIZE);
+      let response =
+        client.thread_messages_sized(thread_id, page_size, page_token.as_deref()).await.map_err(api_failure)?;
+      for item in &response.items {
+        require_item_group(item, &origin.chat_id)?;
+      }
+      if first_page {
+        let root_id = response
+          .items
+          .iter()
+          .find_map(|item| item.get(ROOT_ID).filter(|value| !value.is_null()))
+          .map(|value| {
+            value.as_str().context("a Feishu topic message has a non-string root_id").map_err(ThreadReplyError::failure)
+          })
+          .transpose()?;
+        if let Some(root_id) = root_id
+          && !response.items.iter().any(|item| item.get(MESSAGE_ID).and_then(Value::as_str) == Some(root_id))
+        {
+          let root = client.message(root_id).await.map_err(api_failure)?;
+          require_item_group(&root, &origin.chat_id)?;
+          messages.push(thread_message(&root).map_err(ThreadReplyError::failure)?);
+        }
+        first_page = false;
+      }
+      messages.extend(
+        response
+          .items
+          .iter()
+          .map(|item| thread_message(item).map_err(ThreadReplyError::failure))
+          .collect::<Result<Vec<_>, _>>()?,
+      );
+      page_token = response.next_page_token;
+      if messages.len() > limit {
+        let overflow = messages.pop().expect("a topic page over the limit has a last message");
+        buffered_message_id = Some(message_id_of(&overflow.id).map_err(ThreadReplyError::failure)?.to_string());
+      }
+    }
+    if messages.is_empty() {
+      return Err(ThreadReplyError::refused(StatusCode::NOT_FOUND, "the topic has no message in this session's group"));
+    }
+    let pending = self.pending_summon_ids(session_id).await?;
+    let mut output = json!({
+      (thread_read::MESSAGES): messages
+        .iter()
+        .map(|message| message_view(message, false, pending.contains(&message.id), allowed))
+        .collect::<Vec<_>>(),
+    });
+    if let Some(token) = topic_next_page_token(thread_id, page_token, buffered_message_id)? {
+      output["next_page"] = json!(token);
+    }
+    Ok(output)
   }
-  let pending = pending_summon_ids(bot, session_id).await?;
-  let mut output = json!({
-    (thread_read::MESSAGES): messages
-      .iter()
-      .map(|message| message_view(message, false, pending.contains(&message.id), allowed))
-      .collect::<Vec<_>>(),
-  });
-  if let Some(token) = topic_next_page_token(thread_id, page_token, buffered_message_id)? {
-    output["next_page"] = json!(token);
-  }
-  Ok(output)
 }
 
 fn decode_topic_page_cursor(token: &str, thread_id: &str) -> Result<TopicPageCursor, ThreadReplyError> {
@@ -318,46 +315,75 @@ fn require_chat_id(item_chat_id: Option<&str>, chat_id: &str) -> Result<(), Thre
   }
 }
 
-/// The summon's root message, when the thread listing does not already carry it (`root_message`). The root holds the
-/// summon's text in a thread the bot started from a message, and it is read with the thread's eligibility.
-async fn root_message(
-  bot: &Bot,
-  origin: &FeishuOrigin,
-  thread_messages: &[ThreadMessage],
-) -> anyhow::Result<Option<ThreadMessage>> {
-  if thread_messages.iter().any(|message| message_id_of(&message.id).ok() == Some(origin.root_id.as_str())) {
-    return Ok(None);
-  }
-  let client = bot.client()?;
-  let item = client.message(&origin.root_id).await?;
-  Ok(Some(thread_message(&item)?))
-}
-
-/// The readback of `charliebot feishu check`: each setup check with its outcome, and `ok` when all of them pass. The
-/// checks are: a tenant token, the bot's open_id, the long-connection endpoint, and a non-empty owner list
-/// (`allowed_users`). Refusals: 409 when the app id or secret is unset.
-pub async fn check_setup(bot: &Bot) -> Result<Value, ThreadReplyError> {
-  let credentials = bot.features.credentials.get().map_err(ThreadReplyError::failure)?;
-  for key in ["app_id", "app_secret"] {
-    if credentials.get(NAME, key).is_none() {
-      return Err(ThreadReplyError::refused(StatusCode::CONFLICT, format!("credentials.feishu.{key} is not set")));
+impl Bot {
+  /// The summon's root message, when the thread listing does not already carry it (`root_message`). The root holds the
+  /// summon's text in a thread the bot started from a message, and it is read with the thread's eligibility.
+  async fn root_message(
+    &self,
+    origin: &FeishuOrigin,
+    thread_messages: &[ThreadMessage],
+  ) -> anyhow::Result<Option<ThreadMessage>> {
+    if thread_messages.iter().any(|message| message_id_of(&message.id).ok() == Some(origin.root_id.as_str())) {
+      return Ok(None);
     }
+    let client = self.client()?;
+    let item = client.message(&origin.root_id).await?;
+    Ok(Some(thread_message(&item)?))
   }
-  let client = bot.client().map_err(ThreadReplyError::failure)?;
-  let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
-  let token = check_token(&client).await;
-  let bot_open_id = check_bot(&client).await;
-  let endpoint = check_endpoint(&client).await;
-  let allow_list = json!({"ok": !allowed.is_empty(), "count": allowed.len()});
-  let ok = [&token, &bot_open_id, &endpoint, &allow_list].iter().all(|check| check["ok"] == json!(true));
-  Ok(json!({
-    "ok": ok,
-    "tenant_token": token,
-    "bot": bot_open_id,
-    "long_connection_endpoint": endpoint,
-    "allowed_users": allow_list,
-  }))
+
+  /// The readback of `charliebot feishu check`: each setup check with its outcome, and `ok` when all of them pass. The
+  /// checks are: a tenant token, the bot's open_id, the long-connection endpoint, and a non-empty owner list
+  /// (`allowed_users`). Refusals: 409 when the app id or secret is unset.
+  pub async fn check_setup(&self) -> Result<Value, ThreadReplyError> {
+    let credentials = self.features.credentials.get().map_err(ThreadReplyError::failure)?;
+    for key in ["app_id", "app_secret"] {
+      if credentials.get(NAME, key).is_none() {
+        return Err(ThreadReplyError::refused(StatusCode::CONFLICT, format!("credentials.feishu.{key} is not set")));
+      }
+    }
+    let client = self.client().map_err(ThreadReplyError::failure)?;
+    let config = self.config().map_err(ThreadReplyError::failure)?;
+    let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
+    let token = check_token(&client).await;
+    let bot_open_id = check_bot(&client).await;
+    let endpoint = check_endpoint(&client).await;
+    let allow_list = json!({"ok": !allowed.is_empty(), "count": allowed.len()});
+    let ok = [&token, &bot_open_id, &endpoint, &allow_list].iter().all(|check| check["ok"] == json!(true));
+    Ok(json!({
+      "ok": ok,
+      "tenant_token": token,
+      "bot": bot_open_id,
+      "long_connection_endpoint": endpoint,
+      "allowed_users": allow_list,
+    }))
+  }
+
+  /// The download of one image or file from the session's group into its session directory. Refusals: 404 unknown
+  /// session or message from another group, 409 no Feishu thread, 422 invalid message id or output path, and 502 Feishu
+  /// refusal.
+  pub async fn download(
+    &self,
+    session_id: &str,
+    message_id: &str,
+    file_key: &str,
+    kind: &str,
+    output: &str,
+  ) -> Result<Value, ThreadReplyError> {
+    let session = thread_entry::require_thread_session(&FEISHU, &self.features, session_id).await?;
+    let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
+    let om_id = message_id_of(message_id)
+      .map_err(|error| ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    let session_dir = self.features.store.session_dir(session_id);
+    let target = output_inside(&session_dir, output)
+      .map_err(|error| ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    let client = self.client().map_err(ThreadReplyError::failure)?;
+    let message = client.message(om_id).await.map_err(api_failure)?;
+    require_item_group(&message, &origin.chat_id)?;
+    let bytes = client.download_resource(om_id, file_key, kind).await.map_err(api_failure)?;
+    std::fs::write(&target, &bytes)
+      .map_err(|error| ThreadReplyError::failure(format!("could not write {}: {error}", target.display())))?;
+    Ok(json!({"path": paths::display(&target), "bytes": bytes.len()}))
+  }
 }
 
 async fn check_token(client: &FeishuClient) -> Value {
@@ -379,33 +405,6 @@ async fn check_endpoint(client: &FeishuClient) -> Value {
     Ok(_) => json!({"ok": true}),
     Err(error) => json!({"ok": false, "error": error.to_string()}),
   }
-}
-
-/// The download of one image or file from the session's group into its session directory. Refusals: 404 unknown
-/// session or message from another group, 409 no Feishu thread, 422 invalid message id or output path, and 502 Feishu
-/// refusal.
-pub async fn download(
-  bot: &Bot,
-  session_id: &str,
-  message_id: &str,
-  file_key: &str,
-  kind: &str,
-  output: &str,
-) -> Result<Value, ThreadReplyError> {
-  let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
-  let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
-  let om_id = message_id_of(message_id)
-    .map_err(|error| ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-  let session_dir = bot.features.store.session_dir(session_id);
-  let target = output_inside(&session_dir, output)
-    .map_err(|error| ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-  let client = bot.client().map_err(ThreadReplyError::failure)?;
-  let message = client.message(om_id).await.map_err(api_failure)?;
-  require_item_group(&message, &origin.chat_id)?;
-  let bytes = client.download_resource(om_id, file_key, kind).await.map_err(api_failure)?;
-  std::fs::write(&target, &bytes)
-    .map_err(|error| ThreadReplyError::failure(format!("could not write {}: {error}", target.display())))?;
-  Ok(json!({"path": paths::display(&target), "bytes": bytes.len()}))
 }
 
 /// The output path, checked to sit inside `session_dir`. The path must be absolute, its parent directory must already
@@ -528,7 +527,7 @@ mod tests {
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
     let before = home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned();
 
-    let first_read = read_chat(&bot, &session_id, 2, None).await.unwrap();
+    let first_read = bot.read_chat(&session_id, 2, None).await.unwrap();
     assert_eq!(first_read["messages"].as_array().unwrap().len(), 2);
     assert_eq!(first_read["messages"][0]["content"], "newest");
     assert_eq!(first_read["messages"][0]["author_id"], USER_ID);
@@ -537,7 +536,7 @@ mod tests {
     assert_eq!(first_read["messages"][1]["thread_id"], Value::Null);
     assert_eq!(first_read["next_page"], "older");
 
-    let second_read = read_chat(&bot, &session_id, 2, Some("older")).await.unwrap();
+    let second_read = bot.read_chat(&session_id, 2, Some("older")).await.unwrap();
     assert_eq!(second_read["messages"][0]["content"], "older");
     assert!(second_read.get("next_page").is_none());
     assert_eq!(home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned(), before);
@@ -573,7 +572,7 @@ mod tests {
     .await;
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
 
-    let readback = read_chat(&bot, &session_id, 60, None).await.unwrap();
+    let readback = bot.read_chat(&session_id, 60, None).await.unwrap();
     assert_eq!(readback["messages"].as_array().unwrap().len(), 60);
     assert_eq!(readback["next_page"], "page_three");
     let requests = stub.requests.lock().unwrap();
@@ -611,7 +610,7 @@ mod tests {
     .await;
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
 
-    let readback = read_topic(&bot, &session_id, TOPIC_ID, 2, None).await.unwrap();
+    let readback = bot.read_topic(&session_id, TOPIC_ID, 2, None).await.unwrap();
     assert_eq!(
       readback["messages"]
         .as_array()
@@ -625,10 +624,10 @@ mod tests {
     assert_eq!(readback["messages"][0]["thread_id"], TOPIC_ID);
     let next_page = readback["next_page"].as_str().unwrap();
     assert!(next_page.starts_with(TOPIC_PAGE_TOKEN_PREFIX));
-    let wrong_topic = read_topic(&bot, &session_id, "omt_wrong_topic", 2, Some(next_page)).await.unwrap_err();
+    let wrong_topic = bot.read_topic(&session_id, "omt_wrong_topic", 2, Some(next_page)).await.unwrap_err();
     assert_eq!(wrong_topic.status, StatusCode::UNPROCESSABLE_ENTITY);
 
-    let second_read = read_topic(&bot, &session_id, TOPIC_ID, 2, Some(next_page)).await.unwrap();
+    let second_read = bot.read_topic(&session_id, TOPIC_ID, 2, Some(next_page)).await.unwrap();
     assert_eq!(
       second_read["messages"]
         .as_array()
@@ -671,10 +670,10 @@ mod tests {
     .await;
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
 
-    let cross_error = read_topic(&bot, &session_id, "omt_cross", 10, None).await.unwrap_err();
+    let cross_error = bot.read_topic(&session_id, "omt_cross", 10, None).await.unwrap_err();
     assert_eq!(cross_error.status, StatusCode::NOT_FOUND);
     assert_eq!(error_text(&cross_error), "the message is not in this session's group");
-    let feishu_error = read_topic(&bot, &session_id, "omt_refused", 10, None).await.unwrap_err();
+    let feishu_error = bot.read_topic(&session_id, "omt_refused", 10, None).await.unwrap_err();
     assert_eq!(feishu_error.status, StatusCode::BAD_GATEWAY);
     assert!(error_text(&feishu_error).contains("permission denied"));
     assert_eq!(
@@ -699,8 +698,8 @@ mod tests {
     .await;
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
 
-    assert_eq!(read_chat(&bot, &session_id, 10, None).await.unwrap_err().status, StatusCode::NOT_FOUND);
-    assert_eq!(read_thread(&bot, &session_id, 10).await.unwrap_err().status, StatusCode::NOT_FOUND);
+    assert_eq!(bot.read_chat(&session_id, 10, None).await.unwrap_err().status, StatusCode::NOT_FOUND);
+    assert_eq!(bot.read_thread(&session_id, 10).await.unwrap_err().status, StatusCode::NOT_FOUND);
   }
 
   #[tokio::test]
@@ -710,7 +709,7 @@ mod tests {
     let stub = serve(move |_| api_error(400, 230027, "permission denied")).await;
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
 
-    let error = read_thread(&bot, &session_id, 10).await.unwrap_err();
+    let error = bot.read_thread(&session_id, 10).await.unwrap_err();
     assert_eq!(error.status, StatusCode::BAD_GATEWAY);
     assert!(error_text(&error).contains("permission denied"));
   }
@@ -735,7 +734,7 @@ mod tests {
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
     let before = home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned();
 
-    let error = read_thread(&bot, &session_id, 10).await.unwrap_err();
+    let error = bot.read_thread(&session_id, 10).await.unwrap_err();
     assert_eq!(error.status, StatusCode::NOT_FOUND);
     assert_eq!(home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned(), before);
   }
@@ -761,13 +760,15 @@ mod tests {
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
     let output = session_dir.join("image.png");
 
-    download(&bot, &session_id, "1700000000000-om_main", "img_key", "image", &output.display().to_string())
+    bot
+      .download(&session_id, "1700000000000-om_main", "img_key", "image", &output.display().to_string())
       .await
       .unwrap();
     assert_eq!(std::fs::read(&output).unwrap(), image);
     let foreign = session_dir.join("foreign.png");
     assert_eq!(
-      download(&bot, &session_id, "1700000000000-om_other", "img_key", "image", &foreign.display().to_string())
+      bot
+        .download(&session_id, "1700000000000-om_other", "img_key", "image", &foreign.display().to_string())
         .await
         .unwrap_err()
         .status,
@@ -792,7 +793,7 @@ mod tests {
     let stub = serve(move |_| list(vec![response.clone()], false, None)).await;
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
 
-    let readback = read_thread(&bot, &session_id, 50).await.unwrap();
+    let readback = bot.read_thread(&session_id, 50).await.unwrap();
     assert_eq!(
       readback,
       json!({

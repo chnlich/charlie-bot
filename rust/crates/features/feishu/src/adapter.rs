@@ -328,62 +328,64 @@ fn message_type_of(item: &Value) -> anyhow::Result<&str> {
   item.get("msg_type").and_then(Value::as_str).context("a message has no msg_type")
 }
 
-/// The adapter the wrappers hand the shared core.
-fn adapter(bot: &Bot) -> Arc<dyn ThreadAdapter> {
-  Arc::new(FeishuThreadAdapter::new(bot.clone()))
-}
-
-/// The `post_reply` entry point: it posts `text` into the session's Feishu thread and returns the readback the CLI
-/// prints.
-pub async fn post_reply_with_caller_context(
-  bot: &Bot,
-  session_id: &str,
-  text: &str,
-  request_id: Option<&str>,
-  run_started_at: Option<&str>,
-) -> Result<Value, thread_entry::ThreadReplyError> {
-  let readback = thread_entry::post_reply_with_caller_context(
-    &adapter(bot),
-    &bot.features,
-    session_id,
-    text,
-    request_id,
-    run_started_at,
-  )
-  .await?;
-  record_thread_id(bot, session_id).await?;
-  Ok(readback)
-}
-
-/// The recording of the thread id on the session's origin once the thread exists. The first reply creates the thread,
-/// and the origin carries no thread id until then. A session that already holds one is left as it is.
-async fn record_thread_id(bot: &Bot, session_id: &str) -> Result<(), thread_entry::ThreadReplyError> {
-  let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
-  let origin = origin_of(&session.origin)?;
-  if origin.thread_id.is_some() {
-    return Ok(());
+impl Bot {
+  /// The adapter the wrappers hand the shared core.
+  fn adapter(&self) -> Arc<dyn ThreadAdapter> {
+    Arc::new(FeishuThreadAdapter::new(self.clone()))
   }
-  let root = bot.client()?.message(&origin.root_id).await.map_err(api_failure)?;
-  let thread_id = root
-    .get(THREAD_ID)
-    .and_then(Value::as_str)
-    .with_context(|| format!("the root message {} has no thread after the reply", origin.root_id))?;
-  let origin = FeishuOrigin { thread_id: Some(thread_id.to_string()), ..origin };
-  let value = serde_json::to_value(&origin).map_err(thread_entry::ThreadReplyError::failure)?;
-  bot
-    .features
-    .store
-    .update_slot_fields_at(
+
+  /// The `post_reply` entry point: it posts `text` into the session's Feishu thread and returns the readback the CLI
+  /// prints.
+  pub async fn post_reply_with_caller_context(
+    &self,
+    session_id: &str,
+    text: &str,
+    request_id: Option<&str>,
+    run_started_at: Option<&str>,
+  ) -> Result<Value, thread_entry::ThreadReplyError> {
+    let readback = thread_entry::post_reply_with_caller_context(
+      &self.adapter(),
+      &self.features,
       session_id,
-      FEISHU.name,
-      Map::from_iter([(FEISHU_ORIGIN.to_string(), value)]),
-      UtcDateTime::now(),
+      text,
+      request_id,
+      run_started_at,
     )
-    .await?
-    .ok_or_else(|| {
-      thread_entry::ThreadReplyError::failure(format!("session {session_id} vanished during the reply"))
-    })?;
-  Ok(())
+    .await?;
+    self.record_thread_id(session_id).await?;
+    Ok(readback)
+  }
+
+  /// The recording of the thread id on the session's origin once the thread exists. The first reply creates the thread,
+  /// and the origin carries no thread id until then. A session that already holds one is left as it is.
+  async fn record_thread_id(&self, session_id: &str) -> Result<(), thread_entry::ThreadReplyError> {
+    let session = thread_entry::require_thread_session(&FEISHU, &self.features, session_id).await?;
+    let origin = origin_of(&session.origin)?;
+    if origin.thread_id.is_some() {
+      return Ok(());
+    }
+    let root = self.client()?.message(&origin.root_id).await.map_err(api_failure)?;
+    let thread_id = root
+      .get(THREAD_ID)
+      .and_then(Value::as_str)
+      .with_context(|| format!("the root message {} has no thread after the reply", origin.root_id))?;
+    let origin = FeishuOrigin { thread_id: Some(thread_id.to_string()), ..origin };
+    let value = serde_json::to_value(&origin).map_err(thread_entry::ThreadReplyError::failure)?;
+    self
+      .features
+      .store
+      .update_slot_fields_at(
+        session_id,
+        FEISHU.name,
+        Map::from_iter([(FEISHU_ORIGIN.to_string(), value)]),
+        UtcDateTime::now(),
+      )
+      .await?
+      .ok_or_else(|| {
+        thread_entry::ThreadReplyError::failure(format!("session {session_id} vanished during the reply"))
+      })?;
+    Ok(())
+  }
 }
 
 /// A failed Feishu call as a refusal: 502 with Feishu's message, or the unhandled failure for any other error.
@@ -402,19 +404,19 @@ pub async fn show_turn_notice(
   message: &str,
 ) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(features), BASE_URL);
-  Ok(thread_entry::show_turn_notice(&adapter(&bot), features, session_id, turn, message).await?)
+  Ok(thread_entry::show_turn_notice(&bot.adapter(), features, session_id, turn, message).await?)
 }
 
 /// Runs the existing thread nudge or notice behavior for an errored Feishu turn.
 pub async fn after_failed_turn(features: &Arc<FeatureContext>, session_id: &str, done: &Value) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(features), BASE_URL);
-  thread_entry::audit_failed_turn(&adapter(&bot), features, session_id, done).await?;
+  thread_entry::audit_failed_turn(&bot.adapter(), features, session_id, done).await?;
   Ok(())
 }
 /// The report of queued Feishu summons lost across a restart (`backfill_lost_summons`).
 pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> anyhow::Result<usize> {
   let bot = Bot::new(Arc::clone(features), BASE_URL);
-  Ok(thread_entry::backfill_lost_summons(&adapter(&bot), features).await?)
+  Ok(thread_entry::backfill_lost_summons(&bot.adapter(), features).await?)
 }
 
 /// The shared thread follow backfill (`backfill_followed_threads`), re-run over the adapter `client` serves.

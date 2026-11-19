@@ -11,7 +11,7 @@ use serde_yaml::{Mapping, Value};
 
 const CONTEXT_LIMIT: &str = "context_limit";
 
-/// The `opencode` option's type-specific fields in `OpencodeBackend`'s declaration order, each with the value the
+/// The `opencode` option's type-specific fields in `OpenCodeOption`'s declaration order, each with the value the
 /// option model holds when an entry omits it. `charliebot config get backends` renders them, and
 /// [`OpenCodeOption::from_fields`] accepts each of these names and no other.
 pub const SCHEMA: &[OptionField] = &[

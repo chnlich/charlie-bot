@@ -23,6 +23,7 @@ use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_core::text_repr;
 use charliebot_core::timefmt;
 use charliebot_registry::task_errors::task_http_error;
+use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
@@ -39,6 +40,9 @@ use crate::route_support::{Query, blocking_store};
 use crate::{listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
+/// The bootstrap field of the For-you rows before the first screen, oldest first. Every session carries it; a worker
+/// or thread session carries an empty array.
+const OLDER_FOR_YOU_FIELD: &str = "older_for_you";
 /// The wire budget of the bootstrap's first screen. The payload trims its message tail until its
 /// gzip fits the budget, so a switch's own transfer sets its time on a slow link. The messages the
 /// budget drops reach the page through the scroll-up paging the tail's cursor already feeds.
@@ -193,8 +197,25 @@ pub fn build_bootstrap_payload(
         .filter(|next| *next < events.len()),
     }
   };
-  let (value, untrimmed_wire_bytes) = fit_first_screen_payload(&mut build, &next_drop)?;
+  let (mut value, untrimmed_wire_bytes) = fit_first_screen_payload(&mut build, &next_drop)?;
+  // The older rows stay outside the first screen's wire budget: they are the For-you catch-up the page shows before
+  // its older pages land, so a trim never drops a turn to make room for them.
+  let oldest = value[api::OLDEST_MESSAGE_ORDINAL_FIELD].as_u64().expect("the payload names its oldest ordinal");
+  let older_for_you = if is_web_session(meta) {
+    store.for_you_rows_before(&meta.id, usize::try_from(oldest).expect("an ordinal fits usize"))?
+  } else {
+    Vec::new()
+  };
+  value
+    .as_object_mut()
+    .expect("the bootstrap payload is an object")
+    .insert(OLDER_FOR_YOU_FIELD.to_string(), Value::Array(older_for_you));
   Ok(BootstrapPayload { value, untrimmed_wire_bytes })
+}
+
+/// A web session: a manager session that no chat thread owns. Its For-you view opens on the page's own rule.
+fn is_web_session(meta: &SessionMetadata) -> bool {
+  meta.profile == TaskProfile::Manager && !is_thread_session(meta)
 }
 
 /// The next tail read after one that folded `read` events to `messages` messages. It holds the events the message
@@ -1308,6 +1329,7 @@ fn to_index(value: i64) -> usize {
 #[cfg(test)]
 mod tests {
   use charliebot_registry::{Registry, store_hooks};
+  use charliebot_store::for_you::{self, FOR_YOU_MAX_ROWS};
   use charliebot_store::run_records::RunKind;
   use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, TaskCaller};
 
@@ -1865,7 +1887,7 @@ backends:
     let kept = messages.len();
     let total_events = features.store.load_chat_events_sync(&meta.id).unwrap().len();
     assert!(kept > 0 && kept < 24, "kept {kept} of the tail's 40 events");
-    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    let served_wire = first_screen_wire(&payload.value);
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
     assert_eq!(payload.value["has_more"], json!(true));
@@ -1927,7 +1949,7 @@ backends:
       json!(fixture_text(first_turn as u64, 700)),
       "the first kept event is its turn's user message"
     );
-    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    let served_wire = first_screen_wire(&payload.value);
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
     assert_eq!(payload.value["has_more"], json!(true));
@@ -1985,7 +2007,7 @@ backends:
       messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 40))),
       "the newest turn renders on the first screen"
     );
-    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    let served_wire = first_screen_wire(&payload.value);
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
   }
 
@@ -2087,6 +2109,152 @@ backends:
       .unwrap();
     let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
     assert_eq!(untrimmed, payload.untrimmed_wire_bytes);
+  }
+
+  async fn append_all(features: &FeatureContext, session_id: &str, events: Vec<Value>) {
+    for event in events {
+      features.store.append_chat_event(session_id, event).await.unwrap();
+    }
+  }
+
+  /// The gzip bytes of a bootstrap's first screen: the payload without the For-you rows, which ride outside the budget.
+  fn first_screen_wire(value: &Value) -> usize {
+    let mut first_screen = value.clone();
+    first_screen.as_object_mut().expect("the payload is an object").remove(OLDER_FOR_YOU_FIELD);
+    gzip_level_one(&charliebot_compat::json::fast_json_bytes(&first_screen)).len()
+  }
+
+  fn row_contents(rows: &[Value]) -> Vec<String> {
+    rows.iter().map(|row| row["content"].as_str().expect("a row has text").to_string()).collect()
+  }
+
+  fn hidden_filler() -> Value {
+    json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "hidden"}]}})
+  }
+
+  /// A web session's bootstrap carries the newest For-you rows before its first screen, oldest first, ten at most.
+  /// The user's messages and the error rows show; the assistant's reply between them does not.
+  #[tokio::test]
+  async fn a_web_session_bootstrap_carries_the_newest_for_you_rows_before_its_first_screen() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "for-you-rows", None, TaskProfile::Manager).await;
+    let base = features.store.get_chat_event_count_sync(&meta.id).unwrap();
+    let mut events = Vec::new();
+    // Each shown event with its event index and the content its row carries.
+    let mut shown = Vec::new();
+    for turn in 0..30usize {
+      shown.push((base + events.len(), format!("user {turn}")));
+      events.push(json!({"type": "user", "content": format!("user {turn}")}));
+      events.push(hidden_filler());
+      if turn % 3 == 0 {
+        shown.push((base + events.len(), format!("Error: error {turn}")));
+        events.push(json!({"type": "error", "content": format!("error {turn}")}));
+      }
+      events.push(json!({"type": "master_done"}));
+    }
+    append_all(&features, &meta.id, events).await;
+
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let start = payload.value[api::OLDEST_MESSAGE_ORDINAL_FIELD].as_u64().unwrap() as usize;
+    let before_start: Vec<String> =
+      shown.iter().filter(|(index, _)| *index < start).map(|(_, content)| content.clone()).collect();
+    let expected = before_start[before_start.len().saturating_sub(FOR_YOU_MAX_ROWS)..].to_vec();
+    assert_eq!(expected.len(), FOR_YOU_MAX_ROWS, "the fixture has more rows before the first screen than the cap");
+    let older = payload.value[OLDER_FOR_YOU_FIELD].as_array().expect("the bootstrap carries the older rows");
+    assert_eq!(row_contents(older), expected);
+    assert!(older.iter().all(|row| for_you::is_reply_row(row) || for_you::is_error_row(row)));
+  }
+
+  /// The scan keeps the newest ten rows, and within 16 KiB of JSON the newest row is kept whatever its size.
+  #[tokio::test]
+  async fn the_for_you_scan_keeps_the_newest_ten_rows_within_16_kib() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "for-you-cap", None, TaskProfile::Manager).await;
+    let base = features.store.get_chat_event_count_sync(&meta.id).unwrap();
+    let events = (0..30usize).map(|turn| json!({"type": "user", "content": format!("cap {turn}")})).collect();
+    append_all(&features, &meta.id, events).await;
+    let rows = features.store.for_you_rows_before(&meta.id, base + 30).unwrap();
+    assert_eq!(row_contents(&rows), (20..30).map(|turn| format!("cap {turn}")).collect::<Vec<_>>());
+
+    // Each row takes about 5 KB, so three fit under 16 KiB and a fourth would pass it.
+    let bulky = |turn: usize, size: usize| json!({"type": "user", "content": format!("{turn} {}", "x".repeat(size))});
+    let meta = crate::test_support::create_node(&features.store, "for-you-bytes", None, TaskProfile::Manager).await;
+    let base = features.store.get_chat_event_count_sync(&meta.id).unwrap();
+    append_all(&features, &meta.id, (0..6usize).map(|turn| bulky(turn, 5_000)).collect()).await;
+    let rows = features.store.for_you_rows_before(&meta.id, base + 6).unwrap();
+    assert_eq!(row_contents(&rows).iter().map(|c| c.split(' ').next().unwrap()).collect::<Vec<_>>(), ["3", "4", "5"]);
+
+    let meta = crate::test_support::create_node(&features.store, "for-you-newest", None, TaskProfile::Manager).await;
+    let base = features.store.get_chat_event_count_sync(&meta.id).unwrap();
+    append_all(&features, &meta.id, vec![bulky(0, 5_000), bulky(1, 20_000)]).await;
+    let rows = features.store.for_you_rows_before(&meta.id, base + 2).unwrap();
+    assert_eq!(rows.len(), 1, "the newest row alone is over the cap, and it is kept");
+    assert_eq!(rows[0]["content"].as_str().unwrap().split(' ').next(), Some("1"));
+  }
+
+  /// The scan reads 2,000 event lines back from the line it starts at and no further.
+  #[tokio::test]
+  async fn the_for_you_scan_stops_at_its_2000_line_bound() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "for-you-bound", None, TaskProfile::Manager).await;
+    let base = features.store.get_chat_event_count_sync(&meta.id).unwrap();
+    let mut events = vec![json!({"type": "user", "content": "far"})];
+    events.extend((1..700).map(|_| hidden_filler()));
+    events.push(json!({"type": "user", "content": "mid"}));
+    events.extend((701..2_500).map(|_| hidden_filler()));
+    events.push(json!({"type": "user", "content": "last"}));
+    events.extend((2_501..2_600).map(|_| hidden_filler()));
+    append_all(&features, &meta.id, events).await;
+    // Two thousand lines back from line 2,600 starts at line 600: "mid" at 700 is in, "far" at 0 is out.
+    let rows = features.store.for_you_rows_before(&meta.id, base + 2_600).unwrap();
+    assert_eq!(row_contents(&rows), ["mid", "last"]);
+  }
+
+  /// The scan reads the archived lines behind a session's first screen.
+  #[tokio::test]
+  async fn the_for_you_scan_reads_rows_from_the_archive() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "for-you-archive", None, TaskProfile::Manager).await;
+    let mut events = Vec::new();
+    for index in 0..200usize {
+      let mut event =
+        if index % 20 == 0 { json!({"type": "user", "content": format!("archived {index}")}) } else { hidden_filler() };
+      event["timestamp"] = json!("2025-02-01T00:00:00+00:00");
+      events.push(event);
+    }
+    for _ in 0..60usize {
+      let stamp = json!("2100-01-01T00:00:00+00:00");
+      events.push(
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "live"}]}, "timestamp": stamp}),
+      );
+      events.push(json!({"type": "master_done", "timestamp": stamp}));
+    }
+    append_all(&features, &meta.id, events).await;
+    let archived = features
+      .store
+      .archive_events_before(&meta.id, UtcDateTime::parse("2099-01-01T00:00:00Z").unwrap())
+      .await
+      .unwrap();
+    assert!(archived.is_some(), "the lines before the cutoff move to the archive");
+    // The bootstrap reads the session's own archive offset, which the archive moved.
+    let meta = features.store.require_session(&meta.id).await.unwrap();
+
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let start = payload.value[api::OLDEST_MESSAGE_ORDINAL_FIELD].as_u64().unwrap() as usize;
+    assert!(start > 200, "the first screen starts past the archived lines, at {start}");
+    let older = payload.value[OLDER_FOR_YOU_FIELD].as_array().unwrap();
+    assert_eq!(row_contents(older), (0..10usize).map(|slot| format!("archived {}", slot * 20)).collect::<Vec<_>>());
+  }
+
+  /// Only a manager session outside a chat thread is a web session. A worker and a thread session carry no older rows.
+  #[test]
+  fn only_a_manager_session_outside_a_chat_thread_is_a_web_session() {
+    charliebot_registry::thread_origin::register_origin_field("for_you_test_origin");
+    let mut thread = SessionMetadata::new("thread", "Thread", TaskProfile::Manager);
+    thread.set_extra("for_you_test_origin", json!({"thread": "t1"}));
+    assert!(!is_web_session(&thread));
+    assert!(is_web_session(&SessionMetadata::new("manager", "Manager", TaskProfile::Manager)));
+    assert!(!is_web_session(&SessionMetadata::new("worker", "Worker", TaskProfile::Worker)));
   }
 
   fn cfg_of(features: &Arc<FeatureContext>) -> Arc<CharlieBotConfig> {

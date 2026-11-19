@@ -1,9 +1,11 @@
 'use strict';
 // Session status panel loader (templates/js/chat/status-panel.js): the document carries this loader in the
 // module's place. A web session's open starts the download only when its status has a waiting item to count on
-// the view toggle, and the Status view's selection is the other first need. The open is replayed when the module
-// lands, with the web_status messages and the descendant refresh that arrived in the meantime. A session that
-// shows no panel never asks for the module. A failed download is reported and the next need retries.
+// the view toggle, and the Status view's selection is the other first need. The shared click-message helper
+// downloads first in the same group, because the module's Done action writes its message with it. The open is
+// replayed when the module lands, with the web_status messages and the descendant refresh that arrived in the
+// meantime. A session that shows no panel never asks for the module. A failed download is reported and the next
+// need retries.
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -70,7 +72,9 @@ test('a web session whose status has a waiting item starts the module download',
   rig.context.openSessionStatusPanel({...manager, web_status: waitingStatus}, []);
   assert.equal(rig.downloadCalls.length, 1);
   assert.equal(rig.downloadCalls[0].key, 'chat-status-panel');
-  assert.deepEqual(Array.from(rig.downloadCalls[0].paths), ['/static/js/chat/status-panel.js']);
+  assert.deepEqual(Array.from(rig.downloadCalls[0].paths),
+    ['/static/js/comment_post.js', '/static/js/chat/status-panel.js'],
+    'the Done action\'s click-message helper lands before the module that calls it');
 });
 
 test('a web session with nothing to count and a hidden panel asks for nothing', () => {

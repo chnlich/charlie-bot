@@ -14,9 +14,15 @@
 // reader selects the Status view. The open the page asked for is kept here,
 // with any web_status message or descendant refresh that lands in the meantime,
 // and the module replays them when it runs.
+//
+// The panel's Done action writes its click message with buildClickMessage from
+// web/static/js/comment_post.js, so that shared helper downloads first in the
+// same group. It travels with the panel rather than with the page: a reader who
+// never marks an item done pays neither file.
 (function() {
   const Chat = globalThis.Chat;
   const SOURCE = '/static/js/chat/status-panel.js';
+  const COMMENT_POST = '/static/js/comment_post.js';
 
   let loading = null;
   // The session open the page asked for while the module travelled. A null open
@@ -32,7 +38,7 @@
   // its message view, and the panel stays empty.
   function load() {
     if (loading === null) {
-      loading = loadPageScripts('chat-status-panel', [SOURCE]);
+      loading = loadPageScripts('chat-status-panel', [COMMENT_POST, SOURCE]);
       loading.then(() => {
         const open = opened;
         if (open) {

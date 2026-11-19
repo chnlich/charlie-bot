@@ -1762,8 +1762,8 @@ mod tests {
   async fn a_cron_child_quota_end_retries_on_the_next_auto_member() {
     let (_home, features) = feature_context_with_auto(&["member-a", "member-b"]);
     install_execution(&features).await;
-    // The bound session holds member-b, so the priority pool selects member-a for the child: a load on one member
-    // leaves the round on the other.
+    // The bound session holds member-b. The pool's subscription position starts at the list head, so the child takes
+    // member-a.
     let node = auto_manager(&features, "synthetic-auto-child-quota-node", "member-b").await.unwrap();
     let task = ScheduledTaskConfig {
       name: "synthetic-auto-child-quota".to_string(),

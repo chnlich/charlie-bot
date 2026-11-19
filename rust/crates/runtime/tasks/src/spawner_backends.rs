@@ -194,7 +194,7 @@ pub async fn resolve_requested_subagent_backend_model(
     error => anyhow::Error::new(error),
   })?;
   let excluded = verify_exclusion(cfg, &meta, role)?;
-  let selector = pool.selector(cfg).with_store(store);
+  let selector = pool.selector(cfg);
   let backend_id = match requested_backend {
     Some("") => return Err(value_error("requested backend is required")),
     Some(backend_id) => backend_id.to_string(),
@@ -222,7 +222,7 @@ pub async fn select_verify_backend(
 ) -> anyhow::Result<Option<(String, Option<String>, Vec<String>)>> {
   let meta = store.require_session(session_id).await?;
   let (session_backend, session_model) = resolve_session_default_backend_model(cfg, &meta)?;
-  let selector = pool.selector(cfg).with_store(store);
+  let selector = pool.selector(cfg);
   crate::review::select_checker_backend(
     cfg,
     &selector,

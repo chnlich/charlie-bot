@@ -161,8 +161,7 @@ impl BackendPool {
     Arc::clone(&self.availability)
   }
 
-  /// One selection over the process-wide owners this pool holds. A caller that also holds a store chains
-  /// [`model_pool::Selector::with_store`], so a priority pool orders its members by session load.
+  /// One selection over the process-wide owners this pool holds.
   pub fn selector<'a>(&'a self, cfg: &'a CharlieBotConfig) -> model_pool::Selector<'a> {
     model_pool::Selector::new(cfg, &self.registry, Arc::clone(&self.availability), Arc::clone(&self.positions))
   }

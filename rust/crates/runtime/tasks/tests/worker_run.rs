@@ -1988,12 +1988,12 @@ async fn a_verify_quota_switch_leaves_the_initiating_sessions_member_out() -> an
   Ok(())
 }
 
-/// Acceptance ④'s load order: a priority pool's delegation picks the member with the fewest sessions, so a quick edit
-/// delegated from a session on `fake` takes `fake2`.
+/// A priority pool's delegations take its subscription members in turn: two quick edits delegated from one Auto session
+/// run on `fake`, then `fake2`.
 #[tokio::test]
 #[ignore = "integration"]
-async fn a_priority_pool_delegation_picks_the_least_loaded_member() -> anyhow::Result<()> {
-  let scripts = Scripts::new(vec![result_script("distributed")]);
+async fn a_priority_pool_delegation_rotates_its_subscription_members() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("distributed"), result_script("distributed")]);
   let options = ["fake", "fake2"]
     .map(|id| BackendOption { billing: Some(PoolBilling::Subscription), ..scripts.option(id, BACKEND_TYPE) })
     .to_vec();
@@ -2011,16 +2011,20 @@ async fn a_priority_pool_delegation_picks_the_least_loaded_member() -> anyhow::R
   stack.dispatch.set_executor(None);
   stack.dispatch.admit_input(&parent.id, event_types::USER, "Take off and delegate this.", "user", json!({})).await?;
 
-  let (child_id, run) = delegate_and_run(&stack, quick_edit_body(&parent.id), &["fake", "fake2"]).await?;
+  let members = ["fake", "fake2"];
+  let (first_id, first_run) = delegate_and_run(&stack, quick_edit_body(&parent.id), &members).await?;
+  assert_eq!(first_run.backend.as_deref(), Some("fake"), "the subscription position starts at the list head");
+  // The request id derives from the description, so a second delegation needs its own description.
+  let second_body =
+    json!({"session_id": parent.id, "description": "run the second quick edit", "task_type": "quick-edit"});
+  let (second_id, second_run) = delegate_and_run(&stack, second_body, &members).await?;
+  assert_eq!(second_run.backend.as_deref(), Some("fake2"), "the position moved past fake");
 
-  assert_eq!(
-    run.backend.as_deref(),
-    Some("fake2"),
-    "the parent holds fake, so the child takes the least loaded member"
-  );
-  let child = stack.store().load_task_meta(&child_id).await?;
-  assert_eq!(child.backend, AUTO_POOL_ID, "the child keeps the pool id");
-  assert_eq!(child.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake2")));
+  for (child_id, member) in [(first_id, "fake"), (second_id, "fake2")] {
+    let child = stack.store().load_task_meta(&child_id).await?;
+    assert_eq!(child.backend, AUTO_POOL_ID, "the child keeps the pool id");
+    assert_eq!(child.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!(member)));
+  }
   Ok(())
 }
 
@@ -2347,9 +2351,9 @@ fn write_run_events(stack: &Stack, worker: &str, run: &str) -> anyhow::Result<()
 }
 
 /// Test ③: a worker that inherits an Auto session's pool id fails over within Auto when its run ends on quota. The
-/// delegation orders Auto by session load, so the worker takes a member other than the parent's; that member cools, the
-/// node moves to the next Auto member and not to the rotation pool, and the switch record sits in the worker's own chat
-/// with the handoff summary from the run's events log.
+/// worker takes the first Auto member; that member cools, the node moves to the next Auto member and not to the
+/// rotation pool, and the switch record sits in the worker's own chat with the handoff summary from the run's events
+/// log.
 #[tokio::test]
 #[ignore = "integration"]
 async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Result<()> {
@@ -2407,13 +2411,13 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
   assert_eq!(meta.backend, AUTO_POOL_ID, "the worker takes the pool id and picks its own member");
   assert_eq!(
     meta.extra(model_pool::POOL_MEMBER_FIELD),
-    Some(&json!("fake2")),
-    "the parent holds fake, so the load order gives the worker fake2"
+    Some(&json!("fake")),
+    "the subscription position starts at the list head, so the worker takes fake"
   );
 
   // The delegated first run finishes before the review feedback arrives, so the revision starts from a settled worker.
   settle_node(&stack, &worker).await?;
-  let run = revision_run_on_quota(&stack, &worker, "fake2").await?;
+  let run = revision_run_on_quota(&stack, &worker, "fake").await?;
   write_run_events(&stack, &worker, &run)?;
   stack.adapter.record_quota_failure_for_test(&worker, &run, None);
   stack.adapter.after_worker_run_for_test(&worker, &run, "failed").await?;
@@ -2425,26 +2429,26 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
     .into_iter()
     .find(|record| record.retry_of_run_id.as_deref() == Some(run.as_str()))
     .expect("the failover registers a retry run");
-  assert_eq!(retry.backend.as_deref(), Some("fake3"), "the next Auto member runs the retry");
+  assert_eq!(retry.backend.as_deref(), Some("fake2"), "the next Auto member runs the retry");
   assert_eq!(retry.input_event_ids, interrupted.input_event_ids);
   let outcome = stack.wait_terminal(&worker, &retry.id).await?;
   assert_eq!(outcome, RunOutcomeKind::Success, "{}", error_text(&stack, &worker, &retry.id)?);
   settle_node(&stack, &worker).await?;
   let worker_meta = stack.store().load_task_meta(&worker).await?;
   assert_eq!(worker_meta.backend, AUTO_POOL_ID, "the worker keeps its pool");
-  assert_eq!(worker_meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake3")), "the worker's own member moved");
+  assert_eq!(worker_meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake2")), "the worker's own member moved");
   let parent_meta = stack.store().load_task_meta(&parent.id).await?;
   assert_eq!(
     parent_meta.extra(model_pool::POOL_MEMBER_FIELD),
     Some(&json!("fake")),
     "the child's switch leaves the parent's member alone"
   );
-  assert!(backend_availability(&stack.features)?.out_until("fake2").is_some(), "the spent member is recorded out");
+  assert!(backend_availability(&stack.features)?.out_until("fake").is_some(), "the spent member is recorded out");
 
   let switches: Vec<Value> = quota_failover_events(&stack, &worker)?.iter().map(|event| event.to_value()).collect();
   assert_eq!(switches.len(), 1, "one switch record in the worker's own chat: {switches:?}");
-  assert_eq!(switches[0]["from"], "fake2");
-  assert_eq!(switches[0]["to"], "fake3");
+  assert_eq!(switches[0]["from"], "fake");
+  assert_eq!(switches[0]["to"], "fake2");
   assert_eq!(switches[0]["set"], AUTO_POOL_ID);
   assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
 
@@ -2455,7 +2459,7 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
     .find(|build| build.prompt_contains(REVIEW_FEEDBACK))
     .expect("the retry launched with the feedback it answers");
   assert!(
-    retry_launch.prompt_contains("this task switched from backend fake2 to fake3 after fake2 spent its quota"),
+    retry_launch.prompt_contains("this task switched from backend fake to fake2 after fake spent its quota"),
     "the retry's launch carries the switch note"
   );
   let failed_dir = stack.store().run_dir(&worker, &run).display().to_string();

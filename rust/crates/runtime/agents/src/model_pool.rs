@@ -1,17 +1,18 @@
 //! The model pool: the one resolver for a backend id, whether it names an option or a configured pool.
 //!
-//! A pool names `backends.options` ids and a rule. A priority pool picks its best selectable member. A rotate pool
-//! picks the first selectable member after its rotation position. Both rules skip a member the caller excludes, that
-//! [`BackendAvailability`] holds out, or whose usage reading says it is exhausted. A member one pool recorded out is
-//! skipped by every pool that names it. A session whose backend is a pool id runs each turn on the member this module
-//! picks, and records that member in its `pool_member` slot.
+//! A pool names `backends.options` ids and a rule. A priority pool takes its subscription members in turn, and takes
+//! its pay-as-you-go members in turn only when no subscription member is selectable. A rotate pool takes its members in
+//! turn. Both rules skip a member the caller excludes, that [`BackendAvailability`] holds out, or whose usage reading
+//! says it is exhausted. A member one pool recorded out is skipped by every pool that names it. A session whose backend
+//! is a pool id runs each turn on the member this module picks, and records that member in its `pool_member` slot.
 //!
 //! Terms: a *member* is a `backends.options` id that a pool names. *Out* is the "out until" record that
-//! [`BackendAvailability`] keeps per member. A *position* is a rotate pool's place in its member list, kept in process
-//! memory, one per pool id.
+//! [`BackendAvailability`] keeps per member. A *lane* is one track of a pool's turns: a rotate pool has one, and a
+//! priority pool has one per billing tier. A *position* is a lane's place in its pool's member list, kept in process
+//! memory, one per pool id and lane.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
@@ -19,7 +20,6 @@ use charliebot_core::{event_types, metadata_slot};
 use charliebot_registry::backend::MemberReading;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::{Registry, RegistryError};
-use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use serde_json::{Map, Value, json};
 
@@ -40,7 +40,7 @@ pub struct ModelPool {
 }
 
 /// What one selection reads: the config, the registry whose usage readings it consults, the availability owner, the
-/// pool, the ids the caller excludes, and the moment it reads at. It also reads the active sessions each member holds.
+/// pool, the ids the caller excludes, and the moment it reads at.
 pub struct Selection<'a> {
   cfg: &'a CharlieBotConfig,
   registry: &'a Registry,
@@ -48,14 +48,10 @@ pub struct Selection<'a> {
   pool: &'a ModelPool,
   excluded: &'a [String],
   now: UtcDateTime,
-  /// How many active sessions each member holds, which orders a priority pool's subscription tier. Empty when the
-  /// caller keeps no such count.
-  member_loads: &'a HashMap<String, usize>,
 }
 
 impl<'a> Selection<'a> {
-  /// A selection that reads no load counts, for a caller that keeps none: a worker's or a route's pick, or a pool whose
-  /// order alone decides.
+  /// The selection of `pool` at `now`, leaving out the members `excluded` names.
   pub fn new(
     cfg: &'a CharlieBotConfig,
     registry: &'a Registry,
@@ -64,47 +60,30 @@ impl<'a> Selection<'a> {
     excluded: &'a [String],
     now: UtcDateTime,
   ) -> Self {
-    Self { cfg, registry, availability, pool, excluded, now, member_loads: &NO_LOADS }
-  }
-
-  /// The same selection, reading the load counts `member_loads`.
-  pub fn with_loads(self, member_loads: &'a HashMap<String, usize>) -> Self {
-    Self { member_loads, ..self }
+    Self { cfg, registry, availability, pool, excluded, now }
   }
 }
 
-/// The load counts of a selection that reads none.
-static NO_LOADS: LazyLock<HashMap<String, usize>> = LazyLock::new(HashMap::new);
-
-/// The one selection every caller makes: the process-wide owners a member pick reads, plus the store whose active
-/// sessions order a priority pool when the caller has one.
+/// The one selection every caller makes: the process-wide owners a member pick reads and the positions it moves.
 ///
-/// A caller with a [`FeatureContext`] builds one with [`Selector::from_features`], so a priority pool orders its
-/// subscription tier by the active sessions each member holds. A caller that holds only the process-wide owners (a CLI
-/// one-shot call) builds one with [`Selector::new`], and reads the pool's configured order.
+/// A caller with a [`FeatureContext`] builds one with [`Selector::from_features`]. A caller that holds only the
+/// process-wide owners (a CLI one-shot call) builds one with [`Selector::new`].
 pub struct Selector<'a> {
   cfg: &'a CharlieBotConfig,
   registry: &'a Registry,
   availability: Arc<BackendAvailability>,
   positions: Arc<RotationPositions>,
-  store: Option<&'a Store>,
 }
 
 impl<'a> Selector<'a> {
-  /// A selection over the given owners that reads no session load counts.
+  /// A selection over the given owners.
   pub fn new(
     cfg: &'a CharlieBotConfig,
     registry: &'a Registry,
     availability: Arc<BackendAvailability>,
     positions: Arc<RotationPositions>,
   ) -> Self {
-    Self { cfg, registry, availability, positions, store: None }
-  }
-
-  /// The same selection, ordering a priority pool by the active sessions `store` records for each member.
-  pub fn with_store(mut self, store: &'a Store) -> Self {
-    self.store = Some(store);
-    self
+    Self { cfg, registry, availability, positions }
   }
 
   /// The selection over the owners a server process holds in its startup state.
@@ -114,26 +93,21 @@ impl<'a> Selector<'a> {
       registry: &features.registry,
       availability: backend_availability::backend_availability(features)?,
       positions: features.startup.require::<RotationPositions>()?,
-      store: Some(&features.store),
     })
   }
 
   /// The option a call on `backend_id` runs on, or `None` when no member is selectable. A model id selects itself
-  /// through the same filters as a one-member rotate pool. A selected rotate pool moves past its member.
+  /// through the same filters as a one-member rotate pool. The selected member moves its lane's position past it.
   pub fn select(&self, backend_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
     let pool = selection_pool_for_id(self.cfg, backend_id)?;
-    let loads = self.loads(&pool)?;
-    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now())
-      .with_loads(&loads);
+    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now());
     Ok(self.option(self.positions.select(&selection)?))
   }
 
-  /// The option the next call on `backend_id` would run on, without moving a rotate pool's position.
+  /// The option the next call on `backend_id` would run on, without moving any position.
   pub fn peek(&self, backend_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
     let pool = selection_pool_for_id(self.cfg, backend_id)?;
-    let loads = self.loads(&pool)?;
-    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now())
-      .with_loads(&loads);
+    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now());
     Ok(self.option(self.positions.peek(&selection)?))
   }
 
@@ -164,14 +138,6 @@ impl<'a> Selector<'a> {
       self.cfg.get_backend_option(&member.backend).expect("a pool selection returns a backends.options id").clone()
     })
   }
-
-  /// The counts a priority pool orders by, or none for a rotate pool and for a selector without a store.
-  fn loads(&self, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
-    match (pool.rule, self.store) {
-      (PoolRule::Priority, Some(store)) => member_loads_in(store, pool),
-      _ => Ok(HashMap::new()),
-    }
-  }
 }
 
 impl ModelPool {
@@ -196,56 +162,99 @@ fn selection_pool_for_id(cfg: &CharlieBotConfig, id: &str) -> anyhow::Result<Mod
   Ok(ModelPool { id: id.to_string(), rule: PoolRule::Rotate, members: vec![PoolMember { backend: option.id.clone() }] })
 }
 
-/// The rotation positions of the rotate pools, one per pool id. A position lives in process memory: a restart or a
-/// new CLI process starts every rotation from its first member.
+/// One track of a pool's turns, with its own position. A rotate pool has one lane. A priority pool has one per billing
+/// tier, so a turn on one tier leaves the other tier's position where it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Lane {
+  /// A rotate pool's only lane.
+  Rotate,
+  /// A priority pool's subscription tier.
+  Subscription,
+  /// A priority pool's pay-as-you-go tier.
+  Payg,
+}
+
+/// Where a lane's position starts when a process first reads it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LaneStart {
+  /// The first member in config order. The server starts here, so its callers share one rotation from the list head.
+  #[default]
+  Head,
+  /// A random member. A CLI process starts here, so that separate processes do not all begin on the first member.
+  Random,
+}
+
+/// The member a selection picked, the lane it belongs to, and the position that lane moves to once the pick is taken.
+pub(crate) struct Pick {
+  member: PoolMember,
+  lane: Lane,
+  next: usize,
+}
+
+/// The rotation positions, one per pool id and lane. A position lives in process memory: a restart or a new CLI process
+/// starts each lane again from its [`LaneStart`].
 #[derive(Default)]
 pub struct RotationPositions {
-  positions: Mutex<HashMap<String, usize>>,
+  positions: Mutex<HashMap<(String, Lane), usize>>,
+  start: LaneStart,
 }
 
 impl RotationPositions {
-  /// Select the member `selection`'s pool runs a call on and move the pool's position past it. The position is read
+  /// Positions whose lanes start from `start` when a process first reads them.
+  pub fn new(start: LaneStart) -> Self {
+    Self { positions: Mutex::default(), start }
+  }
+
+  /// Select the member `selection`'s pool runs a call on and move the lane's position past it. The position is read
   /// under the lock, the selection reads usage without the lock, and the advanced position is written under the lock in
   /// one step.
   pub fn select(&self, selection: &Selection<'_>) -> anyhow::Result<Option<PoolMember>> {
-    let mut position = self.position(&selection.pool.id);
-    let selected = select(selection, Some(&mut position))?;
-    self.set_position(&selection.pool.id, position);
-    Ok(selected)
+    let pool_id = &selection.pool.id;
+    let Some(pick) = select(selection, |lane| self.position(pool_id, lane))? else {
+      return Ok(None);
+    };
+    self.set_position(pool_id, pick.lane, pick.next);
+    Ok(Some(pick.member))
   }
 
-  /// The member `select` would pick now, without moving the pool's position. A host gate and a turn read use it, so
-  /// reading a member leaves the rotation where it was.
+  /// The member `select` would pick now, without moving any position. A route check and a turn read use it, so reading
+  /// a member leaves the rotation where it was.
   pub fn peek(&self, selection: &Selection<'_>) -> anyhow::Result<Option<PoolMember>> {
-    let mut position = self.position(&selection.pool.id);
-    select(selection, Some(&mut position))
+    Ok(select(selection, |lane| self.position(&selection.pool.id, lane))?.map(|pick| pick.member))
   }
 
-  fn position(&self, pool_id: &str) -> usize {
-    let positions = self.positions.lock().expect("rotation position mutex is not poisoned");
-    positions.get(pool_id).copied().unwrap_or(0)
-  }
-
-  fn set_position(&self, pool_id: &str, position: usize) {
+  fn position(&self, pool_id: &str, lane: Lane) -> usize {
     let mut positions = self.positions.lock().expect("rotation position mutex is not poisoned");
-    positions.insert(pool_id.to_string(), position);
+    *positions.entry((pool_id.to_string(), lane)).or_insert_with(|| self.first_position())
+  }
+
+  fn first_position(&self) -> usize {
+    match self.start {
+      LaneStart::Head => 0,
+      LaneStart::Random => {
+        let mut bytes = [0u8; size_of::<usize>()];
+        getrandom::fill(&mut bytes).expect("the OS random source is available");
+        usize::from_ne_bytes(bytes)
+      }
+    }
+  }
+
+  fn set_position(&self, pool_id: &str, lane: Lane, position: usize) {
+    let mut positions = self.positions.lock().expect("rotation position mutex is not poisoned");
+    positions.insert((pool_id.to_string(), lane), position);
   }
 }
 
 /// Select the member a call runs on, or `None` when the pool has no selectable member.
 ///
 /// A selectable member is one `excluded` does not name, that is not out per [`BackendAvailability`], and whose usage
-/// reading does not say it is exhausted. A member whose backend type exposes no reading is selectable. A
-/// [`PoolRule::Priority`] pool orders its selectable members. A [`PoolRule::Rotate`] pool walks from `position` in
-/// member order and advances `position` past the member it selects, so `position` is required for a rotate pool.
-pub(crate) fn select(selection: &Selection<'_>, position: Option<&mut usize>) -> anyhow::Result<Option<PoolMember>> {
-  let Selection { cfg, registry, availability, pool, excluded, now, member_loads } = *selection;
+/// reading does not say it is exhausted. A member whose backend type exposes no reading is selectable. `position` reads
+/// the position of a lane; the pick names the lane it belongs to and the position that lane moves to.
+pub(crate) fn select(selection: &Selection<'_>, position: impl FnOnce(Lane) -> usize) -> anyhow::Result<Option<Pick>> {
+  let Selection { cfg, registry, availability, pool, excluded, now } = *selection;
   match pool.rule {
-    PoolRule::Priority => select_priority(cfg, registry, availability, pool, excluded, now, member_loads),
-    PoolRule::Rotate => {
-      let position = position.ok_or_else(|| anyhow!("a rotate pool needs the rotation position to advance"))?;
-      select_rotate(cfg, registry, availability, pool, position, excluded, now)
-    }
+    PoolRule::Priority => select_priority(cfg, registry, availability, pool, excluded, now, position),
+    PoolRule::Rotate => select_rotate(cfg, registry, availability, pool, position(Lane::Rotate), excluded, now),
   }
 }
 
@@ -285,7 +294,9 @@ fn candidate(
   Ok(Some(Candidate { member: member.clone(), reading }))
 }
 
-/// Pick the least-assigned member from the subscription tier that the quota readings allow.
+/// Pick from a priority pool. The subscription tier comes first: its members below the 90% line, or every selectable
+/// subscription when none is below it. The pay-as-you-go tier is picked from only when no subscription is selectable.
+/// The pick walks the chosen tier's lane from that lane's position.
 fn select_priority(
   cfg: &CharlieBotConfig,
   registry: &Registry,
@@ -293,68 +304,72 @@ fn select_priority(
   pool: &ModelPool,
   excluded: &[String],
   now: UtcDateTime,
-  member_loads: &HashMap<String, usize>,
-) -> anyhow::Result<Option<PoolMember>> {
-  let mut candidates = Vec::new();
-  for member in &pool.members {
-    if let Some(candidate) = candidate(cfg, registry, availability, member, excluded, now)? {
-      candidates.push(candidate);
-    }
-  }
-
-  let subscriptions = candidates
+  position: impl FnOnce(Lane) -> usize,
+) -> anyhow::Result<Option<Pick>> {
+  let candidates = pool
+    .members
     .iter()
-    .filter(|candidate| member_billing(cfg, &candidate.member) == Some(PoolBilling::Subscription))
-    .collect::<Vec<_>>();
-  if !subscriptions.is_empty() {
-    let under_line = subscriptions
-      .iter()
-      .filter(|candidate| !near_exhaustion(candidate.reading.as_ref()))
-      .copied()
-      .collect::<Vec<_>>();
-    let tier = if under_line.is_empty() { subscriptions } else { under_line };
-    return Ok(
-      tier
-        .iter()
-        .enumerate()
-        .min_by_key(|(config_order, candidate)| {
-          (member_loads.get(&candidate.member.backend).copied().unwrap_or_default(), *config_order)
-        })
-        .map(|(_, candidate)| candidate.member.clone()),
-    );
-  }
+    .map(|member| candidate(cfg, registry, availability, member, excluded, now))
+    .collect::<anyhow::Result<Vec<_>>>()?;
+  let reading = |index: usize| candidates[index].as_ref().and_then(|candidate| candidate.reading.as_ref());
+  let selectable = |billing: PoolBilling| {
+    (0..pool.members.len())
+      .filter(|&index| candidates[index].is_some() && member_billing(cfg, &pool.members[index]) == Some(billing))
+      .collect::<Vec<_>>()
+  };
 
-  Ok(
-    candidates
-      .iter()
-      .find(|candidate| member_billing(cfg, &candidate.member) == Some(PoolBilling::Payg))
-      .map(|candidate| candidate.member.clone()),
-  )
+  let subscriptions = selectable(PoolBilling::Subscription);
+  let (tier, lane) = if subscriptions.is_empty() {
+    (selectable(PoolBilling::Payg), Lane::Payg)
+  } else {
+    let under_line =
+      subscriptions.iter().copied().filter(|&index| !near_exhaustion(reading(index))).collect::<Vec<_>>();
+    (if under_line.is_empty() { subscriptions } else { under_line }, Lane::Subscription)
+  };
+  if tier.is_empty() {
+    return Ok(None);
+  }
+  Ok(pick_in_tier(pool, &tier, lane, position(lane)))
 }
 
-/// Pick from a rotate pool: the first selectable member after `position`, then move `position` past it.
+/// The first member of `tier` that the walk from `start` reaches. The pick moves the lane past it.
+fn pick_in_tier(pool: &ModelPool, tier: &[usize], lane: Lane, start: usize) -> Option<Pick> {
+  let count = pool.members.len();
+  walk(count, start).find(|index| tier.contains(index)).map(|index| Pick {
+    member: pool.members[index].clone(),
+    lane,
+    next: (index + 1) % count,
+  })
+}
+
+/// Pick from a rotate pool: the first selectable member the walk from `start` reaches. The pick moves the lane past it.
 fn select_rotate(
   cfg: &CharlieBotConfig,
   registry: &Registry,
   availability: &BackendAvailability,
   pool: &ModelPool,
-  position: &mut usize,
+  start: usize,
   excluded: &[String],
   now: UtcDateTime,
-) -> anyhow::Result<Option<PoolMember>> {
+) -> anyhow::Result<Option<Pick>> {
   let count = pool.members.len();
   if count == 0 {
     return Ok(None);
   }
-  for offset in 0..count {
-    let index = (*position + offset) % count;
+  for index in walk(count, start) {
     let Some(candidate) = candidate(cfg, registry, availability, &pool.members[index], excluded, now)? else {
       continue;
     };
-    *position = (index + 1) % count;
-    return Ok(Some(candidate.member));
+    return Ok(Some(Pick { member: candidate.member, lane: Lane::Rotate, next: (index + 1) % count }));
   }
   Ok(None)
+}
+
+/// The member indexes a walk visits: `start` first, then each later index in member order, wrapping once around the
+/// list. A walk takes a list of at least one member.
+fn walk(count: usize, start: usize) -> impl Iterator<Item = usize> {
+  let first = start % count;
+  (0..count).map(move |offset| (first + offset) % count)
 }
 
 /// One member change a turn start made.
@@ -493,8 +508,7 @@ pub async fn start_turn(
 }
 
 /// The member a turn of the session runs on, as the turn start decides it, read without recording anything or moving
-/// a rotation position. The cron host gate asks it before a fire, so the gate judges the member the fire then runs on.
-/// `None` when no member is selectable: the turn then ends with the exhausted error and runs nothing.
+/// a position. `None` when no member is selectable: the turn then ends with the exhausted error and runs nothing.
 pub fn turn_member(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
@@ -518,8 +532,7 @@ fn decide_turn(
   let availability = backend_availability::backend_availability(features)?;
   let positions = features.startup.require::<RotationPositions>()?;
   let now = UtcDateTime::now();
-  let member_loads = member_loads(features, &pool)?;
-  let selection = Selection::new(cfg, &features.registry, &availability, &pool, &[], now).with_loads(&member_loads);
+  let selection = Selection::new(cfg, &features.registry, &availability, &pool, &[], now);
   let current = cfg.backends.pool(&meta.backend).and_then(|_| {
     meta
       .extra(POOL_MEMBER_FIELD)
@@ -539,7 +552,7 @@ fn decide_turn(
           Ok(TurnDecision::Keep(current.clone()))
         }
       }
-      PoolRule::Priority => decide_keep_or_switch(features, &selection, &positions, current),
+      PoolRule::Priority => decide_keep_or_switch(features, &selection, &positions, current, advance),
     };
   }
   decide_fresh(features, &selection, current.as_deref(), advance)
@@ -586,12 +599,15 @@ fn decide_fresh(
   Ok(TurnDecision::Move { member: selected.backend, change })
 }
 
-/// Apply the priority turn-start rules to a session whose current member is selectable.
+/// Apply the priority turn-start rules to a session whose current member is selectable. The rules compare the member
+/// `peek` names. A move takes its new member through `select` when the turn advances the rotation, so each session that
+/// moves at one turn start takes the next member in its tier.
 fn decide_keep_or_switch(
   features: &FeatureContext,
   selection: &Selection<'_>,
   positions: &RotationPositions,
   current: &str,
+  advance: bool,
 ) -> anyhow::Result<TurnDecision> {
   let Some(selected) = positions.peek(selection)? else {
     // The member is selectable by its out record but spent by its reading, and no other member is left.
@@ -620,12 +636,17 @@ fn decide_keep_or_switch(
   } else {
     return Ok(TurnDecision::Keep(current.to_string()));
   };
+  // Another turn can move the lane between `peek` and `select`, so a move records the member `select` takes. `select`
+  // finds none only when a member's state changed between the two reads.
+  let Some(moved) = (if advance { positions.select(selection)? } else { Some(selected) }) else {
+    return Ok(TurnDecision::Exhausted(exhausted_message(features, selection.cfg, selection.pool)?));
+  };
   Ok(TurnDecision::Move {
-    member: selected.backend.clone(),
+    member: moved.backend.clone(),
     change: Some(MemberChange::at_turn_start(
       &selection.pool.id,
       current.to_string(),
-      selected.backend,
+      moved.backend,
       reason,
       recovers_at,
     )),
@@ -736,20 +757,6 @@ pub async fn set_current_member(features: &FeatureContext, session_id: &str, mem
 /// Render a reset in the minute-resolution form the pool events carry.
 fn format_minutes(datetime: UtcDateTime) -> String {
   crate::backend_availability::format_minutes(datetime.into_inner())
-}
-
-/// The active sessions each member of `pool` holds: the counts a priority pool's subscription tier is ordered by. A
-/// rotate pool keeps its configured order, so it reads no count.
-pub fn member_loads(features: &FeatureContext, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
-  member_loads_in(&features.store, pool)
-}
-
-/// The same counts, read from `store` alone, for a caller that holds no [`FeatureContext`].
-pub fn member_loads_in(store: &Store, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
-  match pool.rule {
-    PoolRule::Priority => Ok(store.active_session_string_metadata_counts(&pool.id, POOL_MEMBER_FIELD)?),
-    PoolRule::Rotate => Ok(HashMap::new()),
-  }
 }
 
 /// The refusal of a session whose backend resolves to no `backends.options` entry.
@@ -887,7 +894,7 @@ backends:
       members: [chatgpt]
 ";
 
-  /// The priority pool `auto` over five subscriptions, for the tests that count the sessions each member holds.
+  /// The priority pool `auto` over five subscriptions, for the tests that take turns across them.
   const ROTATION_CONFIG: &str = "\
 backends:
   options:
@@ -901,6 +908,25 @@ backends:
       label: Auto
       rule: priority
       members: [member-a, member-b, member-c, member-d, member-e]
+";
+
+  /// One priority pool over two subscriptions below the line, one near exhaustion, one spent, and three pay-as-you-go
+  /// members. The readings are `test_reading`'s.
+  const TIER_CONFIG: &str = "\
+backends:
+  options:
+    - {id: chatgpt, label: ChatGPT, type: synthetic, model: model-gpt, billing: subscription}
+    - {id: claude-sub, label: Claude, type: synthetic, model: model-claude, billing: subscription}
+    - {id: near, label: Near, type: synthetic, model: model-near, billing: subscription}
+    - {id: spent, label: Spent, type: synthetic, model: model-spent, billing: subscription}
+    - {id: payg-a, label: Payg A, type: synthetic, model: model-payg-a, billing: payg}
+    - {id: payg-b, label: Payg B, type: synthetic, model: model-payg-b, billing: payg}
+    - {id: payg-c, label: Payg C, type: synthetic, model: model-payg-c, billing: payg}
+  pools:
+    - id: cheap
+      label: Cheap
+      rule: priority
+      members: [chatgpt, claude-sub, near, spent, payg-a, payg-b, payg-c]
 ";
 
   fn fixture() -> (tempfile::TempDir, Arc<FeatureContext>) {
@@ -987,7 +1013,7 @@ backends:
   #[tokio::test]
   async fn subscription_tiers_precede_pay_as_you_go() {
     let (_home, features) = fixture();
-    // Trade-off 3's example: ChatGPT (20% left, 6h), Claude (51%, 2 days), Devin (no reading).
+    // The readings: ChatGPT (20% left, 6h), Claude (51%, 2 days), Devin (no reading).
     assert_eq!(pick(&features, "auto", &[]), Some("chatgpt".to_string()));
     assert_eq!(pick(&features, "auto", &["chatgpt"]), Some("claude-sub".to_string()));
     assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub"]), Some("devin".to_string()));
@@ -998,15 +1024,15 @@ backends:
   }
 
   #[tokio::test]
-  async fn new_auto_sessions_take_the_least_assigned_member_in_turn() {
+  async fn new_auto_sessions_take_the_subscriptions_in_turn() {
     let (_home, features) = fixture_with(ROTATION_CONFIG);
     let cfg = loaded_cfg(&features);
     let expected = ["member-a", "member-b", "member-c", "member-d", "member-e", "member-a"];
 
     for (index, expected_member) in expected.into_iter().enumerate() {
       let mut meta = pool_session(&features, &format!("pool-rotation-{index}"), "auto").await;
-      let gate_member = turn_member(&features, &cfg, &meta).unwrap();
-      assert_eq!(gate_member.as_deref(), Some(expected_member));
+      let read_member = turn_member(&features, &cfg, &meta).unwrap();
+      assert_eq!(read_member.as_deref(), Some(expected_member));
 
       start_turn(&features, &cfg, &mut meta).await.unwrap();
       assert_eq!(current_member_id(&cfg, &meta).unwrap(), expected_member);
@@ -1014,60 +1040,101 @@ backends:
   }
 
   #[tokio::test]
-  async fn archived_and_other_backend_sessions_do_not_add_member_load() {
+  async fn consecutive_selects_rotate_across_the_subscriptions() {
     let (_home, features) = fixture_with(ROTATION_CONFIG);
-    let cfg = loaded_cfg(&features);
-    features.store.active_session_string_metadata_counts("auto", POOL_MEMBER_FIELD).unwrap();
-
-    let active = pool_session(&features, "pool-load-active", "auto").await;
-    features
-      .store
-      .update_slot_fields(&active.id, OWNER, Map::from_iter([(POOL_MEMBER_FIELD.to_string(), json!("member-a"))]))
-      .await
-      .unwrap();
-
-    let archived = pool_session(&features, "pool-load-archived", "auto").await;
-    features
-      .store
-      .update_slot_fields(&archived.id, OWNER, Map::from_iter([(POOL_MEMBER_FIELD.to_string(), json!("member-b"))]))
-      .await
-      .unwrap();
-    features.store.archive_session(&archived.id).await.unwrap();
-
-    let other_backend = pool_session(&features, "pool-load-other-backend", "member-a").await;
-    features
-      .store
-      .update_slot_fields(
-        &other_backend.id,
-        OWNER,
-        Map::from_iter([(POOL_MEMBER_FIELD.to_string(), json!("member-b"))]),
-      )
-      .await
-      .unwrap();
-
-    let counts = features.store.active_session_string_metadata_counts("auto", POOL_MEMBER_FIELD).unwrap();
-    assert_eq!(counts.get("member-a"), Some(&1));
-    assert!(!counts.contains_key("member-b"));
-
-    let fresh = pool_session(&features, "pool-load-probe", "auto").await;
-    assert_eq!(turn_member(&features, &cfg, &fresh).unwrap().as_deref(), Some("member-b"));
+    let picks = (0..6).map(|_| pick(&features, "auto", &[]).unwrap()).collect::<Vec<_>>();
+    assert_eq!(picks, ["member-a", "member-b", "member-c", "member-d", "member-e", "member-a"]);
   }
 
   #[tokio::test]
-  async fn under_line_subscriptions_win_over_a_less_assigned_near_exhausted_member() {
-    let (_home, features) = fixture();
+  async fn a_selectable_subscription_wins_over_pay_as_you_go() {
+    let (_home, features) = fixture_with(TIER_CONFIG);
+    assert_eq!(pick(&features, "cheap", &[]), Some("chatgpt".to_string()));
+    assert_eq!(pick(&features, "cheap", &["chatgpt"]), Some("claude-sub".to_string()), "an excluded subscription");
+    assert_eq!(pick(&features, "cheap", &["claude-sub"]), Some("chatgpt".to_string()));
+    assert_eq!(pick(&features, "cheap", &[]), Some("claude-sub".to_string()));
+  }
+
+  #[tokio::test]
+  async fn with_no_selectable_subscription_the_pay_as_you_go_members_rotate() {
+    let (_home, features) = fixture_with(TIER_CONFIG);
+    let availability = availability(&features);
+    for subscription in ["chatgpt", "claude-sub", "near"] {
+      availability.record(subscription, None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    }
+    let picks = (0..4).map(|_| pick(&features, "cheap", &[]).unwrap()).collect::<Vec<_>>();
+    assert_eq!(picks, ["payg-a", "payg-b", "payg-c", "payg-a"]);
+  }
+
+  #[tokio::test]
+  async fn cooling_and_excluded_members_take_no_turn() {
+    let (_home, features) = fixture_with(TIER_CONFIG);
+    // While an under-line subscription is selectable, `near` (at or above the line) and `spent` (exhausted) take no
+    // turn.
+    let picks = (0..3).map(|_| pick(&features, "cheap", &[]).unwrap()).collect::<Vec<_>>();
+    assert_eq!(picks, ["chatgpt", "claude-sub", "chatgpt"]);
+
+    // With every subscription gone, only the pay-as-you-go member that is neither cooling nor excluded takes turns.
+    availability(&features).record("payg-b", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    let excluded = ["chatgpt", "claude-sub", "near", "payg-c"];
+    assert_eq!(pick(&features, "cheap", &excluded), Some("payg-a".to_string()));
+    assert_eq!(pick(&features, "cheap", &excluded), Some("payg-a".to_string()));
+  }
+
+  #[tokio::test]
+  async fn peeks_move_no_lane_and_the_two_tiers_turn_apart() {
+    let (_home, features) = fixture_with(TIER_CONFIG);
     let cfg = loaded_cfg(&features);
-    for (index, member) in ["chatgpt", "chatgpt", "claude-sub", "devin"].into_iter().enumerate() {
-      let session = pool_session(&features, &format!("pool-load-under-line-{index}"), "auto").await;
+    let meta = pool_session(&features, "tier-peek", "cheap").await;
+    // A turn read names the member the next select takes, and reading it twice moves nothing.
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap().as_deref(), Some("chatgpt"));
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap().as_deref(), Some("chatgpt"));
+    assert_eq!(pick(&features, "cheap", &[]), Some("chatgpt".to_string()));
+
+    // Normal selects alternate with selects that exclude both subscriptions. The subscription lane keeps its turn
+    // order, and the pay-as-you-go lane rotates on its own.
+    let subscriptions_excluded = ["chatgpt", "claude-sub", "near"];
+    let mut normal = Vec::new();
+    let mut pay_as_you_go = Vec::new();
+    for _ in 0..3 {
+      normal.push(pick(&features, "cheap", &[]).unwrap());
+      pay_as_you_go.push(pick(&features, "cheap", &subscriptions_excluded).unwrap());
+    }
+    assert_eq!(normal, ["claude-sub", "chatgpt", "claude-sub"]);
+    assert_eq!(pay_as_you_go, ["payg-a", "payg-b", "payg-c"]);
+  }
+
+  #[tokio::test]
+  async fn sessions_moved_at_one_turn_start_take_different_subscriptions() {
+    let (_home, features) = fixture_with(TIER_CONFIG);
+    let cfg = loaded_cfg(&features);
+    let mut changes = Vec::new();
+    for index in 0..2 {
+      let mut meta = pool_session(&features, &format!("tier-moved-{index}"), "cheap").await;
       features
         .store
-        .update_slot_fields(&session.id, OWNER, Map::from_iter([(POOL_MEMBER_FIELD.to_string(), json!(member))]))
+        .update_slot_fields(&meta.id, OWNER, Map::from_iter([(POOL_MEMBER_FIELD.to_string(), json!("payg-a"))]))
         .await
         .unwrap();
+      meta.set_extra(POOL_MEMBER_FIELD, json!("payg-a"));
+      changes.push(changed(start_turn(&features, &cfg, &mut meta).await.unwrap()));
     }
+    // Each session runs on pay-as-you-go while a subscription is selectable, so each one moves at its turn start.
+    assert_eq!(changes.iter().map(|change| change.to.as_str()).collect::<Vec<_>>(), ["chatgpt", "claude-sub"]);
+    assert!(changes.iter().all(|change| change.reason == event_types::QUOTA_REASON_SUBSCRIPTION_RESET));
+  }
 
-    let fresh = pool_session(&features, "pool-load-under-line-probe", "auto").await;
-    assert_eq!(turn_member(&features, &cfg, &fresh).unwrap().as_deref(), Some("claude-sub"));
+  #[tokio::test]
+  async fn a_random_start_holds_across_reads() {
+    let (_home, features) = fixture_with(TIER_CONFIG);
+    let cfg = loaded_cfg(&features);
+    let availability = availability(&features);
+    let positions = RotationPositions::new(LaneStart::Random);
+    let cheap = selection_pool_for_id(&cfg, "cheap").unwrap();
+    let selection = Selection::new(&cfg, &features.registry, &availability, &cheap, &[], UtcDateTime::now());
+    let peeked = positions.peek(&selection).unwrap();
+    assert_eq!(positions.peek(&selection).unwrap(), peeked, "a second read draws no new start");
+    assert_eq!(positions.select(&selection).unwrap(), peeked, "the select takes the member the peek named");
   }
 
   #[tokio::test]

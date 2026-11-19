@@ -180,6 +180,25 @@
     return row;
   }
 
+  // The Remaining row: the open milestones in the order the work reaches them, under their count. The caller draws
+  // no row for an empty list.
+  function remainingRow(items) {
+    const row = statusRow('remaining');
+    row.appendChild(labelSpan('Remaining'));
+    const column = document.createElement('div');
+    column.className = 'min-w-0 break-words text-slate-200';
+    const count = textSpan('block text-slate-400', items.length + ' left');
+    count.dataset.remainingCount = String(items.length);
+    column.appendChild(count);
+    items.forEach((text, index) => {
+      const line = textSpan('block', (index + 1) + '. ' + text);
+      line.dataset.remainingItem = String(index + 1);
+      column.appendChild(line);
+    });
+    row.appendChild(column);
+    return row;
+  }
+
   function nowRow(status) {
     const row = statusRow('now');
     row.appendChild(labelSpan('Now'));
@@ -497,6 +516,7 @@
       if (held.length || pendingForSession(panelSessionId).length || panelHeaderNotice) el.appendChild(waitingRow([], held));
     } else {
       el.appendChild(goalRow(panelStatus.goal));
+      if (panelStatus.remaining.length) el.appendChild(remainingRow(panelStatus.remaining));
       el.appendChild(nowRow(panelStatus));
       el.appendChild(waitingRow(panelStatus.waiting, derivedFor(panelSessionId)));
     }

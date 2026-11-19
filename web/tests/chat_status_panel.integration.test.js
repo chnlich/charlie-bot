@@ -32,6 +32,7 @@ const {readStatic, runIconModule} = require('./read_static');
 const STATUS = {
   goal: 'Ship the status panel',
   now: 'Frontend under review',
+  remaining: [],
   waiting: [
     {text: 'Decide the sample size', link: 'https://example.com/plan'},
     {text: 'Approve the deploy', link: null},
@@ -42,6 +43,7 @@ const STATUS = {
 const NEWER = {
   goal: 'Ship the status panel',
   now: 'Tests running',
+  remaining: [],
   waiting: [{text: 'Review the diff', link: null}],
   updated_at: '2026-10-16T21:00:00Z',
 };
@@ -49,6 +51,7 @@ const NEWER = {
 const OLDER = {
   goal: 'Ship the status panel',
   now: 'Planning',
+  remaining: [],
   waiting: [],
   updated_at: '2026-10-16T19:00:00Z',
 };
@@ -357,6 +360,19 @@ test('the Status view shows Goal, Now, Waiting on you, children and child Now ro
   assert.equal(rig.panel.classList.contains('hidden'), false);
   assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting', 'children', 'children-now']);
   assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, STATUS.goal);
+});
+
+test('the Status view lists the Remaining milestones in order between Goal and Now', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {...STATUS, remaining: ['Land the list', 'Read back the trial']}});
+  selectStatus(rig);
+  assert.deepEqual(viewKinds(rig.panel).slice(0, 4), ['goal', 'remaining', 'now', 'waiting']);
+  const row = viewRow(rig.panel, 'remaining');
+  assert.equal(row.querySelector('[data-remaining-count]').textContent, '2 left');
+  assert.deepEqual(
+    [...row.querySelectorAll('[data-remaining-item]')].map((el) => el.textContent),
+    ['1. Land the list', '2. Read back the trial'],
+  );
 });
 
 test('the Now row carries the full text and its update time', async () => {

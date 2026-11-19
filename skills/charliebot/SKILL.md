@@ -386,8 +386,9 @@ Caveats:
   `sbatch --wrap "srun bash script.sh"` so the outer `srun` binds the GPUs.
 - `sacct` formats times in the local time zone of the process that runs it. Before you align `sacct` times with other logs, check that zone.
 - The watcher handles whole non-array allocations only — watching an array job by its base id fails, because sacct `-X` reports the allocation and individual array tasks stay invisible to it.
-- verify-on-create rejects a trigger whose ssh probe fails, and a BatchMode probe cannot start a browser key
-  approval: on a host that gates keys behind one, complete the approval before registering the trigger.
+- verify-on-create rejects a trigger whose ssh probe fails. The probe runs with `BatchMode=yes`. When the probe fails
+  because an action only the user can take remains, end the run with a blocker report per `prompts/task_base.md`; register
+  the trigger after the probe succeeds.
 
 Keep `--message` a short label (capped at `MAX_TRIGGER_MESSAGE_CHARS`): the wake lands back in the same session with full history, so the label only names which watch fired.
 

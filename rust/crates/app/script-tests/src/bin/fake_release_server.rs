@@ -377,8 +377,8 @@ impl Server {
       "messages": messages,
       "pending_draft": draft,
       "event_count": messages.len(),
-      "oldest_message_ordinal": 0,
-      "has_more": false,
+      (session_routes::OLDEST_MESSAGE_ORDINAL_FIELD): 0,
+      (session_routes::HAS_MORE_FIELD): false,
     })
   }
 

@@ -2929,8 +2929,8 @@ fn fold_task_facts_from(
       }
       event_types::CHILD_REPORT => {
         if let (Some(child_id), Some(child_event_id)) = (
-          event.get("child_session_id").and_then(CompactValue::as_str),
-          event.get("child_event_id").and_then(CompactValue::as_str),
+          event.get(event_types::CHILD_SESSION_ID).and_then(CompactValue::as_str),
+          event.get(event_types::CHILD_EVENT_ID).and_then(CompactValue::as_str),
         ) {
           facts.delivered_reports.insert((child_id.to_string(), child_event_id.to_string()));
         }

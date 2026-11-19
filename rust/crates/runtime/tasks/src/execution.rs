@@ -1042,7 +1042,7 @@ impl TaskExecutionAdapter {
     let Some(parent_id) = meta.task_parent_id.as_deref() else { return Ok(false) };
     Ok(self.features.store.load_all_facts_view_sync(parent_id)?.iter().any(|event| {
       event.get("type").and_then(CompactValue::as_str) == Some(event_types::CHILD_REPORT)
-        && event.get("child_session_id").and_then(CompactValue::as_str) == Some(meta.id.as_str())
+        && event.get(event_types::CHILD_SESSION_ID).and_then(CompactValue::as_str) == Some(meta.id.as_str())
         && event.get("outcome").and_then(CompactValue::as_str) == Some("blocked")
     }))
   }

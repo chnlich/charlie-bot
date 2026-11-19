@@ -143,6 +143,12 @@ pub const RUN_STOP_REQUESTED: &str = "run_stop_requested";
 pub const RUN_FINISHED: &str = "run_finished";
 pub const RUN_LAUNCH_WITHHELD: &str = "run_launch_withheld";
 pub const CHILD_REPORT: &str = "child_report";
+/// The `task_delegated` and `child_report` facts' field holding the id of the child session they name. The delegate
+/// route and the report builder write it, and the tree, the report composer and the session routes read it here.
+pub const CHILD_SESSION_ID: &str = "child_session_id";
+/// The `child_report` fact's field holding the id of the child's event that the report refers to. The report builder
+/// writes it, and the tree's delivered-report set reads it here.
+pub const CHILD_EVENT_ID: &str = "child_event_id";
 pub const PROMPT_CHANGED: &str = "prompt_changed";
 pub const TASK_IMPORTED: &str = "task_imported";
 pub const RUN_HEADER: &str = "run_header";

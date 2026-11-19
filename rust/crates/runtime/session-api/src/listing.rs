@@ -497,9 +497,9 @@ pub const STARRED_PROJECTION: SidebarProjection = SidebarProjection {
 
 /// The session value a sidebar row starts from.
 ///
-/// The page renders the stored metadata, and its client draws the goal and the origin fields it reads. A listing
-/// route renders the response model's form, [`metadata_value`], which names the chat-thread flag and leaves the goal
-/// out.
+/// The page renders the stored metadata without `task.goal`: no page code reads the goal from a row (the task-context
+/// modal fetches the session detail and reads its web status). A listing route renders the response model's form,
+/// [`metadata_value`], which also names the chat-thread flag.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RowSchema {
   Page,
@@ -512,7 +512,11 @@ pub(crate) enum RowSchema {
 impl RowSchema {
   fn value(self, store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
     match self {
-      RowSchema::Page => Ok(store.session_metadata_value(meta)),
+      RowSchema::Page => {
+        let mut value = store.session_metadata_value(meta);
+        remove_task_goal(&mut value);
+        Ok(value)
+      }
       RowSchema::Listing => metadata_value(store, meta),
       RowSchema::Move => {
         let mut value = metadata_value(store, meta)?;
@@ -1415,12 +1419,18 @@ pub const THREAD_SESSION: &str = "thread_session";
 /// thread session, so the web client never reads the platform origin fields itself.
 pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   let mut value = store.session_metadata_value(meta);
+  remove_task_goal(&mut value);
+  let object = value.as_object_mut().expect("session metadata serializes to an object");
+  object.insert(THREAD_SESSION.to_string(), Value::Bool(is_thread_session(meta)));
+  Ok(value)
+}
+
+/// Removes `task.goal` from a serialized session.
+fn remove_task_goal(value: &mut Value) {
   let object = value.as_object_mut().expect("session metadata serializes to an object");
   if let Some(task) = object.get_mut("task").and_then(Value::as_object_mut) {
     task.remove("goal");
   }
-  object.insert(THREAD_SESSION.to_string(), Value::Bool(is_thread_session(meta)));
-  Ok(value)
 }
 
 /// `dump` with schedule model fields removed and the controller's row fields applied.
@@ -2251,5 +2261,9 @@ mod tests {
     let value = metadata_value(&features.store, &meta).unwrap();
     assert!(value["task"].get("goal").is_none());
     assert_eq!(value["task"]["task_type"], "implement");
+    // The page row drops the goal too, and keeps the rest of the stored task.
+    let page = RowSchema::Page.value(&features.store, &meta).unwrap();
+    assert!(page["task"].get("goal").is_none());
+    assert_eq!(page["task"]["task_type"], "implement");
   }
 }

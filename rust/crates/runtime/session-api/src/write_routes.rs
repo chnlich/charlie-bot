@@ -26,7 +26,7 @@ use charliebot_store::metadata::{
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
-  TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller,
+  TASK_CREATE_REQUEST_ID_REQUIRED,
 };
 use charliebot_tasks::dispatch;
 use charliebot_tasks::routes::{COLD_READ_FIELDS, COLD_READ_SPEC_CLASS_NAME};
@@ -263,7 +263,7 @@ async fn create(
       group: fields.group,
       session_id: None,
     };
-    let meta = features.store.create_task(request, task_caller(caller), slot_values).await.map_err(task_http_error)?;
+    let meta = features.store.create_task(request, caller.task_caller(), slot_values).await.map_err(task_http_error)?;
     tracing::info!(
       target: LOG_TARGET,
       session_id = %meta.id,
@@ -291,7 +291,7 @@ async fn create(
     group: fields.group,
     session_id: fields.session_id,
   };
-  features.store.create_task(request, task_caller(caller), slot_values).await.map_err(task_http_error)
+  features.store.create_task(request, caller.task_caller(), slot_values).await.map_err(task_http_error)
 }
 
 /// The validated create body and the keys beyond its declared fields. Each extra key must be a registered session
@@ -439,7 +439,7 @@ async fn patch(
   let guards =
     dispatch::dispatcher(features).map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
   let meta =
-    features.store.patch_task(session_id, patch, task_caller(caller), &*guards).await.map_err(task_http_error)?;
+    features.store.patch_task(session_id, patch, caller.task_caller(), &*guards).await.map_err(task_http_error)?;
   features.store.session_detail(&meta.id).map_err(task_http_error)
 }
 
@@ -531,14 +531,6 @@ pub(crate) fn resolve_requested_backend(
   Ok(fallback_backend.to_string())
 }
 
-/// The caller as the task owner sees it: an agent's verified run claims, else the operator.
-fn task_caller(caller: &CallerIdentity) -> TaskCaller {
-  match caller.claims() {
-    Some(claims) => TaskCaller::Agent { session_id: claims.session_id.clone() },
-    None => TaskCaller::Operator,
-  }
-}
-
 /// The repr of a list of strings, as the detail texts print it.
 fn list_repr(items: &[&str]) -> String {
   let quoted: Vec<String> = items.iter().map(|item| text_repr::str_repr(item)).collect();
@@ -563,7 +555,7 @@ mod tests {
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::run_token::{self, RunTokenClaims};
   use charliebot_core::test_support::EventSink;
-  use charliebot_store::{AGENT_REPARENT_SCOPE_REFUSAL, SIDEBAR_CHANNEL, session_channel};
+  use charliebot_store::{AGENT_REPARENT_SCOPE_REFUSAL, SIDEBAR_CHANNEL, TaskCaller, session_channel};
   use tracing::Event;
   use tracing::field::{Field, Visit};
 

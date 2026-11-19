@@ -68,6 +68,43 @@ fn guard_prepends_the_three_options_before_the_callers_own() {
   assert_eq!(received, expected);
 }
 
+/// The guard's string removal misses a PATH entry that spells the guard directory through a symlink, so the lookup
+/// skips its own directory by physical path. Without that, the guard execs itself forever.
+#[test]
+#[ignore = "integration"]
+fn symlinked_guard_path_entry_still_runs_the_real_ssh() {
+  let root = tempfile::tempdir().unwrap();
+  let stub_dir = root.path().join("stub");
+  let record = root.path().join("argv");
+  write_stub(&stub_dir, &record);
+  let linked_guard = root.path().join("guard-link");
+  std::os::unix::fs::symlink(guard_dir(), &linked_guard).unwrap();
+
+  let mut child = Command::new(linked_guard.join("ssh"))
+    .env("PATH", guarded_path(&linked_guard, Some(&stub_dir)))
+    .args(INCIDENT_ARGV)
+    .arg("host1")
+    .spawn()
+    .unwrap();
+  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+  let status = loop {
+    if let Some(status) = child.try_wait().unwrap() {
+      break status;
+    }
+    if std::time::Instant::now() >= deadline {
+      child.kill().unwrap();
+      child.wait().unwrap();
+      panic!("the guard never reached the stub through a symlinked PATH entry; it execs itself");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(20));
+  };
+
+  assert!(status.success(), "the guard runs the stub: {status}");
+  let received: Vec<String> = fs::read_to_string(&record).unwrap().lines().map(str::to_string).collect();
+  let expected: Vec<&str> = GUARD_OPTIONS.iter().chain(INCIDENT_ARGV.iter()).chain(["host1"].iter()).copied().collect();
+  assert_eq!(received, expected);
+}
+
 #[test]
 #[ignore = "integration"]
 fn ssh_config_readback_through_the_guard_shows_the_guard_values_first() {

@@ -51,7 +51,45 @@ done
 PATH=$new_path
 export PATH
 
-if ! real_ssh=$(command -v ssh); then
+# Search PATH for an executable and print the path found. Relative entries resolve against the current directory,
+# like execvp. An entry that resolves physically to this guard's own directory is skipped: the entry may spell that
+# directory through a symlink or a relative path, which the string removal above does not catch, and exec'ing this
+# script again would loop.
+find_on_path() {
+  find_name=$1
+  find_rest=$PATH
+  while :; do
+    case $find_rest in
+      *:*)
+        find_dir=${find_rest%%:*}
+        find_rest=${find_rest#*:}
+        find_more=1
+        ;;
+      *)
+        find_dir=$find_rest
+        find_more=0
+        ;;
+    esac
+    if [ -z "$find_dir" ]; then
+      find_dir=.
+    fi
+    case $find_dir in
+      /*) ;;
+      *) find_dir=$PWD/$find_dir ;;
+    esac
+    if [ -x "$find_dir/$find_name" ]; then
+      find_real_dir=$(cd -- "$find_dir" 2>/dev/null && pwd -P)
+      if [ "$find_real_dir" != "$self_dir" ]; then
+        printf '%s\n' "$find_dir/$find_name"
+        return 0
+      fi
+    fi
+    [ "$find_more" = 1 ] || return 1
+  done
+}
+
+real_ssh=$(find_on_path ssh)
+if [ -z "$real_ssh" ]; then
   echo "ssh guard: no ssh on the PATH outside $self_dir" >&2
   exit 127
 fi

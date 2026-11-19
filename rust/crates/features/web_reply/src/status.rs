@@ -620,8 +620,9 @@ async fn remaining_missing(
 }
 
 /// Store the items the JSON `text` names, record one `web_status` event and notify the ancestors. Waiting items need
-/// a non-blank context and a matching cold-read digest. A stale plan link refuses the set before the cold read. A thread session's set names the goal alone; one that names Now or Waiting on you is
-/// refused. The return adds the Now length and `remaining_missing`; a refusal stores and records nothing.
+/// a non-blank context and a matching cold-read digest. A stale plan link refuses the set before the cold read. A
+/// thread session's set names the goal alone; one that names Now or Waiting on you is refused. The return adds the Now
+/// length and `remaining_missing`; a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   let meta = reply::require_manager_session(features, session_id).await?;

@@ -390,6 +390,7 @@ fn lock_tmp_root() -> File {
 /// One test's repository, both homes and stub directory.
 pub struct World {
   _tmp_root: File,
+  direction: &'static str,
   pub sandbox: Sandbox,
   /// The launcher's checkout, with its own `origin/main`.
   pub repo: PathBuf,
@@ -432,6 +433,10 @@ pub struct World {
 
 impl World {
   pub fn new() -> Self {
+    Self::new_with_direction(DIRECTION)
+  }
+
+  pub fn new_with_direction(direction: &'static str) -> Self {
     let tmp_root = lock_tmp_root();
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
@@ -473,9 +478,9 @@ impl World {
     .expect("the session metadata");
     let cron_dir = sandbox.dir("profile/config.d/cron.d");
     fs::write(
-      cron_dir.join(format!("improve-{DIRECTION}.yaml")),
+      cron_dir.join(format!("improve-{direction}.yaml")),
       format!(
-        "cron: 31 * * * *\nbackend: synthetic\nprompt_file: dev/improve/{DIRECTION}.md\nsession_id: {PARENT_ID}\n"
+        "cron: 31 * * * *\nbackend: synthetic\nprompt_file: dev/improve/{direction}.md\nsession_id: {PARENT_ID}\n"
       ),
     )
     .expect("the cron task file");
@@ -498,7 +503,7 @@ impl World {
     )
     .expect("the profile home's credentials.yaml");
 
-    let round_root = sandbox.dir(&format!("remote/improve/{DIRECTION}"));
+    let round_root = sandbox.dir(&format!("remote/improve/{direction}"));
     sandbox.dir("remote/improve/home");
     let clone = round_root.join("charlie-bot");
     fs::create_dir_all(&clone).expect("the direction clone");
@@ -530,6 +535,7 @@ impl World {
 
     Self {
       _tmp_root: tmp_root,
+      direction,
       ssh_args: sandbox.root().join("ssh-arguments.log"),
       claude_argv: evidence.join("claude-argv.txt"),
       claude_env: evidence.join("claude-env.txt"),
@@ -770,7 +776,7 @@ impl World {
 
   /// The CODEX_HOME that a codex round of this world uses on the host: a directory under the direction's /tmp root.
   pub fn codex_home_directory(&self) -> PathBuf {
-    PathBuf::from(format!("/tmp/improve-{DIRECTION}/codex-home"))
+    PathBuf::from(format!("/tmp/improve-{}/codex-home", self.direction))
   }
 
   /// The launch directory, when the round left one behind.
@@ -781,7 +787,7 @@ impl World {
 
   /// The evidence directory that the launcher copies back to.
   pub fn local_evidence(&self) -> PathBuf {
-    self.local_home.join("improve").join(DIRECTION).join("evidence")
+    self.local_home.join("improve").join(self.direction).join("evidence")
   }
 
   /// Every path under `root`, relative to it.

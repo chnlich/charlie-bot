@@ -326,7 +326,10 @@ fn a_stale_open_pr_is_updated_to_the_resolved_title_and_body() {
   assert_eq!(code, 0, "record: {record}");
   assert_eq!(venue.pr_text(), ("feature.txt".to_string(), String::new()));
   let calls = venue.gh_calls();
-  assert!(calls.lines().any(|call| call.starts_with("pr edit 1 ")), "the stale PR is edited: {calls}");
+  assert!(
+    calls.lines().any(|call| call.starts_with("api repos/") && call.contains("/pulls/1 -X PATCH ")),
+    "the stale PR is patched through the REST pull endpoint: {calls}"
+  );
 }
 
 #[test]

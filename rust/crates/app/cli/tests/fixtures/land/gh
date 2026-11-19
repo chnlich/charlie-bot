@@ -97,15 +97,6 @@ case "$group $action" in
     printf '%s' "${option[body]}" >"$state_dir/prs/$number/body"
     printf 'https://github.test/pull/%s\n' "$number"
     ;;
-  'pr edit')
-    number=${positional[0]}
-    if [[ ${option[title]+set} ]]; then
-      printf '%s' "${option[title]}" >"$state_dir/prs/$number/title"
-    fi
-    if [[ ${option[body]+set} ]]; then
-      printf '%s' "${option[body]}" >"$state_dir/prs/$number/body"
-    fi
-    ;;
   'pr close')
     number=${positional[0]}
     if [[ $(pr_state "$number") == MERGED ]]; then
@@ -121,6 +112,16 @@ case "$group $action" in
       rm "$state_dir/advance-main"
     fi
     printf '{"workflow_runs":[{"name":"CI","path":".github/workflows/ci.yml","event":"pull_request","status":"completed","conclusion":"success"}]}\n'
+    ;;
+  api\ repos/*/pulls/*)
+    number=${action##*/}
+    for field in "${positional[@]}"; do
+      case $field in
+        title=*) printf '%s' "${field#title=}" >"$state_dir/prs/$number/title" ;;
+        body=*) printf '%s' "${field#body=}" >"$state_dir/prs/$number/body" ;;
+      esac
+    done
+    printf '{"number":%s}\n' "$number"
     ;;
   api\ repos/*/commits/*/check-runs\?per_page=100)
     printf '{"check_runs":[{"name":"rust-test","conclusion":"success","completed_at":"2026-11-11T00:00:00Z","html_url":"https://github.test/checks/1"}]}\n'

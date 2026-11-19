@@ -1226,9 +1226,20 @@ async fn ensure_draft_pr(
   if current_title != text.title || current_body != text.body {
     let number =
       pr.get("number").and_then(Value::as_i64).ok_or_else(|| anyhow::anyhow!("gh pr view printed no number"))?;
+    // `gh pr edit` fails on gh 2.101 before its write (the Projects (classic) lookup), so an open PR's
+    // title and body go through the REST pull endpoint.
     gh_stdout(
       &ctx.worktree,
-      &["pr", "edit", &number.to_string(), "--repo", repo, "--title", &text.title, "--body", &text.body],
+      &[
+        "api",
+        &format!("repos/{repo}/pulls/{number}"),
+        "-X",
+        "PATCH",
+        "-f",
+        &format!("title={}", text.title),
+        "-f",
+        &format!("body={}", text.body),
+      ],
     )
     .await?;
   }

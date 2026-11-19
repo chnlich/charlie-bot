@@ -642,7 +642,16 @@ fn orjson_error_text(source: &[u8], error: &serde_json::Error) -> String {
     "number with leading zero is not allowed" => serde_offset.saturating_sub(1),
     "unexpected control character in string" => string_control_offset(source, serde_offset),
     "number is infinity when parsed as double" => number_start(source, serde_offset),
-    _ => serde_offset,
+    "Input is a zero-length, empty document"
+    | "unexpected end of data"
+    | "unexpected content after document"
+    | "unexpected character, expected a string key"
+    | "unexpected character, expected ':' after key"
+    | "unexpected character, expected ',' or '}'"
+    | "unexpected character, expected ',' or ']'"
+    | "no digit after sign"
+    | "unexpected character, expected a JSON value" => serde_offset,
+    other => unreachable!("orjson_error_text produced an unknown message {other:?}"),
   };
   let (line, column, char_offset) = error_position(source, offset);
   format!("{message}: line {line} column {column} (char {char_offset})")
@@ -708,7 +717,8 @@ fn string_control_offset(source: &[u8], end: usize) -> usize {
         in_string = false;
         index += 1;
       }
-      _ => return index,
+      byte if byte < 0x20 => return index,
+      other => unreachable!("no scan stops on byte {other:#04x}"),
     }
   }
   end

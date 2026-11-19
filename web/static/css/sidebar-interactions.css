@@ -1,12 +1,28 @@
-/* The sidebar interactions' surfaces: the row settings popover and the rename
-   field. The page loads this sheet with the interaction scripts
-   (web/static/js/sidebar/namespace.js, loadSidebarInteractions) on the first
-   control call, so a reader who clicks no row control pays neither the rules
-   nor their bytes. */
+/* The sidebar interactions' surfaces: the row settings popover, the rename
+   field and the Task & context dialog the popover opens. The page loads this
+   sheet with the interaction scripts (web/static/js/sidebar/namespace.js,
+   loadSidebarInteractions) on the first control call, so a reader who clicks
+   no row control pays neither the rules nor their bytes. */
 /* The rename field (sidebar/modals.js) is fixed over the row being edited. On a
    phone that row sits in the fixed drawer (z-index 100), so the field takes the
    row menu's z-index to paint above the drawer instead of behind it. */
 #rename-input { z-index: 150; }
+/* The Task & context dialog (index.html, sidebar/modals.js) names the session it
+   was opened for in its title, and the dialog's body reads that session's task
+   and next run context. The title is the dialog's only statement of which
+   session that is. Its one line holds about 33 characters at the dialog's phone
+   width, where the title's 50 characters ("Task & context · permission boundary
+   review / #544") run past the box: the ellipsis then leaves the session's
+   "#544" out, and the full text sits in the title attribute, which a phone has
+   no hover to show. The title takes at
+   most two lines, so the name and its number read whole, and a name past that
+   keeps two lines instead of pushing the dialog's body down. No row, strip or
+   label is added: a title that fits one line still takes one. */
+#task-context-modal-title {
+  display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; line-clamp: 2;
+  white-space: normal; overflow: hidden;
+}
 /* Sidebar row settings popover (sidebar/row-menu.js): the one shared menu,
    appended to document.body and fixed-positioned under its anchor. */
 .row-menu {

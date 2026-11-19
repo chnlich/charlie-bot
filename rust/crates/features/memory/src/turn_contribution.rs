@@ -16,10 +16,6 @@ use crate::store_root;
 pub struct MemoryTurn;
 
 impl TurnContribution for MemoryTurn {
-  fn class_name(&self) -> &'static str {
-    "MemoryTurnContribution"
-  }
-
   fn instruction_segments(
     &self,
     meta: &SessionMetadata,

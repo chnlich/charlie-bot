@@ -29,6 +29,7 @@ pub mod task_input_prompt;
 pub mod task_sessions;
 pub mod text_length;
 pub mod tool_line;
+pub mod turn_hooks;
 pub mod upload;
 pub mod verify_trailer;
 pub mod worker;

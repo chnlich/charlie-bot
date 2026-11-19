@@ -3135,12 +3135,14 @@ fn observe_run_facts(
   Ok(!should_stop())
 }
 
+/// Whether `event` is an input a turn consumes. A turn-end check shows its reason in the session, and the check's own
+/// continuation carries the reason to the agent, so that display is no input: a message carrying `TURN_HOOKS_ID` names
+/// the check result it shows.
 fn admits_input(event: &ChatEvent) -> bool {
   match event.get("type").and_then(CompactValue::as_str) {
     Some("user") => event.get("content").is_some_and(CompactValue::is_string),
-    Some("agent_message" | event_types::SCHEDULED_TRIGGER | event_types::CHILD_REPORT | event_types::DRAFT_SENT) => {
-      true
-    }
+    Some(event_types::AGENT_MESSAGE) => event.get(event_types::TURN_HOOKS_ID).is_none(),
+    Some(event_types::SCHEDULED_TRIGGER | event_types::CHILD_REPORT | event_types::DRAFT_SENT) => true,
     _ => false,
   }
 }
@@ -4608,12 +4610,16 @@ pub(crate) mod tests {
       json!({"id": "close-request", "type": "task_close_requested"}),
       json!({"id": "report", "type": "child_report", "child_session_id": "child-a", "child_event_id": "event-a"}),
       json!({"id": "report", "type": "child_report", "child_session_id": "child-a", "child_event_id": "duplicate"}),
+      json!({"id": "reason", "type": "agent_message", "content": "answer the question",
+             (event_types::TURN_HOOKS_ID): "record-1"}),
+      json!({"id": "message", "type": "agent_message", "content": "from elsewhere"}),
     ];
     let facts = fold_task_facts(&events).unwrap();
     assert_eq!(facts.task_state, "open");
+    // The turn-end check's shown reason is no input; another agent message is one.
     assert_eq!(
       facts.input_candidates.iter().map(|event| event["id"].as_str().unwrap()).collect::<Vec<_>>(),
-      ["input-c", "report"]
+      ["input-c", "report", "message"]
     );
     assert_eq!(facts.confirmed_input_ids, HashSet::from(["input-c".to_string()]));
     assert_eq!(facts.run_outcomes["run-a"], "success");

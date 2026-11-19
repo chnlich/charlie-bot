@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 31] = [
+const COMMANDS: [&str; 32] = [
   "artifact",
   "backup",
   "compaction-context",
@@ -29,6 +29,7 @@ const COMMANDS: [&str; 31] = [
   "gc-trash",
   "github",
   "google",
+  "hook",
   "improve",
   "land",
   "linear",
@@ -108,6 +109,7 @@ fn run_subcommand(
     "feishu" => charliebot_feishu::cli::main(args),
     "files" => commands::files::main(args),
     "gc-trash" => commands::gc_trash::main(args, host),
+    "hook" => commands::hook::main(args),
     "github" => charliebot_github::cli::main(args),
     "google" => commands::google::main(args),
     "improve" => charliebot_improve::cli::improve_main(args),

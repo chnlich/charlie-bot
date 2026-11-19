@@ -24,6 +24,7 @@ use charliebot_store::trigger_files::PendingTrigger;
 use charliebot_store::{CreateTask, SIDEBAR_CHANNEL, Store, StoreResult, Subscription, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher};
+use charliebot_tasks::turn_hooks::{CheckResult, TurnInput};
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -60,16 +61,6 @@ fn summon_block() -> Value {
 /// A fakechat summon injection as the log holds it.
 fn summon_event(event_id: &str) -> Value {
   json!({"id": event_id, "type": event_types::AGENT_MESSAGE, "content": "summon", "fakechat": {"thread": "t1"}})
-}
-
-/// The receipt of an appended event: its own id and log time, under run `run_id`.
-fn receipt_of(event: &Value, run_id: &str) -> Receipt {
-  Receipt {
-    input_event_id: event["id"].as_str().expect("an appended event carries its id").to_string(),
-    run_id: run_id.to_string(),
-    at: UtcDateTime::parse(event["timestamp"].as_str().expect("an appended event carries its timestamp"))
-      .expect("the store stamps a parsable time"),
-  }
 }
 
 /// The arguments of one fakechat summon into session `s1`, borrowed from the caller's owned origin and block.
@@ -145,21 +136,13 @@ async fn thread_replies_and_assistant_errors_do_not_notify_task_tree_changes() {
       }),
     )
     .await;
-  let nudge = home
-    .append(
-      "error-session",
-      json!({
-        "type": event_types::AGENT_MESSAGE,
-        "content": "the nudge",
-        "fakechat": {"nudge_of": summon["id"]},
-      }),
-    )
-    .await;
   let mut error_sidebar = home.features.store.subscribe(SIDEBAR_CHANNEL);
+  let mut stored = summon.clone();
+  stored["received_at"] = summon["timestamp"].clone();
 
-  audit_round(&dyn_adapter, &home.features, "error-session", &receipt_of(&nudge, "nudge-run"))
+  show_turn_notice(&dyn_adapter, &home.features, "error-session", &[stored], NO_REPLY_NOTICE)
     .await
-    .expect("the no-reply audit posts its assistant error");
+    .expect("the no-reply notice posts its assistant error");
 
   let error_frames = home.sidebar_frames(&mut error_sidebar).await;
   assert!(error_frames.iter().all(|frame| frame["type"] != "task_tree_changed"), "{error_frames:?}");
@@ -441,6 +424,7 @@ struct FakeAdapter {
   posts: Mutex<Vec<(Value, String, String)>>,
   post_keys: Mutex<HashSet<String>>,
   yield_before_post: bool,
+  refuse_posts: bool,
   acks: Mutex<Vec<Value>>,
   removed: Mutex<Vec<Value>>,
   thread: Mutex<Vec<ThreadMessage>>,
@@ -449,6 +433,11 @@ struct FakeAdapter {
 impl FakeAdapter {
   fn with_thread(messages: &[(&str, &str)]) -> Arc<Self> {
     Self::with_thread_yield_before_post(messages, false)
+  }
+
+  /// An adapter whose every post fails: the platform refuses each write.
+  fn refusing_posts() -> Arc<Self> {
+    Arc::new(Self { refuse_posts: true, ..Self::default() })
   }
 
   fn with_thread_yield_before_post(messages: &[(&str, &str)], yield_before_post: bool) -> Arc<Self> {
@@ -476,9 +465,13 @@ impl ThreadAdapter for FakeAdapter {
 
   fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
     let yield_before_post = self.yield_before_post;
+    let refuse_posts = self.refuse_posts;
     Box::pin(async move {
       if yield_before_post {
         tokio::task::yield_now().await;
+      }
+      if refuse_posts {
+        anyhow::bail!("the fake platform refused the post");
       }
       self.posts.lock().expect("the post log is never poisoned").push((
         address.clone(),
@@ -709,8 +702,6 @@ fn replied_nudged_noticed_read_the_fakechat_shapes() {
   // A reply at the receipt's own instant or before it does not answer the message.
   let later = Receipt { at: UtcDateTime::parse("2026-11-02T08:23:00Z").unwrap(), ..receipt.clone() };
   assert!(!replied(&FAKECHAT, &later, &events).unwrap());
-  assert!(nudged(&FAKECHAT, &events, "s1"));
-  assert!(!nudged(&FAKECHAT, &events, "s2"));
   assert!(noticed(&FAKECHAT, &events, "s1"));
   assert!(!noticed(&FAKECHAT, &events, "s2"));
 }
@@ -868,148 +859,176 @@ async fn ack_messages_orders_ids_by_the_platform_id_key() {
   assert_eq!(ack_event["fakechat_ack"], json!({"message_ids": ["99", "100"], "watermark_id": "100"}));
 }
 
-#[tokio::test]
-async fn audit_nudges_a_summon_of_the_current_contract_for_the_one_line_input() {
-  audit_nudges_a_summon_of_the_current_contract(FAKECHAT.summon_line).await;
+/// The summon event of the FAKECHAT block, received at `received_at` (the checkpoint stamps the receipt).
+fn summon_received(id: &str, content: &str, received_at: &str) -> Value {
+  json!({
+    "id": id, "type": event_types::AGENT_MESSAGE, "content": content, "timestamp": received_at,
+    "received_at": received_at, "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"},
+  })
 }
 
-#[tokio::test]
-async fn audit_nudges_a_summon_of_the_current_contract_for_the_full_prompt() {
-  audit_nudges_a_summon_of_the_current_contract(
-    "Fakechat summon; post the reply with `charliebot fakechat reply --file <path>`.",
-  )
-  .await;
+/// The shared turn input of a FAKECHAT session holding `turn`.
+fn fakechat_turn(turn: Vec<Value>, exit_code: i64) -> TurnInput {
+  TurnInput { session_id: "s1".to_string(), kind: Some("fakechat".to_string()), exit_code, status: Value::Null, turn }
 }
 
-/// Both summon formats of the current contract get the nudge: the one-line input, and the older full prompt that named
-/// the reply command.
-async fn audit_nudges_a_summon_of_the_current_contract(content: &str) {
-  let home = Home::new();
-  home.thread_session("s1", origin()).await;
-  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
-  let summon = home
-    .append(
-      "s1",
-      json!({"id": "s1", "type": event_types::AGENT_MESSAGE, "content": content,
-             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
-    )
-    .await;
-  home.launch_run("s1", "run-1", &["s1"], summon["timestamp"].as_str().unwrap());
-  let done = json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "input_event_ids": ["s1"],
-                    "exit_code": 0, "still_thinking": false});
+/// The `turn_hooks` record of a turn whose entry `name` blocked once.
+fn blocked_record(name: &str) -> Value {
+  json!({"type": event_types::TURN_HOOKS, "id": "record-1", "results": [{"name": name, "result": "block", "reason": "r"}]})
+}
 
-  let acted = deliver_done(&adapter, &home.features, "s1", &done).await.unwrap();
-
-  assert!(acted);
-  settle(|| home.launches().len() == 1).await;
-  let nudge =
-    home.events("s1").into_iter().find(|ev| ev["fakechat"]["nudge_of"] == "s1").expect("the nudge is persisted");
-  assert_eq!(nudge["type"], event_types::AGENT_MESSAGE);
-  assert_eq!(nudge["from_session_name"], "Fakechat");
-  // The nudge carries the decision only: no link, no reply-command usage.
-  let text = nudge["content"].as_str().unwrap();
+#[test]
+fn a_summon_round_without_a_reply_blocks_once_then_passes_with_the_notice() {
+  let summon = summon_received("s1", FAKECHAT.summon_line, "2026-01-01T00:00:01Z");
+  let mut input = fakechat_turn(vec![summon], 0);
+  let first = check_thread_reply(&FAKECHAT, &input).unwrap();
   assert!(
-    text.starts_with("Fakechat thread: the round answering this mention ended without posting a reply"),
-    "{text}"
+    matches!(&first, CheckResult::Block(reason) if reason.starts_with("Fakechat thread: the round answering this mention")),
+    "{first:?}"
   );
-  assert!(!text.contains("http"));
-  assert!(!text.contains("fakechat reply"));
-  assert_eq!(nudge["fakechat"], json!({"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1", "nudge_of": "s1"}));
+  input.turn.push(blocked_record(THREAD_REPLY_ENTRY));
+  assert_eq!(check_thread_reply(&FAKECHAT, &input).unwrap(), CheckResult::Notice(NO_REPLY_NOTICE.to_string()));
+}
+
+#[test]
+fn a_reply_after_the_summon_passes_and_an_errored_round_is_still_checked() {
+  let summon = summon_received("s1", FAKECHAT.summon_line, "2026-01-01T00:00:01Z");
+  let reply = json!({"type": FAKECHAT.reply_event_type, "id": "r1", "timestamp": "2026-01-01T00:00:05Z"});
+  assert_eq!(check_thread_reply(&FAKECHAT, &fakechat_turn(vec![summon.clone(), reply], 0)).unwrap(), CheckResult::Pass);
+  let errored = check_thread_reply(&FAKECHAT, &fakechat_turn(vec![summon], 1)).unwrap();
+  assert!(matches!(errored, CheckResult::Block(_)), "{errored:?}");
+}
+
+#[test]
+fn a_summon_of_the_marker_contract_is_left_alone() {
+  let summon = summon_received("s1", "fakechat marker summon", "2026-01-01T00:00:01Z");
+  assert_eq!(check_thread_reply(&FAKECHAT, &fakechat_turn(vec![summon], 0)).unwrap(), CheckResult::Pass);
+}
+
+/// The nudge that a failed round leaves for an earlier summon: it copies the summon's block and names it in `nudge_of`.
+fn nudge_received(id: &str, summon_id: &str) -> Value {
+  json!({
+    "id": id, "type": event_types::AGENT_MESSAGE, "content": nudge_text(&FAKECHAT),
+    "timestamp": "2026-01-01T00:00:01Z", "received_at": "2026-01-01T00:00:01Z",
+    "fakechat": {
+      "channel_id": "c1", "thread_ts": "t1", "mention_id": "m1", (event_types::NUDGE_OF): summon_id,
+    },
+  })
+}
+
+#[test]
+fn a_nudge_round_is_judged_by_its_reply_and_notices_the_second_miss() {
+  let mut input = fakechat_turn(vec![nudge_received("n1", "s1")], 0);
+  let first = check_thread_reply(&FAKECHAT, &input).unwrap();
+  assert!(matches!(first, CheckResult::Block(_)), "{first:?}");
+  input.turn.push(blocked_record(THREAD_REPLY_ENTRY));
+  assert_eq!(check_thread_reply(&FAKECHAT, &input).unwrap(), CheckResult::Notice(NO_REPLY_NOTICE.to_string()));
+
+  let reply = json!({"type": FAKECHAT.reply_event_type, "id": "r1", "timestamp": "2026-01-01T00:00:05Z"});
+  let answered = fakechat_turn(vec![nudge_received("n1", "s1"), reply], 0);
+  assert_eq!(check_thread_reply(&FAKECHAT, &answered).unwrap(), CheckResult::Pass);
 }
 
 #[tokio::test]
-async fn audit_leaves_a_marker_contract_summon_alone() {
+async fn a_notice_posts_once_and_is_recorded_after_its_post() {
   let home = Home::new();
   home.thread_session("s1", origin()).await;
-  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
-  // A summon carrying neither the one-line input nor the reply command predates the contract.
-  let summon = home
-    .append(
-      "s1",
-      json!({"id": "s1", "type": event_types::AGENT_MESSAGE, "content": "fakechat marker summon",
-             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
-    )
-    .await;
-  home.launch_run("s1", "run-1", &["s1"], summon["timestamp"].as_str().unwrap());
-  let before = home.events("s1").len();
-  let done = json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "input_event_ids": ["s1"],
-                    "exit_code": 0, "still_thinking": false});
-
-  let acted = deliver_done(&adapter, &home.features, "s1", &done).await.unwrap();
-
-  assert!(!acted);
-  assert_eq!(home.events("s1").len(), before);
-}
-
-#[tokio::test]
-async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
-  let home = Home::new();
-  home.thread_session("audit-retry", origin()).await;
-  let backend_pool =
-    home.features.startup.require::<backend_pool::BackendPool>().expect("the backend pool is in startup");
-  home
-    .features
-    .startup
-    .insert(charliebot_tasks::master_queue::MasterQueue::new(backend_pool))
-    .expect("the master queue inserts once");
-  let adapter = FakeAdapter::with_thread_yield_before_post(&[], true);
+  let adapter = FakeAdapter::with_thread(&[]);
   let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
   let summon = home
     .append(
-      "audit-retry",
-      json!({
-        "type": event_types::AGENT_MESSAGE,
-        "content": FAKECHAT.summon_line,
-        "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"},
-      }),
+      "s1",
+      json!({"id": "s1", "type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
     )
     .await;
-  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
-  let summon_at = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
-  home.launch_run("audit-retry", "run-1", &[summon_id.as_str()], &summon_at);
-  let summon_done = home
-    .append(
-      "audit-retry",
-      json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "input_event_ids": [summon_id], "exit_code": 0}),
-    )
-    .await;
+  let mut stored = summon.clone();
+  stored["received_at"] = summon["timestamp"].clone();
+  let turn = [stored];
 
-  assert!(deliver_done(&dyn_adapter, &home.features, "audit-retry", &summon_done).await.unwrap());
+  show_turn_notice(&dyn_adapter, &home.features, "s1", &turn, NO_REPLY_NOTICE).await.unwrap();
+  show_turn_notice(&dyn_adapter, &home.features, "s1", &turn, NO_REPLY_NOTICE).await.unwrap();
+
+  assert_eq!(adapter.posts.lock().unwrap().len(), 1);
+  let notices = home.events("s1").into_iter().filter(|event| event.get("fakechat_notice").is_some()).count();
+  assert_eq!(notices, 1);
+}
+
+// The test-support feature supplies the retry-delay override this case needs to fail a post without waiting.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_refused_notice_post_records_nothing_and_fails_the_delivery() {
+  install_keyed_post_retry_delays([Duration::ZERO, Duration::ZERO]);
+  let home = Home::new();
+  home.thread_session("s1", origin()).await;
+  let dyn_adapter: Arc<dyn ThreadAdapter> = FakeAdapter::refusing_posts();
+  let summon = home
+    .append(
+      "s1",
+      json!({"id": "s1", "type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
+    )
+    .await;
+  let mut stored = summon.clone();
+  stored["received_at"] = summon["timestamp"].clone();
+
+  let result = show_turn_notice(&dyn_adapter, &home.features, "s1", &[stored], NO_REPLY_NOTICE).await;
+  clear_keyed_post_retry_delays();
+
+  assert!(result.is_err());
+  assert!(home.events("s1").iter().all(|event| event.get("fakechat_notice").is_none()));
+}
+
+#[tokio::test]
+async fn errored_thread_turns_keep_the_nudge_then_notice_path() {
+  let home = Home::new();
+  home.thread_session("s1", origin()).await;
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let summon = home
+    .append(
+      "s1",
+      json!({"type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
+    )
+    .await;
+  let summon_id = summon["id"].as_str().expect("the summon has an id").to_string();
+  let started_at = summon["timestamp"].as_str().expect("the summon has a timestamp");
+  home.launch_run("s1", "failed-run", &[summon_id.as_str()], started_at);
+  let failed_summon_run = json!({
+    "type": event_types::MASTER_DONE,
+    "run_id": "failed-run",
+    "input_event_ids": [summon_id],
+    "exit_code": 1,
+  });
+
+  assert!(audit_failed_turn(&dyn_adapter, &home.features, "s1", &failed_summon_run).await.unwrap());
   settle(|| home.launches().len() == 1).await;
   let nudge = home
-    .events("audit-retry")
+    .events("s1")
     .into_iter()
-    .find(|event| event.get("fakechat").and_then(|block| block.get("nudge_of")).is_some())
-    .expect("the silent summon creates a nudge");
-  let nudge_id = nudge["id"].as_str().expect("an appended event carries its id").to_string();
-  let nudge_at = nudge["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
-  home.launch_run("audit-retry", "run-2", &[nudge_id.as_str()], &nudge_at);
-  let nudge_done = home
-    .append(
-      "audit-retry",
-      json!({"type": event_types::MASTER_DONE, "run_id": "run-2", "input_event_ids": [nudge_id], "exit_code": 0}),
-    )
-    .await;
+    .find(|event| event["fakechat"]["nudge_of"] == summon["id"])
+    .expect("the failed summon run leaves a nudge");
+  assert_eq!(nudge["type"], event_types::AGENT_MESSAGE);
+  let nudge_id = nudge["id"].as_str().expect("the nudge has an id").to_string();
+  let nudge_started_at = nudge["timestamp"].as_str().expect("the nudge has a timestamp");
+  home.launch_run("s1", "failed-nudge-run", &[nudge_id.as_str()], nudge_started_at);
+  let failed_nudge_run = json!({
+    "type": event_types::MASTER_DONE,
+    "run_id": "failed-nudge-run",
+    "input_event_ids": [nudge_id],
+    "exit_code": 1,
+  });
 
-  let (delivered, backfilled) = tokio::join!(
-    deliver_done(&dyn_adapter, &home.features, "audit-retry", &nudge_done),
-    backfill_lost_summons(&dyn_adapter, &home.features),
-  );
-  delivered.unwrap();
-  backfilled.unwrap();
+  assert!(audit_failed_turn(&dyn_adapter, &home.features, "s1", &failed_nudge_run).await.unwrap());
 
-  let events = home.events("audit-retry");
-  let nudges: Vec<_> =
-    events.iter().filter(|event| event.get("fakechat").and_then(|block| block.get("nudge_of")).is_some()).collect();
-  let notices: Vec<_> = events
-    .iter()
-    .filter(|event| event.get("fakechat_notice").and_then(|notice| notice.get(event_types::INPUT_EVENT_ID)).is_some())
-    .collect();
-  assert_eq!(nudges.len(), 1);
+  let posts = adapter.posts.lock().expect("the post log is never poisoned");
+  assert_eq!(posts.len(), 1);
+  assert_eq!(posts[0].1, NO_REPLY_NOTICE);
+  let notices: Vec<Value> =
+    home.events("s1").into_iter().filter(|event| event.get("fakechat_notice").is_some()).collect();
   assert_eq!(notices.len(), 1);
-  assert_eq!(adapter.posts.lock().unwrap().len(), 1);
-  assert_eq!(nudges[0]["request_id"], format!("fakechat-nudge:{}", summon["id"].as_str().unwrap()));
-  assert_eq!(notices[0]["request_id"], format!("fakechat-notice:{}", summon["id"].as_str().unwrap()));
+  assert_eq!(notices[0]["fakechat_notice"][event_types::INPUT_EVENT_ID], summon["id"]);
 }
 
 /// A reply posted while a resumed turn runs clears the 👀 of the summon that turn's run received, and the reply
@@ -1045,40 +1064,7 @@ async fn a_reply_on_a_resumed_turn_clears_the_received_summons_ack() {
   assert_eq!(reply["fakechat_reply"], json!({"chars": 10, "chunks": 1}));
 }
 
-/// A resumed thread turn that posted no thread reply gets the round-end nudge: its run record holds the summon even
-/// though the restart dropped the `master_done` input ids.
-#[tokio::test]
-async fn a_resumed_thread_turn_that_posted_no_reply_gets_a_nudge() {
-  let home = Home::new();
-  home.thread_session("s1", origin()).await;
-  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
-  let summon = home
-    .append(
-      "s1",
-      json!({"type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
-             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
-    )
-    .await;
-  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
-  let started = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
-  home.launch_run("s1", "resumed-run", &[summon_id.as_str()], &started);
-  let done = json!({"type": event_types::MASTER_DONE, "run_id": "resumed-run", "exit_code": 0,
-                    "input_event_ids": []});
-
-  let acted = deliver_done(&adapter, &home.features, "s1", &done).await.unwrap();
-
-  assert!(acted);
-  settle(|| home.launches().len() == 1).await;
-  let nudge = home
-    .events("s1")
-    .into_iter()
-    .find(|event| event["fakechat"]["nudge_of"] == summon_id)
-    .expect("the resumed turn's unanswered summon gets a nudge");
-  assert_eq!(nudge["type"], event_types::AGENT_MESSAGE);
-}
-
-/// The boot backfill retires a summon that a finished resumed turn received through its run record, and reports a
-/// summon no finished turn received.
+/// Boot backfill reports an unreceived summon while leaving finished turns to the turn-end hook checkpoint.
 #[tokio::test]
 async fn the_boot_backfill_reports_only_summons_no_finished_turn_received() {
   let home = Home::new();
@@ -1176,15 +1162,30 @@ async fn fixture_session(home: &Home, fixture: &Value) -> (String, Value) {
   (sid, events[0].clone())
 }
 
-/// R3: the reply at 09:52:57 preceded the run start at 09:53:21, so the summon is unanswered and the log's nudge is
-/// the one the rule produces. The audit finds that nudge and posts no second one.
+/// The fixture turn with `received_at` on the inputs its run received, as the checkpoint stamps the turn.
+fn stamped_turn(events: &[Value], receipts: &[Receipt]) -> Vec<Value> {
+  events
+    .iter()
+    .map(|event| {
+      let mut event = event.clone();
+      if let Some(receipt) =
+        receipts.iter().find(|receipt| event["id"].as_str() == Some(receipt.input_event_id.as_str()))
+      {
+        event["received_at"] = json!(receipt.at.to_str());
+      }
+      event
+    })
+    .collect()
+}
+
+/// R3: the reply at 09:52:57 preceded the run start at 09:53:21, so the summon is unanswered and the check blocks the
+/// turn once.
 #[tokio::test]
-async fn replay_r3_nudges_a_summon_whose_reply_preceded_the_run() {
+async fn replay_r3_blocks_a_summon_whose_reply_preceded_the_run() {
   let fixture = replay_fixture();
   let r3 = &fixture["r3"];
   let home = Home::new();
-  let (sid, summon) = fixture_session(&home, r3).await;
-  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
+  let (sid, _) = fixture_session(&home, r3).await;
   let events = r3["events"].as_array().expect("the fixture lists its events");
   let shared = home.features.store.load_chat_events_shared_sync(&sid).expect("the chat log reads");
 
@@ -1194,18 +1195,13 @@ async fn replay_r3_nudges_a_summon_whose_reply_preceded_the_run() {
   assert_eq!(receipts[0].at, UtcDateTime::parse("2026-11-03T09:53:21.751733Z").expect("the fixture time parses"));
   assert!(!replied(&FAKECHAT, &receipts[0], shared.as_ref()).expect("the reply reads"));
 
-  let acted = deliver_done(&adapter, &home.features, &sid, &fixture_done(events)).await.unwrap();
-
-  assert!(!acted, "the recorded nudge already answers the round");
-  let nudges: Vec<Value> =
-    home.events(&sid).into_iter().filter(|event| event["fakechat"].get("nudge_of").is_some()).collect();
-  assert_eq!(nudges.len(), 1);
-  assert_eq!(nudges[0]["fakechat"]["nudge_of"], summon["id"]);
-  assert_eq!(nudges[0]["id"], json!("06885499-8ede-59b9-b002-2f667e758c38"));
+  let input = fakechat_turn(stamped_turn(events, &receipts), 0);
+  let answer = check_thread_reply(&FAKECHAT, &input).expect("the check reads the turn");
+  assert!(matches!(answer, CheckResult::Block(_)), "{answer:?}");
 }
 
-/// R4: the reply at 09:44:57 followed the run start at 09:40:26, so the summon is answered. The round's audit posts
-/// no nudge, and the reply clears the summon's 👀.
+/// R4: the reply at 09:44:57 followed the run start at 09:40:26, so the summon is answered. The check passes, and the
+/// reply clears the summon's 👀.
 #[tokio::test]
 async fn replay_r4_answers_a_summon_replied_during_the_run_and_clears_its_ack() {
   let fixture = replay_fixture();
@@ -1223,9 +1219,8 @@ async fn replay_r4_answers_a_summon_replied_during_the_run_and_clears_its_ack() 
   assert_eq!(receipts[0].at, UtcDateTime::parse("2026-11-03T09:40:26.064432Z").expect("the fixture time parses"));
   assert!(replied(&FAKECHAT, &receipts[0], shared.as_ref()).expect("the reply reads"));
 
-  let acted = deliver_done(&dyn_adapter, &home.features, &sid, &fixture_done(events)).await.unwrap();
-
-  assert!(!acted);
+  let input = fakechat_turn(stamped_turn(events, &receipts), 0);
+  assert_eq!(check_thread_reply(&FAKECHAT, &input).expect("the check reads the turn"), CheckResult::Pass);
   assert!(home.events(&sid).iter().all(|event| event["fakechat"].get("nudge_of").is_none()));
   post_reply_with_request_id(&dyn_adapter, &home.features, &sid, "The upstream returned 503.", Some("replay-reply"))
     .await

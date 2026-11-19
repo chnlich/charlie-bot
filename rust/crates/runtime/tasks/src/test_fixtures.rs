@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_claude_code::login_dirs;
+use charliebot_core::RepoRoot;
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::context::{FeatureContext, StartupState};
@@ -19,6 +20,16 @@ use tokio::sync::watch;
 
 use crate::master_queue::MasterQueue;
 use crate::master_state::{TaskRunBinding, WorkItem};
+
+/// Inserts `checkout` as the served repo, with an empty turn-end hook list at `hooks/turn_end.json`: every turn's
+/// checkpoint reads that list, so a fixture that runs a turn needs it.
+pub fn insert_checkout(startup: &StartupState, checkout: &Path) {
+  std::fs::create_dir_all(checkout.join("hooks")).expect("the hooks directory is created");
+  std::fs::write(checkout.join("hooks/turn_end.json"), "[]").expect("the empty hook list is written");
+  startup
+    .insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string())).expect("the checkout path is valid"))
+    .expect("the checkout inserts once");
+}
 
 /// The config.yaml of one cc-claude option `fable` on model `claude-fable-5-1`. With `account_dir`, the option draws
 /// on the pool `alpha`, whose one login `acct-a` keeps its transcripts in `account_dir`; without it, the option

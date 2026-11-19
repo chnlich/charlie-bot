@@ -1,13 +1,9 @@
-use std::future::Future;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
 
-use charliebot_core::config::CharlieBotConfig;
 use serde_json::Value;
 
 use crate::StoreResult;
-use crate::metadata::SessionMetadata;
 
 /// A feature renderer for one persisted event type.
 pub trait EventRenderer: Send + Sync {
@@ -24,21 +20,10 @@ where
   }
 }
 
-/// One contribution's after-turn work. The store starts it as its own task after a master_done frame is broadcast.
-pub struct AfterTurnWork {
-  /// The contribution's class name. The task is named `after-turn-<name>-<session id>`.
-  pub name: String,
-  /// Future for the contribution's after-turn action.
-  pub future: Pin<Box<dyn Future<Output = StoreResult<()>> + Send + 'static>>,
-}
-
 /// Feature-owned event renderers and runtime-state notifications.
 pub trait RuntimeEventHooks: Send + Sync {
   /// The feature event renderers in registration order.
   fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn EventRenderer>)>>;
-
-  /// Each contribution's work for one completed turn.
-  fn after_turn(&self, meta: SessionMetadata, event: Value, cfg: CharlieBotConfig) -> Vec<AfterTurnWork>;
 
   /// The session's derived sidebar state, marked dirty.
   fn mark_sidebar_dirty(&self, session_id: &str);
@@ -56,10 +41,6 @@ pub struct EmptyRuntimeEventHooks;
 impl RuntimeEventHooks for EmptyRuntimeEventHooks {
   fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn EventRenderer>)>> {
     Ok(Vec::new())
-  }
-
-  fn after_turn(&self, _meta: SessionMetadata, _event: Value, _cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
-    Vec::new()
   }
 
   fn mark_sidebar_dirty(&self, _session_id: &str) {}

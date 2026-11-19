@@ -1,0 +1,5 @@
+[
+  {"name": "web-reply", "command": "charliebot hook web-reply"},
+  {"name": "web-status", "command": "charliebot hook web-status"},
+  {"name": "thread-reply", "command": "charliebot hook thread-reply"}
+]

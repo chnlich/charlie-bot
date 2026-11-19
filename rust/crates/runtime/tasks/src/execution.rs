@@ -3535,6 +3535,7 @@ mod tests {
         Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       ))
       .expect("the pool inserts once");
+    crate::test_fixtures::insert_checkout(&startup, home.path());
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
 
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");

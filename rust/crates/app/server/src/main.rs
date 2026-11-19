@@ -299,8 +299,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     registry: Arc::clone(&registry),
     startup: Arc::new(startup),
   });
-  // The lifespan's recovery can re-attach a round whose master_done starts the after-turn works, so the context is
-  // bound before the lifespan starts.
+  // Cron sequence controllers read the context during the lifespan, so bind it before startup begins.
   registry.bind_feature_context(&features).expect("the registry binds its feature context once, at startup");
   clock.segment("features");
   let mut lifespan = match Lifespan::start(Arc::clone(&features), &mut clock).await {

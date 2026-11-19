@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use crate::autonamer;
 use crate::master_run;
 use crate::master_state::{MasterResumeRequest, MasterTurnRequest, WorkItem};
+use crate::turn_hooks;
 
 use crate::master_state::RunTracking;
 pub use crate::master_state::{
@@ -421,68 +422,92 @@ impl MasterQueue {
     item.callbacks.features.registry.settle_idle_compaction(session_id).await?;
     refresh_anchors_from_disk(item, last_cc_session_id, last_account_label)?;
     let tracking: Arc<dyn RunTracking> = self.clone();
-    let mut result = if item.resume_record.is_some() {
-      master_run::resume_cc(tracking, item).await?
-    } else {
-      master_run::run_cc(tracking, item).await?
-    };
-    let ran_backend = result.finish_extras.get(NATIVE_BACKEND).and_then(Value::as_str).map(str::to_string);
-    arm_idle_after_round(self, item, session_id, ran_backend.clone()).await;
-    if result.let_go {
-      return Err(master_run::TurnLetGo.into());
-    }
-    if result.cancelled {
-      return Err(master_run::TurnCancelled.into());
-    }
-    if result.finish_extras.get("zero_output").and_then(Value::as_bool) == Some(true) {
-      if result.error_msg.is_none() {
-        let resume_ref = result.cc_session_id.as_deref().unwrap_or("fresh session");
-        let message = format!(
-          "Master run produced zero model output (cc_session_id={resume_ref}): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14)."
-        );
-        (item.callbacks.persist_and_broadcast)(
-          session_id.to_string(),
-          charliebot_agents::event_builders::make_error_event(&message),
-        )
-        .await?;
+    let mut continuation = None;
+    let (result, ran_backend) = loop {
+      let mut result = if item.resume_record.is_some() {
+        master_run::resume_cc(Arc::clone(&tracking), item).await?
+      } else {
+        master_run::run_cc(Arc::clone(&tracking), item, continuation.take()).await?
+      };
+      // Only the run's first process resumes a recorded process; a continuation is a run_cc of the same conversation.
+      item.resume_record = None;
+      let ran_backend = result.finish_extras.get(NATIVE_BACKEND).and_then(Value::as_str).map(str::to_string);
+      if result.let_go || result.cancelled {
+        arm_idle_after_round(self, item, session_id, ran_backend).await;
+        if result.let_go {
+          return Err(master_run::TurnLetGo.into());
+        }
+        return Err(master_run::TurnCancelled.into());
       }
-      result.exit_code = 1;
-    }
-    if item.task_run.fresh_native_context {
-      *last_cc_session_id = None;
-    }
-    if let Some(cc_session_id) = result.cc_session_id.as_ref().filter(|id| !id.is_empty()) {
-      {
-        let mut metadata = item.session_meta.lock().expect("work item metadata mutex is not poisoned");
-        metadata.cc_session_id = Some(cc_session_id.clone());
-        if let Some(backend) = &ran_backend {
-          metadata.native_backend = Some(backend.clone());
+      if result.finish_extras.get("zero_output").and_then(Value::as_bool) == Some(true) {
+        if result.error_msg.is_none() {
+          let resume_ref = result.cc_session_id.as_deref().unwrap_or("fresh session");
+          let message = format!(
+            "Master run produced zero model output (cc_session_id={resume_ref}): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14)."
+          );
+          (item.callbacks.persist_and_broadcast)(
+            session_id.to_string(),
+            charliebot_agents::event_builders::make_error_event(&message),
+          )
+          .await?;
+        }
+        result.exit_code = 1;
+      }
+      if item.task_run.fresh_native_context {
+        *last_cc_session_id = None;
+      }
+      if let Some(cc_session_id) = result.cc_session_id.as_ref().filter(|id| !id.is_empty()) {
+        {
+          let mut metadata = item.session_meta.lock().expect("work item metadata mutex is not poisoned");
+          metadata.cc_session_id = Some(cc_session_id.clone());
+          if let Some(backend) = &ran_backend {
+            metadata.native_backend = Some(backend.clone());
+          }
+        }
+        *last_cc_session_id = Some(cc_session_id.clone());
+        let read_back =
+          (item.callbacks.persist_cc_session_id)(session_id.to_string(), cc_session_id.clone(), ran_backend.clone())
+            .await?;
+        if read_back.as_deref() != Some(cc_session_id) {
+          persist_mismatch(item, "resume_anchor", "Resume anchor", cc_session_id, read_back.as_deref()).await?;
         }
       }
-      *last_cc_session_id = Some(cc_session_id.clone());
-      let read_back =
-        (item.callbacks.persist_cc_session_id)(session_id.to_string(), cc_session_id.clone(), ran_backend.clone())
-          .await?;
-      if read_back.as_deref() != Some(cc_session_id) {
-        persist_mismatch(item, "resume_anchor", "Resume anchor", cc_session_id, read_back.as_deref()).await?;
-      }
-    }
-    let lifecycles = item.callbacks.features.registry.lifecycles();
-    if let Some(account_label) = persist_shared_account_label(
-      &item.session_meta,
-      &lifecycles,
-      session_id,
-      item.callbacks.persist_account_label.as_ref(),
-    )
-    .await?
-    {
-      *last_account_label = Some(account_label.label.clone());
-      if let Some(read_back) = account_label.read_back
-        && read_back.as_deref() != Some(account_label.label.as_str())
+      let lifecycles = item.callbacks.features.registry.lifecycles();
+      if let Some(account_label) = persist_shared_account_label(
+        &item.session_meta,
+        &lifecycles,
+        session_id,
+        item.callbacks.persist_account_label.as_ref(),
+      )
+      .await?
       {
-        persist_mismatch(item, "account", "Account label", &account_label.label, read_back.as_deref()).await?;
+        *last_account_label = Some(account_label.label.clone());
+        if let Some(read_back) = account_label.read_back
+          && read_back.as_deref() != Some(account_label.label.as_str())
+        {
+          persist_mismatch(item, "account", "Account label", &account_label.label, read_back.as_deref()).await?;
+        }
       }
-    }
+
+      let features = Arc::clone(&item.callbacks.features);
+      let meta = item.session_metadata();
+      let has_conversation = meta.cc_session_id.as_deref().is_some_and(|id| !id.is_empty());
+      let checkpoint = if turn_hooks::skips_checkpoint(&result.finish_extras) {
+        turn_hooks::Checkpoint::Finish
+      } else {
+        turn_hooks::checkpoint(&features, session_id, &meta, i64::from(result.exit_code), has_conversation).await?
+      };
+      match checkpoint {
+        turn_hooks::Checkpoint::Finish => break (result, ran_backend),
+        turn_hooks::Checkpoint::Continue(prompt) => {
+          // The continuation resumes the conversation that the previous process persisted.
+          item.task_run.fresh_native_context = false;
+          item.user_content = prompt.clone();
+          continuation = Some(prompt);
+        }
+      }
+    };
+    arm_idle_after_round(self, item, session_id, ran_backend).await;
 
     let still_thinking = self
       .state
@@ -511,6 +536,7 @@ impl MasterQueue {
       done_object.insert(event_types::THINKING_SECONDS.to_string(), json!(seconds));
     }
     done_object.extend(result.finish_extras.clone());
+    let failed_turn_event = done_event.clone();
     let finish_handled = (item.on_task_finish)(
       result.cc_session_id.clone(),
       result.exit_code,
@@ -521,6 +547,20 @@ impl MasterQueue {
     if !finish_handled {
       (item.callbacks.persist_and_broadcast)(session_id.to_string(), done_event).await?;
     }
+    if turn_hooks::skips_checkpoint(&result.finish_extras) {
+      let metadata = item.session_metadata();
+      if let Some((_, contribution)) = item.callbacks.features.registry.turn_owner(&metadata)
+        && let Err(error) =
+          contribution.after_failed_turn(&item.callbacks.features, session_id, &failed_turn_event).await
+      {
+        tracing::error!(
+          target: "charliebot_tasks",
+          session = %session_id,
+          error = %error,
+          "failed-turn contribution failed"
+        );
+      }
+    }
     if let Some(completion) = item.completion.take() {
       let _ = completion.send(Ok(result.cc_session_id.clone()));
     }
@@ -530,7 +570,7 @@ impl MasterQueue {
       let session_id = session_id.to_string();
       tokio::spawn(async move {
         if let Err(error) = after_round(cfg, session_id.clone()).await {
-          tracing::error!(target: "charliebot_tasks", task = %format!("after-round-{session_id}"), error = %error, "after-turn contribution failed");
+          tracing::error!(target: "charliebot_tasks", task = %format!("after-round-{session_id}"), error = %error, "after-round callback failed");
         }
       });
     }
@@ -841,6 +881,7 @@ mod tests {
     ));
     let startup = Arc::new(StartupState::default());
     startup.insert(SessionUsage::new(Arc::clone(&config), Arc::clone(&store), Arc::clone(&registry))).unwrap();
+    crate::test_fixtures::insert_checkout(&startup, home);
     Arc::new(FeatureContext { config, credentials, store, registry, startup })
   }
 

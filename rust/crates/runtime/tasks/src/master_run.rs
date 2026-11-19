@@ -453,6 +453,8 @@ fn turn_context_state(
 
 struct TurnProcess<'a> {
   item: &'a mut WorkItem,
+  /// The prompt of this run's processes that no relay replaces: the turn-end continuation, else the run's own prompt.
+  continuation: Option<String>,
   features: Arc<FeatureContext>,
   option: BackendOption,
   cwd: PathBuf,
@@ -490,7 +492,8 @@ impl RunProcess for TurnProcess<'_> {
         if self.was_built {
           self.record_persisted.store(false, Ordering::Release);
         }
-        let process_prompt = launch.prompt.as_deref().unwrap_or(&self.item.user_content);
+        let process_prompt =
+          launch.prompt.clone().or_else(|| self.continuation.clone()).unwrap_or_else(|| self.item.user_content.clone());
         if relays == 0 && self.automatic_retries == 0 {
           let resume_id = launch.resume_id.as_deref();
           if resume_id.is_none() && !self.item.task_run.fresh_native_context && metadata.cc_session_id.is_some() {
@@ -839,7 +842,13 @@ async fn emit_round_notices(
   Ok(())
 }
 
-pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
+/// Runs the run's process as a new process of the run. `continuation` is the prompt that a turn-end block sends to the
+/// same conversation; `None` sends the run's own prompt.
+pub(crate) async fn run_cc(
+  tracking: Arc<dyn RunTracking>,
+  item: &mut WorkItem,
+  continuation: Option<String>,
+) -> anyhow::Result<MasterRunOutcome> {
   let metadata = item.session_metadata();
   tokio::fs::create_dir_all(item.cfg.sessions_dir().join(&metadata.id)).await?;
   let option = match resolve_turn_option(item) {
@@ -890,6 +899,7 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   let session_id = metadata.id.clone();
   let mut process = TurnProcess {
     item,
+    continuation,
     features: Arc::clone(&features),
     option: option.clone(),
     cwd,
@@ -1273,6 +1283,8 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
         stderr: stderr.clone(),
         turn: TurnProcess {
           item: &mut *item,
+          // A re-attached turn's relays carry the run's own prompt, never a turn-end continuation.
+          continuation: None,
           features: Arc::clone(&features),
           option: option.clone(),
           cwd,

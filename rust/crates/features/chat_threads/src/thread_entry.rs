@@ -16,9 +16,9 @@
 //!   it for every platform). The scope doc is `<charliebot_home>/prompts/<scope_doc>` when the host has that file,
 //!   else the repo's `prompts/<scope_doc>`; the red line and the reply format always come from the repo.
 //! - Pure helpers: `follow_wake_label`, `follow_floor`, `chunk_text`, `event_by_id`, `summon_of`, `newest_thread_input`,
-//!   `replied`, `nudged`, `noticed`, `lost_summons`, `unread_after`.
+//!   `replied`, `noticed`, `lost_summons`, `unread_after`.
 //! - Round side: `load_chat_events`, `pending_summon_mention_ids`, `post_with_retry`, `ack_clear`, `unread_messages`,
-//!   `assert_thread_fresh` (the reply gate), `post_reply`, `ack_messages`, `audit_round`, `deliver_done`,
+//!   `assert_thread_fresh` (the reply gate), `post_reply`, `ack_messages`, `check_thread_reply`, `show_turn_notice`,
 //!   `backfill_lost_summons`.
 //! - Summon and follow side: `Summon` (the arguments of `accept_summon`), `accept_summon`, `consume_mention`,
 //!   `ensure_group`, `armed_follow_triggers`, `cancel_armed_follow_triggers`, `arm_follow_trigger`,
@@ -58,6 +58,7 @@ use charliebot_store::trigger_files::{PendingTrigger, TriggerStatus};
 use charliebot_store::{CompactValue, CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::master_queue;
 use charliebot_tasks::master_trigger::{self, TriggerMasterRequest};
+use charliebot_tasks::turn_hooks::{CheckResult, TurnInput, received_receipts};
 use charliebot_triggers::triggers::{TriggerCreateError, TriggerManager};
 use chrono_tz::Tz;
 use futures_util::future::BoxFuture;
@@ -96,7 +97,7 @@ const HOUSE_TIMEZONE: Tz = chrono_tz::America::Los_Angeles;
 const LOST_SUMMON_NOTICE: &str = "The last summon was lost when the server restarted and was not handled. Mention me \
   again if you still need an answer.";
 /// The notice a thread receives when neither its round nor its nudge round replied.
-const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details are in the session log. \
+pub const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details are in the session log. \
   Mention me again for a thread answer.";
 /// The follow-trigger floor the label carries.
 static FOLLOW_FLOOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"floor=([0-9.]+)").expect("valid pattern"));
@@ -148,7 +149,7 @@ pub struct ThreadPlatform {
   pub id_label: &'static str,
   /// The summon-block key of the mention message; a block without it carries no ack to clear.
   pub mention_key: &'static str,
-  /// The summon-block keys a nudge copies from the summon it re-asks.
+  /// The summon-block keys a failed turn copies to its recovery nudge.
   pub block_keys: &'static [&'static str],
   /// The whole summon input: one fixed line naming the platform and the event.
   pub summon_line: &'static str,
@@ -563,16 +564,6 @@ pub fn replied<E: ThreadEventData>(
 ) -> Result<bool, StoreError> {
   let events: Vec<ChatEvent> = events.iter().map(|event| ChatEvent::from_value(&event.event_value())).collect();
   reply_order::answered(receipt, &events, platform.reply_event_type)
-}
-
-/// Whether the log holds the nudge for `summon_id`: a summon-block message carrying `nudge_of` (`nudged`).
-pub fn nudged<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summon_id: &str) -> bool {
-  events.iter().any(|event| {
-    let event = event.event_value();
-    event_type(&event) == Some(event_types::AGENT_MESSAGE)
-      && event.get(platform.name).and_then(|block| block.get(event_types::NUDGE_OF)).and_then(Value::as_str)
-        == Some(summon_id)
-  })
 }
 
 /// Whether the log holds the thread's no-reply notice marker for `summon_id` (`noticed`).
@@ -1138,7 +1129,17 @@ pub async fn ack_messages(
   Ok(json!({"acked": ids.len(), (platform.watermark_key()): watermark}))
 }
 
-/// The nudge text the summon round's silence triggers.
+/// Whether the log holds the nudge sent after a failed turn for summon_id.
+pub fn nudged<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summon_id: &str) -> bool {
+  events.iter().any(|event| {
+    let event = event.event_value();
+    event_type(&event) == Some(event_types::AGENT_MESSAGE)
+      && event.get(platform.name).and_then(|block| block.get(event_types::NUDGE_OF)).and_then(Value::as_str)
+        == Some(summon_id)
+  })
+}
+
+/// The summon text written after a failed thread turn has no reply.
 fn nudge_text(platform: &ThreadPlatform) -> String {
   format!(
     "{} thread: the round answering this mention ended without posting a reply. Decide now:\n\
@@ -1148,39 +1149,48 @@ fn nudge_text(platform: &ThreadPlatform) -> String {
   )
 }
 
-/// The round-end audit of one finished round whose received input carries a summon block; true when it acted
-/// (`audit_round`). A summon round without a reply later than `receipt` gets a nudge, once; a nudge round without one
-/// gets the thread notice, once, persisted only after the post succeeds.
-pub async fn audit_round(
+/// Preserves the thread's existing nudge and notice path for a run that ended on a member failure or quota handoff.
+pub async fn audit_failed_turn(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
   session_id: &str,
-  receipt: &Receipt,
-) -> Result<Option<Arc<Vec<SharedChatEvent>>>, ThreadReplyError> {
-  let _session_guard = session_lock_for(session_id).lock_owned().await;
+  done: &Value,
+) -> Result<bool, ThreadReplyError> {
   let platform = adapter.platform();
+  let Some(meta) = features.store.get_session(session_id).await? else {
+    return Ok(false);
+  };
+  if origin_of(&meta, platform).is_none() {
+    return Ok(false);
+  }
   let chat_events = load_chat_events(features, session_id).await?;
-  let Some(input_event) = event_by_id(&chat_events, &receipt.input_event_id) else {
-    return Ok(Some(chat_events));
+  let receipts =
+    reply_order::turn_receipts(&features.store, session_id, done, &chat_events).map_err(ThreadReplyError::failure)?;
+  if receipts.is_empty() {
+    return Ok(false);
+  }
+  let receipt_ids: Vec<String> = receipts.iter().map(|receipt| receipt.input_event_id.clone()).collect();
+  let Some((input_event_id, target)) = newest_thread_input(platform, &chat_events, &receipt_ids) else {
+    return Ok(false);
   };
-  let Some(target) = input_event.get(platform.name).filter(|block| block.is_object()).cloned() else {
-    return Ok(Some(chat_events));
-  };
-  let summon_id = summon_of(&target, &receipt.input_event_id);
+  let receipt = receipts
+    .into_iter()
+    .find(|receipt| receipt.input_event_id == input_event_id)
+    .expect("the newest thread input is one of the turn's receipts");
+  let summon_id = summon_of(&target, &input_event_id);
   let content = event_by_id(&chat_events, &summon_id)
     .and_then(|summon| summon.get("content").and_then(Value::as_str).map(str::to_string))
     .unwrap_or_default();
-  // A summon from the earlier marker contract names neither the one-line input nor the reply command.
   if content != platform.summon_line && !content.contains(platform.reply_command) {
-    return Ok(Some(chat_events));
+    return Ok(false);
   }
-  if replied(platform, receipt, &chat_events)? {
-    return Ok(Some(chat_events));
+  if replied(platform, &receipt, &chat_events)? {
+    return Ok(false);
   }
 
   if target.get(event_types::NUDGE_OF).is_none() {
     if nudged(platform, &chat_events, &summon_id) {
-      return Ok(Some(chat_events));
+      return Ok(false);
     }
     let text = nudge_text(platform);
     let mut block = Map::new();
@@ -1190,7 +1200,6 @@ pub async fn audit_round(
       }
     }
     block.insert(event_types::NUDGE_OF.to_string(), json!(summon_id));
-    drop(chat_events);
     let dispatcher =
       features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().map_err(ThreadReplyError::failure)?;
     let stored = dispatcher
@@ -1216,17 +1225,15 @@ pub async fn audit_round(
       nudge_id,
       platform.display_name,
     );
-    let event = format!("{}_reply_nudge", platform.name);
-    let thread = adapter.log_fields(&target);
-    tracing::info!(%event, session = session_id, thread = %thread, summon_id = %summon_id, nudge_id);
-    return Ok(None);
+    return Ok(true);
   }
 
   if noticed(platform, &chat_events, &summon_id) {
-    return Ok(Some(chat_events));
+    return Ok(false);
   }
-  let summon_event = event_by_id(&chat_events, &summon_id).expect("a nudge references its original summon event");
-  let created_after = summon_event.get("timestamp").and_then(Value::as_str).expect("a summon event has a timestamp");
+  let summon_event = event_by_id(&chat_events, &summon_id).context("a nudge references its original summon event")?;
+  let created_after =
+    summon_event.get("timestamp").and_then(Value::as_str).context("a summon event has a timestamp")?;
   let request_id = format!("{}-notice:{summon_id}", platform.name);
   if !post_with_retry(
     adapter.as_ref(),
@@ -1239,7 +1246,7 @@ pub async fn audit_round(
   )
   .await?
   {
-    return Ok(Some(chat_events));
+    return Ok(false);
   }
   let content = format!(
     "This {} mention got no reply from its round or the nudge round; the thread was told so.",
@@ -1247,51 +1254,122 @@ pub async fn audit_round(
   );
   let mut fields = Map::new();
   fields.insert(platform.notice_key(), json!({event_types::INPUT_EVENT_ID: summon_id}));
-  drop(chat_events);
   persist_request_event(features, session_id, &request_id, event_types::ASSISTANT_ERROR, &content, fields).await?;
   ack_clear(adapter, &target, session_id);
-  let event = format!("{}_reply_notice", platform.name);
-  let thread = adapter.log_fields(&target);
-  tracing::info!(%event, session = session_id, thread = %thread, summon_id = %summon_id);
-  Ok(None)
+  Ok(true)
+}
+/// The turn-end kind of a session bound to `platform`'s thread: the platform's name, or none for another session.
+pub fn thread_turn_kind(meta: &SessionMetadata, platform: &ThreadPlatform) -> Option<&'static str> {
+  origin_of(meta, platform).map(|_| platform.name)
 }
 
-/// The round-end audit for one finished round (`deliver_done`). It returns false without acting unless the round
-/// belongs to a thread-bound session and received a summon or a nudge.
-pub async fn deliver_done(
-  adapter: &Arc<dyn ThreadAdapter>,
-  features: &Arc<FeatureContext>,
-  session_id: &str,
-  done: &Value,
-) -> Result<bool, ThreadReplyError> {
-  let platform = adapter.platform();
-  let Some(meta) = features.store.get_session(session_id).await? else {
-    return Ok(false);
-  };
-  if origin_of(&meta, platform).is_none() {
-    return Ok(false);
-  }
-  let chat_events = load_chat_events(features, session_id).await?;
-  let receipts =
-    reply_order::turn_receipts(&features.store, session_id, done, &chat_events).map_err(ThreadReplyError::failure)?;
-  if receipts.is_empty() {
-    return Ok(false);
-  }
+/// The entry that checks each summon of the turn got a thread reply, on every thread platform.
+pub const THREAD_REPLY_ENTRY: &str = "thread-reply";
+
+/// The reason the `thread-reply` check blocks a summon round that posted no reply.
+fn reply_reason(platform: &ThreadPlatform) -> String {
+  format!(
+    "{} thread: the round answering this mention ended without posting a reply. Decide now:\n\
+     when the thread should hear something, post a reply; when there is nothing to say, end this\n\
+     round and the thread gets a one-line notice pointing to this session.",
+    platform.display_name
+  )
+}
+
+/// The turn's newest summon of `platform` and its receipt, when the turn received one. A summon names the turn only
+/// through the platform's block on the input event.
+fn newest_summon(platform: &ThreadPlatform, turn: &[Value]) -> anyhow::Result<Option<(Receipt, Value)>> {
+  let receipts = received_receipts(turn)?;
   let receipt_ids: Vec<String> = receipts.iter().map(|receipt| receipt.input_event_id.clone()).collect();
-  let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &receipt_ids) else {
-    return Ok(false);
+  let Some((input_event_id, block)) = newest_thread_input(platform, turn, &receipt_ids) else {
+    return Ok(None);
   };
   let receipt = receipts
     .into_iter()
     .find(|receipt| receipt.input_event_id == input_event_id)
     .expect("the newest thread input is one of the turn's receipts");
-  Ok(audit_round(adapter, features, session_id, &receipt).await?.is_none())
+  Ok(Some((receipt, block)))
 }
 
-/// Boot pass over every thread-bound session; returns how many notices and nudges it produced
-/// (`backfill_lost_summons`). A session with a turn running or waiting is left alone: its summons belong to that turn's
-/// end. An idle session reports each summon that no finished turn received and re-runs the round-end audit of every
-/// round that carries a run id. A second pass finds nothing, because every predicate reads the log.
+/// The `thread-reply` entry for one platform: the turn's newest summon has a reply later than its receipt. The first
+/// miss blocks with the reason; a miss after that passes with the no-reply notice. A round that errored is checked too.
+pub fn check_thread_reply(platform: &ThreadPlatform, input: &TurnInput) -> anyhow::Result<CheckResult> {
+  let Some((receipt, block)) = newest_summon(platform, &input.turn)? else {
+    return Ok(CheckResult::Pass);
+  };
+  // A nudge copies the summon's platform block and names the summon in `nudge_of`. The audit posted it only after
+  // checking that summon's format, and the summon itself may sit before this turn, so a nudge input skips the check.
+  if block.get(event_types::NUDGE_OF).and_then(Value::as_str).is_none() {
+    let summon = event_by_id(&input.turn, &receipt.input_event_id).context("the summon is in the turn")?;
+    let content = summon.get("content").and_then(Value::as_str).unwrap_or_default();
+    // A summon from the earlier marker contract names neither the one-line input nor the reply command.
+    if content != platform.summon_line && !content.contains(platform.reply_command) {
+      return Ok(CheckResult::Pass);
+    }
+  }
+  if replied(platform, &receipt, &input.turn)? {
+    return Ok(CheckResult::Pass);
+  }
+  if input.turn.iter().any(blocked_thread_check) {
+    return Ok(CheckResult::Notice(NO_REPLY_NOTICE.to_string()));
+  }
+  Ok(CheckResult::Block(reply_reason(platform)))
+}
+
+/// Whether a `turn_hooks` record of the turn holds the `thread-reply` block.
+fn blocked_thread_check(event: &Value) -> bool {
+  event["type"] == event_types::TURN_HOOKS
+    && event["results"].as_array().is_some_and(|results| {
+      results.iter().any(|result| result["name"] == THREAD_REPLY_ENTRY && result["result"] == "block")
+    })
+}
+
+/// Shows the no-reply notice `message` in the thread of the turn's newest summon: posts it with retry, then records it.
+/// A post that fails returns its error, and the checkpoint records that error. A notice already recorded is not posted
+/// again.
+pub async fn show_turn_notice(
+  adapter: &Arc<dyn ThreadAdapter>,
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  turn: &[Value],
+  message: &str,
+) -> Result<(), ThreadReplyError> {
+  let platform = adapter.platform();
+  let _session_guard = session_lock_for(session_id).lock_owned().await;
+  let Some((receipt, block)) = newest_summon(platform, turn).map_err(ThreadReplyError::failure)? else {
+    return Err(ThreadReplyError::failure("the turn received no summon to notice"));
+  };
+  let summon_id = receipt.input_event_id.clone();
+  let chat_events = load_chat_events(features, session_id).await?;
+  if noticed(platform, &chat_events, &summon_id) {
+    return Ok(());
+  }
+  let summon = event_by_id(turn, &summon_id).expect("the newest summon is in the turn");
+  let created_after = summon.get("timestamp").and_then(Value::as_str).expect("a summon event has a timestamp");
+  let request_id = format!("{}-notice:{summon_id}", platform.name);
+  if !post_with_retry(adapter.as_ref(), &block, message, session_id, &format!("{request_id}#1"), created_after, None)
+    .await?
+  {
+    return Err(ThreadReplyError::failure(format!("{} refused the no-reply notice", platform.display_name)));
+  }
+  let content = format!(
+    "This {} mention got no reply from its round or the nudge round; the thread was told so.",
+    platform.display_name
+  );
+  let mut fields = Map::new();
+  fields.insert(platform.notice_key(), json!({event_types::INPUT_EVENT_ID: summon_id}));
+  persist_request_event(features, session_id, &request_id, event_types::ASSISTANT_ERROR, &content, fields).await?;
+  ack_clear(adapter, &block, session_id);
+  let event = format!("{}_reply_notice", platform.name);
+  let thread = adapter.log_fields(&block);
+  tracing::info!(%event, session = session_id, thread = %thread, summon_id = %summon_id);
+  Ok(())
+}
+
+/// Boot pass over every thread-bound session; returns how many lost-summon notices it posted (`backfill_lost_summons`).
+/// A session with a turn running or waiting is left alone: its summons belong to that turn's end. An idle session
+/// reports each summon that no finished turn received. A second pass finds nothing, because the predicate reads the
+/// log.
 pub async fn backfill_lost_summons(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
@@ -1307,7 +1385,7 @@ pub async fn backfill_lost_summons(
     if master_queue::session_is_busy(features, &meta.id).map_err(ThreadReplyError::failure)? {
       continue;
     }
-    let mut chat_events = {
+    {
       let _session_guard = session_lock_for(&meta.id).lock_owned().await;
       let chat_events = load_chat_events(features, &meta.id).await?;
       let received = reply_order::received_by_finished_turns(&features.store, &meta.id, &chat_events)?;
@@ -1344,41 +1422,6 @@ pub async fn backfill_lost_summons(
         let log_event = format!("{}_backfill_lost_summon", platform.name);
         let thread = adapter.log_fields(block);
         tracing::info!(event = %log_event, session = %meta.id, thread = %thread, input_event_id = %summon_id);
-      }
-      load_chat_events(features, &meta.id).await?
-    };
-
-    let dones: Vec<usize> = chat_events
-      .iter()
-      .enumerate()
-      .filter(|(_, event)| event_type(&event.to_value()) == Some(event_types::MASTER_DONE))
-      .filter(|(_, event)| {
-        event.as_ref().get("run_id").and_then(CompactValue::as_str).is_some_and(|run_id| !run_id.is_empty())
-      })
-      .map(|(index, _)| index)
-      .collect();
-    for done_index in dones {
-      let done = chat_events[done_index].to_value();
-      let receipts = reply_order::turn_receipts(&features.store, &meta.id, &done, &chat_events)
-        .map_err(ThreadReplyError::failure)?;
-      if receipts.is_empty() {
-        continue;
-      }
-      let receipt_ids: Vec<String> = receipts.iter().map(|receipt| receipt.input_event_id.clone()).collect();
-      let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &receipt_ids) else {
-        continue;
-      };
-      let receipt = receipts
-        .into_iter()
-        .find(|receipt| receipt.input_event_id == input_event_id)
-        .expect("the newest thread input is one of the turn's receipts");
-      match audit_round(adapter, features, &meta.id, &receipt).await? {
-        Some(snapshot) => chat_events = snapshot,
-        None => {
-          reported += 1;
-          // The action appended an event the next done's predicates must see.
-          chat_events = load_chat_events(features, &meta.id).await?;
-        }
       }
     }
   }

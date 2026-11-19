@@ -12,10 +12,6 @@ const THREAD_WORKFLOW_RULES_FILE: &str = "thread_session.md";
 pub struct ChatThreadsTurn;
 
 impl TurnContribution for ChatThreadsTurn {
-  fn class_name(&self) -> &'static str {
-    "ChatThreadsTurnContribution"
-  }
-
   fn workflow_rules_file(&self, meta: &SessionMetadata) -> Option<&'static str> {
     is_thread_session(meta).then_some(THREAD_WORKFLOW_RULES_FILE)
   }

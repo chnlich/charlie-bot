@@ -1,5 +1,5 @@
 //! The web-reply package's turn contribution. It carries the reply
-//! rules in a web session's manager runs, runs the round-end audit after a turn that answers a user, renders the
+//! rules in a web session's manager runs, owns the web turn-end checks and notice delivery, renders the
 //! `web_reply`, `web_reply_notice` and `web_status` events as chat lines, and claims turn-end unread state for web
 //! sessions.
 
@@ -27,10 +27,6 @@ use crate::{audit, reply, status};
 pub struct WebReplyTurnContribution;
 
 impl TurnContribution for WebReplyTurnContribution {
-  fn class_name(&self) -> &'static str {
-    "WebReplyTurnContribution"
-  }
-
   fn instruction_segments(
     &self,
     meta: &SessionMetadata,
@@ -50,25 +46,22 @@ impl TurnContribution for WebReplyTurnContribution {
     Ok(vec![RuleSegment { text, sources: vec![source], delivery: DELIVERY_FULL.to_string() }])
   }
 
-  fn after_turn<'a>(
+  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
+    reply::is_web_session(meta).then_some("web")
+  }
+
+  fn turn_check_sender(&self, entry: &str) -> &'static str {
+    if entry == audit::WEB_STATUS_ENTRY { audit::STATUS_SENDER_NAME } else { reply::NUDGE_SENDER_NAME }
+  }
+
+  fn show_turn_notice<'a>(
     &'a self,
-    meta: &'a SessionMetadata,
-    done_event: &'a Value,
-    _cfg: &'a CharlieBotConfig,
     features: &'a Arc<FeatureContext>,
+    session_id: &'a str,
+    turn: &'a [Value],
+    message: &'a str,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move {
-      if !reply::is_web_session(meta) {
-        return Ok(());
-      }
-      // An errored turn is not audited: its error event already shows and marks the session unread.
-      let exit_code = done_event.get("exit_code").context("the master_done event has no exit_code")?;
-      if exit_code.as_i64() != Some(0) {
-        return Ok(());
-      }
-      let archived = meta.status == charliebot_store::metadata::SessionStatus::Archived;
-      audit::audit_turn(features, &meta.id, done_event, archived).await
-    })
+    Box::pin(audit::show_notice(features, session_id, turn, message))
   }
 
   /// The line that opens each user message of a web session in the turn prompt. The turn prompt joins a turn's inputs
@@ -147,8 +140,6 @@ mod tests {
   use tempfile::TempDir;
 
   use super::*;
-  use crate::audit;
-  use crate::test_support::{Home, id_of, master_done, user_event};
 
   /// A synthetic checkout whose `prompts/web_reply.md` holds `text`.
   fn checkout(text: &str) -> (TempDir, RepoRoot) {
@@ -317,201 +308,5 @@ mod tests {
   fn web_status_without_content_or_status_renders_empty_and_null() {
     let event = json!({});
     assert_eq!(web_status_message(&event).to_string(), r#"{"role":"web_status","content":"","web_status":null}"#);
-  }
-
-  /// A start time before every event a test appends.
-  const TURN_START: &str = "2026-01-01T00:00:00Z";
-
-  #[tokio::test]
-  async fn after_turn_audits_only_a_web_turn_that_answers_a_user() {
-    for (session_kind, input_kind, expect_nudge) in
-      [("web", "user", true), ("web", "background", false), ("thread", "user", false)]
-    {
-      let home = Home::new();
-      let origin = match session_kind {
-        "web" => None,
-        "thread" => {
-          Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"})))
-        }
-        other => unreachable!("no session kind {other}"),
-      };
-      let sid = home.manager("session", origin).await;
-      let input = match input_kind {
-        "user" => user_event("the question"),
-        "background" => json!({"type": "scheduled_trigger", "content": "wake"}),
-        other => unreachable!("no input kind {other}"),
-      };
-      let input_id = id_of(&home.append(&sid, input).await).to_string();
-      home.launch_run(&sid, "run-1", &[input_id.as_str()], TURN_START);
-      let meta = home.meta(&sid).await;
-
-      WebReplyTurnContribution
-        .after_turn(
-          &meta,
-          &master_done("run-1", &[input_id.as_str()], 0),
-          &synthetic_config("/synthetic/home"),
-          &home.features,
-        )
-        .await
-        .unwrap();
-
-      assert_eq!(!home.nudges(&sid).is_empty(), expect_nudge, "{session_kind} session, {input_kind} input");
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // The status reminder: every finished turn, once, and no reminder from its own wake
-  // -------------------------------------------------------------------------
-
-  /// The web contribution's after_turn for one finished turn, over the test home's feature context.
-  async fn after_turn(home: &Home, session_id: &str, done: &Value) {
-    let meta = home.meta(session_id).await;
-    WebReplyTurnContribution
-      .after_turn(&meta, done, &synthetic_config("/synthetic/home"), &home.features)
-      .await
-      .unwrap();
-  }
-
-  /// The status reminders of the session's log, in log order: the agent messages a turn's missing status set or
-  /// confirm woke.
-  fn status_reminders(home: &Home, session_id: &str) -> Vec<Value> {
-    home.events(session_id).into_iter().filter(|event| event.get("web_status_reminder").is_some()).collect()
-  }
-
-  /// A master_done event of `run_id` that answers `input_event_ids`, carries `id` as its persisted id, and ended
-  /// cleanly.
-  fn done_with_id(run_id: &str, input_event_ids: &[&str], id: &str) -> Value {
-    json!({"type": "master_done", "run_id": run_id, "exit_code": 0, "input_event_ids": input_event_ids, "id": id})
-  }
-
-  #[tokio::test]
-  async fn a_turn_without_a_status_gets_one_reminder_and_its_reminder_turn_gets_none() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    home.launch_run(&sid, "turn-1", &[], TURN_START);
-    let done = done_with_id("turn-1", &[], "turn-1");
-
-    after_turn(&home, &sid, &done).await;
-    after_turn(&home, &sid, &done).await;
-
-    let reminders = status_reminders(&home, &sid);
-    assert_eq!(reminders.len(), 1);
-    assert_eq!(reminders[0]["type"], json!("agent_message"));
-    assert_eq!(reminders[0]["web_status_reminder"], json!("turn-1"));
-    assert_eq!(reminders[0]["from_session_name"], json!("Session status"));
-    assert_eq!(reminders[0].get("web_reply"), None, "a plain reminder answers no user message");
-
-    let reminder_id = id_of(&reminders[0]).to_string();
-    home.launch_run(&sid, "turn-2", &[reminder_id.as_str()], TURN_START);
-    after_turn(&home, &sid, &done_with_id("turn-2", &[reminder_id.as_str()], "turn-2")).await;
-
-    assert_eq!(status_reminders(&home, &sid).len(), 1, "the reminder's own turn gets no reminder");
-  }
-
-  #[tokio::test]
-  async fn a_turn_missing_reply_and_status_gets_one_combined_reminder_and_one_wake() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let user = home.append(&sid, user_event("the question")).await;
-    home.launch_run(&sid, "turn-1", &[id_of(&user)], TURN_START);
-    let done = done_with_id("turn-1", &[id_of(&user)], "turn-1");
-
-    after_turn(&home, &sid, &done).await;
-
-    let events = home.events(&sid);
-    let reminders: Vec<Value> =
-      events.iter().filter(|event| event.get("web_status_reminder").is_some()).cloned().collect();
-    assert_eq!(reminders.len(), 1);
-    assert_eq!(reminders[0]["web_reply"]["nudge_of"], json!(id_of(&user)));
-    // The combined reminder is the turn's one nudge: no separate reply nudge rides it.
-    let nudges = home.nudges(&sid);
-    assert_eq!(nudges.len(), 1);
-    assert_eq!(id_of(&nudges[0]), id_of(&reminders[0]));
-    assert_eq!(events.iter().filter(|event| event["type"] == "agent_message").count(), 1);
-
-    let reminder_id = id_of(&reminders[0]).to_string();
-    home.launch_run(&sid, "turn-2", &[reminder_id.as_str()], TURN_START);
-    after_turn(&home, &sid, &done_with_id("turn-2", &[reminder_id.as_str()], "turn-2")).await;
-
-    let events = home.events(&sid);
-    assert_eq!(events.iter().filter(|event| event.get("web_status_reminder").is_some()).count(), 1);
-    assert_eq!(events.iter().filter(|event| event["type"] == "web_reply_notice").count(), 1);
-  }
-
-  #[tokio::test]
-  async fn a_pending_close_request_skips_the_status_reminder_and_the_nudge() {
-    for missing_reply in [false, true] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      let mut input_ids: Vec<String> = Vec::new();
-      if missing_reply {
-        let user = home.append(&sid, user_event("the question")).await;
-        input_ids.push(id_of(&user).to_string());
-      }
-      home.launch_run(&sid, "run-1", &input_ids.iter().map(String::as_str).collect::<Vec<_>>(), TURN_START);
-      home
-        .append(&sid, json!({"type": "task_close_requested", "request_id": "close-1", "owner_run_id": "run-1"}))
-        .await;
-      let input_refs: Vec<&str> = input_ids.iter().map(String::as_str).collect();
-
-      after_turn(&home, &sid, &done_with_id("run-1", &input_refs, "turn-1")).await;
-
-      assert!(status_reminders(&home, &sid).is_empty(), "missing reply {missing_reply}");
-      assert!(home.nudges(&sid).is_empty(), "missing reply {missing_reply}");
-    }
-  }
-
-  #[tokio::test]
-  async fn a_turn_that_recorded_a_status_command_gets_no_status_reminder() {
-    for event_type in ["web_status", "web_status_confirmed"] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      home.append(&sid, json!({"type": event_type, "content": "Status command"})).await;
-      home.launch_run(&sid, "turn-1", &[], TURN_START);
-      let done = home.append(&sid, done_with_id("turn-1", &[], "turn-1")).await;
-
-      after_turn(&home, &sid, &done).await;
-
-      assert!(status_reminders(&home, &sid).is_empty(), "{event_type}");
-
-      // A status command from the previous turn cannot satisfy the next background turn.
-      home.launch_run(&sid, "turn-2", &[], TURN_START);
-      let next = home.append(&sid, done_with_id("turn-2", &[], "turn-2")).await;
-      after_turn(&home, &sid, &next).await;
-      assert_eq!(status_reminders(&home, &sid).len(), 1, "{event_type}");
-    }
-  }
-
-  #[tokio::test]
-  async fn an_errored_turn_gets_no_audit() {
-    for (errored_input, expected_nudges) in [("user", 0), ("nudge", 1)] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      let user_id = id_of(&home.append(&sid, user_event("the question")).await).to_string();
-      home.launch_run(&sid, "run-1", &[user_id.as_str()], TURN_START);
-      let input_id = match errored_input {
-        "user" => user_id.clone(),
-        "nudge" => {
-          audit::audit_reply(&home.features, &sid, &master_done("run-1", &[user_id.as_str()], 0)).await.unwrap();
-          id_of(&home.nudges(&sid)[0]).to_string()
-        }
-        other => unreachable!("no errored input {other}"),
-      };
-      home.launch_run(&sid, "run-2", &[input_id.as_str()], TURN_START);
-      let meta = home.meta(&sid).await;
-
-      WebReplyTurnContribution
-        .after_turn(
-          &meta,
-          &master_done("run-2", &[input_id.as_str()], 1),
-          &synthetic_config("/synthetic/home"),
-          &home.features,
-        )
-        .await
-        .unwrap();
-
-      assert_eq!(home.nudges(&sid).len(), expected_nudges, "errored {errored_input} input");
-      assert!(home.events(&sid).iter().all(|event| event["type"] != WEB_REPLY_NOTICE), "errored {errored_input} input");
-    }
   }
 }

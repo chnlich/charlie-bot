@@ -5,15 +5,10 @@ use charliebot_registry::turn::{EventRenderer, TurnContribution};
 
 use crate::card;
 
-/// The drafts turn contribution. It adds no instruction segment and no after-turn work. It renders the three draft
-/// events.
+/// The drafts turn contribution. It adds no instruction segment and renders the three draft events.
 pub struct DraftsTurnContribution;
 
 impl TurnContribution for DraftsTurnContribution {
-  fn class_name(&self) -> &'static str {
-    "DraftsTurnContribution"
-  }
-
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
     vec![
       (event_types::DRAFT_REGISTERED, card::draft_registered_message),

@@ -57,7 +57,7 @@ pub use control::ControlGuard;
 pub use events::{ChatEvent, ChatEventHistory, ChatEventsDelta, SharedChatEvent, SharedChatEventRange};
 pub use fact_scan::ScannedLiveFacts;
 pub use held_run_lists::RunListHold;
-pub use hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
+pub use hooks::{EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
 pub use listing::{ArchivedPage, MetadataListing, RawMetadata, SharedSubtreeRoots};
 pub use message_utils::{MessageProvenance, SESSION_NOT_FOUND_DETAIL, build_scheduled_trigger_event};
 pub use projection::MessageProjection;

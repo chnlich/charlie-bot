@@ -56,6 +56,10 @@
           "total_cost_usd": 0
         },
         {
+          "type": "turn_hooks",
+          "results": []
+        },
+        {
           "type": "master_done",
           "exit_code": 0,
           "still_thinking": false,
@@ -106,6 +110,10 @@
           "type": "error",
           "message": "Master run produced zero model output (cc_session_id=fresh session): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14).",
           "content": "Master run produced zero model output (cc_session_id=fresh session): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14)."
+        },
+        {
+          "type": "turn_hooks",
+          "results": []
         },
         {
           "type": "master_done",
@@ -176,6 +184,10 @@
           }
         },
         {
+          "type": "turn_hooks",
+          "results": []
+        },
+        {
           "type": "master_done",
           "exit_code": 0,
           "still_thinking": false,
@@ -212,6 +224,10 @@
         {
           "type": "assistant_error",
           "content": "Agent error: synthetic backend error"
+        },
+        {
+          "type": "turn_hooks",
+          "results": []
         },
         {
           "type": "master_done",
@@ -292,6 +308,10 @@
           "total_cost_usd": 0
         },
         {
+          "type": "turn_hooks",
+          "results": []
+        },
+        {
           "type": "master_done",
           "exit_code": 0,
           "still_thinking": false,
@@ -317,6 +337,10 @@
         {
           "type": "assistant_error",
           "content": "Agent error: synthetic stderr failure"
+        },
+        {
+          "type": "turn_hooks",
+          "results": []
         },
         {
           "type": "master_done",
@@ -390,6 +414,10 @@
           "total_cost_usd": 0
         },
         {
+          "type": "turn_hooks",
+          "results": []
+        },
+        {
           "type": "master_done",
           "exit_code": 0,
           "still_thinking": false,
@@ -460,6 +488,10 @@
           "timestamp": "$TIME"
         },
         {
+          "type": "turn_hooks",
+          "results": []
+        },
+        {
           "type": "master_done",
           "exit_code": 0,
           "still_thinking": false,
@@ -512,6 +544,10 @@
           "content": "Master run produced zero model output (cc_session_id=fresh session): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14)."
         },
         {
+          "type": "turn_hooks",
+          "results": []
+        },
+        {
           "type": "master_done",
           "exit_code": 1,
           "still_thinking": false,
@@ -541,6 +577,10 @@
           "content": "Agent error: no backend option was given and this session pins none \u2014 refusing to fall back to backends.options[0]; this run did not execute."
         },
         {
+          "type": "turn_hooks",
+          "results": []
+        },
+        {
           "type": "master_done",
           "exit_code": 1,
           "still_thinking": false,
@@ -563,6 +603,10 @@
         {
           "type": "assistant_error",
           "content": "Agent error: backend 'deleted-id' is not a backends.options or backends.pools id; valid ids: ['fake', 'pool']"
+        },
+        {
+          "type": "turn_hooks",
+          "results": []
         },
         {
           "type": "master_done",
@@ -628,6 +672,10 @@
             "cache_creation_input_tokens": 0
           },
           "total_cost_usd": 0
+        },
+        {
+          "type": "turn_hooks",
+          "results": []
         },
         {
           "type": "master_done",

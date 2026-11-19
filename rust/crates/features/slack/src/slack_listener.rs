@@ -158,16 +158,6 @@ pub async fn ack_messages(
   thread_entry::ack_messages(&adapter, features, session_id, message_ids).await
 }
 
-/// The round-end audit that runs after one `master_done` event.
-pub async fn deliver_done(
-  session_id: &str,
-  done: &Value,
-  features: &Arc<FeatureContext>,
-) -> Result<bool, ThreadReplyError> {
-  let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::lazy(Arc::clone(features)));
-  thread_entry::deliver_done(&adapter, features, session_id, done).await
-}
-
 /// The report of queued Slack summons lost across a restart.
 pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> Result<usize, ThreadReplyError> {
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::lazy(Arc::clone(features)));

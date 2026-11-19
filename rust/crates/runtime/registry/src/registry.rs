@@ -194,9 +194,8 @@ pub struct Registry {
   pub(crate) recovery_steps: Ledger<StepFn>,
   pub(crate) trigger_step: Ledger<StepFn>,
   pub(crate) let_go_steps: Ledger<StepFn>,
-  /// The server's feature context, bound once right after the server builds it. The store's after-turn hooks read it
-  /// through this link. It is a `Weak`: the store's hooks hold the registry, and a strong link would form a cycle that
-  /// keeps the context alive.
+  /// The server's feature context, bound before the lifespan starts. Cron sequence controllers read it through this
+  /// `Weak` link, so the registry and store do not form a strong cycle that keeps the context alive.
   pub(crate) feature_context: OnceLock<Weak<FeatureContext>>,
 }
 
@@ -1829,10 +1828,6 @@ pub type EventRenderer = fn(&Value) -> Value;
 
 /// One package's part in a master turn. Every step defaults to adding nothing.
 pub trait TurnContribution: Send + Sync {
-  /// The class name of this contribution. The store names the
-  /// contribution's after-turn task by it: `after-turn-<class name>-<session id>`.
-  fn class_name(&self) -> &'static str;
-
   /// Segments for the managed instructions of a run of `kind`. They follow the model overlay segments and precede
   /// the local rule segments, in registration order. A contribution reads its prompt docs through `repo`.
   fn instruction_segments(
@@ -1860,13 +1855,35 @@ pub trait TurnContribution: Send + Sync {
     Box::pin(async { Ok(()) })
   }
 
-  /// The contribution's work as its own logged task after the `MASTER_DONE` event is appended and broadcast.
-  fn after_turn<'a>(
+  /// The session kind whose turn-end checks this contribution owns, when `meta` is one of its sessions. At most one
+  /// contribution owns a session: the registry's turn owner is the first that claims it.
+  fn turn_kind(&self, _meta: &SessionMetadata) -> Option<&'static str> {
+    None
+  }
+
+  /// The sender of the message that shows the block of the turn-end check `entry` in this contribution's sessions.
+  fn turn_check_sender(&self, _entry: &str) -> &'static str {
+    "CharlieBot"
+  }
+
+  /// Shows a turn-end check's notice to the user of the session `session_id`, after the check passed with it. `turn` is
+  /// the turn's events as the check read them. A failed delivery returns its error, and the check records that error.
+  fn show_turn_notice<'a>(
     &'a self,
-    _meta: &'a SessionMetadata,
-    _done_event: &'a Value,
-    _cfg: &'a CharlieBotConfig,
     _features: &'a Arc<FeatureContext>,
+    _session_id: &'a str,
+    _turn: &'a [Value],
+    _message: &'a str,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Err(anyhow::anyhow!("this contribution owns no turn-end notices")) })
+  }
+
+  /// Handles the contribution's existing errored-turn behavior after the run's master_done is persisted.
+  fn after_failed_turn<'a>(
+    &'a self,
+    _features: &'a Arc<FeatureContext>,
+    _session_id: &'a str,
+    _done_event: &'a Value,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async { Ok(()) })
   }
@@ -1895,6 +1912,14 @@ pub trait TurnContribution: Send + Sync {
 impl Registry {
   /// The registration of a turn contribution. A chat renderer type that an
   /// earlier contribution, or this one, already renders fails here, at the aggregator's build.
+  /// The contribution that owns the turn-end checks of `meta`'s session, with the session kind it claims.
+  pub fn turn_owner(&self, meta: &SessionMetadata) -> Option<(&'static str, Arc<dyn TurnContribution>)> {
+    self
+      .turn_contributions
+      .values()
+      .find_map(|contribution| contribution.turn_kind(meta).map(|kind| (kind, Arc::clone(contribution))))
+  }
+
   pub fn turn_contribution(
     &mut self,
     name: &'static str,

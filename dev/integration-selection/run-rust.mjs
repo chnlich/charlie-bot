@@ -11,8 +11,8 @@ if (selection === undefined || selection === '') throw new Error('RUST_INTEGRATI
 
 const filter = `(${selection}) and not test(/_subprocess_entry$/)`;
 
-function runCargo(args) {
-  const child = spawn('cargo', args, { cwd: workspaceRoot, env: process.env });
+function runCargo(args, env = process.env) {
+  const child = spawn('cargo', args, { cwd: workspaceRoot, env });
   let stderrTail = '';
   child.stdout.pipe(process.stdout);
   child.stderr.on('data', (chunk) => {
@@ -48,7 +48,11 @@ const args = [
   '--filterset',
   filter,
 ];
-const result = await runCargo(args);
+// The turn-end checks of the served repo run `charliebot hook ...` from PATH, and the build above leaves that binary in
+// the workspace's debug directory, so the selected tests find it there.
+const builtBinaries = path.join(workspaceRoot, 'target', 'debug');
+const testEnv = { ...process.env, PATH: `${builtBinaries}${path.delimiter}${process.env.PATH}` };
+const result = await runCargo(args, testEnv);
 exitOnFailure('nextest', result);
 const { stderrTail } = result;
 

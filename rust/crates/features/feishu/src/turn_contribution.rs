@@ -1,9 +1,9 @@
-//! The Feishu package's round-end audit, thread reply contract, and `feishu_reply` chat renderer.
+//! The Feishu package's turn-end check, thread reply contract, and `feishu_reply` chat renderer.
 
 use std::sync::Arc;
 
 use charliebot_chat_threads::reply_event::reply_line;
-use charliebot_chat_threads::thread_entry::{thread_reply_contract, thread_reply_segment};
+use charliebot_chat_threads::thread_entry::{self, thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::run_kind::RunKind;
@@ -22,10 +22,6 @@ use crate::thread_contract::{FEISHU, thread_contract_part};
 pub struct FeishuTurnContribution;
 
 impl TurnContribution for FeishuTurnContribution {
-  fn class_name(&self) -> &'static str {
-    "FeishuTurnContribution"
-  }
-
   fn instruction_segments(
     &self,
     meta: &SessionMetadata,
@@ -44,17 +40,31 @@ impl TurnContribution for FeishuTurnContribution {
     vec![(FEISHU_REPLY, feishu_reply_message)]
   }
 
-  fn after_turn<'a>(
+  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
+    thread_entry::thread_turn_kind(meta, &FEISHU)
+  }
+
+  fn turn_check_sender(&self, _entry: &str) -> &'static str {
+    FEISHU.display_name
+  }
+
+  fn show_turn_notice<'a>(
     &'a self,
-    meta: &'a SessionMetadata,
-    done_event: &'a Value,
-    _cfg: &'a CharlieBotConfig,
     features: &'a Arc<FeatureContext>,
+    session_id: &'a str,
+    turn: &'a [Value],
+    message: &'a str,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move {
-      adapter::deliver_done(features, &meta.id, done_event).await?;
-      Ok(())
-    })
+    Box::pin(adapter::show_turn_notice(features, session_id, turn, message))
+  }
+
+  fn after_failed_turn<'a>(
+    &'a self,
+    features: &'a Arc<FeatureContext>,
+    session_id: &'a str,
+    done_event: &'a Value,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(adapter::after_failed_turn(features, session_id, done_event))
   }
 }
 

@@ -8,7 +8,6 @@ use charliebot_core::event_types;
 
 use crate::aggregator::MessageAggregator;
 use crate::aggregator_hold;
-use crate::compact::CompactValue;
 use crate::event_types::ChatEvent;
 use crate::projection::MessageProjection;
 use crate::streaming::{self, SocketHandle, Subscription};
@@ -21,25 +20,10 @@ impl Store {
   pub async fn persist_and_broadcast(&self, session_id: &str, event: Value) -> StoreResult<ChatEvent> {
     let _event_guard = self.event_lock(session_id).await;
     let aggregator = self.get_or_init_aggregator(session_id).await?;
-    let meta = self.get_session(session_id).await?;
     let appended = self.append_chat_event(session_id, event).await?;
     let mut event = appended;
     self.stamp_event_index(session_id, &mut event)?;
     self.feed_and_broadcast(session_id, &event, &aggregator).await?;
-
-    if event.get("type").and_then(CompactValue::as_str) == Some(event_types::MASTER_DONE)
-      && let Some(meta) = meta
-    {
-      for work in self.runtime_hooks.after_turn(meta, event.to_value(), self.cfg.clone()) {
-        let session_id = session_id.to_string();
-        let name = format!("after-turn-{}-{session_id}", work.name);
-        tokio::spawn(async move {
-          if let Err(error) = work.future.await {
-            tracing::error!(task_name = %name, error = %error, "{}", event_types::BACKGROUND_TASK_FAILED_EVENT);
-          }
-        });
-      }
-    }
     Ok(event)
   }
 
@@ -325,13 +309,10 @@ fn async_lock_for(locks: &StdMutex<HashMap<String, Arc<Mutex<()>>>>, session_id:
 
 #[cfg(test)]
 mod tests {
-  use std::sync::atomic::{AtomicUsize, Ordering};
-  use std::sync::{Arc, Mutex as StdMutex, mpsc};
-
-  use charliebot_core::config::CharlieBotConfig;
+  use std::sync::{Arc, mpsc};
 
   use super::*;
-  use crate::hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
+  use crate::hooks::{EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
   use crate::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
   use crate::store::test_support::{
     assistant_event, assistant_text_event, make_test_store, make_test_store_with_runtime, open_test_store,
@@ -408,10 +389,6 @@ mod tests {
       )
     }
 
-    fn after_turn(&self, meta: SessionMetadata, event: Value, cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
-      EmptyRuntimeEventHooks.after_turn(meta, event, cfg)
-    }
-
     fn mark_sidebar_dirty(&self, session_id: &str) {
       EmptyRuntimeEventHooks.mark_sidebar_dirty(session_id)
     }
@@ -458,10 +435,6 @@ mod tests {
     store.append_chat_event("synthetic", answer).await.unwrap();
   }
 
-  struct AfterTurnHook {
-    sender: StdMutex<Option<tokio::sync::oneshot::Sender<Value>>>,
-  }
-
   struct FeatureEventHook;
 
   impl RuntimeEventHooks for FeatureEventHook {
@@ -473,44 +446,6 @@ mod tests {
       let renderer: Arc<dyn crate::hooks::EventRenderer> =
         Arc::new(|event: &Value| Ok(Some(json!({"role": "feature", "content": event["content"].clone()}))));
       Ok(vec![("feature_event".to_string(), renderer)])
-    }
-
-    fn after_turn(
-      &self,
-      _meta: SessionMetadata,
-      _event: Value,
-      _cfg: charliebot_core::config::CharlieBotConfig,
-    ) -> Vec<AfterTurnWork> {
-      Vec::new()
-    }
-
-    fn mark_sidebar_dirty(&self, _session_id: &str) {}
-
-    fn drop_session_runtime_state(&self, _session_id: &str) {}
-  }
-
-  impl RuntimeEventHooks for AfterTurnHook {
-    fn copy_on_fork(&self, _parent_dir: &std::path::Path, _child_dir: &std::path::Path) -> StoreResult<()> {
-      Ok(())
-    }
-
-    fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn crate::hooks::EventRenderer>)>> {
-      Ok(Vec::new())
-    }
-
-    fn after_turn(
-      &self,
-      _meta: SessionMetadata,
-      event: Value,
-      _cfg: charliebot_core::config::CharlieBotConfig,
-    ) -> Vec<AfterTurnWork> {
-      let sender = self.sender.lock().unwrap().take().unwrap();
-      vec![AfterTurnWork {
-        name: "test-contribution".to_string(),
-        future: Box::pin(
-          async move { sender.send(event).map_err(|_| StoreError::new("after-turn receiver was dropped")) },
-        ),
-      }]
     }
 
     fn mark_sidebar_dirty(&self, _session_id: &str) {}
@@ -593,63 +528,6 @@ mod tests {
     assert!(drain_frames(&mut subscription).await.is_empty());
     assert!(store.mark_unread("missing").await.unwrap().is_none());
     assert!(drain_frames(&mut subscription).await.is_empty());
-  }
-
-  #[tokio::test]
-  async fn after_turn_contribution_starts_for_master_done_after_persistence() {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let hook = Arc::new(AfterTurnHook { sender: StdMutex::new(Some(sender)) });
-    let (_home, store) = make_test_store_with_runtime(hook);
-    write_test_session(&store, "synthetic");
-
-    let event = store.persist_and_broadcast("synthetic", json!({"type": "master_done"})).await.unwrap();
-    assert_eq!(event["event_index"].as_i64(), Some(0));
-    let contribution_event = tokio::time::timeout(std::time::Duration::from_secs(1), receiver).await.unwrap().unwrap();
-    assert_eq!(contribution_event["type"], "master_done");
-    assert_eq!(contribution_event["event_index"], 0);
-    assert_eq!(store.load_chat_events_sync("synthetic").unwrap().len(), 1);
-  }
-
-  /// Counts the after-turn requests the store makes. It starts no work.
-  #[derive(Default)]
-  struct CountingAfterTurnHook {
-    requests: AtomicUsize,
-  }
-
-  impl RuntimeEventHooks for CountingAfterTurnHook {
-    fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn crate::hooks::EventRenderer>)>> {
-      Ok(Vec::new())
-    }
-
-    fn after_turn(&self, _meta: SessionMetadata, _event: Value, _cfg: CharlieBotConfig) -> Vec<AfterTurnWork> {
-      self.requests.fetch_add(1, Ordering::SeqCst);
-      Vec::new()
-    }
-
-    fn copy_on_fork(&self, _parent_dir: &std::path::Path, _child_dir: &std::path::Path) -> StoreResult<()> {
-      Ok(())
-    }
-
-    fn mark_sidebar_dirty(&self, _session_id: &str) {}
-
-    fn drop_session_runtime_state(&self, _session_id: &str) {}
-  }
-
-  #[tokio::test]
-  async fn after_turn_is_requested_only_for_a_master_done_of_an_existing_session() {
-    let hook = Arc::new(CountingAfterTurnHook::default());
-    let (_home, store) = make_test_store_with_runtime(hook.clone());
-    write_test_session(&store, "synthetic");
-
-    store
-      .persist_and_broadcast("synthetic", json!({"type": "user", "content": "hi", "timestamp": "t1"}))
-      .await
-      .unwrap();
-    store.persist_and_broadcast("missing", json!({"type": "master_done"})).await.unwrap();
-    assert_eq!(hook.requests.load(Ordering::SeqCst), 0);
-
-    store.persist_and_broadcast("synthetic", json!({"type": "master_done"})).await.unwrap();
-    assert_eq!(hook.requests.load(Ordering::SeqCst), 1);
   }
 
   #[test]

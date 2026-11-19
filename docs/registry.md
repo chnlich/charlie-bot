@@ -164,27 +164,21 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 
 ### Turn contributions
 
-- Rust: `turn_contribution(name: &'static str, contribution: Arc<dyn TurnContribution>)`. The trait's one required
-  method is `class_name()`, the name the after-turn task name carries. The other steps default to
-  adding nothing: `instruction_segments(&self, meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig,
-  repo: &RepoRoot)`, `workflow_rules_file`, `input_preamble`, `status_goal_line(meta)`, `event_renderers`,
-  `claims_turn_end_unread`, and the async `before_turn` and `after_turn(meta, done_event, cfg, features)` hooks. `repo` is the checkout the server serves
-  (`RepoRoot`); a contribution reads its prompt docs through it, and `Registry::instruction_segments` takes the same
-  `repo` argument and passes it to each contribution. The registry's readers run them in registration order. Two
-  contributions that render the same event type fail.
+- Rust: `turn_contribution(name: &'static str, contribution: Arc<dyn TurnContribution>)`. The contribution may add
+  instruction segments, a workflow-rules file, an input preamble, a status goal, event renderers, turn-end ownership,
+  notice delivery, and a failed-turn action. Its other methods default to adding nothing. `repo` is the checkout the
+  server serves (`RepoRoot`); a contribution reads its prompt docs through it, and `Registry::instruction_segments`
+  passes the same `repo` to each contribution in registration order. Two contributions that render the same event type
+  fail.
 - Example: `registry.turn_contribution("memory", Arc::new(MemoryTurn))?;`
-- After-turn work: `RegistryRuntimeEvents::after_turn` (`store_hooks.rs`) answers one work per contribution, in
-  registration order. The store starts each work as its own task after it broadcasts a `master_done` of a session that
-  exists. The task is named `after-turn-<class_name>-<session id>`. A task that fails logs
-  `background_task_failed` with that `task_name`, and the other tasks run on.
-- The context: each work needs the `FeatureContext`. The server calls `Registry::bind_feature_context` once, right after
-  it builds the context and before the lifespan starts, because the lifespan's recovery can finish a round. The registry
-  keeps a `Weak` link, so the store never holds the context. When no context is bound, or the bound one was dropped,
-  every work fails with a message that names the `FeatureContext`.
-- Round origins: every `master_done` is persisted by the master queue's round end (`master_queue.rs:538`). That covers a
-  chat turn, a task turn, an auto-trigger, and a turn re-attached after a restart,
-  so each reaches the hook. The announce path (`announce_appended_event`) carries no `master_done` and starts no
-  after-turn work.
+- Turn-end ownership: `turn_kind(meta)` names the session kind whose checks the contribution serves. The registry
+  selects the first contribution that claims the session. `master_queue::process_item` runs `hooks/turn_end.json` before
+  it writes `master_done`; every command reads the same turn input. `show_turn_notice` delivers a passing check's
+  notice. `after_failed_turn` preserves the contribution's existing behavior for a failure or quota handoff, after
+  `master_done` is persisted.
+- Context: the server calls `Registry::bind_feature_context` once after it builds the context and before the lifespan
+  starts. Cron sequence controllers read the bound context through the registry's `Weak` link; the link avoids a strong
+  cycle with the store.
 
 ### Sidebar contributions
 

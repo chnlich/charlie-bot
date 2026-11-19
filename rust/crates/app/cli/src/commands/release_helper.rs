@@ -297,7 +297,6 @@ struct RunCounts {
   delegation_message: usize,
   worker_task_report: usize,
   nudge: usize,
-  status_reminder: usize,
   other: usize,
   mixed: usize,
 }
@@ -309,7 +308,6 @@ impl RunCounts {
       "delegation_message" => self.delegation_message += 1,
       "worker_task_report" => self.worker_task_report += 1,
       "nudge" => self.nudge += 1,
-      "status_reminder" => self.status_reminder += 1,
       other => panic!("unknown run class {other}"),
     }
   }
@@ -351,17 +349,9 @@ fn run_contract_value(
 
   let mut nudge_by_id: BTreeMap<String, String> = BTreeMap::new();
   let mut report_ids: BTreeSet<String> = BTreeSet::new();
-  let mut reminder_ids: BTreeSet<String> = BTreeSet::new();
   for event in events {
     let id = event_object_id(event);
     let kind = event.get("type").and_then(Value::as_str);
-    // The server sends one session status reminder after a turn that ended without a status set or confirm.
-    if kind == Some(event_types::AGENT_MESSAGE)
-      && event.get(event_types::WEB_STATUS_REMINDER).is_some_and(text_repr::is_truthy)
-      && !id.is_empty()
-    {
-      reminder_ids.insert(id.clone());
-    }
     if kind == Some(event_types::AGENT_MESSAGE)
       && let Some(parent) =
         event.get(event_types::WEB_REPLY).and_then(Value::as_object).and_then(|reply| reply.get(event_types::NUDGE_OF))
@@ -400,10 +390,6 @@ fn run_contract_value(
         run_classes.insert("nudge");
         matched_users.insert(parent);
       }
-      // One follow-up message can carry both the web reply nudge and the status reminder; it is one nudge run.
-      if reminder_ids.contains(input_id) && !nudge_by_id.contains_key(input_id) {
-        run_classes.insert("status_reminder");
-      }
     }
     for class in &run_classes {
       counts.bump(class);
@@ -423,9 +409,6 @@ fn run_contract_value(
   }
 
   let all_success = states.iter().all(|state| state == RUN_STATE_SUCCESS);
-  // Each turn gets at most one status reminder, so the reminder runs never outnumber the other runs.
-  let reminders = counts.status_reminder as i64;
-  let reminders_ok = reminders <= items.len() as i64 - reminders;
   let contract_ok = match mode {
     "check2" | "check5" => {
       !first_user_id.is_empty()
@@ -435,7 +418,6 @@ fn run_contract_value(
         && counts.nudge <= 1
         && counts.other == 0
         && counts.mixed == 0
-        && reminders_ok
         && all_success
     }
     "check4" => {
@@ -447,7 +429,6 @@ fn run_contract_value(
         && counts.other == 0
         && counts.mixed == 0
         && nudge_counts.iter().all(|(_, count)| *count <= 1)
-        && reminders_ok
         && all_success
     }
     other => return Err(format!("unknown run contract mode: {other}")),
@@ -460,14 +441,13 @@ fn run_contract_value(
   let states_summary = if states.is_empty() { "none".to_string() } else { states.join(",") };
   let summary = format!(
     "run_classes total={} user_message={} delegation_message={} worker_task_report={} nudge={} \
-nudge_by_user={} status_reminder={} other={} mixed={} states={} all_success={}",
+nudge_by_user={} other={} mixed={} states={} all_success={}",
     items.len(),
     counts.user_message,
     counts.delegation_message,
     counts.worker_task_report,
     counts.nudge,
     nudge_by_user,
-    counts.status_reminder,
     counts.other,
     counts.mixed,
     states_summary,
@@ -1316,45 +1296,6 @@ fn self_test(args: &[String]) -> Result<i32, String> {
     return Err("check 2 accepted two runs for one user message".to_string());
   }
   println!("PASS self-test check 2 rejects two runs for one user message");
-
-  let events = vec![
-    json!({"id": "user-1", "type": event_types::USER}),
-    json!({"id": "reminder-1", "type": "agent_message", (event_types::WEB_STATUS_REMINDER): "reminder-a"}),
-    json!({"id": "reminder-2", "type": "agent_message", (event_types::WEB_STATUS_REMINDER): "reminder-b"}),
-  ];
-  let runs = vec![
-    json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]}),
-    json!({"id": "run-reminder", "state": "success", (event_types::INPUT_EVENT_IDS): ["reminder-1"]}),
-  ];
-  for mode in ["check2", "check5"] {
-    let (ok, _) = run_contract_value(&runs, &events, mode, "user-1", "")?;
-    if !ok {
-      return Err(format!("{mode} rejected one status reminder run"));
-    }
-  }
-  println!("PASS self-test checks 2 and 5 allow one status reminder run");
-
-  let runs = vec![
-    json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]}),
-    json!({"id": "run-reminder-a", "state": "success", (event_types::INPUT_EVENT_IDS): ["reminder-1"]}),
-    json!({"id": "run-reminder-b", "state": "success", (event_types::INPUT_EVENT_IDS): ["reminder-2"]}),
-  ];
-  let (ok, _) = run_contract_value(&runs, &events, "check5", "user-1", "")?;
-  if ok {
-    return Err("check 5 accepted two status reminder runs for one turn".to_string());
-  }
-  println!("PASS self-test check 5 rejects two status reminder runs for one turn");
-
-  let events = vec![json!({"id": "user-1", "type": event_types::USER,
-    (event_types::WEB_REPLY): {(event_types::NUDGE_OF): "user-1"}, (event_types::WEB_STATUS_REMINDER): "reminder-a"})];
-  let runs = vec![json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]})];
-  for mode in ["check2", "check5"] {
-    let (ok, summary) = run_contract_value(&runs, &events, mode, "user-1", "")?;
-    if !ok {
-      return Err(format!("{mode} did not count a combined nudge and status reminder as one run: {summary}"));
-    }
-  }
-  println!("PASS self-test checks 2 and 5 count a combined nudge and status reminder as one nudge run");
 
   let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
   let sessions = directory.path();

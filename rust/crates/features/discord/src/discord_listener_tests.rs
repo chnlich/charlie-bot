@@ -11,12 +11,14 @@ use axum::extract::ws::{CloseFrame as AxumCloseFrame, Message as AxumMessage, We
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::serve::ListenerExt;
+use charliebot_chat_threads::thread_entry::{NO_REPLY_NOTICE, THREAD_REPLY_ENTRY, check_thread_reply};
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_compat::ws_client::{self, Options};
 use charliebot_core::event_types;
 use charliebot_registry::turn::TurnContribution;
 use charliebot_store::metadata::SessionStatus;
 use charliebot_store::trigger_files::TriggerStatus;
+use charliebot_tasks::turn_hooks::{CheckResult, TurnInput};
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::SinkExt;
 use serde_json::{Value, json};
@@ -842,105 +844,36 @@ async fn test_post_reply_refuses_422_and_posts_nothing_on_a_file_server_link() {
   );
 }
 
+#[test]
+fn test_thread_check_blocks_a_summon_round_without_a_reply_then_notices_the_second_miss() {
+  let block = json!({"guild_id": GUILD, "channel_id": PARENT, "thread_id": THREAD, "mention_id": MENTION});
+  let summon = json!({"type": event_types::AGENT_MESSAGE, "id": "summon-1", "timestamp": "2026-01-01T00:00:01Z",
+    "content": DISCORD.summon_line, "discord": block, "received_at": "2026-01-01T00:00:01Z"});
+  let mut input = TurnInput {
+    session_id: "discord-session".to_string(),
+    kind: Some("discord".to_string()),
+    exit_code: 0,
+    status: Value::Null,
+    turn: vec![summon],
+  };
+  let first = check_thread_reply(&DISCORD, &input).unwrap();
+  assert!(matches!(first, CheckResult::Block(_)), "{first:?}");
+
+  input.turn.push(json!({"type": event_types::TURN_HOOKS, "id": "record-1",
+    "results": [{"name": THREAD_REPLY_ENTRY, "result": "block", "reason": "r"}]}));
+  assert_eq!(check_thread_reply(&DISCORD, &input).unwrap(), CheckResult::Notice(NO_REPLY_NOTICE.to_string()));
+}
+
 #[tokio::test]
-async fn test_after_turn_audits_the_round_on_the_bound_blocks_and_persists_the_nudge() {
+async fn test_turn_kind_claims_only_a_discord_thread_session() {
   let home = Home::new(true).await;
   let sid = discord_session(&home).await;
-  let block = json!({"guild_id": GUILD, "channel_id": PARENT, "thread_id": THREAD, "mention_id": MENTION});
-  let summon = home
-    .features
-    .store
-    .append_chat_event(
-      &sid,
-      json!({"type": event_types::AGENT_MESSAGE, "content": DISCORD.summon_line, "discord": block}),
-    )
-    .await
-    .unwrap()
-    .to_value();
-  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
-  let summon_at = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
-  home.launch_run(&sid, "run-1", &[summon_id.as_str()], &summon_at);
-  let done = json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "exit_code": 0,
-                    "input_event_ids": [summon_id]});
-  home.features.store.append_chat_event(&sid, done.clone()).await.unwrap();
   let meta = home.features.store.get_session(&sid).await.unwrap().unwrap();
-  let config = home.features.config.get().unwrap();
-  crate::turn_contribution::DiscordTurnContribution.after_turn(&meta, &done, &config, &home.features).await.unwrap();
-  let nudge = home
-    .features
-    .store
-    .load_chat_events_sync(&sid)
-    .unwrap()
-    .iter()
-    .map(charliebot_store::ChatEvent::to_value)
-    .find(|event| event["type"] == event_types::AGENT_MESSAGE && event["discord"].get("nudge_of").is_some())
-    .unwrap();
-  assert_eq!(
-    nudge["discord"],
-    json!({
-      "guild_id": GUILD,
-      "channel_id": PARENT,
-      "thread_id": THREAD,
-      "mention_id": MENTION,
-      "nudge_of": summon["id"],
-    })
-  );
-}
+  assert_eq!(crate::turn_contribution::DiscordTurnContribution.turn_kind(&meta), Some("discord"));
 
-#[tokio::test]
-async fn test_persisted_master_done_fires_both_deliver_tasks() {
-  let home = Home::new(true).await;
-  let sid = discord_session(&home).await;
-  let block = json!({"guild_id": GUILD, "channel_id": PARENT, "thread_id": THREAD, "mention_id": MENTION});
-  let summon = home
-    .append(&sid, json!({"type": event_types::AGENT_MESSAGE, "content": DISCORD.summon_line, "discord": block}))
-    .await;
-  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
-  let summon_at = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
-  home.launch_run(&sid, "run-1", &[summon_id.as_str()], &summon_at);
-  let done =
-    json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "exit_code": 0, "input_event_ids": [summon_id]});
-  home.features.store.persist_and_broadcast(&sid, done).await.unwrap();
-  wait_for(|| {
-    home.features.store.load_chat_events_sync(&sid).unwrap().iter().any(|event| {
-      event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::AGENT_MESSAGE)
-        && event.get("discord").and_then(|block| block.get("nudge_of")).is_some()
-    })
-  })
-  .await;
-  let events = home
-    .features
-    .store
-    .load_chat_events_sync(&sid)
-    .unwrap()
-    .iter()
-    .map(charliebot_store::ChatEvent::to_value)
-    .collect::<Vec<_>>();
-  let nudge = events
-    .iter()
-    .find(|event| event["type"] == event_types::AGENT_MESSAGE && event["discord"].get("nudge_of").is_some())
-    .unwrap();
-  assert_eq!(
-    nudge["discord"],
-    json!({
-      "guild_id": GUILD,
-      "channel_id": PARENT,
-      "thread_id": THREAD,
-      "mention_id": MENTION,
-      "nudge_of": summon["id"],
-    })
-  );
-  assert_eq!(nudge["type"], event_types::AGENT_MESSAGE);
-}
-
-#[tokio::test]
-async fn test_deliver_done_skips_a_session_without_discord_origin() {
-  let home = Home::new(false).await;
-  let sid = home.plain_session("plain-session").await;
-  let before = home.features.store.load_chat_events_sync(&sid).unwrap();
-  let done = json!({"type": event_types::MASTER_DONE, "input_event_ids": ["e1"]});
-  assert!(!deliver_done(&home.features, &sid, &done).await.unwrap());
-  assert_eq!(home.features.store.load_chat_events_sync(&sid).unwrap(), before);
+  let plain = home.plain_session("plain-session").await;
+  let plain_meta = home.features.store.get_session(&plain).await.unwrap().unwrap();
+  assert_eq!(crate::turn_contribution::DiscordTurnContribution.turn_kind(&plain_meta), None);
 }
 
 #[test]

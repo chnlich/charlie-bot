@@ -85,10 +85,11 @@ pub const WEB_STATUS: &str = "web_status";
 /// A confirmation through `charliebot web status confirm` that the stored status needs no change this turn. The
 /// event records that the turn ran a status command; the For-you view hides it.
 pub const WEB_STATUS_CONFIRMED: &str = "web_status_confirmed";
-/// The round-end status reminder is an agent_message whose same-named key marks it and names the turn it was posted
-/// for. A turn that answers such a reminder posts no further status reminder. A combined reminder also carries the
-/// web_reply payload key with nudge_of.
-pub const WEB_STATUS_REMINDER: &str = "web_status_reminder";
+/// One run of the turn-end hook list: every entry's result, in list order. A block's reason is shown in an agent_message
+/// whose `TURN_HOOKS_ID` names this event.
+pub const TURN_HOOKS: &str = "turn_hooks";
+/// The key on an agent_message that shows a block's reason: the id of the `turn_hooks` event that recorded the block.
+pub const TURN_HOOKS_ID: &str = "turn_hooks_id";
 pub const WEB_ASK_CHECK: &str = "web_ask_check";
 pub const WEB_REPLY_CHECK: &str = "web_reply_check";
 pub const CONTEXT_COMPACTED: &str = "context_compacted";
@@ -268,8 +269,8 @@ pub const CONFIG_RELOAD_FAILED_EVENT: &str = "config_reload_failed";
 /// The log event a hot-reloaded `credentials.yaml` writes when its reload fails: the server's state, the feature
 /// context and each feature's own credentials cache log it.
 pub const CREDENTIALS_RELOAD_FAILED_EVENT: &str = "credentials_reload_failed";
-/// The log event a spawned background task writes when its future fails: the thread entry's logged spawn and the
-/// store's after-turn hook both write it.
+/// The log event a spawned background task writes when its future fails: thread entry tasks and runtime background
+/// work use it.
 pub const BACKGROUND_TASK_FAILED_EVENT: &str = "background_task_failed";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the

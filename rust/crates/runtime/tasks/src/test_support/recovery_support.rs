@@ -765,7 +765,7 @@ impl Stack {
       registry,
       startup,
     });
-    // The server binds the feature context once its store exists; the turn contributions read it while a turn ends.
+    // Sequence controllers read the bound feature context after the store exists.
     features.registry.bind_feature_context(&features)?;
 
     // The wiring of `execution::pre_recovery_step`, with the run-finish completion behind a fault seam.

@@ -1,4 +1,4 @@
-//! The Slack package's after-turn audit, thread reply contract, and `slack_reply` chat renderer.
+//! The Slack package's turn-end check, thread reply contract, and `slack_reply` chat renderer.
 
 use std::sync::Arc;
 
@@ -21,10 +21,6 @@ use crate::thread_contract::{SLACK, thread_contract_part};
 pub struct SlackTurnContribution;
 
 impl TurnContribution for SlackTurnContribution {
-  fn class_name(&self) -> &'static str {
-    "SlackTurnContribution"
-  }
-
   fn instruction_segments(
     &self,
     meta: &SessionMetadata,
@@ -46,17 +42,39 @@ impl TurnContribution for SlackTurnContribution {
     vec![(SLACK_REPLY, slack_reply_message)]
   }
 
-  fn after_turn<'a>(
+  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
+    thread_entry::thread_turn_kind(meta, &SLACK)
+  }
+
+  fn turn_check_sender(&self, _entry: &str) -> &'static str {
+    SLACK.display_name
+  }
+
+  fn show_turn_notice<'a>(
     &'a self,
-    meta: &'a SessionMetadata,
-    done_event: &'a Value,
-    _cfg: &'a CharlieBotConfig,
     features: &'a Arc<FeatureContext>,
+    session_id: &'a str,
+    turn: &'a [Value],
+    message: &'a str,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {
       let adapter: Arc<dyn ThreadAdapter> =
         Arc::new(crate::slack_listener::SlackThreadAdapter::lazy(Arc::clone(features)));
-      thread_entry::deliver_done(&adapter, features, &meta.id, done_event).await?;
+      thread_entry::show_turn_notice(&adapter, features, session_id, turn, message).await?;
+      Ok(())
+    })
+  }
+
+  fn after_failed_turn<'a>(
+    &'a self,
+    features: &'a Arc<FeatureContext>,
+    session_id: &'a str,
+    done_event: &'a Value,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move {
+      let adapter: Arc<dyn ThreadAdapter> =
+        Arc::new(crate::slack_listener::SlackThreadAdapter::lazy(Arc::clone(features)));
+      thread_entry::audit_failed_turn(&adapter, features, session_id, done_event).await?;
       Ok(())
     })
   }

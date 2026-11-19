@@ -1,5 +1,5 @@
 //! The web reply record and the web-session test: the refusals, the language check, the For-you layer and the
-//! readback. The round-end audit that nudges and notices over these records is in `audit.rs`.
+//! readback. The `web-reply` turn-end check and its notice delivery are in `audit.rs`.
 //!
 //! The web session test is chat_threads' `thread_sessions::is_thread_session`, restated over the same fields: this
 //! package does not depend on chat_threads.
@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 /// The web reply rules file under `prompts/`.
 pub const RULES_FILE: &str = "web_reply.md";
 
-/// The audit's nudge for the unanswered user message `message`.
+/// The reason that asks the agent to answer the unanswered user message `message`.
 pub fn nudge_text(message: &str) -> String {
   let opening = "Web reply nudge: your last turn woke on a user message and ended without a web reply. \
                  The For-you view hides your turn output. ";
@@ -230,16 +230,6 @@ fn received_user_texts(events: &[SharedChatEvent], receipts: &[Receipt]) -> Resu
     }
   }
   Ok((!texts.is_empty()).then(|| texts.join("\n")))
-}
-
-/// Whether the log holds a web reply later than `receipt`: the order rule's answer test for a received user message.
-pub fn replied(receipt: &Receipt, events: &[SharedChatEvent]) -> Result<bool, StoreError> {
-  reply_order::answered(receipt, events, WEB_REPLY)
-}
-
-/// Whether the log holds the nudge posted for `user_event_id`.
-pub fn nudged(events: &[SharedChatEvent], user_event_id: &str) -> bool {
-  events.iter().any(|event| nudge_of(event.as_ref()).as_deref() == Some(user_event_id))
 }
 
 /// Whether the log holds the no-reply notice for `user_event_id`.

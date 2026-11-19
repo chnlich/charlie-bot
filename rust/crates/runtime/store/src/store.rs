@@ -124,7 +124,7 @@ pub struct StoreHooks {
   pub anchor_reconciler: Option<Arc<dyn AnchorFieldReconciler>>,
   /// Sequence-controller listing contributions.
   pub sequence_listing: Option<Arc<dyn SequenceListingFields>>,
-  /// Feature event renderers, after-turn contributions, and runtime-state callbacks.
+  /// Feature event renderers and runtime-state callbacks.
   pub runtime_events: Option<Arc<dyn RuntimeEventHooks>>,
   /// Sequence-binding archive callback.
   pub sequence_archive: Option<Arc<dyn SequenceArchiveHook>>,

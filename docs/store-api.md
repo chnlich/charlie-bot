@@ -248,7 +248,7 @@ the write still succeeds.
 - `get_message_projection(&self, session_id: &str) -> StoreResult<Option<Arc<MessageProjection>>>`
 - `Store::new_message_aggregator(&self, event_index_offset: usize, emit_stream_deltas: bool) -> MessageAggregator`; `MessageAggregator::{new, with_renderers, feed, feed_indexed, flush_pending, pending_draft_message}`
 - `MessageProjection::{new, advanced, history, committed, pending_draft, tail, slice_before}` and bounded page-body cache methods
-- `RuntimeEventHooks`, `EventRenderer`, and `AfterTurnWork` supplied in `StoreHooks.runtime_events`
+- `RuntimeEventHooks` and `EventRenderer` supplied in `StoreHooks.runtime_events`
 - `mark_busy(&self, session_id: &str, since: UtcDateTime) -> StoreResult<(UtcDateTime, bool)>`; `clear_busy(&self, session_id: &str)`; `busy_since(&self, session_id: &str) -> Option<UtcDateTime>`
 - `mark_run_busy(&self, session_id: &str, run_id: &str, since: UtcDateTime)`; `clear_run_busy(&self, session_id: &str, run_id: &str)`; `note_run_backend(&self, session_id: &str, backend: &str)`; `run_backend(&self, session_id: &str) -> Option<String>`
 - `build_scheduled_trigger_event(content: &str) -> ChatEvent`; `build_agent_message_event(&self, session_id: &str, text: &str, provenance: MessageProvenance) -> ChatEvent`; `master_done_input_event_ids(&self, event: &ChatEvent) -> Vec<String>`; `events_to_messages(&self, events: &[ChatEvent]) -> StoreResult<Vec<Value>>`; `events_to_view(&self, events: &[ChatEvent]) -> StoreResult<(Vec<Value>, Option<Value>)>`
@@ -256,12 +256,12 @@ the write still succeeds.
 - `handle_compaction_event(&self, session_id: &str, event: &Value) -> StoreResult<Option<ChatEvent>>`
 - `normalize_user_message_event`, `serialize_uploaded_files`, `strip_attached_files_block`, `build_agent_input_content`, `stable_history_projection`, `stable_closed_prefix_len`
 
-`persist_and_broadcast` feeds the aggregator after the durable append, broadcasts the event, and
-starts each registered turn contribution's `after_turn` work for `master_done`. Stream deltas are
+`persist_and_broadcast` feeds the aggregator after the durable append and broadcasts the event. The
+master queue runs the repository's turn-end hook list before it writes `master_done`. Stream deltas are
 coalesced per channel over 200 ms, with a leading frame and the latest trailing frame; message and
 error frames discard a pending preview. The control-sink two-phase path primes before the tree lock,
 appends under the lock, then announces after release only when its epoch still matches. Feature event
-renderers and after-turn work enter through `StoreHooks.runtime_events`; they are not mutable store hooks.
+renderers enter through `StoreHooks.runtime_events`; they are not mutable store hooks.
 
 ## Test write faults (`write-faults` feature, test-only)
 

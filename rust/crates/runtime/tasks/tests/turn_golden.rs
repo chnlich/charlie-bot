@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -158,14 +159,17 @@ impl BackendFactory for ScriptFactory {
       option.type_fields.get(&key).and_then(YamlValue::as_str).context("scripted option has no script")?.to_string();
     let response_key = YamlValue::String("one_shot_response".to_string());
     let one_shot_response = option.type_fields.get(&response_key).and_then(YamlValue::as_str).map(str::to_string);
+    let prompt_capture_key = YamlValue::String("prompt_capture".to_string());
+    let prompt_capture = option.type_fields.get(&prompt_capture_key).and_then(YamlValue::as_str).map(PathBuf::from);
     let translation_error = option.backend_type == "translation_error_script";
-    Ok(Box::new(ScriptBackend { script, one_shot_response, translation_error }))
+    Ok(Box::new(ScriptBackend { script, one_shot_response, prompt_capture, translation_error }))
   }
 }
 
 struct ScriptBackend {
   script: String,
   one_shot_response: Option<String>,
+  prompt_capture: Option<PathBuf>,
   translation_error: bool,
 }
 
@@ -178,7 +182,11 @@ impl AgentBackend for ScriptBackend {
     Ok(())
   }
 
-  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
+    if let Some(path) = &self.prompt_capture {
+      let mut capture = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+      writeln!(capture, "{}", serde_json::to_string(prompt)?)?;
+    }
     Ok(vec!["/bin/sh".to_string(), "-c".to_string(), self.script.clone()])
   }
 
@@ -450,7 +458,43 @@ fn config_with_features_from_config(
   registry: Arc<Registry>,
   install_queue: bool,
 ) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
-  config_with_features_from_config_and_agent_path(cfg, registry, install_queue, "/usr/bin".to_string())
+  let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+    .ancestors()
+    .nth(4)
+    .context("tasks crate manifest has no repository root ancestor")?;
+  let checkout = turn_test_checkout(repo, &cfg.charliebot_home)?;
+  config_with_features_from_config_and_agent_path(cfg, registry, install_queue, "/usr/bin".to_string(), &checkout)
+}
+
+/// A checkout for a turn test: the repository's prompt docs, and an empty turn-end hook list, so the test's persisted
+/// event stream carries the turn's own events and not the served list's checks.
+fn turn_test_checkout(repo: &Path, home: &Path) -> anyhow::Result<PathBuf> {
+  let checkout = home.join("checkout");
+  std::fs::create_dir_all(checkout.join("hooks"))?;
+  for name in ["prompts", "skills"] {
+    let link = checkout.join(name);
+    if !link.exists() {
+      std::os::unix::fs::symlink(repo.join(name), link)?;
+    }
+  }
+  std::fs::write(checkout.join("hooks/turn_end.json"), "[]")?;
+  Ok(checkout)
+}
+
+fn config_with_features_at_checkout(
+  home: &Path,
+  option: Option<BackendOption>,
+  registry: Arc<Registry>,
+  install_queue: bool,
+  checkout: &Path,
+) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
+  config_with_features_from_config_and_agent_path(
+    Arc::new(config(home, option)),
+    registry,
+    install_queue,
+    "/usr/bin".to_string(),
+    checkout,
+  )
 }
 
 fn config_with_features_from_config_and_agent_path(
@@ -458,6 +502,7 @@ fn config_with_features_from_config_and_agent_path(
   registry: Arc<Registry>,
   install_queue: bool,
   agent_path: String,
+  checkout: &Path,
 ) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
   std::fs::create_dir_all(&cfg.charliebot_home)?;
   let config_value = Arc::clone(&cfg);
@@ -495,10 +540,6 @@ fn config_with_features_from_config_and_agent_path(
     Arc::clone(&registry),
     startup.require::<charliebot_agents::model_pool::RotationPositions>()?,
   ))?;
-  let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
-    .ancestors()
-    .nth(4)
-    .context("tasks crate manifest has no repository root ancestor")?;
   startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
   if install_queue {
     let features = Arc::new(FeatureContext {
@@ -803,6 +844,91 @@ async fn manager_turn_matches_recorded_event_stream_matrix() -> anyhow::Result<(
     assert_eq!(actual, expected, "persisted events differ for {}", case.name);
     assert_eq!(unread, case.mark_unread, "unread calls differ for {}", case.name);
   }
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn turn_end_block_continues_through_run_launches() -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let checkout = temp.path().join("checkout");
+  std::fs::create_dir_all(checkout.join("hooks"))?;
+  std::fs::create_dir_all(checkout.join("prompts"))?;
+  std::fs::write(checkout.join("prompts/web_reply.md"), "Synthetic web reply rules")?;
+  std::fs::write(
+    checkout.join("hooks/turn_end.json"),
+    r#"[
+      {"name":"web-reply","command":"charliebot hook web-reply"},
+      {"name":"web-status","command":"charliebot hook web-status"},
+      {"name":"thread-reply","command":"charliebot hook thread-reply"}
+    ]"#,
+  )?;
+
+  let prompt_capture = temp.path().join("backend-prompts.jsonl");
+  let script = scripted_process(
+    &[
+      json!({"type":"system","subtype":"init","session_id":"synthetic-native-session"}),
+      json!({"type":"assistant","message":{"content":[{"type":"text","text":"synthetic answer"}]}}),
+      json!({"type":"result","subtype":"success","result":"","usage":{"input_tokens":1,"output_tokens":1}}),
+    ],
+    0,
+    "",
+  )?;
+  let mut option = backend_option(script);
+  option.type_fields.insert(
+    YamlValue::String("prompt_capture".to_string()),
+    YamlValue::String(prompt_capture.to_string_lossy().into_owned()),
+  );
+  let registry = registry();
+  let home = temp.path().join("home");
+  let (cfg, features) =
+    config_with_features_at_checkout(&home, Some(option.clone()), Arc::clone(&registry), true, &checkout)?;
+  let meta = session_meta("turn-hook-continuation", "web", "fresh");
+  save_session_metadata(&features, &registry, &meta)?;
+  let unread = Arc::new(Mutex::new(Vec::new()));
+  let callbacks = callbacks(Arc::clone(&features), unread);
+  let queue = features.startup.require::<master_queue::MasterQueue>()?;
+  features
+    .store
+    .persist_and_broadcast(&meta.id, json!({"id":"hook-block","type":event_types::USER,"content":"the question"}))
+    .await?;
+  let mut run =
+    charliebot_tasks::test_support::recovery_support::synthetic_run(&meta.id, "run-hook-block", RunKind::ManagerTurn);
+  run.input_event_ids.push("hook-block".to_string());
+  run.started_at = Some(UtcDateTime::now());
+  let guard = features.store.control_lock().await;
+  features.store.register_run_locked(&guard, &meta.id, run, None).await?;
+  drop(guard);
+
+  run_turn(queue.clone(), cfg, meta.clone(), callbacks, "hook-block".to_string(), option).await?;
+  queue.shutdown().await?;
+
+  let prompts = std::fs::read_to_string(prompt_capture)?
+    .lines()
+    .map(serde_json::from_str::<String>)
+    .collect::<Result<Vec<_>, _>>()?;
+  assert_eq!(prompts.len(), 2, "the blocked turn must launch one continuation process");
+  assert!(prompts[1].contains("web-reply: ") && prompts[1].contains("web-status: "), "{prompts:?}");
+
+  let events = features.store.load_chat_events_sync(&meta.id)?;
+  let hook_records: Vec<Value> =
+    events.iter().map(|event| event.to_value()).filter(|event| event["type"] == event_types::TURN_HOOKS).collect();
+  assert_eq!(hook_records.len(), 2, "the initial run and its continuation each reach the checkpoint");
+  assert_eq!(hook_records[0]["results"][0]["name"], "web-reply");
+  assert_eq!(hook_records[0]["results"][0]["result"], "block");
+  assert_eq!(hook_records[0]["results"][1]["name"], "web-status");
+  assert_eq!(hook_records[0]["results"][1]["result"], "block");
+  assert_eq!(hook_records[1]["results"][0]["name"], "web-reply");
+  assert_eq!(hook_records[1]["results"][0]["result"], "pass");
+  let notice = events
+    .iter()
+    .map(|event| event.to_value())
+    .find(|event| {
+      event["type"] == event_types::WEB_REPLY_NOTICE
+        && event[event_types::WEB_REPLY_NOTICE][event_types::INPUT_EVENT_ID] == "hook-block"
+    })
+    .context("the second web-reply check delivers its notice")?;
+  assert_eq!(hook_records[1]["results"][0]["system_message"], notice["content"]);
   Ok(())
 }
 

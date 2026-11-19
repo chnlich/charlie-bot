@@ -19,10 +19,6 @@ const INDEX_SOURCE_REF: &str = "taste:index";
 pub struct TasteTurn;
 
 impl TurnContribution for TasteTurn {
-  fn class_name(&self) -> &'static str {
-    "TasteTurnContribution"
-  }
-
   /// The index segment for a run of any kind. A store with no active row adds nothing.
   fn instruction_segments(
     &self,

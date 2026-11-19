@@ -1,10 +1,10 @@
 //! `web/features/web_reply`: the internal routes behind `charliebot web reply`, `charliebot web dialog` and
 //! `charliebot web status`, the turn contribution that carries the reply rules into a web session's manager runs,
-//! runs the round-end audit after a turn that answers a user, and renders the reply chat lines, and the web-reply
+//! owns the web turn-end checks and their notice delivery, renders the reply chat lines, and the web-reply
 //! status field of each session.
 
 mod api;
-mod audit;
+pub mod audit;
 pub mod cli;
 mod json_input;
 pub mod metadata;

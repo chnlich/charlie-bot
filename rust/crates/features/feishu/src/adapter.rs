@@ -394,12 +394,23 @@ pub fn api_failure(error: anyhow::Error) -> thread_entry::ThreadReplyError {
   }
 }
 
-/// The round-end audit for one `master_done` (`deliver_done`).
-pub async fn deliver_done(features: &Arc<FeatureContext>, session_id: &str, done: &Value) -> anyhow::Result<bool> {
+/// Shows a turn-end notice in the Feishu thread of the turn's newest summon (`show_turn_notice`).
+pub async fn show_turn_notice(
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  turn: &[Value],
+  message: &str,
+) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(features), BASE_URL);
-  Ok(thread_entry::deliver_done(&adapter(&bot), features, session_id, done).await?)
+  Ok(thread_entry::show_turn_notice(&adapter(&bot), features, session_id, turn, message).await?)
 }
 
+/// Runs the existing thread nudge or notice behavior for an errored Feishu turn.
+pub async fn after_failed_turn(features: &Arc<FeatureContext>, session_id: &str, done: &Value) -> anyhow::Result<()> {
+  let bot = Bot::new(Arc::clone(features), BASE_URL);
+  thread_entry::audit_failed_turn(&adapter(&bot), features, session_id, done).await?;
+  Ok(())
+}
 /// The report of queued Feishu summons lost across a restart (`backfill_lost_summons`).
 pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> anyhow::Result<usize> {
   let bot = Bot::new(Arc::clone(features), BASE_URL);

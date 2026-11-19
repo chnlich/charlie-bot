@@ -177,8 +177,14 @@
       <h2><span class="n nb">3</span> High Level Solution</h2>
       <p>Add a read-only <code>charliebot triggers list</code> command that resolves the current session, loads its trigger records through the existing manager, and formats them for inspection. Trigger files remain the single source of truth in their existing persisted format; the command owns no state.</p>
       <div class="flow">
-        <span class="b">sessions/{id}/triggers/*.json</span><span class="ar">→</span>
-        <span class="b n">triggers list</span><span class="ar">→</span>
+        <span class="b">sessions/{id}/triggers/*.json</span><span class="ar"><svg class="cb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 12h14" />
+  <path d="m12 5 7 7-7 7" />
+</svg></span>
+        <span class="b n">triggers list</span><span class="ar"><svg class="cb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 12h14" />
+  <path d="m12 5 7 7-7 7" />
+</svg></span>
         <span class="b">one row per trigger</span>
       </div>
     </section>

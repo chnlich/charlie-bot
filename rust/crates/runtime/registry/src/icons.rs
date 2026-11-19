@@ -325,6 +325,17 @@ mod tests {
     assert!(error.to_string().contains("close"));
   }
 
+  /// The plan template's two flow arrows are example graphics copied verbatim into plan pages, so each copy is the
+  /// module's own output and the template keeps no other arrow glyph in its figure.
+  #[test]
+  fn the_plan_template_flow_arrows_are_the_module_output() {
+    let icons = Icons::load(&repository_root()).unwrap();
+    let arrow = icons.svg("leads-to", 12, "", "").unwrap();
+    let template = fs::read_to_string(repository_root().join("prompts/plan_template.html")).unwrap();
+    assert_eq!(template.matches(&arrow).count(), 2, "prompts/plan_template.html must carry the leads-to output twice");
+    assert_eq!(template.matches(r#"<span class="ar">→</span>"#).count(), 0);
+  }
+
   #[test]
   fn script_and_svg_match_the_shared_browser_fixtures() {
     let fixture: ParityFixture =

@@ -7,9 +7,11 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::sync::Arc;
 
 use charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 use charliebot_core::timefmt;
+use charliebot_registry::icons::Icons;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use time::OffsetDateTime;
 
@@ -60,8 +62,13 @@ struct Child {
 }
 
 /// The listing page of `dir_path`, or `None` when `dir_path` is not a directory. `url_prefix` is the request path
-/// that the rows link under.
-pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<String>, ListingError> {
+/// that the rows link under. `load_icons` yields the icon table that draws the folder and file glyphs; it runs only
+/// when `dir_path` is a directory.
+pub fn dir_listing_page(
+  dir_path: &Path,
+  url_prefix: &str,
+  load_icons: impl FnOnce() -> Result<Arc<Icons>, String>,
+) -> Result<Option<String>, ListingError> {
   let entries = match fs::read_dir(dir_path).and_then(|entries| entries.collect::<io::Result<Vec<_>>>()) {
     Ok(entries) => entries,
     Err(error) => {
@@ -73,6 +80,7 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
       };
     }
   };
+  let icons = load_icons().map_err(|detail| failed(FailureKind::RuntimeError, detail))?;
   let mut children = Vec::new();
   for entry in entries {
     // A child that cannot be stat-ed is skipped, not reported.
@@ -94,14 +102,15 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
   let base = url_prefix.trim_end_matches('/');
   if base != FILE_SERVER_MOUNT {
     let (parent, _) = base.rsplit_once('/').expect("a listed URL runs under the mount, so it holds a slash");
+    let folder = glyph(&icons, "folder")?;
     rows.push_str(&format!(
-      r#"<tr><td class="icon">📁</td><td class="name"><a href="{}">..</a></td><td class="size"></td><td class="modified"></td></tr>"#,
+      r#"<tr><td class="icon">{folder}</td><td class="name"><a href="{}">..</a></td><td class="size"></td><td class="modified"></td></tr>"#,
       escape(parent)
     ));
     rows.push('\n');
   }
   for child in &children {
-    rows.push_str(&row(child, base)?);
+    rows.push_str(&row(child, base, &icons)?);
     rows.push('\n');
   }
   let display_path = dir_path
@@ -110,9 +119,14 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
   Ok(Some(page(&escape(display_path), &rows)))
 }
 
+/// The folder or file glyph at the row's 16 px size, drawn by the icon module.
+fn glyph(icons: &Icons, key: &str) -> Result<String, ListingError> {
+  icons.svg(key, 16, "", "").map_err(|error| failed(FailureKind::RuntimeError, error.to_string()))
+}
+
 /// One child's `<tr>`, without its newline.
-fn row(child: &Child, base: &str) -> Result<String, ListingError> {
-  let icon = if child.is_dir { "📁" } else { "📄" };
+fn row(child: &Child, base: &str, icons: &Icons) -> Result<String, ListingError> {
+  let icon = glyph(icons, if child.is_dir { "folder" } else { "file" })?;
   let name = escape(&format!("{}{}", child.name, if child.is_dir { "/" } else { "" }));
   let href = escape(&format!("{base}/{}", quote(&child.name)));
   let size = if child.is_dir { String::new() } else { human_size::format_size(child.size) };
@@ -209,8 +223,12 @@ mod tests {
   /// 2026-01-01 12:00:00 UTC.
   const NOON: u64 = 1_767_268_800;
 
+  fn icons() -> Arc<Icons> {
+    Arc::new(Icons::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../")).expect("the icon table loads"))
+  }
+
   fn listing(dir: &Path, url_prefix: &str) -> String {
-    dir_listing_page(dir, url_prefix).expect("the directory lists").expect("the path is a directory")
+    dir_listing_page(dir, url_prefix, || Ok(icons())).expect("the directory lists").expect("the path is a directory")
   }
 
   fn set_mtime(path: &Path, seconds: u64, nanos: u32) {
@@ -255,16 +273,19 @@ mod tests {
     set_mtime(&file, NOON, 0);
     fs::create_dir(dir.path().join("sub")).expect("the dir creates");
     let page = listing(dir.path(), "/absolute_filepath/tmp");
+    let icons = icons();
+    let file = icons.svg("file", 16, "", "").expect("the file glyph renders");
+    let folder = icons.svg("folder", 16, "", "").expect("the folder glyph renders");
     assert!(
-      page.contains(
-        r#"<tr><td class="icon">📄</td><td class="name"><a href="/absolute_filepath/tmp/notes.txt">notes.txt</a></td><td class="size">1.5 KB</td><td class="modified">2026-01-01 12:00</td></tr>"#
-      ),
+      page.contains(&format!(
+        r#"<tr><td class="icon">{file}</td><td class="name"><a href="/absolute_filepath/tmp/notes.txt">notes.txt</a></td><td class="size">1.5 KB</td><td class="modified">2026-01-01 12:00</td></tr>"#
+      )),
       "{page}"
     );
     assert!(
-      page.contains(
-        r#"<tr><td class="icon">📁</td><td class="name"><a href="/absolute_filepath/tmp/sub">sub/</a></td><td class="size"></td><td class="modified">"#
-      ),
+      page.contains(&format!(
+        r#"<tr><td class="icon">{folder}</td><td class="name"><a href="/absolute_filepath/tmp/sub">sub/</a></td><td class="size"></td><td class="modified">"#
+      )),
       "{page}"
     );
   }
@@ -284,9 +305,10 @@ mod tests {
     let at_root = listing(dir.path(), "/absolute_filepath/");
     assert!(!at_root.contains(">..</a>"), "{at_root}");
     let below = listing(dir.path(), "/absolute_filepath/x/y/");
-    assert!(below.contains(
-      r#"<tr><td class="icon">📁</td><td class="name"><a href="/absolute_filepath/x">..</a></td><td class="size"></td><td class="modified"></td></tr>"#
-    ));
+    let folder = icons().svg("folder", 16, "", "").expect("the folder glyph renders");
+    assert!(below.contains(&format!(
+      r#"<tr><td class="icon">{folder}</td><td class="name"><a href="/absolute_filepath/x">..</a></td><td class="size"></td><td class="modified"></td></tr>"#
+    )));
   }
 
   #[test]
@@ -294,7 +316,7 @@ mod tests {
     let dir = tempfile::tempdir().expect("a temp dir");
     let file = dir.path().join("plain.txt");
     fs::write(&file, "").expect("the file writes");
-    assert!(dir_listing_page(&file, "/absolute_filepath/plain.txt").expect("no error").is_none());
+    assert!(dir_listing_page(&file, "/absolute_filepath/plain.txt", || Ok(icons())).expect("no error").is_none());
   }
 
   #[test]
@@ -307,7 +329,7 @@ mod tests {
   fn a_missing_directory_is_missing() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let gone = dir.path().join("gone");
-    assert!(matches!(dir_listing_page(&gone, "/absolute_filepath/gone"), Err(ListingError::Missing)));
+    assert!(matches!(dir_listing_page(&gone, "/absolute_filepath/gone", || Ok(icons())), Err(ListingError::Missing)));
   }
 
   #[test]
@@ -317,7 +339,7 @@ mod tests {
     let locked = dir.path().join("locked");
     fs::create_dir(&locked).expect("the dir creates");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("the mode sets");
-    let outcome = dir_listing_page(&locked, "/absolute_filepath/locked");
+    let outcome = dir_listing_page(&locked, "/absolute_filepath/locked", || Ok(icons()));
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("the mode restores");
     assert!(matches!(outcome, Err(ListingError::PermissionDenied)));
   }

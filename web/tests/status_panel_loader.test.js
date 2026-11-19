@@ -9,6 +9,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const {indexScriptPaths} = require('./read_static');
 
 const ROOT = path.join(__dirname, '..');
 const readLoader = () => fs.readFileSync(path.join(ROOT, 'templates/js/chat/status-panel.js'), 'utf8');
@@ -71,6 +72,7 @@ test('a web session whose status has a waiting item starts the module download',
   assert.equal(rig.downloadCalls.length, 1);
   assert.equal(rig.downloadCalls[0].key, 'chat-status-panel');
   assert.deepEqual(Array.from(rig.downloadCalls[0].paths), ['/static/js/chat/status-panel.js']);
+  assert.ok(indexScriptPaths().includes('comment_post.js'), 'the chat page loads the comment-post helpers');
 });
 
 test('a web session with nothing to count and a hidden panel asks for nothing', () => {

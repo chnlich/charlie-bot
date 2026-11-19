@@ -17,7 +17,6 @@
 
   const VIEW_ID = 'status-panel';
   const BADGE_ID = 'status-waiting-count';
-  const DONE_WINDOW_MS = 5000;
   const DONE_HEADER = '[Status · Waiting on you]';
   const pendingDone = new Map();
   const itemNotices = new Map();
@@ -52,7 +51,7 @@
 
   function cancelPendingDone() {
     for (const [key, entry] of pendingDone) {
-      clearTimeout(entry.timer);
+      entry.undo.cancel();
       pendingDone.delete(key);
     }
     renderPanel();
@@ -237,7 +236,7 @@
   function cancelDone(key) {
     const entry = pendingDone.get(key);
     if (!entry) return;
-    clearTimeout(entry.timer);
+    entry.undo.cancel();
     pendingDone.delete(key);
     renderPanel();
   }
@@ -252,10 +251,10 @@
     const notice = key && itemNotices.get(key);
     if (item.answered === true) {
       row.appendChild(textSpan('text-slate-400', 'Marked done'));
-    } else if (pending && !pending.sent) {
+    } else if (pending && !pending.undo.sending) {
       row.appendChild(textSpan('text-slate-400', 'Marked done · '));
       row.appendChild(undoButton(() => cancelDone(key)));
-    } else if (pending && pending.sent) {
+    } else if (pending) {
       row.appendChild(textSpan('text-slate-400', 'Marked done'));
     } else if (notice) {
       row.appendChild(textSpan(notice.startsWith('Status unknown:') ? 'text-amber-200' : 'text-slate-400', notice));
@@ -271,9 +270,16 @@
   function scheduleDone(sessionId, waitingVersion, position, since) {
     const key = doneKey(sessionId, waitingVersion, position);
     if (pendingDone.has(key)) return;
-    const entry = {sessionId, waitingVersion, position, since, clickMs: Date.now(), sent: false, timer: null};
-    entry.timer = setTimeout(() => sendDone(key), DONE_WINDOW_MS);
+    const entry = {sessionId, waitingVersion, position, since, clickMs: Date.now(), undo: null};
+    entry.undo = startUndoableSend(() => postDone(entry));
     pendingDone.set(key, entry);
+    entry.undo.sent.then(
+      (posted) => {
+        // A cancelled click has already left pendingDone, in cancelDone or cancelPendingDone.
+        if (posted !== null) finishDone(key, entry, null);
+      },
+      (err) => finishDone(key, entry, err),
+    );
     renderPanel();
   }
 
@@ -294,11 +300,9 @@
     return body;
   }
 
-  async function sendDone(key) {
-    const entry = pendingDone.get(key);
-    if (!entry) return;
-    entry.sent = true;
-    entry.timer = null;
+  // The Status click's post, the delayed send's one attempt: an answer other than 202 is an error.
+  // A failed click reports "Not sent" and the user clicks again; the post itself never retries.
+  async function postDone(entry) {
     renderPanel();
     const content = buildClickMessage(DONE_HEADER, [{
       reference: 'Waiting on you · session ' + entry.sessionId + ' · list ' + entry.waitingVersion +
@@ -306,18 +310,17 @@
       answer: 'Done',
     }]);
     const requestId = 'status-done-' + entry.sessionId + '-' + entry.clickMs;
-    let postError = null;
-    try {
-      const response = await fetch('/api/chat/' + encodeURIComponent(entry.sessionId) + '/message', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        credentials: 'same-origin',
-        body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
-      });
-      if (response.status !== 202) throw new Error('HTTP ' + response.status);
-    } catch (err) {
-      postError = err;
-    }
+    const response = await fetch('/api/chat/' + encodeURIComponent(entry.sessionId) + '/message', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
+    });
+    if (response.status !== 202) throw new Error('HTTP ' + response.status);
+  }
+
+  // The post settled (postError null when it was accepted): read the status back and say what the server holds.
+  async function finishDone(key, entry, postError) {
     pendingDone.delete(key);
     try {
       const body = await fetchStatusForAction(entry.sessionId);
@@ -450,7 +453,7 @@
     controls.dataset.waitingHeaderControls = 'true';
     const currentVersion = panelStatus && panelStatus.waiting_version;
     for (const [key, entry] of pendingDone) {
-      if (entry.sessionId !== panelSessionId || entry.waitingVersion === currentVersion || entry.sent) continue;
+      if (entry.sessionId !== panelSessionId || entry.waitingVersion === currentVersion || entry.undo.sending) continue;
       controls.appendChild(textSpan('text-slate-400', 'Marked done · '));
       controls.appendChild(undoButton(() => cancelDone(key)));
     }

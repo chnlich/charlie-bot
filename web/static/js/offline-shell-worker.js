@@ -8,14 +8,14 @@
 // Interception is limited to the GETs listed below. Everything else (POSTs, the socket, other
 // /api/* requests) is not answered here and reaches the network unchanged.
 //
-// Storage: COPY_CACHE holds the shell under SHELL_KEY, the copies of the first screen and the
-// sidebar list, and an index of session ids with their last open time. Its initial name carries the
-// release version; activation reuses an existing store so a shell already on the device can answer
-// the next open. FILE_CACHE holds the shell's same-origin files under their own versioned paths; a
-// file that did not change keeps its path, so a release does not fetch it again.
+// Storage: the copy cache holds the shell under SHELL_KEY, the copies of the first screen and the
+// sidebar list, and an index of session ids with their last open time. Its name carries the release
+// version that created it; activation keeps one existing copy cache so a shell already on the device
+// can answer the next open. FILE_CACHE holds the shell's same-origin files under their own versioned
+// paths; a file that did not change keeps its path, so a release does not fetch it again.
 
 const COPY_PREFIX = 'last-state-';
-let COPY_CACHE = COPY_PREFIX + WORKER_CONFIG.version;
+const COPY_CACHE = COPY_PREFIX + WORKER_CONFIG.version;
 const FILE_CACHE = COPY_PREFIX + 'files';
 const SHELL_KEY = self.location.origin + '/shell';
 const INDEX_KEY = self.location.origin + '/index';
@@ -25,6 +25,7 @@ const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
 // settled, so a copy's first match may miss although the copy is stored; one wait cap later the match answers. A
 // first screen's network race re-reads at each cap, and a sidebar list re-reads once before it asks the network.
 const WAIT_CAP_MS = 400;
+let copyCacheNamePromise = null;
 
 const SHELL_STATIC_REF = /<(?:link|script)\b[^>]*?\b(?:href|src)="(\/static\/[^"]+)"/g;
 
@@ -41,17 +42,30 @@ async function activateCurrent() {
   // response, so disable the extra network request; the first navigation without a stored shell falls back to fetch.
   await self.registration.navigationPreload.disable();
   const names = await caches.keys();
-  if (!names.includes(COPY_CACHE)) {
-    const previous = names.find((name) => name.startsWith(COPY_PREFIX) && name !== FILE_CACHE);
-    if (previous) COPY_CACHE = previous;
-  }
+  const previous = names.find((name) => name.startsWith(COPY_PREFIX) && name !== COPY_CACHE && name !== FILE_CACHE);
+  const copyCacheName = previous ?? COPY_CACHE;
+  copyCacheNamePromise = Promise.resolve(copyCacheName);
   for (const name of names) {
-    if (name.startsWith(COPY_PREFIX) && name !== COPY_CACHE && name !== FILE_CACHE) {
+    if (name.startsWith(COPY_PREFIX) && name !== copyCacheName && name !== FILE_CACHE) {
       await caches.delete(name);
     }
   }
   // The pages this load opened stay their own: a worker that claims a page mid-load reroutes the rest of
   // that load through itself. The next navigation in the worker's scope is controlled without a claim.
+}
+
+function selectedCopyCacheName() {
+  if (copyCacheNamePromise === null) {
+    copyCacheNamePromise = caches.keys().then((names) => {
+      const previous = names.find((name) => name.startsWith(COPY_PREFIX) && name !== COPY_CACHE && name !== FILE_CACHE);
+      return previous ?? COPY_CACHE;
+    });
+  }
+  return copyCacheNamePromise;
+}
+
+async function openCopyCache() {
+  return caches.open(await selectedCopyCacheName());
 }
 
 async function retire() {
@@ -95,7 +109,7 @@ function isSidebarListRequest(url) {
 // yet). A worker that just started can match before the cache's disk index has settled, while the same
 // cache answers a moment later, so a miss re-reads twice before it falls back to the network.
 async function answerShell(request) {
-  const cache = await caches.open(COPY_CACHE);
+  const cache = await openCopyCache();
   for (let attempt = 0; attempt < 3; attempt++) {
     const shell = await cache.match(SHELL_KEY);
     if (shell) return shell;
@@ -122,7 +136,7 @@ async function answerFile(event, request) {
 // only when that read misses too: a list the copy would beat is a fetch aborted mid-body, and the bytes it already
 // put on the link delay the requests that follow it. Without a stored copy the network answers.
 async function answerCopy(event, request) {
-  const cache = await caches.open(COPY_CACHE);
+  const cache = await openCopyCache();
   if (request.headers.get(NETWORK_ONLY_HEADER) === '1') {
     const response = await networkAnswer(event, request);
     if (response.ok || response.status === 401) refreshQueue.delete(request.url);
@@ -223,7 +237,7 @@ function queueCopyRefresh(url) {
 // read while offline are refreshed after the next catch-up.
 async function refreshCopies() {
   for (const url of refreshQueue) {
-    const cache = await caches.open(COPY_CACHE);
+    const cache = await openCopyCache();
     if (await cache.match(url) === undefined) continue;
     const answer = await observe(fetch(url, {credentials: 'same-origin'}));
     if (answer.error) return;
@@ -249,7 +263,7 @@ function sessionIdOf(url) {
 async function storeCopy(url, response) {
   const body = await response.arrayBuffer();
   const sessionId = sessionIdOf(new URL(url));
-  const cache = await caches.open(COPY_CACHE);
+  const cache = await openCopyCache();
   for (;;) {
     const headers = new Headers(response.headers);
     headers.set(STORED_AT_HEADER, new Date().toISOString());
@@ -305,7 +319,7 @@ async function evictOldestSession(cache, keepSessionId) {
 
 // Every copy goes; the shell stays, since it holds no session's data.
 async function dropCopies() {
-  const cache = await caches.open(COPY_CACHE);
+  const cache = await openCopyCache();
   for (const request of await cache.keys()) {
     if (request.url !== SHELL_KEY && request.url !== INDEX_KEY) await cache.delete(request);
   }
@@ -326,7 +340,7 @@ function shellStaticRefs(html) {
 // Fetches the shell and the files it names, stores them, and drops the stored files it no longer names.
 // A refresh leaves the current shell in place until the replacement and its files are ready.
 async function warmShell(refresh = false) {
-  const cache = await caches.open(COPY_CACHE);
+  const cache = await openCopyCache();
   const stored = await cache.match(SHELL_KEY);
   if (!refresh && stored) return {stored: true};
   // A refresh revalidates the stored shell: its tag names the body the worker holds, and an unchanged page answers 304
@@ -380,7 +394,7 @@ async function warmShell(refresh = false) {
 
 // Called only after a refresh answers 401, so navigation reaches the server instead of using stale HTML.
 async function dropShell() {
-  const cache = await caches.open(COPY_CACHE);
+  const cache = await openCopyCache();
   await cache.delete(SHELL_KEY);
 }
 

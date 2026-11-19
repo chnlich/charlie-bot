@@ -80,9 +80,9 @@ function makeCaches() {
 }
 
 // One worker: its listeners, its caches, and the network it reaches. `network(request, init)` answers a fetch.
-function harness({version = 'v1', enabled = true} = {}) {
+function harness({version = 'v1', enabled = true, cacheStorage = makeCaches()} = {}) {
   const listeners = {};
-  const cachesFake = makeCaches();
+  const cachesFake = cacheStorage;
   const state = {claimed: 0, unregistered: 0, preloadDisabled: 0, network: null, calls: []};
   const self = {
     location: {origin: ORIGIN},
@@ -750,8 +750,9 @@ test('a shell file 401 during refresh clears stored copies and the old shell', a
   assert.equal(await store.match(BOOTSTRAP_URL), undefined);
 });
 
-test('a release reuses its stored copy cache instead of dropping the older release', async () => {
+test('a release reuses its stored copy cache across worker restarts', async () => {
   const h = harness({version: 'v2'});
+  await h.caches.api.open('last-state-v2');
   const previous = await h.caches.api.open('last-state-v1');
   await previous.put(SHELL_KEY, new Response('<html>current</html>', {headers: {ETag: '"shell-1"'}}));
   await previous.put(BOOTSTRAP_URL, new Response('{"session":"current"}'));
@@ -767,6 +768,11 @@ test('a release reuses its stored copy cache instead of dropping the older relea
   assert.equal(await (await previous.match(BOOTSTRAP_URL)).text(), '{"session":"current"}');
   assert.equal(await (await previous.match(LIST_URL)).text(), '{"sessions":[]}');
   assert.equal(h.state.unregistered, 0);
+
+  const restarted = harness({version: 'v2', cacheStorage: h.caches});
+  const navigation = await answer(restarted, request(SHELL_URL, {mode: 'navigate'}));
+  assert.equal(await navigation.response.text(), '<html>current</html>');
+  assert.equal(restarted.state.calls.length, 0, 'a restarted worker finds the prior cache without a shell fetch');
 });
 
 test('the retired form empties the worker stores, claims the pages and unregisters itself', async () => {

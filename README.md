@@ -92,7 +92,7 @@ flowchart TB
 <p align="center">
   <img src="docs/assets/readme/ui-status-desktop.png" alt="Desktop status view" width="880">
 </p>
-<p align="center"><i>Desktop: the same session's Status view — the Goal, Now and Waiting on you items that hold work until you act.</i></p>
+<p align="center"><i>Desktop: the same session's Status view — the Goal, Remaining, Now and Waiting on you items that hold work until you act.</i></p>
 <p align="center">
   <img src="docs/assets/readme/ui-plans-desktop.png" alt="Plans tab" width="880">
 </p>

@@ -290,7 +290,7 @@ fn status_show(args: &SessionArgs) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The GET result as plain text, the session's Goal, Now and Waiting on you, then the derived items the
+/// The GET result as plain text, the session's Goal, Remaining, Now and Waiting on you, then the derived items the
 /// server holds for the session in their own block, then one block per child with waiting items, then the Now of each
 /// open child.
 fn render_status(result: &Value) -> Result<String, CliExit> {

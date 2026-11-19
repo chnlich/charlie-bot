@@ -22,12 +22,12 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
 3. On worker success → review uses its configured target or the worker route fallback. It prefers a selectable backend
    outside the work run and earlier work-run backends, then tries the writer first and another previously used member.
    A reviewer that already failed this work run stays excluded from its retries.
-4. A reviewer lands the task with `charliebot land`. For a gated landing, an omitted title defaults to the first commit
-   subject and an omitted body defaults to commit bodies in chronological order; one commit uses its body, while
-   multiple commits retain every subject and body. `--title` and either `--body` or `--body-file` replace those
-   defaults, and `--body` and `--body-file` are exclusive. An existing open PR is synchronized to the resolved
-   values, and a new draft PR uses them. A blank title or unreadable or blank body file fails before landing. An
-   ungated landing accepts these values and leaves them unused. When the base is the default branch and declares a
+4. A reviewer lands the task with `charliebot land`. On a gated landing, a single-commit branch supplies the PR title
+   from its subject and the PR body from its body. A branch of several commits lands with an explicit `--title` and
+   either `--body` or `--body-file`, both written by `~/.claude/skills/writing-style/genres/commits-and-prs.md`.
+   `--body` and `--body-file` are exclusive. An existing open PR is synchronized to the landed title and body, and a
+   new draft PR uses them. A blank title or unreadable or blank body file fails before landing. An ungated landing
+   accepts these values and leaves them unused. When the base is the default branch and declares a
    `pull_request` workflow, the command moves the base only when its CI gate passes on the landed commit. When that
    gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit
    0 and leave the task branch's PR merged or closed. Every other state leaves the change unlanded and names what

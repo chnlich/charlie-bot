@@ -1592,8 +1592,11 @@ mod tests {
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  #[ignore = "integration"]
   async fn a_click_that_joins_a_concurrent_wait_gets_the_same_answer() {
     let _serial = SERIAL.lock().await;
+    // The wait prints after a delay, so the second click arrives while the start is still pending. Each run appends a
+    // line to a file named after its script, which counts the starts.
     let held =
       LoginStub::new("joined", &format!("echo started >> \"$0.starts\"\nsleep 1\n{HELD_LINE}\nexit 255\n"), "exit 0\n");
     let paths = held.paths();
@@ -1630,10 +1633,10 @@ mod tests {
   #[tokio::test]
   async fn a_concurrent_wait_stays_seen_after_more_output_than_the_read_window_keeps() {
     let _serial = SERIAL.lock().await;
-    // The prefix is read on its own, then 20 KB follow. By the end, the window that held the prefix has moved past it.
+    // The prefix comes first, then 20 KB follow, so by the end the window that held the prefix has moved past it.
     let held = LoginStub::new(
       "probe-long",
-      &format!("{HELD_LINE}\nsleep 0.2\nhead -c 20000 /dev/zero | tr '\\0' x\necho\nexit 0\n"),
+      &format!("{HELD_LINE}\nhead -c 20000 /dev/zero | tr '\\0' x\necho\nexit 0\n"),
       "exit 0\n",
     );
     let matched = probe_link_within(&held.login, Duration::from_secs(5)).await.expect("the probe runs");

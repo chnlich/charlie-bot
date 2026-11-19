@@ -14,7 +14,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD as URL_SAFE_NO_PAD;
 use charliebot_shell_harness::{self as harness, Env, Sandbox, write_executable};
 
 /// The committer identity of every fixture commit.
@@ -45,12 +48,22 @@ pub const REVIEW_CREDENTIAL: &str = "aigw_charliebot_agents";
 pub const REVIEW_MODEL: &str = "kimi-k3.1-pro";
 pub const REVIEW_API_BASE: &str = "https://aigw.example";
 pub const REVIEW_CONTEXT_WINDOW: &str = "409600";
-/// The host's Claude login for a subscription member: the whole content of its login file.
-pub const LOGIN_TOKEN: &str = "synthetic-subscription-login";
+/// The access token of a subscription member: the `accessToken` of its login file.
+pub const LOGIN_TOKEN: &str = "synthetic-subscription-access-token";
+/// The refresh token of that login. It stays on the launching host, so no round may receive it.
+pub const LOGIN_REFRESH_TOKEN: &str = "synthetic-subscription-refresh-token";
 /// The launcher host's own Claude login, which must not be forwarded to the improve host.
 pub const LOCAL_CLAUDE_OAUTH_TOKEN: &str = "synthetic-local-claude-oauth-token";
-/// The host's Codex login: the content of its `auth.json`.
-pub const CODEX_LOGIN: &str = "synthetic-codex-login";
+/// The refresh token of the host's Codex login. It stays on the launching host.
+pub const CODEX_REFRESH_TOKEN: &str = "synthetic-codex-refresh-token";
+/// The ChatGPT id token of the host's Codex login.
+pub const CODEX_ID_TOKEN: &str = "synthetic-codex-id-token";
+/// The account id of the host's Codex login.
+pub const CODEX_ACCOUNT_ID: &str = "synthetic-codex-account";
+/// The `last_refresh` of the host's Codex login, which the forwarded login keeps.
+pub const CODEX_LAST_REFRESH: &str = "2026-11-14T17:05:27Z";
+/// The least access-token life a round may start with, in seconds: the server's `IMPROVE_TOKEN_MIN_SECONDS`.
+pub const TOKEN_MIN_SECONDS: &str = "14400";
 pub const RUN_TOKEN: &str = "synthetic-run-token";
 pub const REMOTE_HOST: &str = "improve.example.ts.net";
 pub const MOCK_HOME_VERSION: &str = "2";
@@ -158,10 +171,15 @@ fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
 "#;
 
-/// Fake codex: record the `CODEX_HOME` it runs with and its arguments, outside the round's boundary.
-const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with and the arguments it receives.
+/// Fake codex: record the `CODEX_HOME` it runs with, its arguments, and the `auth.json` it finds there with that file's
+/// mode, outside the round's boundary.
+const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with, the arguments it receives and its login file.
 printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}" >"$FAKE_CODEX_ENV"
 printf '%s\n' "$@" >"$FAKE_CODEX_ARGV"
+if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
+  cp -- "$CODEX_HOME/auth.json" "$FAKE_CODEX_AUTH"
+  stat -c %a -- "$CODEX_HOME/auth.json" >"$FAKE_CODEX_AUTH_MODE"
+fi
 exit 0
 "#;
 
@@ -323,8 +341,43 @@ esac
 exit 0
 "#;
 
+/// The current time in whole seconds since the epoch.
+pub fn now_seconds() -> i64 {
+  std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("the clock is after the epoch").as_secs()
+    as i64
+}
+
+/// A synthetic ChatGPT access token whose payload carries `exp`. The launcher reads only that claim.
+pub fn codex_access_token(exp: i64) -> String {
+  let encode = |text: String| URL_SAFE_NO_PAD.encode(text);
+  format!("{}.{}.synthetic-signature", encode(r#"{"alg":"none"}"#.to_string()), encode(format!(r#"{{"exp":{exp}}}"#)))
+}
+
+/// The host's `auth.json` for a codex login whose access token expires at `exp`. It holds a refresh token, which the
+/// launch must not forward.
+pub fn codex_login_json(exp: i64) -> String {
+  serde_json::json!({
+    "auth_mode": "chatgpt",
+    "OPENAI_API_KEY": null,
+    "last_refresh": CODEX_LAST_REFRESH,
+    "tokens": {
+      "id_token": CODEX_ID_TOKEN,
+      "access_token": codex_access_token(exp),
+      "refresh_token": CODEX_REFRESH_TOKEN,
+      "account_id": CODEX_ACCOUNT_ID,
+    },
+  })
+  .to_string()
+}
+
 /// One test's repository, both homes and stub directory.
+/// The lock every world holds for its lifetime. Each round of a direction writes under `/tmp/improve-<direction>`, and its
+/// start removes an idle direction's Codex login from there, so two worlds never run together: one test's round would
+/// otherwise remove the login another test's codex round is reading.
+static TMP_ROOT_LOCK: Mutex<()> = Mutex::new(());
+
 pub struct World {
+  _tmp_root: MutexGuard<'static, ()>,
   pub sandbox: Sandbox,
   /// The launcher's checkout, with its own `origin/main`.
   pub repo: PathBuf,
@@ -351,6 +404,11 @@ pub struct World {
   /// Where the fake codex writes its `CODEX_HOME` and its arguments: this host's records, outside the round's boundary.
   pub codex_env: PathBuf,
   pub codex_argv: PathBuf,
+  /// Where the fake codex copies the `auth.json` it finds under its CODEX_HOME, and that file's mode.
+  pub codex_auth: PathBuf,
+  pub codex_auth_mode: PathBuf,
+  /// The login directory of a subscription member: its `CLAUDE_CONFIG_DIR`, which holds `.credentials.json`.
+  pub claude_login_dir: PathBuf,
   pub systemctl_log: PathBuf,
   pub systemd_run_log: PathBuf,
   pub scope_stopped: PathBuf,
@@ -362,6 +420,7 @@ pub struct World {
 
 impl World {
   pub fn new() -> Self {
+    let tmp_root = TMP_ROOT_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");
@@ -458,6 +517,7 @@ impl World {
     }
 
     Self {
+      _tmp_root: tmp_root,
       ssh_args: sandbox.root().join("ssh-arguments.log"),
       claude_argv: evidence.join("claude-argv.txt"),
       claude_env: evidence.join("claude-env.txt"),
@@ -467,6 +527,9 @@ impl World {
       charlie_code_env: evidence.join("charlie-code-env.txt"),
       codex_env: sandbox.root().join("codex-env.txt"),
       codex_argv: sandbox.root().join("codex-argv.txt"),
+      codex_auth: sandbox.root().join("codex-auth.json"),
+      codex_auth_mode: sandbox.root().join("codex-auth-mode.txt"),
+      claude_login_dir: sandbox.dir("login/claude"),
       systemctl_log: sandbox.root().join("systemctl.log"),
       systemd_run_log: sandbox.root().join("systemd-run.log"),
       scope_stopped: sandbox.root().join("scope-stopped"),
@@ -522,6 +585,9 @@ impl World {
     env.insert("FAKE_CLAUDE_INFLIGHT".to_string(), self.claude_inflight.display().to_string());
     env.insert("FAKE_CODEX_ENV".to_string(), self.codex_env.display().to_string());
     env.insert("FAKE_CODEX_ARGV".to_string(), self.codex_argv.display().to_string());
+    env.insert("FAKE_CODEX_AUTH".to_string(), self.codex_auth.display().to_string());
+    env.insert("FAKE_CODEX_AUTH_MODE".to_string(), self.codex_auth_mode.display().to_string());
+    env.insert("IMPROVE_TOKEN_MIN_SECONDS".to_string(), TOKEN_MIN_SECONDS.to_string());
     env.insert("FAKE_CHARLIE_CODE_ARGV".to_string(), self.charlie_code_argv.display().to_string());
     env.insert("FAKE_CHARLIE_CODE_ENV".to_string(), self.charlie_code_env.display().to_string());
     env.insert("FAKE_SYSTEMCTL_LOG".to_string(), self.systemctl_log.display().to_string());
@@ -536,12 +602,14 @@ impl World {
     env
   }
 
-  /// The environment of a member that logs in on the host: the server strips the gateway variables from it.
+  /// The environment of a subscription member: the server strips the gateway variables from it and points
+  /// `CLAUDE_CONFIG_DIR` at the member's login directory.
   pub fn host_login_env(&self) -> Env {
     let mut env = self.env();
     for name in GATEWAY_VARIABLES {
       env.remove(name);
     }
+    env.insert("CLAUDE_CONFIG_DIR".to_string(), self.claude_login_dir.display().to_string());
     env
   }
 
@@ -662,22 +730,35 @@ impl World {
     self.systemd_run_log.exists()
   }
 
-  /// The host's Claude login file, which a subscription round reads.
+  /// The login file of a subscription member: `.credentials.json` in its login directory.
   pub fn claude_login_file(&self) -> PathBuf {
-    self.remote_home.join("improve/logins/claude-oauth-token")
+    self.claude_login_dir.join(".credentials.json")
   }
 
-  /// The host's Claude login file, with no trailing newline, as the host's setup writes it.
-  pub fn write_claude_login(&self) {
-    fs::create_dir_all(self.claude_login_file().parent().expect("the logins directory")).expect("the logins directory");
-    fs::write(self.claude_login_file(), LOGIN_TOKEN).expect("the Claude login file");
+  /// Write the member's login file, whose access token expires at `expires_at_ms` (milliseconds since the epoch).
+  pub fn write_claude_login(&self, expires_at_ms: i64) {
+    fs::create_dir_all(&self.claude_login_dir).expect("the Claude login directory");
+    let login = serde_json::json!({
+      "claudeAiOauth": {
+        "accessToken": LOGIN_TOKEN,
+        "refreshToken": LOGIN_REFRESH_TOKEN,
+        "expiresAt": expires_at_ms,
+        "scopes": ["user:inference"],
+      }
+    });
+    fs::write(self.claude_login_file(), login.to_string()).expect("the Claude login file");
   }
 
-  /// The host's Codex login file, `<remote home>/.codex/auth.json`.
-  pub fn write_codex_login(&self) {
-    let codex_home = self.remote_home.join(".codex");
+  /// The host's Codex login file, `<local home>/.codex/auth.json`, whose access token expires at `exp` (seconds).
+  pub fn write_codex_login(&self, exp: i64) {
+    let codex_home = self.local_home.join(".codex");
     fs::create_dir_all(&codex_home).expect("the Codex home");
-    fs::write(codex_home.join("auth.json"), CODEX_LOGIN).expect("the Codex login");
+    fs::write(codex_home.join("auth.json"), codex_login_json(exp)).expect("the Codex login");
+  }
+
+  /// The CODEX_HOME that a codex round of this world uses on the host: a directory under the direction's /tmp root.
+  pub fn codex_home_directory(&self) -> PathBuf {
+    PathBuf::from(format!("/tmp/improve-{DIRECTION}/codex-home"))
   }
 
   /// The launch directory, when the round left one behind.

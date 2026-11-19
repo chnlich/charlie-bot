@@ -1245,6 +1245,7 @@ dependencies = [
 name = "charliebot-script-tests"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "charliebot-cli-common",
  "charliebot-core",
  "charliebot-session-api",

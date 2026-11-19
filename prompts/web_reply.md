@@ -71,7 +71,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
   (BLOCK KIT, section 5).
 - When a decision needs a page, also write your recommendation and the evidence links on it.
 - Set the item's `link` to a page the browser renders. The set refuses a link it cannot render as a page.
-  Comments on the page reach the session in which the user opened the page. Option picks on the page reach this session.
+  Comments on the page reach the session in which the user opened the page.
+  Option picks on the page reach the owning session; a worker-written page reaches its parent session.
 - When the item decides on a plan page or an understanding page, use that page.
   That page already holds the options, the recommendation and the evidence.
 - For an item whose options compare in the item text alone, name each option in `text` and `context`, and set

@@ -38,9 +38,9 @@ self.addEventListener('activate', (event) => {
 });
 
 async function activateCurrent() {
-  // A stored-shell navigation is answered from this worker's copy. This worker never reads the navigation preload
-  // response, so disable the extra network request; the first navigation without a stored shell falls back to fetch.
-  await self.registration.navigationPreload.disable();
+  // A stored-shell navigation is answered from this worker's copy. The browser's parallel preload request reaches
+  // the chat route, which answers it with a 204 and no body; this worker never reads the preload response.
+  await self.registration.navigationPreload.enable();
   const names = await caches.keys();
   const previous = names.find((name) => name.startsWith(COPY_PREFIX) && name !== COPY_CACHE && name !== FILE_CACHE);
   const copyCacheName = previous ?? COPY_CACHE;

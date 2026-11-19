@@ -17,6 +17,7 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_registry::FeatureContext;
 use charliebot_store::compact::CompactValue;
+use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::{Store, session_channel};
 use charliebot_user_text_checks as user_text_checks;
@@ -678,7 +679,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     )
     .await?;
   for ancestor_id in ancestor_ids(&features.store, session_id).await? {
-    let notice = json!({"type": SUBTREE_NOTICE_TYPE, "source_session_id": session_id});
+    let notice = json!({"type": SUBTREE_NOTICE_TYPE, (SOURCE_SESSION_ID_FIELD): session_id});
     features.store.broadcast(&session_channel(&ancestor_id), notice).await?;
   }
   tracing::info!(session = %session_id, changed = ?changed, "web_status_set");

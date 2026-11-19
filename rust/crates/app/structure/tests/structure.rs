@@ -829,6 +829,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::SCHEMA_VERSION_FIELD`.",
   },
+  OwnerRow {
+    name: "source_session_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::control_events::SOURCE_SESSION_ID_FIELD`; every request event's header and every \
+           prompt source names the session it came from there.",
+  },
   OwnerRow { name: "master_runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::master_runs_dir`." },
   OwnerRow { name: "archives", owner: "runtime/store", hint: "Use `charliebot_store::layout::archives_dir`." },
   OwnerRow {

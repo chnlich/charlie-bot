@@ -11,7 +11,7 @@ use charliebot_core::event_types::{
   INPUT_EVENT_IDS, RESULT_REFS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED, TASK_SPEC_REF,
 };
 use charliebot_core::proc_identity::PID_START_FIELD;
-use charliebot_store::control_events::TASK_SPEC_HASH_FIELD;
+use charliebot_store::control_events::{SOURCE_SESSION_ID_FIELD, TASK_SPEC_HASH_FIELD};
 use charliebot_store::layout;
 use charliebot_store::metadata::{
   ACCEPTANCE_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, CONTEXT_REFS_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD,
@@ -178,7 +178,7 @@ fn control(label: &str, kind: &str, session_id: &str, at: &str, actor: &str, fie
   event.insert("type".into(), json!(kind));
   event.insert("timestamp".into(), json!(format!("{at}+00:00")));
   event.insert("actor".into(), json!(actor));
-  event.insert("source_session_id".into(), json!(session_id));
+  event.insert(SOURCE_SESSION_ID_FIELD.into(), json!(session_id));
   let Value::Object(fields) = fields else { unreachable!("control fields are an object") };
   event.extend(fields);
   Value::Object(event)

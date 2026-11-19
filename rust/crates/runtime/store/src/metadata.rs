@@ -750,6 +750,12 @@ impl SessionMetadata {
   pub fn extra(&self, name: &str) -> Option<&Value> {
     self.extra.get(name)
   }
+
+  /// The ssh alias of the improve host that this run's process executes on, when its task names one. A run with a host
+  /// executes beyond this machine, so every decision of where a run executes reads this accessor.
+  pub fn improve_host(&self) -> Option<&str> {
+    self.task.as_ref().and_then(|task| task.improve_host.as_deref())
+  }
 }
 
 // The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns.

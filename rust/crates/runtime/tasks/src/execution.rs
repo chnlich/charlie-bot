@@ -2916,7 +2916,7 @@ impl TaskExecutionAdapter {
 /// Whether the run's process executes beyond this host: its task names an `improve_host`, and the improve launcher
 /// carries the process to that host. This host prepares no worktree for such a run, and its brief names none.
 fn backend_runs_beyond_this_host(meta: &SessionMetadata) -> bool {
-  meta.task.as_ref().is_some_and(|task| task.improve_host.is_some())
+  meta.improve_host().is_some()
 }
 
 /// The member failure an Auto session's manager turn ended on, read from the finish extras. The recorder writes the

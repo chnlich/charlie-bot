@@ -523,7 +523,7 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
 /// Whether the run is a keyed round: its task names an improve host, and the round's login travels to that host.
 fn keyed_round(ctx: &LaunchContext) -> bool {
   let meta = ctx.session_meta.lock().expect("launch metadata mutex is not poisoned");
-  meta.task.as_ref().is_some_and(|task| task.improve_host.is_some())
+  meta.improve_host().is_some()
 }
 
 fn refused(

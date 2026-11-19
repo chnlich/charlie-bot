@@ -598,20 +598,18 @@ impl Worker {
   /// The improve launcher and host this worker's round starts through, when its task names an `improve_host`. The
   /// launcher is the one the served checkout ships.
   fn remote_launch(&self) -> anyhow::Result<Option<RemoteLaunch>> {
-    let Some(meta) = &self.session_meta else {
-      return Ok(None);
-    };
-    let host = meta
-      .lock()
-      .expect("the session metadata mutex is not poisoned")
-      .task
-      .as_ref()
-      .and_then(|task| task.improve_host.clone());
-    let Some(host) = host else {
+    let Some(host) = self.improve_host() else {
       return Ok(None);
     };
     let checkout = self.features.startup.require::<RepoRoot>()?;
     Ok(Some(RemoteLaunch { launcher: checkout.path().join(IMPROVE_LAUNCHER_PATH), host }))
+  }
+
+  /// The ssh alias of the improve host this run's process executes on, when its task names one.
+  fn improve_host(&self) -> Option<String> {
+    let meta = self.session_meta.as_ref()?;
+    let meta = meta.lock().expect("the session metadata mutex is not poisoned");
+    meta.improve_host().map(str::to_string)
   }
 
   /// The backend of one process (`Worker._build_backend`). A launcher build fails loudly. A translate-only build falls

@@ -216,7 +216,8 @@ impl IdSet {
 ///
 /// A repeat request shares both allocations instead of copying the body. The response hands the ETag layer the same
 /// `Bytes` every time, so its tag memo answers the repeat without hashing the body again. The memo keeps the body,
-/// so its compressed form is paid once per version and takes the smaller level-9 form a kept body uses.
+/// so its compressed form is paid once per version and takes the smaller of the level-9 and level-8 forms a kept
+/// body uses.
 struct StatusBody {
   plain: Bytes,
   gzip: OnceLock<Bytes>,
@@ -877,9 +878,9 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
 /// A page holds its bytes across requests while the tree and its rows hold, and deflating it again on every repeat
 /// costs about two thirds of this route's latency. The memo answers a repeat with the bytes it already compressed.
 ///
-/// The memo keeps the body, so its compressed form is paid once per page version. That form is the smaller level-9
-/// form a kept body uses, the form the transport's own body memo sends. On the 7,160-session mock home that is
-/// 5,627 bytes of the page's 30,950, against the 7,401 bytes the per-response level-1 form spends.
+/// The memo keeps the body, so its compressed form is paid once per page version. That form is the smaller of the
+/// level-9 and level-8 forms a kept body uses, the form the transport's own body memo sends. On the 7,160-session
+/// mock home that is 5,627 bytes of the page's 30,950, against the 7,401 bytes the per-response level-1 form spends.
 ///
 /// The middleware leaves a response that names its own `Content-Encoding` untouched, so this sender writes the
 /// headers the middleware would write. They are `Vary: Accept-Encoding` with the compressed body, and the plain
@@ -1037,9 +1038,9 @@ fn parse_session_ids(ids: &str) -> Vec<String> {
 
 /// One search answer: the body, compressed for a client that accepts gzip, from the memo that keeps its form.
 ///
-/// The memo keeps the body, so its compressed form is paid once per version and takes the smaller level-9 form a
-/// kept body uses. On the 7,160-session mock home a search for `permission` is 16,063 bytes of its 256,488-byte
-/// answer, against the 22,512 bytes the per-response level-1 form spends.
+/// The memo keeps the body, so its compressed form is paid once per version and takes the smaller of the level-9 and
+/// level-8 forms a kept body uses. On the 7,160-session mock home a search for `permission` is 16,063 bytes of its
+/// 256,488-byte answer, against the 22,512 bytes the per-response level-1 form spends.
 fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
   if !accepts_gzip(request.headers()) {
     return json_bytes_response(Bytes::from(body), false);

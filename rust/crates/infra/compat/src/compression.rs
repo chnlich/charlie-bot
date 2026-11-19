@@ -3,8 +3,9 @@
 //! A response pays the deflate once per body it builds; a memo serves the repeats. The level-1
 //! deflator covers the per-response bodies of ordinary size, and its byte count is one counter. A
 //! per-response body too large for its short hash chain to find the long matches takes the level-4
-//! form instead. The level-9 deflator covers a body a memo keeps and serves on every repeat, where
-//! the smaller output reaches every repeat request and is worth a slower one-time deflate.
+//! form instead. A body a memo keeps and serves on every repeat deflates at the level-9 and level-8
+//! forms, and the memo keeps whichever is smaller: the output reaches every repeat request, so the
+//! second deflate is paid once per version and is worth it.
 //!
 //! A body a memo keeps also has a zstd form, which a client that accepts zstd takes instead. Zstd
 //! compresses a page's markup and inline script smaller than gzip does. The memo pays its slower
@@ -111,7 +112,8 @@ pub fn gzip_memoized_body(data: &[u8]) -> Vec<u8> {
 ///
 /// The memo keeps the output, so the one-time compression buys the smaller bytes for every repeat request. Level 19
 /// trades a slower one-time compression for a smaller body. On the 7,160-session mock home the chat page body falls
-/// from 99,974 bytes (gzip level 9) to 86,817 (13.2%). That costs about 120 ms of a version's first request.
+/// from 99,974 bytes (the memoized gzip form) to 86,817 (13.2%). That costs about 120 ms of a version's first
+/// request.
 pub const ZSTD_MEMOIZED_LEVEL: i32 = 19;
 
 /// The level-19 zstd form of a body a memo serves on every repeat request.

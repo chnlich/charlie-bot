@@ -24,7 +24,7 @@ use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunReco
 use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus};
 use charliebot_store::{CreateTask, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::completion::ArchiveAuthority;
-use charliebot_tasks::completion::{CompletionEvidence, LandingEvidence, SequenceCloseOutcome, TaskCompletion};
+use charliebot_tasks::completion::{CompletionEvidence, LandingEvidence, RunEnd, SequenceCloseOutcome, TaskCompletion};
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use charliebot_tasks::routes;
 use futures_util::future::BoxFuture;
@@ -2292,20 +2292,34 @@ async fn automatic_completion_of_a_closed_task_refuses_without_building_the_task
   );
 }
 
-/// One pending trigger of `session_id`: created at 09:22:23 and due at 10:22:23, a 3600-second maximum wait.
-fn write_pending_trigger(h: &CompletionHarness, session_id: &str, label: &str) {
+/// One pending trigger of `session_id`, created at `created_at` and due at `fire_at`.
+fn write_trigger_at(h: &CompletionHarness, session_id: &str, label: &str, created_at: &str, fire_at: &str) {
   let trigger = PendingTrigger {
     id: trigger_files::fresh_uuid(),
     session_id: session_id.to_string(),
-    fire_at: UtcDateTime::parse("2026-11-19T10:22:23.055346Z").unwrap(),
+    fire_at: UtcDateTime::parse(fire_at).unwrap(),
     message: label.to_string(),
-    created_at: UtcDateTime::parse("2026-11-19T09:22:23.056056Z").unwrap(),
+    created_at: UtcDateTime::parse(created_at).unwrap(),
     status: TriggerStatus::Pending,
     fired_at: None,
     watch_targets: Vec::new(),
     fire_reason: None,
   };
   trigger_files::write_trigger(&h.base.store.session_dir(session_id), &trigger).unwrap();
+}
+
+/// One pending trigger of `session_id`: created at 09:22:23 and due at 10:22:23, a 3600-second maximum wait.
+fn write_pending_trigger(h: &CompletionHarness, session_id: &str, label: &str) {
+  write_trigger_at(h, session_id, label, "2026-11-19T09:22:23.056056Z", "2026-11-19T10:22:23.055346Z");
+}
+
+/// A successful run of `session_id` whose live finish recorded its end at `ended_at`.
+async fn finish_run_at(h: &CompletionHarness, session_id: &str, run_id: &str, ended_at: &str) {
+  register_run(&h.base, session_id, run_id).await;
+  let guard = h.base.store.control_lock().await;
+  let mut outcome = RunOutcome::new(RunOutcomeKind::Success);
+  outcome.ended_at = Some(UtcDateTime::parse(ended_at).unwrap());
+  h.base.store.record_finish_locked(&guard, session_id, run_id, outcome).await.unwrap();
 }
 
 /// The trigger-pause notices the initiator holds for one run of one worker.
@@ -2327,17 +2341,42 @@ async fn pending_trigger_pause_tells_the_initiator_once_per_run() {
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let worker = h.base.create_task("worker", Some(&root.id), TaskProfile::Worker, "Worker").await;
   write_pending_trigger(&h, &worker.id, "moonlite Okta ssh master: approved, or 55-min window ended");
+  finish_run_at(&h, &worker.id, "run-1", "2026-11-19T09:30:00Z").await;
 
-  assert!(h.completion.pause_delivery(&worker.id, "run-1").await.unwrap().is_some());
+  assert!(h.completion.pause_delivery(&worker.id, "run-1", RunEnd::Live).await.unwrap().is_some());
   let notices = trigger_pause_notices(&h, &root.id, &worker.id, "run-1");
   assert_eq!(notices.len(), 1, "one notice for the run's pending trigger");
   let content = notices[0]["content"].as_str().unwrap();
   assert!(content.contains("moonlite Okta ssh master: approved, or 55-min window ended"), "{content}");
   assert!(content.contains("max wait 3600 s"), "{content}");
 
-  // The same run's end, replayed by recovery, admits no second notice.
-  assert!(h.completion.pause_delivery(&worker.id, "run-1").await.unwrap().is_some());
+  // The same run's end, replayed by recovery, decides the pause again and admits no second notice.
+  assert!(h.completion.pause_delivery(&worker.id, "run-1", RunEnd::Replay).await.unwrap().is_some());
   assert_eq!(trigger_pause_notices(&h, &root.id, &worker.id, "run-1").len(), 1);
+}
+
+#[tokio::test]
+async fn pending_trigger_created_after_the_run_end_is_not_named() {
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let worker = h.base.create_task("worker", Some(&root.id), TaskProfile::Worker, "Worker").await;
+  write_pending_trigger(&h, &worker.id, "ci gate before the end");
+  write_trigger_at(
+    &h,
+    &worker.id,
+    "ci gate after the end",
+    "2026-11-19T09:45:00.000000Z",
+    "2026-11-19T10:45:00.000000Z",
+  );
+  finish_run_at(&h, &worker.id, "run-1", "2026-11-19T09:30:00Z").await;
+
+  assert!(h.completion.pause_delivery(&worker.id, "run-1", RunEnd::Live).await.unwrap().is_some());
+  let notices = trigger_pause_notices(&h, &root.id, &worker.id, "run-1");
+  assert_eq!(notices.len(), 1, "one notice for the run");
+  let content = notices[0]["content"].as_str().unwrap();
+  assert!(content.contains("ci gate before the end"), "{content}");
+  assert!(!content.contains("ci gate after the end"), "{content}");
+  assert!(content.contains("with 1 pending trigger(s)"), "{content}");
 }
 
 #[tokio::test]
@@ -2345,6 +2384,7 @@ async fn unprocessed_input_pause_stays_silent() {
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let worker = h.base.create_task("worker", Some(&root.id), TaskProfile::Worker, "Worker").await;
+  finish_run_at(&h, &worker.id, "run-1", "2026-11-19T09:30:00Z").await;
   h.dispatcher
     .admit_input(
       &worker.id,
@@ -2356,6 +2396,6 @@ async fn unprocessed_input_pause_stays_silent() {
     .await
     .unwrap();
 
-  assert!(h.completion.pause_delivery(&worker.id, "run-1").await.unwrap().is_some());
+  assert!(h.completion.pause_delivery(&worker.id, "run-1", RunEnd::Live).await.unwrap().is_some());
   assert!(trigger_pause_notices(&h, &root.id, &worker.id, "run-1").is_empty());
 }

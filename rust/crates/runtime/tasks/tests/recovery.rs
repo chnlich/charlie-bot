@@ -37,6 +37,7 @@ use charliebot_store::run_records::{
   self, CURSOR_NAME, RAW_LOG_NAME, RUN_EVENTS_NAME, RetryRunFields, RunKind, RunOutcome, RunOutcomeKind, RunRecord,
   SequenceRef,
 };
+use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus};
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{CreateTask, PatchTask, TaskCaller, control_events};
 use charliebot_tasks::execution::{TaskExecutionAdapter, is_out_of_space_error};
@@ -2064,6 +2065,123 @@ async fn recovery_replays_failed_earlier_run_without_archiving_worker() -> anyho
   assert_eq!(reports[0]["result_refs"], json!(["run:run-a"]));
   assert_eq!(stack.store().task_state(&worker.id)?, "open");
   assert_eq!(closes_of(&stack, &worker.id)?, 0);
+  settle_manager(&stack, &manager.id).await?;
+  Ok(())
+}
+
+/// A successful work run of `session_id` whose terminal fact records `ended_at`, with no follow-up behind it: the crash
+/// window a restart replays.
+async fn ended_success_run(stack: &Stack, session_id: &str, run_id: &str, ended_at: &str) -> anyhow::Result<()> {
+  stack.queue_run(session_id, run_id, RunKind::Work).await?;
+  let guard = stack.store().control_lock().await;
+  let mut outcome = RunOutcome::new(RunOutcomeKind::Success);
+  outcome.ended_at = Some(UtcDateTime::parse(ended_at)?);
+  stack.store().record_finish_locked(&guard, session_id, run_id, outcome).await?;
+  Ok(())
+}
+
+/// One pending trigger of `session_id`, created at `created_at` and due at `fire_at`.
+fn write_pending_trigger(
+  stack: &Stack,
+  session_id: &str,
+  label: &str,
+  created_at: &str,
+  fire_at: &str,
+) -> anyhow::Result<()> {
+  let trigger = PendingTrigger {
+    id: trigger_files::fresh_uuid(),
+    session_id: session_id.to_string(),
+    fire_at: UtcDateTime::parse(fire_at)?,
+    message: label.to_string(),
+    created_at: UtcDateTime::parse(created_at)?,
+    status: TriggerStatus::Pending,
+    fired_at: None,
+    watch_targets: Vec::new(),
+    fire_reason: None,
+  };
+  trigger_files::write_trigger(&stack.store().session_dir(session_id), &trigger)
+}
+
+/// How many pending-trigger notices the initiator holds, one per run of `run_ids` that `session_id` ended.
+fn pending_trigger_notices(
+  stack: &Stack,
+  initiator_id: &str,
+  session_id: &str,
+  run_ids: &[&str],
+) -> anyhow::Result<usize> {
+  let notice_ids: Vec<String> =
+    run_ids.iter().map(|run_id| control_events::stable_trigger_pause_notice_id(session_id, run_id)).collect();
+  Ok(
+    stack
+      .run_event_values(initiator_id)?
+      .iter()
+      .filter(|event| {
+        event["type"] == event_types::AGENT_MESSAGE
+          && event["id"].as_str().is_some_and(|id| notice_ids.iter().any(|n| n == id))
+      })
+      .count(),
+  )
+}
+
+/// A restart replays the follow-ups of a worker's successful runs whose live ends lost their follow-up. The worker
+/// holds one trigger created after those runs ended, as the 18:31 trigger of the incident did, and one created before
+/// `run-a` ended. The replay names neither in a notice: a replayed run end never notifies the initiator.
+#[tokio::test]
+#[ignore = "integration"]
+async fn restart_replay_sends_no_pending_trigger_notice_for_runs_that_ended_before_it() -> anyhow::Result<()> {
+  let stack = Stack::start("exit 0").await?;
+  stack.write_access_key()?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(script_run_spec())).await?;
+  let runs = ["run-a", "run-b", "run-c"];
+  for (run_id, ended_at) in runs.iter().zip(["2026-11-19T09:00:00Z", "2026-11-19T09:10:00Z", "2026-11-19T09:20:00Z"]) {
+    ended_success_run(&stack, &worker.id, run_id, ended_at).await?;
+  }
+  write_pending_trigger(&stack, &worker.id, "ci gate", "2026-11-19T18:30:00Z", "2099-01-01T00:00:00Z")?;
+  write_pending_trigger(&stack, &worker.id, "early wait", "2026-11-19T08:50:00Z", "2099-01-01T00:00:00Z")?;
+
+  stack.boot().await?;
+  assert_eq!(pending_trigger_notices(&stack, &manager.id, &worker.id, &runs)?, 0);
+  Ok(())
+}
+
+/// A restart replays the review of an open implement task that ended before the boot. The worker holds a trigger
+/// created after that review ended, and the replayed review end sends no pending-trigger notice.
+#[tokio::test]
+#[ignore = "integration"]
+async fn restart_replay_sends_no_pending_trigger_notice_for_a_review_that_ended_before_it() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start("exit 0").await?;
+  stack.write_access_key()?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-impl")?;
+  finished_work_run(&stack, &worker.id, "run-impl", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-a", "run-impl", RunOutcomeKind::Success, "fake2").await?;
+  write_pending_trigger(&stack, &worker.id, "ci gate", "2026-11-19T18:30:00Z", "2099-01-01T00:00:00Z")?;
+
+  stack.boot().await?;
+  assert_eq!(pending_trigger_notices(&stack, &manager.id, &worker.id, &["review-a"])?, 0);
+  Ok(())
+}
+
+/// A run that ends with a pending trigger tells its initiator once, at its live end. A restart that replays the run
+/// adds no second notice.
+#[tokio::test]
+#[ignore = "integration"]
+async fn run_ending_with_a_pending_trigger_keeps_one_notice_across_a_restart() -> anyhow::Result<()> {
+  let stack = Stack::start("exit 0").await?;
+  stack.write_access_key()?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(script_run_spec())).await?;
+  stack.queue_run(&worker.id, "run-a", RunKind::Work).await?;
+  write_pending_trigger(&stack, &worker.id, "ci gate", &UtcDateTime::now().to_str(), "2099-01-01T00:00:00Z")?;
+
+  stack.finish(&worker.id, "run-a", RunOutcomeKind::Success).await?;
+  assert_eq!(pending_trigger_notices(&stack, &manager.id, &worker.id, &["run-a"])?, 1);
+
+  stack.boot().await?;
+  assert_eq!(pending_trigger_notices(&stack, &manager.id, &worker.id, &["run-a"])?, 1);
   settle_manager(&stack, &manager.id).await?;
   Ok(())
 }

@@ -72,10 +72,13 @@ shutdown and re-attachment into server lifespan.
 - `TaskCompletion::close_sequence_child`
 - `TaskCompletion::recheck_close_requests`
 - `TaskCompletion::evaluate_automatic_completion`
-- `TaskCompletion::after_run_finished`
+- `TaskCompletion::after_run_finished` (a live run end)
+- `TaskCompletion::replay_run_finished` (the startup re-drive of a run that ended before the boot; no notice)
 - `TaskCompletion::pause_reason`
-- `TaskCompletion::pause_delivery` (every run-end pause; notifies the initiator once per run when the worker holds
-  pending triggers of its own)
+- `TaskCompletion::pause_delivery(session, run, RunEnd)` (every run-end pause. A `RunEnd::Live` end notifies the
+  initiator once per run when the worker holds pending triggers created by that run's end. A `RunEnd::Replay` end
+  decides the same pause and sends no notice.)
+- `completion::RunEnd` (`Live` or `Replay`)
 - `RunFinishedCompletion for TaskCompletion`
 - `SequenceCompletion for TaskCompletion`
 - `completion::task_completion`
@@ -146,12 +149,13 @@ post-finish completion traits are supplied by the execution and completion stage
 
 ## Startup recovery and shutdown
 
-`recovery::recovery_step`, registered as `task_recovery`, runs after the pre-recovery step. It re-attaches manager
-turns that are still alive, drains runs that exited while the server was down, and replays the follow-ups their crash
-window lost. `recovery::let_go_step`, registered as `task_execution`, runs after services stop. It first cancels each
-run launch and waits for it to end: the run keeps no terminal fact, a started agent keeps running, and the next boot
-launches or re-attaches the run. A launch requested after this point starts no task. It then cancels the queue's
-consumers: a turn whose record is durable detaches, and an uncovered turn terminates.
+`recovery::recovery_step`, registered as `task_recovery`, runs after the pre-recovery step. It re-attaches manager turns
+that are still alive, drains runs that exited while the server was down, and replays the follow-ups their crash window
+lost. A replayed run end decides its delivery pause again from the state at the boot, and sends no pending-trigger
+notice: that notice belongs to the live end of the run. `recovery::let_go_step`, registered as `task_execution`, runs
+after services stop. It first cancels each run launch and waits for it to end: the run keeps no terminal fact, a started
+agent keeps running, and the next boot launches or re-attaches the run. A launch requested after this point starts no
+task. It then cancels the queue's consumers: a turn whose record is durable detaches, and an uncovered turn terminates.
 
 - `recovery::recovery_step`
 - `recovery::reconcile_task_tree`

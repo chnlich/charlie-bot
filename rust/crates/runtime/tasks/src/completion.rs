@@ -12,7 +12,7 @@ use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
-use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskType};
+use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::session_fork::ReplacedSourceArchive;
 use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus};
@@ -46,6 +46,15 @@ const RESTORE_CHAIN_HOP_LIMIT: usize = 1000;
 pub enum ArchiveAuthority {
   Operator,
   Agent { caller_task_id: String },
+}
+
+/// How a run's end reaches the completion owner. `Live` is the finish that just recorded the end, the only path that
+/// tells the initiator about the worker's pending triggers. `Replay` is the startup re-drive of a run that ended
+/// before this boot: it decides the same pause and sends no notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunEnd {
+  Live,
+  Replay,
 }
 
 struct CloseNowRequest<'a> {
@@ -1885,23 +1894,37 @@ impl TaskCompletion {
     Ok(None)
   }
 
-  /// Record a successful run's delivery pause, and when the worker holds pending triggers of its own, tell its
-  /// initiator once for this run. Every run-end pause site calls this. A pause on unprocessed input stays silent.
-  pub async fn pause_delivery(&self, session_id: &str, run_id: &str) -> StoreResult<Option<String>> {
+  /// Record a run's delivery pause. A live run end also tells the initiator once for this run when the worker holds
+  /// triggers of its own that were pending and created by that end. A replay decides the same pause and sends no
+  /// notice, whatever triggers the boot finds. A pause on unprocessed input stays silent.
+  pub async fn pause_delivery(&self, session_id: &str, run_id: &str, end: RunEnd) -> StoreResult<Option<String>> {
     let Some(reason) = self.pause_reason(session_id)? else {
       return Ok(None);
     };
     tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "worker_delivery_paused");
-    let triggers = self.pending_triggers(session_id)?;
-    if !triggers.is_empty() {
-      self.notify_initiator_of_pending_triggers(session_id, run_id, &triggers).await?;
+    if end == RunEnd::Live {
+      let ended_at = self.run_ended_at(session_id, run_id)?;
+      let triggers = self.pending_triggers(session_id, ended_at)?;
+      if !triggers.is_empty() {
+        self.notify_initiator_of_pending_triggers(session_id, run_id, &triggers).await?;
+      }
     }
     Ok(Some(reason))
   }
 
-  /// The worker's own triggers that are still pending, earliest fire first. A trigger file that does not decode is an
-  /// error, because the pause would otherwise name a wait the initiator never hears about.
-  fn pending_triggers(&self, session_id: &str) -> StoreResult<Vec<PendingTrigger>> {
+  /// The end time that a run's live finish recorded. A live finish always records one, so its absence is an error.
+  fn run_ended_at(&self, session_id: &str, run_id: &str) -> StoreResult<UtcDateTime> {
+    let run = self
+      .store()
+      .read_run_sync(session_id, run_id)?
+      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
+    run.ended_at.ok_or_else(|| StoreError::new(format!("run {run_id} has no end time at its live pause")))
+  }
+
+  /// The worker's own triggers that are still pending and were created no later than `ended_at`, earliest fire first.
+  /// A trigger file that does not decode is an error, because the pause would otherwise name a wait the initiator
+  /// never hears about.
+  fn pending_triggers(&self, session_id: &str, ended_at: UtcDateTime) -> StoreResult<Vec<PendingTrigger>> {
     let triggers_dir = layout::triggers_dir(&self.store().session_dir(session_id));
     let files = match trigger_files::iter_trigger_file_stats(&triggers_dir) {
       Ok(files) => files,
@@ -1911,7 +1934,7 @@ impl TaskCompletion {
     let mut pending = Vec::new();
     for (path, _) in files {
       let trigger = trigger_files::read_trigger(&path).map_err(|error| StoreError::new(format!("{error:#}")))?;
-      if trigger.status == TriggerStatus::Pending {
+      if trigger.status == TriggerStatus::Pending && trigger.created_at <= ended_at {
         pending.push(trigger);
       }
     }
@@ -1968,8 +1991,18 @@ impl TaskCompletion {
     }
   }
 
-  /// Apply successful-run close requests and ordinary worker delivery follow-ups.
+  /// Apply successful-run close requests and ordinary worker delivery follow-ups for a run's live end.
   pub async fn after_run_finished(&self, session_id: &str, run_id: &str) -> StoreResult<()> {
+    self.finish_successful_run(session_id, run_id, RunEnd::Live).await
+  }
+
+  /// The follow-ups of [`Self::after_run_finished`] for a run that ended before this boot, as the startup replay
+  /// re-drives them. The pause is decided again from the state at the boot, and no pending-trigger notice is sent.
+  pub async fn replay_run_finished(&self, session_id: &str, run_id: &str) -> StoreResult<()> {
+    self.finish_successful_run(session_id, run_id, RunEnd::Replay).await
+  }
+
+  async fn finish_successful_run(&self, session_id: &str, run_id: &str, end: RunEnd) -> StoreResult<()> {
     let meta = self.store().load_task_meta(session_id).await?;
     self.recheck_close_requests(session_id, run_id).await?;
     if self.store().node_facts(session_id)?.task()?.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
@@ -1989,7 +2022,7 @@ impl TaskCompletion {
       tracing::info!(target: "charliebot_tasks", session_id, run_id, "cold_read_delivery_awaits_report");
       return Ok(());
     }
-    if self.pause_delivery(session_id, run_id).await?.is_some() {
+    if self.pause_delivery(session_id, run_id, end).await?.is_some() {
       return Ok(());
     }
     match self.evaluate_automatic_completion(session_id, run_id, None, None, None, None).await {

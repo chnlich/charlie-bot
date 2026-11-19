@@ -37,7 +37,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::oneshot;
 
-use crate::completion::TaskCompletion;
+use crate::completion::{RunEnd, TaskCompletion};
 use crate::dispatch::{self, Dispatcher};
 use crate::execution::{TaskExecutionAdapter, is_out_of_space_error};
 use crate::master_queue::{MasterQueue, SessionCallbacks};
@@ -1232,7 +1232,7 @@ async fn replay_followups_with_records(
         // interrupted run reports through the generic failure entry, never the next-backend retry.
         match outcome {
           RunOutcomeKind::Success => {
-            completion.after_run_finished(session_id, &run.id).await?;
+            completion.replay_run_finished(session_id, &run.id).await?;
             adapter.after_cold_read_run(&meta, run, outcome_name(outcome)).await?;
           }
           RunOutcomeKind::Failed => {
@@ -1248,11 +1248,11 @@ async fn replay_followups_with_records(
         continue;
       }
       if outcome == RunOutcomeKind::Success {
-        completion.after_run_finished(session_id, &run.id).await?;
+        completion.replay_run_finished(session_id, &run.id).await?;
         if meta.task.is_some()
           && spawner_prompt::reviewer_run_follows(meta.task.as_ref())
           && run.repo_path.is_some()
-          && completion.pause_delivery(session_id, &run.id).await?.is_none()
+          && completion.pause_delivery(session_id, &run.id, RunEnd::Replay).await?.is_none()
           && review_facts.owes_review(task_facts.task_state == "open", run)
           && let crate::execution::ReviewSpawnOutcome::NoReviewer(reason) =
             adapter.maybe_spawn_review(session_id, run).await?
@@ -1274,7 +1274,7 @@ async fn replay_followups_with_records(
       adapter.after_worker_run(&meta, run, outcome_name(outcome)).await?;
     } else if run.kind == RunKind::Review {
       counters.followups += 1;
-      adapter.after_review_run(&meta, run, outcome_name(outcome)).await?;
+      adapter.after_review_run(&meta, run, outcome_name(outcome), RunEnd::Replay).await?;
     }
   }
   Ok(())

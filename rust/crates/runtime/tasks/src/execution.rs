@@ -1659,7 +1659,7 @@ impl TaskExecutionAdapter {
     }
 
     if run.kind == RunKind::Review {
-      return self.after_review_run(meta, run, durable_outcome).await;
+      return self.after_review_run(meta, run, durable_outcome, crate::completion::RunEnd::Live).await;
     }
     let task_type = meta.task.as_ref().and_then(|task| task.task_type);
     if task_type == Some(TaskType::ColdRead) && matches!(durable_outcome, "success" | "failed") {
@@ -1668,7 +1668,7 @@ impl TaskExecutionAdapter {
     if durable_outcome == "success" {
       if spawner_prompt::reviewer_run_follows(meta.task.as_ref()) {
         let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
-        if completion.pause_delivery(session_id, &run.id).await?.is_some() {
+        if completion.pause_delivery(session_id, &run.id, crate::completion::RunEnd::Live).await?.is_some() {
           return Ok(());
         }
         if let ReviewSpawnOutcome::NoReviewer(reason) = self.maybe_spawn_review(session_id, run).await? {
@@ -1920,6 +1920,7 @@ impl TaskExecutionAdapter {
     meta: &SessionMetadata,
     run: &RunRecord,
     durable_outcome: &str,
+    end: crate::completion::RunEnd,
   ) -> anyhow::Result<()> {
     let session_id = meta.id.as_str();
     let work_run = self
@@ -1974,7 +1975,7 @@ impl TaskExecutionAdapter {
       return Ok(());
     }
     let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
-    if completion.pause_delivery(session_id, &run.id).await?.is_some() {
+    if completion.pause_delivery(session_id, &run.id, end).await?.is_some() {
       return Ok(());
     }
     let mut result_refs = vec![format!("run:{}", work_run.id)];

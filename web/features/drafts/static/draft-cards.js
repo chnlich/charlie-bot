@@ -30,6 +30,19 @@
     FAILED: 'failed',
   };
 
+  // The outcomes a failed send reports: a rejected request, or one whose result the server could not see.
+  const DRAFT_OUTCOME = {
+    UNKNOWN: 'unknown',
+    REJECTED: 'rejected',
+  };
+
+  // The message roles this module renders: the registered draft card and its two outcome lines.
+  const DRAFT_ROLE = {
+    DRAFT: 'draft',
+    SENT: 'draft_sent',
+    FAILED: 'draft_failed',
+  };
+
   // The card's target line: the platform's own label, or the target fields in order.
   function targetText(msg) {
     if (msg.target_label != null && String(msg.target_label) !== '') return String(msg.target_label);
@@ -37,21 +50,37 @@
     return Object.keys(target).map((key) => key + ': ' + String(target[key])).join(' · ');
   }
 
+  // The status a card state names. A state that names none is a caller's error, not a sendable card.
+  function draftStatus(state) {
+    if (!state || !state.status) throw new Error('a draft card state names no status');
+    return state.status;
+  }
+
+  // The state line one card state shows: empty for a sendable card, and one sentence for every other status.
   function stateLineHtml(state) {
-    if (!state || !state.status || state.status === DRAFT_STATUS.SENDABLE) return '';
-    if (state.status === DRAFT_STATUS.SENT) {
-      const link = state.url
-        ? ' · <a class="underline text-blue-400" href="' + escapeHtmlAttr(state.url) + '" target="_blank" rel="noopener">Open</a>'
-        : '';
-      return 'Sent by ' + escapeHtml(state.sender || '') + link;
+    switch (draftStatus(state)) {
+      case DRAFT_STATUS.SENDABLE: return '';
+      case DRAFT_STATUS.SENT: {
+        const link = state.url
+          ? ' · <a class="underline text-blue-400" href="' + escapeHtmlAttr(state.url) + '" target="_blank" rel="noopener">Open</a>'
+          : '';
+        return 'Sent by ' + escapeHtml(state.sender || '') + link;
+      }
+      case DRAFT_STATUS.SUPERSEDED: return 'Superseded by a newer draft';
+      case DRAFT_STATUS.STALE: return 'This draft was already sent or replaced';
+      case DRAFT_STATUS.FAILED: return failedStateLine(state);
+      default: throw new Error('unknown draft status: ' + state.status);
     }
-    if (state.status === DRAFT_STATUS.SUPERSEDED) return 'Superseded by a newer draft';
-    if (state.status === DRAFT_STATUS.STALE) return 'This draft was already sent or replaced';
-    if (state.status === DRAFT_STATUS.FAILED) {
-      const hint = state.outcome === 'unknown' ? ' Check the target before resending.' : '';
-      return 'Send failed: ' + escapeHtml(state.detail || '') + hint;
+  }
+
+  // The failed card's line: the failure text, and for an unknown outcome the warning to check the target first.
+  function failedStateLine(state) {
+    const detail = 'Send failed: ' + escapeHtml(state.detail || '');
+    switch (state.outcome) {
+      case DRAFT_OUTCOME.UNKNOWN: return detail + ' Check the target before resending.';
+      case DRAFT_OUTCOME.REJECTED: return detail;
+      default: throw new Error('unknown draft outcome: ' + state.outcome);
     }
-    return '';
   }
 
   function sendButtonHtml(sessionId, draftId) {
@@ -109,7 +138,7 @@
   // Apply one state to one card: the status attribute, the state line, and the button's presence.
   function applyDraftState(card, state) {
     if (!card) return;
-    const status = state && state.status ? state.status : DRAFT_STATUS.SENDABLE;
+    const status = draftStatus(state);
     card.dataset.draftStatus = status;
     const line = card.querySelector('.draft-state-line');
     if (line) line.innerHTML = stateLineHtml(state);
@@ -138,7 +167,7 @@
       applyDraftState(findCard(root, marker.getAttribute('data-draft-failed')), {
         status: DRAFT_STATUS.FAILED,
         detail: marker.getAttribute('data-error') || '',
-        outcome: marker.getAttribute('data-outcome') || 'rejected',
+        outcome: marker.getAttribute('data-outcome') || DRAFT_OUTCOME.REJECTED,
       });
     });
   }
@@ -161,13 +190,13 @@
         applyDraftState(card, {
           status: DRAFT_STATUS.FAILED,
           detail: body.detail || ('HTTP ' + res.status),
-          outcome: body.outcome || 'rejected',
+          outcome: body.outcome || DRAFT_OUTCOME.REJECTED,
         });
         return;
       }
       applyDraftState(card, {status: DRAFT_STATUS.SENT, sender: body.sender || '', url: body.url || ''});
     } catch (error) {
-      applyDraftState(card, {status: DRAFT_STATUS.FAILED, detail: String(error), outcome: 'unknown'});
+      applyDraftState(card, {status: DRAFT_STATUS.FAILED, detail: String(error), outcome: DRAFT_OUTCOME.UNKNOWN});
     } finally {
       // A failed send leaves the button clickable: the operator decides whether to resend, and the
       // server never retries on its own. A sent or superseded card lost its button above.
@@ -178,9 +207,9 @@
   // The page part's loader registers a placeholder for each of these roles and
   // starts this download from the first draft message. Replacing keeps a
   // re-render of the placeholder's root on the card path once this file lands.
-  Chat.replaceMessageRoleRenderer('draft', (msg, sessionId) => draftCardHtml(msg, sessionId));
-  Chat.replaceMessageRoleRenderer('draft_sent', draftSentLineHtml);
-  Chat.replaceMessageRoleRenderer('draft_failed', draftFailedLineHtml);
+  Chat.replaceMessageRoleRenderer(DRAFT_ROLE.DRAFT, (msg, sessionId) => draftCardHtml(msg, sessionId));
+  Chat.replaceMessageRoleRenderer(DRAFT_ROLE.SENT, draftSentLineHtml);
+  Chat.replaceMessageRoleRenderer(DRAFT_ROLE.FAILED, draftFailedLineHtml);
   Chat.registerMessagePostProcessor(applyDraftUpdates);
   Chat.wire(
       {sendDraft},
@@ -215,9 +244,19 @@
   function replaceInDocument(entry) {
     const node = document.getElementById(entry.id);
     if (!node) return;
-    if (entry.msg.role === 'draft') node.outerHTML = draftCardHtml(entry.msg, entry.sessionId);
-    else if (entry.msg.role === 'draft_sent') node.outerHTML = draftSentLineHtml(entry.msg);
-    else node.outerHTML = draftFailedLineHtml(entry.msg);
+    switch (entry.msg.role) {
+      case DRAFT_ROLE.DRAFT:
+        node.outerHTML = draftCardHtml(entry.msg, entry.sessionId);
+        return;
+      case DRAFT_ROLE.SENT:
+        node.outerHTML = draftSentLineHtml(entry.msg);
+        return;
+      case DRAFT_ROLE.FAILED:
+        node.outerHTML = draftFailedLineHtml(entry.msg);
+        return;
+      default:
+        throw new Error('unknown draft role: ' + entry.msg.role);
+    }
   }
 
   const pending = Chat.__draftCardsPending || [];

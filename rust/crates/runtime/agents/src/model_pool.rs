@@ -371,12 +371,13 @@ pub struct MemberChange {
   pub reason: String,
   /// The moment the member left recovers, in the minute-resolution event format.
   pub recovers_at: Option<String>,
-  /// The handoff summary state of a change made mid-turn. A turn-start change carries none.
+  /// The handoff summary state of the retry a mid-turn change started. A turn-start change leaves it `None`: its
+  /// summary is recorded in its event instead.
   pub summary: Option<String>,
 }
 
 impl MemberChange {
-  /// A turn-start change, which builds no retry and so carries no handoff summary.
+  /// A turn-start change, which starts no retry; its handoff summary is recorded in its event, not in this struct.
   fn at_turn_start(pool: &str, from: String, to: String, reason: String, recovers_at: Option<String>) -> Self {
     Self { pool: pool.to_string(), from, to, reason, recovers_at, summary: None }
   }

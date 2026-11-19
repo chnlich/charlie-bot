@@ -193,9 +193,10 @@ pub const QUOTA_FAILOVER_SET: &str = "set";
 /// The `quota_failover` field carrying the instant the member that failed recovers its quota, empty when the change
 /// names none.
 pub const QUOTA_FAILOVER_RECOVERS_AT: &str = "recovers_at";
-/// The `quota_failover` field carrying the handoff summary state of the retry the change started.
+/// The `quota_failover` field carrying the handoff summary state of the run the change started: a mid-turn retry, or
+/// a manager turn that starts on the member the pool switched to.
 pub const QUOTA_FAILOVER_SUMMARY: &str = "summary";
-/// The [`QUOTA_FAILOVER_SUMMARY`] value of a retry whose handoff summary was assembled.
+/// The [`QUOTA_FAILOVER_SUMMARY`] value of a run whose handoff summary was assembled.
 pub const QUOTA_SUMMARY_OK: &str = "ok";
 /// The [`QUOTA_FAILOVER_SUMMARY`] value that opens an unassembled summary; the reason follows a colon and a space.
 pub const QUOTA_SUMMARY_UNAVAILABLE: &str = "unavailable";

@@ -262,7 +262,6 @@ function buildTurnFoldBar(turnKey, count) {
   btn.type = 'button';
   btn.className = 'turn-fold-bar';
   btn.dataset.turnFoldKey = turnKey;
-  btn.dataset.turnFoldCount = String(count);
   btn.onclick = function() { toggleTurnFold(this); };
   btn.innerHTML = turnFoldBarHtml(count);
   setTurnFoldBarExpanded(btn, false);

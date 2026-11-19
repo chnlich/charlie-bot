@@ -17,8 +17,9 @@
 //
 // The panel's Done action writes its click message with buildClickMessage from
 // web/static/js/comment_post.js, so that shared helper downloads first in the
-// same group. It travels with the panel rather than with the page: a reader who
-// never marks an item done pays neither file.
+// same group. It travels with the panel rather than with the page: a reader
+// whose sessions show no waiting badge and who never opens the Status view
+// downloads neither file.
 (function() {
   const Chat = globalThis.Chat;
   const SOURCE = '/static/js/chat/status-panel.js';

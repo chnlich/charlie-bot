@@ -67,6 +67,13 @@
    layout keeps the width it already had. */
 #messages .max-w-\[75\%\] { max-width: min(75%, 37rem); }
 #messages .max-w-\[90\%\] { max-width: min(90%, 37rem); }
+/* The scroll-to-bottom control floats over the list's bottom-right corner: its 38 px box keeps the
+   24 px inset the list's edge gives it, so its left edge stands 62 px from the window's right edge.
+   A user bubble is right-aligned on the list's 16 px inset and pads its text another 16 px, which
+   left the last 30 px of a full line under the circle. The bubble's 36 px right margin carries its
+   text 68 px from the window's edge, past the circle, while the bubble keeps the width its share
+   of the pane gives it. */
+#messages .max-w-\[75\%\] { margin-right: 2.25rem; }
 .turn-fold-bar {
   display: flex; align-items: center; justify-content: center; gap: 0.4rem;
   width: 100%; padding: 0.35rem 0.75rem; border: 1px solid rgba(100, 116, 139, 0.35);

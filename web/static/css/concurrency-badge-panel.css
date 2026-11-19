@@ -50,3 +50,9 @@ body.dark .cb-panel { border-color: #334155; background: #1e293b; color: #e2e8f0
   color: #ffffff; font-size: 11px; white-space: nowrap; pointer-events: none; transform: translate(-50%, -130%) }
 .cb-status { margin: 8px 0 0; opacity: .7 }
 .cb-empty { margin: 0; padding: 56px 0; text-align: center; opacity: .7 }
+/* A range with no run draws the note and no plot: the plot's 150 px floor and the note's 56 px
+   padding would hold a blank box under that one line, and at a phone's width the panel covers the
+   page's first card with it. The note takes its own line's height, and the panel's body ends under
+   it. A range that draws the plot keeps both. */
+.cb-chart.cb-chart-empty { min-height: 0 }
+.cb-chart-empty .cb-empty { padding: 8px 0 }

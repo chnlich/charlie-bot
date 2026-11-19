@@ -1188,7 +1188,7 @@ const CANCEL_TASK_BODY: BodyModel = BodyModel::required(&[
 /// The task-inputs/acknowledge body model.
 const ACKNOWLEDGE_TASK_INPUTS_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
-  Field::required("input_ids", FieldType::StringList),
+  Field::required(event_types::INPUT_IDS, FieldType::StringList),
   Field::optional("note", FieldType::String),
 ]);
 
@@ -1325,7 +1325,7 @@ async fn acknowledge_task_inputs(State(features): State<Arc<FeatureContext>>, re
     .acknowledge_inputs(
       &meta.id,
       &validated_string(&fields, "request_id"),
-      &validated_string_list(&fields, "input_ids"),
+      &validated_string_list(&fields, event_types::INPUT_IDS),
       &optional_validated_string(&fields, "note"),
       &caller,
     )

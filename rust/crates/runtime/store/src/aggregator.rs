@@ -973,7 +973,7 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
 }
 
 fn render_task_input_acknowledged<E: EventFields>(event: &E) -> StoreResult<Value> {
-  let input_ids = join_strings(event.field("input_ids"), "input_ids")?;
+  let input_ids = join_strings(event.field(event_types::INPUT_IDS), event_types::INPUT_IDS)?;
   let mut content = format!("Task input(s) acknowledged as handled: {input_ids}");
   if event.field("note").is_some_and(is_truthy) {
     content.push_str(" — ");

@@ -168,6 +168,9 @@ pub const RUN_DURATION_SECONDS: &str = "duration_seconds";
 pub const RUN_ERROR: &str = "run_error";
 pub const RUN_DELIVERY: &str = "run_delivery";
 pub const TASK_INPUT_ACKNOWLEDGED: &str = "task_input_acknowledged";
+/// The pending-input ids a task-inputs acknowledgement names: the request body carries the ids the caller asks to
+/// acknowledge, and the [`TASK_INPUT_ACKNOWLEDGED`] event and the response carry only those that were still pending.
+pub const INPUT_IDS: &str = "input_ids";
 pub const TASK_TRIGGERED: &str = "task_triggered";
 pub const THINKING: &str = "thinking";
 pub const RATE_LIMIT_EVENT: &str = "rate_limit_event";

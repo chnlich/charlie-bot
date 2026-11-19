@@ -399,7 +399,7 @@ fn acknowledge(args: &AcknowledgeArgs) -> Result<(), CliExit> {
   }
   let payload = json!({
     "request_id": args.request_id.clone().unwrap_or_else(control_events::new_request_id),
-    "input_ids": input_ids,
+    (event_types::INPUT_IDS): input_ids,
     "note": args.note,
   });
   let result = client::post(

@@ -33,6 +33,75 @@ async function postCommentMessage(sessionId, content) {
   }
 }
 
+// The one undo window of every click-to-send message: it closes after this many
+// seconds, and the message leaves only when no cancel came first.
+const COMMENT_UNDO_SECONDS = 5;
+
+// Starts the undo window for one message. onTick receives the seconds left, once
+// a second from COMMENT_UNDO_SECONDS down to 0; 0 comes right before the post. The
+// returned handle's sent promise settles with postCommentMessage's result, or with
+// null when cancel() wins the window. cancel() returns false once the post has begun.
+function startUndoableCommentSend(sessionId, content, onTick) {
+  let left = COMMENT_UNDO_SECONDS;
+  let timer = null;
+  let posting = false;
+  let settle = null;
+  const sent = new Promise((resolve, reject) => {
+    settle = {resolve, reject};
+  });
+  const step = () => {
+    onTick(left);
+    if (left === 0) {
+      posting = true;
+      postCommentMessage(sessionId, content).then(settle.resolve, settle.reject);
+      return;
+    }
+    left -= 1;
+    timer = setTimeout(step, 1000);
+  };
+  step();
+  return {
+    sent,
+    cancel() {
+      if (posting) return false;
+      clearTimeout(timer);
+      settle.resolve(null);
+      return true;
+    },
+  };
+}
+
+// One comment entry: the locator line (▸) and the comment line (↳). A quote-less
+// entry, as a click-to-send message has, carries only the context.
+function buildCommentEntry(quote, context, comment, suffix) {
+  if (quote === '') {
+    return ('▸ ' + context).split('\n').concat(('↳ ' + comment).split('\n'));
+  }
+  const quoteLines = (context
+    ? '▸ ' + context + ' › "' + quote + '"'
+    : '▸ "' + quote + '"').split('\n');
+  // A quote spanning lines keeps its locator shape. The suffix rides the last
+  // quote line, right of the closing quote.
+  quoteLines[quoteLines.length - 1] += suffix || '';
+  return quoteLines.concat(('↳ ' + comment).split('\n'));
+}
+
+// One numbered message: the header line, then each entry's lines, the entry's
+// first line numbered and its later lines indented under it. `spaced` puts a
+// blank line after the header and between entries, the comment batch's layout;
+// a pick message is not spaced.
+function assembleBatchMessage(header, entries, spaced) {
+  const lines = spaced ? [header, ''] : [header];
+  for (let i = 0; i < entries.length; i++) {
+    lines.push((i + 1) + '. ' + entries[i][0]);
+    for (let j = 1; j < entries[i].length; j++) {
+      lines.push('   ' + entries[i][j]);
+    }
+    if (spaced && i < entries.length - 1) lines.push('');
+  }
+  return lines.join('\n');
+}
+
 // One tray toast at a time: showing a new one removes the previous. Each tray
 // passes its own CSS class prefix, mount (a page layer marks nodes through
 // injectRoot; the diff page appends straight to body) and removal

@@ -59,4 +59,4 @@ function runStaticModules(context, files) {
   }
 }
 
-module.exports = {readStatic, readPackageStatic, chatModules: () => scopedModules('chat/'), sidebarModules: () => scopedModules('sidebar/'), runStaticModules};
+module.exports = {readStatic, readPackageStatic, indexScriptPaths, chatModules: () => scopedModules('chat/'), sidebarModules: () => scopedModules('sidebar/'), runStaticModules};

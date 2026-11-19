@@ -78,7 +78,9 @@ function loadArtifactCommentsContext(opts = {}) {
       throw new Error('fetch should not run while loading artifact-comments.js');
     },
     crypto: {randomUUID: () => `artifact-comment-request-${++requestSequence}`},
-    setTimeout: (callback) => { callback(); return 1; },
+    // Timers run at once unless a suite supplies its own clock, as the pick undo tests do.
+    setTimeout: opts.setTimeout || ((callback) => { callback(); return 1; }),
+    clearTimeout: opts.clearTimeout || (() => {}),
   };
   if (opts.sessionStorage !== undefined) {
     context.sessionStorage = opts.sessionStorage;

@@ -104,6 +104,12 @@ node = ["web/tests/client_readback.integration.test.mjs"]
 paths = ["prompts/plan_template.html"]
 node = ["web/tests/plan_panel.integration.test.js"]
 
+# web/tests/artifact_picks.integration.test.js checks the page parser's forks of the plan template against the shared
+# fixture that artifact_check.rs also asserts on.
+[[entry]]
+paths = ["prompts/plan_template.html", "rust/crates/features/artifacts/tests/data/plan_template_forks.json"]
+node = ["web/tests/artifact_picks.integration.test.js"]
+
 [[entry]]
 paths = [".gitignore", "dev/check-unit-test-time.mjs"]
 none = true

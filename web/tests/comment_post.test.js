@@ -152,3 +152,80 @@ test('postCommentMessage stops on a 4xx and preserves the auth and HTTP messages
   await assert.rejects(badRequest.postCommentMessage('s', 'c'), {message: 'Comment post failed: HTTP 409'});
   assert.equal(attempts, 1);
 });
+
+// The undo window runs on a clock the test owns: each setTimeout call queues its step, and the test runs them.
+function loadCommentPostWithClock(fetchImpl) {
+  const timers = [];
+  const cleared = [];
+  let requestSequence = 0;
+  const context = {
+    fetch: fetchImpl,
+    crypto: {randomUUID: () => `comment-request-${++requestSequence}`},
+    setTimeout: (callback) => {
+      timers.push(callback);
+      return timers.length;
+    },
+    clearTimeout: (id) => { cleared.push(id); },
+  };
+  vm.createContext(context);
+  vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
+  return {context, timers, cleared};
+}
+
+const ACCEPTED = async () => ({ok: true, status: 202, json: async () => ({input_event_id: 'event-1'})});
+
+test('startUndoableCommentSend counts five seconds down, then posts once and settles with the result', async () => {
+  const calls = [];
+  const {context, timers} = loadCommentPostWithClock(async (url, options) => {
+    calls.push({url, body: JSON.parse(options.body)});
+    return ACCEPTED();
+  });
+  const ticks = [];
+  const handle = context.startUndoableCommentSend('session 7', 'the picks', (left) => ticks.push(left));
+  while (timers.length > 0) timers.shift()();
+
+  assert.deepEqual(ticks, [5, 4, 3, 2, 1, 0]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/chat/session%207/message');
+  assert.equal(calls[0].body.content, 'the picks');
+  assert.deepEqual(await handle.sent, {input_event_id: 'event-1'});
+});
+
+test('cancel inside the window posts nothing and settles null', async () => {
+  const calls = [];
+  const {context, timers, cleared} = loadCommentPostWithClock(async (url) => {
+    calls.push(url);
+    return ACCEPTED();
+  });
+  const ticks = [];
+  const handle = context.startUndoableCommentSend('s', 'c', (left) => ticks.push(left));
+  assert.equal(handle.cancel(), true);
+
+  assert.deepEqual(cleared, [1], 'the pending tick is cleared');
+  assert.equal(await handle.sent, null);
+  assert.deepEqual(ticks, [5]);
+  assert.deepEqual(calls, []);
+  assert.equal(timers.length, 1, 'only the first tick was ever queued');
+});
+
+test('cancel after the post has begun returns false and the message still lands', async () => {
+  const calls = [];
+  const {context, timers} = loadCommentPostWithClock(async (url) => {
+    calls.push(url);
+    return ACCEPTED();
+  });
+  const handle = context.startUndoableCommentSend('s', 'c', () => {});
+  while (timers.length > 0) timers.shift()();
+
+  assert.equal(handle.cancel(), false);
+  assert.deepEqual(await handle.sent, {input_event_id: 'event-1'});
+  assert.equal(calls.length, 1);
+});
+
+test('a 4xx answer rejects the undo window with the post error', async () => {
+  const {context, timers} = loadCommentPostWithClock(async () => ({ok: false, status: 409}));
+  const handle = context.startUndoableCommentSend('s', 'c', () => {});
+  while (timers.length > 0) timers.shift()();
+
+  await assert.rejects(handle.sent, {message: 'Comment post failed: HTTP 409'});
+});

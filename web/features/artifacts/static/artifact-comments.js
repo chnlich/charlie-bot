@@ -495,6 +495,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-send:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
         '.' + GLOBAL_PREFIX + '-tray-clear{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}' +
+        '.' + GLOBAL_PREFIX + '-icon{display:inline-flex;vertical-align:middle;margin-right:5px}' +
+        '.' + GLOBAL_PREFIX + '-icon:empty{display:none}' +
         '.' + GLOBAL_PREFIX + '-picks{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}' +
         '.' + GLOBAL_PREFIX + '-pick{border:1px solid #d0d7de;border-radius:6px;padding:4px 9px;background:#f6f8fa;color:#1b2430;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-pick[aria-pressed="true"]{background:#1163c0;border-color:#1163c0;color:#fff}' +
@@ -1776,9 +1778,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         var record = picks[i];
         if (record.picked === -1 && record.rec !== -1) restAvailable = true;
         for (var j = 0; j < record.options.length; j++) {
-          var button = record.options[j].button;
-          button.disabled = !editable;
-          button.setAttribute('aria-pressed', record.picked === j ? 'true' : 'false');
+          var option = record.options[j];
+          option.button.disabled = !editable;
+          option.button.setAttribute('aria-pressed', record.picked === j ? 'true' : 'false');
+          setIcon(option.mark, record.picked === j ? 'done' : null, 12);
         }
       }
       var picked = pickedCount();
@@ -1837,11 +1840,33 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       if (typeof refresh === 'function') refresh();
     }
 
-    function makeButton(label, onClick, className) {
+    // An icon slot holds one cbIcon drawing. setIcon fills it; an empty slot draws nothing.
+    function makeIconSlot() {
+      var slot = document.createElement('span');
+      slot.className = GLOBAL_PREFIX + '-icon';
+      return slot;
+    }
+
+    // cbIcon is the icon module's function. It throws on a meaning the table lacks, so no control draws without one.
+    function setIcon(slot, meaning, size) {
+      slot.innerHTML = meaning ? window.cbIcon(meaning, size) : '';
+    }
+
+    function iconSlotFor(meaning, size) {
+      var slot = makeIconSlot();
+      setIcon(slot, meaning, size);
+      return slot;
+    }
+
+    // A button with an optional leading icon slot. The label sits in its own span, so the button's text is the label.
+    function makeButton(label, onClick, className, leading) {
       var button = document.createElement('button');
       button.type = 'button';
-      button.textContent = label;
       button.className = className;
+      if (leading) button.appendChild(leading);
+      var text = document.createElement('span');
+      text.textContent = label;
+      button.appendChild(text);
       button.addEventListener('click', onClick);
       return button;
     }
@@ -1852,9 +1877,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       pickBar.classList.add(UI_CLASS);
       pickLabel = document.createElement('span');
       pickLabel.className = GLOBAL_PREFIX + '-pickbar-label';
-      pickRestButton = makeButton('Rest as recommended', restPicksAsRecommended, GLOBAL_PREFIX + '-pickbar-btn');
-      pickUndoButton = makeButton('Undo', undoPicks, GLOBAL_PREFIX + '-pickbar-btn');
-      pickSendButton = makeButton('Send', sendPicks, GLOBAL_PREFIX + '-pickbar-btn ' + GLOBAL_PREFIX + '-pickbar-send');
+      pickRestButton = makeButton('Rest as recommended', restPicksAsRecommended, GLOBAL_PREFIX + '-pickbar-btn', null);
+      pickUndoButton = makeButton('Undo', undoPicks, GLOBAL_PREFIX + '-pickbar-btn', iconSlotFor('undo', 14));
+      pickSendButton = makeButton('Send', sendPicks, GLOBAL_PREFIX + '-pickbar-btn ' + GLOBAL_PREFIX + '-pickbar-send',
+        iconSlotFor('send', 14));
       pickBar.appendChild(pickLabel);
       pickBar.appendChild(pickRestButton);
       pickBar.appendChild(pickUndoButton);
@@ -1869,7 +1895,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       row.className = GLOBAL_PREFIX + '-picks';
       row.classList.add(UI_CLASS);
       record.options.forEach(function(option, index) {
-        var button = makeButton(option.name, function() { togglePick(record, index); }, GLOBAL_PREFIX + '-pick');
+        option.mark = makeIconSlot();
+        var button = makeButton(option.name, function() { togglePick(record, index); }, GLOBAL_PREFIX + '-pick',
+          option.mark);
         option.button = button;
         row.appendChild(button);
       });

@@ -59,4 +59,21 @@ function runStaticModules(context, files) {
   }
 }
 
-module.exports = {readStatic, readPackageStatic, indexScriptPaths, chatModules: () => scopedModules('chat/'), sidebarModules: () => scopedModules('sidebar/'), runStaticModules};
+// The icon table the server embeds as window.CB_ICON_TABLE: each meaning's Lucide name, its fill flag when set, and the
+// SVG children of its vendored file. The shapes are the raw inner text, the form the Rust table writes.
+function readIconTable() {
+  const iconDirectory = path.join(__dirname, '..', 'static', 'icons');
+  const meanings = JSON.parse(fs.readFileSync(path.join(iconDirectory, 'icons.json'), 'utf8'));
+  const table = {};
+  for (const [key, definition] of Object.entries(meanings)) {
+    const source = fs.readFileSync(path.join(iconDirectory, 'lucide', `${definition.lucide}.svg`), 'utf8');
+    const match = source.match(/<svg[^>]*>([\s\S]*)<\/svg>/);
+    if (!match) throw new Error(`Lucide ${definition.lucide}.svg has no svg root`);
+    table[key] = definition.fill === true
+      ? {lucide: definition.lucide, fill: true, shapes: match[1]}
+      : {lucide: definition.lucide, shapes: match[1]};
+  }
+  return table;
+}
+
+module.exports = {readStatic, readPackageStatic, readIconTable, indexScriptPaths, chatModules: () => scopedModules('chat/'), sidebarModules: () => scopedModules('sidebar/'), runStaticModules};

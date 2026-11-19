@@ -1988,3 +1988,22 @@ test('a question inside a closed details or a demo is not a pick, and a sitrep p
   assert.equal(findChildByClass(sitrep, '__cbc-picks'), undefined);
   assert.equal(pickBarOf(sitrepBody), undefined);
 });
+
+test('the pick controls draw their icons: a picked option shows done, Send and Undo their own', async () => {
+  const calls = [];
+  const {body, window} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+  });
+  const [fork] = body.children.filter((child) => child.className === 'fork');
+  const keep = pickButton(fork, 'keep');
+  assert.equal(keep.children[0].innerHTML, '', 'an unpicked option draws no icon');
+  clickElement(keep);
+  assert.equal(keep.children[0].innerHTML, window.cbIcon('done', 12), 'a picked option draws the done icon');
+  assert.equal(pickButton(fork, 'drop').children[0].innerHTML, '', 'the other option stays bare');
+  assert.equal(pickBarButton(body, 'Send').children[0].innerHTML, window.cbIcon('send', 14));
+  assert.equal(pickBarButton(body, 'Undo').children[0].innerHTML, window.cbIcon('undo', 14));
+  assert.equal(pickBarButton(body, 'Rest as recommended').children.length, 1, 'Rest draws no icon');
+  assert.equal(pickButton(fork, 'keep').textContent, 'keep', 'the icon leaves the label as the button text');
+});

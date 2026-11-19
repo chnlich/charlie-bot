@@ -21,11 +21,14 @@ const path = require('node:path');
 const {spawn} = require('node:child_process');
 const test = require('node:test');
 
+const {readIconTable} = require('./read_static');
+
 const WEB_DIR = path.join(__dirname, '..');
 const REPO_DIR = path.join(WEB_DIR, '..');
 const TEMPLATE_PATH = path.join(REPO_DIR, 'prompts', 'plan_template.html');
 const FIXTURE_PATH = path.join(REPO_DIR, 'rust', 'crates', 'features', 'artifacts', 'tests', 'data',
   'plan_template_forks.json');
+const ICON_PARITY_PATH = path.join(WEB_DIR, 'tests', 'icons_parity.json');
 const OWNER = 'owner-session';
 const VIEWER = 'viewer-session';
 const PAGE_PATH = `/sessions/${OWNER}/artifacts/plan_picks.html`;
@@ -37,6 +40,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function serve(sent) {
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   const tags = `<script>window.__cbcServerSessionId=${JSON.stringify(OWNER)};</script>\n` +
+    `<script>window.CB_ICON_TABLE = ${JSON.stringify(readIconTable())};</script>\n` +
+    '<script src="/static/js/icons.js"></script>\n' +
     '<script src="/static/js/comment_post.js"></script>\n' +
     '<script src="/static/features/artifacts/artifact-comments.js"></script>';
   const page = template.replace('</body>', `${tags}\n</body>`);
@@ -54,6 +59,7 @@ function serve(sent) {
       return;
     }
     const statics = {
+      '/static/js/icons.js': path.join(WEB_DIR, 'static', 'js', 'icons.js'),
       '/static/js/comment_post.js': path.join(WEB_DIR, 'static', 'js', 'comment_post.js'),
       '/static/features/artifacts/artifact-comments.js':
         path.join(WEB_DIR, 'features', 'artifacts', 'static', 'artifact-comments.js'),
@@ -140,6 +146,13 @@ async function withPlanPage(check) {
   }
 }
 
+test('the icon table the page embeds is the Rust table for the parity keys', () => {
+  const parity = JSON.parse(fs.readFileSync(ICON_PARITY_PATH, 'utf8')).script;
+  const expected = JSON.parse(parity.replace(/^window\.CB_ICON_TABLE = /, '').replace(/;\n$/, ''));
+  const table = readIconTable();
+  for (const key of Object.keys(expected)) assert.deepEqual(table[key], expected[key], `icon ${key}`);
+});
+
 test('the browser parser reads the shared fixture and offers a button per option, no text box', async () => {
   await withPlanPage(async (page) => {
     const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
@@ -156,6 +169,10 @@ test('Send posts one message to the page owner after the undo window, option tex
   await withPlanPage(async (page, sent) => {
     const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
     await page.evaluate('document.querySelector(".__cbc-pick").click()');
+    assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-pick svg").length'), 1,
+      'the picked option draws the done icon');
+    assert.equal(await page.evaluate('document.querySelector(".__cbc-pickbar-send svg") !== null'), true,
+      'Send draws its icon');
     await page.evaluate('document.querySelector(".__cbc-pickbar-send").click()');
     await sleep(SEND_WAIT_MS);
 
@@ -175,7 +192,7 @@ test('Undo inside the undo window posts nothing', async () => {
     await page.evaluate('document.querySelector(".__cbc-pick").click()');
     await page.evaluate('document.querySelector(".__cbc-pickbar-send").click()');
     await page.evaluate(
-      'Array.from(document.querySelectorAll(".__cbc-pickbar-btn")).find((button) => button.textContent === "Undo").click()');
+      'Array.from(document.querySelectorAll(".__cbc-pickbar-btn")).find((button) => button.textContent.trim() === "Undo").click()');
     await sleep(SEND_WAIT_MS);
 
     assert.deepEqual(sent, []);

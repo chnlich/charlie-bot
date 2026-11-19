@@ -7,11 +7,14 @@
 
 const vm = require('node:vm');
 
-const { readStatic, readPackageStatic } = require('./read_static');
+const { readStatic, readPackageStatic, readIconTable } = require('./read_static');
 const { makeElement } = require('./artifact_comments_dom_stub');
 
 const ARTIFACT_COMMENTS_JS = readPackageStatic('features', 'artifacts', 'artifact-comments.js');
 const COMMENT_POST_JS = readStatic('comment_post.js');
+const ICONS_JS = readStatic('icons.js');
+// The table the server embeds ahead of icons.js in every artifact page.
+const ICON_TABLE = readIconTable();
 
 function loadArtifactCommentsContext(opts = {}) {
   const listeners = [];
@@ -86,6 +89,8 @@ function loadArtifactCommentsContext(opts = {}) {
     context.sessionStorage = opts.sessionStorage;
   }
   vm.createContext(context);
+  window.CB_ICON_TABLE = ICON_TABLE;
+  vm.runInContext(ICONS_JS, context, {filename: 'icons.js'});
   vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
   return {context, window, head, body, documentElement, listeners};

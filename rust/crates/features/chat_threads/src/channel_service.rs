@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_registry::FeatureContext;
-use charliebot_registry::wiring::{Phase, Service, ServiceContext};
+use charliebot_registry::wiring::{Phase, Service, ServiceContext, cancel_and_wait};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -111,21 +111,13 @@ impl<L: ChannelListener> ChannelService<L> {
   async fn stop_tasks(&self) -> anyhow::Result<()> {
     let listener = self.listener_task.lock().expect("the listener task slot is never poisoned").take();
     let backfill = self.backfill_task.lock().expect("the backfill task slot is never poisoned").take();
-    cancel_and_wait(listener).await?;
-    cancel_and_wait(backfill).await
-  }
-}
-
-/// Cancel one task and wait for it. A task that stopped by cancellation is the expected end; a panic is an error.
-async fn cancel_and_wait(task: Option<JoinHandle<()>>) -> anyhow::Result<()> {
-  let Some(task) = task else {
-    return Ok(());
-  };
-  task.abort();
-  match task.await {
-    Ok(()) => Ok(()),
-    Err(error) if error.is_cancelled() => Ok(()),
-    Err(error) => Err(error.into()),
+    if let Some(task) = listener {
+      cancel_and_wait(task).await?;
+    }
+    if let Some(task) = backfill {
+      cancel_and_wait(task).await?;
+    }
+    Ok(())
   }
 }
 

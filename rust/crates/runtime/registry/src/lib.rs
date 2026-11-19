@@ -24,6 +24,7 @@ pub mod registry;
 mod render_binding;
 pub mod route_claims;
 pub mod sequence;
+mod service_task;
 pub mod sidebar;
 mod startup_stop;
 pub mod startup_timing;

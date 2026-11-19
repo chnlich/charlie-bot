@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::context::StartupStop;
-use charliebot_registry::wiring::{Phase, Service, ServiceContext};
+use charliebot_registry::wiring::{Phase, Service, ServiceContext, cancel_and_wait};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -54,12 +54,7 @@ impl Service for HostAuthPoller {
       let Some(task) = task else {
         return Ok(());
       };
-      task.abort();
-      match task.await {
-        Ok(()) => {}
-        Err(error) if error.is_cancelled() => {}
-        Err(error) => return Err(error.into()),
-      }
+      cancel_and_wait(task).await?;
       tracing::info!("host_auth_poller_stopped");
       // Also end every live browser login after the poller stops.
       browser_login::stop_all().await;

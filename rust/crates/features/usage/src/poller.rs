@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::usage::QuotaAccount;
-use charliebot_registry::wiring::{Phase, Service, ServiceContext};
+use charliebot_registry::wiring::{Phase, Service, ServiceContext, cancel_and_wait};
 use charliebot_store::SIDEBAR_CHANNEL;
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -46,12 +46,7 @@ impl Service for ExtUsagePoller {
       let Some(task) = task else {
         return Ok(());
       };
-      task.abort();
-      match task.await {
-        Ok(()) => {}
-        Err(error) if error.is_cancelled() => {}
-        Err(error) => return Err(error.into()),
-      }
+      cancel_and_wait(task).await?;
       tracing::info!("ext_usage_poller_stopped");
       Ok(())
     })

@@ -1,5 +1,5 @@
-//! The value helpers the codex code reads: `text_of`, `object_or_empty` and `count_or_zero`, beside `splitlines` and
-//! `is_truthy`, each re-exported from its one owner.
+//! The value helpers the codex code reads: `text_of`, `object_or_empty` and `count_or_zero`, defined here, and
+//! `splitlines` and `is_truthy`, each re-exported from its one owner.
 
 use std::sync::LazyLock;
 

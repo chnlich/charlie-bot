@@ -17,7 +17,7 @@ use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::text_repr;
 use charliebot_improve::command::{active_lock_path_in, loop_dir_in, read_active_lock_loop_id, read_loop_controller};
 use charliebot_store::layout;
-use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
+use charliebot_store::run_records::{ENDED_AT_FIELD, RUN_METADATA_NAME, STARTED_AT_FIELD, read_run_metadata};
 use regex::Regex;
 use serde_json::Value;
 
@@ -61,7 +61,7 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
         continue;
       }
       let run = read_run_metadata(&metadata).map_err(|error| failed(metadata_read_failure(&metadata, error)))?;
-      if matches!(run.get("ended_at"), Some(value) if !value.is_null()) {
+      if matches!(run.get(ENDED_AT_FIELD), Some(value) if !value.is_null()) {
         continue;
       }
       let Some((pid, pid_start, backend)) = live_run(&run, boot).map_err(failed)? else {
@@ -155,7 +155,7 @@ fn live_run(run: &Value, boot: i64) -> Result<Option<(u32, String, Value)>> {
   let (Some(pid), Some(pid_start), Some(started_at)) = (
     run.get("pid").and_then(Value::as_u64),
     run.get(PID_START_FIELD).and_then(Value::as_str),
-    run.get("started_at").and_then(Value::as_str),
+    run.get(STARTED_AT_FIELD).and_then(Value::as_str),
   ) else {
     return Ok(None);
   };

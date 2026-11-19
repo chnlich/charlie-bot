@@ -55,6 +55,12 @@ pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
 /// The run metadata file's field naming the session's native (backend) session id. A reader of the file, such as the
 /// usage capture scan, takes the name from here.
 pub const NATIVE_SESSION_ID_FIELD: &str = "native_session_id";
+/// The run metadata file's field naming the run's start time. The writers of the file, and the usage capture scan that
+/// dates a run's record by it, take the name from here.
+pub const STARTED_AT_FIELD: &str = "started_at";
+/// The run metadata file's field naming the run's end time, null until the run ends. A reader of the file, such as
+/// the switch helper's live-run scan, takes the name from here.
+pub const ENDED_AT_FIELD: &str = "ended_at";
 
 // The `record_observation` field names. The task side sends them, and this crate validates and applies them, so the
 // writer and the validator match these names instead of spelling them.

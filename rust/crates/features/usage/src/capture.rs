@@ -18,7 +18,9 @@ use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, read_metadata_object};
 use charliebot_store::run_logs as run_log_files;
-use charliebot_store::run_records::{NATIVE_SESSION_ID_FIELD, RAW_LOG_NAME, RUN_EVENTS_NAME, RUN_METADATA_NAME};
+use charliebot_store::run_records::{
+  NATIVE_SESSION_ID_FIELD, RAW_LOG_NAME, RUN_EVENTS_NAME, RUN_METADATA_NAME, STARTED_AT_FIELD,
+};
 use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value};
 
@@ -508,7 +510,7 @@ fn run_record(
     source: CHARLIE_BOT_SOURCE.to_string(),
     model,
     account: backend.to_string(),
-    ts: text_value(metadata, "started_at")?,
+    ts: text_value(metadata, STARTED_AT_FIELD)?,
     in_fresh,
     cache_write,
     cache_read,

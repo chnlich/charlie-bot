@@ -18,9 +18,9 @@ use charliebot_store::metadata::{
   REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
 };
 use charliebot_store::run_records::{
-  OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
+  ENDED_AT_FIELD, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
   OBSERVATION_NATIVE_SESSION_ID, OBSERVATION_PROMPT_SNAPSHOT_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_REPO_PATH,
-  OBSERVATION_RESULT_REF, OBSERVATION_WORKTREE_PATH, RAW_LOG_NAME, RUN_METADATA_NAME, RunKind,
+  OBSERVATION_RESULT_REF, OBSERVATION_WORKTREE_PATH, RAW_LOG_NAME, RUN_METADATA_NAME, RunKind, STARTED_AT_FIELD,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -200,8 +200,8 @@ fn run_record(run: RunRecord) -> Value {
     (OBSERVATION_NATIVE_SESSION_ID): null,
     "pid": run.pid,
     (PID_START_FIELD): "12345",
-    "started_at": format!("{}Z", run.started_at),
-    "ended_at": run.ended_at.as_ref().map(|at| format!("{at}Z")),
+    (STARTED_AT_FIELD): format!("{}Z", run.started_at),
+    (ENDED_AT_FIELD): run.ended_at.as_ref().map(|at| format!("{at}Z")),
     "exit_code": run.ended_at.as_ref().map(|_| 0),
     (OBSERVATION_REPO_PATH): null,
     (OBSERVATION_BASE_BRANCH): null,
@@ -380,7 +380,7 @@ pub fn attach_live_run(sessions: &Path, session_id: &str, run_id: &str, pid: u32
   let mut record: Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
   record["pid"] = json!(pid);
   record[PID_START_FIELD] = json!(pid_start);
-  record["started_at"] = json!(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
+  record[STARTED_AT_FIELD] = json!(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
   write_json(&path, &record)
 }
 
@@ -396,7 +396,7 @@ pub fn unended_live_runs(sessions: &Path, live_runs_path: &Path) -> Result<usize
     let path = record_path(sessions, run.session_id, run.run_id);
     let record: Value =
       serde_json::from_str(&fs::read_to_string(&path)?).with_context(|| format!("{} is not JSON", path.display()))?;
-    if record["ended_at"].is_null() {
+    if record[ENDED_AT_FIELD].is_null() {
       unended += 1;
     }
   }

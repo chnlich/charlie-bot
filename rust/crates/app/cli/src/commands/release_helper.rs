@@ -1104,8 +1104,8 @@ fn seed_run(args: &[String]) -> Result<i32, String> {
     "backend": backend,
     "pid": pid,
     (proc_identity::PID_START_FIELD): pid_start,
-    "started_at": started_at,
-    "ended_at": Value::Null,
+    (run_records::STARTED_AT_FIELD): started_at,
+    (run_records::ENDED_AT_FIELD): Value::Null,
   });
   let metadata = run_dir.join(run_records::RUN_METADATA_NAME);
   run_records::write_run_metadata(&metadata, &record, &text_repr::DEFAULT_JSON)

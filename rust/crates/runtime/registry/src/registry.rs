@@ -1894,15 +1894,17 @@ pub trait TurnContribution: Send + Sync {
     None
   }
 
-  /// Shows a turn-end check's notice to the user of the session `session_id`, after the check passed with it. `turn` is
-  /// the turn's events as the check read them. A failed delivery returns its error, and the check records that error.
+  /// Attaches a turn-end check's notice, which the check passed with, to a message of the turn `turn` in the session
+  /// `session_id`. `turn` is the turn's events as the check read them. Resolves to `true` once the notice is attached,
+  /// and to `false` when the turn has no message to attach it to; the runner then posts the notice itself. A failed
+  /// delivery returns its error, and the check records that error.
   fn show_turn_notice<'a>(
     &'a self,
     _features: &'a Arc<FeatureContext>,
     _session_id: &'a str,
     _turn: &'a [Value],
     _message: &'a str,
-  ) -> BoxFuture<'a, anyhow::Result<()>> {
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async { Err(anyhow::anyhow!("this contribution owns no turn-end notices")) })
   }
 

@@ -50,7 +50,7 @@ impl TurnContribution for FeishuTurnContribution {
     session_id: &'a str,
     turn: &'a [Value],
     message: &'a str,
-  ) -> BoxFuture<'a, anyhow::Result<()>> {
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(adapter::show_turn_notice(features, session_id, turn, message))
   }
 

@@ -50,7 +50,7 @@ impl TurnContribution for DiscordTurnContribution {
     session_id: &'a str,
     turn: &'a [Value],
     message: &'a str,
-  ) -> BoxFuture<'a, anyhow::Result<()>> {
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(discord_listener::show_turn_notice(features, session_id, turn, message))
   }
 

@@ -115,15 +115,20 @@ fn unanswered_user_messages(turn: &[Value]) -> anyhow::Result<Vec<(String, Strin
 }
 
 /// Shows the no-reply notice `message` for each user message of the turn that no web reply answers, then marks the
-/// session unread. A message that already has its notice gets none, so a retried delivery adds nothing.
+/// session unread. A message that already has its notice gets none, so a retried delivery adds nothing. A turn with no
+/// such message attaches nothing and resolves to `false`: the turn-end runner then posts the notice itself.
 pub async fn show_notice(
   features: &Arc<FeatureContext>,
   session_id: &str,
   turn: &[Value],
   message: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
+  let unanswered = unanswered_user_messages(turn)?;
+  if unanswered.is_empty() {
+    return Ok(false);
+  }
   let loaded = reply::load_events(features, session_id).await?;
-  for (user_id, _) in unanswered_user_messages(turn)? {
+  for (user_id, _) in unanswered {
     if reply::noticed(loaded.as_slice(), &user_id) {
       continue;
     }
@@ -140,7 +145,7 @@ pub async fn show_notice(
       .await?;
   }
   features.store.mark_unread(session_id).await?;
-  Ok(())
+  Ok(true)
 }
 
 /// Whether the session's newest run left a close request pending. A request that a
@@ -166,6 +171,7 @@ pub(crate) async fn close_request_pending(store: &Arc<Store>, session_id: &str) 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_support::Home;
 
   fn input(kind: Option<&str>, exit_code: i64, turn: Vec<Value>) -> TurnInput {
     TurnInput {
@@ -251,5 +257,19 @@ mod tests {
     closing.push(json!({"type": TASK_CLOSE_REQUESTED, "id": "close-1"}));
     assert_eq!(check_web_reply(&input(Some("web"), 0, closing.clone())).unwrap(), CheckResult::Pass);
     assert_eq!(check_web_status(&input(Some("web"), 0, closing)), CheckResult::Pass);
+  }
+
+  #[tokio::test]
+  async fn a_notice_attaches_to_an_unanswered_message_or_reports_that_none_is_there() {
+    let home = Home::new();
+    let session_id = home.manager("session", None).await;
+    let turn = vec![user("u1", "the question", "2026-01-01T00:00:01Z")];
+
+    assert!(show_notice(&home.features, &session_id, &turn, "no reply").await.unwrap());
+    assert_eq!(home.events(&session_id).iter().filter(|event| event["type"] == WEB_REPLY_NOTICE).count(), 1);
+
+    // A turn without an unanswered user message attaches nothing, so the runner posts the notice itself.
+    assert!(!show_notice(&home.features, &session_id, &[], "no reply").await.unwrap());
+    assert_eq!(home.events(&session_id).iter().filter(|event| event["type"] == WEB_REPLY_NOTICE).count(), 1);
   }
 }

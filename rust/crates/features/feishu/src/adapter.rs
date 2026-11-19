@@ -396,13 +396,14 @@ pub fn api_failure(error: anyhow::Error) -> thread_entry::ThreadReplyError {
   }
 }
 
-/// Shows a turn-end notice in the Feishu thread of the turn's newest summon (`show_turn_notice`).
+/// Shows a turn-end notice in the Feishu thread of the turn's newest summon (`show_turn_notice`). Resolves to `false`
+/// when the turn received no summon.
 pub async fn show_turn_notice(
   features: &Arc<FeatureContext>,
   session_id: &str,
   turn: &[Value],
   message: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
   let bot = Bot::new(Arc::clone(features), BASE_URL);
   Ok(thread_entry::show_turn_notice(&bot.adapter(), features, session_id, turn, message).await?)
 }

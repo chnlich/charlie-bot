@@ -52,12 +52,11 @@ impl TurnContribution for SlackTurnContribution {
     session_id: &'a str,
     turn: &'a [Value],
     message: &'a str,
-  ) -> BoxFuture<'a, anyhow::Result<()>> {
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async move {
       let adapter: Arc<dyn ThreadAdapter> =
         Arc::new(crate::slack_listener::SlackThreadAdapter::lazy(Arc::clone(features)));
-      thread_entry::show_turn_notice(&adapter, features, session_id, turn, message).await?;
-      Ok(())
+      Ok(thread_entry::show_turn_notice(&adapter, features, session_id, turn, message).await?)
     })
   }
 

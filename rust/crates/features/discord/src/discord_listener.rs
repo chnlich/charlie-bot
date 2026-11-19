@@ -417,13 +417,14 @@ fn required_text<'a>(message: &'a Value, field: &str) -> anyhow::Result<&'a str>
   message.get(field).and_then(Value::as_str).with_context(|| format!("Discord message has no string {field}"))
 }
 
-/// Shows a turn-end notice in the Discord thread of the turn's newest summon (`show_turn_notice`).
+/// Shows a turn-end notice in the Discord thread of the turn's newest summon (`show_turn_notice`). Resolves to `false`
+/// when the turn received no summon.
 pub async fn show_turn_notice(
   features: &Arc<FeatureContext>,
   session_id: &str,
   turn: &[Value],
   message: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
   let bot = Bot::new(Arc::clone(features), crate::discord_client::BASE_URL);
   Ok(thread_entry::show_turn_notice(&adapter(&bot), features, session_id, turn, message).await?)
 }

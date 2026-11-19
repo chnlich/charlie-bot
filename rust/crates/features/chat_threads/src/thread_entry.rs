@@ -1326,23 +1326,23 @@ fn blocked_thread_check(event: &Value) -> bool {
 
 /// Shows the no-reply notice `message` in the thread of the turn's newest summon: posts it with retry, then records it.
 /// A post that fails returns its error, and the checkpoint records that error. A notice already recorded is not posted
-/// again.
+/// again. Resolves to `false`, posting nothing, when the turn received no summon: no thread holds the notice.
 pub async fn show_turn_notice(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
   session_id: &str,
   turn: &[Value],
   message: &str,
-) -> Result<(), ThreadReplyError> {
+) -> Result<bool, ThreadReplyError> {
   let platform = adapter.platform();
   let _session_guard = session_lock_for(session_id).lock_owned().await;
   let Some((receipt, block)) = newest_summon(platform, turn).map_err(ThreadReplyError::failure)? else {
-    return Err(ThreadReplyError::failure("the turn received no summon to notice"));
+    return Ok(false);
   };
   let summon_id = receipt.input_event_id.clone();
   let chat_events = load_chat_events(features, session_id).await?;
   if noticed(platform, &chat_events, &summon_id) {
-    return Ok(());
+    return Ok(true);
   }
   let summon = event_by_id(turn, &summon_id).expect("the newest summon is in the turn");
   let created_after = summon.get("timestamp").and_then(Value::as_str).expect("a summon event has a timestamp");
@@ -1363,7 +1363,7 @@ pub async fn show_turn_notice(
   let event = format!("{}_reply_notice", platform.name);
   let thread = adapter.log_fields(&block);
   tracing::info!(%event, session = session_id, thread = %thread, summon_id = %summon_id);
-  Ok(())
+  Ok(true)
 }
 
 /// Boot pass over every thread-bound session; returns how many lost-summon notices it posted (`backfill_lost_summons`).

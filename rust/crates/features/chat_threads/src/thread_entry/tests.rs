@@ -954,6 +954,19 @@ async fn a_notice_posts_once_and_is_recorded_after_its_post() {
   assert_eq!(notices, 1);
 }
 
+#[tokio::test]
+async fn a_notice_on_a_turn_without_a_summon_attaches_to_nothing() {
+  let home = Home::new();
+  home.thread_session("s1", origin()).await;
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+
+  let attached = show_turn_notice(&dyn_adapter, &home.features, "s1", &[], NO_REPLY_NOTICE).await.unwrap();
+
+  assert!(!attached);
+  assert!(adapter.posts.lock().unwrap().is_empty());
+}
+
 // The test-support feature supplies the retry-delay override this case needs to fail a post without waiting.
 #[cfg(feature = "test-support")]
 #[tokio::test]

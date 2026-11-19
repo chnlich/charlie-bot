@@ -2,9 +2,10 @@
 //!
 //! The list is `hooks/turn_end.json` in the served repo: an array of `{name, command}`. Each command runs under `sh -c`
 //! with one shared JSON object on stdin (`TurnInput`). Its result follows Claude Code's Stop hooks: exit 0 passes, a
-//! stdout JSON object with `decision: "block"` and a `reason` blocks, and a `systemMessage` shows the user a notice;
-//! exit 2 blocks with stderr as the reason. Any other exit, a timeout, or a stdout that is not a JSON object is an
-//! `error`: it is shown, and the turn ends without continuing.
+//! stdout JSON object with `decision: "block"` and a `reason` blocks, and a `systemMessage` is the entry's notice;
+//! exit 2 blocks with stderr as the reason. The session's turn contribution attaches a notice to a message of the turn
+//! when the turn has one; otherwise the runner posts it as an agent message from the entry's name. Any other exit, a
+//! timeout, or a stdout that is not a JSON object is an `error`: it is shown, and the turn ends without continuing.
 //!
 //! A checkpoint runs every entry in list order and writes one `turn_hooks` event with all the results. Each block's
 //! reason is shown in the session, and the same conversation continues with the reasons, at most `MAX_CONTINUATIONS`
@@ -18,8 +19,11 @@ use std::time::Duration;
 use anyhow::Context;
 use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_core::RepoRoot;
-use charliebot_core::event_types::{AGENT_MESSAGE, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID, WEB_STATUS};
+use charliebot_core::event_types::{
+  AGENT_MESSAGE, FROM_SESSION_NAME, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID, WEB_STATUS,
+};
 use charliebot_registry::FeatureContext;
+use charliebot_registry::turn::TurnContribution;
 use charliebot_store::MessageProvenance;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::reply_order::{self, Receipt};
@@ -311,6 +315,41 @@ async fn show_message(
   Ok(persisted.to_value())
 }
 
+/// Delivers a passed check's notice. The session's turn contribution attaches it to a message of the turn when the turn
+/// has one, and a session no contribution owns has none. Otherwise the runner posts it from the entry's name and marks
+/// the session unread. A turn that already holds the notice gets no second one, so a replayed checkpoint adds nothing.
+async fn deliver_notice(
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  owner: Option<&Arc<dyn TurnContribution>>,
+  turn: &[Value],
+  name: &str,
+  message: &str,
+) -> anyhow::Result<()> {
+  if let Some(contribution) = owner
+    && contribution.show_turn_notice(features, session_id, turn, message).await?
+  {
+    return Ok(());
+  }
+  if notice_posted(turn, name, message) {
+    return Ok(());
+  }
+  show_message(features, session_id, name, message, None).await?;
+  features.store.mark_unread(session_id).await?;
+  Ok(())
+}
+
+/// Whether the turn already holds the runner's notice `message` from the entry `name`. A block's reason carries its
+/// record's id and the notice carries none, so a block never counts as the notice.
+fn notice_posted(turn: &[Value], name: &str, message: &str) -> bool {
+  turn.iter().any(|event| {
+    event["type"] == AGENT_MESSAGE
+      && event[FROM_SESSION_NAME] == name
+      && event["content"] == message
+      && event[TURN_HOOKS_ID].is_null()
+  })
+}
+
 /// The turn-end checkpoint of the running turn of `session_id`. `has_conversation` says whether the turn's conversation
 /// id is known: a continuation resumes it, and without one the turn ends with an error.
 pub(crate) async fn checkpoint(
@@ -336,12 +375,10 @@ pub(crate) async fn checkpoint(
     turn: log.turn.clone(),
   };
   let mut ran = run_entries(&entries, &input, checkout.path(), ENTRY_TIMEOUT).await?;
+  let contribution = owner.as_ref().map(|(_, contribution)| contribution);
   for run in &mut ran {
     let Outcome::Pass { notice: Some(message) } = &run.outcome else { continue };
-    let delivered = match &owner {
-      Some((_, contribution)) => contribution.show_turn_notice(features, session_id, &log.turn, message).await,
-      None => Err(anyhow::anyhow!("no contribution owns the turn-end checks of this session")),
-    };
+    let delivered = deliver_notice(features, session_id, contribution, &log.turn, &run.name, message).await;
     if let Err(error) = delivered {
       run.outcome = Outcome::Error { message: format!("notice delivery failed: {error:#}") };
     }
@@ -438,7 +475,9 @@ fn result_json(run: &Ran) -> Value {
 
 #[cfg(test)]
 mod tests {
-  use charliebot_core::event_types::ERROR;
+  use charliebot_core::event_types::{ERROR, SCHEDULED_TRIGGER, USER};
+  use charliebot_registry::{Registry, RegistryError};
+  use futures_util::future::BoxFuture;
 
   use super::*;
 
@@ -600,9 +639,47 @@ mod tests {
     "grep -q continuation_ran && exit 0; printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'";
   const GATE_ALWAYS_BLOCKS: &str = "printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'";
 
-  /// A manager session in a fresh checkout at `home` whose turn-end list is `hooks`.
+  /// The event that `AttachingTurns` persists for each notice it attaches.
+  const ATTACHED_NOTICE: &str = "test_attached_notice";
+
+  /// A turn contribution that owns every manager session's turn-end checks, as the web contribution does for web
+  /// sessions. It attaches a notice when the turn holds a user message, and has no message to attach to otherwise.
+  struct AttachingTurns;
+
+  impl TurnContribution for AttachingTurns {
+    fn turn_kind(&self, _meta: &SessionMetadata) -> Option<&'static str> {
+      Some("web")
+    }
+
+    fn show_turn_notice<'a>(
+      &'a self,
+      features: &'a Arc<FeatureContext>,
+      session_id: &'a str,
+      turn: &'a [Value],
+      message: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<bool>> {
+      Box::pin(async move {
+        if !turn.iter().any(|event| event["type"] == USER) {
+          return Ok(false);
+        }
+        features.store.persist_and_broadcast(session_id, json!({"type": ATTACHED_NOTICE, "content": message})).await?;
+        Ok(true)
+      })
+    }
+  }
+
+  fn register_attaching_turns(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.turn_contribution("attaching-turns", Arc::new(AttachingTurns))
+  }
+
+  /// A manager session in a fresh checkout at `home` whose turn-end list is `hooks`. Its turns are owned by
+  /// `AttachingTurns`.
   async fn checkpoint_session(home: &Path, hooks: &str, request_id: &str) -> (Arc<FeatureContext>, SessionMetadata) {
-    let features = crate::test_fixtures::claude_features(home, &crate::test_fixtures::claude_config(None));
+    let features = crate::test_fixtures::features_with_packages(
+      home,
+      &crate::test_fixtures::claude_config(None),
+      &[("backends.claude_code", charliebot_claude_code::register), ("test.attaching_turns", register_attaching_turns)],
+    );
     crate::test_fixtures::insert_checkout(&features.startup, home);
     std::fs::write(home.join(HOOKS_FILE), hooks).unwrap();
     let meta = crate::test_fixtures::manager_session(&features, request_id, "fable", None, "cc-synthetic").await;
@@ -712,5 +789,52 @@ mod tests {
       .map(|event| event["from_session_name"].as_str().unwrap())
       .collect();
     assert_eq!(senders, ["test-gate", "test-gate-two", "web-status"]);
+  }
+
+  /// A gate that blocks until the turn holds a continuation's event, then passes with the notice `needs a look`.
+  const GATE_NOTICES_AFTER_CONTINUATION: &str = concat!(
+    "grep -q continuation_ran && { printf '{\"systemMessage\":\"needs a look\"}'; exit 0; }; ",
+    "printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'",
+  );
+
+  #[tokio::test]
+  async fn a_trigger_turn_notice_is_posted_once_under_the_entry_name() {
+    let home = tempfile::tempdir().unwrap();
+    let (features, meta) =
+      checkpoint_session(home.path(), &gate_list(GATE_NOTICES_AFTER_CONTINUATION), "turn-hooks-trigger-notice").await;
+    let session_id = &meta.id;
+    append(&features, session_id, json!({"type": SCHEDULED_TRIGGER, "id": "t1", "content": "wake"})).await;
+
+    assert!(matches!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    append(&features, session_id, json!({"type": "continuation_ran", "id": "c1"})).await;
+    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    // A restart before the turn ends replays the check: the turn already holds its notice, so none is posted again.
+    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+
+    let turn = turn_events(&features, session_id);
+    assert_eq!(count_of(&turn, ATTACHED_NOTICE), 0);
+    let notices: Vec<&Value> =
+      turn.iter().filter(|event| event["type"] == AGENT_MESSAGE && event["content"] == "needs a look").collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["from_session_name"], "gate");
+  }
+
+  #[tokio::test]
+  async fn a_user_message_turn_notice_attaches_through_the_contribution_and_posts_none() {
+    let home = tempfile::tempdir().unwrap();
+    let (features, meta) =
+      checkpoint_session(home.path(), &gate_list(GATE_NOTICES_AFTER_CONTINUATION), "turn-hooks-user-notice").await;
+    let session_id = &meta.id;
+    append(&features, session_id, json!({"type": USER, "id": "u1", "content": "the question"})).await;
+
+    assert!(matches!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    append(&features, session_id, json!({"type": "continuation_ran", "id": "c1"})).await;
+    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+
+    let turn = turn_events(&features, session_id);
+    assert_eq!(count_of(&turn, ATTACHED_NOTICE), 1);
+    let attached = turn.iter().find(|event| event["type"] == ATTACHED_NOTICE).unwrap();
+    assert_eq!(attached["content"], "needs a look");
+    assert!(turn.iter().all(|event| event["type"] != AGENT_MESSAGE || event["content"] != "needs a look"));
   }
 }

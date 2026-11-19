@@ -56,7 +56,7 @@ impl TurnContribution for WebReplyTurnContribution {
     session_id: &'a str,
     turn: &'a [Value],
     message: &'a str,
-  ) -> BoxFuture<'a, anyhow::Result<()>> {
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(audit::show_notice(features, session_id, turn, message))
   }
 

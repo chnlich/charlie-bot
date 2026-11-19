@@ -1041,6 +1041,81 @@ async fn test_a_resumed_worker_run_rejected_on_main_relays_to_ext1_and_completes
   Ok(())
 }
 
+/// Re-attaches a run whose task names an improve host to its live process. No login on this machine holds the run's
+/// conversation, because the improve host keeps the transcript. The held process wrote its assistant text and result
+/// to the raw log and exited, so the follow reads the log to its end. Returns the worker and the count of processes
+/// it spawns.
+fn keyed_reattach(setup: &Setup, root: &Root, option_id: &str) -> anyhow::Result<(Worker, Arc<AtomicUsize>)> {
+  let data = root.path().join("data");
+  fs::create_dir_all(&data)?;
+  let mut raw = String::new();
+  for event in [assistant_text("working"), result()] {
+    raw.push_str(&format!("{}\n", serde_json::to_string(&event)?));
+  }
+  fs::write(data.join(RAW_LOG_NAME), raw)?;
+  let mut spec = setup.spec(root, Some(option_id), None)?;
+  spec.held_native_id = Some(CC_ID.to_string());
+  spec.session_meta.as_mut().context("a task run with a backend option has session metadata")?.task =
+    Some(TaskSpec { improve_host: Some("improve-host".to_string()), ..TaskSpec::default() });
+  let spawns = Arc::new(AtomicUsize::new(0));
+  let counter = Arc::clone(&spawns);
+  let tracked = spec.on_spawned.take().context("a spec tracks its spawns")?;
+  spec.on_spawned = Some(Arc::new(move |thread: ThreadMetadata| {
+    counter.fetch_add(1, Ordering::SeqCst);
+    tracked(thread)
+  }));
+  Ok((setup.worker(spec)?, spawns))
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_keyed_run_reattached_on_pooled_claude_follows_without_placement() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![String::new(), String::new()]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let (task_worker, spawns) = keyed_reattach(&setup, &root, POOLED)?;
+
+  assert_eq!(task_worker.resume(Arc::new(|| false), None).await?, 0);
+  assert_eq!(spawns.load(Ordering::SeqCst), 0, "the run follows its live process and spawns none");
+  assert_eq!(task_worker.account_relays(), 0, "a keyed run cannot relay, so the follow moves no login");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_keyed_run_reattached_on_plain_claude_code_follows_without_placement() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![String::new(), String::new()]);
+  let option = option_yaml("claude-plain", "cc-claude", Some(&scripts.token), None);
+  let config = config_text(&root, &[], &[], &[option])?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let (task_worker, spawns) = keyed_reattach(&setup, &root, "claude-plain")?;
+
+  assert_eq!(task_worker.resume(Arc::new(|| false), None).await?, 0);
+  assert_eq!(spawns.load(Ordering::SeqCst), 0, "the run follows its live process and spawns none");
+  assert_eq!(task_worker.account_relays(), 0, "a keyed run cannot relay, so the follow moves no login");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_keyed_run_reattached_on_codex_follows_without_placement() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  let scripts = Scripts::new(vec![String::new(), String::new()]);
+  let option = option_yaml("codex-keyed", "codex", Some(&scripts.token), None);
+  let config = config_text(&root, &[], &[], &[option])?;
+  let setup = Setup::new(&root, scripted_registry(&Arc::new(ClaudeAccountState::new()))?, &config)?;
+  let (task_worker, spawns) = keyed_reattach(&setup, &root, "codex-keyed")?;
+
+  assert_eq!(task_worker.resume(Arc::new(|| false), None).await?, 0);
+  assert_eq!(spawns.load(Ordering::SeqCst), 0, "the run follows its live process and spawns none");
+  assert_eq!(task_worker.account_relays(), 0, "a keyed run cannot relay, so the follow moves no login");
+  Ok(())
+}
+
 #[tokio::test]
 #[ignore = "integration"]
 async fn test_a_rejection_moves_the_run_to_the_login_with_headroom_and_the_next_run_starts_there() -> anyhow::Result<()>

@@ -270,10 +270,12 @@ impl Worker {
   }
 
   /// Re-attaches to an interrupted run and streams its remaining output, then emits the terminal events (`Worker.resume`).
-  /// The process still running is the run's first process: the launch loop follows it, and a run with a conversation id
-  /// gets its lifecycle's watch, so a rejected login relays the run to another login once that process exits. A run
-  /// with no conversation id follows its process without a watch. `is_alive` judges the process from its pinned
-  /// identity; `on_silence` is the follow's silence recheck.
+  /// The process still running is the run's first process, and the follow reads it to its exit. A run whose task
+  /// names an improve host follows it without placement: that host holds the process's login and conversation, and
+  /// this machine holds neither. Any other run with a conversation id is placed by its lifecycle, which attaches the
+  /// watch that relays a rejected login to another login once the process exits. A run with no conversation id follows
+  /// its process without a watch. `is_alive` judges the process from its pinned identity; `on_silence` is the follow's
+  /// silence recheck.
   pub async fn resume(
     &self,
     is_alive: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -337,7 +339,7 @@ impl Worker {
       spawn: WorkerProcess { worker: self, sink: Arc::clone(&sink), env: self.process_env()?, automatic_retries: 0 },
     };
     match self.backend_option.as_ref() {
-      Some(option) if self.held_native_id.is_some() => {
+      Some(option) if self.held_native_id.is_some() && self.improve_host().is_none() => {
         let lifecycle = self.features.registry.lifecycle_for(&option.backend_type)?;
         let context = self.launch_context(option, lifecycle.as_ref(), &sink)?;
         launch_loop::run_launches(

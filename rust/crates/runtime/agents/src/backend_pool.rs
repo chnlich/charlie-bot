@@ -24,6 +24,7 @@ use tokio::process::{Child, Command};
 
 use crate::backend_availability::BackendAvailability;
 use crate::model_pool::{self, RotationPositions};
+use crate::temporary_unavailable::is_temporary_unavailable_error;
 use charliebot_store::metadata::UtcDateTime;
 
 /// Error substrings that mark a backend as out of quota. The aigw gateway's `402 Insufficient Balance` text is one.
@@ -53,25 +54,6 @@ pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "rate limit",
   "usage limit",
   "budget has been exceeded",
-];
-
-/// Error substrings of a temporary provider or gateway failure, or of a no-output stall. A pool-chosen run that hits
-/// one fails over to the next member. Bare HTTP status digits, which also occur in request ids, and BadRequest or HTTP
-/// 400 text stay out: those are request errors that must fail fast.
-pub const BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS: &[&str] = &[
-  "at capacity",
-  "bad gateway",
-  "badgateway",
-  "internal server error",
-  "internalservererror",
-  "service unavailable",
-  "serviceunavailable",
-  "gateway timeout",
-  "apiconnectionerror",
-  "connection error",
-  "peer closed connection",
-  "no output for",
-  "no session progress for",
 ];
 
 /// Error substrings that mark a member refusing access: Claude Code's authentication-failure marker and the
@@ -390,12 +372,6 @@ fn api_error_status(line: &str) -> Option<&str> {
 /// Return whether a Claude Code `result` event's text marks a spent quota. The caller has checked `is_error`.
 pub fn is_spent_quota_result(event: &Value) -> bool {
   event.get("result").map(text_repr::value_str).is_some_and(|text| is_spent_quota_error(&text))
-}
-
-/// Return whether an error string contains a temporary backend failure substring.
-pub fn is_temporary_unavailable_error(text: &str) -> bool {
-  let lowered = text.to_lowercase();
-  BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS.iter().any(|pattern| lowered.contains(pattern))
 }
 
 /// Return whether a Claude Code `result` event reports a temporary backend failure. A present status decides alone:

@@ -20,6 +20,7 @@ use charliebot_agents::runner::{
   AgentRunner, DEFAULT_CLEANUP_TIMEOUT, DEFAULT_POST_RESULT_TIMEOUT, OnSpawnFn, RunRequest, capture_process_diagnostics,
 };
 use charliebot_agents::runs;
+use charliebot_agents::temporary_unavailable::is_temporary_unavailable_error;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::cursor;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
@@ -1119,7 +1120,7 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
     return Err(QuotaExhaustedError::new(text, None).into());
   }
 
-  if event_type == ET::ERROR && backend_pool::is_temporary_unavailable_error(&message) {
+  if event_type == ET::ERROR && is_temporary_unavailable_error(&message) {
     sink.append(&event)?;
     let text = event.get("message").and_then(Value::as_str).unwrap_or(TEMPORARY_MESSAGE_FALLBACK);
     return Err(QuotaExhaustedError::new(text, None).into());

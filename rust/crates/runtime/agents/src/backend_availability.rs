@@ -20,7 +20,7 @@ use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, UtcOffset};
 
-use crate::backend_pool;
+use crate::temporary_unavailable::is_temporary_unavailable_error;
 
 /// The cooling a member failure that states no reset time records.
 pub const DEFAULT_COOLDOWN: Duration = Duration::minutes(30);
@@ -127,7 +127,7 @@ impl BackendAvailability {
     let pooled = match cfg.get_backend_option(backend_id) {
       Some(option)
         if reason == REASON_QUOTA_ERROR
-          && !backend_pool::is_temporary_unavailable_error(detail)
+          && !is_temporary_unavailable_error(detail)
           && registry.backend_type_of(&option.backend_type).is_some() =>
       {
         registry.lifecycle_for(&option.backend_type)?.quota_outlook(option, cfg)?.map(|outlook| (option, outlook))

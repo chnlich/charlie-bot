@@ -27,8 +27,6 @@ use crate::reply;
 pub const WEB_REPLY_ENTRY: &str = "web-reply";
 /// The entry that checks the turn ran a status set or confirm.
 pub const WEB_STATUS_ENTRY: &str = "web-status";
-/// The sender of the status reminder the `web-status` check shows.
-pub const STATUS_SENDER_NAME: &str = "Session status";
 
 /// The status instruction that ends a status reminder.
 const STATUS_SENTENCES: &str = concat!(

@@ -50,10 +50,6 @@ impl TurnContribution for WebReplyTurnContribution {
     reply::is_web_session(meta).then_some("web")
   }
 
-  fn turn_check_sender(&self, entry: &str) -> &'static str {
-    if entry == audit::WEB_STATUS_ENTRY { audit::STATUS_SENDER_NAME } else { reply::NUDGE_SENDER_NAME }
-  }
-
   fn show_turn_notice<'a>(
     &'a self,
     features: &'a Arc<FeatureContext>,

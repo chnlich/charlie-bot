@@ -20,7 +20,6 @@ use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_core::RepoRoot;
 use charliebot_core::event_types::{AGENT_MESSAGE, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID, WEB_STATUS};
 use charliebot_registry::FeatureContext;
-use charliebot_registry::turn::TurnContribution;
 use charliebot_store::MessageProvenance;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::reply_order::{self, Receipt};
@@ -30,8 +29,6 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// The sender of the messages the server writes itself: a turn-end error, or a continuation that cannot resume.
-const SERVER_SENDER: &str = "CharlieBot";
 /// The file that holds the turn-end hook list, relative to the served repo.
 pub const HOOKS_FILE: &str = "hooks/turn_end.json";
 /// The blocks that continue one turn. The block after them ends the turn with its reason shown.
@@ -326,7 +323,7 @@ pub(crate) async fn checkpoint(
   let log = read_log(features, session_id)?;
   let owner = features.registry.turn_owner(meta);
   if let Some(index) = pending_block(&log.turn) {
-    return resume_block(features, session_id, meta, &log, index, has_conversation).await;
+    return resume_block(features, session_id, &log, index, has_conversation).await;
   }
 
   let checkout = features.startup.require::<RepoRoot>()?;
@@ -365,7 +362,7 @@ pub(crate) async fn checkpoint(
   if !ran.iter().any(|run| matches!(run.outcome, Outcome::Block { .. })) {
     return Ok(Checkpoint::Finish);
   }
-  show_reasons(features, session_id, owner.as_ref().map(|(_, contribution)| contribution), &record_value, 0).await?;
+  show_reasons(features, session_id, &record_value, 0).await?;
   if blocks_before(&log.turn, log.turn.len()) >= MAX_CONTINUATIONS {
     return Ok(Checkpoint::Finish);
   }
@@ -382,7 +379,6 @@ pub(crate) async fn checkpoint(
 async fn resume_block(
   features: &Arc<FeatureContext>,
   session_id: &str,
-  meta: &SessionMetadata,
   log: &SessionLog,
   index: usize,
   has_conversation: bool,
@@ -390,8 +386,7 @@ async fn resume_block(
   let record = &log.turn[index];
   let record_id = record["id"].as_str().context("a turn_hooks record carries its id")?;
   let shown = log.turn[index + 1..].iter().filter(|event| shows_reason_of(event, record_id)).count();
-  let owner = features.registry.turn_owner(meta).map(|(_, contribution)| contribution);
-  show_reasons(features, session_id, owner.as_ref(), record, shown).await?;
+  show_reasons(features, session_id, record, shown).await?;
   if blocks_before(&log.turn, index) >= MAX_CONTINUATIONS {
     return Ok(Checkpoint::Finish);
   }
@@ -402,21 +397,14 @@ async fn resume_block(
   Ok(Checkpoint::Continue(continuation_prompt(record)))
 }
 
-/// Shows the reason of each block in `record` from the `skip`-th on, one agent message per blocked entry, each under the
-/// sender its owner gives that entry.
-async fn show_reasons(
-  features: &FeatureContext,
-  session_id: &str,
-  owner: Option<&Arc<dyn TurnContribution>>,
-  record: &Value,
-  skip: usize,
-) -> anyhow::Result<()> {
+/// Shows the reason of each block in `record` from the `skip`-th on, one agent message per blocked entry. The message's
+/// sender is the entry's name in the hook list, so each entry labels its own blocks.
+async fn show_reasons(features: &FeatureContext, session_id: &str, record: &Value, skip: usize) -> anyhow::Result<()> {
   let record_id = record["id"].as_str().context("a turn_hooks record carries its id")?;
   let blocks = record["results"].as_array().into_iter().flatten().filter(|result| result["result"] == "block");
   for result in blocks.skip(skip) {
-    let name = result["name"].as_str().unwrap_or_default();
-    let sender = owner.map_or(SERVER_SENDER, |contribution| contribution.turn_check_sender(name));
-    show_message(features, session_id, sender, result["reason"].as_str().unwrap_or_default(), Some(record_id)).await?;
+    let name = result["name"].as_str().context("a turn_hooks block carries its entry name")?;
+    show_message(features, session_id, name, result["reason"].as_str().unwrap_or_default(), Some(record_id)).await?;
   }
   Ok(())
 }
@@ -702,5 +690,27 @@ mod tests {
     assert_eq!(count_of(&turn, TURN_HOOKS), 1);
     assert_eq!(count_of(&turn, AGENT_MESSAGE), 1);
     assert_eq!(count_of(&turn, ERROR), 1);
+  }
+
+  #[tokio::test]
+  async fn each_block_of_a_web_session_is_shown_under_its_own_entry_name() {
+    let home = tempfile::tempdir().unwrap();
+    let hooks = json!([
+      {"name": "test-gate", "command": GATE_ALWAYS_BLOCKS},
+      {"name": "test-gate-two", "command": GATE_ALWAYS_BLOCKS},
+      {"name": "web-status", "command": GATE_ALWAYS_BLOCKS},
+    ])
+    .to_string();
+    let (features, meta) = checkpoint_session(home.path(), &hooks, "turn-hooks-sender").await;
+    let session_id = &meta.id;
+
+    assert!(matches!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Continue(_)));
+    let turn = turn_events(&features, session_id);
+    let senders: Vec<&str> = turn
+      .iter()
+      .filter(|event| event["type"] == AGENT_MESSAGE)
+      .map(|event| event["from_session_name"].as_str().unwrap())
+      .collect();
+    assert_eq!(senders, ["test-gate", "test-gate-two", "web-status"]);
   }
 }

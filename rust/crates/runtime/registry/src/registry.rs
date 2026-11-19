@@ -1870,11 +1870,6 @@ pub trait TurnContribution: Send + Sync {
     None
   }
 
-  /// The sender of the message that shows the block of the turn-end check `entry` in this contribution's sessions.
-  fn turn_check_sender(&self, _entry: &str) -> &'static str {
-    "CharlieBot"
-  }
-
   /// Shows a turn-end check's notice to the user of the session `session_id`, after the check passed with it. `turn` is
   /// the turn's events as the check read them. A failed delivery returns its error, and the check records that error.
   fn show_turn_notice<'a>(

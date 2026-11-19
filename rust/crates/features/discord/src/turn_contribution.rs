@@ -44,10 +44,6 @@ impl TurnContribution for DiscordTurnContribution {
     thread_entry::thread_turn_kind(meta, &DISCORD)
   }
 
-  fn turn_check_sender(&self, _entry: &str) -> &'static str {
-    DISCORD.display_name
-  }
-
   fn show_turn_notice<'a>(
     &'a self,
     features: &'a Arc<FeatureContext>,

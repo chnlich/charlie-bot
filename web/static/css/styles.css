@@ -304,10 +304,10 @@ body.resizing { cursor: col-resize; user-select: none; }
    phone, in a 36 px box. The link takes a 24 px box around the glyph and the header's
    bordered-control surface (index.html). The box is the control's only mark, so its border holds the
    3:1 floor. slate-600 draws 2.15:1 on the header's slate-800/50 surface, slate-500 draws 3.42:1 at
-   rest and slate-400 draws 6.34:1 under the pointer. The backend badge beside it keeps slate-600,
-   because it is a label and not a control. No row, strip or label is added: the header's tallest item
-   still sets its height. On a phone, the box with its margins fills the 2.5rem the tab row
-   reserves. */
+   rest and slate-400 draws 6.34:1 under the pointer. The backend badge beside it keeps slate-600 while
+   it holds a label, because a label is not a control; the rule below gives a badge that holds a switch
+   the same floor. No row, strip or label is added: the header's tallest item still sets its height. On
+   a phone, the box with its margins fills the 2.5rem the tab row reserves. */
 main > header > a[title="View JSONL events"] {
   display: inline-flex;
   align-items: center;
@@ -324,6 +324,15 @@ main > header > a[title="View JSONL events"]:hover {
    select takes a 24 px box. The badge's 30 px box holds it without growing the header row. A label
    wider than the badge's bound ellipsizes at its last whole character instead of losing half of one. */
 #backend-badge select { min-height: 24px; max-width: 100%; text-overflow: ellipsis; }
+/* A session whose backend offers more than one member swaps the badge's label for a switch
+   (session-view.js, renderSwitchableBackendBadge). The badge then holds a control, so its box takes the
+   3:1 boundary floor the header's other controls keep: slate-600 draws 2.15:1 on the header's
+   slate-800/50 surface, and slate-500 draws 3.42:1. The switch drops its own slate-600 outline, which
+   draws 1.37:1 on the badge's slate-700 fill, so the badge's one edge marks the control instead of a box
+   inside a box. A badge that holds a label keeps slate-600, because a label is not a control. No row,
+   strip or label is added: the badge keeps its 30 px box and the switch its 24 px one. */
+#backend-badge:has(select) { border-color: #64748b; }
+#backend-badge select { border-color: transparent; }
 @media (max-width: 768px) {
   .input-row { flex-wrap: nowrap; }
   .input-buttons { display: flex; gap: 0.5rem; margin-left: auto; }

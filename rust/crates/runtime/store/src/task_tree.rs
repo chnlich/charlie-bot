@@ -2983,7 +2983,7 @@ fn fold_task_facts_from(
         }
       }
       event_types::TASK_INPUT_ACKNOWLEDGED => {
-        if let Some(input_ids) = event.get("input_ids").and_then(CompactValue::as_array) {
+        if let Some(input_ids) = event.get(event_types::INPUT_IDS).and_then(CompactValue::as_array) {
           facts.confirmed_input_ids.extend(input_ids.iter().filter_map(CompactValue::as_str).map(str::to_string));
         }
       }

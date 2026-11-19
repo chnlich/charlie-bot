@@ -1578,7 +1578,7 @@ impl TaskCompletion {
         return Ok(json!({
           "session_id": session_id,
           "acknowledged_event_id": null,
-          "input_ids": [],
+          (event_types::INPUT_IDS): [],
           "already_acknowledged": input_ids,
         }));
       }
@@ -1590,7 +1590,7 @@ impl TaskCompletion {
         None,
         [
           ("request_id".to_string(), json!(request_id)),
-          ("input_ids".to_string(), json!(acked_now)),
+          (event_types::INPUT_IDS.to_string(), json!(acked_now)),
           ("note".to_string(), json!(note)),
         ],
       );
@@ -1600,7 +1600,7 @@ impl TaskCompletion {
       let response = json!({
         "session_id": session_id,
         "acknowledged_event_id": event.get("id").map(CompactValue::to_value),
-        "input_ids": acked_now,
+        (event_types::INPUT_IDS): acked_now,
         "already_acknowledged": already_acknowledged,
       });
       (event, response)
@@ -1618,7 +1618,7 @@ impl TaskCompletion {
         return Ok(Some(json!({
           "session_id": session_id,
           "acknowledged_event_id": event_id,
-          "input_ids": event.get("input_ids").map(CompactValue::to_value).unwrap_or(Value::Null),
+          (event_types::INPUT_IDS): event.get(event_types::INPUT_IDS).map(CompactValue::to_value).unwrap_or(Value::Null),
           "already_acknowledged": [],
         })));
       }

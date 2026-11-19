@@ -1,8 +1,8 @@
   <script>
-    // The terminal surface, all of it on the first click: xterm and its fit addon give the four modules below their
-    // mount, and a reader who never opens a terminal pays none of these bytes. Its tab button loads them in dependency
-    // order — xterm, the fit addon, the base64 codec, the clipboard wiring, the shared mount, and the panel that
-    // registers the tab — so the switch that follows finds the tab registered.
+    // The terminal surface loads on the first click. xterm and its fit addon give the four modules below their mount,
+    // so a reader who never opens a terminal pays none of these bytes. Its tab button loads them in dependency order:
+    // xterm, the fit addon, the base64 codec, the clipboard wiring, the shared mount, and the panel that registers the
+    // tab. The switch that follows then finds the tab registered.
     globalThis.openTerminalTab = function() {
       Promise.all([
         loadPageStyles('terminal', ['https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css']),

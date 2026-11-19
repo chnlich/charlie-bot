@@ -1,4 +1,5 @@
-//! The value helpers the codex code reads: `splitlines` and `is_truthy`, each re-exported from its one owner.
+//! The value helpers the codex code reads: `text_of`, `object_or_empty` and `count_or_zero`, defined here, and
+//! `splitlines` and `is_truthy`, each re-exported from its one owner.
 
 use std::sync::LazyLock;
 
@@ -6,6 +7,11 @@ use serde_json::{Map, Value};
 
 pub use charliebot_core::str_methods::splitlines;
 pub use charliebot_core::text_repr::is_truthy;
+
+/// The text under `key`: an absent key or a non-string value reads as `None`.
+pub fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+  map.get(key).and_then(Value::as_str)
+}
 
 /// The empty object a missing key falls back to.
 static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);

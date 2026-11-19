@@ -232,7 +232,7 @@ impl MessageAggregator {
       let content = event.field("message").and_then(|message| message.field("content"));
       let mut deltas = Vec::new();
       for block in message_blocks(content, "user message content", false)? {
-        if block.field("type").and_then(EventFields::as_str_field) != Some("tool_result") {
+        if block.field("type").and_then(EventFields::as_str_field) != Some(event_types::TOOL_RESULT) {
           continue;
         }
         let tool_use_id = block.field(event_types::TOOL_USE_ID).and_then(EventFields::as_str_field);
@@ -285,7 +285,7 @@ impl MessageAggregator {
     let mut deltas = Vec::new();
 
     for block in &blocks {
-      if block.field("type").and_then(EventFields::as_str_field) == Some("tool_use")
+      if block.field("type").and_then(EventFields::as_str_field) == Some(event_types::TOOL_USE)
         && block.field("name").and_then(EventFields::as_str_field) == Some("ExitPlanMode")
       {
         let plan = block
@@ -322,7 +322,7 @@ impl MessageAggregator {
     }
 
     for block in &blocks {
-      if block.field("type").and_then(EventFields::as_str_field) == Some("tool_use")
+      if block.field("type").and_then(EventFields::as_str_field) == Some(event_types::TOOL_USE)
         && block.field("name").and_then(EventFields::as_str_field) != Some("ExitPlanMode")
       {
         self.tool_rows.push(tool_call_row(*block));
@@ -489,7 +489,7 @@ impl MessageAggregator {
     let content = event.field("message").and_then(|message| message.field("content"));
     let rows: Vec<ToolRow> = message_blocks(content, "assistant message content", true)?
       .into_iter()
-      .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some("tool_use"))
+      .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some(event_types::TOOL_USE))
       .map(tool_call_row)
       .collect();
     let mut deltas = self.tool_rows.update_subagent(parent, |subagent| subagent.add_tools(rows));
@@ -515,7 +515,7 @@ impl MessageAggregator {
       }));
     }
     for block in blocks {
-      if block.field("type").and_then(EventFields::as_str_field) != Some("tool_result") {
+      if block.field("type").and_then(EventFields::as_str_field) != Some(event_types::TOOL_RESULT) {
         continue;
       }
       let tool_use_id = required_str(block, event_types::TOOL_USE_ID)?;
@@ -1171,7 +1171,7 @@ fn run_assistant_tool_uses<E: EventFields>(event: &E) -> Vec<&E> {
     .and_then(EventFields::array_items)
     .into_iter()
     .flatten()
-    .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some("tool_use"))
+    .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some(event_types::TOOL_USE))
     .collect()
 }
 

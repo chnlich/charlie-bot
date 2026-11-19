@@ -60,7 +60,7 @@ fn normalize_web_status(value: &mut Value) -> bool {
     return true;
   }
   let Some(status) = value.as_object_mut() else { return false };
-  status.retain(|name, _| ["goal", "now", "waiting", "updated_at"].contains(&name.as_str()));
+  status.retain(|name, _| ["goal", "now", "remaining", "waiting", "updated_at"].contains(&name.as_str()));
   for name in ["goal", "now"] {
     if status.get(name).is_some_and(|field| {
       !field.is_null() && (!field.is_string() || field.as_str().is_some_and(|text| text.trim().is_empty()))
@@ -68,6 +68,11 @@ fn normalize_web_status(value: &mut Value) -> bool {
       return false;
     }
     status.entry(name.to_string()).or_insert(Value::Null);
+  }
+  let remaining = status.entry("remaining".to_string()).or_insert_with(|| json!([]));
+  let Some(milestones) = remaining.as_array() else { return false };
+  if milestones.iter().any(|milestone| !milestone.as_str().is_some_and(|text| !text.trim().is_empty())) {
+    return false;
   }
   let waiting = status.entry("waiting".to_string()).or_insert_with(|| json!([]));
   let Some(items) = waiting.as_array_mut() else { return false };
@@ -425,5 +430,29 @@ mod tests {
     let row =
       listing.as_array().expect("the Workspace listing is a row array").iter().find(|row| row["id"] == json!(sid));
     assert_eq!(row.expect("the manager is listed")["has_waiting_items"], json!(false));
+  }
+
+  #[test]
+  fn a_session_field_write_keeps_remaining_and_refuses_the_trial_form() {
+    let stored = json!({
+      "goal": "Ship",
+      "now": null,
+      "remaining": ["Build", "Read back"],
+      "waiting": [],
+      "updated_at": "2026-11-19T00:00:00Z",
+      "waiting_version": "derived",
+    });
+    let mut values = Map::from_iter([(event_types::WEB_STATUS.to_string(), stored)]);
+    assert_eq!(validate_session_fields(&mut values), None);
+    assert_eq!(values[event_types::WEB_STATUS]["remaining"], json!(["Build", "Read back"]));
+    assert!(values[event_types::WEB_STATUS].get("waiting_version").is_none(), "a derived key is dropped");
+
+    let trial_form = json!({"goal": "Ship", "remaining": [{"text": "Build", "done": true}]});
+    let mut values = Map::from_iter([(event_types::WEB_STATUS.to_string(), trial_form)]);
+    assert_eq!(
+      validate_session_fields(&mut values),
+      Some("web_status must be a WebStatus or null".to_string()),
+      "the old {{text, done}} list is refused, not kept"
+    );
   }
 }

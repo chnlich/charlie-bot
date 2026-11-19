@@ -14,7 +14,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 
 use charliebot_cli_common::exit::CliExit;
-use parse::{Invocation, Killer, Word, invocations};
+use parse::{Invocation, Killer, invocations};
 
 use super::bash_hook::run_bash_guard;
 
@@ -29,8 +29,31 @@ const SIGNAL_NAMES: &[&str] = &[
   "USR1", "USR2", "VTALRM", "WINCH", "XCPU", "XFSZ",
 ];
 
-/// The options of `pkill` and `pgrep` that take an argument. The rest of a cluster that holds one is that argument.
-const ARGUMENT_OPTIONS: &[char] = &['d', 'F', 'G', 'L', 'r', 't', 'U', 'u'];
+/// The short options of `pkill` and `pgrep` that take an argument. When one ends a cluster, the next word is its
+/// argument; otherwise the rest of the cluster is that argument.
+const ARGUMENT_OPTIONS: &[char] = &['d', 'F', 'G', 'O', 'q', 'r', 't', 'U', 'u'];
+
+/// The long options of `pkill` and `pgrep` that take a separate argument word when written without `=`.
+const LONG_ARGUMENT_OPTIONS: &[&str] = &[
+  "delimiter",
+  "euid",
+  "group",
+  "ns",
+  "nslist",
+  "older",
+  "pidfile",
+  "queue",
+  "runstates",
+  "signal",
+  "terminal",
+  "uid",
+];
+
+enum OptionKind {
+  Scope,
+  TakesNextArg,
+  Other,
+}
 
 /// The refusal. It leads with the working alternative, the PID the caller recorded when it started the process.
 const DENY_REASON: &str = "Kill the PID you recorded instead: start the process, keep `pid=$!`, and run `kill \"$pid\"`. To match by name, scope `pkill` or `pgrep` with `-P <parent pid>`, `-g <process group>`, `-s <session id>` or `--cgroup <path>`; `killall` has no scope. An unscoped match also ends other sessions' jobs and watch triggers.";
@@ -73,30 +96,54 @@ fn refuses(command: &str) -> bool {
   pgrep_unscoped && kill_seen
 }
 
-/// Whether a `pkill` or `pgrep` selection carries a scope option. An option the shell quoted is text, so it is not one.
-fn scoped(args: &[Word]) -> bool {
-  args.iter().any(|word| !word.quoted && is_scope_option(&word.text))
-}
-
-fn is_scope_option(text: &str) -> bool {
-  if let Some(long) = text.strip_prefix("--") {
-    let name = long.split_once('=').map_or(long, |(name, _)| name);
-    return matches!(name, "cgroup" | "parent" | "pgroup" | "session");
-  }
-  let Some(cluster) = text.strip_prefix('-') else {
-    return false;
-  };
-  if is_signal_name(cluster) {
-    return false;
-  }
-  for letter in cluster.chars() {
-    match letter {
-      'P' | 'g' | 's' => return true,
-      letter if ARGUMENT_OPTIONS.contains(&letter) => return false,
-      _ => {}
+/// Whether a `pkill` or `pgrep` selection carries a scope option before `--`.
+fn scoped(args: &[String]) -> bool {
+  let mut expect_arg = false;
+  for arg in args {
+    if expect_arg {
+      expect_arg = false;
+      continue;
+    }
+    if arg == "--" {
+      break;
+    }
+    match classify_option(arg) {
+      OptionKind::Scope => return true,
+      OptionKind::TakesNextArg => expect_arg = true,
+      OptionKind::Other => {}
     }
   }
   false
+}
+
+fn classify_option(text: &str) -> OptionKind {
+  if let Some(long) = text.strip_prefix("--") {
+    let (name, has_value) = long.split_once('=').map_or((long, false), |(name, _)| (name, true));
+    if matches!(name, "cgroup" | "parent" | "pgroup" | "session") {
+      return OptionKind::Scope;
+    }
+    if !has_value && LONG_ARGUMENT_OPTIONS.contains(&name) {
+      return OptionKind::TakesNextArg;
+    }
+    return OptionKind::Other;
+  }
+  let Some(cluster) = text.strip_prefix('-') else {
+    return OptionKind::Other;
+  };
+  if cluster.is_empty() || is_signal_name(cluster) {
+    return OptionKind::Other;
+  }
+  let mut chars = cluster.chars();
+  while let Some(letter) = chars.next() {
+    match letter {
+      'P' | 'g' | 's' => return OptionKind::Scope,
+      letter if ARGUMENT_OPTIONS.contains(&letter) => {
+        return if chars.as_str().is_empty() { OptionKind::TakesNextArg } else { OptionKind::Other };
+      }
+      _ => {}
+    }
+  }
+  OptionKind::Other
 }
 
 fn is_signal_name(name: &str) -> bool {
@@ -127,8 +174,14 @@ mod tests {
       "pgrep -f x | xargs kill",
       "kill $(pgrep -f x)",
       "pkill -f 'sleep -s 60'",
+      "pkill -f -- -s",
+      "pkill -u -s x",
+      "pkill --signal -P x",
       "pkill -STOP -f x",
       "killall -g node",
+      "x=$(( 1 << 2 ))\npkill -f foo",
+      "echo $(( $(pkill -f foo) + 1 ))",
+      "echo $((pkill -f foo); (echo bar))",
     ] {
       assert!(refuses(command), "{command}");
     }
@@ -140,8 +193,11 @@ mod tests {
       "kill 12345",
       "kill -- -4321",
       "pkill -P $$ -f x",
+      r#"pkill -P"$$" -f x"#,
       "pkill -g 4321 x",
       "pkill --cgroup /x y",
+      r#"pkill --cgroup="/x" y"#,
+      r#"pkill --cgroup="$CG" y"#,
       "pgrep -P $$ -f x | xargs kill",
       "pkill -STOP -P 5 x",
       "pkill -u me -s 7 x",
@@ -159,6 +215,9 @@ mod tests {
       r#"echo "pgrep -f x | xargs kill""#,
       "git commit -m 'stop pkill use'",
       "cat <<'EOF'\npkill -f x\nEOF",
+      "command -v pkill",
+      "command -V killall",
+      "x=$(( 1 << 2 ))\necho pkill",
     ] {
       assert!(!refuses(command), "{command}");
     }

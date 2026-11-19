@@ -14,19 +14,11 @@ pub enum Killer {
   Kill,
 }
 
-/// One shell word after quote removal.
-#[derive(Clone, Debug)]
-pub struct Word {
-  pub text: String,
-  /// Whether the word holds a quote or an escape. The shell reads such a word as text, so it is never an option.
-  pub quoted: bool,
-}
-
 /// One command position: a command the guard classifies, or a command word whose name the reader cannot know.
 #[derive(Debug)]
 pub enum Invocation {
   Dynamic,
-  Call { killer: Killer, args: Vec<Word> },
+  Call { killer: Killer, args: Vec<String> },
 }
 
 /// Stands in for a command substitution inside a word. The shell fills in the word's value only when it runs the text.
@@ -57,11 +49,11 @@ pub fn invocations(text: &str) -> Result<Vec<Invocation>, String> {
 }
 
 /// Classifies one simple command: its command word, and the command that a wrapper runs.
-fn call(words: &[Word], found: &mut Vec<Invocation>) -> Result<(), String> {
+fn call(words: &[String], found: &mut Vec<Invocation>) -> Result<(), String> {
   let Some(start) = command_start(words) else {
     return Ok(());
   };
-  let command = &words[start].text;
+  let command = &words[start];
   if is_dynamic(command) {
     found.push(Invocation::Dynamic);
     return Ok(());
@@ -71,21 +63,23 @@ fn call(words: &[Word], found: &mut Vec<Invocation>) -> Result<(), String> {
   if let Some(killer) = killer_named(name) {
     found.push(Invocation::Call { killer, args: arguments.to_vec() });
   } else if name == "eval" {
-    let text: Vec<&str> = arguments.iter().map(|word| word.text.as_str()).collect();
-    found.extend(invocations(&text.join(" "))?);
+    found.extend(invocations(&arguments.join(" "))?);
   } else if SHELLS.contains(&name) {
-    if let Some(flag) = arguments.iter().position(|word| is_c_flag(&word.text))
+    if let Some(flag) = arguments.iter().position(|word| is_c_flag(word))
       && let Some(script) = arguments.get(flag + 1)
     {
-      found.extend(invocations(&script.text)?);
+      found.extend(invocations(script)?);
     }
   } else if WRAPPERS.contains(&name) {
+    if name == "command" && is_command_query(arguments) {
+      return Ok(());
+    }
     for (offset, word) in arguments.iter().enumerate() {
-      if is_dynamic(&word.text) {
+      if is_dynamic(word) {
         found.push(Invocation::Dynamic);
         break;
       }
-      if is_command_name(&word.text) {
+      if is_command_name(word) {
         call(&arguments[offset..], found)?;
         break;
       }
@@ -94,8 +88,20 @@ fn call(words: &[Word], found: &mut Vec<Invocation>) -> Result<(), String> {
   Ok(())
 }
 
-fn command_start(words: &[Word]) -> Option<usize> {
-  words.iter().position(|word| !is_assignment(&word.text) && !KEYWORDS.contains(&word.text.as_str()))
+fn is_command_query(arguments: &[String]) -> bool {
+  for arg in arguments {
+    if arg == "--" || !arg.starts_with('-') || arg == "-" {
+      break;
+    }
+    if arg.chars().skip(1).any(|flag| matches!(flag, 'v' | 'V')) {
+      return true;
+    }
+  }
+  false
+}
+
+fn command_start(words: &[String]) -> Option<usize> {
+  words.iter().position(|word| !is_assignment(word) && !KEYWORDS.contains(&word.as_str()))
 }
 
 fn is_assignment(text: &str) -> bool {
@@ -148,7 +154,7 @@ struct Reader {
   pos: usize,
   heredocs: Vec<Heredoc>,
   /// The simple commands read so far, each as its words. Substitutions and heredoc bodies add theirs here too.
-  simples: Vec<Vec<Word>>,
+  simples: Vec<Vec<String>>,
   /// Set by a redirection operator. The next word is its target, which is not a command word.
   drop_next_word: bool,
 }
@@ -174,8 +180,8 @@ impl Reader {
   /// `close` is `)` inside `$(...)` and a backtick inside a backtick substitution. A `)` that closes no group ends
   /// the list only when `close` is `)`.
   fn read_list(&mut self, close: Option<char>) -> Result<(), String> {
-    let mut words: Vec<Word> = Vec::new();
-    let mut word: Option<Word> = None;
+    let mut words: Vec<String> = Vec::new();
+    let mut word: Option<String> = None;
     let mut groups = 0usize;
     loop {
       let Some(character) = self.bump() else {
@@ -215,31 +221,107 @@ impl Reader {
           self.read_list(Some('`'))?;
         }
         '$' if self.peek() == Some('(') => {
-          self.bump();
           placeholder(&mut word);
-          self.read_list(Some(')'))?;
+          self.read_dollar_paren()?;
         }
         '<' | '>' => self.redirect(character, &mut word, &mut words),
         '#' if word.is_none() => self.skip_comment(),
         '\\' => match self.bump() {
           Some('\n') | None => {}
-          Some(escaped) => push(&mut word, escaped, true),
+          Some(escaped) => push(&mut word, escaped),
         },
         '\'' => self.read_single_quoted(&mut word)?,
         '"' => self.read_double_quoted(&mut word)?,
-        other => push(&mut word, other, false),
+        other => push(&mut word, other),
       }
     }
   }
 
-  fn end(&mut self, word: &mut Option<Word>, words: &mut Vec<Word>) {
+  /// Reads `$(...)` or `$((...))` starting with the `(` that `peek()` saw after `$`.
+  ///
+  /// Arithmetic `$((...))` cannot open heredocs via `<<`, so it scans balanced parentheses first and falls back to
+  /// `read_list` when the inner `(` closes without a trailing `)` (e.g. `$((echo a); (echo b))`).
+  fn read_dollar_paren(&mut self) -> Result<(), String> {
+    self.bump();
+    if self.peek() == Some('(') {
+      let saved_pos = self.pos;
+      let saved_simples = self.simples.len();
+      self.bump();
+      if self.read_arithmetic()? {
+        return Ok(());
+      }
+      self.pos = saved_pos;
+      self.simples.truncate(saved_simples);
+    }
+    self.read_list(Some(')'))
+  }
+
+  /// Scans an arithmetic expansion body after `$((` up to its matching `))`, parsing any substitutions inside it.
+  /// Returns `Ok(false)` if the form is not closed as arithmetic so the caller can backtrack to `$(...)`.
+  fn read_arithmetic(&mut self) -> Result<bool, String> {
+    let mut depth = 0usize;
+    loop {
+      let Some(character) = self.bump() else {
+        return Ok(false);
+      };
+      match character {
+        '(' => depth += 1,
+        ')' => {
+          if depth > 0 {
+            depth -= 1;
+          } else if self.peek() == Some(')') {
+            self.bump();
+            return Ok(true);
+          } else {
+            return Ok(false);
+          }
+        }
+        ';' | '\n' if depth == 0 => return Ok(false),
+        '$' if self.peek() == Some('(') => self.read_dollar_paren()?,
+        '`' => self.read_list(Some('`'))?,
+        '\'' if !self.skip_single_quoted() => return Ok(false),
+        '"' if !self.read_arith_double_quoted()? => return Ok(false),
+        '\\' => {
+          self.bump();
+        }
+        _ => {}
+      }
+    }
+  }
+
+  fn skip_single_quoted(&mut self) -> bool {
+    loop {
+      match self.bump() {
+        None => return false,
+        Some('\'') => return true,
+        Some(_) => {}
+      }
+    }
+  }
+
+  fn read_arith_double_quoted(&mut self) -> Result<bool, String> {
+    loop {
+      match self.bump() {
+        None => return Ok(false),
+        Some('"') => return Ok(true),
+        Some('\\') => {
+          self.bump();
+        }
+        Some('$') if self.peek() == Some('(') => self.read_dollar_paren()?,
+        Some('`') => self.read_list(Some('`'))?,
+        Some(_) => {}
+      }
+    }
+  }
+
+  fn end(&mut self, word: &mut Option<String>, words: &mut Vec<String>) {
     self.finish_word(word, words);
     if !words.is_empty() {
       self.simples.push(std::mem::take(words));
     }
   }
 
-  fn finish_word(&mut self, word: &mut Option<Word>, words: &mut Vec<Word>) {
+  fn finish_word(&mut self, word: &mut Option<String>, words: &mut Vec<String>) {
     let Some(finished) = word.take() else {
       return;
     };
@@ -252,8 +334,8 @@ impl Reader {
 
   /// A redirection operator and its target. A descriptor number before the operator, such as `2>`, is part of the
   /// operator, so it is not a command word.
-  fn redirect(&mut self, first: char, word: &mut Option<Word>, words: &mut Vec<Word>) {
-    if word.as_ref().is_some_and(|text| !text.quoted && text.text.chars().all(|digit| digit.is_ascii_digit())) {
+  fn redirect(&mut self, first: char, word: &mut Option<String>, words: &mut Vec<String>) {
+    if word.as_ref().is_some_and(|text| text.chars().all(|digit| digit.is_ascii_digit())) {
       *word = None;
     }
     self.finish_word(word, words);
@@ -328,10 +410,7 @@ impl Reader {
         '\\' => {
           self.bump();
         }
-        '$' if self.peek() == Some('(') => {
-          self.bump();
-          self.read_list(Some(')'))?;
-        }
+        '$' if self.peek() == Some('(') => self.read_dollar_paren()?,
         '`' => self.read_list(Some('`'))?,
         _ => {}
       }
@@ -345,19 +424,19 @@ impl Reader {
     }
   }
 
-  fn read_single_quoted(&mut self, word: &mut Option<Word>) -> Result<(), String> {
-    open(word).quoted = true;
+  fn read_single_quoted(&mut self, word: &mut Option<String>) -> Result<(), String> {
+    let word = open(word);
     loop {
       match self.bump() {
         None => return Err("a single quote is never closed".to_string()),
         Some('\'') => return Ok(()),
-        Some(character) => open(word).text.push(character),
+        Some(character) => word.push(character),
       }
     }
   }
 
-  fn read_double_quoted(&mut self, word: &mut Option<Word>) -> Result<(), String> {
-    open(word).quoted = true;
+  fn read_double_quoted(&mut self, word: &mut Option<String>) -> Result<(), String> {
+    open(word);
     loop {
       match self.bump() {
         None => return Err("a double quote is never closed".to_string()),
@@ -366,34 +445,31 @@ impl Reader {
           if let Some(escaped) = self.bump()
             && escaped != '\n'
           {
-            push(word, escaped, true);
+            push(word, escaped);
           }
         }
         Some('$') if self.peek() == Some('(') => {
-          self.bump();
           placeholder(word);
-          self.read_list(Some(')'))?;
+          self.read_dollar_paren()?;
         }
         Some('`') => {
           placeholder(word);
           self.read_list(Some('`'))?;
         }
-        Some(character) => push(word, character, true),
+        Some(character) => push(word, character),
       }
     }
   }
 }
 
-fn open(word: &mut Option<Word>) -> &mut Word {
-  word.get_or_insert_with(|| Word { text: String::new(), quoted: false })
+fn open(word: &mut Option<String>) -> &mut String {
+  word.get_or_insert_with(String::new)
 }
 
-fn push(word: &mut Option<Word>, character: char, quoted: bool) {
-  let word = open(word);
-  word.text.push(character);
-  word.quoted |= quoted;
+fn push(word: &mut Option<String>, character: char) {
+  open(word).push(character);
 }
 
-fn placeholder(word: &mut Option<Word>) {
-  open(word).text.push(SUBSTITUTION);
+fn placeholder(word: &mut Option<String>) {
+  open(word).push(SUBSTITUTION);
 }

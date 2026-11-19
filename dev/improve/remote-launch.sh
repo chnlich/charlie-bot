@@ -72,11 +72,11 @@ readonly REMOTE_HOST=${IMPROVE_REMOTE_HOST:-}
 readonly SESSION_ID=${CHARLIEBOT_SESSION_ID:-}
 readonly TEMP_ROOT=${TMPDIR:-/tmp}
 [[ $TEMP_ROOT == /* ]] || fail 1 'TMPDIR must be an absolute path'
-[[ -n $REMOTE_HOST ]] || fail 1 'IMPROVE_REMOTE_HOST is not set; it names the improve host in host config'
+[[ -n $REMOTE_HOST ]] || fail 7 'IMPROVE_REMOTE_HOST is not set; it names the improve host in host config'
 [[ -n $SESSION_ID ]] || fail 6 'CHARLIEBOT_SESSION_ID is not set, so the round has no direction'
 # The least access-token life, in seconds, that a round may start with. The server sets it beside IMPROVE_REMOTE_HOST.
 readonly TOKEN_MIN_SECONDS=${IMPROVE_TOKEN_MIN_SECONDS:-}
-[[ $TOKEN_MIN_SECONDS =~ ^[0-9]+$ ]] || fail 1 'IMPROVE_TOKEN_MIN_SECONDS is not set to a whole number of seconds'
+[[ $TOKEN_MIN_SECONDS =~ ^[0-9]+$ ]] || fail 7 'IMPROVE_TOKEN_MIN_SECONDS is not set to a whole number of seconds'
 
 # The value of one top-level YAML key in a file, unquoted, without a trailing comment.
 yaml_value() {
@@ -199,7 +199,7 @@ section_api_key() {
 check_token_life() {
   local seconds_left=$1 login_file=$2
   if (( seconds_left < TOKEN_MIN_SECONDS )); then
-    fail 8 "the $kind login in $login_file has $(( seconds_left > 0 ? seconds_left / 60 : 0 )) min of access-token" \
+    fail 8 "token-short: the $kind login in $login_file has $(( seconds_left > 0 ? seconds_left / 60 : 0 )) min of access-token" \
       "life left; a round needs $(( TOKEN_MIN_SECONDS / 60 )) min. No round started."
   fi
 }
@@ -262,7 +262,7 @@ if [[ $kind == codex ]]; then
   codex_record=$(jq -ce '
     if ([.auth_mode, .last_refresh, .tokens.access_token, .tokens.id_token, .tokens.account_id]
         | all(type == "string" and length > 0))
-    then {auth_mode, OPENAI_API_KEY: null, last_refresh,
+    then {auth_mode, last_refresh,
           tokens: {access_token: .tokens.access_token, id_token: .tokens.id_token,
                    account_id: .tokens.account_id, refresh_token: ""}}
     else error("the login lacks a field") end' "$codex_login" 2>/dev/null) \
@@ -351,8 +351,8 @@ fi
 # ANTHROPIC_ or CLAUDE_, and the two Bash timeouts the round needs. CLAUDE_CONFIG_DIR is the
 # worker's own config directory here, CLAUDE_CODE_OAUTH_TOKEN is the member's login, which section 1b
 # reads, and CHARLIEBOT_RUN_TOKEN authenticates to a server that the remote host does not have. The
-# member's tokens travel on the `--prepare` channel instead of this file, so the launch directory holds
-# no token. Values go into a file, never a command line.
+# tar payload holds no token: the member's login travels on the later `--prepare` channel and is stored
+# in the host's per-launch member-credential file. Values go into a file, never a command line.
 forwarded_name() {
   case $1 in
     ANTHROPIC_AUTH_TOKEN | ANTHROPIC_API_KEY) return 1 ;;
@@ -382,6 +382,16 @@ send_status=$?
 set -e
 (( send_status == 0 )) || fail 3 "cannot send the round's inputs to $REMOTE_HOST; approve the connection on the /host-auth page"
 
+# The heartbeat carries this launch id as its own argument. The host's next-start sweep uses that live process to keep
+# this launch's member-credential file between `--prepare` and the wrapper's start. Start it before preparing that
+# file, so the sweep sees an owner before the credential exists.
+heartbeat_script='cat >/dev/null; if [ -e "$HOME/improve/launch/$1/started" ]; then systemctl --user stop "improve-$2.scope"; fi'
+heartbeat_command="bash -c '$heartbeat_script' improve-heartbeat $launch_id $direction"
+mkfifo "$payload/heartbeat"
+"${SSH[@]}" "$REMOTE_HOST" "$heartbeat_command" <"$payload/heartbeat" &
+heartbeat_pid=$!
+exec 3>"$payload/heartbeat"
+
 # The review key, the review option's settings and the member's record from section 1b go to the host on this
 # channel's standard input alone. The runner selects each value by its name: the review key goes into the round's
 # credentials file, and the member's record into the launch's member-credential file. The launching shell holds them
@@ -404,16 +414,6 @@ fi
 (( prepare_status == 0 )) || fail 1 "the runner could not write the round's credentials on $REMOTE_HOST"
 
 # ---------- 5. Start ----------
-# The heartbeat reads its standard input on the remote side. EOF tells it that the launcher is
-# gone, and only then does it stop the scope: a Tailscale connection that is killed leaves remote
-# processes alive, so the launcher's death cannot be detected on the host any other way.
-# The FIFO's write end lives in this process alone, so any exit, SIGKILL included, closes it.
-heartbeat_command="cat >/dev/null; if [ -e \"\$HOME/improve/launch/$launch_id/started\" ]; then systemctl --user stop improve-$direction.scope; fi"
-mkfifo "$payload/heartbeat"
-"${SSH[@]}" "$REMOTE_HOST" "$heartbeat_command" <"$payload/heartbeat" &
-heartbeat_pid=$!
-exec 3>"$payload/heartbeat"
-
 set +e
 "${SSH[@]}" "$REMOTE_HOST" \
   "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind" 3>&-

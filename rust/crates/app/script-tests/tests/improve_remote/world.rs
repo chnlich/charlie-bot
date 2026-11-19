@@ -99,6 +99,12 @@ fi
 if [[ ${SSH_HANG_TAR:-0} == 1 && $remote == *'tar '*'-cf -'* ]]; then
   sleep 30
 fi
+if [[ ${FAKE_SSH_PAUSE_MAIN_RUN:-0} == 1 && $remote == *'remote-runner.sh '* && $remote != *'--prepare '* ]]; then
+  : >"$FAKE_SSH_MAIN_RUN_READY"
+  while [[ ! -e $FAKE_SSH_MAIN_RUN_RELEASE ]]; do
+    sleep 0.01
+  done
+fi
 environment=()
 while IFS= read -r name; do
   case $name in
@@ -357,7 +363,6 @@ pub fn codex_access_token(exp: i64) -> String {
 pub fn codex_login_json(exp: i64) -> String {
   serde_json::json!({
     "auth_mode": "chatgpt",
-    "OPENAI_API_KEY": null,
     "last_refresh": CODEX_LAST_REFRESH,
     "tokens": {
       "id_token": CODEX_ID_TOKEN,

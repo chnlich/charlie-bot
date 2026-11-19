@@ -310,8 +310,8 @@ fn a_subscription_claude_forwards_its_access_token_and_no_refresh_token() {
   // The access token reaches no ssh argument and no file on either home once the round ends. The refresh token
   // reaches nothing but the login file on this host.
   let arguments = world.ssh_arguments();
-  assert!(!arguments.contains(LOGIN_TOKEN), "the access token reached an ssh argument:\n{arguments}");
-  assert!(!arguments.contains(LOGIN_REFRESH_TOKEN), "the refresh token reached an ssh argument:\n{arguments}");
+  assert!(!arguments.contains(LOGIN_TOKEN), "the access token reached an ssh argument");
+  assert!(!arguments.contains(LOGIN_REFRESH_TOKEN), "the refresh token reached an ssh argument");
   assert!(
     files_holding(&world, &world.local_home, LOGIN_TOKEN).is_empty(),
     "the access token reached this host's files"
@@ -342,11 +342,11 @@ fn a_codex_member_runs_under_its_round_codex_home_with_the_forwarded_login() {
   let found = fs::read_to_string(&world.codex_auth).expect("the login the fake codex found");
   let mut expected: Value = serde_json::from_str(&world::codex_login_json(exp)).expect("the fixture login is JSON");
   expected["tokens"]["refresh_token"] = json!("");
-  assert_eq!(
-    serde_json::from_str::<Value>(&found).expect("the forwarded login is JSON"),
-    expected,
-    "{}",
-    run.describe()
+  let forwarded: Value = serde_json::from_str(&found).expect("the forwarded login is JSON");
+  assert!(forwarded == expected, "the forwarded Codex login has the wrong fields");
+  assert!(
+    !forwarded.as_object().expect("the forwarded login is an object").contains_key("OPENAI_API_KEY"),
+    "the forwarded Codex login includes an unrequested API key field"
   );
   assert_eq!(fs::read_to_string(&world.codex_auth_mode).expect("the login's mode").trim(), "600");
 
@@ -692,8 +692,8 @@ fn no_key_value_reaches_an_ssh_argument_or_any_file_but_the_credentials_file() {
   assert!(!arguments.is_empty(), "the fake ssh recorded no call");
   let agent_arguments = world.claude_arguments_received().join("\n");
   for key in [GATEWAY_TOKEN, REVIEW_KEY, world::RUN_TOKEN, world::LOCAL_CLAUDE_OAUTH_TOKEN] {
-    assert!(!arguments.contains(key), "a key value reached an ssh argument:\n{arguments}");
-    assert!(!agent_arguments.contains(key), "a key value reached the agent's arguments: {agent_arguments}");
+    assert!(!arguments.contains(key), "a key value reached an ssh argument");
+    assert!(!agent_arguments.contains(key), "a key value reached the agent's arguments");
   }
   assert_eq!(
     world.claude_environment().get("CLAUDE_CODE_OAUTH_TOKEN_SHA256").map(String::as_str),
@@ -707,7 +707,7 @@ fn no_key_value_reaches_an_ssh_argument_or_any_file_but_the_credentials_file() {
   let text = fs::read_to_string(&credentials).expect("the runner wrote the credentials file");
   assert!(
     text.contains(REVIEW_KEY) && !text.contains(GATEWAY_TOKEN),
-    "the credentials file holds the wrong keys: {text}"
+    "the credentials file holds the wrong keys"
   );
   let mode = fs::metadata(&credentials).expect("credentials metadata").permissions().mode() & 0o777;
   assert_eq!(mode, 0o600, "{credentials:?} has mode {mode:o}");
@@ -777,6 +777,20 @@ fn a_codex_login_with_less_than_four_hours_of_token_life_exits_8_before_any_inpu
   let run = harness::run(&mut world.launcher_command_for(&world.host_login_env(), &world.codex_arguments()));
   assert_short_before_input(&world, &run, &world.local_home.join(".codex/auth.json"));
   assert!(!world.codex_ran(), "a short login started codex:\n{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_missing_token_life_threshold_exits_7_before_any_input() {
+  let world = World::new();
+  let mut env = world.env();
+  env.remove("IMPROVE_TOKEN_MIN_SECONDS");
+
+  let run = world.run(&env);
+
+  assert_eq!(run.code, 7, "{}", run.describe());
+  assert!(stderr(&run).contains("IMPROVE_TOKEN_MIN_SECONDS is not set"), "{}", run.describe());
+  assert!(world.ssh_arguments().is_empty(), "a missing threshold contacted the host");
 }
 
 /// The forwarded form of a codex login whose access token expires at `exp`: the refresh token is the empty string,
@@ -899,6 +913,80 @@ fi
 
 #[test]
 #[ignore = "integration"]
+fn a_codex_round_refuses_a_parent_directory_another_user_owns() {
+  let world = World::new();
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{FOCUS_DIRECTION}"));
+  assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
+  fs::create_dir(&round_tmp).expect("the round's directory");
+  let stub = world.sandbox.dir("owner-stub");
+  harness::write_executable(
+    &stub.join("stat"),
+    format!(r#"#!/usr/bin/env bash
+# Reports uid 0 for the round directory, and the real owner for every other path.
+if [[ $* == *"{}"* ]]; then
+  printf '0\n'
+else
+  command -p stat "$@"
+fi
+"#, round_tmp.display()),
+  );
+  let launch_id = "20261101T090700Z-1-307";
+  codex_in_scope_fixture(&world, launch_id, &forwarded_codex_login(world::now_seconds() + 200 * 3600));
+  let path = format!("{}:/usr/local/bin:/usr/bin:/bin", stub.display());
+
+  let run = run_in_scope_with(&world, launch_id, "codex", &[("PATH", path)]);
+
+  let _ = fs::remove_dir_all(&round_tmp);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains("is not owned by the runner's user"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_start_refuses_a_codex_parent_symlink_before_removing_its_target_login() {
+  let world = World::new();
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{DIRECTION}"));
+  assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
+  let target = world.sandbox.dir("elsewhere");
+  let auth = target.join("codex-home/auth.json");
+  fs::create_dir_all(auth.parent().expect("the target Codex home")).expect("the target Codex home");
+  fs::write(&auth, "synthetic-codex-auth").expect("the target login");
+  std::os::unix::fs::symlink(&target, &round_tmp).expect("the round directory symlink");
+
+  let run = world.run(&world.env());
+
+  let login_kept = fs::read_to_string(&auth).expect("the target login remains readable");
+  let _ = fs::remove_file(&round_tmp);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains("is a symbolic link"), "{}", run.describe());
+  assert!(login_kept == "synthetic-codex-auth", "the start sweep changed the target login");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_start_refuses_a_codex_home_symlink_before_removing_its_target_login() {
+  let world = World::new();
+  let round_tmp = PathBuf::from(format!("/tmp/improve-{DIRECTION}"));
+  assert!(!round_tmp.exists(), "{} exists, so the test does not own it", round_tmp.display());
+  fs::create_dir(&round_tmp).expect("the round directory");
+  let target = world.sandbox.dir("elsewhere");
+  let auth = target.join("auth.json");
+  fs::write(&auth, "synthetic-codex-auth").expect("the target login");
+  let codex_home = round_tmp.join("codex-home");
+  std::os::unix::fs::symlink(&target, &codex_home).expect("the Codex home symlink");
+
+  let run = world.run(&world.env());
+
+  let login_kept = fs::read_to_string(&auth).expect("the target login remains readable");
+  let _ = fs::remove_file(&codex_home);
+  let _ = fs::remove_dir(&round_tmp);
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains("is a symbolic link"), "{}", run.describe());
+  assert!(login_kept == "synthetic-codex-auth", "the start sweep changed the target login");
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_duplicate_codex_fire_leaves_the_live_login_and_removes_its_own_launch_directory() {
   let world = World::new();
   world.write_codex_login(world::now_seconds() + 200 * 3600);
@@ -915,7 +1003,7 @@ fn a_duplicate_codex_fire_leaves_the_live_login_and_removes_its_own_launch_direc
   let kept = fs::read_to_string(&live_login);
   let _ = fs::remove_file(&live_login);
   assert_eq!(run.code, 5, "{}", run.describe());
-  assert_eq!(kept.expect("the live round's login"), "LIVE-CODEX-LOGIN", "the duplicate fire changed the live login");
+  assert!(kept.as_ref().is_ok_and(|login| login == "LIVE-CODEX-LOGIN"), "the duplicate fire changed the live login");
   assert!(!world.codex_ran(), "the duplicate fire started codex:\n{}", run.describe());
   let launches: Vec<String> = fs::read_dir(world.remote_home.join("improve/launch"))
     .expect("the launch directories")
@@ -949,6 +1037,38 @@ fn a_start_removes_a_dead_launchs_member_credential_and_keeps_a_live_launchs() {
 
 #[test]
 #[ignore = "integration"]
+fn a_prepared_launch_keeps_its_member_credential_until_its_wrapper_starts() {
+  let world = World::new();
+  let ready = world.sandbox.root().join("main-run-ready");
+  let release = world.sandbox.root().join("main-run-release");
+  let mut first_env = world.env();
+  first_env.insert("FAKE_SSH_PAUSE_MAIN_RUN".to_string(), "1".to_string());
+  first_env.insert("FAKE_SSH_MAIN_RUN_READY".to_string(), ready.display().to_string());
+  first_env.insert("FAKE_SSH_MAIN_RUN_RELEASE".to_string(), release.display().to_string());
+  let mut first_command = world.launcher_command(&first_env);
+  let mut first = harness::spawn(&mut first_command);
+
+  let reached_gap = wait_until(Duration::from_secs(15), || ready.exists());
+  if !reached_gap {
+    let _ = fs::write(&release, "continue\n");
+    let _ = first.wait_with_output();
+    panic!("the first launch did not pause after preparing its member credential");
+  }
+  let first_launch = world.launch_directory().expect("the prepared launch directory");
+  let member_credential = first_launch.join("member-credential");
+  let second = world.run(&world.env());
+  let survived_sweep = member_credential.is_file();
+  fs::write(&release, "continue\n").expect("release the first launch");
+  let first_result = first.wait_with_output().expect("the first launch finished");
+
+  assert_eq!(second.code, 0, "{}", second.describe());
+  assert!(survived_sweep, "a concurrent start removed the prepared launch's member credential");
+  assert!(first_result.status.success(), "the prepared launch failed before its wrapper started");
+  assert!(!first_launch.exists(), "the prepared launch directory was not cleaned up");
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_start_removes_an_idle_directions_codex_login_and_keeps_a_live_rounds() {
   let world = World::new();
   let login = world.codex_home_directory().join("auth.json");
@@ -968,7 +1088,7 @@ fn a_start_removes_an_idle_directions_codex_login_and_keeps_a_live_rounds() {
   let _ = fs::remove_file(&login);
 
   assert_eq!(live_run.code, 0, "{}", live_run.describe());
-  assert_eq!(kept.expect("the live round's login"), "LIVE-CODEX-LOGIN", "a start removed a live round's login");
+  assert!(kept.as_ref().is_ok_and(|login| login == "LIVE-CODEX-LOGIN"), "a start removed a live round's login");
 }
 
 #[test]
@@ -1001,17 +1121,22 @@ fn two_launches_prepared_at_once_keep_their_own_member_records_and_the_review_ke
     assert!(output.status.success(), "prepare failed: {}", String::from_utf8_lossy(&output.stderr));
   }
 
-  assert_eq!(
-    member_records(&launches.join(first).join("member-credential")),
-    ["ANTHROPIC_AUTH_TOKEN=synthetic-first-gateway-token"]
+  assert!(
+    member_records(&launches.join(first).join("member-credential"))
+      == ["ANTHROPIC_AUTH_TOKEN=synthetic-first-gateway-token"],
+    "the first launch's member record changed"
   );
-  assert_eq!(
-    member_records(&launches.join(second).join("member-credential")),
-    ["IMPROVE_CODEX_AUTH={\"synthetic\":\"second-launch\"}"]
+  assert!(
+    member_records(&launches.join(second).join("member-credential"))
+      == ["IMPROVE_CODEX_AUTH={\"synthetic\":\"second-launch\"}"],
+    "the second launch's member record changed"
   );
   let credentials =
     fs::read_to_string(world.remote_home.join("improve/home/credentials.yaml")).expect("the review credentials file");
-  assert_eq!(credentials, format!("{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\n"));
+  assert!(
+    credentials == format!("{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\n"),
+    "the review credentials file has the wrong content"
+  );
   for launch_id in [first, second] {
     let mode = fs::metadata(launches.join(launch_id).join("member-credential"))
       .expect("the member credential")

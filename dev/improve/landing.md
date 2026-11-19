@@ -23,7 +23,9 @@ The host keeps the token in the launch's `member-credential` file, mode 600, and
 
 - A Claude subscription round receives the token as `CLAUDE_CODE_OAUTH_TOKEN`.
 - A codex round runs under `CODEX_HOME=/tmp/improve-<direction>/codex-home`, whose `auth.json` holds the access token and an empty `refresh_token`.
-  The runner owns that directory: a round neither deletes nor writes it.
+  The round uses that per-round login only inside its scope; the refresh token stays on the launching host. The runner
+  removes `auth.json` when its round ends or a later start finds no live round. Symlink and ownership checks protect
+  the directory and its parent before cleanup or use.
 - A gateway member receives its token as `ANTHROPIC_AUTH_TOKEN`.
 
 The launch exits 8 before it contacts the host when the login's access token has less life left than `IMPROVE_TOKEN_MIN_SECONDS`, and its stderr names the login and the minutes left.

@@ -372,6 +372,14 @@ if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
   cp -- "$CODEX_HOME/auth.json" "$FAKE_SCOPE_AUTH"
   printf 'CODEX_AUTH_MODE=%s\n' "$(stat -c %a -- "$CODEX_HOME/auth.json")" >>"$FAKE_SCOPE_ENV"
 fi
+# A review that the agent left running: the stub charlie-code starts in the background and outlives this scope's agent.
+if [[ -n ${FAKE_SCOPE_LEFT_REVIEW:-} ]]; then
+  charlie-code --json >/dev/null 2>&1 </dev/null &
+  for _ in $(seq 1 600); do
+    [[ -e $FAKE_REVIEW_STARTED ]] && break
+    sleep 0.1
+  done
+fi
 exit 0
 "#;
 
@@ -459,6 +467,72 @@ fn the_in_scope_runner_without_a_review_key_exits_1_and_names_the_file() {
       && message.contains(credentials.display().to_string().as_str()),
     "the failure does not name the review key's file: {message}"
   );
+}
+
+/// Fake charlie-code for a review that outlives its agent: it records its process id, reports its start, and stays
+/// until the test writes the release file or its wait bound passes.
+const LEFT_REVIEW: &str = r#"# Fake charlie-code: record this process, report the start, and wait for the release.
+printf '%s\n' "$$" >"$FAKE_REVIEW_PID"
+: >"$FAKE_REVIEW_STARTED"
+for _ in $(seq 1 600); do
+  [[ -e $FAKE_REVIEW_RELEASE ]] && break
+  sleep 0.1
+done
+"#;
+
+/// Whether process `pid` has ended: its entry is gone, or it is a zombie that its parent has not reaped.
+fn process_ended(pid: u32) -> bool {
+  match fs::read_to_string(format!("/proc/{pid}/stat")) {
+    Ok(stat) => stat.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+    Err(error) => panic!("cannot read the stat of process {pid}: {error}"),
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_review_that_outlives_its_agent_fails_the_round_and_names_it() {
+  let world = World::new();
+  let launch_id = "20261101T090200Z-1-302";
+  let launch = world.remote_home.join("improve/launch").join(launch_id);
+  fs::create_dir_all(&launch).expect("the launch directory");
+  write_member_credential(&launch, &[("ANTHROPIC_AUTH_TOKEN", FOCUSED_MEMBER_TOKEN)]);
+  fs::write(
+    world.remote_home.join("improve/home/credentials.yaml"),
+    format!("{REVIEW_CREDENTIAL}:\n  api_key: {FOCUSED_REVIEW_KEY}\n"),
+  )
+  .expect("the fixture credentials file");
+  let stubs = world.sandbox.root().join("review-bin");
+  fs::create_dir_all(&stubs).expect("the stub review's directory");
+  harness::write_executable(&stubs.join("charlie-code"), format!("#!/usr/bin/env bash\n{LEFT_REVIEW}"));
+  let pid_file = world.sandbox.root().join("review-pid");
+  let started = world.sandbox.root().join("review-started");
+  let release = world.sandbox.root().join("review-release");
+  let path = format!("{}:/usr/local/bin:/usr/bin:/bin", stubs.display());
+
+  let run = run_in_scope_with(
+    &world,
+    launch_id,
+    "claude",
+    &[
+      ("PATH", path),
+      ("FAKE_SCOPE_LEFT_REVIEW", "1".to_string()),
+      ("FAKE_REVIEW_PID", pid_file.display().to_string()),
+      ("FAKE_REVIEW_STARTED", started.display().to_string()),
+      ("FAKE_REVIEW_RELEASE", release.display().to_string()),
+    ],
+  );
+
+  // The stub ends before this test does, so no later test's scope holds it.
+  fs::write(&release, "").expect("the release file");
+  let pid: u32 = fs::read_to_string(&pid_file)
+    .unwrap_or_else(|error| panic!("the stub review wrote no process id ({error}): {}", run.describe()))
+    .trim()
+    .parse()
+    .expect("a process id");
+  assert!(wait_until(Duration::from_secs(10), || process_ended(pid)), "the stub review {pid} did not end");
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains("charlie-code"), "the failure does not name the review: {}", run.describe());
 }
 
 #[test]

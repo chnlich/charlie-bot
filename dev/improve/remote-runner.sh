@@ -17,7 +17,8 @@
 # agent under the Landlock boundary that limits its writes and signals, and records the scope's memory peak.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
-# scope; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
+# scope, or a round whose review still runs in the scope after its agent exited (stderr names the
+# review); 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
 # of this direction still runs; 7 a round dependency is missing (a login, the review key, the round's
 # home or the write boundary), and stderr names it. Nothing starts on 4, 5 and 7.
 #
@@ -542,15 +543,44 @@ prepare_codex_home() {
   chmod 600 "$CODEX_HOME_TARGET/auth.json"
 }
 
+# The process ids of this scope that run the round's review: a process whose command line names charlie-code as its
+# program, or as the script its interpreter runs. Prints one id per line, and fails when the scope's process list cannot
+# be read, because the review's end is then unknown.
+scope_review_pids() {
+  local cgroup procs pid argument
+  local -a arguments=()
+  cgroup=$(sed -n 's/^0:://p' /proc/self/cgroup)
+  procs="/sys/fs/cgroup$cgroup/cgroup.procs"
+  [[ -n $cgroup && -r $procs ]] || return 1
+  while read -r pid; do
+    mapfile -d '' -t arguments <"/proc/$pid/cmdline" 2>/dev/null || continue
+    for argument in "${arguments[@]:0:2}"; do
+      if [[ ${argument##*/} == charlie-code ]]; then
+        printf '%s\n' "$pid"
+        break
+      fi
+    done
+  done <"$procs"
+}
+
 run_in_scope() {
   # The marker tells the heartbeat that this launch owns the scope: a refusal leaves no marker,
   # so a heartbeat that closes cannot stop the previous round's scope.
   : >"$LAUNCH_DIR/started"
   empty_tmpdir
   export_round_credentials
-  local status=0
+  local status=0 review
   "$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- "$kind" "${REWRITTEN[@]}" || status=$?
   record_memory_peak
+  # A review that outlives its agent never reaches the pull request, so the round fails by name. Other leftovers keep
+  # the handling of a stale scope at the start (above).
+  review=$(scope_review_pids | paste -sd ' ') \
+    || fail 1 "cannot list the processes of the round's scope, so the review's end cannot be checked"
+  if [[ -n $review ]]; then
+    printf '%s the review still runs in the scope after the agent exited: charlie-code pid %s; the round fails\n' \
+      "$STDERR_PREFIX" "$review" >&2
+    (( status != 0 )) || status=1
+  fi
   exit "$status"
 }
 

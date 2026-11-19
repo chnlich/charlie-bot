@@ -355,6 +355,9 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
       setInputMode: (mode) => state.chatFlags.push(mode),
       registerInputMode() {},
     },
+    // The page defines cbIcon (chat_scripts.html's icons.js) before the package scripts slot this file loads in;
+    // the badge registration calls it at load time.
+    cbIcon: () => '<svg class="cb-icon"></svg>',
     autoResize() {},
     saveDraft() {},
     loadPageStyles: () => Promise.resolve(),

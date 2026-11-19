@@ -59,6 +59,9 @@ function buildHarness() {
     VOICE_BACKENDS: [{id: 'batch', label: 'Batch backend', livePartials: false, unavailableReason: null}],
     VOICE_DEFAULT_BACKEND: 'batch',
     Chat: {registerInputMode() {}},
+    // The page defines cbIcon (chat_scripts.html's icons.js) before the package scripts slot this file loads in;
+    // the badge registration calls it at load time.
+    cbIcon: () => '<svg class="cb-icon"></svg>',
     navigator: {mediaDevices: {getUserMedia: () => {
       calls.push('getUserMedia');
       return Promise.resolve(stream);

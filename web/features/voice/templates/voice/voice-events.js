@@ -232,7 +232,7 @@ function ensureVoiceBackendEntry() {
 
 // A dictated message's bubble carries the microphone badge from the first
 // paint, before any recording loads the module.
-Chat.registerInputMode(VOICE_INPUT_MODE, '&#127908; Voice');
+Chat.registerInputMode(VOICE_INPUT_MODE, cbIcon('voice', 12) + ' Voice');
 updateVoiceMicTitle();
 ensureVoiceBackendEntry();
 

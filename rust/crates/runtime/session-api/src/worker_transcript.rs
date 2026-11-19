@@ -34,11 +34,6 @@ fn failed_state(state: RunDisplayState) -> bool {
   matches!(state, RunDisplayState::Failed | RunDisplayState::Interrupted | RunDisplayState::Attention)
 }
 
-/// The display states in which a stop request can still reach the run.
-fn signallable_state(state: RunDisplayState) -> bool {
-  matches!(state, RunDisplayState::Running | RunDisplayState::Queued)
-}
-
 type Signature = Vec<Value>;
 type TranscriptMemo = Mutex<LruCache<String, (Signature, Arc<TranscriptEntry>)>>;
 
@@ -127,7 +122,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
       backend_label,
       &launch_prompt_ref,
       if *state == RunDisplayState::Withheld { withheld_reason(facts_events.as_slice(), &run.id) } else { None },
-      (!signallable_state(*state)).then_some(tool_calls),
+      (!state.is_live()).then_some(tool_calls),
     ))));
     for event in shared {
       // The rewrite replaces the transcript's copy only: the summary map keeps the raw event.
@@ -140,7 +135,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
       };
       transcript.push(event);
     }
-    if !signallable_state(*state) {
+    if !state.is_live() {
       transcript.push(Arc::new(ChatEvent::from_value(&run_end_event(run))));
     }
   }
@@ -152,7 +147,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   let active_run_id = run_records
     .iter()
     .rev()
-    .find_map(|run| states.get(&run.id).filter(|state| signallable_state(**state)).map(|_| run.id.clone()));
+    .find_map(|run| states.get(&run.id).filter(|state| state.is_live()).map(|_| run.id.clone()));
   let revision = revision(&signature, &states, &task_state)?;
   let client_revision = client_revision(&signature, &run_records, &states, &task_state)?;
   let summary = build_summary(

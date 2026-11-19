@@ -1661,8 +1661,7 @@ impl TaskExecutionAdapter {
     if durable_outcome == "success" {
       if spawner_prompt::reviewer_run_follows(meta.task.as_ref()) {
         let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
-        if let Some(reason) = completion.pause_reason(session_id)? {
-          tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
+        if completion.pause_delivery(session_id, &run.id).await?.is_some() {
           return Ok(());
         }
         if let ReviewSpawnOutcome::NoReviewer(reason) = self.maybe_spawn_review(session_id, run).await? {
@@ -1968,8 +1967,7 @@ impl TaskExecutionAdapter {
       return Ok(());
     }
     let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
-    if let Some(reason) = completion.pause_reason(session_id)? {
-      tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
+    if completion.pause_delivery(session_id, &run.id).await?.is_some() {
       return Ok(());
     }
     let mut result_refs = vec![format!("run:{}", work_run.id)];

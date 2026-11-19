@@ -71,6 +71,11 @@ pub fn stable_close_blocked_notice_id(session_id: &str, request_id: &str) -> Str
   stable_id(&format!("close-blocked-notice:{session_id}:{request_id}"))
 }
 
+/// The stable notice id to the initiator for one run that ended with its own pending triggers.
+pub fn stable_trigger_pause_notice_id(session_id: &str, run_id: &str) -> String {
+  stable_id(&format!("trigger-pause-notice:{session_id}:{run_id}"))
+}
+
 /// The stable task-closed fact id for one `(session_id, request_id)` pair.
 pub fn stable_close_event_id(session_id: &str, request_id: &str) -> String {
   stable_id(&format!("task-closed:{session_id}:{request_id}"))

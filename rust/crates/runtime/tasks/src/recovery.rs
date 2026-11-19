@@ -1249,16 +1249,16 @@ async fn replay_followups_with_records(
       }
       if outcome == RunOutcomeKind::Success {
         completion.after_run_finished(session_id, &run.id).await?;
-        if meta.task.is_some() && spawner_prompt::reviewer_run_follows(meta.task.as_ref()) && run.repo_path.is_some() {
-          if let Some(reason) = completion.pause_reason(session_id)? {
-            tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
-          } else if review_facts.owes_review(task_facts.task_state == "open", run)
-            && let crate::execution::ReviewSpawnOutcome::NoReviewer(reason) =
-              adapter.maybe_spawn_review(session_id, run).await?
-          {
-            let summary = format!("review of work run {} found no available reviewer backend; {reason}", run.id);
-            adapter.report_failure_to_parent(session_id, run, "blocked", Some(&summary)).await?;
-          }
+        if meta.task.is_some()
+          && spawner_prompt::reviewer_run_follows(meta.task.as_ref())
+          && run.repo_path.is_some()
+          && completion.pause_delivery(session_id, &run.id).await?.is_none()
+          && review_facts.owes_review(task_facts.task_state == "open", run)
+          && let crate::execution::ReviewSpawnOutcome::NoReviewer(reason) =
+            adapter.maybe_spawn_review(session_id, run).await?
+        {
+          let summary = format!("review of work run {} found no available reviewer backend; {reason}", run.id);
+          adapter.report_failure_to_parent(session_id, run, "blocked", Some(&summary)).await?;
         }
         continue;
       }

@@ -119,6 +119,19 @@ fn pending_trigger_path(stack: &Stack, session_id: &str) -> PathBuf {
   stack.store().session_dir(session_id).join("triggers").join("pending.json")
 }
 
+/// A pending trigger record as the trigger writer stores it, due in 2030, so the run's pause reads its label.
+fn pending_trigger_record(session_id: &str) -> String {
+  json!({
+    "id": "pending",
+    "session_id": session_id,
+    "fire_at": "2030-01-01T00:00:00Z",
+    "message": "pending trigger",
+    "created_at": "2026-11-19T00:00:00Z",
+    "status": "pending",
+  })
+  .to_string()
+}
+
 async fn wait_for_new_run(
   stack: &Stack,
   session_id: &str,
@@ -1460,7 +1473,7 @@ async fn implement_work_with_pending_trigger_pauses_then_continues_and_delivers(
   let worker =
     stack.node("worker", None, TaskProfile::Worker, Some(implement_task("add marker", Some(&repo.repo)))).await?;
   fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
-  fs::write(pending_trigger_path(&stack, &worker.id), r#"{"status":"pending","fire_at":"2030-01-01T00:00:00Z"}"#)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
   wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
@@ -1523,7 +1536,7 @@ async fn failed_work_with_pending_trigger_still_reports_and_keeps_the_task_open(
     .await?;
   stack.dispatch.set_executor(None);
   fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
-  fs::write(pending_trigger_path(&stack, &worker.id), r#"{"status":"pending","fire_at":"2030-01-01T00:00:00Z"}"#)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Failed);
@@ -1547,7 +1560,7 @@ async fn quick_edit_with_pending_trigger_defers_completion_until_continuation() 
   set_access_key(&stack)?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(edit_task("edit the marker", &repo.repo))).await?;
   fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
-  fs::write(pending_trigger_path(&stack, &worker.id), r#"{"status":"pending","fire_at":"2030-01-01T00:00:00Z"}"#)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-edit", "edit the marker").await?;
   wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
@@ -1859,7 +1872,7 @@ async fn review_with_pending_trigger_pauses_merge_and_continues_the_review() -> 
     guard.track(pid);
   }
   fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
-  fs::write(pending_trigger_path(&stack, &worker.id), r#"{"status":"pending","fire_at":"2030-01-01T00:00:00Z"}"#)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
   assert!(pause_reason(&stack.features, &worker.id)?.is_some());
   fs::write(control.path().join("release-1"), "release")?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Success);
@@ -1940,7 +1953,7 @@ async fn failed_review_continuation_reports_failure_to_parent() -> anyhow::Resul
     guard.track(pid);
   }
   fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
-  fs::write(pending_trigger_path(&stack, &worker.id), r#"{"status":"pending","fire_at":"2030-01-01T00:00:00Z"}"#)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
   fs::write(control.path().join("release-1"), "release")?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Success);
   stack.node_pass(&worker.id).await?;
@@ -1999,7 +2012,7 @@ async fn review_continuation_fails_when_its_backend_is_removed() -> anyhow::Resu
     guard.track(pid);
   }
   fs::create_dir_all(pending_trigger_path(&stack, &worker.id).parent().context("trigger directory exists")?)?;
-  fs::write(pending_trigger_path(&stack, &worker.id), r#"{"status":"pending","fire_at":"2030-01-01T00:00:00Z"}"#)?;
+  fs::write(pending_trigger_path(&stack, &worker.id), pending_trigger_record(&worker.id))?;
   fs::write(control.path().join("release-1"), "release")?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Success);
   stack.node_pass(&worker.id).await?;

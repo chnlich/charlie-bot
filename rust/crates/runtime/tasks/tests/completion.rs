@@ -21,6 +21,7 @@ use charliebot_registry::sequence::SequenceCompletion;
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, terminal_outcome};
+use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus};
 use charliebot_store::{CreateTask, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::completion::ArchiveAuthority;
 use charliebot_tasks::completion::{CompletionEvidence, LandingEvidence, SequenceCloseOutcome, TaskCompletion};
@@ -2289,4 +2290,72 @@ async fn automatic_completion_of_a_closed_task_refuses_without_building_the_task
     builds_before,
     "the refusal answers from the folded facts without the blocker check's index build"
   );
+}
+
+/// One pending trigger of `session_id`: created at 09:22:23 and due at 10:22:23, a 3600-second maximum wait.
+fn write_pending_trigger(h: &CompletionHarness, session_id: &str, label: &str) {
+  let trigger = PendingTrigger {
+    id: trigger_files::fresh_uuid(),
+    session_id: session_id.to_string(),
+    fire_at: UtcDateTime::parse("2026-11-19T10:22:23.055346Z").unwrap(),
+    message: label.to_string(),
+    created_at: UtcDateTime::parse("2026-11-19T09:22:23.056056Z").unwrap(),
+    status: TriggerStatus::Pending,
+    fired_at: None,
+    watch_targets: Vec::new(),
+    fire_reason: None,
+  };
+  trigger_files::write_trigger(&h.base.store.session_dir(session_id), &trigger).unwrap();
+}
+
+/// The trigger-pause notices the initiator holds for one run of one worker.
+fn trigger_pause_notices(h: &CompletionHarness, initiator_id: &str, session_id: &str, run_id: &str) -> Vec<Value> {
+  let notice_id = control_events::stable_trigger_pause_notice_id(session_id, run_id);
+  h.base
+    .store
+    .load_all_facts(initiator_id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::AGENT_MESSAGE && event["id"] == notice_id)
+    .map(|event| event.to_value())
+    .collect()
+}
+
+#[tokio::test]
+async fn pending_trigger_pause_tells_the_initiator_once_per_run() {
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let worker = h.base.create_task("worker", Some(&root.id), TaskProfile::Worker, "Worker").await;
+  write_pending_trigger(&h, &worker.id, "moonlite Okta ssh master: approved, or 55-min window ended");
+
+  assert!(h.completion.pause_delivery(&worker.id, "run-1").await.unwrap().is_some());
+  let notices = trigger_pause_notices(&h, &root.id, &worker.id, "run-1");
+  assert_eq!(notices.len(), 1, "one notice for the run's pending trigger");
+  let content = notices[0]["content"].as_str().unwrap();
+  assert!(content.contains("moonlite Okta ssh master: approved, or 55-min window ended"), "{content}");
+  assert!(content.contains("max wait 3600 s"), "{content}");
+
+  // The same run's end, replayed by recovery, admits no second notice.
+  assert!(h.completion.pause_delivery(&worker.id, "run-1").await.unwrap().is_some());
+  assert_eq!(trigger_pause_notices(&h, &root.id, &worker.id, "run-1").len(), 1);
+}
+
+#[tokio::test]
+async fn unprocessed_input_pause_stays_silent() {
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let worker = h.base.create_task("worker", Some(&root.id), TaskProfile::Worker, "Worker").await;
+  h.dispatcher
+    .admit_input(
+      &worker.id,
+      event_types::AGENT_MESSAGE,
+      "one more tweak",
+      ACTOR_AGENT,
+      json!({(event_types::FROM_SESSION): root.id}),
+    )
+    .await
+    .unwrap();
+
+  assert!(h.completion.pause_delivery(&worker.id, "run-1").await.unwrap().is_some());
+  assert!(trigger_pause_notices(&h, &root.id, &worker.id, "run-1").is_empty());
 }

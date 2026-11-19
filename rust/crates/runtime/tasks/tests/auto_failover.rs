@@ -906,6 +906,30 @@ async fn a_pending_turn_start_intent_is_finished_before_the_launch() -> anyhow::
   Ok(())
 }
 
+/// An unreadable switch note does not block the run: the fallback keeps the session history location in its launch.
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_unreadable_turn_start_note_falls_back_to_the_history_location() -> anyhow::Result<()> {
+  let stack = subscription_reset_stack().await?;
+  let session = auto_session(&stack, "auto-turn-start-unreadable").await?;
+  first_turn_on_payg(&stack, &session.id).await?;
+  let launched =
+    register_pending_switch(&stack, &session.id, MEMBER_A, MEMBER_B, event_types::QUOTA_REASON_SUBSCRIPTION_RESET)
+      .await?;
+  let note = stack.store().run_dir(&session.id, &launched).join(HANDOFF_NOTE_FILENAME);
+  std::fs::remove_file(&note)?;
+  std::fs::create_dir(&note)?;
+
+  stack.adapter.call(&session.id, &[], Some(&launched)).await?;
+  wait_for_launch(&stack, &session.id, &launched).await?;
+  let prompt = launch_text(&stack, &session.id, &launched)?;
+  assert!(prompt.contains(HISTORY_LOCATION_NOTE), "{prompt}");
+  assert!(prompt.contains("this turn starts a fresh conversation, so read the session chat history"), "{prompt}");
+  assert!(!prompt.contains("Handoff summary:"), "the unreadable note's summary is not injected: {prompt}");
+  settle(&stack, &session.id).await?;
+  Ok(())
+}
+
 /// A manual switch lands after a turn start's intent, and a restart comes before the launch. The launch still carries
 /// its run's note, and the first turn after the manual switch carries no switch note.
 #[tokio::test]

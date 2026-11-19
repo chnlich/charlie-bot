@@ -2583,6 +2583,24 @@ impl TaskExecutionAdapter {
       return Ok(None);
     }
     let run_dir = self.features.store.run_dir(&meta.id, &run.id);
+    // Only a manager turn-start switch writes this file; check its presence before opening it on an ordinary turn.
+    match run_dir.join(prompts::HANDOFF_NOTE_FILENAME).try_exists() {
+      Ok(false) => return Ok(None),
+      Ok(true) => {}
+      Err(error) => {
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id = %meta.id,
+          run_id = %run.id,
+          error = %error,
+          "turn_start_note_unreadable"
+        );
+        return Ok(Some(session_anchors::manager_context_reset_note(
+          &meta.id,
+          "this turn starts a fresh conversation, so read the session chat history",
+        )));
+      }
+    }
     match handoff::read_note(&run_dir) {
       Ok(None) => Ok(None),
       Ok(Some(handoff::HandoffNote::Finished(note))) => Ok(Some(note)),
@@ -2600,7 +2618,10 @@ impl TaskExecutionAdapter {
           error = %format!("{error:#}"),
           "turn_start_note_unreadable"
         );
-        Ok(None)
+        Ok(Some(session_anchors::manager_context_reset_note(
+          &meta.id,
+          "this turn starts a fresh conversation, so read the session chat history",
+        )))
       }
     }
   }

@@ -10,10 +10,9 @@
 //! compresses a page's markup and inline script smaller than gzip does. The memo pays its slower
 //! compression once per body version.
 //!
-//! A page's body is built per request, but its last substituted value ends near the front of the
-//! document. The scripts and stylesheets after it are the same bytes in every body the page serves.
-//! [`PageTail`] keeps the compressed forms of those bytes, so a body pays the deflate of its own head
-//! and copies the tail's form.
+//! A page's body is built per request, but its last substituted value ends near the front of the document. The
+//! scripts and stylesheets after it are the same bytes in every body the page serves. [`PageTail`] keeps the
+//! compressed forms of those bytes, so a body pays the deflate of its own head and copies the tail's form.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};

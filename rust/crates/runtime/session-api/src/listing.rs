@@ -764,8 +764,8 @@ impl PageRowText {
 const COLUMN_ENCODING_KEY: &str = "$encoded";
 
 /// The encoding of the page's `id` column: the ids' 16-byte UUID values travel in row order as one base64url string.
-/// A home whose ids are not all canonical UUIDs carries one cell per row instead: the canonical UUID's 16 bytes in
-/// base64url, any other id as `~` and its text.
+/// A home whose ids are not all canonical UUIDs carries one cell per row instead. A canonical UUID keeps its 16 bytes
+/// in base64url there, and any other id is `~` followed by its text.
 const UUID_ENCODING: &str = "uuid-b64";
 
 /// The encoding of the page's `updated_at` column: the first row carries its epoch minutes, and every later row the
@@ -1269,7 +1269,7 @@ pub fn sessions_list_response(
 ///
 /// One memo serves one form. The session-move picker reads four fields of the same corpus, so it asks for that form
 /// through a memo of its own and leaves the Workspace's columns untouched. The first-screen form keeps a memo of its
-/// own too: the sidebar asks for it on every filter switch, and a request pair that alternated the two forms would
+/// own too. The sidebar asks for it on every filter switch, and a request pair that alternated the two forms would
 /// re-render the full listing each time.
 #[derive(Default)]
 pub struct CompactListingMemo {
@@ -1347,8 +1347,8 @@ pub fn row_refresh_ids(request: &Request<Body>) -> Option<Vec<String>> {
   crate::route_support::Query::new(request).get("ids").map(crate::api::parse_session_ids)
 }
 
-/// The row refresh body: the compact column text of the rows of `page` that `ids` name, and the ids the page no longer
-/// holds, as `{"sessions": <column text>, "gone": [...]}`.
+/// The row refresh body: the compact column text of the rows of `page` that `ids` name. It also carries the ids the
+/// page no longer holds, as `{"sessions": <column text>, "gone": [...]}`.
 ///
 /// The rows take the full listing's compact form, so the sidebar merges them into its painted list with the same
 /// decoding and the same epoch-minute times. The row memo is local to this call: a refresh names a few rows, and the

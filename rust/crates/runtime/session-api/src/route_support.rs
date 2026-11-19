@@ -31,7 +31,7 @@ impl<'a> Query<'a> {
   ///
   /// A pair that carries neither `%` nor `+` decodes to its own bytes, so it borrows the request instead of taking a
   /// copy of them. The sidebar's status poll names its row set in one `ids` value of several kilobytes and repeats it
-  /// every few seconds, and the copy of that value was most of the route's query cost.
+  /// every few seconds. Copying that value was most of the route's query cost.
   pub(crate) fn new(request: &'a Request<Body>) -> Self {
     let raw = request.uri().query().unwrap_or_default();
     let values = raw.split('&').filter(|part| !part.is_empty()).map(decode_pair).collect();
@@ -69,7 +69,7 @@ impl<'a> Query<'a> {
 
 /// One raw `key=value` part as its decoded name and value.
 ///
-/// A part without a `%` or a `+` decodes to its own bytes: the split leaves one name and one value, and a part
+/// A part without a `%` or a `+` decodes to its own bytes. The split leaves one name and one value, and a part
 /// without `=` keeps its blank value. A part that carries either escape takes `form_urlencoded::parse`, which reads
 /// the part as one pair and decodes both halves as the whole-string parse did.
 fn decode_pair(part: &str) -> (Cow<'_, str>, Cow<'_, str>) {

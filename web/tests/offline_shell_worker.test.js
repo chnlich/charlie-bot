@@ -750,15 +750,22 @@ test('a shell file 401 during refresh clears stored copies and the old shell', a
   assert.equal(await store.match(BOOTSTRAP_URL), undefined);
 });
 
-test('a release drops the stores of older releases and keeps its own and the files store', async () => {
+test('a release reuses its stored copy cache instead of dropping the older release', async () => {
   const h = harness({version: 'v2'});
-  await h.caches.api.open('last-state-v1');
-  await h.caches.api.open('last-state-v2');
+  const previous = await h.caches.api.open('last-state-v1');
+  await previous.put(SHELL_KEY, new Response('<html>current</html>', {headers: {ETag: '"shell-1"'}}));
+  await previous.put(BOOTSTRAP_URL, new Response('{"session":"current"}'));
+  await previous.put(LIST_URL, new Response('{"sessions":[]}'));
   await h.caches.api.open('last-state-files');
   await h.caches.api.open('other-cache');
   await Promise.all(h.fire('activate').waits);
   assert.deepEqual((await h.caches.api.keys()).sort(),
-      ['last-state-files', 'last-state-v2', 'other-cache']);
+      ['last-state-files', 'last-state-v1', 'other-cache']);
+  const shell = await previous.match(SHELL_KEY);
+  assert.equal(await shell.text(), '<html>current</html>');
+  assert.equal(shell.headers.get('ETag'), '"shell-1"');
+  assert.equal(await (await previous.match(BOOTSTRAP_URL)).text(), '{"session":"current"}');
+  assert.equal(await (await previous.match(LIST_URL)).text(), '{"sessions":[]}');
   assert.equal(h.state.unregistered, 0);
 });
 

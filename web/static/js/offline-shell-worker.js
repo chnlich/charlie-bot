@@ -9,13 +9,13 @@
 // /api/* requests) is not answered here and reaches the network unchanged.
 //
 // Storage: COPY_CACHE holds the shell under SHELL_KEY, the copies of the first screen and the
-// sidebar list, and an index of session ids with their last open time. Its name carries the
-// release version, so a new release starts with an empty copy store. FILE_CACHE holds the shell's
-// same-origin files under their own versioned paths; a file that did not change keeps its path, so
-// a release does not fetch it again.
+// sidebar list, and an index of session ids with their last open time. Its initial name carries the
+// release version; activation reuses an existing store so a shell already on the device can answer
+// the next open. FILE_CACHE holds the shell's same-origin files under their own versioned paths; a
+// file that did not change keeps its path, so a release does not fetch it again.
 
 const COPY_PREFIX = 'last-state-';
-const COPY_CACHE = COPY_PREFIX + WORKER_CONFIG.version;
+let COPY_CACHE = COPY_PREFIX + WORKER_CONFIG.version;
 const FILE_CACHE = COPY_PREFIX + 'files';
 const SHELL_KEY = self.location.origin + '/shell';
 const INDEX_KEY = self.location.origin + '/index';
@@ -41,7 +41,12 @@ async function activateCurrent() {
   // answers that request with no body (routes/pages.rs): this worker answers each stored-shell navigation from its copy
   // and never reads the preload response.
   await self.registration.navigationPreload.enable();
-  for (const name of await caches.keys()) {
+  const names = await caches.keys();
+  if (!names.includes(COPY_CACHE)) {
+    const previous = names.find((name) => name.startsWith(COPY_PREFIX) && name !== FILE_CACHE);
+    if (previous) COPY_CACHE = previous;
+  }
+  for (const name of names) {
     if (name.startsWith(COPY_PREFIX) && name !== COPY_CACHE && name !== FILE_CACHE) {
       await caches.delete(name);
     }

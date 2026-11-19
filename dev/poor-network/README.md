@@ -2,7 +2,7 @@
 
 One command drives the web client in headless Chrome through a shaping proxy at the link profile in `profile.mjs`.
 The browser's connections all share that proxy's bandwidth budget. The client talks to a trial server on the mock home.
-The bench reports seven scenarios, five repetitions each, as JSON and as a summary table with a pass or fail against each
+The bench reports the scenarios of `--scenarios`, five repetitions each, as JSON and as a summary table with a pass or fail against each
 target.
 
 ## Run
@@ -21,7 +21,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
+| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,foryou,open` (default the first four). `open` and `foryou` run their own cells, see below. |
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
@@ -72,12 +72,33 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 | 5 reset blackout | restore to `catchup_complete`, over the catch-up bytes / 12.5 KB/s | <= 2000 ms over the byte time |
 | 6 long stream | socket bytes of one reply, per reply text byte | <= 1.20 |
 | 7 tool stream | stream frames' tool-row bytes, per final row byte; the turn's socket bytes per minute | <= 2.0; <= 75 KB/min |
+| 8 foryou switch, large target | click to the first For-you row, when the first screen holds none | <= 2000 ms |
+| 8 foryou switch, typical target | click to the first For-you row, when the first screen holds none | <= 1200 ms |
+| 8 foryou failed page | the same switch with one injected failed older page, click to the first row | <= 2000 ms |
+| 8 foryou, pages before the first row | the target's older-event-page requests before the first row, switch and first open | 0 |
+| 8 foryou first open | navigation to the first For-you row | reported, not scored |
 
 The switch to real-time connection number is the before value of the one-socket-per-tab fix: today's page opens a new
 socket for the target after the first screen renders, and the fix keeps the page's socket and subscribes the session on
 it. The bench reads both the same way — today's `catchup_complete` belongs to the socket the page opened for that
 session, and the fix's frame names its session. The send of scenario 3 waits for the same frame: a person types for
 longer than a socket's setup takes, and the send floor assumes an open socket.
+
+## For you
+
+The For-you scenario's targets end in a tail of scheduled-trigger turns, which carry no For-you row: a trigger turn's
+message is the trigger and its reply the backend's assistant text. The first screen — the newest 40 messages — holds
+no For-you row, and the newest one, the tail's last human turn (the marker), sits a few hundred event lines back,
+inside the bootstrap's 2,000-line For-you scan. The seed asserts both facts from the bootstrap, so a stub or a
+scan-bound change fails the seed instead of measuring a different defect. The large target's bootstrap is also sized
+to the live view's (`VIEW.bootstrapUntrimmedWireBytes`).
+
+The switch cells run under the background load of scenarios 1 to 3; each repetition also injects one failed
+older-page request into the large target's switch by failing the page's first event-page fetch with a 500, and the
+first-open cells run on a fresh profile whose browser has opened another chat page, but never the target. The first
+row's time is the marker's paint; the pages readout counts the target's event-page requests before it, reading the
+page's own `first_for_you_row` phase where the page reports one. The offline reopen of the plan's third cell waits
+for the offline shell's landing and is not in the scenario yet.
 
 That wait fixes the send's phase in the repetition, so a link hold would land on it in every repetition. A 1 s delay
 spike is the link's time and not the page's, so the send's click waits out a hold that covers the next second

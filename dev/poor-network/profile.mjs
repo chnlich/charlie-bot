@@ -32,6 +32,18 @@ export const TARGETS = Object.freeze({
   toolStreamRatio: 2.0,
   // Scenario 7's turn is background traffic while it runs, so its socket bytes per minute read the scenario 1
   // target (`backgroundKbPerMinute`), not a target of their own.
+  // The For-you scenario: a switch whose target's first screen holds no For-you row. The switch caps are the
+  // acceptance table's absolute limits (the large target's own cap is 2,000 ms, the typical one's 1,200 ms), and
+  // the older-page requests before the first row are zero: the bootstrap's `older_for_you` rows show the first one.
+  // The first open has no time target (the plan's Trade-off 3); its older-page requests read zero the same way.
+  // The failed-page cell's cap is the failure-to-first-row limit of the same table.
+  foryouSwitchLargeMs: 2000,
+  foryouSwitchTypicalMs: 1200,
+  foryouFailedPageMs: 2000,
+  foryouPagesBeforeFirstRow: 0,
+  // The first-open time the plan set no target for, reported beside the pages readout so the number is not lost.
+  foryouOpenLargeMs: null,
+  foryouOpenTypicalMs: null,
 });
 
 // The background load of scenarios 1 to 3: the task-tree changes a live turn produces, one burst per window.
@@ -94,9 +106,10 @@ export const OTHER_VIEWS = Object.freeze({
 });
 
 // The sessions the bench creates on the trial's backend: one open, one running in the background, three for the
-// probes, one switch target, five for the held blackout and one whose status churns. They are task-tree nodes, so the
-// server takes a message.
-export const BENCH_SESSIONS = 12;
+// probes, one switch target, five for the held blackout, one whose status churns, and the For-you scenario's two
+// targets (plain here; the scenario sizes the large one and gives both the trigger tail when it runs). They are
+// task-tree nodes, so the server takes a message.
+export const BENCH_SESSIONS = 14;
 
 // The repo's default cron tasks (configs/cron.default.yaml: memory-curator, storage-cool, proactive-agent). Since commit
 // 0cae6f846 the server seeds them at startup, and the scheduler binds each to a root session at its first tick, 60 s

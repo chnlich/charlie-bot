@@ -87,6 +87,7 @@ fn the_backend_dropdown_lists_each_visible_option_and_pool_in_picker_order() {
         "event_count": 0,
         "session_bootstrap_json": "{}",
         "initial_sessions_json": "[]",
+        "for_you_rule": charliebot_store::for_you::page_rule(),
         "load_errors": [],
         "backend_options": [],
         "backend_compact": {},

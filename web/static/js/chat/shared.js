@@ -5,6 +5,10 @@
 // Roles whose messages open a chat turn — the one list, read by the shared
 // span rule below and by rendering.js's DOM matcher.
 const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary', 'child_report'];
+// The page-request retry backoff: a failed request (the switch's bootstrap, an older page, a send) waits 1 s, doubling
+// to a 30 s cap, and retries the same request. Every page request path reads these two values.
+const PAGE_REQUEST_RETRY_BASE_MS = 1000;
+const PAGE_REQUEST_RETRY_MAX_MS = 30000;
 
 // The pending-trigger bell's body, read from the icon table (icons.js): the sidebar row's bell
 // (sidebar/status.js) still wraps this body in its own svg element. The tray draws the bell through
@@ -214,14 +218,13 @@ function messageIdentityAttrs(msg) {
   return attrs;
 }
 
-// An error row: a system message whose text starts with ERROR_PREFIX. The
-// aggregator's ASSISTANT_ERROR, ERROR and RUN_ERROR arms in `render_builtin`
-// (`rust/crates/runtime/store/src/aggregator.rs`) write that prefix, so keep it
-// in step with them. The For you filter and rendering.js both read this one test.
-const ERROR_PREFIX = 'Error: ';
-
+// An error row: a system message whose text starts with the error prefix. The
+// prefix and its role come from FOR_YOU_RULE, which the store's for_you module
+// defines beside the aggregator's error arms (`render_builtin`,
+// `rust/crates/runtime/store/src/aggregator.rs`). The For you filter and
+// rendering.js both read this one test.
 function isErrorRow(msg) {
-  return msg.role === 'system' && String(msg.content || '').startsWith(ERROR_PREFIX);
+  return msg.role === FOR_YOU_RULE.error.role && String(msg.content || '').startsWith(FOR_YOU_RULE.error.prefix);
 }
 
 function isRenderedMessage(msg) {
@@ -255,6 +258,8 @@ const GLOBALS = {
   toolNameChipHtml,
   formatBubbleTime,
   STIMULUS_ROLES,
+  PAGE_REQUEST_RETRY_BASE_MS,
+  PAGE_REQUEST_RETRY_MAX_MS,
 };
 const CHAT_ONLY = {
   PENDING_TRIGGER_BELL_SVG_PATH,

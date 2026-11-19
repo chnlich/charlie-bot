@@ -621,6 +621,7 @@ fn index_answer(
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
     "session_bootstrap_json": SESSION_BOOTSTRAP_PLACEHOLDER,
+    "for_you_rule": charliebot_store::for_you::page_rule(),
     "active_session": active_session,
     "pending_draft": pending_draft,
     "event_count": event_count,

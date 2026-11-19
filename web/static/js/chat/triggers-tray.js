@@ -22,12 +22,6 @@
 
   const TRAY_ID = 'pending-triggers-tray';
   const CANCEL_REVERT_MS = 3000;
-  // The pending-trigger bell's body: the sidebar's bell (sidebar/status.js)
-  // renders the same glyph, so shared.js owns the one copy both surfaces read.
-  const PENDING_TRIGGER_BELL_SVG_PATH = Chat.PENDING_TRIGGER_BELL_SVG_PATH;
-  const CHEVRON_DOWN_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';
-  const CHEVRON_UP_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>';
-  const X_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>';
 
   // One active session's tray state. traySessionId is the session the fetched
   // records belong to. The poll handoff and the bell only act on a session
@@ -45,14 +39,13 @@
   }
 
   function bellSvg() {
-    return '<svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-      + PENDING_TRIGGER_BELL_SVG_PATH + '</svg>';
+    return cbIcon('notification', 16, 'text-amber-400 flex-shrink-0');
   }
 
-  function chevronSvg(up, extraClass) {
-    return '<svg class="w-4 h-4 text-slate-500 flex-shrink-0' + (up ? ' ml-auto' : '')
-      + (extraClass ? ' ' + extraClass : '')
-      + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">' + (up ? CHEVRON_UP_PATH : CHEVRON_DOWN_PATH) + '</svg>';
+  // The tray's disclosure mark: chevron-right while the tray is collapsed, chevron-down while expanded.
+  function chevronSvg(open, extraClass) {
+    return Chat.disclosureIcon(open, 16, 'text-slate-500 flex-shrink-0' + (open ? ' ml-auto' : '')
+      + (extraClass ? ' ' + extraClass : ''));
   }
 
   // The --watch spellings: a local pid renders with its kind prefix so the
@@ -101,7 +94,7 @@
     }
     return '<button class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 flex-shrink-0"'
       + ' title="Cancel trigger" onclick="' + call + '">'
-      + '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">' + X_SVG_PATH + '</svg></button>';
+      + cbIcon('close', 14) + '</button>';
   }
 
   function trayRowHtml(tr, last) {

@@ -11,7 +11,7 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 
-const { readStatic, readPackageStatic } = require('./read_static');
+const { readStatic, readPackageStatic, runIconModule } = require('./read_static');
 
 const { escapeHtml } = require('./escape_html_stub');
 
@@ -284,6 +284,7 @@ function loadArtifactsScript(opts) {
   // chat/shared.js is not loaded either, so the engine lookup sees no engine.
   context.Chat = {registerMessagePostProcessor: () => {}, activeTurnEngineFor: () => null};
   vm.createContext(context);
+  runIconModule(context);
   vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
   vm.runInContext(FILE_LINKS_JS, context, {filename: 'chat/file-links.js'});
   vm.runInContext(ARTIFACT_CARDS_JS, context, {filename: 'artifact-cards.js'});

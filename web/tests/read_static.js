@@ -54,9 +54,49 @@ function runStaticModules(context, files) {
     vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
     for (const [name, value] of stubs) context[name] = value;
   }
+  runIconModule(context);
   for (const file of files) {
     vm.runInContext(readStatic(file), context, {filename: file});
   }
 }
 
-module.exports = {readStatic, readPackageStatic, chatModules: () => scopedModules('chat/'), sidebarModules: () => scopedModules('sidebar/'), runStaticModules};
+// The icon module the page inlines ahead of every script: the table icon_script() emits, then icons.js.
+// The page's include list skips it, because its tag sits behind icon_script(). The table is built here from
+// the committed icons.json and the Lucide files, so the shapes match what the server renders.
+function iconTableScript() {
+  const iconsDir = path.join(__dirname, '..', 'static', 'icons');
+  const meanings = JSON.parse(fs.readFileSync(path.join(iconsDir, 'icons.json'), 'utf8'));
+  const table = {};
+  for (const [key, meaning] of Object.entries(meanings)) {
+    const source = fs.readFileSync(path.join(iconsDir, 'lucide', `${meaning.lucide}.svg`), 'utf8');
+    const shapes = source.replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/^[\s\S]*?<svg[^>]*>/, '')
+      .replace(/<\/svg>[\s\S]*$/, '');
+    table[key] = meaning.fill === true
+      ? {lucide: meaning.lucide, fill: true, shapes}
+      : {lucide: meaning.lucide, shapes};
+  }
+  return `window.CB_ICON_TABLE = ${JSON.stringify(table)};`;
+}
+
+// Runs the icon module into a vm context once: cbIcon and the table it reads. A context without a window
+// object gets its global as window, the page's own arrangement. A harness's window stub keeps its own copy,
+// so the table and cbIcon are also set on the global, where the chat modules read them as bare names.
+function runIconModule(context) {
+  if (typeof context.cbIcon === 'function') return;
+  vm.runInContext("if (typeof window === 'undefined') { globalThis.window = globalThis; }", context);
+  vm.runInContext(iconTableScript(), context, {filename: 'icons.table.js'});
+  vm.runInContext(readStatic('icons.js'), context, {filename: 'icons.js'});
+  vm.runInContext('globalThis.CB_ICON_TABLE = window.CB_ICON_TABLE; globalThis.cbIcon = window.cbIcon;', context);
+}
+
+module.exports = {
+  readStatic,
+  readPackageStatic,
+  indexScriptPaths,
+  chatModules: () => scopedModules('chat/'),
+  sidebarModules: () => scopedModules('sidebar/'),
+  runStaticModules,
+  runIconModule,
+  iconTableScript,
+};

@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {loadChatRendering} = require('./chat_rendering_context_stub');
+const {runIconModule} = require('./read_static');
 
 const ROOT = path.join(__dirname, '..');
 const read = (name) => fs.readFileSync(path.join(ROOT, 'static/js/chat', name), 'utf8');
@@ -90,6 +91,7 @@ function loadCard() {
     Object.assign(this, globals, chatOnly || {});
   };
   vm.createContext(context);
+  runIconModule(context);
   vm.runInContext(read('worker-summary.js'), context, {filename: 'worker-summary.js'});
   return {
     context,
@@ -400,6 +402,7 @@ function loadThroughDocument({worker = false} = {}) {
   context.Chat.wire = function(globals, chatOnly) { Object.assign(this, globals, chatOnly || {}); };
   context.globalThis = context;
   vm.createContext(context);
+  runIconModule(context);
   // The page declares SESSION_BOOTSTRAP with a top-level const, so the loader
   // must read a bare reference: a globalThis property would let a wrong read
   // pass here and miss the real page.

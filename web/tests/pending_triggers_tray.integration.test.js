@@ -152,7 +152,7 @@ test('below sm the collapsed row wraps the message onto its own second line', as
   // document order. +N and the chevron follow the message in the markup but
   // carry no order, so the order-modulated line breaking keeps them on line 1.
   for (const marker of [
-    '<svg class="w-4 h-4 text-amber-400 flex-shrink-0"',
+    '<svg class="cb-icon text-amber-400 flex-shrink-0" width="16" height="16"',
     '>Next trigger<',
     '>' + context.clockTimeHM(new context.Date(at(3, 52))) + '<',
   ]) {

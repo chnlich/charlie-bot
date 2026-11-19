@@ -74,8 +74,6 @@
   font-size: 0.75rem; transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .turn-fold-bar:hover { background: rgba(30, 41, 59, 0.7); border-color: rgba(148, 163, 184, 0.45); color: #cbd5e1; }
-.turn-fold-chevron { width: 0.875rem; height: 0.875rem; transition: transform 0.15s; }
-.turn-fold-bar[aria-expanded="true"] .turn-fold-chevron { transform: rotate(180deg); }
 /* Turn outline fold — one finished turn per wrapper: folded shows the row and
    hides the span, open does the reverse. */
 .turn-wrap[data-turn-open="false"] > :not(.turn-row) { display: none; }
@@ -116,18 +114,21 @@
 .turn-row-tag-turn { background: rgba(100, 116, 139, 0.3); color: #cbd5e1; }
 .turn-row-title { flex: 1 1 0; min-width: 0; color: #cbd5e1; }
 .turn-row-conclusion { flex: 0 1 auto; min-width: 0; max-width: 45%; }
+/* An icon from cbIcon sits on its text line. Preflight makes an svg a block, which would drop a mark
+   onto a line of its own beside the words it labels. */
+.cb-icon { display: inline-block; }
 /* The fold row's secondary tone: the conclusion arrow and the steps/time meta
    read beside the title. #64748b rendered 3.75:1 on the row's #0f172a
    background, under the 4.5:1 floor for text this small. #94a3b8 renders
    6.96:1, the tone the row's own label already uses. */
-.turn-row-conclusion:not(:empty)::before { content: "\2192\00a0"; color: #94a3b8; }
+.turn-row-arrow { margin-right: 0.25rem; color: #94a3b8; }
 .turn-row-meta { flex: 0 0 auto; font-family: 'Fira Code', ui-monospace, monospace; font-size: 0.65rem; color: #94a3b8; }
 /* The middle dot separates the step count from the time. A hex escape consumes
    its terminating space, so the trailing space is spelled `\0020`. */
 .turn-row-meta > span:not(:empty) ~ span:not(:empty)::before { content: " \00b7\0020"; }
 /* A folded turn is a button (rendering.js), and a phone has no hover to show it. The row ends in
    the disclosure caret the fold bar and the events rows carry. It keeps the row's secondary tone,
-   which renders 6.96:1 on the row. Its 10 px glyph and the row's gap come from the title, which
+   which renders 6.96:1 on the row. Its 10 px icon and the row's gap come from the title, which
    elides anyway. */
 .turn-row-caret { flex: 0 0 auto; color: #94a3b8; font-size: 0.625rem; line-height: 1; }
 /* A phone sets the conclusion and the steps/time meta on lines of their own. At 390 px the tag, the

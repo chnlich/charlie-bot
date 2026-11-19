@@ -43,9 +43,16 @@
     while (el.firstChild) el.removeChild(el.firstChild);
   }
 
-  // A fold's mark: the closed and open glyphs every fold in the panel shows.
+  // A fold's mark: the disclosure icon for its state, the one every fold in the panel shows.
   function foldGlyph(open) {
-    return open ? '▾' : '▸';
+    return Chat.disclosureIcon(open, 12);
+  }
+
+  function foldGlyphSpan(open) {
+    const span = document.createElement('span');
+    span.className = 'w-3 text-center';
+    span.innerHTML = foldGlyph(open);
+    return span;
   }
 
   // A fold toggle: the button, its glyph span and its label span are the same
@@ -55,7 +62,7 @@
     toggle.type = 'button';
     toggle.className = className;
     toggle.setAttribute('aria-expanded', String(open));
-    toggle.appendChild(textSpan('w-3 text-center', foldGlyph(open)));
+    toggle.appendChild(foldGlyphSpan(open));
     toggle.appendChild(textSpan('', label));
     toggle.onclick = onToggle;
     return toggle;
@@ -65,7 +72,7 @@
   // for the eye.
   function setFoldOpen(toggle, open) {
     toggle.setAttribute('aria-expanded', String(open));
-    toggle.children[0].textContent = foldGlyph(open);
+    toggle.children[0].innerHTML = foldGlyph(open);
   }
 
   function safeLink(link) {
@@ -77,7 +84,7 @@
     a.className = 'shrink-0 whitespace-nowrap text-blue-400 hover:text-blue-300';
     a.href = href;
     a.dataset.openLink = 'true';
-    a.textContent = 'Open ›';
+    a.innerHTML = 'Open ' + cbIcon('open', 12);
     return a;
   }
 

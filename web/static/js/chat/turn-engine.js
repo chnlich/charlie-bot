@@ -542,7 +542,7 @@
       // which is off-screen. The span sticks to the window's middle instead.
       const label = document.createElement('span');
       label.className = 'turn-placeholder-label';
-      label.textContent = '…';
+      label.innerHTML = cbIcon('loading', 14);
       el.appendChild(label);
       return el;
     }

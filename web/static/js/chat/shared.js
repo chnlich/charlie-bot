@@ -6,11 +6,16 @@
 // span rule below and by rendering.js's DOM matcher.
 const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary', 'child_report'];
 
-// The pending-trigger bell's body: the sidebar row's bell (sidebar/status.js) and
-// the chat column's tray (triggers-tray.js) show the same glyph, so one constant
-// serves both surfaces. The tray's code travels after the document, so the
-// sidebar bell reads this copy before the tray lands.
-const PENDING_TRIGGER_BELL_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 01-6 0"/>';
+// The pending-trigger bell's body, read from the icon table (icons.js): the sidebar row's bell
+// (sidebar/status.js) still wraps this body in its own svg element. The tray draws the bell through
+// cbIcon directly.
+const PENDING_TRIGGER_BELL_SVG_PATH = globalThis.CB_ICON_TABLE.notification.shapes;
+
+// The disclosure mark for a control's state: chevron-right while its body is hidden, chevron-down
+// while it is open. The state picks the key, so no CSS turns the glyph.
+function disclosureIcon(open, size, cls = '') {
+  return cbIcon(open ? 'disclosure-open' : 'disclosure', size, cls);
+}
 
 // ---------------------------------------------------------------------------
 // The turn-input rule, stated once.
@@ -253,6 +258,7 @@ const GLOBALS = {
 };
 const CHAT_ONLY = {
   PENDING_TRIGGER_BELL_SVG_PATH,
+  disclosureIcon,
   escapeJsSingleQuoted,
   messageIdentityAttrs,
   toolInputSummary,

@@ -16,7 +16,7 @@ const {
 const {baseSessionContext, createChatSidebarContext} = require('./session_context_stub');
 const {createFakeWebSocketClass} = require('./fake_websocket');
 const {loadWebsocketModules} = require('./websocket_context_stub');
-const {readStatic} = require('./read_static');
+const {readStatic, runIconModule} = require('./read_static');
 
 // ---------------------------------------------------------------------------
 // The session status surfaces (chat/status-panel.js) on a page of the real chat,
@@ -135,6 +135,7 @@ function panelRig() {
   context.reconnectDelay = 1000;
   // tabs.js loads in the connection layer, before the sidebar module that calls switchTab on it.
   vm.createContext(context);
+  runIconModule(context);
   vm.runInContext(readStatic('tabs.js'), context, {filename: 'tabs.js'});
   createChatSidebarContext(context);
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;

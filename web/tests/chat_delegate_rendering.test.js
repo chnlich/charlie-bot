@@ -243,13 +243,13 @@ test('a Run header reads its own state: queued in amber, failed in red with its 
   const queued = header('queued');
   assertWellFormedMarkup(queued, 'queued header');
   assert.match(queued, /id="run-header-run-queued" data-run-state="queued"/);
-  assert.match(queued, /id="run-dot-run-queued" class="[^"]*bg-amber-400/);
+  assert.match(queued, /<svg class="[^"]*text-amber-400[^"]*"[^>]*id="run-dot-run-queued"/);
   assert.match(queued, /Run work \u00b7 Sonnet 5 \u00b7 queued/);
   assert.doesNotMatch(queued, /run-error-/);
 
   const failed = header('failed', {error: 'RuntimeError: worktree <prep> failed'});
   assertWellFormedMarkup(failed, 'failed header');
-  assert.match(failed, /id="run-dot-run-failed" class="[^"]*bg-red-500/);
+  assert.match(failed, /<svg class="[^"]*text-red-500[^"]*"[^>]*id="run-dot-run-failed"/);
   assert.match(failed, /id="run-error-run-failed"[^>]*>(?:<span[^>]*>)?RuntimeError: worktree &lt;prep&gt; failed</);
 
   const multiline = header('failed', {error: 'peer closed connection\nwhile streaming\nretry exhausted'});
@@ -257,9 +257,9 @@ test('a Run header reads its own state: queued in amber, failed in red with its 
   assert.match(multiline, /2 more lines/);
   assert.match(multiline, /while streaming[\s\S]*retry exhausted/);
 
-  assert.match(header('running'), /id="run-dot-run-running" class="[^"]*bg-blue-500/);
-  assert.match(header('success'), /id="run-dot-run-success" class="[^"]*bg-green-500/);
-  assert.match(header('stopped'), /id="run-dot-run-stopped" class="[^"]*bg-slate-500/);
+  assert.match(header('running'), /<svg class="[^"]*text-blue-500[^"]*"[^>]*id="run-dot-run-running"/);
+  assert.match(header('success'), /<svg class="[^"]*text-green-500[^"]*"[^>]*id="run-dot-run-success"/);
+  assert.match(header('stopped'), /<svg class="[^"]*text-slate-500[^"]*"[^>]*id="run-dot-run-stopped"/);
 });
 
 test('a run_end separator keeps its label while an ordinary separator keeps its button group and no text', () => {

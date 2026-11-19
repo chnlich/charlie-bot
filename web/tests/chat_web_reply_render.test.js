@@ -9,7 +9,8 @@ const {loadChatRendering} = require('./chat_rendering_context_stub');
 // web_reply_notice is a one-line centered notice of plain text. A
 // web_reply_check is the audit marker of one reply's text and draws nothing.
 // The error row a failed turn writes (a system message whose text starts with
-// "Error: ") closes the file.
+// "Error: ") follows. A handler result row carries its kind, and the row draws the
+// check or the cross from that kind.
 // ---------------------------------------------------------------------------
 
 test('a web reply renders as an agent-side bubble around its markdown body', () => {
@@ -64,4 +65,25 @@ test('a system row without the error prefix stays a centered one-line pill', () 
       {role: 'system', id: 's1', content: 'Backend switched: one to two', timestamp: null}, 'sess-1');
   assert.ok(html.includes('justify-center'));
   assert.ok(html.includes('truncate'), 'the pill truncates its one line');
+});
+
+test('a handler_ok row draws the check ahead of its task and message', () => {
+  const context = loadChatRendering();
+  const html = context.renderMessage(
+      {role: 'system', kind: 'handler_ok', id: 'h1', content: 'lint: clean', timestamp: null}, 'sess-1');
+  assert.ok(html.includes(context.cbIcon('done', 12) + ' lint: clean'), 'the check leads the text');
+  assert.ok(html.includes('justify-center'), 'the row stays a centered pill');
+  // A row stored before the kind field has no mark: its text keeps the check it was stored with.
+  const legacy = context.renderMessage(
+      {role: 'system', id: 'h0', content: '\u2713 lint: clean', timestamp: null}, 'sess-1');
+  assert.ok(legacy.includes('\u2713 lint: clean'), 'the stored text shows as it was');
+  assert.ok(!legacy.includes('class="cb-icon'), 'a row without a kind draws no icon');
+});
+
+test('a handler_error row draws the cross ahead of its task and message', () => {
+  const context = loadChatRendering();
+  const html = context.renderMessage(
+      {role: 'system', kind: 'handler_error', id: 'h2', content: 'test: 2 failed', timestamp: null}, 'sess-1');
+  assert.ok(html.includes(context.cbIcon('failed', 12) + ' test: 2 failed'), 'the cross leads the text');
+  assert.ok(html.includes('justify-center'), 'the row stays a centered pill');
 });

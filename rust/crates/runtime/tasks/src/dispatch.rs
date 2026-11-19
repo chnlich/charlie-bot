@@ -9,7 +9,7 @@ use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::compact::CompactValue;
-use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
+use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER, REPORT_TO_FIELD};
 use charliebot_store::metadata::{TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text};
 use charliebot_store::session_fork::CloseReportRedelivery;
@@ -762,7 +762,7 @@ impl Dispatcher {
     let mut recipient_events: HashMap<String, DeliveredReportHistory> = HashMap::new();
     for close in close_events {
       let close_value = close.to_value();
-      let recipient = close_value.get("report_to");
+      let recipient = close_value.get(REPORT_TO_FIELD);
       if !recipient.is_some_and(is_truthy) {
         continue;
       }

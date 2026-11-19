@@ -226,6 +226,9 @@ pub fn build_task_created_event(
   )
 }
 
+/// The close fact's field naming the parent task that receives the close report.
+pub const REPORT_TO_FIELD: &str = "report_to";
+
 /// The fields of one task-close fact: its outcome and summary, the report recipient, and the archive or sequence
 /// detail its outcome carries.
 pub struct CloseFact<'a> {
@@ -251,7 +254,7 @@ pub fn close_event(fact: CloseFact<'_>) -> Value {
     ("summary".to_string(), json!(fact.summary)),
     (event_types::RESULT_REFS.to_string(), json!(fact.result_refs)),
     ("run_ids".to_string(), json!(fact.run_ids)),
-    ("report_to".to_string(), fact.report_to.map_or(Value::Null, |parent| json!(parent))),
+    (REPORT_TO_FIELD.to_string(), fact.report_to.map_or(Value::Null, |parent| json!(parent))),
   ];
   if let Some(archived_with) = fact.archived_with {
     payload.push(("archived_with".to_string(), json!(archived_with)));

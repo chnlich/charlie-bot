@@ -10,10 +10,14 @@ use charliebot_core::text_repr;
 use serde_json::{Value, json};
 
 use crate::git::{self, DIFF_TIMEOUT};
+use crate::params::RangeMode;
 
 /// `base...head` for three-dot, `base..head` for two-dot.
-pub(crate) fn range_spec(base: &str, head: &str, mode: &str) -> String {
-  if mode == "three-dot" { format!("{base}...{head}") } else { format!("{base}..{head}") }
+pub(crate) fn range_spec(base: &str, head: &str, mode: RangeMode) -> String {
+  match mode {
+    RangeMode::ThreeDot => format!("{base}...{head}"),
+    RangeMode::TwoDot => format!("{base}..{head}"),
+  }
 }
 
 /// The rows and totals of one range, shared by every response that serves it.

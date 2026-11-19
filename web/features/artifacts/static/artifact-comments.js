@@ -605,7 +605,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       trigger = document.createElement('button');
       trigger.type = 'button';
       trigger.className = GLOBAL_PREFIX + '-trigger';
-      trigger.textContent = '\uD83D\uDCAC';
+      trigger.innerHTML = cbIcon('comment', 16);
       trigger.title = 'Comment on this block';
       trigger.setAttribute('aria-label', 'Comment on this block');
       trigger.addEventListener('mousedown', function(event) {
@@ -1142,7 +1142,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       var remove = document.createElement('button');
       remove.type = 'button';
       remove.className = GLOBAL_PREFIX + '-tray-remove';
-      remove.textContent = '\u00D7';
+      remove.innerHTML = cbIcon('close', 12);
       remove.title = 'Remove this comment';
       remove.setAttribute('aria-label', 'Remove this comment');
       remove.addEventListener('click', function() {

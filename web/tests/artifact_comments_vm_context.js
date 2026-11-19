@@ -8,6 +8,7 @@
 const vm = require('node:vm');
 
 const { readStatic, readPackageStatic } = require('./read_static');
+const { loadIconScripts } = require('./icon_context');
 const { makeElement } = require('./artifact_comments_dom_stub');
 
 const ARTIFACT_COMMENTS_JS = readPackageStatic('features', 'artifacts', 'artifact-comments.js');
@@ -84,6 +85,7 @@ function loadArtifactCommentsContext(opts = {}) {
     context.sessionStorage = opts.sessionStorage;
   }
   vm.createContext(context);
+  loadIconScripts(context);
   vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
   return {context, window, head, body, documentElement, listeners};

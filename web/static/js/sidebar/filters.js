@@ -40,6 +40,9 @@ function workspaceListingUrl(activeSessionId) {
   return url + separator + 'active=' + encodeURIComponent(activeSessionId);
 }
 
+// The offline shell stores the first screen's listing under the URL this builds (offline-shell.js).
+registerOfflineShellListingUrl(workspaceListingUrl);
+
 function getRestorableSidebarFilters() {
   return sidebarFilters.filter(filter => filter.restoreFromUrl).map(filter => filter.name);
 }

@@ -10,7 +10,7 @@ const vm = require('node:vm');
 
 const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
 const {createFakeWebSocketClass} = require('./fake_websocket');
-const {standInForUsageJs} = require('./session_context_stub');
+const {standInForUsageJs, standInForOfflineShell} = require('./session_context_stub');
 const {createElement} = require('./dom_element_stub');
 
 // A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
@@ -106,6 +106,7 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
   vm.runInContext(readStatic('view-requests.js'), context, {filename: 'view-requests.js'});
   runStaticModules(context, chatModules());
   standInForUsageJs(context);
+  standInForOfflineShell(context);
   runStaticModules(context, sidebarModules());
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});

@@ -10,7 +10,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
-const {standInForUsageJs} = require('./session_context_stub');
+const {standInForUsageJs, standInForOfflineShell} = require('./session_context_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
 function createFakeDocument() {
@@ -104,6 +104,7 @@ function buildSidebarContext() {
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
   runStaticModules(context, chatModules());
   standInForUsageJs(context);
+  standInForOfflineShell(context);
   runStaticModules(context, sidebarModules());
   return {context, document, timers};
 }

@@ -186,7 +186,14 @@ function createChatSidebarContext(context, options = {}) {
   vm.runInContext(VIEW_REQUESTS_JS, context, {filename: 'view-requests.js'});
   runStaticModules(context, chatModules());
   standInForUsageJs(context);
+  standInForOfflineShell(context);
   runStaticModules(context, sidebarModules());
+}
+
+// offline-shell.js loads before the sidebar modules on the page, and these harnesses do not load it. This stands
+// in for the listing-URL registration sidebar/filters.js makes at load.
+function standInForOfflineShell(context) {
+  context.registerOfflineShellListingUrl = () => {};
 }
 
 // usage.js loads between the chat and the sidebar modules on the page. These
@@ -469,6 +476,7 @@ module.exports = {
   paintListReply,
   createChatSidebarContext,
   standInForUsageJs,
+  standInForOfflineShell,
   loadCronPackage,
   buildSidebarFilterElements,
   buildUsageElements,

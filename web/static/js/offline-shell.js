@@ -50,6 +50,14 @@ function warmOfflineShell() {
   }, (err) => reportWarm({error: String(err)}));
 }
 
+// The sidebar's listing URL for an active session. sidebar/filters.js registers it at load, after this file loads,
+// so this file names only its own entries.
+let offlineShellListingUrl;
+
+function registerOfflineShellListingUrl(listingUrlOf) {
+  offlineShellListingUrl = listingUrlOf;
+}
+
 // Server-rendered data did not pass through the worker's fetch handler, so seed the same URLs from the page that
 // painted them. The shell's first-screen payload and initial sidebar rows are the offline copies for its next open.
 function offlineShellSeedCopies() {
@@ -63,7 +71,7 @@ function offlineShellSeedCopies() {
   if (INITIAL_SESSIONS !== null && INITIAL_LOAD_ERRORS.length === 0) {
     const activeSessionId = SESSION_ID || new URL(location.href).searchParams.get('session');
     copies.push({
-      url: new URL(Sidebar.workspaceListingUrl(activeSessionId), location.href).href,
+      url: new URL(offlineShellListingUrl(activeSessionId), location.href).href,
       body: INITIAL_SESSIONS,
     });
   }

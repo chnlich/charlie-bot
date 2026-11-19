@@ -34,10 +34,6 @@ function buildPage({
     SESSION_BOOTSTRAP: sessionBootstrap,
     INITIAL_SESSIONS: initialSessions,
     INITIAL_LOAD_ERRORS: initialLoadErrors,
-    Sidebar: {
-      workspaceListingUrl: (activeSessionId) => '/api/sessions/?compact=1&screen=1' +
-        (activeSessionId ? '&active=' + encodeURIComponent(activeSessionId) : ''),
-    },
     CustomEvent: class {
       constructor(type, init) {
         this.type = type;
@@ -131,6 +127,9 @@ test('the warm seeds the server-rendered first screen and sidebar rows', async (
     sessionBootstrap: bootstrap,
     initialSessions,
   });
+  // sidebar/filters.js registers this at load; the page test plays that registration.
+  page.context.registerOfflineShellListingUrl((activeSessionId) => '/api/sessions/?compact=1&screen=1' +
+    (activeSessionId ? '&active=' + encodeURIComponent(activeSessionId) : ''));
   page.firePageCurrent();
   await new Promise((resolve) => setImmediate(resolve));
 

@@ -128,7 +128,7 @@ pub fn change_login(state: &mut State, name: &str, change: impl FnOnce(&mut Logi
   Ok(())
 }
 
-/// Applies `change` to a login record through [`update_state`].
+/// The application of `change` to a login record through [`update_state`].
 pub async fn update_login(state_path: &Path, name: &str, change: impl FnOnce(&mut LoginState)) -> anyhow::Result<()> {
   update_state(state_path, |state| {
     change_login(state, name, change)?;
@@ -162,8 +162,8 @@ pub async fn record_link_match(state_path: &Path, name: &str, matched: LinkMatch
   update_login(state_path, name, |record| record.link_match = Some(matched)).await
 }
 
-/// Records a link result only while `should_record` still holds under the round slot. The condition and write share
-/// one state read so a passing check cannot race with a stale probe result.
+/// The recording of a link result only while `should_record` still holds under the round slot. The condition and write
+/// share one state read so a passing check cannot race with a stale probe result.
 pub async fn record_link_match_if(
   state_path: &Path,
   name: &str,
@@ -204,7 +204,8 @@ fn settle_check(record: &mut LoginState, status: LoginStatus, detail: String, ch
   }
 }
 
-/// Clears the stored link result of `name`, when one is stored. A passing host probe of the login's host calls it.
+/// The clearing of the stored link result of `name`, when one is stored. A passing host probe of the login's host calls
+/// it.
 pub fn clear_link_match(state: &mut State, name: &str) -> anyhow::Result<()> {
   if login_state(state, name)?.link_match.is_some() {
     change_login(state, name, |record| record.link_match = None)?;

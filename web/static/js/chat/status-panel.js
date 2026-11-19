@@ -214,8 +214,9 @@
   function undoButton(onClick) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'text-blue-400 hover:text-blue-300';
-    button.textContent = 'Undo';
+    button.className = 'inline-flex items-center gap-1 text-blue-400 hover:text-blue-300';
+    button.innerHTML = cbIcon('undo', 14);
+    button.appendChild(textSpan('', 'Undo'));
     button.onclick = onClick;
     return button;
   }
@@ -228,19 +229,7 @@
     button.style.height = '24px';
     button.setAttribute('aria-label', 'Mark done');
     button.title = 'Mark done';
-    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    icon.setAttribute('width', '14');
-    icon.setAttribute('height', '14');
-    icon.setAttribute('viewBox', '0 0 24 24');
-    icon.setAttribute('fill', 'none');
-    icon.setAttribute('stroke', 'currentColor');
-    icon.setAttribute('stroke-width', '2');
-    icon.setAttribute('stroke-linecap', 'round');
-    icon.setAttribute('stroke-linejoin', 'round');
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', 'M5 12.5 10 17.5 20 6.5');
-    icon.appendChild(path);
-    button.appendChild(icon);
+    button.innerHTML = cbIcon('done', 14);
     button.onclick = onClick;
     return button;
   }

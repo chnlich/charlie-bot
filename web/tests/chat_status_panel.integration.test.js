@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -17,6 +19,9 @@ const {baseSessionContext, createChatSidebarContext} = require('./session_contex
 const {createFakeWebSocketClass} = require('./fake_websocket');
 const {loadWebsocketModules} = require('./websocket_context_stub');
 const {readStatic, runIconModule} = require('./read_static');
+
+// The shared icon parity fixture carries the table that icon_script() renders into the page.
+const ICON_TABLE_SCRIPT = JSON.parse(fs.readFileSync(path.join(__dirname, 'icons_parity.json'), 'utf8')).script;
 
 // ---------------------------------------------------------------------------
 // The session status surfaces (chat/status-panel.js) on a page of the real chat,
@@ -197,6 +202,10 @@ function panelRig() {
   vm.runInContext(readStatic('comment_post.js'), context, {filename: 'comment_post.js'});
   vm.runInContext(readStatic('tabs.js'), context, {filename: 'tabs.js'});
   createChatSidebarContext(context);
+  // The page renders the icon table ahead of icons.js; status-panel.js calls cbIcon as a page global.
+  vm.runInContext(ICON_TABLE_SCRIPT, context, {filename: 'icons_parity.json'});
+  vm.runInContext(readStatic('icons.js'), context, {filename: 'icons.js'});
+  vm.runInContext('var cbIcon = window.cbIcon;', context);
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
   loadWebsocketModules(context);
   // The message list is the other suites' subject: a live message lands there
@@ -532,12 +541,7 @@ test('only stored own items have the 14px check icon; child answers show Marked 
   assert.ok(iconButton, 'a stored own item has a done button');
   assert.equal(iconButton.style.width, '24px');
   assert.equal(iconButton.style.height, '24px');
-  const svg = iconButton.children[0];
-  assert.equal(svg.tagName, 'SVG');
-  assert.equal(svg.getAttribute('width'), '14');
-  assert.equal(svg.getAttribute('height'), '14');
-  assert.equal(svg.getAttribute('viewBox'), '0 0 24 24');
-  assert.equal(svg.getAttribute('stroke'), 'currentColor');
+  assert.equal(iconButton.innerHTML, rig.context.cbIcon('done', 14), 'the done control renders the shared done icon');
   assert.equal(viewWaitingItems(rig.panel)[2].querySelectorAll('[data-item-controls]').length, 0,
     'a derived host item gets no done control');
   const child = viewChildItems(rig.panel)[0];

@@ -106,7 +106,8 @@ Remaining lists the open milestones between the session and its Goal, so the use
   Each `▸` line names one of your items by its list version, its `since` time and its position in your list.
   When the line's list version is your current list version (`charliebot web status show`), its position names the item;
   otherwise ask the user which item the click meant, and change nothing.
-  The `↳` line below it is the user's answer. `↳ Done` confirms that the user finished the item's own action, fact or review;
+  Each `↳` line below it is the user's answer to that item; a pick line begins with `Q<n>`, the question it answers.
+  `↳ Done` confirms that the user finished the item's own action, fact or review;
   it gives no take off and no approval. Any other answer falls under Action Boundaries in `prompts/master.md`.
 - The Status view marks an item done from a click message while its list version matches your current Waiting on you list.
 - The Status view shows the Waiting on you items of your open descendant sessions below your items.

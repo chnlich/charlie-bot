@@ -9,15 +9,18 @@
 // session show neither the option nor the badge. A web session is one that
 // Chat.ForYou.isWebSession (for-you.js) accepts.
 //
-// The session's own status, list version, and answered marks come from GET
-// /api/internal/web/status. The descendant and child rows use the same read,
-// fetched at open and after status notifications.
+// The session's own status, list version, answered marks and each stored item's open questions (forks, which the pick
+// buttons read) come from GET /api/internal/web/status. The descendant and child rows use the same read, fetched at
+// open and after status notifications.
 (function() {
   const Chat = globalThis.Chat;
 
   const VIEW_ID = 'status-panel';
   const BADGE_ID = 'status-waiting-count';
-  const DONE_HEADER = '[Status · Waiting on you]';
+  // The header of every Status click: the done mark and each pick send one click message under it.
+  const CLICK_HEADER = '[Status · Waiting on you]';
+  const DONE_LABEL = 'Marked done';
+  const DONE_ANSWER = 'Done';
   const pendingDone = new Map();
   const itemNotices = new Map();
   const headerNotices = new Map();
@@ -260,44 +263,84 @@
     renderPanel();
   }
 
-  function itemControlRow(item, sessionId, position, canMarkDone) {
-    const row = document.createElement('div');
-    row.className = 'flex items-center gap-2 text-xs';
-    row.dataset.itemControls = 'true';
-    const waitingVersion = panelStatus && panelStatus.waiting_version;
-    const key = position ? doneKey(sessionId, waitingVersion, position) : null;
-    const pending = key && pendingDone.get(key);
-    const notice = key && itemNotices.get(key);
-    if (item.answered === true) {
-      row.appendChild(textSpan('text-slate-400', 'Marked done'));
-    } else if (pending && !pending.undo.sending) {
-      row.appendChild(textSpan('text-slate-400', 'Marked done · '));
-      row.appendChild(undoButton(() => cancelDone(key)));
-    } else if (pending) {
-      row.appendChild(textSpan('text-slate-400', 'Marked done'));
-    } else if (notice) {
-      row.appendChild(textSpan(notice.startsWith('Status unknown:') ? 'text-amber-200' : 'text-slate-400', notice));
-      if (!notice.startsWith('Status unknown:') && canMarkDone && waitingVersion && position) {
-        row.appendChild(doneButton(() => scheduleDone(sessionId, waitingVersion, position, item.since)));
-      }
-    } else if (canMarkDone && waitingVersion && position) {
-      row.appendChild(doneButton(() => scheduleDone(sessionId, waitingVersion, position, item.since)));
+  // The picks one stored item offers, from the open questions its page shows (the forks the status read gives it). An
+  // item offers picks only when every open question on its page names two or more options, so a click never answers
+  // part of the page. One question gives one button per option; several give one button that answers each question
+  // with its recommended option, and only when each one has a recommendation.
+  function pickChoices(forks) {
+    if (forks.length === 0 || forks.some((fork) => fork.options.length < 2)) return [];
+    if (forks.length === 1) {
+      const [fork] = forks;
+      return fork.options.map((option) => ({label: option.name, answers: ['Q' + fork.n + ' ' + option.text]}));
     }
+    const answers = [];
+    for (const fork of forks) {
+      const option = fork.rec && fork.options.find((candidate) => candidate.name === fork.rec);
+      if (!option) return [];
+      answers.push('Q' + fork.n + ' ' + option.text);
+    }
+    return [{label: 'All as recommended', answers}];
+  }
+
+  function pickButton(choice, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'rounded px-2 py-1 bg-slate-700 text-slate-200 hover:bg-slate-600 transition-colors';
+    button.textContent = choice.label;
+    button.dataset.pickChoice = choice.label;
+    button.onclick = onClick;
+    return button;
+  }
+
+  // One stored item's control row: its done mark (own items only), then its pick buttons. A click waits under the row
+  // for Undo; an answered item reads Marked done with no buttons. pageLink is the item's page, offered beside a
+  // multi-question item's button when the item's line does not already open that page.
+  function itemControlRow(item, sessionId, waitingVersion, position, canMarkDone, pageLink) {
+    const row = document.createElement('div');
+    row.className = 'flex flex-wrap items-center gap-2 text-xs';
+    row.dataset.itemControls = 'true';
+    const key = doneKey(sessionId, waitingVersion, position);
+    const pending = pendingDone.get(key);
+    const notice = itemNotices.get(key);
+    if (item.answered === true) {
+      row.appendChild(textSpan('text-slate-400', DONE_LABEL));
+      return row;
+    }
+    if (pending) {
+      row.appendChild(textSpan('text-slate-400', pending.label));
+      if (!pending.undo.sending) {
+        row.appendChild(textSpan('text-slate-400', ' · '));
+        row.appendChild(undoButton(() => cancelDone(key)));
+      }
+      return row;
+    }
+    if (notice) {
+      row.appendChild(textSpan(notice.startsWith('Status unknown:') ? 'text-amber-200' : 'text-slate-400', notice));
+      if (notice.startsWith('Status unknown:')) return row;
+    }
+    const clickOn = (label, answers) => () =>
+      scheduleClick({sessionId, waitingVersion, position, since: item.since, label, answers});
+    if (canMarkDone) row.appendChild(doneButton(clickOn(DONE_LABEL, [DONE_ANSWER])));
+    const choices = pickChoices(item.forks);
+    for (const choice of choices) row.appendChild(pickButton(choice, clickOn(choice.label, choice.answers)));
+    if (item.forks.length > 1 && pageLink) row.appendChild(openLink(pageLink));
     return row;
   }
 
-  function scheduleDone(sessionId, waitingVersion, position, since) {
-    const key = doneKey(sessionId, waitingVersion, position);
+  // The one click path of the Status view: the done mark and each pick. The click waits its undo window, then posts
+  // one click message to the owning session.
+  function scheduleClick(click) {
+    const key = doneKey(click.sessionId, click.waitingVersion, click.position);
     if (pendingDone.has(key)) return;
-    const entry = {sessionId, waitingVersion, position, since, clickMs: Date.now(), undo: null};
-    entry.undo = startUndoableSend(() => postDone(entry));
+    const entry = {...click, clickMs: Date.now(), undo: null};
+    entry.undo = startUndoableSend(() => postClick(entry));
     pendingDone.set(key, entry);
     entry.undo.sent.then(
       (posted) => {
         // A cancelled click has already left pendingDone, in cancelDone or cancelPendingDone.
-        if (posted !== null) finishDone(key, entry, null);
+        if (posted !== null) finishClick(key, entry, null);
       },
-      (err) => finishDone(key, entry, err),
+      (err) => finishClick(key, entry, err),
     );
     renderPanel();
   }
@@ -321,12 +364,12 @@
 
   // The Status click's post, the delayed send's one attempt: an answer other than 202 is an error.
   // A failed click reports "Not sent" and the user clicks again; the post itself never retries.
-  async function postDone(entry) {
+  async function postClick(entry) {
     renderPanel();
-    const content = buildClickMessage(DONE_HEADER, [{
+    const content = buildClickMessage(CLICK_HEADER, [{
       reference: 'Waiting on you · session ' + entry.sessionId + ' · list ' + entry.waitingVersion +
         ' · since ' + entry.since + ' · #' + entry.position,
-      answer: 'Done',
+      answer: entry.answers,
     }]);
     const requestId = 'status-done-' + entry.sessionId + '-' + entry.clickMs;
     const response = await fetch('/api/chat/' + encodeURIComponent(entry.sessionId) + '/message', {
@@ -338,38 +381,43 @@
     if (response.status !== 202) throw new Error('HTTP ' + response.status);
   }
 
-  // The post settled (postError null when it was accepted): read the status back and say what the server holds.
-  async function finishDone(key, entry, postError) {
+  // The stored item a click named, in its owner's status: the item at the click's position while the list still has the
+  // click's version. Null once the list changed.
+  function clickedItem(owner, entry) {
+    const status = owner.web_status;
+    if (!status || status.waiting_version !== entry.waitingVersion) return null;
+    return status.waiting[entry.position - 1] || null;
+  }
+
+  // The post settled (postError null when it was accepted): read the owner's status back and say what the server holds.
+  // A child's answered flag is the child's own, so the owner's read answers for both. The Status view in front of the
+  // user then re-reads, since a child's mark shows in its parent's view.
+  async function finishClick(key, entry, postError) {
     pendingDone.delete(key);
     try {
-      const body = await fetchStatusForAction(entry.sessionId);
-      const status = body && body.web_status;
-      const item = status && status.waiting && status.waiting[entry.position - 1];
-      const answered = status && status.waiting_version === entry.waitingVersion && item && item.answered === true;
-      if (postError) {
-        if (answered) {
-          itemNotices.delete(key);
-        } else if (status && status.waiting_version === entry.waitingVersion && item) {
-          itemNotices.set(key, 'Not sent: ' + postError.message);
-        } else {
-          setHeaderNotice(entry.sessionId, 'Not sent: ' + postError.message);
-        }
-      } else if (!answered) {
-        setHeaderNotice(entry.sessionId, 'Sent: the list changed');
-      } else {
+      const owner = await fetchStatusForAction(entry.sessionId);
+      const item = clickedItem(owner, entry);
+      if (item && item.answered === true) {
         itemNotices.delete(key);
         setHeaderNotice(entry.sessionId, '');
+      } else if (postError && item) {
+        itemNotices.set(key, 'Not sent: ' + postError.message);
+      } else if (postError) {
+        setHeaderNotice(entry.sessionId, 'Not sent: ' + postError.message);
+      } else {
+        setHeaderNotice(entry.sessionId, 'Sent: the list changed');
       }
     } catch (err) {
       if (postError) itemNotices.set(key, 'Status unknown: ' + err.message);
       else setHeaderNotice(entry.sessionId, 'Status unknown: ' + err.message);
     }
-    if (entry.sessionId === panelSessionId) renderPanel();
+    if (entry.sessionId !== panelSessionId) refreshSessionStatusPanel();
+    renderPanel();
   }
 
-  // A Waiting on you item. contextOpen: the Status view shows an own item's
-  // context open. The descendant rows keep it folded.
-  function waitingItem(item, contextOpen, sessionId, position, canMarkDone) {
+  // A Waiting on you item. An own stored item (position set) carries the done mark and its picks, with its context
+  // open. A derived item carries neither.
+  function waitingItem(item, sessionId, waitingVersion, position) {
     const el = document.createElement('div');
     el.className = 'break-words text-amber-200';
     el.dataset.waitingItem = 'true';
@@ -381,14 +429,14 @@
     const href = safeLink(item.link);
     if (href) line.appendChild(openLink(href));
     el.appendChild(line);
-    if (item.answered === true || canMarkDone) {
-      el.appendChild(itemControlRow(item, sessionId, position, canMarkDone));
-    }
-    if (item.context) el.appendChild(contextFold(item.context, contextOpen));
+    if (position) el.appendChild(itemControlRow(item, sessionId, waitingVersion, position, true, null));
+    if (item.context) el.appendChild(contextFold(item.context, true));
     return el;
   }
 
-  function childItem(item, sessionId) {
+  // A child's item, in the parent's Status view: its picks, sent to the child session, and no done mark. Its line opens
+  // the child session; the page link rides in its control row.
+  function childItem(item, sessionId, waitingVersion, position) {
     const el = document.createElement('div');
     el.className = 'break-words text-amber-200';
     el.dataset.childItem = 'true';
@@ -399,13 +447,7 @@
     if (age) line.appendChild(age);
     line.appendChild(openLink('/?session=' + encodeURIComponent(sessionId)));
     el.appendChild(line);
-    if (item.answered === true) {
-      const controls = document.createElement('div');
-      controls.className = 'flex items-center gap-2 text-xs';
-      controls.dataset.itemControls = 'true';
-      controls.appendChild(textSpan('text-slate-400', 'Marked done'));
-      el.appendChild(controls);
-    }
+    if (position) el.appendChild(itemControlRow(item, sessionId, waitingVersion, position, false, safeLink(item.link)));
     if (item.context) el.appendChild(contextFold(item.context, false));
     return el;
   }
@@ -430,9 +472,12 @@
       const header = textSpan('text-slate-400', child.name + ' · ' + child.session_id.slice(0, 8));
       header.dataset.childGroup = child.session_id;
       group.appendChild(header);
-      const items = child.waiting.concat(derivedFor(child.session_id));
-      for (const item of items) group.appendChild(childItem(item, child.session_id));
-      if (items.length) column.appendChild(group);
+      const notice = headerNotices.get(child.session_id);
+      if (notice) group.appendChild(textSpan('text-amber-200', notice));
+      child.waiting.forEach((item, index) =>
+        group.appendChild(childItem(item, child.session_id, child.waiting_version, index + 1)));
+      for (const item of derivedFor(child.session_id)) group.appendChild(childItem(item, child.session_id, null, null));
+      if (child.waiting.length || derivedFor(child.session_id).length) column.appendChild(group);
     }
     row.appendChild(column);
     return row;
@@ -473,7 +518,7 @@
     const currentVersion = panelStatus && panelStatus.waiting_version;
     for (const [key, entry] of pendingDone) {
       if (entry.sessionId !== panelSessionId || entry.waitingVersion === currentVersion || entry.undo.sending) continue;
-      controls.appendChild(textSpan('text-slate-400', 'Marked done · '));
+      controls.appendChild(textSpan('text-slate-400', entry.label + ' · '));
       controls.appendChild(undoButton(() => cancelDone(key)));
     }
     if (panelHeaderNotice) controls.appendChild(textSpan('text-amber-200', panelHeaderNotice));
@@ -487,9 +532,9 @@
       column.appendChild(nothing);
     }
     for (let i = 0; i < storedItems.length; i++) {
-      column.appendChild(waitingItem(storedItems[i], true, panelSessionId, i + 1, true));
+      column.appendChild(waitingItem(storedItems[i], panelSessionId, currentVersion, i + 1));
     }
-    for (const item of derivedItems) column.appendChild(waitingItem(item, true, panelSessionId, null, false));
+    for (const item of derivedItems) column.appendChild(waitingItem(item, panelSessionId, null, null));
     waiting.appendChild(column);
     return waiting;
   }

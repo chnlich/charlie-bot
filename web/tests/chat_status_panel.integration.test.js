@@ -182,7 +182,8 @@ function panelRig() {
       const sessionId = url.slice(url.indexOf('session_id=') + 'session_id='.length);
       return {ok: true, status: 200, json: async () => ({
         session_id: sessionId, own_task_state: page.own_task_state, web_status: page.web_status,
-        descendants: page.descendants, children: page.children, derived_waiting: page.derived_waiting,
+        descendants: page.descendants.map(normalizeDescendantRow), children: page.children,
+        derived_waiting: page.derived_waiting,
       })};
     }
     if (url.startsWith('/api/chat/')) {
@@ -285,6 +286,21 @@ function normalizeStatus(status) {
       ...item,
       since: item.since || status.updated_at,
       answered: item.answered === true,
+      forks: item.forks || [],
+    })),
+  };
+}
+
+// A descendant row as the status read answers it: its list version, and each stored item with its answered flag and
+// the open questions of its page (none unless a case gives them).
+function normalizeDescendantRow(row) {
+  return {
+    ...row,
+    waiting_version: row.waiting_version || '2222222222222222',
+    waiting: row.waiting.map((item) => ({
+      ...item,
+      answered: item.answered === true,
+      forks: item.forks || [],
     })),
   };
 }
@@ -612,6 +628,174 @@ test('an answered readback marks the item done after a 202', async () => {
   assert.match(ownControls(rig).textContent, /Marked done/);
   assert.equal(ownControls(rig).querySelectorAll('button').length, 0);
   assert.equal(rig.statusGets.length, 2, 'the server status is read again after 202');
+});
+
+// Two open questions of one page, as the status read gives them: the first names a recommendation, the second has
+// options and a recommendation too.
+const CHOICE_QUESTION = {
+  n: '1',
+  options: [
+    {name: 'keep', text: '「keep」: keep the file.'},
+    {name: 'drop', text: '「drop」: drop the file.'},
+  ],
+  rec: 'keep',
+};
+const SECOND_QUESTION = {
+  n: '2',
+  options: [
+    {name: 'now', text: '「now」: act now.'},
+    {name: 'later', text: '「later」: act later.'},
+  ],
+  rec: 'later',
+};
+
+// The option labels of one item's control row, in order.
+function pickLabels(controls) {
+  return controls.querySelectorAll('[data-pick-choice]').map((button) => button.textContent);
+}
+
+function pickButton(controls, label) {
+  return controls.querySelectorAll('[data-pick-choice]').find((button) => button.textContent === label);
+}
+
+test('one button per option on a single-question item; the chosen line is sent at five seconds', async () => {
+  const rig = panelRig();
+  const since = '2026-11-19T08:30:00Z';
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{
+      text: 'Private item text', context: 'Private context', since, link: 'https://example.com/plan',
+      forks: [CHOICE_QUESTION],
+    }],
+  }});
+  selectStatus(rig);
+  assert.deepEqual(pickLabels(ownControls(rig)), ['keep', 'drop']);
+  pickButton(ownControls(rig), 'drop').onclick();
+  assert.match(ownControls(rig).textContent, /drop · Undo/);
+  assert.equal(rig.posts.length, 0, 'the pick is still undoable');
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(rig.posts.length, 1, 'one pick sends one request');
+  assert.equal(rig.posts[0].url, '/api/chat/session-a/message');
+  assert.equal(rig.posts[0].body.content,
+    '[Status · Waiting on you]\n\n1. ▸ Waiting on you · session session-a · list 1111111111111111 · since ' + since +
+      ' · #1\n   ↳ Q1 「drop」: drop the file.');
+  assert.equal(rig.posts[0].body.content.includes('Private item text'), false);
+  assert.equal(rig.posts[0].body.content.includes('Private context'), false);
+});
+
+test('several open questions offer one All as recommended button answering each question', async () => {
+  const rig = panelRig();
+  const since = '2026-11-19T08:30:00Z';
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{
+      text: 'Two questions', since, link: 'https://example.com/plan', forks: [CHOICE_QUESTION, SECOND_QUESTION],
+    }],
+  }});
+  selectStatus(rig);
+  assert.deepEqual(pickLabels(ownControls(rig)), ['All as recommended'], 'one row for the page, not one per question');
+  pickButton(ownControls(rig), 'All as recommended').onclick();
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(rig.posts[0].body.content,
+    '[Status · Waiting on you]\n\n1. ▸ Waiting on you · session session-a · list 1111111111111111 · since ' + since +
+      ' · #1\n   ↳ Q1 「keep」: keep the file.\n   ↳ Q2 「later」: act later.');
+});
+
+test('a page with a question that has no pick or no recommendation offers no buttons, so no click answers part of it',
+  async () => {
+    const rig = panelRig();
+    const since = '2026-11-19T08:30:00Z';
+    const onlyOneOption = {n: '2', options: [{name: 'now', text: '「now」: act now.'}], rec: null};
+    const noRecommendation = {n: '2', options: SECOND_QUESTION.options, rec: null};
+    await openSession(rig, {web_status: {
+      ...STATUS,
+      waiting: [
+        {
+          text: 'One question has one option', since, link: 'https://example.com/a',
+          forks: [CHOICE_QUESTION, onlyOneOption],
+        },
+        {
+          text: 'One question has no recommendation', since, link: 'https://example.com/b',
+          forks: [CHOICE_QUESTION, noRecommendation],
+        },
+        {text: 'No open question', since, link: 'https://example.com/c', forks: []},
+      ],
+    }});
+    selectStatus(rig);
+    for (const index of [0, 1, 2]) {
+      assert.deepEqual(pickLabels(ownControls(rig, index)), [], `item ${index + 1} offers no pick`);
+    }
+  });
+
+test('a child item pick goes to the child at its list version, with no done mark', async () => {
+  const rig = panelRig();
+  const since = '2026-11-19T08:00:00Z';
+  rig.page.descendants = [{
+    session_id: CHILD_ID,
+    name: 'Child one',
+    updated_at: '2026-10-16T20:30:00Z',
+    waiting_version: 'cccccccccccccccc',
+    waiting: [{
+      text: 'Child decision', context: 'Child context', since, link: 'https://example.com/child',
+      forks: [CHOICE_QUESTION, SECOND_QUESTION],
+    }],
+  }];
+  await openSession(rig, {web_status: {...STATUS, waiting: []}});
+  selectStatus(rig);
+  const child = viewChildItems(rig.panel)[0];
+  assert.deepEqual(pickLabels(child), ['All as recommended']);
+  assert.equal(child.querySelectorAll('button').some((button) => button.title === 'Mark done'), false,
+    'a child item has no done control');
+  assert.ok(child.querySelectorAll('[data-open-link]').some((link) => link.href === 'https://example.com/child'),
+    'a multi-question child item also offers its page');
+  pickButton(child, 'All as recommended').onclick();
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(rig.posts.length, 1);
+  assert.equal(rig.posts[0].url, '/api/chat/' + CHILD_ID + '/message');
+  assert.equal(rig.posts[0].body.content,
+    '[Status · Waiting on you]\n\n1. ▸ Waiting on you · session ' + CHILD_ID + ' · list cccccccccccccccc · since ' +
+      since + ' · #1\n   ↳ Q1 「keep」: keep the file.\n   ↳ Q2 「later」: act later.');
+});
+
+test('Undo cancels a pick before it is sent, and the item offers its picks again', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{
+      text: 'Pick one', since: '2026-11-19T08:30:00Z', link: 'https://example.com/plan', forks: [CHOICE_QUESTION],
+    }],
+  }});
+  selectStatus(rig);
+  pickButton(ownControls(rig), 'keep').onclick();
+  ownControls(rig).querySelectorAll('button').find((button) => button.textContent === 'Undo').onclick();
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(rig.posts.length, 0, 'a cancelled pick sends nothing');
+  assert.deepEqual(pickLabels(ownControls(rig)), ['keep', 'drop']);
+});
+
+test('a pick the server marks answered shows Marked done and no buttons', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{
+      text: 'Pick one', since: '2026-11-19T08:30:00Z', link: 'https://example.com/plan', forks: [CHOICE_QUESTION],
+    }],
+  }});
+  rig.setPostHandler(() => {
+    rig.page.web_status = normalizeStatus({...rig.page.web_status, waiting: [
+      {...rig.page.web_status.waiting[0], answered: true},
+    ]});
+  });
+  selectStatus(rig);
+  pickButton(ownControls(rig), 'drop').onclick();
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.match(ownControls(rig).textContent, /Marked done/);
+  assert.deepEqual(pickLabels(ownControls(rig)), []);
 });
 
 test('a Status click starts the one delayed send that page picks start too', async () => {

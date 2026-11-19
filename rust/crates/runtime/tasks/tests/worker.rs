@@ -1535,8 +1535,9 @@ async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> a
   let mut spec = setup.spec(&root, Some("fable"), None)?;
   spec.instructions_content = Some("rules".to_string());
   let task_worker = setup.worker(spec)?;
+  // The lifecycle places the run id in a task launch's kwargs, and the worker's compaction hook needs it.
   let launch = Launch {
-    backend_kwargs: Map::new(),
+    backend_kwargs: serde_json::json!({"run_id": "resume-run"}).as_object().unwrap().clone(),
     resume_id: Some("held-conversation".to_string()),
     prompt: None,
     account_label: None,

@@ -16,6 +16,7 @@
 const vm = require('node:vm');
 
 const {readStatic, readPackageStatic} = require('./read_static');
+const {loadIconModule} = require('./icon_module');
 const {escapeHtml, escapeHtmlText} = require('./escape_html_stub');
 
 const UTILS_JS = readStatic('utils.js');
@@ -66,6 +67,7 @@ function loadGroups() {
   };
   context.globalThis = context;
   vm.createContext(context);
+  loadIconModule(context);
   // utils.js first, as on the page, which loads it ahead of every chat and sidebar module: groups.js reads
   // expandSessionColumns and sessionUpdatedMs from it. Its real time forms replace the stubs above, so those land
   // back after its load.

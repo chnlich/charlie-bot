@@ -8,6 +8,11 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const {readPackageStatic} = require('./read_static');
+const { iconTable, loadIconModule } = require('./icon_module');
+
+// A row's check mark: the done icon's Lucide shapes, read from the icon table the page loads.
+const CHECK_SHAPES = iconTable().done.shapes;
+const checkMark = (row) => (row.children[0].innerHTML.includes(CHECK_SHAPES) ? '\u2713' : '');
 
 const VOICE_EVENTS_JS = readPackageStatic('features', 'voice', 'voice-events.js');
 const VOICE_INPUT_JS = readPackageStatic('features', 'voice', 'voice-input.js');
@@ -89,6 +94,7 @@ function buildHarness({stored = null, defaultBackend = 'batch', backends = BACKE
     window: {innerWidth: 1024, location: {href: ''}, addEventListener() {}, removeEventListener() {}},
   };
   vm.createContext(sandbox);
+  loadIconModule(sandbox);
   // Page order: the voice-events part registers the badge, the mic title and
   // the ⋯ entry, and the recording module loads after it.
   vm.runInContext(VOICE_EVENTS_JS, sandbox, {filename: 'voice-events.js'});
@@ -114,7 +120,7 @@ test('the menu lists every backend, checks the selection, and disables the uncon
   assert.deepEqual(
       rows.map((row) => row.children[1].textContent),
       ['Batch backend', 'Gemini 3.5 Transcribe Live', 'Muse Voice Transcribe \u00b7 needs meta.model_api_key']);
-  assert.deepEqual(rows.map((row) => row.children[0].textContent), ['\u2713', '', '']);
+  assert.deepEqual(rows.map(checkMark), ['\u2713', '', '']);
   assert.deepEqual(rows.map((row) => row.disabled), [false, false, true]);
   assert.equal(rows[2].title, 'needs meta.model_api_key'); // the missing key is named, never its value
 });
@@ -125,7 +131,7 @@ test('picking a backend persists it, moves the check, and retitles the mic', () 
   rows[1].onclick();
 
   assert.equal(storage['charliebot-voice-backend'], 'gemini');
-  assert.deepEqual(rows.map((row) => row.children[0].textContent), ['', '\u2713', '']);
+  assert.deepEqual(rows.map(checkMark), ['', '\u2713', '']);
   assert.equal(voiceBtn.title, 'Voice input \u00b7 Gemini 3.5 Transcribe Live');
   assert.ok(menu.classList.contains('hidden')); // the menu closed with the pick
 });
@@ -134,7 +140,7 @@ test('a stored id the page does not know falls back to the server default', () =
   const {voiceBtn, rows} = buildHarness({stored: 'geminii'});
 
   assert.equal(voiceBtn.title, 'Voice input \u00b7 Batch backend');
-  assert.deepEqual(rows.map((row) => row.children[0].textContent), ['\u2713', '', '']);
+  assert.deepEqual(rows.map(checkMark), ['\u2713', '', '']);
 });
 
 test('a stored backend that lost its credential falls back until the key arrives', () => {
@@ -142,7 +148,7 @@ test('a stored backend that lost its credential falls back until the key arrives
 
   // The default serves, while the stored entry stays visible and unselectable.
   assert.equal(voiceBtn.title, 'Voice input \u00b7 Batch backend');
-  assert.deepEqual(rows.map((row) => row.children[0].textContent), ['\u2713', '', '']);
+  assert.deepEqual(rows.map(checkMark), ['\u2713', '', '']);
   assert.equal(rows[2].disabled, true);
 });
 
@@ -150,7 +156,7 @@ test('the stored choice wins again once it is configured', () => {
   const {voiceBtn, rows} = buildHarness({stored: 'gemini'});
 
   assert.equal(voiceBtn.title, 'Voice input \u00b7 Gemini 3.5 Transcribe Live');
-  assert.deepEqual(rows.map((row) => row.children[0].textContent), ['', '\u2713', '']);
+  assert.deepEqual(rows.map(checkMark), ['', '\u2713', '']);
 });
 
 test('the caret toggles the menu open and closed', () => {

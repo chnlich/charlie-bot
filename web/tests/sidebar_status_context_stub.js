@@ -9,6 +9,7 @@
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { loadIconModule } = require('./icon_module');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const STATUS_JS = readStatic('sidebar/status.js');
@@ -21,6 +22,7 @@ function loadSidebarStatusContext(extraContext) {
     ...extraContext,
   };
   vm.createContext(context);
+  loadIconModule(context);
   vm.runInContext(NAMESPACE_JS, context, { filename: 'sidebar/namespace.js' });
   vm.runInContext(STATUS_JS, context, { filename: 'sidebar/status.js' });
   return context;

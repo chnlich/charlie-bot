@@ -24,6 +24,12 @@ function buildSidebarIndicatorContext(ids) {
   return built;
 }
 
+// The Lucide shapes a meaning key draws, from the icon table the page loads. A rendered icon is checked by the key it
+// names.
+function glyphOf(context, key) {
+  return context.window.CB_ICON_TABLE[key].shapes;
+}
+
 const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
 
 function meta(id, overrides = {}) {
@@ -171,7 +177,7 @@ test('a worker tree row leads with the worker glyph instead of a chevron', () =>
   const glyphAt = leaf.indexOf('title="Worker (implementation leaf)"');
   const nameAt = leaf.indexOf('class="truncate block session-name"');
   assert.ok(glyphAt !== -1 && nameAt !== -1 && glyphAt < nameAt, 'the worker glyph precedes the name');
-  assert.match(leaf, /class="w-3 h-3 [^"]*" title="Worker \(implementation leaf\)"/);
+  assert.match(leaf, /class="cb-icon text-slate-500 flex-shrink-0" width="12" height="12"[^>]*title="Worker \(implementation leaf\)"/);
   assert.doesNotMatch(leaf, /data-tree-toggle/);
 });
 
@@ -524,7 +530,7 @@ test('group preview limit exemption registrations validate and reject duplicate 
 test('toggleTreeNode flips the in-memory state, the rendered subtree and the chevron', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
   const container = createElement({className: 'tree-children hidden'});
-  const chevron = createElement({className: 'tree-chevron'});
+  const chevron = createElement({className: 'tree-chevron', title: '1 child task'});
   context.document.querySelectorAll = (selector) => {
     if (selector === '[data-tree-children="r1"]') return [container];
     if (selector === '[data-tree-toggle="r1"]') return [chevron];
@@ -536,19 +542,21 @@ test('toggleTreeNode flips the in-memory state, the rendered subtree and the che
 
   assert.equal(context.Sidebar.isTreeNodeExpanded('r1'), true);
   assert.equal(container.classList.contains('hidden'), false);
-  assert.equal(chevron.classList.contains('rotate-90'), true);
-  assert.equal(chevron['aria-expanded'], 'true');
+  assert.ok(chevron.outerHTML.includes(glyphOf(context, 'disclosure-open')), 'an expanded chevron draws disclosure-open');
+  assert.match(chevron.outerHTML, /aria-expanded="true"/);
 
   // A repaint while expanded renders the subtree open and the chevron turned.
   context.renderSessionList(familyRows(), 'all');
   const open = nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="r1">/);
   assert.doesNotMatch(open[0], /hidden/);
-  assert.match(rowHtml(nav.innerHTML, 'r1'), /rotate-90"[^>]*data-tree-toggle="r1"[^>]*aria-expanded="true"/);
+  assert.match(rowHtml(nav.innerHTML, 'r1'), /tree-chevron"[^>]*data-tree-toggle="r1"[^>]*aria-expanded="true"/);
+  assert.ok(rowHtml(nav.innerHTML, 'r1').includes(glyphOf(context, 'disclosure-open')));
 
   context.toggleTreeNode('r1');
   assert.equal(context.Sidebar.isTreeNodeExpanded('r1'), false);
   assert.equal(container.classList.contains('hidden'), true);
-  assert.equal(chevron['aria-expanded'], 'false');
+  assert.match(chevron.outerHTML, /aria-expanded="false"/);
+  assert.ok(chevron.outerHTML.includes(glyphOf(context, 'disclosure')), 'a collapsed chevron draws disclosure');
 });
 
 test('a worker leaf row shows the leaf icon and keeps the archive action alone', () => {
@@ -733,7 +741,7 @@ test('the active session’s ancestors open once per switch and a manual collaps
 test('expandTreeNode opens a collapsed parent and is a no-op on an open one', () => {
   const {context} = buildSidebarIndicatorContext([]);
   const container = createElement({className: 'tree-children hidden'});
-  const chevron = createElement({className: 'tree-chevron'});
+  const chevron = createElement({className: 'tree-chevron', title: '1 child task'});
   context.document.querySelectorAll = (selector) => {
     if (selector === '[data-tree-children="p1"]') return [container];
     if (selector === '[data-tree-toggle="p1"]') return [chevron];
@@ -743,11 +751,11 @@ test('expandTreeNode opens a collapsed parent and is a no-op on an open one', ()
   context.Sidebar.expandTreeNode('p1');
   assert.equal(context.Sidebar.isTreeNodeExpanded('p1'), true);
   assert.equal(container.classList.contains('hidden'), false);
-  assert.equal(chevron.classList.contains('rotate-90'), true);
+  assert.ok(chevron.outerHTML.includes(glyphOf(context, 'disclosure-open')));
 
   context.Sidebar.expandTreeNode('p1');
   assert.equal(context.Sidebar.isTreeNodeExpanded('p1'), true, 'an already open node is left alone');
-  assert.equal(chevron.classList.contains('rotate-90'), true);
+  assert.ok(chevron.outerHTML.includes(glyphOf(context, 'disclosure-open')));
 });
 
 test('an archived worker row shows the delivered check in place of the leaf icon', () => {
@@ -762,7 +770,8 @@ test('an archived worker row shows the delivered check in place of the leaf icon
   const doneRow = html.slice(html.indexOf('id="session-w2"'));
   assert.match(liveRow, /title="Worker \(implementation leaf\)"/);
   assert.doesNotMatch(liveRow, /title="Worker \(delivered\)"/);
-  assert.match(doneRow, /title="Worker \(delivered\)"[^>]*>[\s\S]*?M5 13l4 4L19 7/);
+  assert.match(doneRow, /title="Worker \(delivered\)"/);
+  assert.ok(doneRow.includes(glyphOf(context, 'done')), 'the delivered row draws the done glyph');
   assert.doesNotMatch(doneRow, /title="Worker \(implementation leaf\)"/);
 });
 
@@ -858,9 +867,9 @@ test('a bound node’s clock and lines follow the task state: disabled goes grey
   ], 'all');
 
   const html = nav.innerHTML;
-  assert.match(rowHtml(html, 'cron1'), /text-blue-400[^>]*viewBox="0 0 24 24" title="Scheduled: task-cron1"/s);
+  assert.match(rowHtml(html, 'cron1'), /class="cb-icon flex-shrink-0 text-blue-400"[^>]*title="Scheduled: task-cron1"/);
   assert.match(rowHtml(html, 'cron1'), /Next: /);
-  assert.match(rowHtml(html, 'cron2'), /text-slate-500[^>]*viewBox="0 0 24 24" title="Scheduled: task-cron2"/s);
+  assert.match(rowHtml(html, 'cron2'), /class="cb-icon flex-shrink-0 text-slate-500"[^>]*title="Scheduled: task-cron2"/);
   assert.match(rowHtml(html, 'cron2'), /Disabled/);
   assert.doesNotMatch(rowHtml(html, 'cron2'), /Next: /);
 });

@@ -90,7 +90,7 @@
       <div class="p-3 border-b border-slate-700">
         <div class="flex gap-2">
           <button onclick="createSession()" class="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors min-w-0">
-            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            {{ icon('add', 16, 'flex-shrink-0') }}
             <span class="truncate">New Session</span>
           </button>
           {% if picker_entries %}
@@ -119,9 +119,7 @@
                  oninput="handleSidebarSearch(this.value)">
           <button type="button" id="sidebar-search-clear" title="Clear search" aria-label="Clear search"
                   onclick="clearSidebarSearch()">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
+            {{ icon('close', 14) }}
           </button>
         </div>
       </div>
@@ -130,18 +128,12 @@
       <div class="px-3 py-2 border-b border-slate-700">
         <a href="/home" target="_blank"
            class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-300 hover:bg-slate-700/50 transition-colors">
-          <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                  d="M3 12l9-9 9 9M5 10v10a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V10"/>
-          </svg>
+          {{ icon('home', 16, 'flex-shrink-0') }}
           <span>Home</span>
         </a>
         <a href="/diff" target="_blank"
            class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-300 hover:bg-slate-700/50 transition-colors">
-          <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                  d="M8 7v10m0 0l-3-3m3 3l3-3M16 17V7m0 0l-3 3m3-3l3 3"/>
-          </svg>
+          {{ icon('diff', 16, 'flex-shrink-0') }}
           <span>Diff Viewer</span>
         </a>
       </div>
@@ -164,7 +156,7 @@
       <!-- Tab bar -->
       <header class="flex items-center border-b border-slate-700 bg-slate-800/50 px-4">
         <button class="hamburger-btn p-2 -ml-2 mr-1 rounded-lg hover:bg-slate-700 transition-colors" onclick="toggleMobileSidebar()" title="Menu">
-          <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          {{ icon('menu', 20, 'text-slate-400') }}
         </button>
         <div class="flex-1 min-w-0 py-3 cursor-pointer hover:text-blue-300 transition-colors"
              onclick="startRename(event, SESSION_ID)" title="Click to rename">
@@ -192,10 +184,7 @@
            class="border border-slate-600 rounded text-slate-400 hover:bg-slate-700
                   hover:text-slate-200 transition-colors ml-2 mr-2"
            title="View JSONL events">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0121 9.414V19a2 2 0 01-2 2z" />
-          </svg>
+          {{ icon('events', 16) }}
         </a>
         <div id="tab-buttons" class="flex gap-1">
           {% for part in page_parts('tab_buttons') %}{% include part %}{% endfor %}
@@ -248,17 +237,15 @@
                 onclick="scrollToBottom()"
                 class="hidden absolute right-6 bottom-24 z-10 p-2 rounded-full bg-slate-700 border border-slate-600 text-slate-300 hover:bg-slate-600 hover:text-white shadow-lg transition-all"
                 title="Scroll to bottom">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
-          </svg>
+          {{ icon('scroll-bottom', 20) }}
         </button>
 
         <!-- Thinking indicator -->
         <div id="thinking" class="hidden px-4 py-2 flex items-center gap-2 text-sm text-slate-400">
-          <span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse-dot"></span>
+          {{ icon('dot', 8, 'text-blue-400 animate-pulse-dot') }}
           Thinking... <span id="thinking-time">0s</span>
           <button onclick="cancelMaster()" class="ml-1 p-1 rounded-md hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Stop agent or run">
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+            {{ icon('stop', 16) }}
           </button>
         </div>
 
@@ -282,15 +269,15 @@
             <div class="input-buttons flex gap-2">
               <div id="overflow-menu" class="collapsible">
                 <button onclick="document.getElementById('file-input').click()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Attach files">
-                  <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
+                  {{ icon('attachment', 20, 'text-slate-400') }}
                 </button>
               </div>
               <button class="overflow-toggle p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="More options" onclick="document.getElementById('overflow-menu').classList.toggle('show')">
-                <svg class="w-5 h-5 text-slate-400" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+                {{ icon('more', 20, 'text-slate-400') }}
               </button>
               {% for part in page_parts('input_buttons') %}{% include part %}{% endfor %}
               <button onclick="sendMessage()" id="send-btn" class="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-colors" title="Send (Ctrl+Enter)">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>
+                {{ icon('send', 20) }}
               </button>
             </div>
           </div>

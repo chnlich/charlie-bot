@@ -23,6 +23,7 @@ import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 
 import {CdpConnection, Page} from '../../dev/poor-network/chrome.mjs';
+import {iconTable} from './icon_module.js';
 
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STATIC_DIR = path.join(WEB_DIR, 'static');
@@ -167,6 +168,8 @@ ${links}
 </head>
 <body class="dark bg-slate-900 text-slate-100">
 <script>const JSON_HEADERS = {'Content-Type': 'application/json'};</script>
+<script>window.CB_ICON_TABLE = ${JSON.stringify(iconTable())};</script>
+<script src="/static/js/icons.js"></script>
 ${scripts}
 <script>${PROBE_JS}</script>
 </body>

@@ -25,7 +25,7 @@
             data-panel-styles="/static/css/concurrency-badge-panel.css?v={{ static_asset_version|urlencode }}"
             aria-haspopup="dialog" aria-expanded="false" aria-controls="concurrency-panel"
             aria-label="0 running">
-      <span class="cb-dot" aria-hidden="true"></span><span id="concurrency-count">0 running</span>
+      {{ icon('dot', 7, 'cb-dot', 'aria-hidden="true"') }}<span id="concurrency-count">0 running</span>
     </button>
     <span id="concurrency-tip" class="cb-tip" role="tooltip" hidden></span>
     <div id="concurrency-panel" class="cb-panel" role="dialog" aria-label="Concurrent agents" hidden>
@@ -36,7 +36,7 @@
           <button type="button" class="cb-range" data-range="7d" aria-pressed="true">7d</button>
           <button type="button" class="cb-range" data-range="all">All</button>
         </div>
-        <button type="button" id="concurrency-close" class="cb-close" aria-label="Close">&times;</button>
+        <button type="button" id="concurrency-close" class="cb-close" aria-label="Close">{{ icon('close', 16) }}</button>
       </div>
       <p id="concurrency-peak" class="cb-peak"></p>
       <div id="concurrency-chart" class="cb-chart"></div>

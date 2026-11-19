@@ -223,19 +223,14 @@ function registerGroupMenuItem(item) {
   groupMenuItems.push(item);
 }
 
-// Session-row action buttons: a markup change to one of these buttons is made
-// here once, not in each renderer.
-const STAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
+// The expand chevron's meaning key follows its state: disclosure while
+// collapsed, disclosure-open while expanded. A toggle re-renders the chevron
+// with this function, so the glyph and the state never disagree.
+function expandChevron(expanded, cls, attrs = '') {
+  return cbIcon(expanded ? 'disclosure-open' : 'disclosure', 12, cls, attrs);
+}
 
-// The one archive-box outline: the Archive action button (a normal row's and
-// a worker row's -- archiving is not deletion, so it gets its own icon).
-const ARCHIVE_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>`;
-
-// The one right-chevron outline: the session-group collapse toggle and the
-// tree-row expand chevron below. Each call site keeps its own <svg> wrapper.
-const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
-
-const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>`;
+const SESSION_GROUP_CHEVRON_CLASS = 'text-slate-500 transition-transform session-group-chevron';
 
 // Single source for both pill strips: through the namespace, the sidebar
 // filter strip (filters.js) and the archived view's group strip (archived.js).
@@ -255,22 +250,21 @@ function starButtonOnclick(id, starred) {
 }
 
 function renderStarButton(s) {
-  const starFill = s.starred ? 'currentColor' : 'none';
   const starClass = s.starred ? 'text-yellow-400 !opacity-100' : 'hover:text-yellow-400';
   return `<button onclick="${starButtonOnclick(s.id, s.starred)}"
           class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass}" title="Star" id="star-${s.id}">
-    <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${STAR_SVG_PATH}</svg>
+    ${cbIcon(s.starred ? 'starred' : 'star', 14)}
   </button>`;
 }
 
 // The one hover-revealed icon button frame for the session row's plain
 // actions: a markup change is made here once, not in each renderer. The star's
-// dynamic fill and id and the Settings button's data attributes stay at
+// dynamic key and id and the Settings button's data attributes stay at
 // their own renderers.
-function renderRowActionButton(onclick, colorClass, title, svgBody) {
+function renderRowActionButton(onclick, colorClass, title, iconKey) {
   return `<button onclick="${onclick}"
           class="opacity-0 group-hover:opacity-100 p-1 ${colorClass} transition-opacity flex-shrink-0" title="${title}">
-    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${svgBody}</svg>
+    ${cbIcon(iconKey, 14)}
   </button>`;
 }
 
@@ -279,7 +273,7 @@ function renderArchiveButton(s) {
       `event.preventDefault(); event.stopPropagation(); sidebarControl('archiveSession', '${s.id}')`,
       'hover:text-red-400',
       'Archive',
-      ARCHIVE_SVG_PATH);
+      'archive');
 }
 
 // Renders '' for a falsy taskName: the caller's show-guard stays visible in
@@ -291,7 +285,7 @@ function renderNewChildButton(s) {
       `event.preventDefault(); event.stopPropagation(); sidebarControl('createChildSession', '${s.id}')`,
       'hover:text-green-400',
       'New child session',
-      PLUS_SVG_PATH);
+      'add');
 }
 
 // The row's Settings hover button: opens the shared row menu (row-menu.js)
@@ -318,7 +312,7 @@ function renderSettingsButton(s, rowMenu) {
           data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
           data-profile="${escapeHtmlAttr(s.profile || '')}"${renderSessionMenuAttrs(s)}
           class="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-slate-300 transition-opacity flex-shrink-0">
-    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
+    ${cbIcon('settings', 14)}
   </button>`;
 }
 
@@ -455,7 +449,6 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     const groupSessions = groups[key];
     const isCollapsed = collapsedState[key] === true; // expanded by default
     const isLimitExpanded = limitState[key] === true;
-    const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtmlAttr(key);
     // The open session's row joins the preview from past the limit, so the group paints one row more
     // than groupPreviewLimit budgets for the list's height. The preview gives up its last row for it:
@@ -503,13 +496,13 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); sidebarControl('createSessionInGroup', this.dataset.groupName)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-green-400 transition-opacity" title="New session in group">
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PLUS_SVG_PATH}</svg>
+        ${cbIcon('add', 12)}
       </button>` : '';
     const groupActions = key && options.groupActions !== false ? `${createInGroupButton}
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); sidebarControl('openGroupHeaderMenu', this)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity" title="Settings">
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${Sidebar.GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
+        ${cbIcon('settings', 12)}
       </button>` : '';
 
     // The limit toggle sits in front of the first row it hides. Expanding then
@@ -546,9 +539,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       <div class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-700/30 rounded-lg select-none"
            data-sgroup-toggle-key="${safeKey}"
            onclick="toggleSessionGroup(this.dataset.sgroupToggleKey)">
-        <svg class="w-3 h-3 text-slate-500 transition-transform session-group-chevron ${chevronClass}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          ${CHEVRON_SVG_PATH}
-        </svg>
+        ${expandChevron(!isCollapsed, SESSION_GROUP_CHEVRON_CLASS)}
         <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
         ${groupActions}
         <span class="text-xs text-slate-400 ml-auto">${groupCount.toLocaleString('en-US')}</span>
@@ -578,7 +569,7 @@ function toggleSessionGroup(key) {
     .find(el => el.dataset.sgroupKey === key);
   if (group) {
     const chevron = group.querySelector('.session-group-chevron');
-    if (chevron) chevron.classList.toggle('rotate-90');
+    if (chevron) chevron.outerHTML = expandChevron(wasCollapsed, SESSION_GROUP_CHEVRON_CLASS);
   }
 }
 
@@ -649,7 +640,6 @@ const treeExpandedNodes = new Set();
 // The session whose ancestors the last paint opened (one reveal per switch).
 let lastRevealedSessionId = null;
 
-const LEAF_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>`;
 
 // Roots are the rows without a parent in this list (a null parent, or a parent
 // that is archived or filtered out). Every other row nests under its parent.
@@ -698,12 +688,17 @@ function revealActiveSessionOnce(parentOf) {
 }
 
 function renderTreeChevron(sessionId, childCount) {
-  const expanded = treeExpandedNodes.has(sessionId);
-  return `<svg class="w-3 h-3 text-slate-500 transition-transform cursor-pointer flex-shrink-0 tree-chevron ${expanded ? 'rotate-90' : ''}"
-         data-tree-toggle="${sessionId}" role="button" aria-expanded="${expanded ? 'true' : 'false'}"
-         title="${childCount} child task${childCount === 1 ? '' : 's'}"
-         onclick="event.preventDefault(); event.stopPropagation(); toggleTreeNode(this.dataset.treeToggle)"
-         fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHEVRON_SVG_PATH}</svg>`;
+  const title = `${childCount} child task${childCount === 1 ? '' : 's'}`;
+  return treeChevron(sessionId, treeExpandedNodes.has(sessionId), title);
+}
+
+// One tree row's expand chevron. applyTreeNodeExpansion rebuilds it with this
+// same markup, so the glyph follows the expansion.
+function treeChevron(sessionId, expanded, title) {
+  return expandChevron(expanded,
+      'text-slate-500 transition-transform cursor-pointer flex-shrink-0 tree-chevron',
+      `data-tree-toggle="${sessionId}" role="button" aria-expanded="${expanded ? 'true' : 'false'}" title="${title}"`
+      + ' onclick="event.preventDefault(); event.stopPropagation(); toggleTreeNode(this.dataset.treeToggle)"');
 }
 
 // The lead marker on a tree row with no child tasks: the chevron's 12px slot,
@@ -726,15 +721,13 @@ function renderTreeChildCount(sessionId, nonWorkerChildCount) {
 // The worker glyph leads its row — the chevron's slot at the chevron's
 // size, in every paint tree or flat — and a worker row never draws a chevron.
 function renderWorkerLeafIcon() {
-  return `<svg class="w-3 h-3 text-slate-500 flex-shrink-0" title="Worker (implementation leaf)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${LEAF_SVG_PATH}</svg>`;
+  return cbIcon('worker', 12, 'text-slate-500 flex-shrink-0', 'title="Worker (implementation leaf)"');
 }
 
 // An archived worker delivered its work: the row leads with a check instead
 // of the leaf glyph.
-const CHECK_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>`;
-
 function renderWorkerDeliveredIcon() {
-  return `<svg class="w-3 h-3 text-green-500 flex-shrink-0" title="Worker (delivered)" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CHECK_SVG_PATH}</svg>`;
+  return cbIcon('done', 12, 'text-green-500 flex-shrink-0', 'title="Worker (delivered)"');
 }
 
 // One row followed by its subtree. The outer wrapper carries the row's
@@ -763,7 +756,7 @@ function renderSessionTree(s, filter, options, childrenOf) {
   </div>`;
 }
 
-// Expansion is display only: child rows show or hide and the chevron rotates.
+// Expansion is display only: child rows show or hide and the chevron changes glyph.
 // The subtree waiting mark is the one icon that reads the expansion, so the
 // toggle repaints the row's indicators. The other icons read facts only.
 function applyTreeNodeExpansion(sessionId, expanded) {
@@ -773,8 +766,7 @@ function applyTreeNodeExpansion(sessionId, expanded) {
     el.classList.toggle('hidden', !expanded);
   });
   document.querySelectorAll(`[data-tree-toggle="${selectorId}"]`).forEach(el => {
-    el.classList.toggle('rotate-90', expanded);
-    el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    el.outerHTML = treeChevron(sessionId, expanded, el.getAttribute('title'));
   });
   Sidebar.refreshSessionIndicator(sessionId);
 }
@@ -818,7 +810,7 @@ function renderSessionItem(s, filter, options = {}) {
           `event.preventDefault(); event.stopPropagation(); sidebarControl('unarchiveSession', '${s.id}')`,
           'hover:text-green-400',
           'Unarchive',
-          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/>')}
+          'unarchive')}
       ${renderSettingsButton(s, 'archived')}`;
   } else if (isWorkerRow) {
     actions = renderArchiveButton(s);

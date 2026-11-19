@@ -16,10 +16,10 @@ const STATUS_QUERY_MAX_BYTES = 8192;
 const renderedSessionStatuses = {};
 
 // Rows painted with profile=worker: a leaf runs its own work, so its running
-// state paints as the spinner rather than the delegated-work gear.
+// state paints as the spinner rather than the delegated-work loader.
 const renderedWorkerRows = new Set();
 // Rows painted as task-tree nodes (profile not null): their own running state
-// is a live Run of their own and paints as the spinner too. The gear is
+// is a live Run of their own and paints as the spinner too. The loader is
 // exclusively a parent row's stand-in for a running descendant or a paused
 // worker.
 const renderedTaskTreeRows = new Set();
@@ -27,7 +27,7 @@ const renderedTaskTreeRows = new Set();
 // The paused-worker fact per row: a worker whose Run ended with its wake-up
 // trigger still pending has no live Run and no running turn. Its own state
 // then reads idle, yet it delivers nothing until the trigger fires. The
-// wake-up trigger is a charliebot session trigger registration. The gear
+// wake-up trigger is a charliebot session trigger registration. The loader
 // stands in for it on every ancestor row for the whole pause. The list paint
 // records the fact from the row's own profile and has_pending_trigger. The
 // status poll's reply carries no profile, so the poll path takes the worker
@@ -299,21 +299,12 @@ function factSeqAtRequest() {
 // ---------------------------------------------------------------------------
 // Activity indicators — one owner, one visual language
 // ---------------------------------------------------------------------------
-// The thinking spinner and the delegated-work gear are this module's SVGs and
-// this module's element ids (spinner-<id>, worker-indicator-<id>). Every row
-// that renders them is patchable by setSessionIndicator, whatever view built
-// it.
-const SPINNER_SVG_INNER =
-  '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>'
-  + '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>';
-// The one cog-outline body: the worker indicator below and, through the
-// namespace, groups.js's Settings buttons (Sidebar.GEAR_SVG_PATH). Each call
-// site keeps its own center markup.
-const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
-const GEAR_CENTER_PATH =
-  '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>';
+// The thinking spinner, the delegated-work loader and the waiting icon are this
+// module's icons and this module's element ids (spinner-<id>,
+// worker-indicator-<id>, waiting-indicator-<id>). Every row that renders them
+// is patchable by setSessionIndicator, whatever view built it.
 const SPINNER_TITLE = 'Task is running';
-const GEAR_TITLE = 'Delegated work running or waiting in subtasks';
+const DELEGATED_TITLE = 'Delegated work running or waiting in subtasks';
 // The spin phase every spinner shares: the wall clock's milliseconds within
 // one turn of the animation. The paint bakes the current phase into the
 // element as a negative animation-delay, so a spinner a repaint recreates
@@ -325,19 +316,12 @@ function spinnerPhaseDelay() {
   const phaseMs = Date.now() % SPINNER_PERIOD_MS;
   return ` style="animation-delay:-${(phaseMs / SPINNER_PERIOD_MS).toFixed(3)}s"`;
 }
-// The waiting clock completes the visual language: one activity icon per row,
+// The waiting icon completes the visual language: one activity icon per row,
 // chosen by the priority table in paintSessionIndicator. The activity family
 // sits beside the unread marks, which ride independently. The order is own
-// state first, then a parent's gear for a running descendant or a paused
-// worker. The clock always describes the row itself, never its subtree.
-const CLOCK_TITLE = 'Task waiting to run';
-const CLOCK_SVG_PATH =
-  '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
-  + 'd="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>';
-
-function gearSvgContent() {
-  return GEAR_SVG_PATH + GEAR_CENTER_PATH;
-}
+// state first, then a parent's loader for a running descendant or a paused
+// worker. The waiting icon always describes the row itself, never its subtree.
+const WAITING_TITLE = 'Task waiting to run';
 
 // The unread dot: the row's own unread reply — never a descendant's. Pinned
 // to the unread-<id> element id the row re-render path and the unread_changed
@@ -351,17 +335,22 @@ const UNREAD_TITLE = 'Unread reply';
 // refreshTreeIndicators lights it after the grouped paint.
 const SUBTREE_UNREAD_TITLE = 'Unread reply in subtasks';
 
-// Thinking spinner, worker gear, waiting clock, unread dot: one session row's
+// Thinking spinner, worker loader, waiting icon, unread dot: one session row's
 // header indicators. setSessionIndicator toggles each element by id, so the id
 // prefixes are pinned.
 function renderSessionIndicators(session) {
   const ownState = getSessionIndicatorState(session);
   const indicatorState = displayIndicatorState(session.id, ownState);
-  return `<svg id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}"${spinnerPhaseDelay()} fill="none" viewBox="0 0 24 24">${SPINNER_SVG_INNER}</svg>
-    <svg id="worker-indicator-${session.id}" title="${escapeHtmlAttr(GEAR_TITLE)}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${gearSvgContent()}</svg>
-    <svg id="waiting-indicator-${session.id}" title="${escapeHtmlAttr(CLOCK_TITLE)}" class="w-3.5 h-3.5 text-slate-500 flex-shrink-0 ${indicatorState === 'waiting' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_SVG_PATH}</svg>
-    <span id="unread-${session.id}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${ownUnread(session.id) ? '' : 'hidden'}"></span>
-    <span id="subtree-unread-${session.id}" title="${escapeHtmlAttr(SUBTREE_UNREAD_TITLE)}" class="w-2 h-2 rounded-full border border-yellow-400 flex-shrink-0 hidden"></span>`;
+  return `${cbIcon('loading', 16, `animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}`,
+    `id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}"${spinnerPhaseDelay()}`)}
+    ${cbIcon('subtasks-running', 14, `text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}`,
+    `id="worker-indicator-${session.id}" title="${escapeHtmlAttr(DELEGATED_TITLE)}"`)}
+    ${cbIcon('waiting', 14, `text-slate-500 flex-shrink-0 ${indicatorState === 'waiting' ? '' : 'hidden'}`,
+    `id="waiting-indicator-${session.id}" title="${escapeHtmlAttr(WAITING_TITLE)}"`)}
+    ${cbIcon('dot', 8, `text-yellow-400 animate-pulse-dot flex-shrink-0 ${ownUnread(session.id) ? '' : 'hidden'}`,
+    `id="unread-${session.id}" title="${escapeHtmlAttr(UNREAD_TITLE)}"`)}
+    ${cbIcon('ring', 8, 'text-yellow-400 flex-shrink-0 hidden',
+    `id="subtree-unread-${session.id}" title="${escapeHtmlAttr(SUBTREE_UNREAD_TITLE)}"`)}`;
 }
 
 function pendingTriggerTitle(count, nextTriggerAt) {
@@ -377,17 +366,20 @@ function pendingTriggerTitle(count, nextTriggerAt) {
 function renderPendingTriggerIndicator(session) {
   const count = Number(session.pending_trigger_count) || 0;
   const click = `event.preventDefault(); event.stopPropagation(); sidebarControl('openPendingTriggers', '${session.id}')`;
-  return `<svg id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 cursor-pointer ${session.has_pending_trigger ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="${escapeHtmlAttr(pendingTriggerTitle(count, session.next_trigger_at))}" onclick="${click}">${Chat.PENDING_TRIGGER_BELL_SVG_PATH}</svg>`;
+  return cbIcon('notification', 14, `text-amber-400 flex-shrink-0 cursor-pointer ${session.has_pending_trigger ? '' : 'hidden'}`,
+    `id="pending-trigger-${session.id}" data-count="${count}" data-next-trigger-at="${escapeHtmlAttr(session.next_trigger_at || '')}" title="${escapeHtmlAttr(pendingTriggerTitle(count, session.next_trigger_at))}" onclick="${click}"`);
 }
 
 function renderPendingPlanApprovalIndicator(session) {
   const hasPending = !!(session && session.has_pending_plan_approval);
-  return `<svg id="pending-plan-approval-${session.id}" class="w-3.5 h-3.5 text-blue-400 flex-shrink-0 ${hasPending ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Plan awaiting approval"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>`;
+  return cbIcon('plan', 14, `text-blue-400 flex-shrink-0 ${hasPending ? '' : 'hidden'}`,
+    `id="pending-plan-approval-${session.id}" title="Plan awaiting approval"`);
 }
 
 // The waiting marks: a solid square for the row's own Waiting on you fact and
 // a hollow square for the subtree mark. Each mark's look is its class string
-// below and nothing else, so a later change of look edits these strings only.
+// below and its exclamation-mark icon, so a later change of look edits these
+// strings only.
 // Both marks start hidden. paintSessionIndicator shows them from the facts.
 const WAITING_MARK_TITLE = 'Waiting on you';
 const WAITING_SUBTREE_MARK_TITLE = 'Waiting on you in a session below';
@@ -400,9 +392,9 @@ const WAITING_SUBTREE_MARK_CLASS = 'inline-flex items-center justify-center flex
 function renderWaitingMarks(session) {
   const hidden = sessionWaiting[session.id] ? '' : ' hidden';
   const own = `<span id="waiting-marker-${session.id}" title="${WAITING_MARK_TITLE}"`
-    + ` class="${WAITING_MARK_CLASS}${hidden}">!</span>`;
+    + ` class="${WAITING_MARK_CLASS}${hidden}">${cbIcon('waiting-on-you', 12)}</span>`;
   const subtree = `<span id="waiting-subtree-marker-${session.id}" title="${WAITING_SUBTREE_MARK_TITLE}"`
-    + ` class="${WAITING_SUBTREE_MARK_CLASS} hidden">!</span>`;
+    + ` class="${WAITING_SUBTREE_MARK_CLASS} hidden">${cbIcon('waiting-on-you', 12)}</span>`;
   return own + subtree;
 }
 
@@ -426,11 +418,11 @@ function updateSidebarHighlight(newSessionId) {
 // Indicator priority over the nested sidebar. Two independent families each pick at most one
 // element per row, in a fixed order that reads no expansion state. The activity family starts
 // with the row's own state. The row's own thinking or running paints the spinner through the
-// display mapping. A legacy row's own delegated work keeps the gear, and own waiting (queued,
-// not launched) takes the muted clock. A parent row whose own state is idle then stands in for
-// its subtree with one icon only. A running descendant at any depth shows the gear, and so
+// display mapping. A legacy row's own delegated work keeps the loader, and own waiting (queued,
+// not launched) takes the muted waiting icon. A parent row whose own state is idle then stands in for
+// its subtree with one icon only. A running descendant at any depth shows the loader, and so
 // does a paused worker (a worker row whose latest fact is idle with a pending wake-up
-// trigger). The clock never stands in for a subtree. The unread family reads the unread facts
+// trigger). The waiting icon never stands in for a subtree. The unread family reads the unread facts
 // alone, gated by no activity state. The row's own unread paints the filled dot, otherwise an
 // unread reply anywhere below paints the subtree's hollow mark. The facts are the latest
 // applied state per row, from the list paint, the status poll, and the task_tree_changed /
@@ -487,10 +479,10 @@ function subtreeHasPausedWorker(sid) {
 }
 
 // The subtree stand-in sits in the same priority position as the row's own
-// state. A running descendant at any depth shows the gear, and so does a
+// state. A running descendant at any depth shows the loader, and so does a
 // paused worker at any depth. A running descendant is one whose own state is
 // worker_only or thinking: a manager's turn or a worker's live Run, whose
-// header timer (thinking_since) paints its own row's spinner. The clock never
+// header timer (thinking_since) paints its own row's spinner. The waiting icon never
 // stands in for a subtree: a queued Run marks its own row only.
 function subtreeStandInState(sid) {
   if (subtreeHasState(sid, 'worker_only') || subtreeHasState(sid, 'thinking')
@@ -513,17 +505,17 @@ function ownUnread(sid) {
 function paintSessionIndicator(sid) {
   // The display mapping (a row's own running Run reads as the spinner) applies
   // only to the row's own state. The subtree stand-in keeps its own icon: the
-  // gear for a running descendant or a paused worker.
+  // loader for a running descendant or a paused worker.
   const own = ownIndicatorState[sid] || 'idle';
   const state = own !== 'idle' ? displayIndicatorState(sid, own) : subtreeStandInState(sid);
   const spinner = document.getElementById('spinner-' + sid);
   const worker = document.getElementById('worker-indicator-' + sid);
-  const clock = document.getElementById('waiting-indicator-' + sid);
+  const waiting = document.getElementById('waiting-indicator-' + sid);
   const dot = document.getElementById('unread-' + sid);
   const subtreeMark = document.getElementById('subtree-unread-' + sid);
   if (spinner) spinner.classList.toggle('hidden', state !== 'thinking');
   if (worker) worker.classList.toggle('hidden', state !== 'worker_only');
-  if (clock) clock.classList.toggle('hidden', state !== 'waiting');
+  if (waiting) waiting.classList.toggle('hidden', state !== 'waiting');
   // The unread family reads the unread facts alone. No activity state gates
   // it. The dot reads the row's own fact. The subtree mark yields to it and
   // reads the subtree's.
@@ -537,7 +529,7 @@ function paintSessionIndicator(sid) {
   if (waitingSubtreeMark) waitingSubtreeMark.classList.toggle('hidden', !subtreeWaitingMarkShown(sid));
 }
 
-// Repaint one row and every ancestor whose gear or subtree mark may have
+// Repaint one row and every ancestor whose loader or subtree mark may have
 // changed. This runs right after markSessionRead clears the fact, so the
 // opened row's dot and every ancestor's subtree mark clear in one paint.
 function refreshSessionIndicator(sid) {
@@ -554,7 +546,7 @@ function setSessionIndicator(sid, state) {
 }
 
 // A grouped paint renders each row with its own facts. The parent rows take
-// their stand-in gear and their subtree marks here, once the rows exist.
+// their stand-in loader and their subtree marks here, once the rows exist.
 function refreshTreeIndicators() {
   Object.keys(ownIndicatorState).forEach(sid => {
     if (treeChildIds(sid).length) paintSessionIndicator(sid);
@@ -636,10 +628,10 @@ function applySessionStatus(sid, status, requestSeq) {
 // The worker registers its wake-up trigger just before its turn ends, so the
 // event reaches the browser before any poll could carry the new trigger fact.
 // Repainting the row idle on the event would blink the row's spinner and the
-// ancestors' gear off until the next poll. That repaint is left to the status
+// ancestors' loader off until the next poll. That repaint is left to the status
 // poll the handler starts right after, which applies the new state and the
 // trigger fact in one write. A really finished worker pays one status round
-// trip of stale spinner and gear for this. Every other event — a busy start,
+// trip of stale spinner and loader for this. Every other event — a busy start,
 // any non-worker row — repaints at once.
 function applyRunningChanged(ev) {
   const runEnded = !ev.thinking_since && !ev.has_running_tasks;
@@ -758,7 +750,6 @@ const API = {
 Sidebar.wire(API, {
   sidebarSessionIds,
   updateSpinner,
-  GEAR_SVG_PATH,
   treeChildIds,
   treeParentId,
 });

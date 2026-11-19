@@ -4,6 +4,9 @@ import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { iconTable, loadIconModule } from './icon_module.js';
+
+const ICON_TABLE = iconTable();
 
 class FakeClassList {
   constructor(element, initialClassName = '') {
@@ -172,6 +175,7 @@ function loadExtUsageScript(options = {}) {
   const pageTimersPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../static/js/page-timers.js');
   const pageTimersSource = fs.readFileSync(pageTimersPath, 'utf8');
   vm.createContext(context);
+  loadIconModule(context);
   // page-timers.js loads first, matching the script order in index.html — the
   // strip's refresh timers register through it.
   vm.runInContext(pageTimersSource, context, { filename: pageTimersPath });
@@ -1037,7 +1041,8 @@ test('a refusing localStorage degrades to the in-memory boolean', () => {
   assert.doesNotThrow(() => _click(chip), 'toggle survives a throwing storage');
   assert.equal(harness.isCollapsed(), !collapsedBefore, 'toggle still flips the in-memory boolean');
   assert.equal(strip.classList.contains('collapsed'), !collapsedBefore, 'strip class still follows');
-  assert.equal(chip.textContent, (!collapsedBefore) ? '▸' : '▾', 'chip glyph still follows');
+  assert.ok(chip.innerHTML.includes(ICON_TABLE[!collapsedBefore ? 'disclosure' : 'disclosure-open'].shapes),
+    'chip glyph still follows');
 });
 
 test('renderExtUsage marks a pool account that needs a new login with its directory', () => {

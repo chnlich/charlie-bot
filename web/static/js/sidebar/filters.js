@@ -385,11 +385,11 @@ function sendSearchRequest() {
 async function toggleSessionStar(id, currentlyStarred) {
   const endpoint = currentlyStarred ? 'unstar' : 'star';
   // Optimistic UI update: repaint the button into the new state; groups.js's
-  // renderStarButton paints the same state from the same two literals.
+  // renderStarButton paints the same state from the same icon keys and class literals.
   const btn = document.getElementById('star-' + id);
   if (btn) {
     const starred = !currentlyStarred;
-    btn.querySelector('svg').setAttribute('fill', starred ? 'currentColor' : 'none');
+    btn.querySelector('svg').outerHTML = cbIcon(starred ? 'starred' : 'star', 14);
     btn.classList.toggle('text-yellow-400', starred);
     btn.classList.toggle('!opacity-100', starred);
     btn.classList.toggle('hover:text-yellow-400', !starred);

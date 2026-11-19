@@ -11,6 +11,7 @@ const vm = require('node:vm');
 
 const {readStatic} = require('./read_static');
 const {loadGroups} = require('./sidebar_groups_context_stub');
+const { loadIconModule } = require('./icon_module');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const MODALS_JS = readStatic('sidebar/modals.js');
@@ -193,6 +194,7 @@ test('the page loader registers the separator buttons before the first transcrip
   };
   context.globalThis = context;
   vm.createContext(context);
+  loadIconModule(context);
   vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
   const loader = fs.readFileSync(
     path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'modals.js'), 'utf8');

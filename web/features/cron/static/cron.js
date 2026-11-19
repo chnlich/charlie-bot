@@ -201,7 +201,7 @@ function renderCronErrorBadge(brokenTasks) {
   if (!broken.length) return '';
   return `<div class="mx-3 my-2 px-3 py-2 rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs cursor-pointer"
        role="button" title="Open the first failed task"
-       onclick="openCronEditor('${escapeHtml(broken[0].name)}')">⚠ ${broken.length} scheduled tasks failed to load</div>`;
+       onclick="openCronEditor('${escapeHtml(broken[0].name)}')">${cbIcon('warning', 12)} ${broken.length} scheduled tasks failed to load</div>`;
 }
 
 // The Workspace error badge rides this fetch: a failed cron pull yields no
@@ -218,13 +218,11 @@ async function fetchBrokenCronTasks() {
   }
 }
 
-// The one clock-badge body (face plus hands): renderScheduledBadge below.
-const CLOCK_SVG_BODY = `<circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>`;
-
 // A bound node's clock badge: blue while the task is enabled, grey with the
 // Disabled line when it is not. One markup home for every view's row.
 function renderScheduledBadge(s) {
-  return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtmlAttr(s.schedule_task)}">${CLOCK_SVG_BODY}</svg>`;
+  return cbIcon('scheduled', 12, `flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}`,
+    `title="Scheduled: ${escapeHtmlAttr(s.schedule_task)}"`);
 }
 
 // The `last_run_status` values the scheduler stores for a schedule's last firing; the cron crate's

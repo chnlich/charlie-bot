@@ -33,8 +33,6 @@ const ERROR_CLASS = 'flex flex-col gap-1 text-xs text-red-300';
 const FOOTER_CLASS = 'mt-2 text-xs text-slate-400';
 // The Set Group dialog's close control. The modal-close-btn class is styled by the page's close_button.html.
 const CLOSE_BUTTON_CLASS = 'text-slate-500 hover:text-slate-300 p-1 modal-close-btn';
-const CLOSE_ICON = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
-  '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
 
 // The open picker: its overlay and the Escape listener that its close path removes. One picker is open at a time.
 let openPicker = null;
@@ -118,7 +116,7 @@ function buildMovePickerDialog() {
   closeButton.type = 'button';
   closeButton.title = 'Close';
   closeButton.className = CLOSE_BUTTON_CLASS;
-  closeButton.innerHTML = CLOSE_ICON;
+  closeButton.innerHTML = cbIcon('close', 16);
   closeButton.addEventListener('click', closeSessionMovePicker);
   header.appendChild(title);
   header.appendChild(closeButton);

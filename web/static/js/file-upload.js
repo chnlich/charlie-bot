@@ -73,11 +73,11 @@ function clearSentUploadedFiles(ids) {
 function renderFileChipIcon(file) {
   switch (file.status) {
     case FILE_STATUS.UPLOADING:
-      return '<span class="file-chip-icon file-chip-icon--spinner" aria-hidden="true"></span>';
+      return `<span class="file-chip-icon" aria-hidden="true">${cbIcon('loading', 14, 'file-chip-icon--spinner')}</span>`;
     case FILE_STATUS.FAILED:
-      return '<span class="file-chip-icon" aria-hidden="true">&#x26A0;</span>';
+      return `<span class="file-chip-icon" aria-hidden="true">${cbIcon('warning', 12)}</span>`;
     case FILE_STATUS.UPLOADED:
-      return '<span class="file-chip-icon" aria-hidden="true">&#x2713;</span>';
+      return `<span class="file-chip-icon" aria-hidden="true">${cbIcon('done', 12)}</span>`;
     default:
       throw new Error('Unknown file status: ' + file.status);
   }
@@ -90,7 +90,7 @@ function renderFileChipRemoveButton(file) {
       return '';
     case FILE_STATUS.FAILED:
     case FILE_STATUS.UPLOADED:
-      return `<button onclick="removeFile(${file.id})" title="Remove">&#x2715;</button>`;
+      return `<button onclick="removeFile(${file.id})" title="Remove">${cbIcon('close', 12)}</button>`;
     default:
       throw new Error('Unknown file status: ' + file.status);
   }

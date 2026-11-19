@@ -232,7 +232,7 @@ function renderVoiceBackendMenu() {
   if (!voiceMenuRows) return;
   const selected = selectedVoiceBackend();
   for (const {entry, check} of voiceMenuRows) {
-    check.textContent = selected && entry.id === selected.id ? '✓' : '';
+    check.innerHTML = selected && entry.id === selected.id ? cbIcon('done', 12) : '';
   }
   updateVoiceMicTitle();
 }
@@ -254,8 +254,15 @@ function openVoiceBackendMenu() {
   const menu = ensureVoiceBackendMenu();
   if (!menu) return;
   menu.classList.remove('hidden');
+  setVoiceCaretGlyph(true);
   renderVoiceBackendMenu();
   positionVoiceBackendMenu();
+}
+
+// The caret's glyph follows the menu: disclosure while it is closed, disclosure-open while it is open.
+function setVoiceCaretGlyph(open) {
+  const caret = document.getElementById('voice-backend-btn');
+  if (caret) caret.innerHTML = cbIcon(open ? 'disclosure-open' : 'disclosure', 12, 'text-slate-400');
 }
 
 function positionVoiceBackendMenu() {
@@ -276,7 +283,9 @@ function positionVoiceBackendMenu() {
 }
 
 function closeVoiceBackendMenu() {
-  if (voiceMenu) voiceMenu.classList.add('hidden');
+  if (!voiceMenu) return;
+  voiceMenu.classList.add('hidden');
+  setVoiceCaretGlyph(false);
 }
 
 function updateVoiceCaret() {

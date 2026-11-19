@@ -4,6 +4,9 @@ import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { iconTable, loadIconModule } from './icon_module.js';
+
+const ICON_TABLE = iconTable();
 
 class FakeClassList {
   constructor(element, initialClassName = '') {
@@ -167,6 +170,7 @@ function loadExtUsageScript(options = {}) {
   const pageTimersPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../static/js/page-timers.js');
   const pageTimersSource = fs.readFileSync(pageTimersPath, 'utf8');
   vm.createContext(context);
+  loadIconModule(context);
   // page-timers.js loads first, matching the script order in index.html — the
   // strip's refresh timers register through it.
   vm.runInContext(pageTimersSource, context, { filename: pageTimersPath });
@@ -367,7 +371,8 @@ function _assertCollapseConsistent(harness, expect, label) {
       label + ': strip collapsed class mirrors the boolean');
   assert.equal(chip.classList.contains('hidden'), strip.classList.contains('hidden'),
       label + ': chip hidden exactly when the strip is');
-  assert.equal(chip.textContent, expect.collapsed ? '▸' : '▾', label + ': chip glyph');
+  assert.ok(chip.innerHTML.includes(ICON_TABLE[expect.collapsed ? 'disclosure' : 'disclosure-open'].shapes),
+    label + ': chip glyph');
 
   if (expect.providers === 0) {
     assert.equal(strip.children.length, 0, label + ': no providers renders no rows');

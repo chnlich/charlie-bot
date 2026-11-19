@@ -224,8 +224,9 @@ function sessionListElement(elements) {
         return true;
       }
       html.value = value;
-      for (const match of value.matchAll(/<span id="((?:subtree-)?unread-[^"]+)"[^>]*?class="([^"]*)"/g)) {
-        elements.set(match[1], makeIndicator(match[2]));
+      // A dot is an icon's tag now, so its class comes before its id.
+      for (const match of value.matchAll(/<[a-z]+\s[^>]*?\bid="((?:subtree-)?unread-[^"]+)"[^>]*>/g)) {
+        elements.set(match[1], makeIndicator(match[0].match(/\sclass="([^"]*)"/)[1]));
       }
       return true;
     },

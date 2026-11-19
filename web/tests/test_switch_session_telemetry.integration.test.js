@@ -258,10 +258,10 @@ test('click paints the placeholder synchronously over the old session DOM', asyn
   const row = h.messages.children[0];
   assert.equal(row.id, 'switch-placeholder', 'placeholder must be the first messages child at click time');
   assert.equal(h.messages.children.length, 1, 'old session DOM must be gone at click time');
-  assert.equal(row.children[0].className.includes('animate-pulse-dot'), true,
-      'placeholder must reuse the thinking pulse-dot style');
-  assert.match(row.children[1].textContent, /Opening/);
-  assert.match(row.children[1].textContent, /Beta/);
+  assert.match(row.innerHTML, /class="cb-icon text-blue-400 animate-pulse-dot"/,
+      'placeholder must draw the thinking pulse-dot icon');
+  assert.match(row.children[0].textContent, /Opening/);
+  assert.match(row.children[0].textContent, /Beta/);
   assert.equal(h.headerName.textContent, 'Beta', 'header name must update at click time');
   assert.equal(h.elements.get('session-session-b').classList.contains('bg-blue-600/20'), true,
       'sidebar highlight must move at click time');

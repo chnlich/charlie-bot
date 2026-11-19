@@ -102,7 +102,7 @@ test('an unread child manager gives the parent the subtree mark, not the dot, co
 
   assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true});
   // The child's own dot renders at paint; only parent rows get a post-paint pass.
-  const dotClass = nav.innerHTML.match(/<span id="unread-c"[^>]*class="([^"]*)"/)[1];
+  const dotClass = renderedClass(nav, 'unread-c');
   assert.equal(/\bhidden\b/.test(dotClass), false, 'the child shows its own dot');
   assert.equal(context.Sidebar.ownUnread('p'), false);
   assert.equal(context.Sidebar.subtreeUnread('p'), true);
@@ -313,7 +313,7 @@ test('a parent thinking over a paused worker shows its own spinner', () => {
 test('the gear hover text names the waiting work too', () => {
   const {context, nav} = buildSidebarIndicatorContext(['w']);
   context.renderSessionList([row('w', null)], 'all');
-  const title = nav.innerHTML.match(/<svg id="worker-indicator-w"[^>]*title="([^"]*)"/)[1];
+  const title = renderedAttr(nav, 'worker-indicator-w', 'title');
   assert.equal(title, 'Delegated work running or waiting in subtasks');
 });
 
@@ -508,7 +508,7 @@ test('a childless legacy row keeps main’s behavior: its own state and unread f
   // threads) stays the legacy delegated-work gear, byte for byte.
   paintListReply(context, [row('solo', null, {profile: null, has_unread: true})], 'all');
   // The paint itself renders the dot visible; no post-paint pass touches a childless row.
-  const dotClass = nav.innerHTML.match(/<span id="unread-solo"[^>]*class="([^"]*)"/)[1];
+  const dotClass = renderedClass(nav, 'unread-solo');
   assert.equal(/\bhidden\b/.test(dotClass), false);
   assert.equal(context.Sidebar.ownUnread('solo'), true);
   assert.equal(context.Sidebar.subtreeUnread('solo'), false);
@@ -526,9 +526,9 @@ test('a task-tree row’s own running Run paints the spinner, not the gear', () 
   // from the task-tree derivation) is its own work: the spinner, whatever the
   // row's profile — the gear is a stand-in's icon, never an own one.
   paintListReply(context, [row('root', null, {has_running_tasks: true, has_unread: true})], 'all');
-  const spinnerClass = nav.innerHTML.match(/<svg id="spinner-root"[^>]*class="([^"]*)"/)[1];
-  const gearClass = nav.innerHTML.match(/<svg id="worker-indicator-root"[^>]*class="([^"]*)"/)[1];
-  const dotClass = nav.innerHTML.match(/<span id="unread-root"[^>]*class="([^"]*)"/)[1];
+  const spinnerClass = renderedClass(nav, 'spinner-root');
+  const gearClass = renderedClass(nav, 'worker-indicator-root');
+  const dotClass = renderedClass(nav, 'unread-root');
   assert.equal(/\bhidden\b/.test(spinnerClass), false, 'own running paints the spinner at paint');
   assert.equal(/\bhidden\b/.test(gearClass), true);
   assert.equal(/\bhidden\b/.test(dotClass), false,
@@ -544,8 +544,8 @@ test('a task-tree row’s own running Run paints the spinner, not the gear', () 
 test('a running worker leaf paints the spinner, not the delegated-work gear', () => {
   const {context, nav, shown} = buildSidebarIndicatorContext(['p', 'w']);
   context.renderSessionList([row('p', null), row('w', 'p', {has_running_tasks: true})], 'all');
-  const spinnerClass = nav.innerHTML.match(/<svg id="spinner-w"[^>]*class="([^"]*)"/)[1];
-  const gearClass = nav.innerHTML.match(/<svg id="worker-indicator-w"[^>]*class="([^"]*)"/)[1];
+  const spinnerClass = renderedClass(nav, 'spinner-w');
+  const gearClass = renderedClass(nav, 'worker-indicator-w');
   assert.equal(/\bhidden\b/.test(spinnerClass), false, 'the leaf\u2019s own run shows as the spinner at paint');
   assert.equal(/\bhidden\b/.test(gearClass), true);
 
@@ -576,7 +576,7 @@ test('no state paints an alert-indicator element; a failed child reads idle', ()
   paintListReply(context, [row('w', null, {work_state: 'idle', has_unread: true})], 'all');
   assert.equal(/alert-indicator-/.test(nav.innerHTML), false,
       'no render path emits an alert-indicator element');
-  const dotClass = nav.innerHTML.match(/<span id="unread-w"[^>]*class="([^"]*)"/)[1];
+  const dotClass = renderedClass(nav, 'unread-w');
   assert.equal(/\bhidden\b/.test(dotClass), false,
       'a failed child’s idle row paints only its unread dot');
   // The status poll's seam agrees for the remaining states.
@@ -597,9 +597,9 @@ test('no state paints an alert-indicator element; a failed child reads idle', ()
 test('a task-tree row’s own waiting (queued) paints the muted clock beside its unread dot', () => {
   const {context, nav, shown} = buildSidebarIndicatorContext(['w']);
   paintListReply(context, [row('w', null, {work_state: 'waiting', has_unread: true})], 'all');
-  const clockClass = nav.innerHTML.match(/<svg id="waiting-indicator-w"[^>]*class="([^"]*)"/)[1];
+  const clockClass = renderedClass(nav, 'waiting-indicator-w');
   assert.equal(/\bhidden\b/.test(clockClass), false, 'own waiting paints the clock at paint');
-  const dotClass = nav.innerHTML.match(/<span id="unread-w"[^>]*class="([^"]*)"/)[1];
+  const dotClass = renderedClass(nav, 'unread-w');
   assert.equal(/\bhidden\b/.test(dotClass), false,
       'first paint: the clock and the own dot show together');
   context.setSessionIndicator('w', 'waiting');
@@ -623,7 +623,7 @@ test('a waiting child gives the parent no clock; the queued row keeps its own', 
   context.renderSessionList([row('p', null), row('w', 'p', {work_state: 'waiting'})], 'all');
   assert.deepEqual(shown('p'), IDLE_ICONS, 'the clock never stands in for a subtree');
   // The queued row's own clock renders at paint; only parent rows get a post-paint pass.
-  const clockClass = nav.innerHTML.match(/<svg id="waiting-indicator-w"[^>]*class="([^"]*)"/)[1];
+  const clockClass = renderedClass(nav, 'waiting-indicator-w');
   assert.equal(/\bhidden\b/.test(clockClass), false, 'the queued row shows its own clock');
 
   context.Sidebar.expandTreeNode('p');
@@ -663,11 +663,21 @@ test('the waiting clock and the descendant’s own dot show together; the mark r
 // A row whose session stores a Waiting on you item: the server's has_waiting_items flag on the listing row.
 const stores = (id, parent, overrides = {}) => row(id, parent, {has_waiting_items: true, ...overrides});
 
+// The opening tag of a rendered element in the row list's HTML. An icon's tag carries its class before its id, so
+// the tag is found by its id whatever the attribute order.
+function openingTag(html, elementId) {
+  const match = html.match(new RegExp(`<[a-z]+\\s[^>]*\\bid="${elementId}"[^>]*>`));
+  assert.ok(match, `no rendered element ${elementId}`);
+  return match[0];
+}
+
+function renderedAttr(nav, elementId, name) {
+  return openingTag(nav.innerHTML, elementId).match(new RegExp(`\\s${name}="([^"]*)"`))[1];
+}
+
 // The class a rendered element carries in the row list's HTML: the state the last paint gave it.
 function renderedClass(nav, elementId) {
-  const match = nav.innerHTML.match(new RegExp(`<[a-z]+ id="${elementId}"[^>]*class="([^"]*)"`));
-  assert.ok(match, `no rendered element ${elementId}`);
-  return match[1];
+  return renderedAttr(nav, elementId, 'class');
 }
 const renderedHidden = (nav, elementId) => /\bhidden\b/.test(renderedClass(nav, elementId));
 

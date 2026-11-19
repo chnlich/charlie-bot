@@ -622,11 +622,9 @@ function showSwitchPlaceholder(sessionId) {
   const row = document.createElement('div');
   row.id = 'switch-placeholder';
   row.className = 'px-4 py-2 flex items-center gap-2 text-sm text-slate-400';
-  const dot = document.createElement('span');
-  dot.className = 'w-2 h-2 rounded-full bg-blue-400 animate-pulse-dot';
+  row.innerHTML = cbIcon('dot', 8, 'text-blue-400 animate-pulse-dot');
   const label = document.createElement('span');
   label.textContent = 'Opening ' + switchTargetName(sessionId) + '…';
-  row.appendChild(dot);
   row.appendChild(label);
   container.appendChild(row);
 }

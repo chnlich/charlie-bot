@@ -15,10 +15,9 @@
 const MODAL_OVERLAY_CLASS = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
 const MODAL_DIALOG_CLASS = 'bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72';
 
-// The one trash-can outline: real deletion only -- the delete confirmation
-// below. The archived row's Delete permanently and the group header's Delete
+// The delete confirmation shows the icon module's delete mark: real deletion
+// only. The archived row's Delete permanently and the group header's Delete
 // group are menu items, not icons.
-const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>`;
 
 // ---------------------------------------------------------------------------
 // Archive, unarchive and permanent delete
@@ -157,17 +156,14 @@ function closeConfirmDialog() {
   }
 }
 
-function openConfirmDialog({iconPath = '', iconClass = '', heading, detail, confirmLabel, confirmClass,
+function openConfirmDialog({iconKey = '', iconClass = '', heading, detail, confirmLabel, confirmClass,
     confirmOnEnter = false, onConfirm}) {
   closeConfirmDialog();
 
   const overlay = document.createElement('div');
   overlay.id = CONFIRM_OVERLAY_ID;
   overlay.className = MODAL_OVERLAY_CLASS;
-  const icon = iconPath
-    ? `<svg class="w-8 h-8 ${iconClass} mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">`
-      + `${iconPath}</svg>`
-    : '';
+  const icon = iconKey ? cbIcon(iconKey, 32, `${iconClass} mx-auto mb-3`) : '';
   const okClass = `px-3 py-1.5 text-xs rounded-lg ${confirmClass} text-white transition-colors`;
   overlay.innerHTML = `
     <div class="${MODAL_DIALOG_CLASS} text-center"
@@ -205,7 +201,7 @@ function openConfirmDialog({iconPath = '', iconClass = '', heading, detail, conf
 
 function confirmDeletePermanently(sessionId) {
   Sidebar.openConfirmDialog({
-    iconPath: TRASH_SVG_PATH,
+    iconKey: 'delete',
     iconClass: 'text-red-400',
     heading: 'Delete permanently?',
     detail: 'This will permanently delete this session and all its data. This cannot be undone.',
@@ -281,7 +277,7 @@ async function showGroupSelector(sessionId, currentGroup) {
         <p class="text-sm text-slate-300 font-semibold">Set Group</p>
         <button id="group-modal-close" type="button" title="Close"
                 class="text-slate-500 hover:text-slate-300 p-1 modal-close-btn">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          ${cbIcon('close', 16)}
         </button>
       </div>
       <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">

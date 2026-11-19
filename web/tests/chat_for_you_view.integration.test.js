@@ -394,7 +394,7 @@ test('Everything separator HTML carries the round group and no label', () => {
   }), 'sess-fy');
   const hash = crypto.createHash('sha256').update(html).digest('hex');
 
-  assert.equal(hash, '38d667a4c21f99006da3c695e068897377d262037c54dec67c3e96a53306a582');
+  assert.equal(hash, 'e61f626d49a1d7857062a61fe687a93fa78b2ebebaa3d9f2800bdeaa0631b09f');
   assert.doesNotMatch(html, /response complete/);
   assert.doesNotMatch(html, /separator-label/);
   assert.equal((html.match(/\bseparator-hairline\b/g) || []).length, 2, 'both hairlines stay');
@@ -433,7 +433,7 @@ test('run_end separator HTML is unchanged; ordinary shapes drop only the label',
     [eMsg('separator', 'noidx-s', '', {thinking_seconds: 4}),
       '1c538b99203e41f01e23b06ea3bf2315842dcbe9c4cf5783e9a89b78fba3b972'],
     [eMsg('separator', 'nosec-s', '', {event_index: 705}),
-      '5b6ec71439453deeecc50d235f0cde3b6e88d587e0651f053e6b67bf39f162be'],
+      '8e5c1ee17575f02eea339c0bfab6dd5dc0b679d55ede15caa4c8cac1c4c2f757'],
   ];
   for (const [msg, expected] of shapes) {
     const html = rig.context.renderMessage(msg, 'sess-fy');

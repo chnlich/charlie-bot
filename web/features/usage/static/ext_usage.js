@@ -51,14 +51,15 @@ function _setExtUsageCollapsed(collapsed) {
 }
 
 // The collapsed class mirrors the in-memory boolean on every render, and the
-// chip tracks the strip: hidden whenever the strip is, glyph ▸ collapsed /
-// ▾ expanded. Called from renderExtUsage and from toggle clicks.
+// chip tracks the strip: hidden whenever the strip is, glyph disclosure
+// collapsed / disclosure-open expanded. Called from renderExtUsage and from
+// toggle clicks.
 function _syncExtUsageChrome(strip) {
   strip.classList.toggle('collapsed', _extUsageCollapsed);
   const chip = document.getElementById('ext-usage-toggle');
   if (!chip) return;
   chip.classList.toggle('hidden', strip.classList.contains('hidden'));
-  chip.textContent = _extUsageCollapsed ? '▸' : '▾';
+  chip.innerHTML = cbIcon(_extUsageCollapsed ? 'disclosure' : 'disclosure-open', 12);
   chip.title = _extUsageCollapsed ? 'Show quota details' : 'Hide quota details';
 }
 

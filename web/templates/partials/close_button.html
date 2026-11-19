@@ -2,8 +2,8 @@
     and its X icon, so every close button stays identical. Each call site
     passes its own click target, title and resting classes; an empty title
     renders no attribute.
-    The icon's w-4 h-4 tokens must stay spelled out here: the Tailwind build
-    scans template source text, never macro expansion.
+    The X is the icon module's close at 16 px; the phone rule below sets its
+    box to 20 px.
 
     A phone's icon buttons carry a 20 px glyph: the header's menu button and
     the composer's attach and mic do. The composer's take the 44 px box
@@ -27,6 +27,6 @@
   }
 </style>
 <button onclick="{{ onclick }}" class="{{ btn_class }} modal-close-btn"{% if title %} title="{{ title }}"{% endif %}>
-  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+  {{ icon('close', 16) }}
 </button>
 {%- endmacro %}

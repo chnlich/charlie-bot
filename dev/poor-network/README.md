@@ -394,7 +394,9 @@ named scenario: the default run does not include it, and it takes its own repeti
 - **idle**: the box is cleared and the query typed, and nothing else changes on the server. Recorded per query: `e2e_ms`,
   the answer's paint minus its input event on the page's clock; `body_bytes`, the answer's `encodedBodySize`, the body
   compressed as it crosses the link; `wire_bytes`, its `transferSize`, headers included; and `overlap`, the other
-  requests whose transfer overlapped the answer's, by count and `transferSize`, with the status polls counted apart.
+  requests in flight from the search request's start to the answer's response end, by count and `transferSize`, with
+  the status polls counted apart. A request still in flight when the answer is read is not in the resource log yet, so
+  it is not counted.
 - **broadcast**: as idle, and after each query's first paint one window of `broadcast.windowMs` runs. The bench renames
   its background session at `k × windowMs / changesPerWindow` for k = 0 … 18, so the server broadcasts 19 changes in the
   window. Each broadcast makes the page call `handleSidebarSearch` for the open query (`refetchSessionList` in
@@ -411,7 +413,7 @@ named scenario: the default run does not include it, and it takes its own repeti
     the same `sessions` object, so it is counted as `repaints` and not as a paint.
   - `discarded` = `answers − answer_paints`: the responses that ended and did not paint. The run stops if the paints
     exceed the answers, since every paint belongs to an answer that ended.
-  - `status_polls`, `status_bytes`, `bytes_by_path`: the requests that began in the span, as in the idle variant.
+  - `status_polls`, `status_bytes`, `bytes_by_path`: the requests that began in the span, the status polls counted apart.
 
 The view reads each request's resource entry from an observer's log (`window.__resources`), not from the browser's
 resource timing buffer. The page's diagnostics clear that buffer every 60 s (`TRAFFIC_FLUSH_MS` in
@@ -425,7 +427,7 @@ The constants are `SEARCH` in `profile.mjs`. Each row states its source:
 | `repetitions` | 3 | per query and variant |
 | `clearSettleMs`, `loadSettleMs` | 2500, 4000 | the waits browser_search.js takes between searches and after the load |
 | `windowSettleMs` | 1000 | the view's own wait: the last answer's render and paint follow its response's end, and the drain's idle check does not wait for them |
-| `liveBeforeBodyBytes` | sidebar 116645.5, plan 66574, cron 60003, hydeogen 1887 | the median `encodedBodySize` of each query's search answer in the live before captures on the live release e8d6bc82: `browser_fast.json` (sidebar and plan, 5 runs each), `browser_slow.json` (sidebar and plan, 2 each), `browser_slow2.json` (sidebar 3, cron 3), `browser_slow_hydeogen.json` (hydeogen 2), in `~/scripts/20261119_sidebar_search_slow/` |
+| `liveBeforeBodyBytes` | sidebar 116645.5, plan 66574, cron 60003, hydeogen 1887 | the median `encodedBodySize` of each query's search answer in the live before captures on the live release e8d6bc82, in `~/scripts/20261119_sidebar_search_slow/`: sidebar 10 runs (`browser_fast.json` 5, `browser_slow.json` 2, `browser_slow2.json` 3), plan 7 (`browser_fast.json` 5, `browser_slow.json` 2), cron 3 (`browser_slow2.json`), hydeogen 9 (`browser_fast.json` 5, `browser_slow.json` 2, `browser_slow_hydeogen.json` 2) |
 | `bodyToleranceShare` | 0.1 | the view's acceptance: a checked query's median body lies within 10 % of its live body |
 | `checkedQueries` | sidebar, plan, cron | hydeogen is reported without a check |
 | `broadcast` | 19 changes, 60004 ms | `watch_ws.json`: 19 `task_tree_changed` frames in a 60.004 s window |

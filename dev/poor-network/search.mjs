@@ -6,8 +6,8 @@
 // - e2e_ms: the answer's paint minus the input event, both on the page's clock;
 // - body_bytes: the search response's encodedBodySize, the body as it crossed the link compressed;
 // - wire_bytes: the response's transferSize, headers included;
-// - overlap: the other requests whose transfer overlapped the response's, with their transferSize, the status polls
-//   counted apart.
+// - overlap: the other requests in flight between the search request's start and its response's end, with their
+//   transferSize, the status polls counted apart.
 // The broadcast variant also runs a window from the query's first paint. For the window the bench renames its background
 // session at SEARCH.broadcast's rate, and the server broadcasts each rename as task_tree_changed. Each broadcast makes the
 // page refetch the open query, and an answer whose generation a newer refetch has overtaken is discarded unpainted. The
@@ -81,8 +81,10 @@ export const WRAP_RENDER_SCRIPT = `(() => {
 })()`;
 
 // The answer to the query typed after input `inputIndex`, once it has painted after render `renderIndex`; null until then.
-// Its overlap is the other resource entries whose transfer overlapped the answer's.
-const READ_ANSWER_SCRIPT = `(function (query, inputIndex, renderIndex) {
+// Its overlap is the other resource entries in flight between the answer's request start and its response end, so a
+// request that ended while the answer was still waiting for its first byte counts. An entry still in flight at this read
+// is not in the log yet, and is not counted.
+export const READ_ANSWER_SCRIPT = `(function (query, inputIndex, renderIndex) {
   const input = window.__searchInputs[inputIndex];
   if (!input) return null;
   const render = window.__searchRenders.slice(renderIndex)
@@ -101,7 +103,7 @@ const READ_ANSWER_SCRIPT = `(function (query, inputIndex, renderIndex) {
     encodedBodySize: entry.encodedBodySize,
     transferSize: entry.transferSize,
     overlap: entries
-      .filter((e) => e !== entry && e.startTime < entry.responseEnd && e.responseEnd > entry.responseStart)
+      .filter((e) => e !== entry && e.startTime < entry.responseEnd && e.responseEnd > entry.startTime)
       .map((e) => ({ path: new URL(e.name).pathname, transferSize: e.transferSize })),
   };
 })`;

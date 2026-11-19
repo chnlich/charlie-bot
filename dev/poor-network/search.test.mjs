@@ -8,6 +8,7 @@ import vm from 'node:vm';
 
 import { SEARCH } from './profile.mjs';
 import {
+  READ_ANSWER_SCRIPT,
   READ_SPAN_SCRIPT,
   WRAP_RENDER_SCRIPT,
   bodyCheck,
@@ -64,6 +65,35 @@ test('the overlap counts every other request and splits out the status polls', (
     { path: '/api/sessions/status', transferSize: 25 },
   ]);
   assert.deepEqual(summary, { count: 3, bytes: 175, status_count: 2, status_bytes: 125 });
+});
+
+test('an answer overlaps the requests in flight from its request start to its response end', () => {
+  const entry = (path, startTime, responseEnd, transferSize) => ({
+    name: `http://127.0.0.1:18650${path}`,
+    startTime,
+    responseStart: responseEnd - 10,
+    responseEnd,
+    transferSize,
+    encodedBodySize: 66574,
+  });
+  const entries = [
+    entry('/api/sessions/search?q=plan', 1010, 1550, 300),
+    // Ends while the answer waits for its first byte: in flight at the request's start.
+    entry('/api/sessions/status', 900, 1200, 25),
+    // Ends before the answer's request starts.
+    entry('/api/sessions/status', 100, 900, 30),
+    // In flight at the answer's response end.
+    entry('/api/sessions/?ids=a', 1400, 1700, 50),
+    // Starts after the answer's response end.
+    entry('/api/sessions/status', 1560, 1600, 40),
+  ];
+  const sandbox = pageSandbox({});
+  sandbox.__searchInputs = [{ t: 1000 }];
+  sandbox.__searchRenders = [{ filter: 'search', repaint: false, t0: 1600, paint: 1650, wallPaint: 1650, rows: 200 }];
+  sandbox.__resources = entries;
+  const answer = JSON.parse(vm.runInContext(`JSON.stringify((${READ_ANSWER_SCRIPT})('plan', 0, 0))`, sandbox));
+  assert.deepEqual(answer.overlap.map((other) => other.transferSize), [25, 50]);
+  assert.deepEqual(overlapSummary(answer.overlap), { count: 2, bytes: 75, status_count: 1, status_bytes: 25 });
 });
 
 test('the body check holds the checked queries to the tolerance and reports hydeogen without one', () => {

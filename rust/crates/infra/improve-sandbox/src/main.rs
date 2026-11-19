@@ -1,15 +1,19 @@
-//! The sandbox that runs one improve round's command under a write-only Landlock boundary.
+//! The sandbox that runs one improve round's command under a Landlock boundary that limits writes and signals.
 //!
 //! Usage: `improve-sandbox <direction> -- <command> [args...]`
 //!
-//! The boundary limits writes only: every read stays open. `direction_paths` lists the directories that accept a
+//! The write rules limit writes only: every read stays open. `direction_paths` lists the directories that accept a
 //! write. Every other path is denied. The live CharlieBot home, the runtime clone and the host worker's trees
 //! therefore stay out of reach. `DEVICE_PATHS` takes a rule for each device that tools write to.
 //!
+//! The signal scope (`LANDLOCK_SCOPE_SIGNAL`) confines signals to the round's domain. A process of the round can
+//! signal only the processes that the round started, so a `kill`, `pkill` or `killall` at another worker's process
+//! fails with EPERM. Every process the round starts inherits the domain, so the round still stops what it started.
+//!
 //! The program creates each missing allow-list directory, because the rules bind to objects that exist when it
-//! starts. It stops with an error when the kernel cannot enforce Landlock, since an unguarded round could write
-//! anywhere on the host. On success it replaces itself with the command, so the command's exit code is the
-//! program's exit code.
+//! starts. It stops with an error when the kernel cannot enforce Landlock ABI 6, since an unguarded round could write
+//! anywhere on the host or signal any process of the host. On success it replaces itself with the command, so the
+//! command's exit code is the program's exit code.
 
 use std::collections::BTreeSet;
 use std::ffi::{CString, OsString};
@@ -31,12 +35,14 @@ const SYS_LANDLOCK_ADD_RULE: libc::c_long = 445;
 const SYS_LANDLOCK_RESTRICT_SELF: libc::c_long = 446;
 const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1;
 const LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
-/// The ABI that adds the truncate right, which the write rules depend on.
-const REQUIRED_ABI: i64 = 3;
+/// The ABI that adds signal scoping. ABI 3 added the truncate right that the write rules depend on, and ABI 6 keeps it.
+const REQUIRED_ABI: i64 = 6;
 
 /// Filesystem access rights from `linux/landlock.h`: bit 1 is write, bit 14 is truncate.
 const ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
 const ACCESS_FS_TRUNCATE: u64 = 1 << 14;
+/// The scope from `linux/landlock.h` (ABI 6): bit 1 stops a process from signalling a process outside its domain.
+const SCOPE_SIGNAL: u64 = 1 << 1;
 /// Every write right: bit 1 and bits 4 to 14 (write, remove and create of each object type, refer, truncate).
 /// Bit 0 (execute) and bits 2 and 3 (read) stay out, so reads are never restricted.
 const WRITE_ACCESS: u64 = 0x7FF2;
@@ -59,10 +65,13 @@ const DEVICE_PATHS: [&str; 9] = [
   "/dev/shm",
 ];
 
-/// `struct landlock_ruleset_attr`: the rights the ruleset handles.
+/// `struct landlock_ruleset_attr`: the filesystem rights the ruleset handles, the network rights it handles (none),
+/// and the scopes it restricts.
 #[repr(C)]
 struct RulesetAttr {
   handled_access_fs: u64,
+  handled_access_net: u64,
+  scoped: u64,
 }
 
 /// `struct landlock_path_beneath_attr`. The kernel declares it packed, so the fd sits right after the rights.
@@ -141,14 +150,17 @@ fn open_path(path: &Path) -> Result<OwnedFd> {
   Ok(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
 }
 
-/// The restriction of this process's writes to `write_allowed`, with reads left open. The return value is the ABI
-/// version.
+/// The restriction of this process's writes to `write_allowed`, with reads left open, and of its signals to its own
+/// domain. The return value is the ABI version.
 fn restrict(write_allowed: &BTreeSet<PathBuf>) -> Result<i64> {
   let abi = landlock_abi()?;
   if abi < REQUIRED_ABI {
-    bail!("Landlock ABI {abi} cannot enforce truncate; ABI {REQUIRED_ABI} is required");
+    bail!(
+      "Landlock ABI {abi} cannot scope signals, so a round could signal other workers' processes; ABI {REQUIRED_ABI} \
+       is required"
+    );
   }
-  let attr = RulesetAttr { handled_access_fs: WRITE_ACCESS };
+  let attr = RulesetAttr { handled_access_fs: WRITE_ACCESS, handled_access_net: 0, scoped: SCOPE_SIGNAL };
   // SAFETY: attr is a live struct of the size passed, and the kernel only reads it.
   let ruleset_fd = unsafe {
     libc::syscall(SYS_LANDLOCK_CREATE_RULESET, &attr as *const RulesetAttr, mem::size_of::<RulesetAttr>(), 0u32)
@@ -196,7 +208,10 @@ fn main() -> Result<()> {
     write_allowed.insert(fs::canonicalize(path).with_context(|| format!("cannot resolve {}", path.display()))?);
   }
   let abi = restrict(&write_allowed)?;
-  eprintln!("improve boundary: write-only Landlock ABI {abi}, {} writable paths, {direction}", write_allowed.len());
+  eprintln!(
+    "improve boundary: Landlock ABI {abi} with writes and signals scoped, {} writable paths, {direction}",
+    write_allowed.len()
+  );
 
   let error = Command::new(&command[0]).args(&command[1..]).exec();
   Err(error).with_context(|| format!("cannot start {}", command[0].to_string_lossy()))

@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
-use crate::browser_login::{self, InputRefused};
+use crate::browser_login::{self, InputRefused, StartFailed};
 use crate::config::{self, BrowserLoginConfig};
 use crate::host_auth::{self, RoundSlot};
 use crate::page;
@@ -195,8 +195,9 @@ async fn manual_round(_slot: RoundSlot, logins: Vec<BrowserLoginConfig>) {
   }
 }
 
-/// `POST /api/host-auth/logins/{name}/start`: start the named login and redirect to its approval link. It answers 502
-/// with the failure body when the login gives none.
+/// `POST /api/host-auth/logins/{name}/start`: start the named login and redirect to its approval link. It answers 409
+/// with the concurrent-wait page when another Okta authorization holds the router, and 502 with the failure body when
+/// the login gives no link for any other reason.
 async fn browser_login_start(
   State(features): State<Arc<FeatureContext>>,
   RoutePath(name): RoutePath<String>,
@@ -208,8 +209,27 @@ async fn browser_login_start(
   };
   match browser_login::start_login(&login).await {
     Ok(link) => see_other_to(&link),
-    Err(failed) => responses::plain_text(StatusCode::BAD_GATEWAY, &failed.0),
+    Err(StartFailed::ConcurrentWait) => concurrent_wait_page(),
+    Err(StartFailed::Failed(body)) => responses::plain_text(StatusCode::BAD_GATEWAY, &body),
   }
+}
+
+/// The text of the 409 answer. It names the places another authorization can have started from, so the user knows where
+/// to look.
+const CONCURRENT_WAIT_TEXT: &str = concat!(
+  "A previous Okta authorization is still waiting for browser confirmation. It was started by another session, ",
+  "a terminal, an earlier Start on this row, or a link check of this row. Complete it where its link is shown, ",
+  "or wait up to 5 minutes, then click Start again."
+);
+
+/// The 409 answer to a start that met a concurrent wait: the wait's text, and a link back to the page.
+fn concurrent_wait_page() -> Response {
+  let body = format!("<!doctype html>\n<p>{CONCURRENT_WAIT_TEXT}</p>\n<p><a href=\"/host-auth\">/host-auth</a></p>\n");
+  Response::builder()
+    .status(StatusCode::CONFLICT)
+    .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+    .body(Body::from(body))
+    .expect("the conflict page builds")
 }
 
 /// `POST /api/host-auth/logins/{name}/input`: write the body's `value` to the login that waits for it, once. The value
@@ -340,6 +360,7 @@ mod tests {
     router: Router,
     ok_name: String,
     failing_name: String,
+    held_name: String,
     router_name: String,
     tree_name: String,
     missing_name: String,
@@ -354,6 +375,7 @@ mod tests {
     let (tree_name, missing_name, input_name, marked_name) =
       (names("tree"), names("missing"), names("input"), names("marked"));
     let link_name = names("needing-link");
+    let held_name = names("held-sso");
     let missing_readback = dir.path().join(format!("{prefix}-no-such-readback")).display().to_string();
     // The login leaves a marker when it runs, so a test shows whether a request started it.
     let login =
@@ -361,6 +383,15 @@ mod tests {
     let failing = write_script(dir.path(), &format!("{prefix}-failing"), "echo starting; exit 3\n");
     let readback = write_script(dir.path(), &format!("{prefix}-readback"), "echo valid\n");
     let failing_readback = write_script(dir.path(), &format!("{prefix}-failing-readback"), "echo failed\nexit 1\n");
+    // A router that another authorization holds: it prints the wait and exits with the router's refusal.
+    let held = write_script(
+      dir.path(),
+      &format!("{prefix}-held"),
+      concat!(
+        "printf '%s\\n' 'A previous Okta authorization is still waiting for browser confirmation: ",
+        "complete it, or wait up to 5 minutes, then reconnect.'\nexit 255\n"
+      ),
+    );
     // The shell records its pid and its background child's pid beside itself, then both wait. The background child holds
     // the output pipe, so only the timeout's tree kill ends the readback.
     let tree_readback = write_script(
@@ -411,6 +442,11 @@ host_auth:
       enter_after_pattern: 'Press Enter after approval'
       user_code_pattern: 'Code:\\s*(\\S+)'
       lifetime_sec: 86400
+    - name: {held_name}
+      label: Held SSO
+      login_command: [{held}]
+      approval_url_pattern: 'https://device\\.sso\\S*'
+      readback_command: [{readback}]
     - name: {tree_name}
       label: Tree SSO
       login_command: [{login}]
@@ -479,6 +515,7 @@ host_auth:
       router,
       ok_name,
       failing_name,
+      held_name,
       router_name,
       tree_name,
       missing_name,
@@ -588,6 +625,20 @@ host_auth:
       "text/plain; charset=utf-8"
     );
     assert_eq!(body, "exit 3\nstarting");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn the_start_route_answers_409_html_while_another_authorization_holds_the_router() {
+    let _slot_lock = crate::test_support::round_slot_lock().lock().await;
+    let home = home("start-held", false);
+    let _home_env = use_home(&home);
+    let (status, headers, body) =
+      call(home.router, Method::POST, &format!("/api/host-auth/logins/{}/start", home.held_name), "").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(headers.get(header::CONTENT_TYPE).expect("the page names its type"), "text/html; charset=utf-8");
+    assert!(body.contains(CONCURRENT_WAIT_TEXT), "{body}");
+    assert!(body.contains("href=\"/host-auth\""), "the page links back to /host-auth: {body}");
   }
 
   #[tokio::test]
@@ -837,8 +888,8 @@ host_auth:
     let (status, body) = get_json(home.router.clone(), "/api/host-auth/status").await;
     assert_eq!(status, StatusCode::OK);
     let rows = body["rows"].as_array().expect("the rows are a list");
-    // Eight logins, and the one ssh host without a login: host0. host1 is renewed by a login, so it has no row.
-    assert_eq!(rows.len(), 9);
+    // Nine logins, and the one ssh host without a login: host0. host1 is renewed by a login, so it has no row.
+    assert_eq!(rows.len(), 10);
     assert!(rows.iter().any(|row| row["id"] == json!("host:host0")));
     let needs = body["summary"]["needs_user"].as_array().expect("the needs-user list");
     let broken = body["summary"]["broken"].as_array().expect("the broken list");

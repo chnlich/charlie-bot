@@ -277,11 +277,14 @@ where
 /// The link probe of a login whose row shows that it needs approval. A passing check that ends the need during the probe
 /// drops its answer. The final state check and write share the round slot, so a passing check cannot race with a stale
 /// probe result. A row in any other state is refused, so a probe never records a link failure for a login that works.
+/// A probe that finds a concurrent wait has no result, and it records nothing.
 async fn probe_waiting_login(state_path: &Path, login: &BrowserLoginConfig) -> anyhow::Result<()> {
   if login_row_state(state_path, login)? != RowState::NeedsUser {
     bail!("login {} does not show as needing approval, so its link probe does not run", login.name);
   }
-  let matched = browser_login::probe_link(login).await?;
+  let Some(matched) = browser_login::probe_link(login).await? else {
+    return Ok(());
+  };
   login_state::record_link_match_if(state_path, &login.name, matched, |state| {
     let hosts = host_auth::host_entries(state)?;
     Ok(login_row(state, &hosts, login, None)?.state == RowState::NeedsUser)
@@ -439,6 +442,36 @@ pub fn format_remaining(seconds: i64) -> String {
 mod tests {
   use super::*;
   use crate::probe::STATUS_OK;
+
+  #[tokio::test]
+  async fn a_row_broken_by_a_stored_link_failure_runs_no_link_probe_and_keeps_the_failure() {
+    let dir = tempfile::tempdir().expect("a temporary home");
+    let state_path = dir.path().join("host_auth.json");
+    let mut state = crate::state_file::empty_state();
+    state.insert(
+      "hosts".to_string(),
+      json!([{"alias": "host1", "hostname": "host1.example.internal", "status": "router-rejected", "detail": ""}]),
+    );
+    state.insert("logins".to_string(), json!({"router-host1": {"link_match": "fail"}}));
+    crate::state_file::save_state(&state, &state_path).expect("the state writes");
+    let login: BrowserLoginConfig = serde_json::from_value(json!({
+      "name": "router-host1",
+      "label": "host1 login router",
+      "host": "host1",
+      "login_command": ["/nonexistent/login"],
+      "approval_url_pattern": "https://device\\.example\\S*",
+      "readback_command": ["/bin/true"],
+    }))
+    .expect("the login config parses");
+
+    let refused = probe_waiting_login(&state_path, &login).await.expect_err("a broken row does not probe");
+    assert!(refused.to_string().contains("does not show as needing approval"), "{refused:#}");
+    let kept = crate::state_file::read_state(&state_path).expect("the state reads");
+    assert_eq!(
+      login_state::login_state(&kept, "router-host1").expect("the record reads").link_match,
+      Some(LinkMatch::Fail)
+    );
+  }
 
   #[test]
   fn the_countdown_shows_its_two_largest_units() {

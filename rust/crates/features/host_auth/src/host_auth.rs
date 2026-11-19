@@ -80,8 +80,8 @@ pub fn apply_probe_result(entry: &mut Map<String, Value>, status: &str, detail: 
 }
 
 /// `fold_probe`: apply one probe to the host at `index`. A probe that approves the host records the approval on the
-/// login bound to that host, and an ok probe clears that login's stored link result. The records are part of the same
-/// state write.
+/// login bound to that host. An ok probe clears that login's stored `broken` status and its stored link result, since
+/// the host answering ok is the login's availability. The records are part of the same state write.
 fn fold_probe(
   state: &mut State,
   logins: &[BrowserLoginConfig],
@@ -97,6 +97,7 @@ fn fold_probe(
       login_state::change_login(state, name, |record| record.last_approved_at = Some(probed.to_string()))?;
     }
     if verdict.0 == STATUS_OK {
+      login_state::clear_broken(state, name)?;
       login_state::clear_link_match(state, name)?;
     }
   }
@@ -364,6 +365,7 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::login_state::{LinkMatch, LoginStatus};
   use crate::probe::{STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_UNREACHABLE, build_detail};
   use time::Duration;
 
@@ -425,6 +427,51 @@ mod tests {
       .expect("the probe folds");
     let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
     assert_eq!(record.last_approved_at.as_deref(), Some(probed), "a failing probe leaves the approval");
+  }
+
+  #[test]
+  fn an_ok_probe_of_the_bound_host_clears_the_broken_status_and_a_row_check_does_not() {
+    let logins = vec![BrowserLoginConfig {
+      name: "router-login-a".to_string(),
+      label: "login-a router".to_string(),
+      host: Some("login-a".to_string()),
+      login_command: vec!["/usr/bin/true".to_string()],
+      approval_url_pattern: r"https://\S*".to_string(),
+      readback_command: vec!["/usr/bin/true".to_string()],
+      use_pty: false,
+      enter_after_pattern: None,
+      user_code_pattern: None,
+      input_prompt: None,
+      lifetime_sec: None,
+    }];
+    let mut state = empty_state();
+    state.insert(
+      "hosts".to_string(),
+      json!([entry("login-a", "login-a.example.internal", &[("status", json!(STATUS_ROUTER_REJECTED))])]),
+    );
+    let broken = |state: &mut State| {
+      login_state::change_login(state, "router-login-a", |record| {
+        record.status = Some(LoginStatus::Broken);
+        record.link_match = Some(LinkMatch::Fail);
+      })
+      .expect("the record changes");
+    };
+    let probed = "2026-11-19T09:54:09+00:00";
+
+    broken(&mut state);
+    fold_probe(&mut state, &[], 0, (STATUS_OK, "exit 0"), probed).expect("the row check's probe folds");
+    let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
+    assert_eq!(record.status, Some(LoginStatus::Broken), "a host row check passes no login, so it clears nothing");
+    assert_eq!(record.link_match, Some(LinkMatch::Fail));
+
+    fold_probe(&mut state, &logins, 0, (STATUS_UNREACHABLE, "exit 255"), probed).expect("the probe folds");
+    let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
+    assert_eq!(record.status, Some(LoginStatus::Broken), "a probe that does not answer ok keeps the broken status");
+
+    fold_probe(&mut state, &logins, 0, (STATUS_OK, "exit 0"), probed).expect("the bound probe folds");
+    let record = login_state::login_state(&state, "router-login-a").expect("the record reads");
+    assert_eq!(record.status, None, "the bound host's ok clears the stored broken status");
+    assert_eq!(record.link_match, None, "and its stored link result");
   }
 
   #[test]

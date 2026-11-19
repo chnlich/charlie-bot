@@ -50,6 +50,9 @@ pub const READBACK_SHOWN_CHARS: usize = 300;
 
 /// The 502 body of a start whose driver died before the link or the failure was known.
 const ABANDONED_START_BODY: &str = "the browser login ended before it gave an approval link";
+/// The output of a router that holds its key for another Okta authorization. The text is matched as printed, so a
+/// changed wording is an ordinary start failure.
+const CONCURRENT_WAIT_PREFIX: &str = "A previous Okta authorization is still waiting for browser confirmation";
 
 /// Where an attempt in progress stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,9 +87,13 @@ pub fn timeout_text(after_sec: u64) -> String {
   format!("readback timed out after {after_sec} s; its process tree was ended")
 }
 
-/// A start that produced no approval link. The string is the 502 body of the click that waited on it.
-#[derive(Debug, Clone)]
-pub struct StartFailed(pub String);
+/// Why a start gave no approval link. A failure carries the 502 body of the click that waited on it. A concurrent wait
+/// means another Okta authorization holds the router, so the click answers 409 instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartFailed {
+  Failed(String),
+  ConcurrentWait,
+}
 
 /// Why a value was not given to a login.
 #[derive(Debug)]
@@ -105,8 +112,8 @@ enum LinkState {
   Pending,
   /// The link was found. Every joined click redirects to it.
   Link(String),
-  /// The start gave no link. The string is the 502 body of the clicks that waited on it.
-  Failed(String),
+  /// The start gave no link. Every click that waited on it answers with this failure.
+  Failed(StartFailed),
 }
 
 /// `user_code_of`: the value of the link's first `user_code=` parameter, in the query or the fragment. The value is
@@ -301,7 +308,7 @@ pub fn live_attempt(name: &str) -> Option<LiveAttempt> {
 /// appended to the approval link as `user_code=`.
 pub async fn start_login(login: &BrowserLoginConfig) -> Result<String, StartFailed> {
   let state = host_auth::default_state_path()
-    .map_err(|error| StartFailed(format!("could not resolve the host-auth state path: {error}")))?;
+    .map_err(|error| StartFailed::Failed(format!("could not resolve the host-auth state path: {error}")))?;
   let paths = AttemptPaths { state, ssh_config: host_auth::ssh_config_path() };
   start_login_with_paths(login, paths).await
 }
@@ -332,7 +339,7 @@ enum Slot {
 fn claim_slot(login: &BrowserLoginConfig, paths: AttemptPaths) -> Result<Slot, StartFailed> {
   let mut live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
   if LINK_PROBES.lock().expect("the link-probe set is never poisoned").contains(&login.name) {
-    return Err(StartFailed("a link probe is in progress for this login".to_string()));
+    return Err(StartFailed::Failed("a link probe is in progress for this login".to_string()));
   }
   if let Some(entry) = live.get(&login.name).filter(|entry| matches!(&*entry.link.borrow(), LinkState::Pending)) {
     return Ok(Slot::Join(entry.link.clone()));
@@ -350,13 +357,13 @@ async fn await_link(link: &mut watch::Receiver<LinkState>) -> Result<String, Sta
   loop {
     match link.borrow_and_update().clone() {
       LinkState::Link(url) => return Ok(url),
-      LinkState::Failed(body) => return Err(StartFailed(body)),
+      LinkState::Failed(failure) => return Err(failure),
       LinkState::Pending => {}
     }
     if link.changed().await.is_err() {
       // The sender lives in the attempt record, which the live map holds until the attempt ends. A dropped sender means
       // the driver died without resolving the link.
-      return Err(StartFailed(ABANDONED_START_BODY.to_string()));
+      return Err(StartFailed::Failed(ABANDONED_START_BODY.to_string()));
     }
   }
 }
@@ -422,23 +429,26 @@ async fn finish_readback(child: Child) -> Readback {
 /// `probe_link`: run the login's command until its approval link prints or the start timeout passes, then end its
 /// process tree. The login is not approved here: no readback runs, and the output is dropped with the probe. The probe
 /// is never registered as a live attempt, so its link reaches no row.
-pub async fn probe_link(login: &BrowserLoginConfig) -> io::Result<LinkMatch> {
+///
+/// The answer is `None` when the output showed a concurrent wait. Another authorization holds the router, so no link
+/// can come, and the caller records nothing for the probe.
+pub async fn probe_link(login: &BrowserLoginConfig) -> io::Result<Option<LinkMatch>> {
   probe_link_within(login, Duration::from_secs(START_TIMEOUT_SEC)).await
 }
 
 /// [`probe_link`] with its timeout as a parameter, so a test can run a silent login without waiting out the start
 /// timeout.
-async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io::Result<LinkMatch> {
+async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io::Result<Option<LinkMatch>> {
   if let Some(path) = missing_path(&login.login_command) {
     tracing::warn!(login = %login.name, path, "browser_login_link_probe_missing_file");
-    return Ok(LinkMatch::Fail);
+    return Ok(Some(LinkMatch::Fail));
   }
   let _probe = claim_link_probe(&login.name)?;
   let (mut child, mut output, _input) = match spawn_login(login) {
     Ok(spawned) => spawned,
     Err(error) => {
       tracing::warn!(login = %login.name, error = %error, "browser_login_link_probe_not_started");
-      return Ok(LinkMatch::Fail);
+      return Ok(Some(LinkMatch::Fail));
     }
   };
   let matcher = Regex::new(&login.approval_url_pattern).expect("the config validated the approval-url pattern");
@@ -449,15 +459,19 @@ async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io:
   }
   child.wait().await?;
   match printed {
-    Ok(Ok(true)) => Ok(LinkMatch::Pass),
+    Ok(Err(error)) => Err(error),
+    _ if output.sees_concurrent_wait() => {
+      tracing::info!(login = %login.name, "browser_login_link_probe_concurrent_wait");
+      Ok(None)
+    }
+    Ok(Ok(true)) => Ok(Some(LinkMatch::Pass)),
     Ok(Ok(false)) => {
       tracing::warn!(login = %login.name, "browser_login_link_probe_no_link");
-      Ok(LinkMatch::Fail)
+      Ok(Some(LinkMatch::Fail))
     }
-    Ok(Err(error)) => Err(error),
     Err(_elapsed) => {
       tracing::warn!(login = %login.name, "browser_login_link_probe_timed_out");
-      Ok(LinkMatch::Fail)
+      Ok(Some(LinkMatch::Fail))
     }
   }
 }
@@ -533,14 +547,14 @@ async fn drive(core: Arc<Mutex<AttemptCore>>) {
 async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   let login = core.lock().expect("the attempt record lock is never poisoned").login.clone();
   if let Some(path) = missing_path(&login.login_command) {
-    fail_start(core, format!("missing file: {path}"));
+    fail_start(core, StartFailed::Failed(format!("missing file: {path}")));
     return Ok(());
   }
   let (mut child, mut output, input) = match spawn_login(&login) {
     Ok(spawned) => spawned,
     // An executable that is missing or not runnable.
     Err(error) => {
-      fail_start(core, format!("could not start the login command: {error}"));
+      fail_start(core, StartFailed::Failed(format!("could not start the login command: {error}")));
       return Ok(());
     }
   };
@@ -552,15 +566,20 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   tracing::info!(login = %login.name, "browser_login_started");
 
   let Some(link) = read_until_link(core, &mut output).await? else {
+    let concurrent = output.sees_concurrent_wait();
     child.start_kill().expect("a spawned child that has not been reaped takes the kill");
     let login_exit = proc_status::code_of(child.wait().await?).expect("an exit status has a code or a signal");
-    let body = {
+    let failure = {
       let mut state = core.lock().expect("the attempt record lock is never poisoned");
       state.login_exit = Some(login_exit);
       state.child_pid = None;
-      failure_text(login_exit, &state.output)
+      if concurrent && login_exit != 0 {
+        StartFailed::ConcurrentWait
+      } else {
+        StartFailed::Failed(failure_text(login_exit, &state.output))
+      }
     };
-    fail_start(core, body);
+    fail_start(core, failure);
     return Ok(());
   };
   {
@@ -831,9 +850,12 @@ struct LoginReader {
   pending: Vec<u8>,
   /// The recent bytes, decoded for a pattern that can match a prompt with no trailing newline.
   seen: Vec<u8>,
+  /// Whether the output has shown [`CONCURRENT_WAIT_PREFIX`]. The read that first shows it sets it, and it stays set.
+  concurrent_wait: bool,
 }
 
-/// The most output bytes a pattern is matched against. A prompt is short, so older output adds no match.
+/// The most output bytes a pattern is matched against. A prompt is short, so older output adds no match. A read adds at
+/// most 4096 bytes, so the prefix of the read that carries it is still in `seen` when the read is checked.
 const SEEN_KEEP_BYTES: usize = 8192;
 
 impl LoginReader {
@@ -844,7 +866,13 @@ impl LoginReader {
       entered: false,
       pending: Vec::new(),
       seen: Vec::new(),
+      concurrent_wait: false,
     }
+  }
+
+  /// Whether the output read so far has shown the concurrent-wait prefix. Output after the read stops is not seen.
+  fn sees_concurrent_wait(&self) -> bool {
+    self.concurrent_wait
   }
 
   /// The next output line. The line in progress is returned as the last line when the output ends. Each chunk read
@@ -874,6 +902,9 @@ impl LoginReader {
     if self.seen.len() > SEEN_KEEP_BYTES {
       let excess = self.seen.len() - SEEN_KEEP_BYTES;
       self.seen.drain(..excess);
+    }
+    if !self.concurrent_wait && String::from_utf8_lossy(&self.seen).contains(CONCURRENT_WAIT_PREFIX) {
+      self.concurrent_wait = true;
     }
     Ok(true)
   }
@@ -1102,23 +1133,27 @@ fn failure_text(exit_code: i32, output: &VecDeque<String>) -> String {
   lines.join("\n")
 }
 
-/// A start failure recorded, and the clicks waiting on the link failed with *body*.
-fn fail_start(core: &Arc<Mutex<AttemptCore>>, body: String) {
+/// A start failure recorded under its outcome, and the clicks waiting on the link failed with *failure*.
+fn fail_start(core: &Arc<Mutex<AttemptCore>>, failure: StartFailed) {
   let (name, login_exit) = {
     let state = core.lock().expect("the attempt record lock is never poisoned");
     (state.login.name.clone(), state.login_exit)
   };
-  tracing::warn!(login = %name, login_exit = ?login_exit, "browser_login_start_failed");
-  end(core, Outcome::StartFailed);
+  let outcome = match failure {
+    StartFailed::Failed(_) => Outcome::StartFailed,
+    StartFailed::ConcurrentWait => Outcome::ConcurrentWait,
+  };
+  tracing::warn!(login = %name, login_exit = ?login_exit, outcome = outcome.label(), "browser_login_start_failed");
+  end(core, outcome);
   // A click that joined the start awaits the watch. With no click waiting, nobody reads the failure.
-  let _ = core.lock().expect("the attempt record lock is never poisoned").link.send(LinkState::Failed(body));
+  let _ = core.lock().expect("the attempt record lock is never poisoned").link.send(LinkState::Failed(failure));
 }
 
 /// An attempt ended after its driver failed mid-run, so that no live slot or waiting click is left behind.
 fn abandon(core: &Arc<Mutex<AttemptCore>>) {
   let phase = core.lock().expect("the attempt record lock is never poisoned").phase;
   match phase {
-    Phase::Starting => fail_start(core, ABANDONED_START_BODY.to_string()),
+    Phase::Starting => fail_start(core, StartFailed::Failed(ABANDONED_START_BODY.to_string())),
     Phase::WaitingForApproval => end(core, Outcome::LoginFailed),
     Phase::ReadingBack => end(core, Outcome::ReadbackFailed),
   }
@@ -1169,6 +1204,8 @@ mod tests {
   use crate::host_auth::State;
   use crate::login_state::LoginStatus;
   use crate::process_tree::is_running;
+  use crate::rows;
+  use crate::state_file;
 
   const LINK: &str = "https://device.sso.us-east-1.amazonaws.com/?user_code=7f3c9d21";
   /// The stub body that prints the approval link, in the shape the AWS CLI prints it.
@@ -1353,7 +1390,7 @@ mod tests {
       "touch \"$0.ran\"\nexit 0\n",
     );
     let matched = probe_link_within(&stub.login, Duration::from_secs(5)).await.expect("the probe runs");
-    assert_eq!(matched, LinkMatch::Pass);
+    assert_eq!(matched, Some(LinkMatch::Pass));
     let script = &stub.login.login_command[0];
     for pid_file in [format!("{script}.root"), format!("{script}.child")] {
       let pid: u32 =
@@ -1379,7 +1416,7 @@ mod tests {
 
     let matched = probe_link_within(&stub.login, Duration::from_secs(5)).await.expect("the probe runs");
 
-    assert_eq!(matched, LinkMatch::Pass);
+    assert_eq!(matched, Some(LinkMatch::Pass));
     assert!(!Path::new(&format!("{}.entered", stub.login.login_command[0])).exists(), "the probe sent no Enter");
   }
 
@@ -1402,10 +1439,10 @@ mod tests {
 
     let failure = start_login_with_paths(&stub.login, stub.paths()).await.expect_err("a probe owns the process slot");
 
-    assert!(failure.0.contains("link probe is in progress"), "{failure:?}");
+    assert!(matches!(&failure, StartFailed::Failed(body) if body.contains("link probe is in progress")), "{failure:?}");
     assert_eq!(fs::read_to_string(&starts).expect("the start count reads").lines().count(), 1);
     fs::write(format!("{script}.release"), "").expect("the login is released");
-    assert_eq!(probe.await.expect("the probe task completes").expect("the probe ends"), LinkMatch::Pass);
+    assert_eq!(probe.await.expect("the probe task completes").expect("the probe ends"), Some(LinkMatch::Pass));
   }
 
   #[tokio::test]
@@ -1414,7 +1451,7 @@ mod tests {
     let _serial = SERIAL.lock().await;
     let stub = LoginStub::new("probe-silent", "echo $$ > \"$0.root\"\nsleep 600\n", "exit 0\n");
     let matched = probe_link_within(&stub.login, Duration::from_millis(60)).await.expect("the probe runs");
-    assert_eq!(matched, LinkMatch::Fail);
+    assert_eq!(matched, Some(LinkMatch::Fail));
     let pid: u32 = fs::read_to_string(format!("{}.root", stub.login.login_command[0]))
       .expect("the login recorded its pid")
       .trim()
@@ -1479,7 +1516,7 @@ mod tests {
     let failing = LoginStub::new("start-failed", "echo starting; exit 3\n", "exit 0\n");
     let paths = failing.paths();
     let failure = start_login_with_paths(&failing.login, paths.clone()).await.expect_err("no link comes");
-    assert_eq!(failure.0, "exit 3\nstarting");
+    assert_eq!(failure, StartFailed::Failed("exit 3\nstarting".to_string()));
     recorded_outcome(&paths, "start-failed", Outcome::StartFailed).await;
     let record = login_record(&paths, "start-failed");
     assert_eq!(record.status, Some(LoginStatus::Broken));
@@ -1489,7 +1526,8 @@ mod tests {
     missing.login.login_command = vec![missing.dir.path().join("gone-login").display().to_string()];
     let paths = missing.paths();
     let failure = start_login_with_paths(&missing.login, paths.clone()).await.expect_err("the script is gone");
-    assert!(failure.0.starts_with("missing file: "), "{}", failure.0);
+    let StartFailed::Failed(body) = &failure else { panic!("a missing script fails the start: {failure:?}") };
+    assert!(body.starts_with("missing file: "), "{body}");
     recorded_outcome(&paths, "missing", Outcome::StartFailed).await;
     assert_eq!(login_record(&paths, "missing").status, Some(LoginStatus::Broken));
 
@@ -1498,6 +1536,141 @@ mod tests {
     start_login_with_paths(&refused.login, paths.clone()).await.expect("the login gives its link");
     recorded_outcome(&paths, "login-refused", Outcome::LoginFailed).await;
     assert_eq!(login_record(&paths, "login-refused").status, None, "a login that did not finish keeps its status");
+  }
+
+  /// The line a router prints while another Okta authorization holds its key.
+  const HELD_LINE: &str = concat!(
+    "printf '%s\\n' 'A previous Okta authorization is still waiting for browser confirmation: ",
+    "complete it, or wait up to 5 minutes, then reconnect.'"
+  );
+
+  /// Writes a state where host1 reads router-rejected and `login` failed its last start, and returns the file's bytes.
+  fn seed_router_rejected(paths: &AttemptPaths, login: &str) -> Vec<u8> {
+    let mut state = state_file::empty_state();
+    state.insert(
+      "hosts".to_string(),
+      json!([{
+        "alias": "host1",
+        "hostname": "host1.example.internal",
+        "status": "router-rejected",
+        "detail": "someone@host1.example.internal: Permission denied (keyboard-interactive).",
+        "last_probe_at": "2026-11-19T09:27:01+00:00",
+        "last_change_at": "2026-11-19T09:27:01+00:00",
+      }]),
+    );
+    let failed_start = AttemptRecord {
+      outcome: Outcome::StartFailed,
+      started_at: "2026-11-19T09:27:03+00:00".to_string(),
+      finished_at: Some("2026-11-19T09:27:06+00:00".to_string()),
+      last_line: "exit 255".to_string(),
+      readback_exit: None,
+      readback_output: String::new(),
+    };
+    login_state::change_login(&mut state, login, |record| record.last_attempt = Some(failed_start.clone()))
+      .expect("the login record changes");
+    state_file::save_state(&state, &paths.state).expect("the state writes");
+    fs::read(&paths.state).expect("the state reads")
+  }
+
+  #[tokio::test]
+  async fn a_click_during_another_authorization_answers_a_concurrent_wait_and_writes_nothing() {
+    let _serial = SERIAL.lock().await;
+    let held = LoginStub::new("held", &format!("{HELD_LINE}\nexit 255\n"), "exit 0\n").bound_to_host1();
+    let paths = held.paths();
+    let before = seed_router_rejected(&paths, "held");
+
+    let failure = start_login_with_paths(&held.login, paths.clone()).await.expect_err("the router is held");
+    assert_eq!(failure, StartFailed::ConcurrentWait);
+    until(|| live_attempt("held").is_none()).await;
+
+    assert_eq!(fs::read(&paths.state).expect("the state reads"), before, "the click writes no byte of the state file");
+    let state = host_auth::read_state(&paths.state).expect("the state reads");
+    let row = rows::row(&state, std::slice::from_ref(&held.login), "login:held", timestamps::utc_now())
+      .expect("the rows build")
+      .expect("the row is listed");
+    assert_eq!(row["state"], json!("needs_user"), "the row keeps asking the user for the router's approval");
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn a_click_that_joins_a_concurrent_wait_gets_the_same_answer() {
+    let _serial = SERIAL.lock().await;
+    let held =
+      LoginStub::new("joined", &format!("echo started >> \"$0.starts\"\nsleep 1\n{HELD_LINE}\nexit 255\n"), "exit 0\n");
+    let paths = held.paths();
+    let clicks = (0..2).map(|_| {
+      let login = held.login.clone();
+      let paths = paths.clone();
+      tokio::spawn(async move { start_login_with_paths(&login, paths).await })
+    });
+    for click in futures_util::future::join_all(clicks).await {
+      assert_eq!(click.expect("the click task finishes").expect_err("the router is held"), StartFailed::ConcurrentWait);
+    }
+    until(|| live_attempt("joined").is_none()).await;
+    let starts = fs::read_to_string(held.dir.path().join("joined-login.starts")).expect("the login ran");
+    assert_eq!(starts.lines().count(), 1, "the second click joined the first start");
+  }
+
+  #[tokio::test]
+  async fn a_link_probe_that_sees_a_concurrent_wait_has_no_result_at_the_end_of_its_output() {
+    let _serial = SERIAL.lock().await;
+    let held = LoginStub::new("probe-held", &format!("{HELD_LINE}\nexit 255\n"), "exit 0\n");
+    let matched = probe_link_within(&held.login, Duration::from_secs(5)).await.expect("the probe runs");
+    assert_eq!(matched, None, "a probe that sees the wait records no result");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_link_probe_that_sees_a_concurrent_wait_has_no_result_at_its_timeout() {
+    let _serial = SERIAL.lock().await;
+    let held = LoginStub::new("probe-held-slow", &format!("{HELD_LINE}\nsleep 600\n"), "exit 0\n");
+    let matched = probe_link_within(&held.login, Duration::from_millis(300)).await.expect("the probe runs");
+    assert_eq!(matched, None, "a probe that times out after the wait records no result");
+  }
+
+  #[tokio::test]
+  async fn a_concurrent_wait_stays_seen_after_more_output_than_the_read_window_keeps() {
+    let _serial = SERIAL.lock().await;
+    // The prefix is read on its own, then 20 KB follow. By the end, the window that held the prefix has moved past it.
+    let held = LoginStub::new(
+      "probe-long",
+      &format!("{HELD_LINE}\nsleep 0.2\nhead -c 20000 /dev/zero | tr '\\0' x\necho\nexit 0\n"),
+      "exit 0\n",
+    );
+    let matched = probe_link_within(&held.login, Duration::from_secs(5)).await.expect("the probe runs");
+    assert_eq!(matched, None, "the wait is seen when its read happens, not at the end of the output");
+  }
+
+  #[tokio::test]
+  async fn a_concurrent_wait_printed_before_the_kept_output_tail_still_answers_a_concurrent_wait() {
+    let _serial = SERIAL.lock().await;
+    // Two hundred and fifty lines follow the prefix, more than the attempt keeps, so the prefix is out of its tail.
+    let held = LoginStub::new(
+      "tail-held",
+      &format!("{HELD_LINE}\nfor i in $(seq 1 250); do echo filler $i; done\nexit 255\n"),
+      "exit 0\n",
+    );
+    let paths = held.paths();
+    let failure = start_login_with_paths(&held.login, paths.clone()).await.expect_err("the router is held");
+    assert_eq!(failure, StartFailed::ConcurrentWait);
+    until(|| live_attempt("tail-held").is_none()).await;
+  }
+
+  #[tokio::test]
+  async fn a_changed_wait_wording_is_an_ordinary_start_failure() {
+    let _serial = SERIAL.lock().await;
+    let reworded = LoginStub::new(
+      "reworded",
+      "printf '%s\\n' 'Another Okta authorization is pending; try again later.'\nexit 255\n",
+      "exit 0\n",
+    );
+    let paths = reworded.paths();
+    let failure = start_login_with_paths(&reworded.login, paths.clone()).await.expect_err("no link comes");
+    assert_eq!(
+      failure,
+      StartFailed::Failed("exit 255\nAnother Okta authorization is pending; try again later.".to_string())
+    );
+    recorded_outcome(&paths, "reworded", Outcome::StartFailed).await;
+    assert_eq!(login_record(&paths, "reworded").status, Some(LoginStatus::Broken));
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

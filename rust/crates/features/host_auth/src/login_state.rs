@@ -19,7 +19,8 @@ use crate::timestamps::isoformat;
 
 const LOGINS_KEY: &str = "logins";
 
-/// How an attempt ended. The words are stored, so they stay stable.
+/// How an attempt ended. The words of the stored outcomes are stable. `Replaced` and `ConcurrentWait` are never stored:
+/// [`record_attempt`] skips them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -29,6 +30,8 @@ pub enum Outcome {
   Replaced,
   HoldLimit,
   StartFailed,
+  /// The start met another Okta authorization that holds the router, so the click started no login.
+  ConcurrentWait,
 }
 
 impl Outcome {
@@ -41,6 +44,7 @@ impl Outcome {
       Outcome::Replaced => "replaced",
       Outcome::HoldLimit => "hold limit",
       Outcome::StartFailed => "start failure",
+      Outcome::ConcurrentWait => "concurrent wait",
     }
   }
 }
@@ -213,11 +217,22 @@ pub fn clear_link_match(state: &mut State, name: &str) -> anyhow::Result<()> {
   Ok(())
 }
 
+/// The clearing of the stored `broken` status of `name`, when one is stored. A passing host probe of the login's host
+/// calls it: the host answers ok, so the failed start that broke the login no longer holds its row. The last attempt
+/// stays as it was.
+pub fn clear_broken(state: &mut State, name: &str) -> anyhow::Result<()> {
+  if login_state(state, name)?.status == Some(LoginStatus::Broken) {
+    change_login(state, name, |record| record.status = None)?;
+  }
+  Ok(())
+}
+
 /// A finished attempt: its record, and the status its outcome leaves the login with. A host-bound login's
 /// status follows its outcome only when the start failed or the login approved again. Its availability
-/// stays the host's. A replaced attempt records nothing: the attempt that replaced it records its own.
+/// stays the host's. A replaced attempt records nothing: the attempt that replaced it records its own. A concurrent
+/// wait records nothing either, so the stored record keeps the attempt the user last saw.
 pub async fn record_attempt(state_path: &Path, name: &str, bound: bool, attempt: &AttemptRecord) -> anyhow::Result<()> {
-  if attempt.outcome == Outcome::Replaced {
+  if matches!(attempt.outcome, Outcome::Replaced | Outcome::ConcurrentWait) {
     return Ok(());
   }
   let check = attempt_check(attempt, bound)?;
@@ -238,7 +253,7 @@ pub async fn record_attempt(state_path: &Path, name: &str, bound: bool, attempt:
 /// The status and the detail an attempt's outcome leaves its login with. `None` leaves the record's status as it was.
 fn attempt_check(attempt: &AttemptRecord, bound: bool) -> anyhow::Result<Option<(Option<LoginStatus>, String)>> {
   Ok(match attempt.outcome {
-    Outcome::Replaced | Outcome::LoginFailed | Outcome::HoldLimit => None,
+    Outcome::Replaced | Outcome::ConcurrentWait | Outcome::LoginFailed | Outcome::HoldLimit => None,
     Outcome::ReadbackFailed if bound => None,
     Outcome::Approved if bound => Some((None, attempt.readback_output.clone())),
     Outcome::Approved | Outcome::ReadbackFailed => {

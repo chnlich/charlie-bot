@@ -3,8 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { createClassList } = require('./dom_element_stub');
-const { readPackageStatic } = require('./read_static');
-const { loadIconScripts } = require('./icon_context');
+const { readPackageStatic, runIconModule } = require('./read_static');
 
 const DIFF_PAGE_JS = readPackageStatic('features', 'diff_view', 'diff_page.js');
 
@@ -325,7 +324,7 @@ function loadDiffPage({search = '', repos = [], manifest = null, manifestFailure
     },
   };
   vm.createContext(context);
-  loadIconScripts(context);
+  runIconModule(context);
   vm.runInContext(DIFF_PAGE_JS, context, {filename: 'diff_page.js'});
   return {elements, fetches, page: context.window.__cbdiffPage, output: elements.get('diff-output')};
 }

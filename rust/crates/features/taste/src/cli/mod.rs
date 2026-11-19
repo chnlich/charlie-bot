@@ -161,8 +161,7 @@ where
     Some(list) => {
       let mut sources = BTreeSet::new();
       for value in list.split(',') {
-        let source = CandidateSource::parse(value)
-          .ok_or_else(|| CliExit::error(format!("--sources: unknown source {:?}", value.trim())))?;
+        let source = CandidateSource::parse(value).map_err(|detail| CliExit::error(format!("--sources: {detail}")))?;
         sources.insert(source);
       }
       sources

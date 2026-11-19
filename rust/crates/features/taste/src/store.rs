@@ -74,11 +74,11 @@ impl RowKind {
     }
   }
 
-  fn parse(value: &str) -> Option<Self> {
+  fn parse(value: &str) -> Result<Self, String> {
     match value {
-      "choice" => Some(Self::Choice),
-      "rejection" => Some(Self::Rejection),
-      _ => None,
+      "choice" => Ok(Self::Choice),
+      "rejection" => Ok(Self::Rejection),
+      other => Err(format!("expected \"choice\" or \"rejection\", got {other:?}")),
     }
   }
 }
@@ -332,8 +332,7 @@ fn parse_row_body(object: &Map<String, Value>) -> Result<Row, FieldError> {
   let domain = required_string(object, "domain")?;
   validate_domain(&domain)?;
   let kind_text = required_string(object, "kind")?;
-  let kind = RowKind::parse(&kind_text)
-    .ok_or_else(|| FieldError::new("kind", format!("expected \"choice\" or \"rejection\", got {kind_text:?}")))?;
+  let kind = RowKind::parse(&kind_text).map_err(|detail| FieldError::new("kind", detail))?;
   let situation = required_string(object, "situation")?;
   let options = parse_options(object.get("options"))?;
   let recommended = parse_optional_string(object.get("recommended"), "recommended")?;
@@ -575,7 +574,7 @@ fn duplicates(existing: &Row, row: &Row) -> bool {
   match (&existing.source.reference, &row.source.reference) {
     (SourceRef::Event(left), SourceRef::Event(right)) => left == right,
     (SourceRef::PlanVersion(left), SourceRef::PlanVersion(right)) => left == right,
-    _ => false,
+    (SourceRef::Event(_), SourceRef::PlanVersion(_)) | (SourceRef::PlanVersion(_), SourceRef::Event(_)) => false,
   }
 }
 

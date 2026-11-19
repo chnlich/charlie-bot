@@ -244,3 +244,47 @@ test('a search row whose session stores a waiting item shows the orange marker',
   assert.ok(markerClass, 'the search row paints its waiting marker');
   assert.equal(/\bhidden\b/.test(markerClass[1]), false, 'the marker is shown on the row that stores a waiting item');
 });
+
+// ---------------------------------------------------------------------------
+// The search box and the list paints that disagree with it. The page's input holds the text the list reads, so the
+// harness gives the box a value of its own.
+// ---------------------------------------------------------------------------
+function withSearchBox(context) {
+  const box = {value: ''};
+  const lookup = context.document.getElementById;
+  context.document.getElementById = (id) => (id === 'sidebar-search' ? box : lookup(id));
+  return box;
+}
+
+// A Workspace listing whose fetch ignores its signal, so the search start cannot abort it: its answer arrives after
+// the search began, and it must paint nothing over the search rows.
+test('a late Workspace listing never paints over the search results', async () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const box = withSearchBox(context);
+  const pending = deferredFetches(context);
+
+  context.switchSidebarFilter('all');
+  box.value = 'needle';
+  context.handleSidebarSearch('needle');
+  pending[1].resolve({json: async () => [makeSessionMeta('needle')]});
+  await flush();
+  pending[0].resolve({json: async () => [makeSessionMeta('workspace')]});
+  await flush();
+
+  assert.deepEqual(rowIds(nav.innerHTML), ['needle'], 'the late Workspace listing leaves the search rows in place');
+});
+
+test('a list paint that disagrees with the search box counts as stale', () => {
+  const {context} = buildSidebarIndicatorContext([]);
+  const box = withSearchBox(context);
+  context.renderSessionList([makeSessionMeta('w')], 'all');
+  assert.equal(context.sidebarSearchCounters.stale_paints, 0);
+
+  box.value = 'x';
+  context.renderSessionList([makeSessionMeta('w')], 'all');
+  assert.equal(context.sidebarSearchCounters.stale_paints, 1, 'a Workspace paint into a non-empty box');
+
+  box.value = '';
+  context.renderSessionList([makeSessionMeta('s')], 'search');
+  assert.equal(context.sidebarSearchCounters.stale_paints, 2, 'a search paint into an empty box');
+});

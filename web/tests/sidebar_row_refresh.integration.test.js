@@ -19,6 +19,10 @@ const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
+function abortError() {
+  return Object.assign(new Error('aborted'), {name: 'AbortError'});
+}
+
 // One open page on the Workspace view. `painted` names the sessions the sidebar paints as rows.
 function buildPage({painted = [], filter = 'all', partial = true} = {}) {
   const listeners = new Map();
@@ -62,6 +66,7 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
     CustomEvent,
     TextEncoder,
     URLSearchParams,
+    AbortController,
     console: {error() {}, warn() {}, log() {}},
     setInterval: () => 0,
     clearInterval() {},
@@ -70,9 +75,12 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
       return timers.length;
     },
     clearTimeout() {},
-    fetch: (url) => new Promise((resolve, reject) => {
+    fetch: (url, options = {}) => new Promise((resolve, reject) => {
+      // A request its signal aborts rejects the way fetch does, and its answer comes too late to count.
+      if (options.signal) options.signal.addEventListener('abort', () => reject(abortError()));
       page.requests.push({
         url,
+        signal: options.signal,
         respond: (body) => resolve({ok: true, json: async () => body}),
         fail: (error) => reject(error),
       });
@@ -205,7 +213,7 @@ test('a task_tree_changed frame inside a switch window still refreshes its row',
   assert.doesNotMatch(page.nav.innerHTML, /id="session-w"/, 'the archived row left the list mid-switch');
 });
 
-test('a row id dropped from the queue on another view still leaves on the return to the Workspace', async () => {
+test('a row id queued during a search still leaves on the return to the Workspace', async () => {
   const page = buildPage();
   const manager = row('b', {profile: 'manager', updated_at: '2026-04-02T10:00:00Z'});
   const worker = row('w', {profile: 'worker', task_parent_id: 'b', updated_at: '2026-04-02T09:00:00Z'});
@@ -223,9 +231,14 @@ test('a row id dropped from the queue on another view still leaves on the return
   await flush();
   assert.equal(page.rowUrls().length, 1, 'the queued id is dropped, not fetched');
 
-  // Clearing the search returns to the Workspace, whose own load paints the server's rows, the worker absent.
+  // Clearing the search paints the Workspace from memory, then the row refresh of the ids the search recorded names
+  // the worker as gone. The worker is in the memory, so the membership change re-reads the whole Workspace.
   page.elements.get('sidebar-search').value = '';
   page.context.handleSidebarSearch('');
+  page.requests
+      .filter((request) => request.url.includes('&ids='))
+      .forEach((request) => request.respond({sessions: {}, gone: ['w']}));
+  await flush();
   page.requests
       .filter((request) => request.url === '/api/sessions/?compact=1&screen=1&active=session-a')
       .forEach((request) => request.respond([manager]));
@@ -418,4 +431,214 @@ test('the status poll sends a stable URL for the same row set and the token of t
   assert.deepEqual(urls().slice(1),
       ['/api/sessions/status?filter=all&since=test-1&ids=session-a,session-b,session-c&answer=ids'],
       'the same row set revalidates the answer the page holds, with the token it names');
+});
+
+// ---------------------------------------------------------------------------
+// The clear after a search: the Workspace paints from memory, its row refresh names the rows the search recorded, and
+// a row that entered or left the Workspace re-reads the whole list. A search start aborts the Workspace's requests.
+// ---------------------------------------------------------------------------
+const WORKSPACE_LISTING = '/api/sessions/?compact=1&screen=1&active=session-a';
+
+// The search box as oninput drives it: the box holds the text, then the handler runs.
+function type(page, text) {
+  page.elements.set('sidebar-search', {value: text});
+  page.context.handleSidebarSearch(text);
+}
+
+// The clear: the box empties, then the handler runs with the empty text.
+function clearBox(page) {
+  page.elements.get('sidebar-search').value = '';
+  page.context.handleSidebarSearch('');
+}
+
+const searches = (page) => page.requests.filter((request) => request.url.startsWith('/api/sessions/search'));
+const refreshes = (page) => page.requests.filter((request) => request.url.includes('&ids='));
+const listings = (page) => page.requests.filter((request) => request.url === WORKSPACE_LISTING);
+
+test('a search start aborts the Workspace requests in flight, and a late listing paints nothing', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager'});
+  page.context.renderSessionList([manager], 'all');
+  const badgeSignals = [];
+  page.context.registerWorkspaceBadge((signal) => new Promise((resolve, reject) => {
+    badgeSignals.push(signal);
+    signal.addEventListener('abort', () => reject(abortError()));
+  }));
+  page.connect();
+  page.socket().emitOpen();
+
+  // A group change re-reads the Workspace, and the reader types before its listing and badges answer.
+  page.frame({type: 'session_group_changed', session_id: 'b'});
+  type(page, 'needle');
+  page.runTimers();
+  assert.equal(listings(page)[0].signal.aborted, true, 'the typed search aborts the Workspace listing');
+  assert.equal(badgeSignals[0].aborted, true, 'the badge loader gets the same abort');
+
+  listings(page)[0].respond([manager, row('late')]);
+  await flush();
+  assert.match(page.nav.innerHTML, /Searching/, 'the late listing leaves the search note in place');
+  assert.doesNotMatch(page.nav.innerHTML, /id="session-late"/, 'the late listing paints no Workspace row');
+});
+
+test('a clear paints the Workspace from memory at once, then refreshes the row the search recorded', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager'});
+  page.context.renderSessionList([manager, row('w')], 'all');
+  page.connect();
+  page.socket().emitOpen();
+  type(page, 'needle');
+  page.runTimers();
+  searches(page).forEach((request) => request.respond([manager]));
+  await flush();
+
+  // The row changes while the search holds the list, so its id waits for the restore.
+  page.frame({type: 'task_tree_changed', session_id: 'b'});
+  clearBox(page);
+  assert.equal(listings(page).length, 0, 'the clear reads no listing');
+  assert.match(page.nav.innerHTML, /id="session-w"/, 'the Workspace paints from memory before any answer');
+  assert.equal(page.context.sidebarSearchCounters.stale_paints, 0, 'the restore paints no search row into the box');
+
+  refreshes(page).forEach((request) => request.respond({
+    sessions: [row('b', {updated_at: '2026-05-01T00:00:00Z'})],
+    gone: [],
+  }));
+  await flush();
+  assert.equal(refreshes(page).length, 1, 'the restore refreshes the recorded id once');
+  assert.match(page.nav.innerHTML, /data-time="2026-05-01T00:00:00Z"/, 'the recorded row answers with its new state');
+});
+
+test('a session created during a search appears after the clear, once its row joins the Workspace', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager'});
+  page.context.renderSessionList([manager], 'all');
+  page.connect();
+  page.socket().emitOpen();
+  type(page, 'needle');
+  page.runTimers();
+  searches(page).forEach((request) => request.respond([manager]));
+  await flush();
+
+  page.frame({type: 'task_tree_changed', session_id: 'n'});
+  clearBox(page);
+  refreshes(page).forEach((request) => request.respond({sessions: [row('n', {name: 'Created'})], gone: []}));
+  await flush();
+  assert.equal(listings(page).length, 1, 'a row entering the Workspace re-reads the whole list');
+
+  listings(page).forEach((request) => request.respond([manager, row('n', {name: 'Created'})]));
+  await flush();
+  assert.match(page.nav.innerHTML, /id="session-n"/, 'the created session shows after the clear');
+});
+
+test('a Workspace badge refresh a search held waits for the clear, then paints into the restored list', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager'});
+  page.context.renderSessionList([manager], 'all');
+  let badgeLoads = 0;
+  page.context.registerWorkspaceBadge(() => {
+    badgeLoads += 1;
+    return Promise.resolve('<i id="badge-x"></i>');
+  });
+  page.connect();
+  page.socket().emitOpen();
+  type(page, 'needle');
+  page.runTimers();
+  searches(page).forEach((request) => request.respond([manager]));
+  await flush();
+
+  page.context.refreshWorkspaceBadges();
+  assert.equal(badgeLoads, 0, 'no badge load goes out during a search');
+  clearBox(page);
+  await flush();
+  assert.equal(badgeLoads, 1, 'the clear loads the badges once');
+  assert.match(page.nav.innerHTML, /id="badge-x"/, 'the badges paint into the restored Workspace');
+  assert.match(page.nav.innerHTML, /id="session-b"/, 'the Workspace rows stay under the badges');
+});
+
+test('a row refresh a search aborts leaves its id for the restore after the clear', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager'});
+  page.context.renderSessionList([manager], 'all');
+  page.connect();
+  page.socket().emitOpen();
+  page.frame({type: 'task_tree_changed', session_id: 'b'});
+  type(page, 'needle');
+  page.runTimers();
+
+  assert.equal(refreshes(page)[0].signal.aborted, true, 'the typed search aborts the row refresh in flight');
+  await flush();
+  clearBox(page);
+  assert.equal(refreshes(page).length, 2, 'the restore asks for the aborted id again');
+});
+
+test('a group change during a search makes the clear re-read the whole Workspace', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager'});
+  page.context.renderSessionList([manager], 'all');
+  page.connect();
+  page.socket().emitOpen();
+  type(page, 'needle');
+  page.runTimers();
+  searches(page).forEach((request) => request.respond([manager]));
+  await flush();
+
+  page.frame({type: 'session_group_changed', session_id: 'b'});
+  clearBox(page);
+  assert.equal(refreshes(page).length, 0, 'the restore names no row');
+  assert.equal(listings(page).length, 1, 'the clear reads the whole Workspace');
+});
+
+test('a reconnect during a search makes the clear re-read the whole Workspace', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager'});
+  page.context.renderSessionList([manager], 'all');
+  page.connect();
+  page.socket().emitOpen();
+  type(page, 'needle');
+  page.runTimers();
+  searches(page).forEach((request) => request.respond([manager]));
+  await flush();
+
+  page.socket().emitClose({code: 1006});
+  page.connect();
+  page.socket().emitOpen();
+  clearBox(page);
+  assert.equal(refreshes(page).length, 0, 'the restore names no row');
+  assert.equal(listings(page).length, 1, 'the clear reads the whole Workspace');
+});
+
+test('the first status poll after a clear carries the token the page held before the search', async () => {
+  const page = buildPage({painted: ['session-b', 'session-c']});
+  page.context.renderSessionList([row('b'), row('c')], 'all');
+  page.connect();
+  page.socket().emitOpen();
+  const polls = () => page.urlsStarting('/api/sessions/status');
+  const rows = {'session-a': {}, 'session-b': {}, 'session-c': {}};
+  vm.runInContext('pollSessionStatus()', page.context);
+  page.requests.forEach((request) => request.respond({token: 'test-1', rows, gone: []}));
+  await flush();
+
+  type(page, 'needle');
+  page.runTimers();
+  searches(page).forEach((request) => request.respond([row('b')]));
+  await flush();
+  clearBox(page);
+  vm.runInContext('pollSessionStatus()', page.context);
+  assert.match(polls().at(-1), /since=test-1/, 'the restore keeps the token the Workspace poll held');
+});
+
+test('a session renamed during a search re-reads its row when the clear restores the Workspace', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager'});
+  page.context.renderSessionList([manager], 'all');
+  page.connect();
+  page.socket().emitOpen();
+  type(page, 'needle');
+  page.runTimers();
+  searches(page).forEach((request) => request.respond([manager]));
+  await flush();
+
+  page.frame({type: 'session_renamed', session_id: 'b', name: 'Renamed while searching'});
+  clearBox(page);
+  assert.deepEqual(refreshes(page).map((request) => request.url), ['/api/sessions/?compact=1&screen=1&ids=b'],
+      'the clear re-reads the renamed row, since the Workspace memory still holds the old name');
 });

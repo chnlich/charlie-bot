@@ -135,6 +135,23 @@ test('the Workspace view shows the global failure badge the cron loader resolves
   assert.ok(html.indexOf('2 scheduled tasks failed to load') < html.indexOf('No sessions yet'), html);
 });
 
+// The loader takes the Workspace's signal into its fetch. An abort ends the load with the AbortError, so the Workspace
+// knows the badge was cut short; it is not an empty answer.
+test('an aborted cron badge load rejects with the abort, and its fetch carries the signal', async () => {
+  const signals = [];
+  const abortableFetch = (url, opts = {}) => new Promise((resolve, reject) => {
+    signals.push(opts.signal);
+    opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), {name: 'AbortError'})));
+  });
+  const {registered} = loadCron(abortableFetch);
+  const controller = new AbortController();
+  const load = registered.workspaceBadges[0](controller.signal);
+
+  controller.abort();
+  await assert.rejects(load, {name: 'AbortError'});
+  assert.equal(signals[0], controller.signal);
+});
+
 test('the cron loader resolves to no badge when nothing is broken', async () => {
   const {registered} = loadCron(tasksFetch([{name: 'fine', cron: '0 9 * * *', broken: false}]));
 

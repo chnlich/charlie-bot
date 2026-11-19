@@ -68,6 +68,7 @@ function loadWebsocketContext(extraContext) {
     updateSidebarSessionName: () => {},
     handleSidebarSearch: () => {},
     switchSidebarFilter: () => {},
+    invalidateWorkspaceMemory: () => {},
     currentFilter: 'all',
     ...extraContext,
   };

@@ -85,6 +85,7 @@ function buildSidebarContext() {
     location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
     history: {pushState() {}},
     URLSearchParams,
+    AbortController,
     marked: {parse: (t) => t},
     fixNestedFences: (t) => t,
     escapeHtml: (v) => String(v),

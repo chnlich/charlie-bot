@@ -57,6 +57,7 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
     setSessionPendingTriggerIndicator() {},
     updateSidebarSessionName() {},
     handleSidebarSearch() {},
+    invalidateWorkspaceMemory() {},
     switchSidebarFilter() {},
     currentFilter: 'all',
   };

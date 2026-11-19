@@ -46,7 +46,8 @@ const QUOTA_RESET: &str = "2999-01-01T00:00:00Z";
 const LOOP_GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 static QUOTA_REJECTED_HOMES: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
-static TOKEN_SHORT_REJECTED_HOMES: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static TOKEN_SHORT_REJECTED_HOMES: LazyLock<Mutex<HashSet<(PathBuf, String)>>> =
+  LazyLock::new(|| Mutex::new(HashSet::new()));
 static GIT_OVERRIDE_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
 
 #[derive(Default)]
@@ -85,11 +86,11 @@ impl BackendLifecycle for QuotaOnceLifecycle {
           resets_at: Some(UtcDateTime::parse(QUOTA_RESET).expect("the fixed reset time parses")),
         });
       }
-      if context.option.id == "short"
+      if matches!(context.option.id.as_str(), "short" | "short_again")
         && TOKEN_SHORT_REJECTED_HOMES
           .lock()
           .expect("token-short rejection list is not poisoned")
-          .insert(context.cfg.charliebot_home.clone())
+          .insert((context.cfg.charliebot_home.clone(), context.option.id.clone()))
       {
         return Err(LaunchRefused {
           message: "the round's login has too little access-token life".to_string(),
@@ -585,19 +586,30 @@ async fn a_textual_quota_error_blocks_when_the_next_selection_finds_no_member() 
 #[ignore = "integration"]
 async fn a_token_short_round_runs_again_on_the_next_member_without_recording_it_out() -> anyhow::Result<()> {
   let harness =
-    LoopHarness::new(&["short", "next"], &[], vec![recovery_support::result_script("second words")]).await?;
+    LoopHarness::new(&["short", "short_again", "next"], &[], vec![recovery_support::result_script("second words")])
+      .await?;
 
   harness.finish_loop(harness.start_loop(1)).await;
 
-  // The refused attempt starts no round, so the one iteration's run is the second member's run.
+  // Neither refused attempt starts a round; the retry chain excludes both until the available member runs.
   let runs = harness.stack.run_records(&harness.child.id)?;
-  assert_eq!(runs.iter().map(|run| run.backend.as_deref()).collect::<Vec<_>>(), [Some("short"), Some("next")]);
+  let backends = runs.iter().map(|run| run.backend.as_deref()).collect::<Vec<_>>();
+  assert_eq!(backends.len(), 3);
+  assert!(backends[..2].contains(&Some("short")) && backends[..2].contains(&Some("short_again")), "{backends:?}");
+  assert_eq!(backends[2], Some("next"), "the retry chain excludes both short-token members: {backends:?}");
   assert_eq!(
     harness.iteration_reports().iter().map(|event| event["outcome"].as_str()).collect::<Vec<_>>(),
     [Some("success")]
   );
   let availability = charliebot_agents::backend_availability::backend_availability(&harness.stack.features)?;
   assert!(availability.out_until("short").is_none(), "a token shortage records no member out");
+  assert!(availability.out_until("short_again").is_none(), "a token shortage records no member out");
+  let pool = backend_pool::backend_pool(&harness.stack.features)?;
+  let selected = pool.selector(&harness.stack.cfg).select("pool", &[])?.map(|member| member.id);
+  assert!(
+    selected.as_deref().is_some_and(|member| member == "short" || member == "short_again"),
+    "the exclusion ends with this retry chain: {selected:?}"
+  );
   let state = command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?;
   assert_eq!(state.blocked_iteration, None);
   Ok(())

@@ -161,7 +161,13 @@ impl BackendPool {
     Arc::clone(&self.availability)
   }
 
-  /// One selection over the process-wide owners this pool holds.
+  /// The registry this pool's members are read and recorded through, for the availability owner's write.
+  pub fn registry(&self) -> Arc<Registry> {
+    Arc::clone(&self.registry)
+  }
+
+  /// One selection over the process-wide owners this pool holds. A caller that also holds a store chains
+  /// [`model_pool::Selector::with_store`], so a priority pool orders its members by session load.
   pub fn selector<'a>(&'a self, cfg: &'a CharlieBotConfig) -> model_pool::Selector<'a> {
     model_pool::Selector::new(cfg, &self.registry, Arc::clone(&self.availability), Arc::clone(&self.positions))
   }
@@ -673,10 +679,10 @@ mod tests {
     Arc::new(registry)
   }
 
-  fn record(pool: &BackendPool, member: &str, reset: Option<UtcDateTime>) {
+  fn record(pool: &BackendPool, cfg: &CharlieBotConfig, member: &str, reset: Option<UtcDateTime>) {
     pool
       .availability()
-      .record(member, reset, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .record(cfg, &pool.registry(), member, reset, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
       .unwrap();
   }
 
@@ -718,7 +724,7 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b", "c"]);
     let pool = pool_at(home.path());
-    record(&pool, "a", None);
+    record(&pool, &cfg, "a", None);
     assert_eq!(select_id(&pool, &cfg, "test", &["c"]), Some("b".to_string()));
     assert_eq!(select_id(&pool, &cfg, "test", &["b", "c"]), None);
   }
@@ -728,7 +734,7 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b", "c"]);
     let pool = pool_at(home.path());
-    record(&pool, "a", None);
+    record(&pool, &cfg, "a", None);
 
     let reloaded = pool_at(home.path());
     assert_eq!(select_id(&reloaded, &cfg, "test", &[]), Some("b".to_string()));
@@ -740,10 +746,10 @@ mod tests {
     let cfg = config(&["a"]);
     let pool = pool_at(home.path());
     let reset = UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap();
-    record(&pool, "a", Some(reset));
+    record(&pool, &cfg, "a", Some(reset));
     assert_eq!(select_id(&pool, &cfg, "test", &[]), None);
     let expired = UtcDateTime::parse("2000-01-02T03:04:00Z").unwrap();
-    record(&pool, "a", Some(expired));
+    record(&pool, &cfg, "a", Some(expired));
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("a".to_string()));
   }
 
@@ -752,8 +758,11 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a"]);
     let pool = pool_at(home.path());
-    let until =
-      pool.availability().record("a", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error").unwrap();
+    let until = pool
+      .availability()
+      .record(&cfg, &pool.registry(), "a", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .unwrap()
+      .expect("a quota record without a login pool is written");
     let after = OffsetDateTime::now_utc();
     let remaining = until - after;
     assert!(remaining >= backend_availability::DEFAULT_COOLDOWN - Duration::seconds(5));
@@ -768,14 +777,14 @@ mod tests {
     let pool = pool_at(home.path());
     pool
       .availability()
-      .record("a", None, backend_availability::REASON_ACCESS_REFUSED, "Failed to authenticate")
+      .record(&cfg, &pool.registry(), "a", None, backend_availability::REASON_ACCESS_REFUSED, "Failed to authenticate")
       .unwrap();
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("b".to_string()));
     assert_eq!(pool.selector(&cfg).peek(POOL, &[]).unwrap().map(|option| option.id), Some("b".to_string()));
 
     pool
       .availability()
-      .record("b", None, backend_availability::REASON_ACCESS_REFUSED, "Failed to authenticate")
+      .record(&cfg, &pool.registry(), "b", None, backend_availability::REASON_ACCESS_REFUSED, "Failed to authenticate")
       .unwrap();
     let message = pool.selector(&cfg).exhausted_message(POOL).unwrap();
     assert!(message.contains("- a: access_refused, recovers at "), "{message}");
@@ -787,7 +796,7 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b"]);
     let pool = pool_at(home.path());
-    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    record(&pool, &cfg, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     let message = pool.selector(&cfg).exhausted_message(POOL).unwrap();
     assert!(message.starts_with("pool 'light' has no selectable member:\n"), "{message}");
     assert!(message.contains("\n- a: ") && message.contains("recovers at 2030-01-02T03:04"), "{message}");
@@ -802,7 +811,7 @@ mod tests {
     let pool = pool_at(home.path());
     assert_eq!(select_id(&pool, &cfg, "caller-a", &[]), Some("a".to_string()));
     assert_eq!(select_id(&pool, &cfg, "caller-b", &[]), Some("b".to_string()));
-    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    record(&pool, &cfg, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     assert_eq!(select_id(&pool, &cfg, "caller-b", &[]), Some("c".to_string()));
     assert_eq!(select_id(&pool, &cfg, "caller-a", &[]), Some("b".to_string()));
   }
@@ -829,7 +838,7 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b", "c"]);
     let pool = pool_at(home.path());
-    record(&pool, "b", None);
+    record(&pool, &cfg, "b", None);
     assert_eq!(
       pool.selector(&cfg).ordered(&["b".to_string(), "a".to_string()], &[]).unwrap().map(|option| option.id),
       Some("a".to_string())
@@ -842,7 +851,7 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b"]);
     let pool = pool_at(home.path());
-    record(&pool, "a", None);
+    record(&pool, &cfg, "a", None);
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("b".to_string()));
     assert_eq!(
       pool.selector(&cfg).ordered(&["a".to_string(), "b".to_string()], &[]).unwrap().map(|option| option.id),
@@ -956,7 +965,7 @@ mod tests {
       .unwrap();
     assert!(matches!(routed.target, RouteTarget::Backend(ref id) if id == POOL), "{:?}", routed.target);
 
-    record(&pool, "b", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    record(&pool, &cfg, "b", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     let cooling = pool
       .decide(
         &cfg,
@@ -988,7 +997,7 @@ mod tests {
       );
     }
 
-    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    record(&pool, &cfg, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     for backend_id in ["a", POOL] {
       let routed = pool
         .decide(
@@ -1013,7 +1022,7 @@ mod tests {
       assert_eq!(attempts.next().unwrap().unwrap().id, "a", "{backend_id}");
     }
 
-    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    record(&pool, &cfg, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     for backend_id in ["a", POOL] {
       let target = CallTarget::Backend(backend_id.to_string());
       let mut attempts = one_shot_members(&cfg, Arc::clone(&pool), "probe", Some(&target));
@@ -1078,8 +1087,8 @@ mod tests {
     configured_router(&mut cfg, command);
     let home = tempfile::tempdir().unwrap();
     let pool = pool_at(home.path());
-    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
-    record(&pool, "b", Some(UtcDateTime::parse("2000-01-02T03:04:00Z").unwrap()));
+    record(&pool, &cfg, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    record(&pool, &cfg, "b", Some(UtcDateTime::parse("2000-01-02T03:04:00Z").unwrap()));
 
     let answer =
       pool.route(&cfg, "thread", "untrimmed thread", &["a".to_string(), "b".to_string()], Some("b")).await.unwrap();

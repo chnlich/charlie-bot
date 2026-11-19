@@ -40,7 +40,7 @@ pub async fn switch_member(
 ) -> anyhow::Result<MemberSwitch> {
   let cfg = features.config.get()?;
   let availability = backend_availability::backend_availability(features)?;
-  availability.record(from, failure.resets_at, &failure.reason, &failure.message)?;
+  availability.record(&cfg, &features.registry, from, failure.resets_at, &failure.reason, &failure.message)?;
   let selector = Selector::from_features(features, &cfg)?;
   let excluded = crate::spawner_backends::switch_exclusions(&cfg, &features.store, session).await?;
   let Some(member) = selector.select(pool_id, &excluded)? else {

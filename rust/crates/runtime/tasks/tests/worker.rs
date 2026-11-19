@@ -604,7 +604,7 @@ async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
   let state = Arc::new(ClaudeAccountState::new());
-  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("rejected", 1.0), None);
+  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("rejected", 1.0), None, None);
   let scripts = Scripts::new(vec![exits(&[rate_limit("rejected", 1.0)], 1)]);
   let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
   let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
@@ -623,7 +623,7 @@ async fn test_worker_relay_stays_inside_the_option_pool() -> anyhow::Result<()> 
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
   let state = Arc::new(ClaudeAccountState::new());
-  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("allowed", 0.50), None);
+  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("allowed", 0.50), None, None);
   let scripts =
     Scripts::new(vec![exits(&[rate_limit("rejected", 1.0)], 1), exits(&[assistant_text("done"), result()], 0)]);
   let pools: &[(&str, &[&str])] = &[("alpha", &["main", "ext-1"]), ("beta", &["ext-2"])];
@@ -726,8 +726,8 @@ async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band
   make_transcript(&root.claude("main"), CC_ID)?;
   let state = Arc::new(ClaudeAccountState::new());
   // ext-1 sits below the line (headroom 0.11); ext-2 sits at the line (headroom 0.095) with the older reading.
-  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("allowed", 0.89), Some(reading_at(5)));
-  claude_accounts::observe_rate_limit(&state, "ext-2", &rate_limit_info("allowed", 0.905), Some(reading_at(30)));
+  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("allowed", 0.89), Some(reading_at(5)), None);
+  claude_accounts::observe_rate_limit(&state, "ext-2", &rate_limit_info("allowed", 0.905), Some(reading_at(30)), None);
   let scripts =
     Scripts::new(vec![holds(&[rate_limit("allowed_warning", 0.92), user_tool_result()]), exits(&[result()], 0)]);
   let config = pooled_config(&root, &["main", "ext-1", "ext-2"], &[], &scripts.token)?;
@@ -752,8 +752,8 @@ async fn test_worker_falls_back_to_the_regular_select_when_the_below_line_target
   make_transcript(&root.claude("main"), CC_ID)?;
   let state = Arc::new(ClaudeAccountState::new());
   // ext-1 is the gate's below-line destination; ext-2 already sits at the line.
-  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("allowed", 0.85), Some(reading_at(0)));
-  claude_accounts::observe_rate_limit(&state, "ext-2", &rate_limit_info("allowed", 0.92), Some(reading_at(0)));
+  claude_accounts::observe_rate_limit(&state, "ext-1", &rate_limit_info("allowed", 0.85), Some(reading_at(0)), None);
+  claude_accounts::observe_rate_limit(&state, "ext-2", &rate_limit_info("allowed", 0.92), Some(reading_at(0)), None);
   let scripts =
     Scripts::new(vec![holds(&[rate_limit("allowed_warning", 0.92), user_tool_result()]), exits(&[result()], 0)]);
   let config = pooled_config(&root, &["main", "ext-1", "ext-2"], &[], &scripts.token)?;
@@ -764,7 +764,13 @@ async fn test_worker_falls_back_to_the_regular_select_when_the_below_line_target
     while let Some(frame) = frames.recv().await {
       let frame: Value = serde_json::from_str(&frame)?;
       if frame["type"] == ET::USER {
-        claude_accounts::observe_rate_limit(&raised_state, "ext-1", &rate_limit_info("allowed_warning", 0.95), None);
+        claude_accounts::observe_rate_limit(
+          &raised_state,
+          "ext-1",
+          &rate_limit_info("allowed_warning", 0.95),
+          None,
+          None,
+        );
         return anyhow::Ok(true);
       }
     }

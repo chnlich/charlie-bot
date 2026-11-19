@@ -310,7 +310,14 @@ mod tests {
     home.append_round("s1", Some("The answer.")).await;
     backend_availability::backend_availability(&home.features)
       .unwrap()
-      .record(OPTION_ID, None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .record(
+        &home.features.config.get().unwrap(),
+        &home.features.registry,
+        OPTION_ID,
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "synthetic quota error",
+      )
       .unwrap();
     for backend_id in [OPTION_ID, "auto"] {
       let body = json!({"event_index": 2, "backend": backend_id}).to_string();

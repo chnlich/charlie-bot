@@ -357,7 +357,14 @@ mod tests {
 
     pool
       .availability()
-      .record("synthetic", None, charliebot_agents::backend_availability::REASON_QUOTA_ERROR, "spent")
+      .record(
+        &cfg,
+        &pool.registry(),
+        "synthetic",
+        None,
+        charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
       .unwrap();
     for backend_id in ["synthetic", POOL_ID] {
       let error = resolve_requested_subagent_backend_model(

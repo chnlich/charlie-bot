@@ -82,7 +82,8 @@ impl LaunchWatchTrait for RelayWatch {
           return false;
         };
         let moment = claude_accounts::now_or(self.now);
-        let reading = claude_accounts::observe_rate_limit(&self.state, &self.label, info, Some(moment));
+        let reading =
+          claude_accounts::observe_rate_limit(&self.state, &self.label, info, Some(moment), self.model.as_deref());
         match info.get(RATE_LIMIT_STATUS).and_then(Value::as_str) {
           Some(RATE_LIMIT_STATUS_REJECTED) => {
             self.reason = Some(Decision::Rejected);
@@ -126,6 +127,10 @@ impl LaunchWatchTrait for RelayWatch {
     let decision = self.decision(exit_code).map(Decision::as_str).map(str::to_string);
     *self.decision.lock().expect("Claude relay decision is not poisoned") = decision.clone();
     decision.is_some()
+  }
+
+  fn decided_relay(&self) -> bool {
+    self.reason.is_some() || self.auth_failed
   }
 }
 
@@ -171,10 +176,11 @@ fn timestamp(value: f64) -> UtcDateTime {
 fn pool_detail(
   state: &claude_accounts::ClaudeAccountState,
   cfg: &CharlieBotConfig,
+  model: Option<&str>,
   now: Option<UtcDateTime>,
   account_pool: Option<&str>,
 ) -> anyhow::Result<String> {
-  let detail = if let Some(reset) = claude_accounts::earliest_reset(state, cfg, now, account_pool)? {
+  let detail = if let Some(reset) = claude_accounts::earliest_reset(state, cfg, model, now, account_pool)? {
     format!("earliest reset {:02}:{:02} UTC", reset.into_inner().hour(), reset.into_inner().minute())
   } else {
     claude_accounts::unavailable_detail(state, cfg, now, account_pool)?
@@ -186,20 +192,25 @@ fn pool_detail(
 pub fn pool_exhausted_message(
   state: &claude_accounts::ClaudeAccountState,
   cfg: &CharlieBotConfig,
+  model: Option<&str>,
   now: Option<UtcDateTime>,
   account_pool: Option<&str>,
 ) -> anyhow::Result<String> {
-  Ok(format!("{POOL_EXHAUSTED_PHRASE} ({}); this run did not complete.", pool_detail(state, cfg, now, account_pool)?))
+  Ok(format!(
+    "{POOL_EXHAUSTED_PHRASE} ({}); this run did not complete.",
+    pool_detail(state, cfg, model, now, account_pool)?
+  ))
 }
 
 pub fn relay_limit_message(
   state: &claude_accounts::ClaudeAccountState,
   cfg: &CharlieBotConfig,
+  model: Option<&str>,
   account_pool: Option<&str>,
 ) -> anyhow::Result<String> {
   Ok(format!(
     "Claude account relay limit reached ({MAX_RELAYS_PER_TURN} relays in one run; {}); this run did not complete.",
-    pool_detail(state, cfg, None, account_pool)?
+    pool_detail(state, cfg, model, None, account_pool)?
   ))
 }
 
@@ -225,9 +236,9 @@ pub fn relay_cap_refusal(
   }
   let exhausted = decision != LOGIN_FAILED && !has_cool_destination;
   Ok(Some(LaunchRefused {
-    message: relay_limit_message(state, cfg, account_pool)?,
+    message: relay_limit_message(state, cfg, model, account_pool)?,
     failure: if exhausted { MemberFailure::Quota } else { MemberFailure::Other },
-    resets_at: if exhausted { claude_accounts::earliest_reset(state, cfg, None, account_pool)? } else { None },
+    resets_at: if exhausted { claude_accounts::earliest_reset(state, cfg, model, None, account_pool)? } else { None },
   }))
 }
 
@@ -269,7 +280,7 @@ pub fn relay_move(
   let Some(next) = next else {
     return Ok(RelayMove {
       account: None,
-      error: Some(pool_exhausted_message(state, cfg, now, account_pool)?),
+      error: Some(pool_exhausted_message(state, cfg, model, now, account_pool)?),
       refused_holder: None,
       pool_exhausted: true,
     });
@@ -448,8 +459,8 @@ mod tests {
       "resetsAt": reset,
     });
     let below_line = json!({"unifiedWindows":{"five_hour":{"utilization":0.20}}});
-    claude_accounts::observe_rate_limit(&state, "spent", &rejected, Some(now));
-    claude_accounts::observe_rate_limit(&state, "fresh", &below_line, Some(now));
+    claude_accounts::observe_rate_limit(&state, "spent", &rejected, Some(now), None);
+    claude_accounts::observe_rate_limit(&state, "fresh", &below_line, Some(now), None);
 
     // The cap does not stop a relay while a login below the line can take over.
     assert!(
@@ -472,7 +483,7 @@ mod tests {
     assert_eq!(refused_below_line.resets_at, None);
 
     // With every login at or above the line, a quota decision refuses with the mark and the stated reset.
-    claude_accounts::observe_rate_limit(&state, "fresh", &rejected, Some(now));
+    claude_accounts::observe_rate_limit(&state, "fresh", &rejected, Some(now), None);
     let refusal = relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_WARNING, None)
       .unwrap()
       .expect("the cap refuses with no login below the line");
@@ -507,8 +518,8 @@ mod tests {
     let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
     let older = UtcDateTime::parse("2025-01-01T11:00:00Z").unwrap();
     let window = |utilization: f64| json!({"unifiedWindows":{"five_hour":{"utilization":utilization}}});
-    claude_accounts::observe_rate_limit(&state, "ext-1", &window(0.89), Some(now));
-    claude_accounts::observe_rate_limit(&state, "ext-2", &window(0.905), Some(older));
+    claude_accounts::observe_rate_limit(&state, "ext-1", &window(0.89), Some(now), None);
+    claude_accounts::observe_rate_limit(&state, "ext-2", &window(0.905), Some(older), None);
     let current = claude_accounts::account_by_label(&cfg, Some("main")).unwrap().unwrap();
 
     let movement =

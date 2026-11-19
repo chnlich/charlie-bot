@@ -245,7 +245,7 @@ fn record_member_failure(backends: &JudgeBackends<'_>, backend_id: &str, error: 
   backends
     .pool
     .availability()
-    .record(backend_id, resets_at.map(UtcDateTime::from), reason, &detail)
+    .record(backends.cfg, &backends.registry, backend_id, resets_at.map(UtcDateTime::from), reason, &detail)
     .map_err(|error| JudgeError::Call(format!("{error:#}")))?;
   Ok(())
 }
@@ -617,7 +617,14 @@ mod tests {
     let pool = test_pool(home.path());
     pool
       .availability()
-      .record("alpha", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .record(
+        &config,
+        &pool.registry(),
+        "alpha",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "synthetic quota error",
+      )
       .unwrap();
     let backends = JudgeBackends {
       cfg: &config,

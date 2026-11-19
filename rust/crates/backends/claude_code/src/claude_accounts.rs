@@ -42,8 +42,11 @@ const STAGING_SUFFIX: &str = ".staging";
 pub struct RateLimitReading {
   pub at: UtcDateTime,
   pub utilization: f64,
-  pub rejected_until: Option<UtcDateTime>,
 }
+
+/// The rejection key that holds every model of a login out: a rejection whose reading is the login's whole window,
+/// or one that names no model.
+const ALL_MODELS: &str = "*";
 
 #[derive(Clone, Debug)]
 struct PanelReading {
@@ -54,6 +57,9 @@ struct PanelReading {
 #[derive(Default)]
 struct Readings {
   event: HashMap<String, RateLimitReading>,
+  /// The reset of each login's rejection, keyed by `(login, model family)`. A family's rejection holds only that family;
+  /// an [`ALL_MODELS`] rejection holds every model of the login.
+  rejections: HashMap<(String, String), UtcDateTime>,
   panel: HashMap<String, PanelReading>,
   auth_failures: HashMap<String, UtcDateTime>,
   login_notified: HashSet<String>,
@@ -218,11 +224,14 @@ pub fn healthy(state: &ClaudeAccountState, account: &claude_config::ClaudeAccoun
   credentials_present(account) && !auth_failed_recently(state, &account.label, now)
 }
 
+/// Record one login's rate-limit event for `model`. A rejection is held under the model's family, or under
+/// [`ALL_MODELS`] when the login's reading is its whole window (1.0), which holds every model out.
 pub fn observe_rate_limit(
   state: &ClaudeAccountState,
   label: &str,
   info: &Value,
   now: Option<UtcDateTime>,
+  model: Option<&str>,
 ) -> Option<RateLimitReading> {
   let moment = now_or(now);
   let windows = info.get("unifiedWindows").and_then(Value::as_object);
@@ -238,20 +247,43 @@ pub fn observe_rate_limit(
   if values.is_empty() && !rejected {
     return None;
   }
-  let rejected_until = if rejected {
-    Some(
-      info
-        .get(RATE_LIMIT_RESETS_AT)
-        .and_then(Value::as_f64)
-        .map_or_else(|| add_duration(moment, REJECTED_WITHOUT_RESET), unix_seconds),
-    )
-  } else {
-    None
-  };
-  let reading =
-    RateLimitReading { at: moment, utilization: values.into_iter().reduce(f64::max).unwrap_or(1.0), rejected_until };
-  state.readings.lock().expect("Claude account state is not poisoned").event.insert(label.to_string(), reading.clone());
+  let utilization = values.into_iter().reduce(f64::max).unwrap_or(1.0);
+  let mut readings = state.readings.lock().expect("Claude account state is not poisoned");
+  if rejected {
+    let reset = info
+      .get(RATE_LIMIT_RESETS_AT)
+      .and_then(Value::as_f64)
+      .map_or_else(|| add_duration(moment, REJECTED_WITHOUT_RESET), unix_seconds);
+    let key = if utilization >= 1.0 { ALL_MODELS.to_string() } else { rejection_key(model) };
+    readings.rejections.insert((label.to_string(), key), reset);
+  }
+  let reading = RateLimitReading { at: moment, utilization };
+  readings.event.insert(label.to_string(), reading.clone());
   Some(reading)
+}
+
+/// The rejection key of `model`: its family, or [`ALL_MODELS`] when the model names no family.
+fn rejection_key(model: Option<&str>) -> String {
+  let family = model_family(model);
+  if family.is_empty() { ALL_MODELS.to_string() } else { family }
+}
+
+/// The reset that holds `model` out on `label`: the later of the unexpired rejections that cover it, the login's
+/// whole-window rejection and the model's own. `None` when no unexpired rejection covers the model.
+pub fn rejected_until(
+  state: &ClaudeAccountState,
+  label: &str,
+  model: Option<&str>,
+  now: Option<UtcDateTime>,
+) -> Option<UtcDateTime> {
+  let moment = now_or(now);
+  let family = rejection_key(model);
+  let readings = state.readings.lock().expect("Claude account state is not poisoned");
+  [ALL_MODELS, family.as_str()]
+    .into_iter()
+    .filter_map(|key| readings.rejections.get(&(label.to_string(), key.to_string())).copied())
+    .filter(|reset| *reset > moment)
+    .max()
 }
 
 pub fn observe_usage_panel(state: &ClaudeAccountState, label: &str, usage_data: &Value) {
@@ -305,7 +337,7 @@ fn panel_reading(reading: &PanelReading, model: Option<&str>, now: UtcDateTime) 
     .filter_map(|window| window.get(usage::PANEL_UTILIZATION).and_then(Value::as_f64))
     .map(|value| value / 100.0)
     .reduce(f64::max)?;
-  Some(RateLimitReading { at: reading.at, utilization, rejected_until: None })
+  Some(RateLimitReading { at: reading.at, utilization })
 }
 
 fn newest_reading(left: Option<RateLimitReading>, right: Option<RateLimitReading>) -> Option<RateLimitReading> {
@@ -341,22 +373,21 @@ pub fn latest_reading(
   let Some(scoped) = panel_reading(panel, Some(model), moment) else {
     return general;
   };
-  let rejection = general.as_ref().and_then(|reading| reading.rejected_until).filter(|reset| *reset > moment);
   Some(RateLimitReading {
     at: general.as_ref().map_or(scoped.at, |reading| reading.at.max(scoped.at)),
     utilization: general.map_or(scoped.utilization, |reading| reading.utilization.max(scoped.utilization)),
-    rejected_until: rejection,
   })
 }
 
+/// The login's headroom for `model`: 0 while a rejection holds the model out, else one minus the reading.
 pub fn headroom(state: &ClaudeAccountState, label: &str, model: Option<&str>, now: Option<UtcDateTime>) -> f64 {
   let moment = now_or(now);
+  if rejected_until(state, label, model, Some(moment)).is_some() {
+    return 0.0;
+  }
   let Some(reading) = latest_reading(state, label, model, Some(moment)) else {
     return 1.0;
   };
-  if reading.rejected_until.is_some_and(|reset| reset > moment) {
-    return 0.0;
-  }
   (1.0 - reading.utilization).max(0.0)
 }
 
@@ -499,9 +530,9 @@ pub fn login_reading(
       .unwrap_or_default()
   };
   let reading = reading?;
-  let rejected = reading.rejected_until.is_some_and(|reset| reset > moment);
-  let limiting_resets_at = if rejected {
-    reading.rejected_until
+  let rejection = rejected_until(state, label, model, Some(moment));
+  let limiting_resets_at = if rejection.is_some() {
+    rejection
   } else {
     windows
       .iter()
@@ -520,7 +551,7 @@ pub fn login_reading(
     .max_by(|left, right| left.utilization.total_cmp(&right.utilization))
     .and_then(|window| window.resets_at);
   Some(LoginReading {
-    utilization: if rejected { 1.0 } else { reading.utilization },
+    utilization: if rejection.is_some() { 1.0 } else { reading.utilization },
     limiting_resets_at,
     weekly_resets_at,
     windows,
@@ -569,23 +600,19 @@ pub fn member_reading(
   }))
 }
 
+/// The earliest instant a login of the pool can serve `model` again, from the rejections that hold it out.
 pub fn earliest_reset(
   state: &ClaudeAccountState,
   cfg: &CharlieBotConfig,
+  model: Option<&str>,
   now: Option<UtcDateTime>,
   account_pool: Option<&str>,
 ) -> anyhow::Result<Option<UtcDateTime>> {
   let moment = now_or(now);
-  let labels = pool_accounts(cfg, account_pool)?.into_iter().map(|account| account.label).collect::<HashSet<_>>();
   Ok(
-    state
-      .readings
-      .lock()
-      .expect("Claude account state is not poisoned")
-      .event
+    pool_accounts(cfg, account_pool)?
       .iter()
-      .filter(|(label, _)| labels.contains(*label))
-      .filter_map(|(_, reading)| reading.rejected_until.filter(|reset| *reset > moment))
+      .filter_map(|account| rejected_until(state, &account.label, model, Some(moment)))
       .min(),
   )
 }
@@ -641,14 +668,7 @@ fn login_unavailability(
     .filter(|failed| now.into_inner() - failed.into_inner() < AUTH_FAILURE_COOLDOWN)
     .map(|failed| add_duration(failed, AUTH_FAILURE_COOLDOWN));
   if headroom(state, &account.label, model, Some(now)) <= 0.0 {
-    let reset = state
-      .readings
-      .lock()
-      .expect("Claude account state is not poisoned")
-      .event
-      .get(&account.label)
-      .and_then(|reading| reading.rejected_until)
-      .filter(|reset| *reset > now);
+    let reset = rejected_until(state, &account.label, model, Some(now));
     let recovers = match disabled_until {
       Some(disabled) => reset.map(|reset| reset.max(disabled)),
       None => reset,
@@ -1073,8 +1093,8 @@ mod tests {
     let cfg = config(&home, &[("a", &a), ("b", &b)]);
     let state = ClaudeAccountState::new();
     let now = timestamp("2025-01-01T12:00:00Z");
-    observe_rate_limit(&state, "a", &window(0.20), Some(now));
-    observe_rate_limit(&state, "b", &window(0.60), Some(now));
+    observe_rate_limit(&state, "a", &window(0.20), Some(now), None);
+    observe_rate_limit(&state, "b", &window(0.60), Some(now), None);
     let busy = BTreeSet::from(["a".to_string()]);
     let chosen = select(&state, &cfg, Some("claude-fable-5-1"), &HashSet::new(), Some(&busy), Some(now), None, 0.0)
       .unwrap()
@@ -1100,8 +1120,8 @@ mod tests {
     let cfg = config(&home, &[("a", &a), ("b", &b)]);
     let state = ClaudeAccountState::new();
     let now = timestamp("2025-01-01T12:00:00Z");
-    observe_rate_limit(&state, "a", &window(0.89), Some(now));
-    observe_rate_limit(&state, "b", &window(0.90), Some(now));
+    observe_rate_limit(&state, "a", &window(0.89), Some(now), None);
+    observe_rate_limit(&state, "b", &window(0.90), Some(now), None);
     let busy = BTreeSet::from(["a".to_string()]);
     let chosen = select(&state, &cfg, Some("claude-fable-5-1"), &HashSet::new(), Some(&busy), Some(now), None, 0.0)
       .unwrap()
@@ -1121,8 +1141,8 @@ mod tests {
     let cfg = config(&home, &[("a", &a), ("b", &b)]);
     let state = ClaudeAccountState::new();
     let now = timestamp("2025-01-01T12:00:00Z");
-    observe_rate_limit(&state, "a", &window(0.95), Some(now));
-    observe_rate_limit(&state, "b", &window(0.92), Some(now));
+    observe_rate_limit(&state, "a", &window(0.95), Some(now), None);
+    observe_rate_limit(&state, "b", &window(0.92), Some(now), None);
     let busy = BTreeSet::from(["b".to_string()]);
     let chosen = select(&state, &cfg, Some("claude-fable-5-1"), &HashSet::new(), Some(&busy), Some(now), None, 0.0)
       .unwrap()
@@ -1148,7 +1168,7 @@ mod tests {
         "windows":[{"utilization":85.0,"scope_label":"Fable weekly","window_minutes":10080}]
       }),
     );
-    observe_rate_limit(&state, "a", &window(0.20), Some(now));
+    observe_rate_limit(&state, "a", &window(0.20), Some(now), None);
     assert_eq!(latest_reading(&state, "a", Some("claude-fable-5-1"), Some(now)).unwrap().utilization, 0.85);
     assert!((headroom(&state, "a", Some("claude-fable-5-1"), Some(now)) - 0.15).abs() < 1e-12);
     assert!((headroom(&state, "a", Some("claude-opus-4-8"), Some(now)) - 0.80).abs() < 1e-12);
@@ -1193,8 +1213,8 @@ mod tests {
     // No healthy login has headroom once the last one rejects.
     let rejected =
       json!({"unifiedWindows":{"five_hour":{"utilization":1.0}},"status":"rejected","resetsAt":4102462800.0});
-    observe_rate_limit(&state, "a", &rejected, Some(now));
-    observe_rate_limit(&state, "b", &rejected, Some(now));
+    observe_rate_limit(&state, "a", &rejected, Some(now), None);
+    observe_rate_limit(&state, "b", &rejected, Some(now), None);
     let reading = member_reading(&state, &cfg, &option, now).unwrap().expect("rejected logins still read");
     assert!(reading.exhausted);
   }
@@ -1298,14 +1318,14 @@ mod tests {
       // "x" has no weekly reading, so its 30% headroom scores 0.30 over 168 h. "y" has 50% headroom at 10 h
       // and scores 8.4. Without the 168 h value "x" would score at the 0.5 h floor (100.8) and win.
       let (_root, cfg, state) = pool_fixture(&["x", "y"]);
-      observe_rate_limit(&state, "x", &window(0.70), Some(now));
+      observe_rate_limit(&state, "x", &window(0.70), Some(now), None);
       observe_usage_panel(&state, "y", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T22:00:00Z"));
       assert_eq!(select_now(&state, &cfg, now), "y");
     }
     {
       // "x" (30% over 168 h) and "z" (20% over 168 h) tie. "x" carries the most headroom.
       let (_root, cfg, state) = pool_fixture(&["x", "z"]);
-      observe_rate_limit(&state, "x", &window(0.70), Some(now));
+      observe_rate_limit(&state, "x", &window(0.70), Some(now), None);
       observe_usage_panel(&state, "z", &panel_window(80.0, WEEKLY_WINDOW_MINUTES, "2025-01-08T12:00:00Z"));
       assert_eq!(select_now(&state, &cfg, now), "x");
     }
@@ -1332,8 +1352,8 @@ mod tests {
     observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
     observe_usage_panel(&state, "b", &panel_window(49.0, WEEKLY_WINDOW_MINUTES, weekly));
     // The scores differ by 0.01 per hour, inside the 0.02 band. "b" was read more recently and still wins.
-    observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")));
-    observe_rate_limit(&state, "b", &window(0.49), Some(timestamp("2025-01-01T11:00:00Z")));
+    observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")), None);
+    observe_rate_limit(&state, "b", &window(0.49), Some(timestamp("2025-01-01T11:00:00Z")), None);
     assert_eq!(select_now(&state, &cfg, now), "b");
   }
 
@@ -1344,8 +1364,8 @@ mod tests {
     let weekly = "2025-01-02T12:00:00Z";
     observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
     observe_usage_panel(&state, "b", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
-    observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")));
-    observe_rate_limit(&state, "b", &window(0.50), Some(timestamp("2025-01-01T11:00:00Z")));
+    observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")), None);
+    observe_rate_limit(&state, "b", &window(0.50), Some(timestamp("2025-01-01T11:00:00Z")), None);
     assert_eq!(select_now(&state, &cfg, now), "a");
   }
 
@@ -1410,6 +1430,7 @@ mod tests {
         "resetsAt": reset.unix_timestamp() as f64,
       }),
       Some(now),
+      None,
     );
     record_auth_failure(&state, "b", Some(now));
     let answer = no_usable_login(&state, &cfg, Some("claude-fable-5-1"), Some(now), None).unwrap();
@@ -1431,6 +1452,7 @@ mod tests {
         "resetsAt": reset.unix_timestamp() as f64,
       }),
       Some(now),
+      None,
     );
     record_auth_failure(&state, "a", Some(now));
     let answer = no_usable_login(&state, &cfg, Some("claude-fable-5-1"), Some(now), None).unwrap();

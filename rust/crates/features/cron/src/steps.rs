@@ -155,7 +155,14 @@ mod tests {
 
     backend_availability::backend_availability(&features)
       .unwrap()
-      .record("synthetic", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .record(
+        &cfg,
+        &features.registry,
+        "synthetic",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "synthetic quota error",
+      )
       .unwrap();
     let model = select_step_member(&features, &cfg, "synthetic", &[]).unwrap();
     let pool = select_step_member(&features, &cfg, "pool", &[]).unwrap();

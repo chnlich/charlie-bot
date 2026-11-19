@@ -1630,7 +1630,15 @@ impl TaskExecutionAdapter {
     // lists it.
     if let (Some(failure), Some(backend)) = (quota_failure.as_ref(), run.backend.as_deref()) {
       let availability = backend_availability::backend_availability(&self.features)?;
-      availability.record(backend, failure.resets_at, &failure.reason, &failure.message)?;
+      let cfg = self.features.config.get()?;
+      availability.record(
+        &cfg,
+        &self.features.registry,
+        backend,
+        failure.resets_at,
+        &failure.reason,
+        &failure.message,
+      )?;
     }
 
     if run.kind == RunKind::Review {
@@ -2474,7 +2482,15 @@ impl TaskExecutionAdapter {
       .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, &meta.id)))?;
     if let Some(backend) = run.backend.as_deref().filter(|backend| !backend.is_empty()) {
       let availability = backend_availability::backend_availability(&self.features)?;
-      availability.record(backend, failure.resets_at, &failure.reason, &failure.message)?;
+      let cfg = self.features.config.get()?;
+      availability.record(
+        &cfg,
+        &self.features.registry,
+        backend,
+        failure.resets_at,
+        &failure.reason,
+        &failure.message,
+      )?;
     }
     if self.features.config.get()?.backends.pool(&meta.backend).is_none() {
       return Ok(());

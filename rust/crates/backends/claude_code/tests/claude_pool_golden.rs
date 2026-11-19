@@ -77,7 +77,7 @@ fn timestamp(value: &str) -> UtcDateTime {
 
 fn rust_observe_readings(state: &claude_accounts::ClaudeAccountState, case: &Value, now: UtcDateTime) {
   for reading in case["readings"].as_array().unwrap() {
-    claude_accounts::observe_rate_limit(state, reading["label"].as_str().unwrap(), &reading["info"], Some(now));
+    claude_accounts::observe_rate_limit(state, reading["label"].as_str().unwrap(), &reading["info"], Some(now), None);
   }
   for label in case["auth_failures"].as_array().unwrap() {
     claude_accounts::record_auth_failure(state, label.as_str().unwrap(), Some(now));

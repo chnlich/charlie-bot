@@ -989,6 +989,20 @@ pub trait LaunchWatch: Send {
   fn observe(&mut self, event: &Value) -> bool;
   /// Whether the run continues in a next process, which `next_launch` plans; `true` continues.
   fn wants_next(&self, exit_code: i32, stderr: &str) -> bool;
+  /// Whether the watch has already decided that the run moves on: a rejection, a warning at the line, or a lost login.
+  /// The process's own error for the same quota then belongs to the watch, which relays when the process exits.
+  fn decided_relay(&self) -> bool {
+    false
+  }
+}
+
+/// What a backend's login pool says about a model whose member failed on its quota.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuotaOutlook {
+  /// Whether some login of the pool can still serve the model.
+  pub can_run: bool,
+  /// The earliest instant a login of the pool serves the model again, when a login states one.
+  pub earliest_reset: Option<UtcDateTime>,
 }
 
 /// A backend type's lifecycle (`backend_lifecycle.BackendLifecycle`). The defaults serve a type with no login pool:
@@ -1026,6 +1040,12 @@ pub trait BackendLifecycle: Send + Sync {
     _native_id: Option<&'a str>,
   ) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
     Box::pin(async { panic!("next_launch is called only for a lifecycle whose watch asks for a relay") })
+  }
+
+  /// The login pool's answer on a quota failure of `option`'s model: whether a login can still run it, and when the
+  /// earliest login recovers. `None` for a backend type with no login pool.
+  fn quota_outlook(&self, _option: &BackendOption, _cfg: &CharlieBotConfig) -> anyhow::Result<Option<QuotaOutlook>> {
+    Ok(None)
   }
 
   /// Cleans up after the last process of a round, whether the round succeeded or not.

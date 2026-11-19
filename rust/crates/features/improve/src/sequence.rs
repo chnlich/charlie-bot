@@ -477,7 +477,7 @@ async fn run_loop(
             Some(failure) => (failure.resets_at, failure.reason.as_str(), failure.message.clone()),
             None => (None, backend_availability::REASON_ITERATION_FAILURE, reason.clone()),
           };
-          pool.availability().record(&iteration_backend, resets_at, cooling_reason, &message)?;
+          pool.availability().record(cfg, &pool.registry(), &iteration_backend, resets_at, cooling_reason, &message)?;
           if member_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
             match pool.selector(cfg).select(pool_id, &[])? {
               Some(member) => next_pool_member = Some(member),

@@ -1165,7 +1165,16 @@ backends:
   #[tokio::test]
   async fn an_out_member_is_skipped_and_an_exhausted_reading_is_skipped() {
     let (_home, features) = fixture();
-    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     assert_eq!(pick(&features, "auto", &[]), Some("claude-sub".to_string()));
   }
 
@@ -1186,10 +1195,28 @@ backends:
     assert_eq!(rotate(&features, &[]), Some("payg-a".to_string()));
     assert_eq!(rotate(&features, &["payg-a"]), Some("chatgpt".to_string()), "a member the caller excludes is skipped");
 
-    availability.record("payg-a", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "payg-a",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     assert_eq!(rotate(&features, &[]), Some("chatgpt".to_string()), "a member the owner recorded out is skipped");
 
-    availability.record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     assert_eq!(rotate(&features, &[]), None);
   }
 
@@ -1197,7 +1224,16 @@ backends:
   async fn a_member_both_pools_share_is_skipped_by_both_once_recorded_out() {
     let (_home, features) = fixture();
     // `chatgpt` is a member of the priority pool and of the rotate pool. One out record covers both.
-    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     assert_eq!(pick(&features, "auto", &[]), Some("claude-sub".to_string()));
     assert_eq!(pick(&features, "light", &[]), Some("payg-a".to_string()));
     assert_eq!(
@@ -1246,7 +1282,16 @@ backends:
     let cfg = loaded_cfg(&features);
     let mut meta = pool_session(&features, "pool-out-member", "auto").await;
     start_turn(&features, &cfg, &mut meta).await.unwrap();
-    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
 
     let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
     assert_eq!((change.from.as_str(), change.to.as_str()), ("chatgpt", "claude-sub"));
@@ -1268,7 +1313,14 @@ backends:
     let mut meta = pool_session(&features, "pool-refused-member", "auto").await;
     start_turn(&features, &cfg, &mut meta).await.unwrap();
     availability(&features)
-      .record("chatgpt", None, backend_availability::REASON_ACCESS_REFUSED, "Failed to authenticate")
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_ACCESS_REFUSED,
+        "Failed to authenticate",
+      )
       .unwrap();
 
     let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
@@ -1291,7 +1343,16 @@ backends:
     assert_eq!(start_turn(&features, &cfg, &mut meta).await.unwrap(), TurnStart::Kept);
     assert_eq!(meta.extra(POOL_MEMBER_FIELD), Some(&json!("payg-a")));
 
-    availability(&features).record("payg-a", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "payg-a",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
     assert_eq!((change.from.as_str(), change.to.as_str()), ("payg-a", "chatgpt"));
     assert_eq!(change.event()["set"], "light");
@@ -1304,7 +1365,16 @@ backends:
     let mut meta = pool_session(&features, "pool-subscription-reset", "auto").await;
     let availability = availability(&features);
     for member in ["chatgpt", "claude-sub", "near", "devin"] {
-      availability.record(member, None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+      availability
+        .record(
+          &loaded_cfg(&features),
+          &features.registry,
+          member,
+          None,
+          backend_availability::REASON_QUOTA_ERROR,
+          "spent",
+        )
+        .unwrap();
     }
     start_turn(&features, &cfg, &mut meta).await.unwrap();
     assert_eq!(meta.extra(POOL_MEMBER_FIELD), Some(&json!("payg-a")));
@@ -1312,7 +1382,16 @@ backends:
     // Their out records expire, so turn start returns the session to the subscription tier.
     let expired = UtcDateTime::from(time::OffsetDateTime::now_utc() - time::Duration::hours(1));
     for member in ["chatgpt", "claude-sub", "near", "devin"] {
-      availability.record(member, Some(expired), backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+      availability
+        .record(
+          &loaded_cfg(&features),
+          &features.registry,
+          member,
+          Some(expired),
+          backend_availability::REASON_QUOTA_ERROR,
+          "spent",
+        )
+        .unwrap();
     }
     let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
     assert_eq!((change.from.as_str(), change.to.as_str()), ("payg-a", "chatgpt"));
@@ -1366,7 +1445,16 @@ backends:
     let mut meta = pool_session(&features, "pool-exhausted", "auto").await;
     let reset = UtcDateTime::parse("2999-01-02T03:04:05Z").unwrap();
     for member in ["chatgpt", "claude-sub", "near", "devin", "payg-a"] {
-      availability.record(member, Some(reset), backend_availability::REASON_QUOTA_ERROR, "API Error: 402").unwrap();
+      availability
+        .record(
+          &loaded_cfg(&features),
+          &features.registry,
+          member,
+          Some(reset),
+          backend_availability::REASON_QUOTA_ERROR,
+          "API Error: 402",
+        )
+        .unwrap();
     }
 
     let start = start_turn(&features, &cfg, &mut meta).await.unwrap();
@@ -1420,7 +1508,16 @@ backends:
     assert!(selector.select("chatgpt", &["chatgpt".to_string()]).unwrap().is_none());
     assert!(selector.select("chatgpt-only", &["chatgpt".to_string()]).unwrap().is_none());
 
-    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     assert!(selector.select("chatgpt", &[]).unwrap().is_none());
     assert!(selector.select("chatgpt-only", &[]).unwrap().is_none());
     assert!(selector.exhausted_message("chatgpt").unwrap().contains("- chatgpt: quota_error"));
@@ -1443,7 +1540,16 @@ backends:
     );
     assert!(meta.extra(POOL_MEMBER_FIELD).is_none_or(Value::is_null));
 
-    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     assert_eq!(current_member_id(&cfg, &meta).unwrap(), "chatgpt", "current member resolution ignores availability");
     assert_eq!(current_member_id(&cfg, &singleton_pool_meta).unwrap(), "chatgpt");
     assert_eq!(turn_member(&features, &cfg, &meta).unwrap(), None);
@@ -1456,7 +1562,16 @@ backends:
     let (_home, features) = fixture();
     let cfg = loaded_cfg(&features);
     let mut meta = pool_session(&features, "model-cooling-turn", "chatgpt").await;
-    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
 
     assert_eq!(turn_member(&features, &cfg, &meta).unwrap(), None);
     let TurnStart::Exhausted(message) = start_turn(&features, &cfg, &mut meta).await.unwrap() else {
@@ -1478,7 +1593,16 @@ backends:
     start_turn(&features, &cfg, &mut meta).await.unwrap();
     assert_eq!(current_member_id(&cfg, &meta).unwrap(), "chatgpt");
 
-    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    availability(&features)
+      .record(
+        &loaded_cfg(&features),
+        &features.registry,
+        "chatgpt",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "spent",
+      )
+      .unwrap();
     assert_eq!(turn_member(&features, &cfg, &meta).unwrap().as_deref(), Some("claude-sub"));
     let stored = features.store.read_metadata_fresh(&meta.id).unwrap().unwrap();
     assert_eq!(stored.extra(POOL_MEMBER_FIELD), Some(&json!("chatgpt")), "a read leaves the recorded member in place");

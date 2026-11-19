@@ -448,7 +448,10 @@ async fn a_model_and_singleton_pool_select_the_same_improve_iteration_backend() 
 #[ignore = "integration"]
 async fn a_cooling_model_refuses_an_improve_iteration_with_the_exhaustion_message() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], Vec::new()).await?;
-  charliebot_agents::backend_availability::backend_availability(&harness.stack.features)?.record(
+  let features = &harness.stack.features;
+  charliebot_agents::backend_availability::backend_availability(features)?.record(
+    &*features.config.get()?,
+    &features.registry,
     "fake",
     None,
     charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
@@ -465,7 +468,10 @@ async fn a_cooling_model_refuses_an_improve_iteration_with_the_exhaustion_messag
   drop(harness);
 
   let pool_harness = LoopHarness::new(&["fake"], &[], Vec::new()).await?;
-  charliebot_agents::backend_availability::backend_availability(&pool_harness.stack.features)?.record(
+  let features = &pool_harness.stack.features;
+  charliebot_agents::backend_availability::backend_availability(features)?.record(
+    &*features.config.get()?,
+    &features.registry,
     "fake",
     None,
     charliebot_agents::backend_availability::REASON_QUOTA_ERROR,

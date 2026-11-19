@@ -9,7 +9,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
   BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, IdleArmContext, Launch, LaunchContext, LaunchKind, LaunchRefused,
-  LaunchWatch, MemberFailure,
+  LaunchWatch, MemberFailure, QuotaOutlook,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::RunKind;
@@ -266,8 +266,14 @@ impl ClaudeCodeLifecycle {
     )
     .map_err(|error| refused(error, MemberFailure::Other, None))?;
     let Some(account) = account else {
-      let message = claude_relay::pool_exhausted_message(&self.state, &ctx.cfg, None, account_pool.as_deref())
-        .map_err(|error| refused(error, MemberFailure::Other, None))?;
+      let message = claude_relay::pool_exhausted_message(
+        &self.state,
+        &ctx.cfg,
+        Some(&ctx.option.model),
+        None,
+        account_pool.as_deref(),
+      )
+      .map_err(|error| refused(error, MemberFailure::Other, None))?;
       let no_login =
         claude_accounts::no_usable_login(&self.state, &ctx.cfg, Some(&ctx.option.model), None, account_pool.as_deref())
           .map_err(|error| refused(error, MemberFailure::Other, None))?;
@@ -338,6 +344,25 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
 
   fn settle_idle_compaction<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move { claude_idle_compaction::IdleCompaction::shared().settle_for_turn(session_id).await })
+  }
+
+  /// The pool answers whether any login can serve the option's model now (a login with readings below full, or none
+  /// read yet), and the earliest reset among the logins that its rejections hold out.
+  fn quota_outlook(&self, option: &BackendOption, cfg: &CharlieBotConfig) -> anyhow::Result<Option<QuotaOutlook>> {
+    if !claude_accounts::is_pooled(option, cfg) {
+      return Ok(None);
+    }
+    let now = claude_accounts::now_or(None);
+    let can_run =
+      claude_accounts::member_reading(&self.state, cfg, option, now)?.is_none_or(|reading| !reading.exhausted);
+    let earliest_reset = claude_accounts::earliest_reset(
+      &self.state,
+      cfg,
+      Some(&option.model),
+      Some(now),
+      claude_accounts::option_pool(option).as_deref(),
+    )?;
+    Ok(Some(QuotaOutlook { can_run, earliest_reset }))
   }
 
   fn watch(&self, ctx: &LaunchContext, launch: &Launch) -> Option<Box<dyn LaunchWatch>> {

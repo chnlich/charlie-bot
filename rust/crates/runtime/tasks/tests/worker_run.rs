@@ -1444,6 +1444,8 @@ async fn a_cooling_routed_option_falls_back_to_the_pool() -> anyhow::Result<()> 
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&["fake2"]), &[])?;
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake2",
     None,
     backend_availability::REASON_QUOTA_ERROR,
@@ -1469,12 +1471,16 @@ async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&[ROTATION_POOL_ID]), &[])?;
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake",
     None,
     backend_availability::REASON_QUOTA_ERROR,
     "synthetic quota error",
   )?;
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake2",
     None,
     backend_availability::REASON_QUOTA_ERROR,
@@ -1711,6 +1717,8 @@ async fn a_cooling_routed_option_runs_on_the_default_path_and_says_so() -> anyho
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&["fake2"]), &[])?;
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake2",
     None,
     backend_availability::REASON_QUOTA_ERROR,
@@ -2223,6 +2231,8 @@ async fn quota_failover_of_a_routed_run_returns_to_the_subscription_member() -> 
 
   // The subscription member is out, so the failover takes the pay-as-you-go member.
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     CHEAP_SUBSCRIPTION_MEMBER,
     None,
     backend_availability::REASON_QUOTA_ERROR,
@@ -2250,6 +2260,8 @@ async fn quota_failover_of_a_routed_run_returns_to_the_subscription_member() -> 
   // the session's next turn, and that turn returns the session to the subscription member.
   let reset_passed = UtcDateTime::parse("2020-01-02T03:04:00+00:00").expect("a fixed instant parses");
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     CHEAP_SUBSCRIPTION_MEMBER,
     Some(reset_passed),
     backend_availability::REASON_QUOTA_ERROR,
@@ -2533,6 +2545,8 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   let (worker, run) = interrupted_worker_run(&stack, &manager.id, TaskType::Implement, WorkerForm::Pool).await?;
   let fake3_reset = UtcDateTime::parse("2030-01-02T03:04:00+00:00").expect("a fixed instant parses");
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake3",
     Some(fake3_reset),
     backend_availability::REASON_QUOTA_ERROR,

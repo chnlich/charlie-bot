@@ -341,7 +341,15 @@ async fn an_exhausted_set_ends_the_turn_with_one_error_listing_every_member() ->
   let availability = backend_availability::backend_availability(&stack.features)?;
   let reset = UtcDateTime::parse("2999-01-02T03:04:05Z")?;
   for member in [MEMBER_A, MEMBER_B] {
-    availability.record(member, Some(reset), backend_availability::REASON_QUOTA_ERROR, QUOTA_ERROR)?;
+    let cfg = stack.features.config.get()?;
+    availability.record(
+      &cfg,
+      &stack.features.registry,
+      member,
+      Some(reset),
+      backend_availability::REASON_QUOTA_ERROR,
+      QUOTA_ERROR,
+    )?;
   }
   dispatch_turn(&stack, &session.id).await?;
   let runs = settle(&stack, &session.id).await?;
@@ -587,7 +595,10 @@ async fn subscription_reset_stack() -> anyhow::Result<Stack> {
 
 /// Record `member` out until `reset`, or for the default cooldown when `reset` is `None`.
 fn record_out(stack: &Stack, member: &str, reset: Option<UtcDateTime>) -> anyhow::Result<()> {
+  let cfg = stack.features.config.get()?;
   backend_availability::backend_availability(&stack.features)?.record(
+    &cfg,
+    &stack.features.registry,
     member,
     reset,
     backend_availability::REASON_QUOTA_ERROR,

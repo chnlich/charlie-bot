@@ -476,7 +476,14 @@ async fn reviewer_uses_the_writer_when_it_is_the_only_selectable_pool_member() -
   let pool = test_pool();
   pool
     .availability()
-    .record("fake2", None, charliebot_agents::backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+    .record(
+      &*stack.features.config.get()?,
+      &pool.registry(),
+      "fake2",
+      None,
+      charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
+      "synthetic quota error",
+    )
     .unwrap();
   let used = HashSet::from(["fake".to_string()]);
   let selection = review::select_reviewer_backend(
@@ -1056,6 +1063,8 @@ async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow
   stack.dispatch.set_executor(None);
   let pool = charliebot_agents::backend_pool::backend_pool(&stack.features)?;
   pool.availability().record(
+    &*stack.features.config.get()?,
+    &pool.registry(),
     "fake",
     None,
     charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
@@ -1130,6 +1139,8 @@ async fn successful_worker_uses_the_writer_when_it_is_the_only_selectable_review
   stack.dispatch.set_executor(None);
   let pool = charliebot_agents::backend_pool::backend_pool(&stack.features)?;
   pool.availability().record(
+    &*stack.features.config.get()?,
+    &pool.registry(),
     "fake2",
     None,
     charliebot_agents::backend_availability::REASON_QUOTA_ERROR,

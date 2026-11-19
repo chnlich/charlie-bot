@@ -945,6 +945,7 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
 
   fill_timestamp(&mut event);
   let watched = watch.is_some();
+  let relay_decided = watch.as_deref().is_some_and(LaunchWatch::decided_relay);
   let terminate_now = match watch {
     Some(watch) => watch.observe(&event),
     None => false,
@@ -1019,7 +1020,9 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
     } else {
       backend_pool::classify_member_failure(&text, None)
     };
-    let owned_by_watch = watched && failure == backend_pool::MemberFailure::AccessRefused;
+    // A watch that already decided to move the run owns the errored result too: a rejected login's 429 result is the
+    // same quota the watch relays past, so the run continues on another login instead of ending here.
+    let owned_by_watch = watched && (failure == backend_pool::MemberFailure::AccessRefused || relay_decided);
     if failure != backend_pool::MemberFailure::Other && !owned_by_watch {
       sink.append(&event)?;
       return Err(QuotaExhaustedError::with_failure(text, None, failure).into());

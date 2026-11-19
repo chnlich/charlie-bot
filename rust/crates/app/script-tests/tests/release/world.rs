@@ -154,7 +154,7 @@ impl World {
     }
   }
 
-  /// Writes `behavior` as the files the stub gh reads beside itself.
+  /// The files the stub gh reads beside itself, written from `behavior`.
   pub fn write_gh(&self, behavior: &GhBehavior) {
     let dir = self.bin().join("gh_behavior");
     fs::create_dir_all(&dir).expect("the gh behavior directory");
@@ -169,7 +169,7 @@ impl World {
       .expect("the artifact directory answer");
   }
 
-  /// Runs the repository's release script for `commit`.
+  /// The repository's release script run for `commit`.
   pub fn release(&self, commit: &str) -> Run {
     let mut command = harness::command("bash", &self.env);
     command.arg(self.repo.join("scripts/release.sh")).arg(commit);
@@ -224,7 +224,7 @@ impl World {
       .any(|entry| entry.expect("a release entry").file_name().to_string_lossy().starts_with(&prefix))
   }
 
-  /// Makes a version directory named `commit` whose install time is `installed_at`, in Unix seconds. The prune reads
+  /// A version directory named `commit` whose install time is `installed_at`, in Unix seconds. The prune reads
   /// the install time from the directory's mtime, so the fixture sets it.
   pub fn version_dir(&self, commit: &str, installed_at: u64) -> PathBuf {
     let dir = self.releases.join(commit);

@@ -150,7 +150,7 @@ fn the_rewritten_shell_entry_points_parse() {
   }
 }
 
-/// Parse an `ExecStart=` directive from a systemd unit using systemd command-line quoting rules.
+/// An `ExecStart=` directive's arguments, parsed from a systemd unit with systemd's command-line quoting rules.
 fn systemd_exec_start_args(unit_text: &str) -> Vec<String> {
   let mut in_exec = false;
   let mut raw = String::new();

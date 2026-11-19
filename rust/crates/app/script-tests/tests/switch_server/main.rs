@@ -472,8 +472,8 @@ fn test_a_switch_that_finds_the_release_lock_held_refuses_at_once_and_names_the_
 /// The agent gh wrapper: a file the configuration check requires, which the fixture's old commit lacks.
 const AGENT_GH_WRAPPER: &str = "rust/crates/runtime/agents/gh_wrapper/gh";
 
-/// Commits the agent gh wrapper on top of the clone's old commit and returns the new commit. The clone ends at the old
-/// commit, as a fresh world starts.
+/// The new commit from the agent gh wrapper committed on top of the clone's old commit. The clone ends at the
+/// old commit, as a fresh world starts.
 fn commit_agent_gh_wrapper(world: &World) -> String {
   let wrapper = world.clone.join(AGENT_GH_WRAPPER);
   fs::create_dir_all(wrapper.parent().expect("a parent")).expect("the wrapper directory");
@@ -1162,8 +1162,8 @@ impl Drop for Pane {
   }
 }
 
-/// Fails, naming the command, when the pane shell cannot set its server's parent-death signal: without setpriv the
-/// server would outlive the test, which is the leak these checks close.
+/// The `setpriv` requirement, failed with the command named when the pane shell cannot set its server's
+/// parent-death signal. Without setpriv the server would outlive the test, which is the leak these checks close.
 fn require_setpriv(env: &Env) {
   let on_path = env
     .get("PATH")

@@ -16,8 +16,9 @@ const DELEGATE: &str = "POST /api/internal/delegate";
 const DELEGATION_CANCEL: &str = "POST /api/sessions/delegation-child/runs/task-run/cancel";
 const DELEGATION_ARCHIVE: &str = "POST /api/sessions/delegation-session/archive";
 
-/// Starts the old release on a pane, gives the new release's stand-in `behavior`, and runs the switch to the new
-/// release. The delegation wait is two seconds, so a check that never passes fails within the test.
+/// The switch to the new release: the old release started on a pane, the new release's stand-in `behavior`,
+/// and the switch run to the new release. The delegation wait is two seconds, so a check that never passes
+/// fails within the test.
 fn switch_to_new_release(world: &mut World, behavior: &[(&str, Value)]) -> Run {
   world.env.insert("CHARLIEBOT_SWITCH_DELEGATION_WAIT_S".to_string(), "2".to_string());
   let pane = world.start_pane();

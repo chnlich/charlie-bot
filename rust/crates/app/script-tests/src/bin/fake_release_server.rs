@@ -498,7 +498,7 @@ fn config_names_key(home: &Path, key: &str) -> io::Result<bool> {
   Ok(config.lines().any(|line| line.split_once(':').is_some_and(|(name, _)| name == key)))
 }
 
-/// Appends a top-level section named `key` to config.yaml, as an edit another session makes to the shared config.
+/// A top-level section named `key`, appended to config.yaml as an edit another session makes to the shared config.
 fn append_config_key(home: &Path, key: &str) -> io::Result<()> {
   let mut config = OpenOptions::new().append(true).open(home.join(CONFIG_FILENAME))?;
   writeln!(config, "{key}:\n  enabled: true")

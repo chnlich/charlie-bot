@@ -107,12 +107,18 @@ impl BackendAvailability {
   /// for every member failure.
   ///
   /// A quota failure of a login-pooled option asks the pool first. While a login can still run the option's model, no
-  /// row is written and the kept record is logged. Otherwise the row runs until the pool's earliest reset for the model,
-  /// then the failure's stated reset, then [`DEFAULT_COOLDOWN`]. Every other failure runs until its stated reset, or
-  /// for [`DEFAULT_COOLDOWN`] when it states none. `None` means the row was kept.
+  /// row is written, the kept record is logged, and `None` is returned. Otherwise the row runs until the pool's
+  /// earliest reset for the model, then the failure's stated reset, then [`DEFAULT_COOLDOWN`]. Every other failure runs
+  /// until its stated reset, or for [`DEFAULT_COOLDOWN`] when it states none.
   ///
-  /// The write is a read-merge-write under an exclusive file lock, so a row another process recorded since this one
-  /// last read the file survives.
+  /// A write that states a reset replaces the stored row, whether the stated reset is earlier or later. The stated
+  /// reset is the caller's `resets_at`, or the pool's earliest reset when the pool states one. A write that states no
+  /// reset keeps an unexpired stored row whose `out_until` is later than the new one: nothing is written, the stored
+  /// instant is returned, and `backend_availability_later_kept` is logged. So a stated reset earlier than a stored
+  /// default row ends that row at the stated reset.
+  ///
+  /// The comparison and the write run under one exclusive file lock, on the rows read under that lock. A row another
+  /// process recorded since this one last read the file therefore survives, and is compared rather than overwritten.
   pub fn record(
     &self,
     cfg: &CharlieBotConfig,
@@ -159,6 +165,23 @@ impl BackendAvailability {
     };
     let _lock = self.lock()?;
     let mut rows = Self::read_rows(&self.path)?;
+    let now = UtcDateTime::now().into_inner();
+    if !reset_known
+      && let Some(stored) = rows.get(backend_id)
+      && stored.out_until.into_inner() > now
+      && stored.out_until.into_inner() > out_until
+    {
+      let stored_until = stored.out_until.into_inner();
+      tracing::info!(
+        target: "charliebot_agents",
+        member = backend_id,
+        stored_until = %format_minutes(stored_until),
+        new_until = %format_minutes(out_until),
+        reason,
+        "backend_availability_later_kept"
+      );
+      return Ok(Some(stored_until));
+    }
     rows.insert(backend_id.to_string(), row);
     self.persist(&rows)?;
     drop(_lock);
@@ -255,6 +278,14 @@ pub(crate) fn format_minutes(datetime: OffsetDateTime) -> String {
 
 #[cfg(test)]
 mod tests {
+  use std::sync::Arc;
+
+  use charliebot_core::config::BackendOption;
+  use charliebot_registry::RegistryError;
+  use charliebot_registry::backend::{
+    AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle,
+  };
+
   use super::*;
 
   /// The config and registry of a home with no backend option, so every record is a plain row.
@@ -366,5 +397,166 @@ mod tests {
     fs::write(home.path().join("state"), "a file where the directory belongs").unwrap();
     let error = BackendAvailability::load(home.path()).unwrap_err().to_string();
     assert_eq!(error, format!("could not read {}", display_state_path()));
+  }
+
+  /// How far after a write the login pool's earliest login recovers in these tests.
+  const POOL_RESET_AFTER: Duration = Duration::minutes(40);
+
+  /// A login pool whose every login is out for the option's model, and whose earliest login recovers
+  /// [`POOL_RESET_AFTER`] after the write.
+  struct ExhaustedLoginPool;
+
+  impl BackendLifecycle for ExhaustedLoginPool {
+    fn quota_outlook(&self, _option: &BackendOption, _cfg: &CharlieBotConfig) -> anyhow::Result<Option<QuotaOutlook>> {
+      let earliest_reset = UtcDateTime::now().into_inner() + POOL_RESET_AFTER;
+      Ok(Some(QuotaOutlook { can_run: false, earliest_reset: Some(earliest_reset.into()) }))
+    }
+  }
+
+  fn register_exhausted_pool(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.backend_type(BackendTypeRegistration {
+      type_name: "exhausted-pool",
+      traits: BackendTraits {
+        resume: ResumeStyle::CliFlag,
+        restart_reattach: false,
+        preassigned_session_id: false,
+        family_prefix: None,
+        manual_compact: false,
+        compact_hint: None,
+      },
+      option_model: |_| Ok(()),
+      factory: Arc::new(NeverBuilt),
+      lifecycle: Some(Arc::new(ExhaustedLoginPool)),
+      translate_fallback: false,
+    })
+  }
+
+  /// The config and registry of a home whose one option, `member`, sits in a login pool with no login free.
+  fn pooled_config(home: &Path) -> (CharlieBotConfig, Registry) {
+    let config = r#"backends:
+  options:
+    - {id: member, label: Member, type: exhausted-pool, model: model-member, billing: subscription}
+"#;
+    fs::write(home.join("config.yaml"), config).unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("test.backend_availability", register_exhausted_pool).unwrap();
+    let cfg = registry.load_config(home).unwrap();
+    (cfg, registry)
+  }
+
+  /// A backend type that builds no backend: these tests record rows, and no run starts.
+  struct NeverBuilt;
+
+  impl BackendFactory for NeverBuilt {
+    fn build(
+      &self,
+      _option: Option<&BackendOption>,
+      _cfg: &CharlieBotConfig,
+      _launch: LaunchArgs,
+    ) -> anyhow::Result<Box<dyn AgentBackend>> {
+      anyhow::bail!("the availability test backend is not launched")
+    }
+  }
+
+  /// Store `backend_id`'s quota row as an earlier write left it, whatever its instant.
+  fn seed_row(availability: &BackendAvailability, backend_id: &str, out_until: OffsetDateTime, detail: &str) {
+    let row = AvailabilityRow {
+      out_until: out_until.into(),
+      reason: REASON_QUOTA_ERROR.to_string(),
+      detail: detail.to_string(),
+      recorded_at: UtcDateTime::now(),
+    };
+    availability.persist(&HashMap::from([(backend_id.to_string(), row)])).unwrap();
+  }
+
+  #[test]
+  fn a_write_without_a_stated_reset_keeps_a_later_stored_row() {
+    // A known reset, then a write that states none: the default write must not cut the known reset.
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    let known_reset = UtcDateTime::now().into_inner() + Duration::minutes(80);
+    availability
+      .record(&cfg, &registry, "member", Some(known_reset.into()), REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap();
+    let kept = availability.record(&cfg, &registry, "member", None, REASON_QUOTA_ERROR, "a default cooldown").unwrap();
+
+    assert_eq!(kept, Some(known_reset));
+    let row = availability.row("member").unwrap();
+    assert_eq!(row.out_until.into_inner(), known_reset);
+    assert_eq!(row.detail, "quota is spent");
+  }
+
+  #[test]
+  fn a_write_without_a_stated_reset_replaces_an_expired_row() {
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    seed_row(&availability, "member", OffsetDateTime::now_utc() - Duration::minutes(10), "an old quota is spent");
+    let out_until = availability
+      .record(&cfg, &registry, "member", None, REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap()
+      .expect("an expired row is replaced by a written row");
+
+    let remaining = out_until - OffsetDateTime::now_utc();
+    assert!(remaining >= DEFAULT_COOLDOWN - Duration::seconds(5));
+    assert!(remaining <= DEFAULT_COOLDOWN + Duration::seconds(5));
+    assert_eq!(availability.row("member").unwrap().detail, "quota is spent");
+  }
+
+  #[test]
+  fn a_stated_reset_earlier_than_a_default_row_replaces_it() {
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    availability.record(&cfg, &registry, "member", None, REASON_QUOTA_ERROR, "a default cooldown").unwrap();
+    let known_reset = UtcDateTime::now().into_inner() + Duration::minutes(10);
+    let replaced = availability
+      .record(&cfg, &registry, "member", Some(known_reset.into()), REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap();
+
+    assert_eq!(replaced, Some(known_reset));
+    let row = availability.row("member").unwrap();
+    assert_eq!(row.out_until.into_inner(), known_reset);
+    assert_eq!(row.detail, "quota is spent");
+  }
+
+  #[test]
+  fn a_stated_reset_replaces_a_later_stored_reset() {
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    let later_reset = UtcDateTime::now().into_inner() + Duration::hours(3);
+    availability
+      .record(&cfg, &registry, "member", Some(later_reset.into()), REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap();
+    let known_reset = UtcDateTime::now().into_inner() + Duration::minutes(80);
+    let replaced = availability
+      .record(&cfg, &registry, "member", Some(known_reset.into()), REASON_QUOTA_ERROR, "quota is spent again")
+      .unwrap();
+
+    assert_eq!(replaced, Some(known_reset));
+    let row = availability.row("member").unwrap();
+    assert_eq!(row.out_until.into_inner(), known_reset);
+    assert_eq!(row.detail, "quota is spent again");
+  }
+
+  #[test]
+  fn a_login_pool_reset_replaces_a_later_stored_row() {
+    let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = pooled_config(home.path());
+    let availability = BackendAvailability::load(home.path()).unwrap();
+    seed_row(&availability, "member", OffsetDateTime::now_utc() + Duration::hours(3), "quota is spent");
+    let before = OffsetDateTime::now_utc();
+    let replaced = availability
+      .record(&cfg, &registry, "member", None, REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap()
+      .expect("a pool reset replaces the stored row");
+    let after = OffsetDateTime::now_utc();
+
+    // The row ends at the pool's reset, not at the default cooldown and not at the stored later instant.
+    assert!(replaced >= before + POOL_RESET_AFTER - Duration::seconds(5));
+    assert!(replaced <= after + POOL_RESET_AFTER + Duration::seconds(5));
+    assert_eq!(availability.out_until("member"), Some(replaced));
   }
 }

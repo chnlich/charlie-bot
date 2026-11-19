@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use charliebot_core::text_repr::{self, JsonStyle, json_dumps, str_repr, type_name};
-use charliebot_store::control_events::sha256_hex;
+use charliebot_store::control_events::{SOURCE_SESSION_ID_FIELD, sha256_hex};
 use serde_json::{Map, Value, json};
 
 use super::{PromptSource, RuleSegment, TaskPromptError};
@@ -94,7 +94,7 @@ fn source_value(source: &PromptSource) -> Value {
   json!({
     "scope": source.scope,
     "source_ref": source.source_ref,
-    "source_session_id": source.source_session_id,
+    (SOURCE_SESSION_ID_FIELD): source.source_session_id,
   })
 }
 
@@ -176,7 +176,7 @@ fn parse_source(value: &Value) -> Result<PromptSource, String> {
     .as_object()
     .ok_or_else(|| format!("PromptSource.__init__() argument after ** must be a mapping, not {}", type_name(value)))?;
   if let Some(unexpected) =
-    members.keys().find(|key| !matches!(key.as_str(), "scope" | "source_ref" | "source_session_id"))
+    members.keys().find(|key| !matches!(key.as_str(), "scope" | "source_ref" | SOURCE_SESSION_ID_FIELD))
   {
     return Err(format!("PromptSource.__init__() got an unexpected keyword argument {}", str_repr(unexpected)));
   }
@@ -189,7 +189,7 @@ fn parse_source(value: &Value) -> Result<PromptSource, String> {
     }
     _ => unreachable!("two required keys"),
   }
-  let session = match members.get("source_session_id") {
+  let session = match members.get(SOURCE_SESSION_ID_FIELD) {
     None | Some(Value::Null) => None,
     Some(Value::String(session)) => Some(session.clone()),
     Some(other) => return Err(format!("source_session_id must be a string, not {}", type_name(other))),

@@ -33,6 +33,7 @@
   flex-shrink: 0;
 }
 .file-chip-icon--spinner {
+  color: #cbd5e1;
   animation: file-chip-spin 0.8s linear infinite;
 }
 .file-chip-state { color: #fca5a5; font-size: 0.7rem; flex-shrink: 0; }

@@ -145,3 +145,18 @@ test('a failed interaction file retries alone, and the files that loaded never r
   assert.deepEqual(appended.slice(6).map(nodeName), [SIDEBAR + 'modals.js?v=v1'],
     'the retry asks for the failed file only');
 });
+
+test('a failed interaction stylesheet retries alone while its scripts are still loading', async () => {
+  const {context, appended, errors} = buildSidebarContext();
+
+  context.sidebarControl('archiveSession');
+  await settle();
+  appended[0].onerror();
+  await settle();
+  assert.deepEqual(errors, ['the page stylesheet did not load: /static/css/sidebar-interactions.css']);
+
+  context.sidebarControl('archiveSession');
+  await settle();
+  assert.deepEqual(appended.slice(5).map(nodeName), ['/static/css/sidebar-interactions.css?v=v1'],
+    'the retry asks for the failed stylesheet only');
+});

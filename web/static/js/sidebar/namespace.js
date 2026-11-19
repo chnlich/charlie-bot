@@ -130,15 +130,18 @@
   // once session-actions.js has run.
   function loadSidebarInteractions() {
     if (interactionLoad === null) {
-      const loading = Promise.all([
+      let loading;
+      loading = Promise.all([
         loadPageStyles('sidebar-interactions', ['/static/css/sidebar-interactions.css'])
-          .catch((error) => console.error(error.message)),
+          .catch((error) => {
+            console.error(error.message);
+            if (interactionLoad === loading) interactionLoad = null;
+          }),
         ...INTERACTION_SCRIPTS.filter((path) => path !== SESSION_MOVE_SCRIPT).map(loadInteractionScript),
         loadInteractionScript(SESSION_ACTIONS_SCRIPT).then(() => loadInteractionScript(SESSION_MOVE_SCRIPT)),
       ]);
       interactionLoad = loading;
-      // A failed download clears the memo so the next click retries. The failed file's own entry clears in
-      // loadPageScripts, so the retry asks for that file alone. The caller logs the failure.
+      // A failed download clears its memo so the next click retries that file alone. The caller logs script failures.
       loading.catch(() => { if (interactionLoad === loading) interactionLoad = null; });
     }
     return interactionLoad;

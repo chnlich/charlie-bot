@@ -34,7 +34,17 @@ pub const SUMMARY_OK: &str = event_types::QUOTA_SUMMARY_OK;
 /// The summary value that opens an unassembled summary; the reason follows after a colon and a space.
 pub const SUMMARY_UNAVAILABLE: &str = event_types::QUOTA_SUMMARY_UNAVAILABLE;
 
+/// The character cap on one summary line: the goal, a step, or the in-progress step. At four bytes a character at most,
+/// a capped line stays far below [`MAX_SUMMARY_PART_BYTES`].
 const MAX_SUMMARY_LINE_CHARS: usize = 300;
+
+/// The byte bound on each part of the summary: the goal line, the done list, the in-progress line and the files list.
+///
+/// The summary sits in the launch prompt, and the kernel caps one argv string at 128 KiB (`MAX_ARG_STRLEN`), failing a
+/// longer one with E2BIG. At 8 KiB a part, the four parts total at most 32 KiB, a quarter of that cap. A part over the
+/// bound keeps its newest entries, because the next run needs the latest steps and the in-progress step first. The
+/// part then states how many older entries it left out and names the log that holds the full list.
+const MAX_SUMMARY_PART_BYTES: usize = 8 * 1024;
 
 /// Where the previous run's events are read from.
 pub enum HandoffSource<'a> {
@@ -53,6 +63,33 @@ impl HandoffSource<'_> {
       HandoffSource::ManagerRun { run }
       | HandoffSource::ManagerTurnStart { run }
       | HandoffSource::WorkerRun { run } => run,
+    }
+  }
+
+  /// The log the previous run's events are read from, which a cut summary part names.
+  fn full_list_log(&self) -> FullListLog {
+    match self {
+      HandoffSource::ManagerRun { .. } | HandoffSource::ManagerTurnStart { .. } => FullListLog::SessionChat,
+      HandoffSource::WorkerRun { .. } => FullListLog::RunEvents,
+    }
+  }
+}
+
+/// The log that holds a run's full step and file lists. A cut summary part names it, so the next run knows where the
+/// omitted entries are.
+#[derive(Clone, Copy)]
+enum FullListLog {
+  /// A worker run's events log.
+  RunEvents,
+  /// A manager turn's session chat log.
+  SessionChat,
+}
+
+impl FullListLog {
+  fn name(self) -> &'static str {
+    match self {
+      FullListLog::RunEvents => "the run's events log",
+      FullListLog::SessionChat => "the session chat log",
     }
   }
 }
@@ -219,7 +256,7 @@ fn summary(features: &FeatureContext, meta: &SessionMetadata, source: &HandoffSo
   }
   let events = previous_events(features, meta, source)?;
   let goal = (meta.profile == TaskProfile::Worker).then(|| task_goal(meta));
-  Ok(RunWork::collect(&events).render(goal))
+  Ok(RunWork::collect(&events).located_in(source.full_list_log()).render(goal))
 }
 
 /// The previous run's events, from the source the run kind records them in.
@@ -265,6 +302,8 @@ struct RunWork {
   targets: HashMap<String, usize>,
   last_text: Option<String>,
   files: Vec<String>,
+  /// The log a cut part names as holding the full lists. [`RunWork::located_in`] sets it.
+  full_list_log: Option<FullListLog>,
 }
 
 impl RunWork {
@@ -280,6 +319,12 @@ impl RunWork {
       }
     }
     work
+  }
+
+  /// Name the log that holds the full lists, which a list part cut to the bound points to.
+  fn located_in(mut self, log: FullListLog) -> Self {
+    self.full_list_log = Some(log);
+    self
   }
 
   fn assistant(&mut self, event: &Value) {
@@ -347,32 +392,87 @@ impl RunWork {
     }
   }
 
-  /// The four summary parts. The goal line is present when `goal` is.
+  /// The four summary parts. The goal line is present when `goal` is. A list part over
+  /// [`MAX_SUMMARY_PART_BYTES`] keeps its newest entries and states how many older ones it left out.
   fn render(&self, goal: Option<&str>) -> String {
-    let done = self
+    let goal_line = goal.map(|goal| format!("goal: {}\n", truncate(goal))).unwrap_or_default();
+    let in_progress = self.steps.iter().zip(&self.completed).rev().find(|(_, completed)| !**completed).map_or_else(
+      || self.last_text.as_deref().map_or_else(|| "none".to_string(), truncate),
+      |(step, _)| format!("{} (no result yet)", truncate(step)),
+    );
+    format!("Handoff summary:\n{goal_line}{}\nin progress: {in_progress}\n{}", self.done_part(), self.files_part())
+  }
+
+  /// The done part: one `- ` line per finished step, oldest first.
+  fn done_part(&self) -> String {
+    let lines = self
       .steps
       .iter()
       .zip(&self.completed)
       .filter(|(_, completed)| **completed)
       .map(|(step, _)| format!("- {}", truncate(step)))
       .collect::<Vec<_>>();
-    let in_progress = self.steps.iter().zip(&self.completed).rev().find(|(_, completed)| !**completed).map_or_else(
-      || self.last_text.as_deref().map_or_else(|| "none".to_string(), truncate),
-      |(step, _)| format!("{} (no result yet)", truncate(step)),
-    );
-    let files = if self.files.is_empty() { "none".to_string() } else { self.files.join(", ") };
-    let goal_line = goal.map(|goal| format!("goal: {}\n", truncate(goal))).unwrap_or_default();
-    let mut text = format!("Handoff summary:\n{goal_line}done ({}):", done.len());
-    if done.is_empty() {
-      text.push_str(" none");
+    let whole = if lines.is_empty() {
+      "done (0): none".to_string()
+    } else {
+      format!("done ({}):\n{}", lines.len(), lines.join("\n"))
+    };
+    if whole.len() <= MAX_SUMMARY_PART_BYTES {
+      return whole;
     }
-    for step in done {
-      text.push('\n');
-      text.push_str(&step);
-    }
-    text.push_str(&format!("\nin progress: {in_progress}\nfiles: {files}"));
-    text
+    // The label is sized at its widest count, so the kept lines fit beside any count it states.
+    let label_width = self.cut_done_label(lines.len(), lines.len()).len();
+    let oldest = oldest_kept(&lines, MAX_SUMMARY_PART_BYTES - label_width, 1);
+    let label = self.cut_done_label(lines.len(), oldest);
+    if oldest == lines.len() { label } else { format!("{label}\n{}", lines[oldest..].join("\n")) }
   }
+
+  /// The files part: the touched paths in first-touch order, or `none`.
+  fn files_part(&self) -> String {
+    if self.files.is_empty() {
+      return "files: none".to_string();
+    }
+    let whole = format!("files: {}", self.files.join(", "));
+    if whole.len() <= MAX_SUMMARY_PART_BYTES {
+      return whole;
+    }
+    // Each path is counted with its ", " separator. The oldest kept path has none, so the count runs two bytes high
+    // and the part still stays within the bound.
+    let label_width = self.cut_files_label(self.files.len(), self.files.len()).len();
+    let oldest = oldest_kept(&self.files, MAX_SUMMARY_PART_BYTES - label_width, 2);
+    let label = self.cut_files_label(self.files.len(), oldest);
+    if oldest == self.files.len() { label } else { format!("{label} {}", self.files[oldest..].join(", ")) }
+  }
+
+  /// The done label of a cut part: the finished-step count, the older steps it left out, and the full list's log.
+  fn cut_done_label(&self, total: usize, omitted: usize) -> String {
+    format!("done ({total}; {omitted} earlier steps omitted; the full list is in {}):", self.log_name())
+  }
+
+  /// The files label of a cut part: the touched-file count, the older files it left out, and the full list's log.
+  fn cut_files_label(&self, total: usize, omitted: usize) -> String {
+    format!("files ({total}; {omitted} earlier files omitted; the full list is in {}):", self.log_name())
+  }
+
+  /// The name of the log that holds the full lists. Only a cut part reads it.
+  fn log_name(&self) -> &'static str {
+    self.full_list_log.expect("a summary that cuts a list part names its full list with located_in").name()
+  }
+}
+
+/// The index of the oldest entry a list part keeps: the newest entries whose bytes, each with `separator` bytes before
+/// it, fit `budget`. `entries` are oldest first.
+fn oldest_kept(entries: &[String], budget: usize, separator: usize) -> usize {
+  let mut used = 0;
+  let mut oldest = entries.len();
+  for entry in entries.iter().rev() {
+    used += separator + entry.len();
+    if used > budget {
+      break;
+    }
+    oldest -= 1;
+  }
+  oldest
 }
 
 /// Collect the paths a tool input names: a singular file field or a list of paths.
@@ -442,7 +542,7 @@ fn forced_summary_failure(_run_id: &str) -> Option<String> {
 mod tests {
   use serde_json::json;
 
-  use super::RunWork;
+  use super::{FullListLog, MAX_SUMMARY_PART_BYTES, RunWork};
 
   #[test]
   fn the_summary_pairs_standalone_tool_lines_by_order() {
@@ -489,5 +589,60 @@ mod tests {
     assert!(text.contains("done (1):\n- $ Read {\"file_path\": \"/synthetic/b.rs\"}"), "{text}");
     assert!(text.contains("in progress: $ Read {\"file_path\": \"/synthetic/a.rs\"} (no result yet)"), "{text}");
     assert!(text.contains("files: /synthetic/a.rs, /synthetic/b.rs"), "{text}");
+  }
+
+  #[test]
+  fn a_900_command_run_summary_keeps_its_newest_steps_within_the_part_bound() {
+    let mut events = Vec::new();
+    for index in 0..900 {
+      let id = format!("call-{index}");
+      // Each command runs past the line cap and touches its own file, so both list parts exceed the bound.
+      let command = format!("cargo test --package synthetic-{index:04} -- {}", "x".repeat(320));
+      let path = format!("/synthetic/crates/module_{index:04}/src/lib.rs");
+      events.push(json!({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": id, "name": "Bash", "input": {"command": command, "file_path": path}},
+      ]}}));
+      events.push(json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": id, "content": "ok"},
+      ]}}));
+    }
+    let in_progress = "cargo clippy --package synthetic-in-progress";
+    events.push(json!({"type": "assistant", "message": {"content": [
+      {"type": "tool_use", "id": "call-900", "name": "Bash", "input": {"command": in_progress}},
+    ]}}));
+
+    let text = RunWork::collect(&events).located_in(FullListLog::RunEvents).render(Some("synthetic goal"));
+
+    assert!(text.len() <= 4 * MAX_SUMMARY_PART_BYTES, "{text}");
+    let done_part = &text[text.find("done (").unwrap()..text.find("\nin progress: ").unwrap()];
+    let files_part = &text[text.rfind("\nfiles").unwrap() + 1..];
+    assert!(done_part.len() <= MAX_SUMMARY_PART_BYTES, "{done_part}");
+    assert!(files_part.len() <= MAX_SUMMARY_PART_BYTES, "{files_part}");
+
+    let kept_steps = done_part.matches("- $ Bash cargo test --package synthetic-").count();
+    let omitted_steps = 900 - kept_steps;
+    assert!(kept_steps > 0 && omitted_steps > 0, "{done_part}");
+    let done_label = done_part.lines().next().unwrap();
+    assert!(states_number(done_label, 900) && states_number(done_label, omitted_steps), "{done_label}");
+    assert!(done_label.contains(FullListLog::RunEvents.name()), "{done_label}");
+    assert!(done_part.contains("synthetic-0899"), "the newest finished step stays: {done_part}");
+    assert!(!text.contains("synthetic-0000"), "the oldest finished step is cut: {text}");
+    assert!(
+      text.contains("in progress: $ Bash cargo clippy --package synthetic-in-progress (no result yet)"),
+      "{text}"
+    );
+
+    let kept_files = files_part.matches("/synthetic/crates/module_").count();
+    let omitted_files = 900 - kept_files;
+    assert!(kept_files > 0 && omitted_files > 0, "{files_part}");
+    assert!(states_number(files_part, 900) && states_number(files_part, omitted_files), "{files_part}");
+    assert!(files_part.contains(FullListLog::RunEvents.name()), "{files_part}");
+    assert!(files_part.contains("module_0899"), "the newest touched file stays: {files_part}");
+    assert!(!files_part.contains("module_0000"), "the oldest touched file is cut: {files_part}");
+  }
+
+  /// Whether `text` states `number` as a whole number, so `90` does not match `900`.
+  fn states_number(text: &str, number: usize) -> bool {
+    text.split(|c: char| !c.is_ascii_digit()).any(|token| token == number.to_string())
   }
 }

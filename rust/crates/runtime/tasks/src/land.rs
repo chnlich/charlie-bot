@@ -61,7 +61,8 @@ pub const STATE_CI_NOT_STARTED: &str = "ci-not-started";
 pub const STATE_CI_TIMEOUT: &str = "ci-timeout";
 pub const STATE_PR_MERGE_REQUIRED: &str = "pr-merge-required";
 
-/// PR text supplied to `charliebot land`; each omitted value derives from the task branch's commits on a gated path.
+/// PR text supplied to `charliebot land`. On a gated path an omitted value derives from the task branch's single
+/// commit; a branch of several commits needs both values.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LandOptions {
   pub title: Option<String>,
@@ -1096,6 +1097,9 @@ struct CommitMessage {
   body: String,
 }
 
+/// The genre that the caller's PR title and body follow when the branch holds several commits.
+const PR_TEXT_GENRE: &str = "~/.claude/skills/writing-style/genres/commits-and-prs.md";
+
 /// PR text after applying explicit values to the commit-derived defaults.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ResolvedPrText {
@@ -1112,8 +1116,7 @@ async fn resolve_draft_pr_text(
   let commits = if options.title.is_none() || options.body.is_none() {
     let range = format!("origin/{published_base}..HEAD");
     let (ok, out, err) =
-      git::git_stdout(worktree, &["log", "--reverse", "-z", "--format=%s%n%b", &range], GIT_READ_TIMEOUT, "git log")
-        .await;
+      git::git_stdout(worktree, &["log", "-z", "--format=%s%n%b", &range], GIT_READ_TIMEOUT, "git log").await;
     if !ok {
       anyhow::bail!("git log {range} failed: {err}");
     }
@@ -1135,34 +1138,38 @@ fn parse_commit_messages(output: &str) -> Vec<CommitMessage> {
     .collect()
 }
 
+/// The PR text of a gated landing: explicit values win, and an omitted value derives from the single
+/// commit. A branch of several commits has no one commit to derive a description from, so it takes
+/// both values from the caller.
 fn resolve_pr_text(commits: &[CommitMessage], options: &LandOptions) -> anyhow::Result<ResolvedPrText> {
   options.validate()?;
-  let title = match &options.title {
-    Some(title) => title.clone(),
-    None => {
-      let first = commits
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("cannot derive a PR title: the branch has no commits ahead of origin"))?;
-      if first.subject.trim().is_empty() {
+  if commits.len() > 1 {
+    return match (&options.title, &options.body) {
+      (Some(title), Some(body)) => Ok(ResolvedPrText { title: title.clone(), body: body.clone() }),
+      _ => anyhow::bail!(
+        "the branch has {} commits ahead of origin: a gated landing of several commits needs --title and --body \
+         or --body-file, written by {PR_TEXT_GENRE}",
+        commits.len()
+      ),
+    };
+  }
+  let commit = commits.first();
+  let title = match (&options.title, commit) {
+    (Some(title), _) => title.clone(),
+    (None, Some(commit)) => {
+      if commit.subject.trim().is_empty() {
         anyhow::bail!("cannot derive a PR title from an empty commit subject");
       }
-      first.subject.clone()
+      commit.subject.clone()
     }
+    (None, None) => anyhow::bail!("cannot derive a PR title: the branch has no commits ahead of origin"),
   };
-  let body = match &options.body {
-    Some(body) => body.clone(),
-    None => match commits {
-      [] => String::new(),
-      [commit] => commit.body.trim().to_string(),
-      _ => commits.iter().map(commit_body_section).collect::<Vec<_>>().join("\n\n"),
-    },
+  let body = match (&options.body, commit) {
+    (Some(body), _) => body.clone(),
+    (None, Some(commit)) => commit.body.trim().to_string(),
+    (None, None) => String::new(),
   };
   Ok(ResolvedPrText { title, body })
-}
-
-fn commit_body_section(commit: &CommitMessage) -> String {
-  let body = commit.body.trim();
-  if body.is_empty() { format!("### {}", commit.subject) } else { format!("### {}\n\n{body}", commit.subject) }
 }
 
 /// The one draft PR the landing keeps: reused when one is open for the task branch, created
@@ -1342,12 +1349,23 @@ mod tests {
   }
 
   #[test]
-  fn multiple_commits_keep_each_subject_and_body_in_order() {
+  fn several_commits_need_both_an_explicit_title_and_body() {
     let commits =
       parse_commit_messages("Add the route\n\nExplain the contract.\n\0Handle errors\n\nName the failure.\n\0");
-    let text = resolve_pr_text(&commits, &LandOptions::default()).expect("the commit range resolves");
-    assert_eq!(text.title, "Add the route");
-    assert_eq!(text.body, "### Add the route\n\nExplain the contract.\n\n### Handle errors\n\nName the failure.");
+    let refusal = resolve_pr_text(&commits, &LandOptions::default()).expect_err("two commits need explicit text");
+    let refusal = format!("{refusal:#}");
+    assert!(refusal.contains("2 commits"), "{refusal}");
+    assert!(refusal.contains("--title"), "{refusal}");
+    assert!(refusal.contains(PR_TEXT_GENRE), "{refusal}");
+    let title_only = LandOptions { title: Some("Routing".to_string()), body: None };
+    assert!(resolve_pr_text(&commits, &title_only).is_err());
+    let body_only = LandOptions { title: None, body: Some("Why.".to_string()) };
+    assert!(resolve_pr_text(&commits, &body_only).is_err());
+    let explicit = LandOptions { title: Some("Routing".to_string()), body: Some("Why.".to_string()) };
+    assert_eq!(
+      resolve_pr_text(&commits, &explicit).expect("explicit text resolves"),
+      ResolvedPrText { title: "Routing".to_string(), body: "Why.".to_string() }
+    );
   }
 
   #[test]

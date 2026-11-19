@@ -284,6 +284,39 @@ fn explicit_title_and_body_file_override_the_commit_defaults() {
 
 #[test]
 #[ignore = "integration"]
+fn several_commits_without_explicit_pr_text_are_refused_before_any_push() {
+  let venue = Venue::new(true);
+  commit_with_message(&venue.worktree, "second.txt", "Second change", "");
+
+  let output = venue.land_output();
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("2 commits"), "stderr: {stderr}");
+  assert!(stderr.contains("--title"), "stderr: {stderr}");
+  assert!(stderr.contains("commits-and-prs.md"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
+
+#[test]
+#[ignore = "integration"]
+fn several_commits_land_with_explicit_title_and_body_file() {
+  let venue = Venue::new(true);
+  commit_with_message(&venue.worktree, "second.txt", "Second change", "");
+  let body_file = venue.home.join("several-commits.md");
+  fs::write(&body_file, "Both commits make one routing change.\n").expect("the PR description is written");
+  let body_file = body_file.display().to_string();
+
+  let (code, record) = venue.land_with_args(&["--title", "Routing change", "--body-file", &body_file]);
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(record["state"], "landed");
+  assert_eq!(venue.pr_text(), ("Routing change".to_string(), "Both commits make one routing change.\n".to_string()));
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_stale_open_pr_is_updated_to_the_resolved_title_and_body() {
   let venue = Venue::new(true);
   venue.open_worker_pr_with_text("Previous commit title", "Description from an earlier commit.");

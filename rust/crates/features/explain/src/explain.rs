@@ -52,7 +52,7 @@ pub fn results_path(store: &Store, session_id: &str) -> PathBuf {
   store.chat_events_path(session_id).with_file_name(RESULTS_FILE)
 }
 
-/// Runs blocking file work on the blocking pool.
+/// The blocking pool's run of `work`, awaited by the caller.
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> anyhow::Result<T> {
   spawn_blocking(work).await?
 }
@@ -68,7 +68,8 @@ fn load_results(path: &Path) -> anyhow::Result<Results> {
   }
 }
 
-/// Replaces the divider's entry and swaps the whole document into place, in the file's pretty indentation.
+/// The replacement of the divider's entry and the swap of the whole document into place, in the file's pretty
+/// indentation.
 fn write_entry(path: &Path, upto: i64, entry: Map<String, Value>) -> anyhow::Result<()> {
   let mut results = load_results(path)?;
   results.insert(upto.to_string(), Value::Object(entry));
@@ -127,7 +128,7 @@ fn terminal_entry(
   new_entry(state, backend, answer, error, requested_at, Some(&timefmt::utc_now_iso()))
 }
 
-/// Land a stale pending entry as an error, persist it, and log the reap.
+/// The landing of a stale pending entry as an error: it is persisted, and the reap is logged.
 async fn reap(
   features: &FeatureContext,
   session_id: &str,
@@ -173,7 +174,7 @@ struct HistoryCopy {
 }
 
 impl HistoryCopy {
-  /// Copy the session's events into a fresh temporary directory, then chmod the copy 0444.
+  /// The copy of the session's events in a fresh temporary directory, made read-only with mode 0444.
   fn make(store: &Store, session_id: &str) -> anyhow::Result<Self> {
     let source = store.chat_events_path(session_id);
     let dir = tempdir::mkdtemp("charliebot-explain-")?;
@@ -201,7 +202,7 @@ enum Outcome {
 }
 
 impl Generation {
-  /// Run the explain and land its entry. A failure lands as the entry's error text and is logged.
+  /// The run of the explain and the landing of its entry. A failure lands as the entry's error text and is logged.
   async fn generate(&self, timeout: Duration) {
     if let Err(error) = self.run(timeout).await {
       let text = exception_text(&error);
@@ -238,7 +239,7 @@ impl Generation {
     agent_one_shot_text(built, &base_env.values, &prompt, prompt::SYSTEM, Some(timeout)).await
   }
 
-  /// Land the terminal entry, then broadcast the state the file now holds.
+  /// The landing of the terminal entry, followed by the broadcast of the state the file now holds.
   async fn finish(&self, outcome: Outcome) -> anyhow::Result<()> {
     let (state, answer, error) = match outcome {
       Outcome::Ready(answer) => ("ready", answer, None),
@@ -267,7 +268,7 @@ fn exception_text(error: &anyhow::Error) -> String {
   if text.is_empty() { format!("{root:?}") } else { text }
 }
 
-/// Starts the generation as a detached task, registered under its divider until the task ends.
+/// The detached task of one generation, registered under its divider until the task ends.
 fn spawn_generation(generation: Generation) {
   let key = (generation.session_id.clone(), generation.upto);
   let finished = key.clone();
@@ -396,7 +397,7 @@ mod tests {
     timefmt::iso_from_system_time(SystemTime::now() - ONESHOT_TIMEOUT - Duration::from_secs(1))
   }
 
-  /// Writes one entry through the same writer the server uses.
+  /// The write of one entry through the same writer the server uses.
   fn write_raw_entry(home: &Home, session_id: &str, upto: i64, entry: Map<String, Value>) {
     write_entry(&results_path(&home.features.store, session_id), upto, entry).expect("the entry writes");
   }

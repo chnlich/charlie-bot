@@ -235,7 +235,7 @@ impl Home {
     Self { dir, features, factory }
   }
 
-  /// Creates the session's metadata and its `data/` directory, as the server does for a new session.
+  /// The creation of the session's metadata and its `data/` directory, as the server does for a new session.
   pub fn create_session(&self, session_id: &str) {
     let meta = SessionMetadata::new(session_id, "Explain", TaskProfile::Manager);
     let slots = self.features.registry.metadata_slots();
@@ -245,7 +245,7 @@ impl Home {
     fs::write(path, meta.to_json_string(&slots, true)).expect("the session metadata");
   }
 
-  /// Appends one round: the user's question, the assistant text when given, and the `master_done` divider.
+  /// The append of one round: the user's question, the assistant text when given, and the `master_done` divider.
   pub async fn append_round(&self, session_id: &str, assistant_text: Option<&str>) {
     let store = &self.features.store;
     store

@@ -1,6 +1,4 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -19,9 +17,6 @@ const {baseSessionContext, createChatSidebarContext} = require('./session_contex
 const {createFakeWebSocketClass} = require('./fake_websocket');
 const {loadWebsocketModules} = require('./websocket_context_stub');
 const {readStatic, runIconModule} = require('./read_static');
-
-// The shared icon parity fixture carries the table that icon_script() renders into the page.
-const ICON_TABLE_SCRIPT = JSON.parse(fs.readFileSync(path.join(__dirname, 'icons_parity.json'), 'utf8')).script;
 
 // ---------------------------------------------------------------------------
 // The session status surfaces (chat/status-panel.js) on a page of the real chat,
@@ -202,10 +197,6 @@ function panelRig() {
   vm.runInContext(readStatic('comment_post.js'), context, {filename: 'comment_post.js'});
   vm.runInContext(readStatic('tabs.js'), context, {filename: 'tabs.js'});
   createChatSidebarContext(context);
-  // The page renders the icon table ahead of icons.js; status-panel.js calls cbIcon as a page global.
-  vm.runInContext(ICON_TABLE_SCRIPT, context, {filename: 'icons_parity.json'});
-  vm.runInContext(readStatic('icons.js'), context, {filename: 'icons.js'});
-  vm.runInContext('var cbIcon = window.cbIcon;', context);
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
   loadWebsocketModules(context);
   // The message list is the other suites' subject: a live message lands there

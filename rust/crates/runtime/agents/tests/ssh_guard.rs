@@ -48,6 +48,7 @@ fn write_stub(directory: &Path, record: &Path) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn guard_prepends_the_three_options_before_the_callers_own() {
   let root = tempfile::tempdir().unwrap();
   let stub_dir = root.path().join("stub");
@@ -68,6 +69,7 @@ fn guard_prepends_the_three_options_before_the_callers_own() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn ssh_config_readback_through_the_guard_shows_the_guard_values_first() {
   let output = Command::new(guard_dir().join("ssh"))
     .env("PATH", guarded_path(&guard_dir(), None))

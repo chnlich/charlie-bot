@@ -15,9 +15,8 @@ const { createElement } = require('./dom_element_stub');
 const { buildSidebarIndicatorContext: buildCoreSidebarContext, loadCronPackage, makeSessionMeta, paintListReply } =
   require('./session_context_stub');
 
-// A bound node's schedule lines, clock badge and schedule menu items come from
-// the cron script. So each harness here runs it after the core modules, as the
-// page does.
+// A bound node's schedule lines and clock badge come from the cron script. So each
+// harness here runs it after the core modules, as the page does.
 function buildSidebarIndicatorContext(ids) {
   const built = buildCoreSidebarContext(ids);
   loadCronPackage(built.context);
@@ -608,7 +607,6 @@ test('a normal row\u2019s direct buttons end in Settings carrying the menu facts
   assert.match(r1, /data-current-group="Work"/);
   assert.match(r1, /data-task-parent=""/);
   assert.match(r1, /data-profile="manager"/);
-  assert.match(r1, /data-schedule-task=""/);
   // A legacy row's Settings carries the empty profile; a worker leaf keeps
   // the archive action alone.
   assert.match(rowHtml(nav.innerHTML, 'old1'), /data-profile=""/);
@@ -635,10 +633,9 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
 
   // A root manager, unbound: all four items; each core item's onSelect calls
   // its action. (Move to group opens the group selector modal, outside this
-  // harness's reach; the browser harness covers it. cron_broken_ui.test.js
-  // drives the schedule items.)
+  // harness's reach; the browser harness covers it.)
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'r1'),
-    ['Rename', 'Move to group\u2026', 'Task & context', 'Move under\u2026', 'Add schedule\u2026']);
+    ['Rename', 'Move to group\u2026', 'Task & context', 'Move under\u2026']);
   items[0].onSelect(click);
   items[2].onSelect(click);
   assert.deepEqual(calls, [
@@ -649,18 +646,14 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
 
   // A child manager moves with its parent: no Move to group.
   assert.deepEqual(open({taskParent: 'r1', profile: 'manager'}, 'c1'),
-    ['Rename', 'Task & context', 'Move under\u2026', 'Add schedule\u2026']);
+    ['Rename', 'Task & context', 'Move under\u2026']);
   calls.length = 0;
   items[1].onSelect(click);
   assert.deepEqual(calls, [['taskContext', 'c1']]);
 
   // A legacy row (profile null, unbound): the group move stays (it has no
-  // task-tree parent), but no Task & context and no schedule item.
+  // task-tree parent), but no Task & context.
   assert.deepEqual(open({}, 'old1'), ['Rename', 'Move to group\u2026']);
-
-  // A bound row edits its own task instead of adding one.
-  assert.deepEqual(open({scheduleTask: 'task-cron1'}, 'cron1'),
-    ['Rename', 'Move to group\u2026', 'Edit schedule\u2026']);
 });
 
 test('touch menus lead with the Later toggle and child creation and trail with Archive', () => {
@@ -688,7 +681,7 @@ test('touch menus lead with the Later toggle and child creation and trail with A
   // order, then the separator and Archive.
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'm1'),
     ['Add to Later', 'New child session', 'Rename', 'Move to group\u2026', 'Task & context',
-     'Move under\u2026', 'Add schedule\u2026', '---', 'Archive']);
+     'Move under\u2026', '---', 'Archive']);
   items[0].onSelect(click);
   items[1].onSelect(click);
   items[items.length - 1].onSelect(click);
@@ -701,7 +694,7 @@ test('touch menus lead with the Later toggle and child creation and trail with A
   // A task-tree child keeps the desktop order minus Move to group.
   assert.deepEqual(open({taskParent: 'r1', profile: 'manager'}, 'c1'),
     ['Add to Later', 'New child session', 'Rename', 'Task & context', 'Move under\u2026',
-     'Add schedule\u2026', '---', 'Archive']);
+     '---', 'Archive']);
 
   // A starred row reads its state off the star button (only star-r1 resolves
   // to the repainted solid star): Remove from Later toggles away from
@@ -839,14 +832,13 @@ test('a bound node nests its firing leaves under it, collapsed, and keeps the bo
   assert.match(rowHtml(html, 'cron1'), /Next: /);
   assert.match(anchorOpenTag(html, 'cron1') + rowHtml(html, 'cron1'),
       /data-tree-toggle="cron1"[^>]*aria-expanded="false"/);
-  assert.match(rowHtml(html, 'cron1'), /Scheduled: task-cron1/);
+  assert.match(rowHtml(html, 'cron1'), /title="Scheduled: 0 9 \* \* \* \u00b7 America\/Los_Angeles"/);
   assert.match(rowHtml(html, 'cron1'), /title="Settings"/);
-  assert.match(rowHtml(html, 'cron1'), /data-schedule-task="task-cron1"/);
-  // A worker leaf carries the archive action alone: no star, rename or
-  // schedule button, and its click switches sessions.
+  // A worker leaf carries the archive action alone: no star or rename
+  // button, and its click switches sessions.
   for (const t of ['t1', 't2', 't3']) {
     const row = rowHtml(html, t);
-    assert.doesNotMatch(row, /star-btn|title="Rename"|title="Edit schedule"|title="Add schedule"/);
+    assert.doesNotMatch(row, /star-btn|title="Rename"/);
     assert.match(row, /title="Archive"/);
     assert.match(anchorOpenTag(html, t), /sidebarControl\('switchSession', 't/);
   }
@@ -867,21 +859,11 @@ test('a bound node’s clock and lines follow the task state: disabled goes grey
   ], 'all');
 
   const html = nav.innerHTML;
-  assert.match(rowHtml(html, 'cron1'), /class="cb-icon flex-shrink-0 text-blue-400"[^>]*title="Scheduled: task-cron1"/);
+  assert.match(rowHtml(html, 'cron1'), /class="cb-icon flex-shrink-0 text-blue-400"[^>]*title="Scheduled: 0 9 \* \* \* · America\/Los_Angeles"/);
   assert.match(rowHtml(html, 'cron1'), /Next: /);
-  assert.match(rowHtml(html, 'cron2'), /class="cb-icon flex-shrink-0 text-slate-500"[^>]*title="Scheduled: task-cron2"/);
+  assert.match(rowHtml(html, 'cron2'), /class="cb-icon flex-shrink-0 text-slate-500"[^>]*title="Scheduled: 0 9 \* \* \* · America\/Los_Angeles"/);
   assert.match(rowHtml(html, 'cron2'), /Disabled/);
   assert.doesNotMatch(rowHtml(html, 'cron2'), /Next: /);
-});
-
-test('a bound row\u2019s Settings names its schedule task; an unbound manager row names none', () => {
-  const {context, nav} = buildSidebarIndicatorContext([]);
-
-  context.renderSessionList([boundNode('cron1', 10), manager('mgr', null, 9)], 'all');
-
-  assert.match(rowHtml(nav.innerHTML, 'cron1'), /data-schedule-task="task-cron1"/);
-  assert.match(rowHtml(nav.innerHTML, 'mgr'), /data-schedule-task=""/);
-  assert.match(rowHtml(nav.innerHTML, 'mgr'), /data-profile="manager"/);
 });
 
 test('a grouped paint records the tree maps, refreshes tree indicators, and keeps expand state across repaints', () => {

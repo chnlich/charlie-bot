@@ -10,7 +10,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::run_records::{RunFacts, RunOutcomeKind, RunRecord};
 
-use crate::config::{ScheduledTaskConfig, StepConfig, effective_backend};
+use crate::config::{ScheduledTaskConfig, StepConfig};
 
 /// The member a step's run is registered on, or the reason no member is selectable.
 pub(crate) enum StepMember {
@@ -19,16 +19,9 @@ pub(crate) enum StepMember {
   Exhausted(String),
 }
 
-/// The backend id a step runs on: its own, else the task's effective backend.
-pub(crate) fn step_backend_id(
-  task: &ScheduledTaskConfig,
-  cfg: &CharlieBotConfig,
-  backend: Option<&str>,
-) -> anyhow::Result<String> {
-  match backend.filter(|backend| !backend.is_empty()) {
-    Some(backend) => Ok(backend.to_string()),
-    None => effective_backend(task, cfg),
-  }
+/// The backend id a step runs on: its own, else the bound session's backend.
+pub(crate) fn step_backend_id(step_backend: Option<&str>, session_backend: &str) -> String {
+  step_backend.filter(|backend| !backend.is_empty()).unwrap_or(session_backend).to_string()
 }
 
 /// The member a step's run is registered on. A model id selects itself through the same filters as a one-member pool.
@@ -72,6 +65,7 @@ fn option_of<'a>(cfg: &'a CharlieBotConfig, backend: &str) -> anyhow::Result<&'a
 pub(crate) fn distinct_backend_conflict(
   task: &ScheduledTaskConfig,
   cfg: &CharlieBotConfig,
+  session_backend: &str,
 ) -> anyhow::Result<Option<String>> {
   let Some(steps) = task.steps.as_ref() else { return Ok(None) };
   // A duplicated step name resolves to its last position, from this one-pass index.
@@ -83,8 +77,8 @@ pub(crate) fn distinct_backend_conflict(
       .copied()
       .ok_or_else(|| anyhow::anyhow!("step '{}' names missing distinct backend source '{prior_name}'", step.name))?;
     let prior = &steps[prior_position];
-    let backend = step_backend_id(task, cfg, step.backend.as_deref())?;
-    let prior_backend = step_backend_id(task, cfg, prior.backend.as_deref())?;
+    let backend = step_backend_id(step.backend.as_deref(), session_backend);
+    let prior_backend = step_backend_id(prior.backend.as_deref(), session_backend);
     if cfg.backends.pool(&backend).is_some() || cfg.backends.pool(&prior_backend).is_some() {
       continue;
     }
@@ -116,6 +110,7 @@ pub(crate) fn distinct_backend_conflict(
 pub(crate) fn steps_chain_awaits_next_step(
   task: &ScheduledTaskConfig,
   cfg: &CharlieBotConfig,
+  session_backend: &str,
   runs: &[RunRecord],
   facts: &RunFacts,
 ) -> anyhow::Result<bool> {
@@ -132,7 +127,7 @@ pub(crate) fn steps_chain_awaits_next_step(
   }
   let passed =
     matches!(facts.terminal_outcome(&last_run.id)?, Some(RunOutcomeKind::Success)) && last_run.exit_code == Some(0);
-  Ok(passed && last_position + 1 < steps.len() && distinct_backend_conflict(task, cfg)?.is_none())
+  Ok(passed && last_position + 1 < steps.len() && distinct_backend_conflict(task, cfg, session_backend)?.is_none())
 }
 
 #[cfg(test)]
@@ -140,6 +135,13 @@ mod tests {
   use super::*;
   use crate::test_support::feature_context;
   use charliebot_agents::backend_availability;
+
+  #[test]
+  fn a_step_names_its_own_backend_before_the_session_backend() {
+    assert_eq!(step_backend_id(Some("synthetic-a"), "synthetic-b"), "synthetic-a");
+    assert_eq!(step_backend_id(Some(""), "synthetic-b"), "synthetic-b");
+    assert_eq!(step_backend_id(None, "synthetic-b"), "synthetic-b");
+  }
 
   #[test]
   fn a_model_and_its_singleton_pool_share_step_selection_and_cooling() {

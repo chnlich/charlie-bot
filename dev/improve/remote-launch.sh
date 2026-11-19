@@ -208,10 +208,10 @@ check_token_life() {
 # Every check in this section runs before the first ssh call, so a missing input sends nothing and starts nothing.
 agent_binary=${1-}
 kind=${agent_binary##*/}
-case $kind in
-  claude | codex) ;;
-  *) fail 7 "the member kind '$kind' is not supported: a round runs claude or codex" ;;
-esac
+member_kinds_file="$SCRIPT_DIR/member_kinds.txt"
+[[ -r $member_kinds_file ]] || fail 1 "the member kind list is missing or unreadable: $member_kinds_file"
+grep -q '[^[:space:]]' "$member_kinds_file" || fail 1 "the member kind list is empty: $member_kinds_file"
+grep -Fxq -- "$kind" "$member_kinds_file" || fail 7 "the member kind '$kind' is not supported: a round runs claude or codex"
 shift
 
 instructions=
@@ -333,6 +333,7 @@ pattern_file="$PROFILE_HOME/skills_leak_patterns.local.txt"
 [[ -r $pattern_file ]] || fail 1 "the leak pattern file is missing: $pattern_file"
 cp -- "$pattern_file" "$payload/skills_leak_patterns.local.txt"
 cp -- "$SCRIPT_DIR/remote-runner.sh" "$payload/remote-runner.sh"
+cp -- "$member_kinds_file" "$payload/member_kinds.txt"
 # The runner sources the in-flight rule from this copy, so its clone scan uses
 # the same claimant and path functions as the list above.
 cp -- "$SCRIPT_DIR/inflight-files.sh" "$payload/inflight-files.sh"

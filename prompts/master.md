@@ -382,11 +382,20 @@ You have these built-in features. If unsure how one works, read the code in `rus
 
 See `charliebot --help` for CLI subcommands.
 
-Cron tasks live in `$CHARLIEBOT_HOME/config.d/cron.d/` (one file per job; manage through the
-`/api/cron` API; operational notes in the `charliebot` skill). Call `/api/cron` with your run
+Each cron task lives in its own file under `$CHARLIEBOT_HOME/config.d/cron.d/` and binds one session.
+The task file holds the schedule and timezone, the enabled flag, the prompt file path, the repo, allow_failure, the bound session_id, the mode, handler and steps fields, and improve_host.
+The bound session's record holds its name, backend and group.
+Agents create a task with `POST /api/cron/tasks`, edit it with `PUT /api/cron/tasks/{name}` (an enable or disable is an edit of `enabled`), and delete it with `DELETE /api/cron/tasks/{name}`. A field that the API does not take (mode, handler, steps, improve_host), and the prompt text, which is the file at `prompt_file`, are edited in the task file. An agent sets the session's backend with `POST /api/sessions/{id}/backend` and its group with `POST /api/sessions/{id}/group`.
+The session page shows the settings of the bound session and of each task bound to it, prompt text included; its header edits the session's name and backend.
+Operational notes live in the `charliebot` skill.
+Call `/api/cron` with your run
 token (`CHARLIEBOT_RUN_TOKEN`), the credential of this agent run. The access key is the user's credential.
-Each fire of a `prompt_file` cron task that the server does not skip reaches its bound session as a `[Scheduled trigger]` input. A `mode: master` task's input is its own prompt. Any other `prompt_file` task's input names the task on its first line and carries a category template. The session decides whether, when and with what note to run that task, through `charliebot delegate --bound-task <name>`; to run it later, it registers a delay with `charliebot session trigger`. The server skips a fire while an input, or a worker that an earlier fire or a `--bound-task` delegation started, is queued or running; while the task's host awaits login approval; or while the bound session is archived. A skipped fire records its reason and wakes no session. When the server cannot read the task's template, it also posts an error to the bound session.
-To run a scheduled task once now, POST `/api/cron/tasks/{name}/run`. A run of a `prompt_file` task queues its input behind the current turn and has no busy check. A run of a `steps` task writes no chat event. To stop this session's improve loop, run `charliebot improve stop`.
+On each due fire of a `prompt_file` or `steps` task, the server checks the bound session's backend before it applies the skip rules below. When that backend names no current option or pool id, the fire records `failed`, posts the error to the bound session, and queues no input. A `handler` task uses no backend, so its fire runs whatever the bound session's backend names. A `prompt_file` fire that the server neither fails nor skips reaches its bound session as a `[Scheduled trigger]` input. A `mode: master` task's input is its own prompt. Any other `prompt_file` task's input names the task on its first line and carries a category template. The session decides whether, when and with what note to run that task, through `charliebot delegate --bound-task <name>`; to run it later, it registers a delay with `charliebot session trigger`. The server skips a fire while any of these holds:
+- an input, or a worker that an earlier fire or a `--bound-task` delegation started, is queued or running;
+- the task's host awaits login approval;
+- the bound session is archived.
+A skipped fire records its reason and wakes no session. When the server cannot read the task's template, it also posts an error to the bound session.
+To run a scheduled task once now, POST `/api/cron/tasks/{name}/run`. Before it checks the bound session's backend, the server refuses a run of a `steps` task whose round is still in flight (409), and a run whose bound session is archived (error). It checks that backend on a run of a `prompt_file` or `steps` task. When that backend names no current option or pool id, the run records `failed`, posts the error to the bound session, queues no input, and returns the session id with no thread id. Otherwise, a run of a `prompt_file` task queues its input behind the current turn and has no busy check, and a run of a `steps` task writes no chat event. A `handler` task uses no backend, so a run of it starts the handler whatever the bound session's backend names. To stop this session's improve loop, run `charliebot improve stop`.
 To stop a running worker child, run `charliebot session cancel <worker id> --reason <text>`.
 The command stops the worker's runs and ends the delegation.
 A message from `charliebot session send` reaches a worker only after its current run ends.

@@ -21,9 +21,9 @@ use crate::firing::round_request_id;
 use crate::rounds::round_task_spec;
 use crate::scheduler::CronScheduler;
 use crate::test_support::{
-  HELD_ROUND_GOAL, archive_task, bound_delegate, bound_round_leaf, feature_context, feature_context_with_login_hosts,
-  feature_context_with_repo_root, install_execution, manager, repo_root, set_host_login, write_prompted_task,
-  write_task,
+  HELD_ROUND_GOAL, NON_KEYED_BACKEND_ID, archive_task, bound_delegate, bound_round_leaf, feature_context,
+  feature_context_with_login_hosts, feature_context_with_repo_root, install_execution, keyed_manager, manager,
+  repo_root, set_host_login, write_prompted_task, write_task,
 };
 
 const GATED_ALIAS: &str = "synthetic-login-host";
@@ -63,8 +63,7 @@ fn text_of(event: &CompactValue, key: &str) -> String {
 
 /// A prompt task of the bound session `node_id` that runs every minute, from the task file.
 fn prompt_task(features: &FeatureContext, name: &str, node_id: &str, repo: Option<&str>) -> ScheduledTaskConfig {
-  let mut body =
-    json!({"cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id, "backend": "synthetic"});
+  let mut body = json!({"cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id});
   if let Some(repo) = repo {
     body["repo"] = Value::String(repo.to_string());
   }
@@ -74,7 +73,7 @@ fn prompt_task(features: &FeatureContext, name: &str, node_id: &str, repo: Optio
 /// A prompt task of the bound session `node_id` that runs every minute and names `host` as its `improve_host`.
 fn keyed_prompt_task(features: &FeatureContext, name: &str, node_id: &str, host: &str) -> ScheduledTaskConfig {
   let body = json!({
-    "cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id, "backend": "synthetic",
+    "cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id,
     "improve_host": host,
   });
   written_prompt_task(features, name, &body)
@@ -381,7 +380,7 @@ async fn a_bound_delegation_is_refused_while_a_round_is_in_flight_and_while_the_
   assert_eq!(features.store.child_ids(&node.id).unwrap(), vec![leaf], "the refusal starts no second worker");
 
   let (_gated_home, gated_features) = feature_context_with_login_hosts(&[GATED_ALIAS]);
-  let gated_node = manager(&gated_features, "synthetic-gated-node").await.unwrap();
+  let gated_node = keyed_manager(&gated_features, "synthetic-gated-node").await.unwrap();
   let gated_home = gated_features.config.get().unwrap().charliebot_home.clone();
   set_host_login(
     &gated_home,
@@ -486,7 +485,7 @@ async fn a_bound_delegation_of_a_keyed_task_starts_a_round_whose_spec_names_the_
   let (_home, features) = feature_context_with_login_hosts(&[KEYED_HOST]);
   install_execution(&features).await;
   keyed_host_answers_ok(&features);
-  let node = manager(&features, "synthetic-keyed-delegation-node").await.unwrap();
+  let node = keyed_manager(&features, "synthetic-keyed-delegation-node").await.unwrap();
   let task = keyed_prompt_task(&features, "synthetic-keyed-delegation", &node.id, KEYED_HOST);
 
   let (leaf, _run) = bound_round_leaf(&features, &task, "").await;
@@ -500,7 +499,7 @@ async fn a_round_that_a_fire_starts_through_the_session_carries_the_improve_host
   let (_home, features) = feature_context_with_login_hosts(&[KEYED_HOST]);
   install_execution(&features).await;
   keyed_host_answers_ok(&features);
-  let node = manager(&features, "synthetic-keyed-fire-node").await.unwrap();
+  let node = keyed_manager(&features, "synthetic-keyed-fire-node").await.unwrap();
   let _task = keyed_prompt_task(&features, "synthetic-keyed-fire", &node.id, KEYED_HOST);
 
   tick(&features).await;
@@ -519,7 +518,7 @@ async fn a_turn_of_the_bound_session_carries_no_improve_host() {
   let (_home, features) = feature_context_with_login_hosts(&[KEYED_HOST]);
   install_execution(&features).await;
   keyed_host_answers_ok(&features);
-  let node = manager(&features, "synthetic-keyed-turn-node").await.unwrap();
+  let node = keyed_manager(&features, "synthetic-keyed-turn-node").await.unwrap();
   let _task = keyed_prompt_task(&features, "synthetic-keyed-turn", &node.id, KEYED_HOST);
 
   tick(&features).await;
@@ -531,4 +530,111 @@ async fn a_turn_of_the_bound_session_carries_no_improve_host() {
     None,
     "the bound session's turns run on this host; only the round worker carries the key"
   );
+}
+
+/// A `steps` task of the bound session `node_id` whose one step names the current `synthetic` option.
+fn steps_task(features: &FeatureContext, name: &str, node_id: &str) -> ScheduledTaskConfig {
+  let home = features.config.get().unwrap().charliebot_home.clone();
+  let step_prompt = home.join(format!("{name}-step.md"));
+  std::fs::write(&step_prompt, "Synthetic step\n").unwrap();
+  write_task(
+    &home,
+    name,
+    &json!({
+      "cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node_id,
+      "steps": [{"name": "work", "prompt_file": step_prompt.display().to_string(), "backend": "synthetic"}],
+    }),
+  );
+  crate::loader::read_snapshot(features, &features.config.get().unwrap())
+    .unwrap()
+    .0
+    .tasks
+    .into_iter()
+    .find(|task| task.name == name)
+    .expect("the steps task loads")
+}
+
+#[tokio::test]
+async fn a_stale_session_backend_fails_prompt_master_steps_fires_and_bound_rounds_and_runs_handler_fires() {
+  let (_home, features) = feature_context();
+  install_execution(&features).await;
+  let node = manager(&features, "synthetic-stale-node").await.unwrap();
+  features.store.switch_backend(&node.id, "gone-id").await.unwrap();
+  let prompt = prompt_task(&features, "synthetic-stale-prompt", &node.id, Some("/synthetic/repo"));
+  let master = written_prompt_task(
+    &features,
+    "synthetic-stale-master",
+    &json!({"cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node.id, "mode": "master"}),
+  );
+  let steps = steps_task(&features, "synthetic-stale-steps", &node.id);
+  let home = features.config.get().unwrap().charliebot_home.clone();
+  write_task(
+    &home,
+    "synthetic-stale-handler",
+    &json!({"cron": "* * * * *", "enabled": true, "timezone": "UTC", "session_id": node.id, "handler": "synthetic_handler"}),
+  );
+
+  tick(&features).await;
+
+  let errors = events_of(&features, &node.id, event_types::ASSISTANT_ERROR);
+  assert_eq!(errors.len(), 3, "one error per prompt, master and steps fire, none for the handler: {errors:?}");
+  assert!(errors.iter().all(|error| text_of(error, "content").contains("'gone-id'")), "{errors:?}");
+  assert!(pending_inputs(&features, &node.id).is_empty(), "no input is queued");
+  assert!(features.store.child_ids(&node.id).unwrap().is_empty(), "no worker starts");
+  let session = features.store.get_session(&node.id).await.unwrap().unwrap();
+  for name in [&prompt.name, &master.name, &steps.name] {
+    let slot = &session.extra[TASK_SCHEDULE_SLOTS][name];
+    assert_eq!(slot[LAST_RUN_STATUS], "failed", "{name}");
+    assert!(slot[LAST_SCHEDULED_RUN].is_string(), "the failed fire advances the slot: {slot}");
+  }
+  let handler_slot = &session.extra[TASK_SCHEDULE_SLOTS]["synthetic-stale-handler"];
+  assert!(handler_slot[LAST_SCHEDULED_RUN].is_string(), "the handler fires: {handler_slot}");
+  assert_ne!(handler_slot[LAST_RUN_STATUS], "failed", "a handler fire runs whatever the backend names");
+
+  let (status, body) = bound_delegate(&features, &node.id, &prompt.name, "").await;
+  assert_eq!(status, StatusCode::CONFLICT, "{body}");
+  assert!(body.to_string().contains("'gone-id'"), "{body}");
+  assert_eq!(features.store.child_ids(&node.id).unwrap().len(), 0, "the refused delegation builds no worker");
+
+  features.store.switch_backend(&node.id, "pool").await.unwrap();
+  tick_minutes_after_start(&features, 4).await;
+  let inputs = pending_inputs(&features, &node.id);
+  assert!(
+    inputs.iter().any(|input| text_of(input, "id").starts_with(&format!("cron:{}:", prompt.name))),
+    "a pool id takes the prompt fire: {inputs:?}"
+  );
+
+  features.store.switch_backend(&node.id, "synthetic").await.unwrap();
+  let current = prompt_task(&features, "synthetic-stale-current", &node.id, Some("/synthetic/repo"));
+  tick_minutes_after_start(&features, 6).await;
+  let inputs = pending_inputs(&features, &node.id);
+  assert!(
+    inputs.iter().any(|input| text_of(input, "id").starts_with(&format!("cron:{}:", current.name))),
+    "a current option takes the prompt fire: {inputs:?}"
+  );
+}
+
+#[tokio::test]
+async fn a_keyed_round_refuses_a_member_kind_the_launcher_refuses() {
+  let (_home, features) = feature_context_with_login_hosts(&[KEYED_HOST]);
+  install_execution(&features).await;
+  keyed_host_answers_ok(&features);
+  let node = keyed_manager(&features, "synthetic-keyed-kind-node").await.unwrap();
+  let _task = keyed_prompt_task(&features, "synthetic-keyed-kind", &node.id, KEYED_HOST);
+
+  tick(&features).await;
+  assert_eq!(pending_inputs(&features, &node.id).len(), 1, "a session on a member kind takes the fire");
+
+  features.store.switch_backend(&node.id, NON_KEYED_BACKEND_ID).await.unwrap();
+  tick_minutes_after_start(&features, 4).await;
+  let errors = events_of(&features, &node.id, event_types::ASSISTANT_ERROR);
+  assert_eq!(errors.len(), 1, "{errors:?}");
+  assert!(text_of(&errors[0], "content").contains("(type 'gemini')"), "{errors:?}");
+  assert_eq!(pending_inputs(&features, &node.id).len(), 1, "the refused fire queues no input");
+  assert!(features.store.child_ids(&node.id).unwrap().is_empty(), "no worker starts");
+  let session = features.store.get_session(&node.id).await.unwrap().unwrap();
+  assert_eq!(session.backend, NON_KEYED_BACKEND_ID, "the refusal leaves the session's backend unchanged");
+  assert_eq!(session.extra[TASK_SCHEDULE_SLOTS]["synthetic-keyed-kind"][LAST_RUN_STATUS], "failed");
+
+  assert!(crate::rounds::parse_member_kinds("  \n\n").is_err(), "an empty kind list is an error");
 }

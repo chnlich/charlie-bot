@@ -7,14 +7,13 @@
 use axum::http::StatusCode;
 use axum::response::Response;
 use charliebot_compat::responses;
-use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::task_errors::store_error;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{CreateTask, TaskCaller};
 use serde_json::{Map, json};
 
-use crate::config::{self, ScheduledTaskConfig};
+use crate::config::ScheduledTaskConfig;
 
 /// The refusal for an agent whose session is not a manager: manager sessions create and rebind cron tasks.
 pub(crate) const MANAGER_REFUSAL: &str = "an agent may create or rebind a cron task only as a manager session";
@@ -55,19 +54,14 @@ pub(crate) async fn authorize_rebind(
   require_within_caller(features, caller_session, requested).await
 }
 
-/// The session that a new cron task binds: a manager child of the caller's session, by the create-subtask rule.
-/// The session takes the backend the task fires on, so the scheduler's backend alignment has nothing to change.
+/// The session that a new cron task binds: a manager child of the caller's session, by the create-subtask rule. It takes
+/// its backend and group from the ordinary session-creation rule, so the task file names neither.
 #[allow(clippy::result_large_err)]
 pub(crate) async fn create_bound_session(
   features: &FeatureContext,
-  cfg: &CharlieBotConfig,
   caller_session: &str,
   task: &ScheduledTaskConfig,
 ) -> Result<SessionMetadata, Response> {
-  let backend = match config::effective_backend(task, cfg) {
-    Ok(backend) => backend,
-    Err(error) => return Err(responses::internal_error("RuntimeError", error.to_string())),
-  };
   features
     .store
     .create_task(
@@ -77,8 +71,8 @@ pub(crate) async fn create_bound_session(
         profile: TaskProfile::Manager,
         task: None,
         name: Some(task.name.clone()),
-        backend: Some(backend),
-        group: task.project.clone(),
+        backend: None,
+        group: None,
         session_id: None,
       },
       TaskCaller::Agent { session_id: caller_session.to_string() },

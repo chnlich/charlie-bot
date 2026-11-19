@@ -1,38 +1,39 @@
 # Repo-owned default scheduled tasks. The server seeds each missing entry on every start into
 # its own host file $CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml (the job `name`
 # becomes the file name, and the host file body carries no `name` key), and
-# never touches a file that is already there. Host-specific fields (backend,
-# schedule) belong in the host files, not here.
+# never touches a file that is already there. Host files own the schedule. The
+# bound session owns the backend and the group, so no entry names a task-level
+# backend or a group.
 #
-# `project` names the session group: when the scheduler first binds a task's
-# session, it creates the node in that group. Every entry here names
-# `CharlieBot`, so a seeded task's session lands in the CharlieBot group.
+# The scheduler creates a task's session on the first tick that binds it. The
+# session starts in no group. Agents change task settings through /api/cron,
+# and the session page shows them.
 #
 # The prompt source of every task is exactly one of `prompt_file`, `steps`,
 # or `handler`. `steps` is an ordered worker list: each step declares
-# `name`, `prompt_file`, and an optional `backend` (a step without one uses the
-# task-level `backend`), starts after the previous step exits 0 with that
+# `name`, `prompt_file`, and an optional `backend` (a step without one runs on
+# the bound session's backend), starts after the previous step exits 0 with that
 # step's result, and the session master is woken once at the end with one
 # summary block per step.
 scheduled_tasks:
   - name: memory-curator
     cron: "27 6 * * *"
     timezone: local
-    project: CharlieBot
     steps:
       - name: selector
         prompt_file: prompts/cron/memory_curator/memory_selector.md
+        backend: claude-opus
       - name: reviewer
         prompt_file: prompts/cron/memory_curator/memory_reviewer.md
-        # The reviewer must not ride the same backend as the drafter it
-        # reviews. The repo default names no backend ids (they are
-        # host-local); the firing-time check stops the task until this host's
-        # file writes two different ones.
+        backend: claude-fable
+        # The reviewer runs on a different model from the drafter it reviews.
+        # Both steps of the pair carry their own backend. These ids name
+        # options of configs/config.example.yaml. The seed writes this file only
+        # when the host config holds them.
         distinct_backend_from: selector
   - name: storage-cool
     cron: "30 4 * * *"
     timezone: local
-    project: CharlieBot
     handler: cool_storage
   # `mode` sets the input a fire gives the bound session. `master` sends the
   # task's prompt; an absent mode sends the task's name and its category
@@ -41,6 +42,5 @@ scheduled_tasks:
   # host file.
   - name: proactive-agent
     cron: "0 7 * * *"
-    project: CharlieBot
     prompt_file: prompts/cron/proactive_agent/prompt.md
     mode: master

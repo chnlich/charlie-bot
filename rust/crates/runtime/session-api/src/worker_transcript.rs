@@ -781,7 +781,6 @@ mod tests {
 
     let bootstrap = crate::detail::build_bootstrap_payload(
       store,
-      &features.registry,
       &features.config.get().unwrap(),
       &features.store.get_session(&session_id).await.unwrap().unwrap(),
     )

@@ -41,14 +41,10 @@ pub struct ScheduledTaskConfig {
   pub prompt_file: Option<String>,
   #[serde(default)]
   pub repo: Option<String>,
-  #[serde(default)]
-  pub backend: Option<String>,
   #[serde(default = "default_timezone")]
   pub timezone: String,
   #[serde(default = "default_true")]
   pub enabled: bool,
-  #[serde(default)]
-  pub project: Option<String>,
   #[serde(default)]
   pub allow_failure: bool,
   #[serde(default)]
@@ -71,6 +67,12 @@ impl ScheduledTaskConfig {
   /// Whether the task's one source is a prompt: a prompt task's fire reaches its bound session as a trigger input.
   pub(crate) fn is_prompt(&self) -> bool {
     self.prompt.as_deref().is_some_and(|prompt| !prompt.is_empty())
+  }
+
+  /// Whether the task's runs take the bound session's backend. A handler task takes none, so its fires run whatever
+  /// the session names.
+  pub(crate) fn uses_session_backend(&self) -> bool {
+    self.handler.as_deref().is_none_or(str::is_empty)
   }
 }
 
@@ -130,24 +132,18 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
           step.name, source_name
         ));
       }
+      if step.backend.as_deref().is_none_or(str::is_empty) {
+        return Err(format!("step '{}' declares distinct_backend_from, so it must name its own backend", step.name));
+      }
+      if steps[source_position].backend.as_deref().is_none_or(str::is_empty) {
+        return Err(format!(
+          "step '{}' is the distinct_backend_from source of step '{}', so it must name its own backend",
+          source_name, step.name
+        ));
+      }
     }
   }
   Ok(())
-}
-
-/// The backend a scheduled task fires on: its own `backend` (an options id or a pool id, returned as written), else the
-/// `backends.calls.new_session` target, else the first configured option.
-pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
-  if let Some(backend) = task.backend.as_deref().filter(|backend| !backend.is_empty()) {
-    cfg.backends.check_backend_id(backend).map_err(anyhow::Error::msg)?;
-    return Ok(backend.to_string());
-  }
-  let backend = cfg
-    .backends
-    .new_session_backend()
-    .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))?;
-  cfg.backends.check_backend_id(&backend).map_err(anyhow::Error::msg)?;
-  Ok(backend)
 }
 
 /// The hosts that `host_auth.browser_logins` names, in config order. A config without the host-auth section names none.
@@ -191,10 +187,8 @@ const CREATE_FIELDS: &[Field] = &[
   Field::required("cron", FieldType::String),
   Field::optional("prompt_file", FieldType::NullableString),
   Field::optional("repo", FieldType::NullableString),
-  Field::optional("backend", FieldType::NullableString),
   Field::optional("timezone", FieldType::String),
   Field::optional("enabled", FieldType::Boolean),
-  Field::optional("project", FieldType::NullableString),
   Field::optional("allow_failure", FieldType::Boolean),
   Field::optional("session_id", FieldType::NullableString),
   Field::optional("mode", FieldType::NullableLiteral(&["master", "worker"])),
@@ -208,11 +202,8 @@ pub const UPDATE_MODEL: BodyModel = BodyModel::required(&[
   Field::optional("cron", FieldType::NullableString),
   Field::optional("prompt_file", FieldType::NullableString),
   Field::optional("repo", FieldType::NullableString),
-  Field::optional("backend", FieldType::NullableString),
   Field::optional("timezone", FieldType::NullableString),
-  Field::optional("project", FieldType::NullableString),
   Field::optional("enabled", FieldType::Boolean),
-  Field::optional("project", FieldType::NullableString),
   Field::optional("allow_failure", FieldType::Boolean),
   Field::optional("session_id", FieldType::NullableString),
 ]);
@@ -242,10 +233,8 @@ mod tests {
       cron: "0 7 * * *".to_string(),
       prompt_file: Some("prompts/cron/proactive_agent/prompt.md".to_string()),
       repo: None,
-      backend: None,
       timezone: DEFAULT_TIMEZONE.to_string(),
       enabled: true,
-      project: Some("CharlieBot".to_string()),
       allow_failure: false,
       session_id: None,
       mode: Some(TaskMode::Master),

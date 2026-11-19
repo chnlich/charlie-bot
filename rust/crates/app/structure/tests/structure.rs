@@ -1051,11 +1051,6 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::SCHEDULE_TIMEZONE`.",
   },
   OwnerRow {
-    name: "schedule_project",
-    owner: "runtime/store",
-    hint: "Use `charliebot_store::metadata::SCHEDULE_PROJECT`.",
-  },
-  OwnerRow {
     name: "schedule_allow_failure",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::SCHEDULE_ALLOW_FAILURE`.",

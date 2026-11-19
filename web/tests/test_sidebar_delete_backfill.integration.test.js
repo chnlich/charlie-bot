@@ -208,7 +208,7 @@ test('entering Workspace paints the badge and the list from one parallel fetch p
   assert.equal(countRows(nav.innerHTML), 2);
   // Broken entries reach the badge name-ordered; the click opens the first.
   assert.ok(nav.innerHTML.includes('2 scheduled tasks failed to load'), nav.innerHTML);
-  assert.ok(nav.innerHTML.includes("openCronEditor('a-broken')"), nav.innerHTML);
+  assert.ok(nav.innerHTML.includes("openCronErrorView('a-broken')"), nav.innerHTML);
   assert.ok(nav.innerHTML.includes('Session c1'), nav.innerHTML);
   assert.ok(nav.innerHTML.includes('Session c2'), nav.innerHTML);
 });

@@ -34,12 +34,14 @@ use crate::firing::{firing_ref, parse_firing_ref};
 use crate::steps::{
   StepMember, distinct_backend_conflict, distinct_exclusion, option_model, select_step_member, step_backend_id,
 };
-use crate::{loader, scheduler};
+use crate::{loader, rounds, scheduler};
 
 /// A set of task configs bound to the same manager node.
 pub struct CronBinding {
   name: String,
   names: Vec<String>,
+  /// Whether a bound task sets `improve_host`, so a round of it launches through the improve launcher.
+  keyed: bool,
   registry: watch::Receiver<Option<Weak<Registry>>>,
 }
 
@@ -71,15 +73,11 @@ impl SequenceBinding for CronBinding {
     &self.name
   }
 
-  fn dedicated_backend(&self) -> bool {
-    true
-  }
-
-  fn backend_lock_detail(&self, target_backend: &str) -> String {
-    format!(
-      "backend '{target_backend}' cannot be switched to in place: this session is the bound node of scheduled task '{}', whose cron config decides its backend and whose scheduler re-aligns the node to that config on every tick. Edit the task's config in the cron editor, or clone/fork the session with the target backend instead.",
-      self.name
-    )
+  fn backend_refusal(&self, cfg: &CharlieBotConfig, backend: &str) -> anyhow::Result<Option<String>> {
+    if !self.keyed {
+      return Ok(None);
+    }
+    rounds::session_backend_refusal(cfg, backend, true)
   }
 
   fn on_wake<'a>(
@@ -258,8 +256,24 @@ impl CronSequenceController {
   fn cron_binding(&self, tasks: &[ScheduledTaskConfig], session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
     let names = names_for_binding(tasks, session_id);
     let name = names.first()?.clone();
-    Some(Arc::new(CronBinding { name, names, registry: self.registry.clone() }))
+    let keyed = tasks.iter().any(|task| task.session_id.as_deref() == Some(session_id) && task.improve_host.is_some());
+    Some(Arc::new(CronBinding { name, names, keyed, registry: self.registry.clone() }))
   }
+}
+
+/// The task a session's sidebar row shows: its enabled task with the earliest next fire, or, when every task is disabled,
+/// its first task, which the row shows as disabled.
+fn shown_task<'a>(candidates: &[&'a ScheduledTaskConfig], now: UtcDateTime) -> Option<&'a ScheduledTaskConfig> {
+  candidates
+    .iter()
+    .copied()
+    .filter(|task| task.enabled)
+    .min_by_key(|task| {
+      let next =
+        scheduler::next_fire_iso(&task.cron, &task.timezone, now).ok().and_then(|next| UtcDateTime::parse(&next).ok());
+      (next.is_none(), next)
+    })
+    .or_else(|| candidates.first().copied())
 }
 
 fn row_schedule_fields(
@@ -285,10 +299,10 @@ fn row_schedule_fields(
   #[cfg(test)]
   let builds = memo.as_ref().map_or(1, |cached| cached.builds + 1);
 
-  let mut bound_tasks = HashMap::new();
+  let mut bound_tasks: HashMap<&str, Vec<&ScheduledTaskConfig>> = HashMap::new();
   for task in tasks {
     if let Some(session_id) = task.session_id.as_deref() {
-      bound_tasks.entry(session_id).or_insert(task);
+      bound_tasks.entry(session_id).or_default().push(task);
     }
   }
   let mut fields_by_session = HashMap::new();
@@ -296,7 +310,8 @@ fn row_schedule_fields(
   for session_id in &ids {
     // A session with no bound task owns no row fields: the row writer emits `schedule_task: null` itself.
     // An entry holding only that null would make one map per listed session for every listing response.
-    let Some(task) = bound_tasks.get(session_id.as_str()).copied() else { continue };
+    let Some(candidates) = bound_tasks.get(session_id.as_str()) else { continue };
+    let Some(task) = shown_task(candidates, now) else { continue };
     let mut fields = Map::new();
     fields.insert(SCHEDULE_TASK.to_string(), Value::String(task.name.clone()));
     fields.insert(SCHEDULE_CRON.to_string(), Value::String(task.cron.clone()));
@@ -569,16 +584,20 @@ async fn switch_failed_step(
   let Some((_, firing)) = parse_firing_ref(&sequence.owner_ref) else { return Ok(None) };
   let Some(steps) = task.steps.as_ref().filter(|steps| !steps.is_empty()) else { return Ok(None) };
   let position = sequence.position as usize;
-  let pool_id = step_backend_id(task, tree.config(), steps[position].backend.as_deref())?;
-  if tree.config().backends.pool(&pool_id).is_none() {
-    return Ok(None);
-  }
   let leaf = tree
     .load_meta(leaf_id)
     .await?
     .ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id} vanished during its quota switch"))?;
   let parent_id =
     leaf.task_parent_id.as_deref().ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id} names no bound session"))?;
+  let parent = tree
+    .load_meta(parent_id)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id} names no bound session {parent_id}"))?;
+  let pool_id = step_backend_id(steps[position].backend.as_deref(), &parent.backend);
+  if tree.config().backends.pool(&pool_id).is_none() {
+    return Ok(None);
+  }
   let from = run
     .backend
     .as_deref()
@@ -602,6 +621,7 @@ async fn switch_failed_step(
         task,
         &firing,
         position,
+        &parent.backend,
         &option.id,
         option_model(option).as_deref(),
         Some(run),
@@ -671,7 +691,7 @@ async fn reconcile_bound_firing(
     if run.pid.is_some() {
       return Ok(BoundaryState::Running);
     }
-    if let Some(conflict) = distinct_backend_conflict(task, tree.config())? {
+    if let Some(conflict) = distinct_backend_conflict(task, tree.config(), &parent.backend)? {
       let summary = format!(
         "Scheduled task '{}' stopped before relaunching step '{}': {conflict}.",
         task.name, steps[position].name
@@ -688,7 +708,7 @@ async fn reconcile_bound_firing(
   let last_run = &by_position[&last_position];
   let last_outcome = tree.terminal_outcome(&events, &last_run.id);
   if last_position + 1 < steps.len() && last_outcome.as_deref() == Some("success") && last_run.exit_code == Some(0) {
-    if let Some(conflict) = distinct_backend_conflict(task, tree.config())? {
+    if let Some(conflict) = distinct_backend_conflict(task, tree.config(), &parent.backend)? {
       let summary = format!(
         "Scheduled task '{}' stopped before launching step '{}': {conflict}.",
         task.name,
@@ -699,7 +719,7 @@ async fn reconcile_bound_firing(
         .map(|()| BoundaryState::Finished);
     }
     let position = last_position + 1;
-    let backend = step_backend_id(task, tree.config(), steps[position].backend.as_deref())?;
+    let backend = step_backend_id(steps[position].backend.as_deref(), &parent.backend);
     let exclude = distinct_exclusion(steps, position, &by_position);
     let option = match select_step_member(features, tree.config(), &backend, &exclude)? {
       StepMember::Selected(option) => option,
@@ -711,9 +731,18 @@ async fn reconcile_bound_firing(
           .map(|()| BoundaryState::Finished);
       }
     };
-    let next =
-      register_step_run(tree, leaf_id, task, firing, position, &option.id, option_model(&option).as_deref(), None)
-        .await?;
+    let next = register_step_run(
+      tree,
+      leaf_id,
+      task,
+      firing,
+      position,
+      &parent.backend,
+      &option.id,
+      option_model(&option).as_deref(),
+      None,
+    )
+    .await?;
     let prompt = step_prompt(steps, position, &by_position, tree)?;
     schedule_settle(tree.executor(), leaf_id.to_string(), next.id, prompt);
     return Ok(BoundaryState::Running);
@@ -854,6 +883,7 @@ async fn register_step_run(
   task: &ScheduledTaskConfig,
   firing: &str,
   position: usize,
+  session_backend: &str,
   backend: &str,
   model: Option<&str>,
   retry_of: Option<&RunRecord>,
@@ -905,11 +935,9 @@ async fn register_step_run(
   let run = tree.register_run_locked(&guard, leaf_id, run, Some(task_spec_text)).await?;
   // A pool step records the member its run launches on, as every pool-id child does.
   let step_backend = step_backend_id(
-    task,
-    tree.config(),
     task.steps.as_ref().and_then(|steps| steps.get(position).and_then(|step| step.backend.as_deref())),
-  )
-  .map_err(|error| charliebot_store::StoreError::new(error.to_string()))?;
+    session_backend,
+  );
   if tree.config().backends.pool(&step_backend).is_some() {
     tree
       .set_slot_fields_locked(
@@ -1125,8 +1153,47 @@ mod tests {
     CronBinding {
       name: names[0].to_string(),
       names: names.iter().map(|name| (*name).to_string()).collect(),
+      keyed: false,
       registry: receiver,
     }
+  }
+
+  #[test]
+  fn a_keyed_binding_refuses_a_session_backend_the_launcher_refuses() {
+    let (_home, features) = crate::test_support::feature_context_with_login_hosts(&["synthetic-login-host"]);
+    let cfg = features.config.get().unwrap();
+    let base = binding(&features, &["synthetic-keyed"]);
+    let unkeyed =
+      CronBinding { keyed: false, name: base.name.clone(), names: base.names.clone(), registry: base.registry.clone() };
+    let keyed = CronBinding { keyed: true, ..base };
+    assert_eq!(keyed.backend_refusal(&cfg, crate::test_support::KEYED_BACKEND_ID).unwrap(), None);
+    let refusal = keyed
+      .backend_refusal(&cfg, crate::test_support::NON_KEYED_BACKEND_ID)
+      .unwrap()
+      .expect("a gemini option is refused for a keyed binding");
+    assert!(refusal.contains("(type 'gemini')"), "{refusal}");
+    assert_eq!(unkeyed.backend_refusal(&cfg, crate::test_support::NON_KEYED_BACKEND_ID).unwrap(), None);
+  }
+
+  #[test]
+  fn the_sidebar_row_shows_the_enabled_task_with_the_earliest_next_fire() {
+    let task_at = |name: &str, cron: &str, enabled: bool| {
+      crate::loader::validate_body(
+        name,
+        json!({"cron": cron, "enabled": enabled, "timezone": "UTC", "handler": "synthetic_handler"}),
+        std::path::Path::new("."),
+        &[],
+      )
+      .unwrap()
+    };
+    let now = UtcDateTime::parse("2026-11-19T10:00:00Z").unwrap();
+    let daily = task_at("daily", "0 12 * * *", true);
+    let early = task_at("early", "0 11 * * *", true);
+    let stopped = task_at("stopped", "5 10 * * *", false);
+    let shown = |tasks: &[&ScheduledTaskConfig]| super::shown_task(tasks, now).map(|task| task.name.clone());
+    assert_eq!(shown(&[&daily, &early, &stopped]).as_deref(), Some("early"));
+    assert_eq!(shown(&[&stopped, &daily]).as_deref(), Some("daily"), "a disabled task shows only when none is enabled");
+    assert_eq!(shown(&[&stopped]).as_deref(), Some("stopped"), "a row of disabled tasks shows its first one");
   }
 
   fn write_cron(home: &std::path::Path, name: &str, value: Value) {
@@ -1250,10 +1317,8 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: None,
-      backend: Some(AUTO_POOL_ID.to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
-      project: None,
       allow_failure: false,
       session_id: Some(parent.id.clone()),
       mode: Some(TaskMode::Worker),
@@ -1267,7 +1332,9 @@ mod tests {
     let tree = charliebot_tasks::recovery::sequence_tree(&features, &adapter).unwrap();
     let firing = "2026-10-21T03:00:00-07:00";
     let failed =
-      register_step_run(&tree, &leaf.id, &task, firing, 0, "member-a", Some("member-a-model"), None).await.unwrap();
+      register_step_run(&tree, &leaf.id, &task, firing, 0, AUTO_POOL_ID, "member-a", Some("member-a-model"), None)
+        .await
+        .unwrap();
     let quota = QuotaFailure {
       resets_at: None,
       message: "API Error: 402 Insufficient Balance".to_string(),
@@ -1365,10 +1432,8 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: None,
-      backend: Some("synthetic".to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
-      project: None,
       allow_failure: false,
       session_id: Some(parent.id.clone()),
       mode: Some(TaskMode::Worker),
@@ -1403,6 +1468,7 @@ mod tests {
         &task,
         "2026-10-21T03:00:00-07:00",
         position,
+        "synthetic",
         "synthetic",
         Some("synthetic-model"),
         None,

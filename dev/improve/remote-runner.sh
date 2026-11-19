@@ -82,12 +82,17 @@ esac
 [[ $launch_id =~ ^[0-9A-Za-z._-]+$ ]] || fail 1 "not a launch id: $launch_id"
 if [[ $mode != prepare ]]; then
   [[ $direction =~ ^[a-z][a-z0-9_]*$ ]] || fail 1 "not an improve direction: $direction"
-  [[ $kind == claude || $kind == codex ]] || fail 1 "not a member kind: $kind"
 fi
 
 readonly HOME_DIR=${HOME:-}
 [[ $HOME_DIR == /* ]] || fail 1 'HOME must be an absolute path'
 readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
+if [[ $mode != prepare ]]; then
+  member_kinds_file="$LAUNCH_DIR/member_kinds.txt"
+  [[ -r $member_kinds_file ]] || fail 1 "the member kind list is missing or unreadable: $member_kinds_file"
+  grep -q '[^[:space:]]' "$member_kinds_file" || fail 1 "the member kind list is empty: $member_kinds_file"
+  grep -Fxq -- "$kind" "$member_kinds_file" || fail 1 "not a member kind: $kind"
+fi
 readonly ROUND_HOME="$HOME_DIR/improve/home"
 readonly RUNNER_ROOT="$HOME_DIR/improve/runner"
 # The member's login file of this launch: the records `--prepare` wrote, each `NAME=value` with a NUL after it.

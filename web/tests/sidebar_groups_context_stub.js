@@ -55,7 +55,7 @@ function loadGroups() {
     console: {error: () => {}},
     // A package script the page fetched after its document reads readyState; no paint is on screen in this harness,
     // so the repaint such a script asks for has no last paint to re-render.
-    document: {readyState: 'complete', getElementById: () => null},
+    document: {readyState: 'complete', getElementById: () => null, addEventListener: () => {}},
     localStorage: {getItem: () => null, setItem: () => {}},
     fetch: () => Promise.resolve({ok: true, json: async () => ({})}),
     JSON_HEADERS: {},

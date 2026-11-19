@@ -565,8 +565,9 @@ impl BackendsConfig {
       || self.pools.iter().any(|pool| pool.id == id && pool.visible)
   }
 
-  /// The backend a session or scheduled task takes when its request names none: the `backends.calls.new_session`
-  /// target, else the first `backends.options` id, else `None` when neither is configured.
+  /// The backend a new session takes when its request names none, the session the scheduler creates for a task
+  /// included: the `backends.calls.new_session` target, else the first `backends.options` id, else `None` when neither
+  /// is configured.
   pub fn new_session_backend(&self) -> Option<String> {
     match self.calls.get(CallClass::NewSession) {
       Some(CallTarget::Backend(backend_id)) => Some(backend_id.clone()),

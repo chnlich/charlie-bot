@@ -441,7 +441,7 @@ impl World {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");
-    for name in ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh"] {
+    for name in ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh", "member_kinds.txt"] {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }
     let local_home = sandbox.dir("local");

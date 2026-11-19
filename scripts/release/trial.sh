@@ -298,6 +298,23 @@ cat >/dev/null
 printf '%s' '{"routed":true,"backends":["pool"],"reason":"release trial router stub"}'
 STUB
 
+# trial_option prints one option of the trial config. The trial-only `claude-opus` and `claude-fable` ids give the
+# default memory-curator's two steps the two model identities that its `distinct_backend_from` pair requires.
+trial_option() {
+  printf '    - id: %s\n      label: %s\n      type: %s\n      model: %s\n      prompt_overlay: none\n' "$1" "$2" "$3" "$4"
+  if [[ $3 == charlie-code ]]; then
+    printf '      api_base: %s\n' "$TRIAL_API_BASE"
+    if [[ -n $TRIAL_CREDENTIAL ]]; then
+      printf '      credential: %s\n' "$TRIAL_CREDENTIAL"
+    fi
+  elif [[ $3 == cc-claude ]]; then
+    printf '      effort: xhigh\n'
+  else
+    printf 'trial config has unsupported backend type: %s\n' "$3" >&2
+    return 1
+  fi
+}
+
 cat >"$TRIAL_CB_HOME/config.yaml" <<EOF
 server:
   host: 127.0.0.1
@@ -334,16 +351,10 @@ backends:
   routing:
     command: ["/bin/sh", "$TRIAL_ROUTER_STUB"]
   options:
-    - id: charlie-code-release-trial
-      label: Release trial
-      type: charlie-code
-      model: openai/glm-5.3-flash
-      api_base: $TRIAL_API_BASE
-      prompt_overlay: none
+$(trial_option charlie-code-release-trial "Release trial" charlie-code openai/glm-5.3-flash)
+$(trial_option claude-opus "Trial claude-opus" cc-claude claude-opus-5)
+$(trial_option claude-fable "Trial claude-fable" cc-claude claude-fable-5-1)
 EOF
-if [[ -n $TRIAL_CREDENTIAL ]]; then
-  printf '      credential: %s\n' "$TRIAL_CREDENTIAL" >>"$TRIAL_CB_HOME/config.yaml"
-fi
 chmod 600 "$TRIAL_CB_HOME/config.yaml"
 
 if ! git -C "$SOURCE_REPO" archive "$COMMIT" | tar -x -C "$REPO_ROOT"; then
@@ -673,6 +684,13 @@ copy_seed_sessions() {
     [[ -d $entry ]] || continue
     cp -a -- "${entry%/}" "$SESSIONS_DIR/" || return 1
   done
+  if [[ -d $SEED_HOME/.cron.d ]]; then
+    mkdir -m 700 -p "$TRIAL_CB_HOME/config.d/cron.d" || return 1
+    for task in "$SEED_HOME"/.cron.d/*.yaml; do
+      [[ -f $task ]] || continue
+      cp -a -- "$task" "$TRIAL_CB_HOME/config.d/cron.d/" || return 1
+    done
+  fi
   if [[ -f $SEED_HOME/boot_recovery.json ]]; then
     mkdir -m 700 -p "$TRIAL_CB_HOME/state" || return 1
     cp -a -- "$SEED_HOME/boot_recovery.json" "$TRIAL_CB_HOME/state/boot_recovery.json" || return 1

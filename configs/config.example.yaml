@@ -122,8 +122,8 @@ backends:
   #   triage       failure triage's judgement of each failure signature; left out: the triage scan will not start
   #   thread       a chat thread's backend when the router does not route it; left out: the new_session
   #                target, else the first backends.options entry
-  #   new_session  the backend a session or scheduled task takes when its request names none; left out: the first
-  #                backends.options entry
+  #   new_session  the backend a new session takes when its request names none, the session the scheduler
+  #                creates for a task included; left out: the first backends.options entry
   # The example sends long agent work to cheap, short waits to fast, replies to human-communication, and new sessions
   # to one strong option.
   # calls:

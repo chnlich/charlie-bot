@@ -473,8 +473,7 @@ fn chat_page(
   if let Some(session_id) = session.as_deref().filter(|session_id| !session_id.is_empty()) {
     match state.features.store.get_session_cached_or_read_sync(session_id) {
       Ok(Some(row)) => {
-        let loaded =
-          detail::page_bootstrap(&PAGE_BOOTSTRAP_MEMO, &state.features.store, &state.features.registry, &cfg, &row);
+        let loaded = detail::page_bootstrap(&PAGE_BOOTSTRAP_MEMO, &state.features.store, &cfg, &row);
         // The row identifies the open session whether or not its bootstrap loads: the page keeps showing it
         // after a failed load, and only the bootstrap fields stay out.
         meta = Some(row);

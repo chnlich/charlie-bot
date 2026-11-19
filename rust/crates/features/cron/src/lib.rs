@@ -7,8 +7,6 @@ pub mod config;
 mod firing;
 mod host_gate;
 mod loader;
-#[cfg(test)]
-mod page_tests;
 mod rounds;
 #[cfg(test)]
 mod rounds_tests;

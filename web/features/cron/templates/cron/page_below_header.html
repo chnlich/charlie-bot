@@ -1,0 +1,7 @@
+{#- The read-only task panel of a session bound to scheduled tasks. cron.js fills the body from GET /api/cron/tasks and
+    shows the panel only when a task is bound to the active session. The panel holds no control: its last line names
+    the agent that makes every change. -#}
+<section id="cron-session-panel" class="hidden px-4 py-2 bg-slate-800/80 border-b border-slate-700/50 text-xs text-slate-300">
+  <div id="cron-session-panel-body" class="flex flex-col gap-3"></div>
+  <p class="mt-2 text-slate-400">To change a task setting, ask this session's agent.</p>
+</section>

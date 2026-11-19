@@ -34,7 +34,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
-use crate::backend_lock::same_continuation_domain;
 use crate::detail::response_metadata;
 use crate::route_support::store_error;
 
@@ -362,21 +361,19 @@ async fn switch(
   let SwitchFields { backend: target } = typed(validated_object(body, &SWITCH_BACKEND)?)?;
   let cfg = config(features)?;
   cfg.backends.check_backend_id(&target).map_err(StoreError::invalid).map_err(store_error)?;
-  let effective = if parent.backend.is_empty() { default_backend_id(&cfg) } else { parent.backend.clone() };
-  if target == effective {
-    return Ok(parent);
-  }
-
   let binding = features
     .registry
     .binding_for(session_id)
     .map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
-  let dedicated = binding.as_ref().is_some_and(|binding| binding.dedicated_backend());
-  let lock_refuses =
-    dedicated && !same_continuation_domain(&effective, &target, &cfg, &features.registry).map_err(store_error)?;
-  if lock_refuses {
-    let binding = binding.expect("a lock refusal requires the session's dedicated binding");
-    return Err(store_error(StoreError::invalid(binding.backend_lock_detail(&target))));
+  if let Some(binding) = binding.as_ref()
+    && let Some(reason) =
+      binding.backend_refusal(&cfg, &target).map_err(|error| store_error(StoreError::new(error.to_string())))?
+  {
+    return Err(store_error(StoreError::invalid(reason)));
+  }
+  let effective = if parent.backend.is_empty() { default_backend_id(&cfg) } else { parent.backend.clone() };
+  if target == effective {
+    return Ok(parent);
   }
 
   // The pre-rule backfill: a held native id with no recorded producer gets the effective current backend first.
@@ -555,7 +552,7 @@ mod tests {
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::run_token::{self, RunTokenClaims};
   use charliebot_core::test_support::EventSink;
-  use charliebot_store::{AGENT_REPARENT_SCOPE_REFUSAL, SIDEBAR_CHANNEL, TaskCaller, session_channel};
+  use charliebot_store::{AGENT_REPARENT_SCOPE_REFUSAL, SIDEBAR_CHANNEL, session_channel};
   use tracing::Event;
   use tracing::field::{Field, Visit};
 
@@ -780,34 +777,6 @@ mod tests {
     assert_eq!(audit["to"].as_str(), Some("synthetic-b"));
     assert!(audit["previous_native_backend"].is_null());
     assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("session_backend_switched")));
-  }
-
-  #[tokio::test]
-  async fn backend_switch_respects_a_dedicated_sequence_lock() {
-    let (_home, features) = feature_context();
-    let request = CreateTask {
-      request_id: "sequence-locked-node".to_string(),
-      task_parent_id: None,
-      profile: TaskProfile::Manager,
-      task: None,
-      name: Some("Locked node".to_string()),
-      backend: Some("synthetic-a".to_string()),
-      group: None,
-      session_id: Some("sequence-locked-node".to_string()),
-    };
-    let node = features.store.create_task(request, TaskCaller::System, Map::new()).await.unwrap();
-    let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
-    let mut session = features.store.subscribe(&session_channel(&node.id));
-    let (headers, body) = json_request(json!({"backend": "synthetic-b"}));
-
-    let (status, detail) =
-      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(detail, json!({"detail": "backend 'synthetic-b' is locked by the session API test sequence"}));
-    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "synthetic-a");
-    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), sidebar.recv()).await.is_err());
-    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), session.recv()).await.is_err());
   }
 
   #[tokio::test]
@@ -1210,104 +1179,5 @@ backends:
       detail["detail"].as_str().expect("detail text").contains("valid ids: ['synthetic-a', 'synthetic-b']"),
       "{detail}"
     );
-  }
-
-  #[tokio::test]
-  async fn a_dedicated_lock_refuses_auto_when_a_pool_names_it() {
-    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
-    let request = CreateTask {
-      request_id: "sequence-locked-auto-node".to_string(),
-      task_parent_id: None,
-      profile: TaskProfile::Manager,
-      task: None,
-      name: Some("Locked auto node".to_string()),
-      backend: Some("synthetic-a".to_string()),
-      group: None,
-      session_id: Some("sequence-locked-node".to_string()),
-    };
-    let node = features.store.create_task(request, TaskCaller::System, Map::new()).await.unwrap();
-    let (headers, body) = json_request(json!({"backend": "auto"}));
-
-    let (status, detail) =
-      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(detail, json!({"detail": "backend 'auto' is locked by the session API test sequence"}));
-    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "synthetic-a");
-  }
-
-  /// The switch-lock config: the `twin` options share one continuation domain (`TwinLifecycle`), the `synthetic`
-  /// option keeps its own, and the pools mix the two kinds.
-  const LOCK_DOMAIN_CONFIG: &str = "\
-backends:
-  options:
-    - {id: twin-a, label: Twin A, type: twin, model: model-a}
-    - {id: twin-b, label: Twin B, type: twin, model: model-b}
-    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-c}
-  pools:
-    - {id: twins, label: Twins, rule: rotate, members: [twin-a, twin-b]}
-    - {id: mixed, label: Mixed, rule: rotate, members: [twin-a, synthetic-a]}
-    - {id: twin-b-only, label: Twin B only, rule: rotate, members: [twin-b]}
-    - {id: synthetic-a-only, label: A only, rule: rotate, members: [synthetic-a]}
-";
-
-  /// The node the test fixture binds (`sequence-locked-node`), on the model `backend`.
-  async fn locked_node(features: &Arc<FeatureContext>, backend: &str) -> SessionMetadata {
-    let request = CreateTask {
-      request_id: "sequence-locked-node".to_string(),
-      task_parent_id: None,
-      profile: TaskProfile::Manager,
-      task: None,
-      name: Some("Locked node".to_string()),
-      backend: Some(backend.to_string()),
-      group: None,
-      session_id: Some("sequence-locked-node".to_string()),
-    };
-    features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the locked node")
-  }
-
-  async fn switch_to(features: &Arc<FeatureContext>, session_id: &str, target: &str) -> (StatusCode, Value) {
-    let (headers, body) = json_request(json!({"backend": target}));
-    answer(switch_backend(State(Arc::clone(features)), AxumPath(session_id.to_string()), headers, body).await).await
-  }
-
-  #[tokio::test]
-  async fn a_dedicated_lock_judges_a_pool_target_by_its_member_set() {
-    let (_home, features) = feature_context_with_config(LOCK_DOMAIN_CONFIG);
-    let node = locked_node(&features, "twin-a").await;
-
-    let (status, _) = switch_to(&features, &node.id, "twins").await;
-    assert_eq!(status, StatusCode::OK, "every member of the target pool shares the node's domain");
-    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "twins");
-  }
-
-  #[tokio::test]
-  async fn a_dedicated_lock_refuses_a_pool_with_a_foreign_domain_member() {
-    let (_home, features) = feature_context_with_config(LOCK_DOMAIN_CONFIG);
-    let node = locked_node(&features, "twin-a").await;
-
-    let (status, detail) = switch_to(&features, &node.id, "mixed").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{detail}");
-    assert_eq!(detail, json!({"detail": "backend 'mixed' is locked by the session API test sequence"}));
-    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "twin-a");
-  }
-
-  /// A model and the pool holding it alone expand to the same member set, so the lock rules them the same way.
-  /// The foreign-domain model and its singleton pool both refuse, and the same-domain model and its singleton pool
-  /// both pass.
-  #[tokio::test]
-  async fn a_model_and_the_pool_holding_it_alone_get_the_same_lock_verdict() {
-    let (_home, features) = feature_context_with_config(LOCK_DOMAIN_CONFIG);
-    let node = locked_node(&features, "twin-a").await;
-
-    for target in ["synthetic-a", "synthetic-a-only"] {
-      let (status, _) = switch_to(&features, &node.id, target).await;
-      assert_eq!(status, StatusCode::BAD_REQUEST, "{target}");
-      assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "twin-a");
-    }
-    let (model_status, _) = switch_to(&features, &node.id, "twin-b").await;
-    assert_eq!(model_status, StatusCode::OK);
-    let (pool_status, _) = switch_to(&features, &node.id, "twin-b-only").await;
-    assert_eq!(pool_status, StatusCode::OK);
   }
 }

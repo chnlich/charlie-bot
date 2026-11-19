@@ -31,41 +31,12 @@ use serde_json::{Map, Value};
 
 struct TestBackendFactory;
 
-/// The lifecycle the switch-lock tests use: every `twin` option continues the same conversation domain, the way
-/// cc-claude options share the login pool's domain.
+/// The lifecycle of the `twin` test options: every `twin` option continues the same conversation domain.
 struct TwinLifecycle;
 
 impl BackendLifecycle for TwinLifecycle {
   fn continuation_domain(&self, _option: &BackendOption, _cfg: &CharlieBotConfig) -> String {
     "twin-domain".to_string()
-  }
-}
-
-struct TestSequenceBinding;
-
-impl SequenceBinding for TestSequenceBinding {
-  fn name(&self) -> &str {
-    "session_api_test"
-  }
-
-  fn dedicated_backend(&self) -> bool {
-    true
-  }
-
-  fn backend_lock_detail(&self, target_backend: &str) -> String {
-    format!("backend '{target_backend}' is locked by the session API test sequence")
-  }
-
-  fn on_wake<'a>(
-    &'a self,
-    _meta: &'a SessionMetadata,
-    _input_events: &'a [Value],
-  ) -> BoxFuture<'a, anyhow::Result<Option<String>>> {
-    Box::pin(async { Ok(None) })
-  }
-
-  fn on_archive<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async { Ok(()) })
   }
 }
 
@@ -113,8 +84,8 @@ impl SequenceController for TestSequenceController {
     Box::pin(async { Ok(()) })
   }
 
-  fn binding(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
-    (session_id == "sequence-locked-node").then(|| Arc::new(TestSequenceBinding) as Arc<dyn SequenceBinding>)
+  fn binding(&self, _session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
+    None
   }
 
   /// A synthetic session whose id starts with `sequence-owned-` belongs to this sequence, as a scheduled task's

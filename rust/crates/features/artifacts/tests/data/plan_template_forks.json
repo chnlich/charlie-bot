@@ -1,0 +1,16 @@
+[
+  {
+    "n": "1",
+    "options": [
+      {
+        "name": "current session only",
+        "text": "「current session only」: list this session directory's triggers, and triggers written by other sessions stay invisible."
+      },
+      {
+        "name": "all sessions",
+        "text": "「all sessions」: list every trigger on the host, and the command reads directories this session did not write."
+      }
+    ],
+    "rec": "current session only"
+  }
+]

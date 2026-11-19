@@ -69,7 +69,7 @@ async fn serve(features: &FeatureContext, request: &Parts, path: &str) -> ViewRe
     read_target_text(target_path).await?
   };
   let (comment_version, artifact_version) = asset_versions(features)?;
-  let icon_script = comment_icon_script(features)?;
+  let icon_script = artifact_icon_script(features)?;
   let metadata =
     features.store.get_session(&session_id).await.map_err(|error| internal_error("RuntimeError", error.to_string()))?;
   // A page can outlive its session metadata. The comment endpoint reports the missing session on send.
@@ -186,14 +186,16 @@ fn asset_versions(features: &FeatureContext) -> ViewResult<(String, String)> {
   Ok((comment_version, artifact_version))
 }
 
-/// The icon table the comment layer draws its two glyphs from, `comment` and `close`; the layer loads no other icon.
-fn comment_icon_script(features: &FeatureContext) -> ViewResult<String> {
+/// The icon table for the artifact controls: comments use `comment` and `close`; picks use `done`, `undo` and `send`.
+fn artifact_icon_script(features: &FeatureContext) -> ViewResult<String> {
   let templating = features
     .startup
     .require::<Templating>()
     .map_err(|error: StateError| internal_error("RuntimeError", error.to_string()))?;
   let icons = templating.icons().map_err(|error| internal_error("ValueError", error.to_string()))?;
-  icons.script(Some(&["comment", "close"])).map_err(|error| internal_error("ValueError", error.to_string()))
+  icons
+    .script(Some(&["comment", "close", "done", "undo", "send"]))
+    .map_err(|error| internal_error("ValueError", error.to_string()))
 }
 
 fn inject_artifact_ui(
@@ -278,18 +280,21 @@ mod tests {
 
   #[test]
   fn ui_injection_matches_the_splice_and_append_rules() {
-    let icons = "window.CB_ICON_TABLE = {};\n";
+    let icon_script = "window.CB_ICON_TABLE = {};\n";
     let tags = "<script>window.CB_ICON_TABLE = {};\n</script>\n<script src=/static/js/icons.js?v=v1></script>\n<script>window.__cbcServerSessionId=\"S\";</script>\n<script src=/static/js/comment_post.js?v=v1></script>\n<script src=/static/features/artifacts/artifact-comments.js?v=v2></script>";
     assert_eq!(
-      inject_artifact_ui("<body>one</body>tail</body>", "S", "v1", "v2", icons),
+      inject_artifact_ui("<body>one</body>tail</body>", "S", "v1", "v2", icon_script),
       format!("<body>one</body>tail{tags}\n</body>")
     );
-    assert_eq!(inject_artifact_ui("<p>page</p>", "S", "v1", "v2", icons), format!("<p>page</p>\n{tags}\n"));
+    assert_eq!(
+      inject_artifact_ui("<p>page</p>", "S", "v1", "v2", icon_script),
+      format!("<p>page</p>\n{tags}\n")
+    );
   }
 
   #[test]
   fn injected_script_keeps_json_ascii_escapes_for_unicode_session_ids() {
-    let html = inject_artifact_ui("<body>page</body>", "计划😀", "v1", "v2", "");
+    let html = inject_artifact_ui("<body>page</body>", "计划😀", "v1", "v2", "window.CB_ICON_TABLE = {};");
 
     assert!(html.contains(r#"window.__cbcServerSessionId="\u8ba1\u5212\ud83d\ude00";"#));
   }
@@ -315,7 +320,7 @@ mod tests {
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     assert!(!response.headers().contains_key(header::LAST_MODIFIED));
     let (comment_version, artifact_version) = asset_versions(&features).expect("asset versions are available");
-    let icon_script = comment_icon_script(&features).expect("the comment icons are available");
+    let icon_script = artifact_icon_script(&features).expect("the artifact icons are available");
     assert_eq!(
       response_body(response).await,
       inject_artifact_ui(source, "S", &comment_version, &artifact_version, &icon_script)

@@ -61,6 +61,23 @@ pub const STATE_CI_NOT_STARTED: &str = "ci-not-started";
 pub const STATE_CI_TIMEOUT: &str = "ci-timeout";
 pub const STATE_PR_MERGE_REQUIRED: &str = "pr-merge-required";
 
+/// PR text supplied to `charliebot land`; each omitted value derives from the task branch's commits on a gated path.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LandOptions {
+  pub title: Option<String>,
+  pub body: Option<String>,
+}
+
+impl LandOptions {
+  /// Explicit titles must contain non-whitespace text before any landing work starts.
+  pub fn validate(&self) -> anyhow::Result<()> {
+    if self.title.as_deref().is_some_and(|title| title.trim().is_empty()) {
+      anyhow::bail!("--title must not be empty");
+    }
+    Ok(())
+  }
+}
+
 /// One landed commit's check row: a check run or a commit status on the head sha.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckRow {
@@ -248,7 +265,8 @@ fn repo_from_remote_url(url: &str) -> Option<String> {
 }
 
 /// Run one landing: the whole flow, ending in a written `landing.json` and the record returned.
-pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingRecord> {
+pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> anyhow::Result<LandingRecord> {
+  options.validate()?;
   let ctx = TaskLanding::load(home, task_session_id).await?;
   let published = review_text::review_published_branch(&ctx.base_branch);
   let base_ref = format!("origin/{published}");
@@ -348,8 +366,9 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
       }
     }
 
+    let pr_text = resolve_draft_pr_text(&ctx.worktree, published, options).await?;
     push_task_branch(&ctx, &ctx.branch_name).await?;
-    let (pr_url, pr_number) = ensure_draft_pr(&ctx, &ctx.repo, published).await?;
+    let (pr_url, pr_number) = ensure_draft_pr(&ctx, &ctx.repo, published, &pr_text).await?;
     let expected = expected_workflow_paths(&workflow_files_at(&ctx.worktree, &sha).await?)?;
     let evaluation = read_ci_state(&ctx.worktree, &ctx.repo, &sha).await?;
     let elapsed = match &head_pushed_at {
@@ -1070,48 +1089,142 @@ fn pending_trigger_with_message(session_dir: &Path, message: &str) -> anyhow::Re
   Ok(false)
 }
 
+/// One commit's subject and body from the branch range used to derive a gated PR description.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CommitMessage {
+  subject: String,
+  body: String,
+}
+
+/// PR text after applying explicit values to the commit-derived defaults.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedPrText {
+  title: String,
+  body: String,
+}
+
+async fn resolve_draft_pr_text(
+  worktree: &Path,
+  published_base: &str,
+  options: &LandOptions,
+) -> anyhow::Result<ResolvedPrText> {
+  options.validate()?;
+  let commits = if options.title.is_none() || options.body.is_none() {
+    let range = format!("origin/{published_base}..HEAD");
+    let (ok, out, err) =
+      git::git_stdout(worktree, &["log", "--reverse", "-z", "--format=%s%n%b", &range], GIT_READ_TIMEOUT, "git log")
+        .await;
+    if !ok {
+      anyhow::bail!("git log {range} failed: {err}");
+    }
+    parse_commit_messages(&out)
+  } else {
+    Vec::new()
+  };
+  resolve_pr_text(&commits, options)
+}
+
+fn parse_commit_messages(output: &str) -> Vec<CommitMessage> {
+  output
+    .split('\0')
+    .filter(|record| !record.trim().is_empty())
+    .map(|record| {
+      let (subject, body) = record.split_once('\n').unwrap_or((record, ""));
+      CommitMessage { subject: subject.to_string(), body: body.trim().to_string() }
+    })
+    .collect()
+}
+
+fn resolve_pr_text(commits: &[CommitMessage], options: &LandOptions) -> anyhow::Result<ResolvedPrText> {
+  options.validate()?;
+  let title = match &options.title {
+    Some(title) => title.clone(),
+    None => {
+      let first = commits
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("cannot derive a PR title: the branch has no commits ahead of origin"))?;
+      if first.subject.trim().is_empty() {
+        anyhow::bail!("cannot derive a PR title from an empty commit subject");
+      }
+      first.subject.clone()
+    }
+  };
+  let body = match &options.body {
+    Some(body) => body.clone(),
+    None => match commits {
+      [] => String::new(),
+      [commit] => commit.body.trim().to_string(),
+      _ => commits.iter().map(commit_body_section).collect::<Vec<_>>().join("\n\n"),
+    },
+  };
+  Ok(ResolvedPrText { title, body })
+}
+
+fn commit_body_section(commit: &CommitMessage) -> String {
+  let body = commit.body.trim();
+  if body.is_empty() { format!("### {}", commit.subject) } else { format!("### {}\n\n{body}", commit.subject) }
+}
+
 /// The one draft PR the landing keeps: reused when one is open for the task branch, created
 /// otherwise. Returns `(url, number)`.
-async fn ensure_draft_pr(ctx: &TaskLanding, repo: &str, published_base: &str) -> anyhow::Result<(String, i64)> {
-  if let Ok(pr) =
-    gh_json(&ctx.worktree, &["pr", "view", &ctx.branch_name, "--repo", repo, "--json", "number,url,state"]).await
-    && string_field(&pr, "state").as_deref() == Some("OPEN")
-  {
-    return pr_url_and_number(&pr);
+async fn ensure_draft_pr(
+  ctx: &TaskLanding,
+  repo: &str,
+  published_base: &str,
+  text: &ResolvedPrText,
+) -> anyhow::Result<(String, i64)> {
+  if open_task_prs(ctx, repo).await?.is_empty() {
+    let created = gh_stdout(
+      &ctx.worktree,
+      &[
+        "pr",
+        "create",
+        "--repo",
+        repo,
+        "--draft",
+        "--head",
+        &ctx.branch_name,
+        "--base",
+        published_base,
+        "--title",
+        &text.title,
+        "--body",
+        &text.body,
+      ],
+    )
+    .await;
+    if let Err(create_error) = created {
+      let concurrent = open_task_prs(ctx, repo).await.map_err(|list_error| {
+        anyhow::anyhow!("gh pr create failed: {create_error:#}; checking for an open PR failed: {list_error:#}")
+      })?;
+      if concurrent.is_empty() {
+        return Err(create_error);
+      }
+      tracing::info!(target: "charliebot_tasks", branch = %ctx.branch_name, error = %create_error, "land_pr_create_raced");
+    }
   }
-  let title = format!("Land {}", ctx.branch_name);
-  let body = format!(
-    "Landing gate for `{branch}` → `{base}`.\n\nOpened by `charliebot land`; the base branch moves only when \
-     CI passes on this PR's head sha.",
-    branch = ctx.branch_name,
-    base = published_base
-  );
-  let created = gh_json(
-    &ctx.worktree,
-    &[
-      "pr",
-      "create",
-      "--repo",
-      repo,
-      "--draft",
-      "--head",
-      &ctx.branch_name,
-      "--base",
-      published_base,
-      "--title",
-      &title,
-      "--body",
-      &body,
-    ],
-  )
-  .await;
-  if let Err(error) = &created {
-    // A concurrent creation or a just-opened PR: log the refusal, then re-read before failing.
-    tracing::info!(target: "charliebot_tasks", branch = %ctx.branch_name, error = %error, "land_pr_create_refused");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-  }
+
   let pr =
-    gh_json(&ctx.worktree, &["pr", "view", &ctx.branch_name, "--repo", repo, "--json", "number,url,state"]).await?;
+    gh_json(&ctx.worktree, &["pr", "view", &ctx.branch_name, "--repo", repo, "--json", "number,url,state,title,body"])
+      .await?;
+  if string_field(&pr, "state").as_deref() != Some("OPEN") {
+    anyhow::bail!("gh pr view {} did not return an open PR", ctx.branch_name);
+  }
+  let current_title = string_field(&pr, "title").ok_or_else(|| anyhow::anyhow!("gh pr view printed no title"))?;
+  let current_body = match pr.get("body") {
+    Some(Value::String(body)) => body.as_str(),
+    Some(Value::Null) => "",
+    _ => anyhow::bail!("gh pr view printed no body"),
+  };
+  if current_title != text.title || current_body != text.body {
+    let number =
+      pr.get("number").and_then(Value::as_i64).ok_or_else(|| anyhow::anyhow!("gh pr view printed no number"))?;
+    gh_stdout(
+      &ctx.worktree,
+      &["pr", "edit", &number.to_string(), "--repo", repo, "--title", &text.title, "--body", &text.body],
+    )
+    .await?;
+  }
   pr_url_and_number(&pr)
 }
 
@@ -1154,10 +1267,10 @@ async fn close_task_prs(ctx: &TaskLanding, published: &str, sha: &str) -> anyhow
     return Ok(());
   }
   let deadline = tokio::time::Instant::now() + PR_MERGE_WAIT;
-  let mut open = open_task_prs(ctx).await?;
+  let mut open = open_task_prs(ctx, &ctx.repo).await?;
   while open.iter().any(|pr| pr.head_sha == sha) && tokio::time::Instant::now() < deadline {
     tokio::time::sleep(PR_MERGE_POLL).await;
-    open = open_task_prs(ctx).await?;
+    open = open_task_prs(ctx, &ctx.repo).await?;
   }
   let comment = format!("Landed on `{published}` as {sha} by `charliebot land`.");
   let mut refusals = Vec::new();
@@ -1169,7 +1282,7 @@ async fn close_task_prs(ctx: &TaskLanding, published: &str, sha: &str) -> anyhow
       refusals.push(format!("#{number}: {error:#}"));
     }
   }
-  let left = open_task_prs(ctx).await?;
+  let left = open_task_prs(ctx, &ctx.repo).await?;
   if !left.is_empty() {
     let numbers = left.iter().map(|pr| format!("#{}", pr.number)).collect::<Vec<_>>().join(", ");
     anyhow::bail!("PR {numbers} of {} still reads open after the close ({})", ctx.branch_name, refusals.join("; "));
@@ -1180,10 +1293,10 @@ async fn close_task_prs(ctx: &TaskLanding, published: &str, sha: &str) -> anyhow
   Ok(())
 }
 
-async fn open_task_prs(ctx: &TaskLanding) -> anyhow::Result<Vec<OpenPr>> {
+async fn open_task_prs(ctx: &TaskLanding, repo: &str) -> anyhow::Result<Vec<OpenPr>> {
   let listed = gh_json(
     &ctx.worktree,
-    &["pr", "list", "--repo", &ctx.repo, "--head", &ctx.branch_name, "--state", "open", "--json", "number,headRefOid"],
+    &["pr", "list", "--repo", repo, "--head", &ctx.branch_name, "--state", "open", "--json", "number,headRefOid"],
   )
   .await?;
   let rows = listed.as_array().ok_or_else(|| anyhow::anyhow!("gh pr list printed no array"))?;
@@ -1218,6 +1331,42 @@ mod tests {
       run["conclusion"] = json!(conclusion);
     }
     run
+  }
+
+  #[test]
+  fn one_commit_supplies_its_subject_and_trimmed_body() {
+    let commits = parse_commit_messages("Add the route\n\nExplain the contract.\n\0");
+    let text = resolve_pr_text(&commits, &LandOptions::default()).expect("one commit resolves");
+    assert_eq!(text.title, "Add the route");
+    assert_eq!(text.body, "Explain the contract.");
+  }
+
+  #[test]
+  fn multiple_commits_keep_each_subject_and_body_in_order() {
+    let commits =
+      parse_commit_messages("Add the route\n\nExplain the contract.\n\0Handle errors\n\nName the failure.\n\0");
+    let text = resolve_pr_text(&commits, &LandOptions::default()).expect("the commit range resolves");
+    assert_eq!(text.title, "Add the route");
+    assert_eq!(text.body, "### Add the route\n\nExplain the contract.\n\n### Handle errors\n\nName the failure.");
+  }
+
+  #[test]
+  fn explicit_pr_text_replaces_commit_derived_values() {
+    let options = LandOptions { title: Some("Resolved title".to_string()), body: Some("Resolved body".to_string()) };
+    let text = resolve_pr_text(&[], &options).expect("explicit values need no commit range");
+    assert_eq!(text, ResolvedPrText { title: "Resolved title".to_string(), body: "Resolved body".to_string() });
+  }
+
+  #[test]
+  fn an_empty_explicit_title_fails_validation() {
+    let options = LandOptions { title: Some(" \t\n".to_string()), body: None };
+    assert!(options.validate().is_err());
+    assert!(resolve_pr_text(&[], &options).is_err());
+  }
+
+  #[test]
+  fn a_missing_commit_title_fails_when_the_range_is_empty() {
+    assert!(resolve_pr_text(&[], &LandOptions::default()).is_err());
   }
 
   #[test]

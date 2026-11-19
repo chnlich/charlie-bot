@@ -27,6 +27,16 @@ pr_state() {
   cat "$state_dir/prs/$number/state"
 }
 
+json_escape() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '%s' "$value"
+}
+
 group=$1
 action=$2
 shift 2
@@ -72,7 +82,10 @@ case "$group $action" in
       printf 'no pull requests found for branch "%s"\n' "${positional[0]}" >&2
       exit 1
     fi
-    printf '{"number":%s,"url":"https://github.test/pull/%s","state":"%s"}\n' "$found" "$found" "$(pr_state "$found")"
+    title=$(cat "$state_dir/prs/$found/title")
+    body=$(cat "$state_dir/prs/$found/body")
+    printf '{"number":%s,"url":"https://github.test/pull/%s","state":"%s","title":"%s","body":"%s"}\n' \
+      "$found" "$found" "$(pr_state "$found")" "$(json_escape "$title")" "$(json_escape "$body")"
     ;;
   'pr create')
     existing=("$state_dir"/prs/*)
@@ -80,7 +93,18 @@ case "$group $action" in
     mkdir -p "$state_dir/prs/$number"
     printf '%s' "${option[head]}" >"$state_dir/prs/$number/branch"
     echo OPEN >"$state_dir/prs/$number/state"
+    printf '%s' "${option[title]}" >"$state_dir/prs/$number/title"
+    printf '%s' "${option[body]}" >"$state_dir/prs/$number/body"
     printf 'https://github.test/pull/%s\n' "$number"
+    ;;
+  'pr edit')
+    number=${positional[0]}
+    if [[ ${option[title]+set} ]]; then
+      printf '%s' "${option[title]}" >"$state_dir/prs/$number/title"
+    fi
+    if [[ ${option[body]+set} ]]; then
+      printf '%s' "${option[body]}" >"$state_dir/prs/$number/body"
+    fi
     ;;
   'pr close')
     number=${positional[0]}

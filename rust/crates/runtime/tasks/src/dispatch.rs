@@ -1033,7 +1033,7 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
 
 fn close_report_outcome(close: &Value) -> &str {
   close
-    .get("sequence_outcome")
+    .get(event_types::SEQUENCE_OUTCOME)
     .and_then(Value::as_str)
     .filter(|value| !value.is_empty())
     .or_else(|| close.get("outcome").and_then(Value::as_str).filter(|value| !value.is_empty()))

@@ -73,12 +73,18 @@ mod tests {
     }
   }
 
-  /// The backend of an option with these type fields, or the factory's error text.
+  /// The backend of an option with these type fields, or the factory's error text. The launch is a worker run, which
+  /// names its session and run in its compaction-context hook.
   fn build(type_fields: &str) -> Result<Box<dyn AgentBackend>, String> {
     let home = tempfile::tempdir().unwrap();
     let cfg = Registry::new().load_config(home.path()).unwrap();
+    let launch = LaunchArgs {
+      cgroup_session_id: Some("worker-session".to_string()),
+      backend_kwargs: serde_json::json!({"run_id": "worker-run"}).as_object().unwrap().clone(),
+      ..LaunchArgs::default()
+    };
     AnthropicCompatibleFactory
-      .build(Some(&option(type_fields)), &cfg, LaunchArgs::default())
+      .build(Some(&option(type_fields)), &cfg, launch)
       .map_err(|error| format!("{error:#}"))
   }
 

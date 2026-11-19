@@ -257,7 +257,10 @@ fn a_single_commit_supplies_the_draft_pr_title_and_body() {
   assert_eq!(record["state"], "landed");
   assert_eq!(venue.pr_text(), ("Add routing support".to_string(), "Keep callers on a stable path.".to_string()));
   let calls = venue.gh_calls();
-  let create = calls.lines().find(|call| call.starts_with("pr create ")).expect("the landing creates a PR: {calls}");
+  let create = calls
+    .lines()
+    .find(|call| call.starts_with("pr create "))
+    .unwrap_or_else(|| panic!("the landing creates a PR: {calls}"));
   assert!(create.contains("--draft"), "the created PR is a draft: {create}");
 }
 

@@ -2498,6 +2498,13 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
   );
   let failed_dir = stack.store().run_dir(&worker, &run).display().to_string();
   assert!(retry_launch.prompt_contains(&failed_dir), "the note names the failed run's directory: {failed_dir}");
+  let task_spec = stack.store().run_task_spec_path(&worker, &run);
+  assert!(task_spec.is_file(), "the failed run pinned its task spec: {}", task_spec.display());
+  assert!(
+    retry_launch.prompt_contains(&task_spec.display().to_string()),
+    "the note names the failed run's task spec: {}",
+    task_spec.display()
+  );
   assert!(retry_launch.prompt_contains("files: /synthetic/src/main.rs"), "the summary comes from the run's events log");
   Ok(())
 }

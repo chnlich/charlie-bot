@@ -107,7 +107,8 @@ pub struct Handoff {
 /// `reason` names why the run starts a fresh conversation. The note always names the session chat log, its archives
 /// and the source run's directory as absolute paths: "the failed run's directory" for a retry, and "the previous run's
 /// directory" for a turn-start switch. A worker's note and summary name the task's goal; a manager's Goals reach it
-/// through its prompt, so its note and summary name none. A summary that cannot be assembled leaves a line in the note
+/// through its prompt, so its note and summary name none. A worker's note also names the failed run's task spec file
+/// when that run pinned one. A summary that cannot be assembled leaves a line in the note
 /// and an `unavailable` value for the switch record, and the run proceeds.
 pub fn handoff(
   features: &FeatureContext,
@@ -129,11 +130,19 @@ pub fn handoff(
       ("Earlier turns' history remains readable in the session chat log at".to_string(), "the failed run's directory")
     }
   };
+  let task_spec = match source {
+    HandoffSource::WorkerRun { .. } => {
+      let path = features.store.run_task_spec_path(&meta.id, &previous.id);
+      path.is_file().then(|| format!(" The failed run's task spec is at {}.", path.display()))
+    }
+    HandoffSource::ManagerRun { .. } | HandoffSource::ManagerTurnStart { .. } => None,
+  };
   let context = format!(
-    "{lead} {}, its weekly archives at {}, and {run_label} at {}, whose {RAW_LOG_NAME} holds each step's raw output.",
+    "{lead} {}, its weekly archives at {}, and {run_label} at {}, whose {RAW_LOG_NAME} holds each step's raw output.{}",
     chat_log.display(),
     archives.display(),
     run_dir.display(),
+    task_spec.unwrap_or_default(),
   );
   let (summary_text, summary_value) = match summary(features, meta, &source) {
     Ok(text) => (text, SUMMARY_OK.to_string()),

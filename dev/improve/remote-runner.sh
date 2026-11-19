@@ -14,7 +14,7 @@
 # into the launch's member-credential file (mode 600), which only this launch reads. The first form
 # checks the round's dependencies, prepares the round's environment, then starts the round's scope
 # through systemd-run; the scope runs the `--in-scope` form, which empties TMPDIR, runs the member's
-# agent under the write-only Landlock boundary and records the scope's memory peak.
+# agent under the Landlock boundary that limits its writes and signals, and records the scope's memory peak.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
@@ -579,7 +579,8 @@ check_round_dependencies() {
     || fail 7 "$HOME_DIR/.charliebot exists; the round's profile home is $ROUND_HOME, and no live profile home may sit beside it"
 }
 
-# The write boundary must start before the round does. A kernel without Landlock makes improve-sandbox refuse at exec.
+# The write boundary must start before the round does. A kernel below Landlock ABI 6 makes improve-sandbox refuse at
+# exec.
 check_boundary_starts() {
   local output
   output=$("$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- true 2>&1) \

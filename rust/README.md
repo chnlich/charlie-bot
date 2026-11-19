@@ -218,7 +218,7 @@ rust/
 - `compat` — the request and response pieces every crate shares: JSON bodies, validation errors, routing and static files
 - [`core`](crates/infra/core/README.md) — the foundation: profile home, configuration, credentials, the home writer fence, log lines and run tokens
 - [`html`](crates/infra/html/README.md) — the HTML tokenizer, character references and page-open fold primitives
-- `improve-sandbox` — the sandbox that runs one improve round's command under a write-only Landlock boundary
+- `improve-sandbox` — the sandbox that runs one improve round's command under a Landlock boundary that limits writes and signals
 - `shell-harness` — the harness that runs the repository's shell scripts for real, against stub commands
 
 `crates/runtime/` — the machinery a session runs on:

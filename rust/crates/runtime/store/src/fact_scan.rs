@@ -25,6 +25,7 @@ use charliebot_core::fsutil;
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 
 use crate::compact::{CompactValue, KeySource, ObjectEntry, ParseKeys};
+use crate::control_events::REPORT_TO_FIELD;
 use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::WHOLE_LOG_LOGGED_BYTES;
 use crate::fact_checkpoint::{ArchiveMark, FactCheckpoint, ParsedCheckpoint};
@@ -101,7 +102,7 @@ impl ScannedLiveFacts {
     let close_events = self.facts.task().map_or(&[][..], |task| task.close_events.as_slice());
     close_events
       .iter()
-      .filter_map(|close| close.get("report_to").and_then(CompactValue::as_str))
+      .filter_map(|close| close.get(REPORT_TO_FIELD).and_then(CompactValue::as_str))
       .filter(|recipient| !recipient.is_empty())
   }
 }

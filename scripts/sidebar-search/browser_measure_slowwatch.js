@@ -7,6 +7,7 @@
 // open tab, so the page refreshes its search as it would under a live turn.
 //
 // Usage: node browser_measure_slowwatch.js <base-url> <out.json> <reps> <window-seconds> <changes> <query>
+//        --confirm-renames
 // The access key, when the server asks for one, comes from CHARLIEBOT_ACCESS_KEY.
 'use strict';
 
@@ -23,10 +24,14 @@ const {
 } = require('./measure_common');
 
 async function main() {
-  const [baseUrl, out, repsArg, windowArg, changesArg, query] = process.argv.slice(2);
-  if (!baseUrl || !out || !repsArg || !windowArg || !changesArg || !query) {
+  const [baseUrl, out, repsArg, windowArg, changesArg, query, confirmation] = process.argv.slice(2);
+  if (confirmation !== '--confirm-renames') {
+    console.error('refusing to send rename PATCH requests without --confirm-renames');
+    process.exit(2);
+  }
+  if (!baseUrl || !out || !repsArg || !windowArg || !changesArg || !query || process.argv.length !== 9) {
     console.error('usage: node browser_measure_slowwatch.js <base-url> <out.json> <reps> <window-seconds> <changes> '
-      + '<query>');
+      + '<query> --confirm-renames');
     process.exit(2);
   }
   const reps = Number(repsArg);

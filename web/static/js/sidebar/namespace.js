@@ -2,6 +2,8 @@
   const Sidebar = global.Sidebar || {};
   const state = Sidebar.state || {};
   Sidebar.state = state;
+  // The search's request, discard and list-paint counts, which the search tests read as window.sidebarSearchCounters.
+  global.sidebarSearchCounters = {fetch: 0, render: 0, discard: 0};
 
   function ensureState(name, value) {
     if (!(name in state)) state[name] = value;

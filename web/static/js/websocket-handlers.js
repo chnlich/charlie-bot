@@ -47,22 +47,23 @@ registerWsMessageHandler('session_renamed', (ev) => {
 // A changed task node re-fetches the list the same way a group change does.
 // The archived view refreshes its loaded rows in place instead, so the
 // broadcast never clears the list.
-function refetchSessionList() {
+// `fromBroadcast` is true when a broadcast asked for the refetch; an open search takes it as a refresh.
+function refetchSessionList(fromBroadcast = false) {
   const searchInput = document.getElementById('sidebar-search');
   const query = searchInput ? searchInput.value.trim() : '';
-  if (query) handleSidebarSearch(query);
+  if (query) handleSidebarSearch(query, fromBroadcast);
   else if (currentFilter === 'archived') refreshArchivedView();
   else switchSidebarFilter(currentFilter);
 }
-registerWsMessageHandler('session_group_changed', () => deferWhileHidden('session-list', refetchSessionList),
-    {advancesCursor: false, sidebar: true});
+registerWsMessageHandler('session_group_changed',
+    () => deferWhileHidden('session-list', () => refetchSessionList(true)), {advancesCursor: false, sidebar: true});
 // A worker run's finish reaches the page as a task_tree_changed frame, and the concurrency badge counts that run, so
 // the badge refetches with the rows. Its 5 s poll covers a worker run's start, which broadcasts nothing. The frame
 // names the session whose row changed: a list scoped by filter fetches that row alone, and the views that keep their
 // own list refetch it. A hidden tab holds each request until it is visible.
 registerWsMessageHandler('task_tree_changed', (ev) => {
   if (sidebarRowsRefreshable()) queueRowRefresh(ev.session_id);
-  else deferWhileHidden('session-list', refetchSessionList);
+  else deferWhileHidden('session-list', () => refetchSessionList(true));
   deferWhileHidden('workspace-badges', refreshWorkspaceBadges);
   globalThis.ConcurrencyBadge?.refreshSoon();
 }, {advancesCursor: false, sidebar: true});

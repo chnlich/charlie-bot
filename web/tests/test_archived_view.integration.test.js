@@ -165,18 +165,18 @@ test('archived listing facts clear an old waiting item before the context ancest
   const parent = makeContextSession('parent', {
     status: 'active',
     profile: 'manager',
-    web_status: {waiting: [{text: 'Approve the deploy'}]},
+    has_waiting_items: true,
   });
   const activeChild = makeSessionMeta('child', {
     status: 'active',
     profile: 'manager',
     task_parent_id: 'parent',
-    web_status: {waiting: [{text: 'Approve the deploy'}]},
+    has_waiting_items: true,
   });
   const archivedChild = makeArchivedSession('child', {
     profile: 'manager',
     task_parent_id: 'parent',
-    web_status: {waiting: [{text: 'Approve the deploy'}]},
+    has_waiting_items: true,
   });
   const {context, elements, nav} = archivedContext([makePage([parent, archivedChild])]);
   const parentOwnMark = createElement({className: 'hidden'});

@@ -253,9 +253,12 @@ function restoreSidebarFromUrl() {
 // ---------------------------------------------------------------------------
 let searchDebounceTimer = null;
 // The query generation the list is waiting for. Each input text takes the next
-// one. A response carries the generation it was fetched under, so a slow
-// earlier query cannot repaint the rows of a newer one.
+// one. A response carries the generation it was sent under, so a slow earlier
+// query cannot repaint the rows of a newer one. A broadcast refresh does not
+// take one: its answer is for the same text.
 let searchGeneration = 0;
+// The text the next search request answers: the newest query typed.
+let searchQueryText = '';
 // The query whose rows the list holds, '' while it holds another view or a
 // note. A same-text call is a refresh. The WebSocket handlers refetch the open
 // query when a session or task tree changes, and that refresh keeps the rows
@@ -263,6 +266,16 @@ let searchGeneration = 0;
 let shownSearchQuery = '';
 // Whether the list holds a search note instead of rows.
 let searchPending = false;
+// The response body the list last painted for a search. A response with the
+// same body repaints nothing.
+let shownSearchBody = null;
+// The generation of the search request on the wire for the current query, or
+// null. A broadcast refresh of that query waits for the request instead of
+// sending another.
+let searchInFlightGeneration = null;
+// Whether a broadcast refresh arrived while the current query's request was in
+// flight. The request's end sends one more request for the newest text.
+let searchRefreshPending = false;
 
 // The search field's clear control (index.html, wired below): the reader's way back to the pills and
 // the current filter's rows. The empty field hides the control itself, so this only empties the box
@@ -274,11 +287,22 @@ function clearSidebarSearch() {
   handleSidebarSearch('');
 }
 
-function handleSidebarSearch(query) {
+// `fromBroadcast` marks a refresh a broadcast asked for. While a request is in
+// flight, that refresh only marks the rows stale and keeps the generation: the
+// request's end sends the one request that follows, so a burst of broadcasts
+// costs at most one more request.
+function handleSidebarSearch(query, fromBroadcast = false) {
+  if (fromBroadcast && searchInFlightGeneration === searchGeneration) {
+    searchRefreshPending = true;
+    return;
+  }
   clearTimeout(searchDebounceTimer);
   const pills = document.querySelector('.filter-pill')?.parentElement;
-  const generation = ++searchGeneration;
+  ++searchGeneration;
+  // A new query supersedes a refresh that was due for the old one.
+  searchRefreshPending = false;
   const text = query.trim();
+  searchQueryText = text;
   if (text) {
     // Hide filter pills while searching
     if (pills) pills.style.display = 'none';
@@ -288,33 +312,71 @@ function handleSidebarSearch(query) {
       // see, and rows that contradict the box read as a search doing nothing.
       renderSearchNote('Searching…');
       shownSearchQuery = '';
+      shownSearchBody = null;
       searchPending = true;
     }
-    searchDebounceTimer = setTimeout(() => {
-      const requestSeq = factSeqAtRequest();
-      fetch('/api/sessions/search?q=' + encodeURIComponent(text))
-        .then(res => res.json())
-        .then(sessions => {
-          if (generation !== searchGeneration) return;
-          shownSearchQuery = text;
-          searchPending = false;
-          renderSessionList(listingRows(sessions, requestSeq), 'search');
-        })
-        .catch(err => {
-          if (generation !== searchGeneration) return;
-          console.error('Search failed:', err);
-          // A failed refresh keeps the rows already on screen; only a search
-          // that has no rows yet replaces its note with the failure.
-          if (searchPending) renderSearchNote('Search failed; try again.');
-        });
-    }, 300);
+    searchDebounceTimer = setTimeout(requestSearchRows, 300);
   } else {
     shownSearchQuery = '';
+    shownSearchBody = null;
     searchPending = false;
     // Restore filter pills and current filter
     if (pills) pills.style.display = '';
     switchSidebarFilter(currentFilter);
   }
+}
+
+// The debounced search: sends the request for the newest text, or marks one due while that query's request is in
+// flight.
+function requestSearchRows() {
+  if (searchInFlightGeneration === searchGeneration) {
+    searchRefreshPending = true;
+    return;
+  }
+  sendSearchRequest();
+}
+
+// Sends the search for the newest text under the current generation. Its end, success or rejection, releases the
+// in-flight state and sends the request a broadcast left due. A response for a superseded generation paints nothing.
+function sendSearchRequest() {
+  const text = searchQueryText;
+  const generation = searchGeneration;
+  const requestSeq = factSeqAtRequest();
+  searchInFlightGeneration = generation;
+  globalThis.sidebarSearchCounters.fetch += 1;
+  fetch('/api/sessions/search?q=' + encodeURIComponent(text))
+    .then(res => res.json())
+    .then(payload => {
+      if (generation !== searchGeneration) {
+        globalThis.sidebarSearchCounters.discard += 1;
+        return;
+      }
+      shownSearchQuery = text;
+      searchPending = false;
+      const rows = listingRows(payload, requestSeq);
+      // An answer identical to the one painted leaves the list as it is.
+      const body = JSON.stringify(payload);
+      if (body === shownSearchBody) return;
+      shownSearchBody = body;
+      renderSessionList(rows, 'search');
+    })
+    .catch(err => {
+      if (generation !== searchGeneration) {
+        globalThis.sidebarSearchCounters.discard += 1;
+        return;
+      }
+      console.error('Search failed:', err);
+      // A failed refresh keeps the rows already on screen; only a search
+      // that has no rows yet replaces its note with the failure.
+      if (searchPending) {
+        shownSearchBody = null;
+        renderSearchNote('Search failed; try again.');
+      }
+    })
+    .finally(() => {
+      if (searchInFlightGeneration === generation) searchInFlightGeneration = null;
+      if (searchRefreshPending) requestSearchRows();
+    });
 }
 
 async function toggleSessionStar(id, currentlyStarred) {

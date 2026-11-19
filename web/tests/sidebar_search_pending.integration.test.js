@@ -118,3 +118,125 @@ test('a short search answer carries no cap notice', () => {
   assert.deepEqual(rowIds(nav.innerHTML).length, 199);
   assert.doesNotMatch(nav.innerHTML, /newest 200 matches/);
 });
+
+// ---------------------------------------------------------------------------
+// Broadcast refreshes of an open search (handleSidebarSearch with fromBroadcast). A broadcast while a request is in
+// flight only marks the rows due and keeps the generation, so its answer is never discarded. The request's end sends
+// one request for the newest text, and a broadcast during that request marks one more. window.sidebarSearchCounters
+// counts the requests, the discarded responses and the list paints.
+// ---------------------------------------------------------------------------
+
+const counters = (context) => ({...context.sidebarSearchCounters});
+
+test('broadcasts during a search in flight discard nothing and send one trailing request', async () => {
+  const {context} = buildSidebarIndicatorContext([]);
+  const pending = deferredFetches(context);
+  context.handleSidebarSearch('debug');
+  const start = counters(context);
+
+  context.handleSidebarSearch('debug', true);
+  context.handleSidebarSearch('debug', true);
+  context.handleSidebarSearch('debug', true);
+  assert.equal(pending.length, 1, 'no request goes out while the first one is in flight');
+
+  pending[0].resolve({json: async () => [makeSessionMeta('a')]});
+  await flush();
+  assert.equal(pending.length, 2, 'the end of the in-flight request sends one trailing request');
+  assert.equal(context.sidebarSearchCounters.discard, start.discard, 'no broadcast discards a response');
+  assert.equal(context.sidebarSearchCounters.fetch - start.fetch, 1, 'three broadcasts cost one request');
+});
+
+test('a burst of broadcasts across a trailing window adds at most one request each', async () => {
+  const {context} = buildSidebarIndicatorContext([]);
+  const pending = deferredFetches(context);
+  context.handleSidebarSearch('debug');
+  const start = counters(context);
+
+  // Each round, a broadcast lands while the newest request is in flight, and then that request answers.
+  const broadcasts = 6;
+  for (let round = 0; round < broadcasts; round += 1) {
+    context.handleSidebarSearch('debug', true);
+    pending[pending.length - 1].resolve({json: async () => [makeSessionMeta('a')]});
+    await flush();
+  }
+
+  assert.equal(pending.length, broadcasts + 1, 'each broadcast adds one trailing request to the wire');
+  assert.ok(context.sidebarSearchCounters.fetch - start.fetch <= broadcasts + 1,
+      'the fetch increment stays within the broadcast count plus one');
+  assert.equal(context.sidebarSearchCounters.discard, start.discard, 'no burst response is discarded');
+});
+
+test('the list converges on the server answer after the last broadcast', async () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const pending = deferredFetches(context);
+  context.handleSidebarSearch('debug');
+  context.handleSidebarSearch('debug', true);
+
+  // The first answer predates the broadcast; the trailing request reads the state the broadcast reports.
+  pending[0].resolve({json: async () => [makeSessionMeta('old')]});
+  await flush();
+  pending[1].resolve({json: async () => [makeSessionMeta('old'), makeSessionMeta('new')]});
+  await flush();
+
+  assert.deepEqual(rowIds(nav.innerHTML), ['old', 'new']);
+});
+
+test('an identical answer paints nothing', async () => {
+  const {context} = buildSidebarIndicatorContext([]);
+  const pending = deferredFetches(context);
+  context.handleSidebarSearch('debug');
+  pending[0].resolve({json: async () => [makeSessionMeta('a')]});
+  await flush();
+  const painted = counters(context).render;
+
+  context.handleSidebarSearch('debug', true);
+  pending[1].resolve({json: async () => [makeSessionMeta('a')]});
+  await flush();
+
+  assert.equal(context.sidebarSearchCounters.render, painted, 'the same rows do not repaint the list');
+});
+
+test('a broadcast during the trailing request sends one more request', async () => {
+  const {context} = buildSidebarIndicatorContext([]);
+  const pending = deferredFetches(context);
+  context.handleSidebarSearch('debug');
+  context.handleSidebarSearch('debug', true);
+  pending[0].resolve({json: async () => [makeSessionMeta('a')]});
+  await flush();
+  assert.equal(pending.length, 2, 'the trailing request is on the wire');
+
+  context.handleSidebarSearch('debug', true);
+  assert.equal(pending.length, 2, 'the broadcast marks the trailing request due');
+  pending[1].resolve({json: async () => [makeSessionMeta('a'), makeSessionMeta('b')]});
+  await flush();
+
+  assert.equal(pending.length, 3, 'the trailing request\'s end sends the one that is due');
+});
+
+test('a rejected search releases the in-flight state and sends the pending request', async () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const pending = deferredFetches(context);
+  context.handleSidebarSearch('debug');
+  context.handleSidebarSearch('debug', true);
+
+  pending[0].reject(new Error('injected failure'));
+  await flush();
+  assert.equal(pending.length, 2, 'the failure releases the request and the due one goes out');
+
+  pending[1].resolve({json: async () => [makeSessionMeta('a')]});
+  await flush();
+  assert.deepEqual(rowIds(nav.innerHTML), ['a']);
+  assert.equal(context.sidebarSearchCounters.discard, 0, 'the failed request was the current one, not superseded');
+});
+
+test('a search row whose session stores a waiting item shows the orange marker', async () => {
+  const {context, nav} = buildSidebarIndicatorContext(['w']);
+  const pending = deferredFetches(context);
+  context.handleSidebarSearch('debug');
+  pending[0].resolve({json: async () => [makeSessionMeta('w', {has_waiting_items: true})]});
+  await flush();
+
+  const markerClass = nav.innerHTML.match(/<[a-z]+ id="waiting-marker-w"[^>]*class="([^"]*)"/);
+  assert.ok(markerClass, 'the search row paints its waiting marker');
+  assert.equal(/\bhidden\b/.test(markerClass[1]), false, 'the marker is shown on the row that stores a waiting item');
+});

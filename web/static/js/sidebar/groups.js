@@ -885,6 +885,7 @@ function renderSessionItem(s, filter, options = {}) {
 }
 
 function renderSessionList(sessions, filter, options = {}) {
+  globalThis.sidebarSearchCounters.render += 1;
   lastListPaint = {sessions, filter, options};
   searchListPainted = (filter === 'search');
   // The grouped paints (Workspace and Later) nest rows and record their tree

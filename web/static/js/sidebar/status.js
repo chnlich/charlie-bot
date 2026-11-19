@@ -274,14 +274,14 @@ function recordWaitingFact(sessionId, hasWaiting) {
 }
 
 // The facts of one fetched row list, captured at requestSeq (factSeqAtRequest
-// before the fetch). Call it before the list paints. An archived row stores no
-// waiting fact, whatever its web_status holds.
+// before the fetch). Call it before the list paints. Each row carries the
+// server's has_waiting_items flag. An archived row stores no waiting fact,
+// whatever its flag holds.
 function applyListingFacts(rows, requestSeq) {
   rows.forEach(row => {
     if (replyIsCurrent('unread', row.id, requestSeq)) recordUnreadFact(row.id, row.has_unread);
     if (replyIsCurrent('waiting', row.id, requestSeq)) {
-      const stored = !!(row.web_status && row.web_status.waiting && row.web_status.waiting.length);
-      recordWaitingFact(row.id, row.status !== 'archived' && stored);
+      recordWaitingFact(row.id, row.status !== 'archived' && row.has_waiting_items);
     }
   });
 }

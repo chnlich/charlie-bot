@@ -660,9 +660,8 @@ test('the waiting clock and the descendant’s own dot show together; the mark r
 // subtree mark reads the facts below it. Both sit after the existing icons.
 // ---------------------------------------------------------------------------
 
-const WAITING_ITEMS = [{text: 'Approve the deploy', context: 'Deploy or wait.', link: null}];
-const stores = (id, parent, overrides = {}) => row(id, parent,
-    {web_status: {goal: null, now: null, waiting: WAITING_ITEMS}, ...overrides});
+// A row whose session stores a Waiting on you item: the server's has_waiting_items flag on the listing row.
+const stores = (id, parent, overrides = {}) => row(id, parent, {has_waiting_items: true, ...overrides});
 
 // The class a rendered element carries in the row list's HTML: the state the last paint gave it.
 function renderedClass(nav, elementId) {
@@ -674,7 +673,7 @@ const renderedHidden = (nav, elementId) => /\bhidden\b/.test(renderedClass(nav, 
 
 test('a listing row with a stored item paints its marker, and a row without one paints none', () => {
   const {context, nav} = buildSidebarIndicatorContext(['a', 'b']);
-  paintListReply(context, [stores('a', null), row('b', null, {web_status: {waiting: []}})], 'all');
+  paintListReply(context, [stores('a', null), row('b', null, {has_waiting_items: false})], 'all');
   assert.equal(renderedHidden(nav, 'waiting-marker-a'), false);
   assert.equal(renderedHidden(nav, 'waiting-marker-b'), true);
 });
@@ -773,7 +772,7 @@ test('a folded ancestor shows the subtree mark at every level; expanding hides i
 test('an archived row shows no marker and gives its ancestors no subtree mark', () => {
   const {context, nav, waitingMarks} = buildSidebarIndicatorContext(['p', 'a']);
   paintListReply(context, [row('p', null),
-    row('a', 'p', {status: 'archived', profile: 'manager', web_status: {waiting: WAITING_ITEMS}})], 'starred');
+    row('a', 'p', {status: 'archived', profile: 'manager', has_waiting_items: true})], 'starred');
   assert.equal(nav.innerHTML.includes('waiting-marker-a'), false, 'an archived row renders no indicators');
   assert.deepEqual(waitingMarks('p'), {marker: false, subtree: false});
 });
@@ -782,7 +781,7 @@ test('an archived row stays clear when a status reply carries its stored item', 
   const {context, waitingMarks} = buildSidebarIndicatorContext(['p', 'a']);
   context.SESSION_ID = 'a';
   paintListReply(context, [row('p', null),
-    row('a', 'p', {status: 'archived', profile: 'manager', web_status: {waiting: WAITING_ITEMS}})], 'starred');
+    row('a', 'p', {status: 'archived', profile: 'manager', has_waiting_items: true})], 'starred');
   context.document.querySelectorAll = (selector) => (
     selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-a'}] : []
   );
@@ -811,7 +810,7 @@ test('a Later row has no subtree mark for an unstarred child outside that listin
   assert.deepEqual(waitingMarks('p'), {marker: false, subtree: false});
 });
 
-test('a repaint from a held row object shows the current fact, not the web_status the row was listed with', () => {
+test('a repaint from a held row object shows the current fact, not the flag the row was listed with', () => {
   const {context, nav} = buildSidebarIndicatorContext(['a']);
   const held = [stores('a', null)];
   paintListReply(context, held, 'all');

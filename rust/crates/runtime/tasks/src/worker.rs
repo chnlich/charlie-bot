@@ -33,7 +33,7 @@ use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timefmt;
 use charliebot_registry::backend::{
   BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch,
-  RemoteLaunch, RetryAfter,
+  RemoteLaunch, RetryAfter, ServeTransport, Translate,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
@@ -266,8 +266,10 @@ impl Worker {
   }
 
   /// Re-attaches to an interrupted run and streams its remaining output, then emits the terminal events (`Worker.resume`).
-  /// `is_alive` judges the process from its pinned identity; `on_silence` is the follow's silence recheck. A process
-  /// still alive after the follow gets its diagnostics captured and its group killed before the terminal events.
+  /// The process still running is the run's first process: the launch loop follows it, and a run with a conversation id
+  /// gets its lifecycle's watch, so a rejected login relays the run to another login once that process exits. A run
+  /// with no conversation id follows its process without a watch. `is_alive` judges the process from its pinned
+  /// identity; `on_silence` is the follow's silence recheck.
   pub async fn resume(
     &self,
     is_alive: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -284,7 +286,6 @@ impl Worker {
       follow::TAIL_POLL_INTERVAL,
     )
     .await?;
-    let stderr_path = self.data_dir.join(STDERR_LOG_NAME);
     let cursor_path = self.data_dir.join(CURSOR_NAME);
     let sink = self.open_sink()?;
     // Replay the delivered prefix through a dedicated translator to restore stateful backend accumulators.
@@ -299,14 +300,10 @@ impl Worker {
     for raw in prefix {
       translator.translate(raw)?;
     }
-    let failure: Arc<Mutex<Option<anyhow::Error>>> = Arc::new(Mutex::new(None));
     let buffer_limit = charliebot_agents::transport::final_stdout::event_buffer_limit(
       &self.data_dir,
       subprocess_buffer_bytes(&self.cfg)?,
     );
-    let follow_sink = Arc::clone(&sink);
-    let follow_failure = Arc::clone(&failure);
-    let alive = Arc::clone(&is_alive);
     let serve_transport =
       self.backend_option.as_ref().and_then(|option| self.features.registry.serve_transport(&option.backend_type));
     let serve_silence = match serve_transport.as_ref() {
@@ -320,7 +317,87 @@ impl Worker {
       }
       None => (on_silence, NO_OUTPUT_REPORT_THRESHOLD),
     };
+    let follow = ResumeFollow {
+      translator,
+      cursor_offset,
+      is_alive,
+      on_silence,
+      silence_threshold,
+      buffer_limit,
+      serve_transport,
+    };
+    let mut process = ResumeProcess {
+      worker: self,
+      sink: Arc::clone(&sink),
+      follow: Some(follow),
+      spawn: WorkerProcess { worker: self, sink: Arc::clone(&sink), env: self.process_env()?, automatic_retries: 0 },
+    };
+    match self.backend_option.as_ref() {
+      Some(option) if self.held_native_id.is_some() => {
+        let lifecycle = self.features.registry.lifecycle_for(&option.backend_type)?;
+        let context = self.launch_context(option, lifecycle.as_ref(), &sink)?;
+        launch_loop::run_launches(
+          &context,
+          lifecycle.as_ref(),
+          &mut process,
+          || self.thread_native_id(lifecycle.as_ref()),
+          |relays| self.relays.store(relays, Ordering::Release),
+        )
+        .await?;
+      }
+      _ => {
+        let launch =
+          Launch { backend_kwargs: Map::new(), resume_id: None, prompt: None, account_label: None, private: None };
+        process.run(&launch, None, 0).await?;
+      }
+    }
+    let last = self
+      .last
+      .lock()
+      .expect("last process mutex is not poisoned")
+      .take()
+      .context("the resumed run ended without a process")?;
+    let completion = recovery::raw_completion_time(&raw_path);
+    self
+      .emit_terminal_events(
+        &sink,
+        last.exit_code,
+        &last.stderr_text,
+        last.hang_diagnostics.as_ref(),
+        last.cgroup_exit_report.as_deref(),
+        completion,
+      )
+      .await?;
+    tracing::info!(target: "charliebot_tasks", thread = %self.thread_id, exit_code = last.exit_code, "worker_resume_finished");
+    Ok(last.exit_code)
+  }
+
+  /// Follows the resumed run's first process from the cursor to its exit, the watch seeing each event (`Worker.resume`'s
+  /// follow). Returns the process's exit code and stderr tail, and records the process as the run's last.
+  async fn follow_resumed(
+    &self,
+    sink: &Arc<RunSink>,
+    follow: ResumeFollow,
+    watch: Option<&mut dyn LaunchWatch>,
+    account: Option<&str>,
+  ) -> anyhow::Result<ProcessResult> {
+    let raw_path = self.raw_log_path();
+    let stderr_path = self.data_dir.join(STDERR_LOG_NAME);
+    let cursor_path = self.data_dir.join(CURSOR_NAME);
+    let ResumeFollow {
+      translator,
+      cursor_offset,
+      is_alive,
+      on_silence,
+      silence_threshold,
+      buffer_limit,
+      serve_transport,
+    } = follow;
+    let failure: Arc<Mutex<Option<anyhow::Error>>> = Arc::new(Mutex::new(None));
+    // The watch is shared by the follow's handler, which awaits it once per event.
+    let watch = tokio::sync::Mutex::new(watch);
     let reject_transport = serve_transport.clone();
+    let mut translator = translator;
     let followed = follow::tail_follow_events(
       &raw_path,
       move |raw| {
@@ -329,11 +406,13 @@ impl Worker {
         }
         translator.translate(raw)
       },
-      move |event| {
-        let sink = Arc::clone(&follow_sink);
-        let failure = Arc::clone(&follow_failure);
+      |event| {
+        let sink = Arc::clone(sink);
+        let failure = Arc::clone(&failure);
+        let watch = &watch;
         async move {
-          match handle_event(&sink, event, None::<&mut dyn LaunchWatch>, None).await {
+          let mut watch = watch.lock().await;
+          match handle_event(&sink, event, watch.as_deref_mut(), account).await {
             Ok(_) => Ok(()),
             Err(error) => {
               // A quota rejection is the run's ending, and its event is already in the events log: the follow
@@ -346,7 +425,10 @@ impl Worker {
           }
         }
       },
-      move || alive(),
+      {
+        let alive = Arc::clone(&is_alive);
+        move || alive()
+      },
       Some(&cursor_path),
       cursor_offset,
       self.post_result_timeout,
@@ -365,7 +447,7 @@ impl Worker {
       Ok(_) => false,
       Err(error) if serve_transport.is_some() => {
         let message = format!("OpenCode backend failed: {error}");
-        handle_event(&sink, event_builders::make_error_event(&message), None::<&mut dyn LaunchWatch>, None).await?;
+        handle_event(sink, event_builders::make_error_event(&message), None::<&mut dyn LaunchWatch>, None).await?;
         let pid = self.thread.lock().expect("thread metadata mutex is not poisoned").pid;
         let pid = pid.context("a failed resumed run has no recorded pid")?;
         if is_alive() {
@@ -404,11 +486,10 @@ impl Worker {
     } else {
       None
     };
-    let completion = recovery::raw_completion_time(&raw_path);
     let stderr_text = read_stderr_tail(&stderr_path).await?;
-    self.emit_terminal_events(&sink, exit_code, &stderr_text, hang_diagnostics.as_ref(), None, completion).await?;
-    tracing::info!(target: "charliebot_tasks", thread = %self.thread_id, exit_code, "worker_resume_finished");
-    Ok(exit_code)
+    *self.last.lock().expect("last process mutex is not poisoned") =
+      Some(LastProcess { exit_code, stderr_text: stderr_text.clone(), hang_diagnostics, cgroup_exit_report: None });
+    Ok((exit_code, stderr_text))
   }
 
   /// Terminates the running process, if one runs (`Worker.terminate`).
@@ -823,6 +904,43 @@ impl RunProcess for WorkerProcess<'_> {
         let mut quota = QuotaExhaustedError::new(message, quota.resets_at);
         quota.retry_after = Some(retry);
         return Err(quota.into());
+      }
+    })
+  }
+}
+
+/// What the follow of a resumed run's first process needs: the translator that replays the delivered prefix, the cursor
+/// where the follow starts, and the liveness and silence checks of that process.
+struct ResumeFollow {
+  translator: Box<dyn Translate>,
+  cursor_offset: u64,
+  is_alive: Arc<dyn Fn() -> bool + Send + Sync>,
+  on_silence: Option<SilenceCallback>,
+  silence_threshold: Duration,
+  buffer_limit: usize,
+  serve_transport: Option<Arc<dyn ServeTransport>>,
+}
+
+/// The process runner of a resumed run. Its first process is the one still running, which the follow reads to its exit
+/// with the lifecycle's watch. Each relay after it spawns through the run's ordinary runner.
+struct ResumeProcess<'a> {
+  worker: &'a Worker,
+  sink: Arc<RunSink>,
+  follow: Option<ResumeFollow>,
+  spawn: WorkerProcess<'a>,
+}
+
+impl RunProcess for ResumeProcess<'_> {
+  fn run<'a>(
+    &'a mut self,
+    launch: &'a Launch,
+    watch: Option<&'a mut dyn LaunchWatch>,
+    relays: usize,
+  ) -> BoxFuture<'a, anyhow::Result<ProcessResult>> {
+    Box::pin(async move {
+      match self.follow.take() {
+        Some(follow) => self.worker.follow_resumed(&self.sink, follow, watch, launch.account_label.as_deref()).await,
+        None => self.spawn.run(launch, watch, relays).await,
       }
     })
   }

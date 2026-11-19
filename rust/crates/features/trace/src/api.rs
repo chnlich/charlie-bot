@@ -89,7 +89,7 @@ async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>,
     format!("{MERGED_PATH}?{}", encode_pairs(&pairs))
   } else {
     if inputs.len() > 1 {
-      warn = Some("⚠ Remote or non-JSON traces cannot be merged, showing first trace only".to_string());
+      warn = Some("Remote or non-JSON traces cannot be merged, showing first trace only".to_string());
     }
     inputs[0].0.clone()
   };

@@ -45,7 +45,7 @@
 {% else %}
   <div id="topbar">
     <span class="trace-name">{{ title }}</span>
-    <span class="warn">{{ warn or "" }}</span>
+    <span class="warn">{% if warn %}{{ icon('warning', 13) }} {% endif %}{{ warn or "" }}</span>
     <span class="spacer"></span>
     <a href="#" id="open-new-tab">Open in new tab</a>
   </div>

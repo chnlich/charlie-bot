@@ -375,7 +375,10 @@ function sendSearchRequest() {
     })
     .finally(() => {
       if (searchInFlightGeneration === generation) searchInFlightGeneration = null;
-      if (searchRefreshPending) requestSearchRows();
+      if (searchRefreshPending) {
+        searchRefreshPending = false;
+        requestSearchRows();
+      }
     });
 }
 

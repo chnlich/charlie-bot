@@ -144,6 +144,10 @@ test('broadcasts during a search in flight discard nothing and send one trailing
   assert.equal(pending.length, 2, 'the end of the in-flight request sends one trailing request');
   assert.equal(context.sidebarSearchCounters.discard, start.discard, 'no broadcast discards a response');
   assert.equal(context.sidebarSearchCounters.fetch - start.fetch, 1, 'three broadcasts cost one request');
+
+  pending[1].resolve({json: async () => [makeSessionMeta('a')]});
+  await flush();
+  assert.equal(pending.length, 2, 'the trailing answer consumes the pending refresh instead of sending another');
 });
 
 test('a burst of broadcasts across a trailing window adds at most one request each', async () => {

@@ -1442,6 +1442,22 @@ async fn resume_run_checked(
 
 /// Hand a live or drained manager turn to the per-session queue (`_resume_manager_turn`). The queue's consumer runs the
 /// follow before any queued turn spawns, and resolves the returned receiver with the turn's result.
+/// The spawn callback of a re-attached manager turn. The follow's relay runs the turn on another login as a new
+/// process of the same run, so its launch is recorded like a fresh turn's: a later restart re-attaches to that
+/// process, not the one the follow replaced.
+fn resume_spawn_callback(features: Arc<FeatureContext>, session_id: String, run_id: String) -> TaskSpawnCallback {
+  Arc::new(move |pid, pid_start| {
+    let features = Arc::clone(&features);
+    let session_id = session_id.clone();
+    let run_id = run_id.clone();
+    Box::pin(async move {
+      let pid_start = pid_start.ok_or_else(|| anyhow!("run {run_id} spawned without a pinned pid_start"))?;
+      features.store.record_launch(&session_id, &run_id, pid, &pid_start).await?;
+      Ok(())
+    })
+  })
+}
+
 async fn enqueue_manager_resume(
   adapter: &TaskExecutionAdapter,
   meta: &SessionMetadata,
@@ -1460,11 +1476,7 @@ async fn enqueue_manager_resume(
     bail!("run {} records no launched process identity; nothing to re-attach", run.id);
   };
   let callbacks: SessionCallbacks = adapter.turn_callbacks();
-  let spawn_run = run.id.clone();
-  let on_task_spawn: TaskSpawnCallback = Arc::new(move |_pid, _pid_start| {
-    let run_id = spawn_run.clone();
-    Box::pin(async move { Err::<(), anyhow::Error>(anyhow!("resume follow of run {run_id} must not spawn a process")) })
-  });
+  let on_task_spawn = resume_spawn_callback(Arc::clone(&adapter.features), session_id.to_string(), run.id.clone());
   let on_task_finish = adapter.manager_finish_recorder(
     meta,
     &run.id,
@@ -2483,6 +2495,32 @@ mod tests {
         .expect("the synthetic node closes");
     }
     task.id
+  }
+
+  /// A re-attached turn's relay spawns the turn's next process, so the spawn callback records that process on the
+  /// run: the next restart re-attaches to the relay, not to the survivor the follow replaced.
+  #[tokio::test]
+  async fn a_resumed_turn_spawn_records_the_relayed_process_on_the_run() -> anyhow::Result<()> {
+    let (_home, features) = startup_features().await;
+    let session_id =
+      synthetic_node(&features, "resume-spawn-node", TaskProfile::Manager, RunKind::ManagerTurn, 0, false).await;
+    let run_id = "resume-spawn-run";
+    {
+      let guard = features.store.control_lock().await;
+      let record =
+        RunRecord { session_id: session_id.clone(), ..run(run_id, RunKind::ManagerTurn, Some("2026-10-18T10:00:00Z")) };
+      features.store.register_run_locked(&guard, &session_id, record, None).await?;
+    }
+    resume_spawn_callback(Arc::clone(&features), session_id.clone(), run_id.to_string())(
+      4242,
+      Some("boot".to_string()),
+    )
+    .await?;
+
+    let stored = features.store.read_run_sync(&session_id, run_id)?.context("the run record reads")?;
+    assert_eq!((stored.pid, stored.pid_start.as_deref()), (Some(4242), Some("boot")));
+    assert!(stored.started_at.is_some(), "the original start time stays");
+    Ok(())
   }
 
   /// The store's history work for one node's recovery pass, measured from a cold snapshot of that node.

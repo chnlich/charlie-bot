@@ -26,8 +26,8 @@ use charliebot_core::config::{
 };
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
-  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
-  TransportKind,
+  AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, Env, Launch, LaunchArgs,
+  LaunchContext, LaunchRefused, MemberFailure, ResumeStyle, Translate, TransportKind,
 };
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor};
@@ -42,10 +42,12 @@ use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{CreateTask, PatchTask, TaskCaller, control_events};
 use charliebot_tasks::execution::{TaskExecutionAdapter, is_out_of_space_error};
 use charliebot_tasks::recovery::{self, PassCounters};
+use futures_util::future::BoxFuture;
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
   BACKEND_ID, BACKEND_TYPE, LOOP_KIND, LogCapture, LoopClose, LoopMarker, PROBE_KIND, Scripts, Stack, SyntheticRepo,
-  assert_logged_node_failure, cold_read_spec, implement_spec, last_child_report, script_option, synthetic_run,
+  assert_logged_node_failure, cold_read_spec, implement_spec, last_child_report, script_option, scripted_type,
+  synthetic_run,
 };
 use serde_json::{Map, Value, json};
 use tower::ServiceExt;
@@ -2183,6 +2185,142 @@ async fn run_ending_with_a_pending_trigger_keeps_one_notice_across_a_restart() -
   stack.boot().await?;
   assert_eq!(pending_trigger_notices(&stack, &manager.id, &worker.id, &["run-a"])?, 1);
   settle_manager(&stack, &manager.id).await?;
+  Ok(())
+}
+
+/// The run-error notices that `parent_id` holds for one run of `session_id`.
+fn run_error_notices(stack: &Stack, parent_id: &str, session_id: &str, run_id: &str) -> anyhow::Result<Vec<Value>> {
+  let notice_id = control_events::stable_run_error_notice_id(session_id, run_id);
+  Ok(
+    stack
+      .run_event_values(parent_id)?
+      .into_iter()
+      .filter(|event| event["type"] == event_types::AGENT_MESSAGE && event["id"].as_str() == Some(notice_id.as_str()))
+      .collect(),
+  )
+}
+
+/// Admit one user message to `manager_id`, dispatch it, and wait until the manager's runs have ended. The dispatch
+/// schedules the turn on its own task and returns before the turn ends, so the wait is what makes the turn's facts
+/// readable. Returns the run that the dispatch launched.
+async fn launch_manager_turn(stack: &Stack, manager_id: &str) -> anyhow::Result<String> {
+  stack.dispatch.admit_input(manager_id, event_types::USER, "Start the synthetic turn.", "user", json!({})).await?;
+  let decision = stack.dispatch.dispatch_pending(manager_id).await?;
+  let run_id = decision["run_id"].as_str().context("the manager's turn launched a run")?.to_string();
+  settle_manager(stack, manager_id).await?;
+  Ok(run_id)
+}
+
+/// A child manager whose turn ends with a non-quota error sends its parent one notice, with the error text and the run
+/// id. The parent's own turn then runs on the same script and ends in its own error.
+#[tokio::test]
+#[ignore = "integration"]
+async fn child_manager_run_error_notifies_the_parent_once() -> anyhow::Result<()> {
+  let stack = Stack::start("printf 'synthetic turn failure\\n' >&2; exit 1").await?;
+  stack.write_access_key()?;
+  let parent = stack.node("parent", None, TaskProfile::Manager, None).await?;
+  let child = stack.node("child", Some(&parent.id), TaskProfile::Manager, None).await?;
+
+  let run_id = launch_manager_turn(&stack, &child.id).await?;
+  settle_manager(&stack, &parent.id).await?;
+  let notices = run_error_notices(&stack, &parent.id, &child.id, &run_id)?;
+  assert_eq!(notices.len(), 1, "{notices:?}");
+  let content = notices[0]["content"].as_str().context("the notice carries its text")?;
+  assert!(content.contains("synthetic turn failure"), "{content}");
+  assert!(content.contains(&run_id), "{content}");
+  Ok(())
+}
+
+/// A backend type whose every launch is refused on a spent quota, as an account placement refuses one.
+struct SpentQuotaLifecycle;
+
+impl BackendLifecycle for SpentQuotaLifecycle {
+  fn place<'a>(&'a self, _ctx: &'a LaunchContext) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
+    Box::pin(async {
+      Err(LaunchRefused { message: "quota exhausted".to_string(), failure: MemberFailure::Quota, resets_at: None })
+    })
+  }
+}
+
+fn register_spent_quota(
+  registry: &mut charliebot_registry::Registry,
+) -> Result<(), charliebot_registry::RegistryError> {
+  registry.backend_type(scripted_type(
+    "spent_quota",
+    BackendTraits {
+      resume: ResumeStyle::CliFlag,
+      restart_reattach: false,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    Some(Arc::new(SpentQuotaLifecycle)),
+  ))
+}
+
+/// A child manager whose launch is refused on a spent quota sends its parent no notice. The refused turn still posts
+/// its error with the quota mark, so the absence is the gate's doing and not a turn that never failed.
+#[tokio::test]
+#[ignore = "integration"]
+async fn child_manager_quota_end_sends_no_run_error_notice() -> anyhow::Result<()> {
+  let option = BackendOption { backend_type: "spent_quota".to_string(), ..script_option(BACKEND_ID, "exit 0") };
+  let stack =
+    Stack::start_with_package(vec![option], vec![BACKEND_ID.to_string()], ("spent_quota", register_spent_quota))
+      .await?;
+  stack.write_access_key()?;
+  let parent = stack.node("parent", None, TaskProfile::Manager, None).await?;
+  let child = stack.node("child", Some(&parent.id), TaskProfile::Manager, None).await?;
+
+  let run_id = launch_manager_turn(&stack, &child.id).await?;
+  settle_manager(&stack, &parent.id).await?;
+  assert!(run_error_notices(&stack, &parent.id, &child.id, &run_id)?.is_empty());
+  let events = stack.run_event_values(&child.id)?;
+  assert!(
+    events
+      .iter()
+      .any(|event| event["type"] == event_types::ASSISTANT_ERROR && event[event_types::QUOTA_EXHAUSTED] == json!(true)),
+    "{events:?}"
+  );
+  Ok(())
+}
+
+/// A root manager's turn error keeps the display it has today: an Agent error on its own session, and no notice.
+#[tokio::test]
+#[ignore = "integration"]
+async fn root_manager_run_error_sends_no_run_error_notice() -> anyhow::Result<()> {
+  let stack = Stack::start("printf 'synthetic turn failure\\n' >&2; exit 1").await?;
+  stack.write_access_key()?;
+  let root = stack.node("root", None, TaskProfile::Manager, None).await?;
+
+  launch_manager_turn(&stack, &root.id).await?;
+  let events = stack.run_event_values(&root.id)?;
+  assert!(
+    events.iter().any(|event| event["type"] == event_types::ASSISTANT_ERROR
+      && event["content"].as_str() == Some("Agent error: synthetic turn failure")),
+    "{events:?}"
+  );
+  assert!(!events.iter().any(|event| event["type"] == event_types::AGENT_MESSAGE), "{events:?}");
+  Ok(())
+}
+
+/// A restart replays a child manager's errored run through the manager branch of the boot pass. The notice that the
+/// live end sent keeps its stable id and stays one, and the replay launches no run of its own.
+#[tokio::test]
+#[ignore = "integration"]
+async fn restart_replay_sends_no_run_error_notice() -> anyhow::Result<()> {
+  let stack = Stack::start("printf 'synthetic turn failure\\n' >&2; exit 1").await?;
+  stack.write_access_key()?;
+  let parent = stack.node("parent", None, TaskProfile::Manager, None).await?;
+  let child = stack.node("child", Some(&parent.id), TaskProfile::Manager, None).await?;
+  let run_id = launch_manager_turn(&stack, &child.id).await?;
+  settle_manager(&stack, &parent.id).await?;
+  assert_eq!(run_error_notices(&stack, &parent.id, &child.id, &run_id)?.len(), 1);
+
+  let counters = stack.boot().await?;
+  assert_eq!(run_error_notices(&stack, &parent.id, &child.id, &run_id)?.len(), 1);
+  assert_eq!(stack.run_records(&child.id)?.len(), 1, "the replay launches no run of its own");
+  assert_eq!(counters.followups, 2, "{counters:?}");
   Ok(())
 }
 

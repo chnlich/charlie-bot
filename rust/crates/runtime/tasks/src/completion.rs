@@ -1942,33 +1942,20 @@ impl TaskCompletion {
     Ok(pending)
   }
 
-  /// Admit one notice to the worker's initiator, keyed by the run, and wake the initiator. An archived initiator takes
-  /// no new input, so the notice is skipped and logged, as the archived-task report is.
-  async fn notify_initiator_of_pending_triggers(
+  /// Admit one notice from `session_id` to its initiator under `notice_id`, then wake the initiator. `content` builds
+  /// the text from the session's name. A task without an initiator has no one to tell. An archived initiator takes no
+  /// new input, so the notice is skipped and logged, as the archived-task report is.
+  async fn notify_initiator(
     &self,
     session_id: &str,
-    run_id: &str,
-    triggers: &[PendingTrigger],
+    notice_id: &str,
+    content: impl FnOnce(&str) -> String,
   ) -> StoreResult<()> {
     let meta = self.store().load_task_meta(session_id).await?;
     let Some(initiator) = meta.task_parent_id.as_deref() else {
       return Ok(());
     };
-    let waits = triggers
-      .iter()
-      .map(|trigger| {
-        let max_wait = (trigger.fire_at.into_inner() - trigger.created_at.into_inner()).as_seconds_f64();
-        format!("- {} (max wait {max_wait:.0} s, fires by {})", trigger.message, trigger.fire_at.to_str())
-      })
-      .collect::<Vec<_>>()
-      .join("\n");
-    let content = format!(
-      "Worker {} ({session_id}) ended run {run_id} with {} pending trigger(s) of its own. It resumes when each one \
-       fires:\n{waits}\nDecide whether to wait for them or to cancel the task.",
-      meta.name,
-      triggers.len()
-    );
-    let notice_id = control_events::stable_trigger_pause_notice_id(session_id, run_id);
+    let content = content(&meta.name);
     let fields = json!({
       (event_types::INPUT_ID): notice_id,
       (event_types::FROM_SESSION): session_id,
@@ -1982,13 +1969,55 @@ impl TaskCompletion {
           target: "charliebot_tasks",
           session_id,
           initiator,
+          notice_id,
           error = %message,
-          "trigger_pause_notice_skipped_archived"
+          "initiator_notice_skipped_archived"
         );
         Ok(())
       }
       Err(error) => Err(error),
     }
+  }
+
+  /// Tell the initiator of a worker that the worker's run ended with pending triggers of its own.
+  async fn notify_initiator_of_pending_triggers(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    triggers: &[PendingTrigger],
+  ) -> StoreResult<()> {
+    let notice_id = control_events::stable_trigger_pause_notice_id(session_id, run_id);
+    self
+      .notify_initiator(session_id, &notice_id, |name| {
+        let waits = triggers
+          .iter()
+          .map(|trigger| {
+            let max_wait = (trigger.fire_at.into_inner() - trigger.created_at.into_inner()).as_seconds_f64();
+            format!("- {} (max wait {max_wait:.0} s, fires by {})", trigger.message, trigger.fire_at.to_str())
+          })
+          .collect::<Vec<_>>()
+          .join("\n");
+        format!(
+          "Worker {name} ({session_id}) ended run {run_id} with {} pending trigger(s) of its own. It resumes when each \
+           one fires:\n{waits}\nDecide whether to wait for them or to cancel the task.",
+          triggers.len()
+        )
+      })
+      .await
+  }
+
+  /// Tell the initiator of a child manager that its live turn `run_id` ended with `error`, the error text. The server
+  /// runs nothing again; the initiator decides.
+  pub async fn notify_initiator_of_run_error(&self, session_id: &str, run_id: &str, error: &str) -> StoreResult<()> {
+    let notice_id = control_events::stable_run_error_notice_id(session_id, run_id);
+    self
+      .notify_initiator(session_id, &notice_id, |name| {
+        format!(
+          "Manager {name} ({session_id}) ended run {run_id} with an error:\n{error}\n\
+           The server did not run it again. Decide whether to run it again or to leave it."
+        )
+      })
+      .await
   }
 
   /// Apply successful-run close requests and ordinary worker delivery follow-ups for a run's live end.

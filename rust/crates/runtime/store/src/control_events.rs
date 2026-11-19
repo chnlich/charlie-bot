@@ -76,6 +76,11 @@ pub fn stable_trigger_pause_notice_id(session_id: &str, run_id: &str) -> String 
   stable_id(&format!("trigger-pause-notice:{session_id}:{run_id}"))
 }
 
+/// The stable notice id to the initiator for one run of a child manager that ended with an error.
+pub fn stable_run_error_notice_id(session_id: &str, run_id: &str) -> String {
+  stable_id(&format!("run-error-notice:{session_id}:{run_id}"))
+}
+
 /// The stable task-closed fact id for one `(session_id, request_id)` pair.
 pub fn stable_close_event_id(session_id: &str, request_id: &str) -> String {
   stable_id(&format!("task-closed:{session_id}:{request_id}"))
@@ -307,6 +312,11 @@ mod tests {
   #[test]
   fn stable_turn_launch_event_id_matches_the_uuid5_namespace() {
     assert_eq!(stable_turn_launch_event_id("run-a", "reason"), "49a20cae-8223-5a11-bf89-46aa225aa122");
+  }
+
+  #[test]
+  fn stable_run_error_notice_id_matches_the_uuid5_namespace() {
+    assert_eq!(stable_run_error_notice_id("session-a", "run-a"), "84dc4408-0076-553f-80d9-e9b5fd81183d");
   }
 
   #[test]

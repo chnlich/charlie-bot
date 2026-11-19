@@ -78,6 +78,8 @@ shutdown and re-attachment into server lifespan.
 - `TaskCompletion::pause_delivery(session, run, RunEnd)` (every run-end pause. A `RunEnd::Live` end notifies the
   initiator once per run when the worker holds pending triggers created by that run's end. A `RunEnd::Replay` end
   decides the same pause and sends no notice.)
+- `TaskCompletion::notify_initiator_of_run_error(session, run, error)` (a child manager's live turn that ended with a
+  non-quota error. The initiator gets one notice with the error text and the run id. Nothing runs again.)
 - `completion::RunEnd` (`Live` or `Replay`)
 - `RunFinishedCompletion for TaskCompletion`
 - `SequenceCompletion for TaskCompletion`

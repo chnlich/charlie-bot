@@ -25,6 +25,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
 use crate::backend_retry;
+use crate::completion::TaskCompletion;
 use crate::master_state::{ContextStateFn, RunTracking, SessionCallbacks, WorkItem};
 use crate::run_support::{
   extra_flags_of, read_stderr_tail, route_resume_session, silence_callback, stream_event_channel,
@@ -972,9 +973,10 @@ pub(crate) async fn run_cc(
     refusal_resets_at.or(process.quota_resets_at),
     &mut finish_extras,
   );
+  let quota_exhausted = failure.map(|failure| failure == MemberFailure::Quota);
   // An Auto session's quota end is continued on its next member, so this turn posts no "Agent error" of its own.
-  if !is_pool_member_failure_end(&process.item.cfg, &metadata, &finish_extras) {
-    let quota_exhausted = failure.map(|failure| failure == MemberFailure::Quota);
+  let pool_member_end = is_pool_member_failure_end(&process.item.cfg, &metadata, &finish_extras);
+  if !pool_member_end {
     report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
   }
   let was_cancelled = cancelled.lock().expect("cancel state mutex is not poisoned").is_some();
@@ -982,6 +984,17 @@ pub(crate) async fn run_cc(
   if !was_cancelled || !covered {
     mark_turn_end_unread(process.item, error_msg.as_deref(), exit_code, &finish_extras).await?;
     tracing::info!(target: "charliebot_tasks", session = %session_id, exit_code, finish_extras = ?finish_extras, "master_cc_finished");
+  }
+  // This turn's end is live: its process ended under this server. A restart resumes a turn through resume_cc, which
+  // sends no notice. The notice follows the unread mark. The parent's dispatch only schedules the parent's turn, so
+  // this turn does not wait for that turn to end.
+  if !pool_member_end
+    && quota_exhausted != Some(true)
+    && metadata.task_parent_id.is_some()
+    && let Some(message) = error_msg.as_deref()
+  {
+    let completion = process.item.callbacks.features.startup.require::<TaskCompletion>()?;
+    completion.notify_initiator_of_run_error(&session_id, &process.item.task_run.run_id, message).await?;
   }
   let cc_session_id = cc_session_id.lock().expect("session id mutex is not poisoned").clone();
   Ok(MasterRunOutcome {

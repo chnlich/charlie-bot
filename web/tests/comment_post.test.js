@@ -158,9 +158,28 @@ function loadCommentPostWithClock(fetchImpl) {
   const timers = [];
   const cleared = [];
   let requestSequence = 0;
+  const makeEventTarget = () => {
+    const listeners = new Map();
+    return {
+      addEventListener(name, listener) {
+        const registered = listeners.get(name) || [];
+        registered.push(listener);
+        listeners.set(name, registered);
+      },
+      removeEventListener(name, listener) {
+        const registered = listeners.get(name) || [];
+        listeners.set(name, registered.filter((current) => current !== listener));
+      },
+      dispatch(name) {
+        for (const listener of listeners.get(name) || []) listener();
+      },
+    };
+  };
   const context = {
     fetch: fetchImpl,
     crypto: {randomUUID: () => `comment-request-${++requestSequence}`},
+    window: makeEventTarget(),
+    document: makeEventTarget(),
     setTimeout: (callback) => {
       timers.push(callback);
       return timers.length;
@@ -206,6 +225,34 @@ test('cancel inside the window posts nothing and settles null', async () => {
   assert.deepEqual(ticks, [5]);
   assert.deepEqual(calls, []);
   assert.equal(timers.length, 1, 'only the first tick was ever queued');
+});
+
+test('pagehide cancels before the post', async () => {
+  const calls = [];
+  const {context, cleared} = loadCommentPostWithClock(async (url) => {
+    calls.push(url);
+    return ACCEPTED();
+  });
+  const handle = context.startUndoableCommentSend('s', 'c', () => {});
+  context.window.dispatch('pagehide');
+
+  assert.equal(await handle.sent, null);
+  assert.deepEqual(cleared, [1]);
+  assert.deepEqual(calls, []);
+});
+
+test('session-view teardown cancels before the post', async () => {
+  const calls = [];
+  const {context, cleared} = loadCommentPostWithClock(async (url) => {
+    calls.push(url);
+    return ACCEPTED();
+  });
+  const handle = context.startUndoableCommentSend('s', 'c', () => {});
+  context.document.dispatch('charliebot:session-view-teardown');
+
+  assert.equal(await handle.sent, null);
+  assert.deepEqual(cleared, [1]);
+  assert.deepEqual(calls, []);
 });
 
 test('cancel after the post has begun returns false and the message still lands', async () => {

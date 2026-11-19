@@ -45,29 +45,48 @@ function startUndoableCommentSend(sessionId, content, onTick) {
   let left = COMMENT_UNDO_SECONDS;
   let timer = null;
   let posting = false;
+  let settled = false;
   let settle = null;
   const sent = new Promise((resolve, reject) => {
     settle = {resolve, reject};
   });
+  const removeLeaveListeners = () => {
+    window.removeEventListener('pagehide', cancelOnLeave);
+    document.removeEventListener('charliebot:session-view-teardown', cancelOnLeave);
+  };
+  const cancel = () => {
+    if (posting || settled) return false;
+    settled = true;
+    clearTimeout(timer);
+    removeLeaveListeners();
+    settle.resolve(null);
+    return true;
+  };
+  function cancelOnLeave() {
+    cancel();
+  }
   const step = () => {
+    if (settled) return;
     onTick(left);
+    if (settled) return;
     if (left === 0) {
       posting = true;
-      postCommentMessage(sessionId, content).then(settle.resolve, settle.reject);
+      removeLeaveListeners();
+      postCommentMessage(sessionId, content).then(
+        (result) => { settled = true; settle.resolve(result); },
+        (error) => { settled = true; settle.reject(error); },
+      );
       return;
     }
     left -= 1;
     timer = setTimeout(step, 1000);
   };
+  window.addEventListener('pagehide', cancelOnLeave);
+  document.addEventListener('charliebot:session-view-teardown', cancelOnLeave);
   step();
   return {
     sent,
-    cancel() {
-      if (posting) return false;
-      clearTimeout(timer);
-      settle.resolve(null);
-      return true;
-    },
+    cancel,
   };
 }
 

@@ -26,6 +26,11 @@ function loadArtifactCommentsContext(opts = {}) {
     addEventListener(type, handler, options) {
       listeners.push({target: 'window', type, handler, options});
     },
+    removeEventListener(type, handler) {
+      const index = listeners.findIndex((listener) =>
+        listener.target === 'window' && listener.type === type && listener.handler === handler);
+      if (index !== -1) listeners.splice(index, 1);
+    },
     setTimeout() {},
     clearTimeout() {},
     getComputedStyle(el) {
@@ -60,6 +65,11 @@ function loadArtifactCommentsContext(opts = {}) {
     },
     addEventListener(type, handler, options) {
       listeners.push({target: 'document', type, handler, options});
+    },
+    removeEventListener(type, handler) {
+      const index = listeners.findIndex((listener) =>
+        listener.target === 'document' && listener.type === type && listener.handler === handler);
+      if (index !== -1) listeners.splice(index, 1);
     },
     querySelectorAll(selector) {
       return body.querySelectorAll(selector);

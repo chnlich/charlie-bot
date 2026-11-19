@@ -253,8 +253,7 @@ fn run_summary_fields(value: &Value) -> Result<Vec<String>, String> {
 fn run_page_fields(value: &Value) -> Result<(bool, String), String> {
   let items = value.get("items").and_then(Value::as_array).ok_or("run response has no items list")?;
   let active = items.iter().any(|item| {
-    let state = run_state(item);
-    state == run_records::RunDisplayState::Queued.as_str() || state == run_records::RunDisplayState::Running.as_str()
+    run_records::RunDisplayState::parse(&run_state(item)).is_some_and(run_records::RunDisplayState::is_live)
   });
   Ok((active, or_default(value.get("next_cursor"))))
 }

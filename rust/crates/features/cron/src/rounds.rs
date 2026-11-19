@@ -12,7 +12,7 @@ use charliebot_registry::registry::{
 };
 use charliebot_store::CompactValue;
 use charliebot_store::metadata::{TaskApprover, TaskSpec, UtcDateTime};
-use charliebot_store::run_records::{HostBoot, RunDisplayState, RunRecord};
+use charliebot_store::run_records::{HostBoot, RunRecord};
 use futures_util::future::BoxFuture;
 
 use crate::config::{ScheduledTaskConfig, TaskMode, effective_backend};
@@ -43,7 +43,7 @@ pub(crate) fn trigger_input_in_flight(
   let mut boot = HostBoot::default();
   let mut claiming = Vec::new();
   for run in runs.iter().filter(|run| !run.input_event_ids.is_empty()) {
-    if is_live(node.display_state(run, &mut boot)?) {
+    if node.display_state(run, &mut boot)?.is_live() {
       claiming.push(run);
     }
   }
@@ -117,11 +117,6 @@ pub(crate) fn scheduled_kind(task: &ScheduledTaskConfig) -> ScheduledKind {
   }
 }
 
-/// Whether a run keeps its round in flight: it is running or queued.
-fn is_live(state: RunDisplayState) -> bool {
-  matches!(state, RunDisplayState::Running | RunDisplayState::Queued)
-}
-
 /// Whether a worker session's runs keep a round in flight: a run is running or queued, or its steps chain awaits the
 /// next step. A withheld run is neither, so a run that never launched does not block the task.
 fn leaf_has_live_run(
@@ -135,7 +130,7 @@ fn leaf_has_live_run(
   let node = store.node_state(leaf_id)?;
   let mut boot = HostBoot::default();
   for run in &runs {
-    if is_live(node.display_state(run, &mut boot)?) {
+    if node.display_state(run, &mut boot)?.is_live() {
       return Ok(true);
     }
   }

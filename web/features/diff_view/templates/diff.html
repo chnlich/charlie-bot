@@ -117,6 +117,9 @@
         vertical-align: top;
       }
     }
+    /* The row chevron is a 9 px disclosure icon drawn inline, so the chevron keeps the 16 px line box
+       of the text glyph it replaced; as a block SVG it would shrink the row's chevron box to 9 px. */
+    .diff-file-chevron > svg { display: inline-block; vertical-align: middle; }
   </style>
 </head>
 <body class="bg-white text-slate-900 min-h-screen">

@@ -702,11 +702,12 @@
     header.className =
       'diff-file-row w-full flex items-center gap-3 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-left';
 
-    // The mark shows the open chevron while the row is open, so it carries the file's open state. slate-500 draws
-    // 4.55:1 on the row's slate-50 and 4.34:1 on its hover tone, over the 3:1 floor a graphical mark keeps.
+    // The mark turns a quarter when the row opens, so it carries the file's open state. The 9 px chevron keeps
+    // the 9.23 px-wide box of the glyph it replaced, so the row's text keeps its column. slate-500 draws 4.55:1
+    // on the row's slate-50 and 4.34:1 on its hover tone, over the 3:1 floor a graphical mark keeps.
     const chevron = document.createElement('span');
-    chevron.innerHTML = cbIcon('disclosure', 12);
-    chevron.className = 'diff-file-chevron text-slate-500 text-xs shrink-0';
+    chevron.innerHTML = cbIcon('disclosure', 9);
+    chevron.className = 'diff-file-chevron text-slate-500 text-xs shrink-0 transition-transform';
 
     const badge = statusBadge(file.status);
     badge.classList.add('diff-file-badge');
@@ -760,14 +761,14 @@
         // Collapse: drop the rendered diff so only expanded files stay in the DOM.
         body.innerHTML = '';
         body.classList.add('hidden');
-        chevron.innerHTML = cbIcon('disclosure', 12);
+        chevron.style.transform = '';
         body.dispatchEvent(new CustomEvent('cbdiff:file-collapsed', {
           bubbles: true,
           detail: { body, file },
         }));
         return;
       }
-      chevron.innerHTML = cbIcon('disclosure-open', 12);
+      chevron.style.transform = 'rotate(90deg)';
       body.classList.remove('hidden');
       loadFileInto(body, params, file, token, false);
     });

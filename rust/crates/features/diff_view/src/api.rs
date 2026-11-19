@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use crate::git::{self, DIFF_TIMEOUT};
 use crate::manifest::{self, Manifest};
 use crate::memo::LockedMemo;
-use crate::params::{self, Params, take};
+use crate::params::{self, Params, RangeMode, Side, take};
 use crate::refs::{self, FileStamp, Signature};
 use crate::repos;
 
@@ -42,10 +42,6 @@ pub(crate) const MANIFEST_MEMO_LIMIT: usize = 64;
 pub(crate) const BRANCH_MEMO_LIMIT: usize = 8;
 /// The most names `branches` answers, `HEAD` included.
 const BRANCH_LIMIT: usize = 50;
-const MODES: &[&str] = &["three-dot", "two-dot"];
-const DEFAULT_MODE: &str = "three-dot";
-/// The sides of a range a `/api/git/diff/lines` read takes.
-const SIDES: &[&str] = &["base", "head"];
 
 /// The repo, both resolved SHAs, the range mode and the `.gitattributes` signature.
 #[derive(Eq, Hash, PartialEq)]
@@ -53,7 +49,7 @@ pub(crate) struct ManifestKey {
   pub(crate) repo: String,
   pub(crate) base_sha: String,
   pub(crate) head_sha: String,
-  pub(crate) mode: &'static str,
+  pub(crate) mode: RangeMode,
   pub(crate) attributes: Option<FileStamp>,
 }
 
@@ -91,7 +87,7 @@ struct Range {
   repo: String,
   base: String,
   head: String,
-  mode: &'static str,
+  mode: RangeMode,
 }
 
 /// The `/api/git` routes, with the feature context's config and registry as their state.
@@ -195,7 +191,7 @@ async fn diff_lines(State(state): State<Arc<GitState>>, Query(query): Query<Para
   let mut errors = Vec::new();
   let range = take_range(&query, &mut errors);
   let path = take(params::text(&query, "path"), &mut errors);
-  let side = take(params::one_of(&query, "side", SIDES), &mut errors);
+  let side = take(params::one_of(&query, "side", Side::LITERALS), &mut errors).map(Side::of_literal);
   let start = take(params::uint(&query, "start", 1), &mut errors);
   let end = take(params::uint(&query, "end", 1), &mut errors);
   match (range, path, side, start, end) {
@@ -211,7 +207,8 @@ fn take_range(query: &Params, errors: &mut Vec<validation::FieldError>) -> Optio
   let repo = take(params::text(query, "repo"), errors);
   let base = take(params::text(query, "base"), errors);
   let head = take(params::text(query, "head"), errors);
-  let mode = take(params::literal(query, "mode", DEFAULT_MODE, MODES), errors);
+  let mode = take(params::literal(query, "mode", RangeMode::ThreeDot.as_str(), RangeMode::LITERALS), errors)
+    .map(RangeMode::of_literal);
   match (repo, base, head, mode) {
     (Some(repo), Some(base), Some(head), Some(mode)) => Some(Range { repo, base, head, mode }),
     _ => None,
@@ -246,7 +243,7 @@ impl GitState {
       "base": range.base,
       "head": range.head,
       "head_sha": head_sha,
-      "mode": range.mode,
+      "mode": range.mode.as_str(),
       "total_files": manifest.rows.len(),
       "total_additions": manifest.total_additions,
       "total_deletions": manifest.total_deletions,
@@ -282,8 +279,10 @@ impl GitState {
     // The two revisions the served diff was built between. A client passes them back to `diff_lines`, whose read
     // then answers the same file content the hunk headers name even after a ref moves.
     let head_revision = head_sha.clone();
-    let base_revision =
-      if range.mode == "three-dot" { git::merge_base(&repo_path, &base_sha, &head_sha).await? } else { base_sha };
+    let base_revision = match range.mode {
+      RangeMode::ThreeDot => git::merge_base(&repo_path, &base_sha, &head_sha).await?,
+      RangeMode::TwoDot => base_sha,
+    };
     let base_path = old_path.filter(|old_path| !old_path.is_empty()).unwrap_or(path);
     let base_total = revision_line_count(&repo_path, &base_revision, base_path).await?;
     let head_total = revision_line_count(&repo_path, &head_revision, path).await?;
@@ -300,7 +299,7 @@ impl GitState {
 
   /// `diff_lines`: the line span `start..=end` of `path` at the range's base or head revision. An `end` past the
   /// file's last line answers the lines through the end.
-  async fn lines_answer(&self, range: &Range, path: &str, side: &str, start: i64, end: i64) -> Result<Value, Response> {
+  async fn lines_answer(&self, range: &Range, path: &str, side: Side, start: i64, end: i64) -> Result<Value, Response> {
     let cfg = self.config()?;
     let repo_path = resolve_repo(&range.repo, &cfg, &self.registry)?;
     let revision = resolved_revision(&repo_path, range, side).await?;
@@ -326,22 +325,26 @@ impl GitState {
     } else {
       Vec::new()
     };
-    Ok(json!({"path": path, "side": side, "start": start, "end": end, "total": total, "lines": rows}))
+    Ok(json!({"path": path, "side": side.as_str(), "start": start, "end": end, "total": total, "lines": rows}))
   }
 }
 
 /// The revision a side's lines come from: the head commit, or for a three-dot range's base side, the merge base
 /// the range's diff diffs against.
-async fn resolved_revision(repo: &Path, range: &Range, side: &str) -> Result<String, Response> {
-  if side == "head" {
-    let shas = git::resolve_commits(repo, &[range.head.as_str()]).await?;
-    return shas.into_iter().next().ok_or_else(|| missing_commit(range.head.as_str()));
+async fn resolved_revision(repo: &Path, range: &Range, side: Side) -> Result<String, Response> {
+  match side {
+    Side::Head => {
+      let shas = git::resolve_commits(repo, &[range.head.as_str()]).await?;
+      shas.into_iter().next().ok_or_else(|| missing_commit(range.head.as_str()))
+    }
+    Side::Base => match range.mode {
+      RangeMode::ThreeDot => git::merge_base(repo, &range.base, &range.head).await,
+      RangeMode::TwoDot => {
+        let shas = git::resolve_commits(repo, &[range.base.as_str()]).await?;
+        shas.into_iter().next().ok_or_else(|| missing_commit(range.base.as_str()))
+      }
+    },
   }
-  if range.mode == "three-dot" {
-    return git::merge_base(repo, &range.base, &range.head).await;
-  }
-  let shas = git::resolve_commits(repo, &[range.base.as_str()]).await?;
-  shas.into_iter().next().ok_or_else(|| missing_commit(range.base.as_str()))
 }
 
 /// The internal error for a `rev-parse` that answered fewer SHAs than it was given refs.

@@ -19,6 +19,7 @@ use tower::ServiceExt;
 
 use crate::api::{self, BranchKey, GitState, ManifestKey};
 use crate::manifest::Manifest;
+use crate::params::RangeMode;
 use crate::refs;
 
 /// A repository under `workspace` with a `main` and a `feature` branch covering add, modify, delete and
@@ -439,7 +440,7 @@ fn the_memos_keep_their_bounds_and_evict_the_least_recent_entry() {
     repo: format!("repo-{index}"),
     base_sha: "a".to_string(),
     head_sha: "b".to_string(),
-    mode: "three-dot",
+    mode: RangeMode::ThreeDot,
     attributes: None,
   };
   for index in 0..=api::MANIFEST_MEMO_LIMIT {

@@ -728,10 +728,16 @@ fn anthropic_compatible_round_reports_a_reply_from_outside_the_pinned_family() {
 fn launch_of(case: &Value) -> LaunchArgs {
   // The recorded fixture predates this Rust-only operational hook, so compare the shared CLI behavior without it.
   let mut backend_kwargs = serde_json::Map::new();
-  if case["backend_type"] == "cc-anthropic-compatible" {
+  let claude = case["backend_type"] == "cc-anthropic-compatible";
+  if claude {
     backend_kwargs.insert("use_pre_tool_use_guards".to_string(), Value::Bool(false));
+    // A worker launch (this test's default run kind) names its session and run in the compaction-context hook, which
+    // the launch requires.
+    backend_kwargs.insert("run_id".to_string(), Value::String("worker-run".to_string()));
   }
+  let worker = claude;
   LaunchArgs {
+    cgroup_session_id: worker.then(|| "worker-session".to_string()),
     extra_flags: strings(&case["extra_flags"]),
     resume_session_id: opt_text(&case["resume_session_id"]),
     instructions_content: opt_text(&case["instructions_content"]),

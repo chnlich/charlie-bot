@@ -667,13 +667,13 @@ impl World {
     self.remote_home.join("improve/logins/claude-oauth-token")
   }
 
-  /// Writes the host's Claude login file with no trailing newline, as the host's setup writes it.
+  /// The host's Claude login file, with no trailing newline, as the host's setup writes it.
   pub fn write_claude_login(&self) {
     fs::create_dir_all(self.claude_login_file().parent().expect("the logins directory")).expect("the logins directory");
     fs::write(self.claude_login_file(), LOGIN_TOKEN).expect("the Claude login file");
   }
 
-  /// Writes the host's Codex login file, `<remote home>/.codex/auth.json`.
+  /// The host's Codex login file, `<remote home>/.codex/auth.json`.
   pub fn write_codex_login(&self) {
     let codex_home = self.remote_home.join(".codex");
     fs::create_dir_all(&codex_home).expect("the Codex home");

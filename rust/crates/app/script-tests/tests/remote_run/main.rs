@@ -231,8 +231,8 @@ fn install_fake_build_home(sandbox: &Sandbox) -> PathBuf {
   base
 }
 
-/// Runs the runner from `project` with the fake ssh evaluating its state commands against the
-/// stand-in build home.
+/// The runner's run from `project`, with the fake ssh evaluating its state commands against the stand-in
+/// build home.
 fn run_with_fake_build_home(sandbox: &Sandbox, project: &Path) -> harness::Run {
   let mut env = run_env(sandbox, CONFIG);
   env.insert("FAKE_BUILD_HOME".to_string(), sandbox.root().join("build-home").display().to_string());
@@ -291,7 +291,7 @@ fn a_same_name_tree_whose_recorded_directory_exists_keeps_the_refusal() {
   assert!(base.join("trees/project").exists(), "the live tree was removed: {}", run.describe());
 }
 
-/// Runs the local work guard's refusal for `tool` with the environment `env`.
+/// The local work guard's refusal for `tool`, with the environment `env`.
 fn refuse(env: &Env, tool: &str) -> harness::Run {
   let mut command = Command::new("bash");
   command.arg(refuse_sh()).arg(tool);

@@ -609,10 +609,10 @@ fn replace_text(path: &Path, old: &str, new: &str) {
   fs::write(path, contents.replace(old, new)).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
 }
 
-/// Starts the launcher in a process group of its own, under a watchdog that reads a pipe. The watchdog kills the
-/// group when the pipe's write end closes, which happens when this process ends however it ends. It is the only
-/// cleanup when this process is killed and no guard runs. The launcher gets SIGINT's default action, because the
-/// test sends SIGINT to the whole group.
+/// The launcher started in a process group of its own, under a watchdog that reads a pipe. The watchdog kills
+/// the group when the pipe's write end closes, which happens when this process ends however it ends. It is the
+/// only cleanup when this process is killed and no guard runs. The launcher gets SIGINT's default action,
+/// because the test sends SIGINT to the whole group.
 fn start_launcher(env: &Env) -> ProcessGroup {
   // The watchdog's `$$` is its pid, and as group leader its group id. It ignores the group's SIGINT. `kill -s` is the
   // spelling dash, the /bin/sh of Debian and Ubuntu, accepts with a group id.

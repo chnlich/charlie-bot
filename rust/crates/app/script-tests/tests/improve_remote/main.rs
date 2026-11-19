@@ -33,7 +33,7 @@ fn lists_path(list: &str, path: &str) -> bool {
   list.lines().any(|line| line == path || line.starts_with(&format!("{path}\t")))
 }
 
-/// Waits for `condition` to hold, at most `limit`.
+/// Whether `condition` holds within `limit`, polled until it does.
 fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
   let start = Instant::now();
   while start.elapsed() < limit {
@@ -113,7 +113,7 @@ fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
   assert!(!world.claude_ran(), "the round ran before its preflight passed");
 }
 
-/// Runs the in-flight list from `cwd`.
+/// The in-flight list's run from `cwd`.
 fn run_inflight_list_from(world: &World, env: &harness::Env, cwd: &Path) -> harness::Run {
   let mut command = harness::command("bash", env);
   command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/").current_dir(cwd);
@@ -328,10 +328,10 @@ exit 0
 /// The direction of the focused export checks. Its TMPDIR name no real direction's round shares.
 const FOCUS_DIRECTION: &str = "focused";
 
-/// Runs the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway variables. The
-/// first form exports the launch environment before it starts the scope, so the review credential's name arrives here
-/// as `IMPROVE_REVIEW_CREDENTIAL`, and the review model and API base as `IMPROVE_REVIEW_MODEL` and
-/// `IMPROVE_REVIEW_API_BASE`.
+/// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway
+/// variables. The first form exports the launch environment before it starts the scope, so the review
+/// credential's name arrives here as `IMPROVE_REVIEW_CREDENTIAL`. The review model and API base arrive as
+/// `IMPROVE_REVIEW_MODEL` and `IMPROVE_REVIEW_API_BASE`.
 fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
   let launch = world.remote_home.join("improve/launch").join(launch_id);
   fs::create_dir_all(&launch).expect("the launch directory");
@@ -497,15 +497,16 @@ fn a_refused_write_boundary_exits_7_and_starts_no_scope() {
   assert_refused_before_start(&world, &run, "the write boundary does not start");
 }
 
-/// Asserts that the launcher refused a launch with exit 7 before it sent any input, and that stderr names `needle`.
+/// The assertion that the launcher refused a launch with exit 7 before it sent any input, and that stderr
+/// names `needle`.
 fn assert_refused_before_input(world: &World, run: &harness::Run, needle: &str) {
   assert_eq!(run.code, 7, "{}", run.describe());
   assert!(stderr(run).contains(needle), "the refusal does not name {needle}: {}", run.describe());
   assert!(world.ssh_arguments().is_empty(), "the refused launch sent input:\n{}", world.ssh_arguments());
 }
 
-/// Asserts that the runner refused a round with exit 7, that stderr names `needle`, and that the round started no
-/// scope and no agent.
+/// The assertion that the runner refused a round with exit 7, that stderr names `needle`, and that the round
+/// started no scope and no agent.
 fn assert_refused_before_start(world: &World, run: &harness::Run, needle: &str) {
   assert_eq!(run.code, 7, "{}", run.describe());
   assert!(stderr(run).contains(needle), "the refusal does not name {needle}: {}", run.describe());
@@ -1033,7 +1034,7 @@ fn spawn_live_round(world: &World, direction: &str) -> std::process::Child {
   harness::spawn(&mut command)
 }
 
-/// Stops a leader that [`spawn_live_round`] started: the children first, since a lone kill of the
+/// The stop of a leader that [`spawn_live_round`] started: the children first, since a lone kill of the
 /// bash that started them leaves them running.
 fn stop_live_round(leader: &mut std::process::Child) {
   let _ = std::process::Command::new("pkill").args(["-KILL", "-P", &leader.id().to_string()]).status();
@@ -1754,7 +1755,7 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
   );
 }
 
-/// Writes one task lifecycle state to the profile home's task store.
+/// One task lifecycle state written to the profile home's task store.
 fn write_task_state(world: &World, task_id: &str, open: bool) -> std::path::PathBuf {
   let session_dir = world.profile_home.join(format!("sessions/{task_id}"));
   fs::create_dir_all(session_dir.join("data")).expect("the task session directory");
@@ -1770,7 +1771,7 @@ fn write_task_state(world: &World, task_id: &str, open: bool) -> std::path::Path
   events
 }
 
-/// Writes a run record that links one task to its worktree. Its end time does not set the task state.
+/// A run record that links one task to its worktree. Its end time does not set the task state.
 fn write_run_record(world: &World, task_id: &str, run_id: &str, worktree: &std::path::Path) {
   let run_dir = world.profile_home.join(format!("sessions/{task_id}/data/runs/{run_id}"));
   fs::create_dir_all(&run_dir).expect("the run record directory");
@@ -1783,8 +1784,8 @@ fn write_run_record(world: &World, task_id: &str, run_id: &str, worktree: &std::
   fs::write(run_dir.join("metadata.json"), format!("{record:#}\n")).expect("the run record");
 }
 
-/// Writes a task record that links one worktree to its owning session, as the store's `threads/`
-/// records do. The session's run records may be gone with the session they belong to.
+/// A task record that links one worktree to its owning session, as the store's `threads/` records do.
+/// The session's run records may be gone with the session they belong to.
 fn write_task_record(world: &World, owner_id: &str, thread_id: &str, worktree: &std::path::Path) {
   let record_dir = world.profile_home.join(format!("sessions/{owner_id}/threads/{thread_id}"));
   fs::create_dir_all(&record_dir).expect("the task record directory");
@@ -1828,7 +1829,7 @@ fn unlanded_worktree_with_uncommitted_state(world: &World, name: &str) -> std::p
   checkout
 }
 
-/// Runs the in-flight list out of its checkout, as the launcher does.
+/// The in-flight list's run out of its checkout, as the launcher does.
 fn run_inflight_list_with_env(world: &World, env: &harness::Env) -> harness::Run {
   let mut command = harness::command("bash", env);
   command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");

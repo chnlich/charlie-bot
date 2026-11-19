@@ -13,7 +13,7 @@ fn mock_home() -> PathBuf {
   harness::built_binary("mock-home")
 }
 
-/// Runs `mock-home generate` into `output`, which must be empty. The run must succeed.
+/// A `mock-home generate` run into `output`, which must be empty. The run must succeed.
 fn generate(sandbox: &Sandbox, output: &Path, sessions: &str, seed: &str) {
   let mut command = harness::command(mock_home(), &sandbox.env());
   command.arg("generate").arg(output).args(["--sessions", sessions, "--seed", seed]);

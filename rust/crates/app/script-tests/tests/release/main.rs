@@ -394,7 +394,7 @@ fn fixture_commit(index: u64) -> String {
   format!("{index:040x}")
 }
 
-/// Makes the ten fixture versions, each installed before the release under test.
+/// The ten fixture versions, each installed before the release under test.
 fn ten_fixture_versions(world: &World) {
   for index in 1..=10 {
     world.version_dir(&fixture_commit(index), installed_at(index));
@@ -671,7 +671,7 @@ impl ServeWorld {
     Self { sandbox, repo, release, commit, env }
   }
 
-  /// Writes a synthetic home of `sessions` sessions with `mock-home generate`, under the sandbox, and returns it.
+  /// A synthetic home of `sessions` sessions, generated with `mock-home generate` under the sandbox, and its path.
   fn seed_home(&self, name: &str, sessions: &str) -> PathBuf {
     let seed = self.sandbox.dir(name);
     let mut command = harness::command(mock_home(), &self.env);
@@ -681,7 +681,7 @@ impl ServeWorld {
     seed
   }
 
-  /// Runs one serve trial: the tree root and `seed` as --tree-root and --seed-home, then `command` once the server
+  /// One serve trial: the tree root and `seed` as --tree-root and --seed-home, then `command` once the server
   /// answers. The command reads the seed path from MOCK_HOME_SEED.
   fn serve(&self, tree_root: &Path, seed: &Path, command: &[&str]) -> Run {
     let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());

@@ -382,7 +382,7 @@ fn the_stdin_mode_exit_codes() {
 
 // -- the git hooks and the host scan --
 
-/// Copies the leak tools and the two hooks into `checkout`, at the paths a real checkout uses.
+/// The leak tools and the two hooks copied into `checkout`, at the paths a real checkout uses.
 fn copy_leak_tools(checkout: &Path) {
   let dev = checkout.join("dev");
   std::fs::create_dir_all(dev.join("git-hooks")).unwrap();

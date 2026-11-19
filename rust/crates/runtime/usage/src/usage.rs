@@ -8,7 +8,10 @@ use charliebot_core::event_types::{self, EventFields, is_truthy};
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::text_repr;
 use charliebot_registry::backend::{ContextLimits, UsageResolver, UsageResolverHost};
-use charliebot_registry::usage::{CLAUDE_READING_KIND, SNAPSHOT_READING_KIND};
+use charliebot_registry::usage::{
+  CLAUDE_READING_KIND, SNAPSHOT_CACHE_READ_TOKENS, SNAPSHOT_CACHE_WRITE_TOKENS, SNAPSHOT_INPUT_TOKENS, SNAPSHOT_LIMIT,
+  SNAPSHOT_MODEL, SNAPSHOT_OUTPUT_TOKENS, SNAPSHOT_READING_KIND, SNAPSHOT_REASONING_TOKENS, SNAPSHOT_TOKENS,
+};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::RunKind;
@@ -267,12 +270,21 @@ impl UsageFold {
 
   fn resolve_snapshot(&self, registry: &Registry, run_kind: RunKind) -> StoreResult<Map<String, Value>> {
     let snapshot = self.snapshot.as_ref().expect("snapshot reading kind carries a snapshot");
-    let tokens = truthy_object(snapshot.get("tokens"), "context_snapshot.tokens")?;
+    let tokens = truthy_object(snapshot.get(SNAPSHOT_TOKENS), "context_snapshot.tokens")?;
     let token_sum = match tokens {
-      Some(tokens) => add_int_fields(tokens, &["input", "output", "reasoning", "cache_read", "cache_write"])?,
+      Some(tokens) => add_int_fields(
+        tokens,
+        &[
+          SNAPSHOT_INPUT_TOKENS,
+          SNAPSHOT_OUTPUT_TOKENS,
+          SNAPSHOT_REASONING_TOKENS,
+          SNAPSHOT_CACHE_READ_TOKENS,
+          SNAPSHOT_CACHE_WRITE_TOKENS,
+        ],
+      )?,
       None => 0,
     };
-    let (context_full, compact_at) = match snapshot.get("limit").and_then(Value::as_object) {
+    let (context_full, compact_at) = match snapshot.get(SNAPSHOT_LIMIT).and_then(Value::as_object) {
       Some(limit) => {
         let input = limit.get("input").and_then(int_value);
         let output = limit.get("output").and_then(int_value);
@@ -291,7 +303,8 @@ impl UsageFold {
       }
       None => (None, None),
     };
-    let model = snapshot.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, event_field_text);
+    let model =
+      snapshot.get(SNAPSHOT_MODEL).filter(|value| is_truthy(*value)).map_or_else(String::new, event_field_text);
     Ok(usage_value(Some(token_sum), context_full, compact_at, &model))
   }
 

@@ -55,6 +55,25 @@ pub const CLAUDE_READING_KIND: &str = "claude";
 /// classifies such a session under this kind and looks its limits up.
 pub const SNAPSHOT_READING_KIND: &str = "snapshot";
 
+/// The model a snapshot reading names: the backend's model for the turn.
+pub const SNAPSHOT_MODEL: &str = "model";
+/// The tokens object inside a snapshot reading: the turn's token counts. The backend that emits the reading writes it
+/// on the result event's `context_snapshot`, and the usage fold sums the counts from there.
+pub const SNAPSHOT_TOKENS: &str = "tokens";
+/// The context limit a snapshot reading carries: the provider's model limits, which the fold derives the context size
+/// and the compaction point from.
+pub const SNAPSHOT_LIMIT: &str = "limit";
+/// A snapshot reading's input tokens: the prompt tokens, the cached ones included.
+pub const SNAPSHOT_INPUT_TOKENS: &str = "input";
+/// A snapshot reading's output tokens.
+pub const SNAPSHOT_OUTPUT_TOKENS: &str = "output";
+/// A snapshot reading's reasoning tokens.
+pub const SNAPSHOT_REASONING_TOKENS: &str = "reasoning";
+/// The input tokens a snapshot reading counts as served from the provider's prompt cache.
+pub const SNAPSHOT_CACHE_READ_TOKENS: &str = "cache_read";
+/// The tokens a snapshot reading counts as written into the provider's prompt cache.
+pub const SNAPSHOT_CACHE_WRITE_TOKENS: &str = "cache_write";
+
 /// The log event an external usage reader emits once per limit window it cannot classify. Every reader's alert
 /// matches this one name.
 pub const UNKNOWN_LIMIT_SHAPE_EVENT: &str = "ext_usage_unknown_limit_shape";

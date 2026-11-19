@@ -17,6 +17,10 @@ use charliebot_registry::backend::{
   AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, BackendFactory, BackendLifecycle, Env, LaunchArgs, RecoverySilence,
   ServeProcessSpec, ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult, Translate, TransportKind,
 };
+use charliebot_registry::usage::{
+  SNAPSHOT_CACHE_READ_TOKENS, SNAPSHOT_CACHE_WRITE_TOKENS, SNAPSHOT_INPUT_TOKENS, SNAPSHOT_LIMIT, SNAPSHOT_MODEL,
+  SNAPSHOT_OUTPUT_TOKENS, SNAPSHOT_REASONING_TOKENS, SNAPSHOT_TOKENS,
+};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde_json::{Map, Value, json};
@@ -949,11 +953,11 @@ impl OpenCodeTranslator {
     self.usage_cache_write += cache_write;
     self.usage_cost += cost;
     self.last_step_tokens = Some(Map::from_iter([
-      ("input".to_string(), json!(input)),
-      ("output".to_string(), json!(output)),
-      ("reasoning".to_string(), tokens.get("reasoning").cloned().unwrap_or(json!(0))),
-      ("cache_read".to_string(), json!(cache_read)),
-      ("cache_write".to_string(), json!(cache_write)),
+      (SNAPSHOT_INPUT_TOKENS.to_string(), json!(input)),
+      (SNAPSHOT_OUTPUT_TOKENS.to_string(), json!(output)),
+      (SNAPSHOT_REASONING_TOKENS.to_string(), tokens.get("reasoning").cloned().unwrap_or(json!(0))),
+      (SNAPSHOT_CACHE_READ_TOKENS.to_string(), json!(cache_read)),
+      (SNAPSHOT_CACHE_WRITE_TOKENS.to_string(), json!(cache_write)),
     ]));
     Ok(())
   }
@@ -961,9 +965,9 @@ impl OpenCodeTranslator {
   pub(super) fn accumulated_result(&self, model_limit: Option<&Map<String, Value>>) -> Value {
     let snapshot = self.last_step_tokens.as_ref().map(|tokens| {
       json!({
-        "model": self.model,
-        "tokens": tokens,
-        "limit": model_limit
+        (SNAPSHOT_MODEL): self.model,
+        (SNAPSHOT_TOKENS): tokens,
+        (SNAPSHOT_LIMIT): model_limit
       })
     });
     event_builders::make_result_event(

@@ -24,9 +24,8 @@ use serde_json::Value;
 use crate::common::{exact, failed, metadata_read_failure, read_config, value_repr};
 use crate::process;
 
-/// Each backend's registration has moved twice. The agents crate held it from 7b680fcbb until the crate grouping at
-/// 03459e0ca. The runtime/agents crate held it from 03459e0ca until each backend's own crate at d1a07436f, and that
-/// crate holds it from d1a07436f on. A build's tree says which layout it has, so each sha is read in its own.
+/// The three registration layouts a build may have: the agents crate's backends, the runtime/agents crate's
+/// backends, and each backend's own crate. A build's tree holds exactly one of them.
 const BACKEND_LAYOUTS: [(&str, &str); 3] = [
   ("rust/crates/charliebot-agents/src/backends", "/mod.rs"),
   ("rust/crates/runtime/agents/src/backends", "/mod.rs"),

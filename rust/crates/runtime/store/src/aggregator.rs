@@ -676,7 +676,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       "role": event_types::TASK_DELEGATED,
       "content": "Task delegated",
       "thread_id": event.field("thread_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-      "child_session_id": event.field("child_session_id").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+      event_types::CHILD_SESSION_ID: event.field(event_types::CHILD_SESSION_ID).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       event_types::DELEGATE_INVOCATION: event.field(event_types::DELEGATE_INVOCATION).map(EventFields::to_owned_value).unwrap_or(Value::Null),
       "backend": preferred_value(event, "backend", "resolved_backend"),
       "model": preferred_value(event, "model", "resolved_model"),
@@ -820,7 +820,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     event_types::CHILD_REPORT => json!({
       "role": event_types::CHILD_REPORT,
       "content": event.field("summary").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-      "child_session_id": event.field("child_session_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+      event_types::CHILD_SESSION_ID: event.field(event_types::CHILD_SESSION_ID).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       "outcome": event.field("outcome").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       (event_types::RESULT_REFS): event.field(event_types::RESULT_REFS).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
     }),

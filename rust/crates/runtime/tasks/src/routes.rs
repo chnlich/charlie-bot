@@ -608,7 +608,7 @@ async fn delegate_bound_round(
     "description": request.description,
     "backend": round.run_backend,
     "model": round.model.as_deref().unwrap_or_default(),
-    "child_session_id": child.id,
+    event_types::CHILD_SESSION_ID: child.id,
   });
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, bound_task, "task_delegated_bound_round");
@@ -732,7 +732,7 @@ async fn delegate_task_tree(
     "description": request.description,
     "backend": subagent.run_backend,
     "model": subagent.model.as_deref().unwrap_or_default(),
-    "child_session_id": child.id,
+    event_types::CHILD_SESSION_ID: child.id,
     "route": route,
     charliebot_core::event_types::DELEGATE_INVOCATION: delegate_invocation_event_payload(request),
   });

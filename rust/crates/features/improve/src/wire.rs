@@ -4,9 +4,11 @@
 //! these fields from here, so a renamed field cannot leave the client posting a key the route rejects.
 //! The session field is the same key in the drafts payload, so it comes from the shared field owner. The
 //! repository and base-branch fields are the same keys in the delegate payload and the run record, so the
-//! store's task-record owner defines them.
+//! store's task-record owner defines them. The child-session field is the same key in the delegate and
+//! child-report facts, so the event-field owner in core defines it.
 
 pub use charliebot_cli_common::fields::SESSION_ID;
+pub use charliebot_core::event_types::CHILD_SESSION_ID;
 pub use charliebot_store::metadata::{BASE_BRANCH_FIELD, REPO_PATH_FIELD};
 
 /// `improve start`'s route.
@@ -25,4 +27,3 @@ pub const STATUS: &str = "status";
 pub const LOOP_ID: &str = "loop_id";
 pub const GOAL_PATH: &str = "goal_path";
 pub const PLAN_PATH: &str = "plan_path";
-pub const CHILD_SESSION_ID: &str = "child_session_id";

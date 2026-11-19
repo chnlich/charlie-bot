@@ -474,13 +474,35 @@ fn test_prior_switch_that_accounted_for_every_run_passes_the_preflight() {
     &["readback: run run-success ended during the switch: outcome success"],
     &["run-resumed", "run-success"],
   );
-  world.seed_new_server_log(&["run-resumed"]);
+  world.seed_new_server_log(&[("task_recovery_resume", "run-resumed")]);
   let running = format!("rust {}", world.old_sha);
 
   let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
 
   assert_eq!(run.code, 0, "{}", world.report(&run));
   assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_refuses_a_run_refused_or_errored_after_its_resume() {
+  // Each of these runs has a resume record, and a refusal or an error for the same run after it. Only the
+  // run that resumed with nothing after it counts as reattached.
+  let world = World::new();
+  world.seed_prior_switch(&[], &["run-refused", "run-errored", "run-resumed"]);
+  world.seed_new_server_log(&[
+    ("task_recovery_resume", "run-refused"),
+    ("task_run_launch_refused", "run-refused"),
+    ("task_recovery_resume", "run-errored"),
+    ("task_run_error", "run-errored"),
+    ("task_recovery_resume", "run-resumed"),
+  ]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("unaccounted: run-refused run-errored;"), "{}", world.report(&run));
 }
 
 #[test]
@@ -871,12 +893,12 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
     "prior-switch-error" => {
       let readback = "readback: run run-failed died during the switch: outcome failed";
       world.seed_prior_switch(&[readback], &["run-resumed", "run-failed"]);
-      world.seed_new_server_log(&["run-resumed"]);
+      world.seed_new_server_log(&[("task_recovery_resume", "run-resumed")]);
       world.start_release();
     }
     "prior-switch-unresumed" => {
       world.seed_prior_switch(&[], &["run-resumed", "run-silent"]);
-      world.seed_new_server_log(&["run-resumed"]);
+      world.seed_new_server_log(&[("task_recovery_resume", "run-resumed")]);
       world.start_release();
     }
     other => panic!("no preflight case named {other}"),

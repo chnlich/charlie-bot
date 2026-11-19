@@ -640,13 +640,13 @@ preflight
   }
 
   /// The log of the server that the prior switch started: a task_recovery_resume record for each run in `resumed`.
-  pub fn seed_new_server_log(&self, resumed: &[&str]) {
-    let text: String = resumed
+  pub fn seed_new_server_log(&self, records: &[(&str, &str)]) {
+    let text: String = records
       .iter()
-      .map(|run| {
+      .map(|(event, run)| {
         format!(
           "2025-01-01 00:00:02.000Z [info     ] tasks/recovery.rs:1020 \
-           task_recovery_resume session_id={SESSION} run_id={run}\n"
+           {event} session_id={SESSION} run_id={run}\n"
         )
       })
       .collect();

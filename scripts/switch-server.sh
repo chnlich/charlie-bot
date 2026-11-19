@@ -33,14 +33,15 @@
 # The standing switch rule has two checks. Both run in the preflight, after the clone check and before any release is
 # selected or the server stops. Check A (the prior switch accounted for every run): the prior switch is the newest
 # switch record under CHARLIEBOT_LOG_DIR whose preflight passed, the switch that last moved the server. Each run in its
-# `.runs` file must be resumed on the server that served when that switch ended, or end with outcome success in the
-# switch's own log (`readback: run <id> ended during the switch: outcome success`). The server is the newest server log
-# launched inside the switch's window, from its first stamp to its last. A run that is neither refuses the switch and
-# is named. No switch record, or a record without its runs file, refuses it too. `--approve-unaccounted-runs` is the
-# only override: pass it once the user approves the restart over the named runs. Check B (no concurrent release or
-# switch) is the host release lock. The switch takes it in run_detached before the preflight, and scripts/release.sh
-# takes it before its first stage, so a second release or switch exits at once while one holds the lock. The preflight
-# therefore scans no processes.
+# `.runs` file must be reattached on the server that served when that switch ended: a task_recovery_resume record for
+# it, with no task_run_launch_refused or task_run_error record for it after that. Or it must end with outcome success
+# in the switch's own log (`readback: run <id> ended during the switch: outcome success`). The server is the newest
+# server log launched inside the switch's window, from its first stamp to its last. A run that is neither refuses the
+# switch and is named. No switch record, or a record without its runs file, refuses it too.
+# `--approve-unaccounted-runs` is the only override: pass it once the user approves the restart over the named runs.
+# Check B (no concurrent release or switch) is the host release lock. The switch takes it in run_detached before the
+# preflight, and scripts/release.sh takes it before its first stage, so a second release or switch exits at once while
+# one holds the lock. The preflight therefore scans no processes.
 #
 # The checks that need a model run after the readback, on the new server and the production home, so the release path
 # ends at server_ready: the probe turn and the delegation check. Each wait is bounded from the measured times (see
@@ -1415,20 +1416,34 @@ new_server_log() {
   return 0
 }
 
-# resumed_in_log LOG RUN: LOG holds a task_recovery_resume record that names RUN. A record's words are the runs of
-# characters a run id does not hold, so the match is the whole id, in the text form and in the JSON form that the
-# server wrote before the text form.
-resumed_in_log() {
-  awk -v run="$2" '/task_recovery_resume/ {
+# reattached_in_log LOG RUN: LOG holds a task_recovery_resume record for RUN, and no task_run_launch_refused or
+# task_run_error record for RUN comes after the last such resume. A record's words are the runs of characters a run id
+# does not hold, so the match is the whole id, in the text form and in the JSON form that the server wrote before the
+# text form.
+reattached_in_log() {
+  awk -v run="$2" '{
     line = $0
     gsub(/[^0-9A-Za-z_-]+/, " ", line)
     count = split(line, words, " ")
-    for (i = 1; i <= count; i++) if (words[i] == run) found = 1
+    named = 0
+    kind = ""
+    for (i = 1; i <= count; i++) {
+      if (words[i] == run) named = 1
+      if (words[i] == "task_recovery_resume") kind = "resume"
+      if (words[i] == "task_run_launch_refused" || words[i] == "task_run_error") kind = "refused"
+    }
+    if (!named || kind == "") next
+    if (kind == "resume") {
+      resumed = 1
+      refused = 0
+    } else if (resumed) {
+      refused = 1
+    }
   }
-  END { exit !found }' "$1"
+  END { exit !(resumed && !refused) }' "$1"
 }
 
-# check_prior_switch: check A of the standing switch rule. Each run that the prior switch recorded must be resumed on
+# check_prior_switch: check A of the standing switch rule. Each run that the prior switch recorded must be reattached on
 # the server that served when it ended, or end with outcome success in its own log. A run that is neither refuses the
 # switch and is named. --approve-unaccounted-runs lets the switch proceed over the named runs, and nothing else does.
 check_prior_switch() {
@@ -1441,7 +1456,7 @@ check_prior_switch() {
     runs="${prior%.log}.runs"
     server="$(new_server_log "$prior")"
     while IFS=$'\t' read -r _state _session run _rest; do
-      if [ -n "$server" ] && resumed_in_log "$server" "$run"; then continue; fi
+      if [ -n "$server" ] && reattached_in_log "$server" "$run"; then continue; fi
       if grep -Fq "readback: run $run ended during the switch: outcome success" "$prior"; then continue; fi
       unaccounted="$unaccounted $run"
     done < "$runs"

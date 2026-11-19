@@ -15,8 +15,8 @@ pub mod model_pool;
 pub mod one_shot;
 pub mod runner;
 pub mod runs;
-pub mod temporary_unavailable;
 pub mod ssh_guard;
+pub mod temporary_unavailable;
 pub mod transport;
 
 use charliebot_registry::{Registry, RegistryError};

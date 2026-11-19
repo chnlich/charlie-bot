@@ -843,15 +843,16 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function buildCommentEntry(quote, context, comment, suffix) {
       if (quote === '') {
-        return ('\u25B8 ' + context).split('\n').concat(('\u21B3 ' + comment).split('\n'));
+        return {reference: context, answer: comment};
       }
-      var quoteLines = (context
-        ? '\u25B8 ' + context + ' \u203A "' + quote + '"'
-        : '\u25B8 "' + quote + '"').split('\n');
+      var reference = context
+        ? context + ' \u203A "' + quote + '"'
+        : '"' + quote + '"';
       // A quote spanning lines keeps its locator shape. The suffix rides the last
       // quote line, right of the closing quote.
-      quoteLines[quoteLines.length - 1] += suffix || '';
-      return quoteLines.concat(('\u21B3 ' + comment).split('\n'));
+      reference = reference.split('\n');
+      reference[reference.length - 1] += suffix || '';
+      return {reference: reference.join('\n'), answer: comment};
     }
 
     function resolveEntryDraft(entry, suffix) {
@@ -878,19 +879,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     function buildBatchMessage(entries) {
-      var lines = [];
-      lines.push('[Artifact comments \u00B7 ' + artifactPath + '] (' + entries.length + ')');
-      lines.push('');
+      var clickEntries = [];
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i];
-        var entryLines = resolveEntryDraft(entry, occurrenceSuffix(entry));
-        lines.push((i + 1) + '. ' + entryLines[0]);
-        for (var j = 1; j < entryLines.length; j++) {
-          lines.push('   ' + entryLines[j]);
-        }
-        if (i < entries.length - 1) lines.push('');
+        clickEntries.push(resolveEntryDraft(entry, occurrenceSuffix(entry)));
       }
-      return lines.join('\n');
+      return buildClickMessage('[Artifact comments \u00B7 ' + artifactPath + '] (' + entries.length + ')', clickEntries);
     }
 
     function ensureDock() {

@@ -101,6 +101,35 @@ function panelRig() {
   ]);
   const page = {own_task_state: 'open', web_status: null, descendants: [], children: [], derived_waiting: []};
   const statusGets = [];
+  const posts = [];
+  const postResults = [];
+  const statusGetErrors = [];
+  let postHandler = null;
+  const statusTimers = {
+    now: Date.now(),
+    nextId: 1,
+    jobs: new Map(),
+    setTimeout(fn, delay) {
+      const id = this.nextId++;
+      this.jobs.set(id, {at: this.now + delay, fn});
+      return id;
+    },
+    clearTimeout(id) {
+      this.jobs.delete(id);
+    },
+    advance(ms) {
+      this.now += ms;
+      while (true) {
+        const next = [...this.jobs.entries()].filter(([, job]) => job.at <= this.now)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next) return;
+        this.jobs.delete(next[0]);
+        next[1].fn();
+      }
+    },
+  };
+  const documentListeners = new Map();
+  const windowListeners = new Map();
   const {context} = baseSessionContext();
   const layout = {mode: 'desktop', callbacks: []};
   context.platform = {
@@ -108,6 +137,23 @@ function panelRig() {
     onChange(fn) { layout.callbacks.push(fn); },
   };
   context.document.createElement = (tag) => new FakeElement(tag);
+  context.document.createElementNS = (_namespace, tag) => new FakeElement(tag);
+  context.document.addEventListener = (type, fn) => {
+    const listeners = documentListeners.get(type) || [];
+    listeners.push(fn);
+    documentListeners.set(type, listeners);
+  };
+  context.window.addEventListener = (type, fn) => {
+    const listeners = windowListeners.get(type) || [];
+    listeners.push(fn);
+    windowListeners.set(type, listeners);
+  };
+  context.setTimeout = (fn, delay) => statusTimers.setTimeout(fn, delay);
+  context.clearTimeout = (id) => statusTimers.clearTimeout(id);
+  const RealDate = Date;
+  context.Date = class StatusFakeDate extends RealDate {
+    static now() { return statusTimers.now; }
+  };
   context.document.createTreeWalker = () => ({});
   context.document.getElementById = (id) => elements.get(id) || null;
   context.document.querySelector = () => null;
@@ -115,16 +161,28 @@ function panelRig() {
     selector === '[data-chat-view-option]' ? toggles : [];
   const timers = makeEngineTimers();
   installEngineTimers(context, timers);
+  context.setTimeout = (fn, delay) => statusTimers.setTimeout(fn, delay);
+  context.clearTimeout = (id) => statusTimers.clearTimeout(id);
   context.setInterval = () => 0;
   context.clearInterval = () => {};
-  context.fetch = async (url) => {
+  context.fetch = async (url, options = {}) => {
     if (url.startsWith('/api/internal/web/status')) {
       statusGets.push(url);
+      const error = statusGetErrors.shift();
+      if (error) throw error;
       const sessionId = url.slice(url.indexOf('session_id=') + 'session_id='.length);
       return {ok: true, status: 200, json: async () => ({
         session_id: sessionId, own_task_state: page.own_task_state, web_status: page.web_status,
         descendants: page.descendants, children: page.children, derived_waiting: page.derived_waiting,
       })};
+    }
+    if (url.startsWith('/api/chat/')) {
+      const request = {url, options, body: JSON.parse(options.body)};
+      posts.push(request);
+      if (postHandler) await postHandler(request);
+      const result = postResults.shift() || {status: 202};
+      if (result instanceof Error) throw result;
+      return {ok: result.status >= 200 && result.status < 300, status: result.status, json: async () => ({})};
     }
     return {ok: true, status: 200, json: async () => []};
   };
@@ -136,6 +194,7 @@ function panelRig() {
   // tabs.js loads in the connection layer, before the sidebar module that calls switchTab on it.
   vm.createContext(context);
   runIconModule(context);
+  vm.runInContext(readStatic('comment_post.js'), context, {filename: 'comment_post.js'});
   vm.runInContext(readStatic('tabs.js'), context, {filename: 'tabs.js'});
   createChatSidebarContext(context);
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
@@ -143,8 +202,15 @@ function panelRig() {
   // The message list is the other suites' subject: a live message lands there
   // through the stub, and the status panel reads the message it is handed.
   context.appendMessageObject = () => {};
-  return {context, root, stream, chat, panel, badge, toggles, scrollButton, inputArea, page, statusGets, layout,
-    timers, FakeWebSocket: context.WebSocket};
+  function fireDocument(type) {
+    for (const fn of documentListeners.get(type) || []) fn({type});
+  }
+  function fireWindow(type) {
+    for (const fn of windowListeners.get(type) || []) fn({type});
+  }
+  return {context, root, stream, chat, panel, badge, toggles, scrollButton, inputArea, page, statusGets, posts,
+    postResults, statusGetErrors, setPostHandler(fn) { postHandler = fn; }, layout, timers, statusTimers,
+    fireDocument, fireWindow, FakeWebSocket: context.WebSocket};
 }
 
 // A layout switch as platform.js makes it: the mode changes, then each callback runs with the new and old mode.
@@ -184,6 +250,9 @@ async function openSession(rig, session, messages = []) {
     round_ratings: {},
     task_parent_id: null,
   }, session);
+  const historyStatus = messages.filter((message) => message.role === 'web_status')
+    .map((message) => message.web_status).at(-1);
+  rig.page.web_status = data.web_status ? normalizeStatus(data.web_status) : historyStatus ? normalizeStatus(historyStatus) : null;
   rig.context.SESSION_ID = data.id;
   rig.context.renderSessionView({
     session: data,
@@ -197,6 +266,18 @@ async function openSession(rig, session, messages = []) {
     has_more: false,
   });
   await settled();
+}
+
+function normalizeStatus(status) {
+  return {
+    ...status,
+    waiting_version: status.waiting_version || '1111111111111111',
+    waiting: status.waiting.map((item) => ({
+      ...item,
+      since: item.since || status.updated_at,
+      answered: item.answered === true,
+    })),
+  };
 }
 
 // The Status view's rows, in order.
@@ -218,6 +299,18 @@ function viewChildItems(panel) {
 
 function viewChildNowItems(panel) {
   return panel.querySelectorAll('[data-child-now-item]');
+}
+
+function ownControls(rig, index = 0) {
+  return viewWaitingItems(rig.panel)[index].querySelector('[data-item-controls]');
+}
+
+function markDoneButton(rig, index = 0) {
+  return ownControls(rig, index).querySelectorAll('button')[0];
+}
+
+function waitingHeaderControls(rig) {
+  return viewRow(rig.panel, 'waiting').querySelector('[data-waiting-header-controls]');
 }
 
 // The socket of the open page: an open event, then one server frame.
@@ -418,6 +511,207 @@ test('a derived item shows under its holder: the session\'s own in Waiting on yo
   assert.equal(rig.badge.textContent, '2');
 });
 
+test('only stored own items have the 14px check icon; child answers show Marked done without a check', async () => {
+  const rig = panelRig();
+  rig.page.descendants = [{
+    session_id: CHILD_ID,
+    name: 'Child one',
+    updated_at: '2026-10-16T20:30:00Z',
+    waiting: [{text: 'Child finished', answered: true, link: null}],
+  }];
+  rig.page.derived_waiting = [{
+    session_id: 'session-a', text: 'Derived host item', context: 'Host context', link: null,
+  }];
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{text: 'Stored item', link: null}, {text: 'Second stored item', link: null}],
+  }});
+  selectStatus(rig);
+  const storedControls = ownControls(rig);
+  const iconButton = storedControls.querySelectorAll('button')[0];
+  assert.ok(iconButton, 'a stored own item has a done button');
+  assert.equal(iconButton.style.width, '24px');
+  assert.equal(iconButton.style.height, '24px');
+  const svg = iconButton.children[0];
+  assert.equal(svg.tagName, 'SVG');
+  assert.equal(svg.getAttribute('width'), '14');
+  assert.equal(svg.getAttribute('height'), '14');
+  assert.equal(svg.getAttribute('viewBox'), '0 0 24 24');
+  assert.equal(svg.getAttribute('stroke'), 'currentColor');
+  assert.equal(viewWaitingItems(rig.panel)[2].querySelectorAll('[data-item-controls]').length, 0,
+    'a derived host item gets no done control');
+  const child = viewChildItems(rig.panel)[0];
+  assert.match(child.textContent, /Marked done/);
+  assert.equal(child.querySelectorAll('button').length, 0, 'a child item has no done control');
+});
+
+test('a done click keeps its undo timer through redraw and sends the exact text at five seconds', async () => {
+  const rig = panelRig();
+  const since = '2026-11-19T08:30:00Z';
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{text: 'Private item text', context: 'Private context', since, link: null}],
+  }});
+  selectStatus(rig);
+  markDoneButton(rig).onclick();
+  assert.match(ownControls(rig).textContent, /Marked done · Undo/);
+  assert.equal(rig.posts.length, 0, 'the click is still undoable');
+
+  rig.page.web_status = normalizeStatus({...rig.page.web_status, now: 'A redraw', updated_at: '2026-10-16T22:00:00Z'});
+  rig.context.observeWebStatusMessages([{role: 'web_status', web_status: rig.page.web_status}]);
+  await settled();
+  assert.match(ownControls(rig).textContent, /Marked done · Undo/);
+  rig.statusTimers.advance(4999);
+  await settled();
+  assert.equal(rig.posts.length, 0, 'nothing is sent before five seconds');
+  rig.statusTimers.advance(1);
+  await settled();
+  const post = rig.posts[0];
+  assert.equal(rig.posts.length, 1, 'one click sends one request');
+  assert.equal(post.url, '/api/chat/session-a/message');
+  assert.equal(post.body.request_id, 'status-done-session-a-' + post.body.request_id.slice('status-done-session-a-'.length));
+  assert.match(post.body.request_id, /^status-done-session-a-\d+$/);
+  assert.equal(post.body.content,
+    '[Status · Waiting on you]\n\n1. ▸ Waiting on you · session session-a · list 1111111111111111 · since ' + since +
+      ' · #1\n   ↳ Done');
+  assert.equal(post.body.content.includes('Private item text'), false);
+  assert.equal(post.body.content.includes('Private context'), false);
+  assert.match(waitingHeaderControls(rig).textContent, /Sent: the list changed/,
+    'a 202 readback without the answered mark reports that the list changed');
+});
+
+test('an answered readback marks the item done after a 202', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Finish this', link: null}]}});
+  rig.setPostHandler(() => {
+    rig.page.web_status = normalizeStatus({...rig.page.web_status, waiting: [
+      {...rig.page.web_status.waiting[0], answered: true},
+    ]});
+  });
+  selectStatus(rig);
+  markDoneButton(rig).onclick();
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.match(ownControls(rig).textContent, /Marked done/);
+  assert.equal(ownControls(rig).querySelectorAll('button').length, 0);
+  assert.equal(rig.statusGets.length, 2, 'the server status is read again after 202');
+});
+
+test('a changed list moves Undo to the header and still sends the clicked version', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Old item', link: null}]}});
+  selectStatus(rig);
+  markDoneButton(rig).onclick();
+  rig.page.web_status = normalizeStatus({...rig.page.web_status, waiting_version: '2222222222222222',
+    waiting: [{text: 'New item', since: '2026-11-19T09:00:00Z', link: null}]});
+  await deliver(rig, {type: 'message', message: {
+    role: 'web_status', id: 'w-version', content: 'Status updated: Waiting on you', web_status: rig.page.web_status,
+  }});
+  assert.match(waitingHeaderControls(rig).textContent, /Marked done · Undo/);
+  assert.match(viewWaitingItems(rig.panel)[0].textContent, /New item/);
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.match(rig.posts[0].body.content, /list 1111111111111111/);
+  assert.match(waitingHeaderControls(rig).textContent, /Sent: the list changed/);
+  assert.equal(waitingHeaderControls(rig).querySelectorAll('button').length, 0);
+});
+
+test('a Now-only push refreshes status without changing the pending click version or timer', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Keep this', link: null}]}});
+  selectStatus(rig);
+  markDoneButton(rig).onclick();
+  rig.page.web_status = normalizeStatus({...rig.page.web_status, now: 'Now changed', updated_at: '2026-10-16T22:00:00Z'});
+  const getsBefore = rig.statusGets.length;
+  await deliver(rig, {type: 'message', message: {
+    role: 'web_status', id: 'w-now', content: 'Status updated: Now', web_status: rig.page.web_status,
+  }});
+  assert.equal(rig.statusGets.length, getsBefore + 1);
+  assert.equal(viewRow(rig.panel, 'now').children[1].children[0].textContent, 'Now changed');
+  assert.match(ownControls(rig).textContent, /Marked done · Undo/);
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.match(rig.posts[0].body.content, /list 1111111111111111/);
+});
+
+test('Undo, pagehide and session teardown cancel without sending', async (t) => {
+  const makePending = async () => {
+    const rig = panelRig();
+    await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Wait', link: null}]}});
+    selectStatus(rig);
+    markDoneButton(rig).onclick();
+    return rig;
+  };
+  await t.test('Undo', async () => {
+    const rig = await makePending();
+    const undo = ownControls(rig).querySelectorAll('button')[0];
+    undo.onclick();
+    rig.statusTimers.advance(5000);
+    await settled();
+    assert.equal(rig.posts.length, 0);
+  });
+  await t.test('pagehide', async () => {
+    const rig = await makePending();
+    rig.fireWindow('pagehide');
+    rig.statusTimers.advance(5000);
+    await settled();
+    assert.equal(rig.posts.length, 0);
+  });
+  await t.test('session teardown', async () => {
+    const rig = await makePending();
+    rig.fireDocument('charliebot:session-view-teardown');
+    rig.statusTimers.advance(5000);
+    await settled();
+    assert.equal(rig.posts.length, 0);
+  });
+});
+
+test('post errors refresh status, keep confirmed marks, report failures and never retry', async (t) => {
+  async function sendWith(postResult, {answered = false, refetchError = null} = {}) {
+    const rig = panelRig();
+    await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Retry not allowed', link: null}]}});
+    if (answered) {
+      rig.setPostHandler(() => {
+        rig.page.web_status = normalizeStatus({...rig.page.web_status, waiting: [
+          {...rig.page.web_status.waiting[0], answered: true},
+        ]});
+      });
+    }
+    if (refetchError) rig.statusGetErrors.push(refetchError);
+    rig.postResults.push(postResult);
+    selectStatus(rig);
+    markDoneButton(rig).onclick();
+    rig.statusTimers.advance(5000);
+    await settled();
+    return rig;
+  }
+  for (const status of [401, 503]) {
+    await t.test('HTTP ' + status, async () => {
+      const rig = await sendWith({status});
+      assert.equal(rig.posts.length, 1, 'the failed request is never retried');
+      assert.match(ownControls(rig).textContent, /Not sent: HTTP/);
+      assert.equal(ownControls(rig).querySelectorAll('button').length, 1, 'the unanswered item remains available to mark');
+      assert.equal(rig.statusGets.length, 2, 'status is re-read after the failure');
+    });
+  }
+  await t.test('network failure', async () => {
+    const rig = await sendWith(new Error('offline'));
+    assert.equal(rig.posts.length, 1);
+    assert.match(ownControls(rig).textContent, /Not sent: offline/);
+    assert.equal(ownControls(rig).querySelectorAll('button').length, 1);
+  });
+  await t.test('confirmed despite the post error', async () => {
+    const rig = await sendWith({status: 401}, {answered: true});
+    assert.match(ownControls(rig).textContent, /Marked done/);
+    assert.doesNotMatch(ownControls(rig).textContent, /Not sent/);
+  });
+  await t.test('status read also fails', async () => {
+    const rig = await sendWith({status: 503}, {refetchError: new Error('read offline')});
+    assert.match(ownControls(rig).textContent, /Status unknown: read offline/);
+    assert.equal(ownControls(rig).querySelectorAll('button').length, 0, 'unknown status shows no mark');
+  });
+});
+
 test('the child Now rows list each open child with its Now, update time and Open link', async () => {
   const rig = panelRig();
   rig.page.children = NOW_CHILDREN;
@@ -472,11 +766,14 @@ test('waiting ages show for own items and for descendant items in the Status vie
 test('a live web_status message redraws the badge and the shown Status view', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
+  rig.page.web_status = normalizeStatus(NEWER);
+  const beforePush = rig.statusGets.length;
   await deliver(rig, {
     type: 'message',
-    message: {role: 'web_status', id: 'w1', content: 'Status updated: Now, Waiting on you', web_status: NEWER,
+    message: {role: 'web_status', id: 'w1', content: 'Status updated: Now, Waiting on you', web_status: OLDER,
       timestamp: '2026-10-16T21:00:00Z'},
   });
+  assert.equal(rig.statusGets.length, beforePush + 1, 'the own-session notice triggers a status read');
   assert.equal(rig.badge.textContent, '1', 'the badge follows the live status');
   selectStatus(rig);
   assert.equal(viewRow(rig.panel, 'now').children[1].children[0].textContent, NEWER.now);

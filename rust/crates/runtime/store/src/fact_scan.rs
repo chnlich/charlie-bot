@@ -152,7 +152,7 @@ impl Store {
     if FileIdentity::read(&path)? != Some(identity) || self.read_archive_offset(session_id)? != archived {
       return Ok(None);
     }
-    let (facts, runs) = fold_scanned_history(&archive, &events, archived)?;
+    let (facts, runs) = fold_scanned_history(session_id, &archive, &events, archived)?;
     let prompt_changes = LivePromptChanges::of(&events);
     let kept: Vec<&SharedChatEvent> = archive.iter().chain(events.iter()).collect();
     let checkpoint = crate::fact_checkpoint::CheckpointFile::new(crate::fact_checkpoint::CheckpointFold {
@@ -218,7 +218,7 @@ impl Store {
     }
     let covered = parsed.checkpoint.covered + tail.len();
     let resume_offset = parsed.checkpoint.offset;
-    let (facts, runs, prompt_changes) = fold_checkpoint_and_tail(parsed, &tail, archived)?;
+    let (facts, runs, prompt_changes) = fold_checkpoint_and_tail(session_id, parsed, &tail, archived)?;
     Ok(Some(ScannedLiveFacts {
       identity,
       archived,
@@ -341,7 +341,7 @@ impl Store {
       return Ok(None);
     }
     let covered = parsed.checkpoint.covered + tail.len();
-    let (facts, runs, prompt_changes) = fold_checkpoint_and_tail(parsed, &tail, archived)?;
+    let (facts, runs, prompt_changes) = fold_checkpoint_and_tail(session_id, parsed, &tail, archived)?;
     let facts = Arc::new(facts);
     let runs = Arc::new(runs);
     self.insert_facts(FoldedNodeFacts {
@@ -397,6 +397,7 @@ fn read_log(path: &Path) -> StoreResult<Option<fsutil::FileBytes>> {
 /// the checkpoint's facts already fold, then the tail past its offset. Returns the facts, the run facts and the newest
 /// prompt fact of each scope.
 fn fold_checkpoint_and_tail(
+  session_id: &str,
   parsed: ParsedCheckpoint,
   tail: &[SharedChatEvent],
   archived: usize,
@@ -405,7 +406,7 @@ fn fold_checkpoint_and_tail(
   let mut changes = prompt_changes;
   changes.subtree = newest_prompt_change(tail, PromptScope::Subtree).or(changes.subtree);
   changes.node = newest_prompt_change(tail, PromptScope::Node).or(changes.node);
-  fold_appended_history(&mut facts, &mut runs, tail, archived + checkpoint.covered)?;
+  fold_appended_history(session_id, &mut facts, &mut runs, tail, archived + checkpoint.covered)?;
   #[cfg(test)]
   {
     // The test-only visit count a whole-history fold accumulates. A checkpoint starts from the count its prefix covers.
@@ -958,6 +959,7 @@ mod tests {
       "close_request_ids": sorted_strings(&task.close_request_ids),
       "first_close_by_request": first_close,
       "delivered_reports": delivered,
+      "clicked": task.clicked,
       "events": events,
       "covered": task.covered,
     })
@@ -1013,6 +1015,17 @@ mod tests {
     file.write_all(&event_lines(events)).unwrap();
   }
 
+  fn set_checkpoint_version(path: &Path, version: u64) {
+    let bytes = std::fs::read(path).unwrap();
+    let header_end = bytes.iter().position(|byte| *byte == b'\n').unwrap();
+    let mut header: serde_json::Value = serde_json::from_slice(&bytes[..header_end]).unwrap();
+    header["version"] = json!(version);
+    let mut rewritten = serde_json::to_vec(&header).unwrap();
+    rewritten.push(b'\n');
+    rewritten.extend_from_slice(&bytes[header_end + 1..]);
+    std::fs::write(path, rewritten).unwrap();
+  }
+
   fn append_first_leg(store: &Store) -> u64 {
     write_events(
       store,
@@ -1050,7 +1063,14 @@ mod tests {
   #[test]
   fn a_matching_checkpoint_reads_the_appended_bytes_and_folds_a_full_scans_facts() {
     let (home, writer) = make_test_store();
-    let checkpoint_leg = write_events(&writer, [json!({"id": "ask", "type": "user", "content": "ship it"})]);
+    let checkpoint_leg = write_events(
+      &writer,
+      [json!({
+        "id": "ask",
+        "type": "user",
+        "content": "[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done"
+      })],
+    );
     let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
     let first = open();
     let scan = first.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
@@ -1071,6 +1091,11 @@ mod tests {
     let facts = resumed.facts.task().unwrap();
     assert_eq!(facts.run_outcomes.get("run-1").map(String::as_str), Some("success"));
     assert!(facts.confirmed_input_ids.contains("ask"));
+    assert_eq!(facts.clicked, [("0123456789abcdef".to_string(), 1)]);
+    let checkpoint = std::fs::read(writer.fact_checkpoint_path("synthetic")).unwrap();
+    let header_end = checkpoint.iter().position(|byte| *byte == b'\n').unwrap();
+    let header: serde_json::Value = serde_json::from_slice(&checkpoint[..header_end]).unwrap();
+    assert_eq!(header["version"], json!(4));
     let full_scan = {
       std::fs::remove_file(writer.fact_checkpoint_path("synthetic")).unwrap();
       let store = open();
@@ -1079,6 +1104,65 @@ mod tests {
       scan
     };
     assert_eq!(scanned_value(&resumed), scanned_value(&full_scan));
+  }
+
+  #[test]
+  fn a_version_three_checkpoint_runs_a_cold_scan_and_is_rewritten_as_version_four() {
+    let (home, writer) = make_test_store();
+    let log_bytes = write_events(
+      &writer,
+      [json!({
+        "id": "click",
+        "type": "user",
+        "content": "[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done"
+      })],
+    );
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
+    open().scan_live_facts("synthetic").unwrap().expect("the initial scan writes a checkpoint");
+    let checkpoint_path = writer.fact_checkpoint_path("synthetic");
+    set_checkpoint_version(&checkpoint_path, 3);
+
+    let migrated = open().scan_live_facts("synthetic").unwrap().expect("the old checkpoint triggers a full scan");
+
+    assert_eq!(migrated.read_bytes(), log_bytes);
+    assert_eq!(migrated.checkpoint_bytes(), 0);
+    assert_eq!(migrated.facts.task().unwrap().clicked, [("0123456789abcdef".to_string(), 1)]);
+    let checkpoint = std::fs::read(checkpoint_path).unwrap();
+    let header_end = checkpoint.iter().position(|byte| *byte == b'\n').unwrap();
+    let header: serde_json::Value = serde_json::from_slice(&checkpoint[..header_end]).unwrap();
+    assert_eq!(header["version"], json!(4));
+  }
+
+  #[test]
+  #[ignore = "performance"]
+  fn checkpoint_v3_cold_scan_startup_time_on_an_isolated_fixture() {
+    let (home, writer) = make_test_store();
+    let assistant_body = "x".repeat(32 * 1024);
+    let mut events = vec![json!({
+      "id": "click",
+      "type": "user",
+      "content": "[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done"
+    })];
+    events.extend((0..256).map(|index| {
+      json!({
+        "id": format!("assistant-{index}"),
+        "type": "assistant",
+        "content": assistant_body,
+      })
+    }));
+    let log_bytes = write_events(&writer, events);
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
+    open().scan_live_facts("synthetic").unwrap().expect("the initial scan writes a checkpoint");
+    set_checkpoint_version(&writer.fact_checkpoint_path("synthetic"), 3);
+
+    let started = Instant::now();
+    let cold = open().scan_live_facts("synthetic").unwrap().expect("the old checkpoint triggers a full scan");
+    let elapsed = started.elapsed();
+
+    assert_eq!(cold.read_bytes(), log_bytes);
+    assert_eq!(cold.checkpoint_bytes(), 0);
+    assert_eq!(cold.facts.task().unwrap().clicked, [("0123456789abcdef".to_string(), 1)]);
+    eprintln!("checkpoint v3 cold scan: {log_bytes} fixture bytes in {} ms", elapsed.as_millis());
   }
 
   /// A matching checkpoint's read parses the appended tail's lines only, not the covered history's. The event index

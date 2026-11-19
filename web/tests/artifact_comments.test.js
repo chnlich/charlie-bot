@@ -447,10 +447,9 @@ test('resolveEntryDraft returns default comment lines when no draft override', (
   assert.equal(typeof resolveEntryDraft, 'function');
 
   const entry = {quote: 'quoted text', context: 'Context', comment: 'comment text'};
-  const lines = resolveEntryDraft(entry);
-  assert.equal(lines.length, 2);
-  assert.equal(lines[0], '▸ Context › "quoted text"');
-  assert.equal(lines[1], '↳ comment text');
+  const draft = resolveEntryDraft(entry);
+  assert.equal(draft.reference, 'Context › "quoted text"');
+  assert.equal(draft.answer, 'comment text');
 });
 
 function cssRule(styleText, selector) {

@@ -2145,14 +2145,14 @@ mod tests {
     let first = send_operator(
       &router,
       path,
-      br#"{"content":"same","request_id":"browser-send-1"}"#.to_vec(),
+      r#"{"content":"[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic-request-session · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done","request_id":"browser-send-1"}"#.as_bytes().to_vec(),
       Some("application/json"),
     )
     .await;
     let second = send_operator(
       &router,
       path,
-      br#"{"content":"same","request_id":"browser-send-1"}"#.to_vec(),
+      r#"{"content":"[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic-request-session · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done","request_id":"browser-send-1"}"#.as_bytes().to_vec(),
       Some("application/json"),
     )
     .await;
@@ -2166,6 +2166,11 @@ mod tests {
       .collect();
     assert_eq!(inputs.len(), 1);
     assert_eq!(inputs[0]["id"].as_str(), first_body["input_event_id"].as_str());
+    assert_eq!(inputs[0]["type"], "user");
+    assert_eq!(
+      inputs[0]["content"],
+      "[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic-request-session · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done"
+    );
   }
 
   #[tokio::test]

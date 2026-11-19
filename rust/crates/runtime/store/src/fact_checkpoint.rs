@@ -34,12 +34,13 @@ use crate::event_types::{ChatEvent, FileIdentity, SharedChatEvent};
 use crate::metadata::TASK_STATE;
 use crate::run_facts::RunFacts;
 use crate::task_tree_state::{
-  EventIdIndex, LineDecoder, LivePromptChanges, NodeFacts, PrefixIndex, TaskFacts, event_id_hash,
+  EventIdIndex, LineDecoder, LivePromptChanges, MAX_CLICKED_WAITING_ITEMS, NodeFacts, PrefixIndex, TaskFacts,
+  event_id_hash, valid_waiting_version,
 };
 use crate::{StoreError, StoreResult};
 
 /// The format version of the checkpoint file. A file of another version is not read.
-const CHECKPOINT_VERSION: u64 = 3;
+const CHECKPOINT_VERSION: u64 = 4;
 /// The bytes of each end of the covered prefix whose digest the checkpoint keeps. A rewrite that leaves both windows
 /// and the length intact would have to reproduce the prefix's ends, which no writer here does.
 pub(crate) const WINDOW_BYTES: usize = 4096;
@@ -372,6 +373,7 @@ fn task_facts_value(facts: &TaskFacts) -> Value {
   let mut delivered_reports: Vec<Vec<String>> =
     facts.delivered_reports.iter().map(|(child, event)| vec![child.clone(), event.clone()]).collect();
   delivered_reports.sort();
+  let clicked: Vec<Value> = facts.clicked.iter().map(|(version, position)| json!([version, position])).collect();
   json!({
     TASK_STATE: facts.task_state,
     "run_outcomes": run_outcomes,
@@ -387,6 +389,7 @@ fn task_facts_value(facts: &TaskFacts) -> Value {
     "close_request_ids": sorted(&facts.close_request_ids),
     "first_close_by_request": first_close_by_request,
     "delivered_reports": delivered_reports,
+    "clicked": clicked,
     "covered": facts.covered,
   })
 }
@@ -419,6 +422,21 @@ fn task_facts_from_value(value: &Value) -> Option<TaskCheckpointFacts> {
       _ => None,
     })
     .collect::<Option<std::collections::HashSet<_>>>()?;
+  let clicked = field("clicked")?
+    .as_array()?
+    .iter()
+    .map(|pair| match pair.as_array()?.as_slice() {
+      [version, position] => {
+        let version = version.as_str()?;
+        let position = usize_of(position)?;
+        (valid_waiting_version(version) && position > 0).then(|| (version.to_string(), position))
+      }
+      _ => None,
+    })
+    .collect::<Option<Vec<_>>>()?;
+  if clicked.len() > MAX_CLICKED_WAITING_ITEMS {
+    return None;
+  }
   let facts = TaskFacts {
     task_state: field(TASK_STATE)?.as_str()?.to_string(),
     run_outcomes,
@@ -437,6 +455,7 @@ fn task_facts_from_value(value: &Value) -> Option<TaskCheckpointFacts> {
     close_request_ids: strings_of(field("close_request_ids")?)?.into_iter().collect(),
     first_close_by_request,
     delivered_reports,
+    clicked,
     events_by_id: EventIdIndex::default(),
     covered: usize_of(field("covered")?)?,
   };

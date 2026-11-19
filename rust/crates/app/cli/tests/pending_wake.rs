@@ -38,10 +38,11 @@ const EXPECTED_BLOCK_REASON: &str = concat!(
 const EXPECTED_NOTICE: &str =
   "pending-wake check: this turn left no wake, so the line has stopped. A reply restarts it.";
 
-/// One open child row of the synthetic session tree.
+/// One child row of the synthetic session tree.
 #[derive(Clone)]
 struct Row {
   id: String,
+  task_state: &'static str,
   work_state: &'static str,
   open_descendant_count: u64,
 }
@@ -60,7 +61,14 @@ struct World {
 impl World {
   /// Adds an open child under `parent` in the given work state, with `open_descendants` open descendants.
   fn child(mut self, parent: &str, id: &str, work_state: &'static str, open_descendants: u64) -> Self {
-    let row = Row { id: id.to_string(), work_state, open_descendant_count: open_descendants };
+    let row = Row { id: id.to_string(), task_state: "open", work_state, open_descendant_count: open_descendants };
+    self.children.entry(parent.to_string()).or_default().push(row);
+    self
+  }
+
+  /// Adds a closed child under `parent`, which the check does not read.
+  fn closed_child(mut self, parent: &str, id: &str) -> Self {
+    let row = Row { id: id.to_string(), task_state: "closed", work_state: "idle", open_descendant_count: 0 };
     self.children.entry(parent.to_string()).or_default().push(row);
     self
   }
@@ -125,7 +133,7 @@ fn row_json(row: &Row) -> Value {
   json!({
     "id": row.id,
     "name": row.id,
-    "task_state": "open",
+    "task_state": row.task_state,
     "work_state": row.work_state,
     "archived": false,
     "child_count": row.open_descendant_count,
@@ -171,7 +179,6 @@ struct Stub {
 impl Stub {
   fn start(world: Arc<World>) -> Stub {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a loopback port binds");
-    listener.set_nonblocking(true).expect("the listener goes nonblocking");
     let port = listener.local_addr().expect("the listener has an address").port();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let stop = Arc::new(AtomicBool::new(false));
@@ -179,22 +186,17 @@ impl Stub {
       let requests = requests.clone();
       let stop = stop.clone();
       std::thread::spawn(move || {
-        while !stop.load(Ordering::Relaxed) {
-          match listener.accept() {
-            Ok((mut stream, _)) => {
-              stream.set_nonblocking(false).expect("the connection goes blocking");
-              stream.set_read_timeout(Some(PROCESS_TIMEOUT)).expect("the read timeout is set");
-              let request_line = read_request_line(&mut stream);
-              let target = request_line.split_whitespace().nth(1).unwrap_or_default().to_string();
-              requests.lock().expect("the request lock").push(request_line);
-              let (status, answer) = world.answer(&target);
-              write_response(&mut stream, status, &answer);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-              std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(error) => panic!("the stub's accept failed: {error}"),
+        for connection in listener.incoming() {
+          let mut stream = connection.expect("the stub accepts a connection");
+          if stop.load(Ordering::Relaxed) {
+            break;
           }
+          stream.set_read_timeout(Some(PROCESS_TIMEOUT)).expect("the read timeout is set");
+          let request_line = read_request_line(&mut stream);
+          let target = request_line.split_whitespace().nth(1).unwrap_or_default().to_string();
+          requests.lock().expect("the request lock").push(request_line);
+          let (status, answer) = world.answer(&target);
+          write_response(&mut stream, status, &answer);
         }
       })
     };
@@ -209,6 +211,9 @@ impl Stub {
 impl Drop for Stub {
   fn drop(&mut self) {
     self.stop.store(true, Ordering::Relaxed);
+    // The loop blocks in accept until a connection arrives, then sees the stop flag. When the loop has already ended,
+    // this connect fails, and the join below reports how the loop ended.
+    let _ = TcpStream::connect(("127.0.0.1", self.port));
     if let Some(thread) = self.thread.take() {
       thread.join().expect("the stub thread ends");
     }
@@ -276,7 +281,7 @@ fn run_check(sandbox: &Sandbox, input: &Value) -> Run {
   let deadline = Instant::now() + PROCESS_TIMEOUT;
   while child.try_wait().expect("the process status reads").is_none() {
     assert!(Instant::now() < deadline, "the check process ran past {PROCESS_TIMEOUT:?}");
-    std::thread::sleep(Duration::from_millis(5));
+    std::thread::sleep(Duration::from_millis(1));
   }
   let output = child.wait_with_output().expect("the output reads");
   let requests = sandbox.stub.requests();
@@ -334,36 +339,64 @@ fn a_turn_that_leaves_no_wake_is_blocked_once_with_the_check_text() {
   assert_eq!(reason, EXPECTED_BLOCK_REASON);
 }
 
-#[test]
-fn each_single_wake_item_passes_the_check_silently() {
-  let scheduled = json!({"schedule_enabled": true, "schedule_next_run": "2026-11-20T09:00:00Z"});
-  let worlds = [
-    ("a pending trigger of the session", World::default().triggers(ROOT, 1)),
-    ("a bound schedule with a next run", World::default().metadata(ROOT, scheduled.clone())),
-    ("a running worker", World::default().child(ROOT, "worker", "running", 0)),
-    ("a worker holding a trigger", World::default().child(ROOT, "worker", "idle", 0).triggers("worker", 1)),
-    (
-      "a worker listing Waiting on you",
-      World::default()
-        .child(ROOT, "worker", "idle", 0)
-        .metadata("worker", json!({"web_status": {"waiting": [{"text": "an answer"}]}})),
-    ),
-    (
-      "an open child manager holding a running worker",
-      World::default().child(ROOT, "manager", "idle", 1).child("manager", "grandchild", "running", 0),
-    ),
-    ("a bound schedule on a child", World::default().child(ROOT, "worker", "idle", 0).metadata("worker", scheduled)),
-  ];
-  for (label, world) in worlds {
-    let run = run_check(&Sandbox::new(world), &web_turn());
-    assert_eq!(run.status, Some(0), "{label}: {run:?}");
-    assert!(run.stdout.is_empty(), "{label} passes silently: {run:?}");
-  }
+/// The metadata of a session whose bound schedule has a next run.
+fn scheduled_metadata() -> Value {
+  json!({"schedule_enabled": true, "schedule_next_run": "2026-11-20T09:00:00Z"})
+}
 
+/// Runs the check on `input` in the sandbox of `world`, and asserts that it passes silently.
+fn assert_passes_silently(world: World, input: &Value) {
+  let run = run_check(&Sandbox::new(world), input);
+  assert_eq!(run.status, Some(0), "{run:?}");
+  assert!(run.stdout.is_empty(), "passes silently: {run:?}");
+}
+
+// One test per wake item: each runs one check process, so each stays within the unit-test time gate.
+
+#[test]
+fn a_pending_trigger_of_the_session_passes_silently() {
+  assert_passes_silently(World::default().triggers(ROOT, 1), &web_turn());
+}
+
+#[test]
+fn a_bound_schedule_of_the_session_passes_silently() {
+  assert_passes_silently(World::default().metadata(ROOT, scheduled_metadata()), &web_turn());
+}
+
+#[test]
+fn a_running_worker_passes_silently() {
+  assert_passes_silently(World::default().child(ROOT, "worker", "running", 0), &web_turn());
+}
+
+#[test]
+fn a_worker_holding_a_trigger_passes_silently() {
+  assert_passes_silently(World::default().child(ROOT, "worker", "idle", 0).triggers("worker", 1), &web_turn());
+}
+
+#[test]
+fn a_worker_listing_waiting_on_you_passes_silently() {
+  let world = World::default()
+    .child(ROOT, "worker", "idle", 0)
+    .metadata("worker", json!({"web_status": {"waiting": [{"text": "an answer"}]}}));
+  assert_passes_silently(world, &web_turn());
+}
+
+#[test]
+fn an_open_child_manager_holding_a_running_worker_passes_silently() {
+  let world = World::default().child(ROOT, "manager", "idle", 1).child("manager", "grandchild", "running", 0);
+  assert_passes_silently(world, &web_turn());
+}
+
+#[test]
+fn a_bound_schedule_on_a_child_passes_silently() {
+  let world = World::default().child(ROOT, "worker", "idle", 0).metadata("worker", scheduled_metadata());
+  assert_passes_silently(world, &web_turn());
+}
+
+#[test]
+fn a_waiting_on_you_item_of_the_turn_passes_silently() {
   let waiting = turn_input("web", 0, status(json!([{"text": "an answer"}])), user_turn());
-  let run = run_check(&Sandbox::new(World::default()), &waiting);
-  assert_eq!(run.status, Some(0), "a Waiting on you item: {run:?}");
-  assert!(run.stdout.is_empty(), "a Waiting on you item passes silently: {run:?}");
+  assert_passes_silently(World::default(), &waiting);
 }
 
 #[test]
@@ -396,26 +429,34 @@ fn a_failed_read_exits_one_and_shows_its_error() {
   assert!(!run.stderr.is_empty(), "the failure is shown: {run:?}");
 }
 
+/// How many of a run's requests read the second page of the root's children.
+fn second_page_reads(run: &Run) -> usize {
+  run.requests.iter().filter(|line| line.contains("cursor=100")).count()
+}
+
 #[test]
-fn a_hundred_and_one_children_are_read_to_the_last_page() {
-  let build = |last_state: &'static str| {
-    let mut world = World::default();
-    for index in 0..100 {
-      world = world.child(ROOT, &format!("child-{index:03}"), "idle", 0);
-    }
-    world.child(ROOT, "child-100", last_state, 0)
-  };
+fn a_running_101st_child_on_the_last_page_passes_silently() {
+  let mut world = World::default();
+  for index in 0..100 {
+    world = world.child(ROOT, &format!("child-{index:03}"), "idle", 0);
+  }
+  let run = run_check(&Sandbox::new(world.child(ROOT, "child-100", "running", 0)), &web_turn());
+  assert_eq!(run.status, Some(0), "{run:?}");
+  assert!(run.stdout.is_empty(), "the 101st child runs: {run:?}");
+  assert_eq!(second_page_reads(&run), 1, "the second page is read: {:?}", run.requests);
+}
 
-  let running_last = run_check(&Sandbox::new(build("running")), &web_turn());
-  assert_eq!(running_last.status, Some(0), "{running_last:?}");
-  assert!(running_last.stdout.is_empty(), "the 101st child runs: {running_last:?}");
-  let second_page = running_last.requests.iter().filter(|line| line.contains("cursor=100")).count();
-  assert_eq!(second_page, 1, "the second page is read: {:?}", running_last.requests);
-
-  let idle_last = run_check(&Sandbox::new(build("idle")), &web_turn());
-  assert_eq!(stdout_json(&idle_last)["decision"], "block", "{idle_last:?}");
-  let second_page = idle_last.requests.iter().filter(|line| line.contains("cursor=100")).count();
-  assert_eq!(second_page, 1, "the second page is read: {:?}", idle_last.requests);
+// The check reads only open children, so the first page holds closed ones: the block then comes only after the open
+// child on the last page is read.
+#[test]
+fn an_open_idle_101st_child_on_the_last_page_blocks_after_the_last_page() {
+  let mut world = World::default();
+  for index in 0..100 {
+    world = world.closed_child(ROOT, &format!("child-{index:03}"));
+  }
+  let run = run_check(&Sandbox::new(world.child(ROOT, "child-100", "idle", 0)), &web_turn());
+  assert_eq!(stdout_json(&run)["decision"], "block", "{run:?}");
+  assert_eq!(second_page_reads(&run), 1, "the second page is read: {:?}", run.requests);
 }
 
 #[test]

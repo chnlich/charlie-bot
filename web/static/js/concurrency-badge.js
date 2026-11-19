@@ -257,6 +257,10 @@
     if (!container) return;
     points = data;
     layout = null;
+    // A range with no run shows the note in place of the plot, so the note takes its own line and the
+    // plot's 150 px floor leaves the box. The panel then ends under the note instead of holding a blank
+    // box, which at a phone's width covers the page's first card.
+    container.classList.toggle('cb-chart-empty', !points.length || !hasRun);
     if (!points.length) {
       container.innerHTML = '<p class="cb-empty">No run records yet.</p>';
       return;

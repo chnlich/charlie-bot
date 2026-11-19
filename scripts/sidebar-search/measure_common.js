@@ -172,24 +172,28 @@ async function oneSearch(page, query) {
   return r;
 }
 
-// The session id of the server's first row, read from the Workspace move form: its id column is the 16-byte UUIDs in
-// base64url, or one cell per row when an id is not a canonical UUID.
-async function firstSessionId(baseUrl, accessKey) {
-  const response = await fetch(new URL('/api/sessions/?compact=move', baseUrl), {
+// The id and name of the first row of the answer at `path`. The id column holds the 16-byte UUIDs in base64url, or one
+// cell per row when an id is not a canonical UUID; a cell that starts with `~` is the id itself.
+async function firstRow(baseUrl, accessKey, path) {
+  const response = await fetch(new URL(path, baseUrl), {
     headers: accessKey ? { authorization: `Bearer ${accessKey}` } : {},
   });
-  if (!response.ok) throw new Error(`the first session lookup failed: ${response.status}`);
+  if (!response.ok) throw new Error(`the first row lookup of ${path} failed: ${response.status}`);
   const columns = await response.json();
   const cell = Array.isArray(columns.id) ? columns.id[0] : columns.id.slice(0, 22);
-  if (cell.startsWith('~')) return cell.slice(1);
+  const name = Array.isArray(columns.name) ? columns.name[0] : null;
+  if (typeof name !== 'string') throw new Error(`the answer of ${path} has no name for its first row`);
+  if (cell.startsWith('~')) return { id: cell.slice(1), name };
   const hex = Buffer.from(cell, 'base64url').toString('hex');
-  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join('-');
+  const id = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join('-');
+  return { id, name };
 }
 
 // Renames one session `changes` times, at k * windowMs / changes for k = 1..changes: each rename is a task-tree change
-// the server pushes to every open tab. Returns {stop}; stop waits for the last rename in flight and resolves to the
-// count sent.
-function startTaskTreeLoad({ baseUrl, accessKey, sessionId, changes, windowMs }) {
+// the server pushes to every open tab. Each rename keeps `baseName` and adds a suffix, so the row still matches the
+// query that the page is showing. Returns {stop}; stop waits for the last rename in flight and resolves to the count
+// sent.
+function startTaskTreeLoad({ baseUrl, accessKey, sessionId, baseName, changes, windowMs }) {
   const intervalMs = windowMs / changes;
   const started = performance.now();
   const headers = { 'content-type': 'application/json' };
@@ -202,7 +206,7 @@ function startTaskTreeLoad({ baseUrl, accessKey, sessionId, changes, windowMs })
   const tick = () => {
     if (stopped) return;
     count += 1;
-    const name = `load rename ${count}`;
+    const name = `${baseName} load ${count}`;
     inFlight = fetch(url, { method: 'PATCH', headers, body: JSON.stringify({ name }) }).then((response) => {
       if (!response.ok) throw new Error(`the rename failed: ${response.status}`);
     });
@@ -229,6 +233,6 @@ module.exports = {
   oneSearch,
   readCounters,
   counterDelta,
-  firstSessionId,
+  firstRow,
   startTaskTreeLoad,
 };

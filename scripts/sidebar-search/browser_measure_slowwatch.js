@@ -18,7 +18,7 @@ const {
   oneSearch,
   readCounters,
   counterDelta,
-  firstSessionId,
+  firstRow,
   startTaskTreeLoad,
 } = require('./measure_common');
 
@@ -33,7 +33,9 @@ async function main() {
   const windowSeconds = Number(windowArg);
   const changes = Number(changesArg);
   const accessKey = accessKeyFromEnvironment();
-  const sessionId = await firstSessionId(baseUrl, accessKey);
+  // The renames go to the first row of the query's answer. A rename of a row outside the answer leaves the
+  // answer's body unchanged, and the page then repaints nothing.
+  const target = await firstRow(baseUrl, accessKey, `/api/sessions/search?q=${encodeURIComponent(query)}`);
   const page = await openPage(baseUrl, { accessKey });
   const result = {
     phase: 'slowwatch',
@@ -59,7 +61,8 @@ async function main() {
       const load = startTaskTreeLoad({
         baseUrl,
         accessKey,
-        sessionId,
+        sessionId: target.id,
+        baseName: target.name,
         changes,
         windowMs: windowSeconds * 1000,
       });

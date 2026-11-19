@@ -30,5 +30,6 @@ Each output file carries one entry per repeat under `runs`. `e2e_ms` is the pain
 ## Broadcast window
 
 `browser_measure_slowwatch.js` makes its broadcasts with renames of one session, which the server pushes to every open
-tab as a task-tree change. The session is the server's first row. A window of 60.004 s with 19 changes sends the
-changes at k × 60.004 / 19 seconds for k = 1..19.
+tab as a task-tree change. The session is the first row of the query's answer, and each rename keeps that row's name
+and adds a suffix, so the row keeps answering the query and each change repaints the list. A window of 60.004 s with
+19 changes sends the changes at k × 60.004 / 19 seconds for k = 1..19.

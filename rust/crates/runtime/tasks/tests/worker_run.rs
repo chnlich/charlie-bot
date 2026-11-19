@@ -2297,11 +2297,18 @@ async fn quota_failover_of_a_routed_run_returns_to_the_subscription_member() -> 
 
 /// A fresh worker run and its retry launch without reading the handoff note file in their run directories. The decoy is
 /// text no worker launch may carry, so a read by either run would reach its launch text.
+///
+/// The fresh run's success starts a review whose success closes the worker, and a closed worker launches no run. A
+/// registered run that has not ended blocks that close. So the retry is registered while the fresh run waits at the
+/// gate, after the fresh run's launch text is written, and the worker is still open when the retry launches.
 #[tokio::test]
 #[ignore = "integration"]
 async fn a_fresh_worker_run_and_its_retry_never_read_a_handoff_note() -> anyhow::Result<()> {
   const DECOY: &str = "decoy handoff note that no worker launch reads";
-  let stack = Stack::start(&result_script("worker done")).await?;
+  let gate_dir = tempfile::tempdir()?;
+  let gate = gate_dir.path().join("release");
+  let script = format!("while [ ! -e '{}' ]; do sleep 0.05; done; {}", gate.display(), result_script("worker done"));
+  let stack = Stack::start(&script).await?;
   stack.write_access_key()?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
   let worker = stack
@@ -2329,12 +2336,27 @@ async fn a_fresh_worker_run_and_its_retry_never_read_a_handoff_note() -> anyhow:
     input_event_ids: vec![input["id"].as_str().expect("an admitted input has an id").to_string()],
     ..synthetic_run(&worker.id, "run-fresh", RunKind::Work)
   };
-  for (run_id, retry_of) in [("run-fresh", None), ("run-retry", Some("run-fresh"))] {
-    let record = RunRecord { id: run_id.to_string(), retry_of_run_id: retry_of.map(str::to_string), ..fresh.clone() };
-    register_run(&stack, record, "do the work").await?;
-    std::fs::write(stack.store().run_dir(&worker.id, run_id).join(HANDOFF_NOTE_FILENAME), DECOY)?;
-    stack.adapter.call(&worker.id, &[], Some(run_id)).await?;
-    assert_eq!(stack.wait_terminal(&worker.id, run_id).await?, RunOutcomeKind::Success, "{run_id} succeeds");
+  let retry = RunRecord { id: "run-retry".to_string(), retry_of_run_id: Some(fresh.id.clone()), ..fresh.clone() };
+  let write_decoy =
+    |run_id: &str| std::fs::write(stack.store().run_dir(&worker.id, run_id).join(HANDOFF_NOTE_FILENAME), DECOY);
+
+  register_run(&stack, fresh, "do the work").await?;
+  write_decoy("run-fresh")?;
+  stack.adapter.call(&worker.id, &[], Some("run-fresh")).await?;
+  // A launch writes its launch text before its process starts. A recorded pid shows that the fresh run launched
+  // before the retry existed, so the fresh run does not continue from the retry's record.
+  settle_until(|| Ok(stack.store().read_run_sync(&worker.id, "run-fresh")?.is_some_and(|run| run.pid.is_some())))
+    .await?;
+  register_run(&stack, retry, "do the work").await?;
+  write_decoy("run-retry")?;
+  std::fs::write(&gate, "")?;
+
+  assert_eq!(stack.wait_terminal(&worker.id, "run-fresh").await?, RunOutcomeKind::Success, "run-fresh succeeds");
+  // The dispatch that follows each worker run launches the queued retry once no run of the node is live. When that
+  // dispatch has launched it, this call finds the run launched and starts nothing.
+  stack.adapter.call(&worker.id, &[], Some("run-retry")).await?;
+  assert_eq!(stack.wait_terminal(&worker.id, "run-retry").await?, RunOutcomeKind::Success, "run-retry succeeds");
+  for run_id in ["run-fresh", "run-retry"] {
     let launch = std::fs::read_to_string(stack.store().run_dir(&worker.id, run_id).join(LAUNCH_TEXT_FILENAME))?;
     assert!(!launch.contains(DECOY), "{run_id} launched with the handoff note file: {launch}");
   }

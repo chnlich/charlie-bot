@@ -150,6 +150,10 @@ fn page(display_path: &str, rows: &str) -> String {
   table {{ border-collapse: collapse; }}
   td, th {{ padding: 4px 12px; text-align: left; }}
   td.size {{ text-align: right; }}
+  /* Inline, the icon sits on the text baseline, and the line box below the baseline makes the
+     cell taller than a text row. Block drops that line box; the negative vertical margin keeps the
+     16 px icon's box from making the row taller than the text line beside it. */
+  td.icon > .cb-icon {{ display: block; margin: -1px 0; }}
   a {{ text-decoration: none; color: #0366d6; }}
   a:hover {{ text-decoration: underline; }}
   @media (max-width: 600px) {{

@@ -30,7 +30,7 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskTyp
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{ChatEvent, CreateTask, PatchTask, TaskCaller};
-use charliebot_tasks::prompts::{LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
+use charliebot_tasks::prompts::{HANDOFF_NOTE_FILENAME, LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
 
 use charliebot_tasks::{cold_read, handoff, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
@@ -2265,9 +2265,65 @@ async fn quota_failover_of_a_routed_run_returns_to_the_subscription_member() -> 
   assert_eq!(switches[1]["from"], CHEAP_PAYG_MEMBER);
   assert_eq!(switches[1]["to"], CHEAP_SUBSCRIPTION_MEMBER);
   assert_eq!(switches[1][event_types::QUOTA_FAILOVER_REASON], event_types::QUOTA_REASON_SUBSCRIPTION_RESET);
+  // A worker's turn-start switch records no handoff summary, and neither its retry nor its next run writes a handoff
+  // note or starts with the manager's switch cause.
+  assert!(switches[1].get(event_types::QUOTA_FAILOVER_SUMMARY).is_none(), "{switches:?}");
+  for run in [&retry.id, &next] {
+    let note = stack.store().run_dir(&worker.id, run).join(HANDOFF_NOTE_FILENAME);
+    assert!(!note.exists(), "run {run} writes no handoff note: {}", note.display());
+  }
+  let next_launch = std::fs::read_to_string(stack.store().run_dir(&worker.id, &next).join(LAUNCH_TEXT_FILENAME))?;
+  assert!(!next_launch.contains(&format!("pool '{CHEAP_POOL_ID}' switched from")), "{next_launch}");
   settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 2)).await?;
   settle_node(&stack, &manager.id).await?;
   settle_node(&stack, &worker.id).await
+}
+
+/// A fresh worker run and its retry launch without reading the handoff note file in their run directories. The decoy is
+/// text no worker launch may carry, so a read by either run would reach its launch text.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_fresh_worker_run_and_its_retry_never_read_a_handoff_note() -> anyhow::Result<()> {
+  const DECOY: &str = "decoy handoff note that no worker launch reads";
+  let stack = Stack::start(&result_script("worker done")).await?;
+  stack.write_access_key()?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "worker".to_string(),
+        task_parent_id: Some(manager.id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(spec("do the work", Some(TaskType::Implement))),
+        name: Some("Synthetic worker".to_string()),
+        backend: Some(BACKEND_ID.to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let input =
+    stack.dispatch.admit_input(&worker.id, event_types::USER, "Continue the work.", "user", json!({})).await?;
+  let fresh = RunRecord {
+    backend: Some(BACKEND_ID.to_string()),
+    model: Some(format!("{BACKEND_ID}-model")),
+    input_event_ids: vec![input["id"].as_str().expect("an admitted input has an id").to_string()],
+    ..synthetic_run(&worker.id, "run-fresh", RunKind::Work)
+  };
+  for (run_id, retry_of) in [("run-fresh", None), ("run-retry", Some("run-fresh"))] {
+    let record = RunRecord { id: run_id.to_string(), retry_of_run_id: retry_of.map(str::to_string), ..fresh.clone() };
+    register_run(&stack, record, "do the work").await?;
+    std::fs::write(stack.store().run_dir(&worker.id, run_id).join(HANDOFF_NOTE_FILENAME), DECOY)?;
+    stack.adapter.call(&worker.id, &[], Some(run_id)).await?;
+    assert_eq!(stack.wait_terminal(&worker.id, run_id).await?, RunOutcomeKind::Success, "{run_id} succeeds");
+    let launch = std::fs::read_to_string(stack.store().run_dir(&worker.id, run_id).join(LAUNCH_TEXT_FILENAME))?;
+    assert!(!launch.contains(DECOY), "{run_id} launched with the handoff note file: {launch}");
+  }
+  settle_node(&stack, &worker.id).await?;
+  settle_node(&stack, &manager.id).await
 }
 
 /// Write the revision run's events log: a read with its result, then a bash call still in progress. The handoff note

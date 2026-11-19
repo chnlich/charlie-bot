@@ -1,20 +1,30 @@
-//! The switch note every automatic retry gets: the absolute paths to the context it continues from, and a
-//! best-effort four-part summary of the work the previous run did.
+//! The switch note an automatic switch gets: the absolute paths to the context it continues from, and a best-effort
+//! four-part summary of the work the previous run did.
 //!
-//! The note is assembled once for every retry, whether the retry continues a worker run, follows the pool's quota
-//! failover, or switches an Auto session to its next member. The paths are the guarantee: the summary is an addition
-//! that a failed assembly reports in the note and in the switch record without blocking the switch.
+//! The note is assembled once for every switch: a retry (a worker's, or a pool's mid-turn quota failover to its next
+//! member) and a manager turn that starts on the member its pool switched to. The paths are the guarantee: the summary
+//! is an addition that a failed assembly reports in the note and in the switch record without blocking the switch.
+//!
+//! A turn-start switch persists its note in the run's `handoff_note.md`. The file first holds the switch's
+//! `quota_failover` event as the pending intent, and the finished note replaces it before the event's summary is
+//! recorded, so a launch that finds the intent completes the note before it starts.
 
 use std::collections::HashMap;
+use std::path::Path;
 
+use anyhow::Context;
+use charliebot_agents::backend_availability;
 use charliebot_core::event_types;
+use charliebot_core::fsutil;
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::layout;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RUN_EVENTS_NAME, RunRecord};
+use charliebot_store::session_fork::HISTORY_LOCATION_NOTE;
 use serde_json::Value;
 
+use crate::prompts::HANDOFF_NOTE_FILENAME;
 use crate::session_anchors;
 use crate::tool_line::tool_input_first_line;
 
@@ -28,8 +38,11 @@ const MAX_SUMMARY_LINE_CHARS: usize = 300;
 
 /// Where the previous run's events are read from.
 pub enum HandoffSource<'a> {
-  /// A manager turn: the events the run wrote to the session's chat log.
+  /// A manager turn that failed mid-turn: the events the run wrote to the session's chat log.
   ManagerRun { run: &'a RunRecord },
+  /// A manager turn that starts on the member its pool switched to: the events the previous launched turn wrote to the
+  /// session's chat log.
+  ManagerTurnStart { run: &'a RunRecord },
   /// A worker run: the run's own `events.jsonl`.
   WorkerRun { run: &'a RunRecord },
 }
@@ -37,25 +50,28 @@ pub enum HandoffSource<'a> {
 impl HandoffSource<'_> {
   fn run(&self) -> &RunRecord {
     match self {
-      HandoffSource::ManagerRun { run } | HandoffSource::WorkerRun { run } => run,
+      HandoffSource::ManagerRun { run }
+      | HandoffSource::ManagerTurnStart { run }
+      | HandoffSource::WorkerRun { run } => run,
     }
   }
 }
 
-/// One retry's switch note and the summary state its `quota_failover` record carries.
+/// One switch's note and the summary state its `quota_failover` record carries.
 pub struct Handoff {
-  /// The bracketed note that opens the retry's prompt.
+  /// The bracketed note that opens the run's prompt.
   pub note: String,
   /// [`SUMMARY_OK`], or an [`SUMMARY_UNAVAILABLE`] value with its reason.
   pub summary: String,
 }
 
-/// Build the switch note and summary for a retry that continues `source`'s run.
+/// Build the switch note and summary for a run that continues `source`'s run.
 ///
-/// `reason` names why the retry starts a fresh conversation. The note always names the session chat log, its archives
-/// and the failed run's directory as absolute paths. A worker's note and summary name the task's goal; a manager's
-/// Goals reach it through its prompt, so its note and summary name none. A summary that cannot be assembled leaves a
-/// line in the note and an `unavailable` value for the switch record, and the retry proceeds.
+/// `reason` names why the run starts a fresh conversation. The note always names the session chat log, its archives
+/// and the source run's directory as absolute paths: "the failed run's directory" for a retry, and "the previous run's
+/// directory" for a turn-start switch. A worker's note and summary name the task's goal; a manager's Goals reach it
+/// through its prompt, so its note and summary name none. A summary that cannot be assembled leaves a line in the note
+/// and an `unavailable` value for the switch record, and the run proceeds.
 pub fn handoff(
   features: &FeatureContext,
   meta: &SessionMetadata,
@@ -67,9 +83,17 @@ pub fn handoff(
   let chat_log = layout::chat_events_path(&session_dir);
   let archives = layout::archives_dir(&session_dir);
   let run_dir = features.store.run_dir(&meta.id, &previous.id);
+  let (lead, run_label) = match source {
+    HandoffSource::ManagerTurnStart { .. } => (
+      format!("{HISTORY_LOCATION_NOTE} Its absolute paths are the session chat log at"),
+      "the previous run's directory",
+    ),
+    HandoffSource::ManagerRun { .. } | HandoffSource::WorkerRun { .. } => {
+      ("Earlier turns' history remains readable in the session chat log at".to_string(), "the failed run's directory")
+    }
+  };
   let context = format!(
-    "Earlier turns' history remains readable in the session chat log at {}, its weekly archives at {}, and the failed \
-     run's directory at {}, whose {RAW_LOG_NAME} holds each step's raw output.",
+    "{lead} {}, its weekly archives at {}, and {run_label} at {}, whose {RAW_LOG_NAME} holds each step's raw output.",
     chat_log.display(),
     archives.display(),
     run_dir.display(),
@@ -92,6 +116,102 @@ fn task_goal(meta: &SessionMetadata) -> &str {
   meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str())
 }
 
+/// The handoff of a manager turn-start switch. `intent` is the switch's `quota_failover` event, and `previous` is the
+/// last manager turn that launched on the session before the switch, or `None` when no such turn launched.
+pub fn turn_start(
+  features: &FeatureContext,
+  meta: &SessionMetadata,
+  intent: &Value,
+  previous: Option<&RunRecord>,
+) -> anyhow::Result<Handoff> {
+  let recovers_at = intent_text(intent, event_types::QUOTA_FAILOVER_RECOVERS_AT)?;
+  let reason = turn_start_reason(
+    intent_text(intent, event_types::QUOTA_FAILOVER_SET)?,
+    intent_text(intent, "from")?,
+    intent_text(intent, "to")?,
+    intent_text(intent, event_types::QUOTA_FAILOVER_REASON)?,
+    (!recovers_at.is_empty()).then_some(recovers_at),
+  );
+  match previous {
+    Some(previous) => handoff(features, meta, HandoffSource::ManagerTurnStart { run: previous }, &reason),
+    None => {
+      let why = "no manager turn launched on the session before this switch";
+      Ok(Handoff {
+        note: format!(
+          "{}\n\nHandoff summary {SUMMARY_UNAVAILABLE}: {why}",
+          session_anchors::manager_context_reset_note(&meta.id, &reason)
+        ),
+        summary: format!("{SUMMARY_UNAVAILABLE}: {why}"),
+      })
+    }
+  }
+}
+
+/// The reason clause a turn-start switch's note opens with: the pool, the member the session left, the member it runs
+/// on, and why the member left.
+pub fn turn_start_reason(pool: &str, from: &str, to: &str, reason: &str, recovers_at: Option<&str>) -> String {
+  let switch = format!("pool '{pool}' switched from {from} to {to}");
+  match (reason, recovers_at) {
+    (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, _) => format!("{switch}: subscription quota reset"),
+    (event_types::QUOTA_REASON_NEAR_EXHAUSTION, None) => format!("{switch}: the member is near quota exhaustion"),
+    (event_types::QUOTA_REASON_NEAR_EXHAUSTION, Some(at)) => {
+      format!("{switch}: the member is near quota exhaustion, resets at {at}")
+    }
+    _ => {
+      let cause = backend_availability::switch_cause(reason);
+      match recovers_at {
+        Some(at) => format!("{switch}: {cause}, {} {at}", backend_availability::switch_recovery_label(reason)),
+        None => format!("{switch}: {cause}"),
+      }
+    }
+  }
+}
+
+/// A text field of a switch intent. The intent is written by this module's caller, so a missing field is a fault.
+fn intent_text<'a>(intent: &'a Value, key: &str) -> anyhow::Result<&'a str> {
+  intent.get(key).and_then(Value::as_str).with_context(|| format!("the switch intent names no {key}: {intent}"))
+}
+
+/// What a manager run's handoff note file holds: a turn-start switch's pending intent, or its finished note.
+pub enum HandoffNote {
+  /// The switch's `quota_failover` event, written before its note was assembled.
+  Pending(Value),
+  /// The finished note, which the launch places ahead of the prompt.
+  Finished(String),
+}
+
+/// Persist a turn-start switch's pending intent in its run's directory, before the switch's note is assembled.
+pub fn write_pending_switch(run_dir: &Path, intent: &Value) -> anyhow::Result<()> {
+  write_note_file(run_dir, &intent.to_string())
+}
+
+/// Persist a turn-start switch's finished note in its run's directory, before the switch's summary is recorded.
+pub fn write_finished_note(run_dir: &Path, note: &str) -> anyhow::Result<()> {
+  write_note_file(run_dir, note)
+}
+
+fn write_note_file(run_dir: &Path, text: &str) -> anyhow::Result<()> {
+  let path = run_dir.join(HANDOFF_NOTE_FILENAME);
+  fsutil::atomic_write_text_synced(&path, text).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Read a run's handoff note file, or `None` when the run carries no turn-start switch. A pending intent is a JSON
+/// object, and a finished note opens with its context-reset line, so the first character tells them apart.
+pub fn read_note(run_dir: &Path) -> anyhow::Result<Option<HandoffNote>> {
+  let path = run_dir.join(HANDOFF_NOTE_FILENAME);
+  let text = match std::fs::read_to_string(&path) {
+    Ok(text) => text,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+  };
+  if text.starts_with('{') {
+    let intent = serde_json::from_str(&text)
+      .with_context(|| format!("parsing the pending switch intent in {}", path.display()))?;
+    return Ok(Some(HandoffNote::Pending(intent)));
+  }
+  Ok(Some(HandoffNote::Finished(text)))
+}
+
 /// Assemble the four summary parts, or fail with the reason the previous run's events could not be read.
 fn summary(features: &FeatureContext, meta: &SessionMetadata, source: &HandoffSource<'_>) -> Result<String, String> {
   if let Some(reason) = forced_summary_failure(&source.run().id) {
@@ -109,13 +229,13 @@ fn previous_events(
   source: &HandoffSource<'_>,
 ) -> Result<Vec<Value>, String> {
   match source {
-    HandoffSource::ManagerRun { run } => {
+    HandoffSource::ManagerRun { run } | HandoffSource::ManagerTurnStart { run } => {
       if run.input_event_ids.is_empty() {
         return Err(format!("run {} recorded no input events", run.id));
       }
       let events = features
         .store
-        .load_chat_events_sync(&meta.id)
+        .load_chat_events_shared_sync(&meta.id)
         .map_err(|error| format!("reading the session chat log: {error}"))?;
       let start = events
         .iter()

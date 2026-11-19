@@ -49,7 +49,7 @@ use crate::auto_switch::{self, MemberSwitch};
 use crate::cold_read::{self, ColdReadOutcome};
 use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion, note_run_liveness};
 use crate::git;
-use crate::handoff::HandoffSource;
+use crate::handoff::{self, HandoffSource};
 use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
 use crate::master_run;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
@@ -196,10 +196,13 @@ impl TaskExecutionAdapter {
   ) -> StoreResult<Option<String>> {
     let mut scheduled = None;
     let mut member_event: Option<ChatEvent> = None;
+    // A manager's turn-start switch persists its intent under the control lock and records its event after the lock,
+    // once the handoff is assembled outside it.
+    let mut switch_intent: Option<(SessionMetadata, Value)> = None;
     // An Auto set with no selectable member ends the turn here, after the end of this lock.
     let mut exhausted_turn: Option<(String, String)> = None;
-    // A turn start that changes an Auto session's member appends its event under the control lock; the epoch primes
-    // the live aggregator the announce after the lock feeds.
+    // A turn start that changes an Auto session's member records its event: a worker's under the control lock, and a
+    // manager's after its handoff is assembled. The epoch primes the live aggregator the announce after the lock feeds.
     let member_epoch = self.features.store.prime_aggregator(session_id).await?;
     let run_id;
     {
@@ -286,7 +289,14 @@ impl TaskExecutionAdapter {
           Err(error) => return Err(error),
         }
         if let Some(change) = change {
-          member_event = Some(self.features.store.append_control_fact(&guard, session_id, change.event()).await?);
+          if meta.profile == TaskProfile::Manager {
+            let intent = change.event();
+            let run_dir = self.features.store.run_dir(session_id, &run_id);
+            handoff::write_pending_switch(&run_dir, &intent).map_err(|error| StoreError::new(format!("{error:#}")))?;
+            switch_intent = Some((meta.clone(), intent));
+          } else {
+            member_event = Some(self.features.store.append_control_fact(&guard, session_id, change.event()).await?);
+          }
         }
         if let Some(message) = exhausted {
           exhausted_turn = Some((run_id.clone(), message));
@@ -300,6 +310,17 @@ impl TaskExecutionAdapter {
           let (sender, _) = watch::channel(None);
           state.settlements.insert(key.clone(), sender);
           scheduled = Some(key);
+        }
+      }
+    }
+    if let Some((meta, intent)) = switch_intent {
+      match self.record_turn_start_switch(&meta, &run_id, &intent).await {
+        Ok((_, event)) => member_event = Some(event),
+        Err(error) => {
+          if let Some(key) = &scheduled {
+            self.release_launch(key);
+          }
+          return Err(error);
         }
       }
     }
@@ -687,6 +708,8 @@ impl TaskExecutionAdapter {
         &reason,
       )?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
+    } else if let Some(note) = self.turn_start_note(&wake_meta, run).await? {
+      prompt = format!("{note}\n\n{prompt}");
     } else if fresh_native && wake_meta.cc_session_id.is_some() {
       let reason = match wake_meta.native_backend.as_deref().filter(|backend| !backend.is_empty() && *backend != option.id) {
         Some(previous) => session_anchors::backend_switch_reset_reason(previous, &option.id),
@@ -2522,6 +2545,66 @@ impl TaskExecutionAdapter {
     ]))
   }
 
+  /// Drop the launch claim of a run that will not launch from this call, so a later dispatch can schedule it.
+  fn release_launch(&self, key: &(String, String)) {
+    let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
+    state.inflight.remove(key);
+    state.settlements.remove(key);
+  }
+
+  /// Assemble a turn-start switch's handoff outside the control lock, write its finished note, then record the switch's
+  /// `quota_failover` event with the summary the assembly reached. The event follows the note on disk, so a recorded
+  /// `ok` summary always has its note. Return the note and the recorded event.
+  async fn record_turn_start_switch(
+    &self,
+    meta: &SessionMetadata,
+    run_id: &str,
+    intent: &Value,
+  ) -> StoreResult<(String, ChatEvent)> {
+    let store = &self.features.store;
+    let previous = previous_launched_manager_run(&self.features, &meta.id, run_id)?;
+    let assembled = handoff::turn_start(&self.features, meta, intent, previous.as_ref())
+      .map_err(|error| StoreError::new(format!("{error:#}")))?;
+    handoff::write_finished_note(&store.run_dir(&meta.id, run_id), &assembled.note)
+      .map_err(|error| StoreError::new(format!("{error:#}")))?;
+    let mut event = intent.clone();
+    event[event_types::QUOTA_FAILOVER_SUMMARY] = json!(assembled.summary);
+    let guard = store.control_lock().await;
+    let event = store.append_control_fact(&guard, &meta.id, event).await?;
+    Ok((assembled.note, event))
+  }
+
+  /// The note a manager run launches with when its turn starts on a member its pool switched to, or `None` when the run
+  /// carries no such switch. A crash between the switch's intent and its finished note leaves the intent in the run's
+  /// handoff note file; the launch finishes the note and records the event before it starts. A retry takes the
+  /// mid-turn failover's note and reads no intent.
+  async fn turn_start_note(&self, meta: &SessionMetadata, run: &RunRecord) -> StoreResult<Option<String>> {
+    if run.retry_of_run_id.is_some() {
+      return Ok(None);
+    }
+    let run_dir = self.features.store.run_dir(&meta.id, &run.id);
+    match handoff::read_note(&run_dir) {
+      Ok(None) => Ok(None),
+      Ok(Some(handoff::HandoffNote::Finished(note))) => Ok(Some(note)),
+      Ok(Some(handoff::HandoffNote::Pending(intent))) => {
+        let epoch = self.features.store.prime_aggregator(&meta.id).await?;
+        let (note, event) = self.record_turn_start_switch(meta, &run.id, &intent).await?;
+        self.features.store.announce_appended_event(&meta.id, &event, epoch).await?;
+        Ok(Some(note))
+      }
+      Err(error) => {
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id = %meta.id,
+          run_id = %run.id,
+          error = %format!("{error:#}"),
+          "turn_start_note_unreadable"
+        );
+        Ok(None)
+      }
+    }
+  }
+
   fn persist_launch_text(&self, session_id: &str, run_id: &str, prompt: &str) -> StoreResult<()> {
     let path = self.features.store.run_dir(session_id, run_id).join(prompts::LAUNCH_TEXT_FILENAME);
     fsutil::atomic_write_text(&path, prompt).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
@@ -2763,6 +2846,22 @@ fn auto_quota_failure(extras: &Map<String, Value>) -> Option<QuotaFailure> {
     .and_then(Value::as_str)
     .and_then(|text| UtcDateTime::parse(text).ok());
   Some(QuotaFailure { resets_at, message, reason })
+}
+
+/// The last manager turn that launched on the session before `current_run_id`. A turn that never launched has no start
+/// time, so an exhausted turn that ended without a member is skipped.
+fn previous_launched_manager_run(
+  features: &FeatureContext,
+  session_id: &str,
+  current_run_id: &str,
+) -> StoreResult<Option<RunRecord>> {
+  Ok(
+    features
+      .store
+      .list_run_records_sync(session_id)?
+      .into_iter()
+      .rfind(|run| run.id != current_run_id && run.kind == RunKind::ManagerTurn && run.started_at.is_some()),
+  )
 }
 
 /// The failed run an Auto switch retry continues, with the reason its fresh conversation starts, when this run is a

@@ -17,7 +17,7 @@ test('the icon table has the approved meanings and licensed Lucide files', () =>
     'disclosure-open', 'done', 'download', 'dot', 'events', 'expand-down', 'expand-up', 'explain', 'failed', 'file',
     'folder', 'home', 'leads-to', 'loading', 'menu', 'more', 'notification', 'open', 'plan', 'rate-down', 'rate-up',
     'resize', 'retry', 'ring', 'scheduled', 'scroll-bottom', 'send', 'settings', 'star', 'starred', 'stop',
-    'subtasks-running', 'unarchive', 'voice', 'waiting', 'waiting-on-you', 'warning', 'worker',
+    'subtasks-running', 'undo', 'unarchive', 'voice', 'waiting', 'waiting-on-you', 'warning', 'worker',
   ];
   assert.deepEqual(Object.keys(iconTable).sort(), expectedKeys.sort());
   assert.deepEqual(
@@ -27,7 +27,7 @@ test('the icon table has the approved meanings and licensed Lucide files', () =>
 
   const lucideDirectory = path.join(iconDirectory, 'lucide');
   const lucideNames = [...new Set(Object.values(iconTable).map((entry) => entry.lucide))].sort();
-  assert.equal(lucideNames.length, 47);
+  assert.equal(lucideNames.length, 48);
   assert.deepEqual(fs.readdirSync(lucideDirectory).filter((name) => name.endsWith('.svg')).sort(),
     lucideNames.map((name) => `${name}.svg`).sort());
   assert.ok(fs.statSync(path.join(iconDirectory, 'LICENSE')).isFile());

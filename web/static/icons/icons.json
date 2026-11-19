@@ -13,6 +13,7 @@
   "starred": { "lucide": "star", "fill": true },
   "archive": { "lucide": "archive" },
   "unarchive": { "lucide": "archive-restore" },
+  "undo": { "lucide": "undo-2" },
   "settings": { "lucide": "settings" },
   "worker": { "lucide": "zap" },
   "retry": { "lucide": "rotate-ccw" },

@@ -444,11 +444,21 @@ fn archived_page_body(
     .filter(|(context_only, row)| !context_only && page_ids.contains(&row.id))
     .map(|(_, row)| Arc::new(row.clone()))
     .collect();
+  let context_rows: Vec<Arc<SessionMetadata>> =
+    merged.iter().filter(|(context_only, _)| *context_only).map(|(_, row)| Arc::new(row.clone())).collect();
   let status = sidebar::resolve_sidebar_state(
     &features.store,
     &features.registry,
     &page_rows,
-    SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+    SidebarFields { running: true, trigger: true, plan: false, waiting: true },
+    false,
+  )?;
+  // A context row paints no running or trigger indicator, but the reader's sidebar still reads its waiting flag.
+  let context_status = sidebar::resolve_sidebar_state(
+    &features.store,
+    &features.registry,
+    &context_rows,
+    SidebarFields { running: false, trigger: false, plan: false, waiting: true },
     false,
   )?;
   let mut session_values = Vec::with_capacity(merged.len());
@@ -461,9 +471,12 @@ fn archived_page_body(
     );
     object
       .insert(RUN_BACKEND.to_string(), listing::run_backend(&features.store, &row)?.map_or(Value::Null, Value::String));
-    if !context_only {
-      apply_derived_fields(&mut value, &row, status.get(&row.id).map(Arc::as_ref), &features.store, true, true, false);
-    }
+    let (derived, fields) = if context_only {
+      (&context_status, SidebarFields { running: false, trigger: false, plan: false, waiting: true })
+    } else {
+      (&status, SidebarFields { running: true, trigger: true, plan: false, waiting: true })
+    };
+    apply_derived_fields(&mut value, &row, derived.get(&row.id).map(Arc::as_ref), &features.store, fields);
     listing::apply_listing_fields(&mut value, listing_fields.get(&row.id).cloned().unwrap_or_default());
     if context_only {
       value
@@ -504,7 +517,7 @@ fn starred_response(features: &FeatureContext, request: &Request<Body>) -> Respo
     &features.store,
     &features.registry,
     &listed.rows,
-    SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+    SidebarFields { running: true, trigger: true, plan: false, waiting: true },
     false,
   ) {
     Ok(derived) => derived,
@@ -918,16 +931,17 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
     }
     return gzip_response(&request, (*body).clone(), &SEARCH_GZIP_MEMO);
   }
-  let (answer, derived) = match blocking_store(move || {
+  let (answer, derived, sequence_fields) = match blocking_store(move || {
     let answer = search::search_sessions(&store, &q)?;
     let derived = sidebar::resolve_sidebar_state(
       &store,
       &registry,
       &answer.rows,
-      SidebarFields { running: true, trigger: true, plan: false, waiting: false },
+      SidebarFields { running: true, trigger: true, plan: true, waiting: true },
       false,
     )?;
-    Ok((answer, derived))
+    let sequence_fields = store.sequence_listing_fields(&answer.rows)?;
+    Ok((answer, derived, sequence_fields))
   })
   .await
   {
@@ -941,16 +955,10 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   {
     return gzip_response(&request, (*body).clone(), &SEARCH_GZIP_MEMO);
   }
-  let mut values = Vec::with_capacity(answer.rows.len());
-  for row in &answer.rows {
-    let mut value = match listing::metadata_value(&features.store, row) {
-      Ok(value) => value,
-      Err(error) => return store_error(error),
-    };
-    apply_derived_fields(&mut value, row, derived.get(&row.id).map(Arc::as_ref), &features.store, true, true, false);
-    values.push(value);
-  }
-  let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
+  let body = match listing::search_columns_text(&features.store, &answer.rows, &derived, &sequence_fields) {
+    Ok(text) => text.into_bytes(),
+    Err(error) => return store_error(error),
+  };
   if let Some(source) = &answer.source {
     source.remember_body(generation, Arc::new(body.clone()));
   }
@@ -962,10 +970,14 @@ fn apply_derived_fields(
   meta: &SessionMetadata,
   derived: Option<&Map<String, Value>>,
   store: &charliebot_store::Store,
-  include_running: bool,
-  include_trigger: bool,
-  include_plan: bool,
+  fields: SidebarFields,
 ) {
+  let SidebarFields {
+    running: include_running,
+    trigger: include_trigger,
+    plan: include_plan,
+    waiting: include_waiting,
+  } = fields;
   let object = value.as_object_mut().expect("session metadata serializes to an object");
   if include_running {
     object.insert(
@@ -994,6 +1006,12 @@ fn apply_derived_fields(
     object.insert(
       sidebar_state::HAS_PENDING_PLAN_APPROVAL.to_string(),
       derived.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
+    );
+  }
+  if include_waiting {
+    object.insert(
+      sidebar_state::HAS_WAITING_ITEMS.to_string(),
+      derived.and_then(|row| row.get(sidebar_state::HAS_WAITING_ITEMS)).cloned().unwrap_or(Value::Bool(false)),
     );
   }
   object
@@ -1465,13 +1483,94 @@ mod tests {
       "the memo keeps the compressed form, so the answer takes the smaller kept-body level"
     );
     let quiet: Value = serde_json::from_slice(&quiet).unwrap();
-    assert_eq!(quiet[0]["thinking_since"], Value::Null);
+    assert_eq!(quiet["thinking_since"][0], Value::Null);
 
     features.store.mark_busy(&meta.id, UtcDateTime::now()).unwrap();
     let busy =
       to_bytes(session_search(State(Arc::clone(&features)), search()).await.into_body(), usize::MAX).await.unwrap();
     let busy: Value = serde_json::from_slice(&busy).unwrap();
-    assert_ne!(busy[0]["thinking_since"], Value::Null, "a moved derived-state generation renders the row again");
+    assert_ne!(busy["thinking_since"][0], Value::Null, "a moved derived-state generation renders the row again");
+  }
+
+  /// The search answer is the sidebar's column form over exactly the search fields. Its two flags are booleans on every
+  /// row, and the archived row keeps its status while the active row drops it.
+  #[tokio::test]
+  async fn the_search_answer_is_the_27_column_form_with_boolean_flags_and_archived_status() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "search-shape-active", None, TaskProfile::Manager).await;
+    let archived =
+      crate::test_support::create_node(&features.store, "search-shape-archived", None, TaskProfile::Manager).await;
+    features.store.archive_session(&archived.id).await.unwrap();
+
+    let request = Request::builder().uri("/api/sessions/search?q=search-shape").body(Body::empty()).unwrap();
+    let body =
+      to_bytes(session_search(State(Arc::clone(&features)), request).await.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+
+    let mut fields: Vec<&str> = body
+      .as_object()
+      .expect("the search answer is a column object")
+      .keys()
+      .filter(|field| !field.starts_with('$'))
+      .map(String::as_str)
+      .collect();
+    fields.sort_unstable();
+    let mut expected = crate::listing::SEARCH_FIELDS.to_vec();
+    expected.sort_unstable();
+    assert_eq!(fields, expected, "the search answer carries exactly its 27 columns");
+    for flag in ["has_waiting_items", "has_pending_plan_approval"] {
+      let cells = body[flag].as_array().expect("a flag is a column");
+      assert_eq!(cells.len(), 2, "one flag cell per row");
+      assert!(cells.iter().all(|cell| cell.is_boolean()), "{flag} is a boolean on every row");
+    }
+    let names = body["name"].as_array().expect("the name column is an array");
+    let row_of = |name: &str| names.iter().position(|cell| cell == name).expect("the search answers the row");
+    assert_eq!(body["status"][row_of("search-shape-archived")], "archived");
+    assert_eq!(body["status"][row_of("search-shape-active")], Value::Null);
+  }
+
+  /// The `has_waiting_items` cells of a listing body in any of its shapes: a row array, a column object, the `sessions`
+  /// of a row refresh, or the `sessions` array of the archived view.
+  fn waiting_cells(body: &Value) -> Vec<Value> {
+    if let Some(sessions) = body.get("sessions") {
+      return waiting_cells(sessions);
+    }
+    match body.as_array() {
+      Some(rows) => rows.iter().map(|row| row["has_waiting_items"].clone()).collect(),
+      None => body["has_waiting_items"].as_array().expect("a column object carries the flag column").clone(),
+    }
+  }
+
+  async fn waiting_cells_of(response: Response) -> Vec<Value> {
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let cells = waiting_cells(&body);
+    assert!(!cells.is_empty(), "the shape answers its row");
+    assert!(cells.iter().all(|cell| cell.is_boolean()), "every row carries a boolean waiting flag: {cells:?}");
+    cells
+  }
+
+  /// Every listing shape answers each row's `has_waiting_items` as a boolean: the row array, the Workspace's and the
+  /// move picker's column forms, a row refresh, the starred view and the archived view.
+  #[tokio::test]
+  async fn every_listing_shape_answers_a_boolean_waiting_flag() {
+    let (_home, features) = crate::test_support::feature_context();
+    let active = crate::test_support::create_node(&features.store, "shape-active", None, TaskProfile::Manager).await;
+    let archived =
+      crate::test_support::create_node(&features.store, "shape-archived", None, TaskProfile::Manager).await;
+    features.store.star_session(&active.id).await.unwrap();
+    features.store.archive_session(&archived.id).await.unwrap();
+    let get = |uri: String| Request::builder().uri(uri).body(Body::empty()).unwrap();
+    let state = || State(Arc::clone(&features));
+
+    waiting_cells_of(list_active(state(), get("/api/sessions/".to_string())).await).await;
+    waiting_cells_of(list_active(state(), get("/api/sessions/?compact=1".to_string())).await).await;
+    waiting_cells_of(list_active(state(), get("/api/sessions/?compact=move".to_string())).await).await;
+    waiting_cells_of(list_active(state(), get(format!("/api/sessions/?ids={}", active.id))).await).await;
+    waiting_cells_of(list_starred(state(), get("/api/sessions/starred".to_string())).await).await;
+    waiting_cells_of(list_starred(state(), get(format!("/api/sessions/starred?ids={}", active.id))).await).await;
+    let archived_rows = waiting_cells_of(list_archived(state(), get("/api/sessions/archived".to_string())).await).await;
+    assert_eq!(archived_rows.len(), 1, "the archived view lists the archived session");
   }
 
   #[tokio::test]

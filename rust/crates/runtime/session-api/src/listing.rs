@@ -18,7 +18,7 @@ use charliebot_store::metadata::{
   RUN_BACKEND, SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
   TASK_PARENT_ID_FIELD, THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
 };
-use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
+use charliebot_store::sidebar_state::{HAS_PENDING_PLAN_APPROVAL, HAS_WAITING_ITEMS};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
@@ -32,6 +32,7 @@ pub struct SidebarProjection {
   pub include_running: bool,
   pub include_trigger: bool,
   pub include_plan: bool,
+  pub include_waiting: bool,
   pub display_backend: bool,
   pub include_run_backend: bool,
 }
@@ -227,7 +228,7 @@ pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> St
     store,
     registry,
     &listed.rows,
-    SidebarFields { running: true, trigger: true, plan: true, waiting: false },
+    SidebarFields { running: true, trigger: true, plan: true, waiting: true },
     false,
   )?;
   // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so the build
@@ -468,20 +469,22 @@ fn outside_owned_subtrees(row: &SessionMetadata, roots: &SharedSubtreeRoots) -> 
   !roots.sequence.contains_key(&row.id) && !roots.views.values().any(|members| members.contains_key(&row.id))
 }
 
-/// The chat page's row projection: running and trigger state, the run backend, and no plan badge.
+/// The chat page's row projection: running, trigger and waiting state, the run backend, and no plan badge.
 const PAGE_PROJECTION: SidebarProjection = SidebarProjection {
   include_running: true,
   include_trigger: true,
   include_plan: false,
+  include_waiting: true,
   display_backend: true,
   include_run_backend: true,
 };
 
-/// A sidebar listing's row projection: running, trigger and plan state, and no run backend.
+/// A sidebar listing's row projection: running, trigger, plan and waiting state, and no run backend.
 pub const LISTING_PROJECTION: SidebarProjection = SidebarProjection {
   include_running: true,
   include_trigger: true,
   include_plan: true,
+  include_waiting: true,
   display_backend: true,
   include_run_backend: false,
 };
@@ -491,6 +494,7 @@ pub const STARRED_PROJECTION: SidebarProjection = SidebarProjection {
   include_running: true,
   include_trigger: true,
   include_plan: false,
+  include_waiting: true,
   display_backend: false,
   include_run_backend: true,
 };
@@ -530,8 +534,9 @@ impl RowSchema {
 }
 
 /// The fields the session-move picker reads. It labels a choice by name, keeps the manager rows, walks the task
-/// parents to drop the moved session's descendants, and names the chosen parent by id.
-const MOVE_FIELDS: [&str; 4] = [ID_FIELD, "name", "profile", TASK_PARENT_ID_FIELD];
+/// parents to drop the moved session's descendants, and names the chosen parent by id. The waiting flag rides along
+/// because every listing shape carries it.
+const MOVE_FIELDS: [&str; 5] = [ID_FIELD, "name", "profile", TASK_PARENT_ID_FIELD, HAS_WAITING_ITEMS];
 
 /// The page's whole sidebar text and the inputs it rendered from.
 struct WholePageText {
@@ -730,7 +735,7 @@ pub(crate) fn page_json_text(
     }
     rows.push(row_text);
   }
-  let text = Arc::new(page_columns_text(&rows, screen.as_ref()));
+  let text = Arc::new(page_columns_text(&rows, screen.as_ref(), None));
   state.whole = Some(WholePageText {
     source: PageTextSource::of(page),
     inputs,
@@ -932,17 +937,26 @@ impl FirstScreenShape {
 ///
 /// A page row never carries a null value. The falsy fields it keeps are a name and a schedule flag, and
 /// [`drop_falsy_fields`] leaves every other falsy field out before this text is built.
-fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>) -> String {
-  let mut fields: Vec<&str> = Vec::new();
-  let mut seen: HashSet<&str> = HashSet::new();
-  for row in rows {
-    for (field, _) in &row.fields {
-      if seen.insert(field.as_str()) {
-        fields.push(field.as_str());
+///
+/// `fixed` names the columns the text carries, in order, when a caller's shape is fixed: each named column is written
+/// even where no row holds the field. `None` writes every field a row holds, sorted.
+fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>, fixed: Option<&[&str]>) -> String {
+  let fields: Vec<&str> = match fixed {
+    Some(fixed) => fixed.to_vec(),
+    None => {
+      let mut fields: Vec<&str> = Vec::new();
+      let mut seen: HashSet<&str> = HashSet::new();
+      for row in rows {
+        for (field, _) in &row.fields {
+          if seen.insert(field.as_str()) {
+            fields.push(field.as_str());
+          }
+        }
       }
+      fields.sort_unstable();
+      fields
     }
-  }
-  fields.sort_unstable();
+  };
   let mut text = String::new();
   text.push('{');
   text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(COLUMN_ENCODING_KEY.to_string())));
@@ -1111,6 +1125,9 @@ fn page_row_value(
         .expect("a session metadata value is an object")
         .insert(HAS_UNREAD.to_string(), Value::Bool(false));
     }
+  } else {
+    // The picker's form carries the waiting flag beside its fields, so every listing shape answers it.
+    insert_waiting_field(value.as_object_mut().expect("a session metadata value is an object"), row);
   }
   Ok(value)
 }
@@ -1119,8 +1136,9 @@ fn page_row_value(
 ///
 /// The client reads these values themselves rather than their truth. It renders `name` literally, so an absent name
 /// prints "undefined" in the sidebar. It draws a schedule as disabled only for `schedule_enabled` false, so an
-/// absent value would draw the schedule as enabled.
-const KEPT_FALSY_FIELDS: [&str; 2] = ["name", SCHEDULE_ENABLED];
+/// absent value would draw the schedule as enabled. Every listing shape carries `has_waiting_items` as a boolean, so
+/// a row the flag is false on keeps it.
+const KEPT_FALSY_FIELDS: [&str; 3] = ["name", SCHEDULE_ENABLED, HAS_WAITING_ITEMS];
 
 /// Leave out every field the page's client reads as falsy: null, false, zero and the empty string.
 ///
@@ -1160,9 +1178,9 @@ fn drop_unread_fields(value: &mut Value) {
 
 /// The page's own presence and form of the row values the client fixes.
 ///
-/// The page lists active sessions only ([`active_page_rows`] reads [`SessionStatus::Active`]), so every page row's
-/// `status` is `active`. The sidebar reads an absent status as active. A task-tree row's `work_state` paints an
-/// indicator only for `waiting`, and `idle` is the client's own default, so an idle row drops it while any other
+/// The sidebar reads an absent status as active, so an active row drops its `status`. An archived row keeps
+/// `status: "archived"`, which the search answer carries beside its active rows. A task-tree row's `work_state` paints
+/// an indicator only for `waiting`, and `idle` is the client's own default, so an idle row drops it while any other
 /// state stays.
 ///
 /// The client formats a row's time with `relativeTime` at minute precision and sorts by the same instant, so epoch
@@ -1170,7 +1188,9 @@ fn drop_unread_fields(value: &mut Value) {
 /// compressed bytes and epoch minutes cost 25 KB.
 fn compact_page_fields(value: &mut Value, updated_at: UtcDateTime) {
   let object = value.as_object_mut().expect("a session metadata value is an object");
-  object.remove("status");
+  if object.get("status").and_then(Value::as_str) == Some("active") {
+    object.remove("status");
+  }
   if object.get(WORK_STATE).and_then(Value::as_str) == Some("idle") {
     object.remove(WORK_STATE);
   }
@@ -1408,6 +1428,63 @@ pub fn row_refresh_text_for(
   Ok(format!(r#"{{"sessions":{columns},"gone":{gone}}}"#))
 }
 
+/// The fields one search row carries, in the order its columns are written. Each one is read by the sidebar's row
+/// renderer, so a search row paints as the same session's listing row does.
+pub const SEARCH_FIELDS: [&str; 27] = [
+  ID_FIELD,
+  "name",
+  "status",
+  "profile",
+  UPDATED_AT,
+  "starred",
+  "group",
+  TASK_PARENT_ID_FIELD,
+  "backend",
+  "pool_member",
+  "native_model",
+  THINKING_SINCE,
+  HAS_RUNNING_TASKS,
+  WORK_STATE,
+  HAS_UNREAD,
+  HAS_PENDING_TRIGGER,
+  PENDING_TRIGGER_COUNT,
+  NEXT_TRIGGER_AT,
+  HAS_PENDING_PLAN_APPROVAL,
+  HAS_WAITING_ITEMS,
+  SCHEDULE_TASK,
+  SCHEDULE_ENABLED,
+  "schedule_cron",
+  "schedule_timezone",
+  "schedule_next_run",
+  "schedule_allow_failure",
+  "task_schedule_slots",
+];
+
+/// The search answer's rows in the sidebar's column form, with exactly [`SEARCH_FIELDS`] as its columns.
+///
+/// Each row takes the listing's row pipeline, so a search row carries the fields the same session's listing row does,
+/// and the sidebar decodes the text with the expander its listing uses. The flags and the status are written as
+/// [`render_row`] and [`compact_page_fields`] leave them: `has_waiting_items` and `has_pending_plan_approval` are
+/// booleans on every row, and an archived row keeps `status`.
+pub(crate) fn search_columns_text(
+  store: &Store,
+  rows: &[Arc<SessionMetadata>],
+  derived: &DerivedSidebarMap,
+  sequence_fields: &HashMap<String, Map<String, Value>>,
+) -> StoreResult<String> {
+  let mut texts = Vec::with_capacity(rows.len());
+  for row in row_inputs(store, rows, derived, sequence_fields, LISTING_PROJECTION)? {
+    let mut value = render_row(store, &row, LISTING_PROJECTION)?;
+    value
+      .as_object_mut()
+      .expect("a listing row is an object")
+      .retain(|field, _| SEARCH_FIELDS.contains(&field.as_str()));
+    compact_page_fields(&mut value, row.meta.updated_at);
+    texts.push(Arc::new(PageRowText::of(value)));
+  }
+  Ok(page_columns_text(&texts, None, Some(&SEARCH_FIELDS)))
+}
+
 /// The response key of the chat-thread flag: true for a session whose metadata names a chat thread.
 pub const THREAD_SESSION: &str = "thread_session";
 
@@ -1540,6 +1617,9 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
       derived.and_then(|entry| entry.get(HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
     );
   }
+  if projection.include_waiting {
+    insert_waiting_field(object, row);
+  }
   object.insert(THINKING_SINCE.to_string(), row.thinking_since.clone());
   if projection.include_run_backend {
     object.insert(RUN_BACKEND.to_string(), row.run_backend.clone().map_or(Value::Null, Value::String));
@@ -1550,6 +1630,14 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   {
     object.insert("backend".to_string(), Value::String(backend.clone()));
   }
+}
+
+/// The row's `has_waiting_items` boolean: whether the session stores a Waiting on you item. A row whose overlay has no
+/// entry for it reads false.
+fn insert_waiting_field(object: &mut Map<String, Value>, row: &RowInputs) {
+  let waiting =
+    row.derived.as_ref().and_then(|entry| entry.get(HAS_WAITING_ITEMS)).cloned().unwrap_or(Value::Bool(false));
+  object.insert(HAS_WAITING_ITEMS.to_string(), waiting);
 }
 
 fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
@@ -1784,7 +1872,7 @@ mod tests {
     assert!(!screen.partial);
 
     let row = Arc::new(PageRowText::of(json!({"id": "small-1", "name": "small-1", "updated_at": 1})));
-    let text = page_columns_text(&[row], Some(&screen));
+    let text = page_columns_text(&[row], Some(&screen), None);
     let columns: Value = serde_json::from_str(&text).expect("the page text is JSON");
     assert_eq!(columns[FIRST_SCREEN_KEY]["partial"], false);
     assert_eq!(columns[FIRST_SCREEN_KEY]["counts"][""], 3);
@@ -1853,9 +1941,10 @@ mod tests {
       let fields: Vec<&str> = row.as_object().expect("a row is an object").keys().map(String::as_str).collect();
       assert!(
         fields.iter().all(|field| MOVE_FIELDS.contains(field)),
-        "the picker reads these four fields alone: {fields:?}"
+        "the picker reads its own fields and the waiting flag alone: {fields:?}"
       );
       assert!(fields.contains(&"id") && fields.contains(&"name") && fields.contains(&"profile"));
+      assert!(row["has_waiting_items"].is_boolean(), "every listing shape carries a boolean waiting flag");
     }
     let parent_row = rows.iter().find(|row| row["name"] == "move-parent").expect("the parent travels");
     assert!(parent_row.get("task_parent_id").is_none(), "a root row leaves its absent parent out");
@@ -2164,7 +2253,7 @@ mod tests {
       .map(|(index, id)| Arc::new(PageRowText::of(json!({"id": id, "updated_at": 29_566_074 + index as i64}))))
       .collect();
 
-    let text = page_columns_text(&rows, None);
+    let text = page_columns_text(&rows, None, None);
     let bytes: Vec<u8> = ids.iter().flat_map(|id| *uuid::Uuid::parse_str(id).unwrap().as_bytes()).collect();
     assert_eq!(
       text,
@@ -2190,7 +2279,7 @@ mod tests {
       .map(|(index, id)| Arc::new(PageRowText::of(json!({"id": id, "updated_at": 29_566_074 + index as i64}))))
       .collect();
 
-    let text = page_columns_text(&rows, None);
+    let text = page_columns_text(&rows, None, None);
     assert_eq!(
       text,
       format!(

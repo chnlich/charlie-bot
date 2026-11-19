@@ -367,8 +367,8 @@ mod tests {
   }
 
   /// The status poll answers each row's `has_waiting_items`. A status set that stores an item raises the flag on the
-  /// next delta poll, which answers that row alone. Clearing the items lowers it the same way, and the Workspace
-  /// listing's rows carry no such key.
+  /// next delta poll, which answers that row alone. Clearing the items lowers it the same way. The Workspace listing's
+  /// row carries the same flag, as a boolean.
   #[tokio::test]
   async fn the_status_poll_carries_the_waiting_flag_of_each_row() {
     let home = test_support::Home::new();
@@ -424,6 +424,6 @@ mod tests {
     let listing = session_api_get(&home, "/api/sessions/").await;
     let row =
       listing.as_array().expect("the Workspace listing is a row array").iter().find(|row| row["id"] == json!(sid));
-    assert!(row.expect("the manager is listed").get("has_waiting_items").is_none());
+    assert_eq!(row.expect("the manager is listed")["has_waiting_items"], json!(false));
   }
 }

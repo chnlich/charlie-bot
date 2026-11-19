@@ -675,7 +675,7 @@ fn examine_session_dir(
       };
       return Ok(WalkEntry::Kept {
         reason: Some("failed_pass"),
-        session: Box::new(FullPassSession { session_id, meta, completed_before: None }),
+        session: Box::new(FullPassSession { session_id, meta: meta.as_ref().clone(), completed_before: None }),
       });
     }
     // A row whose identities still hold answers the node's verdict without reading a tail, a run listing or a
@@ -697,7 +697,10 @@ fn examine_session_dir(
     },
   };
   let completed_before = marker.map(|marker| marker.pass_started_at);
-  Ok(WalkEntry::Kept { reason, session: Box::new(FullPassSession { session_id, meta, completed_before }) })
+  Ok(WalkEntry::Kept {
+    reason,
+    session: Box::new(FullPassSession { session_id, meta: meta.as_ref().clone(), completed_before }),
+  })
 }
 
 /// [`parallel_walk::map_until`] on the blocking pool, ended by the startup stop; the items come back with the results.

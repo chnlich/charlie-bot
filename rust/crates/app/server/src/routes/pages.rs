@@ -372,7 +372,7 @@ struct IndexAnswerKey {
   hostname: String,
   auth_enabled: bool,
   session: String,
-  meta: SessionMetadata,
+  meta: Arc<SessionMetadata>,
   bootstrap_text: Arc<String>,
   bootstrap_session: Arc<Value>,
   pending_draft: Value,
@@ -561,9 +561,9 @@ fn chat_page(
         load_errors: load_errors.clone(),
       };
       let mut memo = INDEX_ANSWER_MEMO.lock().expect("the index answer memo mutex is not poisoned");
-      memo.answer(&key, || build(Some(meta), Some(bootstrap), load_errors))?
+      memo.answer(&key, || build(Some(meta.as_ref()), Some(bootstrap), load_errors))?
     }
-    _ => build(meta.as_ref(), bootstrap.as_ref(), load_errors)?,
+    _ => build(meta.as_deref(), bootstrap.as_ref(), load_errors)?,
   };
   Ok(page_response(body, compressed, StatusCode::OK))
 }
@@ -1197,7 +1197,7 @@ mod tests {
     use charliebot_store::metadata::TaskProfile;
 
     let config = Arc::new(label_config());
-    let meta = SessionMetadata::new("synthetic", "Memo page", TaskProfile::Manager);
+    let meta = Arc::new(SessionMetadata::new("synthetic", "Memo page", TaskProfile::Manager));
     let bootstrap_text = Arc::new("{\"messages\":[]}".to_string());
     let bootstrap_session = Arc::new(json!({"run_backend": null}));
     let sidebar = Arc::new("{}".to_string());

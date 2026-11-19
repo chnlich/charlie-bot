@@ -21,8 +21,8 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
   ACCEPTANCE_FIELD, APPROVER_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, CONTEXT_REFS_FIELD, KEEP_WORKTREE_FIELD,
-  REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_STATE, TASK_TYPE_FIELD, TaskApprover, TaskProfile,
-  TaskSpec, TaskType, WORK_STATE,
+  PROMPT_RULES_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_PARENT_ID_FIELD, TASK_STATE, TASK_TYPE_FIELD,
+  TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -471,7 +471,7 @@ fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Respo
   }
   object.insert("archived".to_string(), json!(false));
   object.insert("ancestors".to_string(), json!([]));
-  object.insert("prompt_rules".to_string(), json!({}));
+  object.insert(PROMPT_RULES_FIELD.to_string(), json!({}));
   Ok(detail)
 }
 

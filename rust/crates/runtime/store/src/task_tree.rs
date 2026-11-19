@@ -23,8 +23,8 @@ use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
 use crate::layout;
 use crate::metadata::{
-  EventRef, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE, TaskApprover,
-  TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
+  EventRef, PROMPT_RULES_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE,
+  TaskApprover, TaskProfile, TaskSpec, UtcDateTime, WORK_STATE,
 };
 use crate::path_error;
 use crate::run_facts::{CachedRunFacts, RunFacts};
@@ -2186,7 +2186,7 @@ impl Store {
       "node": self.prompt_rule_summary(meta.node_prompt_ref.as_deref())?,
       "affected_descendants": descendants,
     });
-    object.insert("prompt_rules".to_string(), prompt_rules);
+    object.insert(PROMPT_RULES_FIELD.to_string(), prompt_rules);
     Ok(detail)
   }
 

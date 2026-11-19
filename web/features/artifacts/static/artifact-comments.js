@@ -112,6 +112,19 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var refDocTop = 0;
     var cardHeights = null;
     var reflowScheduled = false;
+    // Picks on the questions of plan, understanding and waiting pages only.
+    var PICK_PAGE_PATTERN = /(^|\/)(plan|understanding|waiting)_[^/]*$/;
+    var QUOTE_CLOSERS = {'「': '」', '“': '”', '"': '"'};
+    // editing: picks change; countdown: the undo window is open; sending: the post is in flight, retried
+    // on a network error or 5xx; sent: the buttons stay off until a reload.
+    var pickStage = 'editing';
+    var pickCountdown = null;
+    var picks = [];
+    var pickBar = null;
+    var pickLabel = null;
+    var pickRestButton = null;
+    var pickUndoButton = null;
+    var pickSendButton = null;
 
     window.__cbcResolveSessionId = resolveSessionId;
     window.__cbcBuildBatchMessage = buildBatchMessage;
@@ -134,6 +147,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     installListeners();
     installShortcuts();
     installBatchTray();
+    installPicks();
 
     function extractSessionIdFromHash(hash) {
       var text = String(hash || '');
@@ -480,6 +494,17 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-send:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
         '.' + GLOBAL_PREFIX + '-tray-clear{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}' +
+        '.' + GLOBAL_PREFIX + '-icon{display:inline-flex;vertical-align:middle;margin-right:5px}' +
+        '.' + GLOBAL_PREFIX + '-icon:empty{display:none}' +
+        '.' + GLOBAL_PREFIX + '-picks{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}' +
+        '.' + GLOBAL_PREFIX + '-pick{border:1px solid #d0d7de;border-radius:6px;padding:4px 9px;background:#f6f8fa;color:#1b2430;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-pick[aria-pressed="true"]{background:#1163c0;border-color:#1163c0;color:#fff}' +
+        '.' + GLOBAL_PREFIX + '-pick:disabled{cursor:not-allowed;opacity:.64}' +
+        '.' + GLOBAL_PREFIX + '-pickbar{display:flex;align-items:center;justify-content:flex-end;gap:7px;box-sizing:border-box;width:min(400px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:8px 10px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+        '.' + GLOBAL_PREFIX + '-pickbar-label{flex:1;color:#8b949e}' +
+        '.' + GLOBAL_PREFIX + '-pickbar-btn{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-pickbar-btn:disabled{cursor:not-allowed;opacity:.64}' +
+        '.' + GLOBAL_PREFIX + '-pickbar-send{border-color:#2ea043;background:#238636;color:#fff}' +
         '.' + GLOBAL_PREFIX + '-gutter{position:fixed;top:0;left:0;width:300px;overflow-x:hidden;'
           + 'overflow-y:hidden;z-index:2147483644}' +
         '.' + GLOBAL_PREFIX + '-gutter .' + GLOBAL_PREFIX + '-tray-item{position:absolute;left:0;right:0;box-sizing:border-box}';
@@ -1601,6 +1626,318 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         sendBtn.textContent = prevLabel;
       }
     }
+
+    // ---- Option picks on the page's open questions ----
+    // The parser reads the grammar of the Rust checker's page_forks (artifact_check.rs): an open
+    // div.fork holds no p.resolved, its question number is span.fn in a p.q, and its options are the
+    // li lines outside every closed details and every div.demo, each opening with its name in 「」.
+    // The shared fixture plan_template_forks.json pins this parser and the Rust one to one output.
+    function isPickMarker(el) {
+      return el.classList.contains('demo') || el.classList.contains('no-demo');
+    }
+
+    function collapseText(text) {
+      return String(text || '').replace(/\s+/g, ' ').trim();
+    }
+
+    // The option line's text without the demo and reason it may carry: they draw or explain the
+    // option and name none.
+    function optionLineText(el) {
+      var text = '';
+      for (var i = 0; i < el.childNodes.length; i++) {
+        var node = el.childNodes[i];
+        if (node.nodeType === 3) text += node.textContent;
+        else if (node.nodeType === 1 && !isPickMarker(node)) text += optionLineText(node);
+      }
+      return text;
+    }
+
+    function optionNameOf(text) {
+      var rest = text.replace(/^\s+/, '');
+      if (rest.charAt(0) !== '「') return null;
+      var close = rest.indexOf('」');
+      if (close === -1) return null;
+      var name = rest.slice(1, close).trim();
+      return name && rest.slice(close + 1).trim() ? name : null;
+    }
+
+    function quotedSpansOf(text) {
+      var spans = [];
+      var i = 0;
+      while (i < text.length) {
+        var closer = QUOTE_CLOSERS[text.charAt(i)];
+        if (!closer) {
+          i += 1;
+          continue;
+        }
+        var end = text.indexOf(closer, i + 1);
+        if (end === -1) break;
+        spans.push(text.slice(i + 1, end).trim());
+        i = end + 1;
+      }
+      return spans;
+    }
+
+    // True when a closed details lies between el and top (top null: among all ancestors).
+    function isFoldedBelow(el, top) {
+      for (var node = el.parentElement; node && node !== top; node = node.parentElement) {
+        if (node.tagName === 'DETAILS' && !node.open) return true;
+      }
+      return false;
+    }
+
+    function insideDemoBelow(el, top) {
+      for (var node = el.parentElement; node && node !== top; node = node.parentElement) {
+        if (node.classList.contains('demo')) return true;
+      }
+      return false;
+    }
+
+    function forkNumber(fork) {
+      var questions = fork.querySelectorAll('.q');
+      for (var i = 0; i < questions.length; i++) {
+        if (questions[i].tagName !== 'P') continue;
+        var spans = questions[i].querySelectorAll('.fn');
+        for (var j = 0; j < spans.length; j++) {
+          if (spans[j].tagName !== 'SPAN') continue;
+          var number = collapseText(spans[j].textContent);
+          if (number) return number;
+        }
+      }
+      return '';
+    }
+
+    function forkIsResolved(fork) {
+      var marks = fork.querySelectorAll('.resolved');
+      for (var i = 0; i < marks.length; i++) {
+        if (marks[i].tagName === 'P') return true;
+      }
+      return false;
+    }
+
+    // One record per pickable open fork: its number, its named options (each with the line text and
+    // its button once rendered), the index of the recommended option or -1, and the picked index or -1.
+    function pageForkRecords() {
+      var records = [];
+      var blocks = document.querySelectorAll('.fork');
+      for (var i = 0; i < blocks.length; i++) {
+        var fork = blocks[i];
+        if (fork.tagName !== 'DIV' || forkIsResolved(fork) || isFoldedBelow(fork, null)) continue;
+        var number = forkNumber(fork);
+        if (!number) continue;
+        var options = [];
+        var lines = fork.querySelectorAll('li');
+        for (var j = 0; j < lines.length; j++) {
+          if (isFoldedBelow(lines[j], fork) || insideDemoBelow(lines[j], fork)) continue;
+          var text = collapseText(optionLineText(lines[j]));
+          var name = optionNameOf(text);
+          if (name) options.push({name: name, text: text, line: lines[j], button: null});
+        }
+        if (options.length < 2) continue;
+        var rec = -1;
+        var recLines = fork.querySelectorAll('.rec');
+        var recLine = null;
+        for (var k = 0; k < recLines.length; k++) {
+          if (recLines[k].tagName === 'P') {
+            recLine = recLines[k];
+            break;
+          }
+        }
+        if (recLine) {
+          var spans = quotedSpansOf(collapseText(recLine.textContent));
+          for (var s = 0; s < spans.length && rec === -1; s++) {
+            for (var o = 0; o < options.length; o++) {
+              if (options[o].name === spans[s]) {
+                rec = o;
+                break;
+              }
+            }
+          }
+        }
+        records.push({fork: fork, n: number, options: options, rec: rec, picked: -1});
+      }
+      return records;
+    }
+
+    // Option picks go to the session that owns the page: the server injects it, and a worker's page
+    // carries its parent. This is the one place that chooses the target, and sendPicks is its one caller.
+    function pickTargetSessionId() {
+      return serverSessionId;
+    }
+
+    function togglePick(record, index) {
+      record.picked = record.picked === index ? -1 : index;
+      renderPicks();
+    }
+
+    function restPicksAsRecommended() {
+      for (var i = 0; i < picks.length; i++) {
+        if (picks[i].picked === -1 && picks[i].rec !== -1) picks[i].picked = picks[i].rec;
+      }
+      renderPicks();
+    }
+
+    function pickedCount() {
+      var count = 0;
+      for (var i = 0; i < picks.length; i++) {
+        if (picks[i].picked !== -1) count++;
+      }
+      return count;
+    }
+
+    function renderPicks() {
+      var editable = pickStage === 'editing';
+      var restAvailable = false;
+      for (var i = 0; i < picks.length; i++) {
+        var record = picks[i];
+        if (record.picked === -1 && record.rec !== -1) restAvailable = true;
+        for (var j = 0; j < record.options.length; j++) {
+          var option = record.options[j];
+          option.button.disabled = !editable;
+          option.button.setAttribute('aria-pressed', record.picked === j ? 'true' : 'false');
+          setIcon(option.mark, record.picked === j ? 'done' : null, 12);
+        }
+      }
+      var picked = pickedCount();
+      if (pickStage === 'countdown' || pickStage === 'sending') pickLabel.textContent = 'Sending';
+      else pickLabel.textContent = 'Picked ' + picked + '/' + picks.length;
+      pickRestButton.disabled = !(editable && restAvailable);
+      pickSendButton.disabled = !(editable && picked > 0);
+      pickUndoButton.style.display = pickStage === 'countdown' ? 'inline-block' : 'none';
+    }
+
+    function sendPicks() {
+      var chosen = picks.filter(function(record) { return record.picked !== -1; });
+      var entries = chosen.map(function(record) {
+        return buildCommentEntry('', 'Q' + record.n, record.options[record.picked].text);
+      });
+      var message = buildClickMessage('[Artifact picks \u00B7 ' + artifactPath + '] (' + chosen.length + ')', entries);
+      pickStage = 'countdown';
+      pickCountdown = startUndoableSend(function() {
+        pickStage = 'sending';
+        renderPicks();
+        return postCommentMessage(pickTargetSessionId(), message);
+      });
+      pickCountdown.sent.then(function(result) {
+        pickCountdown = null;
+        if (result === null) {
+          pickStage = 'editing';
+          renderPicks();
+          return;
+        }
+        pickStage = 'sent';
+        renderPicks();
+        if (result.dispatch_error) showToast(result.dispatch_error, true);
+        else showToast(chosen.length + ' picks sent to chat', false);
+        refreshStatusViewAfterPick();
+      }, function(err) {
+        pickCountdown = null;
+        console.error('Pick send failed:', err);
+        showToast(err.message, true);
+        pickStage = 'editing';
+        renderPicks();
+      });
+      renderPicks();
+    }
+
+    function undoPicks() {
+      if (pickCountdown) pickCountdown.cancel();
+    }
+
+    // A pick that landed refreshes the Status view of the chat page this artifact sits in. The chat
+    // page's refresh does nothing when no Status view is open.
+    function refreshStatusViewAfterPick() {
+      if (!framed) return;
+      var refresh = window.parent.refreshSessionStatusPanel;
+      if (typeof refresh === 'function') refresh();
+    }
+
+    // An icon slot holds one cbIcon drawing. setIcon fills it; an empty slot draws nothing.
+    function makeIconSlot() {
+      var slot = document.createElement('span');
+      slot.className = GLOBAL_PREFIX + '-icon';
+      return slot;
+    }
+
+    // cbIcon is the icon module's function. It throws on a meaning the table lacks, so no control draws without one.
+    function setIcon(slot, meaning, size) {
+      slot.innerHTML = meaning ? window.cbIcon(meaning, size) : '';
+    }
+
+    function iconSlotFor(meaning, size) {
+      var slot = makeIconSlot();
+      setIcon(slot, meaning, size);
+      return slot;
+    }
+
+    // A button with an optional leading icon slot. The label sits in its own span, so the button's text is the label.
+    function makeButton(label, onClick, className, leading) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = className;
+      if (leading) button.appendChild(leading);
+      var text = document.createElement('span');
+      text.textContent = label;
+      button.appendChild(text);
+      button.addEventListener('click', onClick);
+      return button;
+    }
+
+    function installPickBar() {
+      pickBar = document.createElement('div');
+      pickBar.className = GLOBAL_PREFIX + '-pickbar';
+      pickBar.classList.add(UI_CLASS);
+      pickLabel = document.createElement('span');
+      pickLabel.className = GLOBAL_PREFIX + '-pickbar-label';
+      pickRestButton = makeButton('Rest as recommended', restPicksAsRecommended, GLOBAL_PREFIX + '-pickbar-btn', null);
+      pickUndoButton = makeButton('Undo', undoPicks, GLOBAL_PREFIX + '-pickbar-btn', iconSlotFor('undo', 14));
+      pickSendButton = makeButton('Send', sendPicks, GLOBAL_PREFIX + '-pickbar-btn ' + GLOBAL_PREFIX + '-pickbar-send',
+        iconSlotFor('send', 14));
+      pickBar.appendChild(pickLabel);
+      pickBar.appendChild(pickRestButton);
+      pickBar.appendChild(pickUndoButton);
+      pickBar.appendChild(pickSendButton);
+      ensureDock().appendChild(pickBar);
+    }
+
+    // One row of buttons under the question's option lines. The row carries the layer marker, so the
+    // comment layer neither quotes it nor anchors a comment to it.
+    function installPickRow(record) {
+      var row = document.createElement('div');
+      row.className = GLOBAL_PREFIX + '-picks';
+      row.classList.add(UI_CLASS);
+      record.options.forEach(function(option, index) {
+        option.mark = makeIconSlot();
+        var button = makeButton(option.name, function() { togglePick(record, index); }, GLOBAL_PREFIX + '-pick',
+          option.mark);
+        option.button = button;
+        row.appendChild(button);
+      });
+      var last = record.options[record.options.length - 1].line;
+      var anchor = last.parentElement === record.fork ? last : last.parentElement;
+      anchor.parentNode.insertBefore(row, anchor.nextSibling);
+    }
+
+    function installPicks() {
+      if (!PICK_PAGE_PATTERN.test(artifactPath)) return;
+      picks = pageForkRecords();
+      if (picks.length === 0) return;
+      picks.forEach(installPickRow);
+      installPickBar();
+      renderPicks();
+    }
+
+    // The page's pickable forks in the shape its fixture holds: the number, the named options as
+    // the page writes them, and the recommended name.
+    window.__cbcPageForks = function() {
+      return pageForkRecords().map(function(record) {
+        return {
+          n: record.n,
+          options: record.options.map(function(option) { return {name: option.name, text: option.text}; }),
+          rec: record.rec === -1 ? null : record.options[record.rec].name,
+        };
+      });
+    };
 
     function reposition() {
       layoutColumn();

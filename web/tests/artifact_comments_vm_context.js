@@ -24,6 +24,11 @@ function loadArtifactCommentsContext(opts = {}) {
     addEventListener(type, handler, options) {
       listeners.push({target: 'window', type, handler, options});
     },
+    removeEventListener(type, handler) {
+      const index = listeners.findIndex((listener) =>
+        listener.target === 'window' && listener.type === type && listener.handler === handler);
+      if (index !== -1) listeners.splice(index, 1);
+    },
     setTimeout() {},
     clearTimeout() {},
     getComputedStyle(el) {
@@ -59,6 +64,11 @@ function loadArtifactCommentsContext(opts = {}) {
     addEventListener(type, handler, options) {
       listeners.push({target: 'document', type, handler, options});
     },
+    removeEventListener(type, handler) {
+      const index = listeners.findIndex((listener) =>
+        listener.target === 'document' && listener.type === type && listener.handler === handler);
+      if (index !== -1) listeners.splice(index, 1);
+    },
     querySelectorAll(selector) {
       return body.querySelectorAll(selector);
     },
@@ -79,7 +89,9 @@ function loadArtifactCommentsContext(opts = {}) {
       throw new Error('fetch should not run while loading artifact-comments.js');
     },
     crypto: {randomUUID: () => `artifact-comment-request-${++requestSequence}`},
-    setTimeout: (callback) => { callback(); return 1; },
+    // Timers run at once unless a suite supplies its own clock, as the pick undo tests do.
+    setTimeout: opts.setTimeout || ((callback) => { callback(); return 1; }),
+    clearTimeout: opts.clearTimeout || (() => {}),
   };
   if (opts.sessionStorage !== undefined) {
     context.sessionStorage = opts.sessionStorage;

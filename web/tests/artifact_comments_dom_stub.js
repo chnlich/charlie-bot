@@ -99,6 +99,27 @@ function makeElement() {
       child.parentNode = this;
       return child;
     },
+    // Node.insertBefore: a null reference appends, as the DOM does.
+    insertBefore(node, reference) {
+      if (!reference) return this.appendChild(node);
+      const prior = node.parentNode;
+      if (prior) prior.removeChild(node);
+      const at = this.childNodes.indexOf(reference);
+      this.childNodes.splice(at, 0, node);
+      if (node.nodeType === 1) {
+        // `children` holds the elements only, so the node's place there counts the elements before it.
+        const elementsBefore = this.childNodes.slice(0, at).filter((child) => child.nodeType === 1).length;
+        this.children.splice(elementsBefore, 0, node);
+        node.parentElement = this;
+      }
+      node.parentNode = this;
+      return node;
+    },
+    get nextSibling() {
+      if (!this.parentNode) return null;
+      const siblings = this.parentNode.childNodes;
+      return siblings[siblings.indexOf(this) + 1] || null;
+    },
     replaceChild(next, prev) {
       const index = this.children.indexOf(prev);
       assert.notEqual(index, -1, 'replaceChild target exists');

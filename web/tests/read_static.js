@@ -26,10 +26,12 @@ function readPackageStatic(kind, name, ...parts) {
 // Script paths the chat page carries in document order, relative to web/static/js. The page includes each core
 // script into the document, so the vm harnesses derive their module lists from the include tags and a script
 // added to or reordered on the page cannot drift from what the harnesses load. The page's scripts are the tail
-// partial it names after its markup, so the partial's tags follow index.html's.
+// partial it names after its markup, so the partial's tags follow index.html's. A script the page loads by a
+// versioned src tag counts with the included ones.
 function indexScriptPaths() {
   const html = fs.readFileSync(INDEX_HTML, 'utf8') + fs.readFileSync(CHAT_SCRIPTS, 'utf8');
-  return [...html.matchAll(/<script>\{% include 'js\/([^']+)' %\}<\/script>/g)].map((m) => m[1]);
+  return [...html.matchAll(/<script>\{% include 'js\/([^']+)' %\}<\/script>|<script src="\/static\/js\/([^"?]+)\?v=/g)]
+    .map((m) => m[1] || m[2]);
 }
 
 function scopedModules(prefix) {
@@ -60,10 +62,9 @@ function runStaticModules(context, files) {
   }
 }
 
-// The icon module the page inlines ahead of every script: the table icon_script() emits, then icons.js.
-// The page's include list skips it, because its tag sits behind icon_script(). The table is built here from
-// the committed icons.json and the Lucide files, so the shapes match what the server renders.
-function iconTableScript() {
+// The icon table the server embeds as window.CB_ICON_TABLE: each meaning's Lucide name, its fill flag when set, and
+// the SVG children of its vendored file. The shapes are the raw inner text, the form the Rust table writes.
+function readIconTable() {
   const iconsDir = path.join(__dirname, '..', 'static', 'icons');
   const meanings = JSON.parse(fs.readFileSync(path.join(iconsDir, 'icons.json'), 'utf8'));
   const table = {};
@@ -76,7 +77,14 @@ function iconTableScript() {
       ? {lucide: meaning.lucide, fill: true, shapes}
       : {lucide: meaning.lucide, shapes};
   }
-  return `window.CB_ICON_TABLE = ${JSON.stringify(table)};`;
+  return table;
+}
+
+// The icon module the page inlines ahead of every script: the table icon_script() emits, then icons.js.
+// The page's include list skips it, because its tag sits behind icon_script(). The table is built here from
+// the committed icons.json and the Lucide files, so the shapes match what the server renders.
+function iconTableScript() {
+  return `window.CB_ICON_TABLE = ${JSON.stringify(readIconTable())};`;
 }
 
 // Runs the icon module into a vm context once: cbIcon and the table it reads. A context without a window
@@ -93,6 +101,7 @@ function runIconModule(context) {
 module.exports = {
   readStatic,
   readPackageStatic,
+  readIconTable,
   indexScriptPaths,
   chatModules: () => scopedModules('chat/'),
   sidebarModules: () => scopedModules('sidebar/'),

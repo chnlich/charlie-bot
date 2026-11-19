@@ -38,6 +38,8 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
     pathname,
     hash: opts.hash,
     innerWidth: opts.innerWidth,
+    setTimeout: opts.setTimeout,
+    clearTimeout: opts.clearTimeout,
     framed,
     parent: opts.parent,
     serverSessionId: opts.serverSessionId,
@@ -1708,4 +1710,303 @@ test('a whole-section comment does not gain before when its quote repeats on row
       '   ↳ note',
     ].join('\n')
   );
+});
+
+// ---- Option picks on a plan page ----
+const PICK_PAGE_PATH = '/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/plan_picks.html';
+const TICK = '▸';
+const RETURN = '↳';
+
+function makeOption(text, demo = null) {
+  const li = makeElement();
+  li.tagName = 'LI';
+  li.childNodes = [makeTextNode(text)];
+  if (demo) li.appendChild(demo);
+  return li;
+}
+
+function makeDemo(text) {
+  const demo = makeElement();
+  demo.tagName = 'DIV';
+  demo.classList.add('demo');
+  demo.childNodes = [makeTextNode(text)];
+  return demo;
+}
+
+// One fork of the plan grammar: the numbered question (p.q > span.fn), the option list and the recommendation.
+function makePickFork(number, options, rec, {resolved = false} = {}) {
+  const fork = makeElement();
+  fork.tagName = 'DIV';
+  fork.className = 'fork';
+  const question = makeElement();
+  question.tagName = 'P';
+  question.className = 'q';
+  const fn = makeElement();
+  fn.tagName = 'SPAN';
+  fn.className = 'fn';
+  fn.childNodes = [makeTextNode(number)];
+  question.appendChild(fn);
+  question.childNodes.push(makeTextNode(' Which one?'));
+  fork.appendChild(question);
+  if (resolved) {
+    const mark = makeElement();
+    mark.tagName = 'P';
+    mark.className = 'resolved';
+    mark.childNodes = [makeTextNode('Resolved: keep.')];
+    fork.appendChild(mark);
+    return fork;
+  }
+  const list = makeElement();
+  list.tagName = 'UL';
+  for (const option of options) list.appendChild(option);
+  fork.appendChild(list);
+  if (rec) {
+    const recLine = makeElement();
+    recLine.tagName = 'P';
+    recLine.className = 'rec';
+    recLine.childNodes = [makeTextNode('Recommendation: ' + rec)];
+    fork.appendChild(recLine);
+  }
+  return fork;
+}
+
+function pickFetchStub(calls, status = 202) {
+  return async (url, options = {}) => {
+    calls.push({url, method: options.method || 'GET', body: JSON.parse(options.body || 'null')});
+    if (status !== 202) return {ok: false, status};
+    return {ok: true, status: 202, async json() { return {}; }};
+  };
+}
+
+function pickButton(fork, name) {
+  return findChildByClass(fork, '__cbc-picks').children.find((button) => button.textContent === name);
+}
+
+function pickBarOf(body) {
+  return findChildByClass(dockOf(body), '__cbc-pickbar');
+}
+
+function pickBarButton(body, label) {
+  return pickBarOf(body).children.find((button) => button.textContent === label);
+}
+
+function pickLabel(body) {
+  return pickBarOf(body).children.find((child) => child.className === '__cbc-pickbar-label').textContent;
+}
+
+function pickForkOne() {
+  return makePickFork('1', [
+    makeOption('「keep」: keep the file.', makeDemo('Ann')),
+    makeOption('「drop」: drop the file.'),
+  ], '「keep」, the default.');
+}
+
+function pickForkTwo() {
+  return makePickFork('2', [
+    makeOption('「now」: act now.'),
+    makeOption('「later」: act later.'),
+  ], '「later」, to wait.');
+}
+
+test('a plan page offers one button per named option under each open question, none on a resolved one', () => {
+  const open = pickForkOne();
+  const resolved = makePickFork('3', [], null, {resolved: true});
+  const single = makePickFork('4', [makeOption('「only」: the one way.')], null);
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [open, resolved, single],
+    serverSessionId: 'owner',
+  });
+  assert.deepEqual(findChildByClass(open, '__cbc-picks').children.map((b) => b.textContent), ['keep', 'drop']);
+  assert.equal(findChildByClass(resolved, '__cbc-picks'), undefined, 'an answered question has no buttons');
+  assert.equal(findChildByClass(single, '__cbc-picks'), undefined, 'a question with one option has no pick');
+  assert.equal(pickLabel(body), 'Picked 0/1');
+});
+
+test('Send posts every pick in one message to the page owner, each option text verbatim under its number', async () => {
+  const calls = [];
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne(), pickForkTwo()],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+  });
+  const [forkOne, forkTwo] = body.children.filter((child) => child.className === 'fork');
+  clickElement(pickButton(forkOne, 'keep'));
+  clickElement(pickButton(forkTwo, 'later'));
+  clickElement(pickBarButton(body, 'Send'));
+  await flushPromises(3);
+
+  assert.equal(calls.length, 1, 'one message for the whole page');
+  assert.equal(calls[0].url, '/api/chat/owner/message', 'the message goes to the page owner, not the viewing session');
+  assert.equal(calls[0].body.content, [
+    '[Artifact picks · ' + PICK_PAGE_PATH + '] (2)',
+    '',
+    '1. ' + TICK + ' Q1',
+    '   ' + RETURN + ' 「keep」: keep the file.',
+    '',
+    '2. ' + TICK + ' Q2',
+    '   ' + RETURN + ' 「later」: act later.',
+  ].join('\n'));
+  assert.equal(pickLabel(body), 'Picked 2/2');
+  assert.equal(pickBarButton(body, 'Send').disabled, true, 'a sent page holds its picks until a reload');
+});
+
+test('Rest as recommended picks each open question its recommendation names and keeps a pick already made', async () => {
+  const calls = [];
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [pickForkOne(), pickForkTwo()],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+  });
+  const [forkOne, forkTwo] = body.children.filter((child) => child.className === 'fork');
+  clickElement(pickButton(forkTwo, 'now'));
+  clickElement(pickBarButton(body, 'Rest as recommended'));
+  assert.equal(pickLabel(body), 'Picked 2/2');
+  assert.equal(pickButton(forkOne, 'keep').attributes['aria-pressed'], 'true');
+  assert.equal(pickButton(forkTwo, 'now').attributes['aria-pressed'], 'true', 'a pick made by hand stays');
+  assert.equal(pickButton(forkTwo, 'later').attributes['aria-pressed'], 'false');
+  clickElement(pickBarButton(body, 'Send'));
+  await flushPromises(3);
+  assert.equal(calls[0].body.content, [
+    '[Artifact picks · ' + PICK_PAGE_PATH + '] (2)',
+    '',
+    '1. ' + TICK + ' Q1',
+    '   ' + RETURN + ' 「keep」: keep the file.',
+    '',
+    '2. ' + TICK + ' Q2',
+    '   ' + RETURN + ' 「now」: act now.',
+  ].join('\n'));
+});
+
+test('Undo inside the five-second window posts nothing and returns the bar to the picks', async () => {
+  const calls = [];
+  const timers = [];
+  const cleared = [];
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+    setTimeout: (callback) => {
+      timers.push(callback);
+      return timers.length;
+    },
+    clearTimeout: (id) => { cleared.push(id); },
+  });
+  const [fork] = body.children.filter((child) => child.className === 'fork');
+  clickElement(pickButton(fork, 'keep'));
+  clickElement(pickBarButton(body, 'Send'));
+  assert.equal(pickLabel(body), 'Sending', 'the undo window uses the approved state label');
+  assert.equal(pickButton(fork, 'drop').disabled, true, 'the picks hold during the countdown');
+  clickElement(pickBarButton(body, 'Undo'));
+  await flushPromises(3);
+  assert.deepEqual(cleared, [1], 'the pending tick is cancelled');
+  assert.equal(calls.length, 0, 'nothing is posted');
+  assert.equal(pickLabel(body), 'Picked 1/1');
+  assert.equal(pickButton(fork, 'drop').disabled, false);
+});
+
+test('a 5xx keeps the bar on Sending through the retry, then the sent picks hold until reload', async () => {
+  let attempts = 0;
+  const timers = [];
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch: async () => {
+      attempts += 1;
+      if (attempts === 1) return {ok: false, status: 503};
+      return {ok: true, status: 202, json: async () => ({})};
+    },
+    setTimeout: (callback) => {
+      timers.push(callback);
+      return timers.length;
+    },
+  });
+  const [fork] = body.children.filter((child) => child.className === 'fork');
+  clickElement(pickButton(fork, 'keep'));
+  clickElement(pickBarButton(body, 'Send'));
+  // The undo window closes once and posts; the 5xx schedules the retry's backoff.
+  timers.shift()();
+  await flushPromises(3);
+  assert.equal(pickLabel(body), 'Sending', 'the bar holds Sending while the retry waits');
+  assert.equal(attempts, 1);
+  timers.shift()();
+  await flushPromises(3);
+  assert.equal(attempts, 2, 'the retry posts again');
+  assert.equal(pickLabel(body), 'Picked 1/1');
+  assert.equal(pickBarButton(body, 'Send').disabled, true);
+});
+
+test('a 4xx shows the error, keeps the picks and lets Send run again', async () => {
+  const calls = [];
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls, 409),
+    console: {error() {}},
+  });
+  const [fork] = body.children.filter((child) => child.className === 'fork');
+  clickElement(pickButton(fork, 'keep'));
+  clickElement(pickBarButton(body, 'Send'));
+  await flushPromises(3);
+  const toast = body.children.find((child) => child.textContent === 'Comment post failed: HTTP 409');
+  assert.ok(toast, 'the refusal shows as the toast');
+  assert.equal(pickButton(fork, 'keep').attributes['aria-pressed'], 'true', 'the pick is kept');
+  assert.equal(pickBarButton(body, 'Send').disabled, false, 'Send runs again');
+});
+
+test('a landed pick refreshes the Status view of the framed page it sits in', async () => {
+  let refreshed = 0;
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, true, {
+    hash: '#cbsession=owner&cbpanel=1',
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    parent: {
+      refreshSessionStatusPanel() { refreshed += 1; },
+    },
+    fetch: pickFetchStub([]),
+  });
+  const [fork] = body.children.filter((child) => child.className === 'fork');
+  clickElement(pickButton(fork, 'keep'));
+  clickElement(pickBarButton(body, 'Send'));
+  await flushPromises(3);
+  assert.equal(refreshed, 1);
+});
+
+test('a question inside a closed details or a demo is not a pick, and a sitrep page has no picks', () => {
+  const folded = makeElement();
+  folded.tagName = 'DETAILS';
+  folded.appendChild(makeOption('「hidden」: hidden choice.'));
+  const fork = makePickFork('1', [
+    makeOption('「keep」: keep the file.'),
+    makeOption('「drop」: drop the file.'),
+  ], null);
+  fork.appendChild(folded);
+  loadArtifactCommentsScript(PICK_PAGE_PATH, false, {bodyChildren: [fork], serverSessionId: 'owner'});
+  assert.deepEqual(findChildByClass(fork, '__cbc-picks').children.map((b) => b.textContent), ['keep', 'drop']);
+
+  const sitrep = pickForkOne();
+  const {body: sitrepBody} = loadArtifactCommentsScript(
+    '/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/sitrep_week.html', false,
+    {bodyChildren: [sitrep], serverSessionId: 'owner'});
+  assert.equal(findChildByClass(sitrep, '__cbc-picks'), undefined);
+  assert.equal(pickBarOf(sitrepBody), undefined);
+});
+
+test('the pick controls draw their icons: a picked option shows done, Send and Undo their own', async () => {
+  const calls = [];
+  const {body, window} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+  });
+  const [fork] = body.children.filter((child) => child.className === 'fork');
+  const keep = pickButton(fork, 'keep');
+  assert.equal(keep.children[0].innerHTML, '', 'an unpicked option draws no icon');
+  clickElement(keep);
+  assert.equal(keep.children[0].innerHTML, window.cbIcon('done', 12), 'a picked option draws the done icon');
+  assert.equal(pickButton(fork, 'drop').children[0].innerHTML, '', 'the other option stays bare');
+  assert.equal(pickBarButton(body, 'Send').children[0].innerHTML, window.cbIcon('send', 14));
+  assert.equal(pickBarButton(body, 'Undo').children[0].innerHTML, window.cbIcon('undo', 14));
+  assert.equal(pickBarButton(body, 'Rest as recommended').children.length, 1, 'Rest draws no icon');
+  assert.equal(pickButton(fork, 'keep').textContent, 'keep', 'the icon leaves the label as the button text');
 });

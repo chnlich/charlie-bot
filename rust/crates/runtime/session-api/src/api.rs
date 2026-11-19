@@ -11,6 +11,7 @@ pub const SESSION_EVENTS_PATH: &str = "/api/sessions/{session_id}/events";
 pub const SESSION_EVENTS_JSONL_PATH: &str = "/api/sessions/{session_id}/events.jsonl";
 pub const SESSION_GROUP_PATH: &str = "/api/sessions/{session_id}/group";
 pub const SESSION_RUNS_PATH: &str = "/api/sessions/{session_id}/runs";
+pub const SESSION_PENDING_TRIGGERS_PATH: &str = "/api/sessions/{session_id}/pending-triggers";
 
 /// The session-tree query's keys: the parent to root the page at, the archived switch, the page size and the keyset
 /// cursor. `SESSION_TREE_PATH`'s route reads them and the CLI sends them, so each is spelled once.

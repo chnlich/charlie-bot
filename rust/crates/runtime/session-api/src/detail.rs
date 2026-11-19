@@ -66,7 +66,7 @@ static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
 /// The session detail, transcript, usage, events, and task-read routes.
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
   Router::new()
-    .route("/api/sessions/{session_id}/pending-triggers", get_only(pending_triggers))
+    .route(api::SESSION_PENDING_TRIGGERS_PATH, get_only(pending_triggers))
     .route(api::SESSION_BOOTSTRAP_PATH, get_only(session_bootstrap))
     .route("/api/sessions/{session_id}/usage", get_only(session_usage))
     .route(api::SESSION_EVENTS_PATH, get_only(session_events))

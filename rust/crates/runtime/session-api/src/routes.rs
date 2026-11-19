@@ -280,7 +280,7 @@ pub(crate) const ROUTE_PATTERNS: &[&str] = &[
   "/api/sessions/{session_id}/permanent",
   "/api/sessions/{session_id}/fork",
   "/api/sessions/{session_id}/elone",
-  "/api/sessions/{session_id}/pending-triggers",
+  api::SESSION_PENDING_TRIGGERS_PATH,
   api::SESSION_BOOTSTRAP_PATH,
   "/api/sessions/{session_id}/usage",
   api::SESSION_EVENTS_PATH,

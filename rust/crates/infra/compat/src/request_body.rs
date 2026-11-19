@@ -2,14 +2,8 @@
 //!
 //! ```ignore
 //! let (parts, stream) = request.into_parts();
-//! let body = match read(&parts.headers, stream).await {
-//!   Ok(body) => body,
-//!   Err(response) => return *response,
-//! };
-//! let model = match body.validate(&SESSION_BODY) {
-//!   Ok(model) => model,
-//!   Err(response) => return *response,
-//! };
+//! let body = match read(&parts.headers, stream).await { Ok(body) => body, Err(response) => return *response };
+//! let model = match body.validate(&SESSION_BODY) { Ok(model) => model, Err(response) => return *response };
 //! ```
 //!
 //! The field readers below read one field of a body that a model has validated. Their shape check cannot fail

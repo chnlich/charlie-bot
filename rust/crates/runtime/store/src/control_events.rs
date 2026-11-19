@@ -247,7 +247,7 @@ pub fn close_event(fact: CloseFact<'_>) -> Value {
     payload.push(("archived_by".to_string(), json!(archived_by)));
   }
   if let Some(sequence_outcome) = fact.sequence_outcome {
-    payload.push(("sequence_outcome".to_string(), json!(sequence_outcome)));
+    payload.push((event_types::SEQUENCE_OUTCOME.to_string(), json!(sequence_outcome)));
   }
   build_control_event(
     event_types::TASK_CLOSED,

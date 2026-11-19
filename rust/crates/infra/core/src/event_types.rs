@@ -132,6 +132,9 @@ pub const OWNER_RUN_ID: &str = "owner_run_id";
 /// The results a task's work produced, as references such as `run:<id>` or `landed:<branch>@<sha>`. The close request,
 /// the close and child-report facts, and every reader name the field here.
 pub const RESULT_REFS: &str = "result_refs";
+/// The outcome a sequence reports for the task it closed. The close fact carries it, and the child report reads it in
+/// place of the close outcome.
+pub const SEQUENCE_OUTCOME: &str = "sequence_outcome";
 pub const TASK_CLOSED: &str = "task_closed";
 pub const TASK_REOPENED: &str = "task_reopened";
 /// A task moved to another parent. The moved task's chat events carry it; the chat renders nothing for it.

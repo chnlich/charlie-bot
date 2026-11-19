@@ -811,7 +811,8 @@ mod tests {
         .unwrap();
     let entries: Vec<_> = std::env::split_paths(OsStr::new(&rewritten.values["PATH"])).collect();
     assert_eq!(entries[0], gh_wrapper_dir);
-    assert_eq!(entries[1], current);
+    assert_eq!(entries[1], ssh_guard_dir);
+    assert_eq!(entries[2], current);
     assert!(!entries.contains(&release), "the resolved release directory must not reach agent PATH");
   }
 

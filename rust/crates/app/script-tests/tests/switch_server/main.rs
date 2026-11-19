@@ -422,6 +422,26 @@ fn test_preflight_refusal_exits_1_and_changes_nothing_dirty_clone() {
 
 #[test]
 #[ignore = "integration"]
+fn test_preflight_refusal_exits_1_and_changes_nothing_feature_branch() {
+  preflight_refusal_exits_1_and_changes_nothing("feature-branch");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_preflight_passes_a_detached_head_and_a_main_checkout() {
+  let world = World::new();
+  let running = format!("rust {}", world.old_sha);
+
+  let detached = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(detached.code, 0, "{}", world.report(&detached));
+  world.git(&world.clone, &["checkout", "-q", "-B", "main", world.old_sha.as_str()]);
+  let on_main = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+  assert_eq!(on_main.code, 0, "{}", world.report(&on_main));
+}
+
+#[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_launcher_preflight() {
   preflight_refusal_exits_1_and_changes_nothing("launcher-preflight");
 }
@@ -723,6 +743,9 @@ exec {} "$@"
   assert!(run.stdout.contains("reads no session-weight switches"), "{}", world.report(&run));
 }
 
+/// The branch a worker checks out in the runtime clone, which the switch must refuse.
+const WORKER_BRANCH: &str = "charliebot/worker-branch";
+
 /// Each preflight check refuses before the switch stops anything: exit 1 and no change. The refusals that a live run
 /// raises run against a started release, because the scan reads the running build's registrations.
 fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
@@ -754,6 +777,9 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
       world.start_release();
     }
     "dirty-clone" => fs::write(world.clone.join("scripts/start-server.sh"), "# local edit\n").expect("the local edit"),
+    "feature-branch" => {
+      world.git(&world.clone, &["checkout", "-q", "-b", WORKER_BRANCH]);
+    }
     "launcher-preflight" => {
       world.env.insert("SYSTEMD_RUN_REFUSE_ALL".to_string(), "1".to_string());
       world.start_release();
@@ -776,6 +802,15 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
   if case == "launcher-preflight" {
     let output = format!("{}{}", run.stdout, run.stderr);
     assert!(output.contains("launcher preflight"), "{}", world.report(&run));
+  }
+  if case == "feature-branch" {
+    let output = format!("{}{}", run.stdout, run.stderr);
+    assert!(output.contains(WORKER_BRANCH), "{}", world.report(&run));
+    assert_eq!(world.git(&world.clone, &["symbolic-ref", "HEAD"]), format!("refs/heads/{WORKER_BRANCH}"));
+  }
+  if case == "dirty-clone" {
+    let output = format!("{}{}", run.stdout, run.stderr);
+    assert!(output.contains("scripts/start-server.sh"), "{}", world.report(&run));
   }
   if case == "user-manager" {
     let output = format!("{}{}", run.stdout, run.stderr);

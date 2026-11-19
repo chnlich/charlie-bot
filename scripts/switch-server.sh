@@ -8,9 +8,9 @@
 # (server.enable_session_cpu_weight, server.enable_session_io_weight, read through the release's `charliebot
 # switch-helper`) has its controller in the agents slice's cgroup.controllers. The check runs before the install
 # below, so the target's units must already be installed: scripts/release.sh installs them ahead of its install
-# stage. The no-model preflight checks finish while
-# the old server still serves. It refuses a clone with local changes
-# and a target commit that a fetch does not bring. Its scan refuses a restart while an improve loop's controller still
+# stage. The no-model preflight checks finish while the old server still serves. It refuses a clone whose HEAD is a
+# branch other than main, a clone with local changes (it names the dirty paths), and a target commit that a fetch does
+# not bring. A detached HEAD passes. Its scan refuses a restart while an improve loop's controller still
 # runs in the server: the loop's active lock is present and the server pid its state names is live, whatever status the
 # state file holds — `charliebot improve stop` writes `stopped` while the current iteration keeps running. Its last
 # step runs each release's --check-config on an export of
@@ -1369,8 +1369,14 @@ preflight() {
   helper_binary   # exits 2 when neither release carries the subcommand, before anything changes
   "$SYSTEMD_USER" --check || fail "the user manager did not answer"
   OLD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-  [ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ] \
-    || fail "runtime clone $REPO_ROOT has local changes"
+  # The reset below moves the branch that HEAD names, so a commit that exists only on another branch drops out of the
+  # clone. A detached HEAD names no branch; main is the one branch the switch may move.
+  local head_ref dirty
+  if head_ref="$(git -C "$REPO_ROOT" symbolic-ref -q HEAD)" && [ "$head_ref" != refs/heads/main ]; then
+    fail "runtime clone $REPO_ROOT has branch ${head_ref#refs/heads/} checked out; check out main or detach HEAD first"
+  fi
+  dirty="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
+  [ -z "$dirty" ] || fail "runtime clone $REPO_ROOT has local changes: ${dirty//$'\n'/; }"
   git -C "$REPO_ROOT" fetch --quiet origin || fail "cannot fetch origin in $REPO_ROOT"
   git -C "$REPO_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2> /dev/null \
     || fail "target commit $TARGET_SHA is not in the runtime clone after fetching origin"

@@ -10,6 +10,7 @@ pub mod google;
 pub mod hook;
 pub mod land;
 pub mod linear;
+pub mod pending_wake;
 pub mod preflight_charlie_code;
 pub mod read_budget;
 pub mod release_helper;

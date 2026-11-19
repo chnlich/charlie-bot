@@ -4,7 +4,6 @@
 //! expires. Neither the token nor the secret reaches an error message: a failed call names its method, path, HTTP
 //! status, Feishu's code and Feishu's message.
 
-use std::fmt::{self, Display};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -40,24 +39,8 @@ struct CachedToken {
 }
 
 /// One failed Open API call: its method, path, HTTP status, Feishu's error code (None when the answer has none) and
-/// Feishu's message. The request body and the token never appear in it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FeishuAPIError {
-  pub method: String,
-  pub path: String,
-  pub status: u16,
-  pub code: Option<i64>,
-  pub message: String,
-}
-
-impl Display for FeishuAPIError {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let code = self.code.map_or_else(|| "None".to_string(), |code| code.to_string());
-    write!(f, "{} {} failed: HTTP {} code={code} message={:?}", self.method, self.path, self.status, self.message)
-  }
-}
-
-impl std::error::Error for FeishuAPIError {}
+/// Feishu's message. The request body and the token never appear in it. The shape is the shared platform API error.
+pub use charliebot_compat::api_error::ApiError as FeishuAPIError;
 
 /// The long-connection endpoint Feishu answers with: the WebSocket URL and the interval of the client's pings.
 #[derive(Debug, Clone, PartialEq, Eq)]

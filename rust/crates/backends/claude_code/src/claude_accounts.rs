@@ -1459,19 +1459,11 @@ mod tests {
     .unwrap();
     let cfg = config(
       &home,
-      &[
-        ("at_minimum", &at_minimum),
-        ("one_short", &one_short),
-        ("unnamed", &unnamed),
-        ("nonnumeric", &nonnumeric),
-      ],
+      &[("at_minimum", &at_minimum), ("one_short", &one_short), ("unnamed", &unnamed), ("nonnumeric", &nonnumeric)],
     );
 
     let short = short_token_logins(&cfg, None, Some(now)).unwrap();
-    assert_eq!(
-      short,
-      HashSet::from(["one_short".to_string(), "unnamed".to_string(), "nonnumeric".to_string()])
-    );
+    assert_eq!(short, HashSet::from(["one_short".to_string(), "unnamed".to_string(), "nonnumeric".to_string()]));
     let accounts = pool_accounts(&cfg, None).unwrap();
     let unnamed_account = accounts.iter().find(|account| account.label == "unnamed").unwrap();
     let nonnumeric_account = accounts.iter().find(|account| account.label == "nonnumeric").unwrap();

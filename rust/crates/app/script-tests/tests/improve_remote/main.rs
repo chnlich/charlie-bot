@@ -705,10 +705,7 @@ fn no_key_value_reaches_an_ssh_argument_or_any_file_but_the_credentials_file() {
   // which the round removed when it ended.
   let credentials = world.remote_home.join("improve/home/credentials.yaml");
   let text = fs::read_to_string(&credentials).expect("the runner wrote the credentials file");
-  assert!(
-    text.contains(REVIEW_KEY) && !text.contains(GATEWAY_TOKEN),
-    "the credentials file holds the wrong keys"
-  );
+  assert!(text.contains(REVIEW_KEY) && !text.contains(GATEWAY_TOKEN), "the credentials file holds the wrong keys");
   let mode = fs::metadata(&credentials).expect("credentials metadata").permissions().mode() & 0o777;
   assert_eq!(mode, 0o600, "{credentials:?} has mode {mode:o}");
   assert!(files_holding(&world, &world.local_home, GATEWAY_TOKEN).is_empty(), "a key reached this host's files");
@@ -921,14 +918,17 @@ fn a_codex_round_refuses_a_parent_directory_another_user_owns() {
   let stub = world.sandbox.dir("owner-stub");
   harness::write_executable(
     &stub.join("stat"),
-    format!(r#"#!/usr/bin/env bash
+    format!(
+      r#"#!/usr/bin/env bash
 # Reports uid 0 for the round directory, and the real owner for every other path.
 if [[ $* == *"{}"* ]]; then
   printf '0\n'
 else
   command -p stat "$@"
 fi
-"#, round_tmp.display()),
+"#,
+      round_tmp.display()
+    ),
   );
   let launch_id = "20261101T090700Z-1-307";
   codex_in_scope_fixture(&world, launch_id, &forwarded_codex_login(world::now_seconds() + 200 * 3600));
@@ -1046,7 +1046,7 @@ fn a_prepared_launch_keeps_its_member_credential_until_its_wrapper_starts() {
   first_env.insert("FAKE_SSH_MAIN_RUN_READY".to_string(), ready.display().to_string());
   first_env.insert("FAKE_SSH_MAIN_RUN_RELEASE".to_string(), release.display().to_string());
   let mut first_command = world.launcher_command(&first_env);
-  let mut first = harness::spawn(&mut first_command);
+  let first = harness::spawn(&mut first_command);
 
   let reached_gap = wait_until(Duration::from_secs(15), || ready.exists());
   if !reached_gap {

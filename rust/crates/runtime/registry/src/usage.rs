@@ -207,6 +207,17 @@ pub struct UsageOps {
   pub sweep: bool,
 }
 
+/// The signature a single-file usage source stores for its log: the file's `<mtime_ns>:<size>`.
+///
+/// A source's `read` returns the signature of the state it read, and the ledger stores it, so the next capture skips
+/// a file whose signature still holds. The capture computes the same text from a fresh stat to skip the source's
+/// read. A source whose signature covers more than one file, such as opencode's database with its WAL, builds its
+/// own form.
+pub fn file_signature(metadata: &std::fs::Metadata) -> String {
+  use std::os::unix::fs::MetadataExt;
+  format!("{}:{}", timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()), metadata.len())
+}
+
 /// A source's implementation. [`UsageSourceImpl::ops`] declares the operations it defines; an undeclared operation
 /// is a caller bug and panics.
 pub trait UsageSourceImpl: Send + Sync {

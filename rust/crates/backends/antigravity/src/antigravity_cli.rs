@@ -244,7 +244,9 @@ mod tests {
   use charliebot_agents::runner::{AgentRunner, RunRequest};
   use charliebot_agents::transport::cgroup::SessionCgroupConfig;
   use charliebot_agents::transport::{cursor, final_stdout, follow, identity, kill, recovery};
+  use std::ffi::OsString;
   use std::fs;
+  use std::os::unix::ffi::OsStrExt;
   use std::os::unix::fs::symlink;
   use std::process::{Command, Stdio};
   use std::sync::{Arc, Mutex};
@@ -376,9 +378,14 @@ mod tests {
     assert_eq!(fs::read(root.path().join("received_prompt")).unwrap(), prompt.as_bytes());
     let context: Value =
       serde_json::from_slice(&fs::read(root.path().join("logs/final_stdout.context.json")).unwrap()).unwrap();
-    let command = context["command"].as_array().unwrap();
-    assert!(command.iter().all(|argument| argument.as_str().unwrap().len() <= MAX_ARGUMENT_BYTES), "{command:?}");
-    assert!(command.iter().all(|argument| !argument.as_str().unwrap().contains(&prompt)), "{command:?}");
+    let command: Vec<OsString> = serde_json::from_value(context["command"].clone()).unwrap();
+    assert!(command.iter().all(|argument| argument.as_os_str().as_bytes().len() <= MAX_ARGUMENT_BYTES), "{command:?}");
+    assert!(
+      command.iter().all(|argument| {
+        !argument.as_os_str().as_bytes().windows(prompt.len()).any(|window| window == prompt.as_bytes())
+      }),
+      "{command:?}"
+    );
   }
 
   async fn cut_server(root: &Path) -> u32 {

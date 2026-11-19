@@ -102,8 +102,11 @@ impl CodexBackend {
       .into_string()
       .map_err(|path| anyhow::anyhow!("the codex binary path is not valid Unicode: {}", Path::new(&path).display()))?;
     let manager_turn = launch.manager_turn;
-    let instructions_profile_name =
-      launch.instructions_file.as_ref().map(|_| format!("charliebot-{}", uuid::Uuid::new_v4().simple()));
+    let instructions_profile_name = launch
+      .instructions_file
+      .as_ref()
+      .and(launch.instructions_content.as_ref())
+      .map(|_| format!("charliebot-{}", uuid::Uuid::new_v4().simple()));
     Ok(Self {
       model: model.to_string(),
       codex_bin,
@@ -130,13 +133,15 @@ impl CodexBackend {
     if self.instructions_file.is_none() {
       return Ok(Vec::new());
     }
-    let profile_name = self.instructions_profile_name.as_ref().context("Codex instructions profile has no name")?;
-    Ok(vec![
-      "--profile".to_string(),
-      profile_name.clone(),
+    let mut args = match &self.instructions_profile_name {
+      Some(profile_name) => vec!["--profile".to_string(), profile_name.clone()],
+      None => vec!["--config".to_string(), "developer_instructions=null".to_string()],
+    };
+    args.extend([
       "--config".to_string(),
       format!(r#"project_doc_fallback_filenames=["{CLAUDE_INSTRUCTIONS_FILE_NAME}"]"#),
-    ])
+    ]);
+    Ok(args)
   }
 
   fn model_config_args(&self) -> Vec<String> {
@@ -214,7 +219,7 @@ impl CodexBackend {
       return Ok(());
     }
 
-    let instructions = self.instructions_content.as_deref().unwrap_or("null");
+    let instructions = self.instructions_content.as_deref().context("Codex instructions profile has no text")?;
     let contents = format!("developer_instructions = {}\n", toml_string_value(instructions));
     let mut temporary = tempfile::Builder::new()
       .prefix(".charliebot-codex-profile-")
@@ -506,7 +511,7 @@ mod tests {
   }
 
   #[test]
-  fn instructions_file_without_content_keeps_the_null_text_in_a_profile() {
+  fn instructions_file_without_content_keeps_the_null_override() {
     let root = tempfile::tempdir().unwrap();
     let codex_home = root.path().join(".codex");
     fs::create_dir(&codex_home).unwrap();
@@ -522,9 +527,8 @@ mod tests {
     )
     .unwrap();
     let command = backend.build_command().unwrap();
-    let profile_index = command.iter().position(|argument| argument == "--profile").unwrap();
-    let profile_name = &command[profile_index + 1];
-    assert!(!command.iter().any(|argument| argument.contains("developer_instructions=")), "{command:?}");
+    assert!(command.iter().any(|argument| argument == "developer_instructions=null"), "{command:?}");
+    assert!(!command.iter().any(|argument| argument == "--profile"), "{command:?}");
 
     AgentBackend::prepare_env(
       &backend,
@@ -536,9 +540,7 @@ mod tests {
     )
     .unwrap();
 
-    let profile = fs::read_to_string(codex_home.join(format!("{profile_name}.config.toml"))).unwrap();
-    let decoded: toml::Table = toml::from_str(&profile).unwrap();
-    assert_eq!(decoded["developer_instructions"].as_str(), Some("null"));
+    assert!(fs::read_dir(&codex_home).unwrap().next().is_none());
   }
 
   #[test]

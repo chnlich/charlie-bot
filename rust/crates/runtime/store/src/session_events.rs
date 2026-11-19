@@ -827,7 +827,8 @@ mod tests {
       ["message", "handler_result"]
     );
     assert_eq!(frames[0]["message"]["role"], "system");
-    assert_eq!(frames[0]["message"]["content"], "✓ Lint: Done");
+    assert_eq!(frames[0]["message"]["kind"], "handler_ok");
+    assert_eq!(frames[0]["message"]["content"], "Lint: Done");
   }
 
   #[tokio::test]

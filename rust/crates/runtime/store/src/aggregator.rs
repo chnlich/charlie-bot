@@ -16,6 +16,11 @@ use crate::{StoreError, StoreResult};
 
 pub use crate::tool_rows::TOOL_PREVIEW_CHARS;
 
+// The kind of a handler result row, derived from the stored event at each read. The web draws the
+// row's check or cross from it, so the content carries only the task and the message.
+const HANDLER_OK_KIND: &str = "handler_ok";
+const HANDLER_ERROR_KIND: &str = "handler_error";
+
 const BUILTIN_EVENT_TYPES: &[&str] = &[
   event_types::MASTER_DONE,
   event_types::ASSISTANT_ERROR,
@@ -696,14 +701,15 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       message
     }
     event_types::HANDLER_RESULT => {
-      let icon = if event.field("status").and_then(EventFields::as_str_field) == Some(event_types::HANDLER_STATUS_OK) {
-        "✓"
+      let kind = if event.field("status").and_then(EventFields::as_str_field) == Some(event_types::HANDLER_STATUS_OK) {
+        HANDLER_OK_KIND
       } else {
-        "✗"
+        HANDLER_ERROR_KIND
       };
       json!({
         "role": "system",
-        "content": format!("{icon} {}: {}", string_default(event, "task", ""), string_default(event, "message", "")),
+        "kind": kind,
+        "content": format!("{}: {}", string_default(event, "task", ""), string_default(event, "message", "")),
       })
     }
     event_types::CONTEXT_COMPACTED => render_context_compacted(event)?,

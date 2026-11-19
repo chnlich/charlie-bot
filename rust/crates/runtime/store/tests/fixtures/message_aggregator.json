@@ -947,7 +947,8 @@
           "type": "message",
           "message": {
             "role": "system",
-            "content": "✓ nightly-digest: digest posted",
+            "kind": "handler_ok",
+            "content": "nightly-digest: digest posted",
             "timestamp": "2026-01-05T09:02:20+00:00",
             "event_index": 13,
             "id": "4c86625f-13d7-423c-93e9-d58574a12dec"
@@ -957,7 +958,8 @@
           "type": "message",
           "message": {
             "role": "system",
-            "content": "✗ nightly-digest: digest source unreachable",
+            "kind": "handler_error",
+            "content": "nightly-digest: digest source unreachable",
             "timestamp": "2026-01-05T09:02:27+00:00",
             "event_index": 14,
             "id": "02dda59b-d365-43e2-ae8d-2653dda09d7a"
@@ -3462,7 +3464,8 @@
           "type": "message",
           "message": {
             "role": "system",
-            "content": "✓ nightly-digest: digest posted",
+            "kind": "handler_ok",
+            "content": "nightly-digest: digest posted",
             "timestamp": "2026-01-05T09:02:20+00:00",
             "event_index": 13,
             "id": "4c86625f-13d7-423c-93e9-d58574a12dec"
@@ -3472,7 +3475,8 @@
           "type": "message",
           "message": {
             "role": "system",
-            "content": "✗ nightly-digest: digest source unreachable",
+            "kind": "handler_error",
+            "content": "nightly-digest: digest source unreachable",
             "timestamp": "2026-01-05T09:02:27+00:00",
             "event_index": 14,
             "id": "02dda59b-d365-43e2-ae8d-2653dda09d7a"
@@ -6141,7 +6145,8 @@
           "type": "message",
           "message": {
             "role": "system",
-            "content": "✓ lint: clean",
+            "kind": "handler_ok",
+            "content": "lint: clean",
             "timestamp": null,
             "event_index": 106,
             "id": "syn-h1"
@@ -6151,7 +6156,8 @@
           "type": "message",
           "message": {
             "role": "system",
-            "content": "✗ test: 2 failed",
+            "kind": "handler_error",
+            "content": "test: 2 failed",
             "timestamp": null,
             "event_index": 107,
             "id": "syn-h2"
@@ -6161,7 +6167,8 @@
           "type": "message",
           "message": {
             "role": "system",
-            "content": "✗ : ",
+            "kind": "handler_error",
+            "content": ": ",
             "timestamp": null,
             "event_index": 108,
             "id": "syn-h3"

@@ -19,8 +19,8 @@ pub const SYNC_CLAUDE_AI_SKILLS_SETTINGS_KEY: &str = "syncClaudeAiSkills";
 pub const DISABLE_BUNDLED_SKILLS_SETTINGS_KEY: &str = "disableBundledSkills";
 pub const FAST_MODE_SETTINGS_KEY: &str = "fastMode";
 
-/// The PreToolUse hook event: the backend registers `charliebot wait-guard` and `charliebot scan-guard` under it, and
-/// the CLI's answer must name it.
+/// The PreToolUse hook event: the backend registers `charliebot wait-guard`, `charliebot scan-guard` and
+/// `charliebot kill-guard` under it, and the CLI's answer must name it.
 pub const PRE_TOOL_USE_HOOK_EVENT: &str = "PreToolUse";
 /// The PostToolUse hook event: the backend registers `charliebot read-budget` under it, and the CLI's answer names it.
 pub const POST_TOOL_USE_HOOK_EVENT: &str = "PostToolUse";
@@ -74,21 +74,22 @@ pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> 
   settings
 }
 
-/// The PreToolUse guards a headless Claude process runs under: wait-guard holds a run to its own tasks, and scan-guard
-/// refuses whole-store searches.
+/// The PreToolUse guards a headless Claude process runs under: wait-guard holds a run to its own tasks, scan-guard
+/// refuses whole-store searches, and kill-guard refuses name-based kills.
 #[derive(Clone, Copy)]
 struct PreToolUseGuards {
   wait_guard: bool,
   scan_guard: bool,
+  kill_guard: bool,
 }
 
-/// The guards a run kind runs under. Scheduled steps run the scan guard only.
+/// The guards a run kind runs under. Scheduled steps run the scan and kill guards only.
 fn pre_tool_use_guards(run_kind: RunKind) -> PreToolUseGuards {
   match run_kind {
     RunKind::ManagerTurn | RunKind::Work | RunKind::Review | RunKind::Iteration => {
-      PreToolUseGuards { wait_guard: true, scan_guard: true }
+      PreToolUseGuards { wait_guard: true, scan_guard: true, kill_guard: true }
     }
-    RunKind::ScheduledStep => PreToolUseGuards { wait_guard: false, scan_guard: true },
+    RunKind::ScheduledStep => PreToolUseGuards { wait_guard: false, scan_guard: true, kill_guard: true },
   }
 }
 
@@ -99,6 +100,9 @@ fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>, guards: PreToolUseG
   }
   if guards.scan_guard {
     hooks.push(json!({"type": "command", "command": "charliebot scan-guard"}));
+  }
+  if guards.kill_guard {
+    hooks.push(json!({"type": "command", "command": "charliebot kill-guard"}));
   }
   let event_hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
   event_hooks

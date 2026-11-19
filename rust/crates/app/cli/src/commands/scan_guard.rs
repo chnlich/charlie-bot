@@ -17,10 +17,8 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::sync::OnceLock;
 
-use charliebot_claude_code::claude_launch;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::SESSIONS_DIR_NAME;
-use charliebot_core::event_types;
 use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::str_methods;
@@ -28,8 +26,10 @@ use charliebot_store::layout::DATA_DIR_NAME;
 use charliebot_store::run_logs::COMPRESSED_SUFFIX;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, STDERR_LOG_NAME};
 use regex::{Captures, Regex};
-use serde_json::{Value, json};
+use serde_json::Value;
 use shell::{needs_path_resolution, parse_error, resolve_paths, shell_text, strip_quotes};
+
+use super::bash_hook::run_bash_guard;
 
 /// A recursive `grep`: `-r`, `-R` or `--recursive` among its options, alone or grouped with other flags. The
 /// command-word patterns match every `grep` and this checks the flag after the match, so the search patterns stay
@@ -147,40 +147,14 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   run(std::io::stdin().lock(), &mut std::io::stdout().lock())
 }
 
-fn run<R: Read, W: Write>(mut input: R, output: &mut W) -> Result<(), CliExit> {
-  let mut input_text = String::new();
-  input
-    .read_to_string(&mut input_text)
-    .map_err(|error| CliExit::error(format!("could not read hook input: {error}")))?;
-  let event: Value =
-    serde_json::from_str(&input_text).map_err(|error| CliExit::error(format!("invalid hook JSON: {error}")))?;
-  if event.get(event_types::TOOL_NAME).and_then(Value::as_str) != Some("Bash") {
-    return Ok(());
-  }
-  let command = event
-    .pointer("/tool_input/command")
-    .and_then(Value::as_str)
-    .ok_or_else(|| CliExit::error("Bash hook input must include a string tool_input.command"))?;
-  let cwd = event
-    .get("cwd")
-    .and_then(Value::as_str)
-    .ok_or_else(|| CliExit::error("Bash hook input must include a string cwd"))?;
-  let forms = scan_forms(command, cwd).map_err(CliExit::error)?;
-  if let Some(form) = forms.first() {
-    serde_json::to_writer(&mut *output, &deny_decision(form.reason()))
-      .map_err(|error| CliExit::error(format!("could not write hook output: {error}")))?;
-    output.write_all(b"\n").map_err(|error| CliExit::error(format!("could not write hook output: {error}")))?;
-  }
-  Ok(())
-}
-
-fn deny_decision(reason: &str) -> Value {
-  json!({
-    "hookSpecificOutput": {
-      "hookEventName": claude_launch::PRE_TOOL_USE_HOOK_EVENT,
-      "permissionDecision": "deny",
-      "permissionDecisionReason": reason
-    }
+fn run<R: Read, W: Write>(input: R, output: &mut W) -> Result<(), CliExit> {
+  run_bash_guard(input, output, |event, command| {
+    let cwd = event
+      .get("cwd")
+      .and_then(Value::as_str)
+      .ok_or_else(|| "Bash hook input must include a string cwd".to_string())?;
+    let forms = scan_forms(command, cwd)?;
+    Ok(forms.first().map(|form| form.reason()))
   })
 }
 
@@ -738,6 +712,8 @@ fn glob_pattern() -> &'static Regex {
 #[cfg(test)]
 mod tests {
   use std::io::Cursor;
+
+  use serde_json::json;
 
   use super::*;
 

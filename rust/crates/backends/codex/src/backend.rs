@@ -37,13 +37,14 @@ pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "codex_wrote_agents_md";
 /// The stderr a one-shot keeps for its error message. Later bytes are read and dropped.
 const MAX_ONE_SHOT_STDERR_BYTES: usize = 4 * 1024;
 
-/// The scan-guard `PreToolUse` hook for a streaming run's Bash calls, given on the command line. The run passes
-/// `--dangerously-bypass-hook-trust` with it, because the hook is charlie-bot's own command and the run already
-/// bypasses approvals, so the hook runs without a review stop.
-fn scan_guard_hook_args() -> [String; 3] {
+/// The scan-guard and kill-guard `PreToolUse` hooks for a streaming run's Bash calls, given on the command line. The
+/// run passes `--dangerously-bypass-hook-trust` with them, because the hooks are charlie-bot's own commands and the
+/// run already bypasses approvals, so the hooks run without a review stop.
+fn bash_guard_hook_args() -> [String; 3] {
   [
     "--config".to_string(),
-    r#"hooks.PreToolUse=[{matcher="Bash",hooks=[{type="command",command="charliebot scan-guard"}]}]"#.to_string(),
+    r#"hooks.PreToolUse=[{matcher="Bash",hooks=[{type="command",command="charliebot scan-guard"},{type="command",command="charliebot kill-guard"}]}]"#
+      .to_string(),
     "--dangerously-bypass-hook-trust".to_string(),
   ]
 }
@@ -167,7 +168,7 @@ impl CodexBackend {
       command.insert(2, "resume".to_string());
       command.push(session_id.clone());
     }
-    command.extend(scan_guard_hook_args());
+    command.extend(bash_guard_hook_args());
     if self.manager_turn {
       command.extend(session_memo_hook_args());
     }

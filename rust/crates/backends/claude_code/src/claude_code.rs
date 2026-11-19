@@ -829,7 +829,7 @@ mod tests {
       concat!(
         r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
         r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}"#,
-        r#",{"type":"command","command":"charliebot scan-guard"}]}]},""#,
+        r#",{"type":"command","command":"charliebot scan-guard"},{"type":"command","command":"charliebot kill-guard"}]}]},""#,
         r#"fastMode":true}"#
       )
     );
@@ -894,7 +894,8 @@ mod tests {
         "matcher": "Bash",
         "hooks": [
           {"type": "command", "command": "charliebot wait-guard"},
-          {"type": "command", "command": "charliebot scan-guard"}
+          {"type": "command", "command": "charliebot scan-guard"},
+          {"type": "command", "command": "charliebot kill-guard"}
         ]
       }])
     );
@@ -918,7 +919,8 @@ mod tests {
       "matcher": "Bash",
       "hooks": [
         {"type": "command", "command": "charliebot wait-guard"},
-        {"type": "command", "command": "charliebot scan-guard"}
+        {"type": "command", "command": "charliebot scan-guard"},
+        {"type": "command", "command": "charliebot kill-guard"}
       ]
     }]);
     for run_kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration] {
@@ -929,7 +931,10 @@ mod tests {
     }
     let scan_only = serde_json::json!([{
       "matcher": "Bash",
-      "hooks": [{"type": "command", "command": "charliebot scan-guard"}]
+      "hooks": [
+        {"type": "command", "command": "charliebot scan-guard"},
+        {"type": "command", "command": "charliebot kill-guard"}
+      ]
     }]);
     let settings = claude_launch::headless_claude_settings(RunKind::ScheduledStep, None, None, false, false).unwrap();
     assert_eq!(settings["hooks"]["PreToolUse"], scan_only);
@@ -1278,7 +1283,7 @@ mod tests {
         concat!(
           r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
           r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}"#,
-          r#",{"type":"command","command":"charliebot scan-guard"}]}]}}"#
+          r#",{"type":"command","command":"charliebot scan-guard"},{"type":"command","command":"charliebot kill-guard"}]}]}}"#
         ),
       ]
     );

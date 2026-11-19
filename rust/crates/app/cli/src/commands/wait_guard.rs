@@ -7,11 +7,10 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::sync::OnceLock;
 
-use charliebot_claude_code::claude_launch;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::event_types;
 use fancy_regex::{Captures, Regex};
-use serde_json::{Value, json};
+
+use super::bash_hook::run_bash_guard;
 
 const WAIT_LIMIT_SECONDS: f64 = 60.0;
 const DENY_REASON: &str = "This command waits: it sleeps or repeats a check for more than 60 seconds. Run the work itself in the foreground in one call, or start the wait with `charliebot session trigger --cmd` and end your turn.";
@@ -24,36 +23,10 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   run(std::io::stdin().lock(), &mut std::io::stdout().lock())
 }
 
-fn run<R: Read, W: Write>(mut input: R, output: &mut W) -> Result<(), CliExit> {
-  let mut input_text = String::new();
-  input
-    .read_to_string(&mut input_text)
-    .map_err(|error| CliExit::error(format!("could not read hook input: {error}")))?;
-  let event: Value =
-    serde_json::from_str(&input_text).map_err(|error| CliExit::error(format!("invalid hook JSON: {error}")))?;
-  if event.get(event_types::TOOL_NAME).and_then(Value::as_str) != Some("Bash") {
-    return Ok(());
-  }
-  let command = event
-    .pointer("/tool_input/command")
-    .and_then(Value::as_str)
-    .ok_or_else(|| CliExit::error("Bash hook input must include a string tool_input.command"))?;
-  let wait = declared_wait_seconds(command).map_err(CliExit::error)?;
-  if wait > WAIT_LIMIT_SECONDS {
-    serde_json::to_writer(&mut *output, &deny_decision())
-      .map_err(|error| CliExit::error(format!("could not write hook output: {error}")))?;
-    output.write_all(b"\n").map_err(|error| CliExit::error(format!("could not write hook output: {error}")))?;
-  }
-  Ok(())
-}
-
-fn deny_decision() -> Value {
-  json!({
-    "hookSpecificOutput": {
-      "hookEventName": claude_launch::PRE_TOOL_USE_HOOK_EVENT,
-      "permissionDecision": "deny",
-      "permissionDecisionReason": DENY_REASON
-    }
+fn run<R: Read, W: Write>(input: R, output: &mut W) -> Result<(), CliExit> {
+  run_bash_guard(input, output, |_event, command| {
+    let wait = declared_wait_seconds(command)?;
+    Ok((wait > WAIT_LIMIT_SECONDS).then_some(DENY_REASON))
   })
 }
 
@@ -185,6 +158,8 @@ fn timeout_pattern() -> &'static Regex {
 #[cfg(test)]
 mod tests {
   use std::io::Cursor;
+
+  use serde_json::{Value, json};
 
   use super::*;
 

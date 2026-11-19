@@ -774,7 +774,6 @@ mod tests {
     (release, current)
   }
 
-  /// A wrapper directory with an executable stub script, as `require_installed` expects it.
   /// An ssh guard directory with an executable stub script, as `require_installed` expects it.
   fn ssh_guard_dir_under(root: &Path) -> PathBuf {
     let directory = root.join("ssh-guard");
@@ -783,6 +782,7 @@ mod tests {
     directory
   }
 
+  /// A wrapper directory with an executable stub script, as `require_installed` expects it.
   fn gh_wrapper_dir_under(root: &Path) -> PathBuf {
     let directory = root.join("gh-wrapper");
     fs::create_dir_all(&directory).unwrap();

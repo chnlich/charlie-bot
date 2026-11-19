@@ -21,9 +21,8 @@ use charliebot_registry::caller;
 use http::StatusCode;
 use serde_json::Value;
 
-use crate::adapter::{self, Bot};
+use crate::adapter::Bot;
 use crate::client::BASE_URL;
-use crate::commands;
 use crate::fields::MESSAGE_ID;
 
 /// The download kinds the Open API resource endpoint takes.
@@ -103,8 +102,7 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
       Err(response) => return response,
     };
   let result =
-    adapter::post_reply_with_caller_context(&bot, &session_id, &text, request_id.as_deref(), run_started_at.as_deref())
-      .await;
+    bot.post_reply_with_caller_context(&session_id, &text, request_id.as_deref(), run_started_at.as_deref()).await;
   reply_response(result)
 }
 
@@ -125,9 +123,9 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let topic_id = fields.get("topic_id").and_then(Value::as_str);
   let page = fields.get("page").and_then(Value::as_str);
   let result = match (mode, topic_id, page) {
-    (None, None, None) => commands::read_thread(&bot, &session_id, limit).await,
-    (Some("chat"), None, page) => commands::read_chat(&bot, &session_id, limit, page).await,
-    (Some("topic"), Some(thread_id), page) => commands::read_topic(&bot, &session_id, thread_id, limit, page).await,
+    (None, None, None) => bot.read_thread(&session_id, limit).await,
+    (Some("chat"), None, page) => bot.read_chat(&session_id, limit, page).await,
+    (Some("topic"), Some(thread_id), page) => bot.read_topic(&session_id, thread_id, limit, page).await,
     _ => Err(ThreadReplyError::refused(
       StatusCode::UNPROCESSABLE_ENTITY,
       "read mode parameters do not match the selected mode",
@@ -149,15 +147,15 @@ async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Respon
     Err(response) => return *response,
   };
   reply_response(
-    commands::download(
-      &bot,
-      &text_field(&fields, SESSION_ID),
-      &text_field(&fields, MESSAGE_ID),
-      &text_field(&fields, "file_key"),
-      &text_field(&fields, "kind"),
-      &text_field(&fields, "output"),
-    )
-    .await,
+    bot
+      .download(
+        &text_field(&fields, SESSION_ID),
+        &text_field(&fields, MESSAGE_ID),
+        &text_field(&fields, "file_key"),
+        &text_field(&fields, "kind"),
+        &text_field(&fields, "output"),
+      )
+      .await,
   )
 }
 
@@ -171,5 +169,5 @@ async fn post_check(State(bot): State<Bot>, request: Request<Body>) -> Response 
   if let Err(response) = body.declared_fields(&CHECK_BODY) {
     return *response;
   }
-  reply_response(commands::check_setup(&bot).await)
+  reply_response(bot.check_setup().await)
 }

@@ -12,9 +12,8 @@
 //! test that needs an absent input removes that one fixture path inside the sandbox. No test removes the profile home,
 //! and no delete names a path outside the sandbox.
 
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD as URL_SAFE_NO_PAD;
@@ -370,14 +369,22 @@ pub fn codex_login_json(exp: i64) -> String {
   .to_string()
 }
 
-/// One test's repository, both homes and stub directory.
-/// The lock every world holds for its lifetime. Each round of a direction writes under `/tmp/improve-<direction>`, and its
-/// start removes an idle direction's Codex login from there, so two worlds never run together: one test's round would
-/// otherwise remove the login another test's codex round is reading.
-static TMP_ROOT_LOCK: Mutex<()> = Mutex::new(());
+/// The file every world locks for its lifetime. Each round of a direction writes under `/tmp/improve-<direction>`, and
+/// its start removes an idle direction's Codex login from there, so two worlds never run together: one test's round
+/// would otherwise remove the login another test's codex round is reading. Nextest runs each test in its own process, so
+/// the lock is a file lock that every process shares, not an in-process mutex.
+const TMP_ROOT_LOCK_PATH: &str = "/tmp/improve-tests.lock";
 
+/// Holds the shared tmp-root lock until the world is dropped.
+fn lock_tmp_root() -> File {
+  let file = File::create(TMP_ROOT_LOCK_PATH).expect("the improve tests' tmp-root lock file");
+  file.lock().expect("the improve tests' tmp-root lock");
+  file
+}
+
+/// One test's repository, both homes and stub directory.
 pub struct World {
-  _tmp_root: MutexGuard<'static, ()>,
+  _tmp_root: File,
   pub sandbox: Sandbox,
   /// The launcher's checkout, with its own `origin/main`.
   pub repo: PathBuf,
@@ -420,7 +427,7 @@ pub struct World {
 
 impl World {
   pub fn new() -> Self {
-    let tmp_root = TMP_ROOT_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let tmp_root = lock_tmp_root();
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");

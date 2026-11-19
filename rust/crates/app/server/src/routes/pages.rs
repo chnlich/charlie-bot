@@ -358,10 +358,12 @@ struct IndexAnswerEntry {
 /// Every input that shapes one chat page answer.
 ///
 /// The bootstrap and the sidebar text compare by the shared allocation their own memo keeps, so a repeat request
-/// proves them with a pointer. The session row, the template globals and the load errors compare by value: the
-/// store hands a caller its own copy of the row, and the globals carry the config and credentials a reload
-/// replaced. The config compares by pointer because a reload builds a new one, and the template revision names
-/// the template and static tree. The rest are the small values the request and the page state carry.
+/// proves them with a pointer. The session row compares by value: the store hands out the cache's own allocation, but
+/// an entry that ran past its revalidation window is read again into a new allocation with equal content, and the
+/// answer is the same either way. The template globals and the load errors compare by value because the globals carry
+/// the config and credentials a reload replaced. The config compares by pointer because a reload builds a new one,
+/// and the template revision names the template and static tree. The rest are the small values the request and the
+/// page state carry.
 #[derive(Clone)]
 struct IndexAnswerKey {
   revision: u64,

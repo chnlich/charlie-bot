@@ -1895,7 +1895,7 @@ where
 {
   tokio::spawn(async move {
     if let Err(error) = future.await {
-      tracing::error!(task_name = %name, error = %error, "background_task_failed");
+      tracing::error!(task_name = %name, error = %error, "{}", event_types::BACKGROUND_TASK_FAILED_EVENT);
     }
   })
 }

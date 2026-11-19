@@ -18,6 +18,7 @@
   "retry": { "lucide": "rotate-ccw" },
   "subtasks-running": { "lucide": "loader" },
   "done": { "lucide": "check" },
+  "undo": { "lucide": "undo-2" },
   "failed": { "lucide": "circle-x" },
   "loading": { "lucide": "loader-circle" },
   "waiting": { "lucide": "hourglass" },

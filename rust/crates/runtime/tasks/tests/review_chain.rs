@@ -1603,8 +1603,9 @@ async fn worker_and_review_runs_put_the_gh_wrapper_first_on_path() -> anyhow::Re
   let temp = tempfile::tempdir()?;
   let worker_path = temp.path().join("worker-path");
   let review_path = temp.path().join("review-path");
+  // The record holds the run's PATH on its first line and the ssh that `command -v` resolves on its second.
   let path_script = |record: &Path, summary: &str| {
-    format!("printf '%s' \"$PATH\" > '{}'; {}", record.display(), result_script(summary))
+    format!("printf '%s\\n%s' \"$PATH\" \"$(command -v ssh)\" > '{}'; {}", record.display(), result_script(summary))
   };
   let stack = Stack::start_with(
     vec![
@@ -1626,17 +1627,14 @@ async fn worker_and_review_runs_put_the_gh_wrapper_first_on_path() -> anyhow::Re
   let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).context("checkout root exists")?;
   let wrapper_dir = checkout.join("rust/crates/runtime/agents/gh_wrapper");
   let guard_dir = checkout.join("rust/crates/runtime/tasks/git_stash_guard");
-  let expected_head = format!("{}:{}:", wrapper_dir.display(), guard_dir.display());
-  let worker_path_text = fs::read_to_string(worker_path)?;
-  assert!(
-    worker_path_text.starts_with(&expected_head),
-    "worker PATH {worker_path_text:?} starts with {expected_head:?}"
-  );
-  let review_path_text = fs::read_to_string(review_path)?;
-  assert!(
-    review_path_text.starts_with(&expected_head),
-    "review PATH {review_path_text:?} starts with {expected_head:?}"
-  );
+  let ssh_guard_dir = checkout.join("rust/crates/runtime/agents/ssh_guard");
+  let expected_head = format!("{}:{}:{}:", wrapper_dir.display(), guard_dir.display(), ssh_guard_dir.display());
+  for (label, record) in [("worker", worker_path), ("review", review_path)] {
+    let record = fs::read_to_string(record)?;
+    let (path_text, resolved_ssh) = record.split_once('\n').context("the run records its PATH and its ssh")?;
+    assert!(path_text.starts_with(&expected_head), "{label} PATH {path_text:?} starts with {expected_head:?}");
+    assert_eq!(resolved_ssh, ssh_guard_dir.join("ssh").display().to_string(), "{label} ssh resolves to the guard");
+  }
   Ok(())
 }
 

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
@@ -14,8 +14,8 @@ use charliebot_registry::backend::Env;
 use charliebot_registry::context::{FeatureContext, StartupState, StartupStop};
 use futures_util::future::BoxFuture;
 
-use crate::gh_wrapper;
 use crate::transport::cgroup;
+use crate::{gh_wrapper, ssh_guard};
 
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
 /// GitHub credentials and the token command the server process may carry. The wrapper owns the App token when the
@@ -30,15 +30,17 @@ pub struct AgentBaseEnvironment {
   pub values: Env,
 }
 
-/// Rewrite a supplied server environment with the agent `gh` wrapper and the running server's directory first on
-/// agent PATH.
+/// Rewrite a supplied server environment with the agent `gh` wrapper, the agent `ssh` guard and the running server's
+/// directory first on agent PATH, in that order.
 pub fn agent_environment(
   inherited: &Env,
   server_bin_dir: &Path,
   gh_wrapper_dir: &Path,
+  ssh_guard_dir: &Path,
 ) -> anyhow::Result<AgentBaseEnvironment> {
   require_agent_cli(server_bin_dir)?;
   gh_wrapper::require_installed(gh_wrapper_dir)?;
+  ssh_guard::require_installed(ssh_guard_dir)?;
   let Some(path) = inherited.get("PATH") else {
     bail!("PATH is not set in the server environment; the agent environment places the server binary directory on it");
   };
@@ -46,8 +48,9 @@ pub fn agent_environment(
   for name in ACTIVATION_VARIABLES.into_iter().chain(GITHUB_ENVIRONMENT_VARIABLES) {
     values.remove(name);
   }
-  let mut rewritten_entries = vec![gh_wrapper_dir.to_path_buf(), server_bin_dir.to_path_buf()];
-  rewritten_entries.extend(env::split_paths(path).filter(|entry| entry != server_bin_dir && entry != gh_wrapper_dir));
+  let leading = [gh_wrapper_dir, ssh_guard_dir, server_bin_dir];
+  let mut rewritten_entries: Vec<PathBuf> = leading.iter().map(|dir| dir.to_path_buf()).collect();
+  rewritten_entries.extend(env::split_paths(path).filter(|entry| !leading.contains(&entry.as_path())));
   let rewritten_path = env::join_paths(&rewritten_entries)
     .context("the agent PATH entries join with the path separator")?
     .into_string()
@@ -80,8 +83,12 @@ fn require_agent_cli(server_bin_dir: &Path) -> anyhow::Result<()> {
 ///
 /// The startup value carries no App token command: [`spawn_base_environment`] adds the command the live config holds
 /// when it builds each spawn's environment.
-pub fn agent_base_environment(server_bin_dir: &Path, gh_wrapper_dir: &Path) -> anyhow::Result<AgentBaseEnvironment> {
-  agent_environment(&process_environment()?, server_bin_dir, gh_wrapper_dir)
+pub fn agent_base_environment(
+  server_bin_dir: &Path,
+  gh_wrapper_dir: &Path,
+  ssh_guard_dir: &Path,
+) -> anyhow::Result<AgentBaseEnvironment> {
+  agent_environment(&process_environment()?, server_bin_dir, gh_wrapper_dir, ssh_guard_dir)
 }
 
 /// The agent environment of one spawn: the startup environment plus the App token command the live config holds.
@@ -191,6 +198,18 @@ mod tests {
     directory
   }
 
+  /// An ssh guard directory with an executable stub script, as `require_installed` expects it.
+  fn ssh_guard_dir_under(root: &Path) -> PathBuf {
+    let directory = root.join("ssh-guard");
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("ssh");
+    fs::write(&script, "test fixture; this file is not run\n").unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    directory
+  }
+
   #[test]
   fn places_the_gh_wrapper_and_server_binary_dir_first_and_removes_activation() {
     let root = tempfile::tempdir().unwrap();
@@ -198,6 +217,7 @@ mod tests {
     fs::create_dir_all(&venv_bin).unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
     let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     std::os::unix::fs::symlink(root.path().join("venv"), root.path().join("venv-link")).unwrap();
     let tools = root.path().join("tools");
     let system = root.path().join("system");
@@ -222,7 +242,7 @@ mod tests {
       ("KEPT".to_string(), "value".to_string()),
     ]);
 
-    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap();
+    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap();
 
     assert!(!rewritten.values.contains_key("VIRTUAL_ENV"));
     assert!(!rewritten.values.contains_key("UV_RUN_RECURSION_DEPTH"));
@@ -231,11 +251,13 @@ mod tests {
     assert!(!rewritten.values.contains_key(gh_wrapper::TOKEN_COMMAND_VAR));
     let path_entries: Vec<_> = env::split_paths(std::ffi::OsStr::new(&rewritten.values["PATH"])).collect();
     assert_eq!(path_entries[0], gh_wrapper_dir);
-    assert_eq!(path_entries[1], server_bin_dir);
+    assert_eq!(path_entries[1], ssh_guard_dir);
+    assert_eq!(path_entries[2], server_bin_dir);
     assert_eq!(
       path_entries,
       [
         gh_wrapper_dir.clone(),
+        ssh_guard_dir.clone(),
         server_bin_dir.clone(),
         venv_bin,
         tools,
@@ -257,12 +279,13 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
     let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     let inherited = Env::from([
       ("PATH".to_string(), "/usr/bin".to_string()),
       ("DBUS_SESSION_BUS_ADDRESS".to_string(), "unix:path=/run/user/1001/bus".to_string()),
     ]);
 
-    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap();
+    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap();
 
     assert_eq!(rewritten.values["DBUS_SESSION_BUS_ADDRESS"], "disabled:");
   }
@@ -272,15 +295,16 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
     let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     let inherited = Env::from([
       ("PATH".to_string(), format!("/usr/bin:{}", server_bin_dir.display())),
       ("PYDANTIC_DISABLE_PLUGINS".to_string(), "custom".to_string()),
     ]);
 
-    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap();
+    let rewritten = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap();
 
     let entries: Vec<_> = env::split_paths(std::ffi::OsStr::new(&rewritten.values["PATH"])).collect();
-    assert_eq!(entries, [gh_wrapper_dir, server_bin_dir, PathBuf::from("/usr/bin")]);
+    assert_eq!(entries, [gh_wrapper_dir, ssh_guard_dir, server_bin_dir, PathBuf::from("/usr/bin")]);
     assert_eq!(rewritten.values["PYDANTIC_DISABLE_PLUGINS"], "custom");
   }
 
@@ -290,10 +314,11 @@ mod tests {
     let server_bin_dir = root.path().join("release");
     fs::create_dir_all(&server_bin_dir).unwrap();
     let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
     let expected_path = server_bin_dir.join("charliebot");
 
-    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap_err();
 
     assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
 
@@ -301,7 +326,7 @@ mod tests {
     let mut permissions = fs::metadata(&expected_path).unwrap().permissions();
     permissions.set_mode(0o644);
     fs::set_permissions(&expected_path, permissions).unwrap();
-    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap_err();
 
     assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
     assert!(format!("{error:#}").contains("executable file"), "{error:#}");
@@ -313,10 +338,11 @@ mod tests {
     let server_bin_dir = server_bin_dir_under(root.path());
     let gh_wrapper_dir = root.path().join("gh-wrapper");
     fs::create_dir(&gh_wrapper_dir).unwrap();
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
     let expected_path = gh_wrapper_dir.join("gh");
 
-    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap_err();
 
     assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
 
@@ -324,10 +350,25 @@ mod tests {
     let mut permissions = fs::metadata(&expected_path).unwrap().permissions();
     permissions.set_mode(0o644);
     fs::set_permissions(&expected_path, permissions).unwrap();
-    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap_err();
 
     assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
     assert!(format!("{error:#}").contains("executable file"), "{error:#}");
+  }
+
+  #[test]
+  fn missing_ssh_guard_fails_with_the_expected_path() {
+    let root = tempfile::tempdir().unwrap();
+    let server_bin_dir = server_bin_dir_under(root.path());
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = root.path().join("ssh-guard");
+    fs::create_dir(&ssh_guard_dir).unwrap();
+    let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+    let expected_path = ssh_guard_dir.join("ssh");
+
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap_err();
+
+    assert!(format!("{error:#}").contains(&expected_path.display().to_string()), "{error:#}");
   }
 
   #[test]
@@ -335,9 +376,10 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
     let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     let inherited = Env::from([("KEPT".to_string(), "value".to_string())]);
 
-    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap_err();
+    let error = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap_err();
 
     assert!(error.to_string().contains("PATH"), "{error:#}");
   }
@@ -347,8 +389,9 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
     let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
-    let mut agent = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir).unwrap();
+    let mut agent = agent_environment(&inherited, &server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap();
     let home = tempfile::tempdir().unwrap();
     fs::write(
       home.path().join(charliebot_core::config::CONFIG_FILENAME),
@@ -434,6 +477,7 @@ mod tests {
     fs::create_dir_all(&venv_bin).unwrap();
     let server_bin_dir = server_bin_dir_under(root.path());
     let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     let output = root.path().join("grandchild.env");
     let path = [venv_bin.display().to_string(), "/usr/bin".to_string(), "/bin".to_string()].join(":");
 
@@ -446,6 +490,7 @@ mod tests {
       .env("GH_TOKEN", "operator-token")
       .env(SERVER_BIN_DIR_ENV, &server_bin_dir)
       .env("CHARLIEBOT_TEST_GH_WRAPPER_DIR", &gh_wrapper_dir)
+      .env("CHARLIEBOT_TEST_SSH_GUARD_DIR", &ssh_guard_dir)
       .env(CHILD_OUTPUT_ENV, &output)
       .status()
       .unwrap();
@@ -467,7 +512,8 @@ mod tests {
     let agent_vars: BTreeMap<&str, &str> = agent.lines().filter_map(|line| line.split_once('=')).collect();
     let entries: Vec<&str> = agent_vars["PATH"].split(':').collect();
     assert_eq!(entries[0], gh_wrapper_dir.to_str().unwrap());
-    assert_eq!(entries[1], server_bin_dir.to_str().unwrap());
+    assert_eq!(entries[1], ssh_guard_dir.to_str().unwrap());
+    assert_eq!(entries[2], server_bin_dir.to_str().unwrap());
     assert!(entries.contains(&venv_bin.to_str().unwrap()), "the venv bin stays on PATH: {entries:?}");
     assert!(!agent_vars.contains_key("VIRTUAL_ENV"));
     assert!(!agent_vars.contains_key("UV_RUN_RECURSION_DEPTH"));
@@ -482,8 +528,9 @@ mod tests {
   fn startup_child(output: &Path) {
     let server_bin_dir = PathBuf::from(env::var_os(SERVER_BIN_DIR_ENV).unwrap());
     let gh_wrapper_dir = PathBuf::from(env::var_os("CHARLIEBOT_TEST_GH_WRAPPER_DIR").unwrap());
+    let ssh_guard_dir = PathBuf::from(env::var_os("CHARLIEBOT_TEST_SSH_GUARD_DIR").unwrap());
 
-    let agent = agent_base_environment(&server_bin_dir, &gh_wrapper_dir).unwrap();
+    let agent = agent_base_environment(&server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir).unwrap();
 
     let grandchild = Command::new("/usr/bin/env").output().unwrap();
     fs::write(output, grandchild.stdout).unwrap();

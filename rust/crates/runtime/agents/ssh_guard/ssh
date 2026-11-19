@@ -1,0 +1,59 @@
+#!/bin/sh
+# ssh - agent guard: every ssh that an agent process starts by name runs non-interactive and bounded.
+#
+# agent_environment (rust/crates/runtime/agents/src/agent_environment.rs) puts this directory on the PATH of every
+# agent process, right after the gh wrapper. The script prepends three options and runs the real ssh found on PATH
+# without this directory:
+#
+#   -o BatchMode=yes            no prompt: a login that needs a person fails at once with exit 255
+#   -o ServerAliveInterval=15   probe the server every 15 seconds
+#   -o ServerAliveCountMax=3    drop the connection after 3 unanswered probes, about 45 seconds
+#
+# ssh takes the first value of each parameter, and command-line options come before configuration files, so these
+# options win over the caller's own -o values. A healthy server answers every probe, so a long command that prints
+# nothing keeps running.
+#
+# A caller that names ssh by an absolute path, or rewrites PATH before it starts ssh, bypasses the guard.
+
+set -u
+
+# cd must not reroute or print: the self_dir lookup below needs plain chdir semantics.
+unset CDPATH
+
+# Unset PATH is treated as empty: the guard then fails below instead of searching the default path.
+PATH=${PATH:-}
+
+self_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+
+# Drop this directory from PATH everywhere it appears, preserving the other entries in order. Empty entries name
+# the current directory and stay empty.
+path_rest=$PATH
+new_path=''
+path_sep=''
+while :; do
+  case $path_rest in
+    *:*)
+      path_entry=${path_rest%%:*}
+      path_rest=${path_rest#*:}
+      path_more=1
+      ;;
+    *)
+      path_entry=$path_rest
+      path_more=0
+      ;;
+  esac
+  if [ "$path_entry" != "$self_dir" ]; then
+    new_path=$new_path$path_sep$path_entry
+    path_sep=:
+  fi
+  [ "$path_more" = 1 ] || break
+done
+PATH=$new_path
+export PATH
+
+if ! real_ssh=$(command -v ssh); then
+  echo "ssh guard: no ssh on the PATH outside $self_dir" >&2
+  exit 127
+fi
+
+exec "$real_ssh" -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$@"

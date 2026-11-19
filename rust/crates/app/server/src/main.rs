@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 use charliebot_agents::agent_environment::{self, AgentBaseEnvironment};
 use charliebot_agents::gh_wrapper;
 use charliebot_agents::local_work_guard;
+use charliebot_agents::ssh_guard;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
@@ -510,8 +511,12 @@ struct StateParts {
 fn replace_environment() -> Result<(RepoRoot, AgentBaseEnvironment), String> {
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
   let server_bin_dir = launch_bin_dir()?;
-  let agent_base = agent_environment::agent_base_environment(&server_bin_dir, &gh_wrapper::dir_under(repo_root.path()))
-    .map_err(|error| format!("{error:#}"))?;
+  let agent_base = agent_environment::agent_base_environment(
+    &server_bin_dir,
+    &gh_wrapper::dir_under(repo_root.path()),
+    &ssh_guard::dir_under(repo_root.path()),
+  )
+  .map_err(|error| format!("{error:#}"))?;
   Ok((repo_root, agent_base))
 }
 
@@ -770,6 +775,14 @@ mod tests {
   }
 
   /// A wrapper directory with an executable stub script, as `require_installed` expects it.
+  /// An ssh guard directory with an executable stub script, as `require_installed` expects it.
+  fn ssh_guard_dir_under(root: &Path) -> PathBuf {
+    let directory = root.join("ssh-guard");
+    fs::create_dir_all(&directory).unwrap();
+    write_executable(&directory.join("ssh"));
+    directory
+  }
+
   fn gh_wrapper_dir_under(root: &Path) -> PathBuf {
     let directory = root.join("gh-wrapper");
     fs::create_dir_all(&directory).unwrap();
@@ -784,6 +797,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let (release, current) = release_layout(root.path());
     let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let ssh_guard_dir = ssh_guard_dir_under(root.path());
     let cwd = root.path().join("cwd");
     fs::create_dir_all(&cwd).unwrap();
 
@@ -793,7 +807,8 @@ mod tests {
 
     let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
     let rewritten =
-      charliebot_agents::agent_environment::agent_environment(&inherited, &launch_dir, &gh_wrapper_dir).unwrap();
+      charliebot_agents::agent_environment::agent_environment(&inherited, &launch_dir, &gh_wrapper_dir, &ssh_guard_dir)
+        .unwrap();
     let entries: Vec<_> = std::env::split_paths(OsStr::new(&rewritten.values["PATH"])).collect();
     assert_eq!(entries[0], gh_wrapper_dir);
     assert_eq!(entries[1], current);

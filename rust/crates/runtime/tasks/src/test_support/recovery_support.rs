@@ -673,13 +673,23 @@ impl Stack {
     Stack::assemble(home, cfg, registry(None)?).await
   }
 
-  /// An agent environment whose PATH starts with the checkout's `gh` wrapper, as the server builds.
-  fn gh_wrapper_env(checkout: &Path, path: &str) -> Env {
-    let wrapper_dir = charliebot_agents::gh_wrapper::dir_under(checkout);
-    Env::from([
-      ("PATH".to_string(), format!("{}:{path}", wrapper_dir.display())),
-      (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper_dir.join("gh").display().to_string()),
-    ])
+  /// The agent base environment the server builds with `agent_environment`: `path` follows the checkout's `gh` wrapper
+  /// and ssh guard, and the agent CLI is a stub under `home`.
+  fn agent_base_env(home: &Path, checkout: &Path, path: &str) -> anyhow::Result<Env> {
+    use std::os::unix::fs::PermissionsExt;
+    let server_bin_dir = home.join("release");
+    std::fs::create_dir_all(&server_bin_dir)?;
+    let cli = server_bin_dir.join("charliebot");
+    std::fs::write(&cli, "#!/bin/sh\n")?;
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))?;
+    let inherited = Env::from([("PATH".to_string(), path.to_string())]);
+    let base = charliebot_agents::agent_environment::agent_environment(
+      &inherited,
+      &server_bin_dir,
+      &charliebot_agents::gh_wrapper::dir_under(checkout),
+      &charliebot_agents::ssh_guard::dir_under(checkout),
+    )?;
+    Ok(base.values)
   }
 
   async fn assemble(home: Arc<TempDir>, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
@@ -725,7 +735,8 @@ impl Stack {
       .nth(4)
       .context("tasks crate manifest has no repository root ancestor")?;
     let startup = Arc::new(StartupState::default());
-    startup.insert(AgentBaseEnvironment { values: Stack::gh_wrapper_env(checkout, "/usr/bin") })?;
+    startup
+      .insert(AgentBaseEnvironment { values: Stack::agent_base_env(&cfg.charliebot_home, checkout, "/usr/bin")? })?;
     startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
     startup.insert(RotationPositions::default())?;
     startup.insert(BackendPool::new(

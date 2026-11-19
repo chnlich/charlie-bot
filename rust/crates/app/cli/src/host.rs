@@ -12,6 +12,7 @@ use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::gh_wrapper;
 use charliebot_agents::model_pool::{LaneStart, RotationPositions};
+use charliebot_agents::ssh_guard;
 use charliebot_core::home;
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 
@@ -32,7 +33,11 @@ pub fn compose() -> anyhow::Result<CliHost> {
 fn compose_with(home: &Path, repo_root: &Path, server_bin_dir: &Path) -> anyhow::Result<CliHost> {
   let registry = charliebot_packages::registry()?;
   let cfg = registry.load_config(home)?;
-  let mut base_env = agent_environment::agent_base_environment(server_bin_dir, &gh_wrapper::dir_under(repo_root))?;
+  let mut base_env = agent_environment::agent_base_environment(
+    server_bin_dir,
+    &gh_wrapper::dir_under(repo_root),
+    &ssh_guard::dir_under(repo_root),
+  )?;
   gh_wrapper::apply_token_command(&mut base_env.values, cfg.github.app_token_command.as_deref());
   let availability = Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home)?);
   let registry = Arc::new(registry);
@@ -72,6 +77,9 @@ mod tests {
     let wrapper_dir = gh_wrapper::dir_under(&repo_root);
     fs::create_dir_all(&wrapper_dir).unwrap();
     write_executable(&wrapper_dir.join("gh"), "#!/bin/sh\n");
+    let ssh_guard_dir = ssh_guard::dir_under(&repo_root);
+    fs::create_dir_all(&ssh_guard_dir).unwrap();
+    write_executable(&ssh_guard_dir.join("ssh"), "#!/bin/sh\n");
     let server_bin_dir = root.path().join("release");
     fs::create_dir(&server_bin_dir).unwrap();
     write_executable(&server_bin_dir.join("charliebot"), "test fixture; this file is not run\n");
@@ -81,7 +89,8 @@ mod tests {
     assert_eq!(host.base_env.values[gh_wrapper::WRAPPER_PATH_VAR], wrapper_dir.join("gh").display().to_string());
     let entries: Vec<PathBuf> = std::env::split_paths(&host.base_env.values["PATH"]).collect();
     assert_eq!(entries[0], wrapper_dir);
-    assert_eq!(entries[1], server_bin_dir);
+    assert_eq!(entries[1], ssh_guard_dir);
+    assert_eq!(entries[2], server_bin_dir);
     assert_eq!(
       host.base_env.values[gh_wrapper::TOKEN_COMMAND_VAR],
       charliebot_core::paths::expanduser("~/synthetic/app-token-command")

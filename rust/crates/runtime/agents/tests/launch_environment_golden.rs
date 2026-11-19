@@ -49,6 +49,7 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   fs::write(system_bin.join("probe.json"), json!({"codex": [{"exit": 0}]}).to_string()).unwrap();
   let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
   let gh_wrapper_dir = charliebot_agents::gh_wrapper::dir_under(&repository);
+  let ssh_guard_dir = charliebot_agents::ssh_guard::dir_under(&repository);
   let cases = cases(&venv_bin, &system_bin, &server_bin_dir);
   let python = run_golden_reference(&repository, &cases, root.path());
   let python_cases = python.as_array().expect("Python reference returns a case array");
@@ -63,7 +64,8 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
 
   for case in &cases {
     let rewritten =
-      agent_environment::agent_environment(&case.process_env, &case.server_bin_dir, &gh_wrapper_dir).unwrap();
+      agent_environment::agent_environment(&case.process_env, &case.server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir)
+        .unwrap();
     let startup = StartupState::default();
     startup.insert(rewritten).unwrap();
     let base = startup.require::<agent_environment::AgentBaseEnvironment>().unwrap();

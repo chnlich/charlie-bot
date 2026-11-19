@@ -3,6 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic, readPackageStatic } = require('./read_static');
+const { loadIconScripts } = require('./icon_context');
 
 const DIFF_COMMENTS_JS = readPackageStatic('features', 'diff_view', 'diff_comments.js');
 const COMMENT_POST_JS = readStatic('comment_post.js');
@@ -87,6 +88,7 @@ function loadDiffCommentsScript() {
     window,
   };
   vm.createContext(context);
+  loadIconScripts(context);
   vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
   vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
   vm.runInContext(DIFF_COMMENTS_JS, context, {filename: 'diff_comments.js'});

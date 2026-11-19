@@ -350,7 +350,7 @@
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `${PREFIX}-add`;
-    button.textContent = '+';
+    button.innerHTML = cbIcon('comment', 12);
     button.title = 'Add a line comment';
     button.setAttribute('aria-label', 'Add a line comment');
     button.addEventListener('mousedown', (event) => {

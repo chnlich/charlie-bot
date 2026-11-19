@@ -8,11 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; }
-    .spinner {
-      width: 18px; height: 18px; border-radius: 50%;
-      border: 2px solid #cbd5e1; border-top-color: #2563eb;
-      animation: spin 0.8s linear infinite;
-    }
+    .spinner { flex: 0 0 auto; color: #2563eb; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     /* Placeholder hints sit on white, where preflight's #9ca3af draws 2.54:1 and 12-14 px text
        needs 4.5:1. #64748b draws 4.76:1; the selector keeps preflight's element specificity so
@@ -128,9 +124,7 @@
   <!-- Top bar -->
   <header class="sticky top-0 z-10 bg-slate-50 border-b border-slate-200 flex items-center gap-3 px-4 py-3">
     <a href="/" class="back-link flex items-center gap-1.5 text-slate-600 hover:text-slate-900 transition-colors text-sm">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-      </svg>
+      {{ icon('back', 16) }}
       Back
     </a>
     <div class="h-4 w-px bg-slate-300"></div>
@@ -191,7 +185,7 @@
   <!-- Diff output -->
   <main class="p-4">
     <div id="loading" class="hidden items-center gap-2 text-sm text-slate-600">
-      <span class="spinner"></span>
+      {{ icon('loading', 18, 'spinner') }}
       <span>Loading files…</span>
     </div>
     <div id="error" class="hidden px-3 py-2 rounded bg-red-50 border border-red-300 text-red-700 text-sm"></div>
@@ -212,6 +206,7 @@
     <div id="diff-output"></div>
   </main>
 
+  <script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
   <script src="/static/features/diff_view/diff_page.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/comment_post.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/utils.js?v={{ static_asset_version|urlencode }}"></script>

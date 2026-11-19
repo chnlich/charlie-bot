@@ -460,11 +460,16 @@
       return row;
     }
 
-    function stripButton(gap, label, direction) {
+    function stripButton(gap, label, direction, icon) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'cbdx-expand';
       button.textContent = label;
+      if (icon) {
+        const mark = document.createElement('span');
+        mark.innerHTML = `${cbIcon(icon, 12)} `;
+        button.insertBefore(mark, button.firstChild);
+      }
       button.addEventListener('click', () => {
         if (direction === 'all') revealAll();
         else revealGap(gap, direction);
@@ -480,7 +485,7 @@
       const size = gap.newHi - gap.newLo + 1;
       const directionButtons = size <= EXPAND_STEP
         ? [stripButton(gap, `Expand ${size} ${size === 1 ? 'line' : 'lines'}`, 'whole')]
-        : [stripButton(gap, '↑ Expand up', 'up'), stripButton(gap, '↓ Expand down', 'down')];
+        : [stripButton(gap, 'Expand up', 'up', 'expand-up'), stripButton(gap, 'Expand down', 'down', 'expand-down')];
       const fileButton = stripButton(gap, 'Whole file', 'all');
       fileButton.className = 'cbdx-expand cbdx-whole';
       const count = document.createElement('span');
@@ -639,7 +644,7 @@
   // server-side per-file cap (used by the "load anyway" placeholder).
   async function loadFileInto(body, params, file, token, force) {
     body.innerHTML =
-      '<div class="px-3 py-2 text-xs text-slate-500 flex items-center gap-2"><span class="spinner"></span>Loading…</div>';
+      `<div class="px-3 py-2 text-xs text-slate-500 flex items-center gap-2">${cbIcon('loading', 18, 'spinner')}Loading…</div>`;
     let data;
     try {
       data = await fetchFileDiff(params, file.path, force, file.old_path);
@@ -697,11 +702,11 @@
     header.className =
       'diff-file-row w-full flex items-center gap-3 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-left';
 
-    // The mark turns a quarter when the row opens, so it carries the file's open state. slate-500 draws 4.55:1
-    // on the row's slate-50 and 4.34:1 on its hover tone, over the 3:1 floor a graphical mark keeps.
+    // The mark shows the open chevron while the row is open, so it carries the file's open state. slate-500 draws
+    // 4.55:1 on the row's slate-50 and 4.34:1 on its hover tone, over the 3:1 floor a graphical mark keeps.
     const chevron = document.createElement('span');
-    chevron.textContent = '▶';
-    chevron.className = 'diff-file-chevron text-slate-500 text-xs shrink-0 transition-transform';
+    chevron.innerHTML = cbIcon('disclosure', 12);
+    chevron.className = 'diff-file-chevron text-slate-500 text-xs shrink-0';
 
     const badge = statusBadge(file.status);
     badge.classList.add('diff-file-badge');
@@ -755,14 +760,14 @@
         // Collapse: drop the rendered diff so only expanded files stay in the DOM.
         body.innerHTML = '';
         body.classList.add('hidden');
-        chevron.style.transform = '';
+        chevron.innerHTML = cbIcon('disclosure', 12);
         body.dispatchEvent(new CustomEvent('cbdiff:file-collapsed', {
           bubbles: true,
           detail: { body, file },
         }));
         return;
       }
-      chevron.style.transform = 'rotate(90deg)';
+      chevron.innerHTML = cbIcon('disclosure-open', 12);
       body.classList.remove('hidden');
       loadFileInto(body, params, file, token, false);
     });

@@ -4,6 +4,7 @@ const vm = require('node:vm');
 
 const { createClassList } = require('./dom_element_stub');
 const { readPackageStatic } = require('./read_static');
+const { loadIconScripts } = require('./icon_context');
 
 const DIFF_PAGE_JS = readPackageStatic('features', 'diff_view', 'diff_page.js');
 
@@ -324,6 +325,7 @@ function loadDiffPage({search = '', repos = [], manifest = null, manifestFailure
     },
   };
   vm.createContext(context);
+  loadIconScripts(context);
   vm.runInContext(DIFF_PAGE_JS, context, {filename: 'diff_page.js'});
   return {elements, fetches, page: context.window.__cbdiffPage, output: elements.get('diff-output')};
 }
@@ -666,7 +668,7 @@ test('an expanded file carries a strip at the top, between-hunk and bottom gap',
   const rows = stripRows(page);
   assert.equal(rows.length, 3);
   const top = stripCell(rows[0]).querySelectorAll('button.cbdx-expand').map((button) => button.textContent);
-  assert.deepEqual(top, ['↑ Expand up', '↓ Expand down', 'Whole file']);
+  assert.deepEqual(top, ['Expand up', 'Expand down', 'Whole file']);
   assert.equal(gapCount(page, 0).textContent, '60 hidden lines');
   assert.equal(gapCount(page, 1).textContent, '50 hidden lines');
   assert.equal(gapCount(page, 2).textContent, '22 hidden lines');
@@ -702,13 +704,13 @@ test('expand down and expand up fill the top gap in line order with both sides\'
   };
   const page = await expandFirstFile({tree: sideBySideWrapper(), lines});
 
-  stripButton(stripRows(page)[0], '↓ Expand down').click();
+  stripButton(stripRows(page)[0], 'Expand down').click();
   await settle();
   let numbers = contentNumbers(page);
   assert.deepEqual(numbers.slice(0, 22), [...Array.from({length: 20}, (_, i) => String(i + 1)), '61', '62']);
   assert.equal(gapCount(page, 0).textContent, '40 hidden lines');
 
-  stripButton(stripRows(page)[0], '↑ Expand up').click();
+  stripButton(stripRows(page)[0], 'Expand up').click();
   await settle();
   numbers = contentNumbers(page);
   // The two revealed blocks keep line order, the second sitting against the hunk header.
@@ -750,19 +752,19 @@ test('the between-hunk and bottom gaps expand toward their own edges', async () 
   const page = await expandFirstFile({tree: sideBySideWrapper(), lines});
 
   // The middle gap expands up against the second hunk's header and down against the first hunk's tail.
-  stripButton(stripRows(page)[1], '↑ Expand up').click();
+  stripButton(stripRows(page)[1], 'Expand up').click();
   await settle();
   let numbers = contentNumbers(page);
   assert.deepEqual(numbers.slice(4, 24), Array.from({length: 20}, (_, i) => String(i + 95)));
 
-  stripButton(stripRows(page)[1], '↓ Expand down').click();
+  stripButton(stripRows(page)[1], 'Expand down').click();
   await settle();
   numbers = contentNumbers(page);
   assert.deepEqual(numbers.slice(4, 24), Array.from({length: 20}, (_, i) => String(i + 65)));
   assert.deepEqual(numbers.slice(24, 26), ['95', '96'], 'the up block keeps its place above the second hunk');
 
   // The bottom gap expands down from the last hunk's tail; the two lines left above then expand whole.
-  stripButton(stripRows(page)[2], '↓ Expand down').click();
+  stripButton(stripRows(page)[2], 'Expand down').click();
   await settle();
   numbers = contentNumbers(page);
   assert.deepEqual(numbers.slice(-20), Array.from({length: 20}, (_, i) => String(i + 119)));
@@ -861,7 +863,7 @@ test('Whole file reveals every line of both sides once', async () => {
   const page = await expandFirstFile({tree: sideBySideWrapper(), lines});
 
   // A mixed start: one partial expand, then the whole file from another strip.
-  stripButton(stripRows(page)[0], '↓ Expand down').click();
+  stripButton(stripRows(page)[0], 'Expand down').click();
   await settle();
   stripButton(stripRows(page)[2], 'Whole file').click();
   await settle();
@@ -890,7 +892,7 @@ test('a failed line read reports its error in the strip and reveals nothing', as
   };
   const page = await expandFirstFile({tree: sideBySideWrapper(), lines});
 
-  stripButton(stripRows(page)[0], '↓ Expand down').click();
+  stripButton(stripRows(page)[0], 'Expand down').click();
   await settle();
   const error = stripCell(stripRows(page)[0]).querySelector('.cbdx-gap-error');
   assert.match(error.textContent, /Failed to load lines: nope\.txt does not exist/);
@@ -911,7 +913,7 @@ test('the line-by-line format reveals rows carrying both sides\' numbers', async
   };
   const page = await expandFirstFile({tree: unifiedWrapper(), lines});
 
-  stripButton(stripRows(page)[0], '↓ Expand down').click();
+  stripButton(stripRows(page)[0], 'Expand down').click();
   await settle();
   const table = firstTable(page);
   const revealed = table.querySelectorAll('tr')[1];

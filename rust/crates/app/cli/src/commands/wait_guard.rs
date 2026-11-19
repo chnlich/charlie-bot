@@ -1,19 +1,25 @@
 //! The Claude Code `PreToolUse` hook for waits in Bash commands.
 //!
 //! A declared wait is the largest matching wait budget in one command: a sleep, a `tail --pid` wait, or a polling
-//! loop with a sleep in its body. A `charliebot session trigger` command declares zero seconds.
+//! loop with a sleep in its body. A `charliebot session trigger` command declares zero seconds outside an improve
+//! round. Inside a round the guard refuses it: the round's host has no server to register a wake, so the round's
+//! waits stay inside its run.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::sync::OnceLock;
 
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::improve_round;
 use fancy_regex::{Captures, Regex};
 
 use super::bash_hook::run_bash_guard;
 
 const WAIT_LIMIT_SECONDS: f64 = 60.0;
 const DENY_REASON: &str = "This command waits: it sleeps or repeats a check for more than 60 seconds. Run the work itself in the foreground in one call, or start the wait with `charliebot session trigger --cmd` and end your turn.";
+/// The refusal inside an improve round, which has no CharlieBot server and no wake: a trigger cannot register, and a
+/// wait stays inside the round's run.
+const ROUND_DENY_REASON: &str = "An improve round has no CharlieBot server and no wake, so a session trigger cannot register, and a wait stays inside this run: re-check in calls of 60 seconds or less until the check passes.";
 
 /// Read one Claude Code hook event and emit a deny decision when its Bash command waits too long.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
@@ -24,14 +30,28 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 fn run<R: Read, W: Write>(input: R, output: &mut W) -> Result<(), CliExit> {
-  run_bash_guard(input, output, |_event, command| {
-    let wait = declared_wait_seconds(command)?;
-    Ok((wait > WAIT_LIMIT_SECONDS).then_some(DENY_REASON))
-  })
+  let in_round = improve_round::in_improve_round()?;
+  run_bash_guard(input, output, |_event, command| refusal_reason(command, in_round))
+}
+
+/// The reason the guard refuses `command`, or `None` when the command runs. `in_round` is whether the process runs in
+/// an improve round, where the guard also refuses a session trigger.
+fn refusal_reason(command: &str, in_round: bool) -> Result<Option<&'static str>, String> {
+  if in_round && is_trigger_command(command)? {
+    return Ok(Some(ROUND_DENY_REASON));
+  }
+  if declared_wait_seconds(command)? <= WAIT_LIMIT_SECONDS {
+    return Ok(None);
+  }
+  Ok(Some(if in_round { ROUND_DENY_REASON } else { DENY_REASON }))
+}
+
+fn is_trigger_command(command: &str) -> Result<bool, String> {
+  Ok(command.contains("charliebot") && trigger_command_pattern().is_match(command).map_err(regex_error)?)
 }
 
 fn declared_wait_seconds(command: &str) -> Result<f64, String> {
-  if command.contains("charliebot") && trigger_command_pattern().is_match(command).map_err(regex_error)? {
+  if is_trigger_command(command)? {
     return Ok(0.0);
   }
   let mut wait = 0.0f64;
@@ -218,6 +238,25 @@ mod tests {
   replay_case!(python_range_with_nonzero_start_counts_all_iterations, 12);
   replay_case!(sleep_before_nonwaiting_loop_is_counted_once, 13);
   replay_case!(bounded_tail_pid_wait_stays_within_the_limit, 14);
+
+  /// Each case keeps its verdict outside a round. Inside one, the guard also refuses every session trigger, and each
+  /// refusal carries the in-run reason.
+  #[test]
+  fn each_wait_case_keeps_its_verdict_outside_a_round_and_refuses_the_trigger_inside_one() {
+    for (command, refuse) in WAIT_CASES {
+      let outside = refusal_reason(command, false).unwrap();
+      assert_eq!(outside.is_some(), refuse, "{command}");
+      if refuse {
+        assert_eq!(outside, Some(DENY_REASON), "{command}");
+      }
+      let inside = refusal_reason(command, true).unwrap();
+      let trigger = is_trigger_command(command).unwrap();
+      assert_eq!(inside.is_some(), refuse || trigger, "{command}");
+      if inside.is_some() {
+        assert_eq!(inside, Some(ROUND_DENY_REASON), "{command}");
+      }
+    }
+  }
 
   #[test]
   fn non_bash_hook_event_prints_nothing() {

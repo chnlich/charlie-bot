@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backend_availability::{self, BackendAvailability};
 use charliebot_agents::cli_base::CliHost;
 use charliebot_anthropic_compatible as anthropic_compatible;
 use charliebot_charlie_code as charlie_code;
@@ -242,8 +243,9 @@ fn script(events: &[Value], tail: &str) -> String {
   let mut commands = vec![":".to_string()];
   for event in events {
     let line = serde_json::to_string(event).expect("a JSON value serializes");
-    assert!(!line.contains('\''), "a scripted event line must not contain a single quote");
-    commands.push(format!("printf '%s\\n' '{line}'"));
+    // The line sits in single quotes, so each quote in it closes the quoting, writes an escaped quote, and reopens it.
+    let quoted = line.replace('\'', r"'\''");
+    commands.push(format!("printf '%s\\n' '{quoted}'"));
   }
   commands.push(tail.to_string());
   commands.join("; ")
@@ -300,6 +302,34 @@ fn rate_limit_info(status: &str, utilization: f64) -> Value {
 
 fn rate_limit(status: &str, utilization: f64) -> Value {
   json!({"type": ET::RATE_LIMIT_EVENT, "rate_limit_info": rate_limit_info(status, utilization)})
+}
+
+/// A rate-limit observation of the five-hour window that resets at `resets_at` (Unix seconds).
+fn rate_limit_resetting(status: &str, utilization: f64, resets_at: i64) -> Value {
+  json!({
+    "type": ET::RATE_LIMIT_EVENT,
+    "rate_limit_info": {
+      "status": status,
+      "rateLimitType": "five_hour",
+      "resetsAt": resets_at,
+      "unifiedWindows": {"five_hour": {"utilization": utilization}, "seven_day": {"utilization": 0.3}},
+    },
+  })
+}
+
+/// The errored result Claude Code writes when the login is rejected: a 429 with the limit's wording.
+fn rejected_result() -> Value {
+  json!({
+    "type": ET::RESULT,
+    "is_error": true,
+    "api_error_status": 429,
+    "result": "You've hit your 5-hour limit \u{b7} resets 3:50am (America/Los_Angeles)",
+  })
+}
+
+/// The errored result of a temporary backend failure: a 529 overload with its text.
+fn overloaded_result() -> Value {
+  json!({"type": ET::RESULT, "is_error": true, "api_error_status": 529, "result": "Internal server error"})
 }
 
 /// A reading taken at `minutes` before the fixed instant 2026-09-06 20:00 UTC, the instant the relay tests observe.
@@ -369,6 +399,17 @@ fn make_transcript(config_dir: &Path, session_id: &str) -> anyhow::Result<PathBu
 
 /// One `backends.options` entry of a test's configuration. A scripted option names its harness by `token`.
 fn option_yaml(id: &str, backend_type: &str, token: Option<&str>, account_pool: Option<&str>) -> String {
+  option_yaml_with_model(id, backend_type, "test-model", token, account_pool)
+}
+
+/// One option's YAML with its model named, so a test can give two options two rejection families.
+fn option_yaml_with_model(
+  id: &str,
+  backend_type: &str,
+  model: &str,
+  token: Option<&str>,
+  account_pool: Option<&str>,
+) -> String {
   let token = token.map(|token| format!("      {TOKEN_FIELD}: {token}\n")).unwrap_or_default();
   let pool = account_pool.map(|pool| format!("      account_pool: {pool}\n")).unwrap_or_default();
   let endpoint = if backend_type == "cc-anthropic-compatible" {
@@ -377,7 +418,7 @@ fn option_yaml(id: &str, backend_type: &str, token: Option<&str>, account_pool: 
     ""
   };
   let fields = format!("{token}{pool}{endpoint}");
-  format!("    - id: {id}\n      label: {id}\n      type: {backend_type}\n      model: test-model\n{fields}")
+  format!("    - id: {id}\n      label: {id}\n      type: {backend_type}\n      model: {model}\n{fields}")
 }
 
 /// The `config.yaml` of a test: the Claude accounts under the root with their credentials, the pools, and the options.
@@ -914,6 +955,195 @@ async fn test_worker_relay_does_not_compact_the_task_context() -> anyhow::Result
     let logged = read_events(&root.events_log())?;
     assert!(logged.iter().all(|event| !compaction.contains(&event["type"].as_str().unwrap_or_default())));
   }
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A rejected login moves the run; a row waits until no login can serve the model
+// ---------------------------------------------------------------------------
+
+/// Attaches the availability owner over the test's home, as the server does, so the test can read and write rows.
+fn attach_availability(setup: &Setup, root: &Root) -> anyhow::Result<()> {
+  setup.features.startup.insert(BackendAvailability::load(&root.home())?)?;
+  Ok(())
+}
+
+/// Records a failed run's quota failure the way the execution layer does, for the pooled option, and returns the row's
+/// reset.
+fn record_failure(setup: &Setup, resets_at: Option<UtcDateTime>, message: &str) -> anyhow::Result<OffsetDateTime> {
+  let availability = backend_availability::backend_availability(&setup.features)?;
+  availability
+    .record(&setup.cfg, &setup.features.registry, POOLED, resets_at, backend_availability::REASON_QUOTA_ERROR, message)?
+    .context("the failed run writes its row")
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_new_worker_run_rejected_on_main_moves_to_ext1_and_writes_no_row() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![
+    exits(&[assistant_text("working"), rate_limit("rejected", 1.0), rejected_result()], 1),
+    exits(&[assistant_text("done"), result()], 0),
+  ]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  attach_availability(&setup, &root)?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  assert_eq!(task_worker.run().await?, 0);
+
+  let builds = scripts.builds();
+  assert_eq!((account_label(&builds[0]), account_label(&builds[1])), (Some("main"), Some("ext-1")));
+  assert_eq!(task_worker.account_relays(), 1);
+  let availability = backend_availability::backend_availability(&setup.features)?;
+  assert!(availability.row(POOLED).is_none(), "a login with headroom is left, so the model writes no row");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_resumed_worker_run_rejected_on_main_relays_to_ext1_and_completes() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  // Resume builds the backend for the stream translator and for the exit scan, and each build takes one script. The
+  // relay's process is the third build, the only one that runs.
+  let scripts = Scripts::new(vec![String::new(), String::new(), exits(&[assistant_text("done"), result()], 0)]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  // The held process wrote its rejection to the raw log and exited, so the follow reads the log to its end.
+  let data = root.path().join("data");
+  fs::create_dir_all(&data)?;
+  let mut raw = String::new();
+  for event in [assistant_text("working"), rate_limit("rejected", 1.0), rejected_result()] {
+    raw.push_str(&format!("{}\n", serde_json::to_string(&event)?));
+  }
+  fs::write(data.join(RAW_LOG_NAME), raw)?;
+  let mut spec = setup.spec(&root, Some(POOLED), Some(CC_ID))?;
+  spec.held_native_id = Some(CC_ID.to_string());
+  let task_worker = setup.worker(spec)?;
+
+  assert_eq!(task_worker.resume(Arc::new(|| false), None).await?, 0);
+
+  let builds = scripts.builds();
+  assert_eq!(builds.len(), 3);
+  assert_eq!(account_label(&builds[2]), Some("ext-1"));
+  assert_eq!(task_worker.account_relays(), 1);
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_rejection_moves_the_run_to_the_login_with_headroom_and_the_next_run_starts_there() -> anyhow::Result<()>
+{
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![
+    exits(&[assistant_text("working"), rate_limit("rejected", 1.0), rejected_result()], 1),
+    exits(&[assistant_text("done"), result()], 0),
+    exits(&[assistant_text("next"), result()], 0),
+  ]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let first = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+  assert_eq!(first.run().await?, 0);
+
+  let next = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+  assert_eq!(next.run().await?, 0);
+
+  let builds = scripts.builds();
+  let labels: Vec<_> = builds.iter().map(account_label).collect();
+  assert_eq!(labels, [Some("main"), Some("ext-1"), Some("ext-1")]);
+  assert_eq!(next.account_relays(), 0, "the next run starts on the login with headroom, so it never relays");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_all_logins_rejected_writes_the_row_to_the_earliest_reset() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  // ext-1 resets two hours out and main three hours out, so the model's row runs to ext-1's reset, the earliest.
+  let ext_reset = (OffsetDateTime::now_utc() + TimeDuration::hours(2)).unix_timestamp();
+  let ext_info = rate_limit_resetting("rejected", 1.0, ext_reset)["rate_limit_info"].clone();
+  claude_accounts::observe_rate_limit(&state, "ext-1", &ext_info, None, None);
+  let scripts = Scripts::new(vec![exits(&[rate_limit("rejected", 1.0), rejected_result()], 1)]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  attach_availability(&setup, &root)?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  let refused = refusal(task_worker.run().await.expect_err("no login is left for the model"));
+  let until = record_failure(&setup, refused.resets_at, &refused.message)?;
+
+  assert_eq!(until, OffsetDateTime::from_unix_timestamp(ext_reset)?);
+  let availability = backend_availability::backend_availability(&setup.features)?;
+  assert_eq!(availability.out_until(POOLED), Some(until));
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_fable_week_rejection_holds_only_its_family() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  // A rejection below the whole window (0.95) holds the model's family only: the fable option moves, the opus one does not.
+  let scripts = Scripts::new(vec![
+    exits(&[assistant_text("working"), rate_limit("rejected", 0.95), rejected_result()], 1),
+    exits(&[assistant_text("done"), result()], 0),
+    exits(&[assistant_text("opus"), result()], 0),
+  ]);
+  let token = scripts.token.as_str();
+  let options = [
+    option_yaml_with_model(POOLED, "cc-claude", "claude-fable-5", Some(token), None),
+    option_yaml_with_model("opus-option", "cc-claude", "claude-opus-5", Some(token), None),
+  ];
+  let config = config_text(&root, &["main", "ext-1"], &[], &options)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let fable = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+  assert_eq!(fable.run().await?, 0);
+  let opus = setup.worker(setup.spec(&root, Some("opus-option"), Some(CC_ID))?)?;
+  assert_eq!(opus.run().await?, 0);
+
+  assert_eq!(account_label(&scripts.builds()[1]), Some("ext-1"), "the fable run moved to the other login");
+  assert!(claude_accounts::rejected_until(&state, "main", Some("claude-fable-5"), None).is_some());
+  assert!(claude_accounts::rejected_until(&state, "main", Some("claude-opus-5"), None).is_none());
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_a_temporary_529_result_keeps_the_thirty_minute_row() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![exits(&[assistant_text("working"), overloaded_result()], 1)]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  attach_availability(&setup, &root)?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  let error = task_worker.run().await.expect_err("an overloaded login fails the run");
+  let quota = error.downcast_ref::<QuotaExhaustedError>().context("the run ends in a quota failure")?;
+  assert_eq!(quota.failure(), charliebot_registry::backend::MemberFailure::Quota);
+  assert_eq!(scripts.builds().len(), 1, "a temporary failure is not relayed to another login");
+  let until = record_failure(&setup, None, &quota.to_string())?;
+
+  let remaining = until - OffsetDateTime::now_utc();
+  assert!(
+    remaining > TimeDuration::minutes(29) && remaining <= backend_availability::DEFAULT_COOLDOWN,
+    "the row runs for the cooldown, not to a pool reset: {remaining:?}"
+  );
+  let availability = backend_availability::backend_availability(&setup.features)?;
+  assert_eq!(
+    availability.row(POOLED).map(|row| row.reason),
+    Some(backend_availability::REASON_QUOTA_ERROR.to_string())
+  );
   Ok(())
 }
 

@@ -43,7 +43,7 @@ fn parse_id(id: &str) -> Option<RowId<'_>> {
 /// The rows whose check runs now. The row's JSON reports a check in progress from this set.
 static CHECKING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// Marks a row as checking until the guard drops, on every path.
+/// The guard that marks a row as checking until it drops, on every path.
 struct CheckGuard(String);
 
 impl CheckGuard {

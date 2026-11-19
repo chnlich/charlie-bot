@@ -263,7 +263,8 @@ static LIVE: LazyLock<Mutex<HashMap<String, LiveEntry>>> = LazyLock::new(|| Mute
 /// Login names whose one-off link probe currently owns the login process slot.
 static LINK_PROBES: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// Holds a login's process slot for one link probe. The probe is not a live attempt and never appears in a row.
+/// The guard that holds a login's process slot for one link probe. The probe is not a live attempt and never appears in
+/// a row.
 struct LinkProbeGuard(String);
 
 impl Drop for LinkProbeGuard {
@@ -461,7 +462,7 @@ async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io:
   }
 }
 
-/// Claim a login's process slot for a link probe unless a full attempt already owns it.
+/// The claim of a login's process slot for a link probe unless a full attempt already owns it.
 fn claim_link_probe(name: &str) -> io::Result<LinkProbeGuard> {
   let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
   if live.contains_key(name) {
@@ -1041,7 +1042,7 @@ fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
   Ok((master, unsafe { OwnedFd::from_raw_fd(slave) }))
 }
 
-/// Clears the terminal's echo of typed input.
+/// The clearing of the terminal's echo of typed input.
 fn disable_echo(fd: libc::c_int) -> io::Result<()> {
   // SAFETY: `termios` holds integers only, so the zeroed value is valid, and `tcgetattr` fills it for this descriptor.
   let mut term: libc::termios = unsafe { std::mem::zeroed() };

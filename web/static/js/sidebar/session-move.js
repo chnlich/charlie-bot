@@ -196,11 +196,13 @@ async function openSessionMovePicker(sessionId) {
     }
     pending = false;
   };
+  // A session choice may elide its name, so its full name is also the hover text.
   const choiceButton = (label, parentId) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = CHOICE_CLASS;
     button.textContent = label;
+    if (parentId !== null) button.title = label;
     button.addEventListener('click', () => pick(parentId));
     return button;
   };
@@ -210,6 +212,7 @@ async function openSessionMovePicker(sessionId) {
     const moved = rows.find((row) => row.id === sessionId);
     if (!moved) throw new Error(`Session ${sessionId} is in neither session list`);
     dialog.subject.textContent = `“${moved.name}”`;
+    dialog.subject.title = moved.name;
     const candidates = moveCandidates(rows, moved);
     // Top level sits first and stays while the search narrows the sessions: it names no session.
     const renderChoices = () => {

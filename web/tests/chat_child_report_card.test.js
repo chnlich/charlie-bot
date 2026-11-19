@@ -70,19 +70,21 @@ test('a short report with refs folds, keeps its refs in the markup, and does not
   assert.ok(html.includes('run:1') && html.includes('run:2'));
 });
 
-test('the button label names the full report and the refs', () => {
+test('the button label names the full report and the refs, with its disclosure mark', () => {
   const ctx = loadContext();
   const cases = [
-    [FOUR_LINES, [], 'Show full report ▾'],
-    [FOUR_LINES, ['run:1'], 'Show full report · 1 ref ▾'],
-    [FOUR_LINES, ['run:1', 'run:2'], 'Show full report · 2 refs ▾'],
-    [SHORT, ['run:1'], 'Show 1 ref ▾'],
-    [SHORT, ['run:1', 'run:2'], 'Show 2 refs ▾'],
+    [FOUR_LINES, [], 'Show full report'],
+    [FOUR_LINES, ['run:1'], 'Show full report · 1 ref'],
+    [FOUR_LINES, ['run:1', 'run:2'], 'Show full report · 2 refs'],
+    [SHORT, ['run:1'], 'Show 1 ref'],
+    [SHORT, ['run:1', 'run:2'], 'Show 2 refs'],
   ];
+  const closedMark = ctx.cbIcon('disclosure', 12);
+  const openMark = ctx.cbIcon('disclosure-open', 12);
   for (const [content, result_refs, label] of cases) {
     const html = ctx.renderMessage(childReport({content, result_refs}), 'sess-1');
-    assert.ok(html.includes(label), `label "${label}" in card`);
-    assert.ok(html.includes('Show less ▴'), 'expanded label in card');
+    assert.ok(html.includes(label + ' ' + closedMark), `label "${label}" with its closed mark in card`);
+    assert.ok(html.includes('Show less ' + openMark), 'expanded label with its open mark in card');
   }
 });
 

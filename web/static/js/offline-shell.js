@@ -61,8 +61,9 @@ function offlineShellSeedCopies() {
     });
   }
   if (INITIAL_SESSIONS !== null && INITIAL_LOAD_ERRORS.length === 0) {
+    const activeSessionId = SESSION_ID || new URL(location.href).searchParams.get('session');
     copies.push({
-      url: new URL('/api/sessions/?compact=1', location.href).href,
+      url: new URL(Sidebar.workspaceListingUrl(activeSessionId), location.href).href,
       body: INITIAL_SESSIONS,
     });
   }

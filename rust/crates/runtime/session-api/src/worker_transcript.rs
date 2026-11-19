@@ -19,7 +19,8 @@ use charliebot_store::projection::MessageProjection;
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   HostBoot, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
-  OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunKind, RunRecord,
+  OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunDisplayState, RunKind,
+  RunRecord,
 };
 use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult, path_error};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
@@ -27,8 +28,11 @@ use lru::LruCache;
 use serde_json::{Value, json};
 
 const WORKER_PROJECTION_MEMO_LIMIT: usize = 32;
-const FAILED_STATES: [&str; 3] = ["failed", "interrupted", "attention"];
-const SIGNALLABLE_STATES: [&str; 2] = ["running", "queued"];
+
+/// The display states whose run carries a failure cause worth showing.
+fn failed_state(state: RunDisplayState) -> bool {
+  matches!(state, RunDisplayState::Failed | RunDisplayState::Interrupted | RunDisplayState::Attention)
+}
 
 type Signature = Vec<Value>;
 type TranscriptMemo = Mutex<LruCache<String, (Signature, Arc<TranscriptEntry>)>>;
@@ -47,7 +51,7 @@ pub struct TranscriptEntry {
   pub projection: Arc<MessageProjection>,
   pub summary: Value,
   pub active_run_id: Option<String>,
-  states: BTreeMap<String, String>,
+  states: BTreeMap<String, RunDisplayState>,
 }
 
 /// The memoized worker transcript, rebuilt after a run-file signature or task-state change.
@@ -77,7 +81,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   let mut boot = HostBoot::default();
   let mut states = BTreeMap::new();
   for run in &run_records {
-    states.insert(run.id.clone(), node.display_state(run, &mut boot)?.as_str().to_string());
+    states.insert(run.id.clone(), node.display_state(run, &mut boot)?);
   }
 
   let cfg = store.config();
@@ -93,7 +97,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
     let run_dir = store.run_dir(session_id, &run.id);
     let mut run_events: Vec<ChatEvent> = read_run_events(store, &run_dir.join(RUN_EVENTS_NAME));
     let mut error = String::new();
-    if FAILED_STATES.contains(&state.as_str())
+    if failed_state(*state)
       && let Some((text, first_line, index, timestamp)) =
         aggregator::run_cause(&run_events.iter().collect::<Vec<&ChatEvent>>())
     {
@@ -113,12 +117,12 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
     let backend_label = cfg.get_backend_option(backend).map_or(backend, |option| option.label.as_str());
     transcript.push(Arc::new(ChatEvent::from_value(&run_header_event(
       run,
-      state,
+      *state,
       &error,
       backend_label,
       &launch_prompt_ref,
-      if state == "withheld" { withheld_reason(facts_events.as_slice(), &run.id) } else { None },
-      (!SIGNALLABLE_STATES.contains(&state.as_str())).then_some(tool_calls),
+      if *state == RunDisplayState::Withheld { withheld_reason(facts_events.as_slice(), &run.id) } else { None },
+      (!state.is_live()).then_some(tool_calls),
     ))));
     for event in shared {
       // The rewrite replaces the transcript's copy only: the summary map keeps the raw event.
@@ -131,7 +135,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
       };
       transcript.push(event);
     }
-    if !SIGNALLABLE_STATES.contains(&state.as_str()) {
+    if !state.is_live() {
       transcript.push(Arc::new(ChatEvent::from_value(&run_end_event(run))));
     }
   }
@@ -140,9 +144,10 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   if let Some(delivery) = delivery_event(&task_state, facts_events.as_slice(), &run_records)? {
     transcript.push(Arc::new(ChatEvent::from_value(&delivery)));
   }
-  let active_run_id = run_records.iter().rev().find_map(|run| {
-    states.get(&run.id).filter(|state| SIGNALLABLE_STATES.contains(&state.as_str())).map(|_| run.id.clone())
-  });
+  let active_run_id = run_records
+    .iter()
+    .rev()
+    .find_map(|run| states.get(&run.id).filter(|state| state.is_live()).map(|_| run.id.clone()));
   let revision = revision(&signature, &states, &task_state)?;
   let client_revision = client_revision(&signature, &run_records, &states, &task_state)?;
   let summary = build_summary(
@@ -244,7 +249,7 @@ fn store_read(store: &Store, path: &Path) -> StoreResult<Vec<ChatEvent>> {
 
 fn run_header_event(
   run: &RunRecord,
-  state: &str,
+  state: RunDisplayState,
   error: &str,
   backend_label: &str,
   launch_prompt_ref: &str,
@@ -260,14 +265,14 @@ fn run_header_event(
     "kind": kind,
     "backend": run.backend.as_deref().unwrap_or(""),
     (event_types::BACKEND_LABEL): backend_label,
-    "state": state,
+    "state": state.as_str(),
     "error": error,
     "tool_calls": tool_calls,
     "withheld": withheld,
     "started_at": started,
     "timestamp": started.or(terminal),
     "launched": run.started_at.is_some(),
-    (event_types::LAUNCH_FAILED): FAILED_STATES.contains(&state) && run.started_at.is_none(),
+    (event_types::LAUNCH_FAILED): failed_state(state) && run.started_at.is_none(),
     (event_types::TASK_SPEC_REF): run.task_spec_ref.as_deref().unwrap_or(""),
     (event_types::LAUNCH_PROMPT_REF): launch_prompt_ref,
   })
@@ -369,7 +374,7 @@ struct SummaryInputs<'a> {
   task_state: &'a str,
   facts_events: &'a [SharedChatEvent],
   run_records: &'a [RunRecord],
-  states: &'a BTreeMap<String, String>,
+  states: &'a BTreeMap<String, RunDisplayState>,
   run_events: &'a HashMap<String, Vec<SharedChatEvent>>,
   run_tools: &'a HashMap<String, usize>,
   run_causes: &'a HashMap<String, (String, String)>,
@@ -411,7 +416,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         "run_id": run.id,
         "kind": serde_json::to_value(run.kind).expect("run kind serializes"),
         (event_types::BACKEND_LABEL): backend_label,
-        "state": states.get(&run.id).map(String::as_str).unwrap_or("queued"),
+        "state": states.get(&run.id).map(|state| state.as_str()).unwrap_or(RunDisplayState::Queued.as_str()),
         "started_at": run.started_at.map(UtcDateTime::to_isoformat_text),
         "ended_at": run.ended_at.map(UtcDateTime::to_isoformat_text),
         "tool_calls": run_tools.get(&run.id).copied().unwrap_or(0),
@@ -420,7 +425,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
     .collect::<Vec<_>>();
 
   let newest = run_records.last();
-  let active = match newest.filter(|run| states.get(&run.id).is_some_and(|state| state == "running")) {
+  let active = match newest.filter(|run| states.get(&run.id).is_some_and(|state| *state == RunDisplayState::Running)) {
     Some(run) => {
       let events = run_event_refs(run_events, &run.id);
       json!({
@@ -449,7 +454,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
   let cause = run_records
     .iter()
     .rev()
-    .find(|run| states.get(&run.id).is_some_and(|state| FAILED_STATES.contains(&state.as_str())))
+    .find(|run| states.get(&run.id).is_some_and(|state| failed_state(*state)))
     .and_then(|run| {
       run_causes.get(&run.id).map(|(first_line, timestamp)| {
         json!({
@@ -526,8 +531,8 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
   }))
 }
 
-fn revision(signature: &[Value], states: &BTreeMap<String, String>, task_state: &str) -> StoreResult<String> {
-  let state_pairs: Vec<Value> = states.iter().map(|(run_id, state)| json!([run_id, state])).collect();
+fn revision(signature: &[Value], states: &BTreeMap<String, RunDisplayState>, task_state: &str) -> StoreResult<String> {
+  let state_pairs: Vec<Value> = states.iter().map(|(run_id, state)| json!([run_id, state.as_str()])).collect();
   let mut payload = signature.to_vec();
   payload.push(Value::Array(state_pairs));
   payload.push(Value::String(task_state.to_string()));
@@ -538,7 +543,7 @@ fn revision(signature: &[Value], states: &BTreeMap<String, String>, task_state: 
 fn client_revision(
   signature: &[Value],
   run_records: &[RunRecord],
-  states: &BTreeMap<String, String>,
+  states: &BTreeMap<String, RunDisplayState>,
   task_state: &str,
 ) -> StoreResult<String> {
   let mut stats = HashMap::new();
@@ -556,13 +561,15 @@ fn client_revision(
     .collect::<Vec<_>>();
   let state_values = run_records
     .iter()
-    .map(|run| states.get(&run.id).map(|state| json!(state)).unwrap_or(Value::Null))
+    .map(|run| states.get(&run.id).map(|state| json!(state.as_str())).unwrap_or(Value::Null))
     .collect::<Vec<_>>();
   let newest_index = run_records.len().saturating_sub(1);
   let event_stats = run_records
     .iter()
     .enumerate()
-    .filter(|(index, run)| *index != newest_index || states.get(&run.id).map(String::as_str) != Some("running"))
+    .filter(|(index, run)| {
+      *index != newest_index || !states.get(&run.id).is_some_and(|state| *state == RunDisplayState::Running)
+    })
     .map(|(_, run)| stats.get(&run.id).map(|(_, events)| events.clone()).unwrap_or(Value::Null))
     .collect::<Vec<_>>();
   let payload = json!([

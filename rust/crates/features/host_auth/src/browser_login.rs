@@ -11,7 +11,7 @@
 //! Only [`start_login`] and [`probe_link`] start a login command. [`probe_link`] ends its command as soon as the link
 //! prints or its timeout passes, and never runs a readback or records an approval. The status table otherwise runs the
 //! checks alone, through [`check_readback`] and the host probe. An ended attempt is recorded in `host_auth.json` by
-//! `login_state`; a live attempt lives in memory, in the one map of live attempts keyed by login name.
+//! `login_state`. A live attempt lives in memory, in the one map of live attempts keyed by login name.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
@@ -263,7 +263,8 @@ static LIVE: LazyLock<Mutex<HashMap<String, LiveEntry>>> = LazyLock::new(|| Mute
 /// Login names whose one-off link probe currently owns the login process slot.
 static LINK_PROBES: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// Holds a login's process slot for one link probe. The probe is not a live attempt and never appears in a row.
+/// The guard that holds a login's process slot for one link probe. The probe is not a live attempt and never appears in
+/// a row.
 struct LinkProbeGuard(String);
 
 impl Drop for LinkProbeGuard {
@@ -296,8 +297,8 @@ pub fn live_attempt(name: &str) -> Option<LiveAttempt> {
 ///
 /// A login with `use_pty` runs its command under a pseudo-terminal in a new session, so a keyboard-interactive prompt
 /// reaches that terminal rather than the server's. Such a login may name an `enter_after_pattern`, which writes one
-/// newline to the terminal on its first match, and a `user_code_pattern`, whose first capture group is appended to the
-/// approval link as `user_code=`.
+/// newline to the terminal on its first match. It may also name a `user_code_pattern`, whose first capture group is
+/// appended to the approval link as `user_code=`.
 pub async fn start_login(login: &BrowserLoginConfig) -> Result<String, StartFailed> {
   let state = host_auth::default_state_path()
     .map_err(|error| StartFailed(format!("could not resolve the host-auth state path: {error}")))?;
@@ -362,7 +363,7 @@ async fn await_link(link: &mut watch::Receiver<LinkState>) -> Result<String, Sta
 
 /// `give_input`: write one value and its newline to the login that waits for it, then drop the sink. A login with an
 /// `input_prompt` keeps that sink open while it waits for approval: its stdin pipe, or its terminal when `use_pty` is
-/// set. The value is written once; a second value finds no sink and is refused.
+/// set. The value is written once. A second value finds no sink and is refused.
 pub async fn give_input(name: &str, value: String) -> Result<(), InputRefused> {
   let core = {
     let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
@@ -461,7 +462,7 @@ async fn probe_link_within(login: &BrowserLoginConfig, timeout: Duration) -> io:
   }
 }
 
-/// Claim a login's process slot for a link probe unless a full attempt already owns it.
+/// The claim of a login's process slot for a link probe unless a full attempt already owns it.
 fn claim_link_probe(name: &str) -> io::Result<LinkProbeGuard> {
   let live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
   if live.contains_key(name) {
@@ -576,7 +577,7 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
 }
 
 /// The link a started attempt printed, recorded as a pass: an earlier link-probe failure does not outlive a start that
-/// worked. A failed record is logged; the attempt goes on.
+/// worked. A failed record is logged. The attempt goes on.
 async fn record_link_pass(core: &Arc<Mutex<AttemptCore>>) {
   let (paths, name) = {
     let state = core.lock().expect("the attempt record lock is never poisoned");
@@ -671,7 +672,7 @@ async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut Lo
 }
 
 /// The approval of a login that exited 0, recorded before its check runs, so the approval shows even when the check is
-/// slow. A failed record is logged; the attempt goes on.
+/// slow. A failed record is logged. The attempt goes on.
 async fn record_approval(core: &Arc<Mutex<AttemptCore>>) {
   let (paths, name) = {
     let state = core.lock().expect("the attempt record lock is never poisoned");
@@ -1041,7 +1042,7 @@ fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
   Ok((master, unsafe { OwnedFd::from_raw_fd(slave) }))
 }
 
-/// Clears the terminal's echo of typed input.
+/// The clearing of the terminal's echo of typed input.
 fn disable_echo(fd: libc::c_int) -> io::Result<()> {
   // SAFETY: `termios` holds integers only, so the zeroed value is valid, and `tcgetattr` fills it for this descriptor.
   let mut term: libc::termios = unsafe { std::mem::zeroed() };

@@ -173,12 +173,6 @@ pub struct Registry {
   /// The one reader of the derived Waiting on you items, which `features/cron` registers. Its rows have the open
   /// items' shape, and `features/web_reply` reads them through the registry.
   pub(crate) derived_waiting_items: Ledger<OpenWaitingItemsFn>,
-  /// The host each backend type's entries log into, keyed by the backend type, which the type's package registers.
-  pub(crate) backend_host_aliases: Ledger<BackendHostAliasFn>,
-  /// The launcher binary each backend type's entries name, keyed by the backend type, which the type's package
-  /// registers. A launcher carries the run to the host it decides, so the server prepares no worktree for such an
-  /// entry's runs and their briefs name none.
-  pub(crate) backend_cli_binaries: Ledger<BackendCliBinaryFn>,
   /// The one reader of the host login records, which `features/host_auth` registers.
   pub(crate) host_logins: Ledger<HostLoginsFn>,
   /// The one probe of a host, which `features/host_auth` registers.
@@ -241,8 +235,6 @@ impl Registry {
       draft_platforms,
       plan_registry,
       derived_waiting_items,
-      backend_host_aliases,
-      backend_cli_binaries,
       host_logins,
       host_probes,
       bound_rounds,
@@ -305,8 +297,6 @@ impl Registry {
     append_ledger_inventory(&mut inventory, draft_platforms);
     append_ledger_inventory(&mut inventory, plan_registry);
     append_ledger_inventory(&mut inventory, derived_waiting_items);
-    append_ledger_inventory(&mut inventory, backend_host_aliases);
-    append_ledger_inventory(&mut inventory, backend_cli_binaries);
     append_ledger_inventory(&mut inventory, host_logins);
     append_ledger_inventory(&mut inventory, host_probes);
     append_ledger_inventory(&mut inventory, bound_rounds);
@@ -563,14 +553,6 @@ pub struct OpenWaitingRow {
 /// The reader of the derived Waiting on you items, the whole home's list (`derived_waiting_items`).
 pub type OpenWaitingItemsFn = for<'a> fn(&'a FeatureContext) -> BoxFuture<'a, anyhow::Result<Vec<OpenWaitingRow>>>;
 
-/// The reader of the host that a backend type's entry logs into, from the entry's type-specific keys. The host is
-/// `Some(alias)` for an entry that names one (`host_auth_alias`), and `None` for one that names none.
-pub type BackendHostAliasFn = fn(&serde_yaml::Mapping) -> Result<Option<String>, String>;
-
-/// The reader of the launcher binary that a backend type's entry names, from the entry's type-specific keys. The
-/// binary is `Some(path)` for an entry that names one (`cli_binary`), and `None` for one that names none.
-pub type BackendCliBinaryFn = fn(&serde_yaml::Mapping) -> Result<Option<String>, String>;
-
 /// One probed host's login record as `features/host_auth` keeps it in `host_auth.json`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostLogin {
@@ -719,6 +701,16 @@ pub type UsageResolverConstructor = Arc<dyn Fn(&UsageResolverHost) -> Arc<dyn Us
 /// layer and the Claude factory read it, so they match this name instead of spelling it.
 pub const EXTRA_FLAGS_BACKEND_KWARG: &str = "extra_flags";
 
+/// Where a round's agent process starts: the improve launcher of the served checkout, which carries the process to
+/// `host` and runs it there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteLaunch {
+  /// The launcher, `dev/improve/remote-launch.sh` under the checkout the server serves.
+  pub launcher: PathBuf,
+  /// The ssh alias of the host the round runs on. The launcher reads it as `IMPROVE_REMOTE_HOST`.
+  pub host: String,
+}
+
 /// The keyword arguments the runtime passes to a backend factory: the shared launch arguments and the per-type ones.
 #[derive(Clone, Debug, Default)]
 pub struct LaunchArgs {
@@ -729,6 +721,8 @@ pub struct LaunchArgs {
   pub resume_session_id: Option<String>,
   pub log_dir: Option<PathBuf>,
   pub cgroup_session_id: Option<String>,
+  /// The launcher and host of a round that runs on another host. `None` runs the process on this host.
+  pub remote_launch: Option<RemoteLaunch>,
   /// The per-process arguments of the launch plan, such as `claude_session_id` or the account directory.
   pub backend_kwargs: Map<String, Value>,
   /// Whether this launch is a manager turn. The manager path sets it; a worker run and a one-shot call leave it false.
@@ -995,6 +989,20 @@ pub trait LaunchWatch: Send {
   fn observe(&mut self, event: &Value) -> bool;
   /// Whether the run continues in a next process, which `next_launch` plans; `true` continues.
   fn wants_next(&self, exit_code: i32, stderr: &str) -> bool;
+  /// Whether the watch has already decided that the run moves on: a rejection, a warning at the line, or a lost login.
+  /// The process's own error for the same quota then belongs to the watch, which relays when the process exits.
+  fn decided_relay(&self) -> bool {
+    false
+  }
+}
+
+/// What a backend's login pool says about a model whose member failed on its quota.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuotaOutlook {
+  /// Whether some login of the pool can still serve the model.
+  pub can_run: bool,
+  /// The earliest instant a login of the pool serves the model again, when a login states one.
+  pub earliest_reset: Option<UtcDateTime>,
 }
 
 /// A backend type's lifecycle (`backend_lifecycle.BackendLifecycle`). The defaults serve a type with no login pool:
@@ -1032,6 +1040,12 @@ pub trait BackendLifecycle: Send + Sync {
     _native_id: Option<&'a str>,
   ) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
     Box::pin(async { panic!("next_launch is called only for a lifecycle whose watch asks for a relay") })
+  }
+
+  /// The login pool's answer on a quota failure of `option`'s model: whether a login can still run it, and when the
+  /// earliest login recovers. `None` for a backend type with no login pool.
+  fn quota_outlook(&self, _option: &BackendOption, _cfg: &CharlieBotConfig) -> anyhow::Result<Option<QuotaOutlook>> {
+    Ok(None)
   }
 
   /// Cleans up after the last process of a round, whether the round succeeded or not.
@@ -1537,37 +1551,6 @@ impl Registry {
       .next()
       .copied()
       .ok_or_else(|| anyhow::anyhow!("no package registers the derived Waiting on you reader"))
-  }
-
-  /// The registration of the launcher-binary reader of a backend type (`cli_binary`).
-  pub fn backend_cli_binary(
-    &mut self,
-    backend_type: &'static str,
-    read: BackendCliBinaryFn,
-  ) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.backend_cli_binaries.insert(package, backend_type, read)
-  }
-
-  /// The launcher-binary reader of a backend type, or `None` when the type registered none: its entries name no
-  /// launcher, so their runs run where the server starts them.
-  pub fn backend_cli_binary_reader(&self, backend_type: &str) -> Option<BackendCliBinaryFn> {
-    self.backend_cli_binaries.get(backend_type).copied()
-  }
-
-  /// The registration of the host alias reader of a backend type (`host_auth_alias`).
-  pub fn backend_host_alias(
-    &mut self,
-    backend_type: &'static str,
-    read: BackendHostAliasFn,
-  ) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.backend_host_aliases.insert(package, backend_type, read)
-  }
-
-  /// The host alias reader of a backend type, or `None` when the type registered none: its entries name no host.
-  pub fn backend_host_alias_reader(&self, backend_type: &str) -> Option<BackendHostAliasFn> {
-    self.backend_host_aliases.get(backend_type).copied()
   }
 
   /// The registration of the reader of the host login records.

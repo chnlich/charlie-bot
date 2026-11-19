@@ -42,6 +42,9 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When a child session reports progress that changes this session's next milestone, set the new **Now**.
 - Before the end-of-turn status command, reconcile every Waiting on you item with the evidence and rules read this turn.
   Keep only decisions, actions or reviews that still need the user; rewrite changed items and remove resolved ones.
+- A done click settles an item that asks for an action or a fact that only the user has, or for the review of a delivered product;
+  any other item stays, and the reply asks the user for its answer.
+- When a done click leaves its item unsettled, keep the item and write the reason in its context with a status set.
 - When the session's goal is delivered and no Waiting on you item remains, archive your task as
   prompts/task_manager.md says. The user's next message reopens the task.
 
@@ -71,7 +74,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
   (BLOCK KIT, section 5).
 - When a decision needs a page, also write your recommendation and the evidence links on it.
 - Set the item's `link` to a page the browser renders. The set refuses a link it cannot render as a page.
-  Comments on the page reach this session.
+  Comments on a page shown inside the app reach the session that the app shows, or the session named in the page's address
+  when the app cannot report its session; comments on a page opened on its own reach the session named in its address.
 - When the item decides on a plan page or an understanding page, use that page.
   That page already holds the options, the recommendation and the evidence.
 - For an item whose options compare in the item text alone, name each option in `text` and `context`, and set
@@ -84,9 +88,16 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - The status set refuses a failing page before any cold read starts (the Cold-Read Gate in the `file-server` skill).
 - When the user acts on another page, such as a login page, link that page from the item's page.
   The item's page then holds the context, and the user reaches the action from it.
-- The user answers your Waiting on you items in your own session.
+- The user answers your Waiting on you items in your own session, by a typed message or by a click in the Status view.
+- A message whose first line is `[Status · Waiting on you]` carries the user's clicks.
+  Each `▸` line names one of your items by its list version, its `since` time and its position in your list.
+  When the line's list version is your current list version (`charliebot web status show`), its position names the item;
+  otherwise ask the user which item the click meant, and change nothing.
+  The `↳` line below it is the user's answer. `↳ Done` confirms that the user finished the item's own action, fact or review;
+  it gives no take off and no approval. Any other answer falls under Action Boundaries in `prompts/master.md`.
+- The Status view marks an item done from a click message while its list version matches your current Waiting on you list.
 - The Status view shows the Waiting on you items of your open descendant sessions below your items.
-- The Status view shows the **Now** of each open child session in a folded block below your items.
+- The Status view shows the **Now** of each open child session below your items.
 
 ## Delivery
 

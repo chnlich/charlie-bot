@@ -10,7 +10,7 @@ use memchr::memrchr;
 use serde_json::{Map, Value};
 use walkdir::WalkDir;
 
-use super::text::object_or_empty;
+use super::text::{object_or_empty, text_of};
 use super::usage_fields;
 
 /// The directory under the Codex home that holds the rollout files. Codex names it, so the name stays here.
@@ -158,10 +158,6 @@ pub fn walk_files(root: &Path, keep: impl Fn(&str) -> bool) -> io::Result<Vec<Pa
 fn walk_error(error: walkdir::Error) -> io::Error {
   let message = error.to_string();
   error.into_io_error().unwrap_or_else(|| io::Error::other(message))
-}
-
-pub fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-  map.get(key).and_then(Value::as_str)
 }
 
 /// Whether `name` is a rollout file's name: `rollout-<started>-<thread id>.jsonl`.

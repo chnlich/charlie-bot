@@ -2,18 +2,22 @@
 //! on the next member, as a retry run that carries the switch note.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use charliebot_agents::backend_availability;
-use charliebot_core::config::{BackendOption, PoolBilling, PoolConfig, PoolMember, PoolRule};
+use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::event_types;
+use charliebot_registry::registry::{MemberReading, MemberWindow};
+use charliebot_registry::{RegisterFn, Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
-use charliebot_store::run_records::{self, RunKind};
+use charliebot_store::run_records::{self, RunKind, RunOutcomeKind};
+use charliebot_store::session_fork::HISTORY_LOCATION_NOTE;
 use charliebot_store::{CreateTask, RunRecord, TaskCaller};
 use charliebot_tasks::handoff;
 use charliebot_tasks::master_queue::PersistAndBroadcastFn;
 use charliebot_tasks::master_run::{FINISH_ERROR_MESSAGE, FINISH_FAILURE_REASON, FINISH_QUOTA_EXHAUSTED};
-use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
+use charliebot_tasks::prompts::{HANDOFF_NOTE_FILENAME, LAUNCH_TEXT_FILENAME};
 use charliebot_tasks::test_support::recovery_support::{BACKEND_TYPE, Stack, script_option, synthetic_run};
 use serde_json::{Map, Value, json};
 
@@ -171,10 +175,11 @@ async fn wait_for_retry_launch(stack: &Stack, session_id: &str) -> anyhow::Resul
   }
 }
 
-async fn dispatch_turn(stack: &Stack, session_id: &str) -> anyhow::Result<()> {
+/// Dispatch one turn on the session and return the run it registered.
+async fn dispatch_turn(stack: &Stack, session_id: &str) -> anyhow::Result<String> {
   stack.dispatch.admit_input(session_id, event_types::USER, "fix the failing test", "user", json!({})).await?;
-  stack.dispatch.dispatch_pending(session_id).await?;
-  Ok(())
+  let decision = stack.dispatch.dispatch_pending(session_id).await?;
+  Ok(decision["run_id"].as_str().ok_or_else(|| anyhow::anyhow!("the dispatch names no run: {decision}"))?.to_string())
 }
 
 fn retry_of<'a>(runs: &'a [RunRecord], original: &RunRecord) -> &'a RunRecord {
@@ -233,6 +238,7 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert!(prompt.contains(&chat_log.display().to_string()), "{prompt}");
   assert!(prompt.contains(&archives.display().to_string()), "{prompt}");
   assert!(prompt.contains(&failed_run_dir.display().to_string()), "{prompt}");
+  assert!(prompt.contains(&format!("the failed run's directory at {}", failed_run_dir.display())), "{prompt}");
   assert!(prompt.contains("pool 'auto' switched from member-a to member-b"), "{prompt}");
   // A manager's retry carries the manager note: the orientation order and the sort. Its Goals sit in its prompt.
   assert!(
@@ -335,7 +341,15 @@ async fn an_exhausted_set_ends_the_turn_with_one_error_listing_every_member() ->
   let availability = backend_availability::backend_availability(&stack.features)?;
   let reset = UtcDateTime::parse("2999-01-02T03:04:05Z")?;
   for member in [MEMBER_A, MEMBER_B] {
-    availability.record(member, Some(reset), backend_availability::REASON_QUOTA_ERROR, QUOTA_ERROR)?;
+    let cfg = stack.features.config.get()?;
+    availability.record(
+      &cfg,
+      &stack.features.registry,
+      member,
+      Some(reset),
+      backend_availability::REASON_QUOTA_ERROR,
+      QUOTA_ERROR,
+    )?;
   }
   dispatch_turn(&stack, &session.id).await?;
   let runs = settle(&stack, &session.id).await?;
@@ -552,4 +566,454 @@ async fn wait_for_run(stack: &Stack, session_id: &str) -> anyhow::Result<RunReco
     // A run registers in tens of milliseconds, and the 0.1 s unit-test budget counts this sleep's full length.
     tokio::time::sleep(Duration::from_millis(2)).await;
   }
+}
+
+/// A scripted option billed as pay-as-you-go, the billing the Auto pool's fallback member has.
+fn payg(id: &str, script: &str) -> BackendOption {
+  BackendOption { billing: Some(PoolBilling::Payg), ..script_option(id, script) }
+}
+
+/// The tool calls of `quota_events`, then a normal finish: a turn whose handoff summary has the work it did.
+fn finished_turn_script() -> String {
+  let mut events = quota_events();
+  events.push(json!({"type":"result","subtype":"success","result":"done"}));
+  scripted_process(&events, 0)
+}
+
+/// An Auto stack whose members are `first` and `second` in that order, each with its own billing.
+async fn turn_start_stack(first: BackendOption, second: BackendOption) -> anyhow::Result<Stack> {
+  let stack = Stack::start_with_auto(vec![first, second], Vec::new(), auto_set()).await?;
+  stack.write_access_key()?;
+  Ok(stack)
+}
+
+/// The stack whose first member is pay-as-you-go and whose second member is a subscription. Its first turn runs on the
+/// first member, and its next turn returns to the second.
+async fn subscription_reset_stack() -> anyhow::Result<Stack> {
+  turn_start_stack(payg(MEMBER_A, &finished_turn_script()), subscription(MEMBER_B, &success_script())).await
+}
+
+/// Record `member` out until `reset`, or for the default cooldown when `reset` is `None`.
+fn record_out(stack: &Stack, member: &str, reset: Option<UtcDateTime>) -> anyhow::Result<()> {
+  let cfg = stack.features.config.get()?;
+  backend_availability::backend_availability(&stack.features)?.record(
+    &cfg,
+    &stack.features.registry,
+    member,
+    reset,
+    backend_availability::REASON_QUOTA_ERROR,
+    QUOTA_ERROR,
+  )?;
+  Ok(())
+}
+
+/// Record `member` out until a reset that has passed, so the member is selectable again.
+fn clear_out(stack: &Stack, member: &str) -> anyhow::Result<()> {
+  record_out(stack, member, Some(UtcDateTime::parse("2020-01-02T03:04:00+00:00")?))
+}
+
+/// Run the session's first turn on the pay-as-you-go member while the subscription member is out, then make the
+/// subscription member selectable again. Return the first turn's run id.
+async fn first_turn_on_payg(stack: &Stack, session_id: &str) -> anyhow::Result<String> {
+  record_out(stack, MEMBER_B, None)?;
+  let first = dispatch_turn(stack, session_id).await?;
+  settle(stack, session_id).await?;
+  clear_out(stack, MEMBER_B)?;
+  Ok(first)
+}
+
+/// Wait until the run's launch text is on disk, which the launch writes before its process starts.
+async fn wait_for_launch(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<()> {
+  let deadline = Instant::now() + TEST_DEADLINE;
+  loop {
+    if stack.store().run_dir(session_id, run_id).join(LAUNCH_TEXT_FILENAME).is_file() {
+      return Ok(());
+    }
+    anyhow::ensure!(Instant::now() < deadline, "the run {run_id} did not launch");
+    tokio::time::sleep(Duration::from_millis(2)).await;
+  }
+}
+
+fn launch_text(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<String> {
+  Ok(std::fs::read_to_string(stack.store().run_dir(session_id, run_id).join(LAUNCH_TEXT_FILENAME))?)
+}
+
+fn run_with_id<'a>(runs: &'a [RunRecord], run_id: &str) -> &'a RunRecord {
+  runs.iter().find(|run| run.id == run_id).expect("the run is recorded")
+}
+
+/// Assert the note a turn-start launch carries. The switch cause opens the note, which then names the history location
+/// and the absolute paths of the previous turn's directory. The launch text starts with the note the run's handoff file
+/// holds. Return the launch text.
+fn assert_turn_start_note(
+  stack: &Stack,
+  session_id: &str,
+  previous_run_id: &str,
+  launched_run_id: &str,
+  cause: &str,
+) -> anyhow::Result<String> {
+  let prompt = launch_text(stack, session_id, launched_run_id)?;
+  let note = std::fs::read_to_string(stack.store().run_dir(session_id, launched_run_id).join(HANDOFF_NOTE_FILENAME))?;
+  assert!(prompt.starts_with(&format!("[Context reset: {cause}.\n")), "{prompt}");
+  assert!(prompt.starts_with(&note), "the launch text opens with the handoff file's note:\n{prompt}\n--\n{note}");
+  assert!(note.contains(HISTORY_LOCATION_NOTE), "{note}");
+  let session_dir = stack.store().session_dir(session_id);
+  let chat_log = charliebot_store::layout::chat_events_path(&session_dir);
+  let archives = charliebot_store::layout::archives_dir(&session_dir);
+  let previous_dir = stack.store().run_dir(session_id, previous_run_id);
+  assert!(note.contains(&format!("the session chat log at {}", chat_log.display())), "{note}");
+  assert!(note.contains(&format!("its weekly archives at {}", archives.display())), "{note}");
+  assert!(note.contains(&format!("the previous run's directory at {}", previous_dir.display())), "{note}");
+  assert!(!note.contains("failed"), "the turn-start note never calls the previous run failed: {note}");
+  Ok(prompt)
+}
+
+/// Register the run a turn start registers under its first control lock, with the switch's intent written to its
+/// handoff file and no note or switch record after it: the state a crash between the two control locks leaves. Return
+/// the run.
+async fn register_pending_switch(
+  stack: &Stack,
+  session_id: &str,
+  from: &str,
+  to: &str,
+  reason: &str,
+) -> anyhow::Result<String> {
+  stack.dispatch.admit_input(session_id, event_types::USER, "fix the failing test", "user", json!({})).await?;
+  let run = {
+    let guard = stack.store().control_lock().await;
+    let record = RunRecord {
+      backend: Some(to.to_string()),
+      model: Some(format!("{to}-model")),
+      ..synthetic_run(session_id, "run-pending-switch", RunKind::ManagerTurn)
+    };
+    let run = stack.store().register_run_locked(&guard, session_id, record, None).await?;
+    stack.dispatch.claim_input_batch_locked(&guard, session_id, &run.id, None)?;
+    run
+  };
+  stack
+    .store()
+    .update_slot_fields(
+      session_id,
+      charliebot_agents::model_pool::OWNER,
+      Map::from_iter([(charliebot_agents::model_pool::POOL_MEMBER_FIELD.to_string(), json!(to))]),
+    )
+    .await?;
+  let intent = json!({
+    "type": event_types::QUOTA_FAILOVER,
+    "from": from,
+    "to": to,
+    "reason": reason,
+    "set": AUTO_POOL_ID,
+    "recovers_at": "",
+  });
+  std::fs::write(stack.store().run_dir(session_id, &run.id).join(HANDOFF_NOTE_FILENAME), intent.to_string())?;
+  Ok(run.id)
+}
+
+/// The reset the spent-quota and near-exhaustion tests name. Its minute-resolution form is in the switch notes.
+const FUTURE_RESET: &str = "2999-01-02T03:04:05Z";
+
+/// Whether the near-exhaustion reading holds member-a at the 90% line. Only
+/// `a_near_exhaustion_turn_start_switches_to_an_under_line_member` sets it, after that test's first turn has run.
+static MEMBER_A_NEAR_EXHAUSTION: AtomicBool = AtomicBool::new(false);
+
+/// The member reading of the near-exhaustion test: member-a is near its line while the flag is set, and its window
+/// resets at `FUTURE_RESET`. The other members read as under the line.
+fn register_member_reading(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.member_reading(
+    BACKEND_TYPE,
+    Arc::new(
+      |_cfg: &CharlieBotConfig, option: &BackendOption, _now: UtcDateTime| -> anyhow::Result<Option<MemberReading>> {
+        let near = option.id == MEMBER_A && MEMBER_A_NEAR_EXHAUSTION.load(Ordering::SeqCst);
+        let windows = if near {
+          vec![MemberWindow {
+            utilization: 0.92,
+            window_minutes: Some(300),
+            resets_at: Some(UtcDateTime::parse(FUTURE_RESET)?),
+          }]
+        } else {
+          Vec::new()
+        };
+        Ok(Some(MemberReading { windows, weekly_resets_at: None, near_exhaustion: near, exhausted: false }))
+      },
+    ),
+  )
+}
+
+/// A subscription member that was reset returns the session from its pay-as-you-go member. The turn starts on the
+/// subscription member with a note that names the previous turn's directory and its summary, and the switch record
+/// carries the summary `ok`.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_subscription_reset_turn_start_hands_off_the_previous_turn() -> anyhow::Result<()> {
+  let stack = subscription_reset_stack().await?;
+  let session = auto_session(&stack, "auto-turn-start-reset").await?;
+  let first = first_turn_on_payg(&stack, &session.id).await?;
+  let second = dispatch_turn(&stack, &session.id).await?;
+  wait_for_launch(&stack, &session.id, &second).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(run_with_id(&runs, &first).backend.as_deref(), Some(MEMBER_A));
+  let launched = run_with_id(&runs, &second);
+  assert_eq!(launched.backend.as_deref(), Some(MEMBER_B));
+  assert!(launched.retry_of_run_id.is_none(), "a turn start is not a retry");
+  let switches = quota_failovers(&stack, &session.id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["from"], MEMBER_A);
+  assert_eq!(switches[0]["to"], MEMBER_B);
+  assert_eq!(switches[0]["set"], AUTO_POOL_ID);
+  assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_SUBSCRIPTION_RESET);
+  assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
+
+  let prompt = assert_turn_start_note(
+    &stack,
+    &session.id,
+    &first,
+    &second,
+    "pool 'auto' switched from member-a to member-b: subscription quota reset",
+  )?;
+  assert!(prompt.contains("Handoff summary:\n"), "{prompt}");
+  assert!(prompt.contains("done (1):"), "{prompt}");
+  assert!(prompt.contains("- $ Read "), "{prompt}");
+  assert!(prompt.contains("in progress: $ Bash cargo test -p cron (no result yet)"), "{prompt}");
+  assert!(prompt.contains("files: /synthetic/src/main.rs"), "{prompt}");
+  Ok(())
+}
+
+/// A subscription member whose quota is spent at a turn start leaves for the pay-as-you-go member. The note names the
+/// spent quota and when it resets, and the switch record carries the summary `ok`.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_spent_quota_at_a_turn_start_leaves_the_subscription_member_with_its_reset() -> anyhow::Result<()> {
+  let stack =
+    turn_start_stack(subscription(MEMBER_A, &finished_turn_script()), payg(MEMBER_B, &success_script())).await?;
+  let session = auto_session(&stack, "auto-turn-start-quota").await?;
+  let first = dispatch_turn(&stack, &session.id).await?;
+  settle(&stack, &session.id).await?;
+  record_out(&stack, MEMBER_A, Some(UtcDateTime::parse(FUTURE_RESET)?))?;
+  let second = dispatch_turn(&stack, &session.id).await?;
+  wait_for_launch(&stack, &session.id, &second).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(run_with_id(&runs, &first).backend.as_deref(), Some(MEMBER_A));
+  assert_eq!(run_with_id(&runs, &second).backend.as_deref(), Some(MEMBER_B));
+  let switches = quota_failovers(&stack, &session.id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_QUOTA_ERROR);
+  assert_eq!(switches[0]["recovers_at"], "2999-01-02T03:04+00:00");
+  assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
+  assert_turn_start_note(
+    &stack,
+    &session.id,
+    &first,
+    &second,
+    "pool 'auto' switched from member-a to member-b: the member's quota is spent, resets at 2999-01-02T03:04+00:00",
+  )?;
+  Ok(())
+}
+
+/// A subscription member near its quota line hands the session to an under-line subscription member at a turn start.
+/// The reading's reset names the switch, and the note carries it.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_near_exhaustion_turn_start_switches_to_an_under_line_member() -> anyhow::Result<()> {
+  let reading: (&'static str, RegisterFn) = ("near-exhaustion-reading", register_member_reading);
+  let stack = Stack::start_with_package(
+    vec![subscription(MEMBER_A, &finished_turn_script()), subscription(MEMBER_B, &success_script())],
+    Vec::new(),
+    reading,
+  )
+  .await?;
+  stack.write_access_key()?;
+  let mut cfg = stack.cfg.as_ref().clone();
+  cfg.backends.pools.push(auto_set());
+  stack.replace_config(cfg)?;
+  let session = auto_session(&stack, "auto-turn-start-near").await?;
+  let first = dispatch_turn(&stack, &session.id).await?;
+  settle(&stack, &session.id).await?;
+  MEMBER_A_NEAR_EXHAUSTION.store(true, Ordering::SeqCst);
+  let second = dispatch_turn(&stack, &session.id).await?;
+  wait_for_launch(&stack, &session.id, &second).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(run_with_id(&runs, &first).backend.as_deref(), Some(MEMBER_A));
+  assert_eq!(run_with_id(&runs, &second).backend.as_deref(), Some(MEMBER_B));
+  let switches = quota_failovers(&stack, &session.id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_NEAR_EXHAUSTION);
+  assert_eq!(switches[0]["recovers_at"], "2999-01-02T03:04+00:00");
+  assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
+  assert_turn_start_note(
+    &stack,
+    &session.id,
+    &first,
+    &second,
+    "pool 'auto' switched from member-a to member-b: the member is near quota exhaustion, \
+     resets at 2999-01-02T03:04+00:00",
+  )?;
+  Ok(())
+}
+
+/// A failed handoff assembly does not stop the turn start. The note, the switch record and the launch text state the
+/// same unavailable reason, and the turn runs on the new member.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_failed_turn_start_summary_still_starts_the_turn_and_states_the_reason() -> anyhow::Result<()> {
+  let stack = subscription_reset_stack().await?;
+  let session = auto_session(&stack, "auto-turn-start-summary-unavailable").await?;
+  let first = first_turn_on_payg(&stack, &session.id).await?;
+  handoff::force_summary_failure_for_test(&first, "synthetic assembly failure");
+  let second = dispatch_turn(&stack, &session.id).await?;
+  wait_for_launch(&stack, &session.id, &second).await?;
+  let runs = settle(&stack, &session.id).await?;
+  handoff::clear_summary_failure_for_test(&first);
+
+  assert_eq!(run_with_id(&runs, &second).backend.as_deref(), Some(MEMBER_B));
+  assert_eq!(stack.wait_terminal(&session.id, &second).await?, RunOutcomeKind::Success);
+  let switches = quota_failovers(&stack, &session.id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["summary"], "unavailable: synthetic assembly failure");
+  let prompt = assert_turn_start_note(
+    &stack,
+    &session.id,
+    &first,
+    &second,
+    "pool 'auto' switched from member-a to member-b: subscription quota reset",
+  )?;
+  assert!(prompt.contains("Handoff summary unavailable: synthetic assembly failure"), "{prompt}");
+  Ok(())
+}
+
+/// A crash between a turn start's intent and its note leaves the run registered with the intent in its handoff file.
+/// The launch finishes the note and records the switch before the turn starts.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_pending_turn_start_intent_is_finished_before_the_launch() -> anyhow::Result<()> {
+  let stack = subscription_reset_stack().await?;
+  let session = auto_session(&stack, "auto-turn-start-pending").await?;
+  let first = first_turn_on_payg(&stack, &session.id).await?;
+  let launched =
+    register_pending_switch(&stack, &session.id, MEMBER_A, MEMBER_B, event_types::QUOTA_REASON_SUBSCRIPTION_RESET)
+      .await?;
+  assert!(quota_failovers(&stack, &session.id)?.is_empty(), "the crash left no switch record");
+
+  stack.adapter.call(&session.id, &[], Some(&launched)).await?;
+  wait_for_launch(&stack, &session.id, &launched).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(run_with_id(&runs, &launched).backend.as_deref(), Some(MEMBER_B));
+  let switches = quota_failovers(&stack, &session.id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["from"], MEMBER_A);
+  assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_SUBSCRIPTION_RESET);
+  assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
+  assert_turn_start_note(
+    &stack,
+    &session.id,
+    &first,
+    &launched,
+    "pool 'auto' switched from member-a to member-b: subscription quota reset",
+  )?;
+  Ok(())
+}
+
+/// An unreadable switch note does not block the run: the fallback keeps the session history location in its launch.
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_unreadable_turn_start_note_falls_back_to_the_history_location() -> anyhow::Result<()> {
+  let stack = subscription_reset_stack().await?;
+  let session = auto_session(&stack, "auto-turn-start-unreadable").await?;
+  first_turn_on_payg(&stack, &session.id).await?;
+  let launched =
+    register_pending_switch(&stack, &session.id, MEMBER_A, MEMBER_B, event_types::QUOTA_REASON_SUBSCRIPTION_RESET)
+      .await?;
+  let note = stack.store().run_dir(&session.id, &launched).join(HANDOFF_NOTE_FILENAME);
+  std::fs::remove_file(&note)?;
+  std::fs::create_dir(&note)?;
+
+  stack.adapter.call(&session.id, &[], Some(&launched)).await?;
+  wait_for_launch(&stack, &session.id, &launched).await?;
+  let prompt = launch_text(&stack, &session.id, &launched)?;
+  assert!(prompt.contains(HISTORY_LOCATION_NOTE), "{prompt}");
+  assert!(prompt.contains("this turn starts a fresh conversation, so read the session chat history"), "{prompt}");
+  assert!(!prompt.contains("Handoff summary:"), "the unreadable note's summary is not injected: {prompt}");
+  settle(&stack, &session.id).await?;
+  Ok(())
+}
+
+/// A manual switch lands after a turn start's intent, and a restart comes before the launch. The launch still carries
+/// its run's note, and the first turn after the manual switch carries no switch note.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_pending_turn_start_survives_a_manual_switch_and_a_restart() -> anyhow::Result<()> {
+  let stack = subscription_reset_stack().await?;
+  let session = auto_session(&stack, "auto-turn-start-manual").await?;
+  let first = first_turn_on_payg(&stack, &session.id).await?;
+  let launched =
+    register_pending_switch(&stack, &session.id, MEMBER_A, MEMBER_B, event_types::QUOTA_REASON_SUBSCRIPTION_RESET)
+      .await?;
+  // The operator moves the session to member-a by hand, which writes the switch's audit event.
+  stack.store().switch_backend(&session.id, MEMBER_A).await?.expect("the session is recorded");
+  stack
+    .store()
+    .persist_and_broadcast(
+      &session.id,
+      json!({"type": event_types::BACKEND_SWITCHED, "from": AUTO_POOL_ID, "to": MEMBER_A}),
+    )
+    .await?;
+
+  let home = Arc::clone(&stack.home);
+  drop(stack);
+  let next = Stack::start_on_home_with_auto(
+    home,
+    vec![payg(MEMBER_A, &finished_turn_script()), subscription(MEMBER_B, &success_script())],
+    Vec::new(),
+    auto_set(),
+  )
+  .await?;
+  next.write_access_key()?;
+  next.adapter.call(&session.id, &[], Some(&launched)).await?;
+  wait_for_launch(&next, &session.id, &launched).await?;
+  settle(&next, &session.id).await?;
+
+  let switches = quota_failovers(&next, &session.id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
+  assert_turn_start_note(
+    &next,
+    &session.id,
+    &first,
+    &launched,
+    "pool 'auto' switched from member-a to member-b: subscription quota reset",
+  )?;
+
+  let after = dispatch_turn(&next, &session.id).await?;
+  wait_for_launch(&next, &session.id, &after).await?;
+  let runs = settle(&next, &session.id).await?;
+  assert_eq!(run_with_id(&runs, &after).backend.as_deref(), Some(MEMBER_A));
+  assert!(!next.store().run_dir(&session.id, &after).join(HANDOFF_NOTE_FILENAME).exists());
+  assert!(!launch_text(&next, &session.id, &after)?.contains("pool 'auto' switched"));
+  Ok(())
+}
+
+/// A turn that keeps its member starts no switch: it records no switch and writes no note, and its launch carries none.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_turn_that_keeps_its_member_carries_no_switch_note() -> anyhow::Result<()> {
+  let stack =
+    turn_start_stack(subscription(MEMBER_A, &finished_turn_script()), subscription(MEMBER_B, &success_script()))
+      .await?;
+  let session = auto_session(&stack, "auto-turn-kept").await?;
+  let first = dispatch_turn(&stack, &session.id).await?;
+  settle(&stack, &session.id).await?;
+  let second = dispatch_turn(&stack, &session.id).await?;
+  wait_for_launch(&stack, &session.id, &second).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(run_with_id(&runs, &first).backend.as_deref(), Some(MEMBER_A));
+  assert_eq!(run_with_id(&runs, &second).backend.as_deref(), Some(MEMBER_A), "the session keeps its member");
+  assert!(quota_failovers(&stack, &session.id)?.is_empty(), "a kept member records no switch");
+  assert!(!stack.store().run_dir(&session.id, &second).join(HANDOFF_NOTE_FILENAME).exists());
+  assert!(!launch_text(&stack, &session.id, &second)?.contains("pool 'auto' switched"));
+  Ok(())
 }

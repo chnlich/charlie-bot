@@ -45,7 +45,10 @@ function fakeRect(width) {
   return {top: 100, left: 50, width, height: 28};
 }
 
-function makeDom({rowWidth = 220, rowName = 'demo session', headerName = 'demo session', withRow = true}) {
+// The name span holds the row's title as its text and the full name as its title, the way renderSessionRowShell
+// paints it. fullName defaults to the title: a row whose title is not shortened.
+function makeDom({rowWidth = 220, rowName = 'demo session', fullName = rowName, headerName = 'demo session',
+  headerHeight = 28, withRow = true}) {
   const input = {
     value: '',
     style: {},
@@ -53,14 +56,16 @@ function makeDom({rowWidth = 220, rowName = 'demo session', headerName = 'demo s
     focus() {},
     select() {},
   };
-  const nameSpan = {textContent: rowName, getBoundingClientRect: () => ({top: 100, left: 50, width: rowWidth, height: 20})};
+  const nameSpan = {
+    textContent: rowName,
+    title: fullName,
+    getBoundingClientRect: () => ({top: 100, left: 50, width: rowWidth, height: 20}),
+  };
   const rowEl = withRow ? {
-    dataset: {},
-    removeAttribute(name) { delete this.dataset[name.replace(/^data-(.)/, (_, c) => c.toUpperCase())]; },
     getBoundingClientRect: () => fakeRect(rowWidth),
     querySelector: (sel) => (sel === '.session-name' ? nameSpan : null),
   } : null;
-  const headerEl = {textContent: headerName, getBoundingClientRect: () => fakeRect(400)};
+  const headerEl = {textContent: headerName, getBoundingClientRect: () => ({...fakeRect(400), height: headerHeight})};
   const elements = {'rename-input': input, 'header-session-name': headerEl};
   if (rowEl) elements['session-s1'] = rowEl;
   return {
@@ -98,19 +103,20 @@ test('prefill reads the live row text: a renamed session prefills its new name',
   assert.equal(dom.input.style.height, '20px');
   assert.equal(dom.input.style.paddingTop, '0px');
   assert.equal(dom.input.style.paddingBottom, '0px');
+  // select() leaves the caret at the end of a long name; the field opens on the name's start instead.
+  assert.equal(dom.input.scrollLeft, 0, 'the field opened scrolled to the end of a long name');
   // updateSidebarSessionName (status.js) and the session_renamed websocket
-  // handler both funnel into this one write: the title text, plus
-  // data-full-name when the title is a shortened one. A non-shortened row has
-  // neither, so the text is the name.
+  // handler both funnel into this one write: the title text and the full name
+  // as the title. A non-shortened row's title is its name.
   dom.nameSpan.textContent = 'renamed by first pass';
+  dom.nameSpan.title = 'renamed by first pass';
   clickRename(dom);
   assert.equal(dom.input.value, 'renamed by first pass',
     'second rename prefilled a stale name instead of the live row text');
 });
 
 test('a shortened Threads title prefills the full session name', () => {
-  const dom = makeDom({rowName: '2026-11-10 12:17'});
-  dom.rowEl.dataset.fullName = 'Slack #docs-review 2026-11-10 12:17';
+  const dom = makeDom({rowName: '2026-11-10 12:17', fullName: 'Slack #docs-review 2026-11-10 12:17'});
   clickRename(dom);
   assert.equal(dom.input.value, 'Slack #docs-review 2026-11-10 12:17',
     'Enter on an untouched field would have committed the shortened title');
@@ -118,8 +124,7 @@ test('a shortened Threads title prefills the full session name', () => {
 
 test('Enter on an untouched shortened field commits the full name', async () => {
   const fetches = [];
-  const dom = makeDom({rowName: '2026-11-10 12:17'});
-  dom.rowEl.dataset.fullName = 'Slack #docs-review 2026-11-10 12:17';
+  const dom = makeDom({rowName: '2026-11-10 12:17', fullName: 'Slack #docs-review 2026-11-10 12:17'});
   const context = loadModals(dom, async (url, opts) => {
     fetches.push({url, opts});
     return {ok: true};
@@ -156,7 +161,8 @@ test('zero-width row rect (hidden row) falls back to the header instead of corne
 });
 
 test('a chat-header click opens the field on the header name line, not on the session row', () => {
-  const dom = makeDom({rowName: 'row text', headerName: 'header name'});
+  // The header name is one line tall; the field covers that line, not the row's.
+  const dom = makeDom({rowName: 'row text', headerName: 'header name', headerHeight: 20});
   const context = loadModals(dom);
   // The header's onclick handler sits on the div that holds the heading.
   context.startRename({
@@ -165,7 +171,7 @@ test('a chat-header click opens the field on the header name line, not on the se
   }, 's1');
   assert.equal(dom.input.value, 'header name');
   assert.equal(dom.input.style.width, '400px', 'the field took the row width instead of the header name line');
-  assert.equal(dom.input.style.height, '28px');
+  assert.equal(dom.input.style.height, '20px', 'the field covers the header name line');
 });
 
 // The page's document carries a loader in place of modals.js, because the module loads on the first sidebar

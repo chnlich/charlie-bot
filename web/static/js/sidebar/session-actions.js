@@ -53,12 +53,13 @@ async function removeSessionRowInline(sessionId) {
   }
 }
 
-// The title a session's row displays. The archive confirmation names the session by it. A session
-// with no row on screen has no title to name, so the miss throws.
-function sessionDisplayTitle(sessionId) {
+// The full name of a session's row. The archive confirmation names the session by it, whole, where a
+// Threads row's title drops its header's label. A session with no row on screen has no name to show, so
+// the miss throws.
+function sessionRowFullName(sessionId) {
   const nameEl = document.getElementById('session-' + sessionId)?.querySelector('.session-name');
   if (!nameEl) throw new Error('No sidebar row shows session ' + sessionId);
-  return nameEl.textContent;
+  return nameEl.title;
 }
 
 // Every archive control calls this: the row's Archive button (groups.js) and the touch row
@@ -67,7 +68,7 @@ function sessionDisplayTitle(sessionId) {
 function archiveSession(id) {
   Sidebar.openConfirmDialog({
     heading: 'Archive session?',
-    detail: sessionDisplayTitle(id),
+    detail: sessionRowFullName(id),
     confirmLabel: 'Archive',
     confirmClass: 'bg-blue-600 hover:bg-blue-500',
     confirmOnEnter: true,
@@ -143,7 +144,7 @@ async function unarchiveSession(id) {
 // The one confirmation dialog the sidebar's actions open: archive and permanent delete. The caller gives the heading,
 // the detail (plain text), the confirm button and what its confirm runs. Cancel, Escape and a click on the backdrop
 // close it and run nothing. Enter runs the confirm only where confirmOnEnter is set. The detail caps its own height
-// and scrolls: a session's name can run past a thousand characters, and the dialog would otherwise stand taller than
+// and scrolls. A session's name can run past a thousand characters, and the dialog would otherwise stand taller than
 // the window, taking its heading and both buttons off screen.
 const CONFIRM_OVERLAY_ID = 'confirm-overlay';
 let confirmDialogKeyHandler = null;
@@ -259,15 +260,15 @@ async function showGroupSelector(sessionId, currentGroup) {
     return `<button data-group="${escapeHtmlAttr(g)}" class="w-full text-left px-3 py-2 rounded-lg text-sm border transition-colors ${activeClass}">${escapeHtml(g)}</button>`;
   }).join('');
 
-  // The Remove group row keeps the group rows' slate-300 label: slate-400 reads 4.04:1 on the
+  // The Remove group row keeps the group rows' slate-300 label. Slate-400 reads 4.04:1 on the
   // row's slate-700 fill, under the 4.5:1 floor for its 14px text. Slate-300 reads 6.97:1.
-  // The dialog's close button carries close_button.html's modal-close-btn class: that macro's rule gives a
+  // The dialog's close button carries close_button.html's modal-close-btn class. That macro's rule gives a
   // phone's close control its 44 px box, and index.html calls the macro, so the rule is already on this page.
   // Without a visible control the dialog's only exits are the backdrop and the Escape key, and a phone has no
   // Escape key.
   overlay.innerHTML = `
     <style>
-      /* The New group name field draws its boundary at the 3:1 control floor on its slate-700 fill:
+      /* The New group name field draws its boundary at the 3:1 control floor on its slate-700 fill.
          #94a3b8 reads 4.04:1 there (slate-500 reads 2.18:1) and 5.71:1 on the slate-800 dialog. The
          #c084fc focus tone reads 3.92:1 on the fill, where purple-500 reads 2.62:1. The rule travels
          with this dialog's own markup, so it needs no rebuilt Tailwind sheet. */

@@ -21,8 +21,10 @@ use charliebot_compat::responses;
 use charliebot_compat::routing::get_and_head;
 use charliebot_compat::static_files::{self, StaticDirectory};
 use charliebot_core::paths;
+use charliebot_registry::icons::Icons;
 use charliebot_registry::pages::HomeCard;
-use charliebot_registry::{FeatureContext, Registry, RegistryError};
+use charliebot_registry::templating::Templating;
+use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
 use charliebot_store::run_logs;
 use http::{HeaderMap, Method, StatusCode, header};
 use listing::{FailureKind, ListingError};
@@ -80,19 +82,32 @@ async fn answer(features: &FeatureContext, parts: &Parts, path: &str) -> Respons
       Err(response) => return response,
     }
   }
+  let startup = features.startup.clone();
   let (path, method, headers) = (path.to_string(), parts.method.clone(), parts.headers.clone());
-  tokio::task::spawn_blocking(move || answer_from_disk(&path, &method, &headers))
+  tokio::task::spawn_blocking(move || answer_from_disk(&path, &method, &headers, || listing_icons(&startup)))
     .await
     .expect("the file server's blocking work does not panic")
 }
 
+/// The icon table the directory listing draws its glyphs from, for the current static-tree revision. The listing
+/// asks for it only when the path is a directory, so a file answer does not need the templating.
+fn listing_icons(startup: &StartupState) -> Result<Arc<Icons>, String> {
+  let templating = startup.require::<Templating>().map_err(|error| error.to_string())?;
+  templating.icons().map_err(|error| error.to_string())
+}
+
 /// The answer below the file views, on the blocking pool: a directory listing, a file, or the error the route
 /// raises for the path.
-fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Response {
+fn answer_from_disk(
+  path: &str,
+  method: &Method,
+  headers: &HeaderMap,
+  load_icons: impl FnOnce() -> Result<Arc<Icons>, String>,
+) -> Response {
   // The path joined under the root, then resolved to its real path.
   let fs_path = paths::realpath(&FsPath::new("/").join(path));
   let url_prefix = if path.is_empty() { MOUNT.to_string() } else { format!("{MOUNT}/{path}") };
-  match listing::dir_listing_page(&fs_path, &url_prefix) {
+  match listing::dir_listing_page(&fs_path, &url_prefix, load_icons) {
     Ok(Some(page)) => return responses::html(page),
     Ok(None) => {}
     // A missing path is 404 unless the compaction stored a run log here as `<name>.zst`.

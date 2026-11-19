@@ -1,8 +1,7 @@
 //! One improve run: `dev/improve/remote-launch.sh` on this host. A round then runs
-//! `dev/improve/remote-runner.sh` on the remote host. A cron session's own turn runs this host's local claude
-//! instead. A fake `ssh` records its arguments and runs the remote side locally. Fake `claude`, `systemd-run`,
-//! `systemctl` and `cargo` record what they receive, so each test checks the run's contract without a network, a
-//! server or a real remote host.
+//! `dev/improve/remote-runner.sh` on the remote host. A fake `ssh` records its arguments and runs the remote side
+//! locally. Fake `claude`, `codex`, `systemd-run`, `systemctl` and `cargo` record what they receive, so each test checks
+//! the run's contract without a network, a server or a real remote host.
 //!
 //! The tests that assert a bound on time measure it: the approval preflight and the heartbeat stop must both finish
 //! inside five seconds.
@@ -17,7 +16,10 @@ use std::time::{Duration, Instant};
 
 use charliebot_shell_harness as harness;
 use sha2::{Digest as _, Sha256};
-use world::{DIRECTION, GATEWAY_TOKEN, World};
+use world::{
+  CODEX_LOGIN, DIRECTION, GATEWAY_TOKEN, LOGIN_TOKEN, REVIEW_API_BASE, REVIEW_CREDENTIAL, REVIEW_KEY, REVIEW_MODEL,
+  World,
+};
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
 const PROMPT: &str = "Improve one topic in the performance direction.\nReply with the word OK.\n";
@@ -31,7 +33,7 @@ fn lists_path(list: &str, path: &str) -> bool {
   list.lines().any(|line| line == path || line.starts_with(&format!("{path}\t")))
 }
 
-/// Waits for `condition` to hold, at most `limit`.
+/// Whether `condition` holds within `limit`, polled until it does.
 fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
   let start = Instant::now();
   while start.elapsed() < limit {
@@ -95,68 +97,6 @@ fn the_prompt_on_the_launchers_standard_input_reaches_the_remote_claude() {
 
 #[test]
 #[ignore = "integration"]
-fn a_cron_sessions_own_turn_runs_this_hosts_claude_with_its_arguments_and_input() {
-  let world = World::new();
-  let prompt = world.sandbox.root().join("node-prompt.txt");
-  fs::write(&prompt, PROMPT).expect("the prompt");
-  let mut env = world.node_env();
-  env.insert("FAKE_CLAUDE_STDIN".to_string(), world.node_claude_stdin.display().to_string());
-  env.insert("FAKE_CLAUDE_EXIT".to_string(), "7".to_string());
-  let stdin = fs::File::open(&prompt).expect("open the prompt");
-  let mut command = world.launcher_command(&env);
-
-  let run = harness::run_with_stdin(&mut command, Stdio::from(stdin));
-
-  assert_eq!(run.code, 7, "the launcher did not exit with the local claude's code:\n{}", run.describe());
-  assert!(world.ssh_arguments().is_empty(), "the node turn opened an ssh connection:\n{}", world.ssh_arguments());
-  assert_eq!(world.node_claude_arguments(), world.claude_arguments());
-  let received = fs::read_to_string(&world.node_claude_stdin).expect("the local claude recorded its standard input");
-  assert_eq!(received, PROMPT, "the local claude did not receive the prompt:\n{}", run.describe());
-}
-
-#[test]
-#[ignore = "integration"]
-fn a_cron_sessions_own_turn_keeps_this_hosts_profile_home_config_dir_and_token() {
-  let world = World::new();
-  let run = world.run(&world.node_env());
-  assert_eq!(run.code, 0, "{}", run.describe());
-
-  let env = world.node_claude_environment();
-  let value = |name: &str| env.get(name).map(String::as_str);
-  let profile_home = world.profile_home.display().to_string();
-  assert_eq!(value("CHARLIEBOT_HOME"), Some(profile_home.as_str()));
-  assert_eq!(value("CLAUDE_CONFIG_DIR"), Some(world.local_config_dir));
-  assert_eq!(value("CHARLIEBOT_RUN_TOKEN"), Some(world::RUN_TOKEN));
-  let digest = format!("{:x}", Sha256::digest(GATEWAY_TOKEN));
-  assert_eq!(value("ANTHROPIC_AUTH_TOKEN_SHA256"), Some(digest.as_str()));
-}
-
-#[test]
-#[ignore = "integration"]
-fn a_cron_sessions_own_turn_without_a_local_claude_exits_1_and_names_it() {
-  let world = World::new();
-  let mut env = world.node_env();
-  // A PATH without the stub directory. The launcher's node branch needs only dirname, sed and head there.
-  env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
-  let mut probe = harness::command("bash", &env);
-  probe.arg("-c").arg("type -P claude");
-  let found = harness::run(&mut probe);
-  assert!(
-    found.stdout.trim().is_empty(),
-    "/usr/bin or /bin holds a claude, so this PATH cannot test a missing one:\n{}",
-    found.describe()
-  );
-
-  let run = world.run(&env);
-
-  assert_eq!(run.code, 1, "{}", run.describe());
-  assert!(stderr(&run).contains("claude"), "the error names no missing CLI: {}", run.describe());
-  assert!(world.ssh_arguments().is_empty(), "the node turn fell back to the remote host:\n{}", world.ssh_arguments());
-  assert!(!world.node_claude_ran());
-}
-
-#[test]
-#[ignore = "integration"]
 fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
   let world = World::new();
   // The worker's metadata names PARENT_ID as its task_parent_id, and the cron task file binds
@@ -170,10 +110,10 @@ fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
 
   assert_eq!(run.code, 3, "{}", run.describe());
   assert!(world.ssh_arguments().contains("\ntrue\n"), "the preflight did not reach ssh:\n{}", world.ssh_arguments());
-  assert!(!world.node_claude_ran(), "the round ran on this host");
+  assert!(!world.claude_ran(), "the round ran before its preflight passed");
 }
 
-/// Runs the in-flight list from `cwd`.
+/// The in-flight list's run from `cwd`.
 fn run_inflight_list_from(world: &World, env: &harness::Env, cwd: &Path) -> harness::Run {
   let mut command = harness::command("bash", env);
   command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/").current_dir(cwd);
@@ -232,7 +172,7 @@ fn the_remote_launcher_rejects_relative_input_and_temp_paths() {
   let world = World::new();
   let cwd = world.sandbox.root();
 
-  let mut arguments = world.claude_arguments();
+  let mut arguments = world.agent_arguments();
   let instructions = arguments
     .iter()
     .position(|argument| argument == "--append-system-prompt-file")
@@ -245,7 +185,7 @@ fn the_remote_launcher_rejects_relative_input_and_temp_paths() {
 
   let mut env = world.env();
   env.insert("TMPDIR".to_string(), "relative-temp".to_string());
-  let arguments = world.claude_arguments();
+  let arguments = world.agent_arguments();
   let run = run_launcher_from(&world, &env, cwd, &arguments);
   assert_ne!(run.code, 0, "{}", run.describe());
   assert!(run.stderr.contains("TMPDIR must be an absolute path"), "{}", run.describe());
@@ -274,22 +214,106 @@ fn the_remote_runner_rejects_a_relative_home() {
   assert!(run.stderr.contains("HOME must be an absolute path"), "{}", run.describe());
 }
 
+/// The SHA-256 of a key, in the form the fake agents record it.
+fn digest(value: &str) -> String {
+  format!("{:x}", Sha256::digest(value))
+}
+
+/// The files under `root` whose text contains `needle`, relative to `root`.
+fn files_holding(world: &World, root: &Path, needle: &str) -> Vec<String> {
+  world
+    .tree(root)
+    .into_iter()
+    .filter(|path| {
+      let file = root.join(path);
+      file.is_file() && fs::read_to_string(&file).is_ok_and(|text| text.contains(needle))
+    })
+    .collect()
+}
+
 #[test]
 #[ignore = "integration"]
-fn the_round_gets_the_gateway_token_under_both_tools_variables() {
+fn the_gateway_member_gets_its_token_and_the_review_key_under_their_own_names() {
   let world = World::new();
   let run = world.run(&world.env());
   assert_eq!(run.code, 0, "{}", run.describe());
   let env = world.claude_environment();
-  let digest = format!("{:x}", Sha256::digest(GATEWAY_TOKEN));
-  for name in ["ANTHROPIC_AUTH_TOKEN_SHA256", "CHARLIE_CODE_API_KEY_SHA256"] {
-    assert_eq!(
-      env.get(name).map(String::as_str),
-      Some(digest.as_str()),
-      "{name} does not carry the gateway token: {}",
-      run.describe()
-    );
-  }
+  let member = digest(GATEWAY_TOKEN);
+  let review = digest(REVIEW_KEY);
+  assert_ne!(member, review, "the fixture keys must differ");
+  assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN_SHA256").map(String::as_str), Some(member.as_str()), "{}", run.describe());
+  assert_eq!(env.get("CHARLIE_CODE_API_KEY_SHA256").map(String::as_str), Some(review.as_str()), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_review_runs_charlie_code_on_the_review_options_model_and_api_base_with_no_flags() {
+  let world = World::new();
+  let task = world.sandbox.root().join("review-task.md");
+  fs::write(&task, "Review the diff.\nPR: 1 https://example.invalid/pull/1\n").expect("the review task file");
+  let mut env = world.env();
+  env.insert("FAKE_CLAUDE_REVIEW_TASK".to_string(), task.display().to_string());
+  let run = world.run(&env);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.charlie_code_ran(), "the round's review did not run charlie-code:\n{}", run.describe());
+
+  // The review command names no model and no API base: charlie-code reads them from the round's environment.
+  let task = task.display().to_string();
+  let session_dir = world.remote_home.join("improve/perf/clc-sessions").display().to_string();
+  assert_eq!(
+    world.charlie_code_arguments_received(),
+    ["--json", "--task-file", task.as_str(), "--session-dir", session_dir.as_str()],
+    "{}",
+    run.describe()
+  );
+  let env = world.charlie_code_environment();
+  let value = |name: &str| env.get(name).map(String::as_str);
+  let model = format!("openai/{REVIEW_MODEL}");
+  let api_base = format!("{REVIEW_API_BASE}/v1");
+  let review = digest(REVIEW_KEY);
+  assert_eq!(value("CHARLIE_CODE_MODEL"), Some(model.as_str()), "{}", run.describe());
+  assert_eq!(value("CHARLIE_CODE_API_BASE"), Some(api_base.as_str()), "{}", run.describe());
+  assert_eq!(value("CHARLIE_CODE_API_KEY_SHA256"), Some(review.as_str()), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_subscription_claude_reads_its_login_file_and_gets_no_gateway_token() {
+  let world = World::new();
+  world.write_claude_login();
+  let run = world.run(&world.host_login_env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let env = world.claude_environment();
+  let value = |name: &str| env.get(name).map(String::as_str);
+  let login = digest(LOGIN_TOKEN);
+  let review = digest(REVIEW_KEY);
+  assert_eq!(value("CLAUDE_CODE_OAUTH_TOKEN_SHA256"), Some(login.as_str()), "{}", run.describe());
+  assert_eq!(value("ANTHROPIC_AUTH_TOKEN_SHA256"), Some("unset"), "{}", run.describe());
+  assert_eq!(value("CHARLIE_CODE_API_KEY_SHA256"), Some(review.as_str()), "{}", run.describe());
+  // The login file is the only copy of the login on this host and on the remote home.
+  assert!(
+    !world.ssh_arguments().contains(LOGIN_TOKEN),
+    "the login reached an ssh argument:\n{}",
+    world.ssh_arguments()
+  );
+  assert!(files_holding(&world, &world.local_home, LOGIN_TOKEN).is_empty(), "the login reached this host's files");
+  assert_eq!(files_holding(&world, &world.remote_home, LOGIN_TOKEN), ["improve/logins/claude-oauth-token"]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_codex_member_runs_under_the_runners_codex_home_with_its_arguments() {
+  let world = World::new();
+  world.write_codex_login();
+  let arguments = world.codex_arguments();
+  let run = harness::run(&mut world.launcher_command_for(&world.host_login_env(), &arguments));
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.codex_ran(), "the fake codex did not run:\n{}", run.describe());
+  assert!(!world.claude_ran(), "a codex member ran claude:\n{}", run.describe());
+  let codex_home = world.remote_home.join(".codex").display().to_string();
+  assert_eq!(world.codex_home_received(), codex_home, "{}", run.describe());
+  assert_eq!(world.codex_arguments_received(), arguments[1..].to_vec(), "{}", run.describe());
+  assert_eq!(files_holding(&world, &world.remote_home, CODEX_LOGIN), [".codex/auth.json"]);
 }
 
 /// The stub improve-sandbox of the focused export checks: it records the digests of the two gateway variables it
@@ -304,8 +328,11 @@ exit 0
 /// The direction of the focused export checks. Its TMPDIR name no real direction's round shares.
 const FOCUS_DIRECTION: &str = "focused";
 
-/// Runs the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway variables.
-fn run_in_scope(world: &World, launch_id: &str) -> harness::Run {
+/// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway
+/// variables. The first form exports the launch environment before it starts the scope, so the review
+/// credential's name arrives here as `IMPROVE_REVIEW_CREDENTIAL`. The review model and API base arrive as
+/// `IMPROVE_REVIEW_MODEL` and `IMPROVE_REVIEW_API_BASE`.
+fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
   let launch = world.remote_home.join("improve/launch").join(launch_id);
   fs::create_dir_all(&launch).expect("the launch directory");
   fs::write(launch.join("args"), "").expect("the launch arguments file");
@@ -318,55 +345,178 @@ fn run_in_scope(world: &World, launch_id: &str) -> harness::Run {
   env.insert("HOME".to_string(), world.remote_home.display().to_string());
   env.insert("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin".to_string());
   env.insert("FAKE_SCOPE_ENV".to_string(), world.sandbox.root().join("scope-env.txt").display().to_string());
+  env.insert("IMPROVE_REVIEW_CREDENTIAL".to_string(), REVIEW_CREDENTIAL.to_string());
+  env.insert("IMPROVE_REVIEW_MODEL".to_string(), REVIEW_MODEL.to_string());
+  env.insert("IMPROVE_REVIEW_API_BASE".to_string(), REVIEW_API_BASE.to_string());
   let mut command = harness::command("bash", &env);
   command.arg(harness::repo_root().join("dev/improve/remote-runner.sh")).args([
     "--in-scope",
     launch_id,
     FOCUS_DIRECTION,
+    kind,
   ]);
   harness::run(&mut command)
 }
 
 #[test]
 #[ignore = "integration"]
-fn the_in_scope_runner_exports_the_credentials_token_under_both_tools_names() {
+fn the_in_scope_runner_selects_each_key_by_its_credential_name() {
   let world = World::new();
-  // The fixture token differs from the launcher's, so the check reads the credentials file and not the environment.
-  let token = "focused-gateway-token";
+  // The decoy section comes first and the member's section comes before the review's, so a read by line position
+  // exports the decoy, and a read by name exports each key under the tool that reads it.
   fs::write(
     world.remote_home.join("improve/home/credentials.yaml"),
-    format!("synthetic-gateway:\n  api_key: {token}\n"),
+    format!(
+      "synthetic-decoy:\n  api_key: decoy-value\nANTHROPIC_AUTH_TOKEN:\n  api_key: {FOCUSED_MEMBER_TOKEN}\n\
+       {REVIEW_CREDENTIAL}:\n  api_key: {FOCUSED_REVIEW_KEY}\n"
+    ),
   )
   .expect("the fixture credentials file");
 
-  let run = run_in_scope(&world, "20261101T090000Z-1-300");
+  let run = run_in_scope(&world, "20261101T090000Z-1-300", "claude");
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  let record = world.sandbox.root().join("scope-env.txt");
-  let text = fs::read_to_string(&record).expect("the stub improve-sandbox recorded its environment");
-  let digest = format!("{:x}", Sha256::digest(token));
-  for name in ["ANTHROPIC_AUTH_TOKEN_SHA256", "CHARLIE_CODE_API_KEY_SHA256"] {
-    assert!(text.contains(&format!("{name}={digest}\n")), "{name} misses the fixture token:\n{text}");
+  let text = fs::read_to_string(world.sandbox.root().join("scope-env.txt"))
+    .expect("the stub improve-sandbox recorded its environment");
+  for (name, value) in [("ANTHROPIC_AUTH_TOKEN", FOCUSED_MEMBER_TOKEN), ("CHARLIE_CODE_API_KEY", FOCUSED_REVIEW_KEY)] {
+    assert!(text.contains(&format!("{name}_SHA256={}\n", digest(value))), "{name} is not the fixture's:\n{text}");
   }
 }
 
 #[test]
 #[ignore = "integration"]
-fn the_in_scope_runner_without_a_credentials_token_exits_1_and_names_the_file() {
+fn the_in_scope_runner_without_a_review_key_exits_1_and_names_the_file() {
   let world = World::new();
-  fs::write(world.remote_home.join("improve/home/credentials.yaml"), "").expect("the empty credentials file");
+  fs::write(world.remote_home.join("improve/home/credentials.yaml"), "synthetic-decoy:\n  api_key: decoy-value\n")
+    .expect("the credentials file without the review section");
   let credentials = world.remote_home.join("improve/home/credentials.yaml");
 
-  let run = run_in_scope(&world, "20261101T090100Z-1-301");
+  let run = run_in_scope(&world, "20261101T090100Z-1-301", "claude");
 
   assert_eq!(run.code, 1, "{}", run.describe());
   let message = stderr(&run);
   assert!(
-    message.contains("the round's credentials file holds no gateway token")
+    message.contains(&format!("no api_key for the review credential {REVIEW_CREDENTIAL}"))
       && message.contains(credentials.display().to_string().as_str()),
-    "the failure does not name the tokenless credentials file: {message}"
+    "the failure does not name the review key's file: {message}"
   );
 }
+
+#[test]
+#[ignore = "integration"]
+fn an_unsupported_member_kind_exits_7_before_any_input_is_sent() {
+  let world = World::new();
+  let mut arguments = world.agent_arguments();
+  arguments[0] = "/opt/agents/gemini".to_string();
+  let run = harness::run(&mut world.launcher_command_for(&world.env(), &arguments));
+  assert_refused_before_input(&world, &run, "the member kind 'gemini' is not supported");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_gateway_member_without_its_token_exits_7_before_any_input_is_sent() {
+  let world = World::new();
+  let mut env = world.env();
+  env.remove("ANTHROPIC_AUTH_TOKEN");
+  let run = world.run(&env);
+  assert_refused_before_input(&world, &run, "ANTHROPIC_AUTH_TOKEN");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_missing_review_key_exits_7_before_any_input_is_sent() {
+  let world = World::new();
+  fs::write(world.profile_home.join("credentials.yaml"), "synthetic-decoy:\n  api_key: decoy-value\n")
+    .expect("the profile home's credentials without the review section");
+  let run = world.run(&world.env());
+  assert_refused_before_input(&world, &run, REVIEW_CREDENTIAL);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_round_without_its_written_review_key_exits_7_before_inventory_or_scope() {
+  let world = World::new();
+  let launch_id = "20261101T090200Z-1-302";
+  let launch = world.remote_home.join("improve/launch").join(launch_id);
+  fs::create_dir_all(&launch).expect("the launch directory");
+  fs::write(launch.join("env"), format!("IMPROVE_REVIEW_CREDENTIAL={REVIEW_CREDENTIAL}\0"))
+    .expect("the launch environment");
+  fs::write(world.remote_home.join("improve/home/credentials.yaml"), "synthetic-decoy:\n  api_key: decoy-value\n")
+    .expect("the round credentials file without the review key");
+
+  let cargo_log = world.sandbox.root().join("preflight-cargo-builds.log");
+  let mut env = world.env();
+  env.insert("HOME".to_string(), world.remote_home.display().to_string());
+  env.insert("FAKE_CARGO_LOG".to_string(), cargo_log.display().to_string());
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("dev/improve/remote-runner.sh")).args([
+    launch_id,
+    DIRECTION,
+    &world.commit,
+    "claude",
+  ]);
+  let run = harness::run(&mut command);
+
+  assert_refused_before_start(&world, &run, REVIEW_CREDENTIAL);
+  assert!(!launch.join("inflight-files.txt").exists(), "the runner listed in-flight files before preflight");
+  assert!(!cargo_log.exists(), "the runner built the CLI before preflight");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_subscription_claude_without_its_login_exits_7_and_starts_no_scope() {
+  let world = World::new();
+  let run = world.run(&world.host_login_env());
+  assert_refused_before_start(&world, &run, &world.claude_login_file().display().to_string());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_codex_member_without_its_login_exits_7_and_starts_no_scope() {
+  let world = World::new();
+  let run = harness::run(&mut world.launcher_command_for(&world.host_login_env(), &world.codex_arguments()));
+  assert_refused_before_start(&world, &run, &world.remote_home.join(".codex/auth.json").display().to_string());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_profile_home_on_the_host_exits_7_and_starts_no_scope() {
+  let world = World::new();
+  fs::create_dir_all(world.remote_home.join(".charliebot")).expect("a profile home on the host");
+  let run = world.run(&world.env());
+  assert_refused_before_start(&world, &run, ".charliebot exists");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_refused_write_boundary_exits_7_and_starts_no_scope() {
+  let world = World::new();
+  let mut env = world.env();
+  env.insert("FAKE_SANDBOX_REFUSE".to_string(), "1".to_string());
+  let run = world.run(&env);
+  assert_refused_before_start(&world, &run, "the write boundary does not start");
+}
+
+/// The assertion that the launcher refused a launch with exit 7 before it sent any input, and that stderr
+/// names `needle`.
+fn assert_refused_before_input(world: &World, run: &harness::Run, needle: &str) {
+  assert_eq!(run.code, 7, "{}", run.describe());
+  assert!(stderr(run).contains(needle), "the refusal does not name {needle}: {}", run.describe());
+  assert!(world.ssh_arguments().is_empty(), "the refused launch sent input:\n{}", world.ssh_arguments());
+}
+
+/// The assertion that the runner refused a round with exit 7, that stderr names `needle`, and that the round
+/// started no scope and no agent.
+fn assert_refused_before_start(world: &World, run: &harness::Run, needle: &str) {
+  assert_eq!(run.code, 7, "{}", run.describe());
+  assert!(stderr(run).contains(needle), "the refusal does not name {needle}: {}", run.describe());
+  assert!(!world.scope_started(), "the refused round started a scope:\n{}", world.systemctl_calls());
+  assert!(!world.claude_ran(), "the refused round started claude");
+  assert!(!world.codex_ran(), "the refused round started codex");
+}
+
+const FOCUSED_REVIEW_KEY: &str = "focused-review-key";
+const FOCUSED_MEMBER_TOKEN: &str = "focused-member-token";
 
 #[test]
 #[ignore = "integration"]
@@ -474,29 +624,39 @@ fn status_change_time(path: &std::path::Path) -> (i64, i64) {
 
 #[test]
 #[ignore = "integration"]
-fn no_token_value_reaches_an_ssh_argument_or_any_file_but_the_credentials_file() {
+fn no_key_value_reaches_an_ssh_argument_or_any_file_but_the_credentials_file() {
   let world = World::new();
   let run = world.run(&world.env());
   assert_eq!(run.code, 0, "{}", run.describe());
   let arguments = world.ssh_arguments();
   assert!(!arguments.is_empty(), "the fake ssh recorded no call");
-  for token in [GATEWAY_TOKEN, world::API_KEY, world::RUN_TOKEN] {
-    assert!(!arguments.contains(token), "a token value reached an ssh argument:\n{arguments}");
+  let agent_arguments = world.claude_arguments_received().join("\n");
+  for key in [GATEWAY_TOKEN, REVIEW_KEY, world::RUN_TOKEN, world::LOCAL_CLAUDE_OAUTH_TOKEN] {
+    assert!(!arguments.contains(key), "a key value reached an ssh argument:\n{arguments}");
+    assert!(!agent_arguments.contains(key), "a key value reached the agent's arguments: {agent_arguments}");
   }
+  assert_eq!(
+    world.claude_environment().get("CLAUDE_CODE_OAUTH_TOKEN_SHA256").map(String::as_str),
+    Some("unset"),
+    "the launcher's own Claude login reached the round"
+  );
 
   let credentials = world.remote_home.join("improve/home/credentials.yaml");
   let text = fs::read_to_string(&credentials).expect("the runner wrote the credentials file");
-  assert!(text.contains(GATEWAY_TOKEN), "the gateway token is absent from {credentials:?}: {text}");
+  assert!(text.contains(GATEWAY_TOKEN) && text.contains(REVIEW_KEY), "a key is absent from {credentials:?}: {text}");
   let mode = fs::metadata(&credentials).expect("credentials metadata").permissions().mode() & 0o777;
   assert_eq!(mode, 0o600, "{credentials:?} has mode {mode:o}");
-  for path in world.tree(&world.remote_home) {
-    let file = world.remote_home.join(&path);
-    if file == credentials || !file.is_file() {
-      continue;
-    }
-    let contents = fs::read_to_string(&file).unwrap_or_default();
-    assert!(!contents.contains(GATEWAY_TOKEN), "a token reached {path}");
-    assert!(!contents.contains(world::API_KEY), "a token reached {path}");
+  for key in [GATEWAY_TOKEN, REVIEW_KEY] {
+    assert!(files_holding(&world, &world.local_home, key).is_empty(), "a key reached this host's files");
+    assert_eq!(
+      files_holding(&world, &world.remote_home, key),
+      ["improve/home/credentials.yaml"],
+      "a key reached a file other than the credentials file"
+    );
+  }
+  for key in [world::RUN_TOKEN, world::LOCAL_CLAUDE_OAUTH_TOKEN] {
+    assert!(files_holding(&world, &world.local_home, key).is_empty(), "a key reached this host's files");
+    assert!(files_holding(&world, &world.remote_home, key).is_empty(), "a key reached the remote host's files");
   }
 }
 
@@ -661,7 +821,7 @@ fn a_worker_session_without_a_parent_exits_6() {
   let run = world.run(&world.env());
   assert_eq!(run.code, 6, "{}", run.describe());
   assert!(!world.claude_ran());
-  assert!(!world.node_claude_ran(), "a session that no cron task file names ran on this host");
+  assert!(!world.ssh_arguments().contains("remote-runner.sh"), "{}", world.ssh_arguments());
 }
 
 #[test]
@@ -874,7 +1034,7 @@ fn spawn_live_round(world: &World, direction: &str) -> std::process::Child {
   harness::spawn(&mut command)
 }
 
-/// Stops a leader that [`spawn_live_round`] started: the children first, since a lone kill of the
+/// The stop of a leader that [`spawn_live_round`] started: the children first, since a lone kill of the
 /// bash that started them leaves them running.
 fn stop_live_round(leader: &mut std::process::Child) {
   let _ = std::process::Command::new("pkill").args(["-KILL", "-P", &leader.id().to_string()]).status();
@@ -1343,7 +1503,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
   let mock_home_barrier = world.sandbox.dir("mock-home-barrier");
   fs::write(
     world.remote_home.join("improve/home/credentials.yaml"),
-    "synthetic-gateway:\n  api_key: synthetic-token\n",
+    format!("{REVIEW_CREDENTIAL}:\n  api_key: {REVIEW_KEY}\nANTHROPIC_AUTH_TOKEN:\n  api_key: {GATEWAY_TOKEN}\n"),
   )
   .expect("the round's credentials file");
   // The round home keeps the pattern file of the previous round, as the host's does. Both
@@ -1375,9 +1535,16 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     harness::copy_file(&harness::repo_root().join("dev/improve/remote-runner.sh"), &launch.join("remote-runner.sh"));
     // The launcher sends the rule script beside the runner, so the runner's clone scan sources it.
     harness::copy_file(&harness::repo_root().join("dev/improve/inflight-files.sh"), &launch.join("inflight-files.sh"));
-    for name in ["args", "env", "paths"] {
-      fs::write(launch.join(name), "").expect(name);
-    }
+    fs::write(launch.join("args"), "").expect("the launch arguments");
+    fs::write(
+      launch.join("env"),
+      format!(
+        "IMPROVE_REVIEW_CREDENTIAL={REVIEW_CREDENTIAL}\0IMPROVE_REVIEW_MODEL={REVIEW_MODEL}\0\
+         IMPROVE_REVIEW_API_BASE={REVIEW_API_BASE}\0"
+      ),
+    )
+    .expect("the launch environment");
+    fs::write(launch.join("paths"), "").expect("the launch paths");
     fs::write(launch.join("origin"), format!("{origin_text}\n")).expect("the launch origin");
     fs::write(launch.join("skills_leak_patterns.local.txt"), "fictionalmarker\n").expect("the leak patterns");
     fs::create_dir_all(format!("/tmp/improve-{direction}-tmp")).expect("the round's TMPDIR");
@@ -1408,7 +1575,7 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     env.insert("GIT_CONFIG_GLOBAL".to_string(), "/dev/null".to_string());
     env.insert("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string());
     let mut command = harness::command("bash", &env);
-    command.arg(launch.join("remote-runner.sh")).args([&launch_id, direction, &commit]);
+    command.arg(launch.join("remote-runner.sh")).args([&launch_id, direction, &commit, "claude"]);
     commands.push(command);
   }
 
@@ -1588,7 +1755,7 @@ fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
   );
 }
 
-/// Writes one task lifecycle state to the profile home's task store.
+/// One task lifecycle state written to the profile home's task store.
 fn write_task_state(world: &World, task_id: &str, open: bool) -> std::path::PathBuf {
   let session_dir = world.profile_home.join(format!("sessions/{task_id}"));
   fs::create_dir_all(session_dir.join("data")).expect("the task session directory");
@@ -1604,7 +1771,7 @@ fn write_task_state(world: &World, task_id: &str, open: bool) -> std::path::Path
   events
 }
 
-/// Writes a run record that links one task to its worktree. Its end time does not set the task state.
+/// A run record that links one task to its worktree. Its end time does not set the task state.
 fn write_run_record(world: &World, task_id: &str, run_id: &str, worktree: &std::path::Path) {
   let run_dir = world.profile_home.join(format!("sessions/{task_id}/data/runs/{run_id}"));
   fs::create_dir_all(&run_dir).expect("the run record directory");
@@ -1617,8 +1784,8 @@ fn write_run_record(world: &World, task_id: &str, run_id: &str, worktree: &std::
   fs::write(run_dir.join("metadata.json"), format!("{record:#}\n")).expect("the run record");
 }
 
-/// Writes a task record that links one worktree to its owning session, as the store's `threads/`
-/// records do. The session's run records may be gone with the session they belong to.
+/// A task record that links one worktree to its owning session, as the store's `threads/` records do.
+/// The session's run records may be gone with the session they belong to.
 fn write_task_record(world: &World, owner_id: &str, thread_id: &str, worktree: &std::path::Path) {
   let record_dir = world.profile_home.join(format!("sessions/{owner_id}/threads/{thread_id}"));
   fs::create_dir_all(&record_dir).expect("the task record directory");
@@ -1662,7 +1829,7 @@ fn unlanded_worktree_with_uncommitted_state(world: &World, name: &str) -> std::p
   checkout
 }
 
-/// Runs the in-flight list out of its checkout, as the launcher does.
+/// The in-flight list's run out of its checkout, as the launcher does.
 fn run_inflight_list_with_env(world: &World, env: &harness::Env) -> harness::Run {
   let mut command = harness::command("bash", env);
   command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");

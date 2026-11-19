@@ -69,8 +69,15 @@ Reject a candidate that fails any of these tests.
   spawn in full. When a natural home is blocked, fix the obstruction or use a tracked path inside that home.
 - Trim the entry before presenting it. Name the canonical home when trimming moves a fact that another home owns.
 
-A candidate's text is a claim: verify its figures against the live system before presenting them.
-A revise re-verifies the surviving claims of the entry it edits.
+A candidate's text is a claim: before presenting its figures, verify them against the live system with read-only
+queries that cause no side effect for any account, excluding:
+
+- completion or inference calls;
+- writes;
+- requests that the claim predicts the system refuses.
+
+A revise re-verifies the surviving claims of the entry it edits with the same read-only queries. When no read-only
+query can check a claim, keep its text. Name that claim as unverified on the PR page, with the reason.
 
 A trap claim about shared infrastructure enters only with its root cause named and reproduced
 outside the originating session; a fixable obstruction is fixed instead of recorded.

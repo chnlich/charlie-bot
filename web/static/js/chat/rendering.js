@@ -11,24 +11,31 @@
 
 // The one branch glyph: the clone_start banner's "Cloned from" marker below
 // and the separator's "Clone to here" button (sidebar/modals.js).
-const CLONE_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>';
+const CLONE_SVG = cbIcon('clone', 14);
 
-// The one down-chevron glyph, path-only because its consuming sites keep different
-// <svg> wrappers: renderToolActivity's "N tool calls" toggle (w-3 h-3) and
-// buildTurnFoldBar's turn-fold chevron.
-const CHEVRON_DOWN_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';
+// A handler result line's mark: the check for a handler that succeeded, the cross for one that failed.
+// A row stored before the kind field has no mark; its text keeps the mark it was stored with.
+const HANDLER_MARK_ICONS = {handler_ok: 'done', handler_error: 'failed'};
 
 function renderToolActivity(tools) {
   if (!Array.isArray(tools) || !tools.length) return '';
   var rows = renderToolRows(tools);
   var label = tools.length + ' tool call' + (tools.length !== 1 ? 's' : '');
   return '<div class="mt-2 border border-slate-600/30 rounded-lg overflow-hidden">'
-    + '<button onclick="this.nextElementSibling.classList.toggle(\'hidden\')" class="w-full flex items-center justify-between px-3 py-1.5 bg-slate-800/50 hover:bg-slate-800 transition-colors text-xs text-slate-400">'
+    + '<button onclick="toggleToolCalls(this)" class="w-full flex items-center justify-between px-3 py-1.5'
+    + ' bg-slate-800/50 hover:bg-slate-800 transition-colors text-xs text-slate-400">'
     + '<span>' + label + '</span>'
-    + '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' + CHEVRON_DOWN_SVG_PATH + '</svg>'
+    + cbIcon('disclosure', 12, 'tool-calls-mark')
     + '</button>'
     + '<div class="hidden bg-slate-800/30 px-3 py-2">' + rows + '</div>'
     + '</div>';
+}
+
+// The tool-call toggle: shows or hides the rows after it and swaps the mark to match.
+function toggleToolCalls(btn) {
+  const rows = btn.nextElementSibling;
+  const open = !rows.classList.toggle('hidden');
+  btn.querySelector('.tool-calls-mark').outerHTML = Chat.disclosureIcon(open, 12, 'tool-calls-mark');
 }
 
 // The rows of one tool list. A row that started a subagent carries the subagent's card under its header.
@@ -238,9 +245,16 @@ function turnFoldLabel(count) {
   return count + ' step' + (count === 1 ? '' : 's');
 }
 
+// The bar's content: its label and the disclosure mark for its state.
+function turnFoldBarHtml(count, expanded) {
+  return '<span class="turn-fold-label">' + turnFoldLabel(count) + '</span>'
+    + Chat.disclosureIcon(expanded, 14, 'turn-fold-chevron');
+}
+
 function setTurnFoldBarExpanded(btn, expanded) {
   btn.setAttribute('aria-expanded', String(expanded));
   btn.setAttribute('title', expanded ? 'Collapse steps' : 'Expand steps');
+  btn.innerHTML = turnFoldBarHtml(Number(btn.dataset.turnFoldCount), expanded);
 }
 
 function buildTurnFoldBar(turnKey, count) {
@@ -250,9 +264,6 @@ function buildTurnFoldBar(turnKey, count) {
   btn.dataset.turnFoldKey = turnKey;
   btn.dataset.turnFoldCount = String(count);
   btn.onclick = function() { toggleTurnFold(this); };
-  btn.innerHTML = '<span class="turn-fold-label">' + turnFoldLabel(count) + '</span>'
-    + '<svg class="turn-fold-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-    + CHEVRON_DOWN_SVG_PATH + '</svg>';
   setTurnFoldBarExpanded(btn, false);
   return btn;
 }
@@ -437,7 +448,15 @@ function buildTurnRowFromSpec(spec) {
   // the title keeps the width its text needs (styles.css).
   const conclusion = spec.conclusionText != null ? turnFirstLine(spec.conclusionText) : '';
   row.classList.toggle('turn-row-no-conclusion', conclusion === '');
-  row.appendChild(turnRowField('turn-row-conclusion', conclusion));
+  // The arrow leads the conclusion text. The text is set first, so the field's text
+  // reads the same with or without the mark.
+  const conclusionField = turnRowField('turn-row-conclusion', conclusion);
+  if (conclusion !== '') {
+    const arrow = document.createElement('span');
+    arrow.innerHTML = cbIcon('leads-to', 12, 'turn-row-arrow');
+    conclusionField.insertBefore(arrow, conclusionField.firstChild);
+  }
+  row.appendChild(conclusionField);
 
   const meta = document.createElement('span');
   meta.className = 'turn-row-meta';
@@ -453,7 +472,8 @@ function buildTurnRowFromSpec(spec) {
   // A folded turn is a button, and a phone has no hover or title tooltip to show it. The row ends in
   // the disclosure caret the fold bar and the events rows carry, so a reader sees it opens. The row
   // hides while the turn is open, so the caret always shows the closed state.
-  const caret = turnRowField('turn-row-caret', '▶');
+  const caret = turnRowField('turn-row-caret', '');
+  caret.innerHTML = cbIcon('disclosure', 10);
   caret.setAttribute('aria-hidden', 'true');
   row.appendChild(caret);
 
@@ -717,9 +737,9 @@ function isLongPassage(text) {
 // note, and the task spec / launch prompt link row. Missing refs show gray
 // placeholders there.
 const RUN_HEADER_DOT_COLORS = {
-  running: 'bg-blue-500', success: 'bg-green-500', completed: 'bg-green-500',
-  queued: 'bg-amber-400', withheld: 'bg-amber-400',
-  failed: 'bg-red-500', interrupted: 'bg-red-500', attention: 'bg-red-500',
+  running: 'text-blue-500', success: 'text-green-500', completed: 'text-green-500',
+  queued: 'text-amber-400', withheld: 'text-amber-400',
+  failed: 'text-red-500', interrupted: 'text-red-500', attention: 'text-red-500',
 };
 
 function runHeaderNoteHtml(msg, runId) {
@@ -762,7 +782,7 @@ function runHeaderLinksHtml(msg, runId) {
 function runHeaderHtml(msg) {
   const runId = escapeHtmlAttr(String(msg.run_id || ''));
   const state = String(msg.state || '');
-  const dot = RUN_HEADER_DOT_COLORS[state] || 'bg-slate-500';
+  const dot = RUN_HEADER_DOT_COLORS[state] || 'text-slate-500';
   const titleAttr = msg.timestamp ? ' title="' + formatBubbleTime(msg.timestamp) + '"' : '';
   const error = msg.error
     ? '<div id="run-error-' + runId + '" class="text-red-400 text-xs max-w-[85%]">'
@@ -771,7 +791,7 @@ function runHeaderHtml(msg) {
   return openMessageWrapper('flex flex-col items-center gap-1', msg)
     + '<div id="run-header-' + runId + '" data-run-state="' + escapeHtmlAttr(state) + '"'
     + ' class="flex items-center gap-2 bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden"' + titleAttr + '>'
-    + '<span id="run-dot-' + runId + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dot + '"></span>'
+    + cbIcon('dot', 8, 'flex-shrink-0 ' + dot, 'id="run-dot-' + escapeHtmlAttr(runId) + '"')
     + '<span class="truncate">' + escapeHtml(msg.content) + '</span></div>'
     + runHeaderNoteHtml(msg, runId) + error + runHeaderLinksHtml(msg, runId) + '</div>';
 }
@@ -986,13 +1006,14 @@ function renderMessage(msg, sessionId) {
   // A web_status change and a cold read of a waiting item read as a system line. The For you view folds both instead.
   if (msg.role === "system" || msg.role === "web_status" || msg.role === "web_ask_check") {
     var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
+    var handlerMark = Object.hasOwn(HANDLER_MARK_ICONS, msg.kind) ? cbIcon(HANDLER_MARK_ICONS[msg.kind], 12) + " " : "";
     return openMessageWrapper("flex justify-center", msg) + "<div class=\"bg-slate-700/50 text-slate-400 text-xs px-3 py-1.5 rounded-full max-w-[85%] overflow-hidden truncate\"" + titleAttr + ">"
-      + escapeHtml(msg.content) + "</div></div>";
+      + handlerMark + escapeHtml(msg.content) + "</div></div>";
   }
   if (msg.role === "task_delegated") {
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-amber-900/30 border border-amber-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\">"
       + "<div class=\"flex items-center gap-2 text-amber-400 text-xs font-semibold mb-2\">"
-      + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"/></svg>"
+      + cbIcon("delegated", 14)
       + "Delegated</div>"
       + renderDelegateMetadata(msg, sessionId) + timeDiv() + "</div></div>";
   }
@@ -1041,7 +1062,8 @@ function renderMessage(msg, sessionId) {
     // The fold state lives on the card node only: a page reload folds the card again.
     var toggleHtml = foldable
       ? "<button type=\"button\" class=\"child-report-toggle\" aria-expanded=\"false\" onclick=\"var c=this.closest('.child-report');var o=c.dataset.folded==='true';c.dataset.folded=o?'false':'true';this.setAttribute('aria-expanded',String(o))\">"
-        + "<span class=\"child-report-more\">" + escapeHtml(moreLabel) + " ▾</span><span class=\"child-report-less\">Show less ▴</span></button>"
+        + "<span class=\"child-report-more\">" + escapeHtml(moreLabel) + " " + cbIcon("disclosure", 12) + "</span>"
+        + "<span class=\"child-report-less\">Show less " + cbIcon("disclosure-open", 12) + "</span></button>"
       : "";
     return openMessageWrapper("flex justify-start", msg)
       + "<div class=\"child-report max-w-[90%] overflow-hidden bg-emerald-900/40 border border-emerald-700/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm text-slate-300\""
@@ -1068,7 +1090,7 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "plan") {
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"max-w-[90%] overflow-hidden bg-slate-800 border border-blue-500/30 rounded-2xl px-4 py-3 text-sm\">"
       + "<div class=\"flex items-center gap-2 text-blue-400 text-xs font-semibold mb-2\">"
-      + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4\"/></svg>"
+      + cbIcon("plan", 14)
       + "Plan</div>"
       + mdDiv(msg.content) + timeDiv() + "</div></div>";
   }
@@ -1090,7 +1112,8 @@ function renderMessage(msg, sessionId) {
     return openMessageWrapper("flex justify-start", msg) + "<div class=\"w-full bg-slate-700/40 border border-slate-600/30 rounded-lg px-4 py-2 text-xs text-slate-300\">"
       + "<div class=\"flex items-center gap-2 mb-1 text-indigo-300 font-semibold\">"
       + "<span class=\"px-1.5 py-0.5 rounded bg-indigo-900 text-[10px] tracking-wide\">AGENT</span>"
-      + "<span class=\"truncate\">" + escapeHtml(msg.from_session_name || "") + "</span>"
+      + "<span class=\"truncate\" title=\"" + escapeHtmlAttr(msg.from_session_name || "") + "\">"
+      + escapeHtml(msg.from_session_name || "") + "</span>"
       + "</div>"
       + "<div class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</div>"
       + timeDiv() + "</div></div>";
@@ -1188,6 +1211,7 @@ function setMessageDeliveryStatus(msg, status) {
 
 const GLOBALS = {
   mdDiv,
+  toggleToolCalls,
   renderMessage,
   renderMessagesIntoContainer,
   postProcessRenderedMessages,

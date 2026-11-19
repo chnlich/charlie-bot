@@ -1,5 +1,5 @@
 //! Path resolution: `expanduser` and the caller-supplied-home form `expanduser_under`, the non-strict `realpath`, the
-//! `PATH` a process without one searches, and the executable a `PATH` value names.
+//! `PATH` a process without one searches, the executable a `PATH` value names, and the file a bare `argv[0]` names.
 //!
 //! The home resolution, the fence's containment check and the static-file containment check all
 //! compare paths these two functions produce. Those checks therefore follow POSIX path resolution step
@@ -172,6 +172,23 @@ pub fn is_executable(path: &Path) -> bool {
 /// that holds no executable — or that cannot be read — is skipped.
 pub fn executable_on_path(name: &str, search_path: &OsStr) -> Option<PathBuf> {
   std::env::split_paths(search_path).map(|directory| directory.join(name)).find(|candidate| is_executable(candidate))
+}
+
+/// The file the caller ran: `argv[0]` when it has a directory part, else the first `PATH` entry that holds it.
+///
+/// A fake program links its role name to one binary and finds its data file beside the link. The entry it ran is
+/// `argv[0]`, which the caller may spell bare for `PATH` resolution, so this resolves it the way the caller's own
+/// `exec` did. The file need not be executable: the caller already ran it.
+pub fn program_path(invoked: &OsStr) -> PathBuf {
+  let path = Path::new(invoked);
+  if path.components().count() > 1 {
+    return path.to_path_buf();
+  }
+  let search = std::env::var_os("PATH").expect("a bare argv[0] is resolved on PATH");
+  std::env::split_paths(&search)
+    .map(|directory| directory.join(path))
+    .find(|candidate| candidate.is_file())
+    .unwrap_or_else(|| panic!("{} is on no PATH entry", path.display()))
 }
 
 #[cfg(test)]

@@ -391,8 +391,9 @@ const planPanel = (() => {
     var dot = btn.querySelector('.plan-tab-dot');
     if (on) {
       if (!dot) {
-        dot = document.createElement('span');
-        dot.className = 'plan-tab-dot ml-1 inline-block w-2 h-2 rounded-full bg-blue-400';
+        const holder = document.createElement('span');
+        holder.innerHTML = cbIcon('dot', 8, 'plan-tab-dot ml-1 inline-block text-blue-400');
+        dot = holder.firstElementChild;
         btn.appendChild(dot);
       }
       dot.style.display = '';

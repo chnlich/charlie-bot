@@ -49,6 +49,7 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   fs::write(system_bin.join("probe.json"), json!({"codex": [{"exit": 0}]}).to_string()).unwrap();
   let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
   let gh_wrapper_dir = charliebot_agents::gh_wrapper::dir_under(&repository);
+  let ssh_guard_dir = charliebot_agents::ssh_guard::dir_under(&repository);
   let cases = cases(&venv_bin, &system_bin, &server_bin_dir);
   let python = run_golden_reference(&repository, &cases, root.path());
   let python_cases = python.as_array().expect("Python reference returns a case array");
@@ -63,7 +64,8 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
 
   for case in &cases {
     let rewritten =
-      agent_environment::agent_environment(&case.process_env, &case.server_bin_dir, &gh_wrapper_dir).unwrap();
+      agent_environment::agent_environment(&case.process_env, &case.server_bin_dir, &gh_wrapper_dir, &ssh_guard_dir)
+        .unwrap();
     let startup = StartupState::default();
     startup.insert(rewritten).unwrap();
     let base = startup.require::<agent_environment::AgentBaseEnvironment>().unwrap();
@@ -108,6 +110,9 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
       .unwrap(),
       _ => panic!("unsupported launch kind/backend pair: {}/{}", case.launch_kind, case.backend_type),
     };
+    if case.launch_kind == "manager-turn" {
+      assert_ssh_resolves_to_guard(&child_env["PATH"], &ssh_guard_dir);
+    }
     rust_cases.push(json!({
       "id": case.id,
       "base_env": base.values.clone(),
@@ -116,6 +121,16 @@ fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   }
 
   assert_eq!(Value::Array(rust_cases), Value::Array(python_cases.clone()));
+}
+
+fn assert_ssh_resolves_to_guard(path: &str, guard_dir: &Path) {
+  let output = std::process::Command::new("/bin/sh").args(["-c", "command -v ssh"]).env("PATH", path).output().unwrap();
+  assert!(output.status.success(), "ssh lookup failed: {}", String::from_utf8_lossy(&output.stderr));
+  assert_eq!(
+    String::from_utf8(output.stdout).unwrap().trim(),
+    guard_dir.join("ssh").to_str().unwrap(),
+    "manager ssh lookup must resolve through the guard"
+  );
 }
 
 fn cases(venv_bin: &Path, system_bin: &Path, server_bin_dir: &Path) -> Vec<Case> {

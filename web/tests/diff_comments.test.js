@@ -3,9 +3,12 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic, readPackageStatic } = require('./read_static');
+const { loadIconScripts } = require('./icon_context');
 
 const DIFF_COMMENTS_JS = readPackageStatic('features', 'diff_view', 'diff_comments.js');
 const COMMENT_POST_JS = readStatic('comment_post.js');
+// The page loads utils.js before diff_comments.js, whose session picker reads expandSessionColumns there.
+const UTILS_JS = readStatic('utils.js');
 
 function makeElement() {
   return {
@@ -72,14 +75,22 @@ function loadDiffCommentsScript() {
     console,
     document,
     fetch: async (url) => {
-      assert.equal(url, '/api/sessions/');
-      return {ok: true, status: 200, async json() { return []; }};
+      assert.equal(url, '/api/sessions/?compact=1');
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {$encoded: {id: 'uuid-b64', updated_at: 'delta'}, id: [], name: [], updated_at: []};
+        },
+      };
     },
     setTimeout,
     window,
   };
   vm.createContext(context);
+  loadIconScripts(context);
   vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
+  vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
   vm.runInContext(DIFF_COMMENTS_JS, context, {filename: 'diff_comments.js'});
   return window;
 }
@@ -178,4 +189,15 @@ test('mostRecentSessionId chooses the latest updated session', () => {
     {id: 'newer', updated_at: '2026-02-01T00:00:00Z'},
   ]), 'newer');
   assert.equal(window.__cbdcMostRecentSessionId([]), null);
+});
+
+test('mostRecentSessionId reads epoch minutes from the column form and an ISO string from a detail row', () => {
+  const window = loadDiffCommentsScript();
+  // The listing's column rows carry updated_at as epoch minutes, and a query session's detail row carries an ISO
+  // string. Reading the minutes as a date string would drop both to zero and pick the list's first row instead.
+  assert.equal(window.__cbdcMostRecentSessionId([
+    {id: 'older', updated_at: 29_566_074},
+    {id: 'newer', updated_at: 29_566_090},
+    {id: 'iso', updated_at: '2025-10-17T06:42:38Z'},
+  ]), 'newer');
 });

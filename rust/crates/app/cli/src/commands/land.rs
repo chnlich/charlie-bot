@@ -8,6 +8,7 @@
 //! (`landed` and `landed-no-ci` exit 0).
 
 use std::ffi::OsString;
+use std::path::Path;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::{self, CliExit};
@@ -21,11 +22,32 @@ const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep 
      branch only after CI passed on the head sha, and leave no PR of the task branch open";
 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(Command::new("land").about(ABOUT).arg(
-    Arg::new("task").long("task").value_name("SESSION_ID").help(
-      "Task session id (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the run environment)",
-    ),
-  ));
+  let command =
+    with_infer_long_args(
+      Command::new("land")
+        .about(ABOUT)
+        .arg(Arg::new("task").long("task").value_name("SESSION_ID").help(
+          "Task session id (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the run environment)",
+        ))
+        .arg(
+          Arg::new("title")
+            .long("title")
+            .value_name("TITLE")
+            .help("PR title on a gated landing; required with a body when the branch holds several commits"),
+        )
+        .arg(
+          Arg::new("body")
+            .long("body")
+            .value_name("BODY")
+            .conflicts_with("body-file")
+            .help("PR body on a gated landing; required with --title when the branch holds several commits"),
+        )
+        .arg(
+          Arg::new("body-file").long("body-file").value_name("PATH").conflicts_with("body").help(
+            "PR body from a file on a gated landing; required with --title when the branch holds several commits",
+          ),
+        ),
+    );
   let matches = match command
     .clone()
     .try_get_matches_from(std::iter::once(OsString::from("charliebot land")).chain(args.iter().cloned()))
@@ -33,6 +55,19 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     Ok(matches) => matches,
     Err(error) => error.exit(),
   };
+  let mut options = charliebot_tasks::land::LandOptions {
+    title: matches.get_one::<String>("title").cloned(),
+    body: matches.get_one::<String>("body").cloned(),
+  };
+  options.validate().map_err(|error| CliExit::error(format!("{error:#}")))?;
+  if let Some(path) = matches.get_one::<String>("body-file") {
+    let body = std::fs::read_to_string(path)
+      .map_err(|error| CliExit::error(format!("cannot read --body-file {}: {error}", Path::new(path).display())))?;
+    if body.trim().is_empty() {
+      return Err(CliExit::error("--body-file must not be empty"));
+    }
+    options.body = Some(body);
+  }
   let task = matches.get_one::<String>("task").map(String::as_str);
   let session_id = resolve::resolve_from_env(task)?;
   let home = home_dir()?;
@@ -40,7 +75,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     .enable_all()
     .build()
     .map_err(|error| CliExit::error(format!("tokio runtime failed to start: {}", exit::source_chain(&error))))?;
-  match runtime.block_on(charliebot_tasks::land::land(&home, &session_id)) {
+  match runtime.block_on(charliebot_tasks::land::land(&home, &session_id, &options)) {
     Ok(record) => {
       let exit_code = charliebot_tasks::land::LandState::try_from(record.state.as_str())
         .map_err(|error| CliExit::error(format!("landing record holds an unknown state: {error}")))?

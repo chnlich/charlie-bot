@@ -703,8 +703,8 @@ fn write_task_log(
         Some(&report.id),
         Some(reported_at),
         [
-          ("child_session_id".to_string(), Value::String(report.child_id.clone())),
-          ("child_event_id".to_string(), Value::String(report.close_event_id.clone())),
+          (event_types::CHILD_SESSION_ID.to_string(), Value::String(report.child_id.clone())),
+          (event_types::CHILD_EVENT_ID.to_string(), Value::String(report.close_event_id.clone())),
           ("outcome".to_string(), json!(report.outcome)),
           ("summary".to_string(), json!(report.summary)),
           (event_types::RESULT_REFS.to_string(), json!([])),

@@ -215,6 +215,11 @@ test('acceptance 2: candidates come from both lists, less the moved session, its
   parts.search.value = 't';
   parts.search.fire('input');
   assert.deepEqual(choiceLabels(document), ['Top level', 'Session T'], 'the search filters the candidates by name');
+  // CHOICE_CLASS elides a long label, so each choice carries its full label as its hover text.
+  assert.equal(choiceButton(document, 'Session T').title, 'Session T', 'a choice names itself on hover');
+  // The header's title block holds the heading, then the quoted subject, whose hover text is the name in its quotes.
+  const subject = parts.title.children[1];
+  assert.equal(subject.title, subject.textContent.slice(1, -1), 'the subject carries the moved session name on hover');
 });
 
 test('acceptance 3: one pick sends one PATCH whose body holds only task_parent_id', async () => {

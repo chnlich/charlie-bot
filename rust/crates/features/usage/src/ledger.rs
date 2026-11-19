@@ -361,8 +361,8 @@ impl UsageLedger {
   }
 
   pub fn model_rows_with_native_starts(&mut self) -> anyhow::Result<(Vec<LedgerRow>, BTreeMap<String, String>)> {
-    let agg = self.agg_ready()?;
-    rows_from_accs(self.all_time_accs(agg)?)
+    let aggregate_serves = self.aggregate_ready()?;
+    rows_from_accs(self.all_time_accs(aggregate_serves)?)
   }
 
   /// Everything one usage page render reads, from one read transaction. The aggregate's readiness decides the path of
@@ -370,9 +370,9 @@ impl UsageLedger {
   pub fn read_page(&mut self, week: Week, host: &str) -> anyhow::Result<PageSnapshot> {
     let previous = week.previous()?;
     // A backfill writes, so it runs before the snapshot opens: a write cannot nest in the read transaction.
-    let agg = self.agg_ready()?;
+    let aggregate_serves = self.aggregate_ready()?;
     self.conn.execute_batch("BEGIN")?;
-    let outcome = self.read_in_snapshot(agg, week, previous, host);
+    let outcome = self.read_in_snapshot(aggregate_serves, week, previous, host);
     let closed = self.conn.execute_batch(if outcome.is_ok() { "COMMIT" } else { "ROLLBACK" });
     match (outcome, closed) {
       (Ok(snapshot), Ok(())) => Ok(snapshot),
@@ -382,13 +382,19 @@ impl UsageLedger {
     }
   }
 
-  fn read_in_snapshot(&self, agg: bool, week: Week, previous: Week, host: &str) -> anyhow::Result<PageSnapshot> {
-    let (rows, native_starts) = rows_from_accs(self.all_time_accs(agg)?)?;
+  fn read_in_snapshot(
+    &self,
+    aggregate_serves: bool,
+    week: Week,
+    previous: Week,
+    host: &str,
+  ) -> anyhow::Result<PageSnapshot> {
+    let (rows, native_starts) = rows_from_accs(self.all_time_accs(aggregate_serves)?)?;
     Ok(PageSnapshot {
       rows,
       native_starts,
-      week_rows: rows_from_accs(self.week_accs(agg, week)?)?.0,
-      previous_week_rows: rows_from_accs(self.week_accs(agg, previous)?)?.0,
+      week_rows: rows_from_accs(self.week_accs(aggregate_serves, week)?)?.0,
+      previous_week_rows: rows_from_accs(self.week_accs(aggregate_serves, previous)?)?.0,
       last_capture: self.last_capture_at(host)?,
     })
   }
@@ -436,15 +442,16 @@ impl UsageLedger {
 
   /// Whether the aggregate answers reads now. An aggregate that is not ready is backfilled here, and this read takes the
   /// table pass, as the first read after a backfill always has.
-  fn agg_ready(&mut self) -> anyhow::Result<bool> {
+  fn aggregate_ready(&mut self) -> anyhow::Result<bool> {
     let ready = self
       .conn
       .query_row("SELECT value FROM ledger_meta WHERE key = 'agg_backfilled'", [], |_| Ok(()))
       .optional()?
       .is_some();
-    let agg_empty = self.conn.query_row("SELECT 1 FROM usage_agg LIMIT 1", [], |_| Ok(())).optional()?.is_none();
-    let usage_nonempty = self.conn.query_row("SELECT 1 FROM usage LIMIT 1", [], |_| Ok(())).optional()?.is_some();
-    if ready && !(agg_empty && usage_nonempty) {
+    let aggregate_table_empty =
+      self.conn.query_row("SELECT 1 FROM usage_agg LIMIT 1", [], |_| Ok(())).optional()?.is_none();
+    let usage_table_nonempty = self.conn.query_row("SELECT 1 FROM usage LIMIT 1", [], |_| Ok(())).optional()?.is_some();
+    if ready && !(aggregate_table_empty && usage_table_nonempty) {
       return Ok(true);
     }
     self.backfill_agg()?;
@@ -452,8 +459,8 @@ impl UsageLedger {
   }
 
   /// The all-time accumulators: the aggregate with exact edge stamps when it serves, else the table's grouped pass.
-  fn all_time_accs(&self, agg: bool) -> anyhow::Result<Accs> {
-    if !agg {
+  fn all_time_accs(&self, aggregate_serves: bool) -> anyhow::Result<Accs> {
+    if !aggregate_serves {
       return fold_rows(self.group_rows(&sql::model_rows_sql(), [])?);
     }
     let edge_sql = sql::group_edge_sql();
@@ -475,10 +482,10 @@ impl UsageLedger {
 
   /// The counted rows of one Pacific week: the table's window scan when the aggregate is not serving, else the
   /// aggregate's whole days plus the two boundary slices.
-  fn week_accs(&self, agg: bool, week: Week) -> anyhow::Result<Accs> {
+  fn week_accs(&self, aggregate_serves: bool, week: Week) -> anyhow::Result<Accs> {
     let lo = Week::utc_text(week.start);
     let hi = Week::utc_text(week.end);
-    if !agg {
+    if !aggregate_serves {
       return fold_rows(self.group_rows(&sql::week_rows_sql(), params![lo, hi])?);
     }
     fold_rows(self.agg_week_rows(week)?)

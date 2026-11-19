@@ -17,16 +17,15 @@ use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_core::text_repr;
 use charliebot_improve::command::{active_lock_path_in, loop_dir_in, read_active_lock_loop_id, read_loop_controller};
 use charliebot_store::layout;
-use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
+use charliebot_store::run_records::{ENDED_AT_FIELD, RUN_METADATA_NAME, STARTED_AT_FIELD, read_run_metadata};
 use regex::Regex;
 use serde_json::Value;
 
 use crate::common::{exact, failed, metadata_read_failure, read_config, value_repr};
 use crate::process;
 
-/// Each backend's registration has moved twice. The agents crate held it from 7b680fcbb until the crate grouping at
-/// 03459e0ca. The runtime/agents crate held it from 03459e0ca until each backend's own crate at d1a07436f, and that
-/// crate holds it from d1a07436f on. A build's tree says which layout it has, so each sha is read in its own.
+/// The three registration layouts a build may have: the agents crate's backends, the runtime/agents crate's
+/// backends, and each backend's own crate. A build's tree holds exactly one of them.
 const BACKEND_LAYOUTS: [(&str, &str); 3] = [
   ("rust/crates/charliebot-agents/src/backends", "/mod.rs"),
   ("rust/crates/runtime/agents/src/backends", "/mod.rs"),
@@ -61,7 +60,7 @@ pub fn scan(args: &[OsString]) -> Result<(), CliExit> {
         continue;
       }
       let run = read_run_metadata(&metadata).map_err(|error| failed(metadata_read_failure(&metadata, error)))?;
-      if matches!(run.get("ended_at"), Some(value) if !value.is_null()) {
+      if matches!(run.get(ENDED_AT_FIELD), Some(value) if !value.is_null()) {
         continue;
       }
       let Some((pid, pid_start, backend)) = live_run(&run, boot).map_err(failed)? else {
@@ -155,7 +154,7 @@ fn live_run(run: &Value, boot: i64) -> Result<Option<(u32, String, Value)>> {
   let (Some(pid), Some(pid_start), Some(started_at)) = (
     run.get("pid").and_then(Value::as_u64),
     run.get(PID_START_FIELD).and_then(Value::as_str),
-    run.get("started_at").and_then(Value::as_str),
+    run.get(STARTED_AT_FIELD).and_then(Value::as_str),
   ) else {
     return Ok(None);
   };

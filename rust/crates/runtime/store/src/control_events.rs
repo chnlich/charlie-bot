@@ -19,13 +19,16 @@ pub const CRON_REQUEST_ID_PREFIX: &str = "cron:";
 /// The field of a run record and a task-created event that carries the hash of the task spec.
 pub const TASK_SPEC_HASH_FIELD: &str = "task_spec_hash";
 
+/// The field of a request event's header that names the session the event came from.
+pub const SOURCE_SESSION_ID_FIELD: &str = "source_session_id";
+
 /// Fields that belong to the request-event header or its shared task-input payload.
 pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
   "id",
   "type",
   "timestamp",
   "actor",
-  "source_session_id",
+  SOURCE_SESSION_ID_FIELD,
   "content",
   "request_id",
   event_types::UPLOADED_FILES,
@@ -66,6 +69,11 @@ pub fn stable_close_request_event_id(session_id: &str, request_id: &str) -> Stri
 /// The stable blocked-close notice id for one `(session_id, request_id)` pair.
 pub fn stable_close_blocked_notice_id(session_id: &str, request_id: &str) -> String {
   stable_id(&format!("close-blocked-notice:{session_id}:{request_id}"))
+}
+
+/// The stable notice id to the initiator for one run that ended with its own pending triggers.
+pub fn stable_trigger_pause_notice_id(session_id: &str, run_id: &str) -> String {
+  stable_id(&format!("trigger-pause-notice:{session_id}:{run_id}"))
 }
 
 /// The stable task-closed fact id for one `(session_id, request_id)` pair.
@@ -179,7 +187,7 @@ pub fn build_control_event(
   event.insert("type".to_string(), Value::String(event_type.to_string()));
   event.insert("timestamp".to_string(), Value::String(timestamp.unwrap_or_else(UtcDateTime::now).to_isoformat_text()));
   event.insert("actor".to_string(), Value::String(actor.to_string()));
-  event.insert("source_session_id".to_string(), Value::String(source_session_id.to_string()));
+  event.insert(SOURCE_SESSION_ID_FIELD.to_string(), Value::String(source_session_id.to_string()));
   for (key, value) in payload {
     event.insert(key, value);
   }
@@ -247,7 +255,7 @@ pub fn close_event(fact: CloseFact<'_>) -> Value {
     payload.push(("archived_by".to_string(), json!(archived_by)));
   }
   if let Some(sequence_outcome) = fact.sequence_outcome {
-    payload.push(("sequence_outcome".to_string(), json!(sequence_outcome)));
+    payload.push((event_types::SEQUENCE_OUTCOME.to_string(), json!(sequence_outcome)));
   }
   build_control_event(
     event_types::TASK_CLOSED,

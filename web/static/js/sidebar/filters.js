@@ -25,12 +25,19 @@ function registerSidebarFilter(filter) {
   sidebarFiltersByName[normalized.name] = normalized;
 }
 
-registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/?compact=1', restoreFromUrl: false});
+registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/?compact=1&screen=1', restoreFromUrl: false});
 registerSidebarFilter({name: 'starred', label: 'Later', url: '/api/sessions/starred'});
 registerSidebarFilter({name: 'archived', label: 'Archive', url: '/api/sessions/archived'});
 
 function getSidebarFilter(filter) {
   return sidebarFiltersByName[filter] || null;
+}
+
+function workspaceListingUrl(activeSessionId) {
+  const url = getSidebarFilter('all').url;
+  if (!activeSessionId) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return url + separator + 'active=' + encodeURIComponent(activeSessionId);
 }
 
 function getRestorableSidebarFilters() {
@@ -114,7 +121,9 @@ function fetchFilterListing(filter, {networkOnly}) {
   if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
   const requestSeq = factSeqAtRequest();
   const headers = networkOnly ? networkOnlyHeaders() : {};
-  return fetch(registeredFilter.url, {headers}).then(res => {
+  const activeSessionId = SESSION_ID || new URL(location.href).searchParams.get('session');
+  const url = filter === 'all' ? workspaceListingUrl(activeSessionId) : registeredFilter.url;
+  return fetch(url, {headers}).then(res => {
     if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
     const stored = isStoredResponse(res);
     return res.json().then(payload => ({
@@ -393,6 +402,7 @@ const GLOBALS = {
   queueRowRefresh,
   refreshWorkspaceBadges,
   refreshCurrentList,
+  workspaceListingUrl,
 };
 Sidebar.wire(GLOBALS);
 

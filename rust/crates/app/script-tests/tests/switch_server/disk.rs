@@ -175,7 +175,7 @@ fn test_disk_preflight_fails_when_the_sampler_cannot_read_the_disk() {
   assert!(!run.stdout.contains("preflight passed:"), "{}", world.report(&run));
 }
 
-/// Resolves the root disk for a fake diskstats table with `/` mounted on the device `root_dev`.
+/// The root disk resolved for a fake diskstats table with `/` mounted on the device `root_dev`.
 fn resolved_root_disk(world: &mut World, diskstats: &str, root_dev: &str) -> String {
   let diskstats_path = world.root().join("root-disk-diskstats");
   let mountinfo_path = world.root().join("root-disk-mountinfo");

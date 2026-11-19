@@ -1019,7 +1019,7 @@ test('renderSessionItem shows separate delayed-trigger and scheduled indicators'
   // included, next to the delayed-trigger indicator.
   assert.match(html, /0 2 \* \* \*/);
   assert.match(html, /Next: /);
-  assert.match(html, /<span class="truncate block session-name">Wake later<\/span>/);
+  assert.match(html, /<span class="truncate block session-name" title="Wake later">Wake later<\/span>/);
 });
 
 test('createSession switches open chat through SPA state without full reload', async () => {

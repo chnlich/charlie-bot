@@ -26,33 +26,27 @@ pub(crate) struct PlanRoutes {
   locks: Arc<SessionLocks>,
 }
 
+/// The plans route's path. The CLI fills the session parameter from the same pattern.
+pub(crate) const PLANS_PATH: &str = "/api/sessions/{session_id}/plans";
+pub(crate) const PLAN_PRESENT_PATH: &str = "/api/internal/plan/present";
+pub(crate) const PLAN_AMEND_PATH: &str = "/api/internal/plan/amend";
+pub(crate) const PLAN_APPROVE_PATH: &str = "/api/internal/plan/approve";
+pub(crate) const PLAN_CLOSE_PATH: &str = "/api/internal/plan/close";
+
+/// The paths the plan router mounts. The registry answers the trailing-slash redirect's claim from them.
+pub(crate) const ROUTE_PATTERNS: &[&str] =
+  &[PLANS_PATH, PLAN_PRESENT_PATH, PLAN_AMEND_PATH, PLAN_APPROVE_PATH, PLAN_CLOSE_PATH];
+
 /// The route table, built with the shared feature context.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   let state = PlanRoutes { features: Arc::clone(features), locks: Arc::default() };
   Router::new()
-    .route("/api/sessions/{session_id}/plans", get_only(list_plans))
-    .route("/api/internal/plan/present", post_only(plan_present))
-    .route("/api/internal/plan/amend", post_only(plan_amend))
-    .route("/api/internal/plan/approve", post_only(plan_approve))
-    .route("/api/internal/plan/close", post_only(plan_close))
+    .route(PLANS_PATH, get_only(list_plans))
+    .route(PLAN_PRESENT_PATH, post_only(plan_present))
+    .route(PLAN_AMEND_PATH, post_only(plan_amend))
+    .route(PLAN_APPROVE_PATH, post_only(plan_approve))
+    .route(PLAN_CLOSE_PATH, post_only(plan_close))
     .with_state(state)
-}
-
-/// Whether a path is one of the plan routes, for the server's trailing-slash redirect.
-pub(crate) fn matches(path: &str) -> bool {
-  if matches!(
-    path,
-    "/api/internal/plan/present"
-      | "/api/internal/plan/amend"
-      | "/api/internal/plan/approve"
-      | "/api/internal/plan/close"
-  ) {
-    return true;
-  }
-  let Some(rest) = path.strip_prefix("/api/sessions/") else {
-    return false;
-  };
-  matches!(rest.split_once('/'), Some((session_id, "plans")) if !session_id.is_empty())
 }
 
 /// The plan registry of a session with derived states and read errors. A missing session answers 404. A corrupt
@@ -308,6 +302,7 @@ mod tests {
 
   use axum::body::{Body, to_bytes};
   use axum::http::{Method, Request, header};
+  use charliebot_registry::route_claims::RouteClaims;
   use charliebot_store::SESSION_NOT_FOUND_DETAIL;
   use tower::ServiceExt;
 
@@ -408,19 +403,21 @@ mod tests {
 
   #[test]
   fn the_route_claims_the_plans_path_of_one_session() {
-    assert!(matches("/api/sessions/sess/plans"));
-    assert!(!matches("/api/sessions//plans"));
-    assert!(!matches("/api/sessions/sess/plans/extra"));
-    assert!(!matches("/api/sessions/sess"));
+    let claims = RouteClaims::new(ROUTE_PATTERNS).expect("the plan route patterns are distinct");
+    assert!(claims.claims("/api/sessions/sess/plans"));
+    assert!(!claims.claims("/api/sessions//plans"));
+    assert!(!claims.claims("/api/sessions/sess/plans/extra"));
+    assert!(!claims.claims("/api/sessions/sess"));
   }
 
   #[test]
   fn the_route_claims_the_present_amend_approve_and_close_paths() {
-    assert!(matches("/api/internal/plan/present"));
-    assert!(matches("/api/internal/plan/amend"));
-    assert!(matches("/api/internal/plan/approve"));
-    assert!(matches("/api/internal/plan/close"));
-    assert!(!matches("/api/internal/plan/extra"));
+    let claims = RouteClaims::new(ROUTE_PATTERNS).expect("the plan route patterns are distinct");
+    assert!(claims.claims("/api/internal/plan/present"));
+    assert!(claims.claims("/api/internal/plan/amend"));
+    assert!(claims.claims("/api/internal/plan/approve"));
+    assert!(claims.claims("/api/internal/plan/close"));
+    assert!(!claims.claims("/api/internal/plan/extra"));
   }
 
   #[tokio::test]

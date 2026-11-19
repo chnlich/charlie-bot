@@ -89,7 +89,7 @@ async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>,
     format!("{MERGED_PATH}?{}", encode_pairs(&pairs))
   } else {
     if inputs.len() > 1 {
-      warn = Some("⚠ Remote or non-JSON traces cannot be merged, showing first trace only".to_string());
+      warn = Some("Remote or non-JSON traces cannot be merged, showing first trace only".to_string());
     }
     inputs[0].0.clone()
   };
@@ -262,7 +262,7 @@ fn resolve_trace_paths(
   for path in paths {
     match fs::metadata(&path) {
       Ok(metadata) if metadata.is_file() => {}
-      _ => {
+      Ok(_) | Err(_) => {
         return Err(Box::new(json_error(StatusCode::NOT_FOUND, &format!("Trace path not found: {}", path.display()))));
       }
     }
@@ -373,7 +373,7 @@ impl GlobMatcher {
           name_index += 1;
           token_index += 1;
         }
-        _ => match star_index {
+        None | Some(_) => match star_index {
           Some(star) => {
             star_end += 1;
             name_index = star_end;

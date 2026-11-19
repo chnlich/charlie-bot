@@ -56,5 +56,6 @@ only; a member's cooling lives in the shared backend-availability record that th
 ## Boundary
 
 A devin launch runs in its session cgroup, as every spawned agent does. It does not run under the write-only Landlock
-boundary that improve rounds apply to `claude`: that boundary wraps the `claude` launcher named by a claude option's
-`cli_binary` (`dev/improve/remote-runner.sh`), and a devin option has no such key.
+boundary that improve rounds apply to `claude`: that boundary wraps the round's agent process through the improve
+launcher (`dev/improve/remote-launch.sh`), which a task reaches through its `improve_host` key, and a devin option
+has no such key.

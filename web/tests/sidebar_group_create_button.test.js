@@ -147,58 +147,73 @@ test('expandSessionGroup turns a stored collapsed group into an expanded one', (
   assert.deepEqual(writes, [[SESSION_GROUP_COLLAPSED_STORAGE_KEY, '{"alpha":false}']]);
 });
 
+// Each interaction file downloads on its own memo entry, so a test holds every file's request and releases them
+// in turn. The picker's file is requested only after session-actions.js has loaded, so releaseAll loops until none
+// is held.
+function holdInteractionScripts(context) {
+  const requests = [];
+  const holds = [];
+  const memo = new Map();
+  context.loadPageScripts = (key, paths) => {
+    if (!memo.has(key)) {
+      requests.push(Array.from(paths)[0]);
+      memo.set(key, new Promise((resolve) => holds.push(resolve)));
+    }
+    return memo.get(key);
+  };
+  const releaseAll = async () => {
+    while (holds.length) {
+      holds.shift()();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+  return {requests, releaseAll};
+}
+
 test('a control click before the interaction scripts arrive loads the group once and then dispatches', async () => {
   const {context} = buildContext();
-  const requests = [];
   const forwarded = [];
-  let settle;
   const styleRequests = [];
   context.loadPageStyles = (key, paths) => {
     styleRequests.push([key, Array.from(paths)]);
     return Promise.resolve();
   };
-  context.loadPageScripts = (key, paths) => {
-    requests.push([key, Array.from(paths)]);
-    return new Promise((resolve) => { settle = resolve; });
-  };
+  const scripts = holdInteractionScripts(context);
   const loader = fs.readFileSync(
     path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'row-menu.js'), 'utf8');
   vm.runInContext(loader, context, {filename: 'templates/js/sidebar/row-menu.js'});
 
   assert.equal(typeof context.Sidebar.openSessionRowMenu, 'function', 'the loader forwards the menu control');
-  assert.equal(requests.length, 0, 'the loader fetches nothing until a control call');
+  assert.equal(scripts.requests.length, 0, 'the loader fetches nothing until a control call');
 
   const pending = context.sidebarControl('openSessionRowMenu', {id: 'gear'}, 's1');
   assert.deepEqual(styleRequests, [['sidebar-interactions', ['/static/css/sidebar-interactions.css']]],
     'the group carries its stylesheet');
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(requests.length, 1, 'the first call starts one download');
-  assert.equal(requests[0][0], 'sidebar-interactions');
-  assert.deepEqual(requests[0][1], [
+  assert.deepEqual(scripts.requests, [
     '/static/js/sidebar/row-menu.js', '/static/js/sidebar/modals.js',
     '/static/js/sidebar/session-actions.js', '/static/js/sidebar/session-menus.js',
-    '/static/js/sidebar/session-move.js',
-  ]);
+  ], 'the first call starts the four files together; the picker waits for session-actions.js');
 
   // A second click while the group downloads joins the first load.
   const second = context.sidebarControl('openSessionRowMenu', {id: 'gear2'}, 's2');
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(requests.length, 1);
-  assert.deepEqual(styleRequests.length, 1);
+  assert.equal(scripts.requests.length, 4);
+  assert.equal(styleRequests.length, 1);
 
   // The module's own registration arrives with the download and takes the dispatch.
   context.registerSidebarControl('openSessionRowMenu', (...args) => { forwarded.push(args); });
-  settle();
+  await scripts.releaseAll();
   await pending;
   await second;
+  assert.equal(scripts.requests[scripts.requests.length - 1], '/static/js/sidebar/session-move.js');
   assert.deepEqual(forwarded, [[{id: 'gear'}, 's1'], [{id: 'gear2'}, 's2']]);
 });
 
 test('a deferred handler reads the currentTarget the click was made with', async () => {
   const {context} = buildContext();
-  let settle;
   context.loadPageStyles = () => Promise.resolve();
-  context.loadPageScripts = () => new Promise((resolve) => { settle = resolve; });
+  const scripts = holdInteractionScripts(context);
   const loader = fs.readFileSync(
     path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'row-menu.js'), 'utf8');
   vm.runInContext(loader, context, {filename: 'templates/js/sidebar/row-menu.js'});
@@ -211,7 +226,7 @@ test('a deferred handler reads the currentTarget the click was made with', async
   event.currentTarget = null;
   await new Promise((resolve) => setImmediate(resolve));
   context.Sidebar.startRename = (e, id) => { seen.push([e.currentTarget, id]); };
-  settle();
+  await scripts.releaseAll();
   await pending;
   assert.deepEqual(seen, [[wrapper, 's1']]);
 });

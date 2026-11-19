@@ -40,6 +40,7 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 
 use crate::context::FeatureContext;
+use crate::icons::{IconError, Icons};
 use crate::pages::{self, STATIC_URL_PREFIX, package_static_directory, package_templates_directory};
 use crate::registry::TemplateGlobalScope;
 use crate::watch::TreeWatch;
@@ -103,10 +104,17 @@ pub struct Templating {
   globals_memo: Mutex<Option<StableGlobalsMemo>>,
   /// The compressed forms of the last eight page bodies deflated, the oldest first.
   page_gzips: Mutex<Vec<PageGzip>>,
+  /// The icon data the current static-tree revision supplied to Rust and template callers.
+  icons: Mutex<Option<IconSnapshot>>,
   /// The served form of each static page tail, kept while the watch revision holds it.
   static_tails: Mutex<Vec<StaticTail>>,
   /// The watch whose revision says whether the template and static trees moved.
   watch: TreeWatch,
+}
+
+struct IconSnapshot {
+  revision: u64,
+  icons: Arc<Icons>,
 }
 
 /// One static page tail's served form: the markup a page puts where its tail's sentinel stands.
@@ -220,6 +228,7 @@ impl Templating {
       render_memo: Mutex::new(Vec::new()),
       globals_memo: Mutex::new(None),
       page_gzips: Mutex::new(Vec::new()),
+      icons: Mutex::new(None),
       static_tails: Mutex::new(Vec::new()),
       watch: TreeWatch::new(&trees),
     }
@@ -244,6 +253,23 @@ impl Templating {
   pub fn static_asset_version(&self) -> io::Result<String> {
     let git_part = self.git_version().replace(" \u{b7} ", "-").replace(' ', "-");
     Ok(format!("{git_part}-{}", self.asset_tree_digest()?))
+  }
+
+  /// The validated icons for the current static-tree revision.
+  pub fn icons(&self) -> Result<Arc<Icons>, IconError> {
+    self.icons_at_revision(self.watch.revision())
+  }
+
+  fn icons_at_revision(&self, revision: u64) -> Result<Arc<Icons>, IconError> {
+    let mut snapshot = self.icons.lock().expect("the icon snapshot mutex is not poisoned");
+    if let Some(snapshot) = snapshot.as_ref()
+      && snapshot.revision == revision
+    {
+      return Ok(Arc::clone(&snapshot.icons));
+    }
+    let icons = Arc::new(Icons::load(&self.repo_root)?);
+    *snapshot = Some(IconSnapshot { revision, icons: Arc::clone(&icons) });
+    Ok(icons)
   }
 
   /// The sha1 over each served static file's URL path and content sha1, in path order, as 12 hex digits.
@@ -498,10 +524,11 @@ impl Templating {
         cache.as_ref().is_some_and(|entry| Arc::ptr_eq(&entry.sources, &sources) && entry.globals == globals);
       if !reused {
         let marker = Arc::new(static_tail_marker());
+        let icons = self.icons_at_revision(revision).map_err(|error| RenderError::Icons(error.to_string()))?;
         *cache = Some(RenderCache {
           sources,
           globals: globals.clone(),
-          environment: Arc::new(self.environment(globals, Arc::clone(&marker))),
+          environment: Arc::new(self.environment(globals, Arc::clone(&marker), icons)?),
           tail_marker: marker,
         });
       }
@@ -601,7 +628,12 @@ impl Templating {
     Ok(sources)
   }
 
-  fn environment(&self, globals: Vec<TemplateGlobal>, tail_marker: Arc<String>) -> Environment<'static> {
+  fn environment(
+    &self,
+    globals: Vec<TemplateGlobal>,
+    tail_marker: Arc<String>,
+    icons: Arc<Icons>,
+  ) -> Result<Environment<'static>, RenderError> {
     let loader = jinja::file_system_loader(self.loader.clone());
     // A page carries its scripts and its stylesheets inline, and a comment in either explains it to an editor rather
     // than to the browser. The inline copy leaves the comments out, and a script's code indentation with them. A
@@ -619,6 +651,17 @@ impl Templating {
       }))
     };
     let mut environment = jinja::environment(loader);
+    let icon_renderer = Arc::clone(&icons);
+    environment.add_function("icon", move |key: String, size: u32, cls: Option<String>, attrs: Option<String>| {
+      let svg = icon_renderer
+        .svg(&key, size, cls.as_deref().unwrap_or(""), attrs.as_deref().unwrap_or(""))
+        .map_err(|error| Error::new(ErrorKind::InvalidOperation, error.to_string()))?;
+      Ok(Value::from_safe_string(svg))
+    });
+    environment.add_function("icon_script", move || {
+      let script = icons.script(None).map_err(|error| Error::new(ErrorKind::InvalidOperation, error.to_string()))?;
+      Ok(Value::from_safe_string(script))
+    });
     let repo_root = self.repo_root.clone();
     let packages = self.packages.clone();
     // A page part is a template source, so this environment lives only while every source holds its value. A part
@@ -641,7 +684,7 @@ impl Templating {
     environment.add_function("static_page_tail", move |path: String| {
       Ok(Value::from_safe_string(format!("{tail_marker}{path}{STATIC_TAIL_CLOSE}")))
     });
-    environment
+    Ok(environment)
   }
 }
 
@@ -823,6 +866,8 @@ pub enum RenderError {
   DuplicateName(String),
   /// A template global raised; the page fails with its message.
   Global(String),
+  /// Icon data failed its validation while a render built the page environment.
+  Icons(String),
   /// A template search directory could not be read while the render confirmed its compiled templates.
   Source(io::Error),
   Template(Error),
@@ -832,7 +877,7 @@ impl RenderError {
   /// The exception class the same failure raises, for the request log.
   pub fn kind(&self) -> &'static str {
     match self {
-      RenderError::DuplicateName(_) | RenderError::Global(_) => "ValueError",
+      RenderError::DuplicateName(_) | RenderError::Global(_) | RenderError::Icons(_) => "ValueError",
       RenderError::Source(_) => "OSError",
       RenderError::Template(error) if error.kind() == ErrorKind::TemplateNotFound => "TemplateNotFound",
       RenderError::Template(error) if error.kind() == ErrorKind::UndefinedError => "UndefinedError",
@@ -844,7 +889,9 @@ impl RenderError {
 impl std::fmt::Display for RenderError {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
-      RenderError::DuplicateName(message) | RenderError::Global(message) => formatter.write_str(message),
+      RenderError::DuplicateName(message) | RenderError::Global(message) | RenderError::Icons(message) => {
+        formatter.write_str(message)
+      }
       RenderError::Source(error) => write!(formatter, "{error}"),
       RenderError::Template(error) => write!(formatter, "{error:#}"),
     }
@@ -1011,7 +1058,15 @@ mod tests {
 
   use super::*;
   use crate::context::features_over;
+  use crate::icons::write_minimal_icon_tree;
   use crate::registry::{Registry, RegistryError};
+
+  /// A temporary template root that carries the icon tree every page render loads.
+  fn template_root() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    write_minimal_icon_tree(root.path());
+    root
+  }
 
   fn notes_label(_features: &FeatureContext) -> Result<Value, String> {
     Ok(Value::from("synthetic-label"))
@@ -1043,7 +1098,7 @@ mod tests {
 
   #[tokio::test]
   async fn render_page_renders_a_package_template_with_request_and_a_global() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(
@@ -1072,7 +1127,7 @@ mod tests {
   /// render instead of serving the page with the placeholder in place of its text.
   #[tokio::test]
   async fn render_page_substitutes_a_placeholder_and_refuses_a_page_without_it() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("splice.html"), "const DATA = {{ payload|safe }};").unwrap();
@@ -1107,7 +1162,7 @@ mod tests {
   /// The sentinel never reaches the page, and a tail that names no marker leaves a page without one as it was.
   #[tokio::test]
   async fn render_page_puts_a_static_tail_where_the_page_names_it() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(templates.join("partials")).unwrap();
     fs::write(templates.join("partials/tail.html"), "<!-- tail -->\n<script>const tail = 1;</script>").unwrap();
@@ -1134,7 +1189,7 @@ mod tests {
   /// page, and it may carry the marker's characters.
   #[tokio::test]
   async fn render_page_leaves_text_that_spells_a_marker_alone() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(templates.join("partials")).unwrap();
     fs::write(templates.join("partials/tail.html"), "<script>const tail = 1;</script>").unwrap();
@@ -1168,7 +1223,7 @@ mod tests {
   /// remote sheet, a tag that states a media query and a URL the loader does not hold keep their link.
   #[tokio::test]
   async fn a_local_stylesheet_link_renders_inline() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = root.path().join("web").join("templates");
     let css = root.path().join("web").join("static").join("css");
     fs::create_dir_all(&templates).unwrap();
@@ -1208,7 +1263,7 @@ mod tests {
   /// their bytes.
   #[tokio::test]
   async fn an_inlined_script_or_stylesheet_travels_without_its_comments_and_folded_whitespace() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = root.path().join("web").join("templates");
     let scripts = root.path().join("web").join("static").join("js");
     let styles = root.path().join("web").join("static").join("css");
@@ -1237,7 +1292,7 @@ mod tests {
   /// the next render compiles the new bytes.
   #[tokio::test]
   async fn a_repeat_render_reuses_the_environment_and_an_edit_takes_effect() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("repeat.html"), "{{ notes_label() }} one").unwrap();
@@ -1266,7 +1321,7 @@ mod tests {
   /// evaluates the globals again.
   #[tokio::test]
   async fn a_stable_template_global_is_evaluated_once_per_config_version() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("counted.html"), "{{ counted_label() }}").unwrap();
@@ -1295,12 +1350,12 @@ mod tests {
   /// no longer displaces the other's.
   #[test]
   fn a_page_rendered_before_another_is_still_served_from_the_memo() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("both.html"), "{{ name }}").unwrap();
     let mut registry = Registry::new();
-    registry.register_package("features.notes", register_counted).unwrap();
+    registry.register_package("features.notes", register_notes).unwrap();
     let home = tempfile::tempdir().unwrap();
     let features = features_over(home.path(), Arc::new(registry));
     features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
@@ -1318,7 +1373,7 @@ mod tests {
   /// A live global may read state the config does not carry, so the engine evaluates it at every render.
   #[tokio::test]
   async fn a_live_template_global_is_evaluated_at_every_render() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("live.html"), "{{ live_label() }}").unwrap();
@@ -1342,7 +1397,7 @@ mod tests {
   /// request of that body reuses the compressed bytes instead of deflating it again.
   #[tokio::test]
   async fn a_gzip_page_request_reuses_the_compressed_body_it_kept() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(&templates).unwrap();
     let page = "note ".repeat(400);
@@ -1385,7 +1440,7 @@ mod tests {
   /// so the next render rebuilds the environment and includes the part.
   #[tokio::test]
   async fn a_page_part_added_on_disk_reaches_the_next_render() {
-    let root = tempfile::tempdir().unwrap();
+    let root = template_root();
     let templates = package_templates_directory(root.path(), "features.notes");
     fs::create_dir_all(templates.join("notes")).unwrap();
     fs::write(templates.join("parts.html"), "{% for part in page_parts('head') %}{% include part %}{% endfor %}")
@@ -1469,5 +1524,43 @@ mod tests {
     collect_html_names(&pages, &mut names);
     names.sort();
     assert_eq!(names, [".hidden.html", "dir.html", "ignored.html", "index.html", "nested/deep.html"]);
+  }
+
+  #[test]
+  fn icon_template_globals_use_static_files_and_reload_after_an_icon_edit() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = root.path().join("web").join("templates");
+    let icons = root.path().join("web").join("static").join("icons");
+    let lucide = icons.join("lucide");
+    fs::create_dir_all(&templates).unwrap();
+    fs::create_dir_all(&lucide).unwrap();
+    fs::write(templates.join("icons.html"), "{{ icon('close', 8, 'custom', 'data-test=\"yes\"') }}{{ icon_script() }}")
+      .unwrap();
+    fs::write(icons.join("LICENSE"), "ISC\n").unwrap();
+    fs::write(icons.join("icons.json"), r#"{"close":{"lucide":"x"}}"#).unwrap();
+    fs::write(
+      lucide.join("x.svg"),
+      "<!-- @license lucide-static v1.76.0 - ISC -->\n<svg viewBox=\"0 0 24 24\"><path d=\"M1 2\"/></svg>\n",
+    )
+    .unwrap();
+
+    let templating = Templating::new(root.path(), &[]);
+    let first_revision = templating.watch.revision();
+    let first = templating.render("icons.html", &json!({}), Vec::new(), first_revision).unwrap();
+    assert!(first.contains("class=\"cb-icon custom\" width=\"8\" height=\"8\""));
+    assert!(first.contains("stroke-width=\"3\""));
+    assert!(first.contains("data-test=\"yes\""));
+    assert!(first.contains("window.CB_ICON_TABLE ="));
+    assert!(templating.icons().unwrap().svg("close", 12, "", "").unwrap().contains("stroke-width=\"2\""));
+
+    fs::write(
+      lucide.join("x.svg"),
+      "<!-- @license lucide-static v1.76.0 - ISC -->\n<svg viewBox=\"0 0 24 24\"><path d=\"M3 4\"/></svg>\n",
+    )
+    .unwrap();
+    let changed_revision = templating.watch.revision();
+    assert!(changed_revision > first_revision);
+    let changed = templating.render("icons.html", &json!({}), Vec::new(), changed_revision).unwrap();
+    assert!(changed.contains("<path d=\"M3 4\"/>"));
   }
 }

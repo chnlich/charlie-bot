@@ -49,7 +49,7 @@ use crate::auto_switch::{self, MemberSwitch};
 use crate::cold_read::{self, ColdReadOutcome};
 use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion, note_run_liveness};
 use crate::git;
-use crate::handoff::HandoffSource;
+use crate::handoff::{self, HandoffSource};
 use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
 use crate::master_run;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
@@ -196,10 +196,13 @@ impl TaskExecutionAdapter {
   ) -> StoreResult<Option<String>> {
     let mut scheduled = None;
     let mut member_event: Option<ChatEvent> = None;
+    // A manager's turn-start switch persists its intent under the control lock and records its event after the lock,
+    // once the handoff is assembled outside it.
+    let mut switch_intent: Option<(SessionMetadata, Value)> = None;
     // An Auto set with no selectable member ends the turn here, after the end of this lock.
     let mut exhausted_turn: Option<(String, String)> = None;
-    // A turn start that changes an Auto session's member appends its event under the control lock; the epoch primes
-    // the live aggregator the announce after the lock feeds.
+    // A turn start that changes an Auto session's member records its event: a worker's under the control lock, and a
+    // manager's after its handoff is assembled. The epoch primes the live aggregator the announce after the lock feeds.
     let member_epoch = self.features.store.prime_aggregator(session_id).await?;
     let run_id;
     {
@@ -286,7 +289,14 @@ impl TaskExecutionAdapter {
           Err(error) => return Err(error),
         }
         if let Some(change) = change {
-          member_event = Some(self.features.store.append_control_fact(&guard, session_id, change.event()).await?);
+          if meta.profile == TaskProfile::Manager {
+            let intent = change.event();
+            let run_dir = self.features.store.run_dir(session_id, &run_id);
+            handoff::write_pending_switch(&run_dir, &intent).map_err(|error| StoreError::new(format!("{error:#}")))?;
+            switch_intent = Some((meta.clone(), intent));
+          } else {
+            member_event = Some(self.features.store.append_control_fact(&guard, session_id, change.event()).await?);
+          }
         }
         if let Some(message) = exhausted {
           exhausted_turn = Some((run_id.clone(), message));
@@ -300,6 +310,17 @@ impl TaskExecutionAdapter {
           let (sender, _) = watch::channel(None);
           state.settlements.insert(key.clone(), sender);
           scheduled = Some(key);
+        }
+      }
+    }
+    if let Some((meta, intent)) = switch_intent {
+      match self.record_turn_start_switch(&meta, &run_id, &intent).await {
+        Ok((_, event)) => member_event = Some(event),
+        Err(error) => {
+          if let Some(key) = &scheduled {
+            self.release_launch(key);
+          }
+          return Err(error);
         }
       }
     }
@@ -687,6 +708,8 @@ impl TaskExecutionAdapter {
         &reason,
       )?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
+    } else if let Some(note) = self.turn_start_note(&wake_meta, run).await? {
+      prompt = format!("{note}\n\n{prompt}");
     } else if fresh_native && wake_meta.cc_session_id.is_some() {
       let reason = match wake_meta.native_backend.as_deref().filter(|backend| !backend.is_empty() && *backend != option.id) {
         Some(previous) => session_anchors::backend_switch_reset_reason(previous, &option.id),
@@ -824,7 +847,7 @@ impl TaskExecutionAdapter {
     } else if continued {
       self.batch_only_context(meta, run, &history).await?
     } else {
-      self.build_work_context(cfg, meta, run, option, task_type, &history).await?
+      self.build_work_context(cfg, meta, run, task_type, &history).await?
     };
     let mut prompt = context;
     if let Some(continuation) = continuation.as_ref().filter(|continuation| continuation.native_id.is_none()) {
@@ -874,8 +897,18 @@ impl TaskExecutionAdapter {
     let lifecycle = self.features.registry.lifecycle_for(&option.backend_type)?;
     let held_native_id = continuation.as_ref().and_then(|continuation| continuation.native_id.clone());
     if registration.traits.preassigned_session_id {
-      let preassigned = held_native_id.clone().or_else(|| Some(Uuid::new_v4().to_string()));
-      lifecycle.assign_thread_native_id(&mut binding, preassigned.as_deref());
+      let preassigned = held_native_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+      lifecycle.assign_thread_native_id(&mut binding, Some(&preassigned));
+      // A re-attach rebuilds the run from its record, so the conversation the process was launched on is recorded now.
+      self
+        .features
+        .store
+        .record_observation(
+          session_id,
+          run_id,
+          Map::from_iter([(OBSERVATION_NATIVE_SESSION_ID.to_string(), json!(preassigned))]),
+        )
+        .await?;
     }
 
     let run_dir = self.features.store.run_dir(session_id, run_id);
@@ -1042,7 +1075,7 @@ impl TaskExecutionAdapter {
     let Some(parent_id) = meta.task_parent_id.as_deref() else { return Ok(false) };
     Ok(self.features.store.load_all_facts_view_sync(parent_id)?.iter().any(|event| {
       event.get("type").and_then(CompactValue::as_str) == Some(event_types::CHILD_REPORT)
-        && event.get("child_session_id").and_then(CompactValue::as_str) == Some(meta.id.as_str())
+        && event.get(event_types::CHILD_SESSION_ID).and_then(CompactValue::as_str) == Some(meta.id.as_str())
         && event.get("outcome").and_then(CompactValue::as_str) == Some("blocked")
     }))
   }
@@ -1275,7 +1308,6 @@ impl TaskExecutionAdapter {
     cfg: &CharlieBotConfig,
     meta: &SessionMetadata,
     run: &RunRecord,
-    option: &BackendOption,
     task_type: TaskType,
     history: &ChatEventHistory,
   ) -> anyhow::Result<String> {
@@ -1294,7 +1326,7 @@ impl TaskExecutionAdapter {
       parts.push(prompts::render_task_body(&checkout, &description)?);
       return Ok(parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n"));
     };
-    if self.backend_runs_beyond_this_host(option)? {
+    if backend_runs_beyond_this_host(meta) {
       // The launcher decides where the process works, so this host prepares no worktree and the brief names none:
       // a path here would be a place that exists on this host only, and the round's protocol owns the real one.
       parts.push(prompts::render_task_body(&checkout, &description)?);
@@ -1372,18 +1404,6 @@ impl TaskExecutionAdapter {
     }
     parts.push(prompts::render_task_body(&checkout, step_prompt)?);
     Ok(parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n"))
-  }
-
-  /// Whether the run's process executes beyond this host. A backend entry that names a `cli_binary` replaces
-  /// `claude` with a launcher that carries the process to the host the launcher decides, so this host prepares no
-  /// worktree for such a run and its brief names none. A backend type that registers no launcher reader names no
-  /// launcher key, so its runs run here, in the worktree this host prepares. The option comes resolved
-  /// (`resolve_run_backend`), so a run that names no backend or an unconfigured one never reaches this decision.
-  fn backend_runs_beyond_this_host(&self, option: &BackendOption) -> anyhow::Result<bool> {
-    let Some(read) = self.features.registry.backend_cli_binary_reader(&option.backend_type) else {
-      return Ok(false);
-    };
-    read(&option.type_fields).map(|binary| binary.is_some()).map_err(anyhow::Error::msg)
   }
 
   async fn prepare_worktree(
@@ -1620,7 +1640,15 @@ impl TaskExecutionAdapter {
     // lists it.
     if let (Some(failure), Some(backend)) = (quota_failure.as_ref(), run.backend.as_deref()) {
       let availability = backend_availability::backend_availability(&self.features)?;
-      availability.record(backend, failure.resets_at, &failure.reason, &failure.message)?;
+      let cfg = self.features.config.get()?;
+      availability.record(
+        &cfg,
+        &self.features.registry,
+        backend,
+        failure.resets_at,
+        &failure.reason,
+        &failure.message,
+      )?;
     }
 
     if run.kind == RunKind::Review {
@@ -1633,8 +1661,7 @@ impl TaskExecutionAdapter {
     if durable_outcome == "success" {
       if spawner_prompt::reviewer_run_follows(meta.task.as_ref()) {
         let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
-        if let Some(reason) = completion.pause_reason(session_id)? {
-          tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
+        if completion.pause_delivery(session_id, &run.id).await?.is_some() {
           return Ok(());
         }
         if let ReviewSpawnOutcome::NoReviewer(reason) = self.maybe_spawn_review(session_id, run).await? {
@@ -1940,8 +1967,7 @@ impl TaskExecutionAdapter {
       return Ok(());
     }
     let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
-    if let Some(reason) = completion.pause_reason(session_id)? {
-      tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
+    if completion.pause_delivery(session_id, &run.id).await?.is_some() {
       return Ok(());
     }
     let mut result_refs = vec![format!("run:{}", work_run.id)];
@@ -2294,9 +2320,26 @@ impl TaskExecutionAdapter {
     let session_id = meta.id.as_str();
     let run_id = run.id.as_str();
     let run_dir = self.features.store.run_dir(session_id, run_id);
+    let held_native_id = match run.native_session_id.as_deref() {
+      Some(native_id) => Some(native_id.to_string()),
+      None => self.native_session_id(&run_dir.join(run_records::RAW_LOG_NAME), option).await?,
+    };
+    if run.native_session_id.is_none()
+      && let Some(native_id) = held_native_id.as_deref()
+    {
+      self
+        .features
+        .store
+        .record_observation(
+          session_id,
+          run_id,
+          Map::from_iter([(OBSERVATION_NATIVE_SESSION_ID.to_string(), json!(native_id))]),
+        )
+        .await?;
+    }
     let mut thread = worker_binding(run_id, session_id, run);
     let lifecycle = self.features.registry.lifecycle_for(&option.backend_type)?;
-    lifecycle.assign_thread_native_id(&mut thread, run.native_session_id.as_deref());
+    lifecycle.assign_thread_native_id(&mut thread, held_native_id.as_deref());
     let mut worker = Worker::new(
       Arc::clone(&self.features),
       WorkerSpec {
@@ -2310,7 +2353,7 @@ impl TaskExecutionAdapter {
         on_spawned: None,
         instructions_content: None,
         session_meta: Some(meta.clone()),
-        held_native_id: run.native_session_id.clone(),
+        held_native_id,
         run_kind: run.kind,
       },
     )?;
@@ -2464,7 +2507,15 @@ impl TaskExecutionAdapter {
       .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, &meta.id)))?;
     if let Some(backend) = run.backend.as_deref().filter(|backend| !backend.is_empty()) {
       let availability = backend_availability::backend_availability(&self.features)?;
-      availability.record(backend, failure.resets_at, &failure.reason, &failure.message)?;
+      let cfg = self.features.config.get()?;
+      availability.record(
+        &cfg,
+        &self.features.registry,
+        backend,
+        failure.resets_at,
+        &failure.reason,
+        &failure.message,
+      )?;
     }
     if self.features.config.get()?.backends.pool(&meta.backend).is_none() {
       return Ok(());
@@ -2533,6 +2584,87 @@ impl TaskExecutionAdapter {
           .into_owned(),
       ),
     ]))
+  }
+
+  /// Drop the launch claim of a run that will not launch from this call, so a later dispatch can schedule it.
+  fn release_launch(&self, key: &(String, String)) {
+    let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
+    state.inflight.remove(key);
+    state.settlements.remove(key);
+  }
+
+  /// Assemble a turn-start switch's handoff outside the control lock, write its finished note, then record the switch's
+  /// `quota_failover` event with the summary the assembly reached. The event follows the note on disk, so a recorded
+  /// `ok` summary always has its note. Return the note and the recorded event.
+  async fn record_turn_start_switch(
+    &self,
+    meta: &SessionMetadata,
+    run_id: &str,
+    intent: &Value,
+  ) -> StoreResult<(String, ChatEvent)> {
+    let store = &self.features.store;
+    let previous = previous_launched_manager_run(&self.features, &meta.id, run_id)?;
+    let assembled = handoff::turn_start(&self.features, meta, intent, previous.as_ref())
+      .map_err(|error| StoreError::new(format!("{error:#}")))?;
+    handoff::write_finished_note(&store.run_dir(&meta.id, run_id), &assembled.note)
+      .map_err(|error| StoreError::new(format!("{error:#}")))?;
+    let mut event = intent.clone();
+    event[event_types::QUOTA_FAILOVER_SUMMARY] = json!(assembled.summary);
+    let guard = store.control_lock().await;
+    let event = store.append_control_fact(&guard, &meta.id, event).await?;
+    Ok((assembled.note, event))
+  }
+
+  /// The note a manager run launches with when its turn starts on a member its pool switched to, or `None` when the run
+  /// carries no such switch. A crash between the switch's intent and its finished note leaves the intent in the run's
+  /// handoff note file; the launch finishes the note and records the event before it starts. A retry takes the
+  /// mid-turn failover's note and reads no intent.
+  async fn turn_start_note(&self, meta: &SessionMetadata, run: &RunRecord) -> StoreResult<Option<String>> {
+    if run.retry_of_run_id.is_some() {
+      return Ok(None);
+    }
+    let run_dir = self.features.store.run_dir(&meta.id, &run.id);
+    // Only a manager turn-start switch writes this file; check its presence before opening it on an ordinary turn.
+    match run_dir.join(prompts::HANDOFF_NOTE_FILENAME).try_exists() {
+      Ok(false) => return Ok(None),
+      Ok(true) => {}
+      Err(error) => {
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id = %meta.id,
+          run_id = %run.id,
+          error = %error,
+          "turn_start_note_unreadable"
+        );
+        return Ok(Some(session_anchors::manager_context_reset_note(
+          &meta.id,
+          "this turn starts a fresh conversation, so read the session chat history",
+        )));
+      }
+    }
+    match handoff::read_note(&run_dir) {
+      Ok(None) => Ok(None),
+      Ok(Some(handoff::HandoffNote::Finished(note))) => Ok(Some(note)),
+      Ok(Some(handoff::HandoffNote::Pending(intent))) => {
+        let epoch = self.features.store.prime_aggregator(&meta.id).await?;
+        let (note, event) = self.record_turn_start_switch(meta, &run.id, &intent).await?;
+        self.features.store.announce_appended_event(&meta.id, &event, epoch).await?;
+        Ok(Some(note))
+      }
+      Err(error) => {
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id = %meta.id,
+          run_id = %run.id,
+          error = %format!("{error:#}"),
+          "turn_start_note_unreadable"
+        );
+        Ok(Some(session_anchors::manager_context_reset_note(
+          &meta.id,
+          "this turn starts a fresh conversation, so read the session chat history",
+        )))
+      }
+    }
   }
 
   fn persist_launch_text(&self, session_id: &str, run_id: &str, prompt: &str) -> StoreResult<()> {
@@ -2760,6 +2892,12 @@ impl TaskExecutionAdapter {
   }
 }
 
+/// Whether the run's process executes beyond this host: its task names an `improve_host`, and the improve launcher
+/// carries the process to that host. This host prepares no worktree for such a run, and its brief names none.
+fn backend_runs_beyond_this_host(meta: &SessionMetadata) -> bool {
+  meta.task.as_ref().is_some_and(|task| task.improve_host.is_some())
+}
+
 /// The member failure an Auto session's manager turn ended on, read from the finish extras. The recorder writes the
 /// availability reason the shared classification chose, beside the message it classified.
 fn auto_quota_failure(extras: &Map<String, Value>) -> Option<QuotaFailure> {
@@ -2770,6 +2908,22 @@ fn auto_quota_failure(extras: &Map<String, Value>) -> Option<QuotaFailure> {
     .and_then(Value::as_str)
     .and_then(|text| UtcDateTime::parse(text).ok());
   Some(QuotaFailure { resets_at, message, reason })
+}
+
+/// The last manager turn that launched on the session before `current_run_id`. A turn that never launched has no start
+/// time, so an exhausted turn that ended without a member is skipped.
+fn previous_launched_manager_run(
+  features: &FeatureContext,
+  session_id: &str,
+  current_run_id: &str,
+) -> StoreResult<Option<RunRecord>> {
+  Ok(
+    features
+      .store
+      .list_run_records_sync(session_id)?
+      .into_iter()
+      .rfind(|run| run.id != current_run_id && run.kind == RunKind::ManagerTurn && run.started_at.is_some()),
+  )
 }
 
 /// The failed run an Auto switch retry continues, with the reason its fresh conversation starts, when this run is a

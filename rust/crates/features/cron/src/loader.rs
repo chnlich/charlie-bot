@@ -30,6 +30,7 @@ pub struct CronSnapshot {
 struct SnapshotKey {
   directory: PathBuf,
   repo: PathBuf,
+  login_hosts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -188,13 +189,18 @@ pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> 
 /// scheduler's tick takes its tasks from here.
 pub(crate) fn read_snapshot(features: &FeatureContext, cfg: &CharlieBotConfig) -> anyhow::Result<(CronSnapshot, bool)> {
   let repo = repo_root(features);
-  load_snapshot_for_paths(&cron_dir(cfg), repo.path())
+  load_snapshot_for_paths(&cron_dir(cfg), repo.path(), &crate::config::browser_login_hosts(cfg))
 }
 
 /// One shared cron snapshot, reread when a cron YAML appears, disappears or changes mtime, or a prompt file
 /// changes mtime or goes missing.
-pub(crate) fn load_snapshot_for_paths(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapshot, bool)> {
-  let key = SnapshotKey { directory: directory.to_path_buf(), repo: repo.to_path_buf() };
+pub(crate) fn load_snapshot_for_paths(
+  directory: &Path,
+  repo: &Path,
+  login_hosts: &[String],
+) -> anyhow::Result<(CronSnapshot, bool)> {
+  let key =
+    SnapshotKey { directory: directory.to_path_buf(), repo: repo.to_path_buf(), login_hosts: login_hosts.to_vec() };
   let snapshots = SNAPSHOTS.get_or_init(|| Mutex::new(HashMap::new()));
   let mut snapshots = snapshots.lock().expect("cron snapshot mutex is not poisoned");
   if let Some(cached) = snapshots.get(&key) {
@@ -203,14 +209,18 @@ pub(crate) fn load_snapshot_for_paths(directory: &Path, repo: &Path) -> anyhow::
       return Ok((cached.snapshot.clone(), false));
     }
   }
-  let (mut snapshot, prompt_paths) = reload_snapshot(directory, repo)?;
+  let (mut snapshot, prompt_paths) = reload_snapshot(directory, repo, login_hosts)?;
   let fingerprint = snapshot_fingerprint(directory, &prompt_paths)?;
   snapshot.fingerprint = NEXT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::Relaxed);
   snapshots.insert(key, CachedSnapshot { snapshot: snapshot.clone(), fingerprint, prompt_paths });
   Ok((snapshot, true))
 }
 
-fn reload_snapshot(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapshot, Vec<PathBuf>)> {
+fn reload_snapshot(
+  directory: &Path,
+  repo: &Path,
+  login_hosts: &[String],
+) -> anyhow::Result<(CronSnapshot, Vec<PathBuf>)> {
   let entries = match std::fs::read_dir(directory) {
     Ok(entries) => entries,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -237,7 +247,7 @@ fn reload_snapshot(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapsho
       });
       continue;
     }
-    match load_file_with_prompts(&path, &name, repo) {
+    match load_file_with_prompts(&path, &name, repo, login_hosts) {
       Ok((task, paths)) => {
         prompt_paths.extend(paths);
         snapshot.tasks.push(task);
@@ -262,14 +272,15 @@ fn reload_snapshot(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapsho
 }
 
 /// One cron file's task, loaded and validated with its prompt pointer strings preserved.
-pub fn load_file(path: &Path, name: &str, repo: &Path) -> Result<ScheduledTaskConfig, String> {
-  load_file_with_prompts(path, name, repo).map(|(task, _)| task).map_err(|(error, _)| error)
+pub fn load_file(path: &Path, name: &str, repo: &Path, login_hosts: &[String]) -> Result<ScheduledTaskConfig, String> {
+  load_file_with_prompts(path, name, repo, login_hosts).map(|(task, _)| task).map_err(|(error, _)| error)
 }
 
 fn load_file_with_prompts(
   path: &Path,
   name: &str,
   repo: &Path,
+  login_hosts: &[String],
 ) -> Result<(ScheduledTaskConfig, Vec<PathBuf>), (String, Vec<PathBuf>)> {
   #[cfg(test)]
   if let Some(directory) = path.parent() {
@@ -283,7 +294,7 @@ fn load_file_with_prompts(
   let body = read_task_file(path).map_err(|error| (error.to_string(), Vec::new()))?;
   let body = Value::Object(body);
   let prompts = prompt_paths(&body, repo);
-  validate_body(name, body, repo).map(|task| (task, prompts.clone())).map_err(|error| (error, prompts))
+  validate_body(name, body, repo, login_hosts).map(|task| (task, prompts.clone())).map_err(|error| (error, prompts))
 }
 
 fn prompt_paths(body: &Value, repo: &Path) -> Vec<PathBuf> {
@@ -353,7 +364,12 @@ fn prompt_file_read_count(path: &Path) -> usize {
 }
 
 /// The task one in-memory create or update body describes, resolved against the repo before it is persisted.
-pub fn validate_body(name: &str, mut body: Value, repo: &Path) -> Result<ScheduledTaskConfig, String> {
+pub fn validate_body(
+  name: &str,
+  mut body: Value,
+  repo: &Path,
+  login_hosts: &[String],
+) -> Result<ScheduledTaskConfig, String> {
   let object = body.as_object_mut().ok_or_else(|| "cron config must be a mapping".to_string())?;
   if object.contains_key("name") {
     return Err("the body must not carry a 'name' key; the file name is the job name".to_string());
@@ -382,7 +398,9 @@ pub fn validate_body(name: &str, mut body: Value, repo: &Path) -> Result<Schedul
   if let Some(repo) = body.get("repo").and_then(Value::as_str) {
     body["repo"] = Value::String(expand_home(repo)?);
   }
-  crate::config::task_from_value(name, body)
+  let task = crate::config::task_from_value(name, body)?;
+  crate::config::validate_improve_host(&task, login_hosts)?;
+  Ok(task)
 }
 
 fn resolve_pointer(
@@ -551,6 +569,7 @@ async fn send_telegram(
 pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Result<(), String> {
   let mut problems = Vec::new();
   let directory = cron_dir(cfg);
+  let login_hosts = crate::config::browser_login_hosts(cfg);
   let entries = match std::fs::read_dir(&directory) {
     Ok(entries) => entries,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -571,7 +590,7 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
     let repo = std::env::var_os(charliebot_core::repo_root::REPO_ROOT_ENV)
       .map(PathBuf::from)
       .ok_or_else(|| format!("{} is not set", charliebot_core::repo_root::REPO_ROOT_ENV))?;
-    let Ok(task) = load_file(&path, stem, &repo) else { continue };
+    let Ok(task) = load_file(&path, stem, &repo, &login_hosts) else { continue };
     for (entry, backend) in std::iter::once(("backend".to_string(), task.backend.as_deref())).chain(
       task.steps.iter().flatten().map(|step| (format!("steps '{}' backend", step.name), step.backend.as_deref())),
     ) {
@@ -596,14 +615,14 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
 mod tests {
   use std::path::Path;
 
-  use charliebot_core::config::CharlieBotConfig;
+  use charliebot_core::config::{CharlieBotConfig, HostAuthConfig};
   use serde_json::{Value, json};
 
   use super::{
     TaskFileReadError, TaskFileWriteError, dispatch_alert_if_fingerprint_changed, fire_error_alert, load_snapshot,
     read_task_file, validate_body, write_task_file,
   };
-  use crate::test_support::feature_context;
+  use crate::test_support::{feature_context, feature_context_with_login_hosts};
 
   fn write_task(cfg: &CharlieBotConfig, name: &str, body: &Value) {
     let directory = cfg.config_d_dir().join("cron.d");
@@ -704,6 +723,49 @@ mod tests {
   }
 
   #[test]
+  fn improve_host_is_checked_per_file_against_the_login_hosts_and_refused_off_a_prompted_worker_task() {
+    let (home, features) = feature_context_with_login_hosts(&["host3"]);
+    let cfg = features.config.get().unwrap();
+    let prompt = write_prompt(home.path(), "prompt.md", "Synthetic body\n");
+    write_task(&cfg, "keyed", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "improve_host":"host3"}));
+    write_task(&cfg, "other-host", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "improve_host":"host9"}));
+    write_task(
+      &cfg,
+      "master",
+      &json!({"cron":"0 8 * * *", "prompt_file":prompt, "mode":"master", "improve_host":"host3"}),
+    );
+    write_task(&cfg, "handler", &json!({"cron":"0 8 * * *", "handler":"synthetic_handler", "improve_host":"host3"}));
+    write_task(
+      &cfg,
+      "steps",
+      &json!({"cron":"0 8 * * *", "steps":[{"name":"first", "prompt_file":prompt}], "improve_host":"host3"}),
+    );
+
+    let snapshot = load_snapshot(&features, &cfg).unwrap();
+
+    assert_eq!(snapshot.tasks.iter().map(|task| task.name.as_str()).collect::<Vec<_>>(), ["keyed"]);
+    assert_eq!(snapshot.tasks[0].improve_host.as_deref(), Some("host3"));
+    let logins = &cfg
+      .section_value("host_auth")
+      .and_then(|value| value.downcast_ref::<HostAuthConfig>())
+      .expect("host_auth parses as HostAuthConfig")
+      .browser_logins;
+    assert_eq!(logins[0].host.as_deref(), Some("host3"));
+    assert_eq!(logins[0].input_prompt.as_deref(), Some("synthetic-code"), "the Phase 1 input_prompt survives the load");
+    assert_eq!(logins[0].lifetime_sec, Some(86400), "the Phase 1 lifetime_sec survives the load");
+    assert_eq!(
+      snapshot.errors.iter().map(|error| error.name.as_str()).collect::<Vec<_>>(),
+      ["handler", "master", "other-host", "steps"]
+    );
+    let error_of =
+      |name: &str| snapshot.errors.iter().find(|error| error.name == name).expect("the task's error").error.as_str();
+    assert!(error_of("other-host").contains("improve_host 'host9' names no host in host_auth.browser_logins"));
+    assert!(error_of("master").contains("not mode 'master'"), "{}", error_of("master"));
+    assert!(error_of("handler").contains("not mode 'master'"), "{}", error_of("handler"));
+    assert!(error_of("steps").contains("not mode 'master'"), "{}", error_of("steps"));
+  }
+
+  #[test]
   fn unchanged_cron_snapshot_reuses_yaml_and_prompt_reads_until_a_fingerprint_moves() {
     let (home, features) = feature_context();
     let cfg = features.config.get().unwrap();
@@ -736,25 +798,29 @@ mod tests {
     let task = |steps: Value| json!({"cron":"0 3 * * *", "steps":steps});
 
     let duplicate = task(json!([pointer("selector", &first), pointer("selector", &second)]));
-    assert!(validate_body("chained", duplicate, home.path()).unwrap_err().contains("duplicate step name 'selector'"));
+    assert!(
+      validate_body("chained", duplicate, home.path(), &[]).unwrap_err().contains("duplicate step name 'selector'")
+    );
     let empty = task(json!([]));
-    assert!(validate_body("chained", empty, home.path()).unwrap_err().contains("exactly one of"));
+    assert!(validate_body("chained", empty, home.path(), &[]).unwrap_err().contains("exactly one of"));
     let inline = task(json!([{"name":"selector","prompt":"inline"}]));
-    assert!(validate_body("chained", inline, home.path()).unwrap_err().contains("inline 'prompt'"));
+    assert!(validate_body("chained", inline, home.path(), &[]).unwrap_err().contains("inline 'prompt'"));
     let missing = task(json!([{"name":"selector"}]));
-    assert!(validate_body("chained", missing, home.path()).unwrap_err().contains("step 'selector' has no prompt body"));
+    assert!(
+      validate_body("chained", missing, home.path(), &[]).unwrap_err().contains("step 'selector' has no prompt body")
+    );
 
     let distinct = task(json!([
       {"name":"selector","prompt_file":first,"backend":"synthetic-a"},
       {"name":"reviewer","prompt_file":second,"backend":"synthetic-b","distinct_backend_from":"selector"}
     ]));
-    let loaded = validate_body("chained", distinct, home.path()).unwrap();
+    let loaded = validate_body("chained", distinct, home.path(), &[]).unwrap();
     assert_eq!(loaded.steps.as_ref().unwrap()[1].distinct_backend_from.as_deref(), Some("selector"));
     let unset = task(json!([
       {"name":"selector","prompt_file":first},
       {"name":"reviewer","prompt_file":second,"distinct_backend_from":"selector"}
     ]));
-    assert!(validate_body("chained", unset, home.path()).is_ok());
+    assert!(validate_body("chained", unset, home.path(), &[]).is_ok());
 
     // Identical backend ids load here: whether they conflict depends on the config, which backend_refs_check reads.
     for invalid in [
@@ -771,7 +837,7 @@ mod tests {
         {"name":"reviewer","prompt_file":second}
       ])),
     ] {
-      assert!(validate_body("chained", invalid, home.path()).is_err());
+      assert!(validate_body("chained", invalid, home.path(), &[]).is_err());
     }
   }
 

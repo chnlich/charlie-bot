@@ -33,6 +33,7 @@ use crate::held_run_lists::RunListHold;
 pub use crate::metadata::MetadataReadError;
 use crate::metadata::{BASE_BRANCH_FIELD, REPO_PATH_FIELD, UtcDateTime};
 use crate::path_error;
+pub use crate::run_display_state::RunDisplayState;
 pub use crate::run_facts::RunFacts;
 #[cfg(test)]
 use crate::run_facts::{CachedRunFacts, RunFactsMemo};
@@ -54,6 +55,12 @@ pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
 /// The run metadata file's field naming the session's native (backend) session id. A reader of the file, such as the
 /// usage capture scan, takes the name from here.
 pub const NATIVE_SESSION_ID_FIELD: &str = "native_session_id";
+/// The run metadata file's field naming the run's start time. The writers of the file, and the usage capture scan that
+/// dates a run's record by it, take the name from here.
+pub const STARTED_AT_FIELD: &str = "started_at";
+/// The run metadata file's field naming the run's end time, null until the run ends. A reader of the file, such as
+/// the switch helper's live-run scan, takes the name from here.
+pub const ENDED_AT_FIELD: &str = "ended_at";
 
 // The `record_observation` field names. The task side sends them, and this crate validates and applies them, so the
 // writer and the validator match these names instead of spelling them.
@@ -339,19 +346,6 @@ impl RunOutcome {
   }
 }
 
-/// A fact-derived run display value.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunDisplayState {
-  Queued,
-  Running,
-  Attention,
-  Stopped,
-  Withheld,
-  Success,
-  Failed,
-  Interrupted,
-}
-
 /// The host boot time, read from `/proc/stat` on first use: only a launched run without a terminal fact needs it.
 #[derive(Debug, Default)]
 pub struct HostBoot(Option<OffsetDateTime>);
@@ -464,22 +458,6 @@ impl RunFacts {
       None => !requests.is_empty(),
       Some(request_id) => requests.iter().any(|candidate| candidate.as_deref() == Some(request_id)),
     })
-  }
-}
-
-impl RunDisplayState {
-  /// The persisted UI spelling for this state.
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Self::Queued => "queued",
-      Self::Running => "running",
-      Self::Attention => "attention",
-      Self::Stopped => "stopped",
-      Self::Withheld => "withheld",
-      Self::Success => "success",
-      Self::Failed => "failed",
-      Self::Interrupted => "interrupted",
-    }
   }
 }
 

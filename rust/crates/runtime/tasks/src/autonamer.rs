@@ -146,7 +146,7 @@ where
         let detail = error.to_string();
         tracing::warn!(target: "charliebot_tasks", session_id, error = %detail, "autonamer_failed");
         if let Some(reason) = backend_pool::classify_member_failure(&detail, None).availability_reason() {
-          pool.availability().record(&backend_id, None, reason, &detail)?;
+          pool.availability().record(cfg, &pool.registry(), &backend_id, None, reason, &detail)?;
         }
       }
     }

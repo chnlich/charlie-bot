@@ -40,12 +40,7 @@ function _commitMessage(msg) {
 // Session rename can arrive at any time
 registerWsMessageHandler('session_renamed', (ev) => {
   const sid = ev.session_id || SESSION_ID;
-  if (typeof updateSidebarSessionName === 'function') {
-    updateSidebarSessionName(sid, ev.name);
-  } else {
-    const link = document.getElementById('session-' + sid);
-    if (link) link.querySelector('.session-name').textContent = ev.name;
-  }
+  updateSidebarSessionName(sid, ev.name);
   refreshDisplayedSessionName(sid, ev.name);
 }, {advancesCursor: false, sidebar: true});
 

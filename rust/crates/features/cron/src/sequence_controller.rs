@@ -200,6 +200,19 @@ impl CronSequenceController {
     snapshot
   }
 
+  /// The browser-login hosts of the config under `home`, for a listing read that no feature context serves. The bound
+  /// registry loads that config the way the server does.
+  fn listing_login_hosts(&self, home: &Path) -> anyhow::Result<Vec<String>> {
+    let registry = self
+      .registry
+      .borrow()
+      .as_ref()
+      .and_then(Weak::upgrade)
+      .ok_or_else(|| anyhow::anyhow!("no registry is bound to read the cron listing's config"))?;
+    let cfg = registry.load_config(home)?;
+    Ok(crate::config::browser_login_hosts(&cfg))
+  }
+
   fn read_snapshot_for_listing(&self) -> loader::CronSnapshot {
     if let Some(registry) = self.registry.borrow().as_ref().and_then(Weak::upgrade)
       && let Some(features) = registry.feature_context()
@@ -224,8 +237,11 @@ impl CronSequenceController {
     let home = cron_home();
     let directory = loader::cron_dir_for_home(&home);
     match std::env::var_os(REPO_ROOT_ENV).map(PathBuf::from) {
-      Some(repo) => match loader::load_snapshot_for_paths(&directory, &repo) {
-        Ok((snapshot, _)) => snapshot,
+      Some(repo) => match self
+        .listing_login_hosts(&home)
+        .and_then(|hosts| loader::load_snapshot_for_paths(&directory, &repo, &hosts).map(|(snapshot, _)| snapshot))
+      {
+        Ok(snapshot) => snapshot,
         Err(error) => {
           tracing::error!(error = %error, "cron_listing_snapshot_failed");
           loader::CronSnapshot::default()
@@ -935,7 +951,7 @@ fn load_bound_task(name: &str, cfg: &CharlieBotConfig) -> anyhow::Result<Option<
   }
   let repo =
     std::env::var_os(REPO_ROOT_ENV).map(PathBuf::from).ok_or_else(|| anyhow::anyhow!("{REPO_ROOT_ENV} is not set"))?;
-  loader::load_file(&path, name, &repo).map(Some).map_err(anyhow::Error::msg)
+  loader::load_file(&path, name, &repo, &crate::config::browser_login_hosts(cfg)).map(Some).map_err(anyhow::Error::msg)
 }
 
 fn cron_home() -> PathBuf {
@@ -1208,6 +1224,7 @@ mod tests {
             keep_worktree: false,
             cold_read: None,
             approver: TaskApprover::User,
+            improve_host: None,
           }),
           name: Some("Synthetic scheduled steps".to_string()),
           backend: Some(AUTO_POOL_ID.to_string()),
@@ -1241,6 +1258,7 @@ mod tests {
       prompt: None,
       handler: None,
       steps: Some(vec![step("select", "Select candidates."), step("review", "Review the diff.")]),
+      improve_host: None,
     };
     charliebot_tasks::execution::pre_recovery_step(Arc::clone(&features)).await.unwrap();
     let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
@@ -1328,6 +1346,7 @@ mod tests {
             keep_worktree: false,
             cold_read: None,
             approver: TaskApprover::User,
+            improve_host: None,
           }),
           name: Some("Synthetic scheduled steps".to_string()),
           backend: Some("synthetic".to_string()),
@@ -1369,6 +1388,7 @@ mod tests {
           distinct_backend_from: None,
         },
       ]),
+      improve_host: None,
     };
     charliebot_tasks::execution::pre_recovery_step(Arc::clone(&features)).await.unwrap();
     let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();

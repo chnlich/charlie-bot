@@ -1,7 +1,7 @@
 //! Scheduled-task request and file models.
 
 use charliebot_compat::request_body::{BodyModel, Field, FieldType};
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CharlieBotConfig, HostAuthConfig};
 use serde::{Deserialize, Serialize};
 
 /// The default time zone of a scheduled task and of a create request: `charliebot_core::pacific::ZONE`, the house zone.
@@ -61,6 +61,10 @@ pub struct ScheduledTaskConfig {
   pub handler: Option<String>,
   #[serde(default)]
   pub steps: Option<Vec<StepConfig>>,
+  /// The host whose ssh login a round of this task runs on: the round starts through the improve launcher on this host,
+  /// with no worktree on this host. Absent, the round runs here.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub improve_host: Option<String>,
 }
 
 impl ScheduledTaskConfig {
@@ -146,6 +150,34 @@ pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConf
   Ok(backend)
 }
 
+/// The hosts that `host_auth.browser_logins` names, in config order. A config without the host-auth section names none.
+pub fn browser_login_hosts(cfg: &CharlieBotConfig) -> Vec<String> {
+  let Some(value) = cfg.section_value("host_auth") else { return Vec::new() };
+  value
+    .downcast_ref::<HostAuthConfig>()
+    .expect("host_auth is parsed as HostAuthConfig")
+    .browser_logins
+    .iter()
+    .filter_map(|login| login.host.clone())
+    .collect()
+}
+
+/// The load-time check of a task's `improve_host`: the value names a host in `login_hosts`, and the key sits only on a
+/// task with a prompt that is not `mode: master`, steps or a handler. Those tasks start no round the launcher carries.
+pub fn validate_improve_host(task: &ScheduledTaskConfig, login_hosts: &[String]) -> Result<(), String> {
+  let Some(host) = task.improve_host.as_deref() else {
+    return Ok(());
+  };
+  let has_prompt = task.prompt.as_deref().is_some_and(|prompt| !prompt.is_empty());
+  if !has_prompt || task.mode == Some(TaskMode::Master) || task.steps.is_some() || task.handler.is_some() {
+    return Err("improve_host needs a task with a 'prompt' that is not mode 'master', steps or a handler".to_string());
+  }
+  if !login_hosts.iter().any(|login_host| login_host == host) {
+    return Err(format!("improve_host '{host}' names no host in host_auth.browser_logins"));
+  }
+  Ok(())
+}
+
 fn default_timezone() -> String {
   DEFAULT_TIMEZONE.to_string()
 }
@@ -220,6 +252,7 @@ mod tests {
       prompt: Some("Synthetic prompt\n".to_string()),
       handler: None,
       steps: None,
+      improve_host: None,
     };
     validate_task(&task).expect("master mode without session_id validates");
 

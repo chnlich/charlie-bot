@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 /// The parent's typed task input for a child report: a header naming the task, its provenance and outcome, then the
 /// summary.
 pub fn child_report_text(report: &Value, provenance: Option<&str>) -> String {
-  let mut header = format!("[Report from task {}", field_text(report.get("child_session_id")));
+  let mut header = format!("[Report from task {}", field_text(report.get(event_types::CHILD_SESSION_ID)));
   if let Some(provenance) = provenance {
     header.push_str(&format!(" ({provenance})"));
   }
@@ -49,7 +49,7 @@ pub fn compose_input_prompt(
       }
       event_types::CHILD_REPORT => {
         let report = event.to_value();
-        let child_id = field_text(report.get("child_session_id"));
+        let child_id = field_text(report.get(event_types::CHILD_SESSION_ID));
         let provenance = report_provenance.get(&child_id).and_then(Value::as_str);
         child_report_text(&report, provenance)
       }

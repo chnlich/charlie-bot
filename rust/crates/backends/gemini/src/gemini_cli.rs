@@ -99,6 +99,7 @@ mod tests {
       resume_session_id: Some("session-123".to_string()),
       log_dir: None,
       cgroup_session_id: None,
+      remote_launch: None,
       backend_kwargs: serde_json::Map::new(),
       manager_turn: false,
     });
@@ -131,6 +132,7 @@ mod tests {
         resume_session_id: None,
         log_dir: None,
         cgroup_session_id: None,
+        remote_launch: None,
         backend_kwargs: serde_json::Map::new(),
         manager_turn: false,
       })
@@ -164,6 +166,7 @@ mod tests {
       resume_session_id: None,
       log_dir: None,
       cgroup_session_id: None,
+      remote_launch: None,
       backend_kwargs: serde_json::Map::new(),
       manager_turn: false,
     })

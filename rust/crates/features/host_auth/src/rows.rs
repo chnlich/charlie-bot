@@ -43,7 +43,7 @@ fn parse_id(id: &str) -> Option<RowId<'_>> {
 /// The rows whose check runs now. The row's JSON reports a check in progress from this set.
 static CHECKING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// Marks a row as checking until the guard drops, on every path.
+/// The guard that marks a row as checking until it drops, on every path.
 struct CheckGuard(String);
 
 impl CheckGuard {
@@ -291,7 +291,7 @@ async fn probe_waiting_login(state_path: &Path, login: &BrowserLoginConfig) -> a
 }
 
 /// The row's JSON. The page renders its first paint from these fields, and the row route answers them on each refresh.
-/// Every text field is ready to show; a field the row lacks is an empty string, a null, or `false`.
+/// Every text field is ready to show. A field the row lacks is an empty string, a null, or `false`.
 fn row_json(row: &Row, now: OffsetDateTime) -> anyhow::Result<Value> {
   let lifetime = row.login.and_then(|login| login.lifetime_sec);
   let (expiry, expiry_soon) = expiry_text(lifetime, row.approved_at.as_deref(), row.state, now)?;
@@ -383,8 +383,9 @@ fn next_step(row: &Row) -> String {
   }
 }
 
-/// The expiry line of a row, and whether the time left is under a day. A login with a lifetime counts from its last
-/// approval. Past one lifetime, a row that still answers reads available, not expired.
+/// The expiry line of a row, and whether the login needs renewing soon: under a quarter of its lifetime left, and at
+/// most a day. A login with a lifetime counts from its last approval. Past one lifetime, a row that still answers
+/// reads available, not expired.
 fn expiry_text(
   lifetime_sec: Option<u64>,
   approved_at: Option<&str>,
@@ -398,11 +399,13 @@ fn expiry_text(
   let Some(lifetime) = lifetime_sec else {
     return Ok((format!("Last approved {}", local_text(&isoformat(approved))?), false));
   };
-  let expires = approved + Duration::seconds(i64::try_from(lifetime)?);
+  let lifetime_secs = i64::try_from(lifetime)?;
+  let expires = approved + Duration::seconds(lifetime_secs);
   let left = (expires - now).whole_seconds();
   if left > 0 {
     let text = format!("Expires {} · {} left", local_text(&isoformat(expires))?, format_remaining(left));
-    return Ok((text, left < 24 * 3600));
+    let renew_below = (lifetime_secs / 4).min(24 * 3600);
+    return Ok((text, left < renew_below));
   }
   let ended = local_text(&isoformat(expires))?;
   let text = if state == RowState::Ok {
@@ -501,9 +504,32 @@ mod tests {
     let (text, soon) = expiry_text(Some(86400), approved, RowState::Ok, now).expect("the expiry builds");
     assert!(text.starts_with("Expires "), "{text}");
     assert!(text.contains("left"), "{text}");
-    assert!(soon, "less than a day is marked soon");
+    assert!(!soon, "23 h 46 m left of a day-long login is not yet soon: {text}");
     let (text, _) = expiry_text(Some(86400), approved, RowState::NeedsUser, now).expect("the expiry builds");
     assert!(text.starts_with("Expires "), "a counting row is counting whatever its state: {text}");
+  }
+
+  #[test]
+  fn a_day_long_login_is_soon_in_its_last_six_hours() {
+    let approved = Some("2026-11-18T00:16:29+00:00");
+    let with_23_hours_left = timestamps::parse("2026-11-18T01:16:29+00:00").expect("the stamp parses");
+    let (text, soon) = expiry_text(Some(86400), approved, RowState::Ok, with_23_hours_left).expect("the expiry builds");
+    assert!(!soon, "23 h left of a day-long login is not soon: {text}");
+    let with_5_hours_left = timestamps::parse("2026-11-18T19:16:29+00:00").expect("the stamp parses");
+    let (text, soon) = expiry_text(Some(86400), approved, RowState::Ok, with_5_hours_left).expect("the expiry builds");
+    assert!(soon, "5 h left of a day-long login is soon: {text}");
+  }
+
+  #[test]
+  fn a_week_long_login_is_soon_in_its_last_day() {
+    let approved = Some("2026-11-18T00:16:29+00:00");
+    let week = 7 * 86400;
+    let with_23_hours_left = timestamps::parse("2026-11-24T01:16:29+00:00").expect("the stamp parses");
+    let (text, soon) = expiry_text(Some(week), approved, RowState::Ok, with_23_hours_left).expect("the expiry builds");
+    assert!(soon, "23 h left of a week-long login is soon: {text}");
+    let with_30_hours_left = timestamps::parse("2026-11-23T18:16:29+00:00").expect("the stamp parses");
+    let (text, soon) = expiry_text(Some(week), approved, RowState::Ok, with_30_hours_left).expect("the expiry builds");
+    assert!(!soon, "the flag caps at 24 h, so 30 h left of a week-long login is not soon: {text}");
   }
 
   #[test]

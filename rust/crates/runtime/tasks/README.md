@@ -74,6 +74,8 @@ shutdown and re-attachment into server lifespan.
 - `TaskCompletion::evaluate_automatic_completion`
 - `TaskCompletion::after_run_finished`
 - `TaskCompletion::pause_reason`
+- `TaskCompletion::pause_delivery` (every run-end pause; notifies the initiator once per run when the worker holds
+  pending triggers of its own)
 - `RunFinishedCompletion for TaskCompletion`
 - `SequenceCompletion for TaskCompletion`
 - `completion::task_completion`

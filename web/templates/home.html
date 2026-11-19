@@ -45,7 +45,6 @@
   .badge { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; font-size:11px;
     font-weight:700; letter-spacing:.04em; text-transform:uppercase;
     border:1px solid; border-radius:999px; padding:1px 9px }
-  .badge::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor }
   .badge-up { color:var(--up-fg); background:var(--up-bg); border-color:var(--up-bd) }
   .badge-down { color:var(--down-fg); background:var(--down-bg); border-color:var(--down-bd) }
   .foot { color:var(--mut); font-size:12.5px; margin-top:26px; max-width:82ch; line-height:1.6 }
@@ -82,7 +81,7 @@
     <a class="card svc-card" href="{{ s.url }}">
       <span class="head">
         <span class="nm">{{ s.name }}</span>
-        <span class="badge badge-{{ s.status }}">{{ s.status }}</span>
+        <span class="badge badge-{{ s.status }}">{{ icon('dot', 6) }}{{ s.status }}</span>
       </span>
       <span class="desc">{{ s.description }}</span>
       <span class="tgt">{{ s.url }}</span>

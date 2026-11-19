@@ -68,7 +68,7 @@ fn cases() -> Vec<Value> {
       "instructions_file":"/synthetic/run/harness_instructions.md", "prompt":"task prompt", "env":{"HOME":"/synthetic/home", "PATH":"/synthetic/bin"}
     }),
     json!({
-      "id":"haiku-flags", "label":"Haiku", "model":"claude-haiku-4-5", "type_fields":{"effort":"high", "cli_binary":"/synthetic/bin/claude"},
+      "id":"haiku-flags", "label":"Haiku", "model":"claude-haiku-4-5", "type_fields":{"effort":"high"},
       "extra_flags":["--extra-option", "value with spaces"], "claude_session_id":null, "claude_account":{"label":"synthetic", "config_dir":"~/accounts/one"},
       "instructions_file":null, "prompt":"flags prompt", "env":{"HOME":"/synthetic/home", "PATH":"/synthetic/bin"}
     }),
@@ -119,6 +119,7 @@ fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Arc<Registry>) -
     resume_session_id: None,
     log_dir: None,
     cgroup_session_id: None,
+    remote_launch: None,
     backend_kwargs: kwargs,
     manager_turn: false,
   };

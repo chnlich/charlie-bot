@@ -35,7 +35,7 @@ impl Store {
         let name = format!("after-turn-{}-{session_id}", work.name);
         tokio::spawn(async move {
           if let Err(error) = work.future.await {
-            tracing::error!(task_name = %name, error = %error, "background_task_failed");
+            tracing::error!(task_name = %name, error = %error, "{}", event_types::BACKGROUND_TASK_FAILED_EVENT);
           }
         });
       }
@@ -827,7 +827,8 @@ mod tests {
       ["message", "handler_result"]
     );
     assert_eq!(frames[0]["message"]["role"], "system");
-    assert_eq!(frames[0]["message"]["content"], "✓ Lint: Done");
+    assert_eq!(frames[0]["message"]["kind"], "handler_ok");
+    assert_eq!(frames[0]["message"]["content"], "Lint: Done");
   }
 
   #[tokio::test]

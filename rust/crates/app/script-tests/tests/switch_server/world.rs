@@ -293,13 +293,13 @@ impl World {
     self.sandbox.dir("user-units")
   }
 
-  /// Rewrites the agents slice's fake `cgroup.controllers`.
+  /// The agents slice's fake `cgroup.controllers`, rewritten.
   pub fn write_agents_controllers(&self, controllers: &str) {
     let path = world_agents_slice(&self.cgroups);
     fs::write(path.join("cgroup.controllers"), format!("{controllers}\n")).expect("the fake controllers");
   }
 
-  /// Rewrites the home config with the two session-weight switches set to `cpu` and `io`, keeping the rest.
+  /// The home config rewritten with the two session-weight switches set to `cpu` and `io`, keeping the rest.
   pub fn set_weight_switches(&self, cpu: bool, io: bool) {
     let config = format!(
       "server:\n  host: 127.0.0.1\n  port: {}\n  enable_session_cpu_weight: {}\n  enable_session_io_weight: {}\n{BACKEND_OPTIONS}",
@@ -308,7 +308,7 @@ impl World {
     fs::write(self.home.join("config.yaml"), config).expect("the config");
   }
 
-  /// Runs the clone's own switch command, as the operator does from the runtime clone.
+  /// The clone's own switch command's run, as the operator does it from the runtime clone.
   pub fn switch(&self, args: &[&str]) -> Run {
     let mut command = harness::command("bash", &self.env);
     command.arg(self.switch_script()).args(args);
@@ -410,15 +410,16 @@ switch_forward
     env
   }
 
-  /// Starts one stand-in release server on the port over the home, with `behavior` on top of the defaults, and waits
-  /// until it answers the version route. Its binary is a copy in the server directory, where its calls.log lands.
+  /// One stand-in release server started on the port over the home, with `behavior` on top of the defaults,
+  /// waiting until it answers the version route. Its binary is a copy in the server directory, where its
+  /// calls.log lands.
   pub fn start_fake_server(&self, behavior: &[(&str, Value)]) -> FakeServer {
     self.start_fake_server_when(behavior, |world| world.answers_version())
   }
 
-  /// Starts one stand-in release server like [`World::start_fake_server`], and waits until `ready` holds, for up to
-  /// 10 seconds. The `FakeServer` guard exists from the moment the process starts, so a panic in the wait stops the
-  /// process on unwind.
+  /// One stand-in release server started like [`World::start_fake_server`], waiting until `ready` holds, for up
+  /// to 10 seconds. The `FakeServer` guard exists from the moment the process starts, so a panic in the wait
+  /// stops the process on unwind.
   pub fn start_fake_server_when(&self, behavior: &[(&str, Value)], ready: impl Fn(&Self) -> bool) -> FakeServer {
     let dir = self.root().join("server");
     fs::create_dir_all(&dir).expect("the server directory");
@@ -486,8 +487,8 @@ preflight
     harness::run(&mut command)
   }
 
-  /// Runs `body` in a shell that has sourced the switch script, with the world's disk, cgroup and proc roots: the
-  /// disk functions' own unit under test.
+  /// The run of `body` in a shell that has sourced the switch script, with the world's disk, cgroup and proc
+  /// roots: the disk functions' own unit under test.
   pub fn disk_command(&self, body: &str) -> Run {
     let script = format!("source \"$1\" rust {} && {body}", self.old_sha);
     let mut command = harness::command("bash", &self.env);
@@ -495,7 +496,7 @@ preflight
     harness::run(&mut command)
   }
 
-  /// Writes a fake session cgroup whose io.stat charges `rbytes` bytes to the root disk.
+  /// A fake session cgroup whose io.stat charges `rbytes` bytes to the root disk.
   pub fn write_session_cgroup(&self, name: &str, rbytes: u64) {
     let dir = self.cgroups.join(name);
     fs::create_dir_all(&dir).expect("the session cgroup");
@@ -505,7 +506,7 @@ preflight
     fs::write(dir.join("cgroup.procs"), "").expect("the fake cgroup procs");
   }
 
-  /// Writes a fake session cgroup with no io.stat, holding `pids` and exposing `controllers`.
+  /// A fake session cgroup with no io.stat, holding `pids` and exposing `controllers`.
   pub fn write_session_cgroup_without_io(&self, name: &str, controllers: &str, pids: &[u32]) {
     let dir = self.cgroups.join(name);
     fs::create_dir_all(&dir).expect("the session cgroup");
@@ -514,7 +515,7 @@ preflight
     fs::write(dir.join("cgroup.procs"), procs).expect("the fake cgroup procs");
   }
 
-  /// Writes a fake process's comm and read_bytes under the world's proc root.
+  /// A fake process's comm and read_bytes, under the world's proc root.
   pub fn write_process(&self, pid: u32, comm: &str, read_bytes: u64) {
     let dir = self.proc.join(pid.to_string());
     fs::create_dir_all(&dir).expect("the fake process");
@@ -558,7 +559,7 @@ preflight
     path
   }
 
-  /// Starts a sleeping process as a live run's process, in a process group of its own, and returns its pid.
+  /// The pid of a sleeping process started as a live run's process, in a process group of its own.
   pub fn spawn_live(&mut self) -> u32 {
     let mut command = harness::command("sleep", &self.env);
     command.arg("300").process_group(0).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -597,7 +598,7 @@ preflight
     wait_until(|| !self.listener_pids().is_empty(), Duration::from_secs(10));
   }
 
-  /// Starts a pane on the private tmux server, with a shell in the clone, and returns the pane id.
+  /// The id of a pane started on the private tmux server, with a shell in the clone.
   pub fn start_pane(&self) -> String {
     let clone = self.clone.display().to_string();
     self.tmux(&[
@@ -855,7 +856,7 @@ pub fn pid_start(pid: u32) -> String {
   stat.rsplit_once(')').expect("a stat line").1.split_whitespace().nth(19).expect("the start time").to_string()
 }
 
-/// Polls `condition` until it holds, and fails the test once `timeout` has passed.
+/// A wait on `condition` until it holds, failing the test once `timeout` has passed.
 pub fn wait_until(mut condition: impl FnMut() -> bool, timeout: Duration) {
   let deadline = Instant::now() + timeout;
   while !condition() {
@@ -864,7 +865,7 @@ pub fn wait_until(mut condition: impl FnMut() -> bool, timeout: Duration) {
   }
 }
 
-/// Writes a release's behavior: the defaults, with `overrides` on top.
+/// A release's behavior written: the defaults, with `overrides` on top.
 pub fn write_behavior(dir: &Path, overrides: &[(&str, Value)]) {
   let mut behavior = behavior_defaults();
   for (name, value) in overrides {
@@ -913,7 +914,7 @@ pub fn install_release(releases: &Path, sha: &str) {
   write_behavior(&release, &[]);
 }
 
-/// Replaces a release's `charliebot` with a script of `body`, then refreshes the checksums the preflight verifies.
+/// A release's `charliebot` replaced with a script of `body`, then its checksums refreshed for the preflight.
 pub fn replace_charliebot(release: &Path, body: &str) {
   let path = release.join("charliebot");
   write_executable(&path, format!("#!/usr/bin/env bash\n{body}"));
@@ -930,7 +931,7 @@ fn write_checksums(release: &Path) {
   fs::write(release.join("sha256sums.txt"), sums).expect("the checksums");
 }
 
-/// Writes one backend's registration in the layout that build has, with its `restart_reattach` declaration.
+/// One backend's registration written in the layout that build has, with its `restart_reattach` declaration.
 fn write_registration(clone: &Path, module: &str, backend_type: &str, enabled: bool, layout: Layout) {
   let path = registration_path(clone, module, layout);
   fs::create_dir_all(path.parent().expect("a parent")).expect("the registration directory");
@@ -969,7 +970,7 @@ fn git_env(sandbox: &Sandbox) -> Env {
   env
 }
 
-/// Copies one file of the repository into the test's tree, keeping its mode.
+/// One file of the repository copied into the test's tree, keeping its mode.
 fn copy_repo_file(relative: &str, to: &Path) {
   harness::copy_file(&harness::repo_root().join(relative), to);
 }

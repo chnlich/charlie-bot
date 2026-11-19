@@ -252,7 +252,9 @@ fn run_summary_fields(value: &Value) -> Result<Vec<String>, String> {
 /// Whether one page of a runs response holds a queued or running run, then that page's next cursor.
 fn run_page_fields(value: &Value) -> Result<(bool, String), String> {
   let items = value.get("items").and_then(Value::as_array).ok_or("run response has no items list")?;
-  let active = items.iter().any(|item| matches!(run_state(item).as_str(), "queued" | "running"));
+  let active = items.iter().any(|item| {
+    run_records::RunDisplayState::parse(&run_state(item)).is_some_and(run_records::RunDisplayState::is_live)
+  });
   Ok((active, or_default(value.get("next_cursor"))))
 }
 
@@ -1102,8 +1104,8 @@ fn seed_run(args: &[String]) -> Result<i32, String> {
     "backend": backend,
     "pid": pid,
     (proc_identity::PID_START_FIELD): pid_start,
-    "started_at": started_at,
-    "ended_at": Value::Null,
+    (run_records::STARTED_AT_FIELD): started_at,
+    (run_records::ENDED_AT_FIELD): Value::Null,
   });
   let metadata = run_dir.join(run_records::RUN_METADATA_NAME);
   run_records::write_run_metadata(&metadata, &record, &text_repr::DEFAULT_JSON)

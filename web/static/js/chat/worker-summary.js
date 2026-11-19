@@ -85,12 +85,14 @@ function statusOf(summary) {
   const state = String(summary.task_state || WORKER_STATE.OPEN);
   const runs = summary.runs || [];
   const newest = runs.length ? runs[runs.length - 1] : null;
-  if (state === WORKER_STATE.COMPLETED) return {label: 'Delivered', dot: 'bg-green-500'};
-  if (state !== WORKER_STATE.OPEN) return {label: 'Task ' + state, dot: 'bg-slate-500'};
-  if (newest && newest.state === WORKER_STATE.RUNNING) return {label: 'Running', dot: 'bg-blue-500 animate-pulse-dot'};
-  if (newest && newest.state === WORKER_STATE.QUEUED) return {label: 'Queued', dot: 'bg-amber-400'};
-  if (newest) return {label: 'Run ' + String(newest.state || ''), dot: 'bg-slate-500'};
-  return {label: 'Open', dot: 'bg-slate-500'};
+  if (state === WORKER_STATE.COMPLETED) return {label: 'Delivered', dot: 'text-green-500'};
+  if (state !== WORKER_STATE.OPEN) return {label: 'Task ' + state, dot: 'text-slate-500'};
+  if (newest && newest.state === WORKER_STATE.RUNNING) {
+    return {label: 'Running', dot: 'text-blue-500 animate-pulse-dot'};
+  }
+  if (newest && newest.state === WORKER_STATE.QUEUED) return {label: 'Queued', dot: 'text-amber-400'};
+  if (newest) return {label: 'Run ' + String(newest.state || ''), dot: 'text-slate-500'};
+  return {label: 'Open', dot: 'text-slate-500'};
 }
 
 // One line per Run in the card: kind, backend, state · duration, tool calls.
@@ -136,7 +138,8 @@ function textHtml(text, foldKey) {
     + body.replace('whitespace-pre-wrap', 'worker-summary-clamp whitespace-pre-wrap')
     + '<button type="button" class="worker-summary-toggle" aria-expanded="' + String(open)
     + '" onclick="toggleWorkerSummaryFold(this)">'
-    + '<span class="worker-summary-more">Show all ▾</span><span class="worker-summary-less">Show less ▴</span></button></div>';
+    + '<span class="worker-summary-more">Show all ' + cbIcon('disclosure', 12) + '</span>'
+    + '<span class="worker-summary-less">Show less ' + cbIcon('disclosure-open', 12) + '</span></button></div>';
 }
 
 // A stop request's origin reads from the request id's generated prefixes. The
@@ -221,7 +224,7 @@ function render() {
   const status = statusOf(summary);
   const activeStart = summary.active && summary.active.started_at ? summary.active.started_at : null;
   const head = '<div class="flex items-center gap-2">'
-    + '<span class="w-2 h-2 rounded-full flex-shrink-0 ' + status.dot + '"></span>'
+    + cbIcon('dot', 8, 'flex-shrink-0 ' + status.dot)
     + '<span class="font-semibold text-slate-200">' + escapeHtml(status.label) + '</span>'
     + statusTimeHtml(summary)
     + '</div>';

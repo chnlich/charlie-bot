@@ -33,7 +33,7 @@ pub fn marker() -> Option<PathBuf> {
   env::var_os(HOLD).map(PathBuf::from)
 }
 
-/// Writes a held test's marker atomically, so the check never reads a file the test is still writing.
+/// A held test's marker, written atomically so the check never reads a file the test is still writing.
 pub fn write_marker(marker: &Path, text: &str) {
   let writing = marker.with_extension("writing");
   fs::write(&writing, text).expect("write the held test's marker");

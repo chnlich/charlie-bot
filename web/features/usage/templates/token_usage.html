@@ -46,8 +46,9 @@
      do. Enter and Space then give the chip the same visible focus the rest of the
      page shows. */
   .detBtn:focus-visible { outline:2px solid var(--acc); outline-offset:2px }
-  .detBtn::after { content:" \25B8" }
-  .detBtn[aria-expanded="true"]::after { content:" \25BE" }
+  .detBtn .det-open, button.tg .tg-open { display:none }
+  .detBtn[aria-expanded="true"] .det-closed, button.tg[aria-expanded="true"] .tg-closed { display:none }
+  .detBtn[aria-expanded="true"] .det-open, button.tg[aria-expanded="true"] .tg-open { display:inline-block }
   .detBody { display:inline-flex; flex-wrap:wrap; gap:8px; max-width:100% }
   p { margin:8px 0 }
   ul { margin:8px 0 0; padding-left:20px } li { margin:4px 0 }
@@ -141,7 +142,7 @@
   ledger ({{ as_of }}).</p>
   <div class="meta">
     {% if ctx.rows %}<span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }} {{ zone }}</span>{% endif %}
-    <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details</button>
+    <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details {{ icon('disclosure', 12, 'det-closed') }}{{ icon('disclosure-open', 12, 'det-open') }}</button>
     <span class="mtag">generated &middot; {{ generated }}</span>
     <span class="detBody" id="usage-details" hidden>
       <span class="mtag">sources &middot; {{ ctx.usage_sources|join(' / ') }} local logs</span>
@@ -194,14 +195,34 @@
       <p class="foot">{% if ctx.week.wow_output is none %}output: no output the week before{% else %}output {{ "+" if ctx.week.wow_output >= 0 }}{{ "%.1f"|format(ctx.week.wow_output) }}%, against {{ ctx.week.previous_output }}{% endif %}</p>
       {% endif %}
     </div>
+    <div class="heroCard">
+      <p class="lab">API list-price equivalent &middot; last week</p>
+      <div class="val">{{ ctx.week.usd }}</div>
+      {% if ctx.week.models %}
+      <p class="foot">Not cash spend: each token at its model&rsquo;s API list price, subscription use included.</p>
+      <p class="foot">{{ ctx.week.usd_left_out }} tokens
+        have no published model price or include a ledger category its published
+        rates cannot price, so they are left out.</p>
+      <p class="foot">Week before {{ ctx.week.usd_previous }}; change
+        {% if ctx.week.usd_change is none %}N/A, the week before has no priced tokens
+        {% else %}{{ ctx.week.usd_change }}
+          ({{ "+" if ctx.week.usd_change_pct >= 0 }}{{ "%.1f"|format(ctx.week.usd_change_pct) }}%)
+        {% endif %}</p>
+      {% else %}
+      <p class="foot">No records last week</p>
+      {% endif %}
+    </div>
   </div>
 
   <h2><span class="n">1</span>Last week by model <span class="win">{{ ctx.week.label }} {{ zone }}</span></h2>
   <table class="data stack" id="tbl_week">
-    {% if ctx.week.models %}<thead><tr><th>Model</th><th class="l">Platform</th><th>API calls</th><th>Output</th><th>Total</th><th>Share of week</th></tr></thead>{% endif %}
+    {% if ctx.week.models %}<thead><tr>
+      <th>Model</th><th class="l">Platform</th><th>API calls</th><th>Output</th><th>Total</th>
+      <th>Share of week</th><th>API list-price equivalent</th>
+    </tr></thead>{% endif %}
     <tbody>
-    {%- if not ctx.rows %}<tr class="none"><td colspan="6">The ledger is empty; the next capture fills it.</td></tr>
-    {%- elif not ctx.week.models %}<tr class="none"><td colspan="6">No records last week.</td></tr>{% endif %}
+    {%- if not ctx.rows %}<tr class="none"><td colspan="7">The ledger is empty; the next capture fills it.</td></tr>
+    {%- elif not ctx.week.models %}<tr class="none"><td colspan="7">No records last week.</td></tr>{% endif %}
     </tbody>
   </table>
 
@@ -257,6 +278,9 @@
     <li><b>Last week and time zone:</b> last week is the Pacific calendar week <code>[Monday 00:00, next Monday 00:00)</code>
       in America/Los_Angeles, the week before the one the page was rendered in. Every date and stamp on the page is in
       that zone, marked PDT or PST; a week that crosses the clock change runs 169 hours.</li>
+    <li><b>API list-price equivalent:</b> each token at its model&rsquo;s standard API list price, with a rate per token
+      category. It is what the tokens would cost through the API, not cash spend. A model with no published price, or a
+      ledger category its published rates cannot price, reads N/A; its tokens are left out of the total.</li>
     <li><b>Dedupe:</b> Claude Code replays history verbatim on resume / fork, so responses are deduped on <code>message.id</code>.</li>
     <li><b>Codex cumulative totals are not additive:</b> subagent threads inherit the parent&rsquo;s
       <code>total_token_usage</code>, so summing across files double counts; the per-request
@@ -278,6 +302,7 @@
 
 <div class="tip" id="tip" role="tooltip" aria-hidden="true"></div>
 
+<script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
 <script>
 const DATA = {{ payload|safe }};
 const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)',
@@ -296,6 +321,7 @@ const compact = n => {
   return fmt(n);
 };
 const share = (part, whole) => (whole > 0 ? (part / whole * 100).toFixed(1) : '0.0') + '%';
+const usdText = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const el = (t, cls, txt) => {
   const e = document.createElement(t);
   if (cls) e.className = cls;
@@ -336,10 +362,14 @@ const sourceTable = (segments, columns) => table('data stack', ['Source', ...col
 const accountTable = accounts => table('data stack', ['Account', 'API calls', 'Output', 'Total'],
   accounts.map(a => [a.name, fmt(a.calls), fmt(a.output), fmt(a.total)]));
 
-// A toggle button opens its detail row (or its accounts table).
-// The button carries the state for assistive tech.
+// A toggle button opens its detail row (or its accounts table). A model row's button shows the disclosure chevron,
+// which turns open while the row is open; the accounts button is labelled. The button carries the state for
+// assistive tech.
 const toggler = (label, cls) => {
-  const button = el('button', cls, cls === 'tg' ? '▸' : label);
+  const button = el('button', cls, cls === 'tg' ? undefined : label);
+  if (cls === 'tg') {
+    button.innerHTML = `${cbIcon('disclosure', 11, 'tg-closed')}${cbIcon('disclosure-open', 11, 'tg-open')}`;
+  }
   button.type = 'button';
   button.setAttribute('aria-expanded', 'false');
   button.setAttribute('aria-label', label);
@@ -476,30 +506,34 @@ function weekTable() {
   const weekTotal = DATA.week.reduce((sum, r) => sum + r.total, 0);
   const tbody = document.querySelector('#tbl_week tbody');
   const columns = [['API calls', 'calls'], ['Output', 'output'], ['Cache read', 'cache_read'], ['Total', 'total']];
-  let calls = 0, output = 0;
+  let calls = 0, output = 0, usd = 0;
   for (const r of DATA.week) {
     const button = toggler(r.model, 'tg');
     const row = el('tr', 'mrow');
+    // A model with no list price reads N/A and adds nothing to the sum.
     row.append(modelCell(r, button),
       td('Platform', r.segments.map(s => sourceName(s.slot)).join(', '), 'l'),
       td('API calls', fmt(r.calls)),
       td('Output', fmt(r.output)),
       td('Total', fmt(r.total)),
-      td('Share of week', share(r.total, weekTotal)));
+      td('Share of week', share(r.total, weekTotal)),
+      td('API list-price equivalent', r.usd == null ? 'N/A' : usdText(r.usd)));
     const detail = el('tr', 'xrow');
     detail.hidden = true;
     const wrap = el('td');
-    wrap.colSpan = 6;
+    wrap.colSpan = 7;
     wrap.append(sourceTable(r.segments, columns));
     detail.append(wrap);
     openable(button, detail);
     tbody.append(row, detail);
     calls += r.calls;
     output += r.output;
+    usd += r.usd ?? 0;
   }
   const sum = el('tr', 'sum');
   sum.append(td('Model', 'Sum (' + DATA.week.length + ' models)'), td('Platform', '', 'l'), td('API calls', fmt(calls)),
-    td('Output', fmt(output)), td('Total', fmt(weekTotal)), td('Share of week', '100.0%'));
+    td('Output', fmt(output)), td('Total', fmt(weekTotal)), td('Share of week', '100.0%'),
+    td('API list-price equivalent', usdText(usd)));
   tbody.append(sum);
 }
 

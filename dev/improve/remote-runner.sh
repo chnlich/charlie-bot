@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # Run one improve round on the remote host.
 #
-#   remote-runner.sh <launch id> <direction> <CLI commit>
-#   remote-runner.sh --in-scope <launch id> <direction>
-#   remote-runner.sh --prepare <launch id>     (the gateway tokens on standard input)
+#   remote-runner.sh <launch id> <direction> <CLI commit> <member kind>
+#   remote-runner.sh --in-scope <launch id> <direction> <member kind>
+#   remote-runner.sh --prepare <launch id>     (the review key and the member token on standard input)
+#
+# The member kind is `claude` or `codex`: the agent the round runs.
 #
 # dev/improve/remote-launch.sh sends this file, with the round's arguments and inputs, into
-# ~/improve/launch/<launch id>/ and runs the remaining forms over ssh. `--prepare` reads the
-# gateway tokens from its standard input and writes them into ~/improve/home/credentials.yaml,
-# the only file that holds a token. The first form prepares the round's environment, then starts
-# the round's scope through systemd-run; the scope runs the `--in-scope` form, which empties
-# TMPDIR, runs claude under the write-only Landlock boundary and records the scope's memory peak.
+# ~/improve/launch/<launch id>/ and runs the remaining forms over ssh. `--prepare` reads the round's
+# keys from its standard input and writes each one into ~/improve/home/credentials.yaml under its
+# credential's name, the only file that holds a key. The first form checks the round's dependencies,
+# prepares the round's environment, then starts the round's scope through systemd-run; the scope runs
+# the `--in-scope` form, which empties TMPDIR, runs the member's agent under the write-only Landlock
+# boundary and records the scope's memory peak.
 #
-# Exit codes: claude's exit code; 1 a local failure, such as a missing input file or a refused
+# Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
-# of this direction still runs. Nothing starts on 4 and 5.
+# of this direction still runs; 7 a round dependency is missing (a login, the review key, the round's
+# home or the write boundary), and stderr names it. Nothing starts on 4, 5 and 7.
 #
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
@@ -41,19 +45,21 @@ fail() {
 }
 
 usage() {
-  printf 'usage: %s <launch id> <direction> <CLI commit>\n       %s --in-scope <launch id> <direction>\n       %s --prepare <launch id>\n' \
+  printf 'usage: %s <launch id> <direction> <CLI commit> <member kind>\n       %s --in-scope <launch id> <direction> <member kind>\n       %s --prepare <launch id>\n' \
     "${BASH_SOURCE[0]}" "${BASH_SOURCE[0]}" "${BASH_SOURCE[0]}" >&2
   exit 1
 }
 
 mode=run
 commit=
+kind=
 case ${1:-} in
   --in-scope)
-    [[ $# -eq 3 ]] || usage
+    [[ $# -eq 4 ]] || usage
     mode=in_scope
     launch_id=$2
     direction=$3
+    kind=$4
     ;;
   --prepare)
     [[ $# -eq 2 ]] || usage
@@ -65,15 +71,17 @@ case ${1:-} in
     usage
     ;;
   *)
-    [[ $# -eq 3 ]] || usage
+    [[ $# -eq 4 ]] || usage
     launch_id=$1
     direction=$2
     commit=$3
+    kind=$4
     ;;
 esac
 [[ $launch_id =~ ^[0-9A-Za-z._-]+$ ]] || fail 1 "not a launch id: $launch_id"
 if [[ $mode != prepare ]]; then
   [[ $direction =~ ^[a-z][a-z0-9_]*$ ]] || fail 1 "not an improve direction: $direction"
+  [[ $kind == claude || $kind == codex ]] || fail 1 "not a member kind: $kind"
 fi
 
 readonly HOME_DIR=${HOME:-}
@@ -81,6 +89,11 @@ readonly HOME_DIR=${HOME:-}
 readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
 readonly ROUND_HOME="$HOME_DIR/improve/home"
 readonly RUNNER_ROOT="$HOME_DIR/improve/runner"
+# The Claude login of a subscription round: a long-lived token that the host keeps in this file.
+readonly CLAUDE_TOKEN_FILE="$HOME_DIR/improve/logins/claude-oauth-token"
+# The CODEX_HOME of a codex round, the host's own Codex login. The write boundary does not yet allow this
+# directory. A change to the directory a round may write sets this value and that boundary together.
+readonly CODEX_HOME_DIR="$HOME_DIR/.codex"
 [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] || fail 1 "the launch directory is not under the improve root: $LAUNCH_DIR"
 if [[ $mode != prepare ]]; then
   [[ -d $LAUNCH_DIR ]] || fail 1 "the launch directory is missing: $LAUNCH_DIR"
@@ -90,14 +103,14 @@ if [[ $mode != prepare ]]; then
 fi
 
 # The variables the launcher forwarded. The launcher writes only these names, and a name outside
-# the list stops the round: an unlisted name would reach claude from an input nobody reviewed.
+# the list stops the round: an unlisted name would reach the agent from an input nobody reviewed.
 read_launch_env() {
   local record name value
   while IFS= read -r -d '' record; do
     name=${record%%=*}
     value=${record#*=}
     case $name in
-      ANTHROPIC_* | CLAUDE_* | BASH_DEFAULT_TIMEOUT_MS | BASH_MAX_TIMEOUT_MS | CHARLIEBOT_SESSION_ID)
+      ANTHROPIC_* | CLAUDE_* | IMPROVE_REVIEW_* | BASH_DEFAULT_TIMEOUT_MS | BASH_MAX_TIMEOUT_MS | CHARLIEBOT_SESSION_ID)
         export "$name=$value"
         ;;
       *) fail 1 "the launch sent an unexpected variable name: $name" ;;
@@ -105,38 +118,48 @@ read_launch_env() {
   done <"$LAUNCH_DIR/env"
 }
 
-# Read the gateway tokens from standard input and write them into the round's credentials file,
-# one section per backend entry that names a credential. The tokens arrive on standard input so no
-# token reaches a command line, and this file is the only one that holds them. The sections come
-# from config.yaml, which the host worker owns, so CLC and the release trial find their key under
-# the section name that their own entry declares.
-write_credentials() {
-  local auth_token= api_key=
+# Read the round's keys from standard input and write them into the round's credentials file, each
+# under its credential's name: the review key under the review credential, and the member token under
+# ANTHROPIC_AUTH_TOKEN. The keys arrive on standard input so no key reaches a command line, and this
+# file is the only one that holds them. The review settings are not secrets: they join the launch
+# environment, which the first form exports. Each record is selected by its name.
+prepare_credentials() {
+  local record name value review_credential= review_key= member_token=
   local target="$ROUND_HOME/credentials.yaml"
-  local sections section record name value
   while IFS= read -r -d '' record; do
     name=${record%%=*}
     value=${record#*=}
     case $name in
-      ANTHROPIC_AUTH_TOKEN) auth_token=$value ;;
-      ANTHROPIC_API_KEY) api_key=$value ;;
-      *) fail 1 "the token stream names an unexpected variable: $name" ;;
+      CHARLIE_CODE_API_KEY) review_key=$value ;;
+      ANTHROPIC_AUTH_TOKEN) member_token=$value ;;
+      IMPROVE_REVIEW_CREDENTIAL)
+        review_credential=$value
+        printf '%s\0' "$record" >>"$LAUNCH_DIR/env"
+        ;;
+      IMPROVE_REVIEW_MODEL | IMPROVE_REVIEW_API_BASE)
+        printf '%s\0' "$record" >>"$LAUNCH_DIR/env"
+        ;;
+      *) fail 1 "the launch sent an unexpected variable name: $name" ;;
     esac
   done
-  local token=${auth_token:-$api_key}
-  [[ -n $token ]] || fail 1 'the launch sent no gateway token'
+  [[ -n $review_credential ]] || fail 1 'the launch named no review credential'
+  [[ -n $review_key ]] || fail 1 'the launch sent no review key'
   mkdir -p -- "$ROUND_HOME"
-  [[ -f $ROUND_HOME/config.yaml ]] || fail 1 "the round's config.yaml is missing: $ROUND_HOME/config.yaml"
-  sections=$(sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*credential:[[:space:]]*//p' "$ROUND_HOME/config.yaml" |
-    sed 's/[[:space:]]*#.*//; s/^["'\'']//; s/["'\'']$//' |
-    grep -Ev '^(null|~|)$' | sort -u) || sections=
-  [[ -n $sections ]] || fail 1 "the round's config.yaml names no backend credential: $ROUND_HOME/config.yaml"
   umask 077
   : >"$target"
-  for section in $sections; do
-    printf '%s:\n  api_key: %s\n' "$section" "$token" >>"$target"
-  done
+  printf '%s:\n  api_key: %s\n' "$review_credential" "$review_key" >>"$target"
+  if [[ -n $member_token ]]; then
+    printf 'ANTHROPIC_AUTH_TOKEN:\n  api_key: %s\n' "$member_token" >>"$target"
+  fi
   chmod 600 "$target"
+}
+
+# The api_key under one top-level section of the round's credentials file, found by the section's name.
+credential_key() {
+  awk -v section="$1" '
+    /^[^ ]/ { inside = ($0 == section ":") }
+    inside && /^  api_key:/ { value = $0; sub(/^  api_key:[ \t]*/, "", value); print value; exit }
+  ' "$ROUND_HOME/credentials.yaml"
 }
 
 # Copy the leak pattern file the launcher sent into the round's home. github-post.sh reads it from
@@ -231,7 +254,7 @@ other_inflight_files() {
 
 # The direction's clone is the round's only checkout inside the boundary. A round whose clone is
 # absent or foreign must not start: on 2026-10-29 a local round found no clone and continued in
-# another checkout although its prompt told it to stop, so the check holds here, before claude.
+# another checkout although its prompt told it to stop, so the check holds here, before the round's agent starts.
 check_clone() {
   local clone="$ROUND_ROOT/charlie-bot"
   local hooks origin
@@ -268,11 +291,11 @@ round_is_live() {
     (( ${#arguments[@]} >= 5 )) || continue
     [[ ${arguments[1]} == "$HOME_DIR"/improve/launch/*/remote-runner.sh ]] || continue
     case ${arguments[2]} in
-      # The leader: bash <launch dir>/remote-runner.sh --in-scope <launch id> <direction>.
+      # The leader: bash <launch dir>/remote-runner.sh --in-scope <launch id> <direction> <member kind>.
       --in-scope) [[ ${arguments[4]} == "$live_direction" ]] || continue ;;
       # The --prepare form holds no direction and starts no scope.
       --prepare) continue ;;
-      # The wrapper: bash <launch dir>/remote-runner.sh <launch id> <direction> <CLI commit>.
+      # The wrapper: bash <launch dir>/remote-runner.sh <launch id> <direction> <CLI commit> <member kind>.
       *) [[ ${arguments[3]} == "$live_direction" ]] || continue ;;
     esac
     launch_dir=$(dirname -- "${arguments[1]}")
@@ -392,17 +415,31 @@ record_memory_peak() {
   fi
 }
 
-# Export the one gateway token under each round tool's documented variable: ANTHROPIC_AUTH_TOKEN for claude,
-# CHARLIE_CODE_API_KEY for charlie-code. The prepare step wrote the token to the round's credentials file, and the
-# launcher keeps it out of the environment file, so this is the one place the token enters the round: the environment,
-# with no argument and no other file that carries it.
-export_gateway_token() {
-  local tokens token
-  tokens=$(sed -n 's/^[[:space:]]*api_key:[[:space:]]*//p' "$ROUND_HOME/credentials.yaml")
-  token=${tokens%%$'\n'*}
-  [[ -n $token ]] || fail 1 "the round's credentials file holds no gateway token: $ROUND_HOME/credentials.yaml"
-  export ANTHROPIC_AUTH_TOKEN=$token
-  export CHARLIE_CODE_API_KEY=$token
+# Export each round key under the name its tool reads. The review key is CHARLIE_CODE_API_KEY whichever member
+# runs the round. charlie-code takes the review option's model and API base from CHARLIE_CODE_MODEL and
+# CHARLIE_CODE_API_BASE, in the gateway's form: the model with an `openai/` prefix, and the base with `/v1` appended.
+# The member's own key is ANTHROPIC_AUTH_TOKEN when the server sent one; a subscription claude has no such key and
+# reads the host's Claude login, and a codex round runs under CODEX_HOME. The keys sit in the credentials file that
+# prepare wrote, and the launcher keeps them out of the environment file, so this is the one place a key enters the
+# round: the environment, with no argument and no other file that carries it.
+export_round_credentials() {
+  local review_key member_key
+  review_key=$(credential_key "$IMPROVE_REVIEW_CREDENTIAL")
+  [[ -n $review_key ]] \
+    || fail 1 "the round's credentials file holds no api_key for the review credential $IMPROVE_REVIEW_CREDENTIAL: $ROUND_HOME/credentials.yaml"
+  export CHARLIE_CODE_API_KEY=$review_key
+  export CHARLIE_CODE_MODEL="openai/$IMPROVE_REVIEW_MODEL"
+  export CHARLIE_CODE_API_BASE="$IMPROVE_REVIEW_API_BASE/v1"
+  if [[ $kind == codex ]]; then
+    export CODEX_HOME=$CODEX_HOME_DIR
+    return
+  fi
+  member_key=$(credential_key ANTHROPIC_AUTH_TOKEN)
+  if [[ -n $member_key ]]; then
+    export ANTHROPIC_AUTH_TOKEN=$member_key
+  else
+    export CLAUDE_CODE_OAUTH_TOKEN=$(<"$CLAUDE_TOKEN_FILE")
+  fi
 }
 
 run_in_scope() {
@@ -410,15 +447,15 @@ run_in_scope() {
   # so a heartbeat that closes cannot stop the previous round's scope.
   : >"$LAUNCH_DIR/started"
   empty_tmpdir
-  export_gateway_token
+  export_round_credentials
   local status=0
-  "$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- claude "${REWRITTEN[@]}" || status=$?
+  "$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- "$kind" "${REWRITTEN[@]}" || status=$?
   record_memory_peak
   exit "$status"
 }
 
 if [[ $mode == prepare ]]; then
-  write_credentials
+  prepare_credentials
   exit 0
 fi
 
@@ -429,6 +466,29 @@ fi
 
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail 1 "not a full commit: $commit"
 
+# The round's dependencies, checked before any side effect of the round: the member's login, the review key that
+# prepare wrote, and this host's lack of a live profile home. Each failure exits 7 and names the missing item.
+check_round_dependencies() {
+  [[ -n ${IMPROVE_REVIEW_CREDENTIAL-} ]] || fail 7 'the launch names no review credential'
+  [[ -n $(credential_key "$IMPROVE_REVIEW_CREDENTIAL") ]] \
+    || fail 7 "the round's credentials file holds no api_key for the review credential $IMPROVE_REVIEW_CREDENTIAL"
+  if [[ $kind == claude ]]; then
+    [[ -n $(credential_key ANTHROPIC_AUTH_TOKEN) || -s $CLAUDE_TOKEN_FILE ]] \
+      || fail 7 "the round has no Claude login: $CLAUDE_TOKEN_FILE is missing or empty"
+  else
+    [[ -s $CODEX_HOME_DIR/auth.json ]] || fail 7 "the round has no Codex login: $CODEX_HOME_DIR/auth.json is missing or empty"
+  fi
+  [[ ! -e $HOME_DIR/.charliebot ]] \
+    || fail 7 "$HOME_DIR/.charliebot exists; the round's profile home is $ROUND_HOME, and no live profile home may sit beside it"
+}
+
+# The write boundary must start before the round does. A kernel without Landlock makes improve-sandbox refuse at exec.
+check_boundary_starts() {
+  local output
+  output=$("$RUNNER_ROOT/bin/improve-sandbox" "$direction" -- true 2>&1) \
+    || fail 7 "the write boundary does not start, so the round does not start: ${output:-improve-sandbox printed no diagnostic}"
+}
+
 cleanup_launch_dir() {
   [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] && rm -rf -- "$LAUNCH_DIR"
   return 0
@@ -436,13 +496,14 @@ cleanup_launch_dir() {
 trap cleanup_launch_dir EXIT
 
 read_launch_env
+check_round_dependencies
 install_pattern_file
 rewrite_command
 other_inflight_files >>"$LAUNCH_DIR/inflight-files.txt"
 check_clone
 
 # The round works in the direction's root, because `--resume` finds a Claude session by the
-# directory. The PATH puts the remote binaries first: claude and charlie-code from ~/.local/bin,
+# directory. The PATH puts the remote binaries first: claude, codex and charlie-code from ~/.local/bin,
 # cargo from ~/.cargo/bin, and the charliebot CLI that the hooks call from the runner's bin.
 export CHARLIEBOT_HOME="$ROUND_HOME"
 export CLAUDE_CONFIG_DIR="$HOME_DIR/.claude-improve"
@@ -457,6 +518,7 @@ fi
 cd "$ROUND_ROOT"
 
 ensure_cli "$commit"
+check_boundary_starts
 export PATH="$RUNNER_ROOT/bin/$commit:$PATH"
 
 # A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run
@@ -495,7 +557,7 @@ scope_stderr="$LAUNCH_DIR/scope.stderr"
 scope_status=0
 systemd-run --user --scope --unit "improve-$direction" \
   -p "MemoryMax=$UNIT_MEMORY_MAX" -p MemorySwapMax=0 -- \
-  bash "$LAUNCH_DIR/remote-runner.sh" --in-scope "$launch_id" "$direction" 2>"$scope_stderr" || scope_status=$?
+  bash "$LAUNCH_DIR/remote-runner.sh" --in-scope "$launch_id" "$direction" "$kind" 2>"$scope_stderr" || scope_status=$?
 cat -- "$scope_stderr" >&2 || true
 if (( scope_status != 0 )); then
   if grep -q 'already loaded' "$scope_stderr"; then

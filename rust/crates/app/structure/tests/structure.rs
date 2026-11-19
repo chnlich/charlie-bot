@@ -829,6 +829,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::SCHEMA_VERSION_FIELD`.",
   },
+  OwnerRow {
+    name: "source_session_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::control_events::SOURCE_SESSION_ID_FIELD`; every request event's header and every \
+           prompt source names the session it came from there.",
+  },
   OwnerRow { name: "master_runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::master_runs_dir`." },
   OwnerRow { name: "archives", owner: "runtime/store", hint: "Use `charliebot_store::layout::archives_dir`." },
   OwnerRow {
@@ -921,11 +927,6 @@ const OWNER_TABLE: &[OwnerRow] = &[
     name: "SessionStart",
     owner: "backends/claude_code",
     hint: "Use `charliebot_claude_code::claude_launch::SESSION_START_HOOK_EVENT`.",
-  },
-  OwnerRow {
-    name: "cli_binary",
-    owner: "backends/claude_code",
-    hint: "Use `charliebot_claude_code::options::CLI_BINARY_KEY`.",
   },
   OwnerRow {
     name: "plans.json",
@@ -1391,6 +1392,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     name: "watermark_id",
     owner: "features/chat_threads",
     hint: "Use `ThreadPlatform::watermark_key` in `charliebot_chat_threads::thread_entry`.",
+  },
+  OwnerRow {
+    name: "message_ids",
+    owner: "features/chat_threads",
+    hint: "Use `charliebot_chat_threads::thread_entry::MESSAGE_IDS`; the ack event and each platform's ack request \
+           name the ids there.",
   },
   OwnerRow {
     name: "author_id",

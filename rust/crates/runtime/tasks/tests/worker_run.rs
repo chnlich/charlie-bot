@@ -30,18 +30,17 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskTyp
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{ChatEvent, CreateTask, PatchTask, TaskCaller};
-use charliebot_tasks::prompts::{LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
+use charliebot_tasks::prompts::{HANDOFF_NOTE_FILENAME, LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
 
 use charliebot_tasks::{cold_read, handoff, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, SCRIPTED_LAUNCHER_FIELD, Scripts, Stack, TOKEN_FIELD, cold_read_body,
-  init_repo_with_origin, last_child_report, post_delegate, result_script, scripted_type, settle_until, synthetic_git,
-  synthetic_run, write_sitrep,
+  BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, Scripts, Stack, TOKEN_FIELD, cold_read_body, init_repo_with_origin,
+  last_child_report, post_delegate, result_script, scripted_type, settle_until, synthetic_git, synthetic_run,
+  write_sitrep,
 };
 use serde_json::{Map, Value, json};
 use serde_yaml::Mapping;
-use serde_yaml::Value as YamlValue;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 /// The id of the priority pool that the Auto sessions of the failover tests run on.
@@ -302,35 +301,36 @@ async fn bare_branch_base_behind_starts_from_origin_tip() -> anyhow::Result<()> 
   Ok(())
 }
 
-/// A repository work run on a launcher backend runs where the launcher decides: the server prepares no worktree for
-/// it, starts no branch, and its brief names no path under this host's worktree directory, because such a path would
-/// be a place that is absent where the run executes. A run on this host's own backend keeps its worktree
-/// (`bare_branch_base_behind_starts_from_origin_tip`, and the cron fires' tests in `features/cron`).
+/// A repository work run whose task names an `improve_host` runs where the improve launcher decides: the server prepares
+/// no worktree for it, starts no branch, and its brief names no path under this host's worktree directory, because such
+/// a path would be a place that is absent where the run executes. A run without the key keeps its worktree
+/// (`bare_branch_base_behind_starts_from_origin_tip`, and the cron fires' tests in `features/cron`). The host is one
+/// that does not resolve, so the launcher ends the run in ssh's failure; the venue facts hold for that launch.
 #[tokio::test]
 #[ignore = "integration"]
-async fn a_repo_work_run_on_a_launcher_backend_prepares_no_worktree_and_names_none() -> anyhow::Result<()> {
+async fn a_repo_work_run_with_an_improve_host_prepares_no_worktree_and_names_none() -> anyhow::Result<()> {
+  const UNRESOLVED_HOST: &str = "synthetic-no-such-host.invalid";
   let scripts = Scripts::new(vec![result_script("worker done")]);
-  let mut option = scripts.option(BACKEND_ID, BACKEND_TYPE);
-  option
-    .type_fields
-    .insert(YamlValue::String(SCRIPTED_LAUNCHER_FIELD.to_string()), YamlValue::String("/path/to/launcher".to_string()));
+  let option = scripts.option(BACKEND_ID, BACKEND_TYPE);
   let stack = Stack::start_with(vec![option], vec![BACKEND_ID.to_string()]).await?;
   stack.write_access_key()?;
   let process_guard = StackProcessGuard::new(&stack);
   let dir = tempfile::tempdir()?;
   let (repo, _origin) = init_repo_with_origin(dir.path())?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
-  let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(implement_task(&repo, "ship it"))).await?;
+  let mut task = implement_task(&repo, "ship it");
+  task.improve_host = Some(UNRESOLVED_HOST.to_string());
+  let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(task)).await?;
 
   stack.dispatch.admit_input(&worker.id, event_types::USER, "do the thing", "user", json!({})).await?;
   let run = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
   process_guard.track_run(&worker.id, &run).await?;
-  assert_eq!(stack.wait_terminal(&worker.id, &run).await?, RunOutcomeKind::Success);
+  stack.wait_terminal(&worker.id, &run).await?;
   process_guard.track_all()?;
 
   let record = stack.store().read_run_sync(&worker.id, &run)?.expect("the run is recorded");
-  assert_eq!(record.worktree_path, None, "a launcher-backend run prepares no worktree");
-  assert_eq!(record.branch_name, None, "a launcher-backend run starts no branch");
+  assert_eq!(record.worktree_path, None, "an improve-host run prepares no worktree");
+  assert_eq!(record.branch_name, None, "an improve-host run starts no branch");
   let launch = std::fs::read_to_string(stack.store().run_dir(&worker.id, &run).join(LAUNCH_TEXT_FILENAME))?;
   assert!(launch.contains("ship it"), "{launch}");
   let worktree_dir = stack.cfg.paths.worktree_dir.clone();
@@ -1444,6 +1444,8 @@ async fn a_cooling_routed_option_falls_back_to_the_pool() -> anyhow::Result<()> 
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&["fake2"]), &[])?;
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake2",
     None,
     backend_availability::REASON_QUOTA_ERROR,
@@ -1469,12 +1471,16 @@ async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&[ROTATION_POOL_ID]), &[])?;
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake",
     None,
     backend_availability::REASON_QUOTA_ERROR,
     "synthetic quota error",
   )?;
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake2",
     None,
     backend_availability::REASON_QUOTA_ERROR,
@@ -1711,6 +1717,8 @@ async fn a_cooling_routed_option_runs_on_the_default_path_and_says_so() -> anyho
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&["fake2"]), &[])?;
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake2",
     None,
     backend_availability::REASON_QUOTA_ERROR,
@@ -1988,12 +1996,12 @@ async fn a_verify_quota_switch_leaves_the_initiating_sessions_member_out() -> an
   Ok(())
 }
 
-/// Acceptance ④'s load order: a priority pool's delegation picks the member with the fewest sessions, so a quick edit
-/// delegated from a session on `fake` takes `fake2`.
+/// A priority pool's delegations take its subscription members in turn: two quick edits delegated from one Auto session
+/// run on `fake`, then `fake2`.
 #[tokio::test]
 #[ignore = "integration"]
-async fn a_priority_pool_delegation_picks_the_least_loaded_member() -> anyhow::Result<()> {
-  let scripts = Scripts::new(vec![result_script("distributed")]);
+async fn a_priority_pool_delegation_rotates_its_subscription_members() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("distributed"), result_script("distributed")]);
   let options = ["fake", "fake2"]
     .map(|id| BackendOption { billing: Some(PoolBilling::Subscription), ..scripts.option(id, BACKEND_TYPE) })
     .to_vec();
@@ -2011,16 +2019,20 @@ async fn a_priority_pool_delegation_picks_the_least_loaded_member() -> anyhow::R
   stack.dispatch.set_executor(None);
   stack.dispatch.admit_input(&parent.id, event_types::USER, "Take off and delegate this.", "user", json!({})).await?;
 
-  let (child_id, run) = delegate_and_run(&stack, quick_edit_body(&parent.id), &["fake", "fake2"]).await?;
+  let members = ["fake", "fake2"];
+  let (first_id, first_run) = delegate_and_run(&stack, quick_edit_body(&parent.id), &members).await?;
+  assert_eq!(first_run.backend.as_deref(), Some("fake"), "the subscription position starts at the list head");
+  // The request id derives from the description, so a second delegation needs its own description.
+  let second_body =
+    json!({"session_id": parent.id, "description": "run the second quick edit", "task_type": "quick-edit"});
+  let (second_id, second_run) = delegate_and_run(&stack, second_body, &members).await?;
+  assert_eq!(second_run.backend.as_deref(), Some("fake2"), "the position moved past fake");
 
-  assert_eq!(
-    run.backend.as_deref(),
-    Some("fake2"),
-    "the parent holds fake, so the child takes the least loaded member"
-  );
-  let child = stack.store().load_task_meta(&child_id).await?;
-  assert_eq!(child.backend, AUTO_POOL_ID, "the child keeps the pool id");
-  assert_eq!(child.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake2")));
+  for (child_id, member) in [(first_id, "fake"), (second_id, "fake2")] {
+    let child = stack.store().load_task_meta(&child_id).await?;
+    assert_eq!(child.backend, AUTO_POOL_ID, "the child keeps the pool id");
+    assert_eq!(child.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!(member)));
+  }
   Ok(())
 }
 
@@ -2219,6 +2231,8 @@ async fn quota_failover_of_a_routed_run_returns_to_the_subscription_member() -> 
 
   // The subscription member is out, so the failover takes the pay-as-you-go member.
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     CHEAP_SUBSCRIPTION_MEMBER,
     None,
     backend_availability::REASON_QUOTA_ERROR,
@@ -2246,6 +2260,8 @@ async fn quota_failover_of_a_routed_run_returns_to_the_subscription_member() -> 
   // the session's next turn, and that turn returns the session to the subscription member.
   let reset_passed = UtcDateTime::parse("2020-01-02T03:04:00+00:00").expect("a fixed instant parses");
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     CHEAP_SUBSCRIPTION_MEMBER,
     Some(reset_passed),
     backend_availability::REASON_QUOTA_ERROR,
@@ -2265,9 +2281,65 @@ async fn quota_failover_of_a_routed_run_returns_to_the_subscription_member() -> 
   assert_eq!(switches[1]["from"], CHEAP_PAYG_MEMBER);
   assert_eq!(switches[1]["to"], CHEAP_SUBSCRIPTION_MEMBER);
   assert_eq!(switches[1][event_types::QUOTA_FAILOVER_REASON], event_types::QUOTA_REASON_SUBSCRIPTION_RESET);
+  // A worker's turn-start switch records no handoff summary, and neither its retry nor its next run writes a handoff
+  // note or starts with the manager's switch cause.
+  assert!(switches[1].get(event_types::QUOTA_FAILOVER_SUMMARY).is_none(), "{switches:?}");
+  for run in [&retry.id, &next] {
+    let note = stack.store().run_dir(&worker.id, run).join(HANDOFF_NOTE_FILENAME);
+    assert!(!note.exists(), "run {run} writes no handoff note: {}", note.display());
+  }
+  let next_launch = std::fs::read_to_string(stack.store().run_dir(&worker.id, &next).join(LAUNCH_TEXT_FILENAME))?;
+  assert!(!next_launch.contains(&format!("pool '{CHEAP_POOL_ID}' switched from")), "{next_launch}");
   settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 2)).await?;
   settle_node(&stack, &manager.id).await?;
   settle_node(&stack, &worker.id).await
+}
+
+/// A fresh worker run and its retry launch without reading the handoff note file in their run directories. The decoy is
+/// text no worker launch may carry, so a read by either run would reach its launch text.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_fresh_worker_run_and_its_retry_never_read_a_handoff_note() -> anyhow::Result<()> {
+  const DECOY: &str = "decoy handoff note that no worker launch reads";
+  let stack = Stack::start(&result_script("worker done")).await?;
+  stack.write_access_key()?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "worker".to_string(),
+        task_parent_id: Some(manager.id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(spec("do the work", Some(TaskType::Implement))),
+        name: Some("Synthetic worker".to_string()),
+        backend: Some(BACKEND_ID.to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let input =
+    stack.dispatch.admit_input(&worker.id, event_types::USER, "Continue the work.", "user", json!({})).await?;
+  let fresh = RunRecord {
+    backend: Some(BACKEND_ID.to_string()),
+    model: Some(format!("{BACKEND_ID}-model")),
+    input_event_ids: vec![input["id"].as_str().expect("an admitted input has an id").to_string()],
+    ..synthetic_run(&worker.id, "run-fresh", RunKind::Work)
+  };
+  for (run_id, retry_of) in [("run-fresh", None), ("run-retry", Some("run-fresh"))] {
+    let record = RunRecord { id: run_id.to_string(), retry_of_run_id: retry_of.map(str::to_string), ..fresh.clone() };
+    register_run(&stack, record, "do the work").await?;
+    std::fs::write(stack.store().run_dir(&worker.id, run_id).join(HANDOFF_NOTE_FILENAME), DECOY)?;
+    stack.adapter.call(&worker.id, &[], Some(run_id)).await?;
+    assert_eq!(stack.wait_terminal(&worker.id, run_id).await?, RunOutcomeKind::Success, "{run_id} succeeds");
+    let launch = std::fs::read_to_string(stack.store().run_dir(&worker.id, run_id).join(LAUNCH_TEXT_FILENAME))?;
+    assert!(!launch.contains(DECOY), "{run_id} launched with the handoff note file: {launch}");
+  }
+  settle_node(&stack, &worker.id).await?;
+  settle_node(&stack, &manager.id).await
 }
 
 /// Write the revision run's events log: a read with its result, then a bash call still in progress. The handoff note
@@ -2291,9 +2363,9 @@ fn write_run_events(stack: &Stack, worker: &str, run: &str) -> anyhow::Result<()
 }
 
 /// Test ③: a worker that inherits an Auto session's pool id fails over within Auto when its run ends on quota. The
-/// delegation orders Auto by session load, so the worker takes a member other than the parent's; that member cools, the
-/// node moves to the next Auto member and not to the rotation pool, and the switch record sits in the worker's own chat
-/// with the handoff summary from the run's events log.
+/// worker takes the first Auto member; that member cools, the node moves to the next Auto member and not to the
+/// rotation pool, and the switch record sits in the worker's own chat with the handoff summary from the run's events
+/// log.
 #[tokio::test]
 #[ignore = "integration"]
 async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Result<()> {
@@ -2351,13 +2423,13 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
   assert_eq!(meta.backend, AUTO_POOL_ID, "the worker takes the pool id and picks its own member");
   assert_eq!(
     meta.extra(model_pool::POOL_MEMBER_FIELD),
-    Some(&json!("fake2")),
-    "the parent holds fake, so the load order gives the worker fake2"
+    Some(&json!("fake")),
+    "the subscription position starts at the list head, so the worker takes fake"
   );
 
   // The delegated first run finishes before the review feedback arrives, so the revision starts from a settled worker.
   settle_node(&stack, &worker).await?;
-  let run = revision_run_on_quota(&stack, &worker, "fake2").await?;
+  let run = revision_run_on_quota(&stack, &worker, "fake").await?;
   write_run_events(&stack, &worker, &run)?;
   stack.adapter.record_quota_failure_for_test(&worker, &run, None);
   stack.adapter.after_worker_run_for_test(&worker, &run, "failed").await?;
@@ -2369,26 +2441,26 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
     .into_iter()
     .find(|record| record.retry_of_run_id.as_deref() == Some(run.as_str()))
     .expect("the failover registers a retry run");
-  assert_eq!(retry.backend.as_deref(), Some("fake3"), "the next Auto member runs the retry");
+  assert_eq!(retry.backend.as_deref(), Some("fake2"), "the next Auto member runs the retry");
   assert_eq!(retry.input_event_ids, interrupted.input_event_ids);
   let outcome = stack.wait_terminal(&worker, &retry.id).await?;
   assert_eq!(outcome, RunOutcomeKind::Success, "{}", error_text(&stack, &worker, &retry.id)?);
   settle_node(&stack, &worker).await?;
   let worker_meta = stack.store().load_task_meta(&worker).await?;
   assert_eq!(worker_meta.backend, AUTO_POOL_ID, "the worker keeps its pool");
-  assert_eq!(worker_meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake3")), "the worker's own member moved");
+  assert_eq!(worker_meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake2")), "the worker's own member moved");
   let parent_meta = stack.store().load_task_meta(&parent.id).await?;
   assert_eq!(
     parent_meta.extra(model_pool::POOL_MEMBER_FIELD),
     Some(&json!("fake")),
     "the child's switch leaves the parent's member alone"
   );
-  assert!(backend_availability(&stack.features)?.out_until("fake2").is_some(), "the spent member is recorded out");
+  assert!(backend_availability(&stack.features)?.out_until("fake").is_some(), "the spent member is recorded out");
 
   let switches: Vec<Value> = quota_failover_events(&stack, &worker)?.iter().map(|event| event.to_value()).collect();
   assert_eq!(switches.len(), 1, "one switch record in the worker's own chat: {switches:?}");
-  assert_eq!(switches[0]["from"], "fake2");
-  assert_eq!(switches[0]["to"], "fake3");
+  assert_eq!(switches[0]["from"], "fake");
+  assert_eq!(switches[0]["to"], "fake2");
   assert_eq!(switches[0]["set"], AUTO_POOL_ID);
   assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
 
@@ -2399,7 +2471,7 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
     .find(|build| build.prompt_contains(REVIEW_FEEDBACK))
     .expect("the retry launched with the feedback it answers");
   assert!(
-    retry_launch.prompt_contains("this task switched from backend fake2 to fake3 after fake2 spent its quota"),
+    retry_launch.prompt_contains("this task switched from backend fake to fake2 after fake spent its quota"),
     "the retry's launch carries the switch note"
   );
   let failed_dir = stack.store().run_dir(&worker, &run).display().to_string();
@@ -2473,6 +2545,8 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   let (worker, run) = interrupted_worker_run(&stack, &manager.id, TaskType::Implement, WorkerForm::Pool).await?;
   let fake3_reset = UtcDateTime::parse("2030-01-02T03:04:00+00:00").expect("a fixed instant parses");
   backend_availability(&stack.features)?.record(
+    &*stack.features.config.get()?,
+    &stack.features.registry,
     "fake3",
     Some(fake3_reset),
     backend_availability::REASON_QUOTA_ERROR,

@@ -88,7 +88,7 @@ impl Bot {
 }
 
 /// The Discord thread's `ThreadAdapter` (`DiscordThreadAdapter`). The client is built on the first platform call and
-/// reused, so a refusal that never reaches Discord (a 404 or a 409 from the session check) needs no token.
+/// reused. A refusal that never reaches Discord (a 404 or a 409 from the session check) needs no token.
 pub struct DiscordThreadAdapter {
   bot: Bot,
   client: OnceCell<DiscordClient>,

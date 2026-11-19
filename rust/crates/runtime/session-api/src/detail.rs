@@ -24,6 +24,7 @@ use charliebot_core::text_repr;
 use charliebot_core::timefmt;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
+use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
 use charliebot_store::trigger_files::{PendingTrigger, TriggerStatus};
@@ -1123,7 +1124,7 @@ fn pending_input_value(event: &Value) -> StoreResult<Value> {
     "type": text_repr::field_text(event.get("type")),
     "timestamp": timestamp,
     "actor": event.get("actor").cloned().unwrap_or(Value::Null),
-    "source_session_id": event.get("source_session_id").cloned().unwrap_or(Value::Null),
+    (SOURCE_SESSION_ID_FIELD): event.get(SOURCE_SESSION_ID_FIELD).cloned().unwrap_or(Value::Null),
     (event_types::FROM_SESSION_NAME): event.get(event_types::FROM_SESSION_NAME).cloned().unwrap_or(Value::Null),
     "text": text,
   }))

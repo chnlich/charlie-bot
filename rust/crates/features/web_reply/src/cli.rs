@@ -304,6 +304,7 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
       or_not_set(field(status, "now")?),
       text_repr::value_str(field(status, "updated_at")?)
     ));
+    lines.push(format!("Waiting on you version: {}", text_repr::value_str(field(status, "waiting_version")?)));
     let waiting = list(field(status, "waiting")?)?;
     if waiting.is_empty() {
       lines.push("Waiting on you: Nothing".to_string());
@@ -433,13 +434,19 @@ mod tests {
       "now": "Reviewing",
       "waiting": [],
       "updated_at": "2026-11-02T03:10:00Z",
+      "waiting_version": "0123456789abcdef",
     }));
 
     let text = render_status(&result).expect("the status renders");
 
     assert_eq!(
       text.lines().collect::<Vec<_>>(),
-      vec!["Goal: Ship the panel", "Now: Reviewing (updated 2026-11-02T03:10:00Z)", "Waiting on you: Nothing"]
+      vec![
+        "Goal: Ship the panel",
+        "Now: Reviewing (updated 2026-11-02T03:10:00Z)",
+        "Waiting on you version: 0123456789abcdef",
+        "Waiting on you: Nothing"
+      ]
     );
   }
 }

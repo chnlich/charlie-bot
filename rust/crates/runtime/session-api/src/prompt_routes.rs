@@ -237,7 +237,14 @@ backends:
     }
     backend_availability::backend_availability(&features)
       .unwrap()
-      .record("synthetic-a", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .record(
+        &features.config.get().unwrap(),
+        &features.registry,
+        "synthetic-a",
+        None,
+        backend_availability::REASON_QUOTA_ERROR,
+        "synthetic quota error",
+      )
       .unwrap();
 
     let (model_status, model) = preview(&features, &session_ids[0]).await;

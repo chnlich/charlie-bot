@@ -15,7 +15,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{HAS_UNREAD, RoundRating, THUMBS_DOWN, THUMBS_UP};
-use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store, TaskCaller};
+use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store};
 use charliebot_tasks::completion::TaskCompletion;
 use serde_json::{Map, Value, json};
 
@@ -214,7 +214,7 @@ async fn delete_session_permanently(
     Ok(caller) => caller,
     Err(response) => return response,
   };
-  match features.store.delete_permanently(&session_id, task_caller(caller)).await {
+  match features.store.delete_permanently(&session_id, caller.task_caller()).await {
     Ok(true) => {
       Response::builder().status(StatusCode::NO_CONTENT).body(Body::empty()).expect("a no-content response is valid")
     }
@@ -232,13 +232,6 @@ async fn read_body(request: Request<Body>) -> Result<RequestBody, Response> {
 #[allow(clippy::result_large_err)]
 fn resolve_request_caller(request: &Request<Body>, features: &FeatureContext) -> Result<CallerIdentity, Response> {
   caller::resolve_caller(request.headers(), features)
-}
-
-fn task_caller(caller: CallerIdentity) -> TaskCaller {
-  match caller {
-    CallerIdentity::Operator { .. } => TaskCaller::Operator,
-    CallerIdentity::Agent { claims } => TaskCaller::Agent { session_id: claims.session_id },
-  }
 }
 
 fn metadata_response(store: &Store, meta: charliebot_store::metadata::SessionMetadata) -> Response {
@@ -266,8 +259,8 @@ mod tests {
   use charliebot_core::test_support::EventSink;
   use charliebot_registry::context::StartupState;
   use charliebot_registry::{Registry, store_hooks};
-  use charliebot_store::CreateTask;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+  use charliebot_store::{CreateTask, TaskCaller};
   use serde_json::{Value, json};
   use tower::ServiceExt;
   use tracing::Event;

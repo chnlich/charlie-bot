@@ -27,6 +27,16 @@ pr_state() {
   cat "$state_dir/prs/$number/state"
 }
 
+json_escape() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '%s' "$value"
+}
+
 group=$1
 action=$2
 shift 2
@@ -72,7 +82,10 @@ case "$group $action" in
       printf 'no pull requests found for branch "%s"\n' "${positional[0]}" >&2
       exit 1
     fi
-    printf '{"number":%s,"url":"https://github.test/pull/%s","state":"%s"}\n' "$found" "$found" "$(pr_state "$found")"
+    title=$(cat "$state_dir/prs/$found/title")
+    body=$(cat "$state_dir/prs/$found/body")
+    printf '{"number":%s,"url":"https://github.test/pull/%s","state":"%s","title":"%s","body":"%s"}\n' \
+      "$found" "$found" "$(pr_state "$found")" "$(json_escape "$title")" "$(json_escape "$body")"
     ;;
   'pr create')
     existing=("$state_dir"/prs/*)
@@ -80,6 +93,8 @@ case "$group $action" in
     mkdir -p "$state_dir/prs/$number"
     printf '%s' "${option[head]}" >"$state_dir/prs/$number/branch"
     echo OPEN >"$state_dir/prs/$number/state"
+    printf '%s' "${option[title]}" >"$state_dir/prs/$number/title"
+    printf '%s' "${option[body]}" >"$state_dir/prs/$number/body"
     printf 'https://github.test/pull/%s\n' "$number"
     ;;
   'pr close')
@@ -97,6 +112,16 @@ case "$group $action" in
       rm "$state_dir/advance-main"
     fi
     printf '{"workflow_runs":[{"name":"CI","path":".github/workflows/ci.yml","event":"pull_request","status":"completed","conclusion":"success"}]}\n'
+    ;;
+  api\ repos/*/pulls/*)
+    number=${action##*/}
+    for field in "${positional[@]}"; do
+      case $field in
+        title=*) printf '%s' "${field#title=}" >"$state_dir/prs/$number/title" ;;
+        body=*) printf '%s' "${field#body=}" >"$state_dir/prs/$number/body" ;;
+      esac
+    done
+    printf '{"number":%s}\n' "$number"
     ;;
   api\ repos/*/commits/*/check-runs\?per_page=100)
     printf '{"check_runs":[{"name":"rust-test","conclusion":"success","completed_at":"2026-11-11T00:00:00Z","html_url":"https://github.test/checks/1"}]}\n'

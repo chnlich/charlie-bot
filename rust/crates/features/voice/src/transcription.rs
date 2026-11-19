@@ -8,6 +8,7 @@ use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16
 use charliebot_core::credentials::{API_KEY_FIELD, Credentials, REDACTED};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{self, DEFAULT_JSON};
+use charliebot_registry::wiring::cancel_and_wait;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
@@ -604,7 +605,7 @@ async fn run_muse_session<S: VoiceSocket + 'static>(
     abort_sender_task(task).await?;
   }
   if let Some(task) = reader.take() {
-    abort_unit_task(task).await?;
+    cancel_and_wait(task).await.map_err(|error| TranscriptionError::Failure(error.to_string()))?;
   }
   result
 }
@@ -816,15 +817,6 @@ async fn abort_sender_task(task: JoinHandle<Result<(), String>>) -> Result<(), T
   match task.await {
     Ok(Ok(())) => Ok(()),
     Ok(Err(error)) => Err(TranscriptionError::Failure(error)),
-    Err(error) if error.is_cancelled() => Ok(()),
-    Err(error) => Err(TranscriptionError::Failure(error.to_string())),
-  }
-}
-
-async fn abort_unit_task(task: JoinHandle<()>) -> Result<(), TranscriptionError> {
-  task.abort();
-  match task.await {
-    Ok(()) => Ok(()),
     Err(error) if error.is_cancelled() => Ok(()),
     Err(error) => Err(TranscriptionError::Failure(error.to_string())),
   }

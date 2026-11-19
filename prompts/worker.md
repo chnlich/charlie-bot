@@ -13,6 +13,10 @@
 - These instructions set the rules for the task lifecycle, git operations and delegation.
 - When the repository guide conflicts with these instructions, follow these instructions.
 - A turn that ends on a wait is a pause. The final report comes in the turn that ends with no pending wake.
+- A login that only the user can approve, such as a host's SSH login or a browser login, is an action that only
+  the user can take (Waiting releases the process). Start no such login yourself. Name the login and its
+  `/host-auth` URL in the blocker report.
+- The manager carries each such login wait under the memory entry `workflow/login-approvals.md`.
 
 <!-- section: memory -->
 ## Memory

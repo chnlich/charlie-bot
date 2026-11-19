@@ -11,9 +11,11 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use charliebot_chat_threads::thread_entry::MESSAGE_IDS;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::channel_verb::{ReplyArgs, post_reply};
 use charliebot_cli_common::client;
+use charliebot_cli_common::credentials::unavailable;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::request::{self, RequestArgs};
@@ -138,16 +140,16 @@ fn prepare_draft(args: &DraftArgs) -> Result<(Value, String), CliExit> {
 
 fn run_request(args: &RequestCommand) -> Result<(), CliExit> {
   let kind = token_kind(&args.token);
-  let home_dir = home::charliebot_home_dir().map_err(|_| credential_failure(kind, None))?;
+  let home_dir = home::charliebot_home_dir().map_err(|_| unavailable("slack", kind.key(), None))?;
   run_request_at(&home_dir, args)
 }
 
 fn run_request_at(home_dir: &Path, args: &RequestCommand) -> Result<(), CliExit> {
   let kind = token_kind(&args.token);
   let path = home_dir.join(config::CREDENTIALS_FILENAME);
-  let token = token::token(home_dir, kind).map_err(|_| credential_failure(kind, Some(&path)))?;
+  let token = token::token(home_dir, kind).map_err(|_| unavailable("slack", kind.key(), Some(&path)))?;
   if token.trim().is_empty() {
-    return Err(credential_failure(kind, Some(&path)));
+    return Err(unavailable("slack", kind.key(), Some(&path)));
   }
   request::write_stdout(&execute_request(&args.request, kind, &token)?)
 }
@@ -164,16 +166,16 @@ fn execute_request(args: &RequestArgs, kind: TokenKind, token: &str) -> Result<V
 
 fn run_download(args: &DownloadCommand) -> Result<(), CliExit> {
   let kind = token_kind(&args.token);
-  let home_dir = home::charliebot_home_dir().map_err(|_| credential_failure(kind, None))?;
+  let home_dir = home::charliebot_home_dir().map_err(|_| unavailable("slack", kind.key(), None))?;
   run_download_at(&home_dir, args)
 }
 
 fn run_download_at(home_dir: &Path, args: &DownloadCommand) -> Result<(), CliExit> {
   let kind = token_kind(&args.token);
   let path = home_dir.join(config::CREDENTIALS_FILENAME);
-  let token = token::token(home_dir, kind).map_err(|_| credential_failure(kind, Some(&path)))?;
+  let token = token::token(home_dir, kind).map_err(|_| unavailable("slack", kind.key(), Some(&path)))?;
   if token.trim().is_empty() {
-    return Err(credential_failure(kind, Some(&path)));
+    return Err(unavailable("slack", kind.key(), Some(&path)));
   }
   token::admit_download(kind, &args.url)?;
   let bytes = download::download(&args.url, &args.output, kind, &token)?;
@@ -191,21 +193,13 @@ fn slack_error(body: &[u8]) -> bool {
     == Some(false)
 }
 
-fn credential_failure(kind: TokenKind, path: Option<&Path>) -> CliExit {
-  let where_text = match path {
-    Some(path) => paths::display(path),
-    None => home::display_path(config::CREDENTIALS_FILENAME),
-  };
-  CliExit::contract(json!({"error": format!("credentials.slack.{} is unavailable in {where_text}", kind.key())}), 3)
-}
-
 fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
   post_reply(REPLY_PATH, args.session.as_deref(), &args.file, None)
 }
 
 fn ack(args: &AckArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  let result = client::post(ACK_PATH, json!({ "session_id": session_id, "message_ids": args.message_id }), None, &[])?;
+  let result = client::post(ACK_PATH, json!({ "session_id": session_id, (MESSAGE_IDS): args.message_id }), None, &[])?;
   print!("{}", json_out::render(&result, None));
   Ok(())
 }

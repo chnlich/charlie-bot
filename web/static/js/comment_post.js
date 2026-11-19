@@ -33,6 +33,22 @@ async function postCommentMessage(sessionId, content) {
   }
 }
 
+// One numbered click message: each reference and answer keeps its own lines beneath the shared arrow markers.
+function buildClickMessage(header, entries) {
+  if (entries.length === 0) return header + '\n\n';
+  const lines = [header, ''];
+  for (let i = 0; i < entries.length; i++) {
+    const referenceLines = entries[i].reference.split('\n');
+    const answerLines = entries[i].answer.split('\n');
+    lines.push((i + 1) + '. ▸ ' + referenceLines[0]);
+    for (let j = 1; j < referenceLines.length; j++) lines.push('   ' + referenceLines[j]);
+    lines.push('   ↳ ' + answerLines[0]);
+    for (let j = 1; j < answerLines.length; j++) lines.push('   ' + answerLines[j]);
+    if (i < entries.length - 1) lines.push('');
+  }
+  return lines.join('\n');
+}
+
 // One tray toast at a time: showing a new one removes the previous. Each tray
 // passes its own CSS class prefix, mount (a page layer marks nodes through
 // injectRoot; the diff page appends straight to body) and removal

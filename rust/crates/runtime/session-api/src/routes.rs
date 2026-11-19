@@ -56,16 +56,16 @@ const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 /// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus. The
 /// overlay holds one entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key
 /// holds that overlay instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A
-/// request that names ids and no filter keys on [`IdSet`], one list shared while the `ids` string repeats, so its
-/// poll neither clones nor compares the strings either; a filter that adds its members builds that union per request,
+/// request's own ids key on [`IdSet`] under both filters: the list is shared while the `ids` string repeats, so its
+/// poll neither clones nor compares the strings either. A filter that adds its members builds that union per request,
 /// as [`StatusIds`] states. `generation` names the sidebar state the body reads beyond the rows, and `since` the
-/// answer's own delta base. A page that holds the state of its last answer sends that answer's token back, so the same
-/// state answers with the same token.
+/// answer's own delta base. A page that holds the state of its last answer sends that answer's token back, so the
+/// same state answers with the same token.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum StatusKey {
   Listing {
     derived: ListingOverlay,
-    extra: Vec<String>,
+    extra: IdSet,
     generation: u64,
     since: Option<String>,
     answer: StatusAnswer,
@@ -113,11 +113,17 @@ impl Hash for ListingOverlay {
 /// The request's own ids, parsed, deduped and sorted once per distinct `ids` query string.
 ///
 /// A page polls one row set every few seconds, and its URL names the ids in one canonical order, so the string
-/// repeats while the view holds. Parsing it costs one allocation per id and one hash-set entry per id, and the key
-/// then hashes every id again; a repeat poll reads the list this memo kept instead.
-static NAMED_ID_SETS: LazyLock<Mutex<LruCache<String, Arc<Vec<String>>>>> = LazyLock::new(|| {
-  Mutex::new(LruCache::new(NonZeroUsize::new(NAMED_ID_SET_MEMO_LIMIT).expect("the id memo limit is nonzero")))
-});
+/// repeats while the view holds. Parsing it costs one allocation per id and one hash-set entry per id, and hashing
+/// the key then hashes every id again. A repeat poll reads the list this memo kept instead.
+///
+/// The entries are found by comparing the request's own value, most recently served first, rather than by hashing
+/// it. The value runs to a few kilobytes, and comparing those bytes reaches the entry sooner than hashing them does.
+/// The cap is small, so a repeat poll meets its own entry first and a new value meets at most
+/// [`NAMED_ID_SET_MEMO_LIMIT`].
+static NAMED_ID_SETS: LazyLock<Mutex<Vec<NamedIdSet>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// One kept parse: the `ids` value a request sent, and the id list it parsed to.
+type NamedIdSet = (String, Arc<Vec<String>>);
 
 /// The cap on the `ids` strings the parse memo keeps, larger than the answer memo's because a page alternates a few
 /// row sets and each keeps its own parse.
@@ -175,11 +181,14 @@ impl IdSet {
   fn of(raw: Option<&str>) -> Self {
     let Some(raw) = raw else { return Self::empty() };
     let mut memo = NAMED_ID_SETS.lock().expect("named id set memo mutex is not poisoned");
-    if let Some(ids) = memo.get(raw) {
-      return Self(Arc::clone(ids));
+    if let Some(index) = memo.iter().position(|(kept, _)| kept == raw) {
+      let (kept, ids) = memo.remove(index);
+      memo.insert(0, (kept, Arc::clone(&ids)));
+      return Self(ids);
     }
     let ids = Arc::new(sorted_unique(parse_session_ids(raw)));
-    memo.put(raw.to_string(), Arc::clone(&ids));
+    memo.insert(0, (raw.to_string(), Arc::clone(&ids)));
+    memo.truncate(NAMED_ID_SET_MEMO_LIMIT);
     Self(ids)
   }
 
@@ -336,15 +345,35 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
       );
     }
   };
+  // `screen=1` asks the sidebar's column form for the rows it paints before the reader expands a group, with each
+  // group's whole row count under `$screen`. Only that form carries the counts, so another form's request naming it
+  // is refused rather than answered with a form the request did not ask for.
+  let screen = match query.get("screen") {
+    None => false,
+    Some("1") if matches!(compact, Some(ListingForm::Sidebar)) => true,
+    Some(other) => {
+      let detail = if matches!(compact, Some(ListingForm::Sidebar)) {
+        format!("unknown screen form: {other}")
+      } else {
+        "screen names the rows a group preview paints, which only compact=1 carries".to_string()
+      };
+      return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": detail}));
+    }
+  };
+  // The open session the first screen keeps visible, whatever its rank in the list. A page names it so the reader's
+  // own row stays painted after a filter switch.
+  let active = query.get("active").map(str::to_string);
   let response = blocking_store(move || {
     // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
     // subtree roots or the overlays move.
     let page = listing::active_page_rows(&features.store, &features.registry)?;
     Ok(match compact {
       Some(ListingForm::Sidebar) => {
-        COMPACT_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Sidebar)
+        COMPACT_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Sidebar, screen, active.as_deref())
       }
-      Some(ListingForm::Move) => MOVE_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Move),
+      Some(ListingForm::Move) => {
+        MOVE_LISTING_MEMO.response(&request, &features.store, &page, ListingForm::Move, false, None)
+      }
       None => listing::sessions_list_page_response(&request, &features.store, &page, &ACTIVE_MEMOS),
     })
   })
@@ -556,6 +585,18 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
   blocking_store(move || Ok(session_status_response(&features, &request))).await.unwrap_or_else(store_error)
 }
 
+/// Drops the count reservation of a poll that returned before a register answered it.
+///
+/// The count must name the poll's register even when the route leaves early, so a later read on this blocking thread
+/// cannot answer a poll it did not count. A register that took the reservation leaves nothing to drop.
+struct PollReservation;
+
+impl Drop for PollReservation {
+  fn drop(&mut self) {
+    sidebar_state::forget_poll_reservation();
+  }
+}
+
 /// The sidebar's status poll: the rows of one filter, plus any further sessions the page names, answered as the rows
 /// whose state moved since the page's last answer.
 ///
@@ -596,11 +637,11 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   let generation = sidebar_state::derived_generation();
   let mut page = None;
   let key = match filter {
-    Some("all") => match listing::page_corpus_rows(&features.store, &features.registry) {
+    Some("all") => match listing::page_corpus_rows(&features.store, &features.registry, false) {
       Ok(corpus) => {
         let overlay = ListingOverlay(corpus.derived);
         page = Some((corpus.rows, overlay.clone()));
-        StatusKey::Listing { derived: overlay, extra: extra.to_vec(), generation, since: since.clone(), answer }
+        StatusKey::Listing { derived: overlay, extra: extra.clone(), generation, since: since.clone(), answer }
       }
       Err(error) => return store_error(error),
     },
@@ -644,16 +685,18 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   // A body whose corpus, sidebar state and delta base still hold is the body a rebuild would render. A miss rebuilds
   // every row payload: about 50 ms for 7,160 rows, on a poll an open page sends every few seconds. A repeat request
   // reads the memo instead. The poll still counts toward the periodic self-heal sweep, which moves the generation and
-  // so replaces the entry.
+  // so replaces the entry. The route registers the poll itself, so the corpus above registers nothing.
+  let probe = !force && sidebar_state::poll_begins_probe();
+  let _poll = PollReservation;
   if !force && let Some(body) = get_status_body(&key) {
     // The self-heal probe is the only reader of a poll's row set, and nine polls in ten begin no probe, so a poll
     // that begins none builds no rows. The rows a probe poll reads are the ones it read before: the answer's own
-    // rows, or the page corpus a set answer already holds. `poll_begins_probe` counts this poll and reserves its turn,
-    // so the `count_memoized_read` below answers the same poll instead of racing another one for the turn.
+    // rows, or the page corpus a set answer already holds. The count above reserved this poll's turn, so the
+    // `count_memoized_read` below answers the same poll instead of racing another one for the turn.
     let owned;
     let sessions: &[Arc<SessionMetadata>] = match &page {
       Some((rows, _)) if answer == StatusAnswer::Set => rows.as_slice(),
-      _ if sidebar_state::poll_begins_probe() => {
+      _ if probe => {
         let source = if answer == StatusAnswer::Named {
           extra.as_slice()
         } else {
@@ -964,7 +1007,7 @@ fn fresh_sessions(
   let mut rows = Vec::new();
   for id in ids {
     if let Some(meta) = features.store.get_session_cached_or_read_sync(id)? {
-      rows.push(Arc::new(meta));
+      rows.push(meta);
     }
   }
   Ok(rows)
@@ -1080,6 +1123,32 @@ mod tests {
     assert!(payload.is_array(), "a request without compact keeps the row array");
   }
 
+  /// `screen=1` answers the sidebar's first-screen form: the page's columns with each group's whole row count under
+  /// `$screen`. The every-row form carries that key only when it leaves rows out, so the pair differs by the key
+  /// alone here. A request naming a screen on another form is refused.
+  #[tokio::test]
+  async fn a_screen_request_answers_the_first_screen_form_and_another_form_refuses_one() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "screen-route", None, TaskProfile::Manager).await;
+
+    let screen = Request::builder().uri("/api/sessions/?compact=1&screen=1").body(Body::empty()).unwrap();
+    let (status, payload) = crate::test_support::answer(list_active(State(Arc::clone(&features)), screen).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["$screen"]["partial"], json!(false), "one row fits the first screen");
+    assert_eq!(payload["$screen"]["counts"][""], json!(1), "the keyless group counts its whole tree");
+    assert_eq!(payload["name"], json!(["screen-route"]));
+
+    let every = Request::builder().uri("/api/sessions/?compact=1").body(Body::empty()).unwrap();
+    let (status, payload) = crate::test_support::answer(list_active(State(Arc::clone(&features)), every).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(payload.get("$screen").is_none(), "the every-row form carries no first-screen key");
+    assert_eq!(payload["name"], json!(["screen-route"]), "both forms carry the one row");
+
+    let move_screen = Request::builder().uri("/api/sessions/?compact=move&screen=1").body(Body::empty()).unwrap();
+    let response = list_active(State(features), move_screen).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "only the sidebar form carries counts");
+  }
+
   /// A row refresh answers the named rows in the compact form, and names each id the Workspace no longer lists.
   #[tokio::test]
   async fn a_row_refresh_answers_the_named_rows_and_the_ids_the_list_no_longer_holds() {
@@ -1179,7 +1248,7 @@ mod tests {
   }
 
   /// The parse memo answers one request's ids to another request only when its string names them. A repeat poll
-  /// answers the same rows, and the same set named in another order answers those rows too rather than the list the
+  /// answers the same rows. The same set named in another order answers those rows too, rather than the list the
   /// memo kept for the first string.
   #[tokio::test]
   async fn a_status_poll_naming_its_ids_answers_those_rows_whatever_order_the_string_names_them_in() {

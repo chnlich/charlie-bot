@@ -45,9 +45,10 @@ pub fn seed_default_cron_tasks(
 
   // Validate every default entry on a resolved copy before touching the host
   // directory, so a bad repo default fails loudly without any partial write.
+  let login_hosts = crate::config::browser_login_hosts(cfg);
   for entry in &default_entries {
     let (name, body) = split_entry(entry)?;
-    loader::validate_body(&name, body, repo_root)
+    loader::validate_body(&name, body, repo_root, &login_hosts)
       .map_err(|error| format!("default cron entry {name:?} failed the seed check: {error}"))?;
   }
 
@@ -93,7 +94,8 @@ pub fn setup_step(cfg: &CharlieBotConfig, repo_root: &Path, dry_run: bool) -> Re
   // host), print the reason instead of aborting setup.
   println!("  effective scheduled tasks:");
   let (snapshot, _) =
-    loader::load_snapshot_for_paths(&loader::cron_dir(cfg), repo_root).map_err(|error| error.to_string())?;
+    loader::load_snapshot_for_paths(&loader::cron_dir(cfg), repo_root, &crate::config::browser_login_hosts(cfg))
+      .map_err(|error| error.to_string())?;
   if snapshot.tasks.is_empty() {
     println!("    (none)");
   }

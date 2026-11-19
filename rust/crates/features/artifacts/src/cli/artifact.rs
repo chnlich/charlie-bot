@@ -375,6 +375,7 @@ mod tests {
     charliebot_agents::agent_environment::agent_base_environment(
       &server_bin_dir,
       &charliebot_agents::gh_wrapper::dir_under(repo_root),
+      &charliebot_agents::ssh_guard::dir_under(repo_root),
     )
     .unwrap()
   }

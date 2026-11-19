@@ -22,7 +22,16 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
 3. On worker success → review uses its configured target or the worker route fallback. It prefers a selectable backend
    outside the work run and earlier work-run backends, then tries the writer first and another previously used member.
    A reviewer that already failed this work run stays excluded from its retries.
-4. A reviewer lands the task with `charliebot land`. When the base is the default branch and declares a `pull_request` workflow, the command moves the base only when its CI gate passes on the landed commit. When that gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit 0 and leave the task branch's PR merged or closed. Every other state leaves the change unlanded and names what holds it.
+4. A reviewer lands the task with `charliebot land`. On a gated landing, a single-commit branch supplies the PR title
+   from its subject and the PR body from its body. A branch of several commits lands with an explicit `--title` and
+   either `--body` or `--body-file`, both written by `~/.claude/skills/writing-style/genres/commits-and-prs.md`.
+   `--body` and `--body-file` are exclusive. An existing open PR is synchronized to the landed title and body, and a
+   new draft PR uses them. A blank title or unreadable or blank body file fails before landing. An ungated landing
+   accepts these values and leaves them unused. When the base is the default branch and declares a
+   `pull_request` workflow, the command moves the base only when its CI gate passes on the landed commit. When that
+   gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit
+   0 and leave the task branch's PR merged or closed. Every other state leaves the change unlanded and names what
+   holds it.
 5. On landing → master agent gets summary
 
 ### Merge-back failover
@@ -377,8 +386,9 @@ Caveats:
   `sbatch --wrap "srun bash script.sh"` so the outer `srun` binds the GPUs.
 - `sacct` formats times in the local time zone of the process that runs it. Before you align `sacct` times with other logs, check that zone.
 - The watcher handles whole non-array allocations only — watching an array job by its base id fails, because sacct `-X` reports the allocation and individual array tasks stay invisible to it.
-- verify-on-create rejects a trigger whose ssh probe fails, and a BatchMode probe cannot start a browser key
-  approval: on a host that gates keys behind one, complete the approval before registering the trigger.
+- verify-on-create rejects a trigger whose ssh probe fails. The probe runs with `BatchMode=yes`. When the probe fails
+  because an action only the user can take remains, end the run with a blocker report per `prompts/task_base.md`; register
+  the trigger after the probe succeeds.
 
 Keep `--message` a short label (capped at `MAX_TRIGGER_MESSAGE_CHARS`): the wake lands back in the same session with full history, so the label only names which watch fired.
 

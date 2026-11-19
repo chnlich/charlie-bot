@@ -135,8 +135,9 @@ test('the Workspace view keeps the group-header create button', () => {
 // ---------------------------------------------------------------------------
 // The row-title rule: a Threads row under a named group header shows its title
 // without the header's label (the header already names the channel), so the
-// date and time read. The full name stays the row's data (data-full-name) for
-// the rename field and the opening notice.
+// date and time read. The name span's title is the full name on every row: the
+// hover text of a shortened row, and what the rename field and the opening
+// notice read.
 // ---------------------------------------------------------------------------
 
 // Five rows covering every branch of the rule: two roots under one named
@@ -161,23 +162,19 @@ test('a Threads row under a named header shows the date and time, the header kee
   await flush();
 
   const html = nav.innerHTML;
-  // The grouped roots and the child row open with their own date and time.
-  assert.match(html, /session-name">2026-11-10 12:17<\/span>/);
-  assert.match(html, /session-name">2026-11-09 11:10<\/span>/);
-  assert.match(html, /session-name">2026-11-08 09:30<\/span>/, 'the child row follows its root’s header');
-  // The full names are gone from the titles, and stay as each row's data.
-  assert.equal(html.includes('session-name">Slack #docs-review'), false);
-  assert.equal(html.match(/data-full-name="Slack #docs-review/g).length, 3,
-               'one data-full-name per shortened row: two roots and the child');
+  // The grouped roots and the child row open with their own date and time, and their hover text is the full name.
+  assert.match(html, /session-name" title="Slack #docs-review 2026-11-10 12:17">2026-11-10 12:17<\/span>/);
+  assert.match(html, /session-name" title="Slack #docs-review 2026-11-09 11:10">2026-11-09 11:10<\/span>/);
+  assert.match(html, /session-name" title="Slack #docs-review 2026-11-08 09:30">2026-11-08 09:30<\/span>/,
+               'the child row follows its root’s header');
   // The header, the non-matching title, the keyless bucket and the second line keep their text.
   assert.match(html, /uppercase tracking-wider">Slack #docs-review<\/span>/);
-  assert.match(html, /session-name">Renamed thread about the launch<\/span>/);
-  assert.match(html, /session-name">Slack #ops-misc 2026-11-09 10:20<\/span>/);
-  assert.equal(html.includes('data-full-name="Slack #ops-misc'), false,
-               'an ungrouped row keeps its full title and carries no data-full-name');
+  assert.match(html, /session-name" title="Renamed thread about the launch">Renamed thread about the launch<\/span>/);
+  assert.match(html, /session-name" title="Slack #ops-misc 2026-11-09 10:20">Slack #ops-misc 2026-11-09 10:20<\/span>/);
+  assert.equal(html.includes('data-full-name'), false, 'no row carries data-full-name: the hover text holds the name');
 });
 
-test('every other sidebar view keeps the full title, with no data-full-name', async () => {
+test('every other sidebar view keeps the full title, and its hover text is that name', async () => {
   const {context, nav, fetchRequests} = buildContext();
   context.INITIAL_SESSIONS = sessionColumns(threadTitleRows());
 
@@ -185,7 +182,9 @@ test('every other sidebar view keeps the full title, with no data-full-name', as
 
   assert.deepEqual(fetchRequests, []);
   const html = nav.innerHTML;
-  assert.match(html, /session-name">Slack #docs-review 2026-11-10 12:17<\/span>/);
-  assert.match(html, /session-name">Slack #ops-misc 2026-11-09 10:20<\/span>/);
-  assert.equal(html.includes('data-full-name'), false, 'no row is shortened, so no row carries data-full-name');
+  const ordinary = 'session-name" title="Slack #docs-review 2026-11-10 12:17">' +
+    'Slack #docs-review 2026-11-10 12:17</span>';
+  assert.ok(html.includes(ordinary), 'an ordinary row shows the full name, and its hover text is that name');
+  assert.match(html, /session-name" title="Slack #ops-misc 2026-11-09 10:20">Slack #ops-misc 2026-11-09 10:20<\/span>/);
+  assert.equal(html.includes('data-full-name'), false, 'no row carries data-full-name');
 });

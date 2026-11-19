@@ -42,7 +42,7 @@ pub struct LockHolder {
 }
 
 impl LockHolder {
-  /// Takes the lock for `script` working on `commit`, through the lock definition at `lock_sh` under `env`.
+  /// The lock holder for `script` working on `commit`, through the lock definition at `lock_sh` under `env`.
   pub fn start(lock_sh: &Path, env: &Env, script: &str, commit: &str) -> Self {
     let (_, record) = paths(lock_sh, env);
     let body = "source \"$1\" && release_lock_take \"$2\" \"$3\" && sleep 300";

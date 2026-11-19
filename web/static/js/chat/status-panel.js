@@ -9,16 +9,19 @@
 // session show neither the option nor the badge. A web session is one that
 // Chat.ForYou.isWebSession (for-you.js) accepts.
 //
-// The status is the session's web_status at open, then the web_status messages
-// of this session, live or in history. The newest updated_at wins, so an older
-// page of history never moves the view back. The descendant and child rows
-// come from GET /api/internal/web/status, fetched at open and on each
-// web_status_subtree notice (websocket-handlers.js).
+// The session's own status, list version, and answered marks come from GET
+// /api/internal/web/status. The descendant and child rows use the same read,
+// fetched at open and after status notifications.
 (function() {
   const Chat = globalThis.Chat;
 
   const VIEW_ID = 'status-panel';
   const BADGE_ID = 'status-waiting-count';
+  const DONE_WINDOW_MS = 5000;
+  const DONE_HEADER = '[Status · Waiting on you]';
+  const pendingDone = new Map();
+  const itemNotices = new Map();
+  const headerNotices = new Map();
   // An item's link is text the agent wrote. Only web and host-absolute URLs become
   // anchors: any other scheme, javascript: above all, would run in this page.
   const SAFE_LINK = /^(https?:\/\/|\/)/;
@@ -31,6 +34,29 @@
   let panelChildren = [];
   let panelDerived = [];
   let panelFetchGen = 0;
+  let panelHeaderNotice = '';
+
+  function doneKey(sessionId, waitingVersion, position) {
+    return JSON.stringify([sessionId, waitingVersion, position]);
+  }
+
+  function setHeaderNotice(sessionId, notice) {
+    if (notice) headerNotices.set(sessionId, notice);
+    else headerNotices.delete(sessionId);
+    if (sessionId === panelSessionId) panelHeaderNotice = notice;
+  }
+
+  function pendingForSession(sessionId) {
+    return [...pendingDone.values()].filter((entry) => entry.sessionId === sessionId);
+  }
+
+  function cancelPendingDone() {
+    for (const [key, entry] of pendingDone) {
+      clearTimeout(entry.timer);
+      pendingDone.delete(key);
+    }
+    renderPanel();
+  }
 
   function textSpan(className, text) {
     const span = document.createElement('span');
@@ -43,9 +69,16 @@
     while (el.firstChild) el.removeChild(el.firstChild);
   }
 
-  // A fold's mark: the closed and open glyphs every fold in the panel shows.
+  // A fold's mark: the disclosure icon for its state, the one every fold in the panel shows.
   function foldGlyph(open) {
-    return open ? '▾' : '▸';
+    return Chat.disclosureIcon(open, 12);
+  }
+
+  function foldGlyphSpan(open) {
+    const span = document.createElement('span');
+    span.className = 'w-3 text-center';
+    span.innerHTML = foldGlyph(open);
+    return span;
   }
 
   // A fold toggle: the button, its glyph span and its label span are the same
@@ -55,7 +88,7 @@
     toggle.type = 'button';
     toggle.className = className;
     toggle.setAttribute('aria-expanded', String(open));
-    toggle.appendChild(textSpan('w-3 text-center', foldGlyph(open)));
+    toggle.appendChild(foldGlyphSpan(open));
     toggle.appendChild(textSpan('', label));
     toggle.onclick = onToggle;
     return toggle;
@@ -65,7 +98,7 @@
   // for the eye.
   function setFoldOpen(toggle, open) {
     toggle.setAttribute('aria-expanded', String(open));
-    toggle.children[0].textContent = foldGlyph(open);
+    toggle.children[0].innerHTML = foldGlyph(open);
   }
 
   function safeLink(link) {
@@ -77,7 +110,7 @@
     a.className = 'shrink-0 whitespace-nowrap text-blue-400 hover:text-blue-300';
     a.href = href;
     a.dataset.openLink = 'true';
-    a.textContent = 'Open ›';
+    a.innerHTML = 'Open ' + cbIcon('open', 12);
     return a;
   }
 
@@ -178,9 +211,143 @@
     return span;
   }
 
+  function undoButton(onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inline-flex items-center gap-1 text-blue-400 hover:text-blue-300';
+    button.innerHTML = cbIcon('undo', 14);
+    button.appendChild(textSpan('', 'Undo'));
+    button.onclick = onClick;
+    return button;
+  }
+
+  function doneButton(onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inline-flex items-center justify-center rounded text-slate-400 hover:text-slate-200';
+    button.style.width = '24px';
+    button.style.height = '24px';
+    button.setAttribute('aria-label', 'Mark done');
+    button.title = 'Mark done';
+    button.innerHTML = cbIcon('done', 14);
+    button.onclick = onClick;
+    return button;
+  }
+
+  function cancelDone(key) {
+    const entry = pendingDone.get(key);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    pendingDone.delete(key);
+    renderPanel();
+  }
+
+  function itemControlRow(item, sessionId, position, canMarkDone) {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2 text-xs';
+    row.dataset.itemControls = 'true';
+    const waitingVersion = panelStatus && panelStatus.waiting_version;
+    const key = position ? doneKey(sessionId, waitingVersion, position) : null;
+    const pending = key && pendingDone.get(key);
+    const notice = key && itemNotices.get(key);
+    if (item.answered === true) {
+      row.appendChild(textSpan('text-slate-400', 'Marked done'));
+    } else if (pending && !pending.sent) {
+      row.appendChild(textSpan('text-slate-400', 'Marked done · '));
+      row.appendChild(undoButton(() => cancelDone(key)));
+    } else if (pending && pending.sent) {
+      row.appendChild(textSpan('text-slate-400', 'Marked done'));
+    } else if (notice) {
+      row.appendChild(textSpan(notice.startsWith('Status unknown:') ? 'text-amber-200' : 'text-slate-400', notice));
+      if (!notice.startsWith('Status unknown:') && canMarkDone && waitingVersion && position) {
+        row.appendChild(doneButton(() => scheduleDone(sessionId, waitingVersion, position, item.since)));
+      }
+    } else if (canMarkDone && waitingVersion && position) {
+      row.appendChild(doneButton(() => scheduleDone(sessionId, waitingVersion, position, item.since)));
+    }
+    return row;
+  }
+
+  function scheduleDone(sessionId, waitingVersion, position, since) {
+    const key = doneKey(sessionId, waitingVersion, position);
+    if (pendingDone.has(key)) return;
+    const entry = {sessionId, waitingVersion, position, since, clickMs: Date.now(), sent: false, timer: null};
+    entry.timer = setTimeout(() => sendDone(key), DONE_WINDOW_MS);
+    pendingDone.set(key, entry);
+    renderPanel();
+  }
+
+  async function readStatus(sessionId, includeViewSignal = true) {
+    const options = includeViewSignal ? {signal: viewRequestSignal()} : {};
+    const response = await fetch('/api/internal/web/status?session_id=' + encodeURIComponent(sessionId), options);
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return response.json();
+  }
+
+  async function fetchStatusForAction(sessionId) {
+    const isCurrentSession = sessionId === panelSessionId;
+    const gen = isCurrentSession ? ++panelFetchGen : null;
+    const body = await readStatus(sessionId, isCurrentSession);
+    if (isCurrentSession && gen === panelFetchGen && sessionId === panelSessionId) {
+      applyStatus(body);
+    }
+    return body;
+  }
+
+  async function sendDone(key) {
+    const entry = pendingDone.get(key);
+    if (!entry) return;
+    entry.sent = true;
+    entry.timer = null;
+    renderPanel();
+    const content = buildClickMessage(DONE_HEADER, [{
+      reference: 'Waiting on you · session ' + entry.sessionId + ' · list ' + entry.waitingVersion +
+        ' · since ' + entry.since + ' · #' + entry.position,
+      answer: 'Done',
+    }]);
+    const requestId = 'status-done-' + entry.sessionId + '-' + entry.clickMs;
+    let postError = null;
+    try {
+      const response = await fetch('/api/chat/' + encodeURIComponent(entry.sessionId) + '/message', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
+      });
+      if (response.status !== 202) throw new Error('HTTP ' + response.status);
+    } catch (err) {
+      postError = err;
+    }
+    pendingDone.delete(key);
+    try {
+      const body = await fetchStatusForAction(entry.sessionId);
+      const status = body && body.web_status;
+      const item = status && status.waiting && status.waiting[entry.position - 1];
+      const answered = status && status.waiting_version === entry.waitingVersion && item && item.answered === true;
+      if (postError) {
+        if (answered) {
+          itemNotices.delete(key);
+        } else if (status && status.waiting_version === entry.waitingVersion && item) {
+          itemNotices.set(key, 'Not sent: ' + postError.message);
+        } else {
+          setHeaderNotice(entry.sessionId, 'Not sent: ' + postError.message);
+        }
+      } else if (!answered) {
+        setHeaderNotice(entry.sessionId, 'Sent: the list changed');
+      } else {
+        itemNotices.delete(key);
+        setHeaderNotice(entry.sessionId, '');
+      }
+    } catch (err) {
+      if (postError) itemNotices.set(key, 'Status unknown: ' + err.message);
+      else setHeaderNotice(entry.sessionId, 'Status unknown: ' + err.message);
+    }
+    if (entry.sessionId === panelSessionId) renderPanel();
+  }
+
   // A Waiting on you item. contextOpen: the Status view shows an own item's
   // context open. The descendant rows keep it folded.
-  function waitingItem(item, contextOpen) {
+  function waitingItem(item, contextOpen, sessionId, position, canMarkDone) {
     const el = document.createElement('div');
     el.className = 'break-words text-amber-200';
     el.dataset.waitingItem = 'true';
@@ -192,6 +359,9 @@
     const href = safeLink(item.link);
     if (href) line.appendChild(openLink(href));
     el.appendChild(line);
+    if (item.answered === true || canMarkDone) {
+      el.appendChild(itemControlRow(item, sessionId, position, canMarkDone));
+    }
     if (item.context) el.appendChild(contextFold(item.context, contextOpen));
     return el;
   }
@@ -207,6 +377,13 @@
     if (age) line.appendChild(age);
     line.appendChild(openLink('/?session=' + encodeURIComponent(sessionId)));
     el.appendChild(line);
+    if (item.answered === true) {
+      const controls = document.createElement('div');
+      controls.className = 'flex items-center gap-2 text-xs';
+      controls.dataset.itemControls = 'true';
+      controls.appendChild(textSpan('text-slate-400', 'Marked done'));
+      el.appendChild(controls);
+    }
     if (item.context) el.appendChild(contextFold(item.context, false));
     return el;
   }
@@ -263,17 +440,34 @@
   }
 
   // The Waiting on you row: the session's items, each with its context open.
-  function waitingRow(items) {
+  function waitingRow(storedItems, derivedItems) {
     const waiting = statusRow('waiting');
-    waiting.appendChild(labelSpan('Waiting on you'));
+    const heading = document.createElement('div');
+    heading.className = 'flex items-center gap-2';
+    heading.appendChild(labelSpan('Waiting on you'));
+    const controls = document.createElement('div');
+    controls.className = 'flex items-center gap-2 text-xs';
+    controls.dataset.waitingHeaderControls = 'true';
+    const currentVersion = panelStatus && panelStatus.waiting_version;
+    for (const [key, entry] of pendingDone) {
+      if (entry.sessionId !== panelSessionId || entry.waitingVersion === currentVersion || entry.sent) continue;
+      controls.appendChild(textSpan('text-slate-400', 'Marked done · '));
+      controls.appendChild(undoButton(() => cancelDone(key)));
+    }
+    if (panelHeaderNotice) controls.appendChild(textSpan('text-amber-200', panelHeaderNotice));
+    heading.appendChild(controls);
+    waiting.appendChild(heading);
     const column = document.createElement('div');
     column.className = 'min-w-0 flex-1 space-y-1';
-    if (!items.length) {
+    if (!storedItems.length && !derivedItems.length) {
       const nothing = textSpan('text-slate-400', 'Nothing');
       nothing.dataset.waitingEmpty = 'true';
       column.appendChild(nothing);
     }
-    for (const item of items) column.appendChild(waitingItem(item, true));
+    for (let i = 0; i < storedItems.length; i++) {
+      column.appendChild(waitingItem(storedItems[i], true, panelSessionId, i + 1, true));
+    }
+    for (const item of derivedItems) column.appendChild(waitingItem(item, true, panelSessionId, null, false));
     waiting.appendChild(column);
     return waiting;
   }
@@ -300,11 +494,11 @@
     if (!panelStatus) {
       el.appendChild(noStatusRow());
       const held = derivedFor(panelSessionId);
-      if (held.length) el.appendChild(waitingRow(held));
+      if (held.length || pendingForSession(panelSessionId).length || panelHeaderNotice) el.appendChild(waitingRow([], held));
     } else {
       el.appendChild(goalRow(panelStatus.goal));
       el.appendChild(nowRow(panelStatus));
-      el.appendChild(waitingRow(panelStatus.waiting.concat(derivedFor(panelSessionId))));
+      el.appendChild(waitingRow(panelStatus.waiting, derivedFor(panelSessionId)));
     }
     if (panelDescendants.length) el.appendChild(childrenRow());
     if (panelChildren.length) el.appendChild(childrenNowRow());
@@ -334,59 +528,46 @@
     badge.classList.toggle('hidden', !count);
   }
 
-  // A web_status message's status replaces the panel's, unless the panel already
-  // holds a newer one.
-  function absorbWebStatusMessages(messages) {
-    for (const msg of messages) {
-      if (msg.role !== 'web_status') continue;
-      const next = msg.web_status;
-      if (panelStatus && Date.parse(next.updated_at) < Date.parse(panelStatus.updated_at)) continue;
-      panelStatus = next;
-    }
-  }
-
-  // The descendant rows: one GET per open and per subtree notice. A response for a
-  // session the page no longer shows, or one overtaken by a later GET, is dropped.
-  async function fetchDescendants(sessionId) {
-    if (pageIsOffline()) return;
-    const gen = ++panelFetchGen;
-    let body;
-    try {
-      const res = await fetch('/api/internal/web/status?session_id=' + encodeURIComponent(sessionId),
-          {signal: viewRequestSignal()});
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      body = await res.json();
-    } catch (err) {
-      console.error('web status fetch failed:', err);
-      return;
-    }
-    if (gen !== panelFetchGen || sessionId !== panelSessionId) return;
-    if (body.web_status && (!panelStatus || Date.parse(body.web_status.updated_at) >= Date.parse(panelStatus.updated_at))) {
-      panelStatus = body.web_status;
-    }
+  // A response for a session the page no longer shows, or one overtaken by a
+  // later GET, is dropped. Only this endpoint supplies waiting_version/answered.
+  function applyStatus(body) {
+    panelStatus = body.web_status;
     panelDescendants = body.descendants;
     panelChildren = body.children;
     panelDerived = body.derived_waiting;
     renderPanel();
   }
 
-  // Session open (first load and SPA switch): the session's own status, then the
-  // history's web_status messages, then the descendant rows. Whether the panel
-  // shows comes from the session's remembered view choice (chat/for-you.js
-  // applyChatView, called by the same open path).
-  function openSessionStatusPanel(session, messages) {
+  async function fetchStatus(sessionId) {
+    if (pageIsOffline()) return null;
+    const gen = ++panelFetchGen;
+    let body;
+    try {
+      body = await readStatus(sessionId);
+    } catch (err) {
+      console.error('web status fetch failed:', err);
+      return null;
+    }
+    if (gen !== panelFetchGen || sessionId !== panelSessionId) return {body, applied: false};
+    applyStatus(body);
+    return {body, applied: true};
+  }
+
+  // Session open loads the status tree from the server. Whether the panel shows
+  // comes from the session's remembered view choice (chat/for-you.js applyChatView).
+  function openSessionStatusPanel(session) {
     if (!Chat.ForYou.isWebSession(session)) {
       clearSessionStatusPanel();
       return;
     }
     panelSessionId = session.id;
-    panelStatus = session.web_status || null;
+    panelStatus = null;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];
-    absorbWebStatusMessages(messages);
+    panelHeaderNotice = headerNotices.get(session.id) || '';
     renderPanel();
-    fetchDescendants(session.id);
+    fetchStatus(session.id);
   }
 
   function clearSessionStatusPanel() {
@@ -395,22 +576,24 @@
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];
+    panelHeaderNotice = '';
     renderPanel();
   }
 
-  // A live or catch-up message of this session: the panel redraws only when a
-  // web_status message changes the status.
+  // The push announces a change; the endpoint supplies the authoritative list and
+  // its derived version and answered marks.
   function observeWebStatusMessages(messages) {
     if (!panelSessionId) return;
-    const before = panelStatus;
-    absorbWebStatusMessages(messages);
-    if (panelStatus !== before) renderPanel();
+    if (messages.some((msg) => msg.role === 'web_status')) fetchStatus(panelSessionId);
   }
 
-  // A descendant session set its status: the page re-reads the child rows.
+  // Either session's status change refreshes all status data for this tree.
   function refreshSessionStatusPanel() {
-    if (panelSessionId) fetchDescendants(panelSessionId);
+    if (panelSessionId) fetchStatus(panelSessionId);
   }
+
+  window.addEventListener('pagehide', cancelPendingDone);
+  document.addEventListener('charliebot:session-view-teardown', cancelPendingDone);
 
   // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);

@@ -141,52 +141,6 @@ pub(crate) struct CachedMetadata {
   pub(crate) identity: Arc<()>,
 }
 
-/// Counts active session metadata strings by backend, field, and value.
-type SessionMetadataValueMembership = ((String, String), String);
-
-#[derive(Default)]
-pub(crate) struct SessionMetadataValueIndex {
-  sessions: HashMap<String, Vec<SessionMetadataValueMembership>>,
-  pub(crate) counts: HashMap<(String, String), HashMap<String, usize>>,
-}
-
-impl SessionMetadataValueIndex {
-  pub(crate) fn update(&mut self, meta: &SessionMetadata) {
-    self.remove(&meta.id);
-    let values = if meta.status == SessionStatus::Active {
-      meta
-        .extra
-        .iter()
-        .filter_map(|(field, value)| {
-          value.as_str().map(|value| ((meta.backend.clone(), field.clone()), value.to_string()))
-        })
-        .collect::<Vec<_>>()
-    } else {
-      Vec::new()
-    };
-    for ((backend, field), value) in &values {
-      *self.counts.entry((backend.clone(), field.clone())).or_default().entry(value.clone()).or_default() += 1;
-    }
-    self.sessions.insert(meta.id.clone(), values);
-  }
-
-  pub(crate) fn remove(&mut self, session_id: &str) {
-    let Some(values) = self.sessions.remove(session_id) else { return };
-    for ((backend, field), value) in values {
-      let key = (backend, field);
-      let counts = self.counts.get_mut(&key).expect("indexed session value has a count");
-      let count = counts.get_mut(&value).expect("indexed session value has a count");
-      *count -= 1;
-      if *count == 0 {
-        counts.remove(&value);
-      }
-      if counts.is_empty() {
-        self.counts.remove(&key);
-      }
-    }
-  }
-}
-
 /// One status corpus in newest-first order, kept while the corpus it sorted still holds.
 pub(crate) struct CachedSortedListing {
   /// The immutable corpus the sorted rows came from.
@@ -426,8 +380,6 @@ pub struct Store {
   pub(crate) sequence_archive: Arc<dyn SequenceArchiveHook>,
   pub(crate) sequence_binding_mover: Arc<dyn SequenceBindingMover>,
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
-  /// Active string-field counts derived from session metadata and refreshed by Store writes.
-  pub(crate) session_metadata_value_index: StdMutex<Option<SessionMetadataValueIndex>>,
   /// Moves on every metadata write and every eviction of a cache entry, as `_listings_revision` does.
   pub(crate) listings_revision: AtomicU64,
   /// Identifies each status-filtered metadata corpus refresh for search memo invalidation.
@@ -544,7 +496,6 @@ impl Store {
       sequence_archive,
       sequence_binding_mover,
       metadata_cache: StdMutex::new(HashMap::new()),
-      session_metadata_value_index: StdMutex::new(None),
       listings_revision: AtomicU64::new(0),
       next_listing_generation: AtomicU64::new(1),
       listings_memo: StdMutex::new(HashMap::new()),
@@ -676,16 +627,22 @@ impl Store {
   }
 
   /// Return cached metadata when fresh, reading and populating the cache only on a miss.
-  pub fn get_session_cached_or_read_sync(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
+  ///
+  /// The cache hands out its own allocation, so a caller that reads many rows in one request shares each row's
+  /// metadata instead of deep-cloning it. The status poll reads every painted row on each rebuild, and cloning a
+  /// session's metadata map per row was a fifth of that route's CPU. The metadata behind the pointer never moves: a
+  /// cache entry is replaced with a new allocation, never written in place, so an `Arc` a caller holds keeps the
+  /// content it read.
+  pub fn get_session_cached_or_read_sync(&self, session_id: &str) -> StoreResult<Option<Arc<SessionMetadata>>> {
     if let Some(meta) = self.fresh_cached_meta(session_id)? {
-      return Ok(Some(meta.as_ref().clone()));
+      return Ok(Some(meta));
     }
     let path = self.metadata_path(session_id);
     let signature = stat_signature(&path);
     let meta = self.read_metadata_path(&path)?;
     let mut cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
     if let Some(entry) = cache.get(session_id) {
-      return Ok(Some(entry.value.as_ref().clone()));
+      return Ok(Some(Arc::clone(&entry.value)));
     }
     let Some(meta) = meta else { return Ok(None) };
     let meta = Arc::new(meta);
@@ -693,7 +650,7 @@ impl Store {
       session_id.to_string(),
       CachedMetadata { value: Arc::clone(&meta), at: Instant::now(), signature, identity: Arc::new(()) },
     );
-    Ok(Some(meta.as_ref().clone()))
+    Ok(Some(meta))
   }
 
   /// Return the directory where the live event log is stored.
@@ -714,7 +671,6 @@ impl Store {
   /// Invalidate cached metadata and listing snapshots after an external write or deletion.
   pub fn invalidate_cache(&self, session_id: &str) {
     self.invalidate_metadata_cache_entry(session_id);
-    self.session_metadata_value_index.lock().expect("session metadata index mutex is not poisoned").take();
   }
 
   pub(crate) fn invalidate_metadata_cache_entry(&self, session_id: &str) {
@@ -838,7 +794,6 @@ impl Store {
       .lock()
       .expect("metadata cache mutex is not poisoned")
       .insert(meta.id.clone(), CachedMetadata { value: parsed, at: Instant::now(), signature, identity: Arc::new(()) });
-    self.update_session_metadata_value_index(meta);
     crate::sidebar_state::mark_sidebar_dirty(&meta.id);
     self.listings_revision.fetch_add(1, Ordering::AcqRel);
     Ok(())
@@ -1254,7 +1209,6 @@ impl Store {
     charliebot_core::cgroup::cleanup_session_cgroup(&base_dir, session_id);
     self.drop_session_runtime_state(session_id);
     self.invalidate_metadata_cache_entry(session_id);
-    self.remove_session_from_metadata_value_index(session_id);
     crate::sidebar_state::mark_sidebar_dirty(session_id);
     self.metadata_locks.lock().expect("metadata lock map mutex is not poisoned").remove(session_id);
     tracing::info!(session_id, "session_deleted_permanently");
@@ -1794,6 +1748,23 @@ mod tests {
     store.metadata_cache.lock().unwrap().get_mut(&meta.id).unwrap().at =
       Instant::now() - METADATA_CACHE_TTL - Duration::from_secs(1);
     assert_eq!(store.get_session(&meta.id).await.unwrap().unwrap().name, "fresh metadata");
+  }
+
+  #[test]
+  fn cached_metadata_reads_share_the_cache_allocation() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg =
+      charliebot_core::config::load_config(home.path(), &charliebot_core::config::ConfigSchema::default()).unwrap();
+    let store = Store::new(cfg, Vec::new(), explicit_test_hooks()).unwrap();
+    let meta = SessionMetadata::new("synthetic-id", "seed", crate::metadata::TaskProfile::Manager);
+    let path = store.metadata_path(&meta.id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, meta.to_json_string(&[], true)).unwrap();
+
+    let first = store.get_session_cached_or_read_sync(&meta.id).unwrap().unwrap();
+    let second = store.get_session_cached_or_read_sync(&meta.id).unwrap().unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(second.name, "seed");
   }
 
   #[test]

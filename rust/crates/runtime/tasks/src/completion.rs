@@ -15,6 +15,7 @@ use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_US
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskType};
 use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::session_fork::ReplacedSourceArchive;
+use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus};
 use charliebot_store::{ControlGuard, StoreError, StoreHookFuture, StoreResult, layout};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -1884,6 +1885,89 @@ impl TaskCompletion {
     Ok(None)
   }
 
+  /// Record a successful run's delivery pause, and when the worker holds pending triggers of its own, tell its
+  /// initiator once for this run. Every run-end pause site calls this. A pause on unprocessed input stays silent.
+  pub async fn pause_delivery(&self, session_id: &str, run_id: &str) -> StoreResult<Option<String>> {
+    let Some(reason) = self.pause_reason(session_id)? else {
+      return Ok(None);
+    };
+    tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "worker_delivery_paused");
+    let triggers = self.pending_triggers(session_id)?;
+    if !triggers.is_empty() {
+      self.notify_initiator_of_pending_triggers(session_id, run_id, &triggers).await?;
+    }
+    Ok(Some(reason))
+  }
+
+  /// The worker's own triggers that are still pending, earliest fire first. A trigger file that does not decode is an
+  /// error, because the pause would otherwise name a wait the initiator never hears about.
+  fn pending_triggers(&self, session_id: &str) -> StoreResult<Vec<PendingTrigger>> {
+    let triggers_dir = layout::triggers_dir(&self.store().session_dir(session_id));
+    let files = match trigger_files::iter_trigger_file_stats(&triggers_dir) {
+      Ok(files) => files,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+      Err(error) => return Err(StoreError::new(format!("read {}: {error}", triggers_dir.display()))),
+    };
+    let mut pending = Vec::new();
+    for (path, _) in files {
+      let trigger = trigger_files::read_trigger(&path).map_err(|error| StoreError::new(format!("{error:#}")))?;
+      if trigger.status == TriggerStatus::Pending {
+        pending.push(trigger);
+      }
+    }
+    pending.sort_by_key(|trigger| trigger.fire_at);
+    Ok(pending)
+  }
+
+  /// Admit one notice to the worker's initiator, keyed by the run, and wake the initiator. An archived initiator takes
+  /// no new input, so the notice is skipped and logged, as the archived-task report is.
+  async fn notify_initiator_of_pending_triggers(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    triggers: &[PendingTrigger],
+  ) -> StoreResult<()> {
+    let meta = self.store().load_task_meta(session_id).await?;
+    let Some(initiator) = meta.task_parent_id.as_deref() else {
+      return Ok(());
+    };
+    let waits = triggers
+      .iter()
+      .map(|trigger| {
+        let max_wait = (trigger.fire_at.into_inner() - trigger.created_at.into_inner()).as_seconds_f64();
+        format!("- {} (max wait {max_wait:.0} s, fires by {})", trigger.message, trigger.fire_at.to_str())
+      })
+      .collect::<Vec<_>>()
+      .join("\n");
+    let content = format!(
+      "Worker {} ({session_id}) ended run {run_id} with {} pending trigger(s) of its own. It resumes when each one \
+       fires:\n{waits}\nDecide whether to wait for them or to cancel the task.",
+      meta.name,
+      triggers.len()
+    );
+    let notice_id = control_events::stable_trigger_pause_notice_id(session_id, run_id);
+    let fields = json!({
+      (event_types::INPUT_ID): notice_id,
+      (event_types::FROM_SESSION): session_id,
+      (event_types::FROM_SESSION_NAME): meta.name,
+    });
+    let dispatcher = self.dispatcher()?;
+    match dispatcher.admit_input(initiator, event_types::AGENT_MESSAGE, &content, ACTOR_AGENT, fields).await {
+      Ok(_) => dispatcher.dispatch_pending(initiator).await.map(|_| ()),
+      Err(StoreError::Archived(message)) => {
+        tracing::info!(
+          target: "charliebot_tasks",
+          session_id,
+          initiator,
+          error = %message,
+          "trigger_pause_notice_skipped_archived"
+        );
+        Ok(())
+      }
+      Err(error) => Err(error),
+    }
+  }
+
   /// Apply successful-run close requests and ordinary worker delivery follow-ups.
   pub async fn after_run_finished(&self, session_id: &str, run_id: &str) -> StoreResult<()> {
     let meta = self.store().load_task_meta(session_id).await?;
@@ -1905,8 +1989,7 @@ impl TaskCompletion {
       tracing::info!(target: "charliebot_tasks", session_id, run_id, "cold_read_delivery_awaits_report");
       return Ok(());
     }
-    if let Some(reason) = self.pause_reason(session_id)? {
-      tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "worker_delivery_paused");
+    if self.pause_delivery(session_id, run_id).await?.is_some() {
       return Ok(());
     }
     match self.evaluate_automatic_completion(session_id, run_id, None, None, None, None).await {

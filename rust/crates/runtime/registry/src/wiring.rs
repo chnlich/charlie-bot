@@ -4,3 +4,4 @@ pub use crate::registry::{
   CheckFn, DiffRootFn, FileView, PathClaim, PathMatch, Phase, RouterBuilder, RouterRegistration, ScheduledHandlerFn,
   Service, ServiceContext, StartupCheckFn, WebSocketHandler, WebSocketMatch, WebSocketRequest,
 };
+pub use crate::service_task::cancel_and_wait;

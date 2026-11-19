@@ -24,6 +24,7 @@ mod ndjson;
 pub mod projection;
 mod read_memos;
 pub mod reply_order;
+mod run_display_state;
 mod run_facts;
 pub mod run_identity;
 pub mod run_logs;

@@ -46,13 +46,13 @@ impl CandidateSource {
   }
 
   /// The source that one `--sources` value names.
-  pub fn parse(value: &str) -> Option<Self> {
+  pub fn parse(value: &str) -> Result<Self, String> {
     match value.trim() {
-      "comments" => Some(Self::Comments),
-      "notes" => Some(Self::Notes),
-      "downvote-replies" => Some(Self::DownvoteReplies),
-      "chat" => Some(Self::Chat),
-      _ => None,
+      "comments" => Ok(Self::Comments),
+      "notes" => Ok(Self::Notes),
+      "downvote-replies" => Ok(Self::DownvoteReplies),
+      "chat" => Ok(Self::Chat),
+      other => Err(format!("unknown source {other:?}")),
     }
   }
 
@@ -403,7 +403,7 @@ fn plan_id(plan: &Value) -> Option<String> {
   match plan.get("id")? {
     Value::Number(number) => Some(number.to_string()),
     Value::String(text) if !text.is_empty() => Some(text.clone()),
-    _ => None,
+    Value::String(_) | Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => None,
   }
 }
 
@@ -487,7 +487,8 @@ fn clean_text(fragment: &str) -> String {
       '<' => in_tag = true,
       '>' if in_tag => in_tag = false,
       _ if !in_tag => visible.push(character),
-      _ => {}
+      _ if in_tag => {}
+      _ => unreachable!("every character is either in a tag or appended to the visible text"),
     }
   }
   charliebot_html::unescape(&visible).split_whitespace().collect::<Vec<&str>>().join(" ")

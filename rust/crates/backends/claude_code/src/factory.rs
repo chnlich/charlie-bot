@@ -22,18 +22,15 @@ impl BackendFactory for ClaudeCodeFactory {
     let cgroup_config = SessionCgroupConfig::from_config(cfg);
     let enable_subagents = claude_config::enable_subagents(cfg);
     let backend = match option {
-      None => ClaudeCodeBackend::from_launch(None, None, None, false, enable_subagents, None, launch, cgroup_config)?,
+      None => ClaudeCodeBackend::from_launch(None, None, false, enable_subagents, None, launch, cgroup_config)?,
       Some(option) => {
         let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
         let effort = options::optional_text(&option.type_fields, options::EFFORT_KEY).map_err(anyhow::Error::msg)?;
-        let cli_binary =
-          options::optional_text(&option.type_fields, options::CLI_BINARY_KEY).map_err(anyhow::Error::msg)?;
         let fast_mode = options::fast_mode(&option.type_fields).map_err(anyhow::Error::msg)?;
         let config_dir = launch_config_dir(&launch)?;
         ClaudeCodeBackend::from_launch(
           Some(model),
           effort,
-          cli_binary,
           fast_mode,
           enable_subagents,
           config_dir,

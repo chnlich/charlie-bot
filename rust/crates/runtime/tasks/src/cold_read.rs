@@ -470,7 +470,7 @@ pub async fn run_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> any
         let message = format!("{error:#}");
         if let Some(reason) = backend_pool::classify_member_failure(&message, None).availability_reason() {
           let availability = host.pool.availability();
-          availability.record(&option.id, None, reason, &message)?;
+          availability.record(&host.cfg, &host.registry, &option.id, None, reason, &message)?;
         }
         attempts.push((option.id, format!("{error_type}: {message}")));
       }

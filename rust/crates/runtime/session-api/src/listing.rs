@@ -337,7 +337,7 @@ impl PageCorpusEntry {
 /// The sidebar corpus read without rendering a row. A memo hit still polls the sidebar state, because the periodic
 /// self-heal sweep is what catches an edit from outside the server.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
-  let corpus = page_corpus(store, registry)?;
+  let corpus = page_corpus(store, registry, true)?;
   let sequence_fields = store.sequence_listing_fields(&corpus.rows)?;
   Ok(PageRows { rows: corpus.rows, index: corpus.index, derived: corpus.derived, sequence_fields })
 }
@@ -352,15 +352,19 @@ pub struct PageCorpusRows {
   pub derived: Arc<DerivedSidebarMap>,
 }
 
-pub fn page_corpus_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageCorpusRows> {
-  let corpus = page_corpus(store, registry)?;
+/// The Workspace page's rows and overlay for a caller that registers its own poll.
+///
+/// `register` is false when the caller counts the poll itself: the corpus then reads the memo without counting the
+/// same poll a second time.
+pub fn page_corpus_rows(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> StoreResult<PageCorpusRows> {
+  let corpus = page_corpus(store, registry, register)?;
   Ok(PageCorpusRows { rows: corpus.rows, derived: corpus.derived })
 }
 
 /// The sidebar corpus with the sequence controller fields of `ids` alone. A row refresh reads this: it merges the
 /// rows it names, so the corpus' other rows need no controller fields.
 pub fn active_page_rows_for(store: &Arc<Store>, registry: &Arc<Registry>, ids: &[String]) -> StoreResult<PageRows> {
-  let corpus = page_corpus(store, registry)?;
+  let corpus = page_corpus(store, registry, true)?;
   let sequence_fields = store.sequence_listing_fields_for(ids)?;
   Ok(PageRows { rows: corpus.rows, index: corpus.index, derived: corpus.derived, sequence_fields })
 }
@@ -378,7 +382,10 @@ fn page_row_index(rows: &[Arc<SessionMetadata>]) -> Arc<HashMap<String, u32>> {
 }
 
 /// The sidebar corpus, from the memo while every input that shapes it still holds.
-fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageCorpus> {
+///
+/// A memo hit registers the poll unless `register` is false, because the periodic self-heal sweep is what catches an
+/// edit from outside the server. A caller that registers the poll itself passes false, so one poll counts once.
+fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> StoreResult<PageCorpus> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
   let roots = store.subtree_roots_shared()?;
@@ -391,8 +398,9 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<Page
       .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.index), Arc::clone(&entry.derived)))
   };
   if let Some((rows, index, derived)) = cached {
-    // A memo hit still polls, because the periodic self-heal sweep is what catches an edit from outside the server.
-    sidebar::count_memoized_read(store, registry, &rows)?;
+    if register {
+      sidebar::count_memoized_read(store, registry, &rows)?;
+    }
     return Ok(PageCorpus { rows, index, derived });
   }
   let ListingCorpus { mut rows, derived, .. } = active_listing_corpus(store, registry)?;
@@ -764,8 +772,8 @@ impl PageRowText {
 const COLUMN_ENCODING_KEY: &str = "$encoded";
 
 /// The encoding of the page's `id` column: the ids' 16-byte UUID values travel in row order as one base64url string.
-/// A home whose ids are not all canonical UUIDs carries one cell per row instead: the canonical UUID's 16 bytes in
-/// base64url, any other id as `~` and its text.
+/// A home whose ids are not all canonical UUIDs carries one cell per row instead. A canonical UUID keeps its 16 bytes
+/// in base64url there, and any other id is `~` followed by its text.
 const UUID_ENCODING: &str = "uuid-b64";
 
 /// The encoding of the page's `updated_at` column: the first row carries its epoch minutes, and every later row the
@@ -1268,11 +1276,15 @@ pub fn sessions_list_response(
 /// keeps its allocation, and the row memo re-renders only the rows a corpus change moved.
 ///
 /// One memo serves one form. The session-move picker reads four fields of the same corpus, so it asks for that form
-/// through a memo of its own and leaves the Workspace's columns untouched.
+/// through a memo of its own and leaves the Workspace's columns untouched. The first-screen form keeps a memo of its
+/// own too. The sidebar asks for it on every filter switch, and a request pair that alternated the two forms would
+/// re-render the full listing each time.
 #[derive(Default)]
 pub struct CompactListingMemo {
   rows: PageRowsMemo,
   body: Mutex<Option<CompactListingBody>>,
+  screen_rows: PageRowsMemo,
+  screen_body: Mutex<Option<CompactListingBody>>,
 }
 
 struct CompactListingBody {
@@ -1300,17 +1312,33 @@ impl ListingForm {
 
 impl CompactListingMemo {
   /// The compact listing for this corpus, gzipped when the request accepts gzip.
-  pub fn response(&self, request: &Request<Body>, store: &Store, page: &PageRows, form: ListingForm) -> Response {
-    let text =
-      match page_json_text(store, page, None, PageRowsScope::EveryRow, &self.rows, LISTING_PROJECTION, form.schema()) {
-        Ok(text) => text,
-        Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
-      };
+  ///
+  /// `screen` answers the rows the sidebar paints before the reader expands a group, with each group's whole row
+  /// count under `$screen`. The reader who expands one asks for the full form. `active` names the session the page
+  /// shows, whose root the first screen keeps visible whatever its rank in the list.
+  pub fn response(
+    &self,
+    request: &Request<Body>,
+    store: &Store,
+    page: &PageRows,
+    form: ListingForm,
+    screen: bool,
+    active: Option<&str>,
+  ) -> Response {
+    let (scope, rows_memo, body_memo) = if screen {
+      (PageRowsScope::FirstScreen { active }, &self.screen_rows, &self.screen_body)
+    } else {
+      (PageRowsScope::EveryRow, &self.rows, &self.body)
+    };
+    let text = match page_json_text(store, page, None, scope, rows_memo, LISTING_PROJECTION, form.schema()) {
+      Ok(text) => text,
+      Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
+    };
     let wants_gzip = accepts_gzip(request.headers());
     if !wants_gzip {
       return json_bytes_response(Bytes::copy_from_slice(text.as_bytes()), false);
     }
-    let mut body = self.body.lock().expect("the compact listing memo mutex is not poisoned");
+    let mut body = body_memo.lock().expect("the compact listing memo mutex is not poisoned");
     if let Some(cached) = body.as_ref()
       && Arc::ptr_eq(&cached.text, &text)
     {
@@ -1327,8 +1355,8 @@ pub fn row_refresh_ids(request: &Request<Body>) -> Option<Vec<String>> {
   crate::route_support::Query::new(request).get("ids").map(crate::api::parse_session_ids)
 }
 
-/// The row refresh body: the compact column text of the rows of `page` that `ids` name, and the ids the page no longer
-/// holds, as `{"sessions": <column text>, "gone": [...]}`.
+/// The row refresh body: the compact column text of the rows of `page` that `ids` name. It also carries the ids the
+/// page no longer holds, as `{"sessions": <column text>, "gone": [...]}`.
 ///
 /// The rows take the full listing's compact form, so the sidebar merges them into its painted list with the same
 /// decoding and the same epoch-minute times. The row memo is local to this call: a refresh names a few rows, and the
@@ -1773,7 +1801,7 @@ mod tests {
     let page = active_page_rows(&features.store, &features.registry).unwrap();
 
     let identity = Request::builder().uri("/api/sessions/?compact=1").body(Body::empty()).unwrap();
-    let response = memo.response(&identity, &features.store, &page, ListingForm::Sidebar);
+    let response = memo.response(&identity, &features.store, &page, ListingForm::Sidebar, false, None);
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = std::str::from_utf8(&body).expect("the identity body is UTF-8");
@@ -1788,13 +1816,13 @@ mod tests {
       .body(Body::empty())
       .unwrap();
     let first = axum::body::to_bytes(
-      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar).into_body(),
+      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar, false, None).into_body(),
       usize::MAX,
     )
     .await
     .unwrap();
     let second = axum::body::to_bytes(
-      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar).into_body(),
+      memo.response(&gzip_request, &features.store, &page, ListingForm::Sidebar, false, None).into_body(),
       usize::MAX,
     )
     .await
@@ -1814,7 +1842,7 @@ mod tests {
     let page = active_page_rows(&features.store, &features.registry).unwrap();
 
     let request = Request::builder().uri("/api/sessions/?compact=move").body(Body::empty()).unwrap();
-    let response = memo.response(&request, &features.store, &page, ListingForm::Move);
+    let response = memo.response(&request, &features.store, &page, ListingForm::Move, false, None);
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = std::str::from_utf8(&body).expect("the move body is UTF-8");

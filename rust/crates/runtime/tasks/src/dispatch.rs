@@ -520,7 +520,7 @@ impl Dispatcher {
       if event.get("type").and_then(Value::as_str) != Some(event_types::CHILD_REPORT) {
         continue;
       }
-      let child_id = field_text(event.get("child_session_id"));
+      let child_id = field_text(event.get(event_types::CHILD_SESSION_ID));
       if provenance.contains_key(&child_id) {
         continue;
       }
@@ -659,8 +659,8 @@ impl Dispatcher {
       Some(&report_id),
       None,
       [
-        ("child_session_id".to_string(), Value::String(child_session_id.to_string())),
-        ("child_event_id".to_string(), Value::String(source_event_id)),
+        (event_types::CHILD_SESSION_ID.to_string(), Value::String(child_session_id.to_string())),
+        (event_types::CHILD_EVENT_ID.to_string(), Value::String(source_event_id)),
         ("outcome".to_string(), Value::String(outcome.to_string())),
         ("summary".to_string(), Value::String(summary.to_string())),
         (event_types::RESULT_REFS.to_string(), json!(result_refs.unwrap_or(&[]))),
@@ -1033,7 +1033,7 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
 
 fn close_report_outcome(close: &Value) -> &str {
   close
-    .get("sequence_outcome")
+    .get(event_types::SEQUENCE_OUTCOME)
     .and_then(Value::as_str)
     .filter(|value| !value.is_empty())
     .or_else(|| close.get("outcome").and_then(Value::as_str).filter(|value| !value.is_empty()))

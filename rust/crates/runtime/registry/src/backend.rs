@@ -9,10 +9,10 @@ pub use crate::registry::{
   BackendTypeRegistration, CLAUDE_INSTRUCTIONS_FILE_NAME, ChildEnvFn, CompactionOutcome, CompactionRun,
   CompactionRunFn, ContextLimits, ContextStateFn, EXTRA_FLAGS_BACKEND_KWARG, EmitFn, Env, ExitedProbe,
   FinalStdoutOutcome, IdleArmContext, IdleStartGate, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchRefused,
-  LaunchWatch, MemberReading, MemberReadingFn, MemberWindow, OptionModel, ReadingLimitsFn, RecordAccountFn,
-  RecoverySilence, Registry, ResumeStyle, RetryAfter, RunningTurnsFn, ServeProcessSpec, ServeTransport, ServeTurn,
-  ServeTurnArgs, ServeTurnResult, SessionContextStateFn, Translate, TransportKind, UsageResolver,
-  UsageResolverConstructor, UsageResolverHost,
+  LaunchWatch, MemberReading, MemberReadingFn, MemberWindow, OptionModel, QuotaOutlook, ReadingLimitsFn,
+  RecordAccountFn, RecoverySilence, Registry, RemoteLaunch, ResumeStyle, RetryAfter, RunningTurnsFn, ServeProcessSpec,
+  ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult, SessionContextStateFn, Translate, TransportKind,
+  UsageResolver, UsageResolverConstructor, UsageResolverHost,
 };
 
 /// The lifecycle of a backend type that registered none.
@@ -61,8 +61,6 @@ impl Registry {
       draft_platforms: crate::registry::Ledger::new("draft platform"),
       plan_registry: crate::registry::Ledger::new("plan registry"),
       derived_waiting_items: crate::registry::Ledger::new("derived waiting items reader"),
-      backend_host_aliases: crate::registry::Ledger::new("backend host alias"),
-      backend_cli_binaries: crate::registry::Ledger::new("backend launcher binary"),
       host_logins: crate::registry::Ledger::new("host login reader"),
       host_probes: crate::registry::Ledger::new("host probe"),
       bound_rounds: crate::registry::Ledger::new("bound round readers"),

@@ -532,7 +532,9 @@ fn selection_from_parts(
     match segments.last_mut() {
       // The usage line rides the index segment. A selection with no index entries gets a usage-only one.
       Some(last) if last.delivery == DELIVERY_INDEX => last.text = format!("{}\n\n{usage}", last.text),
-      _ => segments.push(MemorySegment { delivery: DELIVERY_INDEX, text: usage.to_string(), sources: Vec::new() }),
+      None | Some(_) => {
+        segments.push(MemorySegment { delivery: DELIVERY_INDEX, text: usage.to_string(), sources: Vec::new() })
+      }
     }
   }
   let text = (!segments.is_empty()).then(|| {

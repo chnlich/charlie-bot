@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_core::config::{BackendOption, PoolBilling, PoolConfig, PoolMember, PoolRule};
+use charliebot_core::config::{
+  BackendOption, CONFIG_FILENAME, ConfigSection, HostAuthConfig, PoolBilling, PoolConfig, PoolMember, PoolRule,
+  SectionValue,
+};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::repo_root::RepoRoot;
@@ -23,7 +26,6 @@ use serde_yaml::Mapping;
 
 /// The id of the priority pool that the Auto-style tests of this crate name.
 pub const AUTO_POOL_ID: &str = "auto";
-const SYNTHETIC_LAUNCHER_FIELD: &str = "synthetic_launcher";
 
 /// The priority pool `auto` over `members`, each billed as a subscription, in config order.
 fn auto_pool(members: &[&str]) -> PoolConfig {
@@ -43,14 +45,28 @@ pub fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
 pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let entries: Vec<(&str, Mapping)> =
     std::iter::once("synthetic").chain(extra_backend_ids.iter().copied()).map(|id| (id, Mapping::new())).collect();
-  feature_context_with_entries(&entries, None)
+  feature_context_with_entries(&entries, None, &[])
 }
 
 /// A feature context whose `backends.pools` holds the priority pool `auto` over `members`, each a synthetic backend
 /// option in config order.
 pub fn feature_context_with_auto(members: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  feature_context_with_auto_login_hosts(members, &[])
+}
+
+/// A feature context whose config names `hosts` as browser-login hosts (`host_auth.browser_logins[].host`), so that a
+/// task's `improve_host` may name any of them.
+pub fn feature_context_with_login_hosts(hosts: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  feature_context_with_entries(&[("synthetic", Mapping::new())], None, hosts)
+}
+
+/// [`feature_context_with_auto`] with the browser-login hosts of [`feature_context_with_login_hosts`].
+pub fn feature_context_with_auto_login_hosts(
+  members: &[&str],
+  hosts: &[&str],
+) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let entries: Vec<(&str, Mapping)> = members.iter().map(|id| (*id, Mapping::new())).collect();
-  feature_context_with_entries(&entries, Some(auto_pool(members)))
+  feature_context_with_entries(&entries, Some(auto_pool(members)), hosts)
 }
 
 /// A manager session on `auto` that records no member yet, the shape of a bound session before its first turn start.
@@ -96,67 +112,35 @@ pub async fn auto_manager(
   Ok(session)
 }
 
-/// A feature context whose synthetic backend entries each log into a host. Every `(backend id, host alias)` pair is an
-/// entry that names the host through `host_auth_alias`, as a `cc-anthropic-compatible` entry does.
-pub fn feature_context_with_host_backends(hosts: &[(&str, &str)]) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  feature_context_with_entries(&host_entries(hosts), None)
-}
-
-/// A feature context whose extra synthetic backend entries each name a launcher through `cli_binary`, as a
-/// `cc-anthropic-compatible` entry does. The plain `synthetic` entry stays, so the other fixtures' ids still resolve.
-pub fn feature_context_with_launcher_backends(ids: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  let mut entries = vec![("synthetic", Mapping::new())];
-  for id in ids {
-    let mut fields = Mapping::new();
-    fields.insert(SYNTHETIC_LAUNCHER_FIELD.into(), "/path/to/launcher".into());
-    entries.push((*id, fields));
-  }
-  feature_context_with_entries(&entries, None)
-}
-
-/// A feature context with the same host-naming entries as [`feature_context_with_host_backends`] and the priority pool
-/// `auto` over `members`, each a configured option.
-pub fn feature_context_with_auto_host_backends(
-  hosts: &[(&str, &str)],
-  members: &[&str],
-) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  feature_context_with_entries(&host_entries(hosts), Some(auto_pool(members)))
-}
-
-fn host_entries<'a>(hosts: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, Mapping)> {
-  let mut entries = vec![("synthetic", Mapping::new())];
-  for (id, alias) in hosts {
-    let mut fields = Mapping::new();
-    fields.insert("host_auth_alias".into(), (*alias).into());
-    entries.push((*id, fields));
-  }
-  entries
-}
-
 /// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type. The declared
 /// rotation pool `pool` holds every entry, and the call classes name it. `auto` adds one more pool.
 /// A feature context whose repo root is the checkout, so the session templates of the fires resolve.
 fn feature_context_with_entries(
   entries: &[(&str, Mapping)],
   auto: Option<PoolConfig>,
+  login_hosts: &[&str],
 ) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  feature_context_at(entries, auto, repo_root())
+  feature_context_at(entries, auto, login_hosts, repo_root())
 }
 
 /// A feature context whose repo root is `repo`, for a test that reads templates from a checkout of its own.
 pub fn feature_context_with_repo_root(repo: &Path) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  feature_context_at(&[("synthetic", Mapping::new())], None, repo.to_path_buf())
+  feature_context_at(&[("synthetic", Mapping::new())], None, &[], repo.to_path_buf())
 }
 
 fn feature_context_at(
   entries: &[(&str, Mapping)],
   auto: Option<PoolConfig>,
+  login_hosts: &[&str],
   repo: PathBuf,
 ) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let home = tempfile::tempdir().expect("temporary cron home");
   std::fs::create_dir_all(home.path().join("sessions")).expect("session directory provisions");
   std::fs::create_dir_all(home.path().join("config.d/cron.d")).expect("cron directory provisions");
   std::fs::create_dir_all(home.path().join("state")).expect("state directory provisions");
+  if !login_hosts.is_empty() {
+    std::fs::write(home.path().join(CONFIG_FILENAME), host_auth_config(login_hosts)).expect("config file writes");
+  }
   let mut registry = Registry::new();
   registry.register_package("features.cron", crate::register).expect("cron registration");
   registry.register_package("test.cron_handlers", register_test_handler).expect("handler registration");
@@ -329,18 +313,22 @@ fn register_test_backend(registry: &mut Registry) -> Result<(), RegistryError> {
     lifecycle: None,
     translate_fallback: false,
   })?;
-  registry.backend_host_alias("synthetic", synthetic_host_alias)?;
-  registry.backend_cli_binary("synthetic", synthetic_cli_binary)
+  Ok(())
 }
 
-/// The synthetic entries name a host the way `cc-anthropic-compatible` entries do.
-fn synthetic_host_alias(fields: &Mapping) -> Result<Option<String>, String> {
-  Ok(fields.get("host_auth_alias").and_then(serde_yaml::Value::as_str).map(str::to_string))
-}
-
-/// The synthetic entries name a launcher the way `cc-anthropic-compatible` entries do.
-fn synthetic_cli_binary(fields: &Mapping) -> Result<Option<String>, String> {
-  Ok(fields.get(SYNTHETIC_LAUNCHER_FIELD).and_then(serde_yaml::Value::as_str).map(str::to_string))
+/// A `config.yaml` whose `host_auth.browser_logins` holds one login per host, each renewing that host.
+fn host_auth_config(hosts: &[&str]) -> String {
+  let logins: String = hosts
+    .iter()
+    .map(|host| {
+      format!(
+        "    - name: {host}\n      label: {host}\n      host: {host}\n      login_command: [synthetic-login]\n      \
+         approval_url_pattern: synthetic\n      readback_command: [synthetic-readback]\n      input_prompt: \
+         synthetic-code\n      lifetime_sec: 86400\n"
+      )
+    })
+    .collect();
+  format!("host_auth:\n  browser_logins:\n{logins}")
 }
 
 /// The host verdicts the stub host readers serve, each with the profile home it belongs to, and each probe the stub
@@ -366,8 +354,25 @@ pub fn host_probe_count(home: &Path, alias: &str) -> usize {
 }
 
 fn register_host_auth_stub(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.config_section(ConfigSection {
+    key: "host_auth",
+    legacy_keys: &[],
+    parse: parse_host_auth,
+    dump: dump_host_auth,
+  })?;
   registry.host_logins(host_logins_stub)?;
   registry.host_probe(host_probe_stub)
+}
+
+/// The `host_auth` section as the cron loader reads it: its browser logins name the hosts a task may use.
+fn parse_host_auth(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
+  let settings: HostAuthConfig = serde_yaml::from_value(raw.clone()).map_err(|error| format!("host_auth: {error}"))?;
+  Ok(Arc::new(settings))
+}
+
+fn dump_host_auth(value: &SectionValue) -> Result<Value, String> {
+  let settings = value.downcast_ref::<HostAuthConfig>().ok_or("the host_auth section holds an unexpected value")?;
+  serde_json::to_value(settings).map_err(|error| error.to_string())
 }
 
 fn host_logins_stub(features: &FeatureContext) -> anyhow::Result<Vec<HostLogin>> {
@@ -532,6 +537,7 @@ async fn task_manager(
             keep_worktree: false,
             cold_read: None,
             approver: TaskApprover::User,
+            improve_host: None,
           }),
           name: Some("Synthetic cron manager".to_string()),
           backend: Some("synthetic".to_string()),
@@ -560,6 +566,9 @@ pub fn write_task_file(home: &Path, task: &crate::config::ScheduledTaskConfig) -
   }
   if let Some(backend) = &task.backend {
     body.insert("backend".to_string(), Value::String(backend.clone()));
+  }
+  if let Some(host) = &task.improve_host {
+    body.insert("improve_host".to_string(), Value::String(host.clone()));
   }
   if let Some(mode) = task.mode {
     let mode = match mode {

@@ -93,3 +93,70 @@ test('a featured stylesheet loads once per key, and a failed link retries', asyn
   appended[1].onload();
   await retry;
 });
+
+// The sidebar's interaction bundle (sidebar/namespace.js) on the same loader: one stylesheet and four scripts start
+// in one batch, the move picker's file waits for session-actions.js, and a failed file retries alone.
+const NAMESPACE_JS = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'sidebar', 'namespace.js'), 'utf8');
+
+function buildSidebarContext() {
+  const {context, appended} = buildContext();
+  const errors = [];
+  context.console = {error: (message) => errors.push(message)};
+  vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
+  context.Sidebar.deferSidebarInteractions();
+  return {context, appended, errors};
+}
+
+const nodeName = (node) => node.src || node.href;
+const SIDEBAR = '/static/js/sidebar/';
+
+test('the interaction bundle starts together, and the move picker waits for session-actions.js', async () => {
+  const {context, appended} = buildSidebarContext();
+
+  context.sidebarControl('archiveSession');
+  await settle();
+  assert.deepEqual(appended.map(nodeName), [
+    '/static/css/sidebar-interactions.css?v=v1',
+    SIDEBAR + 'row-menu.js?v=v1',
+    SIDEBAR + 'modals.js?v=v1',
+    SIDEBAR + 'session-actions.js?v=v1',
+    SIDEBAR + 'session-menus.js?v=v1',
+  ], 'one batch, and the picker is not requested while session-actions.js is in flight');
+
+  appended[3].onload();
+  await settle();
+  assert.equal(nodeName(appended[5]), SIDEBAR + 'session-move.js?v=v1');
+  assert.equal(appended.length, 6);
+});
+
+test('a failed interaction file retries alone, and the files that loaded never reload', async () => {
+  const {context, appended, errors} = buildSidebarContext();
+
+  context.sidebarControl('archiveSession');
+  await settle();
+  appended.filter((node) => nodeName(node) !== SIDEBAR + 'modals.js?v=v1').forEach((node) => node.onload());
+  appended.find((node) => nodeName(node) === SIDEBAR + 'modals.js?v=v1').onerror();
+  await settle();
+  assert.deepEqual(errors, ['the sidebar interaction scripts did not load: the page script did not load: '
+    + SIDEBAR + 'modals.js']);
+
+  context.sidebarControl('archiveSession');
+  await settle();
+  assert.deepEqual(appended.slice(6).map(nodeName), [SIDEBAR + 'modals.js?v=v1'],
+    'the retry asks for the failed file only');
+});
+
+test('a failed interaction stylesheet retries alone while its scripts are still loading', async () => {
+  const {context, appended, errors} = buildSidebarContext();
+
+  context.sidebarControl('archiveSession');
+  await settle();
+  appended[0].onerror();
+  await settle();
+  assert.deepEqual(errors, ['the page stylesheet did not load: /static/css/sidebar-interactions.css']);
+
+  context.sidebarControl('archiveSession');
+  await settle();
+  assert.deepEqual(appended.slice(5).map(nodeName), ['/static/css/sidebar-interactions.css?v=v1'],
+    'the retry asks for the failed stylesheet only');
+});

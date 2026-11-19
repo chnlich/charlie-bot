@@ -2,9 +2,10 @@
 // vm-context loader for web/static/js/sidebar/groups.js, shared by the node
 // --test harnesses that drive groups.js standalone. It holds one base context
 // carrying the globals renderSessionItem reaches for, then one load sequence:
-// createContext, sidebar/namespace.js, sidebar/status.js, sidebar/groups.js —
-// the page's order, which the row title rule needs: groups.js reads
-// sessionRowTitle, which status.js defines and the page loads first. The load
+// createContext, utils.js, sidebar/namespace.js, sidebar/status.js,
+// sidebar/groups.js — the page's order, which the row title rule needs:
+// groups.js reads sessionRowTitle, which status.js defines and the page loads
+// first, and the column-form reader, which utils.js defines. The load
 // order every suite depends on lives in one place. The indicator fakes return
 // after status.js's load, so the suites keep the empty indicators they had.
 // The sandbox `escapeHtmlAttr`
@@ -17,6 +18,7 @@ const vm = require('node:vm');
 const {readStatic, readPackageStatic} = require('./read_static');
 const {escapeHtml, escapeHtmlText} = require('./escape_html_stub');
 
+const UTILS_JS = readStatic('utils.js');
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const STATUS_JS = readStatic('sidebar/status.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
@@ -64,7 +66,13 @@ function loadGroups() {
   };
   context.globalThis = context;
   vm.createContext(context);
-  // namespace.js first, as on the page: it supplies the shared sidebar namespace.
+  // utils.js first, as on the page, which loads it ahead of every chat and sidebar module: groups.js reads
+  // expandSessionColumns and sessionUpdatedMs from it. Its real time forms replace the stubs above, so those land
+  // back after its load.
+  vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
+  context.relativeTime = () => 'Jul 29, 5:12 PM';
+  context.formatBubbleTime = () => '';
+  // namespace.js next: it supplies the shared sidebar namespace.
   vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
   vm.runInContext(STATUS_JS, context, {filename: 'status.js'});
   Object.assign(context, STATUS_FAKES);

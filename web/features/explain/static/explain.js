@@ -9,14 +9,8 @@
 // The lightbulb icon and the pending spinner: the four button states (none /
 // pending / ready / error) differ in icon and color class only. The state
 // applier swaps the button's inner SVG and never rebuilds the button itself.
-const EXPLAIN_BULB_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-  + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
-  + 'd="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707'
-  + 'm2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0'
-  + '-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>';
-const EXPLAIN_SPINNER_SVG = '<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">'
-  + '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>'
-  + '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>';
+const EXPLAIN_BULB_SVG = cbIcon('explain', 14);
+const EXPLAIN_SPINNER_SVG = cbIcon('loading', 14, 'animate-spin');
 const EXPLAIN_TITLE = 'Explain this round with a chosen model';
 
 // Every button state with the color class and icon it paints. The server and the

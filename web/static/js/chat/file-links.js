@@ -68,7 +68,7 @@ function resolveFileServerUrl(href) {
 // not resolve. It leaves alone a served link whose answer the package's own
 // fetch brings back.
 // ---------------------------------------------------------------------------
-var MISSING_FILE_MARKER_TEXT = '\u26A0 missing';
+var MISSING_FILE_MARKER_LABEL = 'missing';
 var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
 // Both recognition patterns cut a text run at the same boundaries, so the tail class is one
 // definition shared by both. URL_TAIL_CLASS holds the class. Each pattern appends its own
@@ -103,17 +103,22 @@ function registerFileLinkFamily(family) {
   fileLinkFamilies.set(family.name, family);
 }
 
+// The marker's mark is the warning icon; the label follows it.
+function missingMarkerInnerHtml() {
+  return cbIcon('warning', 12) + ' ' + MISSING_FILE_MARKER_LABEL;
+}
+
 function buildMissingMarker() {
   var marker = document.createElement('span');
   marker.className = 'file-link-missing';
   marker.title = MISSING_FILE_MARKER_TITLE;
-  marker.textContent = MISSING_FILE_MARKER_TEXT;
+  marker.innerHTML = missingMarkerInnerHtml();
   return marker;
 }
 
 function missingMarkerHtml() {
   return '<span class="file-link-missing" title="' + escapeHtml(MISSING_FILE_MARKER_TITLE) + '">'
-    + escapeHtml(MISSING_FILE_MARKER_TEXT) + '</span>';
+    + missingMarkerInnerHtml() + '</span>';
 }
 
 // One occurrence of a file link: the key its probe budget dedupes on. The key is the absolute

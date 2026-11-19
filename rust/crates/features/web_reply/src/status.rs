@@ -17,6 +17,7 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_registry::FeatureContext;
 use charliebot_store::compact::CompactValue;
+use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::{Store, session_channel};
 use charliebot_user_text_checks as user_text_checks;
@@ -233,7 +234,9 @@ fn effective_waiting(status: &WebStatus) -> Vec<WaitingItem> {
 /// The status as the API and the CLI return it, with each waiting item's start time filled in.
 fn status_payload(status: &WebStatus) -> Value {
   let mut payload = payload_of(status);
-  payload["waiting"] = serde_json::to_value(effective_waiting(status)).expect("waiting items serialize to JSON");
+  let waiting = effective_waiting(status);
+  payload["waiting_version"] = json!(waiting_version(&waiting));
+  payload["waiting"] = serde_json::to_value(waiting).expect("waiting items serialize to JSON");
   payload
 }
 
@@ -319,6 +322,26 @@ pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
 /// The item payload the digest covers: JSON with the keys sorted and non-ASCII text literal.
 const ITEM_DIGEST_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
+
+/// The first 16 hex characters of the digest of the ordered, effective Waiting on you items.
+fn waiting_version(items: &[WaitingItem]) -> String {
+  let payload = serde_json::to_value(items).expect("waiting items serialize to JSON");
+  let encoded = json_dumps(&payload, &ITEM_DIGEST_JSON);
+  charliebot_store::control_events::sha256_bytes_hex(encoded.as_bytes())[..16].to_string()
+}
+
+/// Add the fold's click references to the status payload without changing stored waiting items.
+fn status_payload_with_clicked(status: &WebStatus, clicked: &[(String, usize)]) -> Value {
+  let mut payload = status_payload(status);
+  let version = payload["waiting_version"].as_str().expect("a status payload has its waiting version").to_string();
+  let waiting = payload["waiting"].as_array_mut().expect("a status payload has a waiting list");
+  for (index, item) in waiting.iter_mut().enumerate() {
+    item["answered"] = json!(
+      clicked.iter().any(|(clicked_version, position)| { clicked_version == &version && *position == index + 1 })
+    );
+  }
+  payload
+}
 
 /// `status.item_sha256`: the SHA-256 that names an item as it stands, its three fields and then the bytes of the host
 /// file its link names, when that path is a file. A link to a missing path or to a directory adds no bytes.
@@ -656,7 +679,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     )
     .await?;
   for ancestor_id in ancestor_ids(&features.store, session_id).await? {
-    let notice = json!({"type": SUBTREE_NOTICE_TYPE, "source_session_id": session_id});
+    let notice = json!({"type": SUBTREE_NOTICE_TYPE, (SOURCE_SESSION_ID_FIELD): session_id});
     features.store.broadcast(&session_channel(&ancestor_id), notice).await?;
   }
   tracing::info!(session = %session_id, changed = ?changed, "web_status_set");
@@ -700,7 +723,14 @@ struct StatusTree {
   /// The open descendants, in depth-first order.
   open: Vec<String>,
   /// The open descendants that hold a stored status, in the same order.
-  statuses: Vec<(String, SessionMetadata, WebStatus)>,
+  statuses: Vec<StatusDescendant>,
+}
+
+struct StatusDescendant {
+  session_id: String,
+  metadata: SessionMetadata,
+  status: WebStatus,
+  clicked: Vec<(String, usize)>,
 }
 
 /// Read the session's subtree: the direct children, then each descendant's metadata and stored status while that
@@ -714,7 +744,8 @@ fn read_status_tree(store: &Store, session_id: &str) -> Result<StatusTree, WebRe
   for meta in store.open_descendants(session_id)? {
     let descendant_id = meta.id.clone();
     if let Some(status) = stored_status(&meta)? {
-      statuses.push((descendant_id.clone(), meta, status));
+      let clicked = if status.waiting.is_empty() { Vec::new() } else { store.facts_of(&descendant_id)?.clicked };
+      statuses.push(StatusDescendant { session_id: descendant_id.clone(), metadata: meta, status, clicked });
     }
     open.push(descendant_id);
   }
@@ -763,12 +794,13 @@ fn derived_payload(item: &OpenWaitingItem) -> Value {
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
-  let (tree, own_task_state) = tree_read_reply(&features.store, {
+  let (tree, own_task_state, own_clicked) = tree_read_reply(&features.store, {
     let session_id = session_id.to_string();
     move |store| {
       let tree = read_status_tree(store, &session_id)?;
       let own_task_state = store.task_state(&session_id)?;
-      Ok((tree, own_task_state))
+      let own_clicked = store.facts_of(&session_id)?.clicked;
+      Ok((tree, own_task_state, own_clicked))
     }
   })
   .await?;
@@ -776,44 +808,45 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   holders.extend(tree.open.iter().cloned());
   let derived = derived_items(features, Some(&holders)).await?;
   let mut rows: Vec<(UtcDateTime, Value)> = Vec::new();
-  for (descendant_id, child, child_status) in &tree.statuses {
-    if child_status.waiting.is_empty() {
+  for descendant in &tree.statuses {
+    if descendant.status.waiting.is_empty() {
       continue;
     }
-    let payload = status_payload(child_status);
+    let payload = status_payload_with_clicked(&descendant.status, &descendant.clicked);
     let row = json!({
-      "session_id": descendant_id,
-      "name": child.name,
-      "updated_at": child_status.updated_at.to_str(),
+      "session_id": descendant.session_id,
+      "name": descendant.metadata.name,
+      "updated_at": descendant.status.updated_at.to_str(),
+      "waiting_version": payload["waiting_version"],
       "waiting": payload["waiting"],
     });
-    rows.push((child_status.updated_at, row));
+    rows.push((descendant.status.updated_at, row));
   }
   rows.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
   let status_of: HashMap<&str, usize> =
-    tree.statuses.iter().enumerate().map(|(index, (id, _, _))| (id.as_str(), index)).collect();
+    tree.statuses.iter().enumerate().map(|(index, descendant)| (descendant.session_id.as_str(), index)).collect();
   let mut children: Vec<(UtcDateTime, Value)> = Vec::new();
   for child_id in &tree.children {
     let Some(index) = status_of.get(child_id.as_str()) else {
       continue;
     };
-    let (_, child, child_status) = &tree.statuses[*index];
-    let Some(now) = child_status.now.as_ref() else {
+    let child = &tree.statuses[*index];
+    let Some(now) = child.status.now.as_ref() else {
       continue;
     };
     let row = json!({
       "session_id": child_id,
-      "name": child.name,
+      "name": child.metadata.name,
       "now": now,
-      "updated_at": child_status.updated_at.to_str(),
+      "updated_at": child.status.updated_at.to_str(),
     });
-    children.push((child_status.updated_at, row));
+    children.push((child.status.updated_at, row));
   }
   children.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
   Ok(json!({
     "session_id": session_id,
     "own_task_state": own_task_state,
-    (WEB_STATUS): stored.as_ref().map(status_payload),
+    (WEB_STATUS): stored.as_ref().map(|status| status_payload_with_clicked(status, &own_clicked)),
     "derived_waiting": derived.iter().map(derived_payload).collect::<Vec<_>>(),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
     "children": children.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
@@ -934,6 +967,15 @@ mod tests {
     )
     .await
     .expect("the waiting item cold read records");
+  }
+
+  fn waiting_click(session_id: &str, version: &str, since: &str, position: usize) -> Value {
+    json!({
+      "type": "user",
+      "content": format!(
+        "[Status · Waiting on you]\n1. ▸ Waiting on you · session {session_id} · list {version} · since {since} · #{position}\n   ↳ Done"
+      )
+    })
   }
 
   /// The status response without its transient Now budget fields.
@@ -1209,9 +1251,193 @@ mod tests {
       json!([{
         "text": "decision",
         "context": "The decision is active now. Options are continue or stop; continue is recommended.",
-        "link": null
+        "link": null,
+        "answered": false
       }])
     );
+  }
+
+  #[tokio::test]
+  async fn status_read_adds_versions_and_position_answers_for_own_and_descendant_items() {
+    let home = Home::status_only();
+    let (root, child) = ("root", "child");
+    home.seed_manager(root, None);
+    home.seed_manager(child, Some(root));
+    let duplicate_items = json!([
+      {
+        "text": "Decide the layout",
+        "context": "The decision is active now.",
+        "link": null,
+        "since": "2026-11-06T16:50:57.752710Z",
+        "since_exact": true,
+      },
+      {
+        "text": "Decide the layout",
+        "context": "The decision is active now.",
+        "link": null,
+        "since": "2026-11-06T16:51:57.752710Z",
+        "since_exact": true,
+      },
+    ]);
+    write_stored_status(
+      &home,
+      root,
+      json!({
+        "goal": "Ship the panel",
+        "now": "Reviewing",
+        "waiting": duplicate_items,
+        "updated_at": "2026-11-06T17:00:00Z",
+      }),
+    )
+    .await;
+    write_stored_status(
+      &home,
+      child,
+      json!({
+        "goal": null,
+        "now": null,
+        "waiting": [{
+          "text": "Review the child result",
+          "context": "The result is ready.",
+          "link": null,
+          "since": "2026-11-06T16:52:57.752710Z",
+          "since_exact": true,
+        }],
+        "updated_at": "2026-11-06T17:01:00Z",
+      }),
+    )
+    .await;
+
+    let before = read_status(&home.features, root).await.expect("the status reads");
+    let own_version = before["web_status"]["waiting_version"].as_str().unwrap().to_string();
+    let own_since = before["web_status"]["waiting"][1]["since"].as_str().unwrap().to_string();
+    let child_version = before["descendants"][0]["waiting_version"].as_str().unwrap().to_string();
+    let child_since = before["descendants"][0]["waiting"][0]["since"].as_str().unwrap().to_string();
+    assert_eq!(own_version.len(), 16);
+    assert!(own_version.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+    assert_eq!(before["web_status"]["waiting"][0]["answered"], json!(false));
+
+    home.append(root, waiting_click(root, &own_version, &own_since, 2)).await;
+    home.append(child, waiting_click(child, &child_version, &child_since, 1)).await;
+    let after = read_status(&home.features, root).await.expect("the status reads after the clicks");
+
+    assert_eq!(after["web_status"]["waiting_version"], json!(own_version));
+    assert_eq!(
+      after["web_status"]["waiting"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["answered"].as_bool().unwrap())
+        .collect::<Vec<_>>(),
+      [false, true],
+      "identical text still resolves to the clicked 1-based position"
+    );
+    assert_eq!(after["descendants"][0]["waiting_version"], json!(child_version));
+    assert_eq!(after["descendants"][0]["waiting"][0]["answered"], json!(true));
+  }
+
+  #[tokio::test]
+  async fn answered_survives_now_and_confirm_but_tracks_the_current_list_version() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let original = waiting_item("Pick a layout");
+    check_waiting_item(&home, &sid, "Pick a layout").await;
+    set_status(&home.features, &sid, &json!({"waiting": [original.clone()]}).to_string())
+      .await
+      .expect("the first set stores");
+    let initial = read_status(&home.features, &sid).await.expect("the status reads");
+    let initial_version = initial["web_status"]["waiting_version"].as_str().unwrap().to_string();
+    let since = initial["web_status"]["waiting"][0]["since"].as_str().unwrap().to_string();
+    home.append(&sid, waiting_click(&sid, &initial_version, &since, 1)).await;
+    assert_eq!(read_status(&home.features, &sid).await.unwrap()["web_status"]["waiting"][0]["answered"], json!(true));
+
+    set_status(&home.features, &sid, VALID_SET).await.expect("the Now-only set stores");
+    let after_now = read_status(&home.features, &sid).await.expect("the status reads after Now");
+    assert_eq!(after_now["web_status"]["waiting_version"], json!(initial_version));
+    assert_eq!(after_now["web_status"]["waiting"][0]["answered"], json!(true));
+
+    confirm_status(&home.features, &sid).await.expect("the status confirms");
+    assert_eq!(
+      read_status(&home.features, &sid).await.unwrap()["web_status"]["waiting"][0]["answered"],
+      json!(true),
+      "confirm leaves clicked facts available"
+    );
+
+    let changed = json!({
+      "text": "Pick a layout",
+      "context": "The user has not reviewed the revised layout yet.",
+      "link": null,
+    });
+    record_ask_check(&home.features, &sid, &changed, "synthetic-haiku", "The revised layout is ready.")
+      .await
+      .expect("the changed item cold read records");
+    set_status(&home.features, &sid, &json!({"waiting": [changed.clone()]}).to_string())
+      .await
+      .expect("the context edit stores");
+    let after_edit = read_status(&home.features, &sid).await.expect("the status reads after the edit");
+    let changed_version = after_edit["web_status"]["waiting_version"].as_str().unwrap().to_string();
+    let changed_since = after_edit["web_status"]["waiting"][0]["since"].as_str().unwrap().to_string();
+    assert_ne!(changed_version, initial_version);
+    assert_eq!(after_edit["web_status"]["waiting"][0]["answered"], json!(false));
+
+    home.append(&sid, waiting_click(&sid, &initial_version, &since, 1)).await;
+    assert_eq!(
+      read_status(&home.features, &sid).await.unwrap()["web_status"]["waiting"][0]["answered"],
+      json!(false),
+      "a stale-version click does not mark the current item"
+    );
+    home.append(&sid, waiting_click(&sid, &changed_version, &changed_since, 1)).await;
+    assert_eq!(read_status(&home.features, &sid).await.unwrap()["web_status"]["waiting"][0]["answered"], json!(true));
+    home.append(&sid, waiting_click(&sid, &initial_version, &since, 1)).await;
+    assert_eq!(
+      read_status(&home.features, &sid).await.unwrap()["web_status"]["waiting"][0]["answered"],
+      json!(true),
+      "a late stale-version click does not clear the current mark"
+    );
+
+    record_ask_check(&home.features, &sid, &original, "synthetic-haiku", "The options are continue or stop.")
+      .await
+      .expect("the restored item cold read records");
+    set_status(&home.features, &sid, &json!({"waiting": [original]}).to_string())
+      .await
+      .expect("the original list stores again");
+    let restored = read_status(&home.features, &sid).await.expect("the status reads after restoration");
+    assert_eq!(restored["web_status"]["waiting_version"], json!(initial_version));
+    assert_eq!(restored["web_status"]["waiting"][0]["answered"], json!(true));
+  }
+
+  #[tokio::test]
+  async fn a_legacy_item_keeps_its_answer_when_now_stores_its_effective_since() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    write_stored_status(
+      &home,
+      &sid,
+      json!({
+        "goal": null,
+        "now": null,
+        "waiting": [{
+          "text": "Review the old item",
+          "context": "The item predates per-item start times.",
+          "link": null,
+        }],
+        "updated_at": "2026-11-01T12:00:00Z",
+      }),
+    )
+    .await;
+    let before = read_status(&home.features, &sid).await.expect("the legacy status reads");
+    let version = before["web_status"]["waiting_version"].as_str().unwrap().to_string();
+    let since = before["web_status"]["waiting"][0]["since"].as_str().unwrap().to_string();
+    assert_eq!(since, "2026-11-01T12:00:00Z");
+    home.append(&sid, waiting_click(&sid, &version, &since, 1)).await;
+    assert_eq!(read_status(&home.features, &sid).await.unwrap()["web_status"]["waiting"][0]["answered"], json!(true));
+
+    set_status(&home.features, &sid, VALID_SET).await.expect("the Now-only set stores");
+    let after = read_status(&home.features, &sid).await.expect("the status reads after Now");
+    assert_eq!(after["web_status"]["waiting_version"], json!(version));
+    assert_eq!(after["web_status"]["waiting"][0]["since"], json!(since));
+    assert_eq!(after["web_status"]["waiting"][0]["since_exact"], json!(false));
+    assert_eq!(after["web_status"]["waiting"][0]["answered"], json!(true));
   }
 
   #[tokio::test]
@@ -2285,6 +2511,23 @@ mod tests {
     let root = home.manager("status-root", None).await;
     let child = home.child(&root, "status-child").await;
     home.append(&child, json!({"type": "user", "content": "a pending question"})).await;
+    write_stored_status(
+      &home,
+      &child,
+      json!({
+        "goal": null,
+        "now": null,
+        "waiting": [{
+          "text": "Answer the pending question",
+          "context": "The question is open.",
+          "link": null,
+          "since": "2026-11-01T12:00:00Z",
+          "since_exact": true,
+        }],
+        "updated_at": "2026-11-01T12:00:00Z",
+      }),
+    )
+    .await;
     let index_before = home.features.store.task_tree_index_build_count();
 
     read_status(&home.features, &root).await.expect("the status reads");

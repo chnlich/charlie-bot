@@ -10,12 +10,17 @@ use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow};
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::{fsutil, home};
+use charliebot_registry::Registry;
+use charliebot_registry::backend::QuotaOutlook;
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, UtcOffset};
+
+use crate::temporary_unavailable::is_temporary_unavailable_error;
 
 /// The cooling a member failure that states no reset time records.
 pub const DEFAULT_COOLDOWN: Duration = Duration::minutes(30);
@@ -98,20 +103,54 @@ impl BackendAvailability {
     Ok(Self { path })
   }
 
-  /// Record that `backend_id` is out until its reset, or for [`DEFAULT_COOLDOWN`] when the error states no reset, and
-  /// persist the state. Return the instant the option becomes selectable again.
+  /// Record that `backend_id` is out, and return the instant it becomes selectable again. This is the one write entry
+  /// for every member failure.
+  ///
+  /// A quota failure of a login-pooled option asks the pool first. While a login can still run the option's model, no
+  /// row is written and the kept record is logged. Otherwise the row runs until the pool's earliest reset for the model,
+  /// then the failure's stated reset, then [`DEFAULT_COOLDOWN`]. Every other failure runs until its stated reset, or
+  /// for [`DEFAULT_COOLDOWN`] when it states none. `None` means the row was kept.
   ///
   /// The write is a read-merge-write under an exclusive file lock, so a row another process recorded since this one
   /// last read the file survives.
   pub fn record(
     &self,
+    cfg: &CharlieBotConfig,
+    registry: &Registry,
     backend_id: &str,
     resets_at: Option<UtcDateTime>,
     reason: &str,
     detail: &str,
-  ) -> anyhow::Result<OffsetDateTime> {
+  ) -> anyhow::Result<Option<OffsetDateTime>> {
+    // A temporary failure (a 5xx, an overload, a dropped connection) is not a spent quota, so it keeps its own cooldown.
+    // A configured type that no package registered has no login pool to ask.
+    let pooled = match cfg.get_backend_option(backend_id) {
+      Some(option)
+        if reason == REASON_QUOTA_ERROR
+          && !is_temporary_unavailable_error(detail)
+          && registry.backend_type_of(&option.backend_type).is_some() =>
+      {
+        registry.lifecycle_for(&option.backend_type)?.quota_outlook(option, cfg)?.map(|outlook| (option, outlook))
+      }
+      _ => None,
+    };
+    let stated = match pooled {
+      Some((option, QuotaOutlook { can_run: true, .. })) => {
+        tracing::info!(
+          target: "charliebot_agents",
+          member = backend_id,
+          model = %option.model,
+          reason,
+          "backend_availability_kept"
+        );
+        return Ok(None);
+      }
+      Some((_, QuotaOutlook { earliest_reset, .. })) => earliest_reset.or(resets_at),
+      None => resets_at,
+    };
     let out_until =
-      resets_at.map(UtcDateTime::into_inner).unwrap_or_else(|| UtcDateTime::now().into_inner() + DEFAULT_COOLDOWN);
+      stated.map(UtcDateTime::into_inner).unwrap_or_else(|| UtcDateTime::now().into_inner() + DEFAULT_COOLDOWN);
+    let reset_known = stated.is_some();
     let row = AvailabilityRow {
       out_until: out_until.into(),
       reason: reason.to_string(),
@@ -128,10 +167,10 @@ impl BackendAvailability {
       member = backend_id,
       until = %format_minutes(out_until),
       reason,
-      reset_known = resets_at.is_some(),
+      reset_known,
       "backend_availability_recorded"
     );
-    Ok(out_until)
+    Ok(Some(out_until))
   }
 
   /// Return the stored row for a backend, whether or not it has passed, from the file's current state.
@@ -218,6 +257,12 @@ pub(crate) fn format_minutes(datetime: OffsetDateTime) -> String {
 mod tests {
   use super::*;
 
+  /// The config and registry of a home with no backend option, so every record is a plain row.
+  fn plain_config(home: &Path) -> (CharlieBotConfig, Registry) {
+    let cfg = charliebot_core::config::load_config(home, &Default::default()).unwrap();
+    (cfg, Registry::new())
+  }
+
   #[test]
   fn a_missing_file_loads_an_empty_state() {
     let home = tempfile::tempdir().unwrap();
@@ -228,10 +273,11 @@ mod tests {
   #[test]
   fn a_second_owner_from_the_same_home_shares_rows_without_dropping_them() {
     let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
     let first = BackendAvailability::load(home.path()).unwrap();
     let second = BackendAvailability::load(home.path()).unwrap();
-    first.record("a", None, REASON_QUOTA_ERROR, "a is spent").unwrap();
-    second.record("b", None, REASON_QUOTA_ERROR, "b is spent").unwrap();
+    first.record(&cfg, &registry, "a", None, REASON_QUOTA_ERROR, "a is spent").unwrap();
+    second.record(&cfg, &registry, "b", None, REASON_QUOTA_ERROR, "b is spent").unwrap();
 
     assert!(first.out_until("b").is_some(), "the first owner sees the second owner's row");
     assert!(second.out_until("a").is_some(), "the second owner sees the first owner's row");
@@ -244,9 +290,13 @@ mod tests {
   #[test]
   fn a_record_survives_a_rebuild_from_the_same_home() {
     let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
     let availability = BackendAvailability::load(home.path()).unwrap();
     let reset = UtcDateTime::parse("2030-01-02T03:04:05Z").unwrap();
-    let out_until = availability.record("member", Some(reset), REASON_QUOTA_ERROR, "quota is spent").unwrap();
+    let out_until = availability
+      .record(&cfg, &registry, "member", Some(reset), REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap()
+      .expect("a quota record without a login pool is written");
 
     let reloaded = BackendAvailability::load(home.path()).unwrap();
     assert_eq!(reloaded.out_until("member").unwrap(), out_until);
@@ -257,8 +307,12 @@ mod tests {
   #[test]
   fn a_record_without_a_stated_reset_uses_the_default_cooldown() {
     let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
     let availability = BackendAvailability::load(home.path()).unwrap();
-    let out_until = availability.record("member", None, REASON_QUOTA_ERROR, "quota is spent").unwrap();
+    let out_until = availability
+      .record(&cfg, &registry, "member", None, REASON_QUOTA_ERROR, "quota is spent")
+      .unwrap()
+      .expect("a quota record without a login pool is written");
     let remaining = out_until - OffsetDateTime::now_utc();
     assert!(remaining >= DEFAULT_COOLDOWN - Duration::seconds(5));
     assert!(remaining <= DEFAULT_COOLDOWN + Duration::seconds(5));
@@ -267,9 +321,17 @@ mod tests {
   #[test]
   fn the_written_file_parses_and_leaves_no_staging_file() {
     let home = tempfile::tempdir().unwrap();
+    let (cfg, registry) = plain_config(home.path());
     let availability = BackendAvailability::load(home.path()).unwrap();
     availability
-      .record("member", Some(UtcDateTime::parse("2030-01-02T03:04:05Z").unwrap()), REASON_TIMEOUT, "judge timed out")
+      .record(
+        &cfg,
+        &registry,
+        "member",
+        Some(UtcDateTime::parse("2030-01-02T03:04:05Z").unwrap()),
+        REASON_TIMEOUT,
+        "judge timed out",
+      )
       .unwrap();
 
     let path = home::backend_availability_path(home.path());

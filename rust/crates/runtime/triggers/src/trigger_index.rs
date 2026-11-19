@@ -138,7 +138,7 @@ pub(crate) fn served_count() -> usize {
   SERVED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Reset the served-row count a test reads.
+/// The reset of the served-row count a test reads.
 #[cfg(test)]
 pub(crate) fn reset_served_count() {
   SERVED.store(0, std::sync::atomic::Ordering::Relaxed);

@@ -42,7 +42,7 @@ const SESSION_REQUEST: &str = "improve-port-manager";
 const TEST_BACKEND_TYPE: &str = "improve_port_script";
 const QUOTA_RESET: &str = "2999-01-01T00:00:00Z";
 /// Write-class git limit for the loop tests. The test hook's 300 ms cap times out a `git worktree add` that a loaded
-/// host delays, and the loop then fails before its first run; this limit lets the add finish.
+/// host delays, and the loop then fails before its first run. This limit lets the add finish.
 const LOOP_GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 static QUOTA_REJECTED_HOMES: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -166,6 +166,7 @@ impl LoopHarness {
           keep_worktree: false,
           cold_read: None,
           approver: TaskApprover::User,
+          improve_host: None,
         }),
       )
       .await?;
@@ -447,7 +448,10 @@ async fn a_model_and_singleton_pool_select_the_same_improve_iteration_backend() 
 #[ignore = "integration"]
 async fn a_cooling_model_refuses_an_improve_iteration_with_the_exhaustion_message() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], Vec::new()).await?;
-  charliebot_agents::backend_availability::backend_availability(&harness.stack.features)?.record(
+  let features = &harness.stack.features;
+  charliebot_agents::backend_availability::backend_availability(features)?.record(
+    &*features.config.get()?,
+    &features.registry,
     "fake",
     None,
     charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
@@ -464,7 +468,10 @@ async fn a_cooling_model_refuses_an_improve_iteration_with_the_exhaustion_messag
   drop(harness);
 
   let pool_harness = LoopHarness::new(&["fake"], &[], Vec::new()).await?;
-  charliebot_agents::backend_availability::backend_availability(&pool_harness.stack.features)?.record(
+  let features = &pool_harness.stack.features;
+  charliebot_agents::backend_availability::backend_availability(features)?.record(
+    &*features.config.get()?,
+    &features.registry,
     "fake",
     None,
     charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
@@ -968,6 +975,7 @@ async fn an_improve_request_naming_a_pool_launches_on_its_member() -> anyhow::Re
         keep_worktree: false,
         cold_read: None,
         approver: TaskApprover::User,
+        improve_host: None,
       }),
     )
     .await?;

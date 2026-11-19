@@ -46,6 +46,8 @@ pub use sources::{
 pub const SNAPSHOT_FILENAME: &str = "prompt_snapshot.json";
 /// The launch text file a run directory holds (`LAUNCH_TEXT_FILENAME`).
 pub const LAUNCH_TEXT_FILENAME: &str = "launch_prompt.md";
+/// The handoff note file a manager run directory holds for a turn-start pool switch (`HANDOFF_NOTE_FILENAME`).
+pub const HANDOFF_NOTE_FILENAME: &str = "handoff_note.md";
 
 /// The run kinds that take the manager contract (`MANAGER_KINDS`).
 pub const MANAGER_KINDS: [&str; 1] = [RunKind::ManagerTurn.as_str()];

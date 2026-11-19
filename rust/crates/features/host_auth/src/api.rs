@@ -510,8 +510,9 @@ host_auth:
     }
   }
 
-  /// Points the process at the home: its state file through `CHARLIEBOT_HOME`, its ssh config through `HOME`. The caller
-  /// holds the round-slot lock, which every test that sets these variables takes, and keeps the returned guard under it.
+  /// The guard that points the process at the home: its state file through `CHARLIEBOT_HOME`, its ssh config through
+  /// `HOME`. The caller holds the round-slot lock, which every test that sets these variables takes, and keeps the
+  /// returned guard under it.
   fn use_home(home: &Home) -> HomeEnv {
     let ssh = home.dir.path().join(".ssh");
     fs::create_dir_all(&ssh).expect("the ssh directory creates");

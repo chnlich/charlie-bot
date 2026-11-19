@@ -24,9 +24,11 @@ This rule decides the reply language for every summoner, the operator included. 
 The reply reaches the thread through the reply command named on the platform line of this session's thread reply
 contract, run from the session directory with `--file <path>`: the command posts the file's text to the summoning
 thread and prints a readback with the character count. A round that answers a summon posts exactly one reply this
-way; everything addressed to the operator stays in the session, since nothing else is posted. A reply links only a
-published page. The reply path posts your text as written, so a CharlieBot file-server link refuses the whole reply.
+way. A wake with a blocker report for an action only the operator can take posts one reply that names the action and
+includes the full URL named in that report, if it has one. Every other line addressed to the operator stays in the
+session. A reply links only a published page or an application-route URL. The reply path posts your text as written, so
+a CharlieBot file-server link refuses the whole reply.
 
-Every sentence of the reply speaks to the thread and answers the summoner.
+Every sentence of the reply speaks to the thread, answers the summoner, or names an action only the operator can take.
 
 Write plain prose, with links spelled out as full URLs.

@@ -36,10 +36,10 @@
   .alias { display:block; font-family:var(--mono); font-size:13px; font-weight:600; overflow-wrap:anywhere }
   .fqdn { font-family:var(--mono); font-size:11.5px; color:var(--mut2); display:block; overflow-wrap:anywhere }
   .st { display:inline-flex; align-items:center; gap:7px; font-size:12.5px; font-weight:600; white-space:nowrap }
-  .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; background:var(--off) }
-  tr[data-state="ok"] .dot { background:var(--ok) }
-  tr[data-state="needs_user"] .dot { background:var(--warn) }
-  tr[data-state="broken"] .dot { background:var(--bad) }
+  .dot { flex:0 0 auto; color:var(--off) }
+  tr[data-state="ok"] .dot { color:var(--ok) }
+  tr[data-state="needs_user"] .dot { color:var(--warn) }
+  tr[data-state="broken"] .dot { color:var(--bad) }
   tr[data-state="ok"] .st { color:var(--ok) }
   tr[data-state="needs_user"] .st { color:var(--warn) }
   tr[data-state="broken"] .st { color:var(--bad) }
@@ -96,7 +96,10 @@
   </div>
   <p class="err" id="page-error" hidden></p>
 
+  {#- An empty body draws no column head: the head names columns that hold no cell. A phone already
+      hides it. -#}
   <table>
+    {% if rows %}
     <thead>
       <tr>
         <th style="width:24%">Row</th>
@@ -104,6 +107,7 @@
         <th>Next step</th>
       </tr>
     </thead>
+    {% endif %}
     <tbody>
       {% for row in rows %}
       <tr data-row="{{ row.id }}" data-row-url="{{ row.row_url }}" data-kind="{{ row.kind }}" data-name="{{ row.name }}" data-state="{{ row.state }}"
@@ -115,7 +119,7 @@
           {% if row.kind == "login" and row.alias %}<span class="fqdn">via {{ row.alias }}</span>{% endif %}
         </td>
         <td data-l="Status">
-          <span class="st"><i class="dot"></i><span data-f="state_label">{{ row.state_label }}</span></span>
+          <span class="st">{{ icon('dot', 9, 'dot') }}<span data-f="state_label">{{ row.state_label }}</span></span>
           <div class="det" data-f="detail">{{ row.detail }}</div>
           <div class="at" data-f="checked_text">{{ row.checked_text }}</div>
           <div class="cd{% if row.expiry_soon %} amber{% endif %}" data-f="expiry_text" data-amber="expiry_soon">{{ row.expiry_text }}</div>

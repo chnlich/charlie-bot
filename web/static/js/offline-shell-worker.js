@@ -257,7 +257,8 @@ async function refreshCopies() {
 
 function sessionIdOf(url) {
   const match = /^\/api\/sessions\/([^/]+)\/bootstrap$/.exec(url.pathname);
-  return match ? decodeURIComponent(match[1]) : null;
+  if (match) return decodeURIComponent(match[1]);
+  return url.pathname === '/api/sessions/' ? url.searchParams.get('active') : null;
 }
 
 async function storeCopy(url, response) {
@@ -303,7 +304,7 @@ async function touchSession(cache, sessionId) {
   await writeIndex(cache, index);
 }
 
-// Quota is short: the session opened longest ago loses its first screen. The session being stored is not
+// Quota is short: the session opened longest ago loses its stored pages. The session being stored is not
 // evicted. Returns false when no other session is stored.
 async function evictOldestSession(cache, keepSessionId) {
   const index = await readIndex(cache);
@@ -311,7 +312,9 @@ async function evictOldestSession(cache, keepSessionId) {
   if (candidates.length === 0) return false;
   candidates.sort((a, b) => a[1] - b[1]);
   const [oldestId] = candidates[0];
-  await cache.delete(new URL('/api/sessions/' + oldestId + '/bootstrap', self.location.origin).href);
+  for (const request of await cache.keys()) {
+    if (sessionIdOf(new URL(request.url)) === oldestId) await cache.delete(request);
+  }
   delete index.sessions[oldestId];
   await writeIndex(cache, index);
   return true;

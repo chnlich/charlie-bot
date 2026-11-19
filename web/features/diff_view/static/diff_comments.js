@@ -57,7 +57,9 @@
 
   function mostRecentSessionId(items) {
     if (items.length === 0) return null;
-    return items.slice().sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0].id;
+    // The list's rows carry updated_at as the column form's epoch minutes, and a query session's detail row as an
+    // ISO string; sessionUpdatedMs (utils.js) reads both.
+    return items.slice().sort((a, b) => sessionUpdatedMs(b) - sessionUpdatedMs(a))[0].id;
   }
 
   // The line range an entry names: one line, or its first and last.
@@ -156,9 +158,9 @@
         border-top: 1px solid #93c5fd; border-bottom: 1px solid #93c5fd;
       }
       /* A field's border is the only mark of its box. slate-300 draws 1.48:1 on the tray's
-         white panel and 1.42:1 on the editor row's #f8fafc, under the 3:1 floor WCAG 1.4.11
-         sets for a UI component boundary. slate-500 draws 4.76:1, the tone the diff form's
-         fields keep. The focus rule below paints blue over it. */
+         white panel and 1.42:1 on the editor row's #f8fafc. Both fall under the 3:1 floor
+         WCAG 1.4.11 sets for a UI component boundary. slate-500 draws 4.76:1, the tone the
+         diff form's fields keep. The focus rule below paints blue over it. */
       .${PREFIX}-editor textarea, .${PREFIX}-tray textarea {
         box-sizing: border-box; width: 100%; resize: vertical; border: 1px solid #64748b;
         border-radius: 6px; padding: 7px 8px; color: #0f172a; background: white;
@@ -178,9 +180,10 @@
          their own, under the 24 px pointer floor the editor's other controls keep. */
       .${PREFIX}-suggestion { display: flex; align-items: center; gap: 5px; margin-right: auto; font-size: 12px; min-height: 24px; }
       /* A secondary button fills white, so its border is the only mark of its box. slate-300 draws
-         1.42:1 on the editor row and 1.48:1 on the tray's white panel, under the 3:1 floor WCAG
-         1.4.11 sets for a UI component boundary. slate-500 draws 4.55:1 and 4.76:1, the tone the
-         fields in both surfaces keep. The primary and send rules below paint blue over it. */
+         1.42:1 on the editor row and 1.48:1 on the tray's white panel. Both fall under the 3:1
+         floor WCAG 1.4.11 sets for a UI component boundary. slate-500 draws 4.55:1 and 4.76:1,
+         the tone the fields in both surfaces keep. The primary and send rules below paint blue
+         over it. */
       .${PREFIX}-editor button, .${PREFIX}-tray button {
         border: 1px solid #64748b; border-radius: 6px; padding: 5px 9px;
         background: white; color: #334155; font: 12px system-ui, sans-serif; cursor: pointer;
@@ -347,7 +350,7 @@
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `${PREFIX}-add`;
-    button.textContent = '+';
+    button.innerHTML = cbIcon('comment', 12);
     button.title = 'Add a line comment';
     button.setAttribute('aria-label', 'Add a line comment');
     button.addEventListener('mousedown', (event) => {
@@ -637,10 +640,12 @@
     refreshTray();
   }
 
+  // The target picker's rows: the sidebar's column form of the same corpus. It carries the id, name and updated_at
+  // this tray reads and no other field, at about a fifth of the row array's bytes for the same sessions.
   async function fetchSessions() {
-    const response = await fetch('/api/sessions/', { credentials: 'same-origin' });
+    const response = await fetch('/api/sessions/?compact=1', { credentials: 'same-origin' });
     if (!response.ok) throw new Error(`Session list fetch failed: HTTP ${response.status}`);
-    return response.json();
+    return expandSessionColumns(await response.json());
   }
 
   async function fetchQuerySession(id) {

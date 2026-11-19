@@ -15,8 +15,9 @@ use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::git::TRASH_DIR_NAME;
 use charliebot_core::human_size::format_size;
+use charliebot_core::os_error;
 use charliebot_core::paths;
-use charliebot_core::text_repr::format_f;
+use charliebot_core::text_repr::{format_f, str_repr};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -74,6 +75,13 @@ fn run(trash_path: &Path, yes: bool) -> Result<(), CliExit> {
   Ok(())
 }
 
+/// The text a failed trash operation prints: Python's `str(OSError)`, which names the entry by its repr.
+///
+/// `charliebot_core::os_error::text` owns the sentence, so the path arrives here in one pair of quotes.
+fn failure_text(error: &std::io::Error, path: &str) -> String {
+  os_error::text(error, &str_repr(path))
+}
+
 /// Every top-level child of the trash directory with its age (since the entry's own last
 /// modification, never negative) and recursive size.
 fn list_trash_entries(trash_path: &Path, now: SystemTime) -> Result<Vec<TrashEntry>, CliExit> {
@@ -82,15 +90,15 @@ fn list_trash_entries(trash_path: &Path, now: SystemTime) -> Result<Vec<TrashEnt
   }
   let now_seconds = unix_seconds(now);
   let mut children: Vec<PathBuf> = std::fs::read_dir(trash_path)
-    .map_err(|error| CliExit::error(os_error(&paths::display(trash_path), &error)))?
+    .map_err(|error| CliExit::error(failure_text(&error, &paths::display(trash_path))))?
     .map(|entry| entry.map(|entry| entry.path()))
     .collect::<Result<_, _>>()
-    .map_err(|error| CliExit::error(os_error(&paths::display(trash_path), &error)))?;
+    .map_err(|error| CliExit::error(failure_text(&error, &paths::display(trash_path))))?;
   children.sort_by(|first, second| first.as_os_str().cmp(second.as_os_str()));
   let mut entries = Vec::new();
   for child in children {
-    let metadata =
-      std::fs::symlink_metadata(&child).map_err(|error| CliExit::error(os_error(&paths::display(&child), &error)))?;
+    let metadata = std::fs::symlink_metadata(&child)
+      .map_err(|error| CliExit::error(failure_text(&error, &paths::display(&child))))?;
     let age_seconds = now_seconds - modified_seconds(&metadata);
     entries.push(TrashEntry {
       size_bytes: dir_size_bytes(&child),
@@ -134,14 +142,14 @@ fn purge(entries: &[TrashEntry]) -> bool {
           eprintln!(
             "PERMISSION DENIED: {} ({}); contains root-owned files — remove manually with: sudo rm -rf {}",
             entry.path.display(),
-            os_error(&entry.path.display().to_string(), &error),
+            failure_text(&error, &entry.path.display().to_string()),
             entry.path.display()
           );
         } else {
           eprintln!(
             "FAILED to delete {}: {}",
             entry.path.display(),
-            os_error(&entry.path.display().to_string(), &error)
+            failure_text(&error, &entry.path.display().to_string())
           );
         }
       }
@@ -159,18 +167,6 @@ fn unix_seconds(moment: SystemTime) -> f64 {
 
 fn modified_seconds(metadata: &std::fs::Metadata) -> f64 {
   metadata.modified().map(unix_seconds).unwrap_or(0.0)
-}
-
-/// `str(OSError)` with a filename: `[Errno N] <strerror>: '<path>'`.
-fn os_error(path: &str, error: &std::io::Error) -> String {
-  match error.raw_os_error() {
-    Some(errno) => {
-      let text = error.to_string();
-      let strerror = text.strip_suffix(&format!(" (os error {errno})")).unwrap_or(&text);
-      format!("[Errno {errno}] {strerror}: '{}'", charliebot_core::text_repr::str_repr(path))
-    }
-    None => format!("{error}: '{path}'"),
-  }
 }
 
 #[cfg(test)]
@@ -198,5 +194,14 @@ mod tests {
     assert!(!trash.join("charliebot-task-b").exists());
     // The trash dir itself remains; it is just empty now.
     assert_eq!(std::fs::read_dir(&trash).unwrap().count(), 0);
+  }
+
+  #[test]
+  fn a_failed_entry_prints_its_path_in_one_pair_of_quotes() {
+    let error = std::io::Error::from_raw_os_error(2);
+    assert_eq!(
+      failure_text(&error, "/trash/charliebot-task-a"),
+      "[Errno 2] No such file or directory: '/trash/charliebot-task-a'"
+    );
   }
 }

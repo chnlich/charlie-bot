@@ -1,26 +1,23 @@
 #!/usr/bin/env bash
 # Launch one improve run on the host that can run it.
 #
-#   dev/improve/remote-launch.sh <claude arguments...>
+#   dev/improve/remote-launch.sh <agent binary> <agent arguments...>
 #
-# The backend starts this script where it would start `claude`, with claude's arguments,
-# environment, stdin and stdout. The session id in that environment decides the kind of run.
+# The server starts this script where it would start the agent, with the agent's arguments, environment, stdin and
+# stdout. The basename of the agent binary names the member kind: `claude` or `codex`. Any other kind exits 7 before
+# anything is sent.
 #
-# A round runs on the host named by IMPROVE_REMOTE_HOST (host config only, because the repository
-# is public). The script connects there, sends the round's inputs, runs
-# dev/improve/remote-runner.sh and passes claude's stdin and stdout through unchanged.
-# No command of the round runs on this host, so a round that forgets a variable, sets a wrong
-# path or runs rm cannot reach this host's profile home or runtime clone: on 2026-10-04 a round's
-# own probe deleted the whole profile home.
+# A round runs on the host named by IMPROVE_REMOTE_HOST (host config only, because the repository is public). The
+# script connects there, sends the round's inputs, runs dev/improve/remote-runner.sh and passes the agent's stdin and
+# stdout through unchanged. No command of the round runs on this host, so a round that forgets a variable, sets a wrong
+# path or runs rm cannot reach this host's profile home or runtime clone: on 2026-10-04 a round's own probe deleted the
+# whole profile home.
 #
-# A cron session's own turn runs here, in this host's claude. The turn reads this host's CharlieBot
-# server for status, replies, messages and child reads, and the remote host runs no server. This
-# script recognizes the turn by the session's own id alone: the id equals the `session_id` of a
-# cron task file under $CHARLIEBOT_HOME/config.d/cron.d. A round worker is a child session whose id
-# names no task file, so no round reaches this host through that branch.
-#
-# The round path reads six inputs on this host and writes one directory:
-#   - the instructions file that --append-system-prompt-file names;
+# The round path reads these inputs on this host and writes one directory:
+#   - for claude, the instructions file that --append-system-prompt-file names (codex carries its instructions in its
+#     arguments);
+#   - the review option's credential name, model and API base in $CHARLIEBOT_HOME/config.yaml, and that
+#     credential's api_key in $CHARLIEBOT_HOME/credentials.yaml;
 #   - the leak pattern file $CHARLIEBOT_HOME/skills_leak_patterns.local.txt;
 #   - the in-flight files list, which dev/improve/inflight-files.sh prints here;
 #   - the worker session's metadata.json, for task_parent_id;
@@ -28,16 +25,14 @@
 #   - the origin URL of this launcher's checkout, which the runner clones from.
 # It writes only ~/improve/<direction>/evidence/.
 #
-# Exit codes: claude's exit code; 1 a local failure, such as a missing input file or no local
-# claude CLI for a cron session's own turn; 3 the host asks for a Tailscale approval or cannot be
-# reached; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
-# of this direction still runs; 6 the round's direction cannot be read. Codes 3 to 6 start no claude
-# and no scope.
+# Exit codes: the agent's exit code; 1 a local failure, such as a missing input file; 3 the host asks for a Tailscale
+# approval or cannot be reached; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
+# of this direction still runs; 6 the round's direction cannot be read; 7 a round dependency is missing, and stderr names
+# it. Codes 3 to 7 start no agent and no scope.
 #
-# The token values reach the host on ssh's standard input only, so no token value appears in any
-# process command line or in an input file: the runner writes them into
-# ~/improve/home/credentials.yaml, the one file that holds them. CHARLIEBOT_RUN_TOKEN stays here:
-# the remote host has no server that it could call.
+# The token values reach the host on ssh's standard input only, so no token value appears in any process command line or
+# in an input file: the runner writes them into ~/improve/home/credentials.yaml, the one file that holds them.
+# CHARLIEBOT_RUN_TOKEN stays here: the remote host has no server that it could call.
 set -euo pipefail
 
 readonly STDERR_PREFIX='improve launch:'
@@ -48,8 +43,11 @@ readonly PREFLIGHT_SECONDS=4
 readonly EVIDENCE_COPY_SECONDS=${IMPROVE_EVIDENCE_COPY_SECONDS:-60}
 # A call that sends no input of its own adds -n. Without -n, ssh reads this launcher's standard input, which
 # carries the round's prompt, and the remote command drops what it does not read. Only the main run passes that
-# standard input on to the remote claude.
+# standard input on to the remote agent.
 readonly SSH=(ssh -T -o BatchMode=yes -o ConnectTimeout=10)
+# The review option: the backend option whose model, API base and credential the round's review uses.
+# This script is the only place that names it.
+readonly REVIEW_OPTION='claude-code-kimi-k3.1-pro'
 
 fail() {
   local code=$1
@@ -67,42 +65,16 @@ readonly PROFILE_HOME=${CHARLIEBOT_HOME:-$HOME_DIR/.charliebot}
 readonly CRON_DIR="$PROFILE_HOME/config.d/cron.d"
 readonly REMOTE_HOST=${IMPROVE_REMOTE_HOST:-}
 readonly SESSION_ID=${CHARLIEBOT_SESSION_ID:-}
+readonly TEMP_ROOT=${TMPDIR:-/tmp}
+[[ $TEMP_ROOT == /* ]] || fail 1 'TMPDIR must be an absolute path'
+[[ -n $REMOTE_HOST ]] || fail 1 'IMPROVE_REMOTE_HOST is not set; it names the improve host in host config'
+[[ -n $SESSION_ID ]] || fail 6 'CHARLIEBOT_SESSION_ID is not set, so the round has no direction'
 
 # The value of one top-level YAML key in a file, unquoted, without a trailing comment.
 yaml_value() {
   local file=$1 key=$2
   sed -n "s/^$key:[[:space:]]*//p" "$file" | head -n 1 | sed 's/[[:space:]]*#.*//; s/^["'\'']//; s/["'\'']$//'
 }
-
-# Whether this run is a cron session's own turn. The scheduler binds each task to one session and
-# wakes that session for its own turn, so the turn's id is the task file's bound session_id. A round
-# worker is a child session of that bound session, and no task file names a child.
-is_cron_session_turn() {
-  local candidate
-  [[ -n $SESSION_ID ]] || return 1
-  for candidate in "$CRON_DIR"/*.yaml; do
-    [[ -f $candidate ]] || continue
-    if [[ $(yaml_value "$candidate" session_id) == "$SESSION_ID" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-# ---------- 1. A cron session's own turn ----------
-# It runs here for its server: the turn reads status, replies, messages and its children, and the
-# remote host runs no CharlieBot server. The local claude CLI is `claude` from PATH, which is the
-# executable a backend runs when its option names no cli_binary.
-if is_cron_session_turn; then
-  claude=$(type -P claude) || fail 1 'a cron session turn runs the local claude CLI, and no claude executable is on PATH'
-  exec "$claude" "$@"
-fi
-
-# ---------- 2. A round ----------
-readonly TEMP_ROOT=${TMPDIR:-/tmp}
-[[ $TEMP_ROOT == /* ]] || fail 1 'TMPDIR must be an absolute path'
-[[ -n $REMOTE_HOST ]] || fail 1 'IMPROVE_REMOTE_HOST is not set; it names the improve host in host config'
-[[ -n $SESSION_ID ]] || fail 6 'CHARLIEBOT_SESSION_ID is not set, so the round has no direction'
 
 # The direction is the name of the task session's prompt file: `dev/improve/perf.md` gives
 # `perf`. Every link is checked here because the direction names the scope, the boundary and
@@ -179,7 +151,89 @@ copy_evidence() {
   fi
 }
 
-# ---------- 3. Preflight ----------
+# The review option's fields from config.yaml, one `name<TAB>value` line each for the names in `names`. The options
+# are list items: an item starts at a `  - ` line and its fields sit four spaces in. A top-level key or a two-space key
+# ends the item before it.
+review_option_fields() {
+  awk -v id="$REVIEW_OPTION" -v names='model api_base credential' '
+    function take(text,   key, value) {
+      if (current == 0 || !match(text, /^[A-Za-z_]+:/)) return
+      key = substr(text, 1, RLENGTH - 1)
+      value = substr(text, RLENGTH + 1)
+      sub(/^[ \t]+/, "", value)
+      sub(/[ \t]+#.*$/, "", value)
+      field[current, key] = value
+    }
+    BEGIN { wanted_count = split(names, wanted, " ") }
+    /^  - / { items++; current = items; take(substr($0, 5)); next }
+    /^    / { take(substr($0, 5)); next }
+    /^[^ ]/ || /^  [^ ]/ { current = 0 }
+    END {
+      for (item = 1; item <= items; item++) {
+        if (field[item, "id"] != id) continue
+        for (i = 1; i <= wanted_count; i++)
+          if ((item, wanted[i]) in field) print wanted[i] "\t" field[item, wanted[i]]
+      }
+    }
+  ' "$PROFILE_HOME/config.yaml"
+}
+
+# The api_key under one top-level section of a credentials file, found by the section's name.
+section_api_key() {
+  awk -v section="$2" '
+    /^[^ ]/ { inside = ($0 == section ":") }
+    inside && /^  api_key:/ { value = $0; sub(/^  api_key:[ \t]*/, "", value); print value; exit }
+  ' "$1"
+}
+
+# ---------- 1. The member kind and the review inputs ----------
+# Every check in this section runs before the first ssh call, so a missing input sends nothing and starts nothing.
+agent_binary=${1-}
+kind=${agent_binary##*/}
+case $kind in
+  claude | codex) ;;
+  *) fail 7 "the member kind '$kind' is not supported: a round runs claude or codex" ;;
+esac
+shift
+
+instructions=
+if [[ $kind == claude ]]; then
+  expect_value=0
+  for argument in "$@"; do
+    if (( expect_value )); then
+      instructions=$argument
+      expect_value=0
+      continue
+    fi
+    if [[ $argument == --append-system-prompt-file ]]; then
+      expect_value=1
+    fi
+  done
+  [[ -n $instructions ]] || fail 1 'the command names no --append-system-prompt-file, so the round has no instructions file'
+  [[ $instructions == /* ]] || fail 1 'the instructions file path must be absolute'
+  [[ -f $instructions ]] || fail 1 "the instructions file is missing: $instructions"
+fi
+
+# The member token is the gateway token that the server put in the environment. A claude member whose environment
+# names a gateway (ANTHROPIC_BASE_URL) must carry it. A subscription member carries none: its login stays on the host.
+member_token=${ANTHROPIC_AUTH_TOKEN-}
+if [[ $kind == claude && -n ${ANTHROPIC_BASE_URL-} && -z $member_token ]]; then
+  fail 7 'the round has no member token: the gateway member sent no ANTHROPIC_AUTH_TOKEN'
+fi
+
+declare -A review=()
+[[ -r $PROFILE_HOME/config.yaml ]] || fail 7 "the review option's config.yaml is missing: $PROFILE_HOME/config.yaml"
+while IFS=$'\t' read -r field value; do
+  review[$field]=$value
+done < <(review_option_fields)
+for field in model api_base credential; do
+  [[ -n ${review[$field]-} ]] || fail 7 "the review option $REVIEW_OPTION names no $field in $PROFILE_HOME/config.yaml"
+done
+[[ -r $PROFILE_HOME/credentials.yaml ]] || fail 7 "the review credential's file is missing: $PROFILE_HOME/credentials.yaml"
+review_key=$(section_api_key "$PROFILE_HOME/credentials.yaml" "${review[credential]}")
+[[ -n $review_key ]] || fail 7 "credentials.yaml holds no api_key for the review credential ${review[credential]}"
+
+# ---------- 2. Round preflight ----------
 set +e
 preflight_output=$(timeout "$PREFLIGHT_SECONDS" "${SSH[@]}" -n "$REMOTE_HOST" true 2>&1)
 preflight_status=$?
@@ -191,12 +245,12 @@ if (( preflight_status != 0 )); then
   fail 3 "cannot reach the improve host $REMOTE_HOST; approve the connection on the /host-auth page"
 fi
 
-# ---------- 4. Direction ----------
+# ---------- 3. Direction ----------
 if ! direction=$(resolve_direction); then
   exit 6
 fi
 
-# ---------- 5. Send ----------
+# ---------- 4. Send ----------
 launch_id=$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM
 payload_parent=$TEMP_ROOT
 payload=$(mktemp -d "$payload_parent/improve-launch.XXXXXXXX") || fail 1 'cannot make the launch directory'
@@ -206,25 +260,13 @@ cleanup_payload() {
 }
 trap cleanup_payload EXIT
 
-instructions=
-expect_value=0
-for argument in "$@"; do
-  if (( expect_value )); then
-    instructions=$argument
-    expect_value=0
-    continue
-  fi
-  if [[ $argument == --append-system-prompt-file ]]; then
-    expect_value=1
-  fi
-done
-[[ -n $instructions ]] || fail 1 'the command names no --append-system-prompt-file, so the round has no instructions file'
-[[ $instructions == /* ]] || fail 1 'the instructions file path must be absolute'
-[[ -f $instructions ]] || fail 1 "the instructions file is missing: $instructions"
-cp -- "$instructions" "$payload/instructions.md"
 # Each host path maps to the name of its copy in the launch directory; the runner prefixes the
 # launch directory, so this host never needs the remote home path.
-printf '%s\t%s\n' "$instructions" instructions.md >"$payload/paths"
+: >"$payload/paths"
+if [[ $kind == claude ]]; then
+  cp -- "$instructions" "$payload/instructions.md"
+  printf '%s\t%s\n' "$instructions" instructions.md >"$payload/paths"
+fi
 printf '%s\0' "$@" >"$payload/args"
 
 pattern_file="$PROFILE_HOME/skills_leak_patterns.local.txt"
@@ -247,13 +289,14 @@ fi
 
 # The forwarded variables: the gateway and model settings of this backend, which start with
 # ANTHROPIC_ or CLAUDE_, and the two Bash timeouts the round needs. CLAUDE_CONFIG_DIR is the
-# worker's own config directory here, and CHARLIEBOT_RUN_TOKEN authenticates to a server that the
-# remote host does not have. The two tokens travel on the `--prepare` channel instead of this
-# file, so the launch directory holds no token. Values go into a file, never a command line.
+# worker's own config directory here, CLAUDE_CODE_OAUTH_TOKEN is the host's own login, and
+# CHARLIEBOT_RUN_TOKEN authenticates to a server that the remote host does not have. The tokens
+# travel on the `--prepare` channel instead of this file, so the launch directory holds no token.
+# Values go into a file, never a command line.
 forwarded_name() {
   case $1 in
     ANTHROPIC_AUTH_TOKEN | ANTHROPIC_API_KEY) return 1 ;;
-    CLAUDE_CONFIG_DIR | CHARLIEBOT_RUN_TOKEN) return 1 ;;
+    CLAUDE_CONFIG_DIR | CLAUDE_CODE_OAUTH_TOKEN | CHARLIEBOT_RUN_TOKEN) return 1 ;;
     ANTHROPIC_* | CLAUDE_* | BASH_DEFAULT_TIMEOUT_MS | BASH_MAX_TIMEOUT_MS | CHARLIEBOT_SESSION_ID) return 0 ;;
     *) return 1 ;;
   esac
@@ -279,18 +322,20 @@ send_status=$?
 set -e
 (( send_status == 0 )) || fail 3 "cannot send the round's inputs to $REMOTE_HOST; approve the connection on the /host-auth page"
 
-# The gateway tokens go to the host on this channel's standard input alone, and the runner writes
-# them straight into the round's credentials file. This host holds them in its environment only.
-tokens=()
-if [[ -n ${ANTHROPIC_AUTH_TOKEN:-} ]]; then
-  tokens+=("ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN")
+# The review key, the review option's settings and the member token, when the server sent one, go to the host on this
+# channel's standard input alone. The runner selects each value by its name and writes the keys into the round's
+# credentials file. The launching shell holds them in memory until this call sends them.
+records=(
+  "CHARLIE_CODE_API_KEY=$review_key"
+  "IMPROVE_REVIEW_CREDENTIAL=${review[credential]}"
+  "IMPROVE_REVIEW_MODEL=${review[model]}"
+  "IMPROVE_REVIEW_API_BASE=${review[api_base]}"
+)
+if [[ -n $member_token ]]; then
+  records+=("ANTHROPIC_AUTH_TOKEN=$member_token")
 fi
-if [[ -n ${ANTHROPIC_API_KEY:-} ]]; then
-  tokens+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
-fi
-(( ${#tokens[@]} > 0 )) || fail 1 'the environment carries no ANTHROPIC_AUTH_TOKEN and no ANTHROPIC_API_KEY'
 set +e
-printf '%s\0' "${tokens[@]}" |
+printf '%s\0' "${records[@]}" |
   "${SSH[@]}" "$REMOTE_HOST" "bash \$HOME/improve/launch/$launch_id/remote-runner.sh --prepare $launch_id" 3>&-
 prepare_status=$?
 set -e
@@ -299,7 +344,7 @@ if (( prepare_status == 255 )); then
 fi
 (( prepare_status == 0 )) || fail 1 "the runner could not write the round's credentials.yaml on $REMOTE_HOST"
 
-# ---------- 6. Start ----------
+# ---------- 5. Start ----------
 # The heartbeat reads its standard input on the remote side. EOF tells it that the launcher is
 # gone, and only then does it stop the scope: a Tailscale connection that is killed leaves remote
 # processes alive, so the launcher's death cannot be detected on the host any other way.
@@ -312,11 +357,11 @@ exec 3>"$payload/heartbeat"
 
 set +e
 "${SSH[@]}" "$REMOTE_HOST" \
-  "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit" 3>&-
+  "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind" 3>&-
 run_status=$?
 set -e
 
-# ---------- 7. End ----------
+# ---------- 6. End ----------
 copy_evidence "$EVIDENCE_COPY_SECONDS"
 
 exec 3>&-

@@ -74,7 +74,7 @@ pub fn choose_turn_account(
     && claude_accounts::healthy(state, current, Some(moment))
   {
     let reading = claude_accounts::latest_reading(state, &current.label, model, Some(moment));
-    let rejected = reading.as_ref().is_some_and(|reading| reading.rejected_until.is_some_and(|reset| reset > moment));
+    let rejected = claude_accounts::rejected_until(state, &current.label, model, Some(moment)).is_some();
     if reading.as_ref().is_none_or(|reading| reading.utilization < claude_accounts::WARNING_UTILIZATION && !rejected) {
       return Ok((Some(current.clone()), cold));
     }
@@ -172,8 +172,9 @@ where
   )
   .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   let Some(chosen) = chosen else {
-    let message = claude_relay::pool_exhausted_message(state, &ctx.cfg, now, account_pool.as_deref())
-      .map_err(|error| refusal(error, MemberFailure::Other, None))?;
+    let message =
+      claude_relay::pool_exhausted_message(state, &ctx.cfg, Some(&ctx.option.model), now, account_pool.as_deref())
+        .map_err(|error| refusal(error, MemberFailure::Other, None))?;
     let no_login =
       claude_accounts::no_usable_login(state, &ctx.cfg, Some(&ctx.option.model), now, account_pool.as_deref())
         .map_err(|error| refusal(error, MemberFailure::Other, None))?;
@@ -511,7 +512,7 @@ mod tests {
       [("ext-3", 0.07), ("invite-1", 0.23), ("ext-4", 0.47), ("ext-1", 0.73), ("main", 0.96), ("ext-2", 0.90)];
     for (label, utilization) in readings {
       let info = serde_json::json!({"unifiedWindows":{"five_hour":{"utilization":utilization}}});
-      claude_accounts::observe_rate_limit(&state, label, &info, Some(now));
+      claude_accounts::observe_rate_limit(&state, label, &info, Some(now), None);
     }
     let running = ["ext-3", "invite-1", "ext-4", "ext-1", "main"]
       .into_iter()

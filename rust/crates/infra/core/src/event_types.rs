@@ -132,6 +132,9 @@ pub const OWNER_RUN_ID: &str = "owner_run_id";
 /// The results a task's work produced, as references such as `run:<id>` or `landed:<branch>@<sha>`. The close request,
 /// the close and child-report facts, and every reader name the field here.
 pub const RESULT_REFS: &str = "result_refs";
+/// The outcome a sequence reports for the task it closed. The close fact carries it, and the child report reads it in
+/// place of the close outcome.
+pub const SEQUENCE_OUTCOME: &str = "sequence_outcome";
 pub const TASK_CLOSED: &str = "task_closed";
 pub const TASK_REOPENED: &str = "task_reopened";
 /// A task moved to another parent. The moved task's chat events carry it; the chat renders nothing for it.
@@ -140,6 +143,12 @@ pub const RUN_STOP_REQUESTED: &str = "run_stop_requested";
 pub const RUN_FINISHED: &str = "run_finished";
 pub const RUN_LAUNCH_WITHHELD: &str = "run_launch_withheld";
 pub const CHILD_REPORT: &str = "child_report";
+/// The `task_delegated` and `child_report` facts' field holding the id of the child session they name. The delegate
+/// route and the report builder write it, and the tree, the report composer and the session routes read it here.
+pub const CHILD_SESSION_ID: &str = "child_session_id";
+/// The `child_report` fact's field holding the id of the child's event that the report refers to. The report builder
+/// writes it, and the tree's delivered-report set reads it here.
+pub const CHILD_EVENT_ID: &str = "child_event_id";
 pub const PROMPT_CHANGED: &str = "prompt_changed";
 pub const TASK_IMPORTED: &str = "task_imported";
 pub const RUN_HEADER: &str = "run_header";
@@ -184,9 +193,10 @@ pub const QUOTA_FAILOVER_SET: &str = "set";
 /// The `quota_failover` field carrying the instant the member that failed recovers its quota, empty when the change
 /// names none.
 pub const QUOTA_FAILOVER_RECOVERS_AT: &str = "recovers_at";
-/// The `quota_failover` field carrying the handoff summary state of the retry the change started.
+/// The `quota_failover` field carrying the handoff summary state of the run the change started: a mid-turn retry, or
+/// a manager turn that starts on the member the pool switched to.
 pub const QUOTA_FAILOVER_SUMMARY: &str = "summary";
-/// The [`QUOTA_FAILOVER_SUMMARY`] value of a retry whose handoff summary was assembled.
+/// The [`QUOTA_FAILOVER_SUMMARY`] value of a run whose handoff summary was assembled.
 pub const QUOTA_SUMMARY_OK: &str = "ok";
 /// The [`QUOTA_FAILOVER_SUMMARY`] value that opens an unassembled summary; the reason follows a colon and a space.
 pub const QUOTA_SUMMARY_UNAVAILABLE: &str = "unavailable";
@@ -255,6 +265,9 @@ pub const CONFIG_RELOAD_FAILED_EVENT: &str = "config_reload_failed";
 /// The log event a hot-reloaded `credentials.yaml` writes when its reload fails: the server's state, the feature
 /// context and each feature's own credentials cache log it.
 pub const CREDENTIALS_RELOAD_FAILED_EVENT: &str = "credentials_reload_failed";
+/// The log event a spawned background task writes when its future fails: the thread entry's logged spawn and the
+/// store's after-turn hook both write it.
+pub const BACKGROUND_TASK_FAILED_EVENT: &str = "background_task_failed";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

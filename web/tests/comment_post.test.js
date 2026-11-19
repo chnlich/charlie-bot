@@ -107,6 +107,21 @@ test('postCommentMessage sends the comment-tray request shape', async () => {
   assert.equal(body.request_id, 'comment-request-1');
 });
 
+test('buildClickMessage owns the shared numbered reference and answer format', () => {
+  const context = loadCommentPost();
+  const message = context.buildClickMessage('[Status · Waiting on you]', [{
+    reference: 'Waiting on you · session session-a · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #2',
+    answer: 'Done',
+  }]);
+
+  assert.equal(message, [
+    '[Status · Waiting on you]',
+    '',
+    '1. ▸ Waiting on you · session session-a · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #2',
+    '   ↳ Done',
+  ].join('\n'));
+});
+
 test('postCommentMessage retries a network error and a 5xx with one request id', async () => {
   const calls = [];
   const context = loadCommentPost(async (url, options = {}) => {

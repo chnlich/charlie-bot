@@ -21,6 +21,6 @@ use turn_contribution::DraftsTurnContribution;
 
 /// `register`: the two draft routes and the three chat renderers.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router(api::routes, api::matches)?;
+  registry.router_patterns(api::routes, api::ROUTE_PATTERNS)?;
   registry.turn_contribution("drafts", Arc::new(DraftsTurnContribution))
 }

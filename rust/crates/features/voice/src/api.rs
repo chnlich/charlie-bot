@@ -1,6 +1,6 @@
-//! The voice HTTP routes: the upload `POST /api/voice/{session_id}`, the startup report
-//! `POST /api/voice/{session_id}/startup`, the recent recordings list `GET /api/voice/recordings`, and the
-//! Recent recordings page `GET /voice-recordings`.
+//! The voice HTTP routes serve the upload `POST /api/voice/{session_id}` and the startup report
+//! `POST /api/voice/{session_id}/startup`. They also serve the recent recordings list
+//! `GET /api/voice/recordings` and the Recent recordings page `GET /voice-recordings`.
 //!
 //! The upload persists the recording before it selects an online backend. Selection failures answer 400, and
 //! transcription failures answer 500. Both leave the WAV on disk, and a transcription failure is recorded in the

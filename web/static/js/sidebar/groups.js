@@ -334,21 +334,20 @@ function sessionRowActiveClass(isActive) {
 // after the name span — and actions the trailing button column. The anchor's
 // session-row class is the plain-CSS hook styles.css's hover reveal keys on
 // (positioning context for the row's out-of-flow action buttons).
-// A title the row rule shortened (sessionRowTitle) carries its full name in
-// data-full-name, the way the row menu's Settings button carries its row facts.
-// The rename field and the opening notice read it off the anchor at click
-// time, and every other row's text is already the full name.
+// The name span's title is the full name on every row. A title the row rule
+// shortened (sessionRowTitle) reads whole on hover, and the rename field, the
+// switch notice and the archive confirmation read the name from the same
+// attribute. updateSidebarSessionName keeps it current on rename.
 function renderSessionRowShell(s, {filter, title, activeClass, options, indicators, line, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
-  const fullNameAttrs = title === s.name ? '' : ` data-full-name="${escapeHtmlAttr(s.name)}"`;
   return `<a href="/?session=${s.id}&filter=${filter}"
      class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}" ondblclick="sidebarControl('startRename', event, '${s.id}')"
      onclick="event.preventDefault(); sidebarControl('switchSession', '${s.id}')"
-     id="session-${s.id}"${fullNameAttrs}${extraAttrs}>
+     id="session-${s.id}"${extraAttrs}>
     ${indicators}
     <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(title)}</span>
+      <span class="truncate block session-name" title="${escapeHtmlAttr(s.name)}">${escapeHtml(title)}</span>
       ${line}
     </span>
     ${actions}
@@ -633,15 +632,8 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
     + `</span>`;
 }
 
-// The page's initial rows carry updated_at as epoch minutes. Every listing
-// route carries it as an ISO string. Both shapes reach the row renderer.
-function sessionUpdatedMs(session) {
-  const value = session && session.updated_at;
-  if (typeof value === 'number') return value * 60000;
-  const parsed = Date.parse(value || '');
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
+// The row's updated_at as an ISO string. A column row carries epoch minutes and a listing route's row an ISO string;
+// both reach the row renderer. sessionUpdatedMs (utils.js) reads the same two shapes for ordering.
 function sessionUpdatedIso(session) {
   const value = session && session.updated_at;
   if (typeof value === 'number') return new Date(value * 60000).toISOString();
@@ -890,89 +882,6 @@ function renderSessionItem(s, filter, options = {}) {
       ? '<span class="px-1.5 py-0.5 rounded bg-slate-700 text-[10px] font-medium text-slate-400 flex-shrink-0">active</span>'
       : ''),
   });
-}
-
-// The base64url alphabet: a UUID session id travels as its 16 bytes in this alphabet.
-const UUID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-// The bytes a base64url text carries.
-function decodeBase64Url(text) {
-  let buffer = 0;
-  let bits = 0;
-  const bytes = [];
-  for (const character of text) {
-    const index = UUID_ALPHABET.indexOf(character);
-    if (index < 0) throw new Error('Encoded session id character ' + character);
-    buffer = (buffer << 6) | index;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      bytes.push((buffer >> bits) & 0xff);
-    }
-  }
-  return bytes;
-}
-
-// The session id 16 bytes spell in the canonical UUID form the store and the routes name it by.
-function sessionIdOf(bytes) {
-  if (bytes.length !== 16) throw new Error('Encoded session id of ' + bytes.length + ' bytes');
-  const hex = bytes.map(byte => byte.toString(16).padStart(2, '0')).join('');
-  return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' +
-    hex.slice(16, 20) + '-' + hex.slice(20);
-}
-
-// The session id one `uuid-b64` cell carries: 22 base64url characters that encode its 16 bytes, or a `~` id as
-// its text.
-function expandSessionId(cell) {
-  if (cell[0] === '~') return cell.slice(1);
-  if (cell.length !== 22) throw new Error('Encoded session id of ' + cell.length + ' characters');
-  return sessionIdOf(decodeBase64Url(cell));
-}
-
-// The session ids one `uuid-b64` column carries. A string holds every id's 16 bytes in row order. An array holds one
-// cell per row, which is how a home whose ids are not all canonical UUIDs travels.
-function expandSessionIds(values, count) {
-  if (Array.isArray(values)) return values.map(value => (value == null ? null : expandSessionId(value)));
-  const bytes = decodeBase64Url(values);
-  if (bytes.length !== count * 16) throw new Error('Encoded session id blob of ' + bytes.length + ' bytes');
-  return Array.from({length: count}, (_, index) => sessionIdOf(bytes.slice(index * 16, (index + 1) * 16)));
-}
-
-// The page carries the sidebar rows as columns: one array per field, in row order, with null where a row leaves the
-// field out. The page declares under `$encoded` the columns whose cells are not their field's value. A `uuid-b64`
-// column holds the session ids' 16 bytes in base64url. A `delta` column holds the first value as it stands and every
-// later value as its difference from the row before. Expanding the columns once here gives every sidebar view
-// the row objects it reads.
-function expandSessionColumns(columns) {
-  const encoding = columns.$encoded || {};
-  // Keys under `$` describe the listing rather than its rows: `$encoded` names the column encodings, and `$screen`
-  // names the part of the sidebar the page carries.
-  const fields = Object.keys(columns).filter(field => !field.startsWith('$'));
-  const first = fields.length ? columns[fields[0]] : [];
-  // The `id` column's string form carries 16 bytes per row, and base64url carries 3 bytes in 4 characters.
-  const count = Array.isArray(first) ? first.length : Math.floor(first.length * 3 / 4 / 16);
-  const rows = Array.from({length: count}, () => ({}));
-  fields.forEach(field => {
-    const values = columns[field];
-    const kind = encoding[field];
-    if (kind === 'uuid-b64') {
-      expandSessionIds(values, count).forEach((id, index) => {
-        if (id != null) rows[index][field] = id;
-      });
-      return;
-    }
-    let running = 0;
-    for (let i = 0; i < count; i++) {
-      let value = values[i];
-      if (value == null) continue;
-      if (kind === 'delta') {
-        running += value;
-        value = running;
-      }
-      rows[i][field] = value;
-    }
-  });
-  return rows;
 }
 
 function renderSessionList(sessions, filter, options = {}) {

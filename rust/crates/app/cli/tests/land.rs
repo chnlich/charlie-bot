@@ -35,9 +35,17 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 fn commit(dir: &Path, file: &str) -> String {
+  commit_with_message(dir, file, file, "")
+}
+
+fn commit_with_message(dir: &Path, file: &str, subject: &str, body: &str) -> String {
   fs::write(dir.join(file), format!("{file}\n")).expect("the file is written");
   git(dir, &["add", file]);
-  git(dir, &["commit", "-q", "-m", file]);
+  let mut args = vec!["commit", "-q", "-m", subject];
+  if !body.is_empty() {
+    args.extend(["-m", body]);
+  }
+  git(dir, &args);
   git(dir, &["rev-parse", "HEAD"])
 }
 
@@ -56,6 +64,10 @@ struct Venue {
 impl Venue {
   /// *with_ci* commits a `pull_request` workflow to main, which puts the landing under the CI gate.
   fn new(with_ci: bool) -> Venue {
+    Self::with_feature_message(with_ci, "feature.txt", "")
+  }
+
+  fn with_feature_message(with_ci: bool, subject: &str, body: &str) -> Venue {
     let root = tempfile::tempdir().expect("a temporary directory");
     let origin = root.path().join("owner").join("repo.git");
     fs::create_dir_all(&origin).expect("the origin directory is created");
@@ -78,7 +90,7 @@ impl Venue {
 
     let worktree = root.path().join("worktree");
     git(&repo, &["worktree", "add", "-q", "-b", TASK_BRANCH, worktree.to_str().expect("the path is UTF-8"), "main"]);
-    commit(&worktree, "feature.txt");
+    commit_with_message(&worktree, "feature.txt", subject, body);
 
     let home = root.path().join("home");
     let session_dir = home.join("sessions").join(TASK_SESSION);
@@ -132,8 +144,25 @@ impl Venue {
 
   /// The worker's own landing request: the task branch pushed and a PR opened on it.
   fn open_worker_pr(&self) -> String {
+    self.open_worker_pr_with_text("feature", "")
+  }
+
+  fn open_worker_pr_with_text(&self, title: &str, body: &str) -> String {
     git(&self.worktree, &["push", "-q", "origin", TASK_BRANCH]);
-    self.gh(&["pr", "create", "--repo", "owner/repo", "--head", TASK_BRANCH, "--base", "main", "--title", "feature"]);
+    self.gh(&[
+      "pr",
+      "create",
+      "--repo",
+      "owner/repo",
+      "--head",
+      TASK_BRANCH,
+      "--base",
+      "main",
+      "--title",
+      title,
+      "--body",
+      body,
+    ]);
     self.origin_tip(TASK_BRANCH)
   }
 
@@ -155,14 +184,37 @@ impl Venue {
     view["state"].as_str().expect("the PR has a state").to_string()
   }
 
+  fn pr_text(&self) -> (String, String) {
+    (
+      fs::read_to_string(self.gh_state.join("prs/1/title")).expect("the PR title is stored"),
+      fs::read_to_string(self.gh_state.join("prs/1/body")).expect("the PR body is stored"),
+    )
+  }
+
+  fn origin_has_task_branch(&self) -> bool {
+    Command::new("git")
+      .args(["--git-dir"])
+      .arg(&self.origin)
+      .args(["show-ref", "--verify", "--quiet"])
+      .arg(format!("refs/heads/{TASK_BRANCH}"))
+      .status()
+      .expect("git checks the origin ref")
+      .success()
+  }
+
   fn gh_calls(&self) -> String {
     fs::read_to_string(self.gh_state.join("calls")).unwrap_or_default()
   }
 
   /// Run `charliebot land --task` from the task worktree; returns the process output.
   fn land_output(&self) -> std::process::Output {
+    self.land_output_with_args(&[])
+  }
+
+  fn land_output_with_args(&self, extra_args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_charliebot"))
       .args(["land", "--task", TASK_SESSION])
+      .args(extra_args)
       .current_dir(&self.worktree)
       .env("CHARLIEBOT_HOME", &self.home)
       .env_remove("CHARLIEBOT_SESSION_ID")
@@ -177,7 +229,11 @@ impl Venue {
 
   /// Run `charliebot land --task` from the task worktree; returns the exit code and the printed landing record.
   fn land(&self) -> (i32, Value) {
-    let output = self.land_output();
+    self.land_with_args(&[])
+  }
+
+  fn land_with_args(&self, args: &[&str]) -> (i32, Value) {
+    let output = self.land_output_with_args(args);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let record = serde_json::from_str(&stdout).unwrap_or_else(|error| {
       panic!(
@@ -188,6 +244,144 @@ impl Venue {
     });
     (output.status.code().expect("charliebot land exits with a code"), record)
   }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_single_commit_supplies_the_draft_pr_title_and_body() {
+  let venue = Venue::with_feature_message(true, "Add routing support", "Keep callers on a stable path.");
+
+  let (code, record) = venue.land();
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(record["state"], "landed");
+  assert_eq!(venue.pr_text(), ("Add routing support".to_string(), "Keep callers on a stable path.".to_string()));
+  let calls = venue.gh_calls();
+  let create = calls
+    .lines()
+    .find(|call| call.starts_with("pr create "))
+    .unwrap_or_else(|| panic!("the landing creates a PR: {calls}"));
+  assert!(create.contains("--draft"), "the created PR is a draft: {create}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn explicit_title_and_body_file_override_the_commit_defaults() {
+  let venue = Venue::new(true);
+  let body_file = venue.home.join("description.md");
+  fs::write(&body_file, "The reviewed change keeps the routing contract stable.\n")
+    .expect("the PR description is written");
+  let body_file = body_file.display().to_string();
+
+  let (code, record) = venue.land_with_args(&["--title", "Reviewed routing change", "--body-file", &body_file]);
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(
+    venue.pr_text(),
+    ("Reviewed routing change".to_string(), "The reviewed change keeps the routing contract stable.\n".to_string())
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn several_commits_without_explicit_pr_text_are_refused_before_any_push() {
+  let venue = Venue::new(true);
+  commit_with_message(&venue.worktree, "second.txt", "Second change", "");
+
+  let output = venue.land_output();
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("2 commits"), "stderr: {stderr}");
+  assert!(stderr.contains("--title"), "stderr: {stderr}");
+  assert!(stderr.contains("commits-and-prs.md"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
+
+#[test]
+#[ignore = "integration"]
+fn several_commits_land_with_explicit_title_and_body_file() {
+  let venue = Venue::new(true);
+  commit_with_message(&venue.worktree, "second.txt", "Second change", "");
+  let body_file = venue.home.join("several-commits.md");
+  fs::write(&body_file, "Both commits make one routing change.\n").expect("the PR description is written");
+  let body_file = body_file.display().to_string();
+
+  let (code, record) = venue.land_with_args(&["--title", "Routing change", "--body-file", &body_file]);
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(record["state"], "landed");
+  assert_eq!(venue.pr_text(), ("Routing change".to_string(), "Both commits make one routing change.\n".to_string()));
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_stale_open_pr_is_updated_to_the_resolved_title_and_body() {
+  let venue = Venue::new(true);
+  venue.open_worker_pr_with_text("Previous commit title", "Description from an earlier commit.");
+
+  let (code, record) = venue.land();
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(venue.pr_text(), ("feature.txt".to_string(), String::new()));
+  let calls = venue.gh_calls();
+  assert!(
+    calls.lines().any(|call| call.starts_with("api repos/") && call.contains("/pulls/1 -X PATCH ")),
+    "the stale PR is patched through the REST pull endpoint: {calls}"
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_unreadable_body_file_fails_before_push_or_pr_creation() {
+  let venue = Venue::new(true);
+  let missing_file = venue.home.join("missing-description.md").display().to_string();
+
+  let output = venue.land_output_with_args(&["--body-file", &missing_file]);
+
+  assert_ne!(output.status.code(), Some(0));
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty());
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_empty_body_file_fails_before_push_or_pr_creation() {
+  let venue = Venue::new(true);
+  let body_file = venue.home.join("empty-description.md");
+  fs::write(&body_file, " \n\t").expect("the empty description is written");
+  let body_file = body_file.display().to_string();
+
+  let output = venue.land_output_with_args(&["--body-file", &body_file]);
+
+  assert_ne!(output.status.code(), Some(0));
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty());
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_empty_title_fails_before_push_or_pr_creation() {
+  let venue = Venue::new(true);
+
+  let output = venue.land_output_with_args(&["--title", " \t\n"]);
+
+  assert_ne!(output.status.code(), Some(0));
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty());
+}
+
+#[test]
+#[ignore = "integration"]
+fn ungated_landing_accepts_but_does_not_use_explicit_pr_text() {
+  let venue = Venue::new(false);
+
+  let (code, record) = venue.land_with_args(&["--title", "Unused title", "--body", "Unused body"]);
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(record["state"], "landed-no-ci");
+  assert!(!venue.gh_calls().contains("pr create"));
 }
 
 /// The path that left rebase-landed PRs open: a worker pushes the task branch and opens a PR, then main moves

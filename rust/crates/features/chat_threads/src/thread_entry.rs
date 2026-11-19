@@ -11,6 +11,7 @@
 //!   platform face of the entries.
 //! - `ThreadReplyError` with `ThreadDetail`: a refusal with its HTTP status and detail; an
 //!   unplanned failure answers 500 "Internal Server Error".
+//! - `MESSAGE_IDS`: the field the ids one thread ack covers sit in, in the ack event and in each platform's ack request.
 //! - `load_prompt_doc`, `thread_reply_contract`, `thread_reply_segment`: the reply contract (`LINKED_PAGES_LINE` joins
 //!   it for every platform). The scope doc is `<charliebot_home>/prompts/<scope_doc>` when the host has that file,
 //!   else the repo's `prompts/<scope_doc>`; the red line and the reply format always come from the repo.
@@ -70,6 +71,8 @@ pub const LINKED_PAGES_LINE: &str = concat!(
   "Linked pages: publish each page with `charliebot publish <path>` and write the URL it prints into the reply; ",
   "a CharlieBot file-server link refuses the reply."
 );
+/// The ids one thread ack covers: the persisted ack event and every platform's ack request carry them under this name.
+pub const MESSAGE_IDS: &str = "message_ids";
 /// The red-line doc every platform's contract carries.
 const REDLINE_DOC: &str = "thread_reply_redline.md";
 /// The reply-format doc every platform's contract carries.
@@ -1124,7 +1127,7 @@ pub async fn ack_messages(
         "type": platform.ack_event_type(),
         "content": format!("{} thread ack: {} message(s) read through {ceiling}", platform.display_name, ids.len()),
         (platform.ack_event_type()): {
-          "message_ids": ids,
+          (MESSAGE_IDS): ids,
           (platform.watermark_key()): watermark,
         },
       }),
@@ -1895,7 +1898,7 @@ where
 {
   tokio::spawn(async move {
     if let Err(error) = future.await {
-      tracing::error!(task_name = %name, error = %error, "background_task_failed");
+      tracing::error!(task_name = %name, error = %error, "{}", event_types::BACKGROUND_TASK_FAILED_EVENT);
     }
   })
 }

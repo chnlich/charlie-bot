@@ -29,7 +29,7 @@ At round start, delete what an earlier round left under `/tmp/improve-<direction
 Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
 An earlier round's scratch holds large copies, so the next round removes it before it starts.
 
-The runner checks the clone before claude starts, and a missing or foreign clone ends that launch with exit 4.
+The runner checks the clone before the round's agent starts, and a missing or foreign clone ends that launch with exit 4.
 End the round with a report when the clone lacks `core.hooksPath dev/git-hooks`:
 
     git -C ~/improve/<direction>/charlie-bot config core.hooksPath
@@ -147,12 +147,19 @@ The review is one direct `charlie-code` run, outside the clone.
 The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
 
 The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
-The model, API base and context window come from the `claude-code-kimi-k3.1-pro` entry in `backends.options` of `$CHARLIEBOT_HOME/config.yaml`, on `--model`, `--api-base` and `--context-window`; the gateway route needs `openai/` followed by the entry's `model` value on `--model` (LiteLLM's OpenAI-compatible route) and the `/v1` suffix on the API base.
-The option names are `charlie-code`'s own CLI contract.
+The command passes no `--model` or `--api-base` flag.
+`charlie-code` reads the review option's settings from these environment variables, which the runner sets whichever model runs the round:
+
+- `CHARLIE_CODE_MODEL`: the review option's model with an `openai/` prefix.
+- `CHARLIE_CODE_API_BASE`: the review option's API base, ending in `/v1`.
+- `CHARLIE_CODE_API_KEY`: the review option's gateway key.
+
+The review option is the `config.yaml` entry that names the review's model and API base.
+Its key sits in `credentials.yaml`, under the credential that the entry names.
+The context window is `charlie-code`'s default.
 
 The scratch directory sits outside the clone, so the reviewer's own git checkouts stay away from the clone's HEAD.
 The write boundary allows the scratch directory and the session directory, and denies every write outside the round's own directories.
-The runner puts the gateway key in the round's environment as `CHARLIE_CODE_API_KEY`; the round passes no key and reads no credentials file.
 The review is the independent check that the topic is complete and correct.
 
 The reviewer's stdout is an NDJSON event stream.

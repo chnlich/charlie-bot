@@ -11,7 +11,7 @@ const vm = require('node:vm');
 
 const { createEscapingElement } = require('./dom_element_stub');
 const { FakeElement } = require('./fake_dom');
-const { readStatic } = require('./read_static');
+const { readStatic, runIconModule } = require('./read_static');
 
 const UTILS_JS = readStatic('utils.js');
 const NAMESPACE_JS = readStatic('chat/namespace.js');
@@ -34,6 +34,7 @@ const REAL_WC2CH_IS_WIDE = loadRealWc2chIsWide();
 function loadChatRenderingModules(context) {
   // The page loads utils.js ahead of every chat module, and the chat's time label is utils.js formatTimeLabel.
   vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
+  runIconModule(context);
   vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
   vm.runInContext(SHARED_JS, context, {filename: 'chat/shared.js'});
   // The page loads markdown-renderer.js ahead of rendering.js; a context that

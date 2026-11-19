@@ -11,6 +11,7 @@ use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::channel_service::reply_response;
 use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN, REPLY_BODY};
+use charliebot_cli_common::fields::{LIMIT, SESSION_ID, TEXT};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
@@ -24,9 +25,9 @@ use crate::discord_listener::{self, Bot};
 
 /// `DiscordReadRequest`: the calling session's id, an optional channel link, and the window size.
 const READ_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
+  Field::required(SESSION_ID, FieldType::String),
   Field::optional("url", FieldType::NullableString),
-  Field::optional("limit", FieldType::Integer).ge(Bound::Int(READ_LIMIT_MIN)).le(Bound::Int(READ_LIMIT_MAX)),
+  Field::optional(LIMIT, FieldType::Integer).ge(Bound::Int(READ_LIMIT_MIN)).le(Bound::Int(READ_LIMIT_MAX)),
 ];
 const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 
@@ -69,8 +70,8 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
     Ok(fields) => fields,
     Err(response) => return *response,
   };
-  let session_id = text_field(&fields, "session_id");
-  let text = text_field(&fields, "text");
+  let session_id = text_field(&fields, SESSION_ID);
+  let text = text_field(&fields, TEXT);
   let identity = match caller::resolve_caller(&parts.headers, &bot.features) {
     Ok(identity) => identity,
     Err(response) => return response,
@@ -102,9 +103,9 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
     Ok(fields) => fields,
     Err(response) => return *response,
   };
-  let session_id = text_field(&fields, "session_id");
+  let session_id = text_field(&fields, SESSION_ID);
   let url = fields.get("url").and_then(Value::as_str).map(str::to_string);
-  let limit = fields.get("limit").and_then(Value::as_u64).unwrap_or(READ_LIMIT_DEFAULT as u64) as usize;
+  let limit = fields.get(LIMIT).and_then(Value::as_u64).unwrap_or(READ_LIMIT_DEFAULT as u64) as usize;
   reply_response(discord_commands::read_thread(&bot, &session_id, url.as_deref(), limit).await)
 }
 

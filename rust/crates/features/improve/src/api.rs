@@ -361,7 +361,7 @@ mod tests {
   }
 
   /// The acceptance item for improve: with `calls.improve` unset or `session`, a pool session keeps the pool id
-  /// for the loop's child, so every iteration selects the pool's member through `Selector`.
+  /// for the loop's child. Every iteration then selects the pool's member through `Selector`.
   #[test]
   fn a_pool_session_starts_the_loop_on_its_pool_id_when_calls_improve_is_unset_or_session() {
     let home = tempfile::tempdir().expect("temporary home");

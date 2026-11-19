@@ -34,6 +34,10 @@ function buildPage({
     SESSION_BOOTSTRAP: sessionBootstrap,
     INITIAL_SESSIONS: initialSessions,
     INITIAL_LOAD_ERRORS: initialLoadErrors,
+    Sidebar: {
+      workspaceListingUrl: (activeSessionId) => '/api/sessions/?compact=1&screen=1' +
+        (activeSessionId ? '&active=' + encodeURIComponent(activeSessionId) : ''),
+    },
     CustomEvent: class {
       constructor(type, init) {
         this.type = type;
@@ -136,7 +140,7 @@ test('the warm seeds the server-rendered first screen and sidebar rows', async (
       body: bootstrap,
     },
     {
-      url: 'https://charlie.test/api/sessions/?compact=1',
+      url: 'https://charlie.test/api/sessions/?compact=1&screen=1&active=session-a',
       body: initialSessions,
     },
   ]);

@@ -422,7 +422,7 @@ impl MasterQueue {
     refresh_anchors_from_disk(item, last_cc_session_id, last_account_label)?;
     let tracking: Arc<dyn RunTracking> = self.clone();
     let mut result = if item.resume_record.is_some() {
-      master_run::resume_cc(item).await?
+      master_run::resume_cc(tracking, item).await?
     } else {
       master_run::run_cc(tracking, item).await?
     };

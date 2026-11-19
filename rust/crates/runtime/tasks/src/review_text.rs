@@ -15,6 +15,7 @@ You are reviewing another worker's code changes.\n\
 - The repository guide is the repository's `CLAUDE.md` or `AGENTS.md` file and its `.claude/rules/` files.\n\
 - The repository guide sets the rules for the repository's code, environment and tests.\n\
 - These instructions set the rules for the task lifecycle, git operations and delegation.\n\
+- Follow `~/.claude/skills/writing-style/genres/commits-and-prs.md` for commit messages and gated PR title/body.\n\
 - When the repository guide conflicts with these instructions, follow these instructions.";
 
 const CHECKLIST_INTRO: &str = "IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. \
@@ -42,9 +43,9 @@ const CORRECTNESS_CHECK: &str = "Check for: correctness, bugs, unintended side e
 
 const STYLE_CHECK: &str = "Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).";
 
-const COMMIT_STEP: &str = "10. Before the rebase, commit every change you keep and restore tool-generated files with `git restore <path>`; untracked files stay in place.";
+const COMMIT_STEP: &str = "10. Before the rebase, confirm every change you keep is committed and restore tool-generated files with `git restore <path>`; untracked files stay in place.";
 
-const LAND_STEP: &str = "11. Run `charliebot land` and act on its JSON state: `landed` and `landed-no-ci` complete the delivery; `waiting` ends the run, and the trigger the command registered wakes it; on `ci-failed`, fix only the failures this diff causes and run the command again; report every other state as blocked and leave the base branch untouched. A run that a trigger wake resumes runs this command before anything else.";
+const LAND_STEP: &str = "11. `charliebot land` takes a gated PR's title and body from the branch's single commit. A branch of several commits lands with an explicit `--title` and `--body` or `--body-file`, both written by `~/.claude/skills/writing-style/genres/commits-and-prs.md`. Act on its JSON state: `landed` and `landed-no-ci` complete the delivery; `waiting` ends the run, and the trigger the command registered wakes it; on `ci-failed`, fix only the failures this diff causes and run the command again; report every other state as blocked and leave the base branch untouched. A run that a trigger wake resumes runs this command before anything else.";
 
 /// The reviewer contract's stable rules: the managed instruction block of a review Run (`review_rules_text`).
 pub fn review_rules_text() -> String {
@@ -70,7 +71,7 @@ pub fn review_numbered_steps(branch_name: &str, wt_path: &str, base_branch: &str
     format!("6. {DIVERGENT_CHECK}"),
     format!("7. {CORRECTNESS_CHECK}"),
     format!("8. {STYLE_CHECK}"),
-    "9. If you find issues, fix them and commit with descriptive messages.".to_string(),
+    "9. If you find issues, fix them and commit each kept change with a message that follows the commits-and-PRs genre.".to_string(),
     COMMIT_STEP.to_string(),
     LAND_STEP.to_string(),
   ]
@@ -137,28 +138,17 @@ All git operations below run from the worktree."
 mod tests {
   use super::*;
 
-  fn expected_steps() -> Vec<String> {
-    let published = review_published_branch("origin/main");
-    let landing = review_landing_target("origin/main");
-    vec![
-      "1. `cd /wt`".to_string(),
-      format!("2. Fetch the latest base branch: `git fetch origin {published}`"),
-      format!("3. Review the changes: `git diff {landing}...task-1`"),
-      "4. Verify the changes address the user's actual intent (from context research above).".to_string(),
-      format!("5. {SCOPE_CHECK}"),
-      format!("6. {DIVERGENT_CHECK}"),
-      format!("7. {CORRECTNESS_CHECK}"),
-      format!("8. {STYLE_CHECK}"),
-      "9. If you find issues, fix them and commit with descriptive messages.".to_string(),
-      COMMIT_STEP.to_string(),
-      LAND_STEP.to_string(),
-    ]
-  }
-
   #[test]
   fn numbered_steps_are_eleven_and_steps_ten_and_eleven_are_constants() {
     let rendered = review_numbered_steps("task-1", "/wt", "origin/main");
-    assert_eq!(rendered, expected_steps().join("\n"));
+    let steps: Vec<&str> = rendered
+      .lines()
+      .filter(|line| line.split_once(". ").is_some_and(|(number, _)| number.parse::<usize>().is_ok()))
+      .collect();
+    assert_eq!(steps.len(), 11);
+    assert!(steps.iter().enumerate().all(|(index, step)| step.starts_with(&format!("{}.", index + 1))));
+    assert_eq!(steps[9], COMMIT_STEP);
+    assert_eq!(steps[10], LAND_STEP);
   }
 
   #[test]

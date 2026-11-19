@@ -548,7 +548,7 @@ impl TriggerManager {
     Ok(())
   }
 
-  /// Restart every pending trigger found under the configured sessions directory.
+  /// The restart of every pending trigger found under the configured sessions directory.
   ///
   /// One blocking walk reads every session's trigger files in parallel, and the pending triggers then start in directory
   /// order. A trigger task writes only its own file, so reading every file before the first start reads what the
@@ -700,8 +700,8 @@ impl TriggerManager {
     PidProbeOutcome { status, raw, read, local_mid_ns: run.local_mid_ns }
   }
 
-  /// Confirm one pid that the held session reported gone, with the same verdict and end-file read the fire path
-  /// takes from an interval probe. The ssh is a readback: the held report is only the trigger for it.
+  /// The confirmation of one pid that the held session reported gone, with the same verdict and end-file read the
+  /// fire path takes from an interval probe. The ssh is a readback: the held report is only the trigger for it.
   async fn held_readback_pid(&self, target: &RemotePid, trigger_id: &str) -> PidProbeOutcome {
     // Only a pid-only target has a recorder end file. A `--cmd` target's end is the exit file `remote_finish` reads,
     // so its readback waits for no recorder and stays short.
@@ -2628,6 +2628,7 @@ mod tests {
             keep_worktree: false,
             cold_read: None,
             approver: TaskApprover::User,
+            improve_host: None,
           }),
           name: Some("Synthetic trigger task".to_string()),
           backend: Some("synthetic".to_string()),

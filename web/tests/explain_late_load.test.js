@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readPackageStatic} = require('./read_static');
+const {readPackageStatic, runIconModule} = require('./read_static');
 
 const EXPLAIN_JS = readPackageStatic('features', 'explain', 'explain.js');
 
@@ -51,6 +51,7 @@ function load({readyState = 'complete', sessionId = 'sid-1'} = {}) {
   };
   context.globalThis = context;
   vm.createContext(context);
+  runIconModule(context);
   vm.runInContext(EXPLAIN_JS, context, {filename: 'explain.js'});
   return {inserted, repainted, statusFetches, wsHandlers, separatorButton};
 }

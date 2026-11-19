@@ -1,4 +1,5 @@
 <!-- The chat page's script tail: the engine renders and strips it once per template version. -->
+  <script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
   <script>{% include 'js/platform.js' %}</script>
   <script>{% include 'js/math-scanner.js' %}</script>
   <script>{% include 'js/markdown-renderer.js' %}</script>
@@ -24,6 +25,7 @@
   <script>{% include 'js/chat/for-you.js' %}</script>
   <script>{% include 'js/chat/worker-summary.js' %}</script>
   <script>{% include 'js/chat/triggers-tray.js' %}</script>
+  <script src="/static/js/comment_post.js?v={{ static_asset_version|urlencode }}"></script>
   <script>{% include 'js/chat/status-panel.js' %}</script>
   <script>{% include 'js/usage.js' %}</script>
   <script>{% include 'js/file-upload.js' %}</script>

@@ -196,7 +196,7 @@ fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
       params![SOURCE, HOST, TS_A, TS_A],
     )
     .unwrap();
-  assert!(!ledger.agg_ready().unwrap());
+  assert!(!ledger.aggregate_ready().unwrap());
   ledger.conn.execute_batch("BEGIN").unwrap();
   for name in sql::AGG_SUM_TRIGGER_NAMES {
     ledger
@@ -224,9 +224,9 @@ fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
     .unwrap();
   actual.sort();
   assert_eq!(actual, expected);
-  let agg: (i64, i64) =
+  let aggregate_totals: (i64, i64) =
     ledger.conn.query_row("SELECT calls, output FROM usage_agg", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
-  assert_eq!(agg, (1, 5));
+  assert_eq!(aggregate_totals, (1, 5));
 }
 
 #[test]
@@ -248,7 +248,7 @@ fn models(rows: &[LedgerRow]) -> Vec<&str> {
 }
 
 fn agg_rows(ledger: &mut UsageLedger) -> Vec<LedgerRow> {
-  assert!(ledger.agg_ready().unwrap(), "the aggregate has been backfilled and serves");
+  assert!(ledger.aggregate_ready().unwrap(), "the aggregate has been backfilled and serves");
   rows_from_accs(ledger.all_time_accs(true).unwrap()).unwrap().0
 }
 
@@ -671,7 +671,7 @@ fn backfilled_read_serves_the_aggregate_not_the_table_pass() {
   ledger.model_rows().unwrap(); // the first read runs the backfill
   let expected = table_rows(&ledger);
   // Once backfilled the read takes the aggregate, so the table pass never runs.
-  assert!(ledger.agg_ready().unwrap());
+  assert!(ledger.aggregate_ready().unwrap());
   assert_eq!(ledger.model_rows().unwrap(), expected);
 }
 
@@ -1088,7 +1088,7 @@ fn aggregate_week_matches_the_direct_window_query_group_by_group() {
     ..record("rec-native", RecordKind::Native, &["sess-x"])
   };
   ledger.record_file(HOST, "/logs/native.jsonl", "sig-native", &[native]).unwrap();
-  assert!(ledger.agg_ready().unwrap(), "the aggregate serves after the backfill");
+  assert!(ledger.aggregate_ready().unwrap(), "the aggregate serves after the backfill");
 
   let week = Week::last_before("2026-11-03T20:00:00Z".parse().unwrap()).unwrap();
   let window = [Week::utc_text(week.start), Week::utc_text(week.end)];

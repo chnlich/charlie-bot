@@ -9,11 +9,17 @@ use serde_json::{Value, json};
 use crate::hooks::EventRenderer;
 use crate::message_events;
 use crate::metadata::{BASE_BRANCH_FIELD, TASK_STATE};
+use crate::run_display_state::RunDisplayState;
 use crate::streaming::{APPEND, LENGTH, THINKING_APPEND, THINKING_LENGTH};
 use crate::tool_rows::{SubagentStatus, ToolRow, ToolRows, Usage, tool_preview};
 use crate::{StoreError, StoreResult};
 
 pub use crate::tool_rows::TOOL_PREVIEW_CHARS;
+
+// The kind of a handler result row, derived from the stored event at each read. The web draws the
+// row's check or cross from it, so the content carries only the task and the message.
+const HANDLER_OK_KIND: &str = "handler_ok";
+const HANDLER_ERROR_KIND: &str = "handler_error";
 
 const BUILTIN_EVENT_TYPES: &[&str] = &[
   event_types::MASTER_DONE,
@@ -226,7 +232,7 @@ impl MessageAggregator {
       let content = event.field("message").and_then(|message| message.field("content"));
       let mut deltas = Vec::new();
       for block in message_blocks(content, "user message content", false)? {
-        if block.field("type").and_then(EventFields::as_str_field) != Some("tool_result") {
+        if block.field("type").and_then(EventFields::as_str_field) != Some(event_types::TOOL_RESULT) {
           continue;
         }
         let tool_use_id = block.field(event_types::TOOL_USE_ID).and_then(EventFields::as_str_field);
@@ -279,7 +285,7 @@ impl MessageAggregator {
     let mut deltas = Vec::new();
 
     for block in &blocks {
-      if block.field("type").and_then(EventFields::as_str_field) == Some("tool_use")
+      if block.field("type").and_then(EventFields::as_str_field) == Some(event_types::TOOL_USE)
         && block.field("name").and_then(EventFields::as_str_field) == Some("ExitPlanMode")
       {
         let plan = block
@@ -316,7 +322,7 @@ impl MessageAggregator {
     }
 
     for block in &blocks {
-      if block.field("type").and_then(EventFields::as_str_field) == Some("tool_use")
+      if block.field("type").and_then(EventFields::as_str_field) == Some(event_types::TOOL_USE)
         && block.field("name").and_then(EventFields::as_str_field) != Some("ExitPlanMode")
       {
         self.tool_rows.push(tool_call_row(*block));
@@ -483,7 +489,7 @@ impl MessageAggregator {
     let content = event.field("message").and_then(|message| message.field("content"));
     let rows: Vec<ToolRow> = message_blocks(content, "assistant message content", true)?
       .into_iter()
-      .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some("tool_use"))
+      .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some(event_types::TOOL_USE))
       .map(tool_call_row)
       .collect();
     let mut deltas = self.tool_rows.update_subagent(parent, |subagent| subagent.add_tools(rows));
@@ -509,7 +515,7 @@ impl MessageAggregator {
       }));
     }
     for block in blocks {
-      if block.field("type").and_then(EventFields::as_str_field) != Some("tool_result") {
+      if block.field("type").and_then(EventFields::as_str_field) != Some(event_types::TOOL_RESULT) {
         continue;
       }
       let tool_use_id = required_str(block, event_types::TOOL_USE_ID)?;
@@ -675,7 +681,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       "role": event_types::TASK_DELEGATED,
       "content": "Task delegated",
       "thread_id": event.field("thread_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-      "child_session_id": event.field("child_session_id").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+      event_types::CHILD_SESSION_ID: event.field(event_types::CHILD_SESSION_ID).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       event_types::DELEGATE_INVOCATION: event.field(event_types::DELEGATE_INVOCATION).map(EventFields::to_owned_value).unwrap_or(Value::Null),
       "backend": preferred_value(event, "backend", "resolved_backend"),
       "model": preferred_value(event, "model", "resolved_model"),
@@ -695,14 +701,15 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       message
     }
     event_types::HANDLER_RESULT => {
-      let icon = if event.field("status").and_then(EventFields::as_str_field) == Some(event_types::HANDLER_STATUS_OK) {
-        "✓"
+      let kind = if event.field("status").and_then(EventFields::as_str_field) == Some(event_types::HANDLER_STATUS_OK) {
+        HANDLER_OK_KIND
       } else {
-        "✗"
+        HANDLER_ERROR_KIND
       };
       json!({
         "role": "system",
-        "content": format!("{icon} {}: {}", string_default(event, "task", ""), string_default(event, "message", "")),
+        "kind": kind,
+        "content": format!("{}: {}", string_default(event, "task", ""), string_default(event, "message", "")),
       })
     }
     event_types::CONTEXT_COMPACTED => render_context_compacted(event)?,
@@ -819,7 +826,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     event_types::CHILD_REPORT => json!({
       "role": event_types::CHILD_REPORT,
       "content": event.field("summary").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-      "child_session_id": event.field("child_session_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+      event_types::CHILD_SESSION_ID: event.field(event_types::CHILD_SESSION_ID).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       "outcome": event.field("outcome").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       (event_types::RESULT_REFS): event.field(event_types::RESULT_REFS).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!([])),
     }),
@@ -931,7 +938,7 @@ fn render_run_header<E: EventFields>(event: &E) -> StoreResult<Value> {
     .map(event_str)
     .unwrap_or_default();
   let state = event.field("state").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
-  let state_word = if state == "withheld" && event.field("withheld").is_some_and(is_truthy) {
+  let state_word = if state == RunDisplayState::Withheld.as_str() && event.field("withheld").is_some_and(is_truthy) {
     format!("withheld · {}", event_str(event.field("withheld").expect("checked field")))
   } else if is_truthy(required_field(event, event_types::LAUNCH_FAILED)?) {
     "launch failed".to_string()
@@ -1164,7 +1171,7 @@ fn run_assistant_tool_uses<E: EventFields>(event: &E) -> Vec<&E> {
     .and_then(EventFields::array_items)
     .into_iter()
     .flatten()
-    .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some("tool_use"))
+    .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some(event_types::TOOL_USE))
     .collect()
 }
 

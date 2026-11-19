@@ -28,7 +28,7 @@ use charliebot_store::metadata::{
   TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
-use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError, TaskCaller};
+use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -495,14 +495,6 @@ enum DelegateError {
   Refused(StatusCode, String),
 }
 
-/// The task caller that a delegation's identity makes.
-fn task_caller(caller_identity: &CallerIdentity) -> TaskCaller {
-  match caller_identity {
-    CallerIdentity::Operator { .. } => TaskCaller::Operator,
-    CallerIdentity::Agent { claims } => TaskCaller::Agent { session_id: claims.session_id.clone() },
-  }
-}
-
 /// A bound delegation: the round of a prompt task that the calling session binds. The task's kind, session, note and
 /// host hold are checked first, each answering its refusal. The one-round check, the worker's creation and its run
 /// registration then share the tree control lock, so a second delegation of the task cannot start between them.
@@ -568,7 +560,7 @@ async fn delegate_bound_round(
         group: None,
         session_id: None,
       },
-      task_caller(caller_identity),
+      caller_identity.task_caller(),
       Default::default(),
     )
     .await?;
@@ -616,7 +608,7 @@ async fn delegate_bound_round(
     "description": request.description,
     "backend": round.run_backend,
     "model": round.model.as_deref().unwrap_or_default(),
-    "child_session_id": child.id,
+    event_types::CHILD_SESSION_ID: child.id,
   });
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, bound_task, "task_delegated_bound_round");
@@ -650,7 +642,7 @@ async fn delegate_task_tree(
   subagent: &SubagentBackend,
   route: Option<&BackendRoute>,
 ) -> Result<Value, DelegateError> {
-  let caller = task_caller(caller_identity);
+  let caller = caller_identity.task_caller();
   let request_id = delegate_request_id(request);
   let name = if request.task_type == TaskType::ColdRead {
     let path = request.cold_read.as_ref().expect("cold-read field contract was checked").page_path.as_str();
@@ -740,7 +732,7 @@ async fn delegate_task_tree(
     "description": request.description,
     "backend": subagent.run_backend,
     "model": subagent.model.as_deref().unwrap_or_default(),
-    "child_session_id": child.id,
+    event_types::CHILD_SESSION_ID: child.id,
     "route": route,
     charliebot_core::event_types::DELEGATE_INVOCATION: delegate_invocation_event_payload(request),
   });
@@ -2153,14 +2145,14 @@ mod tests {
     let first = send_operator(
       &router,
       path,
-      br#"{"content":"same","request_id":"browser-send-1"}"#.to_vec(),
+      r#"{"content":"[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic-request-session · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done","request_id":"browser-send-1"}"#.as_bytes().to_vec(),
       Some("application/json"),
     )
     .await;
     let second = send_operator(
       &router,
       path,
-      br#"{"content":"same","request_id":"browser-send-1"}"#.to_vec(),
+      r#"{"content":"[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic-request-session · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done","request_id":"browser-send-1"}"#.as_bytes().to_vec(),
       Some("application/json"),
     )
     .await;
@@ -2174,6 +2166,11 @@ mod tests {
       .collect();
     assert_eq!(inputs.len(), 1);
     assert_eq!(inputs[0]["id"].as_str(), first_body["input_event_id"].as_str());
+    assert_eq!(inputs[0]["type"], "user");
+    assert_eq!(
+      inputs[0]["content"],
+      "[Status · Waiting on you]\n1. ▸ Waiting on you · session synthetic-request-session · list 0123456789abcdef · since 2026-11-06T16:50:57Z · #1\n   ↳ Done"
+    );
   }
 
   #[tokio::test]

@@ -61,32 +61,12 @@
   border-right: none;
   border-radius: 0 0 0 0.5rem;
 }
-.html-artifact-resize-s::after {
-  content: '';
-  position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  width: 32px; height: 2px;
-  background: rgba(148, 163, 184, 0.5);
-  border-radius: 1px;
-}
-.html-artifact-resize-s:hover::after { background: rgba(148, 163, 184, 0.9); }
 .html-artifact-resize-e {
   grid-row: 1; grid-column: 2;
   cursor: ew-resize;
   border-left: none;
   border-bottom: none;
 }
-.html-artifact-resize-e::after {
-  content: '';
-  position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  width: 2px; height: 32px;
-  background: rgba(148, 163, 184, 0.5);
-  border-radius: 1px;
-}
-.html-artifact-resize-e:hover::after { background: rgba(148, 163, 184, 0.9); }
 .html-artifact-resize-se {
   grid-row: 2; grid-column: 2;
   cursor: nwse-resize;
@@ -94,18 +74,19 @@
   border-left: none;
   border-radius: 0 0 0.5rem 0;
 }
-.html-artifact-resize-se::after {
-  content: '';
+/* Each grip is the resize icon, centred in its handle and turned to the handle's direction: a
+   vertical grip on the right edge, a diagonal one on the corner. It takes no pointer events, so a
+   press still lands on the handle that starts the drag. */
+.html-artifact-resize-grip {
   position: absolute;
-  right: 2px; bottom: 2px;
-  width: 5px; height: 5px;
-  border-right: 2px solid rgba(148, 163, 184, 0.5);
-  border-bottom: 2px solid rgba(148, 163, 184, 0.5);
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  color: rgba(148, 163, 184, 0.5);
+  pointer-events: none;
 }
-.html-artifact-resize-se:hover::after {
-  border-right-color: rgba(148, 163, 184, 0.9);
-  border-bottom-color: rgba(148, 163, 184, 0.9);
-}
+.html-artifact-resize-handle:hover > .html-artifact-resize-grip { color: rgba(148, 163, 184, 0.9); }
+.html-artifact-resize-e > .html-artifact-resize-grip { transform: translate(-50%, -50%) rotate(90deg); }
+.html-artifact-resize-se > .html-artifact-resize-grip { transform: translate(-50%, -50%) rotate(45deg); }
 .html-artifact-source {
   display: none;
   max-height: 80vh;

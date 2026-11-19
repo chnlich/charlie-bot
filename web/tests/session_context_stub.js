@@ -168,6 +168,8 @@ function baseSessionContext(overrides = {}) {
   context.performance = {now: () => 0};
   context.navigator = {userAgent: 'TestAgent/1.0'};
   context.CSS = {escape: (value) => String(value)};
+  // The rename field's height is one line of the name it covers: text-sm paints a 20px line.
+  context.getComputedStyle = () => ({lineHeight: '20px'});
 
   return {context, elements, localStorageData, sessionStorageData};
 }
@@ -215,7 +217,9 @@ function loadCronPackage(context) {
 // resolving other selectors against a row (archived.js's group move) null-guard
 // the miss.
 function makeSidebarRow(sessionId, name) {
+  // The name span carries the full name as its title, as renderSessionRowShell paints it.
   const nameEl = createElement({textContent: name});
+  nameEl.title = name;
   nameEl.getBoundingClientRect = () => ({top: 0, left: 0, right: 0, bottom: 20, width: 200, height: 20});
   return createElement({
     id: 'session-' + sessionId,

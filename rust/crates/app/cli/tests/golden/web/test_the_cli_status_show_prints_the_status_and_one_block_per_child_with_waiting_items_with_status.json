@@ -27,7 +27,8 @@
               "since_exact": true
             }
           ],
-          "updated_at": "2026-10-16T21:00:00+00:00"
+          "updated_at": "2026-10-16T21:00:00+00:00",
+          "waiting_version": "0123456789abcdef"
         },
         "descendants": [
           {
@@ -51,7 +52,7 @@
     }
   ],
   "expect": {
-    "stdout": "Goal: Ship\nNow: Testing (updated 2026-10-16T21:00:00+00:00)\nWaiting on you:\n- Pick a layout\n  since: 2026-10-16T18:00:00Z\n  since_exact: true\n  context: The line is ready. Options are fold or show; fold is recommended.\n\nPanel child (d7645e8f)\n- Answer plan 5 (/x)\n  since: 2026-10-16T18:00:00Z\n  since_exact: false\n  context: The plan needs review. Options are approve or revise; revise is recommended.\n",
+    "stdout": "Goal: Ship\nNow: Testing (updated 2026-10-16T21:00:00+00:00)\nWaiting on you version: 0123456789abcdef\nWaiting on you:\n- Pick a layout\n  since: 2026-10-16T18:00:00Z\n  since_exact: true\n  context: The line is ready. Options are fold or show; fold is recommended.\n\nPanel child (d7645e8f)\n- Answer plan 5 (/x)\n  since: 2026-10-16T18:00:00Z\n  since_exact: false\n  context: The plan needs review. Options are approve or revise; revise is recommended.\n",
     "stderr": "",
     "exit": 0,
     "requests": [

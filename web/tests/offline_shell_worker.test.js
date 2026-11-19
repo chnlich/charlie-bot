@@ -15,7 +15,7 @@ const STORED_AT = 'X-CharlieBot-Stored-At';
 const NETWORK_ONLY = 'X-CharlieBot-Network-Only';
 const SESSION = 'session-a';
 const BOOTSTRAP_URL = ORIGIN + '/api/sessions/' + SESSION + '/bootstrap';
-const LIST_URL = ORIGIN + '/api/sessions/?compact=1';
+const LIST_URL = ORIGIN + '/api/sessions/?compact=1&screen=1&active=' + SESSION;
 
 const WAIT_CAP_MS = 400;
 
@@ -636,6 +636,8 @@ test('a full store evicts the session opened longest ago and then stores the new
   const h = harness();
   const store = await h.caches.api.open('last-state-v1');
   await store.put(ORIGIN + '/api/sessions/old/bootstrap', new Response('old'));
+  const oldListUrl = ORIGIN + '/api/sessions/?compact=1&screen=1&active=old';
+  await store.put(oldListUrl, new Response('old list'));
   await store.put(ORIGIN + '/index', new Response(JSON.stringify({
     sessions: {old: 1, recent: 2}, files: [],
   }), {headers: {'Content-Type': 'application/json'}}));
@@ -646,6 +648,7 @@ test('a full store evicts the session opened longest ago and then stores the new
   assert.equal((await result.response.json()).body, 'new');
   const keys = (await store.keys()).map((entry) => entry.url);
   assert.ok(!keys.includes(ORIGIN + '/api/sessions/old/bootstrap'), 'the longest-unopened session left the store');
+  assert.ok(!keys.includes(oldListUrl), 'its session-specific list copy leaves with its first screen');
   assert.ok(keys.includes(BOOTSTRAP_URL), 'the new first screen is stored');
 });
 

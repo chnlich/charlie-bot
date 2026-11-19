@@ -17,6 +17,13 @@ use crate::{StoreError, StoreResult};
 /// The task lifecycle folded from a node's durable event history.
 pub type TaskState = String;
 
+/// The maximum click references a task fold keeps for status items.
+pub(crate) const MAX_CLICKED_WAITING_ITEMS: usize = 64;
+
+pub(crate) fn valid_waiting_version(version: &str) -> bool {
+  version.len() == 16 && version.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 /// A fact snapshot used by tree, gate, and pending-input readers.
 #[derive(Clone, Debug)]
 pub struct TaskFacts {
@@ -38,6 +45,7 @@ pub struct TaskFacts {
   /// The first `task_closed` line of each request id, over the same lines as `close_request_ids`.
   pub first_close_by_request: HashMap<String, SharedChatEvent>,
   pub delivered_reports: HashSet<(String, String)>,
+  pub clicked: Vec<(String, usize)>,
   pub events_by_id: EventIdIndex,
   pub covered: usize,
 }

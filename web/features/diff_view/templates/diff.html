@@ -20,16 +20,16 @@
        diff_comments.js builds. */
     input::placeholder, textarea::placeholder { color: #64748b; }
     /* A form field's border is the only mark of its box: the field's white fill sits on the form bar's
-       #f8fafc at 1.05:1. slate-300, the utility's tone, draws 1.48:1 on the fill and 1.42:1 on the bar,
-       under the 3:1 floor WCAG 1.4.11 sets for a UI component boundary. slate-500 draws 4.76:1 and
-       4.55:1, above the floor and the tone the file row's expand mark keeps. The :not(:focus) keeps
-       the blue focus border the field's focus utility paints. */
+       #f8fafc at 1.05:1. slate-300, the utility's tone, draws 1.48:1 on the fill and 1.42:1 on the bar.
+       Both fall under the 3:1 floor WCAG 1.4.11 sets for a UI component boundary. slate-500 draws
+       4.76:1 and 4.55:1, above the floor and the tone the file row's expand mark keeps. The
+       :not(:focus) keeps the blue focus border the field's focus utility paints. */
     #diff-form input:not(:focus), #diff-form select:not(:focus) { border-color: #64748b; }
     /* The Compare button's white 14 px label draws 5.17:1 on its blue-600 fill and 3.68:1 under the
-       blue-500 hover, under the 4.5:1 floor for text that size. The blue-700 hover carries the label at
-       6.70:1 and stays darker than the resting fill, so the pointer still reads the state change. The
-       utility classes stay as the tokens the sheet is built from; the id selector outranks them and
-       decides the hover. */
+       blue-500 hover. Both fall under the 4.5:1 floor for text that size. The blue-700 hover carries
+       the label at 6.70:1 and stays darker than the resting fill, so the pointer still reads the state
+       change. The utility classes stay as the tokens the sheet is built from; the id selector outranks
+       them and decides the hover. */
     #diff-form button[type="submit"]:hover { background-color: #1d4ed8; }
     /* diff2html draws a header above every file's diff: the file's name, its ADDED/MODIFIED tag and
        a Viewed box that collapses that file. The row above the panel already shows the name and the
@@ -37,26 +37,27 @@
        repeats what the user has just read and spends a row of screen space per open file. Hiding it
        keeps the file's identity on the row above and hands the row to the diff content. */
     .d2h-file-header { display: none; }
-    /* diff2html paints each hunk header and every line number at rgba(0, 0, 0, 0.3): 2.10:1 on
-       the hunk's #f8fafd row and 2.11:1 on the white context rows. Both ratios fall short of the
-       4.5:1 floor for their 13 px text. The reader needs the header to know which lines a hunk
-       covers and the numbers to name a line. #475569 draws 7.25:1 on the hunk row and 7.58:1 on
-       white, and it stays above 6:1 on the added and removed rows' tints. A hunk header owns
-       .d2h-info in both layouts; line numbers are .d2h-code-linenumber when line-by-line and
-       .d2h-code-side-linenumber when side-by-side, and their .line-num1 and .line-num2 spans
-       take the cell's tone. */
+    /* diff2html paints each hunk header and every line number at rgba(0, 0, 0, 0.3). That tone
+       draws 2.10:1 on the hunk's #f8fafd row and 2.11:1 on the white context rows. Both ratios
+       fall short of the 4.5:1 floor for their 13 px text. The reader needs the header to know
+       which lines a hunk covers and the numbers to name a line. #475569 draws 7.25:1 on the hunk
+       row and 7.58:1 on white, and it stays above 6:1 on the added and removed rows' tints. A
+       hunk header owns .d2h-info in both layouts; line numbers are .d2h-code-linenumber when
+       line-by-line and .d2h-code-side-linenumber when side-by-side, and their .line-num1 and
+       .line-num2 spans take the cell's tone. */
     .d2h-wrapper .d2h-info,
     .d2h-wrapper .d2h-code-linenumber,
     .d2h-wrapper .d2h-code-side-linenumber,
     .d2h-wrapper .line-num1,
     .d2h-wrapper .line-num2 { color: #475569; }
     /* The CDN theme paints a keyword and a type at #d73a49 and a comment at #6a737d. Those tones read
-       4.57:1 and 4.82:1 on a white context row. The rows a hunk adds, removes or changes sit on a tint
-       instead. There at 13 px the keyword falls to 4.23:1 on an added row, 3.78:1 on the changed row of
-       the line-by-line layout, and 3.91:1 on a removed row. On the side-by-side layout's changed row it
-       falls to 4.09:1, and the comment to 4.45:1. diff2html paints a further word-level highlight over
-       the words a changed line rewrites: #97f295 on the added side, #ffb6ba on the removed one. On that
-       highlight the theme's keyword drops to 4.95:1 and 4.05:1, and its comment to 4.69:1 and 3.84:1.
+       4.57:1 and 4.82:1 on a white context row. The rows a hunk adds, removes or changes sit on a
+       tint instead. There at 13 px the keyword falls to 4.23:1 on an added row and 3.78:1 on the
+       changed row of the line-by-line layout. A removed row draws it at 3.91:1. On the
+       side-by-side layout's changed row it falls to 4.09:1, and the comment to 4.45:1. diff2html
+       paints a further word-level highlight over the words a changed line rewrites: #97f295 on
+       the added side, #ffb6ba on the removed one. On that highlight the theme's keyword drops to
+       4.95:1 and 4.05:1, and its comment to 4.69:1 and 3.84:1.
        The keyword and the type carry the code's structure and the comment carries its prose. A tinted
        cell therefore takes #9a1b27 for a keyword or a type. That tone reads 6.78:1 to 7.59:1 on the four
        row tints and 6.04:1 and 4.94:1 on the two word highlights. A comment takes #474f58, which reads
@@ -75,14 +76,15 @@
     .diff-file-rename { margin-left: .5rem; color: #64748b; font-size: .75rem; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     /* A phone cannot hold a file row on one line, so it becomes a grid. Every item starts at the top
-       of its rows, so the status, the caret and the counts keep the file's first text line while the
-       name wraps and a path or a move's source takes the lines under it. The status, the file name
-       and the counts share the first line, and a path with a directory puts it on the second line
-       under the name. A file at the repository root has no second line to draw. Its row keeps one
-       line, where the old two-line grid spent a line on the counts alone. The name wraps rather than
-       being cut off, and the counts keep their fixed pair so the figures stay in one column of the
-       list. A move's source label takes the line under the path, or under the name when no directory
-       is shown. The same rule as Tailwind's max-sm, the width the row's utilities use. */
+       of its rows, which keeps the status, the caret and the counts on the file's first text line
+       while the name wraps. A path or a move's source takes the lines under it. The status, the
+       file name and the counts share the first line, and a path with a directory puts it on the
+       second line under the name. A file at the repository root has no second line to draw. Its row
+       keeps one line, where the old two-line grid spent a line on the counts alone. The name wraps
+       rather than being cut off, and the counts keep their fixed pair so the figures stay in one
+       column of the list. A move's source label takes the line under the path, or under the name
+       when no directory is shown. The same rule as Tailwind's max-sm, the width the row's utilities
+       use. */
     @media not all and (min-width: 640px) {
       .diff-file-row { display: grid; align-items: start; column-gap: 0.75rem; row-gap: 0.125rem;
         grid-template-columns: auto auto minmax(0, 1fr) auto; }
@@ -112,7 +114,7 @@
         white-space: pre-wrap; overflow-wrap: anywhere; max-width: calc(100% - 1.5em); }
       /* The library stylesheet middle-aligns the wrapped line's inline-block code text, and the
          line box's baseline follows it down. The +/- prefix sits on that baseline, so a wrapped
-         added row drew its marker partway down the block and its first row drew none: a 40-word
+         added row drew its marker partway down the block and its first row drew none. A 40-word
          added line drew the + on the fifth of its nine rows. Top-aligning the prefix keeps it on
          the row's first line, where it sits on every one-line row. */
       .d2h-diff-table:has(.d2h-code-linenumber) .d2h-code-line .d2h-code-line-prefix {

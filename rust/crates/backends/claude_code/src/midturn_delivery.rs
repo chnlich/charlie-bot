@@ -77,11 +77,12 @@ mod tests {
       instructions_file: None,
       resume_session_id: None,
       log_dir: None,
-      cgroup_session_id: None,
+      cgroup_session_id: Some("midturn-session".to_string()),
       remote_launch: None,
       backend_kwargs: serde_json::Map::from_iter([
         ("midturn_delivery".to_string(), Value::Bool(true)),
         ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
+        ("run_id".to_string(), Value::String(run_id.to_string())),
       ]),
       manager_turn: false,
     }
@@ -247,11 +248,12 @@ mod tests {
         instructions_file: None,
         resume_session_id: None,
         log_dir: Some(root.join("run")),
-        cgroup_session_id: None,
+        cgroup_session_id: Some("midturn-session".to_string()),
         remote_launch: None,
         backend_kwargs: serde_json::Map::from_iter([
           ("midturn_delivery".to_string(), Value::Bool(true)),
           ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
+          ("run_id".to_string(), Value::String(run_id.to_string())),
         ]),
         manager_turn: false,
       },

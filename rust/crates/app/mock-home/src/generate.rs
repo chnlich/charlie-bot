@@ -133,7 +133,6 @@ fn write_event_log(
 }
 
 /// The acceptance criteria and context references of a view session: counts drawn from the stream, each item a sentence
-/// The acceptance criteria and context references of a view session: counts drawn from the stream, each item a sentence
 /// or a path of the synthetic pool. The spread of the counts gives the rows a spread of sizes; their median sets the
 /// view's median row.
 fn view_task(rng: &mut Rng, language: Language) -> Value {

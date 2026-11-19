@@ -3,7 +3,7 @@
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, ThreadPlatform};
 
-use crate::metadata::SlackOrigin;
+use crate::metadata::{SLACK_ORIGIN, SLACK_WATERMARK_TS, SlackOrigin};
 
 /// The Slack platform as the shared contract reads it.
 pub const SLACK: ThreadPlatform = ThreadPlatform {
@@ -16,8 +16,8 @@ pub const SLACK: ThreadPlatform = ThreadPlatform {
   follow_trigger_prefix: "slack-thread-follow",
   id_key: IdOrdering::Text,
   recheck_after_failed_post: true,
-  origin_field: "slack_origin",
-  watermark_field: "slack_watermark_ts",
+  origin_field: SLACK_ORIGIN,
+  watermark_field: SLACK_WATERMARK_TS,
   id_label: "ts",
   mention_key: "mention_ts",
   block_keys: &["channel_id", "thread_ts", "mention_ts"],

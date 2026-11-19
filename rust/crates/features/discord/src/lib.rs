@@ -26,7 +26,7 @@ use turn_contribution::DiscordTurnContribution;
 
 /// The thread fields of a Discord session's metadata slot.
 const THREAD_SLOT: ThreadSlot = ThreadSlot {
-  origin_field: "discord_origin",
+  origin_field: metadata::DISCORD_ORIGIN,
   origin_type: "DiscordOrigin",
   origin_keys: &["guild_id", "parent_channel_id", "thread_id"],
   watermark_field: thread_contract::DISCORD.watermark_field,

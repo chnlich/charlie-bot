@@ -1355,7 +1355,7 @@ mod tests {
     fs::create_dir_all(&templates).unwrap();
     fs::write(templates.join("both.html"), "{{ name }}").unwrap();
     let mut registry = Registry::new();
-    registry.register_package("features.notes", register_counted).unwrap();
+    registry.register_package("features.notes", register_notes).unwrap();
     let home = tempfile::tempdir().unwrap();
     let features = features_over(home.path(), Arc::new(registry));
     features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();

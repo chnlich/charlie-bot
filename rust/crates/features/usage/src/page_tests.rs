@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
+use charliebot_core::list_price;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::usage::{RecordKind, UsageRecord, UsageSource};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
@@ -754,4 +755,90 @@ async fn a_capture_after_a_view_reaches_the_next_one() {
   let captured = served_body(&features).await;
   assert_ne!(data_rows(&captured), data_rows(&repeat), "a capture's commit reaches the next view");
   assert!(captured.contains("claude-opus-4"), "the captured row reaches the page");
+}
+
+/// The week's context and its rows' payload, from synthetic rows of the last and the week before.
+fn priced_week(last: Vec<LedgerRow>, previous: Vec<LedgerRow>) -> Value {
+  let home = tempfile::tempdir().expect("a temporary home");
+  let features = page_features(home.path(), registry());
+  let mut read = read_of(&features, [last.clone(), previous.clone()].concat(), &[], None);
+  read.week_rows = last;
+  read.previous_week_rows = previous;
+  token_usage_context(&read, &features.registry).expect("the context builds")
+}
+
+fn week_payload(context: &Value) -> BTreeMap<String, Value> {
+  let payload: Value = serde_json::from_str(context["payload"].as_str().expect("the payload is text")).expect("JSON");
+  by_model(payload["week"].as_array().expect("the payload holds the week's rows"))
+}
+
+fn assert_usd(actual: f64, expected: f64, label: &str) {
+  assert!((actual - expected).abs() < 1e-9, "{label}: {actual} != {expected}");
+}
+
+/// The dollar amount a card prints, such as `$1,234.56` or `+$5.90`, read back to a number.
+fn printed_dollars(text: &Value) -> f64 {
+  let text = text.as_str().expect("the card prints a dollar text");
+  let (sign, amount) = match text.strip_prefix('-') {
+    Some(rest) => (-1.0, rest),
+    None => (1.0, text.trim_start_matches('+')),
+  };
+  sign * amount.trim_start_matches('$').replace(',', "").parse::<f64>().expect("the printed amount parses")
+}
+
+#[test]
+fn list_price_equivalent_prices_the_priced_week_and_leaves_the_unpriced_tokens_out() {
+  let opus = list_price::lookup("claude-opus-5-5").expect("the table prices claude-opus-5-5");
+  let last = vec![
+    row(CC, "claude-opus-5-5", [1_000_000, 500_000, 2_000_000, 0, 100_000], vec![]),
+    row(CC, "unlisted-model", [300_000, 0, 0, 0, 477_000], vec![]),
+  ];
+  let previous = vec![row(CC, "claude-opus-5-5", [500_000, 0, 0, 0, 50_000], vec![])];
+  let context = priced_week(last, previous);
+  let week = &context["ctx"]["week"];
+
+  // Hand-computed from the table's rates in USD per million tokens. The counts below are in millions of tokens.
+  let cache_write = opus.cache_write.expect("the table prices claude-opus-5-5 cache writes");
+  let week_usd = 1.0 * opus.input + 0.5 * cache_write + 2.0 * opus.cache_read + 0.1 * opus.output;
+  let previous_usd = 0.5 * opus.input + 0.05 * opus.output;
+  let change = week_usd - previous_usd;
+
+  // The card prints cents, so each printed figure matches its hand-computed value to half a cent.
+  let cent = 0.005 + 1e-9;
+  assert!((printed_dollars(&week["usd"]) - week_usd).abs() <= cent, "the week's total");
+  assert!((printed_dollars(&week["usd_previous"]) - previous_usd).abs() <= cent, "the week before's total");
+  assert!((printed_dollars(&week["usd_change"]) - change).abs() <= cent, "the change");
+  assert_usd(
+    week["usd_change_pct"].as_f64().expect("the change is a percent"),
+    change / previous_usd * 100.0,
+    "change",
+  );
+  assert_eq!(week["usd_left_out"], "777,000", "the unpriced model's last-week tokens");
+
+  let models = week_payload(&context);
+  assert_usd(models["claude-opus-5-5"]["usd"].as_f64().expect("the priced model has a USD"), week_usd, "opus");
+  assert!(models["unlisted-model"]["usd"].is_null(), "a model with no row reads N/A");
+}
+
+#[test]
+fn a_week_before_with_no_priced_tokens_reads_its_change_as_n_a() {
+  let last = vec![row(CC, "claude-opus-5-5", [1_000_000, 0, 0, 0, 100_000], vec![])];
+  let previous = vec![row(CC, "unlisted-model", [500_000, 0, 0, 0, 50_000], vec![])];
+  let context = priced_week(last, previous);
+  let week = &context["ctx"]["week"];
+
+  assert_eq!(week["usd_previous"], "$0.00");
+  assert!(week["usd_change"].is_null(), "no priced tokens the week before, so no change");
+  assert!(week["usd_change_pct"].is_null(), "no priced tokens the week before, so no percent");
+}
+
+#[test]
+fn list_price_equivalent_leaves_out_a_category_without_a_published_rate() {
+  let last = vec![row(CC, "gemini-3.8-flash", [300_000, 200_000, 0, 0, 100_000], vec![])];
+  let context = priced_week(last, vec![]);
+  let week = &context["ctx"]["week"];
+
+  assert_eq!(week["usd_left_out"], "600,000");
+  let models = week_payload(&context);
+  assert!(models["gemini-3.8-flash"]["usd"].is_null(), "the row has a cache-write category without a published rate");
 }

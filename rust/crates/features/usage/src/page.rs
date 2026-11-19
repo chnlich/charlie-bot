@@ -29,6 +29,7 @@ use crate::ledger::{LedgerRow, UsageLedger, default_ledger_path};
 use crate::pacific::{self, Week};
 use crate::page_memo::{PageInputs, PageMemo, exception};
 use crate::page_rows::{self, PageRow, canonical_model, compact, group_thousands};
+use crate::usd::{self, UsdWeeks};
 
 const TEMPLATE: &str = "token_usage.html";
 
@@ -198,8 +199,10 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
   let previous = Totals::of(&read.previous_week_rows)?;
   let merged = page_rows::merge(&read.rows, &read.config, registry, &cards)?;
   let week_merged = page_rows::merge(&read.week_rows, &read.config, registry, &cards)?;
+  let previous_merged = page_rows::merge(&read.previous_week_rows, &read.config, registry, &cards)?;
+  let usd_weeks = UsdWeeks::of(&week_merged, &previous_merged)?;
   let rows = Value::Array(merged.iter().map(PageRow::to_json).collect());
-  let week_rows = Value::Array(week_merged.iter().map(PageRow::to_json).collect());
+  let week_rows = Value::Array(week_merged.iter().map(week_row_json).collect());
   let (window_first, window_last) = window(&read.rows)?;
   let week_top = page_rows::first_max_by(week_merged.as_slice(), |row| row.output);
   let per_src = per_source(read, registry, &cards, &tot)?;
@@ -210,7 +213,7 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
     "per_src": per_src,
     "usage_sources": cards.iter().map(|card| card.name).collect::<Vec<_>>(),
     "tot_calls": group_thousands(Count::Int(tot.calls)),
-    "week":week_context(read, &week_tot, &previous, &tot, week_merged.len(), week_top)?,
+    "week": week_context(read, &week_tot, &previous, &tot, week_merged.len(), week_top, &usd_weeks)?,
     "elapsed_s": read.elapsed.as_secs_f64(),
   });
   Ok(json!({
@@ -225,8 +228,9 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
   }))
 }
 
-/// The last Pacific week's figures for the hero: its totals in compact and exact form, its share of all time, and its
-/// change from the week before. A change is null when the week before has no tokens to measure against.
+/// The last Pacific week's figures for the hero: its totals in compact and exact form, its share of all time, its
+/// change from the week before, and its API list-price equivalent. A change is null when the week before has no tokens
+/// to measure against.
 fn week_context(
   read: &LedgerRead,
   week_tot: &Totals,
@@ -234,6 +238,7 @@ fn week_context(
   tot: &Totals,
   models: usize,
   top: Option<&PageRow>,
+  usd_weeks: &UsdWeeks,
 ) -> anyhow::Result<Value> {
   Ok(json!({
     "label": read.week.label()?,
@@ -252,9 +257,22 @@ fn week_context(
     "previous_output": compact(previous.output),
     "wow_total": change(week_tot.total, previous.total),
     "wow_output": change(week_tot.output, previous.output),
+    "usd": usd::text(usd_weeks.last.usd),
+    "usd_previous": usd::text(usd_weeks.previous.usd),
+    "usd_change": usd_weeks.change().map(usd::signed_text),
+    "usd_change_pct": usd_weeks.change_percent(),
+    "usd_left_out": group_thousands(usd_weeks.last.left_out_tokens),
     "top_model": top.map_or("", |row| row.model.as_str()),
     "top_output": top.map_or_else(|| "0".to_string(), |row| compact(row.output)),
   }))
+}
+
+/// A last-week row as the page's script reads it: its token fields, and its list-price equivalent in USD, which is null
+/// when the row reads N/A.
+fn week_row_json(row: &PageRow) -> Value {
+  let mut value = row.to_json();
+  value["usd"] = json!(usd::row_usd(row));
+  value
 }
 
 /// The percent change from `previous` to `current`, or null when `previous` is zero.

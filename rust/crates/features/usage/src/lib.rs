@@ -17,6 +17,7 @@ mod poller;
 mod sql;
 #[cfg(test)]
 mod test_support;
+mod usd;
 
 use std::sync::Arc;
 

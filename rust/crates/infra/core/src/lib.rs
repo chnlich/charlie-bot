@@ -18,6 +18,7 @@ pub mod hot_reload;
 pub mod human_size;
 pub mod int_text;
 pub mod json_loads;
+pub mod list_price;
 pub mod logging;
 pub mod logline;
 pub mod memo;

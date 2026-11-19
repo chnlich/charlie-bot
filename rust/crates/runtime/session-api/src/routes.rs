@@ -56,16 +56,16 @@ const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 /// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus. The
 /// overlay holds one entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key
 /// holds that overlay instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A
-/// request that names ids and no filter keys on [`IdSet`] instead. That list is shared while the `ids` string
-/// repeats, so its poll neither clones nor compares the strings either. A filter that adds its members builds that
-/// union per request, as [`StatusIds`] states. `generation` names the sidebar state the body reads beyond the rows,
-/// and `since` the answer's own delta base. A page that holds the state of its last answer sends that answer's token
-/// back, so the same state answers with the same token.
+/// request's own ids key on [`IdSet`] under both filters: the list is shared while the `ids` string repeats, so its
+/// poll neither clones nor compares the strings either. A filter that adds its members builds that union per request,
+/// as [`StatusIds`] states. `generation` names the sidebar state the body reads beyond the rows, and `since` the
+/// answer's own delta base. A page that holds the state of its last answer sends that answer's token back, so the
+/// same state answers with the same token.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum StatusKey {
   Listing {
     derived: ListingOverlay,
-    extra: Vec<String>,
+    extra: IdSet,
     generation: u64,
     since: Option<String>,
     answer: StatusAnswer,
@@ -629,7 +629,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       Ok(corpus) => {
         let overlay = ListingOverlay(corpus.derived);
         page = Some((corpus.rows, overlay.clone()));
-        StatusKey::Listing { derived: overlay, extra: extra.to_vec(), generation, since: since.clone(), answer }
+        StatusKey::Listing { derived: overlay, extra: extra.clone(), generation, since: since.clone(), answer }
       }
       Err(error) => return store_error(error),
     },

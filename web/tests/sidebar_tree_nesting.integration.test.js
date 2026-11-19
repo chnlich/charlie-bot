@@ -541,21 +541,21 @@ test('toggleTreeNode flips the in-memory state, the rendered subtree and the che
 
   assert.equal(context.Sidebar.isTreeNodeExpanded('r1'), true);
   assert.equal(container.classList.contains('hidden'), false);
-  assert.ok(chevron.outerHTML.includes(glyphOf(context, 'disclosure-open')), 'an expanded chevron draws disclosure-open');
-  assert.match(chevron.outerHTML, /aria-expanded="true"/);
+  assert.equal(chevron.classList.contains('rotate-90'), true, 'an expanded chevron turns a quarter');
+  assert.equal(chevron.getAttribute('aria-expanded'), 'true');
 
   // A repaint while expanded renders the subtree open and the chevron turned.
   context.renderSessionList(familyRows(), 'all');
   const open = nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="r1">/);
   assert.doesNotMatch(open[0], /hidden/);
-  assert.match(rowHtml(nav.innerHTML, 'r1'), /tree-chevron"[^>]*data-tree-toggle="r1"[^>]*aria-expanded="true"/);
-  assert.ok(rowHtml(nav.innerHTML, 'r1').includes(glyphOf(context, 'disclosure-open')));
+  assert.match(rowHtml(nav.innerHTML, 'r1'), /tree-chevron rotate-90"[^>]*data-tree-toggle="r1"[^>]*aria-expanded="true"/);
+  assert.ok(rowHtml(nav.innerHTML, 'r1').includes(glyphOf(context, 'disclosure')), 'the chevron draws the collapsed glyph');
 
   context.toggleTreeNode('r1');
   assert.equal(context.Sidebar.isTreeNodeExpanded('r1'), false);
   assert.equal(container.classList.contains('hidden'), true);
-  assert.match(chevron.outerHTML, /aria-expanded="false"/);
-  assert.ok(chevron.outerHTML.includes(glyphOf(context, 'disclosure')), 'a collapsed chevron draws disclosure');
+  assert.equal(chevron.classList.contains('rotate-90'), false, 'a collapsed chevron stays unturned');
+  assert.equal(chevron.getAttribute('aria-expanded'), 'false');
 });
 
 test('a worker leaf row shows the leaf icon and keeps the archive action alone', () => {
@@ -744,11 +744,11 @@ test('expandTreeNode opens a collapsed parent and is a no-op on an open one', ()
   context.Sidebar.expandTreeNode('p1');
   assert.equal(context.Sidebar.isTreeNodeExpanded('p1'), true);
   assert.equal(container.classList.contains('hidden'), false);
-  assert.ok(chevron.outerHTML.includes(glyphOf(context, 'disclosure-open')));
+  assert.equal(chevron.classList.contains('rotate-90'), true);
 
   context.Sidebar.expandTreeNode('p1');
   assert.equal(context.Sidebar.isTreeNodeExpanded('p1'), true, 'an already open node is left alone');
-  assert.ok(chevron.outerHTML.includes(glyphOf(context, 'disclosure-open')));
+  assert.equal(chevron.classList.contains('rotate-90'), true);
 });
 
 test('an archived worker row shows the delivered check in place of the leaf icon', () => {

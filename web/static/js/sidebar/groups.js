@@ -223,11 +223,11 @@ function registerGroupMenuItem(item) {
   groupMenuItems.push(item);
 }
 
-// The expand chevron's meaning key follows its state: disclosure while
-// collapsed, disclosure-open while expanded. A toggle re-renders the chevron
-// with this function, so the glyph and the state never disagree.
+// The expand chevron draws the collapsed disclosure icon; an expanded one
+// turns a quarter with the rotate-90 class. A toggle flips that class on the
+// chevron in place, so the turn animates (toggleSessionGroup, applyTreeNodeExpansion).
 function expandChevron(expanded, cls, attrs = '') {
-  return cbIcon(expanded ? 'disclosure-open' : 'disclosure', 12, cls, attrs);
+  return cbIcon('disclosure', 12, expanded ? `${cls} rotate-90` : cls, attrs);
 }
 
 const SESSION_GROUP_CHEVRON_CLASS = 'text-slate-500 transition-transform session-group-chevron';
@@ -569,7 +569,7 @@ function toggleSessionGroup(key) {
     .find(el => el.dataset.sgroupKey === key);
   if (group) {
     const chevron = group.querySelector('.session-group-chevron');
-    if (chevron) chevron.outerHTML = expandChevron(wasCollapsed, SESSION_GROUP_CHEVRON_CLASS);
+    if (chevron) chevron.classList.toggle('rotate-90', wasCollapsed);
   }
 }
 
@@ -692,8 +692,8 @@ function renderTreeChevron(sessionId, childCount) {
   return treeChevron(sessionId, treeExpandedNodes.has(sessionId), title);
 }
 
-// One tree row's expand chevron. applyTreeNodeExpansion rebuilds it with this
-// same markup, so the glyph follows the expansion.
+// One tree row's expand chevron. applyTreeNodeExpansion turns this element in
+// place, so the rotation animates.
 function treeChevron(sessionId, expanded, title) {
   return expandChevron(expanded,
       'text-slate-500 transition-transform cursor-pointer flex-shrink-0 tree-chevron',
@@ -766,7 +766,8 @@ function applyTreeNodeExpansion(sessionId, expanded) {
     el.classList.toggle('hidden', !expanded);
   });
   document.querySelectorAll(`[data-tree-toggle="${selectorId}"]`).forEach(el => {
-    el.outerHTML = treeChevron(sessionId, expanded, el.getAttribute('title'));
+    el.classList.toggle('rotate-90', expanded);
+    el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   });
   Sidebar.refreshSessionIndicator(sessionId);
 }

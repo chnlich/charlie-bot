@@ -7,7 +7,7 @@ use charliebot_store::run_records::parse_event_line;
 use memchr::memmem;
 use serde_json::Value;
 
-pub fn parse_marker_lines(path: &Path, markers: &[&[u8]]) -> anyhow::Result<Vec<Value>> {
+pub fn parse_marker_lines<M: AsRef<[u8]>>(path: &Path, markers: &[M]) -> anyhow::Result<Vec<Value>> {
   // A compressed log reads as its decompressed bytes. The caller still names the plain path that keys the ledger.
   let reader = run_logs::open(path)
     .with_context(|| format!("opening {}", path.display()))?
@@ -15,7 +15,8 @@ pub fn parse_marker_lines(path: &Path, markers: &[&[u8]]) -> anyhow::Result<Vec<
   let mut reader = BufReader::new(reader);
   let mut line = Vec::new();
   let mut objects = Vec::new();
-  let finders = markers.iter().filter(|marker| !marker.is_empty()).map(memmem::Finder::new).collect::<Vec<_>>();
+  let finders =
+    markers.iter().map(AsRef::as_ref).filter(|marker| !marker.is_empty()).map(memmem::Finder::new).collect::<Vec<_>>();
   loop {
     line.clear();
     if reader.read_until(b'\n', &mut line).with_context(|| format!("reading {}", path.display()))? == 0 {
@@ -73,7 +74,8 @@ mod tests {
       "{\"type\": \"result\", \"usage\": {\"input_tokens\": 5, \"output_tokens\": 6}}".to_string(),
     ];
     fs::write(&path, format!("{}\n{{\"trailing\": \"fragment\"}}", lines.join("\n"))).unwrap();
-    let objects = parse_marker_lines(&path, &[b"\"type\": \"context\"", b"\"type\": \"result\""]).unwrap();
+    let markers: [&[u8]; 2] = [b"\"type\": \"context\"", b"\"type\": \"result\""];
+    let objects = parse_marker_lines(&path, &markers).unwrap();
     let shape = objects.iter().map(|object| (object["type"].as_str(), object["usage"]["input_tokens"].as_i64()));
     assert_eq!(
       shape.collect::<Vec<_>>(),

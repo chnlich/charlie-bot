@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
@@ -12,7 +13,9 @@ use charliebot_core::event_types::{
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::Registry;
-use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl, file_signature};
+use charliebot_registry::usage::{
+  CODEX_THREAD_STARTED, CODEX_TURN_COMPLETED, RecordKind, UsageSource, UsageSourceImpl, file_signature,
+};
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, read_metadata_object};
 use charliebot_store::run_logs as run_log_files;
@@ -30,8 +33,17 @@ pub(crate) const CHARLIE_BOT_SOURCE: &str = "charlie-bot";
 const CLC_MASTER_ACCOUNT: &str = "clc-master";
 const THREAD_MARKERS: [&[u8]; 2] = [b"\"type\": \"result\"", b"\"session_id\""];
 const MASTER_MARKERS: [&[u8]; 2] = [b"\"type\": \"context\"", b"\"type\": \"result\""];
-const RUN_MARKERS: [&[u8]; 5] =
-  [b"\"type\": \"result\"", b"\"type\":\"result\"", b"\"turn.completed\"", b"\"session_id\"", b"\"thread.started\""];
+/// The `type` markers of the run-log lines that can contribute a record: a result, a codex turn's close or a line
+/// naming the session. Two markers quote the codex event names their owner defines, so they are built at first use.
+static RUN_MARKERS: LazyLock<[String; 5]> = LazyLock::new(|| {
+  [
+    "\"type\": \"result\"".to_string(),
+    "\"type\":\"result\"".to_string(),
+    format!("\"{CODEX_TURN_COMPLETED}\""),
+    "\"session_id\"".to_string(),
+    format!("\"{CODEX_THREAD_STARTED}\""),
+  ]
+});
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Verdict {
@@ -163,7 +175,7 @@ pub fn capture_runs(
     if captured.get(path_text) == Some(&signature) {
       continue;
     }
-    let objects = ndjson::parse_marker_lines(&path, &RUN_MARKERS)?;
+    let objects = ndjson::parse_marker_lines(&path, &*RUN_MARKERS)?;
     let metadata = run_metadata(&path)?;
     let backend = truthy_string(&metadata, "backend")?;
     let record = backend
@@ -532,7 +544,7 @@ fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(Count, Count, Count)>>
   let mut seen = false;
   for value in objects {
     let object = as_object(value, "run event")?;
-    if !is_type(object, "turn.completed") {
+    if !is_type(object, CODEX_TURN_COMPLETED) {
       continue;
     }
     seen = true;
@@ -552,7 +564,7 @@ fn run_session_ids(objects: &[Value], metadata: &Map<String, Value>) -> anyhow::
   for value in objects {
     let object = as_object(value, "run event")?;
     ids.extend(session_text(object, "session_id"));
-    if is_type(object, "thread.started") {
+    if is_type(object, CODEX_THREAD_STARTED) {
       ids.extend(session_text(object, "thread_id"));
     }
   }

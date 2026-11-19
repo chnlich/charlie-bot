@@ -3,7 +3,9 @@
   const state = Sidebar.state || {};
   Sidebar.state = state;
   // The search's request, discard and list-paint counts, which the search tests read as window.sidebarSearchCounters.
-  global.sidebarSearchCounters = {fetch: 0, render: 0, discard: 0};
+  // stale_paints counts a list paint that disagrees with the search box: a search paint into an empty box, or a
+  // Workspace paint into a non-empty one.
+  global.sidebarSearchCounters = {fetch: 0, render: 0, discard: 0, stale_paints: 0};
 
   function ensureState(name, value) {
     if (!(name in state)) state[name] = value;
@@ -84,8 +86,13 @@
   // name their rows by id instead. The row refresh and the status poll both read it, so it lives in the first sidebar
   // file they load after.
   function sidebarRowsRefreshable() {
+    return global.currentFilter !== 'archived' && !searchBoxHasText();
+  }
+
+  // Whether the search box holds text: the list then answers a search, and a Workspace paint does not belong on it.
+  function searchBoxHasText() {
     const searchInput = global.document.getElementById('sidebar-search');
-    return global.currentFilter !== 'archived' && !(searchInput && searchInput.value.trim());
+    return !!searchInput && searchInput.value.trim() !== '';
   }
 
   // The sidebar's interaction scripts: the Settings menus, the rename and session-action dialogs,
@@ -174,6 +181,6 @@
   }
 
   Sidebar.wire = wire;
-  wire({registerSidebarControl, sidebarControl, sidebarRowsRefreshable, deferSidebarInteractions});
+  wire({registerSidebarControl, sidebarControl, sidebarRowsRefreshable, searchBoxHasText, deferSidebarInteractions});
   global.Sidebar = Sidebar;
 })(globalThis);

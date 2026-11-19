@@ -70,8 +70,10 @@ function setSidebarFilterPill(filter) {
 }
 
 // The badges at the top of the Workspace list: a package registers a loader
-// when its script loads. load() resolves to the badge HTML, or '' for no
+// when its script loads. load(signal) resolves to the badge HTML, or '' for no
 // badge, and resolves even when its own fetch fails, so the list still paints.
+// It rejects with an AbortError when the signal aborts: a search start cut the
+// Workspace's requests short, and the badges load again with the clear.
 const workspaceBadgeLoaders = [];
 
 function registerWorkspaceBadge(load) {
@@ -82,8 +84,42 @@ function registerWorkspaceBadge(load) {
 
 // Every loader runs on each Workspace fetch; the badges paint in registration
 // order.
-function loadWorkspaceBadges() {
-  return Promise.all(workspaceBadgeLoaders.map(load => load())).then(badges => badges.join(''));
+function loadWorkspaceBadges(signal) {
+  return Promise.all(workspaceBadgeLoaders.map(load => load(signal))).then(badges => badges.join(''));
+}
+
+// The Workspace list's requests (the listing, its badges and the row refresh) share one abort signal. A search start
+// aborts the ones in flight, and a request that starts after that takes the fresh controller.
+let listController = new AbortController();
+
+function listRequestSignal() {
+  return listController.signal;
+}
+
+function abortListRequests() {
+  listController.abort();
+  listController = new AbortController();
+}
+
+// The Workspace memory a clear restores (the last Workspace paint) is fresh while no invalidation came after the full
+// listing it was painted from. A group change, a reconnect, or a row restore that moved rows in or out of the
+// Workspace invalidates it.
+let workspaceInvalidations = 0;
+let workspaceMemoryVersion = 0;
+
+function invalidateWorkspaceMemory() {
+  workspaceInvalidations += 1;
+}
+
+// A listing paints only while the search generation it was sent under is current and the search box is empty. A
+// search that started after the request owns the list.
+function listingMayPaint(generation) {
+  return generation === searchGeneration && !searchBoxHasText();
+}
+
+function listingFailed(err) {
+  // A request the search start aborted ends here without a message.
+  if (err.name !== 'AbortError') console.error('Filter fetch failed:', err);
 }
 
 function switchSidebarFilter(filter) {
@@ -100,6 +136,8 @@ function switchSidebarFilter(filter) {
   const registeredFilter = getSidebarFilter(filter);
   if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
   const requestSeq = factSeqAtRequest();
+  const generation = searchGeneration;
+  const signal = listRequestSignal();
   if (filter === 'all') {
     // The Workspace badges and the session list load in parallel, so badges
     // and list paint together in the one render call.
@@ -107,25 +145,34 @@ function switchSidebarFilter(filter) {
     const url = typeof SESSION_ID !== 'undefined' && SESSION_ID
       ? registeredFilter.url + '&active=' + encodeURIComponent(SESSION_ID)
       : registeredFilter.url;
+    const memoryVersion = workspaceInvalidations;
     Promise.all([
-      fetch(url).then(res => {
+      fetch(url, {signal}).then(res => {
         if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
         return res.json();
       }),
-      loadWorkspaceBadges(),
+      loadWorkspaceBadges(signal),
     ])
-      .then(([payload, workspaceBadges]) => renderSessionList(listingRows(payload, requestSeq), filter,
-          {workspaceBadges, listing: payload.$screen || null}))
-      .catch(err => console.error('Filter fetch failed:', err));
+      .then(([payload, workspaceBadges]) => {
+        if (!listingMayPaint(generation)) return;
+        workspaceMemoryVersion = memoryVersion;
+        workspaceBadgesStale = false;
+        renderSessionList(listingRows(payload, requestSeq), filter,
+            {workspaceBadges, listing: payload.$screen || null});
+      })
+      .catch(listingFailed);
     return;
   }
-  fetch(registeredFilter.url)
+  fetch(registeredFilter.url, {signal})
     .then(res => {
       if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
       return res.json();
     })
-    .then(payload => renderSessionList(listingRows(payload, requestSeq), filter))
-    .catch(err => console.error('Filter fetch failed:', err));
+    .then(payload => {
+      if (!listingMayPaint(generation)) return;
+      renderSessionList(listingRows(payload, requestSeq), filter);
+    })
+    .catch(listingFailed);
 }
 
 // A listing's rows: the Workspace fetch answers with the page's column form, which expandSessionColumns restores,
@@ -146,6 +193,8 @@ function listingRows(payload, requestSeq) {
 const ROW_REFRESH_BATCH = 50;
 const pendingRowIds = new Set();
 let rowRefreshInFlight = false;
+// Set by a restore after a clear: the row refresh it starts re-reads the whole Workspace when a row entered or left it.
+let restoreRowCheck = false;
 
 function queueRowRefresh(sessionId) {
   pendingRowIds.add(sessionId);
@@ -164,27 +213,50 @@ function rowRefreshUrl(filter, ids) {
 function drainRowRefresh() {
   if (rowRefreshInFlight) return;
   if (!sidebarRowsRefreshable()) {
-    pendingRowIds.clear();
+    // An open search keeps the ids for the restore after its clear. Any other view drops them.
+    if (!searchBoxHasText()) pendingRowIds.clear();
     return;
   }
-  if (pendingRowIds.size === 0) return;
+  if (pendingRowIds.size === 0) {
+    restoreRowCheck = false;
+    return;
+  }
   const filter = currentFilter;
   const batch = Array.from(pendingRowIds).slice(0, ROW_REFRESH_BATCH);
   batch.forEach(id => pendingRowIds.delete(id));
   rowRefreshInFlight = true;
   const requestSeq = factSeqAtRequest();
-  fetch(rowRefreshUrl(filter, batch))
+  fetch(rowRefreshUrl(filter, batch), {signal: listRequestSignal()})
     .then(res => {
       if (!res.ok) throw new Error(`Row refresh failed: ${res.status}`);
       return res.json();
     })
     .then(payload => {
       // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
-      if (sidebarRowsRefreshable() && currentFilter === filter) {
-        mergeRowsIntoRenderedList(listingRows(payload.sessions, requestSeq), payload.gone);
+      if (currentFilter !== filter) return;
+      // A search that started while the fetch was in flight keeps the ids for the restore after its clear.
+      if (!sidebarRowsRefreshable()) {
+        batch.forEach(id => pendingRowIds.add(id));
+        return;
       }
+      const rows = listingRows(payload.sessions, requestSeq);
+      if (restoreRowCheck && rowsChangeMembership(rows, payload.gone)) {
+        // The group counts follow the membership, which only a full listing carries.
+        invalidateWorkspaceMemory();
+        pendingRowIds.clear();
+        switchSidebarFilter(filter);
+        return;
+      }
+      mergeRowsIntoRenderedList(rows, payload.gone);
     })
-    .catch(err => console.error('Row refresh failed:', err))
+    .catch(err => {
+      // A search start aborted the fetch: its ids wait for the restore after the clear.
+      if (err.name === 'AbortError') {
+        batch.forEach(id => pendingRowIds.add(id));
+        return;
+      }
+      console.error('Row refresh failed:', err);
+    })
     .finally(() => {
       rowRefreshInFlight = false;
       // Ids that arrived during the fetch form the next one. A tab that went hidden meanwhile holds it until it is
@@ -194,10 +266,27 @@ function drainRowRefresh() {
 }
 
 // The Workspace's badges (the broken cron tasks) load and repaint in place. The Workspace view owns them, so any other
-// view takes no request.
+// view takes no request. A search takes none either: the badges are stale until the clear loads them again.
+let workspaceBadgesStale = false;
+
 function refreshWorkspaceBadges() {
   if (currentFilter !== 'all') return;
-  loadWorkspaceBadges().then(paintWorkspaceBadges);
+  if (searchBoxHasText()) {
+    workspaceBadgesStale = true;
+    return;
+  }
+  loadWorkspaceBadges(listRequestSignal())
+    .then(workspaceBadges => {
+      workspaceBadgesStale = false;
+      paintWorkspaceBadges(workspaceBadges);
+    })
+    .catch(err => {
+      if (err.name === 'AbortError') {
+        workspaceBadgesStale = true;
+        return;
+      }
+      console.error('Workspace badges failed:', err);
+    });
 }
 
 // Pill-click entry point: only entering a different filter collapses group
@@ -287,11 +376,28 @@ function clearSidebarSearch() {
   handleSidebarSearch('');
 }
 
+// The clear's list. On the Workspace with a fresh memory, the rows paint from memory at once, and a row refresh then
+// fetches the ids the search recorded. Any other view, or a stale memory, takes the full listing, which covers those
+// ids too.
+function leaveSearch() {
+  if (currentFilter === 'all' && workspaceMemoryVersion === workspaceInvalidations && restoreWorkspaceFromMemory()) {
+    restoreRowCheck = true;
+    if (workspaceBadgesStale) refreshWorkspaceBadges();
+    deferWhileHidden('row-refresh', drainRowRefresh);
+    return;
+  }
+  pendingRowIds.clear();
+  switchSidebarFilter(currentFilter);
+}
+
 // `fromBroadcast` marks a refresh a broadcast asked for. While a request is in
 // flight, that refresh only marks the rows stale and keeps the generation: the
 // request's end sends the one request that follows, so a burst of broadcasts
 // costs at most one more request.
 function handleSidebarSearch(query, fromBroadcast = false) {
+  const text = query.trim();
+  // A search start aborts the Workspace's requests in flight, before the debounce and the search request.
+  if (text) abortListRequests();
   if (fromBroadcast && searchInFlightGeneration === searchGeneration) {
     searchRefreshPending = true;
     return;
@@ -301,7 +407,6 @@ function handleSidebarSearch(query, fromBroadcast = false) {
   ++searchGeneration;
   // A new query supersedes a refresh that was due for the old one.
   searchRefreshPending = false;
-  const text = query.trim();
   searchQueryText = text;
   if (text) {
     // Hide filter pills while searching
@@ -322,7 +427,7 @@ function handleSidebarSearch(query, fromBroadcast = false) {
     searchPending = false;
     // Restore filter pills and current filter
     if (pills) pills.style.display = '';
-    switchSidebarFilter(currentFilter);
+    leaveSearch();
   }
 }
 
@@ -424,6 +529,7 @@ const GLOBALS = {
   toggleSessionStar,
   queueRowRefresh,
   refreshWorkspaceBadges,
+  invalidateWorkspaceMemory,
 };
 Sidebar.wire(GLOBALS);
 

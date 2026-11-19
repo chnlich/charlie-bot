@@ -41,6 +41,8 @@ function _commitMessage(msg) {
 registerWsMessageHandler('session_renamed', (ev) => {
   const sid = ev.session_id || SESSION_ID;
   updateSidebarSessionName(sid, ev.name);
+  // A rename during a search keeps the row's id for the restore after the clear, which paints the Workspace's old name.
+  if (searchBoxHasText()) queueRowRefresh(sid);
   refreshDisplayedSessionName(sid, ev.name);
 }, {advancesCursor: false, sidebar: true});
 
@@ -55,15 +57,19 @@ function refetchSessionList(fromBroadcast = false) {
   else if (currentFilter === 'archived') refreshArchivedView();
   else switchSidebarFilter(currentFilter);
 }
-registerWsMessageHandler('session_group_changed',
-    () => deferWhileHidden('session-list', () => refetchSessionList(true)), {advancesCursor: false, sidebar: true});
+registerWsMessageHandler('session_group_changed', () => {
+  // The Workspace memory holds the old groups, so a clear that follows re-reads the list.
+  invalidateWorkspaceMemory();
+  deferWhileHidden('session-list', () => refetchSessionList(true));
+}, {advancesCursor: false, sidebar: true});
 // A worker run's finish reaches the page as a task_tree_changed frame, and the concurrency badge counts that run, so
 // the badge refetches with the rows. Its 5 s poll covers a worker run's start, which broadcasts nothing. The frame
 // names the session whose row changed: a list scoped by filter fetches that row alone, and the views that keep their
-// own list refetch it. A hidden tab holds each request until it is visible.
+// own list refetch it. An open search keeps the id as well, for the restore after its clear, and refetches its answer.
+// A hidden tab holds each request until it is visible.
 registerWsMessageHandler('task_tree_changed', (ev) => {
-  if (sidebarRowsRefreshable()) queueRowRefresh(ev.session_id);
-  else deferWhileHidden('session-list', () => refetchSessionList(true));
+  if (sidebarRowsRefreshable() || searchBoxHasText()) queueRowRefresh(ev.session_id);
+  if (!sidebarRowsRefreshable()) deferWhileHidden('session-list', () => refetchSessionList(true));
   deferWhileHidden('workspace-badges', refreshWorkspaceBadges);
   globalThis.ConcurrencyBadge?.refreshSoon();
 }, {advancesCursor: false, sidebar: true});
@@ -78,6 +84,8 @@ registerWsConnectHandler(() => {
   networkLossPending = false;
   if (!sessionListResyncPending) return;
   sessionListResyncPending = false;
+  // The frames the gap hid may have moved rows between groups, so the memory a clear restores is stale.
+  invalidateWorkspaceMemory();
   deferWhileHidden('session-list', refetchSessionList);
 });
 

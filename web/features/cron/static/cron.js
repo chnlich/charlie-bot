@@ -239,13 +239,15 @@ function renderCronErrorBadge(brokenTasks) {
 
 // The Workspace error badge rides this fetch: a failed cron pull yields no
 // badge ([]) but never hides the session list.
-async function fetchBrokenCronTasks() {
+async function fetchBrokenCronTasks(signal) {
   try {
-    const res = await fetch('/api/cron/tasks');
+    const res = await fetch('/api/cron/tasks', {signal});
     if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
     const tasks = await res.json();
     return tasks.filter(t => t.broken).sort((a, b) => a.name.localeCompare(b.name));
   } catch (err) {
+    // An abort is the Workspace's own cancel: the badge load ends with it, not as an empty answer.
+    if (err.name === 'AbortError') throw err;
     console.error('Cron tasks fetch failed:', err);
     return [];
   }
@@ -321,7 +323,7 @@ function renderSessionScheduleLine(s) {
 // Sidebar registrations
 // ---------------------------------------------------------------------------
 // The Workspace error badge rides each Workspace fetch.
-registerWorkspaceBadge(() => fetchBrokenCronTasks().then(renderCronErrorBadge));
+registerWorkspaceBadge(signal => fetchBrokenCronTasks(signal).then(renderCronErrorBadge));
 // Cron owns the listing marker, so its package exempts bound roots from the
 // group preview limit here. A bound root always shows in place and takes no
 // rank against the 5-row cap.

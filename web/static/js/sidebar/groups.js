@@ -381,10 +381,7 @@ let paintedPreviewGroups = 1;
 function paintWorkspaceBadges(workspaceBadges) {
   if (currentFilter !== 'all' || searchListPainted) return;
   if (!lastGroupedRenderArgs || lastGroupedRenderArgs.filter !== 'all') return;
-  lastListPaint = {sessions: lastGroupedRenderArgs.sessions, filter: 'all',
-    options: {workspaceBadges, listing: lastGroupedRenderArgs.listing}};
-  renderGroupedSessionList(lastGroupedRenderArgs.sessions, 'all',
-    {workspaceBadges, listing: lastGroupedRenderArgs.listing});
+  renderSessionList(lastGroupedRenderArgs.sessions, 'all', {workspaceBadges, listing: lastGroupedRenderArgs.listing});
 }
 // A module the page fetched after its document registers a row decoration (a badge, a line, a menu item) after the
 // list painted. The paint it missed leaves the rows it decorates bare. It asks for this repaint, which paints the
@@ -392,10 +389,31 @@ function paintWorkspaceBadges(workspaceBadges) {
 // rather than replaced by the rows an earlier paint left behind.
 let lastListPaint = null;
 
+// The repaint draws the last paint only where the search box agrees with it: a search paint into a non-empty box, any
+// other paint into an empty one. The search note paints over a Workspace paint, so a repaint during the note draws
+// nothing, and a search paint left on screen after its box is cleared draws nothing either.
 function repaintRenderedRows() {
   if (!lastListPaint) return;
   const {sessions, filter, options} = lastListPaint;
+  if ((filter === 'search') !== searchBoxHasText()) return;
   renderSessionList(sessions, filter, options);
+}
+
+// The clear's paint of the Workspace: the rows its last paint drew, from memory and with no fetch. renderSessionList
+// records them as lastListPaint and clears searchListPainted, so a resize repaint after the clear draws the Workspace,
+// and the badge repaint resumes. Returns false when memory holds no Workspace paint.
+function restoreWorkspaceFromMemory() {
+  const memory = lastGroupedRenderArgs;
+  if (!memory || memory.filter !== 'all') return false;
+  renderSessionList(memory.sessions, 'all', {workspaceBadges: memory.workspaceBadges, listing: memory.listing});
+  return true;
+}
+
+// Whether a row refresh moves rows into or out of the Workspace the memory holds: a named row the list lacks, or a
+// gone id the list holds. Such a change alters the groups' counts, which only a full listing carries.
+function rowsChangeMembership(rows, goneIds) {
+  const held = new Set(lastGroupedRenderArgs.sessions.map(s => s.id));
+  return rows.some(row => !held.has(row.id)) || goneIds.some(id => held.has(id));
 }
 
 // The sidebar's list holds a fixed height, and the rows its preview paints follow that height. The phone's
@@ -879,6 +897,7 @@ function renderSessionItem(s, filter, options = {}) {
 
 function renderSessionList(sessions, filter, options = {}) {
   globalThis.sidebarSearchCounters.render += 1;
+  if ((filter === 'search') !== searchBoxHasText()) globalThis.sidebarSearchCounters.stale_paints += 1;
   lastListPaint = {sessions, filter, options};
   searchListPainted = (filter === 'search');
   // The grouped paints (Workspace and Later) nest rows and record their tree
@@ -945,7 +964,7 @@ function removeSessionFromRenderedList(sessionId) {
   if (currentFilter === 'archived' || searchListPainted) return false;
   if (!lastGroupedRenderArgs) return false;
   const doomed = subtreeIdsToRemove(lastGroupedRenderArgs.sessions, sessionId);
-  renderGroupedSessionList(
+  renderSessionList(
       lastGroupedRenderArgs.sessions.filter(s => !doomed.has(s.id)),
       lastGroupedRenderArgs.filter,
       {workspaceBadges: lastGroupedRenderArgs.workspaceBadges, listing: lastGroupedRenderArgs.listing});
@@ -961,7 +980,7 @@ function mergeRowsIntoRenderedList(rows, goneIds) {
   rows.forEach(row => merged.set(row.id, row));
   goneIds.forEach(id => merged.delete(id));
   const sessions = Array.from(merged.values()).sort((a, b) => sessionUpdatedMs(b) - sessionUpdatedMs(a));
-  renderGroupedSessionList(sessions, lastGroupedRenderArgs.filter,
+  renderSessionList(sessions, lastGroupedRenderArgs.filter,
       {workspaceBadges: lastGroupedRenderArgs.workspaceBadges, listing: lastGroupedRenderArgs.listing});
   return true;
 }
@@ -984,6 +1003,8 @@ const GLOBALS = {
   renderSessionItem,
   renderSessionList,
   mergeRowsIntoRenderedList,
+  restoreWorkspaceFromMemory,
+  rowsChangeMembership,
   toggleTreeNode,
 };
 const SIDEBAR_ONLY = {

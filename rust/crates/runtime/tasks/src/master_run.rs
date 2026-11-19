@@ -749,6 +749,36 @@ impl RunProcess for TurnProcess<'_> {
   }
 }
 
+/// A re-attached turn's first process. The follow has read it to its end, so the launch loop's watch observes the events
+/// the follow delivered, and the process's exit is its outcome. Each later launch runs as a turn.
+struct SurvivorProcess<'a> {
+  observed: Vec<Value>,
+  exit_code: i32,
+  stderr: String,
+  turn: TurnProcess<'a>,
+}
+
+impl RunProcess for SurvivorProcess<'_> {
+  fn run<'a>(
+    &'a mut self,
+    launch: &'a Launch,
+    watch: Option<&'a mut dyn LaunchWatch>,
+    relays: usize,
+  ) -> BoxFuture<'a, anyhow::Result<ProcessResult>> {
+    if relays > 0 {
+      return self.turn.run(launch, watch, relays);
+    }
+    Box::pin(async move {
+      if let Some(watch) = watch {
+        for event in &self.observed {
+          watch.observe(event);
+        }
+      }
+      Ok((self.exit_code, self.stderr.clone()))
+    })
+  }
+}
+
 #[derive(Debug)]
 pub(crate) struct TurnCancelled;
 
@@ -1001,7 +1031,7 @@ pub(crate) fn build_fresh_translate(
   crate::midturn_delivery::fresh_translate(features, cfg, option, meta, run_id, Some(log_dir))
 }
 
-pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
+pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
   let metadata = item.session_metadata();
   let record = item.resume_record.as_ref().context("resume item has no recorded run")?.clone();
   let is_alive = item.resume_is_alive.clone().context("resume item has no liveness probe")?;
@@ -1020,6 +1050,7 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   let features = Arc::clone(&item.callbacks.features);
   let callbacks = item.callbacks.clone();
   let cfg = Arc::clone(&item.cfg);
+  let cwd = cfg.sessions_dir().join(&metadata.id);
   let session_id = metadata.id.clone();
   let buffer_limit =
     charliebot_agents::transport::final_stdout::event_buffer_limit(&log_dir, subprocess_buffer_bytes(&cfg)?);
@@ -1124,13 +1155,21 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   {
     error_msg = Some(error);
   }
-  let cancelled = *item.cancel.borrow();
+  let mut cancelled = *item.cancel.borrow();
   let restart_reattach = features
     .registry
     .backend_type_of(&option.backend_type)
     .is_some_and(|registration| registration.traits.restart_reattach);
   let has_process_identity = record.pid.is_some() && record.pid_start.is_some();
-  let let_go = cancelled && restart_reattach && has_process_identity;
+  let mut let_go = cancelled && restart_reattach && has_process_identity;
+  // The launches after the survivor: a relay runs the turn on another login, and its outcome is the turn's.
+  let mut relays = 0;
+  let mut was_built = false;
+  let mut failure = None;
+  let mut refusal_resets_at = None;
+  let mut quota_resets_at = None;
+  // The follow's acknowledgements join the item before any relayed turn records its own.
+  item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
   if cancelled {
     // A resume follow owns no process handle. A covered run only drops this follower; an uncovered process is
     // terminated using the persisted identity, as the fresh-turn cancellation path does.
@@ -1191,13 +1230,97 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
         charliebot_agents::transport::kill::kill_group_escalating(pid, alive).await;
       }
     }
+    // The survivor's exit is in hand, so the launch loop may relay it. The relay watch observes the events the follow
+    // delivered, as a live turn's watch observes each event as it arrives.
+    let context =
+      turn_launch_context(Arc::clone(&tracking), item, option.clone(), cwd.clone(), metadata.cc_session_id.clone())?;
+    let lifecycle = features.registry.lifecycle_for(&option.backend_type)?;
+    let env = build_master_env(item);
+    let mut survivor = SurvivorProcess {
+      observed: stream_events.lock().expect("resume event mutex is not poisoned").clone(),
+      exit_code,
+      stderr: stderr.clone(),
+      turn: TurnProcess {
+        item: &mut *item,
+        features: Arc::clone(&features),
+        option: option.clone(),
+        cwd,
+        env,
+        tracker: Arc::clone(&tracker),
+        cc_session_id: Arc::clone(&callback_cc_session_id),
+        error_event_messages: Vec::new(),
+        log_dir: log_dir.clone(),
+        record_persisted: Arc::new(AtomicBool::new(false)),
+        cancelled: Arc::new(Mutex::new(None)),
+        last_exit_code: None,
+        relay_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        was_built: false,
+        automatic_retries: 0,
+        quota_resets_at: None,
+      },
+    };
+    let launches = launch_loop::run_launches(
+      &context,
+      lifecycle.as_ref(),
+      &mut survivor,
+      {
+        let cc_session_id = Arc::clone(&callback_cc_session_id);
+        move || cc_session_id.lock().expect("native session id mutex is not poisoned").clone()
+      },
+      |_: usize| {},
+    )
+    .await;
+    match launches {
+      Ok(count) => {
+        relays = count;
+        if count > 0 {
+          exit_code = survivor.turn.last_exit_code.unwrap_or(1);
+          error_msg = None;
+          if exit_code != 0 {
+            let relayed_stderr = read_stderr_tail(&stderr_path).await?;
+            error_msg =
+              charliebot_agents::runs::select_error_hint(&survivor.turn.error_event_messages, &relayed_stderr);
+            if survivor.turn.automatic_retries == backend_retry::MAX_AUTOMATIC_RETRIES {
+              error_msg = error_msg.map(|message| backend_retry::exhausted_message(&message));
+            }
+          }
+        }
+      }
+      Err(error) => {
+        if error.downcast_ref::<TurnCancelled>().is_some() {
+          // The relayed turn already ended its process: a covered one was let go, an uncovered one terminated.
+          let covered = survivor.turn.cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
+          tracing::warn!(target: "charliebot_tasks", session = %metadata.id, covered, "master_cc_resume_relay_cancelled");
+          cancelled = true;
+          let_go = covered;
+          error_msg = None;
+          exit_code = 1;
+        } else if let Some(refusal) = error.downcast_ref::<charliebot_registry::backend::LaunchRefused>() {
+          tracing::error!(target: "charliebot_tasks", session = %metadata.id, error = %refusal, failure = ?refusal.failure, "master_cc_resume_launch_refused");
+          error_msg = Some(refusal.to_string());
+          failure = Some(refusal.failure);
+          refusal_resets_at = refusal.resets_at.map(UtcDateTime::into_inner);
+        } else {
+          tracing::error!(target: "charliebot_tasks", session = %metadata.id, error = %error, "master_cc_resume_crashed");
+          error_msg = Some(error.to_string());
+        }
+      }
+    }
+    was_built = survivor.turn.was_built;
+    quota_resets_at = survivor.turn.quota_resets_at;
   }
   let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
-  add_auto_failure_extras(error_msg.as_deref(), None, None, &mut finish_extras);
-  item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
+  if was_built {
+    finish_extras.insert(NATIVE_BACKEND.to_string(), json!(option.id));
+  }
+  if relays > 0 {
+    finish_extras.insert("account_relays".to_string(), json!(relays));
+  }
+  add_auto_failure_extras(error_msg.as_deref(), failure, refusal_resets_at.or(quota_resets_at), &mut finish_extras);
   // The drain takes the same path as a live turn: an Auto quota end continues on the next member silently.
   if !is_pool_member_failure_end(&item.cfg, &metadata, &finish_extras) {
-    report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
+    let quota_exhausted = failure.map(|failure| failure == MemberFailure::Quota);
+    report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), quota_exhausted).await?;
   }
   if !let_go {
     mark_turn_end_unread(item, error_msg.as_deref(), exit_code, &finish_extras).await?;

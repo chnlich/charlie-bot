@@ -77,7 +77,8 @@ struct SessionArgs {
 
 #[derive(Args)]
 struct StatusSetArgs {
-  /// JSON object with any of goal, now, waiting; prints cold reads and exits 3 before storing; - reads stdin
+  /// JSON object with any of goal, now, waiting, remaining; prints cold reads and exits 3 before storing;
+  /// - reads stdin
   #[arg(long)]
   file: String,
   /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
@@ -299,6 +300,7 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
     lines.push("No status yet".to_string());
   } else {
     lines.push(format!("Goal: {}", or_not_set(field(status, "goal")?)));
+    lines.extend(remaining_lines(field(status, "remaining")?)?);
     lines.push(format!(
       "Now: {} (updated {})",
       or_not_set(field(status, "now")?),
@@ -345,6 +347,19 @@ fn render_status(result: &Value) -> Result<String, CliExit> {
     }
   }
   Ok(lines.join("\n"))
+}
+
+/// The Remaining list in its order, each milestone numbered, or `Remaining: Nothing` when the list is empty.
+fn remaining_lines(remaining: &Value) -> Result<Vec<String>, CliExit> {
+  let items = list(remaining)?;
+  if items.is_empty() {
+    return Ok(vec!["Remaining: Nothing".to_string()]);
+  }
+  let mut lines = vec!["Remaining:".to_string()];
+  for (index, item) in items.iter().enumerate() {
+    lines.push(format!("  {}. {}", index + 1, text_repr::value_str(item)));
+  }
+  Ok(lines)
 }
 
 /// The item line, its `since` and `since_exact` lines, and its context when one is stored, indented below.
@@ -432,6 +447,7 @@ mod tests {
     let result = status_result(json!({
       "goal": "Ship the panel",
       "now": "Reviewing",
+      "remaining": [],
       "waiting": [],
       "updated_at": "2026-11-02T03:10:00Z",
       "waiting_version": "0123456789abcdef",
@@ -443,9 +459,35 @@ mod tests {
       text.lines().collect::<Vec<_>>(),
       vec![
         "Goal: Ship the panel",
+        "Remaining: Nothing",
         "Now: Reviewing (updated 2026-11-02T03:10:00Z)",
         "Waiting on you version: 0123456789abcdef",
         "Waiting on you: Nothing"
+      ]
+    );
+  }
+
+  #[test]
+  fn a_status_lists_its_remaining_milestones_in_order_between_goal_and_now() {
+    let result = status_result(json!({
+      "goal": "Ship the panel",
+      "now": "Reviewing",
+      "remaining": ["Land the list", "Read back the trial"],
+      "waiting": [],
+      "updated_at": "2026-11-02T03:10:00Z",
+      "waiting_version": "0123456789abcdef",
+    }));
+
+    let text = render_status(&result).expect("the status renders");
+
+    assert_eq!(
+      text.lines().take(5).collect::<Vec<_>>(),
+      vec![
+        "Goal: Ship the panel",
+        "Remaining:",
+        "  1. Land the list",
+        "  2. Read back the trial",
+        "Now: Reviewing (updated 2026-11-02T03:10:00Z)",
       ]
     );
   }

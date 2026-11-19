@@ -19,9 +19,9 @@ use charliebot_core::event_types::{
   WEB_STATUS, WEB_STATUS_CONFIRMED, WEB_STATUS_REMINDER,
 };
 use charliebot_registry::FeatureContext;
-use charliebot_store::MessageProvenance;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::reply_order::{self, Receipt};
+use charliebot_store::{MessageProvenance, Store};
 use charliebot_tasks::master_trigger::{TriggerMasterRequest, trigger_master};
 use serde_json::{Value, json};
 
@@ -29,7 +29,8 @@ use crate::reply;
 
 /// The status instruction that ends a status reminder.
 const STATUS_SENTENCES: &str = concat!(
-  "Run `charliebot web status set` when Goal, Now or Waiting on you differs from the state that turn read back. ",
+  "Run `charliebot web status set` when Goal, Remaining, Now or Waiting on you differs from the state that turn ",
+  "read back. ",
   "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back."
 );
 
@@ -70,7 +71,7 @@ pub async fn audit_turn(
   let input_ids = features.store.master_done_input_event_ids(done);
   let loaded = reply::load_events(features, session_id).await?;
   let receipts = reply_order::turn_receipts(&features.store, session_id, done, &loaded)?;
-  let pending_close = close_request_pending(features, session_id).await?;
+  let pending_close = close_request_pending(&features.store, session_id).await?;
   let status_needed =
     !archived && status_reminder_needed(features, session_id, done, &input_ids, &loaded, pending_close).await?;
   let steps = reply_steps(&loaded, &receipts)?;
@@ -229,8 +230,8 @@ fn woken_by_status_reminder(loaded: &[charliebot_store::SharedChatEvent], input_
 
 /// Whether the session's newest run left a close request pending. A request that a
 /// later run owns was voided by the wake that started that run, so it does not count.
-async fn close_request_pending(features: &Arc<FeatureContext>, session_id: &str) -> anyhow::Result<bool> {
-  let store = Arc::clone(&features.store);
+pub(crate) async fn close_request_pending(store: &Arc<Store>, session_id: &str) -> anyhow::Result<bool> {
+  let store = Arc::clone(store);
   let session = session_id.to_string();
   tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
     let facts = store.facts_of(&session)?;

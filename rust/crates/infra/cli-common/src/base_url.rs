@@ -8,10 +8,25 @@ use charliebot_core::paths;
 use serde_yaml::{Mapping, Value};
 
 use crate::exit::CliExit;
+use crate::improve_round;
+
+/// The error of a server command that runs in an improve round: the round's host has no CharlieBot server to reach.
+pub const ROUND_NO_SERVER_MESSAGE: &str =
+  "this improve round has no CharlieBot server, so the command cannot reach one: the round waits inside its run";
+
+/// Refuses at once when this process runs in an improve round. A command that needs the server calls it before any
+/// side effect, and [`internal_base_url`] calls it before it reads the port.
+pub fn refuse_in_round() -> Result<(), CliExit> {
+  if improve_round::in_improve_round()? {
+    return Err(CliExit::error(ROUND_NO_SERVER_MESSAGE));
+  }
+  Ok(())
+}
 
 /// The internal-API base URL, `http://localhost:<server.port>`, with the port read from
 /// `config.yaml` each time.
 pub fn internal_base_url() -> Result<String, CliExit> {
+  refuse_in_round()?;
   let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let port = server_port(&home)?;
   Ok(format!("http://localhost:{port}"))

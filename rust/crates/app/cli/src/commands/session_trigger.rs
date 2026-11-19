@@ -10,6 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::base_url;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
@@ -247,6 +248,8 @@ pub fn run(matches: &ArgMatches) -> Result<(), CliExit> {
   if args.cwd.is_some() && args.cmd.is_none() {
     return Err(CliExit::usage("--cwd requires --cmd: it names the started command's working directory"));
   }
+  // Before `--cmd` starts anything: a round refuses here, so no command runs that the registration cannot watch.
+  base_url::refuse_in_round()?;
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
   let sessions_dir = config::sessions_dir_in(&home_dir()?);
   match &args.cmd {

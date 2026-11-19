@@ -41,15 +41,13 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 
 fn probe(link: &str) -> Result<String, CliExit> {
   let path = path_and_query(link)?;
-  let home =
-    home::charliebot_home_dir().map_err(|error| probe_failure(None, &path, Some(exit::source_chain(&error))))?;
-  let port = base_url::server_port(&home).map_err(|error| {
+  let base = base_url::internal_base_url().map_err(|error| {
     let cause = error.body["error"].as_str().expect("base URL errors carry an error message").to_string();
     probe_failure(None, &path, Some(cause))
   })?;
   let auth_headers = headers::internal_api_auth_headers()
     .map_err(|_| probe_failure(None, &path, Some(home::display_path(CREDENTIALS_FILENAME))))?;
-  let url = format!("http://localhost:{port}{path}");
+  let url = format!("{base}{path}");
 
   http::ensure_crypto_provider();
   let runtime = tokio::runtime::Builder::new_current_thread()

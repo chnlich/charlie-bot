@@ -34,6 +34,7 @@ const TIMES_REASON = 'a count written as ×N in text';
 const BREADCRUMB_REASON = 'the › between a comment heading and its question: text, not an icon';
 const REACTION_REASON = "a chat platform's reaction emoji or its test fixture: the platform's own reaction";
 const TEST_DATA_REASON = 'test data for text escaping: the character under test, not an icon';
+const TELEGRAM_ALERT_REASON = 'a cron load-failure alert sent to Telegram: notification text, not drawn as an icon';
 const PROSE_REASON = 'an ellipsis or arrow inside a sentence or a label: text, not an icon';
 
 const ISC_LINE = /^<!-- @license lucide-static \S+ - ISC -->$/;
@@ -104,6 +105,13 @@ const EXCEPTIONS = [
   ...byFile('rust/crates/features/artifacts/src/artifact_view.rs', [
     [" = inject_artifact_ui(\"<body>page</body>\", \"计划😀\", \"v1\", \"v2\", \"window.CB_ICON_TABLE = {};\");", TEST_DATA_REASON],
     ["ns(r#\"window.__cbcServerSessionId=\"\\u8ba1\\u5212\\ud83d\\ude00\";\"#));", TEST_DATA_REASON],
+  ]),
+  ...byFile('rust/crates/features/cron/src/loader.rs', [
+    ["format!(\"⚠️ cron tasks failed to load: {}\"", TELEGRAM_ALERT_REASON],
+    ["assert_eq!(*notifications.lock().unwrap(), [\"⚠️ cron tasks failed to load: alpha, beta\".to_string()]);", TELEGRAM_ALERT_REASON],
+    ["\"⚠️ cron tasks failed to load: alpha, beta\".to_string(),", TELEGRAM_ALERT_REASON],
+    ["\"⚠️ cron tasks failed to load: beta, gamma\".to_string(),", TELEGRAM_ALERT_REASON],
+    ["\"⚠️ cron tasks failed to load: alpha, beta\".to_string(),", TELEGRAM_ALERT_REASON],
   ]),
   ...byFile('rust/crates/features/discord/src/discord_client/tests.rs', [
     ["3333333333333\", \"222222222222222222\", \"\\u{1F440}\").await.unwrap();", REACTION_REASON],

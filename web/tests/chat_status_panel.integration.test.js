@@ -151,6 +151,12 @@ function panelRig() {
     listeners.push(fn);
     windowListeners.set(type, listeners);
   };
+  context.document.removeEventListener = (type, fn) => {
+    documentListeners.set(type, (documentListeners.get(type) || []).filter((listener) => listener !== fn));
+  };
+  context.window.removeEventListener = (type, fn) => {
+    windowListeners.set(type, (windowListeners.get(type) || []).filter((listener) => listener !== fn));
+  };
   context.setTimeout = (fn, delay) => statusTimers.setTimeout(fn, delay);
   context.clearTimeout = (id) => statusTimers.clearTimeout(id);
   const RealDate = Date;
@@ -606,6 +612,26 @@ test('an answered readback marks the item done after a 202', async () => {
   assert.match(ownControls(rig).textContent, /Marked done/);
   assert.equal(ownControls(rig).querySelectorAll('button').length, 0);
   assert.equal(rig.statusGets.length, 2, 'the server status is read again after 202');
+});
+
+test('a Status click starts the one delayed send that page picks start too', async () => {
+  const rig = panelRig();
+  const shared = rig.context.startUndoableSend;
+  const starts = [];
+  rig.context.startUndoableSend = (post) => {
+    starts.push(post);
+    return shared(post);
+  };
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{text: 'Item', since: '2026-11-19T08:30:00Z', link: null}],
+  }});
+  selectStatus(rig);
+  markDoneButton(rig).onclick();
+  assert.equal(starts.length, 1, 'the Status click starts the shared delayed send once');
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(rig.posts.length, 1, 'the shared window posts the click');
 });
 
 test('a changed list moves Undo to the header and still sends the clicked version', async () => {

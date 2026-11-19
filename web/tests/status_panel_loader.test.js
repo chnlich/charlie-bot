@@ -11,6 +11,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const {indexScriptPaths} = require('./read_static');
 
 const ROOT = path.join(__dirname, '..');
 const readLoader = () => fs.readFileSync(path.join(ROOT, 'templates/js/chat/status-panel.js'), 'utf8');
@@ -75,6 +76,7 @@ test('a web session whose status has a waiting item starts the module download',
   assert.deepEqual(Array.from(rig.downloadCalls[0].paths),
     ['/static/js/comment_post.js', '/static/js/chat/status-panel.js'],
     'the Done action\'s click-message helper lands before the module that calls it');
+  assert.ok(!indexScriptPaths().includes('comment_post.js'), 'the chat page loads the helper only through the panel');
 });
 
 test('a web session with nothing to count and a hidden panel asks for nothing', () => {

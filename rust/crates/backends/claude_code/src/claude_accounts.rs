@@ -192,17 +192,20 @@ pub fn credentials_present(account: &claude_config::ClaudeAccount) -> bool {
   data.get("claudeAiOauth").and_then(|oauth| oauth.get("accessToken")).is_some_and(is_truthy)
 }
 
-/// Whether a login's access token lives at least `IMPROVE_TOKEN_MIN_SECONDS` past `now`. A login whose credentials
-/// name no numeric `expiresAt` has no life a round can rely on, so it does not.
-fn token_life_suffices(account: &claude_config::ClaudeAccount, now: UtcDateTime) -> bool {
+/// Whether a login's access token lives at least `IMPROVE_TOKEN_MIN_SECONDS` past `now`. An error names why the login
+/// cannot be used for a keyed round; it never carries credential contents.
+fn token_life_suffices(account: &claude_config::ClaudeAccount, now: UtcDateTime) -> Result<(), &'static str> {
   let path = Path::new(&account.config_dir).join(login_dirs::CREDENTIALS_FILE);
-  let Ok(contents) = fs::read_to_string(path) else { return false };
-  let Ok(data) = serde_json::from_str::<Value>(&contents) else { return false };
-  let Some(expires_at_ms) = data.get("claudeAiOauth").and_then(|oauth| oauth.get("expiresAt")).and_then(Value::as_i64)
-  else {
-    return false;
-  };
-  expires_at_ms / 1000 - now.into_inner().unix_timestamp() >= IMPROVE_TOKEN_MIN_SECONDS as i64
+  let contents = fs::read_to_string(path).map_err(|_| "credentials_unreadable")?;
+  let data = serde_json::from_str::<Value>(&contents).map_err(|_| "credentials_invalid_json")?;
+  let oauth = data.get("claudeAiOauth").ok_or("claudeAiOauth_missing")?;
+  let expires_at = oauth.get("expiresAt").ok_or("expiresAt_missing")?;
+  let expires_at_ms = expires_at.as_i64().ok_or("expiresAt_not_numeric")?;
+  if expires_at_ms / 1000 - now.into_inner().unix_timestamp() >= IMPROVE_TOKEN_MIN_SECONDS as i64 {
+    Ok(())
+  } else {
+    Err("less_than_round_minimum")
+  }
 }
 
 /// The logins of the pool that a keyed round cannot start on, because their access token lives less than
@@ -213,13 +216,20 @@ pub fn short_token_logins(
   now: Option<UtcDateTime>,
 ) -> anyhow::Result<HashSet<String>> {
   let moment = now_or(now);
-  Ok(
-    pool_accounts(cfg, account_pool)?
-      .into_iter()
-      .filter(|account| !token_life_suffices(account, moment))
-      .map(|account| account.label)
-      .collect(),
-  )
+  let mut short = HashSet::new();
+  for account in pool_accounts(cfg, account_pool)? {
+    if let Err(reason) = token_life_suffices(&account, moment) {
+      tracing::warn!(
+        target: "charliebot_agents",
+        account = %account.label,
+        reason,
+        minimum_seconds = IMPROVE_TOKEN_MIN_SECONDS,
+        "claude_account_excluded_for_improve_token_life"
+      );
+      short.insert(account.label);
+    }
+  }
+  Ok(short)
 }
 
 pub fn record_auth_failure(state: &ClaudeAccountState, label: &str, now: Option<UtcDateTime>) {
@@ -1441,10 +1451,32 @@ mod tests {
     let at_minimum = login("at_minimum", Some((seconds + min) * 1000));
     let one_short = login("one_short", Some((seconds + min - 1) * 1000));
     let unnamed = login("unnamed", None);
-    let cfg = config(&home, &[("at_minimum", &at_minimum), ("one_short", &one_short), ("unnamed", &unnamed)]);
+    let nonnumeric = login("nonnumeric", None);
+    fs::write(
+      nonnumeric.join(login_dirs::CREDENTIALS_FILE),
+      json!({"claudeAiOauth": {"accessToken": "synthetic", "expiresAt": "soon"}}).to_string(),
+    )
+    .unwrap();
+    let cfg = config(
+      &home,
+      &[
+        ("at_minimum", &at_minimum),
+        ("one_short", &one_short),
+        ("unnamed", &unnamed),
+        ("nonnumeric", &nonnumeric),
+      ],
+    );
 
     let short = short_token_logins(&cfg, None, Some(now)).unwrap();
-    assert_eq!(short, HashSet::from(["one_short".to_string(), "unnamed".to_string()]));
+    assert_eq!(
+      short,
+      HashSet::from(["one_short".to_string(), "unnamed".to_string(), "nonnumeric".to_string()])
+    );
+    let accounts = pool_accounts(&cfg, None).unwrap();
+    let unnamed_account = accounts.iter().find(|account| account.label == "unnamed").unwrap();
+    let nonnumeric_account = accounts.iter().find(|account| account.label == "nonnumeric").unwrap();
+    assert_eq!(token_life_suffices(unnamed_account, now), Err("expiresAt_missing"));
+    assert_eq!(token_life_suffices(nonnumeric_account, now), Err("expiresAt_not_numeric"));
   }
 
   #[test]

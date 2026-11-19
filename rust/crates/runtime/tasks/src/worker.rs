@@ -56,6 +56,8 @@ const GIT_STASH_GUARD_DIR: &str = "rust/crates/runtime/tasks/git_stash_guard";
 
 /// The improve launcher a round starts through, under the served checkout.
 const IMPROVE_LAUNCHER_PATH: &str = "dev/improve/remote-launch.sh";
+/// The launcher's token-short marker distinguishes its preflight exit 8 from an agent's ordinary exit 8.
+const IMPROVE_TOKEN_SHORT_MARKER: &str = "improve launch: token-short:";
 /// The instructions file of a task run, kept beside its events log.
 pub const HARNESS_INSTRUCTIONS_NAME: &str = "harness_instructions.md";
 /// The diagnostics file of a run whose process outlives its result.
@@ -886,10 +888,10 @@ impl RunProcess for WorkerProcess<'_> {
       let mut watch = watch;
       loop {
         let result = self.worker.run_process(&self.sink, &self.env, launch, watch.as_deref_mut(), relays).await;
-        // The improve launcher exits with its token-life code before it starts the round, so a keyed round that
-        // exits with it never ran: its login is short, and the run moves to another member without recording one out.
+        // The improve launcher marks its token-life exit before it starts the round. Match both the code and marker,
+        // because a remote agent can exit with the same numeric code during an ordinary run.
         let result = match result {
-          Ok((exit_code, stderr)) if exit_code == IMPROVE_TOKEN_SHORT_EXIT => match self.worker.remote_launch()? {
+          Ok((exit_code, stderr)) if is_improve_token_short_exit(exit_code, &stderr) => match self.worker.remote_launch()? {
             Some(_) => {
               Err(QuotaExhaustedError::with_failure(stderr, None, backend_pool::MemberFailure::TokenShort).into())
             }
@@ -967,6 +969,10 @@ impl RunProcess for ResumeProcess<'_> {
       }
     })
   }
+}
+
+fn is_improve_token_short_exit(exit_code: i32, stderr: &str) -> bool {
+  exit_code == IMPROVE_TOKEN_SHORT_EXIT && stderr.lines().any(|line| line.starts_with(IMPROVE_TOKEN_SHORT_MARKER))
 }
 
 /// The events log of one run, held open for the whole run, and the broadcast channel of its thread.
@@ -1313,5 +1319,17 @@ mod run_log_tests {
     expected.extend(event_line(&other_system));
     assert_eq!(fs::read(path).unwrap(), expected);
     assert_eq!(thinking["subtype"], "thinking_tokens", "the stored-line filter does not mutate forwarded events");
+  }
+}
+
+#[cfg(test)]
+mod improve_exit_tests {
+  use super::*;
+
+  #[test]
+  fn token_short_requires_the_launcher_marker_as_well_as_exit_code_eight() {
+    assert!(is_improve_token_short_exit(8, "improve launch: token-short: access token life is short"));
+    assert!(!is_improve_token_short_exit(8, "agent finished with exit code 8"));
+    assert!(!is_improve_token_short_exit(1, "improve launch: token-short: access token life is short"));
   }
 }

@@ -897,8 +897,18 @@ impl TaskExecutionAdapter {
     let lifecycle = self.features.registry.lifecycle_for(&option.backend_type)?;
     let held_native_id = continuation.as_ref().and_then(|continuation| continuation.native_id.clone());
     if registration.traits.preassigned_session_id {
-      let preassigned = held_native_id.clone().or_else(|| Some(Uuid::new_v4().to_string()));
-      lifecycle.assign_thread_native_id(&mut binding, preassigned.as_deref());
+      let preassigned = held_native_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+      lifecycle.assign_thread_native_id(&mut binding, Some(&preassigned));
+      // A re-attach rebuilds the run from its record, so the conversation the process was launched on is recorded now.
+      self
+        .features
+        .store
+        .record_observation(
+          session_id,
+          run_id,
+          Map::from_iter([(OBSERVATION_NATIVE_SESSION_ID.to_string(), json!(preassigned))]),
+        )
+        .await?;
     }
 
     let run_dir = self.features.store.run_dir(session_id, run_id);

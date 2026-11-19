@@ -126,6 +126,8 @@
 /* An icon from cbIcon sits on its text line. Preflight makes an svg a block, which would drop a mark
    onto a line of its own beside the words it labels. */
 .cb-icon { display: inline-block; }
+/* The star button's icon is block-level: an inline icon adds a line box and grows the 22 px button to 32 px. */
+.star-btn > .cb-icon { display: block; }
 /* The fold row's secondary tone: the conclusion arrow and the steps/time meta
    read beside the title. #64748b rendered 3.75:1 on the row's #0f172a
    background, under the 4.5:1 floor for text this small. #94a3b8 renders

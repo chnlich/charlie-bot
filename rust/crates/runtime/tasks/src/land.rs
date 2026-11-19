@@ -1083,13 +1083,14 @@ const CI_WATCH_BOUND_MARGIN_SECS: i64 = 120;
 /// so a PR that never gets a check wakes as the trigger's timeout.
 fn ci_gate_watch_command(repo: &str, pr_number: i64, sha: &str) -> String {
   let bound = TIMEOUT_SECS + CI_WATCH_BOUND_MARGIN_SECS;
-  let registered = format!(
-    "[ \"$(gh api repos/{repo}/commits/{sha}/check-runs --jq .total_count)\" != 0 ] || \
-     [ \"$(gh api repos/{repo}/commits/{sha}/status --jq .total_count)\" != 0 ]"
-  );
   format!(
-    "timeout {bound} sh -c 'until {registered}; do sleep {CHECK_REGISTRATION_POLL_SECS}; done; \
-     gh pr checks {pr_number} --repo {repo} --watch --fail-fast'"
+    "timeout {bound} sh -c 'while :; do \
+     check_runs=$(gh api repos/{repo}/commits/{sha}/check-runs --jq .total_count) || exit $?; \
+     if [ \"$check_runs\" -gt 0 ]; then break; fi; \
+     statuses=$(gh api repos/{repo}/commits/{sha}/status --jq .total_count) || exit $?; \
+     if [ \"$statuses\" -gt 0 ]; then break; fi; \
+     sleep {CHECK_REGISTRATION_POLL_SECS}; \
+     done; gh pr checks {pr_number} --repo {repo} --watch --fail-fast'"
   )
 }
 
@@ -1775,11 +1776,15 @@ mod tests {
   const GH_WATCH_STUB: &str = r#"
 case "$1 $2" in
   "api "*/check-runs)
+    if [ "${GH_API_FAIL_ENDPOINT:-}" = "check-runs" ]; then exit 9; fi
     polls=$(($(cat "$GH_STATE/polls" 2>/dev/null || echo 0) + 1))
     echo "$polls" > "$GH_STATE/polls"
     if [ "$polls" -gt "$GH_REGISTRATION_POLLS" ]; then echo 1; else echo 0; fi
     ;;
-  "api "*/status) echo 0 ;;
+  "api "*/status)
+    if [ "${GH_API_FAIL_ENDPOINT:-}" = "status" ]; then exit 9; fi
+    echo 0
+    ;;
   "pr checks")
     cat "$GH_STATE/polls" > "$GH_STATE/watch-started-after"
     exit "$GH_WATCH_EXIT"
@@ -1808,6 +1813,23 @@ esac
     (run, started_after.trim().parse().expect("the poll count is a number"))
   }
 
+  /// Runs the watch command with one failing registration lookup and returns its sandbox for assertions.
+  fn run_ci_gate_watch_with_api_failure(failed_endpoint: &str) -> (charliebot_shell_harness::Run, std::path::PathBuf) {
+    let sandbox = charliebot_shell_harness::Sandbox::new();
+    let state = sandbox.dir("state");
+    sandbox.stub("gh", GH_WATCH_STUB);
+    sandbox.stub("sleep", "exit 0\n");
+    let mut env = sandbox.env();
+    env.insert("GH_STATE".to_string(), state.display().to_string());
+    env.insert("GH_REGISTRATION_POLLS".to_string(), "100".to_string());
+    env.insert("GH_WATCH_EXIT".to_string(), "0".to_string());
+    env.insert("GH_API_FAIL_ENDPOINT".to_string(), failed_endpoint.to_string());
+    let cmd = ci_gate_watch_command("acme/widgets", 7, &"a".repeat(40));
+    let mut command = charliebot_shell_harness::command("bash", &env);
+    command.arg("-c").arg(&cmd);
+    (charliebot_shell_harness::run(&mut command), state)
+  }
+
   #[test]
   fn an_empty_check_list_then_passing_checks_ends_completed() {
     let (run, started_after) = run_ci_gate_watch(2, 0);
@@ -1827,6 +1849,20 @@ esac
     let (run, started_after) = run_ci_gate_watch(0, 0);
     assert_eq!(run.code, 0, "{}", run.describe());
     assert_eq!(started_after, 1);
+  }
+
+  #[test]
+  fn a_failed_check_run_lookup_fails_without_starting_the_watch() {
+    let (run, state) = run_ci_gate_watch_with_api_failure("check-runs");
+    assert_eq!(run.code, 9, "{}", run.describe());
+    assert!(!state.join("watch-started-after").exists(), "the PR check watch must not start after an API error");
+  }
+
+  #[test]
+  fn a_failed_status_lookup_fails_without_starting_the_watch() {
+    let (run, state) = run_ci_gate_watch_with_api_failure("status");
+    assert_eq!(run.code, 9, "{}", run.describe());
+    assert!(!state.join("watch-started-after").exists(), "the PR check watch must not start after an API error");
   }
 
   #[test]

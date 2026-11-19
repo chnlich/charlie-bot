@@ -3,7 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -26,6 +27,7 @@ use charliebot_core::int_text;
 use charliebot_core::proc_status;
 use charliebot_core::run_token;
 use charliebot_core::subagent::AGENT_TOOL;
+use charliebot_core::tempdir::{TempDir, mkdtemp};
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME, TOOL_NAME};
 
@@ -343,8 +345,8 @@ impl ClaudeCodeBackend {
     }
   }
 
-  fn one_shot_command(&self, system: &str) -> Vec<String> {
-    one_shot_argv(&self.one_shot_model_args(), system)
+  fn one_shot_command(&self, system_file: &str) -> Vec<String> {
+    one_shot_argv(&self.one_shot_model_args(), system_file)
   }
 
   async fn run_one_shot(
@@ -354,7 +356,8 @@ impl ClaudeCodeBackend {
     system: &str,
     timeout: Option<Duration>,
   ) -> anyhow::Result<String> {
-    let command = self.one_shot_command(system);
+    let system_file = SystemPromptFile::write(system)?;
+    let command = self.one_shot_command(&system_file.path);
     let env = self.one_shot_env(base_env);
     run_one_shot_process(&command, &env, prompt, timeout, self.cgroup_session_id.as_deref(), &self.cgroup_config).await
   }
@@ -415,8 +418,9 @@ fn one_shot_disallowed_tools() -> String {
   ["Bash", READ_TOOL, WRITE_TOOL, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, AGENT_TOOL].join(",")
 }
 
-/// The argv of a `claude -p` text one-shot: no session persistence, tools disabled, and the caller's model flags.
-fn one_shot_argv(model_args: &[String], system: &str) -> Vec<String> {
+/// The argv of a `claude -p` text one-shot: no session persistence, tools disabled, the caller's model flags, and the
+/// system prompt file that `--system-prompt-file` reads. The prompt goes to stdin.
+fn one_shot_argv(model_args: &[String], system_file: &str) -> Vec<String> {
   let mut command = vec![
     "claude".to_string(),
     "-p".to_string(),
@@ -426,12 +430,31 @@ fn one_shot_argv(model_args: &[String], system: &str) -> Vec<String> {
   ];
   command.extend(model_args.iter().cloned());
   command.extend([
-    "--system-prompt".to_string(),
-    system.to_string(),
+    "--system-prompt-file".to_string(),
+    system_file.to_string(),
     DISALLOWED_TOOLS_FLAG.to_string(),
     one_shot_disallowed_tools(),
   ]);
   command
+}
+
+/// The system prompt of one text one-shot, written to a file for `--system-prompt-file`. The file lives in its own
+/// temporary directory, which is removed when this guard drops, after the one-shot's process has ended.
+struct SystemPromptFile {
+  _directory: TempDir,
+  path: String,
+}
+
+impl SystemPromptFile {
+  fn write(system: &str) -> anyhow::Result<Self> {
+    let directory = mkdtemp("charliebot-claude-system-")?;
+    let file = directory.path().join("system-prompt.txt");
+    fs::write(&file, system).with_context(|| format!("writing the claude system prompt file {}", file.display()))?;
+    let path = file.into_os_string().into_string().map_err(|path| {
+      anyhow::anyhow!("the claude system prompt path is not valid Unicode: {}", Path::new(&path).display())
+    })?;
+    Ok(Self { _directory: directory, path })
+  }
 }
 
 impl AgentBackend for ClaudeCodeBackend {
@@ -637,8 +660,8 @@ impl AnthropicEndpointBackend {
     }
   }
 
-  fn one_shot_command(&self, system: &str) -> Vec<String> {
-    let mut command = one_shot_argv(&self.one_shot_model_args(), system);
+  fn one_shot_command(&self, system_file: &str) -> Vec<String> {
+    let mut command = one_shot_argv(&self.one_shot_model_args(), system_file);
     disallow_tool(&mut command, TOOL_NAME);
     command
   }
@@ -723,7 +746,8 @@ impl AgentBackend for AnthropicEndpointBackend {
     timeout: Option<Duration>,
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     Some(Box::pin(async move {
-      let command = self.one_shot_command(system);
+      let system_file = SystemPromptFile::write(system)?;
+      let command = self.one_shot_command(&system_file.path);
       let env = self.one_shot_env(base_env)?;
       run_one_shot_process(
         &command,
@@ -1171,6 +1195,47 @@ mod tests {
     assert_eq!(env["UNRELATED_INHERITED_VAR"], "kept");
   }
 
+  /// A 200 KiB prompt reaches claude on stdin, and a 200 KiB system prompt is named by a file. No argv element is over
+  /// 128 KiB. The stub records stdin to `stdin.txt` under the same root.
+  #[ignore = "integration"]
+  #[tokio::test]
+  async fn one_shot_text_sends_a_200_kib_prompt_on_stdin_and_the_system_prompt_by_file() {
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let root = tempfile::tempdir().unwrap();
+    let (bin, argv, _env_file) = stage_fake_claude(root.path());
+    let base_env = inherited_env(&bin);
+    let mut backend = ClaudeCodeBackend::from_launch(
+      Some("claude-haiku-5-5".to_string()),
+      None,
+      false,
+      false,
+      None,
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: Map::new(),
+        manager_turn: false,
+      },
+      zero_limits(),
+    )
+    .unwrap();
+    let prompt = "\u{fc}".repeat(100 * 1024);
+    let system = "\u{e9}".repeat(100 * 1024);
+
+    assert_eq!(backend.one_shot_text(&base_env, &prompt, &system, None).unwrap().await.unwrap(), "ok");
+
+    let args = recorded_lines(&argv);
+    assert!(args.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "{args:?}");
+    assert!(args.contains(&"--system-prompt-file".to_string()), "{args:?}");
+    assert_eq!(fs::read_to_string(root.path().join("stdin.txt")).unwrap(), prompt);
+  }
+
   fn zero_limits() -> SessionCgroupConfig {
     SessionCgroupConfig::disabled()
   }
@@ -1283,7 +1348,7 @@ mod tests {
 
   #[test]
   fn cli_native_one_shot_uses_text_mode_and_no_session_persistence() {
-    let command = one_shot_argv(&["--model".to_string(), "claude-fable-5-1".to_string()], "system");
+    let command = one_shot_argv(&["--model".to_string(), "claude-fable-5-1".to_string()], "/synthetic/system.txt");
     let disallowed = one_shot_disallowed_tools();
     assert_eq!(
       command,
@@ -1295,12 +1360,23 @@ mod tests {
         "--no-session-persistence",
         "--model",
         "claude-fable-5-1",
-        "--system-prompt",
-        "system",
+        "--system-prompt-file",
+        "/synthetic/system.txt",
         "--disallowed-tools",
         disallowed.as_str()
       ]
     );
+  }
+
+  /// A 200 KiB system prompt reaches claude through its file: the argv carries the path, and the file holds the text.
+  #[test]
+  fn a_200_kib_system_prompt_is_read_from_a_file_and_no_argv_element_carries_it() {
+    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+    let system = "\u{fc}".repeat(100 * 1024);
+    let file = SystemPromptFile::write(&system).unwrap();
+    assert_eq!(fs::read_to_string(&file.path).unwrap(), system);
+    let command = one_shot_argv(&[], &file.path);
+    assert!(command.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "{command:?}");
   }
 
   /// The two commands of `cc-claude`: the built-in web search stays available, and the endpoint backend's extra
@@ -1355,15 +1431,15 @@ mod tests {
     );
     let disallowed = one_shot_disallowed_tools();
     assert_eq!(
-      one_shot_argv(&[], "system"),
+      one_shot_argv(&[], "/synthetic/system.txt"),
       [
         "claude",
         "-p",
         "--output-format",
         "text",
         "--no-session-persistence",
-        "--system-prompt",
-        "system",
+        "--system-prompt-file",
+        "/synthetic/system.txt",
         "--disallowed-tools",
         disallowed.as_str()
       ]
@@ -1374,7 +1450,7 @@ mod tests {
   /// The manager turn, work runs and improve iterations disallow it only with the switch off.
   #[test]
   fn only_the_manager_work_and_iteration_lists_lose_agent_with_the_switch_on() {
-    let one_shot = one_shot_argv(&[], "system");
+    let one_shot = one_shot_argv(&[], "/synthetic/system.txt");
     assert!(disallowed_tools_value(&one_shot).split(',').any(|tool| tool == AGENT_TOOL), "the one-shot list");
     let compaction = crate::claude_compaction::compaction_command("cc-session", "charlie-session");
     assert!(disallowed_tools_value(&compaction).split(',').any(|tool| tool == AGENT_TOOL), "the compaction list");
@@ -1427,7 +1503,7 @@ mod tests {
       disallowed_tools_value(&session),
       format!("{},{}", headless_disallowed_tools(RunKind::Work, false), TOOL_NAME)
     );
-    let one_shot = backend.one_shot_command("system");
+    let one_shot = backend.one_shot_command("/synthetic/system.txt");
     assert_eq!(disallowed_tools_value(&one_shot), format!("{},{}", one_shot_disallowed_tools(), TOOL_NAME));
   }
 
@@ -1472,7 +1548,7 @@ mod tests {
       command.iter().all(|value| !value.contains("synthetic-token")),
       "no argument carries a credential: {command:?}"
     );
-    let one_shot = backend.one_shot_command("system");
+    let one_shot = backend.one_shot_command("/synthetic/system.txt");
     assert!(!one_shot.iter().any(|value| value == MCP_CONFIG_FLAG), "a one-shot mounts no MCP tool");
   }
 

@@ -11,6 +11,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use charliebot_chat_threads::thread_entry::MESSAGE_IDS;
 use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::channel_verb::{ReplyArgs, post_reply};
 use charliebot_cli_common::client;
@@ -198,7 +199,7 @@ fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
 
 fn ack(args: &AckArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  let result = client::post(ACK_PATH, json!({ "session_id": session_id, "message_ids": args.message_id }), None, &[])?;
+  let result = client::post(ACK_PATH, json!({ "session_id": session_id, (MESSAGE_IDS): args.message_id }), None, &[])?;
   print!("{}", json_out::render(&result, None));
   Ok(())
 }

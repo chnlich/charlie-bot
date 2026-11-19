@@ -29,14 +29,16 @@
     .event-row { display: flow-root; border-bottom: 1px solid #1e293b; }
     .event-row:last-child { border-bottom: none; }
     /* A row opens its event's JSON, so its first line is a button: slate-850 lifts it from the page's slate-900
-       under the pointer, the caret at its end turns a quarter while the body is open, and the focus ring marks
+       under the pointer, the caret at its end shows the open chevron while the body is open, and the focus ring marks
        where the keyboard stands. The caret keeps the slate-400 tone of the row's other secondary text. */
     .event-row-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 16px;
       border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
     .event-row-head:hover { background: #172033; }
     .event-row-head:focus-visible { outline: 2px solid #3b82f6; outline-offset: -2px; }
-    .event-caret { color: #94a3b8; font-size: 10px; line-height: 1; transition: transform .15s; }
-    .event-row-head[aria-expanded="true"] .event-caret { transform: rotate(90deg); }
+    .event-caret { color: #94a3b8; line-height: 1; }
+    .event-caret-open { display: none; }
+    .event-row-head[aria-expanded="true"] .event-caret-closed { display: none; }
+    .event-row-head[aria-expanded="true"] .event-caret-open { display: inline-block; }
     /* Above 768 px the event's JSON aligns under the type badge: 56 px from the row's left edge,
        16 px from its right. */
     .event-row .json-body { margin: 8px 16px 10px 56px; }
@@ -158,9 +160,7 @@
   <header class="events-topbar bg-slate-850 border-b border-slate-700 flex items-center gap-3 px-4 py-3">
     <a href="/"
        class="events-back flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition-colors text-sm">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-      </svg>
+      {{ icon('back', 16) }}
       Back
     </a>
     <div class="events-back-sep h-4 w-px bg-slate-700"></div>
@@ -191,9 +191,7 @@
     <header class="events-topbar bg-slate-850 border-b border-slate-700 flex items-center gap-3 px-4 py-3">
       <a href="/?session={{ session_id }}"
          class="events-back flex items-center gap-1.5 text-slate-400 hover:text-slate-200 transition-colors text-sm">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-        </svg>
+        {{ icon('back', 16) }}
         Back
       </a>
       <div class="events-back-sep h-4 w-px bg-slate-700"></div>
@@ -202,10 +200,7 @@
       </h1>
       <a href="{{ events_url }}" download aria-label="Download JSONL"
          class="events-download events-secondary flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-300 transition-colors px-2 py-1 rounded border">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-        </svg>
+        {{ icon('download', 14) }}
         <span class="events-download-label">Download JSONL</span>
       </a>
       <span id="event-count" class="text-xs text-slate-400"></span>
@@ -242,15 +237,13 @@
 
   <!-- Loading / error states -->
   <div id="loading" class="flex items-center justify-center py-16 text-slate-400 text-sm gap-2">
-    <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-    </svg>
+    {{ icon('loading', 16, 'animate-spin') }}
     Loading events…
   </div>
   <div id="error-msg" class="hidden text-center py-16 text-red-400 text-sm"></div>
   <div id="empty-msg" class="hidden text-center py-16 text-slate-400 text-sm">No events found.</div>
 
+  <script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
   <script>{% include 'partials/json-highlight.js' %}</script>
   <script>
     // -------------------------------------------------------------------------
@@ -427,7 +420,7 @@
             <span class="event-type text-xs px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${badgeCls}">${escapeHtml(type)}</span>
             ${time ? `<span class="text-xs text-slate-400 flex-shrink-0 font-mono">${timeText(time)}</span>` : ''}
             <span class="event-preview flex-1 min-w-0 text-xs text-slate-400 truncate"></span>
-            <span class="event-caret flex-shrink-0" aria-hidden="true">▶</span>
+            <span class="event-caret flex-shrink-0" aria-hidden="true">${cbIcon('disclosure', 10, 'event-caret-closed')}${cbIcon('disclosure-open', 10, 'event-caret-open')}</span>
           </button>
           <div class="json-body ${expandAll ? '' : 'hidden'}">
             <pre class="text-xs bg-slate-800 rounded p-3 overflow-x-auto leading-5">${payloadHtml(ev)}</pre>

@@ -41,7 +41,8 @@ test("every field the template reads from a row is a field the row JSON carries"
 });
 
 test("every top-level name the template reads is a key of the page context", () => {
-  const loopNames = new Set(["row", "loop"]);
+  // `row` and `loop` belong to the row loop; `icon` is the icon module's template function, not a context key.
+  const loopNames = new Set(["row", "loop", "icon"]);
   const read = new Set([
     ...[...template.matchAll(/{{-?\s*([a-z_]+)/g)].map((match) => match[1]),
     ...[...template.matchAll(/{%-?\s*(?:if|elif|for)\s+(?:not\s+)?([a-z_]+)/g)].map((match) => match[1]),

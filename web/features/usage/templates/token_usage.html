@@ -46,8 +46,9 @@
      do. Enter and Space then give the chip the same visible focus the rest of the
      page shows. */
   .detBtn:focus-visible { outline:2px solid var(--acc); outline-offset:2px }
-  .detBtn::after { content:" \25B8" }
-  .detBtn[aria-expanded="true"]::after { content:" \25BE" }
+  .detBtn .det-open, button.tg .tg-open { display:none }
+  .detBtn[aria-expanded="true"] .det-closed, button.tg[aria-expanded="true"] .tg-closed { display:none }
+  .detBtn[aria-expanded="true"] .det-open, button.tg[aria-expanded="true"] .tg-open { display:inline-block }
   .detBody { display:inline-flex; flex-wrap:wrap; gap:8px; max-width:100% }
   p { margin:8px 0 }
   ul { margin:8px 0 0; padding-left:20px } li { margin:4px 0 }
@@ -141,7 +142,7 @@
   ledger ({{ as_of }}).</p>
   <div class="meta">
     {% if ctx.rows %}<span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }} {{ zone }}</span>{% endif %}
-    <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details</button>
+    <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details {{ icon('disclosure', 12, 'det-closed') }}{{ icon('disclosure-open', 12, 'det-open') }}</button>
     <span class="mtag">generated &middot; {{ generated }}</span>
     <span class="detBody" id="usage-details" hidden>
       <span class="mtag">sources &middot; {{ ctx.usage_sources|join(' / ') }} local logs</span>
@@ -301,6 +302,7 @@
 
 <div class="tip" id="tip" role="tooltip" aria-hidden="true"></div>
 
+<script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
 <script>
 const DATA = {{ payload|safe }};
 const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)',
@@ -360,10 +362,14 @@ const sourceTable = (segments, columns) => table('data stack', ['Source', ...col
 const accountTable = accounts => table('data stack', ['Account', 'API calls', 'Output', 'Total'],
   accounts.map(a => [a.name, fmt(a.calls), fmt(a.output), fmt(a.total)]));
 
-// A toggle button opens its detail row (or its accounts table).
-// The button carries the state for assistive tech.
+// A toggle button opens its detail row (or its accounts table). A model row's button shows the disclosure chevron,
+// which turns open while the row is open; the accounts button is labelled. The button carries the state for
+// assistive tech.
 const toggler = (label, cls) => {
-  const button = el('button', cls, cls === 'tg' ? '▸' : label);
+  const button = el('button', cls, cls === 'tg' ? undefined : label);
+  if (cls === 'tg') {
+    button.innerHTML = `${cbIcon('disclosure', 11, 'tg-closed')}${cbIcon('disclosure-open', 11, 'tg-open')}`;
+  }
   button.type = 'button';
   button.setAttribute('aria-expanded', 'false');
   button.setAttribute('aria-label', label);

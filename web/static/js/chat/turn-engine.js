@@ -181,6 +181,13 @@
       // round id. A slot exists while its panel is open. The cache is what
       // keeps the panel across a view switch.
       this.forYouPanelSlots = new Map();
+      // The For-you rows before the first screen (the bootstrap's older_for_you), oldest first. They sit outside
+      // `entries`: Everything projects the store alone, so these rows never show there. For you shows them above the
+      // store's rows until an older page brings the same message into the store (prependMessages).
+      this.forYouHead = [];
+      // The first For-you row this view paints calls the mount's onForYouFirstRow once; null when no caller asks.
+      this.onForYouFirstRow = null;
+      this.forYouFirstRowReported = false;
       // A worker page's pagination sentinel (holdWorkerSentinel), or null.
       this.workerSentinel = null;
       // Every message entry in server (time) order: a prepended page lands at
@@ -1081,6 +1088,8 @@
     // bottom-pinned.
     mount(messages, options = {}) {
       this.entries.push(...messages.map((msg) => this.makeEntry(msg)));
+      this.forYouHead = (options.forYouHead || []).map((msg) => this.makeEntry(msg));
+      this.onForYouFirstRow = options.onForYouFirstRow || null;
       this.attach(options);
     }
 
@@ -1304,7 +1313,7 @@
       const children = [];
       const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
       if (sentinel) children.push(sentinel);
-      const shown = forYouRules.items(this.entries);
+      const shown = forYouRules.items(this.forYouHead.concat(this.entries));
       if (!shown.length) {
         if (forYouRules.isWorker()) children.push(forYouRules.summaryCard());
         else children.push(this.forYouEmptyNode());
@@ -1320,6 +1329,10 @@
       }
       children.push(this.forYouHolderNode());
       setChildren(this.container, children);
+      if (shown.length && !this.forYouFirstRowReported) {
+        this.forYouFirstRowReported = true;
+        if (this.onForYouFirstRow) this.onForYouFirstRow();
+      }
     }
 
     // Hangs the round's button group on the reply bubble's time row. The
@@ -1576,13 +1589,32 @@
     // shift the existing content moved down by.
     prependMessages(messages) {
       const pageRecords = new Set();
-      const fresh = messages.filter((msg) => {
+      const headByKey = new Map();
+      for (const entry of this.forYouHead) {
+        const key = this.messageKey(entry.msg);
+        if (key !== null) headByKey.set(key, entry);
+      }
+      const movedHead = new Set();
+      const fresh = [];
+      for (const msg of messages) {
         const key = this.messageKey(msg);
-        if (key === null) return true;
-        if (this.messageRecords.has(key) || pageRecords.has(key)) return false;
+        if (key === null) {
+          fresh.push(this.makeEntry(msg));
+          continue;
+        }
+        if (pageRecords.has(key)) continue;
         pageRecords.add(key);
-        return true;
-      }).map((msg) => this.makeEntry(msg));
+        // A For-you row the page now carries moves into the store with its node, so it shows once.
+        const head = headByKey.get(key);
+        if (head) {
+          movedHead.add(head);
+          fresh.push(head);
+          continue;
+        }
+        if (this.messageRecords.has(key)) continue;
+        fresh.push(this.makeEntry(msg));
+      }
+      if (movedHead.size) this.forYouHead = this.forYouHead.filter((entry) => !movedHead.has(entry));
       if (!fresh.length) return 0;
       // The older page sits in front of every stored message.
       this.entries.unshift(...fresh);

@@ -117,8 +117,8 @@ test('failed fetch keeps has_more and leaves a clickable failed sentinel', async
   const sentinel = findSentinel(elements);
   assert.ok(sentinel, 'sentinel must remain after failure');
   assert.equal(sentinel.getAttribute('data-state'), 'failed');
-  assert.match(sentinel.innerHTML, /Failed to load older messages/);
-  assert.match(sentinel.innerHTML, /click to retry/);
+  assert.match(sentinel.innerHTML, /<svg/, 'the failed sentinel carries the retry icon');
+  assert.ok(sentinel.getAttribute('aria-label'), 'the icon has an accessible name');
   assert.equal(typeof sentinel.onclick, 'function', 'failed sentinel must be clickable');
 
   // Clicking the failed sentinel retries — proving has_more was NOT cleared.
@@ -318,7 +318,7 @@ test('missing pagination cursor fails loudly instead of silently doing nothing',
   const sentinel = findSentinel(elements);
   assert.ok(sentinel, 'sentinel must remain');
   assert.equal(sentinel.getAttribute('data-state'), 'failed');
-  assert.match(sentinel.innerHTML, /Failed to load older messages/);
+  assert.match(sentinel.innerHTML, /<svg/, 'the failed sentinel carries the retry icon');
   assert.ok(errors.length >= 1, 'the unusable cursor must be logged');
 });
 
@@ -480,4 +480,142 @@ test('renderUsageFromData hides the indicator when usage is null', () => {
   context.renderUsageFromData(null);
 
   assert.equal(elements.get('usage-indicator').classList.contains('hidden'), true);
+});
+
+// ---------------------------------------------------------------------------
+// The older-page retry: a failed page keeps its cursor and its place, and retries on the page-request backoff. The
+// harness's setTimeout is a stub, so these cases hold the timers a failure schedules and fire them by hand. The page's
+// own 10-second request timeout is held too, and the cases skip it by its length.
+// ---------------------------------------------------------------------------
+
+const PAGE_REQUEST_TIMEOUT_MS = 10000;
+
+function heldTimers(context) {
+  const timers = new Map();
+  let nextId = 1;
+  context.setTimeout = (fn, ms) => {
+    const id = nextId++;
+    timers.set(id, {fn, ms});
+    return id;
+  };
+  context.clearTimeout = (id) => { timers.delete(id); };
+  return timers;
+}
+
+function retryTimers(timers) {
+  return [...timers.values()].filter((timer) => timer.ms !== PAGE_REQUEST_TIMEOUT_MS);
+}
+
+// Fires the held retry timer, which leaves the timer list as a real timer does.
+function fireRetry(timers) {
+  const [id, timer] = [...timers.entries()].find(([, held]) => held.ms !== PAGE_REQUEST_TIMEOUT_MS);
+  timers.delete(id);
+  timer.fn();
+}
+
+function flushed() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+// A fetch that answers `script` in order: a number is a failure status, an object is an empty older page.
+function scriptedPages(script) {
+  const urls = [];
+  let call = 0;
+  const fetch = async (url) => {
+    urls.push(url);
+    const step = script[Math.min(call++, script.length - 1)];
+    if (typeof step === 'number') return {ok: false, status: step};
+    return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
+  };
+  return {fetch, urls};
+}
+
+function olderPageRig(script) {
+  const messages = makeMessages({scrollTop: 0});
+  const pages = scriptedPages(script);
+  const {context, elements} = buildContext({
+    elements: new Map([['messages', messages]]),
+    fetch: pages.fetch,
+  });
+  renderSessionViewWith(context, elements, true);
+  const timers = heldTimers(context);
+  return {context, elements, messages, timers, urls: pages.urls};
+}
+
+test('a failed older page retries its cursor on the page-request backoff and resets after a success', async () => {
+  const {context, messages, timers, urls} = olderPageRig([500, 502, 200]);
+
+  await context.Sidebar.loadOlderIfNeeded(messages);
+  assert.deepEqual(retryTimers(timers).map((timer) => timer.ms), [1000]);
+
+  fireRetry(timers);
+  await flushed();
+  assert.deepEqual(retryTimers(timers).map((timer) => timer.ms), [2000], 'the second failure doubles the delay');
+
+  fireRetry(timers);
+  await flushed();
+  assert.equal(retryTimers(timers).length, 0, 'the success schedules no retry');
+  assert.equal(new Set(urls).size, 1, 'every retry asks for the same cursor');
+  assert.equal(urls.length, 3);
+});
+
+test('a failed older page waits for the browser to come back online before it retries', async () => {
+  const {context, elements, messages, timers, urls} = olderPageRig([500, 200]);
+  const listeners = new Map();
+  context.navigator = {onLine: false};
+  context.window = {
+    addEventListener: (type, fn) => listeners.set(type, fn),
+    removeEventListener: (type) => listeners.delete(type),
+  };
+
+  await context.Sidebar.loadOlderIfNeeded(messages);
+  assert.equal(retryTimers(timers).length, 0, 'offline, no timer runs');
+  assert.ok(listeners.has('online'), 'the failure waits on the online event');
+  assert.equal(findSentinel(elements).getAttribute('data-state'), 'failed');
+
+  listeners.get('online')();
+  await flushed();
+  assert.equal(urls.length, 2, 'coming online retries at once');
+  assert.equal(listeners.has('online'), false, 'the listener leaves with its retry');
+});
+
+test('a 4xx older page is the server refusing, so only the reader retries it', async () => {
+  const {context, elements, messages, timers, urls} = olderPageRig([404]);
+
+  await context.Sidebar.loadOlderIfNeeded(messages);
+  assert.equal(retryTimers(timers).length, 0, 'a refusal schedules no retry');
+  assert.equal(findSentinel(elements).getAttribute('data-state'), 'failed');
+
+  findSentinel(elements).onclick();
+  await flushed();
+  assert.equal(urls.length, 2, 'the click retries');
+});
+
+test('a click on the failed sentinel retries at once and clears the pending timer', async () => {
+  const {context, elements, messages, timers, urls} = olderPageRig([500, 200]);
+
+  await context.Sidebar.loadOlderIfNeeded(messages);
+  assert.equal(retryTimers(timers).length, 1);
+
+  findSentinel(elements).onclick();
+  assert.equal(retryTimers(timers).length, 0, 'the click takes over the pending retry');
+  // A second request while the click's flight is open starts no duplicate flight.
+  context.Sidebar.loadOlderIfNeeded(messages);
+  await flushed();
+  assert.equal(urls.length, 2, 'one request in flight at a time');
+});
+
+test('a switch cancels a pending older-page retry and starts the backoff over', async () => {
+  const {context, messages, timers} = olderPageRig([500]);
+
+  await context.Sidebar.loadOlderIfNeeded(messages);
+  fireRetry(timers);
+  await flushed();
+  assert.deepEqual(retryTimers(timers).map((timer) => timer.ms), [2000]);
+
+  context.Sidebar.cancelOlderPageRetry();
+  assert.equal(retryTimers(timers).length, 0, 'the switch clears the timer');
+  // The next failure after a switch starts from the base delay again.
+  await context.Sidebar.loadOlderIfNeeded(messages);
+  assert.deepEqual(retryTimers(timers).map((timer) => timer.ms), [1000]);
 });

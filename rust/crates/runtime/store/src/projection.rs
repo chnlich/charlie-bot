@@ -84,11 +84,6 @@ impl MessageProjection {
     self.event_count
   }
 
-  /// Return event indexes of separator messages in committed-history ordinal space.
-  pub fn separator_ordinals(&self) -> &[usize] {
-    &self.separator_ordinals
-  }
-
   /// Return the latest turn-aligned message page.
   pub fn tail(&self, limit: usize) -> (Vec<Value>, usize, bool) {
     let total = self.committed.len();

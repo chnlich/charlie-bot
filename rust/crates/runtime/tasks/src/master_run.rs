@@ -770,6 +770,13 @@ impl RunProcess for SurvivorProcess<'_> {
     }
     Box::pin(async move {
       if let Some(watch) = watch {
+        tracing::info!(
+          target: "charliebot_tasks",
+          session = %self.turn.item.session_metadata().id,
+          run_id = %self.turn.item.task_run.run_id,
+          account = launch.account_label.as_deref(),
+          "account_watch_attached"
+        );
         for event in &self.observed {
           watch.observe(event);
         }

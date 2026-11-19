@@ -939,7 +939,17 @@ impl RunProcess for ResumeProcess<'_> {
   ) -> BoxFuture<'a, anyhow::Result<ProcessResult>> {
     Box::pin(async move {
       match self.follow.take() {
-        Some(follow) => self.worker.follow_resumed(&self.sink, follow, watch, launch.account_label.as_deref()).await,
+        Some(follow) => {
+          if watch.is_some() {
+            tracing::info!(
+              target: "charliebot_tasks",
+              thread = %self.worker.thread_id,
+              account = launch.account_label.as_deref(),
+              "account_watch_attached"
+            );
+          }
+          self.worker.follow_resumed(&self.sink, follow, watch, launch.account_label.as_deref()).await
+        }
         None => self.spawn.run(launch, watch, relays).await,
       }
     })

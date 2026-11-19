@@ -1658,6 +1658,7 @@ dependencies = [
  "anyhow",
  "axum",
  "charliebot-agents",
+ "charliebot-artifacts",
  "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",

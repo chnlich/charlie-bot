@@ -15,6 +15,7 @@ use charliebot_registry::{FeatureContext, StateError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use http::{HeaderValue, StatusCode, header};
 
+use crate::artifact_check::{self, PageFork};
 use crate::plan_diff;
 
 const DIFF_TARGET_DETAIL: &str = "diff target is not a session artifact page: ";
@@ -143,6 +144,17 @@ fn is_html_path(path: &Path) -> bool {
     .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
 }
 
+/// The open questions of a page the artifact route serves: a file directly under a session's artifacts directory,
+/// ending in `.html`. Any other path has none, so its links offer no pick.
+pub fn served_page_questions(sessions_dir: &Path, page: &Path) -> anyhow::Result<Vec<PageFork>> {
+  let fs_path = paths::realpath(page);
+  if !is_html_path(&fs_path) || artifact_session_id(sessions_dir, &fs_path).is_none() || !fs_path.is_file() {
+    return Ok(Vec::new());
+  }
+  let html = fs::read_to_string(&fs_path).map_err(|error| anyhow::anyhow!("{}: {error}", fs_path.display()))?;
+  artifact_check::page_forks(&html)
+}
+
 fn resolve_diff_base(sessions_dir: &Path, session_id: &str, diff_param: &str) -> ViewResult<PathBuf> {
   let candidate = paths::realpath(&sessions_dir.join(session_id).join(diff_param));
   if !is_html_path(&candidate) || artifact_session_id(sessions_dir, &candidate).is_none() {
@@ -262,6 +274,29 @@ mod tests {
 
   async fn invoke(features: &FeatureContext, path: &str, uri: &str) -> Result<Option<Response>, Box<Response>> {
     ArtifactView.view(features, &request(uri), path).await.map_err(Box::new)
+  }
+
+  #[test]
+  fn only_a_served_html_page_has_open_questions() {
+    let home = tempfile::tempdir().expect("a temporary home");
+    let sessions = home.path().join("sessions");
+    let page = "<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Which one?</p><ul>\
+      <li>「keep」: keep the file.</li><li>「drop」: drop the file.</li></ul></div>";
+    let served = sessions.join("s1/artifacts/plan_pick.html");
+    write_page(&served, page);
+    let outside = sessions.join("s1/notes/plan_pick.html");
+    write_page(&outside, page);
+    let not_html = sessions.join("s1/artifacts/plan_pick.md");
+    write_page(&not_html, page);
+
+    let questions = served_page_questions(&sessions, &served).expect("the served page reads");
+    assert_eq!(questions.len(), 1);
+    assert_eq!(questions[0].options.len(), 2);
+    assert!(served_page_questions(&sessions, &outside).expect("the page reads").is_empty());
+    assert!(served_page_questions(&sessions, &not_html).expect("the page reads").is_empty());
+    assert!(
+      served_page_questions(&sessions, &sessions.join("s1/artifacts/gone.html")).expect("the page reads").is_empty()
+    );
   }
 
   #[test]

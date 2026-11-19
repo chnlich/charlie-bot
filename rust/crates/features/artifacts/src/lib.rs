@@ -40,7 +40,19 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.plan_registry(plans::read_session_plans)?;
   registry.recovery_step("headless_renderer_orphans", sweep_headless_renderer_orphans_at_startup)?;
   registry.fork_assertions(registered_fork_assertions)?;
+  registry.page_questions(registered_page_questions)?;
   registry.let_go_step("headless_renderer", close_headless_renderer_at_shutdown)
+}
+
+/// The page-question reader the registry hands `web_reply`'s status read: each open question of a served page as JSON.
+pub fn registered_page_questions(
+  sessions_dir: &std::path::Path,
+  page: &std::path::Path,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+  artifact_view::served_page_questions(sessions_dir, page)?
+    .iter()
+    .map(|question| serde_json::to_value(question).map_err(anyhow::Error::from))
+    .collect()
 }
 
 /// The fork-assertion runner the registry hands `web_reply`'s status gate: each failing page line as a pair.

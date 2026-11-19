@@ -65,6 +65,7 @@ impl Registry {
       host_probes: crate::registry::Ledger::new("host probe"),
       bound_rounds: crate::registry::Ledger::new("bound round readers"),
       fork_assertions: crate::registry::Ledger::new("fork assertions"),
+      page_questions: crate::registry::Ledger::new("page questions"),
       user_dm: crate::registry::Ledger::new("user dm"),
       owner_dm: crate::registry::Ledger::new("owner dm"),
       worktree_removals: crate::registry::Ledger::new("worktree removal"),

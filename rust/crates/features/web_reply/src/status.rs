@@ -844,9 +844,42 @@ fn derived_payload(item: &OpenWaitingItem) -> Value {
   })
 }
 
+/// Give each stored item in `waiting` its `forks`: the open questions of the page its link names, read through the
+/// registry's page-question reader, or `[]` when the link names no page the artifact route serves. The pages are read
+/// on the blocking pool, since each one is parsed.
+async fn add_item_forks(features: &FeatureContext, waiting: &mut Value) -> Result<(), WebReplyError> {
+  let read = features.registry.page_questions_reader().map_err(WebReplyError::Failed)?;
+  let charliebot_home =
+    features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?.charliebot_home.clone();
+  let sessions_dir = sessions_dir_in(&charliebot_home);
+  let items = waiting.as_array_mut().expect("a status payload has a waiting list");
+  let pages = items
+    .iter()
+    .map(|item| file_urls::host_file(item["link"].as_str()).map_err(anyhow::Error::msg))
+    .collect::<anyhow::Result<Vec<_>>>()
+    .map_err(WebReplyError::Failed)?;
+  let questions = tokio::task::spawn_blocking(move || {
+    pages
+      .into_iter()
+      .map(|page| match page {
+        Some(path) => read(&sessions_dir, &path),
+        None => Ok(Vec::new()),
+      })
+      .collect::<anyhow::Result<Vec<_>>>()
+  })
+  .await
+  .map_err(|error| WebReplyError::Failed(error.into()))?
+  .map_err(WebReplyError::Failed)?;
+  for (item, forks) in items.iter_mut().zip(questions) {
+    item["forks"] = Value::Array(forks);
+  }
+  Ok(())
+}
+
 /// The session's status, waiting items of open descendants and Now items of open children, newest
 /// first. A descendant needs waiting items; a child needs a Now value. The derived items the session holds ride
-/// beside the stored ones, under `derived_waiting`. The session's own task state rides under `own_task_state`.
+/// beside the stored ones, under `derived_waiting`. The session's own task state rides under `own_task_state`. Each
+/// stored item carries its `forks`, the open questions its page shows; the stored list and its version do not change.
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
@@ -879,6 +912,9 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     rows.push((descendant.status.updated_at, row));
   }
   rows.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
+  for (_, row) in rows.iter_mut() {
+    add_item_forks(features, &mut row["waiting"]).await?;
+  }
   let status_of: HashMap<&str, usize> =
     tree.statuses.iter().enumerate().map(|(index, descendant)| (descendant.session_id.as_str(), index)).collect();
   let mut children: Vec<(UtcDateTime, Value)> = Vec::new();
@@ -899,10 +935,14 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     children.push((child.status.updated_at, row));
   }
   children.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
+  let mut own_status = stored.as_ref().map(|status| status_payload_with_clicked(status, &own_clicked));
+  if let Some(own) = own_status.as_mut() {
+    add_item_forks(features, &mut own["waiting"]).await?;
+  }
   Ok(json!({
     "session_id": session_id,
     "own_task_state": own_task_state,
-    (WEB_STATUS): stored.as_ref().map(|status| status_payload_with_clicked(status, &own_clicked)),
+    (WEB_STATUS): own_status,
     "derived_waiting": derived.iter().map(derived_payload).collect::<Vec<_>>(),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
     "children": children.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
@@ -1393,6 +1433,7 @@ mod tests {
         "text": "decision",
         "context": "The decision is active now. Options are continue or stop; continue is recommended.",
         "link": null,
+        "forks": [],
         "answered": false
       }])
     );
@@ -1475,6 +1516,59 @@ mod tests {
     );
     assert_eq!(after["descendants"][0]["waiting_version"], json!(child_version));
     assert_eq!(after["descendants"][0]["waiting"][0]["answered"], json!(true));
+  }
+
+  #[tokio::test]
+  async fn each_stored_item_carries_the_open_questions_of_the_page_its_link_names() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let artifacts = home.features.store.session_dir(&sid).join("artifacts");
+    fs::create_dir_all(&artifacts).expect("the artifacts directory creates");
+    let choice = artifacts.join("waiting_choice.html");
+    fs::write(
+      &choice,
+      "<div class=\"fork\"><p class=\"q\"><span class=\"fn\">1</span> Which one?</p><ul>\
+       <li>「keep」: keep the file.</li><li>「drop」: drop the file.</li></ul>\
+       <p class=\"rec\">Recommended: 「keep」.</p></div>\
+       <div class=\"fork\"><p class=\"q\"><span class=\"fn\">2</span> Which later?</p><ul>\
+       <li>「now」: act now.</li></ul></div>",
+    )
+    .expect("the page writes");
+    let note = artifacts.join("waiting_note.md");
+    fs::write(&note, "a note with 「keep」: no questions here").expect("the note writes");
+    let since = "2026-11-06T16:52:57.752710Z";
+    write_stored_status(
+      &home,
+      &sid,
+      json!({
+        "goal": null,
+        "now": null,
+        "waiting": [
+          {
+            "text": "Pick one", "context": "Two options.", "link": host_link(&choice),
+            "since": since, "since_exact": true,
+          },
+          {
+            "text": "Read the note", "context": "A note.", "link": host_link(&note),
+            "since": since, "since_exact": true,
+          },
+          {"text": "No page", "context": "Nothing linked.", "link": null, "since": since, "since_exact": true},
+        ],
+        "updated_at": "2026-11-06T17:00:00Z",
+      }),
+    )
+    .await;
+
+    let status = read_status(&home.features, &sid).await.expect("the status reads");
+    let items = status["web_status"]["waiting"].as_array().expect("the waiting list reads");
+    let forks = items[0]["forks"].as_array().expect("a linked page's item carries its forks");
+    assert_eq!(forks[0]["n"], json!("1"));
+    assert_eq!(forks[0]["options"][0], json!({"name": "keep", "text": "「keep」: keep the file."}));
+    assert_eq!(forks[0]["rec"], json!("keep"));
+    assert_eq!(forks[1]["n"], json!("2"));
+    assert_eq!(forks[1]["options"], json!([]), "a question with one named option has no pick, so the item shows none");
+    assert_eq!(items[1]["forks"], json!([]), "a page the artifact route does not serve offers no pick");
+    assert_eq!(items[2]["forks"], json!([]), "an item with no link has no page");
   }
 
   #[tokio::test]

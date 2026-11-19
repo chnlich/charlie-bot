@@ -83,7 +83,7 @@ function makeCaches() {
 function harness({version = 'v1', enabled = true} = {}) {
   const listeners = {};
   const cachesFake = makeCaches();
-  const state = {claimed: 0, unregistered: 0, preloadEnabled: 0, network: null, calls: []};
+  const state = {claimed: 0, unregistered: 0, preloadDisabled: 0, network: null, calls: []};
   const self = {
     location: {origin: ORIGIN},
     addEventListener(type, handler) {
@@ -93,7 +93,7 @@ function harness({version = 'v1', enabled = true} = {}) {
     clients: {claim: async () => { state.claimed += 1; }},
     registration: {
       unregister: async () => { state.unregistered += 1; },
-      navigationPreload: {enable: async () => { state.preloadEnabled += 1; }},
+      navigationPreload: {disable: async () => { state.preloadDisabled += 1; }},
     },
   };
   const fetch = async (input, init) => {
@@ -788,8 +788,8 @@ test('the enabled form claims no page: the load it arrives in keeps its own requ
   assert.equal(h.state.claimed, 0);
 });
 
-test('activation turns navigation preload on, which the chat page answers with no body', async () => {
+test('activation disables navigation preload because stored navigations ignore it', async () => {
   const h = harness();
   await Promise.all(h.fire('activate').waits);
-  assert.equal(h.state.preloadEnabled, 1);
+  assert.equal(h.state.preloadDisabled, 1);
 });

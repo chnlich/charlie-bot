@@ -31,6 +31,7 @@ use crate::run_support::{
   extra_flags_of, read_stderr_tail, route_resume_session, silence_callback, stream_event_channel,
   subprocess_buffer_bytes,
 };
+use crate::spawner_backends;
 
 const NOTICE: &str = "[The model wrote no answer text; its thinking follows.]";
 const POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
@@ -361,15 +362,25 @@ async fn mark_turn_end_unread(
   (item.callbacks.mark_unread)(metadata.id).await
 }
 
-fn resolve_turn_option(item: &WorkItem) -> Option<BackendOption> {
+/// The option a manager run's process launches on. An item that names an option keeps it: a turn's member, chosen at
+/// turn start. Any other item (a re-attached run, or the turn-end continuation of one) reads the session's member
+/// through the normal wake path, so a pool session resolves to its recorded member. A session that pins no backend is
+/// a refusal, not a fall back to `backends.options[0]`.
+fn resolve_run_option(item: &WorkItem) -> anyhow::Result<BackendOption> {
   if let Some(option) = &item.backend_option {
-    return Some(option.clone());
+    return Ok(option.clone());
   }
   let metadata = item.session_metadata();
-  if !metadata.backend.is_empty() {
-    return item.cfg.get_backend_option(&metadata.backend).cloned();
+  if metadata.backend.is_empty() {
+    anyhow::bail!(concat!(
+      "no backend option was given and this session pins none — refusing to fall back to backends.options[0]; ",
+      "this run did not execute."
+    ));
   }
-  None
+  let (backend_id, _model) = spawner_backends::resolve_session_default_backend_model(&item.cfg, &metadata)?;
+  item.cfg.get_backend_option(&backend_id).cloned().ok_or_else(|| {
+    anyhow!("session '{}' runs on backend '{backend_id}', which backends.options does not list", metadata.id)
+  })
 }
 
 fn turn_launch_context(
@@ -852,27 +863,17 @@ pub(crate) async fn run_cc(
 ) -> anyhow::Result<MasterRunOutcome> {
   let metadata = item.session_metadata();
   tokio::fs::create_dir_all(item.cfg.sessions_dir().join(&metadata.id)).await?;
-  let option = match resolve_turn_option(item) {
-    Some(option) => option,
-    None => {
-      let message = if !metadata.backend.is_empty() {
-        let message = item
-          .cfg
-          .backends
-          .check_backend_id(&metadata.backend)
-          .err()
-          .unwrap_or_else(|| format!("backend '{}' has no selected model option", metadata.backend));
-        tracing::error!(
-          target: "charliebot_tasks",
-          session = %metadata.id,
-          requested = %metadata.backend,
-          "master_cc_backend_unresolved"
-        );
-        message
-      } else {
-        tracing::error!(target: "charliebot_tasks", session = %metadata.id, requested = "(none)", "master_cc_backend_unresolved");
-        "no backend option was given and this session pins none — refusing to fall back to backends.options[0]; this run did not execute.".to_string()
-      };
+  let option = match resolve_run_option(item) {
+    Ok(option) => option,
+    Err(error) => {
+      let message = format!("{error:#}");
+      tracing::error!(
+        target: "charliebot_tasks",
+        session = %metadata.id,
+        requested = %metadata.backend,
+        error = %message,
+        "master_cc_backend_unresolved"
+      );
       return refuse_turn(item, &message, None).await;
     }
   };
@@ -1037,19 +1038,6 @@ fn is_pool_member_failure_end(cfg: &CharlieBotConfig, metadata: &SessionMetadata
   cfg.backends.pool(&metadata.backend).is_some() && extras.contains_key(FINISH_ERROR_MESSAGE)
 }
 
-/// The option a resumed turn runs on: the option the item names, else the session's backend, or for a pool session its
-/// recorded member. A backend that resolves to no option is a refusal, not a fall back to another option.
-fn resolve_resume_option(item: &WorkItem) -> anyhow::Result<BackendOption> {
-  if let Some(option) = &item.backend_option {
-    return Ok(option.clone());
-  }
-  let metadata = item.session_metadata();
-  let backend_id = charliebot_agents::model_pool::current_member_id(&item.cfg, &metadata)?;
-  item.cfg.get_backend_option(&backend_id).cloned().ok_or_else(|| {
-    anyhow!("resumed session '{}' runs on backend '{backend_id}', which backends.options does not list", metadata.id)
-  })
-}
-
 pub(crate) fn build_fresh_translate(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
@@ -1087,7 +1075,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let log_dir = raw_path.parent().context("resume raw log has no parent directory")?.to_path_buf();
   let cursor_path = log_dir.join(CURSOR_NAME);
   let stderr_path = log_dir.join(STDERR_LOG_NAME);
-  let option = resolve_resume_option(item)?;
+  let option = resolve_run_option(item)?;
   tracing::info!(target: "charliebot_tasks", session = %metadata.id, pid = record.pid, raw_log = %raw_path.display(), "{}", MASTER_CC_RESUMING_EVENT);
   let backend_type = option.backend_type.as_str();
   let model = Some(option.model.as_str());

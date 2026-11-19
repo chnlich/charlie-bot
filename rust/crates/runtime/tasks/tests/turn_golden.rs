@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,7 +14,8 @@ use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::config::{
-  BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
+  BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, PoolConfig, PoolMember, PoolRule, Sections,
+  ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
@@ -27,7 +29,7 @@ use charliebot_registry::backend::{
 };
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::context::{FeatureContext, StartupState};
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+use charliebot_store::metadata::{NATIVE_BACKEND, SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records;
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, RunKind, RunRecord,
@@ -774,16 +776,18 @@ async fn run_turn(
   event_id: String,
   option: BackendOption,
 ) -> anyhow::Result<Option<String>> {
-  run_turn_with_spawn(queue, cfg, meta, callbacks, event_id, option, noop_task_spawn()).await
+  run_turn_with_spawn(queue, cfg, meta, callbacks, event_id, Some(option), noop_task_spawn()).await
 }
 
+/// Runs one manager turn. `backend_option` is the turn's member; `None` is the item of a re-attached run, which names
+/// no option and reads the session's member.
 async fn run_turn_with_spawn(
   queue: Arc<master_queue::MasterQueue>,
   cfg: Arc<CharlieBotConfig>,
   meta: SessionMetadata,
   callbacks: SessionCallbacks,
   event_id: String,
-  option: BackendOption,
+  backend_option: Option<BackendOption>,
   on_task_spawn: TaskSpawnCallback,
 ) -> anyhow::Result<Option<String>> {
   let run_id = format!("run-{event_id}");
@@ -800,7 +804,7 @@ async fn run_turn_with_spawn(
       task_run: TaskRunBinding { session_id: meta.id, run_id, transport_dir, fresh_native_context: false },
       on_task_spawn,
       on_task_finish: noop_task_finish(),
-      backend_option: Some(option),
+      backend_option,
       extra_claude_flags: None,
       uploaded_files: None,
       extra_env: None,
@@ -851,19 +855,7 @@ async fn manager_turn_matches_recorded_event_stream_matrix() -> anyhow::Result<(
 #[ignore = "integration"]
 async fn turn_end_block_continues_through_run_launches() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
-  let checkout = temp.path().join("checkout");
-  std::fs::create_dir_all(checkout.join("hooks"))?;
-  std::fs::create_dir_all(checkout.join("prompts"))?;
-  std::fs::write(checkout.join("prompts/web_reply.md"), "Synthetic web reply rules")?;
-  // The served list runs `charliebot hook <check>` from PATH. This list names the workspace build of that binary by
-  // its path, so the checks the test runs are this tree's, whatever `charliebot` the host's PATH holds or lacks.
-  let charliebot = charliebot_shell_harness::built_binary("charliebot");
-  let charliebot = shlex::try_quote(charliebot.to_str().context("the built charliebot path is UTF-8")?)?;
-  let entries: Vec<Value> = ["web-reply", "web-status", "thread-reply"]
-    .into_iter()
-    .map(|name| json!({"name": name, "command": format!("{charliebot} hook {name}")}))
-    .collect();
-  std::fs::write(checkout.join("hooks/turn_end.json"), serde_json::to_string(&entries)?)?;
+  let checkout = web_checks_checkout(temp.path())?;
 
   let prompt_capture = temp.path().join("backend-prompts.jsonl");
   let script = scripted_process(
@@ -930,6 +922,220 @@ async fn turn_end_block_continues_through_run_launches() -> anyhow::Result<()> {
     })
     .context("the second web-reply check delivers its notice")?;
   assert_eq!(hook_records[1]["results"][0]["system_message"], notice["content"]);
+  Ok(())
+}
+
+/// The id of the priority pool that the pool tests name, and of its one member.
+const PRIORITY_POOL_ID: &str = "human-communication";
+const POOL_MEMBER_ID: &str = "pool-member";
+
+/// The member option of the pool tests. Each launch appends its prompt to `capture`, then answers with a synthetic
+/// reply. With `fail_continuation`, the second launch exits with an error instead.
+fn pool_member(capture: &Path, fail_continuation: bool) -> anyhow::Result<BackendOption> {
+  let answer = scripted_process(
+    &[
+      json!({"type":"system","subtype":"init","session_id":"synthetic-native-session"}),
+      json!({"type":"assistant","message":{"content":[{"type":"text","text":"synthetic answer"}]}}),
+      json!({"type":"result","subtype":"success","result":"","usage":{"input_tokens":1,"output_tokens":1}}),
+    ],
+    0,
+    "",
+  )?;
+  let script = if fail_continuation {
+    format!(
+      "if [ \"$(wc -l < '{}')\" -ge 2 ]; then printf 'synthetic continuation failure\\n' >&2; exit 1; fi\n{answer}",
+      capture.display()
+    )
+  } else {
+    answer
+  };
+  let mut option = backend_option_for(POOL_MEMBER_ID, "codex", script, None);
+  option
+    .type_fields
+    .insert(YamlValue::String("prompt_capture".to_string()), YamlValue::String(capture.to_string_lossy().into_owned()));
+  Ok(option)
+}
+
+/// A checkout whose turn-end list is the served web checks, and whose prompts are the repository's. The list runs the
+/// workspace build of `charliebot` by its path, so the checks are this tree's whatever the host's PATH holds.
+fn web_checks_checkout(temp: &Path) -> anyhow::Result<PathBuf> {
+  let checkout = temp.join("checkout");
+  std::fs::create_dir_all(checkout.join("hooks"))?;
+  std::fs::create_dir_all(checkout.join("prompts"))?;
+  std::fs::write(checkout.join("prompts/web_reply.md"), "Synthetic web reply rules")?;
+  let charliebot = charliebot_shell_harness::built_binary("charliebot");
+  // The served list runs `charliebot hook <check>` from PATH. This list names the workspace build of that binary by
+  // its path, so the checks the test runs are this tree's, whatever `charliebot` the host's PATH holds or lacks.
+  let charliebot = shlex::try_quote(charliebot.to_str().context("the built charliebot path is UTF-8")?)?;
+  let entries: Vec<Value> = ["web-reply", "web-status", "thread-reply"]
+    .into_iter()
+    .map(|name| json!({"name": name, "command": format!("'{charliebot}' hook {name}")}))
+    .collect();
+  std::fs::write(checkout.join("hooks/turn_end.json"), serde_json::to_string(&entries)?)?;
+  Ok(checkout)
+}
+
+/// The config of the pool tests: one option, the member, and a priority pool that names it.
+fn priority_pool_config(home: &Path, member: BackendOption) -> CharlieBotConfig {
+  let mut cfg = config(home, Some(member));
+  cfg.backends.pools = vec![PoolConfig {
+    id: PRIORITY_POOL_ID.to_string(),
+    label: "Human communication".to_string(),
+    rule: PoolRule::Priority,
+    members: vec![PoolMember { backend: POOL_MEMBER_ID.to_string() }],
+    visible: true,
+  }];
+  cfg
+}
+
+/// A web session on the priority pool, with its member recorded and one user message, `hook-block`, in a registered
+/// run.
+async fn pool_block_session(features: &Arc<FeatureContext>, registry: &Registry) -> anyhow::Result<SessionMetadata> {
+  let mut meta = session_meta("turn-hook-pool", "web", "fresh");
+  meta.backend = PRIORITY_POOL_ID.to_string();
+  meta.extra.insert("pool_member".to_string(), json!(POOL_MEMBER_ID));
+  save_session_metadata(features, registry, &meta)?;
+  features
+    .store
+    .persist_and_broadcast(&meta.id, json!({"id":"hook-block","type":event_types::USER,"content":"the question"}))
+    .await?;
+  let mut run =
+    charliebot_tasks::test_support::recovery_support::synthetic_run(&meta.id, "run-hook-block", RunKind::ManagerTurn);
+  run.input_event_ids.push("hook-block".to_string());
+  run.started_at = Some(UtcDateTime::now());
+  let guard = features.store.control_lock().await;
+  features.store.register_run_locked(&guard, &meta.id, run, None).await?;
+  Ok(meta)
+}
+
+/// The `turn_hooks` records of a session, in order.
+fn hook_records(features: &FeatureContext, session_id: &str) -> anyhow::Result<Vec<Value>> {
+  Ok(
+    features
+      .store
+      .load_chat_events_sync(session_id)?
+      .iter()
+      .map(|event| event.to_value())
+      .filter(|event| event["type"] == event_types::TURN_HOOKS)
+      .collect(),
+  )
+}
+
+/// The result of the entry `name` in a `turn_hooks` record.
+fn entry_result<'a>(record: &'a Value, name: &str) -> &'a Value {
+  record["results"]
+    .as_array()
+    .into_iter()
+    .flatten()
+    .find(|result| result["name"] == name)
+    .expect("the entry has a result")
+}
+
+/// A process-spawn callback that stores the session's status when the run's second process spawns, as the
+/// continuation's `charliebot web status confirm` does.
+fn confirm_status_on_continuation(features: &Arc<FeatureContext>, session_id: &str) -> TaskSpawnCallback {
+  let spawned = Arc::new(AtomicUsize::new(0));
+  let features = Arc::clone(features);
+  let session_id = session_id.to_string();
+  Arc::new(move |_pid: u32, _start: Option<String>| -> BoxFuture<'static, anyhow::Result<()>> {
+    let launch = spawned.fetch_add(1, Ordering::SeqCst) + 1;
+    let features = Arc::clone(&features);
+    let session_id = session_id.clone();
+    Box::pin(async move {
+      if launch == 2 {
+        features
+          .store
+          .persist_and_broadcast(
+            &session_id,
+            json!({"type": event_types::WEB_STATUS_CONFIRMED, "content": "Status confirmed"}),
+          )
+          .await?;
+      }
+      Ok(())
+    })
+  })
+}
+
+/// A turn-end block on a priority pool session whose run is re-attached: its item names no option. The continuation
+/// reads the session's recorded member, launches on it, and stores the status, so the status check passes.
+#[tokio::test]
+#[ignore = "integration"]
+async fn turn_end_block_on_a_priority_pool_continues_on_its_member() -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let checkout = web_checks_checkout(temp.path())?;
+  let prompt_capture = temp.path().join("backend-prompts.jsonl");
+  let member = pool_member(&prompt_capture, false)?;
+  let registry = registry();
+  let (cfg, features) = config_with_features_from_config_and_agent_path(
+    Arc::new(priority_pool_config(&temp.path().join("home"), member)),
+    Arc::clone(&registry),
+    true,
+    "/usr/bin".to_string(),
+    &checkout,
+  )?;
+  let meta = pool_block_session(&features, &registry).await?;
+  let queue = features.startup.require::<master_queue::MasterQueue>()?;
+  let on_spawn = confirm_status_on_continuation(&features, &meta.id);
+  let callbacks = callbacks(Arc::clone(&features), Arc::new(Mutex::new(Vec::new())));
+
+  run_turn_with_spawn(queue.clone(), cfg, meta.clone(), callbacks, "hook-block".to_string(), None, on_spawn).await?;
+  queue.shutdown().await?;
+
+  let events: Vec<Value> =
+    features.store.load_chat_events_sync(&meta.id)?.iter().map(|event| event.to_value()).collect();
+  assert!(events.iter().all(|event| event["type"] != event_types::ASSISTANT_ERROR), "the continuation must not refuse");
+  let records = hook_records(&features, &meta.id)?;
+  assert_eq!(records.len(), 2, "the initial run and its continuation each reach the checkpoint");
+  assert_eq!(entry_result(&records[0], "web-status")["result"], "block");
+  assert_eq!(entry_result(&records[1], "web-status")["result"], "pass");
+  let launches = std::fs::read_to_string(prompt_capture)?.lines().count();
+  assert_eq!(launches, 2, "the block launches one continuation process");
+  let done = events
+    .iter()
+    .rev()
+    .find(|event| event["type"] == event_types::MASTER_DONE)
+    .context("the turn records its master_done")?;
+  assert_eq!(done[NATIVE_BACKEND], POOL_MEMBER_ID, "the continuation launched on the pool member");
+  Ok(())
+}
+
+/// A turn-end block whose continuation exits with an error: each blocking entry counts that run as its second miss and
+/// shows its notice, so the block does not end in a silent pass.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_failed_continuation_gives_its_blocking_entries_the_second_miss_notice() -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let checkout = web_checks_checkout(temp.path())?;
+  let prompt_capture = temp.path().join("backend-prompts.jsonl");
+  let member = pool_member(&prompt_capture, true)?;
+  let registry = registry();
+  let (cfg, features) = config_with_features_from_config_and_agent_path(
+    Arc::new(priority_pool_config(&temp.path().join("home"), member)),
+    Arc::clone(&registry),
+    true,
+    "/usr/bin".to_string(),
+    &checkout,
+  )?;
+  let meta = pool_block_session(&features, &registry).await?;
+  let queue = features.startup.require::<master_queue::MasterQueue>()?;
+  let callbacks = callbacks(Arc::clone(&features), Arc::new(Mutex::new(Vec::new())));
+
+  run_turn_with_spawn(queue.clone(), cfg, meta.clone(), callbacks, "hook-block".to_string(), None, noop_task_spawn())
+    .await?;
+  queue.shutdown().await?;
+
+  let launches = std::fs::read_to_string(prompt_capture)?.lines().count();
+  assert_eq!(launches, 2, "the block launches one continuation process, which fails");
+  let records = hook_records(&features, &meta.id)?;
+  assert_eq!(records.len(), 2, "the failed continuation reaches the checkpoint");
+  for name in ["web-reply", "web-status"] {
+    assert_eq!(entry_result(&records[0], name)["result"], "block", "{name}");
+    let second = entry_result(&records[1], name);
+    assert!(
+      second.get("system_message").and_then(Value::as_str).is_some_and(|text| !text.is_empty()),
+      "{name} must show its second-miss notice: {second}"
+    );
+  }
   Ok(())
 }
 
@@ -1688,7 +1894,7 @@ async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_ali
     meta.clone(),
     callbacks(Arc::clone(&features), Arc::clone(&unread)),
     "failing-input".to_string(),
-    failing_option,
+    Some(failing_option),
     first_spawn,
   ));
   wait_until_busy(&features, &meta.id).await?;

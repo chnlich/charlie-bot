@@ -46,6 +46,18 @@ const SIDEBAR_SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(10);
 /// the corpus size divided by this slice, times the interval, to be rechecked again.
 const SIDEBAR_SWEEP_SLICE: usize = 1024;
 
+/// How many threads one large sidebar read splits its per-session probes across.
+///
+/// A process's first sidebar read has no stored state, so it probes every active session: each probe reads that
+/// session's trigger, metadata and run files. On the 7,160-session mock home the first listing read spends about 760 ms
+/// of CPU on that walk. A probe reads one session's files and shares nothing with another, so the walk splits across
+/// threads; the self-heal sweep already runs the same probes on its own thread beside the request threads.
+const SIDEBAR_PROBE_THREADS: usize = 8;
+
+/// The fewest sessions worth splitting. A poll over the rows one view paints stays on its own thread, because the
+/// threads cost more than the probes they carry.
+const SIDEBAR_PROBE_SPLIT_MIN: usize = 256;
+
 /// How many corpora keep their sweep rotation.
 ///
 /// A process polls a few large corpora, and an evicted entry only restarts that corpus's rotation.
@@ -139,31 +151,41 @@ pub(crate) fn resolve_sidebar_state(
     }
   }
 
-  let mut selected = Vec::new();
-  let mut signatures = HashMap::new();
   if force_full && !force {
     schedule_sidebar_sweep(Arc::clone(store), Arc::clone(registry), &active)?;
   }
-  for meta in &active {
-    let should_check = should_probe_synchronously(
-      force_full,
-      force,
-      charliebot_store::sidebar_state::is_dirty(&meta.id),
-      charliebot_store::sidebar_state::snapshot_entry(&meta.id).is_some(),
-    );
-    if !should_check {
-      continue;
+  let candidates: Vec<&Arc<SessionMetadata>> = active
+    .iter()
+    .filter(|meta| {
+      should_probe_synchronously(
+        force_full,
+        force,
+        charliebot_store::sidebar_state::is_dirty(&meta.id),
+        charliebot_store::sidebar_state::snapshot_entry(&meta.id).is_some(),
+      )
+    })
+    .collect();
+  let checked: Vec<Option<(String, Vec<Value>)>> = spread_across_threads(&candidates, |meta| {
+    let session_id = &meta.id;
+    let signature = probe_signature(store, registry, session_id);
+    let unchanged = charliebot_store::sidebar_state::probe_signature(session_id).as_ref() == Some(&signature);
+    if force || !unchanged || charliebot_store::sidebar_state::is_dirty(session_id) {
+      Some((session_id.clone(), signature))
+    } else {
+      None
     }
-    let signature = probe_signature(store, registry, &meta.id);
-    let unchanged = charliebot_store::sidebar_state::probe_signature(&meta.id).as_ref() == Some(&signature);
-    signatures.insert(meta.id.clone(), signature);
-    if force || !unchanged || charliebot_store::sidebar_state::is_dirty(&meta.id) {
-      selected.push(meta.id.clone());
-    }
+  });
+  let mut selected = Vec::new();
+  let mut signatures = HashMap::new();
+  for (session_id, signature) in checked.into_iter().flatten() {
+    signatures.insert(session_id.clone(), signature);
+    selected.push(session_id);
   }
   charliebot_store::sidebar_state::discard_dirty(&selected);
-  for session_id in &selected {
-    match probe_session(store, registry, session_id) {
+  let probed = spread_across_threads(&selected, |session_id| probe_session(store, registry, session_id));
+  for (index, result) in probed.into_iter().enumerate() {
+    let session_id = &selected[index];
+    match result {
       Ok(snapshot) => {
         charliebot_store::sidebar_state::store_snapshot_entry(session_id, snapshot);
         charliebot_store::sidebar_state::store_probe_signature(
@@ -350,6 +372,29 @@ fn sweep_corpus_key(sessions: &[Arc<SessionMetadata>]) -> (usize, u64) {
   (sessions.len(), hasher.finish())
 }
 
+/// The results of `work` over `items`, in `items`' order, split across [`SIDEBAR_PROBE_THREADS`] when the set is
+/// large enough to pay for them.
+///
+/// Every item's work reads its own session's files and touches the shared memos only through their locks, so one
+/// worker's result never depends on another's and the order of the results is the order of the input.
+fn spread_across_threads<T, R, F>(items: &[T], work: F) -> Vec<R>
+where
+  T: Sync,
+  R: Send,
+  F: Fn(&T) -> R + Sync,
+{
+  let threads = SIDEBAR_PROBE_THREADS.min(items.len());
+  if threads <= 1 || items.len() < SIDEBAR_PROBE_SPLIT_MIN {
+    return items.iter().map(work).collect();
+  }
+  let chunk = items.len().div_ceil(threads);
+  std::thread::scope(|scope| {
+    let handles: Vec<_> =
+      items.chunks(chunk).map(|part| scope.spawn(|| part.iter().map(&work).collect::<Vec<R>>())).collect();
+    handles.into_iter().flat_map(|handle| handle.join().expect("a sidebar probe worker does not panic")).collect()
+  })
+}
+
 fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreResult<Map<String, Value>> {
   let session_dir = store.session_dir(session_id);
   let triggers_dir = layout::triggers_dir(&session_dir);
@@ -437,6 +482,15 @@ fn stat_signature(path: &Path) -> Option<Value> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_split_sidebar_walk_keeps_the_order_of_its_input() {
+    let large: Vec<usize> = (0..SIDEBAR_PROBE_SPLIT_MIN * 3).collect();
+    let split = spread_across_threads(&large, |value| value * 2);
+    assert_eq!(split, large.iter().map(|value| value * 2).collect::<Vec<usize>>(), "a split keeps every item's place");
+    let small = [3_usize, 1, 2];
+    assert_eq!(spread_across_threads(&small, |value| value + 1), vec![4, 2, 3], "a small set runs in place");
+  }
 
   #[test]
   fn a_fast_poller_starts_one_self_heal_sweep_per_interval() {

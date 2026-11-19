@@ -34,7 +34,7 @@ enum Action {
     #[arg(long, default_value_t = DEFAULT_SEED)]
     seed: u64,
     /// The kind of home. `task-tree` adds the production startup's task tree for startup measurements; `view` gives each
-    /// session a task spec sized to a live view's rows.
+    /// session a task spec sized to a live view's rows; `search` adds the sidebar search view's match sets to `view`.
     #[arg(long, value_enum, default_value_t = Shape::Default)]
     shape: Shape,
     /// The language of the seeded prose, titles and table labels. `mixed` takes Chinese or English per sentence; the

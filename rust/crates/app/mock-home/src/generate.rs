@@ -43,7 +43,7 @@ pub fn generate(output: &Path, sessions: usize, seed: u64, shape: Shape, languag
   fs::create_dir(&staging).with_context(|| format!("cannot create the staging directory {}", staging.display()))?;
 
   let written = match shape {
-    Shape::Default | Shape::View => write_home(&staging, sessions, seed, shape, language),
+    Shape::Default | Shape::View | Shape::Search => write_home(&staging, sessions, seed, shape, language),
     Shape::TaskTree => {
       let home = fs::canonicalize(parent)
         .with_context(|| format!("cannot resolve {}", parent.display()))
@@ -133,6 +133,7 @@ fn write_event_log(
 }
 
 /// The acceptance criteria and context references of a view session: counts drawn from the stream, each item a sentence
+/// The acceptance criteria and context references of a view session: counts drawn from the stream, each item a sentence
 /// or a path of the synthetic pool. The spread of the counts gives the rows a spread of sizes; their median sets the
 /// view's median row.
 fn view_task(rng: &mut Rng, language: Language) -> Value {
@@ -146,10 +147,81 @@ fn view_task(rng: &mut Rng, language: Language) -> Value {
          (metadata::BASE_BRANCH_FIELD): "main"})
 }
 
-/// Writes the sessions and the manifest into `home`, and returns the total event-log bytes. The view shape adds a task
-/// spec to each session; the other shapes write the same bytes.
+/// One query's match set in the `search` shape: `sessions` archived sessions whose names carry `query`, each with a
+/// `web_status` goal of `goal_chars` Han characters.
+struct MatchSet {
+  query: &'static str,
+  sessions: u64,
+  goal_chars: usize,
+}
+
+/// The match sets of the `search` shape. The server answers a search with at most 200 rows (`SEARCH_RESULT_LIMIT` in
+/// `runtime/session-api/src/search.rs`), so a set of 200 sessions fills an answer. A row carries its session's
+/// `web_status` goal, and the goal's length sets the answer's gzip body: each count lands the body within 10 % of the
+/// live before capture of the same query (dev/poor-network/README.md, "Search view").
+const SEARCH_MATCH_SETS: [MatchSet; 4] = [
+  MatchSet { query: "sidebar", sessions: 200, goal_chars: 229 },
+  MatchSet { query: "plan", sessions: 200, goal_chars: 119 },
+  MatchSet { query: "cron", sessions: 200, goal_chars: 105 },
+  MatchSet { query: "hydeogen", sessions: 2, goal_chars: 250 },
+];
+/// The Han block the goal characters are drawn from: U+4E00 to U+9FFF, every code point assigned.
+const HAN_FIRST: u64 = 0x4E00;
+const HAN_COUNT: u64 = 0x9FFF - 0x4E00 + 1;
+/// Days after the view's sessions start at which the match sets are stamped. The answer keeps its newest 200 name hits,
+/// so each set's sessions must be newer than every view session.
+const SEARCH_MATCH_STAMP_DAYS: i64 = 30;
+
+/// `count` Han characters drawn from the seeded stream. Each takes three bytes, and gzip keeps about 0.6 of them, so the
+/// count sets a row's share of the answer's compressed body.
+fn han_text(rng: &mut Rng, count: usize) -> String {
+  (0..count)
+    .map(|_| char::from_u32((HAN_FIRST + rng.below(HAN_COUNT)) as u32).expect("the Han block holds scalar values"))
+    .collect()
+}
+
+/// Writes the `search` shape's match sets into `home`: archived sessions named for each query, each with a task spec, a
+/// `web_status` goal of the set's size, and an empty chat file. The active list the bench counts leaves archived sessions
+/// out, and a search answer reads a name hit's chat file only when it has no name hits to fill the answer.
+fn write_search_matches(home: &Path, rng: &mut Rng, language: Language) -> Result<()> {
+  let stamped_at = first_session_time()
+    + TimeDelta::seconds(SESSION_START_SPREAD_SECONDS as i64)
+    + TimeDelta::days(SEARCH_MATCH_STAMP_DAYS);
+  for set in SEARCH_MATCH_SETS {
+    for index in 0..set.sessions {
+      let id = session_id(rng);
+      let session_dir = home.join(&id);
+      fs::create_dir_all(layout::data_dir(&session_dir))
+        .with_context(|| format!("cannot create {}", session_dir.display()))?;
+      let stamp_text = stamp(stamped_at + TimeDelta::seconds(index as i64));
+      let goal = han_text(rng, set.goal_chars);
+      let metadata = SessionMetadata {
+        id,
+        name: format!("{} match {index:03}", set.query),
+        status: "archived",
+        profile: "manager",
+        backend: "mock-backend",
+        created_at: stamp_text.clone(),
+        updated_at: stamp_text,
+        schema_version: 2,
+        has_unread: false,
+        starred: false,
+        task: Some(view_task(rng, language)),
+        web_status: Some(json!({"goal": goal, "now": "", "waiting": []})),
+      };
+      write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
+      let chat = layout::chat_events_path(&session_dir);
+      fs::write(&chat, b"").with_context(|| format!("cannot write {}", chat.display()))?;
+    }
+  }
+  Ok(())
+}
+
+/// Writes the sessions and the manifest into `home`, and returns the total event-log bytes. The view and search shapes
+/// add a task spec to each session; the other shapes write the same bytes. The search shape adds its match sets after
+/// the view's sessions, which the manifest does not list: the bench counts the active sessions, and these are archived.
 fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: Language) -> Result<u64> {
-  let view = shape == Shape::View;
+  let view = matches!(shape, Shape::View | Shape::Search);
   let (mut rng, text, sizes) = planned_home(sessions, seed, language);
   let mut manifest_sessions = Vec::with_capacity(sessions);
   let mut total = 0;
@@ -175,10 +247,14 @@ fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: L
       has_unread: false,
       starred: false,
       task: view.then(|| view_task(&mut rng, language)),
+      web_status: None,
     };
     write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
     manifest_sessions.push(ManifestSession { id, event_log_bytes: log_bytes, last_message: final_text });
     total += log_bytes;
+  }
+  if shape == Shape::Search {
+    write_search_matches(home, &mut rng, language)?;
   }
   let manifest =
     Manifest { seed, session_count: sessions, event_log_bytes: total, sessions: manifest_sessions, shape, language };

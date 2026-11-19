@@ -41,6 +41,9 @@ pub enum Shape {
   /// Sessions of the default size curve, each with a synthetic task spec sized so that its session row matches a live
   /// view's rows. The default shape writes no task spec, so its bytes do not change.
   View,
+  /// The view shape, plus the match sets of the sidebar search view: archived sessions whose names carry each query the
+  /// view searches for, so each answer's body matches a live home's answer (`SEARCH_MATCH_SETS` in `generate.rs`).
+  Search,
 }
 
 impl Shape {

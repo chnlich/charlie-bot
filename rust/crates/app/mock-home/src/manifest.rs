@@ -28,6 +28,9 @@ pub struct SessionMetadata {
   /// The task spec of a view session; the other shapes write none.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub task: Option<Value>,
+  /// The `web_status` of a search match session, which a search row carries; the other sessions write none.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub web_status: Option<Value>,
 }
 
 /// The home's `manifest.json`: the seed, count, shape and language that produced it, and each session's log size and

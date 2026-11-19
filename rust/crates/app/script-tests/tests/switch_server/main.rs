@@ -452,6 +452,81 @@ fn test_preflight_refuses_an_unreachable_user_manager_before_stopping_the_server
   preflight_refusal_exits_1_and_changes_nothing("user-manager");
 }
 
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_refuses_a_run_that_ended_with_an_error_before_stopping_the_server() {
+  preflight_refusal_exits_1_and_changes_nothing("prior-switch-error");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_refuses_a_run_that_never_resumed_before_stopping_the_server() {
+  preflight_refusal_exits_1_and_changes_nothing("prior-switch-unresumed");
+}
+
+// ---- preflight: check A, the prior switch accounted for every run ------------------------------------------------
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_that_accounted_for_every_run_passes_the_preflight() {
+  let world = World::new();
+  world.seed_prior_switch(
+    &["readback: run run-success ended during the switch: outcome success"],
+    &["run-resumed", "run-success"],
+  );
+  world.seed_new_server_log(&["run-resumed"]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_approval_flag_passes_the_run_it_names() {
+  let world = World::new();
+  world.seed_prior_switch(&[], &["run-silent"]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight_approved(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("proceeding on --approve-unaccounted-runs"), "{}", world.report(&run));
+  assert!(run.stdout.contains("unaccounted: run-silent"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_refuses_a_host_with_no_switch_record_without_the_flag() {
+  let world = World::new();
+  world.remove_switch_records();
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("no switch record under"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_process_that_only_quotes_the_switch_script_does_not_block_the_preflight() {
+  let mut world = World::new();
+  let prompt = format!(
+    "You are the release worker. Read the brief, then run scripts/switch-server.sh rust {} once the checks in \
+     scripts/release/lock.sh pass. Report the verdict and the log path, and restart nothing else.",
+    world.rust_sha
+  );
+  world.spawn_quoting_process(&prompt);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+}
+
 // ---- the host release lock ----------------------------------------------------------------------------------------
 
 #[test]
@@ -793,6 +868,17 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
       world.start_release();
     }
     "user-manager" => world.sandbox.stub("systemctl", "exit 1\n"),
+    "prior-switch-error" => {
+      let readback = "readback: run run-failed died during the switch: outcome failed";
+      world.seed_prior_switch(&[readback], &["run-resumed", "run-failed"]);
+      world.seed_new_server_log(&["run-resumed"]);
+      world.start_release();
+    }
+    "prior-switch-unresumed" => {
+      world.seed_prior_switch(&[], &["run-resumed", "run-silent"]);
+      world.seed_new_server_log(&["run-resumed"]);
+      world.start_release();
+    }
     other => panic!("no preflight case named {other}"),
   }
 
@@ -821,6 +907,12 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
     let output = format!("{}{}", run.stdout, run.stderr);
     assert!(output.contains("scripts/start-server.sh"), "{}", world.report(&run));
     assert!(output.contains("untracked-worker-file"), "{}", world.report(&run));
+  }
+  if case == "prior-switch-error" || case == "prior-switch-unresumed" {
+    let named = if case == "prior-switch-error" { "run-failed" } else { "run-silent" };
+    let output = format!("{}{}", run.stdout, run.stderr);
+    assert!(output.contains(&format!("unaccounted: {named};")), "{}", world.report(&run));
+    assert!(output.contains("--approve-unaccounted-runs"), "{}", world.report(&run));
   }
   if case == "user-manager" {
     let output = format!("{}{}", run.stdout, run.stderr);

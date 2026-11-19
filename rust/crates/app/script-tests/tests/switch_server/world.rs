@@ -26,6 +26,14 @@ use uuid::Uuid;
 
 pub const ACCESS_KEY: &str = "switch-test-key";
 pub const SESSION: &str = "11111111-2222-3333-4444-555555555555";
+/// The prior switch's record and runs file, and the server log of the server it started. The record's window runs from
+/// its first line to its last, and the server log's launch stamp lies inside it.
+const PRIOR_SWITCH_LOG: &str = "switch_20250101_000000.log";
+const PRIOR_SWITCH_RUNS: &str = "switch_20250101_000000.runs";
+const NEW_SERVER_LOG: &str = "server_20250101_000002.log";
+const PRIOR_SWITCH_START: &str = "2025-01-01 00:00:00.000";
+const PRIOR_SWITCH_READBACK: &str = "2025-01-01 00:00:05.000";
+const PRIOR_SWITCH_END: &str = "2025-01-01 00:00:09.000";
 
 const GIT_IDENTITY: [(&str, &str); 4] = [
   ("GIT_AUTHOR_NAME", "switch-test"),
@@ -250,7 +258,7 @@ impl World {
     env.remove("TMUX");
     env.remove("SYSTEMD_RUN_REFUSE_ALL");
 
-    World {
+    let world = World {
       sandbox,
       clone,
       home,
@@ -267,7 +275,10 @@ impl World {
       cgroups,
       proc,
       live: Vec::new(),
-    }
+    };
+    // A prior switch that accounted for no runs, so the preflight's check A passes unless a test seeds its own.
+    world.seed_prior_switch(&[], &[]);
+    world
   }
 
   pub fn root(&self) -> &Path {
@@ -464,8 +475,25 @@ switch_forward
   /// The switch's preflight like [`World::stubbed_preflight`], with `prepend` run after the stubs and before the
   /// preflight: the disk tests install their sampler there.
   pub fn stubbed_preflight_with(&self, running_impl: &str, mode: &str, target_sha: &str, prepend: &str) -> Run {
+    self.stubbed_preflight_flags(running_impl, mode, target_sha, prepend, &[])
+  }
+
+  /// The switch's preflight with `--approve-unaccounted-runs`, the flag that the user's approval of a restart passes.
+  pub fn stubbed_preflight_approved(&self, running_impl: &str, mode: &str, target_sha: &str) -> Run {
+    self.stubbed_preflight_flags(running_impl, mode, target_sha, "", &["--approve-unaccounted-runs"])
+  }
+
+  /// The switch's preflight like [`World::stubbed_preflight_with`], with the switch's own `flags` on its command line.
+  fn stubbed_preflight_flags(
+    &self,
+    running_impl: &str,
+    mode: &str,
+    target_sha: &str,
+    prepend: &str,
+    flags: &[&str],
+  ) -> Run {
     let script = format!(
-      r#"source "$1" "$2" ${{3:+"$3"}}
+      r#"source "$1" "$2" ${{3:+"$3"}} "${{@:6}}"
 OLD_SOURCE="$4"
 RUNS_FILE="$5"
 listener_pids() {{ echo 999999; }}
@@ -483,7 +511,8 @@ preflight
       .arg(mode)
       .arg(target_sha)
       .arg(running_impl)
-      .arg(self.root().join("preflight.runs"));
+      .arg(self.root().join("preflight.runs"))
+      .args(flags);
     harness::run(&mut command)
   }
 
@@ -567,6 +596,61 @@ preflight
     let pid = child.id();
     self.live.push(child);
     pid
+  }
+
+  /// A process whose argv quotes `text` in one long argument, as an agent run's argv does. It waits in the shell's own
+  /// `read` rather than in a child process, so stopping it leaves no process behind. Its stdin pipe stays open meanwhile.
+  pub fn spawn_quoting_process(&mut self, text: &str) {
+    let mut command = harness::command("bash", &self.env);
+    command
+      .args(["-c", "read -r -t 300 _", "bash", text])
+      .stdin(Stdio::piped())
+      .stdout(Stdio::null())
+      .stderr(Stdio::null());
+    let child = harness::spawn(&mut command);
+    self.live.push(child);
+  }
+
+  /// The record of a prior switch whose preflight passed, in the log directory, replacing any record already there.
+  /// Its runs file lists `runs` as live. Its own log holds `readback` after the preflight line. The record's window
+  /// runs from its first line to its last, so a server log launched inside it is the server that switch started.
+  pub fn seed_prior_switch(&self, readback: &[&str], runs: &[&str]) {
+    self.remove_switch_records();
+    let mut text = format!(
+      "{PRIOR_SWITCH_START} switch: preflight passed: rust {} -> rust {}; clone at {}\n",
+      self.old_sha, self.rust_sha, self.old_sha
+    );
+    for line in readback {
+      text.push_str(&format!("{PRIOR_SWITCH_READBACK} switch: {line}\n"));
+    }
+    text.push_str(&format!(
+      "{PRIOR_SWITCH_END} switch: SWITCH COMPLETE: rust {} serves port {}\n",
+      self.rust_sha, self.port
+    ));
+    fs::write(self.logs.join(PRIOR_SWITCH_LOG), text).expect("the prior switch log");
+    let runs_text: String = runs.iter().map(|run| format!("live\t{SESSION}\t{run}\tclaude-haiku\t1\t0\n")).collect();
+    fs::write(self.logs.join(PRIOR_SWITCH_RUNS), runs_text).expect("the prior switch runs file");
+  }
+
+  /// Removes every file in the log directory, so that no switch record remains.
+  pub fn remove_switch_records(&self) {
+    for entry in fs::read_dir(&self.logs).expect("the log directory") {
+      fs::remove_file(entry.expect("a log entry").path()).expect("a seeded log removed");
+    }
+  }
+
+  /// The log of the server that the prior switch started: a task_recovery_resume record for each run in `resumed`.
+  pub fn seed_new_server_log(&self, resumed: &[&str]) {
+    let text: String = resumed
+      .iter()
+      .map(|run| {
+        format!(
+          "2025-01-01 00:00:02.000Z [info     ] tasks/recovery.rs:1020 \
+           task_recovery_resume session_id={SESSION} run_id={run}\n"
+        )
+      })
+      .collect();
+    fs::write(self.logs.join(NEW_SERVER_LOG), text).expect("the new server log");
   }
 
   /// A Run record whose process is alive, as the server left it before a restart.

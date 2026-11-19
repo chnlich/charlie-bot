@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Switch the live CharlieBot server to an installed release and move the runtime clone to that release's commit.
 #
-#   scripts/switch-server.sh rust <full main commit> [--pane PANE]
+#   scripts/switch-server.sh rust <full main commit> [--pane PANE] [--approve-unaccounted-runs]
 #
 # The preflight checks the release, clone, runs and config, confirms the user manager answers, then asks
 # start-server.sh to test its slices and scope, and checks that every switched-on session-weight switch
@@ -29,6 +29,18 @@
 # the switch back found that the old release refuses the home while the new release serves: the new release keeps
 # serving, and the log names the failed step and the refusal text; 6 when the probe turn or the delegation check failed
 # on the model's side after one retry: the new release keeps serving and the log names the check and the model's error.
+#
+# The standing switch rule has two checks. Both run in the preflight, after the clone check and before any release is
+# selected or the server stops. Check A (the prior switch accounted for every run): the prior switch is the newest
+# switch record under CHARLIEBOT_LOG_DIR whose preflight passed, the switch that last moved the server. Each run in its
+# `.runs` file must be resumed on the server that served when that switch ended, or end with outcome success in the
+# switch's own log (`readback: run <id> ended during the switch: outcome success`). The server is the newest server log
+# launched inside the switch's window, from its first stamp to its last. A run that is neither refuses the switch and
+# is named. No switch record, or a record without its runs file, refuses it too. `--approve-unaccounted-runs` is the
+# only override: pass it once the user approves the restart over the named runs. Check B (no concurrent release or
+# switch) is the host release lock. The switch takes it in run_detached before the preflight, and scripts/release.sh
+# takes it before its first stage, so a second release or switch exits at once while one holds the lock. The preflight
+# therefore scans no processes.
 #
 # The checks that need a model run after the readback, on the new server and the production home, so the release path
 # ends at server_ready: the probe turn and the delegation check. Each wait is bounded from the measured times (see
@@ -157,7 +169,7 @@ ROOT_DISK_NAME=""
 ROOT_PART_DEV=""
 ROOT_DISK_DEV=""
 usage() {
-  echo "usage: switch-server.sh rust <full main commit> [--pane PANE]" >&2
+  echo "usage: switch-server.sh rust <full main commit> [--pane PANE] [--approve-unaccounted-runs]" >&2
   exit 1
 }
 
@@ -176,12 +188,14 @@ case "$MODE" in
 esac
 PANE=""
 DETACHED_LOG=""
+APPROVE_UNACCOUNTED_RUNS=0 # 1 when the user approved a restart over runs that check A cannot account for
 DIED_RUNS=0   # no switch back can recover an ended run, so keep count until the switch exits 4
 OLD_STOPPED=0 # the server that served the port before the switch has stopped
 BACK=0        # the switch is running its switch-back path
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane) [ $# -ge 2 ] || usage; PANE=$2; shift 2 ;;
+    --approve-unaccounted-runs) APPROVE_UNACCOUNTED_RUNS=1; shift ;;
     --detached) [ $# -ge 2 ] || usage; DETACHED_LOG=$2; shift 2 ;;   # internal: the detached run's log
     *) usage ;;
   esac
@@ -1362,6 +1376,86 @@ config_check() {
   return 0
 }
 
+# prior_switch_log: the newest switch record under LOG_DIR whose preflight passed, the record of the switch that
+# last moved the server. A refused switch moves nothing, so its record is skipped. Prints the record's path.
+prior_switch_log() {
+  local log
+  while IFS= read -r log; do
+    if grep -Fq "switch: preflight passed: " "$log"; then
+      echo "$log"
+      return 0
+    fi
+  done < <(find "$LOG_DIR" -maxdepth 1 -name 'switch_*.log' | sort -r)
+  return 1
+}
+
+# switch_window LOG: the local clock of the record's first and last timestamped lines, each as YYYYMMDDHHMMSS.
+switch_window() {
+  grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} ' "$1" | sed -n -e '1p' -e '$p' \
+    | cut -c1-19 | tr -dc '0-9\n'
+}
+
+# new_server_log LOG: the server log of the server that served when the switch record LOG ended: the newest server log
+# launched inside the record's window. The log names and the record's lines carry the same local clock. Prints nothing
+# when no server launched inside the window.
+new_server_log() {
+  local window start end server stamp
+  window="$(switch_window "$1")"
+  start="$(sed -n 1p <<<"$window")"
+  end="$(sed -n '$p' <<<"$window")"
+  while IFS= read -r server; do
+    stamp="${server##*/server_}"
+    stamp="${stamp%.log}"
+    stamp="${stamp//_/}"
+    if [ "$stamp" -le "$end" ]; then
+      if [ "$stamp" -ge "$start" ]; then echo "$server"; fi
+      return 0
+    fi
+  done < <(find "$LOG_DIR" -maxdepth 1 -name 'server_*.log' | sort -r)
+  return 0
+}
+
+# resumed_in_log LOG RUN: LOG holds a task_recovery_resume record that names RUN. A record's words are the runs of
+# characters a run id does not hold, so the match is the whole id, in the text form and in the JSON form that the
+# server wrote before the text form.
+resumed_in_log() {
+  awk -v run="$2" '/task_recovery_resume/ {
+    line = $0
+    gsub(/[^0-9A-Za-z_-]+/, " ", line)
+    count = split(line, words, " ")
+    for (i = 1; i <= count; i++) if (words[i] == run) found = 1
+  }
+  END { exit !found }' "$1"
+}
+
+# check_prior_switch: check A of the standing switch rule. Each run that the prior switch recorded must be resumed on
+# the server that served when it ended, or end with outcome success in its own log. A run that is neither refuses the
+# switch and is named. --approve-unaccounted-runs lets the switch proceed over the named runs, and nothing else does.
+check_prior_switch() {
+  local prior runs server run why unaccounted=""
+  if ! prior="$(prior_switch_log)"; then
+    why="no switch record under $LOG_DIR passed its preflight"
+  elif [ ! -f "${prior%.log}.runs" ]; then
+    why="the prior switch $(basename "$prior") has no runs file"
+  else
+    runs="${prior%.log}.runs"
+    server="$(new_server_log "$prior")"
+    while IFS=$'\t' read -r _state _session run _rest; do
+      if [ -n "$server" ] && resumed_in_log "$server" "$run"; then continue; fi
+      if grep -Fq "readback: run $run ended during the switch: outcome success" "$prior"; then continue; fi
+      unaccounted="$unaccounted $run"
+    done < "$runs"
+    if [ -z "$unaccounted" ]; then
+      log "check A: every run of the prior switch $(basename "$prior") is accounted for"
+      return 0
+    fi
+    why="the prior switch $(basename "$prior") left run(s) unaccounted:$unaccounted"
+  fi
+  [ "$APPROVE_UNACCOUNTED_RUNS" = 1 ] \
+    || fail "$why; after the user approves the restart, rerun with --approve-unaccounted-runs"
+  log "check A: proceeding on --approve-unaccounted-runs: $why"
+}
+
 preflight() {
   # The reset below moves the branch that HEAD names, so a commit that exists only on another branch drops out of the
   # clone. A detached HEAD names no branch; main is the one branch the switch may move.
@@ -1371,6 +1465,7 @@ preflight() {
   fi
   dirty="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)"
   [ -z "$dirty" ] || fail "runtime clone $REPO_ROOT has local changes: ${dirty//$'\n'/; }"
+  check_prior_switch
 
   PREV_CURRENT="$(readlink "$CURRENT" 2> /dev/null || true)"
   [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"

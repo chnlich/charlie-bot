@@ -337,7 +337,7 @@ impl PageCorpusEntry {
 /// The sidebar corpus read without rendering a row. A memo hit still polls the sidebar state, because the periodic
 /// self-heal sweep is what catches an edit from outside the server.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
-  let corpus = page_corpus(store, registry)?;
+  let corpus = page_corpus(store, registry, true)?;
   let sequence_fields = store.sequence_listing_fields(&corpus.rows)?;
   Ok(PageRows { rows: corpus.rows, index: corpus.index, derived: corpus.derived, sequence_fields })
 }
@@ -352,15 +352,19 @@ pub struct PageCorpusRows {
   pub derived: Arc<DerivedSidebarMap>,
 }
 
-pub fn page_corpus_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageCorpusRows> {
-  let corpus = page_corpus(store, registry)?;
+/// The Workspace page's rows and overlay for a caller that registers its own poll.
+///
+/// `register` is false when the caller counts the poll itself: the corpus then reads the memo without counting the
+/// same poll a second time.
+pub fn page_corpus_rows(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> StoreResult<PageCorpusRows> {
+  let corpus = page_corpus(store, registry, register)?;
   Ok(PageCorpusRows { rows: corpus.rows, derived: corpus.derived })
 }
 
 /// The sidebar corpus with the sequence controller fields of `ids` alone. A row refresh reads this: it merges the
 /// rows it names, so the corpus' other rows need no controller fields.
 pub fn active_page_rows_for(store: &Arc<Store>, registry: &Arc<Registry>, ids: &[String]) -> StoreResult<PageRows> {
-  let corpus = page_corpus(store, registry)?;
+  let corpus = page_corpus(store, registry, true)?;
   let sequence_fields = store.sequence_listing_fields_for(ids)?;
   Ok(PageRows { rows: corpus.rows, index: corpus.index, derived: corpus.derived, sequence_fields })
 }
@@ -378,7 +382,10 @@ fn page_row_index(rows: &[Arc<SessionMetadata>]) -> Arc<HashMap<String, u32>> {
 }
 
 /// The sidebar corpus, from the memo while every input that shapes it still holds.
-fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageCorpus> {
+///
+/// A memo hit registers the poll unless `register` is false, because the periodic self-heal sweep is what catches an
+/// edit from outside the server. A caller that registers the poll itself passes false, so one poll counts once.
+fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>, register: bool) -> StoreResult<PageCorpus> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
   let roots = store.subtree_roots_shared()?;
@@ -391,8 +398,9 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<Page
       .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.index), Arc::clone(&entry.derived)))
   };
   if let Some((rows, index, derived)) = cached {
-    // A memo hit still polls, because the periodic self-heal sweep is what catches an edit from outside the server.
-    sidebar::count_memoized_read(store, registry, &rows)?;
+    if register {
+      sidebar::count_memoized_read(store, registry, &rows)?;
+    }
     return Ok(PageCorpus { rows, index, derived });
   }
   let ListingCorpus { mut rows, derived, .. } = active_listing_corpus(store, registry)?;

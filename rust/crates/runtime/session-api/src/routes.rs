@@ -585,6 +585,18 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
   blocking_store(move || Ok(session_status_response(&features, &request))).await.unwrap_or_else(store_error)
 }
 
+/// Drops the count reservation of a poll that returned before a register answered it.
+///
+/// The count must name the poll's register even when the route leaves early, so a later read on this blocking thread
+/// cannot answer a poll it did not count. A register that took the reservation leaves nothing to drop.
+struct PollReservation;
+
+impl Drop for PollReservation {
+  fn drop(&mut self) {
+    sidebar_state::forget_poll_reservation();
+  }
+}
+
 /// The sidebar's status poll: the rows of one filter, plus any further sessions the page names, answered as the rows
 /// whose state moved since the page's last answer.
 ///
@@ -625,7 +637,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   let generation = sidebar_state::derived_generation();
   let mut page = None;
   let key = match filter {
-    Some("all") => match listing::page_corpus_rows(&features.store, &features.registry) {
+    Some("all") => match listing::page_corpus_rows(&features.store, &features.registry, false) {
       Ok(corpus) => {
         let overlay = ListingOverlay(corpus.derived);
         page = Some((corpus.rows, overlay.clone()));
@@ -673,16 +685,18 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   // A body whose corpus, sidebar state and delta base still hold is the body a rebuild would render. A miss rebuilds
   // every row payload: about 50 ms for 7,160 rows, on a poll an open page sends every few seconds. A repeat request
   // reads the memo instead. The poll still counts toward the periodic self-heal sweep, which moves the generation and
-  // so replaces the entry.
+  // so replaces the entry. The route registers the poll itself, so the corpus above registers nothing.
+  let probe = !force && sidebar_state::poll_begins_probe();
+  let _poll = PollReservation;
   if !force && let Some(body) = get_status_body(&key) {
     // The self-heal probe is the only reader of a poll's row set, and nine polls in ten begin no probe, so a poll
     // that begins none builds no rows. The rows a probe poll reads are the ones it read before: the answer's own
-    // rows, or the page corpus a set answer already holds. `poll_begins_probe` counts this poll and reserves its turn,
-    // so the `count_memoized_read` below answers the same poll instead of racing another one for the turn.
+    // rows, or the page corpus a set answer already holds. The count above reserved this poll's turn, so the
+    // `count_memoized_read` below answers the same poll instead of racing another one for the turn.
     let owned;
     let sessions: &[Arc<SessionMetadata>] = match &page {
       Some((rows, _)) if answer == StatusAnswer::Set => rows.as_slice(),
-      _ if sidebar_state::poll_begins_probe() => {
+      _ if probe => {
         let source = if answer == StatusAnswer::Named {
           extra.as_slice()
         } else {

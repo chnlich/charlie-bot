@@ -11,7 +11,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {indexScriptPaths} = require('./read_static');
+const {indexScriptPaths, readStatic} = require('./read_static');
 
 const ROOT = path.join(__dirname, '..');
 const readLoader = () => fs.readFileSync(path.join(ROOT, 'templates/js/chat/status-panel.js'), 'utf8');
@@ -77,6 +77,16 @@ test('a web session whose status has a waiting item starts the module download',
     ['/static/js/comment_post.js', '/static/js/chat/status-panel.js'],
     'the Done action\'s click-message helper lands before the module that calls it');
   assert.ok(!indexScriptPaths().includes('comment_post.js'), 'the chat page loads the helper only through the panel');
+});
+
+test('the helper the group runs first defines the names a Status click calls', () => {
+  const rig = loadPage();
+  rig.context.openSessionStatusPanel({...manager, web_status: waitingStatus}, []);
+  const [helperPath] = rig.downloadCalls[0].paths;
+  // The page runs the group's first file before the module lands; the Done action resolves these names as globals.
+  vm.runInContext(readStatic(helperPath.slice('/static/js/'.length)), rig.context, {filename: helperPath});
+  assert.equal(typeof rig.context.buildClickMessage, 'function');
+  assert.equal(typeof rig.context.startUndoableSend, 'function');
 });
 
 test('a web session with nothing to count and a hidden panel asks for nothing', () => {

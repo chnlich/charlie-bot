@@ -28,7 +28,7 @@ use charliebot_store::metadata::{
   TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
-use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError, TaskCaller};
+use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -495,14 +495,6 @@ enum DelegateError {
   Refused(StatusCode, String),
 }
 
-/// The task caller that a delegation's identity makes.
-fn task_caller(caller_identity: &CallerIdentity) -> TaskCaller {
-  match caller_identity {
-    CallerIdentity::Operator { .. } => TaskCaller::Operator,
-    CallerIdentity::Agent { claims } => TaskCaller::Agent { session_id: claims.session_id.clone() },
-  }
-}
-
 /// A bound delegation: the round of a prompt task that the calling session binds. The task's kind, session, note and
 /// host hold are checked first, each answering its refusal. The one-round check, the worker's creation and its run
 /// registration then share the tree control lock, so a second delegation of the task cannot start between them.
@@ -568,7 +560,7 @@ async fn delegate_bound_round(
         group: None,
         session_id: None,
       },
-      task_caller(caller_identity),
+      caller_identity.task_caller(),
       Default::default(),
     )
     .await?;
@@ -650,7 +642,7 @@ async fn delegate_task_tree(
   subagent: &SubagentBackend,
   route: Option<&BackendRoute>,
 ) -> Result<Value, DelegateError> {
-  let caller = task_caller(caller_identity);
+  let caller = caller_identity.task_caller();
   let request_id = delegate_request_id(request);
   let name = if request.task_type == TaskType::ColdRead {
     let path = request.cold_read.as_ref().expect("cold-read field contract was checked").page_path.as_str();

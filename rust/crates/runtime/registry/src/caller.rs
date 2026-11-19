@@ -9,7 +9,7 @@ use axum::response::Response;
 use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
 use charliebot_core::run_token::{self, CALLER_SESSION_HEADER, RunTokenClaims};
-use charliebot_store::{Store, control_events};
+use charliebot_store::{Store, TaskCaller, control_events};
 
 use crate::FeatureContext;
 
@@ -39,6 +39,14 @@ impl CallerIdentity {
     match self {
       Self::Operator { .. } => None,
       Self::Agent { claims } => Some(claims),
+    }
+  }
+
+  /// The task owner a request from this caller creates a task as: an agent's verified session, or the operator.
+  pub fn task_caller(&self) -> TaskCaller {
+    match self.claims() {
+      Some(claims) => TaskCaller::Agent { session_id: claims.session_id.clone() },
+      None => TaskCaller::Operator,
     }
   }
 
@@ -239,6 +247,16 @@ mod tests {
 
     let with_session = resolve_caller(&request_headers(None, Some("operator-session")), &features).unwrap();
     assert_eq!(with_session, CallerIdentity::Operator { session_id: Some("operator-session".into()) });
+  }
+
+  #[test]
+  fn a_caller_creates_tasks_as_the_operator_or_its_own_agent_session() {
+    let operator = CallerIdentity::Operator { session_id: Some("operator-session".into()) };
+    assert_eq!(operator.task_caller(), TaskCaller::Operator);
+
+    let claims = claims();
+    let agent = CallerIdentity::Agent { claims: claims.clone() };
+    assert_eq!(agent.task_caller(), TaskCaller::Agent { session_id: claims.session_id });
   }
 
   #[test]

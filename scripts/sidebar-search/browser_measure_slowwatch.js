@@ -56,6 +56,7 @@ async function main() {
       first.rep = rep;
       const countersBefore = await readCounters(page.page);
       const windowStart = Date.now();
+      const windowStartPage = await page.page.evaluate(() => performance.now());
       const framesBefore = page.frames.length;
       const searchesBefore = page.searchResponses.length;
       const load = startTaskTreeLoad({
@@ -69,15 +70,15 @@ async function main() {
       await page.page.waitForTimeout(windowSeconds * 1000);
       const changesSent = await load.stop();
       const countersAfter = await readCounters(page.page);
-      const searchEntries = await page.page.evaluate(({ query, since }) => performance.getEntriesByType('resource')
-        .filter(e => e.name.includes('/api/sessions/search?q=' + encodeURIComponent(query))
-          && performance.timeOrigin + e.startTime >= since)
+      // The entries the observer collected since the window opened, on the page's clock.
+      const searchEntries = await page.page.evaluate(({ query, since }) => window.__resources
+        .filter(e => e.name.includes('/api/sessions/search?q=' + encodeURIComponent(query)) && e.startTime >= since)
         .map(e => ({
           start: performance.timeOrigin + e.startTime,
           duration: e.duration,
           transferSize: e.transferSize,
           encodedBodySize: e.encodedBodySize,
-        })), { query, since: windowStart });
+        })), { query, since: windowStartPage });
       const framesByType = {};
       for (const frame of page.frames.slice(framesBefore)) {
         framesByType[frame.type] = (framesByType[frame.type] || 0) + 1;

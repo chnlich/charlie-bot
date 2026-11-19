@@ -63,7 +63,12 @@ async function openPage(baseUrl, { accessKey = '', sessionId = '' } = {}) {
   });
   await page.addInitScript((key) => {
     if (key) localStorage.setItem('charliebot_access_key', key);
-    performance.setResourceTimingBufferSize(100000);
+    // The page's diagnostics clear the resource timing buffer on every traffic flush, so the runner reads each entry as
+    // the observer receives it. The observer's list keeps every entry the page loads.
+    window.__resources = [];
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) window.__resources.push(entry);
+    }).observe({ type: 'resource', buffered: true });
     window.__inputs = [];
     document.addEventListener('input', (event) => {
       if (event.target && event.target.id === 'sidebar-search') {
@@ -130,7 +135,7 @@ async function oneSearch(page, query) {
     if (!input) return null;
     const render = window.__renders.slice(before.r).find(r => r.filter === 'search' && r.t0 > input.t && r.paint);
     if (!render) return null;
-    const entry = performance.getEntriesByType('resource').find(e =>
+    const entry = window.__resources.find(e =>
       e.name.includes('/api/sessions/search?q=' + encodeURIComponent(query)) && e.startTime > input.t
       && e.responseEnd <= render.t0);
     if (!entry) return null;
@@ -149,7 +154,7 @@ async function oneSearch(page, query) {
       render_t1: render.t1,
       paint: render.paint,
       rows: render.rows,
-      overlap: performance.getEntriesByType('resource').filter(e => e !== entry && e.startTime < entry.responseEnd
+      overlap: window.__resources.filter(e => e !== entry && e.startTime < entry.responseEnd
         && e.responseEnd > entry.responseStart).map(e => ({
         path: new URL(e.name).pathname,
         transferSize: e.transferSize,

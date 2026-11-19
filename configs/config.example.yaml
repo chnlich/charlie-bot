@@ -77,12 +77,14 @@ backends:
   # position lives in server memory, so a restart starts each rotation again at its first member.
   #
   # rule: priority. Members are option ids too, and no member repeats; each member's option names its billing
-  # (subscription or payg). Each call takes the best selectable member:
+  # (subscription or payg). Each call takes a member in two tiers:
   #   1. Subscriptions first. A subscription is near exhaustion when its usage is at or above 90% and its earliest
   #      reset is more than 45 minutes away. The selectable subscriptions below that line form the tier; when none
   #      is below it, all selectable subscriptions form the tier.
-  #   2. In the tier, the member that the fewest active sessions of this pool hold is taken; config order breaks ties.
-  #   3. Pay-as-you-go members only when no subscription is selectable: the first selectable one in config order.
+  #   2. In the tier, the members take turns in config order: the call takes the first selectable tier member after
+  #      the tier's position, and the position moves past it.
+  #   3. Pay-as-you-go members only when no subscription is selectable. They take turns in config order the same way,
+  #      from their own position.
   #
   # A member is selectable unless the call excludes it, it is out, or its usage reading says it has no capacity
   # left. A member whose quota runs out is out until its reset (30 minutes when the error gives none), and the

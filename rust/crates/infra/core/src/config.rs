@@ -387,9 +387,9 @@ pub const SESSION_CALL_TARGET: &str = "session";
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PoolRule {
-  /// The best selectable member: subscriptions below the 90% line, then all subscriptions as a last resort; the
-  /// active sessions each member holds order each subscription tier, with configured order breaking ties.
-  /// Pay-as-you-go follows only when no subscription is selectable.
+  /// Subscriptions first: the members below the 90% line, or every subscription when none is below it. Within that
+  /// tier the members take turns in config order, from the member after the tier's last pick. Pay-as-you-go members
+  /// take turns the same way, and only when no subscription is selectable.
   Priority,
   /// The first selectable member after the pool's rotation position, which then moves past the chosen member.
   Rotate,

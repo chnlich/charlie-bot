@@ -1097,8 +1097,10 @@ struct CommitMessage {
   body: String,
 }
 
-/// The genre that the caller's PR title and body follow when the branch holds several commits.
-const PR_TEXT_GENRE: &str = "~/.claude/skills/writing-style/genres/commits-and-prs.md";
+/// The genre file path used when a branch holds several commits.
+fn pr_text_genre_path() -> String {
+  format!("~/{}/skills/writing-style/genres/commits-and-prs.md", charliebot_core::home::CLAUDE_CONFIG_DIR_NAME)
+}
 
 /// PR text after applying explicit values to the commit-derived defaults.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1148,8 +1150,9 @@ fn resolve_pr_text(commits: &[CommitMessage], options: &LandOptions) -> anyhow::
       (Some(title), Some(body)) => Ok(ResolvedPrText { title: title.clone(), body: body.clone() }),
       _ => anyhow::bail!(
         "the branch has {} commits ahead of origin: a gated landing of several commits needs --title and --body \
-         or --body-file, written by {PR_TEXT_GENRE}",
-        commits.len()
+         or --body-file, written by {}",
+        commits.len(),
+        pr_text_genre_path()
       ),
     };
   }
@@ -1367,7 +1370,7 @@ mod tests {
     let refusal = format!("{refusal:#}");
     assert!(refusal.contains("2 commits"), "{refusal}");
     assert!(refusal.contains("--title"), "{refusal}");
-    assert!(refusal.contains(PR_TEXT_GENRE), "{refusal}");
+    assert!(refusal.contains(&pr_text_genre_path()), "{refusal}");
     let title_only = LandOptions { title: Some("Routing".to_string()), body: None };
     assert!(resolve_pr_text(&commits, &title_only).is_err());
     let body_only = LandOptions { title: None, body: Some("Why.".to_string()) };

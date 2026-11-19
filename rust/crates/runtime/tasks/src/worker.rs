@@ -592,7 +592,8 @@ impl Worker {
         Box::pin(async move { Ok((tokens, None)) })
       }),
       running_turns: None,
-      run_id: None,
+      // The task thread is bound to its run (`execution.rs` `worker_binding`), so the thread id is the run id.
+      run_id: Some(self.thread_id.clone()),
       can_delegate: false,
     })
   }

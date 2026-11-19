@@ -104,6 +104,8 @@ fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Arc<Registry>) -
   if !case["claude_account"].is_null() {
     kwargs.insert("claude_account".to_string(), case["claude_account"].clone());
   }
+  // A worker run names its session and run in the compaction-context hook.
+  kwargs.insert("run_id".to_string(), Value::String("golden-run".to_string()));
   let instructions_file = case["instructions_file"].as_str().map(PathBuf::from);
   let launch = LaunchArgs {
     extra_flags: case["extra_flags"]
@@ -117,7 +119,7 @@ fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Arc<Registry>) -
     instructions_file,
     resume_session_id: None,
     log_dir: None,
-    cgroup_session_id: None,
+    cgroup_session_id: Some("golden-session".to_string()),
     remote_launch: None,
     backend_kwargs: kwargs,
     manager_turn: false,

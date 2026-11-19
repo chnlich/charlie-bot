@@ -57,9 +57,9 @@ impl ClaudeCliLifecycle {
   }
 }
 
-/// The launch arguments one Claude process receives: its run kind, the manager turn's flags, and,
-/// for a manager turn, the run id that its read-budget hook entries name.
-/// A relayed process continues the same run.
+/// The launch arguments one Claude process receives: its run kind, the manager turn's flags, and the run id. A manager
+/// turn's run id names its read-budget hook entries; a task run's run id names its compaction-context hook, so a task
+/// launch without one fails. A relayed process continues the same run.
 fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map<String, Value>> {
   let mut kwargs = Map::new();
   kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
@@ -77,6 +77,10 @@ fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map
       kwargs.insert("can_delegate".to_string(), Value::Bool(ctx.can_delegate));
     }
   } else if ctx.kind == LaunchKind::Task {
+    let Some(run_id) = ctx.run_id.as_deref().filter(|value| !value.is_empty()) else {
+      anyhow::bail!("task Claude launch requires a CharlieBot run id for the compaction-context hook");
+    };
+    kwargs.insert("run_id".to_string(), Value::String(run_id.to_string()));
     if first_process
       && ctx.held_native_id.is_none()
       && let Some(native_id) = ctx.preassigned_native_id.as_deref()

@@ -297,9 +297,11 @@ impl ClaudeCodeBackend {
         agent_tool,
         self.can_delegate,
       )?,
-      false => {
-        claude_launch::headless_claude_settings_without_guards(self.run_kind, self.cgroup_session_id.as_deref())?
-      }
+      false => claude_launch::headless_claude_settings_without_guards(
+        self.run_kind,
+        self.cgroup_session_id.as_deref(),
+        self.run_id.as_deref(),
+      )?,
     };
     if self.fast_mode {
       settings.insert(claude_launch::FAST_MODE_SETTINGS_KEY.to_string(), Value::Bool(true));
@@ -795,6 +797,22 @@ mod tests {
   use super::*;
   use crate::test_support::{inherited_env, recorded_env, recorded_lines, stage_fake_claude};
 
+  /// The launch kwargs of a worker run `worker-run`, which its compaction-context hook names.
+  fn worker_run_kwargs() -> Map<String, Value> {
+    serde_json::json!({"run_id": "worker-run"}).as_object().unwrap().clone()
+  }
+
+  /// The SessionStart entry of the worker run in session `worker-session`: one compaction-context command per slot.
+  fn worker_session_start_json() -> String {
+    let slots: Vec<String> = (1..=claude_launch::COMPACTION_CONTEXT_SLOTS)
+      .map(|slot| {
+        let command = format!("charliebot compaction-context --session worker-session --slot {slot} --run worker-run");
+        format!(r#"{{"type":"command","command":"{command}"}}"#)
+      })
+      .collect();
+    format!(r#""SessionStart":[{{"matcher":"compact","hooks":[{}]}}]"#, slots.join(","))
+  }
+
   #[test]
   fn command_has_headless_settings_and_stdin_prompt() {
     let backend = ClaudeCodeBackend::from_launch(
@@ -810,9 +828,9 @@ mod tests {
         instructions_file: None,
         resume_session_id: None,
         log_dir: None,
-        cgroup_session_id: None,
+        cgroup_session_id: Some("worker-session".to_string()),
         remote_launch: None,
-        backend_kwargs: Map::new(),
+        backend_kwargs: worker_run_kwargs(),
         manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
@@ -826,11 +844,14 @@ mod tests {
     assert!(command.windows(2).any(|pair| pair == ["--resume", "resume-id"]));
     assert_eq!(
       settings,
-      concat!(
-        r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
-        r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}"#,
-        r#",{"type":"command","command":"charliebot scan-guard"},{"type":"command","command":"charliebot kill-guard"}]}]},""#,
-        r#"fastMode":true}"#
+      format!(
+        concat!(
+          r#"{{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,"hooks":{{{}"#,
+          r#","PreToolUse":[{{"matcher":"Bash","hooks":[{{"type":"command","command":"charliebot wait-guard"}}"#,
+          r#",{{"type":"command","command":"charliebot scan-guard"}}"#,
+          r#",{{"type":"command","command":"charliebot kill-guard"}}]}}]}},"fastMode":true}}"#
+        ),
+        worker_session_start_json()
       )
     );
     assert_eq!(AgentBackend::stdin_prompt(&backend, "prompt").as_deref(), Some("prompt"));
@@ -936,10 +957,50 @@ mod tests {
         {"type": "command", "command": "charliebot kill-guard"}
       ]
     }]);
-    let settings = claude_launch::headless_claude_settings(RunKind::ScheduledStep, None, None, false, false).unwrap();
+    let settings = claude_launch::headless_claude_settings(
+      RunKind::ScheduledStep,
+      Some("scheduled-session"),
+      Some("scheduled-run"),
+      false,
+      false,
+    )
+    .unwrap();
     assert_eq!(settings["hooks"]["PreToolUse"], scan_only);
-    let settings = claude_launch::headless_claude_settings_without_guards(RunKind::ScheduledStep, None).unwrap();
-    assert!(settings.get("hooks").is_none());
+    let settings = claude_launch::headless_claude_settings_without_guards(
+      RunKind::ScheduledStep,
+      Some("scheduled-session"),
+      Some("scheduled-run"),
+    )
+    .unwrap();
+    assert!(settings["hooks"].get("PreToolUse").is_none());
+  }
+
+  /// A worker run's settings name its run id in the compaction-context hook, on both launch paths, and a worker run
+  /// without a run id does not start.
+  #[test]
+  fn worker_settings_name_the_run_in_the_compaction_context_hook_and_require_it() {
+    for run_kind in [RunKind::Work, RunKind::Review, RunKind::Iteration, RunKind::ScheduledStep] {
+      let guarded =
+        claude_launch::headless_claude_settings(run_kind, Some("worker-session"), Some("worker-run"), false, false)
+          .unwrap();
+      let unguarded =
+        claude_launch::headless_claude_settings_without_guards(run_kind, Some("worker-session"), Some("worker-run"))
+          .unwrap();
+      for settings in [guarded, unguarded] {
+        let command = &settings["hooks"]["SessionStart"][0]["hooks"][5]["command"];
+        assert_eq!(
+          command, "charliebot compaction-context --session worker-session --slot 6 --run worker-run",
+          "{run_kind:?}"
+        );
+      }
+    }
+    assert!(
+      claude_launch::headless_claude_settings(RunKind::Work, Some("worker-session"), None, false, false).is_err(),
+      "a worker launch without a run id must not start"
+    );
+    assert!(
+      claude_launch::headless_claude_settings_without_guards(RunKind::Work, Some("worker-session"), None).is_err()
+    );
   }
 
   #[test]
@@ -987,9 +1048,9 @@ mod tests {
         instructions_file: None,
         resume_session_id: None,
         log_dir: None,
-        cgroup_session_id: None,
+        cgroup_session_id: Some("worker-session".to_string()),
         remote_launch: None,
-        backend_kwargs: Map::new(),
+        backend_kwargs: worker_run_kwargs(),
         manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
@@ -1259,14 +1320,23 @@ mod tests {
         instructions_file: None,
         resume_session_id: None,
         log_dir: None,
-        cgroup_session_id: None,
+        cgroup_session_id: Some("worker-session".to_string()),
         remote_launch: None,
-        backend_kwargs: Map::new(),
+        backend_kwargs: worker_run_kwargs(),
         manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();
+    let worker_settings = format!(
+      concat!(
+        r#"{{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,"hooks":{{{}"#,
+        r#","PreToolUse":[{{"matcher":"Bash","hooks":[{{"type":"command","command":"charliebot wait-guard"}}"#,
+        r#",{{"type":"command","command":"charliebot scan-guard"}}"#,
+        r#",{{"type":"command","command":"charliebot kill-guard"}}]}}]}}}}"#
+      ),
+      worker_session_start_json()
+    );
     assert_eq!(
       backend.build_command("prompt").unwrap(),
       [
@@ -1280,11 +1350,7 @@ mod tests {
         "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Workflow,SendMessage,ListAgents,\
          ShareOnboardingGuide,RemoteTrigger,ReportFindings,Agent",
         "--settings",
-        concat!(
-          r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,""#,
-          r#"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"charliebot wait-guard"}"#,
-          r#",{"type":"command","command":"charliebot scan-guard"},{"type":"command","command":"charliebot kill-guard"}]}]}}"#
-        ),
+        worker_settings.as_str(),
       ]
     );
     let disallowed = one_shot_disallowed_tools();
@@ -1348,9 +1414,9 @@ mod tests {
         instructions_file: None,
         resume_session_id: None,
         log_dir: None,
-        cgroup_session_id: None,
+        cgroup_session_id: Some("worker-session".to_string()),
         remote_launch: None,
-        backend_kwargs: Map::new(),
+        backend_kwargs: worker_run_kwargs(),
         manager_turn: false,
       },
       SessionCgroupConfig::disabled(),
@@ -1383,9 +1449,9 @@ mod tests {
         instructions_file: None,
         resume_session_id: None,
         log_dir: None,
-        cgroup_session_id: None,
+        cgroup_session_id: Some("worker-session".to_string()),
         remote_launch: None,
-        backend_kwargs: Map::new(),
+        backend_kwargs: worker_run_kwargs(),
         manager_turn: false,
       },
       SessionCgroupConfig::disabled(),

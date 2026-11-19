@@ -59,14 +59,15 @@ fn shlex_quote(value: &str) -> String {
   format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// The SessionStart hook that restores a manager session's read skills after compaction.
-pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> {
+/// The SessionStart hook that restores a session's context after compaction. Without `run_id` it restores a manager
+/// session's read skills; with `run_id` it restores that worker run's task spec ahead of its skills.
+pub fn compaction_context_hook_settings(session_id: &str, run_id: Option<&str>) -> Map<String, Value> {
+  let session = shlex_quote(session_id);
+  let run_flag = run_id.map(|run_id| format!(" --run {}", shlex_quote(run_id))).unwrap_or_default();
   let hooks: Vec<Value> = (1..=COMPACTION_CONTEXT_SLOTS)
     .map(|slot| {
-      json!({
-        "type": "command",
-        "command": format!("charliebot compaction-context --session {} --slot {slot}", shlex_quote(session_id)),
-      })
+      let command = format!("charliebot compaction-context --session {session} --slot {slot}{run_flag}");
+      json!({"type": "command", "command": command})
     })
     .collect();
   let mut settings = Map::new();
@@ -177,12 +178,14 @@ pub fn headless_claude_settings(
   )
 }
 
-/// Headless settings for compaction, which runs with no PreToolUse guard and no read-budget hook.
+/// The unguarded headless settings: no PreToolUse guard and no read-budget hook. The run id still names the worker run
+/// in its compaction-context hook.
 pub fn headless_claude_settings_without_guards(
   run_kind: RunKind,
   session_id: Option<&str>,
+  run_id: Option<&str>,
 ) -> anyhow::Result<Map<String, Value>> {
-  headless_claude_settings_for(run_kind, session_id, None, None, false, false)
+  headless_claude_settings_for(run_kind, session_id, None, run_id, false, false)
 }
 
 fn headless_claude_settings_for(
@@ -201,10 +204,17 @@ fn headless_claude_settings_for(
       let Some(session_id) = session_id else {
         anyhow::bail!("manager_turn Claude settings require a CharlieBot session id");
       };
-      settings.extend(compaction_context_hook_settings(session_id));
+      settings.extend(compaction_context_hook_settings(session_id, None));
     }
     RunKind::Work | RunKind::Review | RunKind::Iteration | RunKind::ScheduledStep => {
+      let Some(session_id) = session_id else {
+        anyhow::bail!("worker Claude settings require a CharlieBot session id");
+      };
+      let Some(run_id) = run_id.filter(|value| !value.is_empty()) else {
+        anyhow::bail!("worker Claude settings require a CharlieBot run id for the compaction-context hook");
+      };
       settings.insert(DISABLE_BUNDLED_SKILLS_SETTINGS_KEY.to_string(), Value::Bool(true));
+      settings.extend(compaction_context_hook_settings(session_id, Some(run_id)));
     }
   }
   if let Some(guards) = guards {

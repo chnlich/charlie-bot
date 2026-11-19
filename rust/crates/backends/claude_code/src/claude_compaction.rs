@@ -191,7 +191,7 @@ fn newest_boundary_compact_metadata(path: &Path) -> anyhow::Result<Option<Value>
 pub fn compaction_command(session_id: &str, charliebot_session_id: &str) -> Vec<String> {
   let mut settings = Map::new();
   settings.insert(claude_launch::DISABLE_CONNECTOR_SETTINGS_KEY.to_string(), Value::Bool(true));
-  settings.extend(claude_launch::compaction_context_hook_settings(charliebot_session_id));
+  settings.extend(claude_launch::compaction_context_hook_settings(charliebot_session_id, None));
   vec![
     "claude".to_string(),
     "-p".to_string(),

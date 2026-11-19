@@ -1232,14 +1232,21 @@ async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_met
   let failure = QuotaFailure {
     resets_at: None,
     message: "You've hit your 5-hour limit".to_string(),
-    reason: backend_availability::REASON_QUOTA_ERROR.to_string(),
+    reason: Some(backend_availability::REASON_QUOTA_ERROR.to_string()),
   };
 
   // One login is rejected and the other still has headroom: the group keeps its Claude member and writes no row.
   claude_accounts::observe_rate_limit(&state, "main", &rate_limit_info("rejected", 1.0), None, Some("claude-fable-5"));
-  let kept =
-    auto_switch::switch_member(&setup.features, GROUP, &meta, HandoffSource::WorkerRun { run: &run }, POOLED, &failure)
-      .await?;
+  let kept = auto_switch::switch_member(
+    &setup.features,
+    GROUP,
+    &meta,
+    HandoffSource::WorkerRun { run: &run },
+    POOLED,
+    &failure,
+    &[],
+  )
+  .await?;
   assert_eq!(kept, MemberSwitch::Moved { member: POOLED.to_string() }, "a login with headroom keeps the Claude member");
   let availability = backend_availability::backend_availability(&setup.features)?;
   assert!(availability.row(POOLED).is_none(), "a login can still run the model, so it writes no row");
@@ -1253,9 +1260,16 @@ async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_met
     None,
     Some("claude-fable-5"),
   );
-  let moved =
-    auto_switch::switch_member(&setup.features, GROUP, &meta, HandoffSource::WorkerRun { run: &run }, POOLED, &failure)
-      .await?;
+  let moved = auto_switch::switch_member(
+    &setup.features,
+    GROUP,
+    &meta,
+    HandoffSource::WorkerRun { run: &run },
+    POOLED,
+    &failure,
+    &[],
+  )
+  .await?;
   assert_eq!(
     moved,
     MemberSwitch::Moved { member: METERED.to_string() },

@@ -584,7 +584,9 @@ async fn switch_failed_step(
     .as_deref()
     .filter(|backend| !backend.is_empty())
     .ok_or_else(|| anyhow::anyhow!("step run {} records no backend; refusing to substitute one", run.id))?;
-  match auto_switch::switch_member(features, &pool_id, &leaf, HandoffSource::WorkerRun { run }, from, quota).await? {
+  match auto_switch::switch_member(features, &pool_id, &leaf, HandoffSource::WorkerRun { run }, from, quota, &[])
+    .await?
+  {
     MemberSwitch::Exhausted(message) => {
       deliver_boundary_report(tree, leaf_id, parent_id, task, &firing, "failed", &message).await?;
       Ok(Some(BoundaryState::Finished))
@@ -1269,7 +1271,7 @@ mod tests {
     let quota = QuotaFailure {
       resets_at: None,
       message: "API Error: 402 Insufficient Balance".to_string(),
-      reason: charliebot_agents::backend_availability::REASON_QUOTA_ERROR.to_string(),
+      reason: Some(charliebot_agents::backend_availability::REASON_QUOTA_ERROR.to_string()),
     };
 
     let state = switch_failed_step(&features, &leaf.id, &failed, &quota, &tree, &task).await.unwrap();

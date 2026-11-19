@@ -21,12 +21,13 @@ use charliebot_store::compact::CompactValue;
 use crate::startup_stop::StartupStop;
 
 /// One run's member failure: the reset the backend stated, if any, the error text the availability owner records, and
-/// the reason the shared failure classification gave it.
+/// the reason the shared failure classification gave it. A failure that records no member out (a token shortage) has no
+/// reason.
 #[derive(Clone, Debug)]
 pub struct QuotaFailure {
   pub resets_at: Option<UtcDateTime>,
   pub message: String,
-  pub reason: String,
+  pub reason: Option<String>,
 }
 
 /// A node's binding to a sequence (`sequence_controllers.SequenceBinding`). A scheduled task's binding is the loaded

@@ -83,9 +83,15 @@ pub fn improve_child_request_id(loop_id: i64) -> String {
   format!("improve:{loop_id}")
 }
 
-/// The stable run request id of one iteration: a replayed finalization binds to the same Run.
-pub fn iteration_run_request_id(loop_id: i64, iteration: i64) -> String {
-  format!("improve:{loop_id}:iter:{iteration}")
+/// The stable run request id of one iteration: a replayed finalization binds to the same Run. A token-short attempt
+/// starts no round, so the same iteration runs again on another member under `attempt` > 0. Attempt 0 keeps the id that
+/// the loop's earlier runs already recorded.
+pub fn iteration_run_request_id(loop_id: i64, iteration: i64, attempt: i64) -> String {
+  if attempt == 0 {
+    format!("improve:{loop_id}:iter:{iteration}")
+  } else {
+    format!("improve:{loop_id}:iter:{iteration}:attempt:{attempt}")
+  }
 }
 
 /// The close request id every call of one loop's close step binds to.
@@ -199,10 +205,12 @@ async fn register_iteration_run(
   spec: &LoopSpec<'_>,
   cfg: &CharlieBotConfig,
   iteration: i64,
+  attempt: i64,
   pin: &Pin<'_>,
   pool_id: Option<&str>,
 ) -> anyhow::Result<RunRecord> {
-  let run_id = control_events::stable_run_id(spec.child_id, &iteration_run_request_id(spec.loop_id, iteration));
+  let run_id =
+    control_events::stable_run_id(spec.child_id, &iteration_run_request_id(spec.loop_id, iteration, attempt));
   if let Some(existing) = tree.get_run(spec.child_id, &run_id).await? {
     return Ok(existing);
   }
@@ -403,7 +411,14 @@ async fn run_loop(
   };
 
   let mut next_pool_member = None;
-  for iteration in 1..=spec.iterations {
+  // The members this round left for a token shortage. Such a member records nothing out, and the round's other attempts
+  // keep off it. The round ends with its judgment, which clears the list.
+  let mut token_short_left: Vec<String> = Vec::new();
+  // A token-short attempt starts no round: its iteration number runs again on another member, under the next attempt.
+  let mut iteration = 0;
+  let mut attempt = 0;
+  while iteration < spec.iterations {
+    iteration += 1;
     let state = command::require_loop_state(cfg, spec.session_id, spec.loop_id)?;
     if state.status == LoopStatus::Stopped {
       break;
@@ -442,7 +457,7 @@ async fn run_loop(
       work_branch: &work_branch,
       worktree_path: &worktree,
     };
-    let run = register_iteration_run(tree, spec, cfg, iteration, &pin, iteration_pool_id).await?;
+    let run = register_iteration_run(tree, spec, cfg, iteration, attempt, &pin, iteration_pool_id).await?;
     let mut outcome = tree.terminal_outcome_of(spec.child_id, &run.id).await?;
     if outcome.is_none() {
       // The iteration's full context is composed here, where the repo root is in hand: the controller's launch hook
@@ -468,13 +483,34 @@ async fn run_loop(
       let (blocker_reason, failed_summary) = iteration_blocker(tree, spec.child_id, &run.id, iteration, &outcome)?;
       let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
       if let Some(pool_id) = state.backend.as_deref().filter(|id| cfg.backends.pool(id).is_some()) {
+        // A token shortage records no member out: its round never started, and the member's login may serve other
+        // rounds. The same iteration moves to another member, and the attempt completes no iteration.
+        if quota_failure.as_ref().is_some_and(|failure| failure.reason.is_none()) {
+          token_short_left.push(iteration_backend.clone());
+          progress.completed_iterations = iteration - 1;
+          let selector = pool.selector(cfg);
+          match selector.select(pool_id, &token_short_left)? {
+            Some(member) => next_pool_member = Some(member),
+            None => {
+              progress.blocked = Some((iteration, selector.exhausted_message(pool_id)?, failed_summary));
+              break;
+            }
+          }
+          iteration -= 1;
+          attempt += 1;
+          continue;
+        }
         // The adapter's member failure records its member even when the transcript names no blocker text. A
         // refusal's transcript names none.
-        let member_failure =
-          quota_failure.as_ref().filter(|failure| backend_availability::is_recorded_reason(&failure.reason));
-        if let Some(reason) = blocker_reason.clone().or_else(|| member_failure.map(|failure| failure.message.clone())) {
+        let member_failure = quota_failure.as_ref().and_then(|failure| {
+          let reason = failure.reason.as_deref()?;
+          backend_availability::is_recorded_reason(reason).then_some((failure, reason))
+        });
+        if let Some(reason) =
+          blocker_reason.clone().or_else(|| member_failure.map(|(failure, _)| failure.message.clone()))
+        {
           let (resets_at, cooling_reason, message) = match member_failure {
-            Some(failure) => (failure.resets_at, failure.reason.as_str(), failure.message.clone()),
+            Some((failure, cooling_reason)) => (failure.resets_at, cooling_reason, failure.message.clone()),
             None => (None, backend_availability::REASON_ITERATION_FAILURE, reason.clone()),
           };
           pool.availability().record(cfg, &pool.registry(), &iteration_backend, resets_at, cooling_reason, &message)?;
@@ -502,6 +538,8 @@ async fn run_loop(
       }
     }
 
+    attempt = 0;
+    token_short_left.clear();
     let judgment = judge_iteration(tree, spec, &run.id, iteration, &wt_path, &loop_dir, &tip_before).await?;
     progress.previous_summaries.push(judgment.summary.clone());
     broadcast_iteration_progress(tree, spec, &run.id, iteration, &outcome, &judgment).await?;

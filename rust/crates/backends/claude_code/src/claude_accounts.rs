@@ -13,7 +13,7 @@ use anyhow::{Context, anyhow};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::text_repr::is_truthy;
-use charliebot_registry::backend::{MemberFailure, MemberReading, MemberWindow};
+use charliebot_registry::backend::{IMPROVE_TOKEN_MIN_SECONDS, MemberFailure, MemberReading, MemberWindow};
 use charliebot_registry::usage::{self, WEEKLY_WINDOW_MINUTES};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::Value;
@@ -190,6 +190,36 @@ pub fn credentials_present(account: &claude_config::ClaudeAccount) -> bool {
     return false;
   };
   data.get("claudeAiOauth").and_then(|oauth| oauth.get("accessToken")).is_some_and(is_truthy)
+}
+
+/// Whether a login's access token lives at least `IMPROVE_TOKEN_MIN_SECONDS` past `now`. A login whose credentials
+/// name no numeric `expiresAt` has no life a round can rely on, so it does not.
+fn token_life_suffices(account: &claude_config::ClaudeAccount, now: UtcDateTime) -> bool {
+  let path = Path::new(&account.config_dir).join(login_dirs::CREDENTIALS_FILE);
+  let Ok(contents) = fs::read_to_string(path) else { return false };
+  let Ok(data) = serde_json::from_str::<Value>(&contents) else { return false };
+  let Some(expires_at_ms) = data.get("claudeAiOauth").and_then(|oauth| oauth.get("expiresAt")).and_then(Value::as_i64)
+  else {
+    return false;
+  };
+  expires_at_ms / 1000 - now.into_inner().unix_timestamp() >= IMPROVE_TOKEN_MIN_SECONDS as i64
+}
+
+/// The logins of the pool that a keyed round cannot start on, because their access token lives less than
+/// `IMPROVE_TOKEN_MIN_SECONDS`. The improve launcher checks the same life before the round starts.
+pub fn short_token_logins(
+  cfg: &CharlieBotConfig,
+  account_pool: Option<&str>,
+  now: Option<UtcDateTime>,
+) -> anyhow::Result<HashSet<String>> {
+  let moment = now_or(now);
+  Ok(
+    pool_accounts(cfg, account_pool)?
+      .into_iter()
+      .filter(|account| !token_life_suffices(account, moment))
+      .map(|account| account.label)
+      .collect(),
+  )
 }
 
 pub fn record_auth_failure(state: &ClaudeAccountState, label: &str, now: Option<UtcDateTime>) {
@@ -1387,6 +1417,34 @@ mod tests {
       observe_usage_panel(&state, "b", &panel_window(60.0, WEEKLY_WINDOW_MINUTES, "2025-01-02T13:00:00Z"));
       assert_eq!(select_now(&state, &cfg, now), "b");
     }
+  }
+
+  #[test]
+  fn a_keyed_round_leaves_out_only_the_logins_with_too_little_token_life() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let seconds = now.into_inner().unix_timestamp();
+    let min = IMPROVE_TOKEN_MIN_SECONDS as i64;
+    // A login's `expiresAt` is in milliseconds, as the Claude CLI writes it.
+    let login = |name: &str, expires_at_ms: Option<i64>| {
+      let dir = root.path().join(name);
+      fs::create_dir_all(&dir).unwrap();
+      let mut oauth = json!({"accessToken": "synthetic"});
+      if let Some(ms) = expires_at_ms {
+        oauth["expiresAt"] = json!(ms);
+      }
+      fs::write(dir.join(login_dirs::CREDENTIALS_FILE), json!({"claudeAiOauth": oauth}).to_string()).unwrap();
+      dir
+    };
+    let at_minimum = login("at_minimum", Some((seconds + min) * 1000));
+    let one_short = login("one_short", Some((seconds + min - 1) * 1000));
+    let unnamed = login("unnamed", None);
+    let cfg = config(&home, &[("at_minimum", &at_minimum), ("one_short", &one_short), ("unnamed", &unnamed)]);
+
+    let short = short_token_logins(&cfg, None, Some(now)).unwrap();
+    assert_eq!(short, HashSet::from(["one_short".to_string(), "unnamed".to_string()]));
   }
 
   #[test]

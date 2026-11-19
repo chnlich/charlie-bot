@@ -33,8 +33,8 @@ use charliebot_core::event_types as ET;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timefmt;
 use charliebot_registry::backend::{
-  BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch,
-  RemoteLaunch, RetryAfter, ServeTransport, Translate,
+  BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, Env, IMPROVE_TOKEN_SHORT_EXIT, Launch, LaunchArgs, LaunchContext,
+  LaunchKind, LaunchWatch, RemoteLaunch, RetryAfter, ServeTransport, Translate,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
@@ -76,8 +76,9 @@ pub type SessionEventFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result
 /// Receives the task node after its process spawns, with `pid` and `pid_start` set (`Worker._on_spawn`).
 pub type SpawnedFn = Arc<dyn Fn(ThreadMetadata) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 
-/// The run's backend failed in a way that records its member out: a spent quota or a refusal of authentication or
-/// model access. `resets_at` is when the member recovers, `None` when the backend names no time.
+/// The run's backend failed on its member: a spent quota, a refusal of authentication or model access, or a token
+/// shortage. `resets_at` is when a spent quota's member recovers, `None` when the backend names no time. A token
+/// shortage records no member out; the failure's own class says so.
 #[derive(Debug)]
 pub struct QuotaExhaustedError {
   message: String,
@@ -885,6 +886,17 @@ impl RunProcess for WorkerProcess<'_> {
       let mut watch = watch;
       loop {
         let result = self.worker.run_process(&self.sink, &self.env, launch, watch.as_deref_mut(), relays).await;
+        // The improve launcher exits with its token-life code before it starts the round, so a keyed round that
+        // exits with it never ran: its login is short, and the run moves to another member without recording one out.
+        let result = match result {
+          Ok((exit_code, stderr)) if exit_code == IMPROVE_TOKEN_SHORT_EXIT => match self.worker.remote_launch()? {
+            Some(_) => {
+              Err(QuotaExhaustedError::with_failure(stderr, None, backend_pool::MemberFailure::TokenShort).into())
+            }
+            None => Ok((exit_code, stderr)),
+          },
+          other => other,
+        };
         let Err(error) = result else { return result };
         let Some(quota) = error.downcast_ref::<QuotaExhaustedError>() else { return Err(error) };
         // Only a spent quota waits on its stated reset on this member; a refusal never retries where it was refused.

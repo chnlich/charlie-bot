@@ -144,9 +144,10 @@ test('a live rename outside Threads, and outside any group, writes the full name
   assert.equal(ungrouped.nameEl.title, 'Slack #ops-misc 2026-11-09 10:20');
 });
 
-// The chat header is the other writer of the session name. displayed-session.js paints the displayed session's full
-// name into #header-session-name, and the template does not truncate that heading, so the header wraps the name.
-test('the chat header paints the full session name, and the template does not truncate it', () => {
+// The chat header is the other writer of the session name. displayed-session.js paints the displayed session's name
+// into #header-session-name and keeps the full name as the heading's hover text. The template truncates that heading
+// to one line, so a long name costs one header line instead of the screen.
+test('the chat header paints the session name in one line and keeps the full name as its hover text', () => {
   const headerEl = {textContent: ''};
   const context = {
     PAGE_HOSTNAME: 'localhost:8000',
@@ -163,9 +164,10 @@ test('the chat header paints the full session name, and the template does not tr
   const longName = `${'A long session name, '.repeat(7)}${'x'.repeat(40)}`;
   context.refreshDisplayedSessionName('s1', longName);
   assert.equal(headerEl.textContent, longName);
+  assert.equal(headerEl.title, longName, 'the heading carries the full name as its hover text');
 
   const html = fs.readFileSync(path.join(__dirname, '..', 'templates', 'index.html'), 'utf8');
   const header = html.match(/<h2 class="([^"]*)"\s+id="header-session-name">/);
   assert.ok(header, 'index.html renders the header name heading');
-  assert.ok(!header[1].split(/\s+/).includes('truncate'), 'the header name wraps instead of truncating');
+  assert.ok(header[1].split(/\s+/).includes('truncate'), 'the header name takes one line');
 });

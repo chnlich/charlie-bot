@@ -75,20 +75,20 @@ pub struct ApiCall<'a> {
 /// The parsed JSON response of one internal-API call.
 pub fn call_api(
   mut call: ApiCall<'_>,
-  ctx: &CallContext,
+  call_context: &CallContext,
   transport: &mut dyn FnMut(&WireRequest) -> Result<WireResponse, TransportError>,
   clock: &mut dyn Clock,
 ) -> Result<Value, CliExit> {
-  let url = build_url(&ctx.base_url, &call.endpoint, call.params.as_deref());
+  let url = build_url(&call_context.base_url, &call.endpoint, call.params.as_deref());
   // The default style: the request body escapes non-ASCII and uses `", "`/`": "`.
   let body = call.payload.as_ref().map(|payload| {
     charliebot_core::text_repr::json_dumps(payload, &charliebot_core::text_repr::DEFAULT_JSON).into_bytes()
   });
-  let mut headers = ctx.headers.clone();
+  let mut headers = call_context.headers.clone();
   if body.is_some() {
     headers.push((CONTENT_TYPE.to_string(), APPLICATION_JSON.to_string()));
   }
-  let deadline = clock.now() + ctx.connect_total_timeout;
+  let deadline = clock.now() + call_context.connect_total_timeout;
   let mut attempt: u32 = 0;
   loop {
     let request = WireRequest {
@@ -96,7 +96,7 @@ pub fn call_api(
       url: url.clone(),
       headers: headers.clone(),
       body: body.clone(),
-      timeout: Duration::from_secs_f64(ctx.request_timeout),
+      timeout: Duration::from_secs_f64(call_context.request_timeout),
     };
     let lost = match transport(&request) {
       Err(TransportError::ConnectPhase(message)) => {
@@ -112,7 +112,7 @@ pub fn call_api(
       }
       Err(TransportError::SentButLost(message)) => message,
       Ok(response) if response.status >= 400 => {
-        return Err(rejection_exit(&response, ctx, call.rejection_exit_codes, transport));
+        return Err(rejection_exit(&response, call_context, call.rejection_exit_codes, transport));
       }
       Ok(response) => match serde_json::from_slice::<Value>(&response.body) {
         Ok(value) => return Ok(value),
@@ -174,7 +174,7 @@ fn build_url(base_url: &str, endpoint: &str, params: Option<&[(String, String)]>
 /// status selects the code.
 fn rejection_exit(
   response: &WireResponse,
-  ctx: &CallContext,
+  call_context: &CallContext,
   rejection_exit_codes: &[(u16, i32)],
   transport: &mut dyn FnMut(&WireRequest) -> Result<WireResponse, TransportError>,
 ) -> CliExit {
@@ -183,7 +183,7 @@ fn rejection_exit(
     .ok()
     .and_then(|body| body.get("detail").cloned())
     .unwrap_or_else(fallback);
-  let hint = skew::version_skew_hint(&ctx.base_url, ctx.headers.as_slice(), transport);
+  let hint = skew::version_skew_hint(&call_context.base_url, call_context.headers.as_slice(), transport);
   let exit_code =
     rejection_exit_codes.iter().find(|(status, _)| *status == response.status).map(|(_, code)| *code).unwrap_or(1);
   CliExit::contract(contract_error(message, "server_error", EFFECT_NONE, hint), exit_code)
@@ -236,13 +236,13 @@ pub fn get(endpoint: &str, params: Option<Vec<(String, String)>>) -> Result<Valu
 }
 
 fn run_call(call: ApiCall<'_>) -> Result<Value, CliExit> {
-  let ctx = CallContext {
+  let call_context = CallContext {
     base_url: crate::base_url::internal_base_url()?,
     headers: crate::headers::internal_api_auth_headers()?,
     request_timeout: crate::timeouts::HTTP_INTERNAL_API_TIMEOUT.as_secs_f64(),
     connect_total_timeout: crate::timeouts::CLI_CONNECT_TOTAL_TIMEOUT.as_secs_f64(),
   };
-  call_api(call, &ctx, &mut crate::http::send_http, &mut WallClock::new())
+  call_api(call, &call_context, &mut crate::http::send_http, &mut WallClock::new())
 }
 
 #[cfg(test)]
@@ -275,7 +275,7 @@ mod tests {
     }
   }
 
-  fn ctx() -> CallContext {
+  fn call_context() -> CallContext {
     CallContext {
       base_url: "http://localhost:49991".to_string(),
       headers: Vec::new(),
@@ -306,7 +306,7 @@ mod tests {
     };
     let mut clock = FakeClock::new();
 
-    let error = call_api(call(Method::Post), &ctx(), &mut transport, &mut clock).unwrap_err();
+    let error = call_api(call(Method::Post), &call_context(), &mut transport, &mut clock).unwrap_err();
 
     assert_eq!(error.code, 1);
     assert_eq!(
@@ -334,7 +334,7 @@ mod tests {
       Ok(None)
     }));
 
-    let error = call_api(call, &ctx(), &mut transport, &mut clock).unwrap_err();
+    let error = call_api(call, &call_context(), &mut transport, &mut clock).unwrap_err();
 
     assert_eq!(readback_runs, 1);
     assert_eq!(
@@ -350,7 +350,7 @@ mod tests {
     };
     let mut clock = FakeClock::new();
 
-    let error = call_api(call(Method::Get), &ctx(), &mut transport, &mut clock).unwrap_err();
+    let error = call_api(call(Method::Get), &call_context(), &mut transport, &mut clock).unwrap_err();
 
     assert_eq!(error.body, json!({ "error": "connection closed", "code": "outcome_unknown", "effect": "none" }));
   }
@@ -364,7 +364,7 @@ mod tests {
     let mut call = call(Method::Post);
     call.readback = Some(Box::new(|| Ok(Some(json!({ "session_id": "task-1" })))));
 
-    let value = call_api(call, &ctx(), &mut transport, &mut clock).unwrap();
+    let value = call_api(call, &call_context(), &mut transport, &mut clock).unwrap();
 
     assert_eq!(value, json!({ "session_id": "task-1" }));
   }
@@ -380,7 +380,7 @@ mod tests {
     let mut call = call(Method::Post);
     call.readback = Some(Box::new(|| Ok(Some(json!({ "session_id": "task-1" })))));
 
-    let value = call_api(call, &ctx(), &mut transport, &mut clock).unwrap();
+    let value = call_api(call, &call_context(), &mut transport, &mut clock).unwrap();
 
     assert_eq!(value, json!({ "session_id": "task-1" }));
     assert_eq!(sends, 1);
@@ -399,7 +399,7 @@ mod tests {
     let mut call = call(Method::Post);
     call.rejection_exit_codes = &[(422, 2)];
 
-    let error = call_api(call, &ctx(), &mut transport, &mut clock).unwrap_err();
+    let error = call_api(call, &call_context(), &mut transport, &mut clock).unwrap_err();
 
     assert_eq!(error.code, 2);
     assert_eq!(error.body, json!({ "error": "refused", "code": "server_error", "effect": "none" }));
@@ -412,7 +412,7 @@ mod tests {
     };
     let mut clock = FakeClock::new();
 
-    let error = call_api(call(Method::Get), &ctx(), &mut transport, &mut clock).unwrap_err();
+    let error = call_api(call(Method::Get), &call_context(), &mut transport, &mut clock).unwrap_err();
 
     assert_eq!(error.body["error"], json!("HTTP 404 Not Found"));
   }
@@ -457,7 +457,7 @@ mod tests {
       stream.write_all(body).unwrap();
       request
     });
-    let ctx = CallContext {
+    let call_context = CallContext {
       base_url: format!("http://localhost:{port}"),
       headers: Vec::new(),
       request_timeout: 5.0,
@@ -472,7 +472,7 @@ mod tests {
       rejection_exit_codes: &[],
     };
 
-    let value = call_api(call, &ctx, &mut crate::http::send_http, &mut WallClock::new()).unwrap();
+    let value = call_api(call, &call_context, &mut crate::http::send_http, &mut WallClock::new()).unwrap();
 
     assert_eq!(value, json!({ "ok": true }));
     let request = server.join().unwrap();

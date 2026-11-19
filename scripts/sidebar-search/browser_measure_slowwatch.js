@@ -65,9 +65,9 @@ async function main() {
   };
   try {
     await page.cdp.send('Network.emulateNetworkConditions', SLOW);
-    if (warmUp) await oneSearch(page.page, query);
+    if (warmUp) await oneSearch(page, query);
     for (let rep = 0; rep < reps; rep += 1) {
-      const first = await oneSearch(page.page, query);
+      const first = await oneSearch(page, query);
       first.rep = rep;
       const countersBefore = await readCounters(page.page);
       const windowStart = Date.now();

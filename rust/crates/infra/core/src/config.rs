@@ -74,7 +74,7 @@ const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
   ("credentials: charliebot_access_key", "charliebot.access_key"),
   ("credentials: moonshot_api_key", "moonshot.api_key"),
   ("credentials: aigw_api_key", "aigw.api_key"),
-  ("credentials: linear_api_key", "linear.api_key"),
+  ("credentials: linear_api_key", "linear.client_id / linear.client_secret"),
   ("credentials: feishu_app_id", "feishu.app_id"),
   ("credentials: feishu_app_secret", "feishu.app_secret"),
   ("credentials: feishu_refresh_token", "feishu.refresh_token"),
@@ -1523,6 +1523,9 @@ voice: {}
       error.ends_with("still uses retired top-level keys; move each one:\n  server_port -> server.port\n  charliebot_access_key -> credentials.yaml charliebot.access_key"),
       "{error}"
     );
+    let home = home_with("\"credentials: linear_api_key\": k\n");
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.ends_with("  credentials: linear_api_key -> linear.client_id / linear.client_secret"), "{error}");
   }
 
   #[test]

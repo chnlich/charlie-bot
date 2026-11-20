@@ -11,9 +11,8 @@ Read, create, update, and search issues in Linear using the Linear GraphQL API.
 ## Configuration
 
 - API endpoint: `https://api.linear.app/graphql`
-- Key: a Personal API Key, which the operator stores in the profile home's `credentials.yaml` under `linear.api_key`.
-- Send every Linear request through `charliebot linear request`.
-  The command is the one reader of the key, so the key stays out of session commands, output and run records.
+- Credential: a Linear OAuth `client_credentials` application (`actor=app`) whose `linear.client_id` and `linear.client_secret` live in the profile home's `credentials.yaml`.
+- Send every Linear request through `charliebot linear request`. The command exchanges and caches the app token under `$CHARLIEBOT_HOME/state/`, so credentials and bearer tokens stay out of session commands, output, and run records.
 
 ## API Reference
 
@@ -23,7 +22,7 @@ The body is a JSON object with a string `query` and an optional `variables` obje
 
 ```sh
 charliebot linear request <<'JSON'
-{"query":"query { viewer { id name email } }"}
+{"query":"query { teams(first: 5) { nodes { id name key } } }"}
 JSON
 ```
 
@@ -32,11 +31,13 @@ JSON
 | 0 | HTTP 200 and a JSON response without an `errors` key. |
 | 1 | Another status, an `errors` key, invalid response JSON or a network failure. |
 | 2 | Invalid arguments or request body. |
-| 3 | The credentials file cannot be read or `linear.api_key` is missing. |
+| 3 | The credentials file cannot be read or `linear.client_id` / `linear.client_secret` is missing. |
 
 Pipe the output to `jq` to format it.
 
-### Viewer (who am I)
+### Viewer (application identity)
+
+Under `actor=app`, `viewer` returns the OAuth application user; filter by explicit user ID or assignee name when querying a person's issues.
 
 ```graphql
 query { viewer { id name email } }

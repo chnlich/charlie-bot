@@ -774,7 +774,8 @@ mod authenticated_commands {
   use std::thread;
 
   const ACCESS_KEY: &str = "synthetic-file-access-key";
-  const LINEAR_API_KEY: &str = "synthetic-linear-api-key";
+  const LINEAR_CLIENT_ID: &str = "synthetic-linear-client-id";
+  const LINEAR_CLIENT_SECRET: &str = "synthetic-linear-client-secret";
 
   fn home_for_port(port: u16) -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
@@ -787,9 +788,19 @@ mod authenticated_commands {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
       home.path().join("credentials.yaml"),
-      format!("charliebot:\n  access_key: {ACCESS_KEY}\nlinear:\n  api_key: {LINEAR_API_KEY}\n"),
+      format!(
+        "charliebot:\n  access_key: {ACCESS_KEY}\nlinear:\n  client_id: {LINEAR_CLIENT_ID}\n  client_secret: \
+         {LINEAR_CLIENT_SECRET}\n"
+      ),
     )
     .unwrap();
+    std::fs::write(home.path().join("request.json"), r#"{"query":"query { viewer { id } }"}"#).unwrap();
+    home
+  }
+
+  fn home_for_linear_without_credentials() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("credentials.yaml"), format!("charliebot:\n  access_key: {ACCESS_KEY}\n")).unwrap();
     std::fs::write(home.path().join("request.json"), r#"{"query":"query { viewer { id } }"}"#).unwrap();
     home
   }
@@ -1023,7 +1034,19 @@ mod authenticated_commands {
     assert!(error["status"].is_null());
     assert_eq!(error["response"], "request failed");
     assert!(error["error"].as_str().is_some_and(|cause| !cause.is_empty()));
-    assert_clean(&output, &[ACCESS_KEY, LINEAR_API_KEY]);
+    assert_clean(&output, &[ACCESS_KEY, LINEAR_CLIENT_ID, LINEAR_CLIENT_SECRET]);
+  }
+
+  #[test]
+  fn linear_request_without_credentials_exits_three() {
+    let home = home_for_linear_without_credentials();
+    let output = invoke_linear(&home, 1);
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(error["error"].as_str().is_some_and(|text| text.contains("credentials.linear.client_id")), "{error}");
+    assert_clean(&output, &[ACCESS_KEY, LINEAR_CLIENT_ID, LINEAR_CLIENT_SECRET]);
   }
 
   #[test]

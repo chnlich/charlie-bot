@@ -26,6 +26,7 @@
   .btn { font:inherit; font-size:13px; background:var(--acc); color:var(--panel); border:0; border-radius:8px;
     padding:8px 15px; cursor:pointer }
   .btn.secondary { background:var(--panel2); color:var(--tx); border:1px solid var(--bd) }
+  .btn:disabled { opacity:.6; cursor:default }
   .err { color:var(--bad); font-size:13px; margin:0 0 12px }
   table { width:100%; border-collapse:collapse; background:var(--panel);
     border:1px solid var(--bd); border-radius:12px; overflow:hidden }
@@ -299,6 +300,16 @@
     });
   }
 
+  // The probe button reads "Probing." from the click until the page reloads, so the click shows that the probe started.
+  // A failed request restores the button and shows its error.
+  const probeButton = document.querySelector("form[data-probe] button");
+  const probeLabel = probeButton.textContent;
+  function probeFailed(error) {
+    probeButton.disabled = false;
+    probeButton.textContent = probeLabel;
+    fail(error);
+  }
+
   // The probe runs in the background, so the page reloads once the round it started has ended, and every row shows it.
   function awaitProbe() {
     request("/api/host-auth/status")
@@ -309,11 +320,13 @@
           location.reload();
         }
       })
-      .catch(fail);
+      .catch(probeFailed);
   }
 
   document.querySelector("form[data-probe]").addEventListener("submit", (event) => {
     event.preventDefault();
+    probeButton.disabled = true;
+    probeButton.textContent = "Probing.";
     fetch(event.target.action, { method: "POST" })
       .then((response) => {
         if (!response.ok) {
@@ -321,7 +334,7 @@
         }
         setTimeout(awaitProbe, POLL_MS);
       })
-      .catch(fail);
+      .catch(probeFailed);
   });
 
   const refresh = [];

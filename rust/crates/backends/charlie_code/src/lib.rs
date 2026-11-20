@@ -9,6 +9,7 @@ mod translate;
 
 use std::sync::Arc;
 
+use charliebot_core::backend_types;
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::{NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
@@ -24,7 +25,7 @@ pub const USAGE_SOURCE: &str = "CLC";
 pub const PACKAGE: &str = "backends.charlie_code";
 
 /// The backend type this package registers: the `type` a `backends.options` entry names.
-pub const TYPE_NAME: &str = "charlie-code";
+pub const TYPE_NAME: &str = backend_types::CHARLIE_CODE;
 
 /// The registration of the `charlie-code` type and the CLC usage source, which attributes the type's usage.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

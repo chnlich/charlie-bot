@@ -25,7 +25,7 @@ use serde_json::{Map, Value};
 
 use crate::task_input_prompt::compose_input_prompt;
 
-/// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
+/// True for a manager session that no chat thread owns (`reply.is_web_session`).
 pub use charliebot_registry::midturn_delivery::is_web_session;
 
 /// One fresh whole-file translator: the mutable event projection of one raw-log scan.

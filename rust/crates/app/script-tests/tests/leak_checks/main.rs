@@ -646,3 +646,152 @@ fn the_host_scan_covers_tracked_gzip_and_explicit_files() {
 fn tools_scanner(repo: &Path) -> PathBuf {
   repo.join("dev/check-skills-host-leak.sh")
 }
+
+// -- github-post.sh pr-merge --
+
+/// The `gh` stand-in for `pr-merge`: it answers the diff and view reads from files the test writes, records every call,
+/// and copies the squash message's `--body-file` aside so a test can read what reached the merge.
+const MERGE_GH_STUB: &str = r#"case "$1 $2" in
+  'pr diff')
+    cat "$GH_CHANGED_PATHS"
+    ;;
+  'pr view')
+    case " $* " in
+      *" title "*) cat "$GH_PR_TITLE" ;;
+      *" body "*) cat "$GH_PR_BODY" ;;
+      *) printf '%s\n' 'https://github.com/chnlich/charlie-bot/pull/5046' ;;
+    esac
+    ;;
+esac
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+if [[ "$1 $2" == 'pr merge' ]]; then
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == --body-file ]]; then cp "$2" "$GH_MERGE_BODY"; fi
+    shift
+  done
+fi
+"#;
+
+/// One synthetic pull request for `pr-merge`: the changed paths, the title and body, the call log and the copied squash
+/// message, plus an evidence directory the caller fills with screenshots.
+struct MergeWorld {
+  sandbox: Sandbox,
+  env: Env,
+  gh_log: PathBuf,
+  merge_body: PathBuf,
+  evidence: PathBuf,
+}
+
+impl MergeWorld {
+  fn new(changed: &str, pr_body: &str) -> MergeWorld {
+    let sandbox = Sandbox::new();
+    let home = pattern_home(&sandbox);
+    let gh_log = sandbox.root().join("gh-calls.log");
+    let env = post_env(&sandbox, &home, &gh_log);
+    sandbox.stub("gh", MERGE_GH_STUB);
+    let binary = harness::built_binary("charliebot").display().to_string();
+    assert!(!binary.contains('\''), "the binary path carries no quote: {binary}");
+    sandbox.stub("charliebot", &format!("exec '{binary}' \"$@\"\n"));
+    let changed_paths = sandbox.root().join("changed-paths");
+    let pr_title = sandbox.root().join("pr-title");
+    let pr_body_file = sandbox.root().join("pr-body");
+    let merge_body = sandbox.root().join("merge-body");
+    std::fs::write(&changed_paths, changed).unwrap();
+    std::fs::write(&pr_title, "Improve the status panel\n").unwrap();
+    std::fs::write(&pr_body_file, pr_body).unwrap();
+    let mut env = env;
+    env.insert("GH_CHANGED_PATHS".to_string(), changed_paths.display().to_string());
+    env.insert("GH_PR_TITLE".to_string(), pr_title.display().to_string());
+    env.insert("GH_PR_BODY".to_string(), pr_body_file.display().to_string());
+    env.insert("GH_MERGE_BODY".to_string(), merge_body.display().to_string());
+    let evidence = sandbox.dir("evidence");
+    MergeWorld { sandbox, env, gh_log, merge_body, evidence }
+  }
+
+  /// Writes `count` PNGs at each window size into the evidence directory.
+  fn write_screenshots(&self, count: usize) {
+    for (width, height) in charliebot_tasks::web_screenshots::WINDOW_SIZES {
+      for copy in 0..count {
+        let name = format!("shot-{width}-{height}-{copy}.png");
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        std::fs::write(self.evidence.join(name), bytes).unwrap();
+      }
+    }
+  }
+
+  fn merge(&self, args: &[&str]) -> Run {
+    let mut command = harness::command("bash", &self.env);
+    command.arg(github_post()).arg("pr-merge").args(args);
+    run_in(&mut command, self.sandbox.root())
+  }
+
+  fn merge_calls(&self) -> Vec<String> {
+    gh_log_lines(&self.gh_log).into_iter().filter(|line| line.starts_with("pr merge")).collect()
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_web_page_change_whose_evidence_lacks_a_window_size() {
+  let world = MergeWorld::new("web/static/ui.js\nrust/crates/x/src/lib.rs\n", "View: /?session=abc\n");
+  world.write_screenshots(1);
+
+  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("screenshot"), "{}", run.stderr);
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}\n{}", world.merge_calls().join("\n"), run.describe());
+  assert!(!world.merge_body.exists(), "no squash message was written");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_refuses_a_web_page_change_without_a_view_line() {
+  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n");
+  world.write_screenshots(2);
+
+  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("View:"), "{}", run.stderr);
+  assert!(world.merge_calls().is_empty(), "nothing may merge: {}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_of_a_non_web_change_needs_no_evidence_directory() {
+  let world = MergeWorld::new("rust/crates/x/src/lib.rs\n", "## Evidence\nno screenshot needed.\n");
+
+  let run = world.merge(&["5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.merge_calls(), ["pr merge --squash 5046"], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
+  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n\nView: /?session=abc\n");
+  world.write_screenshots(2);
+
+  let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let calls = world.merge_calls();
+  assert_eq!(calls.len(), 1, "{}", run.describe());
+  assert!(calls[0].starts_with("pr merge --squash 5046"), "{}", calls[0]);
+  assert!(calls[0].contains("--subject Improve the status panel"), "{}", calls[0]);
+  let message = std::fs::read_to_string(&world.merge_body).expect("the squash message was written");
+  // The View line moves out of the body copy to the message's end, so the switch's trailer read captures the view once.
+  assert_eq!(
+    message.lines().filter(|line| line.starts_with("View: ")).count(),
+    1,
+    "each View line lands once: {message}"
+  );
+  assert!(message.lines().any(|line| line == "View: /?session=abc"), "{message}");
+  assert!(message.contains("## Evidence"), "the pull request body stays in the squash message: {message}");
+}

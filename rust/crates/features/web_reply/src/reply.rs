@@ -120,7 +120,7 @@ impl From<anyhow::Error> for WebReplyError {
   }
 }
 
-/// True for a manager session that no Slack or Discord thread owns.
+/// True for a manager session that no chat thread owns: Slack, Discord, Feishu or another thread platform.
 pub fn is_web_session(meta: &SessionMetadata) -> bool {
   charliebot_tasks::midturn_delivery::is_web_session(meta)
 }
@@ -227,10 +227,11 @@ fn received_user_texts(events: &[SharedChatEvent], receipts: &[Receipt]) -> Resu
   Ok((!texts.is_empty()).then(|| texts.join("\n")))
 }
 
-/// Whether the log holds the no-reply notice for `user_event_id`.
-pub fn noticed(events: &[SharedChatEvent], user_event_id: &str) -> bool {
+/// Whether the log holds the notice `message` for `user_event_id`.
+pub fn noticed(events: &[SharedChatEvent], user_event_id: &str, message: &str) -> bool {
   events.iter().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY_NOTICE)
+      && event.get("content").and_then(CompactValue::as_str) == Some(message)
       && event.get(WEB_REPLY_NOTICE).and_then(|record| record.get(INPUT_EVENT_ID)).and_then(CompactValue::as_str)
         == Some(user_event_id)
   })
@@ -993,7 +994,7 @@ mod tests {
   }
 
   #[test]
-  fn a_web_session_is_a_manager_that_no_slack_or_discord_thread_owns() {
+  fn a_web_session_is_a_manager_that_no_chat_thread_owns() {
     charliebot_registry::thread_origin::register_origin_field("slack_origin");
     charliebot_registry::thread_origin::register_origin_field("discord_origin");
     charliebot_registry::thread_origin::register_origin_field("feishu_origin");

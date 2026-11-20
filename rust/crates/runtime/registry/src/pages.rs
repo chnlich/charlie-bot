@@ -28,6 +28,10 @@ pub const TEMPLATES_DIR_NAME: &str = "templates";
 /// The static file directory of the web app and of each page package.
 pub const STATIC_DIR_NAME: &str = "static";
 
+/// The first dotted part of each page package whose directory sits under the frontend root: `features.<name>` maps to
+/// `web/features/<name>` and `backends.<name>` to `web/backends/<name>` (`package_directory`).
+pub const WEB_PACKAGE_KINDS: &[&str] = &["features", "backends"];
+
 /// The frontend root of a checkout.
 pub fn web_directory(repo_root: &Path) -> PathBuf {
   repo_root.join(WEB_DIR_NAME)
@@ -47,7 +51,8 @@ pub fn web_static_directory(repo_root: &Path) -> PathBuf {
 /// `web/backends/<name>` under `repo_root`. Any other first part (the `runtime.*` registrations, whose directories no
 /// checkout carries) maps under `repo_root` unchanged.
 pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
-  let under_web = package.starts_with("features.") || package.starts_with("backends.");
+  let under_web =
+    WEB_PACKAGE_KINDS.iter().any(|kind| package.strip_prefix(kind).is_some_and(|rest| rest.starts_with('.')));
   let root = if under_web { web_directory(repo_root) } else { repo_root.to_path_buf() };
   package.split('.').fold(root, |path, part| path.join(part))
 }
@@ -60,6 +65,29 @@ pub fn package_templates_directory(repo_root: &Path, package: &str) -> PathBuf {
 /// The static file directory of one dotted page package.
 pub fn package_static_directory(repo_root: &Path, package: &str) -> PathBuf {
   package_directory(repo_root, package).join(STATIC_DIR_NAME)
+}
+
+/// Whether a changed file, named by its path relative to the repository root with `/` separators, is one the server
+/// serves or renders. Those are the files under the web app's `templates/` and `static/` (`web_templates_directory`,
+/// `web_static_directory`) and under the `templates/` and `static/` of each page package
+/// (`package_templates_directory`, `package_static_directory`), where a page package is one dotted part below its kind
+/// in `WEB_PACKAGE_KINDS`. Any other path under the frontend root, such as a test, the package manifest or a package's
+/// own script, is not served.
+pub fn is_served_path(path: &str) -> bool {
+  let Some(under_web) = path.strip_prefix(WEB_DIR_NAME).and_then(|rest| rest.strip_prefix('/')) else {
+    return false;
+  };
+  let parts: Vec<&str> = under_web.split('/').collect();
+  match parts.as_slice() {
+    [dir, _, ..] if is_served_dir(dir) => true,
+    [kind, _, dir, _, ..] => WEB_PACKAGE_KINDS.contains(kind) && is_served_dir(dir),
+    _ => false,
+  }
+}
+
+/// Whether a directory name is one the server serves files from: `templates` or `static`.
+fn is_served_dir(name: &str) -> bool {
+  name == TEMPLATES_DIR_NAME || name == STATIC_DIR_NAME
 }
 
 /// The URL prefix of the static route: `web/static` and each page package's `static/` are served below it.

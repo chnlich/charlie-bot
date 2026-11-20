@@ -21,6 +21,7 @@ use charliebot_core::config::BackendOption;
 use charliebot_core::home::boot_recovery_marker_path;
 use charliebot_core::parallel_walk;
 use charliebot_registry::context::{FeatureContext, StartupStop};
+use charliebot_registry::registry::ReattachHold;
 use charliebot_registry::sequence::{
   SequenceCompletion, SequenceController, SequenceDispatch, SequenceExecutor, SequenceSessionEvents,
   SequenceTreeRuntime, StoreSequenceTree,
@@ -245,16 +246,18 @@ impl TaskExecutionAdapter {
 /// the adapter they hold, without naming this module.
 impl TaskExecutionAdapter {
   /// Re-attach one launched run, or drain it when its process is dead. A manager turn re-enters the per-session queue;
-  /// the follow is tracked and this call returns before it ends.
+  /// the follow is tracked and this call returns before it ends. `hold` is the login reservation a reattach took for
+  /// the run; the follow holds it until the run's follow ends.
   pub async fn resume_run(
     &self,
     session_id: &str,
     run_id: &str,
     is_alive: Option<ResumeLiveness>,
+    hold: ReattachHold,
   ) -> anyhow::Result<()> {
     let key = (session_id.to_string(), run_id.to_string());
     self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").insert(key.clone());
-    let result = resume_run_checked(self, session_id, run_id, is_alive).await;
+    let result = resume_run_checked(self, session_id, run_id, is_alive, hold).await;
     // Ownership passes to the manager follow's tracker only on success; every other exit releases the pair here.
     if !matches!(result, Ok(true)) {
       self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").remove(&key);
@@ -1018,15 +1021,17 @@ async fn reconcile_node_inner(
     if alive {
       counters.resumed += 1;
       tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_resume");
-      // A live worker follow tails the process in the background, never holding startup open.
-      adapter.follow_run_in_background(session_id, &run.id);
+      // The follow holds the login reservation the run's process took, taken before the follow starts so the next
+      // placement's selection sees the reattached run.
+      let hold = reattach_hold(features, adapter, run);
+      adapter.follow_run_in_background(session_id, &run.id, hold);
       steps.end("follow_run_in_background");
     } else {
       counters.drained += 1;
       tracing::warn!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_drain");
       let ended = Arc::new(|| false) as ResumeLiveness;
       let drain_started = Instant::now();
-      adapter.resume_run(session_id, &run.id, Some(ended)).await?;
+      adapter.resume_run(session_id, &run.id, Some(ended), ReattachHold::none()).await?;
       log_slow_recovery_step(session_id, "drain_resume_run", drain_started);
       steps.end("drain_resume_run");
       run_records_changed = true;
@@ -1391,12 +1396,35 @@ fn replay_review_facts_until<'a>(
   Some(facts)
 }
 
+/// The reattach hold of a live run's process: its backend lifecycle reserves the login the process already uses,
+/// read from the process's environment. A run whose backend names no lifecycle that takes one — or whose backend the
+/// config no longer resolves — follows without a hold.
+fn reattach_hold(features: &Arc<FeatureContext>, adapter: &TaskExecutionAdapter, run: &RunRecord) -> ReattachHold {
+  let Some(pid) = run.pid else {
+    return ReattachHold::none();
+  };
+  let hold = || -> anyhow::Result<ReattachHold> {
+    let cfg = features.config.get().context("reading the configuration for a re-attach hold")?;
+    let option = adapter.resolve_run_backend(&cfg, run)?;
+    let lifecycle = features.registry.lifecycle_for(&option.backend_type)?;
+    Ok(lifecycle.reattach_hold(&cfg, pid, &run.id))
+  }();
+  match hold {
+    Ok(hold) => hold,
+    Err(error) => {
+      tracing::warn!(target: "charliebot_tasks", run_id = %run.id, pid, error = %error, "task_recovery_reattach_hold_skipped");
+      ReattachHold::none()
+    }
+  }
+}
+
 /// `resume_run`'s checks and enqueue. True when the manager follow's tracker took over the registered pair.
 async fn resume_run_checked(
   adapter: &TaskExecutionAdapter,
   session_id: &str,
   run_id: &str,
   is_alive: Option<ResumeLiveness>,
+  hold: ReattachHold,
 ) -> anyhow::Result<bool> {
   let store = &adapter.features.store;
   let run = store
@@ -1436,7 +1464,7 @@ async fn resume_run_checked(
     bail!("run {run_id} (profile={}, kind={}) has no resume adapter", meta.profile.as_str(), run.kind.as_str());
   }
   let receiver = enqueue_manager_resume(adapter, &meta, &run, &option, is_alive, ended_at).await?;
-  track_manager_follow(adapter, session_id, run_id, receiver);
+  track_manager_follow(adapter, session_id, run_id, receiver, hold);
   Ok(true)
 }
 
@@ -1524,11 +1552,14 @@ fn track_manager_follow(
   session_id: &str,
   run_id: &str,
   receiver: oneshot::Receiver<anyhow::Result<Option<String>>>,
+  hold: ReattachHold,
 ) {
   let adapter = adapter.clone();
   let session_id = session_id.to_string();
   let run_id = run_id.to_string();
   tokio::spawn(async move {
+    // The reattach hold lasts until the follow's result arrives, like the reservation's own bound.
+    let _hold = hold;
     let result = receiver.await;
     adapter
       .recovery

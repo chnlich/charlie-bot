@@ -17,6 +17,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::artifact_check;
+use crate::plan_diff;
 use crate::plan_paths;
 use crate::plans::{self, LoadFailure, PLANS_FILE};
 
@@ -69,7 +70,7 @@ pub(crate) async fn present(
   let (plan_id, state) = {
     let _guard = locks.lock(session_id).await;
     let mut registry = read_registry(path.clone()).await?;
-    let file_relative = validate_new_version_file(features, session_id, file, &registry).await?;
+    let file_relative = validate_new_version_file(features, session_id, file, plans_of(&registry)?, None).await?;
     let plans = plans_of_mut(&mut registry)?;
     let plan_id = next_plan_id(plans)?;
     let version = json!({
@@ -91,7 +92,9 @@ pub(crate) async fn present(
 }
 
 /// `amend(session_id, file, note, plan_id, trigger, base)`: appends `file` as the next version of one open lineage.
-/// Answers `{plan, v, state}`. The verb refuses a blank note first, before it reads the registry.
+/// Answers `{plan, v, state}`. The verb refuses a blank note first, before it reads the registry. The candidate keeps
+/// the section 1 words of the lineage's most recent registered version, and it runs `non-goals-line` only when the
+/// lineage's first registered version carries the paragraph.
 pub(crate) async fn amend(
   features: &FeatureContext,
   locks: &SessionLocks,
@@ -108,10 +111,12 @@ pub(crate) async fn amend(
   let (plan_id, v, state) = {
     let _guard = locks.lock(session_id).await;
     let mut registry = read_registry(path.clone()).await?;
-    let file_relative = validate_new_version_file(features, session_id, file, &registry).await?;
     let plans = plans_of_mut(&mut registry)?;
     let index = resolve_target_plan_for_amend(plans, amendment.plan_id.as_ref())?;
+    let only = amend_assertion_names(features, session_id, &plans[index]).await?;
+    let file_relative = validate_new_version_file(features, session_id, file, plans, only).await?;
     let plan = plan_map_mut(&mut plans[index])?;
+    enforce_section1_freeze(features, session_id, plan, &file_relative).await?;
     let v = next_version_number(versions_of(plan)?)?;
     let version = json!({
       "v": v,
@@ -249,13 +254,14 @@ async fn broadcast(features: &FeatureContext, session_id: &str, plan_id: &Value)
 }
 
 /// The session-relative path of a file that may back a new version.
-/// The file must lie in the session directory, pass the plan assertion set, and back no version yet. The caller holds the
-/// session lock and passes the registry it loaded.
+/// The file must lie in the session directory, pass the plan assertion set (the `only` names when given, the whole
+/// set otherwise), and back no version yet. The caller holds the session lock and passes the registry's plans.
 async fn validate_new_version_file(
   features: &FeatureContext,
   session_id: &str,
   file: &str,
-  registry: &Value,
+  plans: &[Value],
+  only: Option<Vec<String>>,
 ) -> Result<String, VerbError> {
   let file = posix_path::normpath(file);
   let file_relative = validate_file_in_session_dir(features, session_id, &file)?;
@@ -266,7 +272,7 @@ async fn validate_new_version_file(
     .startup
     .require::<RepoRoot>()
     .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: error.to_string() })?;
-  let outcomes = artifact_check::run_assertions("plan", artifact, &config, repo_root.path().to_path_buf(), None)
+  let outcomes = artifact_check::run_assertions("plan", artifact, &config, repo_root.path().to_path_buf(), only)
     .await
     .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: format!("{error:#}") })?;
   let failures: Vec<String> = outcomes
@@ -281,7 +287,7 @@ async fn validate_new_version_file(
       failures.join("; ")
     )));
   }
-  if let Some((plan_id, v)) = find_binding_by_file(plans_of(registry)?, &file_relative)? {
+  if let Some((plan_id, v)) = find_binding_by_file(plans, &file_relative)? {
     return Err(VerbError::Refused(format!(
       "file {} already bound to plan {} v{}",
       text_repr::str_repr(&file),
@@ -314,6 +320,103 @@ fn validate_file_in_session_dir(features: &FeatureContext, session_id: &str, fil
     )));
   }
   Ok(relative.to_string_lossy().into_owned())
+}
+
+/// The `only` list of an amend's assertion run: the whole plan set when the lineage's first registered version
+/// carries the `p.non-goals` paragraph, and the set without `non-goals-line` otherwise. A first version whose file is
+/// gone from disk counts as carrying none, so an in-flight lineage never gains the paragraph by force.
+async fn amend_assertion_names(
+  features: &FeatureContext,
+  session_id: &str,
+  plan: &Value,
+) -> Result<Option<Vec<String>>, VerbError> {
+  let versions = versions_of(plan_map(plan)?)?;
+  let Some(first) = versions.first() else {
+    return Err(VerbError::Refused("the lineage has no registered version to amend".to_string()));
+  };
+  let first_file = version_file(first)?;
+  let first_source = read_session_file(features, session_id, &first_file).await?;
+  let carries = match &first_source {
+    Some(source) => artifact_check::page_has_non_goals(source)
+      .map_err(|error| VerbError::Failed { kind: "RuntimeError", detail: format!("{error:#}") })?,
+    None => false,
+  };
+  Ok((!carries).then(|| {
+    artifact_check::assertion_names_excluding("plan", &[artifact_check::NON_GOALS_LINE])
+      .expect("the plan genre has an assertion set")
+  }))
+}
+
+/// The section 1 freeze: the candidate keeps the section 1 words of the lineage's most recent registered version. A
+/// change to them is a refusal, because only a user reply that changes the goal can — and that reply opens a new
+/// lineage through `present`.
+async fn enforce_section1_freeze(
+  features: &FeatureContext,
+  session_id: &str,
+  plan: &Map<String, Value>,
+  candidate_relative: &str,
+) -> Result<(), VerbError> {
+  let versions = versions_of(plan)?;
+  let latest = versions.last().expect("a plan carries at least one version");
+  let latest_relative = version_file(latest)?;
+  let latest_source = read_session_file(features, session_id, &latest_relative).await?.ok_or_else(|| {
+    VerbError::Refused(format!(
+      "plan amend cannot read the lineage's most recent registered version {}: the file is gone from the session \
+         directory",
+      text_repr::str_repr(&latest_relative)
+    ))
+  })?;
+  let candidate_source = read_session_file(features, session_id, candidate_relative)
+    .await?
+    .expect("the candidate file was read by the assertion run above");
+  let missing = || {
+    VerbError::Refused("plan amend cannot compare section 1: a version page has no Problem / Goal section".to_string())
+  };
+  let latest_section = artifact_check::section_text(&latest_source, GOAL_SECTION_TITLE)
+    .map_err(|error| runtime_failure(format!("{error:#}")))?
+    .ok_or_else(missing)?;
+  let candidate_section = artifact_check::section_text(&candidate_source, GOAL_SECTION_TITLE)
+    .map_err(|error| runtime_failure(format!("{error:#}")))?
+    .ok_or_else(missing)?;
+  let diff = plan_diff::diff_text(&format!("<p>{latest_section}</p>"), &format!("<p>{candidate_section}</p>"))
+    .map_err(|error| runtime_failure(format!("{error:#}")))?;
+  if !diff.trim().is_empty() {
+    return Err(VerbError::Refused(format!(
+      "plan amend refuses a section 1 change; a user reply that changes the goal opens a new lineage:\n{diff}"
+    )));
+  }
+  Ok(())
+}
+
+/// The title a plan's goal section carries on its first h2.
+const GOAL_SECTION_TITLE: &str = "Problem / Goal";
+
+fn runtime_failure(error: String) -> VerbError {
+  VerbError::Failed { kind: "RuntimeError", detail: error }
+}
+
+/// The session-relative file of one registered version.
+fn version_file(version: &Value) -> Result<String, VerbError> {
+  let file = plan_map(version)?.get("file").ok_or_else(|| key_error("file"))?;
+  match file {
+    Value::String(file) => Ok(file.clone()),
+    other => Err(type_error(format!("a version's file must be a string, got {}", plans::type_name(other)))),
+  }
+}
+
+/// The text of a session-relative file, read on the blocking pool. `None` when the file is gone.
+async fn read_session_file(
+  features: &FeatureContext,
+  session_id: &str,
+  file_relative: &str,
+) -> Result<Option<String>, VerbError> {
+  let path = features.store.session_dir(session_id).join(file_relative);
+  blocking(move || match fs::read_to_string(&path) {
+    Ok(text) => Ok(Some(text)),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(escaped(plans::os_escape(&error, &path))),
+  })
+  .await
 }
 
 /// The plan id and version number of the first version whose file, normalized, is
@@ -801,6 +904,8 @@ mod tests {
   #[ignore = "integration"]
   async fn amend_appends_a_version_and_clears_the_takeoff() {
     let (_home, features) = plan_session("sess", Some(APPROVED_REGISTRY));
+    // The section 1 freeze reads the lineage's most recent registered version, so its page is on disk.
+    write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
     let f2 = write_plan_artifact(&features, "sess", "plan_02.html", &plan_page("Ship the fix."));
     let result = amend(&features, &SessionLocks::default(), "sess", &f2, amendment(Some(json!(1)), "split it"))
       .await
@@ -828,6 +933,76 @@ mod tests {
       matches!(&error, VerbError::Refused(detail) if detail == "amend requires --plan (multiple open lineages: 1, 2)"),
       "{error:?}"
     );
+  }
+
+  /// A plan page without the closing non-goals paragraph: the form a lineage first registered before the
+  /// `non-goals-line` assertion took effect keeps.
+  fn page_without_non_goals(goal: &str) -> String {
+    plan_page(goal).replace("<p class=\"non-goals\">Non-goals: none.</p>", "")
+  }
+
+  /// Plan 1 awaiting approval at two versions whose pages carry no non-goals paragraph.
+  const IN_FLIGHT_REGISTRY: &str = r#"{"plans": [{"id": 1, "title": "P1", "versions": [
+    {"v": 1, "file": "artifacts/plan_01.html"}, {"v": 2, "file": "artifacts/plan_02.html"}],
+    "takeoff": null, "closed": null}]}"#;
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn present_refuses_a_page_without_the_non_goals_paragraph() {
+    let (_home, features) = plan_session("sess", None);
+    write_plan_artifact(&features, "sess", "plan_01.html", &page_without_non_goals("Ship the fix."));
+    let error = present_p1(&features, "sess", "artifacts/plan_01.html").await.unwrap_err();
+    let VerbError::Refused(detail) = &error else { panic!("a missing non-goals paragraph is a refusal: {error:?}") };
+    assert!(detail.starts_with("plan artifact fails 1 check assertion(s): non-goals-line: "), "{detail}");
+    assert!(!features.store.session_dir("sess").join(PLANS_FILE).exists());
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn amend_refuses_a_section_1_change_against_the_latest_registered_version() {
+    let (_home, features) = plan_session("sess", Some(APPROVED_REGISTRY));
+    write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
+    let f2 = write_plan_artifact(&features, "sess", "plan_02.html", &plan_page("Ship it faster."));
+    let error =
+      amend(&features, &SessionLocks::default(), "sess", &f2, amendment(Some(json!(1)), "why")).await.unwrap_err();
+    let VerbError::Refused(detail) = &error else { panic!("a section 1 change is a refusal: {error:?}") };
+    assert!(detail.starts_with("plan amend refuses a section 1 change"), "{detail}");
+    let before = fs::read(features.store.session_dir("sess").join(PLANS_FILE)).expect("the registry is on disk");
+    let data: Value = serde_json::from_slice(&before).expect("the registry is JSON");
+    assert_eq!(data["plans"][0]["versions"].as_array().expect("the versions list").len(), 1);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn amend_of_an_in_flight_lineage_keeps_its_landed_section_1_and_form() {
+    let (_home, features) = plan_session("sess", Some(IN_FLIGHT_REGISTRY));
+    // v1 carried section 1 "Goal A." and no non-goals paragraph; v2 landed with section 1 "Goal B.".
+    write_plan_artifact(&features, "sess", "plan_01.html", &page_without_non_goals("Goal A."));
+    write_plan_artifact(&features, "sess", "plan_02.html", &page_without_non_goals("Goal B."));
+    // The candidate keeps B, changes other content, and adds no non-goals paragraph.
+    let f3 = write_plan_artifact(
+      &features,
+      "sess",
+      "plan_03.html",
+      &page_without_non_goals("Goal B.").replace("<p>The design.</p>", "<p>The design, extended.</p>"),
+    );
+    let result = amend(&features, &SessionLocks::default(), "sess", &f3, amendment(Some(json!(1)), "why"))
+      .await
+      .expect("the amendment succeeds");
+    assert_eq!(result, json!({"plan": 1, "v": 3, "state": "awaiting approval"}));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn amend_refuses_a_section_1_change_on_an_in_flight_lineage() {
+    let (_home, features) = plan_session("sess", Some(IN_FLIGHT_REGISTRY));
+    write_plan_artifact(&features, "sess", "plan_01.html", &page_without_non_goals("Goal A."));
+    write_plan_artifact(&features, "sess", "plan_02.html", &page_without_non_goals("Goal B."));
+    let f3 = write_plan_artifact(&features, "sess", "plan_03.html", &page_without_non_goals("Goal C."));
+    let error =
+      amend(&features, &SessionLocks::default(), "sess", &f3, amendment(Some(json!(1)), "why")).await.unwrap_err();
+    let VerbError::Refused(detail) = &error else { panic!("a section 1 change is a refusal: {error:?}") };
+    assert!(detail.starts_with("plan amend refuses a section 1 change"), "{detail}");
   }
 
   #[tokio::test]

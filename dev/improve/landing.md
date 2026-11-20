@@ -13,7 +13,8 @@ The pull request is the triage record, and CI is the full test run.
 Every text the round writes to GitHub — a pull-request title, body, comment, commit message or branch name — goes through `dev/improve/github-post.sh`, which checks it against the leak rules before it sends anything.
 On a hit, the round removes the matched content from the text, rewrites it, and runs the subcommand again.
 The script sends nothing on a hit, so the posted text is always text that passed.
-`gh pr merge`, `gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round.
+A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash commit message.
+`gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round.
 
 ## The round's login and the launch's exit codes
 
@@ -148,15 +149,18 @@ The round lands a whole topic, not a fragment.
 For a fresh topic, create the branch with `git switch -c improve/<direction>/<topic slug> origin/main`.
 The branch name records the topic for the abandoned-topic check.
 
-When the topic touches `rust/`, run the checks on the remote host, in the `rust/` directory:
-
-    CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=~/.cache/improve-target/<direction> nice -n 19 cargo check
-    CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=~/.cache/improve-target/<direction> nice -n 19 cargo test -p <crate>
-
-Add `-p <crate>` for every crate that the change touches.
-Run no other test, because CI runs the full suite.
-Four build jobs at nice level 19 leave the host's CPU to the other owners' builds.
-The pinned target directory stays inside the write boundary.
+When the topic touches `rust/`, run the checks from the `rust/` directory of the clone, on the remote host where
+  the round already runs.
+The remote host is the host that the host rule names for agent compiles, so the checks satisfy that rule.
+The checks reach no other host, so the round uses neither the remote-run runner (`dev/remote-run/`) nor an ssh
+  connection.
+The round's profile home, `~/improve/home`, leaves `remote_run.host` unset by design.
+Finding it unset is expected, and the round runs its checks directly in the clone.
+The checks use the direction's pinned target directory, `~/.cache/improve-target/<direction>`, which the write
+  boundary allows.
+The round runs `cargo check` for the workspace and `cargo test` for each crate that the change touches.
+The round limits its tests to those crates, because CI runs the full suite.
+The builds run with four build jobs at nice level 19, so the host's CPU stays with the other owners' builds.
 
 ## Step 5: write the evidence and open the pull request
 
@@ -271,11 +275,11 @@ Close the pull request through the posting script with the comment `improve-aban
 
     dev/improve/github-post.sh pr-close --comment-file <comment file> <PR>
 
-A non-empty diff merges:
+A non-empty diff merges through the posting script, with the round's evidence directory:
 
-    gh pr merge --squash <PR>
+    dev/improve/github-post.sh pr-merge --evidence-dir <the round's evidence directory> <PR>
 
-The merge stays a bare call: its squash message comes from the commit messages and title that the posting script already checked.
+The merge checks a web page change's screenshots, and its squash message comes from the pull request's title and body, which the posting script checks before it sends them.
 
 Read a red check with `gh run view --log-failed <run-id>`.
 The failure class selects the fix steps below.
@@ -352,7 +356,7 @@ These steps return `main` to green and resume the step that needed it.
    A red check follows the inside-diff fix steps with the same two-fix budget.
 5. Confirm that the repair still carries a diff against a fresh `origin/main`.
    An emptied repair has nothing to merge, so close it through the posting script with `--delete-branch` and a comment file that reads `improve-abandoned: main repair — nothing left to merge`, then return to the sending step.
-6. Review the repair pull request with Step 6, act on its findings, and merge it with `gh pr merge --squash` once it is green and carries its verdict comment (Step 7).
+6. Review the repair pull request with Step 6, act on its findings, and merge it through `dev/improve/github-post.sh pr-merge <PR>` once it is green and carries its verdict comment (Step 7).
    A repair lands on `main` as well, so it gets the same review as a topic.
    Wait for the merge's main run with `gh run watch`, then return to the sending step.
 7. When the failure names no fix, or the repair pull request is abandoned,

@@ -316,6 +316,30 @@ const TWO_PICKS_AND_A_COMMENT = `(() => {
   };
 })()`;
 
+const PICK_AND_OVERSIZED_COMMENT = `(() => {
+  const paragraphs = Array.from(document.querySelectorAll('p')).filter((p) =>
+    !p.closest('.fork, .__cbc-ui') && p.textContent.trim().length > 40 && p.getClientRects().length > 0);
+  document.querySelector('.__cbc-pick').click();
+  paragraphs[0].click();
+  document.querySelector('.__cbc-popover textarea').value = 'é'.repeat(32768);
+  document.querySelector('.__cbc-add').click();
+})()`;
+
+async function saveKeepaliveLimitScreenshot(page, width, height) {
+  const directory = process.env.CHARLIEBOT_KEEPALIVE_LIMIT_SHOTS_DIR;
+  if (!directory) return;
+  // Put the page and the rail at their lower edges so page text clears the tray and lower rail controls are visible.
+  await page.evaluate('document.body.scrollTo(0, document.body.scrollHeight)');
+  await page.evaluate('(() => { const dock = document.querySelector(".__cbc-dock"); ' +
+    'dock.scrollTop = dock.scrollHeight; })()');
+  await sleep(FRAME_WAIT_MS);
+  const {data} = await page.send('Page.captureScreenshot', {format: 'png'});
+  const outputDirectory = path.resolve(directory);
+  fs.mkdirSync(outputDirectory, {recursive: true});
+  fs.writeFileSync(path.join(outputDirectory, `keepalive_limit_error_${width}x${height}.png`),
+    Buffer.from(data, 'base64'));
+}
+
 test('two picks and a comment share one tray and one Send, which posts one message to the comment target', async () => {
   await withTwoQuestionPage(async (page, sent) => {
     const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
@@ -368,11 +392,16 @@ test('Undo inside the undo window posts nothing, keeps the picks and the comment
   });
 
 // The fetch wrapper records what each post carried, so a check tells a leave flush (keepalive) from a window send.
-const PATCH_FETCH = `(() => { const real = window.fetch; window.__cbcFetchCalls = [];
+// With `rejectKeepalive`, every keepalive post fails the way the browser fails one over its quota.
+const patchFetch = (rejectKeepalive) => `(() => { const real = window.fetch; window.__cbcFetchCalls = [];
   window.fetch = function(url, options) {
-    window.__cbcFetchCalls.push({url: String(url), keepalive: Boolean(options && options.keepalive)});
+    const keepalive = Boolean(options && options.keepalive);
+    window.__cbcFetchCalls.push({url: String(url), keepalive});
+    if (keepalive && ${rejectKeepalive}) return Promise.reject(new TypeError('keepalive quota exhausted'));
     return real(url, options);
   }; })()`;
+const PATCH_FETCH = patchFetch(false);
+const REJECT_KEEPALIVE_FETCH = patchFetch(true);
 // Only the message posts: the tray also fetches the target session's name over the same global.
 const FETCH_CALLS = 'window.__cbcFetchCalls.filter((call) => call.url.endsWith("/message"))';
 const ONE_PICK = `${PICKABLE_FORKS}[0].querySelector(".__cbc-pick").click()`;
@@ -475,6 +504,72 @@ test('Send with nothing pending is disabled and the tray says what to do', async
     assert.equal(await page.evaluate(SEND_DISABLED), true);
     assert.equal(await page.evaluate(TRAY_STATUS_SHOWN), true);
     assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), false);
+  });
+});
+
+// The task's 1280 px capture plus each window size that `charliebot land --help` lists.
+const LAND_WINDOW_SIZES = [
+  {width: 1280, height: 800}, {width: 1536, height: 900}, {width: 1400, height: 1000}, {width: 390, height: 844},
+];
+for (const {width, height} of LAND_WINDOW_SIZES) {
+  test(`an oversized leave flush keeps the entries and explains the 64 KiB limit in the tray at ${width}x${height}`,
+    async () => {
+      await withTwoQuestionPage(async (page, sent) => {
+        await page.evaluate(PICK_AND_OVERSIZED_COMMENT);
+        await sleep(FRAME_WAIT_MS);
+        assert.equal(await page.evaluate(TRAY_ITEMS), 2, 'one pick and one oversized comment are pending');
+
+        await page.evaluate(CLICK_SEND);
+        assert.match(await page.evaluate(TRAY_STATUS), /64 KiB.*Keep this page open/,
+          'the reader sees why leaving during Undo cannot send the batch');
+        await page.evaluate('document.dispatchEvent(new Event("charliebot:session-view-teardown"))');
+        await sleep(100);
+
+        assert.equal(sent.length, 0, 'the oversized keepalive body is not posted');
+        assert.equal(await page.evaluate(TRAY_ITEMS), 2, 'both entries remain pending');
+        assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true, 'the tray keeps an error result');
+        const status = await page.evaluate(TRAY_STATUS);
+        assert.match(status, /64 KiB.*press Send to try again/, 'the tray states the reason and next action');
+        assert.doesNotMatch(status, /\.\./, 'the reason and the next sentence join with one period');
+        await saveKeepaliveLimitScreenshot(page, width, height);
+      }, {viewport: {width, height}});
+    });
+}
+
+test('a rejected leave flush keeps the entries, shows the failure in the tray, and is not retried', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    await page.evaluate(REJECT_KEEPALIVE_FETCH);
+    await page.evaluate(ONE_PICK);
+    await sleep(FRAME_WAIT_MS);
+    await page.evaluate(CLICK_SEND);
+    await page.evaluate('window.dispatchEvent(new PageTransitionEvent("pagehide"))');
+    await sleep(1500);
+
+    assert.equal(sent.length, 0, 'the rejected post never reached the server');
+    assert.deepEqual(await page.evaluate(FETCH_CALLS).then((calls) => calls.map((call) => call.keepalive)), [true],
+      'one keepalive attempt, with no retry after the page has left');
+    assert.equal(await page.evaluate(TRAY_ITEMS), 1, 'the pick stays pending');
+    assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true, 'the tray shows the failure');
+    assert.match(await page.evaluate(TRAY_STATUS), /Page-leave send failed \(keepalive quota exhausted\)\. Keep this/,
+      'the tray gives the browser reason and the next action');
+  });
+});
+
+test('an oversized batch sent from the open page posts as one normal request, not keepalive', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    await page.evaluate(PATCH_FETCH);
+    await page.evaluate(PICK_AND_OVERSIZED_COMMENT);
+    await sleep(FRAME_WAIT_MS);
+    await page.evaluate(CLICK_SEND);
+    await sleep(SEND_WAIT_MS);
+
+    assert.equal(sent.length, 1, 'the in-page send posts the whole batch');
+    assert.equal(sent[0].session, VIEWER, 'the message goes to the comment target');
+    assert.ok(Buffer.byteLength(sent[0].body.content, 'utf8') > 64 * 1024, 'the batch is over the leave limit');
+    assert.deepEqual(await page.evaluate(FETCH_CALLS).then((calls) => calls.map((call) => call.keepalive)), [false],
+      'one normal post, not keepalive');
+    assert.equal(await page.evaluate(TRAY_ITEMS), 0, 'the sent entries leave the list');
+    assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), false, 'a delivered send is not shown as an error');
   });
 });
 

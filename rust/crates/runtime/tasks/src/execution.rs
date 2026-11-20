@@ -25,6 +25,7 @@ use charliebot_core::run_token::{RUN_TOKEN_ENV, RunTokenClaims, sign_run_token};
 use charliebot_core::text_repr;
 use charliebot_registry::backend::{Env, LaunchArgs, LaunchRefused};
 use charliebot_registry::context::FeatureContext;
+use charliebot_registry::registry::ReattachHold;
 use charliebot_registry::sequence::{QuotaFailure, SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
@@ -2895,15 +2896,16 @@ impl TaskExecutionAdapter {
     self.start_run_end_landing_retry(session_id, Some(run_id));
   }
 
-  /// Follow a live worker run without holding the startup reconcile pass open.
-  pub(crate) fn follow_run_in_background(&self, session_id: &str, run_id: &str) {
+  /// Follow a live worker run without holding the startup reconcile pass open. The follow holds `hold` — the login
+  /// reservation a reattach took for the run — until the run's follow ends.
+  pub(crate) fn follow_run_in_background(&self, session_id: &str, run_id: &str, hold: ReattachHold) {
     let key = (session_id.to_string(), run_id.to_string());
     self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").insert(key);
     let adapter = self.clone();
     let session_id = session_id.to_string();
     let run_id = run_id.to_string();
     tokio::spawn(async move {
-      if let Err(error) = adapter.resume_run(&session_id, &run_id, None).await {
+      if let Err(error) = adapter.resume_run(&session_id, &run_id, None, hold).await {
         if is_out_of_space_error(error.as_ref()) {
           adapter.start_run_end_landing_retry(&session_id, Some(&run_id));
         }

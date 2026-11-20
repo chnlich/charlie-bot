@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
+const {TextEncoder} = require('node:util');
 
 const { readStatic } = require('./read_static');
 
@@ -11,6 +12,7 @@ function loadCommentPost(fetchImpl) {
   const context = {
     fetch: fetchImpl,
     crypto: {randomUUID: () => `comment-request-${++requestSequence}`},
+    TextEncoder,
     setTimeout: (callback) => { callback(); return 1; },
   };
   vm.createContext(context);
@@ -107,6 +109,23 @@ test('postCommentMessage sends the comment-tray request shape', async () => {
   assert.equal(body.request_id, 'comment-request-1');
 });
 
+test('postCommentMessage reports an oversized keepalive body and allows the same message while the page stays open',
+  async () => {
+    const calls = [];
+    const context = loadCommentPost(async (url, options = {}) => {
+      calls.push({url, options});
+      return {ok: true, status: 202, json: async () => ({})};
+    });
+    const content = 'é'.repeat(32768);
+
+    await assert.rejects(context.postCommentMessage('s', content, {keepalive: true}), /64 KiB/);
+    assert.equal(calls.length, 0, 'the over-limit request is rejected before fetch');
+
+    await context.postCommentMessage('s', content);
+    assert.equal(calls.length, 1, 'the normal send is not subject to the keepalive limit');
+    assert.ok(Buffer.byteLength(calls[0].options.body, 'utf8') > 64 * 1024);
+  });
+
 test('buildClickMessage owns the shared numbered reference and answer format', () => {
   const context = loadCommentPost();
   const message = context.buildClickMessage('[Status · Waiting on you]', [{
@@ -152,6 +171,17 @@ test('postCommentMessage retries a network error and a 5xx with one request id',
   assert.deepEqual(calls.map((call) => JSON.parse(call.options.body).request_id), [
     'comment-request-1', 'comment-request-1', 'comment-request-1',
   ]);
+});
+
+test('postCommentMessage surfaces a rejected keepalive request instead of retrying after page leave', async () => {
+  let attempts = 0;
+  const context = loadCommentPost(async () => {
+    attempts += 1;
+    throw new TypeError('keepalive quota exhausted');
+  });
+
+  await assert.rejects(context.postCommentMessage('s', 'c', {keepalive: true}), /keepalive quota exhausted/);
+  assert.equal(attempts, 1, 'the caller gets the failure so the tray can show its next action');
 });
 
 test('postCommentMessage treats a 202 dispatch_error as accepted without retry', async () => {
@@ -205,6 +235,7 @@ function loadCommentPostWithClock(fetchImpl) {
   const context = {
     fetch: fetchImpl,
     crypto: {randomUUID: () => `comment-request-${++requestSequence}`},
+    TextEncoder,
     window: makeEventTarget(),
     document: makeEventTarget(),
     setTimeout: (callback, delay) => {

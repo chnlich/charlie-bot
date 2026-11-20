@@ -18,13 +18,13 @@ use charliebot_store::metadata::{
 };
 use charliebot_tasks::routes as task_routes;
 use clap::error::ErrorKind;
-use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser};
 use serde_json::{Map, Value, json};
 
 const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
 
   ## Goal - one concise deliverable.
-  ## Source Files - absolute paths, or `- (none)`.
+  ## Source Files - absolute paths, or `- (none)`; verify requires a listed path.
   ## Required Behavior - the executable contract, state-machine semantics, and boundary rules.
   ## Acceptance Tests - focused tests or verification commands.
   ## Reviewer Checklist - concrete checks beyond "tests passed".
@@ -63,7 +63,9 @@ Requester Words:
   it: the words that asked the question, and each earlier user decision the task rests on, each
   quoted verbatim with its session id and event kind (user, agent, scheduled or thread).
   charliebot delegate checks each quote against its session's events of that kind; the section
-  also gives its worker the user-decisions rule, and a spec without it is accepted.
+  also gives its worker the user-decisions rule, and a spec without it is accepted. A verify
+  spec names the sessions whose user replies extend the yardstick (kind user); verify reads
+  every user reply from those sessions, and only those.
   - 「<verbatim>」 (session <36-char session id>, <user|agent|scheduled|thread>)
 
 Backend selection (--backend):
@@ -128,42 +130,23 @@ struct DelegateCli {
   keep_worktree: Option<i32>,
   #[arg(long, help = "Replay id (v2 task-tree sessions; rule in the epilog)", conflicts_with = "bound_task")]
   request_id: Option<String>,
+  // The store owns the task-type names. Cold read is the artifacts feature's child, so the command names these four.
   #[arg(
     long,
-    value_enum,
+    value_parser = clap::builder::PossibleValuesParser::new([
+      StoreTaskType::Implement.as_str(),
+      StoreTaskType::QuickEdit.as_str(),
+      StoreTaskType::ScriptRun.as_str(),
+      StoreTaskType::Verify.as_str(),
+    ]),
     help = "Task profile (rules in the epilog); omitted, implement",
     conflicts_with = "bound_task"
   )]
-  task_type: Option<TaskType>,
+  task_type: Option<String>,
   #[arg(long, help = "Start a round of the named scheduled prompt task")]
   bound_task: Option<String>,
   #[arg(long, requires = "bound_task", help = "Add a session note; the task must have a repo")]
   note: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum TaskType {
-  Implement,
-  QuickEdit,
-  ScriptRun,
-  Verify,
-}
-
-impl TaskType {
-  fn store_type(self) -> StoreTaskType {
-    match self {
-      Self::Implement => StoreTaskType::Implement,
-      Self::QuickEdit => StoreTaskType::QuickEdit,
-      Self::ScriptRun => StoreTaskType::ScriptRun,
-      Self::Verify => StoreTaskType::Verify,
-    }
-  }
-}
-
-impl std::fmt::Display for TaskType {
-  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    formatter.write_str(self.store_type().as_str())
-  }
 }
 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
@@ -202,12 +185,11 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     return print_spawned(&result);
   }
 
-  let task_type_arg = cli.task_type.unwrap_or(TaskType::Implement);
-  let task_type = task_type_arg.store_type().as_str();
-  if let Err(message) = validate_repo_and_branch(task_type_arg, cli.repo.as_deref(), cli.base_branch.as_deref()) {
+  let task_type = cli.task_type.as_deref().unwrap_or(StoreTaskType::Implement.as_str());
+  if let Err(message) = validate_repo_and_branch(task_type, cli.repo.as_deref(), cli.base_branch.as_deref()) {
     parser_error(&mut command, ErrorKind::ValueValidation, message);
   }
-  if task_type_arg != TaskType::Verify
+  if task_type != StoreTaskType::Verify.as_str()
     && let Some(repo) = &cli.repo
   {
     args::validate_repo_path(&mut command, repo);
@@ -215,7 +197,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 
   let task_spec_file = cli.task_spec_file.as_deref().expect("clap requires --task-spec-file without --bound-task");
   let task_spec = files::read_required_text_file("--task-spec-file", task_spec_file)?;
-  validate_task_spec_markdown(&task_spec)?;
+  validate_task_spec_markdown(&task_spec, task_type)?;
   let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   validate_requester_words(&task_spec, &home)?;
 
@@ -327,8 +309,8 @@ fn parser_error(command: &mut clap::Command, kind: ErrorKind, message: impl std:
   command.error(kind, message).exit()
 }
 
-fn validate_repo_and_branch(task_type: TaskType, repo: Option<&str>, base_branch: Option<&str>) -> Result<(), String> {
-  if task_type == TaskType::Verify {
+fn validate_repo_and_branch(task_type: &str, repo: Option<&str>, base_branch: Option<&str>) -> Result<(), String> {
+  if task_type == StoreTaskType::Verify.as_str() {
     if repo.is_some() {
       return Err("--repo is forbidden when --task-type verify".to_string());
     }
@@ -338,13 +320,13 @@ fn validate_repo_and_branch(task_type: TaskType, repo: Option<&str>, base_branch
   } else if repo.is_some() != base_branch.is_some() {
     return Err(format!(
       "--repo and --base-branch are given together for a repo task or omitted together for a repo-less one; exactly one was given for --task-type {}",
-      task_type.store_type().as_str()
+      task_type
     ));
   }
   Ok(())
 }
 
-fn validate_task_spec_markdown(content: &str) -> Result<(), CliExit> {
+fn validate_task_spec_markdown(content: &str, task_type: &str) -> Result<(), CliExit> {
   let lines: Vec<&str> = content.lines().collect();
   let missing_headings: Vec<&str> = TASK_SPEC_REQUIRED_HEADINGS
     .iter()
@@ -370,6 +352,11 @@ fn validate_task_spec_markdown(content: &str) -> Result<(), CliExit> {
     }
     saw_source_entry = true;
     if stripped == "- (none)" {
+      if task_type == StoreTaskType::Verify.as_str() {
+        return Err(CliExit::usage(
+          "task spec Source Files section must name the lineage's first version for --task-type verify; - (none) is refused",
+        ));
+      }
       continue;
     }
     if stripped.starts_with("- /") {
@@ -566,7 +553,7 @@ mod tests {
     let help = help_text();
     assert!(help.contains("Delegate a task to a CharlieBot worker agent"));
     let char_count = help.chars().count();
-    assert!(char_count <= 4800, "help is {char_count} characters");
+    assert!(char_count <= 5000, "help is {char_count} characters");
     for name in [
       "--session",
       "--repo",
@@ -616,12 +603,42 @@ mod tests {
 
   #[test]
   fn test_main_repo_task_types_take_repo_and_base_branch_together() {
-    for task_type in [TaskType::Implement, TaskType::QuickEdit, TaskType::ScriptRun] {
+    for task_type in
+      [StoreTaskType::Implement, StoreTaskType::QuickEdit, StoreTaskType::ScriptRun].map(StoreTaskType::as_str)
+    {
       for (repo, base_branch) in [(Some("/repo"), None), (None, Some("main"))] {
         let error = validate_repo_and_branch(task_type, repo, base_branch).unwrap_err();
         assert!(error.contains("given together"), "{error}");
-        assert!(error.contains(task_type.store_type().as_str()), "{error}");
+        assert!(error.contains(task_type), "{error}");
       }
     }
+  }
+
+  const SOURCE_FILES_SPEC: &str = "## Goal\n\nCheck the plan.\n\n## Source Files\n\n## Required Behavior\n\n## Acceptance Tests\n\n## Reviewer Checklist\n\n## Out of Scope\n";
+
+  #[test]
+  fn verify_refuses_an_empty_source_files_section() {
+    let error = validate_task_spec_markdown(SOURCE_FILES_SPEC, StoreTaskType::Verify.as_str()).unwrap_err();
+    assert!(error.body["error"].as_str().unwrap().contains("Source Files"), "{error:?}");
+  }
+
+  #[test]
+  fn verify_refuses_a_none_only_source_files_section() {
+    let spec = SOURCE_FILES_SPEC.replace("## Source Files\n", "## Source Files\n\n- (none)\n");
+    let error = validate_task_spec_markdown(&spec, StoreTaskType::Verify.as_str()).unwrap_err();
+    assert!(error.body["error"].as_str().unwrap().contains("- (none) is refused"), "{error:?}");
+  }
+
+  #[test]
+  fn verify_refuses_a_missing_source_files_heading() {
+    let spec = SOURCE_FILES_SPEC.replace("## Source Files\n", "");
+    let error = validate_task_spec_markdown(&spec, StoreTaskType::Verify.as_str()).unwrap_err();
+    assert!(error.body["error"].as_str().unwrap().contains("missing required headings"), "{error:?}");
+  }
+
+  #[test]
+  fn a_non_verify_spec_keeps_accepting_none_only_sources() {
+    let spec = SOURCE_FILES_SPEC.replace("## Source Files\n", "## Source Files\n\n- (none)\n");
+    validate_task_spec_markdown(&spec, StoreTaskType::Implement.as_str()).expect("- (none) stays legal off verify");
   }
 }

@@ -37,6 +37,7 @@ pub use usage_logs::USAGE_SOURCE;
 
 use std::sync::Arc;
 
+use charliebot_core::backend_types;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::{CLAUDE_READING_KIND, NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
@@ -65,7 +66,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
   // readings are the same observations.
   let state = Arc::new(claude_accounts::ClaudeAccountState::new());
   registry.backend_type(BackendTypeRegistration {
-    type_name: "cc-claude",
+    type_name: backend_types::CC_CLAUDE,
     traits: BackendTraits {
       resume: ResumeStyle::CliFlag,
       restart_reattach: true,
@@ -79,11 +80,11 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     lifecycle: Some(Arc::new(ClaudeCodeLifecycle::with_state(Arc::clone(&state))) as Arc<dyn BackendLifecycle>),
     translate_fallback: true,
   })?;
-  registry.option_schema("cc-claude", options::SCHEMA)?;
+  registry.option_schema(backend_types::CC_CLAUDE, options::SCHEMA)?;
   // The Auto set reads this member through the same shared observations the pool selects logins from.
   let reading_state = Arc::clone(&state);
   registry.member_reading(
-    "cc-claude",
+    backend_types::CC_CLAUDE,
     Arc::new(move |cfg, option, now| claude_accounts::member_reading(&reading_state, cfg, option, now)),
   )?;
   registry.config_section(charliebot_core::config::ConfigSection {
@@ -130,7 +131,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(ClaudeLogs::new(host, Arc::clone(&state), Arc::new(http)))),
   })?;
-  registry.attribute_backend_type("cc-claude", USAGE_SOURCE)?;
+  registry.attribute_backend_type(backend_types::CC_CLAUDE, USAGE_SOURCE)?;
   registry.config_check("check_claude_pools", claude_config::check_claude_pools)?;
   registry.turn_contribution("claude_code", Arc::new(turn_contribution::ClaudeCodeTurnContribution))
 }

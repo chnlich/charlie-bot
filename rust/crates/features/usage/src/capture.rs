@@ -11,6 +11,7 @@ use charliebot_core::event_types::{
   USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
 };
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::paths;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{
@@ -149,7 +150,7 @@ pub fn capture_charliebot(
   let mut written = 0;
   for (kind, path, metadata) in charliebot_logs(sessions_dir)? {
     let signature = format!("p2:{}", file_signature(&metadata));
-    let path_text = path_text(&path)?;
+    let path_text = paths::utf8(&path).ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
     if captured.get(path_text) == Some(&signature) {
       continue;
     }
@@ -175,7 +176,7 @@ pub fn capture_runs(
   let mut conversations = ConversationRuns::new(sessions_dir);
   for (path, metadata) in run_logs(sessions_dir)? {
     let signature = file_signature(&metadata);
-    let path_text = path_text(&path)?;
+    let path_text = paths::utf8(&path).ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
     if captured.get(path_text) == Some(&signature) {
       continue;
     }
@@ -253,7 +254,7 @@ fn capture_source(
 ) -> anyhow::Result<usize> {
   let mut written = 0;
   for (path, account) in implementation.logs(config).with_context(|| format!("listing {} usage logs", source.name))? {
-    let path_text = path_text(&path)?;
+    let path_text = paths::utf8(&path).ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))?;
     let metadata = fs::metadata(&path).with_context(|| format!("statting {}", path.display()))?;
     let previous = captured.get(path_text);
     let stat_signature = file_signature(&metadata);
@@ -351,10 +352,6 @@ fn subdirs(path: &Path) -> anyhow::Result<Option<Vec<PathBuf>>> {
     }
   }
   Ok(Some(dirs))
-}
-
-fn path_text(path: &Path) -> anyhow::Result<&str> {
-  path.to_str().ok_or_else(|| anyhow!("path is not valid UTF-8: {}", path.display()))
 }
 
 fn path_parts(path: &Path) -> anyhow::Result<Vec<String>> {

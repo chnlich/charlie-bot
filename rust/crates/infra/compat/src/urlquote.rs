@@ -1,4 +1,4 @@
-//! Percent quoting as a safe set over the `percent-encoding` crate. Each caller names its safe bytes; the crate
+//! Percent quoting as a safe set over the `percent-encoding` crate. Each caller names its safe bytes. The crate
 //! does the byte loop and writes uppercase `%XX`. [`quote_plus`] and [`encode_pairs`] are the one form/query encoder
 //! the CLI's calls and the server's routes share.
 

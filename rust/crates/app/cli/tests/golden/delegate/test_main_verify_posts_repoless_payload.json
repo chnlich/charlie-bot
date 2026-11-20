@@ -13,7 +13,8 @@
   "cwd": "{root}",
   "files": {
     "home/config.yaml": "server:\n  port: {port}\n",
-    "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n"
+    "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- {root}/plan_v1.html\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n",
+    "plan_v1.html": "<html></html>"
   },
   "responses": [
     {
@@ -40,7 +41,7 @@
         },
         "body": {
           "session_id": "s1",
-          "description": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n",
+          "description": "## Goal\nDo work.\n\n## Source Files\n- {root}/plan_v1.html\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n",
           "keep_worktree": false,
           "task_type": "verify",
           "delegate_invocation": {

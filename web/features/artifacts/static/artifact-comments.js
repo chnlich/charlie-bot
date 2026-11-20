@@ -1190,6 +1190,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     function trayStatusOf() {
       if (!resolveTargetSessionId()) return {text: NO_SESSION_MESSAGE, error: true};
       if (trayStage === 'countdown') {
+        if (trayNotice) return trayNotice;
         return {
           text: 'Sends to ' + sessionLabelOf(sendTarget) + ' in ' + COMMENT_UNDO_MS / 1000 +
             ' seconds unless you press Undo.',
@@ -1468,6 +1469,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       });
     }
 
+    // A failed send's reason may already end in its period (the 64 KiB notice and a page-leave failure both do), so the
+    // status line adds one only when the reason lacks it.
+    function endWithPeriod(text) {
+      return text.endsWith('.') ? text : text + '.';
+    }
+
     // The one send of the tray: every pending entry, picks and comments, goes as one message to the comment target
     // after the undo window. The target is the one the click names. Entries that land leave the list; entries added
     // during the window stay pending. Every outcome sets the tray's status line.
@@ -1479,7 +1486,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       var count = batch.length;
       var label = sessionLabelOf(target);
       sendTarget = target;
-      trayNotice = null;
+      var keepaliveLimitMessage = commentKeepaliveLimitMessage(message);
+      trayNotice = keepaliveLimitMessage ? {text: keepaliveLimitMessage, error: false} : null;
       trayStage = 'countdown';
       refreshTray();
       sendHandle = startUndoableSend(function(options) {
@@ -1511,7 +1519,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         trayStage = 'editing';
         console.error('Batch send failed:', err);
         trayNotice = {
-          text: 'Not sent: ' + err.message + '. The entries are still pending; press Send to try again.',
+          text: 'Not sent: ' + endWithPeriod(err.message) + ' The entries are still pending; press Send to try again.',
           error: true,
         };
         refreshTray();

@@ -135,9 +135,13 @@ An understanding page lists the divergences of a request that admits several rea
   pattern and fold every fix into the same revision.
 - When the user names a text change for review, or a change touches the user's schema, show the original text
   beside its diff. In either case, write every command out in full.
-- Only the user changes the goal. Versions answer feedback within the standing goal; a changed
-  goal is a new plan — `charliebot plan present` opens the new lineage and the old one closes
-  as superseded.
+- Only a user reply changes the goal. Section 1 of each version keeps the words of its lineage's most recent
+  registered version; `plan amend` refuses a candidate whose section 1 differs from those words.
+- A lineage first registered before the `plan amend` section 1 check took effect keeps the section 1 and non-goals
+  paragraph it landed with; verify does not report them against its first version.
+- A user reply that changes section 1 starts a new lineage. The new lineage's source names the replaced lineage's
+  first version; verify checks the new first version against it. A lineage keeps its first version's form: later
+  versions retain `p.non-goals` when it exists in the first version, and add none when it does not.
 - When the user asks to control an Other Details entry, promote it; it joins the
   approval object. At approval, each unmentioned Trade-off that the approval covers takes its
   recommendation. Each decision that only the user makes then stays with the user.
@@ -170,11 +174,14 @@ An understanding page lists the divergences of a request that admits several rea
 - Draft and assert the plan, register it with `charliebot plan present`, complete one Improve round, then verify and
   cold-read it in the same turn. Finish the revision under the rules below, then approve it with
   `charliebot plan approve` and send the user its link.
-- Verify is a read-only repo-less delegation on a registered plan. It checks fidelity — claims against evidence —
-  and adequacy: whether the design, assumed accurate and implemented, entails what section 1 claims. Adequacy reads
-  section 1 as the goal statement only; scope boundaries, thresholds, and exemptions stated in Context, section 3,
-  4.1, or Trade-offs bind adequacy equally. Quote the understanding page's path in the spec as the adequacy
-  reference when one exists, and otherwise the originating request.
+- Verify is a read-only repo-less delegation on a registered plan. It checks fidelity, scope (the ruler in
+  prompts/verify.md), and adequacy (whether an accurate, implemented design entails the outcome section 1 claims).
+- A verify task's Source Files section names the lineage's first version and, when a new lineage replaces an old
+  one, the replaced lineage's first version. The delegate rejects a missing or empty Source Files section; verify
+  checks whether the listed file is the right source.
+- Requester Words names the originating request and each session whose user replies extend the ruler, by session id
+  and user-event kind. The manager chooses these sessions; the worker reads all user replies only from those named
+  sessions. Neither the rule nor the code proves that the manager's list is complete.
 - Verify also checks each wait, test and user question against the requirement it protects
   (prompts/manager_workflows.md, Design section), and checks each rule change against the three prompt-admission
   checks in `prompts/master.md` ("Text a model reads"). A step that names no requirement, or a rule change that
@@ -190,12 +197,13 @@ An understanding page lists the divergences of a request that admits several rea
   the specific items that round 1 verify and the cold read named, keeps the plan's structure, and adds no causal
   claim and no derived number, finalize after that revision and run no round 2. Otherwise run round 2, fold its
   findings, and finalize, with no third round.
-- Every round measures with the same ruler: the spec's Goal quotes the registered version's section 1 by path, and
-  cites fidelity and adequacy as defined here. A round that wants a wider question puts that question to the user.
-- Adequacy findings are advisory. `gap-design:` says the mechanism looks short of the goal — weigh it and revise the
-  design if it holds. `gap-goal:` says the goal itself may be misread — put that question to the user.
-- A revision answers findings by correcting the plan against the goal it was registered with; section 1 keeps saying
-  what the first version said. Report the adequacy findings when you send the user the plan link.
+- Every round measures with the same yardstick: the spec's Goal quotes the registered version's section 1 by path,
+  and the spec's Requester Words names the sessions whose later replies extend the yardstick.
+- Adequacy and scope findings are advisory. gap-design: says the mechanism looks short of the goal; weigh it and
+  revise the design if it holds. gap-goal: says the goal itself may be misread; put that question to the user.
+- A revision answers findings by correcting the plan against the goal it was registered with. Section 1 keeps the
+  words of its lineage's most recent registered version; `plan amend` refuses a change to them. The non-goals
+  paragraph changes only with a user reply. Report the adequacy findings when you send the user the plan link.
 
 ## Runtime delegation authorization
 

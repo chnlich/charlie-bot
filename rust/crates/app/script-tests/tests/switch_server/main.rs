@@ -7,6 +7,7 @@
 mod cleanup;
 mod delegation;
 mod disk;
+mod live;
 mod probe;
 #[path = "../common/release_lock.rs"]
 mod release_lock;
@@ -503,6 +504,51 @@ fn test_prior_switch_refuses_a_run_refused_or_errored_after_its_resume() {
 
   assert_eq!(run.code, 1, "{}", world.report(&run));
   assert!(run.stdout.contains("unaccounted: run-refused run-errored;"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_accepts_a_quota_end_that_failed_over_after_its_resume() {
+  // The server writes a task_run_quota_exhausted record and then a task_run_error record for one quota end; the
+  // failover retries the work in a run with its own id. The run that resumed and ended that way is reattached.
+  let world = World::new();
+  world.seed_prior_switch(&[], &["run-quota"]);
+  world.seed_new_server_log(&[
+    ("task_recovery_resume", "run-quota"),
+    ("task_run_quota_exhausted", "run-quota"),
+    ("task_run_error", "run-quota"),
+    ("worker_quota_failover", "run-quota"),
+  ]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(run.stdout.contains("every run of the prior switch"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_prior_switch_refuses_an_error_that_no_quota_end_of_its_own_directly_precedes() {
+  // A second error after a quota end's error has no quota record directly before it. A quota end for another run does
+  // not account for the error of a run that resumed with no quota record of its own.
+  let world = World::new();
+  world.seed_prior_switch(&[], &["run-double-error", "run-neighbour-error"]);
+  world.seed_new_server_log(&[
+    ("task_recovery_resume", "run-double-error"),
+    ("task_run_quota_exhausted", "run-double-error"),
+    ("task_run_error", "run-double-error"),
+    ("task_run_error", "run-double-error"),
+    ("task_recovery_resume", "run-neighbour-error"),
+    ("task_run_quota_exhausted", "run-neighbour"),
+    ("task_run_error", "run-neighbour-error"),
+  ]);
+  let running = format!("rust {}", world.old_sha);
+
+  let run = world.stubbed_preflight(&running, "rust", &world.rust_sha);
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains("unaccounted: run-double-error run-neighbour-error;"), "{}", world.report(&run));
 }
 
 #[test]

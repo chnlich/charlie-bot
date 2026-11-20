@@ -6,8 +6,10 @@
 //! the repository's default branch and that branch declares a workflow with a `pull_request`
 //! trigger; every other landing pushes as today and records `landed-no-ci`.
 //!
-//! Before any push, a diff that changes a CharlieBot web page refuses the call unless its PR body names a
-//! screenshot at each width (`web_screenshots`).
+//! Before any push, a diff that changes a CharlieBot web page refuses the call unless its PR body names the
+//! approved demo, the changed view's URL path and a screenshot at each window size (`web_screenshots`). The
+//! view paths are written into the head commit's trailer block before the push, so the commit that reaches the
+//! base branch carries them for the release switch's live capture.
 //!
 //! Under the gate the call rebases onto `origin/<base>`, pushes the task branch with
 //! `--force-with-lease`, keeps one draft PR for the branch, and pushes `<sha>:<base>` only when
@@ -277,9 +279,10 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
   let base_ref = format!("origin/{published}");
   fetch_base(&ctx.worktree, published).await?;
   let changed = changed_paths(&ctx.worktree, &base_ref).await?;
+  let mut views: Vec<String> = Vec::new();
   if web_screenshots::changes_web_page(&changed) {
     let body = report_body(&ctx.worktree, published, options).await?;
-    web_screenshots::check_screenshots(body.as_deref())?;
+    views = web_screenshots::check_pr_body(body.as_deref())?.views;
   }
 
   let gated = matches!(gate_applicability(&ctx.repo_path, published).await?, GateApplicability::Applies);
@@ -320,6 +323,7 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
     }
     first_round = false;
 
+    carry_view_trailers(&ctx.worktree, &views).await?;
     let sha = head_sha(&ctx.worktree).await?;
     let push_base_sha = git::git_rev_parse(&ctx.worktree, &base_ref)
       .await
@@ -481,6 +485,35 @@ async fn report_body(worktree: &Path, published_base: &str, options: &LandOption
     [single] => Some(single.body.clone()),
     _ => None,
   })
+}
+
+/// Appends each View line to the head commit's trailer block. A landing pushes the task branch's commits rather
+/// than squashing them, so the trailer must be in the commit before the push, and a later release switch reads the
+/// `View:` trailers back from the commits it moved across.
+async fn carry_view_trailers(worktree: &Path, views: &[String]) -> anyhow::Result<()> {
+  if views.is_empty() {
+    return Ok(());
+  }
+  let (ok, message, err) = git::git_stdout(worktree, &["log", "-1", "--format=%B"], GIT_READ_TIMEOUT, "git log").await;
+  if !ok {
+    anyhow::bail!("reading the head commit message failed in {}: {err}", worktree.display());
+  }
+  let missing: Vec<&String> =
+    views.iter().filter(|view| !message.lines().any(|line| line.trim() == format!("View: {view}"))).collect();
+  if missing.is_empty() {
+    return Ok(());
+  }
+  let mut amended = message.trim_end().to_string();
+  amended.push_str("\n\n");
+  for view in missing {
+    amended.push_str(&format!("View: {view}\n"));
+  }
+  let args = ["commit", "--amend", "-q", "-m", amended.as_str()];
+  let (ok, _, err) = git::git_stdout(worktree, &args, GIT_WRITE_TIMEOUT, "git commit --amend").await;
+  if !ok {
+    anyhow::bail!("writing the View trailers into the head commit failed in {}: {err}", worktree.display());
+  }
+  Ok(())
 }
 
 async fn fetch_base(worktree: &Path, published: &str) -> anyhow::Result<()> {

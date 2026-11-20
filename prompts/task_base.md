@@ -67,7 +67,8 @@ For any change that alters what a CharlieBot web page shows, use the reviewed `i
 would alter a page, report that it needs rerouting before editing.
 - Capture screenshots of the changed state before you commit.
 - Cover each state the change adds or alters, including open trays, menus and dialogs.
-- Take each screenshot at 1280 px and at 390 px width.
+- Capture each window size that `charliebot land --help` lists at device pixel ratio 1, filling each view with the
+  longest real content that the page shows in use and capturing the whole screen with every related change applied.
 - Keep the screenshot files out of the commits.
 - For a landing through `charliebot land`, name each screenshot file by its absolute path on this host in the commit
   or PR body.
@@ -78,9 +79,11 @@ When you review such a change, check each screenshot it names before you land it
 - Look for overlap with page content, clipping and missing controls in every state the screenshots show.
 - Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.
 
-`charliebot land` refuses a landing whose diff changes `web/` or a page template under `prompts/` unless its PR body
-names a screenshot at 1280 px and a screenshot at 390 px by absolute path. An improve round does not pass through
-`charliebot land`, so this refusal does not reach its pull request.
+`charliebot land` refuses a landing whose diff changes a file that a CharlieBot page serves, or a page template under
+`prompts/`, unless its PR body names the approved demo on a `Demo:` line, the changed view's URL path on a `View:` line,
+and a screenshot at each window size `charliebot land --help` lists by absolute path. An improve round merges through
+`dev/improve/github-post.sh pr-merge`, which refuses a web page change whose evidence directory lacks a screenshot at
+each window size or whose PR body lacks its `View:` line.
 
 <!-- section: skills_discovery -->
 ## Skills Discovery

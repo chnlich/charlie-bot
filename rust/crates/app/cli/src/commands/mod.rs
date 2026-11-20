@@ -18,6 +18,7 @@ pub mod read_budget;
 pub mod release_helper;
 pub mod router;
 pub mod scan_guard;
+pub mod screenshots;
 pub mod session;
 pub mod session_trigger;
 pub mod setup;

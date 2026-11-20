@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use charliebot_core::backend_types;
 use charliebot_core::config::CharlieBotConfig;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
@@ -153,7 +154,7 @@ pub fn check_claude_pools(cfg: &CharlieBotConfig) -> Result<(), String> {
     }
   }
   for option in &cfg.backends.options {
-    if option.backend_type != "cc-claude" {
+    if option.backend_type != backend_types::CC_CLAUDE {
       continue;
     }
     let pool = option.type_fields.get(Value::String("account_pool".to_string())).and_then(Value::as_str);

@@ -74,7 +74,7 @@ pub enum Message {
 
 /// A WebSocket connection failure. The display text follows the module table.
 ///
-/// Close-frame text includes its code and reason; normal and error closes share one base format. TLS, socket and
+/// Close-frame text includes its code and reason. Normal and error closes share one base format. TLS, socket and
 /// other transport errors keep their Rust text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -217,7 +217,7 @@ enum Scheme {
 }
 
 impl Scheme {
-  /// The scheme `url` names; any other scheme is an error, reported against `original`.
+  /// The scheme `url` names. Any other scheme is an error, reported against `original`.
   fn from_url(url: &reqwest::Url, original: &str) -> Result<Self, Error> {
     match url.scheme() {
       "ws" => Ok(Scheme::Ws),
@@ -1092,7 +1092,7 @@ mod tests {
       let (stream, _) = listener.accept().await.expect("accept the client");
       let mut reader = raw_websocket(stream).await;
       let close = read_raw_frame(&mut reader).await;
-      // The peer never answers the close frame; the client's own close deadline drops the socket.
+      // The peer never answers the close frame. The client's own close deadline drops the socket.
       let mut byte = [0_u8; 1];
       while reader.read(&mut byte).await.unwrap_or(0) != 0 {}
       close_code(&close)
@@ -1113,7 +1113,7 @@ mod tests {
     let address = listener.local_addr().expect("read peer address");
     let server = tokio::spawn(async move {
       let (mut stream, _) = listener.accept().await.expect("accept the client");
-      // The stalled peer reads the opening request but never answers; the open timeout drops the socket.
+      // The stalled peer reads the opening request but never answers. The open timeout drops the socket.
       let mut buffer = [0_u8; 256];
       while stream.read(&mut buffer).await.unwrap_or(0) != 0 {}
     });

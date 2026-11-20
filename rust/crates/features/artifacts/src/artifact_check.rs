@@ -22,6 +22,7 @@ const STYLE_VERBATIM: &str = "style-verbatim";
 const HEAD_TEXT: &str = "head-text";
 const SECTIONS_NUMBERED: &str = "sections-numbered";
 const SCHEMA_DROPPED: &str = "schema-dropped";
+pub(crate) const NON_GOALS_LINE: &str = "non-goals-line";
 const FOOT_PRESENT: &str = "foot-present";
 const EXPLAIN_TRIAD: &str = "explain-triad";
 const EXPLAIN_FIGURES: &str = "explain-figures";
@@ -151,6 +152,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       HEAD_TEXT,
       SECTIONS_NUMBERED,
       SCHEMA_DROPPED,
+      NON_GOALS_LINE,
       FOOT_PRESENT,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
@@ -338,7 +340,7 @@ pub async fn run_assertions(
   artifact: PathBuf,
   config: &CharlieBotConfig,
   repo_root: PathBuf,
-  only: Option<&[&str]>,
+  only: Option<Vec<String>>,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
   run_assertions_with_chrome(
     genre,
@@ -360,10 +362,9 @@ pub async fn run_assertions_with_chrome(
   repo_root: PathBuf,
   checks_config: UserTextChecksConfig,
   home: PathBuf,
-  only: Option<&[&str]>,
+  only: Option<Vec<String>>,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
   let genre = genre.to_owned();
-  let only = only.map(|names| names.iter().map(|name| (*name).to_owned()).collect::<Vec<String>>());
   tokio::task::spawn_blocking(move || {
     run_assertions_sync_with_user_text(&genre, &artifact, &chrome_bin, &repo_root, &checks_config, &home, only)
   })
@@ -423,6 +424,7 @@ fn run_assertions_sync_with_user_text(
       HEAD_TEXT => check_head_text,
       SECTIONS_NUMBERED => check_sections_numbered,
       SCHEMA_DROPPED => check_schema_dropped,
+      NON_GOALS_LINE => check_non_goals_line,
       FOOT_PRESENT => check_foot_present,
       EXPLAIN_TRIAD => check_explain_triad,
       EXPLAIN_FIGURES => check_explain_figures,
@@ -557,6 +559,12 @@ fn named_section(nodes: &[Element], section: usize) -> String {
     .first()
     .map(|&heading| str_methods::collapse_whitespace(&element_text(nodes, heading)))
     .unwrap_or_else(|| "<unnamed section>".to_owned())
+}
+
+/// The section whose first h2's collapsed text ends with `title`, or `None` when no section carries one. The heading
+/// text leads with its span.n number, so the match runs on the title's tail.
+fn numbered_section(nodes: &[Element], title: &str) -> Option<usize> {
+  find(nodes, 0, "section", &[]).into_iter().find(|&section| named_section(nodes, section).ends_with(title))
 }
 
 fn outcome(name: &str, passed: bool, detail: impl Into<String>) -> AssertionOutcome {
@@ -771,6 +779,135 @@ fn check_schema_dropped(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
       format!("more than one p.dropped in 4.1 Schema (found {})", dropped.len()),
     )]),
   }
+}
+
+/// The known prefixes of an exclusion paragraph: a paragraph outside `p.non-goals` that starts with one states a
+/// non-goal where the one list does not live.
+const NON_GOALS_PREFIXES: [&str; 5] = ["不做", "非目标", "范围外", "Non-goals", "Out of scope"];
+
+/// `non-goals-line`: the plan's non-goals live on one closing `p.non-goals` paragraph of section 3, outside every
+/// fold, non-empty, linking the understanding page the header's meta chips name when there is one, and no paragraph
+/// outside it starts with a known exclusion prefix.
+fn check_non_goals_line(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let Some(solution) = numbered_section(&context.nodes, "High Level Solution") else {
+    return Ok(vec![outcome(NON_GOALS_LINE, false, "missing High Level Solution section")]);
+  };
+  let non_goals = find(&context.nodes, solution, "p", &["non-goals"]);
+  let paragraph = match non_goals.as_slice() {
+    [] => {
+      return Ok(vec![outcome(NON_GOALS_LINE, false, "missing p.non-goals in High Level Solution")]);
+    }
+    [paragraph] => *paragraph,
+    _ => {
+      return Ok(vec![outcome(
+        NON_GOALS_LINE,
+        false,
+        format!("more than one p.non-goals in High Level Solution (found {})", non_goals.len()),
+      )]);
+    }
+  };
+  let mut failures = Vec::new();
+  let mut ancestor = context.nodes[paragraph].parent;
+  while let Some(index) = ancestor {
+    if context.nodes[index].tag == "details" {
+      failures.push(outcome(NON_GOALS_LINE, false, "p.non-goals is inside a fold"));
+      break;
+    }
+    ancestor = context.nodes[index].parent;
+  }
+  let last_element = context.nodes[solution]
+    .children
+    .iter()
+    .filter_map(|child| match child {
+      Child::Element(index) => Some(*index),
+      Child::Text(_) => None,
+    })
+    .next_back();
+  if last_element != Some(paragraph) {
+    failures.push(outcome(NON_GOALS_LINE, false, "elements follow p.non-goals in High Level Solution"));
+  }
+  if element_text(&context.nodes, paragraph).trim().is_empty() {
+    failures.push(outcome(NON_GOALS_LINE, false, "p.non-goals is empty"));
+  }
+  if header_names_understanding(context) && !paragraph_links_understanding(context, paragraph) {
+    failures.push(outcome(
+      NON_GOALS_LINE,
+      false,
+      "p.non-goals does not link the understanding page the header's meta chips name",
+    ));
+  }
+  for element in descendants(&context.nodes, 0) {
+    if context.nodes[element].tag != "p" || context.nodes[element].classes.contains("non-goals") {
+      continue;
+    }
+    let text = str_methods::collapse_whitespace(&element_text(&context.nodes, element));
+    let Some(prefix) = NON_GOALS_PREFIXES.iter().find(|prefix| text.starts_with(**prefix)) else {
+      continue;
+    };
+    failures.push(outcome(
+      NON_GOALS_LINE,
+      false,
+      format!(
+        "paragraph in section {} starts with the exclusion prefix {} outside p.non-goals",
+        text_repr::str_repr(&section_heading(&context.nodes, element)),
+        text_repr::str_repr(prefix)
+      ),
+    ));
+  }
+  if failures.is_empty() {
+    failures.push(outcome(NON_GOALS_LINE, true, ""));
+  }
+  Ok(failures)
+}
+
+/// Whether the page's header meta chips reference an `understanding_*.html` page: a chip's text or attribute names it.
+fn header_names_understanding(context: &Context<'_>) -> bool {
+  find(&context.nodes, 0, "span", &["mtag"]).iter().any(|&chip| {
+    let text = element_text(&context.nodes, chip);
+    let attributes = context.nodes[chip]
+      .attrs
+      .values()
+      .flatten()
+      .any(|value| value.contains("understanding_") && value.contains(".html"));
+    (text.contains("understanding_") && text.contains(".html")) || attributes
+  })
+}
+
+/// Whether the paragraph carries a link to an `understanding_*.html` page.
+fn paragraph_links_understanding(context: &Context<'_>, paragraph: usize) -> bool {
+  find(&context.nodes, paragraph, "a", &[]).iter().any(|&link| {
+    context.nodes[link]
+      .attrs
+      .get("href")
+      .and_then(Option::as_deref)
+      .is_some_and(|href| href.contains("understanding_") && href.contains(".html"))
+  })
+}
+
+/// Whether the page carries exactly one `p.non-goals` paragraph. An amend runs `non-goals-line` only when the
+/// lineage's first version carries one.
+pub(crate) fn page_has_non_goals(source: &str) -> anyhow::Result<bool> {
+  Ok(find(&parse_dom(source)?, 0, "p", &["non-goals"]).len() == 1)
+}
+
+/// The collapsed text of the section whose first h2 ends with `title`, or `None` when no section carries one. The
+/// text is HTML-escaped, so a diff of two sections compares their words and never parses them as markup.
+pub(crate) fn section_text(source: &str, title: &str) -> anyhow::Result<Option<String>> {
+  let nodes = parse_dom(source)?;
+  let Some(section) = numbered_section(&nodes, title) else {
+    return Ok(None);
+  };
+  Ok(Some(charliebot_html::escape(
+    &str_methods::collapse_whitespace(&element_text(&nodes, section)),
+    charliebot_html::EscapeContext::Text,
+  )))
+}
+
+/// The named genre's assertion set without the named assertions, as the `only` list of `run_assertions`. `None` means
+/// the genre has no set.
+pub(crate) fn assertion_names_excluding(genre: &str, excluded: &[&str]) -> Option<Vec<String>> {
+  assertion_set(genre)
+    .map(|names| names.iter().copied().filter(|name| !excluded.contains(name)).map(String::from).collect())
 }
 
 fn check_foot_present(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
@@ -1837,6 +1974,115 @@ mod tests {
     assert!(result.passed, "{result:#?}");
   }
 
+  /// A minimal plan body whose section 3 holds `solution` and whose other sections hold `elsewhere`. The style block
+  /// is empty: `non-goals-line` reads the DOM alone.
+  fn non_goals_page(solution: &str, elsewhere: &str) -> String {
+    format!(
+      "<html><head><style></style></head><body>\
+       <section><h2><span class=\"n\">1</span> Problem / Goal</h2><p>The goal.</p></section>\
+       <section><h2><span class=\"n\">2</span> Context</h2>{elsewhere}</section>\
+       <section><h2><span class=\"n nb\">3</span> High Level Solution</h2><p>The mechanism.</p>{solution}</section>\
+       <section><h2><span class=\"n\">4</span> Detailed Design</h2><p>The design.</p></section>\
+       <section><h2><span class=\"n\">5</span> Trade-offs</h2><p>The trade-offs.</p></section>\
+       <section><h2><span class=\"n\">6</span> Other Details</h2><p>The details.</p></section>\
+       </body></html>"
+    )
+  }
+
+  fn non_goals_line(source: &str) -> AssertionOutcome {
+    let nodes = parse_dom(source).unwrap();
+    let context = Context { genre: "plan", artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
+    check_non_goals_line(&context).unwrap().into_iter().next().unwrap()
+  }
+
+  #[test]
+  fn non_goals_line_fails_when_section_3_has_no_non_goals_paragraph() {
+    let result = non_goals_line(&non_goals_page("<p>The mechanism.</p>", "<p>Context.</p>"));
+    assert_eq!(result.name, NON_GOALS_LINE);
+    assert!(!result.passed);
+    assert_eq!(result.detail, "missing p.non-goals in High Level Solution");
+  }
+
+  #[test]
+  fn non_goals_line_fails_when_the_paragraph_sits_in_a_fold() {
+    let solution =
+      "<details class=\"details-layer\"><summary>Fold</summary><p class=\"non-goals\">Non-goals: none.</p></details>";
+    let result = non_goals_line(&non_goals_page(solution, ""));
+    assert!(!result.passed);
+    assert_eq!(result.detail, "p.non-goals is inside a fold");
+  }
+
+  #[test]
+  fn non_goals_line_fails_on_a_second_non_goals_paragraph() {
+    let solution = "<p class=\"non-goals\">Non-goals: none.</p><p class=\"non-goals\">Non-goals: more.</p>";
+    let result = non_goals_line(&non_goals_page(solution, ""));
+    assert!(!result.passed);
+    assert_eq!(result.detail, "more than one p.non-goals in High Level Solution (found 2)");
+  }
+
+  #[test]
+  fn non_goals_line_fails_when_elements_follow_the_paragraph() {
+    let solution = "<p class=\"non-goals\">Non-goals: none.</p><p>After the list.</p>";
+    let result = non_goals_line(&non_goals_page(solution, ""));
+    assert!(!result.passed);
+    assert_eq!(result.detail, "elements follow p.non-goals in High Level Solution");
+  }
+
+  #[test]
+  fn non_goals_line_fails_when_the_paragraph_is_empty() {
+    let result = non_goals_line(&non_goals_page("<p class=\"non-goals\">  </p>", ""));
+    assert!(!result.passed);
+    assert_eq!(result.detail, "p.non-goals is empty");
+  }
+
+  #[test]
+  fn non_goals_line_fails_when_a_header_chip_names_an_understanding_page_the_paragraph_does_not_link() {
+    let page = format!(
+      "<html><head><style></style></head><body><header><div class=\"meta\">\
+       <span class=\"mtag\">understanding · <a href=\"https://host/understanding_home_v2.html\">understanding_home_v2.html</a></span>\
+       </div></header>{}</body></html>",
+      non_goals_page("<p class=\"non-goals\">Non-goals: none.</p>", "")
+    );
+    let result = non_goals_line(&page);
+    assert!(!result.passed);
+    assert_eq!(result.detail, "p.non-goals does not link the understanding page the header's meta chips name");
+  }
+
+  #[test]
+  fn non_goals_line_passes_when_the_paragraph_links_the_understanding_page_the_chips_name() {
+    let page = format!(
+      "<html><head><style></style></head><body><header><div class=\"meta\">\
+       <span class=\"mtag\">understanding · understanding_home_v2.html</span>\
+       </div></header>{}</body></html>",
+      non_goals_page(
+        "<p class=\"non-goals\">Non-goals: see <a href=\"understanding_home_v2.html\">the understanding page</a>.</p>",
+        ""
+      )
+    );
+    assert!(non_goals_line(&page).passed);
+  }
+
+  #[test]
+  fn non_goals_line_fails_on_an_exclusion_paragraph_outside_the_one_list() {
+    for prefix in ["不做", "非目标", "范围外", "Non-goals", "Out of scope"] {
+      let page = non_goals_page("<p class=\"non-goals\">Non-goals: none.</p>", &format!("<p>{prefix}：x</p>"));
+      let result = non_goals_line(&page);
+      assert!(!result.passed, "{prefix}");
+      assert_eq!(
+        result.detail,
+        format!("paragraph in section '2 Context' starts with the exclusion prefix '{prefix}' outside p.non-goals")
+      );
+    }
+  }
+
+  #[test]
+  fn non_goals_line_passes_on_one_closing_paragraph() {
+    let page = non_goals_page("<p class=\"non-goals\">Non-goals: none.</p>", "<p>Context.</p>");
+    let result = non_goals_line(&page);
+    assert_eq!(result.name, NON_GOALS_LINE);
+    assert!(result.passed, "{result:#?}");
+  }
+
   fn stub_chrome(directory: &Path, height: i32) -> PathBuf {
     chrome_program(
       directory,
@@ -1897,11 +2143,13 @@ mod tests {
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
       let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
-      // The fixture predates the fork, schema-dropped and head-text assertions, so those outcomes have no recorded
-      // counterpart.
+      // The fixture predates the fork, schema-dropped, non-goals-line and head-text assertions, so those outcomes
+      // have no recorded counterpart.
       let actual = outcomes
         .iter()
-        .filter(|outcome| ![FORK_OPTIONS, FORK_DEMOS, SCHEMA_DROPPED, HEAD_TEXT].contains(&outcome.name.as_str()))
+        .filter(|outcome| {
+          ![FORK_OPTIONS, FORK_DEMOS, SCHEMA_DROPPED, NON_GOALS_LINE, HEAD_TEXT].contains(&outcome.name.as_str())
+        })
         .map(outcome_value)
         .collect::<Vec<_>>();
       let mut expected: Vec<Value> = serde_json::from_value(case["outcomes"].clone()).unwrap();
@@ -1954,7 +2202,7 @@ mod tests {
     let chrome = stub_chrome(directory.path(), 800);
     let page = repo_root().join(PLAN_TEMPLATE_PATH);
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
-    assert_eq!(outcomes.len(), 16);
+    assert_eq!(outcomes.len(), 17);
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 

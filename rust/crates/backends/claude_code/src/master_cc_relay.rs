@@ -47,6 +47,13 @@ async fn compact_session_transcript(
   .await
 }
 
+/// The login a placement put a run on and the reservation handle that holds the placement.
+#[derive(Debug)]
+pub struct AccountPlacement {
+  pub account: claude_config::ClaudeAccount,
+  pub handle: Option<Arc<claude_accounts::ReservationHandle>>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn choose_turn_account(
   state: &claude_accounts::ClaudeAccountState,
@@ -57,7 +64,9 @@ pub fn choose_turn_account(
   now: Option<UtcDateTime>,
   account_pool: Option<&str>,
   running_turns: &[SessionMetadata],
-) -> anyhow::Result<(Option<claude_config::ClaudeAccount>, bool)> {
+  is_resuming: bool,
+  run_id: &str,
+) -> anyhow::Result<(Option<claude_config::ClaudeAccount>, bool, Option<Arc<claude_accounts::ReservationHandle>>)> {
   let moment = claude_accounts::now_or(now);
   let current_label = claude_metadata::account_of(session_meta);
   let current = claude_accounts::account_by_label(cfg, current_label.as_deref())?;
@@ -68,6 +77,7 @@ pub fn choose_turn_account(
     .filter_map(claude_metadata::account_of)
     .collect::<BTreeSet<_>>();
   if let Some(current) = current.as_ref()
+    && is_resuming
     && claude_accounts::in_pool(cfg, &current.label, account_pool)?
     && !busy.contains(&current.label)
     && !cold
@@ -76,14 +86,22 @@ pub fn choose_turn_account(
     let reading = claude_accounts::latest_reading(state, &current.label, model, Some(moment));
     let rejected = claude_accounts::rejected_until(state, &current.label, model, Some(moment)).is_some();
     if reading.as_ref().is_none_or(|reading| reading.utilization < claude_accounts::WARNING_UTILIZATION && !rejected) {
-      return Ok((Some(current.clone()), cold));
+      let handle = claude_accounts::reserve_on(state, run_id, &current.label, "redirect", Some(moment));
+      return Ok((Some(current.clone()), cold, Some(handle)));
     }
   }
   let busy = busy.into_iter().collect::<BTreeSet<_>>();
-  Ok((
-    claude_accounts::select(state, cfg, model, &Default::default(), Some(&busy), Some(moment), account_pool, 0.0)?,
-    cold,
-  ))
+  let reservation = claude_accounts::reserve_pick(
+    state,
+    cfg,
+    model,
+    &Default::default(),
+    Some(&busy),
+    Some(moment),
+    account_pool,
+    run_id,
+  )?;
+  Ok((reservation.as_ref().map(|pick| pick.account.clone()), cold, reservation.map(|pick| pick.handle)))
 }
 
 pub async fn adopt_transcript_holder(
@@ -137,7 +155,7 @@ pub async fn place_turn(
   context_tokens: Option<i64>,
   last_request_at: Option<UtcDateTime>,
   now: Option<UtcDateTime>,
-) -> Result<claude_config::ClaudeAccount, LaunchRefused> {
+) -> Result<AccountPlacement, LaunchRefused> {
   place_turn_with_hook(state, ctx, resume_id, context_tokens, last_request_at, now, std::future::ready(())).await
 }
 
@@ -149,7 +167,7 @@ async fn place_turn_with_hook<F>(
   last_request_at: Option<UtcDateTime>,
   now: Option<UtcDateTime>,
   after_running_turns: F,
-) -> Result<claude_config::ClaudeAccount, LaunchRefused>
+) -> Result<AccountPlacement, LaunchRefused>
 where
   F: Future<Output = ()> + Send,
 {
@@ -160,7 +178,7 @@ where
   after_running_turns.await;
   let meta = session_metadata(ctx);
   let account_pool = claude_accounts::option_pool(&ctx.option);
-  let (chosen, cold) = choose_turn_account(
+  let (chosen, cold, handle) = choose_turn_account(
     state,
     &ctx.cfg,
     &meta,
@@ -169,6 +187,8 @@ where
     now,
     account_pool.as_deref(),
     &running_turns,
+    resume_id.is_some_and(|id| !id.is_empty()),
+    &claude_accounts::run_key(ctx),
   )
   .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   let Some(chosen) = chosen else {
@@ -237,7 +257,7 @@ where
     .await
     .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   }
-  Ok(chosen)
+  Ok(AccountPlacement { account: chosen, handle })
 }
 
 async fn report_login_required(
@@ -282,7 +302,7 @@ pub async fn prepare_relay(
   session_id: Option<&str>,
   reason: Option<&str>,
   relays: usize,
-) -> Result<claude_config::ClaudeAccount, LaunchRefused> {
+) -> Result<AccountPlacement, LaunchRefused> {
   let account_pool = claude_accounts::option_pool(&ctx.option);
   let pool_choice = if ctx.kind == LaunchKind::Turn { Some(state.pool_choice.lock().await) } else { None };
   let movement = claude_relay::relay_move(
@@ -293,6 +313,7 @@ pub async fn prepare_relay(
     session_id,
     None,
     account_pool.as_deref(),
+    &claude_accounts::run_key(ctx),
   )
   .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   let Some(next) = movement.account else {
@@ -301,7 +322,7 @@ pub async fn prepare_relay(
       adopt_transcript_holder(ctx, session_id, &holder, Some(&current.label), GUARD_REFUSED_NEWER_TRANSCRIPT)
         .await
         .map_err(|error| refusal(error, MemberFailure::Other, None))?;
-      return Ok(holder);
+      return Ok(AccountPlacement { account: holder, handle: movement.handle });
     }
     let (failure, resets_at) = if movement.pool_exhausted {
       let no_login =
@@ -350,7 +371,7 @@ pub async fn prepare_relay(
       .await
       .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   }
-  Ok(next)
+  Ok(AccountPlacement { account: next, handle: movement.handle })
 }
 
 fn refusal(error: anyhow::Error, failure: MemberFailure, resets_at: Option<UtcDateTime>) -> LaunchRefused {
@@ -479,7 +500,7 @@ mod tests {
     };
     let current = SessionMetadata::new("current", "Current", TaskProfile::Manager);
 
-    let (chosen, _) = choose_turn_account(
+    let (chosen, _, _) = choose_turn_account(
       &state,
       &cfg,
       &current,
@@ -488,6 +509,8 @@ mod tests {
       None,
       Some("alpha"),
       &running_turns(),
+      false,
+      "run",
     )
     .unwrap();
 
@@ -527,7 +550,7 @@ mod tests {
     claude_metadata::set_account(&mut current, Some("ext-4"));
     let last_request = UtcDateTime::parse("2026-10-19T23:13:37Z").unwrap();
 
-    let (chosen, cold) = choose_turn_account(
+    let (chosen, cold, _) = choose_turn_account(
       &state,
       &cfg,
       &current,
@@ -536,11 +559,71 @@ mod tests {
       Some(now),
       Some("alpha"),
       &running,
+      true,
+      "run",
     )
     .unwrap();
 
     assert_eq!(chosen.map(|account| account.label), Some("ext-3".to_string()));
     assert!(!cold);
+  }
+
+  /// A turn that opens a fresh conversation picks even though its recorded login is warm and under the line; a turn
+  /// that resumes the conversation keeps the login, and its placement holds a handle.
+  #[test]
+  fn a_fresh_conversation_picks_even_when_the_kept_login_is_warm_and_under_the_line() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    account_credentials(&account_a);
+    account_credentials(&account_b);
+    let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
+    let state = claude_accounts::ClaudeAccountState::new();
+    let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
+    // "a" is warm (a request ten minutes ago) and under the line, but six runs hold all of its five-hour headroom.
+    let info =
+      serde_json::json!({"unifiedWindows":{"five_hour":{"utilization":0.70},"seven_day":{"utilization":0.10}}});
+    claude_accounts::observe_rate_limit(&state, "a", &info, Some(now), None);
+    for index in 0..6 {
+      claude_accounts::reserve_on(&state, &format!("run-{index}"), "a", "redirect", Some(now));
+    }
+    let mut current = SessionMetadata::new("current", "Current", TaskProfile::Manager);
+    claude_metadata::set_account(&mut current, Some("a"));
+    let last_request = UtcDateTime::parse("2025-01-01T11:50:00Z").unwrap();
+
+    let (chosen, cold, _) = choose_turn_account(
+      &state,
+      &cfg,
+      &current,
+      Some("claude-fable-5-1"),
+      Some(last_request),
+      Some(now),
+      Some("alpha"),
+      &[],
+      false,
+      "turn-run",
+    )
+    .unwrap();
+    assert_eq!(chosen.unwrap().label, "b", "a fresh conversation picks even though the kept login qualifies");
+    assert!(!cold);
+
+    let (kept, cold, handle) = choose_turn_account(
+      &state,
+      &cfg,
+      &current,
+      Some("claude-fable-5-1"),
+      Some(last_request),
+      Some(now),
+      Some("alpha"),
+      &[],
+      true,
+      "turn-run",
+    )
+    .unwrap();
+    assert_eq!(kept.unwrap().label, "a", "a resuming turn keeps its login");
+    assert!(!cold);
+    assert!(handle.is_some(), "the kept placement holds a handle");
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -592,7 +675,7 @@ mod tests {
     };
     let account_a = placement_a.await.unwrap();
     let account_b = placement_b.await.unwrap();
-    assert_ne!(account_a.label, account_b.label);
+    assert_ne!(account_a.account.label, account_b.account.label);
     let mut seen = seen.lock().unwrap().clone();
     seen.sort_unstable();
     assert_eq!(seen, [1, 2]);

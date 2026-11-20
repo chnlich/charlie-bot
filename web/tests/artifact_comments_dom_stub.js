@@ -223,7 +223,7 @@ function dockOf(body) {
   return findChildByClass(body, '__cbc-dock');
 }
 
-// The rail's stack: the controls (shortcuts, tray, pick bar, composer, toast) sit here, not in the dock itself.
+// The rail's stack: the controls (shortcuts, tray, composer, toast) sit here, not in the dock itself.
 function stackOf(body) {
   return findChildByClass(dockOf(body), '__cbc-stack');
 }

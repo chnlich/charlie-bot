@@ -344,6 +344,12 @@ impl World {
   /// stubbed out. `delegation` is the shell command that stands in for the delegation check. A switch back touches a
   /// marker file and exits 2, so a test tells a switch back from the switch's own exit.
   pub fn switch_forward(&self, run_pid: u32, launch_output: &str, delegation: &str) -> Run {
+    self.switch_forward_with(run_pid, launch_output, delegation, ":")
+  }
+
+  /// [`World::switch_forward`] with `live` as the shell command standing in for the live capture step, so a test can
+  /// make the capture fail and read the exit.
+  pub fn switch_forward_with(&self, run_pid: u32, launch_output: &str, delegation: &str, live: &str) -> Run {
     let (launch_log, work) = self.launch_files(launch_output);
     let mut env = self.env.clone();
     env.insert("CLONE".to_string(), self.clone.display().to_string());
@@ -356,6 +362,7 @@ impl World {
     env.insert("NEW_OFFSET".to_string(), "0".to_string());
     env.insert("WORK".to_string(), work.display().to_string());
     env.insert("DELEGATION".to_string(), delegation.to_string());
+    env.insert("LIVE_SHOTS".to_string(), live.to_string());
     env.insert("SYSTEMCTL_RECORDS".to_string(), self.sandbox.bin().join("systemctl.records").display().to_string());
     let script = r#"
 source "$1" rust "$2"
@@ -368,6 +375,7 @@ wait_ready() { :; }
 serving() { :; }
 probe_turn() { :; }
 delegation_check() { $DELEGATION; }
+live_screenshots() { $LIVE_SHOTS; }
 switch_back() { log "switch back: $*"; touch "$RESTORED"; exit 2; }
 switch_forward
 "#;
@@ -513,6 +521,15 @@ preflight
       .arg(running_impl)
       .arg(self.root().join("preflight.runs"))
       .args(flags);
+    harness::run(&mut command)
+  }
+
+  /// The run of `body` in a shell that has sourced the switch script, with `REPO_ROOT` at the world's clone: the
+  /// clone-reading functions' unit under test.
+  pub fn clone_command(&self, body: &str) -> Run {
+    let script = format!("source \"$1\" rust {} && REPO_ROOT=\"$2\" && {body}", self.rust_sha);
+    let mut command = harness::command("bash", &self.env);
+    command.args(["-c", script.as_str(), "bash"]).arg(self.switch_script()).arg(&self.clone);
     harness::run(&mut command)
   }
 

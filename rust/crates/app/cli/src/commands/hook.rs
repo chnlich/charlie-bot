@@ -13,14 +13,18 @@ use charliebot_discord::thread_contract::DISCORD;
 use charliebot_feishu::thread_contract::FEISHU;
 use charliebot_slack::thread_contract::SLACK;
 use charliebot_tasks::turn_hooks::{CheckResult, TurnInput};
-use charliebot_web_reply::audit::{WEB_REPLY_ENTRY, WEB_STATUS_ENTRY, check_web_reply, check_web_status};
+use charliebot_web_reply::audit::{
+  STATUS_REREAD_ENTRY, WEB_REPLY_ENTRY, WEB_STATUS_ENTRY, check_status_reread, check_web_reply, check_web_status,
+};
 
 use crate::commands::pending_wake::{self, PENDING_WAKE_ENTRY};
 
 /// Answers the check named by the single argument from the turn input on stdin.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let [name] = args else {
-    return Err(CliExit::error("hook takes one check name: web-reply, web-status, thread-reply or pending-wake"));
+    return Err(CliExit::error(
+      "hook takes one check name: web-reply, web-status, thread-reply, pending-wake or status-reread",
+    ));
   };
   let name = name.to_str().ok_or_else(|| CliExit::error("the hook check name is not UTF-8"))?;
   let mut input_text = String::new();
@@ -32,6 +36,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let answer = match name {
     WEB_REPLY_ENTRY => check_web_reply(&input).map_err(|error| CliExit::error(format!("{error:#}")))?,
     WEB_STATUS_ENTRY => check_web_status(&input),
+    STATUS_REREAD_ENTRY => check_status_reread(&input),
     THREAD_REPLY_ENTRY => match thread_platform(input.kind.as_deref()) {
       Some(platform) => check_thread_reply(&platform, &input).map_err(|error| CliExit::error(format!("{error:#}")))?,
       None => CheckResult::Pass,

@@ -136,7 +136,8 @@ impl CharlieCodeBackend {
       command.extend([flags::RESUME.to_string(), session_id.clone()]);
     }
     if let Some(path) = &self.instructions_file {
-      command.extend([flags::INSTRUCTIONS_FILE.to_string(), path_text(path)?]);
+      let path_text = paths::utf8(path).context(format!("path is not valid Unicode: {}", path.display()))?;
+      command.extend([flags::INSTRUCTIONS_FILE.to_string(), path_text.to_string()]);
     }
     // A manager turn's rebuilt context opens with the session memo sentence, so the agent rereads its memo before it
     // acts in the rebuilt conversation. A worker run carries no memo.
@@ -147,7 +148,9 @@ impl CharlieCodeBackend {
     for image in &self.image_paths {
       command.extend([flags::IMAGE.to_string(), image.clone()]);
     }
-    command.extend([flags::TASK_FILE.to_string(), path_text(&task_path)?]);
+    let task_path_text =
+      paths::utf8(&task_path).context(format!("path is not valid Unicode: {}", task_path.display()))?;
+    command.extend([flags::TASK_FILE.to_string(), task_path_text.to_string()]);
     Ok(command)
   }
 
@@ -226,10 +229,6 @@ fn is_image_ref(reference: &Value) -> anyhow::Result<bool> {
   let filename = ref_text(reference, "filename")?;
   let extension = filename.rsplit_once('.').map_or(filename, |(_, extension)| extension);
   Ok(image_mime(extension).is_some())
-}
-
-fn path_text(path: &Path) -> anyhow::Result<String> {
-  path.to_str().map(str::to_string).with_context(|| format!("path is not valid Unicode: {}", path.display()))
 }
 
 #[cfg(test)]

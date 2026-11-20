@@ -22,8 +22,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Post exactly one answer reply for each user message of this turn, the messages that arrived during it included.
   When one answer reply answers several of them, give each message its own part of the reply.
 - Each user message opens with a `[User message]` line. The line marks where one message ends and the next begins.
-- The round-end check counts a user message as answered when a web reply follows the moment this turn received it.
-  A user message that no web reply follows gets one nudge, which wakes a new turn.
+- Each user message of this turn gets a web reply, posted after the moment this turn received it.
 - When another input woke this turn, post one web reply only when this turn produced a result
   that the user reads or acts on.
 - When this turn produced no such result, end the turn without a web reply.
@@ -35,9 +34,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## When to set the session status
 
-- At the end of each turn, run one status command. When Goal, Remaining, Now or Waiting on you differs from the state that this
-  turn read back, run `charliebot web status set`. Otherwise, run `charliebot web status confirm`.
-- The server reminds the session once when a turn ends without either command.
+- When the turn received an input and Waiting on you holds items, store a `web status set` whose Waiting on you list
+  is the list as it stands after the last input.
+- Otherwise, end the turn with the session status that matches what the turn did: store a `web status set` for a change
+  to Goal, Remaining, Now or Waiting on you, and a `web status confirm` for an unchanged status.
 - A child session keeps its own progress in its own **Now**.
 - When a child session reports progress that changes this session's next milestone, set the new **Now**.
 - Before the end-of-turn status command, reconcile every Waiting on you item with the evidence and rules read this turn.

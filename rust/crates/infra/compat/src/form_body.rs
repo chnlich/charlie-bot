@@ -388,7 +388,7 @@ fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
   let mut params: Vec<(String, String)> = Vec::new();
   for (key, value) in segments {
     let mut value = value;
-    // Browsers may send the full file path as the filename; keep only the last component.
+    // Browsers may send the full file path as the filename. Keep only the last component.
     if key == "filename"
       && (value.chars().nth(1) == Some(':') && value.chars().nth(2) == Some('\\') || value.starts_with("\\\\"))
     {

@@ -10,8 +10,8 @@ pub use crate::registry::{
   CompactionRunFn, ContextLimits, ContextStateFn, EXTRA_FLAGS_BACKEND_KWARG, EmitFn, Env, ExitedProbe,
   FinalStdoutOutcome, IMPROVE_TOKEN_MIN_SECONDS, IMPROVE_TOKEN_SHORT_EXIT, IdleArmContext, IdleStartGate, Launch,
   LaunchArgs, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch, MemberReading, MemberReadingFn, MemberWindow,
-  OptionModel, QuotaOutlook, ReadingLimitsFn, RecordAccountFn, RecoverySilence, Registry, RemoteLaunch, ResumeStyle,
-  RetryAfter, RunningTurnsFn, ServeProcessSpec, ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult,
+  OptionModel, QuotaOutlook, ReadingLimitsFn, ReattachHold, RecordAccountFn, RecoverySilence, Registry, RemoteLaunch,
+  ResumeStyle, RetryAfter, RunningTurnsFn, ServeProcessSpec, ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult,
   SessionContextStateFn, Translate, TransportKind, UsageResolver, UsageResolverConstructor, UsageResolverHost,
 };
 

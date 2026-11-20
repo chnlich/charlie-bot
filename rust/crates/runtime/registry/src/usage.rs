@@ -48,6 +48,10 @@ pub const NEAR_EXHAUSTION_RESET_HORIZON: time::Duration = time::Duration::minute
 /// `PANEL_WINDOW_MINUTES`.
 pub const WEEKLY_WINDOW_MINUTES: i64 = 10_080;
 
+/// The length of the five-hour quota window, in minutes: the short window each backend's quota panel states with
+/// `PANEL_WINDOW_MINUTES`.
+pub const FIVE_HOUR_WINDOW_MINUTES: u64 = 300;
+
 /// The reading-limits kind a backend registers when a session's context follows Claude Code's event stream. The
 /// usage fold classifies such a session under this kind and looks its limits up.
 pub const CLAUDE_READING_KIND: &str = "claude";
@@ -210,7 +214,13 @@ pub fn member_reading_from_windows(
     window.utilization >= WARNING_UTILIZATION && window.resets_at.is_none_or(|reset| reset.into_inner() > near_horizon)
   });
 
-  Ok(Some(MemberReading { windows: member_windows, weekly_resets_at, near_exhaustion, exhausted }))
+  Ok(Some(MemberReading {
+    windows: member_windows,
+    weekly_resets_at,
+    near_exhaustion,
+    exhausted,
+    fully_reserved: false,
+  }))
 }
 
 /// One place usage is logged. `name` is the ledger's source value and the usage page's card title. A config backend

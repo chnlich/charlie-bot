@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
+use charliebot_core::backend_types;
 use charliebot_core::config::{self, ConfigSchema};
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{NativeCacheRead, RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl};
@@ -50,7 +51,7 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
-  registry.attribute_backend_type("charlie-code", "CLC")?;
+  registry.attribute_backend_type(backend_types::CHARLIE_CODE, "CLC")?;
   registry.usage_source(UsageSource {
     name: "Codex",
     id_prefixes: &["codex-"],
@@ -60,7 +61,7 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(FixtureSource { codex_rule: true })),
   })?;
-  registry.attribute_backend_type("codex", "Codex")?;
+  registry.attribute_backend_type(backend_types::CODEX, "Codex")?;
   registry.usage_source(UsageSource {
     name: "Claude Code",
     id_prefixes: &["claude-"],
@@ -70,7 +71,7 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(FixtureSource { codex_rule: false })),
   })?;
-  registry.attribute_backend_type("cc-claude", "Claude Code")?;
+  registry.attribute_backend_type(backend_types::CC_CLAUDE, "Claude Code")?;
   Ok(())
 }
 
@@ -146,7 +147,7 @@ fn capture(home: &Path, ledger_path: &Path) -> anyhow::Result<Value> {
   let schema = ConfigSchema {
     sections: Vec::new(),
     legacy_keys: Vec::new(),
-    backend_types: vec!["charlie-code", "codex", "cc-claude"],
+    backend_types: vec![backend_types::CHARLIE_CODE, backend_types::CODEX, backend_types::CC_CLAUDE],
   };
   let config = config::load_config(home, &schema)?;
   let mut registry = Registry::new();

@@ -204,8 +204,8 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   Ok(patch)
 }
 
-/// Refuse a set file that names a field only the server writes: a waiting item's `since` or `since_exact`. Only a list
-/// `waiting` is examined, and only its object items.
+/// Refuse a set file that names a field only the server writes (the fields `SERVER_WRITTEN_ITEM_FIELDS` lists).
+/// Only a list `waiting` is examined, and only its object items.
 fn refuse_server_fields(fields: &Map<String, Value>) -> Result<(), WebReplyError> {
   let Some(Value::Array(waiting)) = fields.get("waiting") else {
     return Ok(());
@@ -622,7 +622,8 @@ async fn remaining_missing(
 }
 
 /// Store the items the JSON `text` names, record one `web_status` event and notify the ancestors. Waiting items need
-/// a non-blank context and a matching cold-read digest. A stale plan link refuses the set before the cold read. A
+/// a non-blank context and a matching cold-read digest. A stale plan link refuses the set before the cold read. Each
+/// new or changed waiting item then goes to the judge; its refusal or its 判定不可用 error stores nothing. A
 /// thread session's set names the goal alone; one that names Now or Waiting on you is refused. The return adds the Now
 /// length and `remaining_missing`; a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {

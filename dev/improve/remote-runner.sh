@@ -12,8 +12,9 @@
 # dev/improve/remote-launch.sh sends this file, with the round's arguments and inputs, into
 # ~/improve/launch/<launch id>/ and runs the remaining forms over ssh. `--prepare` reads the round's
 # records from its standard input. The review key goes into ~/improve/home/credentials.yaml under its
-# credential's name, written through a temporary file and renamed over it. The member's login goes
-# into the launch's member-credential file (mode 600), which only this launch reads. The first form
+# credential's name, written through a temporary file and renamed over it. No round environment holds the
+# key: the review's charlie-code, installed from review-charlie-code.sh, reads it from that file. The member's
+# login goes into the launch's member-credential file (mode 600), which only this launch reads. The first form
 # checks the round's dependencies, prepares the round's environment, then starts the round's scope
 # through systemd-run; the scope runs the `--in-scope` form, which empties TMPDIR, runs the member's
 # agent under the Landlock boundary that limits its writes and signals, and records the scope's memory peak.
@@ -198,14 +199,6 @@ member_record_value() {
     fi
   done <"$MEMBER_CREDENTIAL"
   return 1
-}
-
-# The api_key under one top-level section of the round's credentials file, found by the section's name.
-credential_key() {
-  awk -v section="$1" '
-    /^[^ ]/ { inside = ($0 == section ":") }
-    inside && /^  api_key:/ { value = $0; sub(/^  api_key:[ \t]*/, "", value); print value; exit }
-  ' "$ROUND_HOME/credentials.yaml"
 }
 
 # Copy the leak pattern file the launcher sent into the round's home. github-post.sh reads it from
@@ -706,21 +699,14 @@ record_memory_peak() {
   fi
 }
 
-# Export each round key under the name its tool reads. The review key is CHARLIE_CODE_API_KEY whichever member
-# runs the round. charlie-code takes the review option's model and API base from CHARLIE_CODE_MODEL and
-# CHARLIE_CODE_API_BASE, in the gateway's form: the model with an `openai/` prefix, and the base with `/v1` appended.
-# The member's own credential is its record in the launch's member-credential file: ANTHROPIC_AUTH_TOKEN for a gateway
-# member, CLAUDE_CODE_OAUTH_TOKEN for a subscription claude, and for a codex round IMPROVE_CODEX_AUTH, which becomes the
-# round's auth.json under CODEX_HOME. The review key comes from the credentials file that prepare wrote. The values
-# enter the round's environment here, with no argument and no other file that carries them.
+# Export the member's own credential under the name its CLI reads. The review key is not exported: the review's
+# charlie-code reads it from the round's credentials file and sets it for its own process only (review-charlie-code.sh),
+# with the review option's model and API base. The member's credential is its record in the launch's member-credential
+# file: ANTHROPIC_AUTH_TOKEN for a gateway member, CLAUDE_CODE_OAUTH_TOKEN for a subscription claude, and for a codex
+# round IMPROVE_CODEX_AUTH, which becomes the round's auth.json under CODEX_HOME. The values enter the round's
+# environment here, with no argument and no other file that carries them.
 export_round_credentials() {
-  local review_key member_key
-  review_key=$(credential_key "$IMPROVE_REVIEW_CREDENTIAL")
-  [[ -n $review_key ]] \
-    || fail 1 "the round's credentials file holds no api_key for the review credential $IMPROVE_REVIEW_CREDENTIAL: $ROUND_HOME/credentials.yaml"
-  export CHARLIE_CODE_API_KEY=$review_key
-  export CHARLIE_CODE_MODEL="openai/$IMPROVE_REVIEW_MODEL"
-  export CHARLIE_CODE_API_BASE="$IMPROVE_REVIEW_API_BASE/v1"
+  local member_key
   if [[ $kind == codex ]]; then
     prepare_codex_home
     export CODEX_HOME=$CODEX_HOME_TARGET
@@ -771,9 +757,24 @@ prepare_codex_home() {
   chmod 600 "$CODEX_HOME_TARGET/auth.json"
 }
 
+# Install the review's charlie-code into the runner's bin, which the round's PATH lists before the host's own
+# charlie-code. The copy is renamed into place, so a parallel launch never runs a half-written shim.
+install_review_shim() {
+  local staged
+  staged=$(mktemp -- "$RUNNER_ROOT/bin/.charlie-code.XXXXXXXX") \
+    || fail 1 "cannot make the review's charlie-code under $RUNNER_ROOT/bin"
+  cp -- "$LAUNCH_DIR/review-charlie-code.sh" "$staged" || {
+    rm -f -- "$staged"
+    fail 1 "cannot copy $LAUNCH_DIR/review-charlie-code.sh to $staged"
+  }
+  chmod 755 -- "$staged"
+  mv -f -- "$staged" "$RUNNER_ROOT/bin/charlie-code"
+}
+
 # The process ids of this scope that run the round's review: a process whose command line names charlie-code as its
-# program, or as the script its interpreter runs. Prints one id per line, and fails when the scope's process list cannot
-# be read, because the review's end is then unknown.
+# program, or as the script its interpreter runs. The review shim execs the host's charlie-code, so the review process
+# names charlie-code as its program. Prints one id per line, and fails when the scope's process list cannot be read,
+# because the review's end is then unknown.
 scope_review_pids() {
   local cgroup procs pid argument
   local -a arguments=()
@@ -833,7 +834,7 @@ fi
 # prepare wrote, and this host's lack of a live profile home. Each failure exits 7 and names the missing item.
 check_round_dependencies() {
   [[ -n ${IMPROVE_REVIEW_CREDENTIAL-} ]] || fail 7 'the launch names no review credential'
-  [[ -n $(credential_key "$IMPROVE_REVIEW_CREDENTIAL") ]] \
+  [[ -n $(credential_key "$ROUND_HOME/credentials.yaml" "$IMPROVE_REVIEW_CREDENTIAL") ]] \
     || fail 7 "the round's credentials file holds no api_key for the review credential $IMPROVE_REVIEW_CREDENTIAL"
   if [[ $kind == claude ]]; then
     { member_record_value ANTHROPIC_AUTH_TOKEN || member_record_value CLAUDE_CODE_OAUTH_TOKEN; } >/dev/null \
@@ -867,6 +868,11 @@ cleanup_launch_dir() {
 }
 trap cleanup_launch_dir EXIT
 
+# The review's charlie-code: the dependency check reads the review key through its credential_key, and the install
+# below copies the same file into the runner's bin.
+[[ -r $LAUNCH_DIR/review-charlie-code.sh ]] \
+  || fail 1 "the review's charlie-code is missing: $LAUNCH_DIR/review-charlie-code.sh"
+source "$LAUNCH_DIR/review-charlie-code.sh"
 read_launch_env
 check_round_dependencies
 install_pattern_file
@@ -895,6 +901,7 @@ fi
 cd "$ROUND_ROOT"
 
 ensure_cli "$commit"
+install_review_shim
 ensure_member_cli "$kind" "$member_version"
 check_boundary_starts
 export PATH="$RUNNER_ROOT/members/$kind-$member_version/bin:$RUNNER_ROOT/bin/$commit:$PATH"

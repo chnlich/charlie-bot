@@ -194,12 +194,16 @@ The review is one direct `charlie-code` run, outside the clone.
 The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
 
 The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
-The command passes no `--model` or `--api-base` flag.
-`charlie-code` reads the review option's settings from these environment variables, which the runner sets whichever model runs the round:
+The command passes no `--model`, `--api-base` or key flag.
+The round's PATH finds `charlie-code` first in `~/improve/runner/bin/`, where the runner installs its review shim (`review-charlie-code.sh`).
+The shim sets these variables for the review process alone, whichever model runs the round, and then runs the host's `~/.local/bin/charlie-code`:
 
-- `CHARLIE_CODE_MODEL`: the review option's model with an `openai/` prefix.
-- `CHARLIE_CODE_API_BASE`: the review option's API base, ending in `/v1`.
-- `CHARLIE_CODE_API_KEY`: the review option's gateway key.
+- `CHARLIE_CODE_MODEL`: the review option's model with an `openai/` prefix, from `IMPROVE_REVIEW_MODEL`.
+- `CHARLIE_CODE_API_BASE`: the review option's API base, ending in `/v1`, from `IMPROVE_REVIEW_API_BASE`.
+- `CHARLIE_CODE_API_KEY`: the review option's gateway key, read from `$CHARLIEBOT_HOME/credentials.yaml` under the credential that `IMPROVE_REVIEW_CREDENTIAL` names.
+
+The round's own environment and every tool shell under it carry none of the three variables.
+A `charlie-code` that the round starts by its full path skips the shim and gets none of them, so it cannot review.
 
 The review option is the `config.yaml` entry that names the review's model and API base.
 Its key sits in `credentials.yaml`, under the credential that the entry names.

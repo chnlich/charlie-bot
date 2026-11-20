@@ -159,6 +159,9 @@ for name in ANTHROPIC_AUTH_TOKEN CHARLIE_CODE_API_KEY CLAUDE_CODE_OAUTH_TOKEN; d
     printf '%s_SHA256=unset\n' "$name"
   fi
 done >>"$FAKE_CLAUDE_ENV"
+# A tool shell is a child of the member: its record shows whether the review key reaches it.
+printf 'TOOL_SHELL_CHARLIE_CODE_API_KEY=%s\n' \
+  "$(bash -c 'if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then echo set; else echo unset; fi')" >>"$FAKE_CLAUDE_ENV"
 if [[ -n ${FAKE_CLAUDE_STDIN:-} ]]; then
   cat >"$FAKE_CLAUDE_STDIN"
 fi
@@ -179,11 +182,19 @@ fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
 "#;
 
-/// Fake codex: record the `CODEX_HOME` it runs with, its arguments, and the `auth.json` it finds there with that file's
-/// mode, outside the round's boundary.
+/// Fake codex: record the `CODEX_HOME` it runs with, whether its environment holds the review key, its arguments, and
+/// the `auth.json` it finds there with that file's mode, outside the round's boundary.
 const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with, the arguments it receives and its login file.
 printf '%s\n' "$0" >>"$FAKE_CLI_RUNS"
 printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}" >"$FAKE_CODEX_ENV"
+if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then
+  printf 'CHARLIE_CODE_API_KEY=set\n' >>"$FAKE_CODEX_ENV"
+else
+  printf 'CHARLIE_CODE_API_KEY=unset\n' >>"$FAKE_CODEX_ENV"
+fi
+# A tool shell is a child of the member: its record shows whether the review key reaches it.
+printf 'TOOL_SHELL_CHARLIE_CODE_API_KEY=%s\n' \
+  "$(bash -c 'if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then echo set; else echo unset; fi')" >>"$FAKE_CODEX_ENV"
 printf '%s\n' "$@" >"$FAKE_CODEX_ARGV"
 if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
   cp -- "$CODEX_HOME/auth.json" "$FAKE_CODEX_AUTH"
@@ -518,7 +529,9 @@ impl World {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");
-    for name in ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh", "member_kinds.txt"] {
+    for name in
+      ["remote-launch.sh", "remote-runner.sh", "review-charlie-code.sh", "inflight-files.sh", "member_kinds.txt"]
+    {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }
     let local_home = sandbox.dir("local");

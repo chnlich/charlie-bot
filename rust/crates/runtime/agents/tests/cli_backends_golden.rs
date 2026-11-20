@@ -589,7 +589,18 @@ fn check_finish(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Ve
 async fn run_finish(fx: &Fixture, case: &Value) -> Value {
   let dir = PathBuf::from(text(&case["dir"]));
   let host = CliHost { path: path_text(&dir), home: fx.home.clone() };
-  let launch = LaunchArgs { resume_session_id: opt_text(&case["resume"]), ..LaunchArgs::default() };
+  let launch = LaunchArgs {
+    resume_session_id: opt_text(&case["resume"]),
+    extra_flags: Vec::new(),
+    buffer_limit: None,
+    instructions_content: None,
+    instructions_file: None,
+    log_dir: None,
+    cgroup_session_id: None,
+    remote_launch: None,
+    backend_kwargs: serde_json::Map::new(),
+    manager_turn: false,
+  };
   let backend = AntigravityFactory::new(host).build(Some(&option_of(case)), &fx.config(), launch.clone()).unwrap();
   let runner = AgentRunner::new("antigravity", backend, launch);
   let agent_path = format!("{}:/usr/bin:/bin", dir.display());
@@ -756,7 +767,9 @@ fn launch_of(case: &Value) -> LaunchArgs {
     // manager path.
     manager_turn: case["instructions_file"].is_null(),
     backend_kwargs,
-    ..LaunchArgs::default()
+    buffer_limit: None,
+    log_dir: None,
+    remote_launch: None,
   }
 }
 

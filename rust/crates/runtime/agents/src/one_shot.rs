@@ -204,7 +204,14 @@ mod tests {
       launch: LaunchArgs {
         instructions_content: Some("must not be written".to_string()),
         instructions_file: Some(instructions_file.clone()),
-        ..LaunchArgs::default()
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
       backend_type: "scripted".to_string(),
       registry: Arc::new(Registry::new()),

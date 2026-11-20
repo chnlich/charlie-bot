@@ -165,7 +165,14 @@ pub async fn recover(
   let launch = LaunchArgs {
     resume_session_id: context.resume_session_id,
     log_dir: Some(directory.to_path_buf()),
-    ..LaunchArgs::default()
+    extra_flags: Vec::new(),
+    buffer_limit: None,
+    instructions_content: None,
+    instructions_file: None,
+    cgroup_session_id: None,
+    remote_launch: None,
+    backend_kwargs: serde_json::Map::new(),
+    manager_turn: false,
   };
   let option = option.context("a captured final-stdout run needs its backend option")?;
   let mut built = crate::backend_types::build_backend(registry, option, cfg, launch)?;

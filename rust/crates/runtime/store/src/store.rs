@@ -31,7 +31,7 @@ use crate::metadata::{
   PARENT_SESSION_ID, PENDING_TRIGGER_COUNT, REPO_PATH_FIELD, ROUND_RATINGS, RUN_BACKEND, RoundRating,
   SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD,
   SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD, THINKING_SINCE,
-  UtcDateTime, WORK_STATE,
+  UPDATED_AT_FIELD, UtcDateTime, WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -1362,7 +1362,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         THINKING_SINCE,
         RUN_BACKEND,
         "created_at",
-        "updated_at",
+        UPDATED_AT_FIELD,
         CC_SESSION_ID_FIELD,
         CC_SESSION_STARTED_AT,
         "backend",

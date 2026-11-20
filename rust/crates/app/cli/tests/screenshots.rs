@@ -8,6 +8,9 @@ use std::process::{Command, Output, Stdio};
 use charliebot_tasks::web_screenshots::WINDOW_SIZES;
 use tempfile::TempDir;
 
+#[path = "common/stand_in.rs"]
+mod stand_in;
+
 /// Writes a PNG whose IHDR chunk carries `width` and `height`, which is all the check reads.
 fn write_png(dir: &Path, name: &str, width: u32, height: u32) {
   let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -90,6 +93,36 @@ fn a_web_page_change_with_a_screenshot_of_the_wrong_height_exits_1() {
   let printed = text(&output);
   assert!(printed.contains(&format!("{width}x{}", height * 2)), "{printed}");
   assert!(printed.contains(&format!("{width}x{height}")), "{printed}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn resolve_asks_the_live_server_with_its_credential_for_each_session_view() {
+  let home = tempfile::tempdir().expect("a temporary profile home");
+  // The stand-in knows session `known` only, and returns each request's header lines, which carry the credential.
+  let (port, server) = stand_in::serve(2, |path| if path == "/api/sessions/known" { 200 } else { 404 });
+  fs::write(home.path().join("config.yaml"), format!("server:\n  port: {port}\n")).expect("the config is written");
+  fs::write(home.path().join("credentials.yaml"), "charliebot:\n  access_key: test-key\n")
+    .expect("the credentials are written");
+  let resolve = |view: &str| {
+    Command::new(env!("CARGO_BIN_EXE_charliebot"))
+      .env("CHARLIEBOT_HOME", home.path())
+      .env_remove("CHARLIEBOT_RUN_TOKEN")
+      .env_remove("IMPROVE_LAUNCH_DIR")
+      .args(["screenshots", "resolve", view])
+      .output()
+      .expect("charliebot screenshots resolve runs")
+  };
+
+  let known = resolve("/?session=known");
+  let unknown = resolve("/?session=unknown");
+
+  assert_eq!(known.status.code(), Some(0), "{}", text(&known));
+  assert_eq!(unknown.status.code(), Some(1), "{}", text(&unknown));
+  assert!(text(&unknown).contains("the live server does not know session unknown"), "{}", text(&unknown));
+  for request in server.join().expect("the stand-in server finishes") {
+    assert!(request.iter().any(|line| line.eq_ignore_ascii_case("authorization: Bearer test-key")), "{request:?}");
+  }
 }
 
 #[test]

@@ -1,9 +1,10 @@
 // ---------------------------------------------------------------------------
 // Offline shell: the page's side of the service worker (offline-shell-worker.js)
 // ---------------------------------------------------------------------------
-// The page registers the worker once its catch-up completes and asks it to store the shell then, refreshes
-// the stored shell before a 4409 reload, reports the catch-up's end to the worker, and drops the stored
-// copies on a 401. A browser without service workers keeps the page it always had.
+// The page registers the worker once its catch-up completes and asks it to store the shell then, asks it to store
+// the session page's on-demand files once the page is idle, refreshes the stored shell before a 4409 reload, reports
+// the catch-up's end to the worker, and drops the stored copies on a 401. A browser without service workers keeps
+// the page it always had.
 
 const OFFLINE_SHELL_WORKER_PATH = '/offline-shell-worker.js';
 
@@ -34,6 +35,7 @@ function registerOfflineShell() {
   // event (sidebar/last-state.js). A worker registered then controls the next navigation in its scope,
   // which keeps its first open's paint the page's own.
   document.addEventListener('charliebot:page-current', warmOfflineShell, {once: true});
+  document.addEventListener('charliebot:page-current', requestOnDemandFiles, {once: true});
 }
 
 function warmOfflineShell() {
@@ -46,8 +48,72 @@ function warmOfflineShell() {
     }
     const channel = new MessageChannel();
     channel.port1.onmessage = (event) => reportWarm(event.data ?? {});
-    registration.active.postMessage({type: 'warm', copies: offlineShellSeedCopies()}, [channel.port2]);
+    registration.active.postMessage({type: 'warm', copies: offlineShellSeedCopies(), files: onDemandFileUrls()},
+        [channel.port2]);
   }, (err) => reportWarm({error: String(err)}));
+}
+
+// ---------------------------------------------------------------------------
+// On-demand files: the same-origin files a view or panel loads when it is first used
+// ---------------------------------------------------------------------------
+// Each file a loadPageScripts or loadPageStyles call names on the session page (utils.js), and each sidebar
+// interaction file (sidebar/namespace.js). A view or panel opened offline needs its file stored, and the worker
+// stores a file only when it answers one: so the worker stores this list once the page is current and idle, after
+// the first screen and the catch-up have used the link. Cross-origin files stay out: the CDN loads are not the
+// worker's to answer. offline_shell_page.test.js fails when a loader names a same-origin file this list lacks.
+const ON_DEMAND_FILES = Object.freeze([
+  '/static/js/chat/worker-summary.js',
+  '/static/js/chat/triggers-tray.js',
+  '/static/js/comment_post.js',
+  '/static/js/chat/status-panel.js',
+  '/static/js/chat/file-links.js',
+  '/static/js/sidebar/archived.js',
+  '/static/js/file-upload.js',
+  '/static/features/drafts/draft-cards.js',
+  '/static/features/artifacts/artifact-cards.js',
+  '/static/features/artifacts/plan-panel.js',
+  '/static/features/usage/ext_usage.js',
+  '/static/features/explain/explain.js',
+  '/static/features/cron/cron.js',
+  '/static/features/terminal/terminal_b64.js',
+  '/static/features/terminal/terminal_clipboard.js',
+  '/static/features/terminal/terminal_mount.js',
+  '/static/features/terminal/terminal_panel.js',
+  '/static/features/voice/voice-input.js',
+  '/static/js/sidebar/row-menu.js',
+  '/static/js/sidebar/modals.js',
+  '/static/js/sidebar/session-actions.js',
+  '/static/js/sidebar/session-menus.js',
+  '/static/js/sidebar/session-move.js',
+  '/static/css/worker-summary.css',
+  '/static/css/triggers-tray.css',
+  '/static/css/file-upload.css',
+  '/static/features/artifacts/artifacts.css',
+  '/static/features/usage/usage.css',
+  '/static/features/voice/voice-overlay.css',
+  '/static/css/sidebar-interactions.css',
+]);
+
+// The versioned URLs the page requests for them (utils.js pageAssetUrl), so the worker's stored keys are the page's URLs.
+function onDemandFileUrls() {
+  return ON_DEMAND_FILES.map((path) => pageAssetUrl(path));
+}
+
+// The worker stores the list when the page is current and the browser is idle. The reply is one event per request,
+// {stored: n} or {error}; the poor-network bench waits for it before a warm browser closes.
+function requestOnDemandFiles() {
+  requestIdleCallback(() => {
+    navigator.serviceWorker.ready.then((registration) => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (event) => reportOnDemandFiles(event.data ?? {});
+      registration.active.postMessage({type: 'store-files', files: onDemandFileUrls()}, [channel.port2]);
+    }, (err) => reportOnDemandFiles({error: String(err)}));
+  }, {timeout: 5000});
+}
+
+function reportOnDemandFiles(detail) {
+  if (detail.error) console.error('offline shell on-demand files failed:', detail.error);
+  document.dispatchEvent(new CustomEvent('charliebot:offline-shell-files-stored', {detail}));
 }
 
 // The sidebar's listing URL for an active session. sidebar/filters.js registers it at load, after this file loads,
@@ -147,7 +213,7 @@ function reloadAfterRefreshingShell() {
   withOfflineShellWorker((worker) => new Promise((resolve) => {
     const channel = new MessageChannel();
     channel.port1.onmessage = (event) => resolve(event.data ?? {});
-    worker.postMessage({type: 'warm', refresh: true}, [channel.port2]);
+    worker.postMessage({type: 'warm', refresh: true, files: onDemandFileUrls()}, [channel.port2]);
   })).then((result) => {
     if (result === undefined || result.stored || result.unauthorized) {
       location.reload();

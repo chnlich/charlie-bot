@@ -863,3 +863,53 @@ test('activation enables navigation preload so the server can answer it without 
   await Promise.all(h.fire('activate').waits);
   assert.equal(h.state.preloadEnabled, 1);
 });
+
+test('the store-files ask fetches each on-demand file the cache lacks, stores the tagged ones, and reports the count', async () => {
+  const h = harness();
+  const tagged = ORIGIN + '/static/features/cron/cron.js?v=1';
+  const untagged = ORIGIN + '/static/js/chat/status-panel.js?v=1';
+  const held = ORIGIN + '/static/css/worker-summary.css?v=1';
+  const fetched = [];
+  h.state.network = async (req) => {
+    fetched.push(req.url);
+    if (req.url === tagged) return new Response('cron()', {status: 200, headers: {ETag: '"cron"'}});
+    if (req.url === untagged) return new Response('status()', {status: 200});
+    throw new Error('unexpected ' + req.url);
+  };
+  const files = await h.caches.api.open('last-state-files');
+  await files.put(held, new Response('held'));
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {
+    data: {type: 'store-files', files: [tagged, untagged, held]},
+    ports: [channel.port2],
+  }).waits);
+  assert.deepEqual(fetched, [tagged, untagged], 'the held file is not fetched again');
+  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: 1}],
+      'only the tagged file is stored, and the reply counts it');
+  assert.equal(await (await files.match(tagged)).text(), 'cron()');
+  assert.equal(await files.match(untagged), undefined, 'a file without an ETag is not stored');
+});
+
+test('a warm keeps the on-demand files it names and drops other stored files', async () => {
+  const h = harness();
+  const onDemand = ORIGIN + '/static/features/cron/cron.js?v=2';
+  const html = '<link href="/static/css/a.css?v=2" rel="stylesheet">';
+  h.state.network = async (req, init) => {
+    if (req.url === SHELL_URL) return new Response(html, {status: 200});
+    if (!init || init.cache !== 'only-if-cached') return new Response(null, {status: 304});
+    if (req.url === ORIGIN + '/static/css/a.css?v=2') return new Response('a', {status: 200, headers: {ETag: '"a"'}});
+    throw new Error('unexpected ' + req.url);
+  };
+  const files = await h.caches.api.open('last-state-files');
+  await files.put(onDemand, new Response('cron()'));
+  await files.put(ORIGIN + '/static/old.css?v=1', new Response('old'));
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', copies: [], files: ['/static/features/cron/cron.js?v=2']},
+    ports: [channel.port2],
+  }).waits);
+  assert.equal(channel.replies[0].stored, true);
+  const stored = (await files.keys()).map((entry) => entry.url).sort();
+  assert.deepEqual(stored, [ORIGIN + '/static/css/a.css?v=2', onDemand].sort(),
+      'the on-demand file survives the warm; the file of an older version is dropped');
+});

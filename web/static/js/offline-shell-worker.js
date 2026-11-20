@@ -339,9 +339,10 @@ function shellStaticRefs(html) {
   return [...new Set(refs)];
 }
 
-// Fetches the shell and the files it names, stores them, and drops the stored files it no longer names.
+// Fetches the shell and the files it names, stores them, and drops the stored files it no longer names. The page's
+// on-demand files (storeOnDemandFiles) are named too, so a warm keeps them.
 // A refresh leaves the current shell in place until the replacement and its files are ready.
-async function warmShell(refresh = false) {
+async function warmShell(refresh = false, onDemand = []) {
   const cache = await caches.open(SHELL_CACHE);
   const stored = await cache.match(SHELL_KEY);
   if (!refresh && stored) return {stored: true};
@@ -383,12 +384,30 @@ async function warmShell(refresh = false) {
   for (const [ref, file] of fetchedFiles) await files.put(ref, file);
   for (const request of await files.keys()) {
     const path = new URL(request.url).pathname + new URL(request.url).search;
-    if (!refs.includes(path)) await files.delete(request);
+    if (!refs.includes(path) && !onDemand.includes(path)) await files.delete(request);
   }
   await cache.put(SHELL_KEY, new Response(html, {
     headers: {'Content-Type': 'text/html; charset=utf-8', ETag: response.headers.get('ETag')},
   }));
   return {stored: true};
+}
+
+// Stores the page's on-demand files: the same-origin files a view or panel loads when it is first used. A file the
+// cache holds is skipped; any other is fetched through the network and stored only with an ETag, the rule the shell's
+// files follow. The page asks once it is current and idle, so the link has carried the first screen first.
+async function storeOnDemandFiles(urls) {
+  const files = await caches.open(FILE_CACHE);
+  let stored = 0;
+  for (const url of urls) {
+    if (await files.match(url)) continue;
+    const response = await fetch(url, {credentials: 'same-origin'});
+    if (!response.ok) throw new Error('on-demand file fetch failed: ' + url + ' ' + response.status);
+    if (response.headers.get('ETag')) {
+      await files.put(url, response);
+      stored += 1;
+    }
+  }
+  return {stored};
 }
 
 // Called only after a refresh answers 401, so navigation reaches the server instead of using stale HTML.
@@ -402,14 +421,18 @@ self.addEventListener('message', (event) => {
   if (!WORKER_CONFIG.enabled) return;
   if (data.type === 'warm') {
     const warming = data.refresh === true
-      ? warmShell(true)
-      : warmShell().then(async (result) => {
+      ? warmShell(true, data.files)
+      : warmShell(false, data.files).then(async (result) => {
         if (result.stored) await storePageCopies(data.copies);
         return result;
       });
     event.waitUntil(warming.then(
         (result) => replyTo(event, result),
         (error) => replyTo(event, {stored: false, error: String(error)})));
+  } else if (data.type === 'store-files') {
+    event.waitUntil(storeOnDemandFiles(data.files).then(
+        (result) => replyTo(event, result),
+        (error) => replyTo(event, {error: String(error)})));
   } else if (data.type === 'catchup-complete') {
     event.waitUntil(refreshCopies());
   } else if (data.type === 'refresh-copies') {

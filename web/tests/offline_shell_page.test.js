@@ -30,6 +30,10 @@ function buildPage({
     console: {error: () => {}},
     location: {href: 'https://charlie.test/?session='},
     URL,
+    // The idle callbacks wait in a list the test runs by hand; the page's versioned URLs are the utils.js form.
+    idleCallbacks: [],
+    requestIdleCallback: (fn) => { context.idleCallbacks.push(fn); },
+    pageAssetUrl: (assetPath) => assetPath + '?v=test',
     SESSION_ID: sessionId,
     SESSION_BOOTSTRAP: sessionBootstrap,
     INITIAL_SESSIONS: initialSessions,
@@ -105,7 +109,8 @@ function buildPage({
     context,
     registered: () => context.navigator?.serviceWorker.registered ?? [],
     firePageCurrent: () => {
-      for (const listener of documentListeners.get(PAGE_CURRENT) || []) listener();
+      // A copy of the list: a once-only listener removes itself from the list as it runs.
+      for (const listener of [...(documentListeners.get(PAGE_CURRENT) || [])]) listener();
     },
   };
 }
@@ -195,7 +200,7 @@ test('the page-current event tells the active worker the catch-up is complete', 
   // The first open's own report precedes the warm request; its refresh queue is empty, so the worker
   // refreshes nothing. The messages are compared as JSON: the vm context's objects carry another prototype.
   assert.deepEqual(JSON.parse(JSON.stringify(page.context.workerMessages)),
-      [{type: 'catchup-complete'}, {type: 'warm', copies: []}]);
+      [{type: 'catchup-complete'}, {type: 'warm', copies: [], files: onDemandPaths().map((listed) => listed + '?v=test')}]);
   page.context.workerMessages.length = 0;
   page.firePageCurrent();
   await new Promise((resolve) => setImmediate(resolve));
@@ -242,3 +247,65 @@ test('a reply burst that spans two sessions refreshes both stored copies in one 
     ],
   }]);
 });
+
+test('the on-demand files are asked of the active worker once the page is current and idle, under the page\'s URLs', async () => {
+  const page = buildPage();
+  page.firePageCurrent();
+  assert.equal(page.context.idleCallbacks.length, 1, 'the request waits for an idle callback, not the page-current event');
+  page.context.idleCallbacks.splice(0).forEach((fn) => fn());
+  await new Promise((resolve) => setImmediate(resolve));
+  const asked = page.context.workerMessages.filter((message) => message.type === 'store-files');
+  assert.equal(asked.length, 1, 'one ask per page');
+  assert.equal(asked[0].files.length, onDemandPaths().length);
+  assert.ok(asked[0].files.every((url) => url.endsWith('?v=test')), 'each file is named by the URL the page requests');
+
+  // The worker's reply reaches the page as the event the bench and the screenshots wait for.
+  page.context.reply({stored: 3});
+  const reported = page.events.filter((event) => event.type === 'charliebot:offline-shell-files-stored');
+  assert.deepEqual(reported.map((event) => event.detail), [{stored: 3}]);
+});
+
+test('the warm names the on-demand files, so a later warm keeps them', async () => {
+  const page = buildPage();
+  page.firePageCurrent();
+  await new Promise((resolve) => setImmediate(resolve));
+  const warm = page.context.workerMessages.find((message) => message.type === 'warm');
+  assert.deepEqual(JSON.parse(JSON.stringify(warm.files)), onDemandPaths().map((listed) => listed + '?v=test'));
+});
+
+test('every same-origin file a page loader names is on the on-demand list', () => {
+  const listed = new Set(onDemandPaths());
+  const named = new Set();
+  for (const file of pageSourceFiles()) {
+    const text = fs.readFileSync(file, 'utf8');
+    if (!/\bload(PageScripts|PageStyles)\(/.test(text)) continue;
+    for (const match of text.matchAll(/['"](\/static\/[^'"]+)['"]/g)) named.add(match[1]);
+  }
+  assert.ok(named.size > 0, 'the scan found the loader files it reads');
+  assert.deepEqual([...named].filter((file) => !listed.has(file)), [],
+      'a loader names a same-origin file that the on-demand list does not store offline');
+});
+
+// The paths in offline-shell.js's ON_DEMAND_FILES, unversioned.
+function onDemandPaths() {
+  const block = SOURCE.match(/const ON_DEMAND_FILES = Object\.freeze\(\[([\s\S]*?)\]\);/);
+  return [...block[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+}
+
+// The page's own source files: the templates and feature trees a session page includes, and the static scripts. Vendor
+// libraries and the tests stay out.
+function pageSourceFiles() {
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== 'vendor' && entry.name !== 'tests') walk(full);
+      } else if (/\.(js|html)$/.test(entry.name)) {
+        files.push(full);
+      }
+    }
+  };
+  for (const root of ['templates', 'features', path.join('static', 'js')]) walk(path.join(__dirname, '..', root));
+  return files;
+}

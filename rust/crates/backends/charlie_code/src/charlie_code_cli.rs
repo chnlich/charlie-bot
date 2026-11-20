@@ -308,15 +308,36 @@ mod tests {
   #[test]
   fn a_manager_turn_passes_the_session_memo_sentence_and_a_worker_run_does_not() {
     let manager_root = tempfile::tempdir().unwrap();
-    let manager_launch = LaunchArgs { manager_turn: true, ..LaunchArgs::default() };
+    let manager_launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: true,
+    };
     let mut manager = backend(manager_root.path(), option("api_base: http://test.invalid/v1\n"), manager_launch);
     manager.prepare_transport(manager_root.path()).unwrap();
     let command = manager.build_command("prompt").unwrap();
     assert!(command.windows(2).any(|pair| pair[0] == flags::RESET_NOTE && pair[1] == SESSION_MEMO_NOTE), "{command:?}");
 
     let worker_root = tempfile::tempdir().unwrap();
-    let worker_launch =
-      LaunchArgs { instructions_file: Some(PathBuf::from("/synthetic/instructions.md")), ..LaunchArgs::default() };
+    let worker_launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: Some(PathBuf::from("/synthetic/instructions.md")),
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
+    };
     let mut worker = backend(worker_root.path(), option("api_base: http://test.invalid/v1\n"), worker_launch);
     worker.prepare_transport(worker_root.path()).unwrap();
     let command = worker.build_command("prompt").unwrap();

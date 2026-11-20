@@ -367,6 +367,47 @@ test('Undo inside the undo window posts nothing, keeps the picks and the comment
     });
   });
 
+// The fetch wrapper records what each post carried, so a check tells a leave flush (keepalive) from a window send.
+const PATCH_FETCH = `(() => { const real = window.fetch; window.__cbcFetchCalls = [];
+  window.fetch = function(url, options) {
+    window.__cbcFetchCalls.push({url: String(url), keepalive: Boolean(options && options.keepalive)});
+    return real(url, options);
+  }; })()`;
+// Only the message posts: the tray also fetches the target session's name over the same global.
+const FETCH_CALLS = 'window.__cbcFetchCalls.filter((call) => call.url.endsWith("/message"))';
+const ONE_PICK = `${PICKABLE_FORKS}[0].querySelector(".__cbc-pick").click()`;
+
+test('leaving the page flushes the pending send at once, as one keepalive post', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    await page.evaluate(PATCH_FETCH);
+    await page.evaluate(ONE_PICK);
+    await sleep(FRAME_WAIT_MS);
+    await page.evaluate(CLICK_SEND);
+    await page.evaluate('window.dispatchEvent(new PageTransitionEvent("pagehide"))');
+    await sleep(1500);
+
+    assert.equal(sent.length, 1, 'the leave flushes the message instead of cancelling it');
+    assert.equal(sent[0].session, VIEWER, 'the message goes to the comment target');
+    assert.deepEqual(await page.evaluate(FETCH_CALLS).then((calls) => calls.map((call) => call.keepalive)), [true],
+      'one post, keepalive, so it outlives the page');
+  });
+});
+
+test('a session switch flushes the pending send at once, as one keepalive post', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    await page.evaluate(PATCH_FETCH);
+    await page.evaluate(ONE_PICK);
+    await sleep(FRAME_WAIT_MS);
+    await page.evaluate(CLICK_SEND);
+    await page.evaluate('document.dispatchEvent(new Event("charliebot:session-view-teardown"))');
+    await sleep(1500);
+
+    assert.equal(sent.length, 1, 'the teardown flushes the message instead of cancelling it');
+    assert.deepEqual(await page.evaluate(FETCH_CALLS).then((calls) => calls.map((call) => call.keepalive)), [true],
+      'one post, keepalive');
+  });
+});
+
 // The live repro: a question whose answer sits only in its rec line (no resolved line) still has option buttons. A pick
 // there must send, and the tray must show the result, so Send never goes dark without a reason.
 test('a pick on a question whose answer is written in its rec line sends, and the tray shows the result', async () => {

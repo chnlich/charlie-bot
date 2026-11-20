@@ -1482,10 +1482,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       trayNotice = null;
       trayStage = 'countdown';
       refreshTray();
-      sendHandle = startUndoableSend(function() {
+      sendHandle = startUndoableSend(function(options) {
         trayStage = 'sending';
         refreshTray();
-        return postCommentMessage(target, message);
+        return postCommentMessage(target, message, options);
       });
       sendHandle.sent.then(function(result) {
         sendHandle = null;

@@ -3,7 +3,8 @@
 // shape and the thrown messages are one contract: each tray catches the errors
 // and surfaces `err.message` in its own toast.
 // ---------------------------------------------------------------------------
-async function postCommentMessage(sessionId, content) {
+// `keepalive` lets the post outlive the document that makes it; only a send flushed at page hide sets it.
+async function postCommentMessage(sessionId, content, {keepalive = false} = {}) {
   const requestId = crypto.randomUUID();
   let retryDelay = 1000;
   const waitBeforeRetry = async () => {
@@ -17,6 +18,7 @@ async function postCommentMessage(sessionId, content) {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         credentials: 'same-origin',
+        keepalive,
         body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
       });
     } catch (_error) {
@@ -54,9 +56,12 @@ function buildClickMessage(header, entries) {
 }
 
 // The one delayed send of every click (a Status completion, a page pick): the message waits
-// COMMENT_UNDO_MS for Undo, then post runs once. The handle's sent promise settles with post's
-// result, or with null when cancel() wins the window; cancel() returns false once post has begun.
-// Leaving the page or tearing down the session view cancels an open window.
+// COMMENT_UNDO_MS for Undo, then post runs once. Leaving the page or tearing down the session view
+// flushes the open window at once instead of cancelling it, so a reader who leaves does not lose the
+// send. post receives `{keepalive}`, true only on a leave flush; each caller passes it to its fetch so
+// the request outlives the document. Undo works only while the page stays. The handle's sent promise
+// settles with post's result, or with null when cancel() wins the window; cancel() returns false once
+// post has begun.
 const COMMENT_UNDO_MS = 5000;
 
 function startUndoableSend(post) {
@@ -67,12 +72,19 @@ function startUndoableSend(post) {
     resolveSent = resolve;
     rejectSent = reject;
   });
-  function cancelOnLeave() {
-    cancel();
+  function flushOnLeave() {
+    if (state !== 'undo') return;
+    clearTimeout(timer);
+    run(true);
   }
   function removeLeaveListeners() {
-    window.removeEventListener('pagehide', cancelOnLeave);
-    document.removeEventListener('charliebot:session-view-teardown', cancelOnLeave);
+    window.removeEventListener('pagehide', flushOnLeave);
+    document.removeEventListener('charliebot:session-view-teardown', flushOnLeave);
+  }
+  function run(keepalive) {
+    state = 'sending';
+    removeLeaveListeners();
+    (async () => post({keepalive}))().then(resolveSent, rejectSent);
   }
   function cancel() {
     if (state !== 'undo') return false;
@@ -82,13 +94,9 @@ function startUndoableSend(post) {
     resolveSent(null);
     return true;
   }
-  window.addEventListener('pagehide', cancelOnLeave);
-  document.addEventListener('charliebot:session-view-teardown', cancelOnLeave);
-  const timer = setTimeout(() => {
-    state = 'sending';
-    removeLeaveListeners();
-    (async () => post())().then(resolveSent, rejectSent);
-  }, COMMENT_UNDO_MS);
+  window.addEventListener('pagehide', flushOnLeave);
+  document.addEventListener('charliebot:session-view-teardown', flushOnLeave);
+  const timer = setTimeout(() => run(false), COMMENT_UNDO_MS);
   return {
     sent,
     cancel,

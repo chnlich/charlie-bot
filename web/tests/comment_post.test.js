@@ -222,17 +222,18 @@ const ACCEPTED = async () => ({ok: true, status: 202, json: async () => ({input_
 
 test('startUndoableSend waits five seconds, then runs post once inside the timer and settles with its result', async () => {
   const {context, timers} = loadCommentPostWithClock(ACCEPTED);
-  let posts = 0;
-  const handle = context.startUndoableSend(async () => {
-    posts += 1;
+  const calls = [];
+  const handle = context.startUndoableSend(async (options) => {
+    calls.push(options);
     return {input_event_id: 'event-1'};
   });
   assert.deepEqual(timers.map((timer) => timer.delay), [5000]);
-  assert.equal(posts, 0);
+  assert.equal(calls.length, 0);
 
   timers.shift().callback();
 
-  assert.equal(posts, 1, 'post runs when the window closes, with no extra tick');
+  assert.deepEqual(calls.map((options) => options.keepalive), [false],
+    'post runs when the window closes, with no extra tick, and not keepalive');
   assert.equal(handle.sending, true);
   assert.equal(handle.cancel(), false, 'cancel after the post has begun returns false');
   assert.deepEqual(await handle.sent, {input_event_id: 'event-1'});
@@ -253,30 +254,35 @@ test('cancel inside the window posts nothing and settles null', async () => {
   assert.equal(timers.length, 1, 'only the window timer was ever queued');
 });
 
-test('pagehide cancels before the post', async () => {
+test('pagehide flushes the window at once, posting once with keepalive so the post outlives the page', async () => {
   const {context, cleared} = loadCommentPostWithClock(ACCEPTED);
-  let posts = 0;
-  const handle = context.startUndoableSend(async () => {
-    posts += 1;
+  const calls = [];
+  const handle = context.startUndoableSend(async (options) => {
+    calls.push(options);
+    return {input_event_id: 'event-1'};
   });
   context.window.dispatch('pagehide');
 
-  assert.equal(await handle.sent, null);
-  assert.deepEqual(cleared, [1]);
-  assert.equal(posts, 0);
+  assert.deepEqual(await handle.sent, {input_event_id: 'event-1'}, 'the flush posts and settles with its result');
+  assert.deepEqual(cleared, [1], 'the pending window timer is cleared');
+  assert.deepEqual(calls.map((options) => options.keepalive), [true], 'exactly one post, keepalive');
+  assert.equal(handle.cancel(), false, 'a flush closes the undo window, so Undo finds nothing to cancel');
 });
 
-test('session-view teardown cancels before the post', async () => {
+test('session-view teardown flushes the window at once, posting once with keepalive', async () => {
   const {context, cleared} = loadCommentPostWithClock(ACCEPTED);
-  let posts = 0;
-  const handle = context.startUndoableSend(async () => {
-    posts += 1;
+  const calls = [];
+  const handle = context.startUndoableSend(async (options) => {
+    calls.push(options);
+    return {input_event_id: 'event-1'};
   });
   context.document.dispatch('charliebot:session-view-teardown');
 
-  assert.equal(await handle.sent, null);
+  assert.deepEqual(await handle.sent, {input_event_id: 'event-1'});
   assert.deepEqual(cleared, [1]);
-  assert.equal(posts, 0);
+  assert.deepEqual(calls.map((options) => options.keepalive), [true], 'exactly one post, keepalive');
+  context.window.dispatch('pagehide');
+  assert.equal(calls.length, 1, 'one leave event does not post a second time');
 });
 
 test('a failed post rejects the undo window with the post error', async () => {

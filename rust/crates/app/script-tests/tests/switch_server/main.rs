@@ -7,6 +7,7 @@
 mod cleanup;
 mod delegation;
 mod disk;
+mod live;
 mod probe;
 #[path = "../common/release_lock.rs"]
 mod release_lock;

@@ -28,7 +28,9 @@
 # during it: the new server keeps serving, nothing is switched back, and the log names the run and its outcome; 5 when
 # the switch back found that the old release refuses the home while the new release serves: the new release keeps
 # serving, and the log names the failed step and the refusal text; 6 when the probe turn or the delegation check failed
-# on the model's side after one retry: the new release keeps serving and the log names the check and the model's error.
+# on the model's side after one retry: the new release keeps serving and the log names the check and the model's error;
+# 7 when the live capture of a View line that a landed commit carries failed: the new release keeps serving, nothing is
+# switched back, and the log names the capture that failed. A failed capture is no server fault.
 #
 # The standing switch rule has two checks. Both run in the preflight, after the clone check and before any release is
 # selected or the server stops. Check A (the prior switch accounted for every run): the prior switch is the newest
@@ -50,6 +52,13 @@
 # and a second such failure keeps the new release serving and exits 6, which leaves the decision to the release's
 # operator. A check that fails any other way is a server-side failure, and the switch switches back. A check that hangs
 # fails the same way, on its wait's bound.
+#
+# After the checks pass and before it reports SWITCH COMPLETE, the forward switch captures the live page of each
+# `View:` trailer a commit in OLD_SHA..TARGET_SHA carries. It reads the window sizes from the target release's own
+# `charliebot screenshots sizes`, captures each view at every size from the new server on 127.0.0.1, and prints one
+# line per capture naming the file, the commit, the view and the size. The files stay under
+# CHARLIEBOT_LOG_DIR/live-screenshots/<switch log name>/<commit>/. A capture that fails keeps the new release serving
+# and exits 7.
 #
 # The switch back runs the forward path's own steps with the previous release as the target: it stops the new release,
 # moves the clone and `current` back, installs the previous release's slice units, starts it, and reads back every run
@@ -1595,6 +1604,49 @@ post_ready_checks() {
   run_check delegation_check || switch_back "the delegation check failed"
 }
 
+# view_trailers OLD NEW: each `View:` trailer of each commit in OLD..NEW, one `<short sha> <view path>` per line. The
+# trailer block sits at the end of a commit message, and a commit may carry several View lines.
+view_trailers() {
+  local sha message views view
+  for sha in $(git -C "$REPO_ROOT" rev-list "$1..$2"); do
+    message="$(git -C "$REPO_ROOT" log -1 --format=%B "$sha")" || return 1
+    views="$(printf '%s\n' "$message" | sed -n 's/^View:[[:space:]]*//p')" || return 1
+    while IFS= read -r view; do
+      [ -n "$view" ] || continue
+      printf '%s %s\n' "$(git -C "$REPO_ROOT" rev-parse --short "$sha")" "$view"
+    done <<< "$views"
+  done
+}
+
+# view_slug VIEW: the view path as a file name, with each character outside the safe set replaced.
+view_slug() {
+  printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/_/g' | cut -c1-80
+}
+
+# live_screenshots: capture the live page of each View line in [OLD_SHA, TARGET_SHA], at every window size the
+# target release's `charliebot screenshots sizes` prints, from the new server on 127.0.0.1. The access key travels in
+# the environment, so it never shows in a process's argv. Each capture prints one line naming the file, the commit,
+# the view and the size. The caller keeps the new release serving and exits 7 when a capture fails.
+live_screenshots() {
+  local trailers sizes size width height short view dir path
+  trailers="$(view_trailers "$OLD_SHA" "$TARGET_SHA")" || return 1
+  [ -n "$trailers" ] || return 0
+  sizes="$("$RELEASE_DIR/charliebot" screenshots sizes)" || return 1
+  while read -r short view; do
+    [ -n "$short" ] || continue
+    for size in $sizes; do
+      width=${size%x*}
+      height=${size#*x}
+      dir="$LOG_DIR/live-screenshots/$(basename "${LOG%.log}")/$short"
+      mkdir -p "$dir" || return 1
+      path="$dir/$(view_slug "$view")-${width}x${height}.png"
+      CHARLIEBOT_ACCESS_KEY="$KEY" node "$SCRIPT_DIR/live-shot.mjs" \
+        "http://127.0.0.1:$PORT" "$view" "$width" "$height" "$path" || return 1
+      log "live screenshot: $path commit $short view $view size $width×$height"
+    done
+  done <<< "$trailers"
+}
+
 # switch_move: the steps from a serving server to the target release at a ready server. Both directions run them: stop
 # the serving server, move the clone and `current`, install the target commit's slice units, start it and wait for
 # server_ready. The target's commit is TARGET_SHA and the release directory it starts from is TARGET_RELEASE.
@@ -1668,6 +1720,10 @@ switch_forward() {
   serving "$WANT" || die "the new server failed its readback"
   adopted || die "a live run was not adopted"
   post_ready_checks
+  if ! live_screenshots; then
+    log "live screenshot capture failed; the new release keeps serving, nothing is switched back"
+    exit 7
+  fi
   local head
   head="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
   if [ "$DIED_RUNS" -gt 0 ]; then

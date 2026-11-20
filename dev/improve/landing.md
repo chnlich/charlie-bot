@@ -190,7 +190,8 @@ One pull request per round is the unit that CI and the reviewer check.
 
 ## Step 6: review the diff
 
-The review is one direct `charlie-code` run, outside the clone.
+The review is one direct `charlie-code` run, outside the clone, unless the pull request names screenshots.
+When the pull request names screenshots, the review compares the before screenshot with the after screenshot of each window size, and each review run receives one size's before-screenshot and after-screenshot as images, split by state when a size has more than one, so that no run receives more than the four images that charlie-code accepts.
 The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
 
 The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.

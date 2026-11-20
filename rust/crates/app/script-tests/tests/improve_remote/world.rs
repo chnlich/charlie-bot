@@ -46,7 +46,7 @@ pub const REVIEW_KEY: &str = "synthetic-review-key";
 /// The review option's credential name, as `config.yaml` and `credentials.yaml` name it.
 pub const REVIEW_CREDENTIAL: &str = "aigw_charliebot_agents";
 /// The review option's model, API base and context window, as the profile home's `config.yaml` holds them.
-pub const REVIEW_MODEL: &str = "kimi-k3.1-pro";
+pub const REVIEW_MODEL: &str = "deepseek-flash";
 pub const REVIEW_API_BASE: &str = "https://aigw.example";
 pub const REVIEW_CONTEXT_WINDOW: &str = "409600";
 /// The access token of a subscription member: the `accessToken` of its login file.
@@ -568,7 +568,7 @@ impl World {
       profile_home.join("config.yaml"),
       format!(
         "backends:\n  options:\n  - api_base: {REVIEW_API_BASE}\n    context_window: {REVIEW_CONTEXT_WINDOW}\n    \
-         credential: {REVIEW_CREDENTIAL}\n    id: claude-code-kimi-k3.1-pro\n    model: {REVIEW_MODEL}\n    \
+         credential: {REVIEW_CREDENTIAL}\n    id: claude-code-deepseek-flash\n    model: {REVIEW_MODEL}\n    \
          type: cc-anthropic-compatible\n  - effort: high\n    id: claude-fable-5\n    model: claude-fable-5-1\n"
       ),
     )

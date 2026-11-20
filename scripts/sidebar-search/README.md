@@ -51,7 +51,7 @@ against. A run's fields:
 | `e2e_ms` | The paint minus the input event. |
 | `T_s`, `within_T` | The query's limit from `limits.js` (null for a query the plan sets none), and whether `e2e_ms` is within it. |
 | `L_bytes`, `clear.requests` | The clear's requests (category, wire bytes, outcome: finished, aborted or failed) and their bytes that arrived after the input. L is their sum. |
-| `requests` | Every request the run sent, from the clear (or the fresh page's search) to the settle: `category`, `path`, `outcome`, `content_encoding`, `sent_ms` and `end_ms` from the input, `encoded_bytes` (the wire total), `decoded_bytes`, and `chrome_total_bytes` (Chrome's own total; null unless the request finished). |
+| `requests` | Every request with bytes in the search's span: sent from the click on, or still loading at the click or ending after it. Fields: `category`, `path`, `outcome`, `content_encoding`, `sent_ms` and `end_ms` from the input, `encoded_bytes` (the wire total), `decoded_bytes`, and `chrome_total_bytes` (Chrome's own total; null unless the request finished). |
 | `counters.stale_paints` | The page's own count, over the search's window and a 1.5 s settle after the paint: a search paint into an empty box, or a non-search paint into a non-empty one. Null when the build has no count. |
 | `stale_paints_observed` | The runner's count of the same condition on the paints it sees through the page's global `renderSessionList`. |
 | `readback.status_polls` | The status polls sent in the window: `count`, the wire bytes that arrived in the window, the link time (bytes ÷ 12,500 B/s) and its share of `e2e_ms`. |

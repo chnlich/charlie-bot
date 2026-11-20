@@ -352,9 +352,11 @@ async function oneSearch(session, query, scenario = 'after-clear') {
   };
   r.L_bytes = L;
   r.readback = readbackOf(session, inputWall, paintWall, r.e2e_ms);
-  // Every request the span sent, from the clear (or the fresh page's search) to the settle. encoded_bytes is the
-  // request's wire total: Chrome's total when it finished, else the decoded body it received before it ended.
-  r.requests = net.list.slice(mark).map((q) => ({
+  // Every request with bytes in the search's span: one sent from the click on, and one still loading at the click or
+  // ending after it (its bytes after the click may fall in the window). encoded_bytes is the request's wire total:
+  // Chrome's total when it finished, else the decoded body it received before it ended.
+  const span = net.list.filter((q) => q.sentWall >= clickWall || q.endWall === null || q.endWall > clickWall);
+  r.requests = span.map((q) => ({
     category: q.category,
     path: new URL(q.url).pathname,
     outcome: q.outcome,

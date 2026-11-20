@@ -462,7 +462,10 @@ async function measureOnce(ctx, cell, repetition) {
       await settleReleaseOnline(tabs, session, released.after);
     } else if (cell.condition === 'replied-offline') {
       // A reply the socket delivered, from a page of the same profile: its stored-copy refresh completes before
-      // the measured open, so the offline reopen shows the newest reply the page received.
+      // the measured open, so the offline reopen shows the newest reply the page received. The profile is copied
+      // from the warm browser, so a release landed earlier in this invocation has moved the served version past
+      // the profile's stored shell; the served version is settled into the profile first.
+      await settleReleaseOnline(tabs, session, await assetVersion(ctx.api, session.id));
       await deliverReplyOnline(tabs, session, repetition);
     }
 
@@ -538,6 +541,11 @@ async function measureOnce(ctx, cell, repetition) {
           '{ responseEnd: entry.responseEnd, transferSize: entry.transferSize, encodedBodySize: entry.encodedBodySize } ' +
           ': null; })()')
       : null;
+    // A stored-copy open is answered by the stored shell, so its document moves no bytes on the wire.
+    if (STORED_COPY_CONDITIONS.includes(cell.condition) && navigation?.transferSize !== 0) {
+      throw new Error(`${cell.id} moved ${navigation?.transferSize ?? 'no'} document bytes on the wire; ` +
+        'its open must read the stored shell');
+    }
     const responseEnd = navigation === null ? null : navigation.responseEnd;
     const dclMs = opened.domContentLoadedMs;
 

@@ -1,7 +1,8 @@
 //! Serving a directory of files: static file responses with validators, ranges and content-type guessing.
 //!
 //! A served file carries the content type the MIME table guesses, `accept-ranges`, `content-length`,
-//! `last-modified` and an `etag` of `md5("<st_mtime>-<st_size>")`. A matching `If-None-Match` or a newer
+//! `last-modified` and an `etag` of the md5 of the bytes it carries, so a release that rewrites a file with the same
+//! bytes keeps the tag. A matching `If-None-Match` or a newer
 //! `If-Modified-Since` answers 304, and a `Range` header answers 206, 400 or 416. The directory is checked per
 //! request until the check first passes, so a directory that appears later serves without a restart. A missing one
 //! answers 500.
@@ -16,7 +17,7 @@ use std::sync::{LazyLock, Mutex};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_core::{int_text, paths, posix_path, text_repr, timefmt};
+use charliebot_core::{int_text, paths, posix_path, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
@@ -50,6 +51,12 @@ const FILE_BODY_MEMO_MAX_BYTES: usize = 256 * 1024;
 /// moved is read again on the next request.
 static FILE_BODY_MEMO: LazyLock<Mutex<BodyMemo<FileBodyKey>>> =
   LazyLock::new(|| Mutex::new(BodyMemo::new(FILE_BODY_MEMO_ENTRIES, FILE_BODY_MEMO_MAX_BYTES)));
+
+/// How many file tags the memo holds before it starts again. A tag costs one read of its file, once per identity.
+const ETAG_MEMO_ENTRIES: usize = 4096;
+
+/// The content tag of each file identity read so far, so a request reads its file's bytes only once per identity.
+static ETAG_MEMO: LazyLock<Mutex<HashMap<FileBodyKey, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// The canonical path of each served directory, resolved the first time a request serves from it.
 ///
@@ -194,7 +201,7 @@ impl FileHeaders {
     mime_types: &MimeTypes,
     override_content_type: Option<&str>,
     content_encoding: Option<&'static str>,
-  ) -> FileHeaders {
+  ) -> std::io::Result<FileHeaders> {
     let content_type = override_content_type.map_or_else(
       || {
         let guessed = mime_types.guess_type(&paths::display(path)).unwrap_or(TEXT_PLAIN);
@@ -203,18 +210,14 @@ impl FileHeaders {
       str::to_string,
     );
     let mtime = timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec());
-    let mut etag_base = format!("{}-{}", text_repr::float_repr(mtime), metadata.size());
-    if content_encoding.is_some() {
-      etag_base.push_str("-br");
-    }
-    FileHeaders {
+    Ok(FileHeaders {
       content_type,
       size: metadata.size(),
       last_modified: timefmt::http_date(mtime.floor() as i64),
-      etag: format!("\"{:x}\"", Md5::digest(etag_base.as_bytes())),
+      etag: content_etag(path, metadata)?,
       content_encoding,
       vary_accept_encoding: false,
-    }
+    })
   }
 
   fn apply(&self, builder: http::response::Builder) -> http::response::Builder {
@@ -272,7 +275,10 @@ fn file_response(
   headers: &HeaderMap,
 ) -> Response {
   let (path, metadata, encoding, vary) = precompressed(path, metadata, headers);
-  let mut file_headers = FileHeaders::of(&path, &metadata, mime_types, override_content_type, encoding);
+  let mut file_headers = match FileHeaders::of(&path, &metadata, mime_types, override_content_type, encoding) {
+    Ok(headers) => headers,
+    Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
+  };
   if vary {
     file_headers.vary_accept_encoding = true;
   }
@@ -495,14 +501,35 @@ fn random_hex(count: usize) -> std::io::Result<String> {
   Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-/// The whole file's body: the bytes the memo holds while the file's identity still holds, else a read that the
-/// memo keeps for the next request.
-fn whole_file_body(path: &Path, metadata: &std::fs::Metadata) -> std::io::Result<Body> {
-  let key = FileBodyKey {
+/// The identity a file's bytes are memoized under: its path, mtime and size.
+fn file_identity(path: &Path, metadata: &std::fs::Metadata) -> FileBodyKey {
+  FileBodyKey {
     path: path.to_path_buf(),
     mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
     size: metadata.size(),
-  };
+  }
+}
+
+/// The ETag of a file's bytes: the md5 of the bytes the response carries. A release that rewrites a file with the same
+/// bytes keeps its tag, so a revalidation of a stored copy answers 304 with no body. The tag is read once per identity.
+fn content_etag(path: &Path, metadata: &std::fs::Metadata) -> std::io::Result<String> {
+  let key = file_identity(path, metadata);
+  if let Some(etag) = ETAG_MEMO.lock().expect("the static file tag memo mutex is not poisoned").get(&key) {
+    return Ok(etag.clone());
+  }
+  let etag = format!("\"{:x}\"", Md5::digest(std::fs::read(path)?));
+  let mut memo = ETAG_MEMO.lock().expect("the static file tag memo mutex is not poisoned");
+  if memo.len() >= ETAG_MEMO_ENTRIES {
+    memo.clear();
+  }
+  memo.insert(key, etag.clone());
+  Ok(etag)
+}
+
+/// The whole file's body: the bytes the memo holds while the file's identity still holds, else a read that the
+/// memo keeps for the next request.
+fn whole_file_body(path: &Path, metadata: &std::fs::Metadata) -> std::io::Result<Body> {
+  let key = file_identity(path, metadata);
   if let Some(bytes) = FILE_BODY_MEMO.lock().expect("the static file body memo mutex is not poisoned").get(&key) {
     return Ok(streamed_body(bytes, true));
   }
@@ -710,5 +737,36 @@ mod tests {
     assert_eq!(ranged_response.headers().get(header::VARY).unwrap(), "Accept-Encoding");
     assert!(ranged_response.headers().get(header::CONTENT_ENCODING).is_none());
     assert_eq!(&body_of(ranged)[..], b"a body lon");
+  }
+
+  /// The tag names the bytes, not the mtime: a release that rewrites a file with the same bytes keeps its ETag, so a
+  /// revalidation answers 304, and a file with changed bytes gets a new tag.
+  #[test]
+  fn an_unchanged_file_keeps_its_etag_when_its_mtime_moves() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("static");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("lib.js");
+    std::fs::write(&file, "console.log(1);").unwrap();
+    let served = StaticDirectory::new(root);
+    let etag_of = |response: &Response| response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+    let tag = etag_of(&serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &HeaderMap::new()));
+
+    std::fs::File::options()
+      .write(true)
+      .open(&file)
+      .unwrap()
+      .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+      .unwrap();
+    let moved = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &HeaderMap::new());
+    assert_eq!(etag_of(&moved), tag, "the same bytes keep their tag when the mtime moves");
+    let mut revalidate = HeaderMap::new();
+    revalidate.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&tag).unwrap());
+    let not_modified = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &revalidate);
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+
+    std::fs::write(&file, "console.log(22);").unwrap();
+    let changed = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &HeaderMap::new());
+    assert_ne!(etag_of(&changed), tag, "changed bytes get a new tag");
   }
 }

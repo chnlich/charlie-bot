@@ -36,6 +36,7 @@
     // The entries every backend picker lists: the config's visible options and pools (visible: true),
     // options first. A hidden entry keeps its label in BACKEND_OPTIONS / BACKEND_POOLS.
     const BACKEND_PICKER_ENTRIES = {{ picker_entries|tojson }};
+    globalThis.ACTIVE_SESSION_BACKEND = {{ active_session_backend|tojson }};
     globalThis.ACTIVE_POOL_MEMBER = {{ active_pool_member|tojson }};
     globalThis.ACTIVE_NATIVE_MODEL = {{ active_native_model|tojson }};
     const DEFAULT_BACKEND_ID = {{ default_backend_id|tojson }};

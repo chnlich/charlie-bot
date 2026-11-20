@@ -88,8 +88,9 @@ Remaining lists the open milestones between the session and its Goal, so the use
 - Set the item's `link` to a page the browser renders. The set refuses a link it cannot render as a page.
   Comments on a page shown inside the app reach the session that the app shows, or the session named in the page's address
   when the app cannot report its session; comments on a page opened on its own reach the session named in its address.
-  Option picks on the page travel with its comments: one message to the same session, with one numbered entry per pick or comment in page order.
-  A pick's entry names its question `Q<n>` and carries the option's text. A worker-written page reaches its parent session, as its comments do.
+  Option picks on the page travel with its comments: one message to the same session, with one numbered entry
+  per pick or comment in page order. A pick's entry names its question `Q<n>` and carries the option's text.
+  A worker-written page reaches its parent session, as its comments do.
 - When the item decides on a plan page or an understanding page, use that page.
   That page already holds the options, the recommendation and the evidence.
 - For an item whose options compare in the item text alone, name each option in `text` and `context`, and set

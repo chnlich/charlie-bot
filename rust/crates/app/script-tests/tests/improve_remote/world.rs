@@ -663,15 +663,26 @@ impl World {
     let arch = std::env::consts::ARCH;
     match kind {
       "codex" => {
-        let bin = self.sandbox.dir(&format!("stage/codex-{version}/bin"));
+        // The package with its vendor layout: the executable beside the two helpers that tool calls start, and the
+        // path and resource directories and the manifest that the install unpacks with them.
+        let stage = self.sandbox.dir(&format!("stage/codex-{version}"));
+        let bin = stage.join("bin");
+        fs::create_dir_all(&bin).expect("the package's bin directory");
         write_executable(&bin.join("codex"), cli_script(CODEX, reported));
+        for helper in ["codex-code-mode-host", "codex-exec-server"] {
+          write_executable(&bin.join(helper), "#!/usr/bin/env bash\nexit 0\n");
+        }
+        fs::create_dir_all(stage.join("codex-path")).expect("the package's path directory");
+        write_executable(&stage.join("codex-path/rg"), "#!/usr/bin/env bash\nexit 0\n");
+        fs::create_dir_all(stage.join("codex-resources")).expect("the package's resource directory");
+        write_executable(&stage.join("codex-resources/bwrap"), "#!/usr/bin/env bash\nexit 0\n");
+        fs::write(stage.join("codex-package.json"), "{\"version\":\"synthetic\"}\n").expect("the package manifest");
         let asset = format!("codex-package-{arch}-unknown-linux-musl.tar.gz");
         let package =
           self.vendor_root.join(format!("github.com/openai/codex/releases/download/rust-v{version}/{asset}"));
         fs::create_dir_all(package.parent().expect("a package directory")).expect("the package directory");
-        let staged = bin.parent().expect("the stage directory");
         let status =
-          Command::new("tar").arg("-czf").arg(&package).arg("-C").arg(staged).arg("bin").status().expect("tar runs");
+          Command::new("tar").arg("-czf").arg(&package).arg("-C").arg(&stage).arg(".").status().expect("tar runs");
         assert!(status.success(), "tar could not write the fake package {}", package.display());
         let release = self.vendor_root.join(format!("api.github.com/repos/openai/codex/releases/tags/rust-v{version}"));
         fs::create_dir_all(release.parent().expect("a release directory")).expect("the release directory");

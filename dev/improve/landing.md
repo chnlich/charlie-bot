@@ -42,7 +42,7 @@ The launch exits 7 before it contacts the host when that output names no version
 
 The runner installs that exact version from the vendor's distribution, and no other CLI on the improve host runs a round:
 
-- Codex: the standalone package `codex-package-<arch>-unknown-linux-musl.tar.gz` of the GitHub release `rust-v<version>`. Its sha256 is the digest that the release's asset list publishes.
+- Codex: the standalone package `codex-package-<arch>-unknown-linux-musl.tar.gz` of the GitHub release `rust-v<version>`. Its sha256 is the digest that the release's asset list publishes. The whole package is unpacked with its layout: `codex-code-mode-host` and `codex-exec-server` sit beside the executable in `bin/`, because codex starts them for tool calls. A codex install that copied only the executable failed every tool call on 2026-11-20 04:52 UTC.
 - Claude Code: the native binary of the version's release, for `linux-arm64` or `linux-x64`. Its sha256 is the digest that the version's `manifest.json` publishes.
 
 The install goes into `~/improve/runner/members/<kind>-<version>/` under the runner's build lock, before the write boundary starts.

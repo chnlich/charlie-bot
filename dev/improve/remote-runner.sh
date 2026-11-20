@@ -506,8 +506,9 @@ check_sha256() {
   fi
 }
 
-# Codex: the standalone package of the release `rust-v<version>`. Its root holds bin/codex with the resources beside it,
-# as the standalone install on this host does. The digest is the one GitHub publishes for the package asset.
+# Codex: the whole standalone package of the release `rust-v<version>`, unpacked with its layout. Tool calls start
+# bin/codex-code-mode-host and bin/codex-exec-server beside bin/codex, and codex-path/ and codex-resources/ sit beside
+# them, so the install copies nothing out of the package. The digest is the one GitHub publishes for the package asset.
 install_codex() {
   local version=$1 arch=$2 stage=$3
   local asset="codex-package-$arch-unknown-linux-musl.tar.gz"

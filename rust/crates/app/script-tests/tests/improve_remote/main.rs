@@ -2693,6 +2693,38 @@ fn a_codex_round_runs_the_version_the_launcher_reads_not_the_hosts_copy() {
   let run = harness::run(&mut world.launcher_command_for(&env, &world.codex_arguments()));
   assert_eq!(run.code, 0, "{}", run.describe());
   assert_eq!(world.cli_runs(), [member_path(&world, "codex", "9.9.9")], "{}", run.describe());
+  // Tool calls start the helpers beside the executable, so the install keeps the vendor's layout whole.
+  let member = world.remote_home.join("improve/runner/members/codex-9.9.9");
+  for helper in ["bin/codex-code-mode-host", "bin/codex-exec-server", "codex-path/rg", "codex-resources/bwrap"] {
+    assert!(member.join(helper).is_file(), "the install lacks {helper}:\n{}", run.describe());
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_codex_package_that_differs_from_its_published_digest_exits_7_and_installs_nothing() {
+  let world = World::new();
+  world.publish_member_cli("codex", "9.9.9", "codex-cli 9.9.9");
+  // The package changes after the release listing names its digest, so the install must refuse what it fetched.
+  let package = world.vendor_root.join(format!(
+    "github.com/openai/codex/releases/download/rust-v9.9.9/codex-package-{}-unknown-linux-musl.tar.gz",
+    std::env::consts::ARCH
+  ));
+  let mut bytes = fs::read(&package).expect("the fake package");
+  bytes.push(b'x');
+  fs::write(&package, bytes).expect("the altered package");
+  let run = harness::run(&mut world.member_cli_command("codex", "9.9.9"));
+  assert_eq!(run.code, 7, "{}", run.describe());
+  assert!(stderr(&run).contains("the vendor publishes"), "{}", run.describe());
+  assert!(stderr(&run).contains("improve host version none"), "{}", run.describe());
+  let members = world.remote_home.join("improve/runner/members");
+  assert!(!members.join("codex-9.9.9").exists(), "a package that failed its digest was installed");
+  let stages: Vec<String> = fs::read_dir(&members)
+    .map(|entries| {
+      entries.map(|entry| entry.expect("a member entry").file_name().to_string_lossy().into_owned()).collect()
+    })
+    .unwrap_or_default();
+  assert!(stages.iter().all(|name| !name.starts_with(".stage-")), "a failed install left a stage: {stages:?}");
 }
 
 #[test]

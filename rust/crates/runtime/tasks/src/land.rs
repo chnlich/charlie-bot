@@ -6,6 +6,10 @@
 //! the repository's default branch and that branch declares a workflow with a `pull_request`
 //! trigger; every other landing pushes as today and records `landed-no-ci`.
 //!
+//! Before any push and before the PR is created, the call checks the commits' messages and diffs and the PR's title and
+//! body for the exact value of a credential the process holds (`credential_check`, the round's scanner). A hit refuses
+//! the call before anything leaves the host, and the refusal names the kind, never the value.
+//!
 //! Before any push, a diff that changes a CharlieBot web page refuses the call unless its PR body names the
 //! approved demo, the changed view's URL path and a screenshot at each window size (`web_screenshots`). The
 //! view paths are written into the head commit's trailer block before the push, so the commit that reaches the
@@ -27,7 +31,10 @@
 //! past the pushed commit's base; every other refusal — a hook, a dead transport, a timeout, an
 //! auth error — ends the call at once with git's stderr verbatim.
 
+use std::fs::DirBuilder;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use charliebot_core::git::ancestry_args;
@@ -271,6 +278,154 @@ fn repo_from_remote_url(url: &str) -> Option<String> {
   (!repo.is_empty() && repo.contains('/') && !repo.contains(':')).then(|| repo.to_string())
 }
 
+/// The scanner that the credential check runs: the same file the improve round's writes run
+/// (`dev/check-skills-host-leak.sh`), with the pattern loader it sources. The release binary carries both files, so the
+/// landing needs no install step and holds no second matcher.
+const LEAK_SCANNER: &str = include_str!("../../../../../dev/check-skills-host-leak.sh");
+const LEAK_PATTERNS: &str = include_str!("../../../../../dev/leak-patterns.sh");
+/// The scanner's exit code for a credential hit (`dev/check-skills-host-leak.sh`).
+const CREDENTIAL_HIT_EXIT: i32 = 3;
+const LEAK_SCAN_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A private directory that holds the scanner, its pattern loader and the values file of one check. The directory is
+/// removed when the check ends, so the values never outlive the landing call.
+struct LeakStage {
+  dir: PathBuf,
+  home: PathBuf,
+}
+
+impl LeakStage {
+  /// Creates the directory, mode 0700, and writes both scanner files into it. Any failure names the path it failed on.
+  fn create(home: &Path) -> anyhow::Result<Self> {
+    let dir = std::env::temp_dir().join(format!(
+      "charliebot-land-check-{}-{}",
+      std::process::id(),
+      OffsetDateTime::now_utc().unix_timestamp_nanos()
+    ));
+    DirBuilder::new()
+      .mode(0o700)
+      .create(&dir)
+      .map_err(|error| anyhow::anyhow!("cannot create the leak check directory {}: {error}", dir.display()))?;
+    let stage = LeakStage { dir, home: home.to_path_buf() };
+    for (name, text) in [("check-skills-host-leak.sh", LEAK_SCANNER), ("leak-patterns.sh", LEAK_PATTERNS)] {
+      let path = stage.dir.join(name);
+      std::fs::write(&path, text)
+        .map_err(|error| anyhow::anyhow!("cannot write the leak scanner {}: {error}", path.display()))?;
+    }
+    Ok(stage)
+  }
+
+  fn scanner(&self) -> PathBuf {
+    self.dir.join("check-skills-host-leak.sh")
+  }
+
+  fn values(&self) -> PathBuf {
+    self.dir.join("credential-values")
+  }
+}
+
+impl Drop for LeakStage {
+  fn drop(&mut self) {
+    if let Err(error) = std::fs::remove_dir_all(&self.dir) {
+      tracing::warn!(target: "charliebot_tasks", dir = %self.dir.display(), error = %error, "leak_check_stage_remove_failed");
+    }
+  }
+}
+
+/// Runs the scanner under bash with the profile home as `CHARLIEBOT_HOME`, its standard input read from *input* when
+/// given. Returns the exit code, the standard output and the standard error. A scanner that cannot start is an error
+/// that names it, and so is one that does not finish in time.
+async fn run_scanner(stage: &LeakStage, args: &[&str], input: Option<&Path>) -> anyhow::Result<(i32, Vec<u8>, String)> {
+  let scanner = stage.scanner();
+  let mut command = tokio::process::Command::new("bash");
+  command.arg(&scanner).args(args).env("CHARLIEBOT_HOME", &stage.home).kill_on_drop(true);
+  if let Some(path) = input {
+    let file = std::fs::File::open(path)
+      .map_err(|error| anyhow::anyhow!("cannot open the text for the leak check {}: {error}", path.display()))?;
+    command.stdin(Stdio::from(file));
+  }
+  let output = tokio::time::timeout(LEAK_SCAN_TIMEOUT, command.output())
+    .await
+    .map_err(|_| {
+      anyhow::anyhow!("the leak scanner {} timed out after {}s", scanner.display(), LEAK_SCAN_TIMEOUT.as_secs())
+    })?
+    .map_err(|error| anyhow::anyhow!("cannot run the leak scanner {} with bash: {error}", scanner.display()))?;
+  let code = output
+    .status
+    .code()
+    .ok_or_else(|| anyhow::anyhow!("the leak scanner {} was killed by a signal", scanner.display()))?;
+  Ok((code, output.stdout, String::from_utf8_lossy(&output.stderr).trim().to_string()))
+}
+
+/// Checks one text for the exact value of a credential this process holds. A hit refuses the landing, and the message
+/// names the kind and the field that the scanner printed; the value never appears in it.
+async fn check_field(stage: &LeakStage, field: &str, text: &str) -> anyhow::Result<()> {
+  let text_path = stage.dir.join("text");
+  std::fs::write(&text_path, text)
+    .map_err(|error| anyhow::anyhow!("cannot write the text for the leak check {}: {error}", text_path.display()))?;
+  let values = stage.values();
+  let values = values.display().to_string();
+  let (code, stdout, stderr) = run_scanner(stage, &["--credential-check", &values, field], Some(&text_path)).await?;
+  match code {
+    0 => Ok(()),
+    CREDENTIAL_HIT_EXIT => anyhow::bail!(
+      "landing refused before any push or PR create: {}; the kind named is the reason",
+      String::from_utf8_lossy(&stdout).trim()
+    ),
+    _ => anyhow::bail!("the leak scanner refused the check of {field} (exit {code}): {stderr}"),
+  }
+}
+
+/// The credential check of a landing, run before each push and before the pull request is created. It checks the
+/// message and the diff of every commit the task branch holds ahead of `base_ref`, and the title and body of
+/// `pr_text` when a pull request is created. The values are the profile home's credentials and the process's tokens,
+/// read by the scanner's `--credential-values`. A source that cannot be read refuses the landing; nothing goes out
+/// unchecked.
+async fn credential_check(
+  home: &Path,
+  worktree: &Path,
+  base_ref: &str,
+  pr_text: Option<&ResolvedPrText>,
+) -> anyhow::Result<()> {
+  let stage = LeakStage::create(home)?;
+  let (code, values, stderr) = run_scanner(&stage, &["--credential-values"], None).await?;
+  if code != 0 {
+    anyhow::bail!("the leak scanner could not read the credential values under {}: {stderr}", home.display());
+  }
+  std::fs::write(stage.values(), values)
+    .map_err(|error| anyhow::anyhow!("cannot write the credential values {}: {error}", stage.values().display()))?;
+
+  let range = format!("{base_ref}..HEAD");
+  let (ok, shas, err) = git::git_stdout(worktree, &["rev-list", &range], GIT_READ_TIMEOUT, "git rev-list").await;
+  if !ok {
+    anyhow::bail!("git rev-list {range} failed in {}: {err}", worktree.display());
+  }
+  for sha in shas.lines().filter(|line| !line.is_empty()) {
+    let (ok, message, err) =
+      git::git_stdout(worktree, &["show", "-s", "--format=%B", sha], GIT_READ_TIMEOUT, "git show").await;
+    if !ok {
+      anyhow::bail!("git show {sha} failed in {}: {err}", worktree.display());
+    }
+    check_field(&stage, &format!("commit {sha} message"), &message).await?;
+    let (ok, diff, err) = git::git_stdout(
+      worktree,
+      &["show", "--format=", "--patch", "--no-color", "--no-ext-diff", sha],
+      GIT_READ_TIMEOUT,
+      "git show",
+    )
+    .await;
+    if !ok {
+      anyhow::bail!("git show --patch {sha} failed in {}: {err}", worktree.display());
+    }
+    check_field(&stage, &format!("commit {sha} diff"), &diff).await?;
+  }
+  if let Some(text) = pr_text {
+    check_field(&stage, "PR title", &text.title).await?;
+    check_field(&stage, "PR body", &text.body).await?;
+  }
+  Ok(())
+}
+
 /// Run one landing: the whole flow, ending in a written `landing.json` and the record returned.
 pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> anyhow::Result<LandingRecord> {
   options.validate()?;
@@ -332,6 +487,7 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
 
     if !gated {
       // No gate: land as today — one fast-forward push of the head onto the base branch.
+      credential_check(home, &ctx.worktree, &base_ref, None).await?;
       let (ok, _, err) = git::git_stdout(
         &ctx.worktree,
         &["push", "origin", &format!("{sha}:refs/heads/{published}")],
@@ -381,6 +537,7 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
     }
 
     let pr_text = resolve_draft_pr_text(&ctx.worktree, published, options).await?;
+    credential_check(home, &ctx.worktree, &base_ref, Some(&pr_text)).await?;
     push_task_branch(&ctx, &ctx.branch_name).await?;
     let (pr_url, pr_number) = ensure_draft_pr(&ctx, &ctx.repo, published, &pr_text).await?;
     let expected = expected_workflow_paths(&workflow_files_at(&ctx.worktree, &sha).await?)?;
@@ -2027,6 +2184,109 @@ mod synthetic_repo_tests {
       .expect("the sha is UTF-8")
       .trim()
       .to_string()
+  }
+
+  /// A profile home whose credentials file holds `secret` as the `planted.api_key` leaf.
+  fn planted_home(root: &Path, secret: &str) -> PathBuf {
+    let home = root.join("home");
+    fs::create_dir(&home).expect("the profile home is created");
+    fs::write(home.join("credentials.yaml"), format!("planted:\n  api_key: {secret}\n"))
+      .expect("the credentials file is written");
+    home
+  }
+
+  /// One commit on the checked-out branch whose message is *message*.
+  fn commit_with_message(repo: &Path, file: &str, content: &str, message: &str) {
+    fs::write(repo.join(file), content).expect("the file is written");
+    assert!(Command::new("git").arg("-C").arg(repo).args(["add", "."]).status().unwrap().success());
+    assert!(
+      Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.test"])
+        .args(["commit", "-q", "-m", message])
+        .status()
+        .unwrap()
+        .success()
+    );
+  }
+
+  async fn fetch_main(repo: &Path) {
+    assert!(git::git_stdout(repo, &["fetch", "origin", "main"], GIT_WRITE_TIMEOUT, "git fetch").await.0);
+  }
+
+  #[tokio::test]
+  async fn a_credential_value_in_the_diff_refuses_the_landing() {
+    const SECRET: &str = "fake-landing-diff-value-0001";
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = planted_home(root.path(), SECRET);
+    let repo = synthetic_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", &format!("the key is {SECRET}\n"));
+    fetch_main(&repo).await;
+    let error = credential_check(&home, &repo, "origin/main", None).await.expect_err("the diff holds the value");
+    let text = format!("{error:#}");
+    assert!(text.contains("credentials.yaml leaf planted.api_key"), "the kind is named: {text}");
+    assert!(text.contains("commit ") && text.contains(" diff"), "the field is named: {text}");
+    assert!(!text.contains(SECRET), "the value never appears: {text}");
+  }
+
+  #[tokio::test]
+  async fn a_credential_value_in_a_commit_message_refuses_the_landing() {
+    const SECRET: &str = "fake-landing-message-value-0002";
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = planted_home(root.path(), SECRET);
+    let repo = synthetic_repo(root.path(), "feature");
+    commit_with_message(&repo, "notes.txt", "clean\n", &format!("notes {SECRET}"));
+    fetch_main(&repo).await;
+    let error = credential_check(&home, &repo, "origin/main", None).await.expect_err("the message holds the value");
+    let text = format!("{error:#}");
+    assert!(text.contains("credentials.yaml leaf planted.api_key"), "the kind is named: {text}");
+    assert!(text.contains(" message"), "the field is named: {text}");
+    assert!(!text.contains(SECRET), "the value never appears: {text}");
+  }
+
+  #[tokio::test]
+  async fn a_credential_value_in_the_pr_body_refuses_before_the_pr_is_created() {
+    const SECRET: &str = "fake-landing-body-value-0003";
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = planted_home(root.path(), SECRET);
+    let repo = synthetic_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    let text = ResolvedPrText { title: "Clean title".to_string(), body: format!("Evidence with {SECRET}\n") };
+    let error = credential_check(&home, &repo, "origin/main", Some(&text)).await.expect_err("the body holds the value");
+    let message = format!("{error:#}");
+    assert!(message.contains("PR body"), "the field is named: {message}");
+    assert!(!message.contains(SECRET), "the value never appears: {message}");
+  }
+
+  #[tokio::test]
+  async fn a_clean_branch_passes_and_a_value_under_the_minimum_length_passes() {
+    // Eleven characters: below the scanner's minimum, so the same value in the diff is not a credential.
+    const SHORT: &str = "fake-short1";
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = planted_home(root.path(), SHORT);
+    let repo = synthetic_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", &format!("the short value {SHORT} is not a credential\n"));
+    fetch_main(&repo).await;
+    let text = ResolvedPrText { title: "Clean title".to_string(), body: "Evidence.\n".to_string() };
+    credential_check(&home, &repo, "origin/main", Some(&text)).await.expect("the check passes");
+  }
+
+  #[tokio::test]
+  async fn a_credentials_file_that_cannot_be_parsed_refuses_the_landing() {
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = root.path().join("home");
+    fs::create_dir(&home).expect("the profile home is created");
+    fs::write(home.join("credentials.yaml"), "planted:\n  - listed-value-not-readable\n")
+      .expect("the credentials file is written");
+    let repo = synthetic_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", "clean\n");
+    fetch_main(&repo).await;
+    let error = credential_check(&home, &repo, "origin/main", None).await.expect_err("the file does not parse");
+    let text = format!("{error:#}");
+    assert!(text.contains("could not read the credential values"), "the refusal is named: {text}");
+    assert!(!text.contains("listed-value-not-readable"), "the content never appears: {text}");
   }
 
   #[tokio::test]

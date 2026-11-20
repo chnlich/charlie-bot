@@ -3,6 +3,8 @@
 // the fixed 2,500 ms when WAIT_FOR_CLEAR is 0), types the query, and records the search: e2e (the paint of the rows minus
 // the input event), the limit T of the query, L (the clear's bytes that arrive after the input), the stale paints, the
 // readback of status polls and frames in the search's window, and the competing traffic that was active.
+// With ENABLE_FRESH_PAGE=1 the scenario is 'fresh-page': each repeat loads a new page and types the query at once, with
+// no clear before it, so the search is the page's first. It has no clear, so its L is 0 by construction.
 //
 // Usage: node browser_search.js <base-url> <out.json> <reps> <query>...
 //
@@ -11,7 +13,7 @@
 // Exit code 3 when a gate fails; the record is written first.
 'use strict';
 
-const { runScenario } = require('./measure_common');
+const { runScenario, enableFreshPageFromEnvironment } = require('./measure_common');
 
 async function main() {
   const [baseUrl, out, repsArg, ...queries] = process.argv.slice(2);
@@ -19,7 +21,8 @@ async function main() {
     console.error('usage: node browser_search.js <base-url> <out.json> <reps> <query>...');
     process.exit(2);
   }
-  await runScenario({ baseUrl, out, reps: Number(repsArg), queries, scenario: 'after-clear' });
+  const scenario = enableFreshPageFromEnvironment() ? 'fresh-page' : 'after-clear';
+  await runScenario({ baseUrl, out, reps: Number(repsArg), queries, scenario });
 }
 
 main().catch((error) => {

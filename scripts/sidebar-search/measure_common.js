@@ -14,11 +14,14 @@
 //                          first search after the server starts, which is a cold sample.
 //   WAIT_FOR_CLEAR         1 (default): after a clear, the 'after-clear' scenario types once the clear's own requests
 //                          (list, row refresh, badge) have ended. 0: it types after the fixed 2,500 ms wait.
+//   ENABLE_FRESH_PAGE      1: browser_search.js loads a new page for each search, with no clear before it (the
+//                          'fresh-page' scenario). 0 (default): every search runs on one page, after a clear.
 
 'use strict';
 
 const fs = require('fs');
 const { LIMIT_T_S, limitFor } = require('./limits');
+const { recordNetwork, decodedTotal, wireBytesIn, wireTotal } = require('./wire_bytes');
 
 const SLOW = { offline: false, latency: 300, downloadThroughput: 12500, uploadThroughput: 12500 };
 // After a paint, the search's counters settle this long before the stale paints of the search are read. A Workspace
@@ -49,6 +52,15 @@ function waitForClearFromEnvironment() {
   return value === '1';
 }
 
+// Whether browser_search.js times each search on a freshly loaded page. Any value but 0 or 1 stops the run.
+function enableFreshPageFromEnvironment() {
+  const value = process.env.ENABLE_FRESH_PAGE ?? '0';
+  if (value !== '0' && value !== '1') {
+    throw new Error(`ENABLE_FRESH_PAGE must be 0 or 1, got '${value}'`);
+  }
+  return value === '1';
+}
+
 // The category of a request the page makes, by its path. A path the runner does not name is 'other'.
 function categoryOf(url) {
   const { pathname, searchParams } = new URL(url);
@@ -60,50 +72,6 @@ function categoryOf(url) {
   if (/^\/api\/sessions\/[^/]+\/usage$/.test(pathname)) return 'usage';
   if (pathname.startsWith('/api/concurrency/')) return 'concurrency';
   return 'other';
-}
-
-// Every request the page makes once its CDP session is open. Each record keeps the time it was sent, the time it ended
-// and how it ended (finished, aborted by the page, or failed), and each response chunk with the wire bytes the network
-// reports for it. Times are this process's wall clock, the same clock the page's input events carry.
-function trackNetwork(cdp) {
-  const byId = new Map();
-  const list = [];
-  cdp.on('Network.requestWillBeSent', (event) => {
-    const record = {
-      url: event.request.url,
-      category: categoryOf(event.request.url),
-      sentWall: Date.now(),
-      chunks: [],
-      endWall: null,
-      outcome: 'pending',
-    };
-    byId.set(event.requestId, record);
-    list.push(record);
-  });
-  cdp.on('Network.dataReceived', (event) => {
-    const record = byId.get(event.requestId);
-    if (record) record.chunks.push({ wall: Date.now(), bytes: event.encodedDataLength });
-  });
-  cdp.on('Network.loadingFinished', (event) => {
-    const record = byId.get(event.requestId);
-    if (record) {
-      record.endWall = Date.now();
-      record.outcome = 'finished';
-    }
-  });
-  cdp.on('Network.loadingFailed', (event) => {
-    const record = byId.get(event.requestId);
-    if (record) {
-      record.endWall = Date.now();
-      record.outcome = event.canceled ? 'aborted' : 'failed';
-    }
-  });
-  return list;
-}
-
-// The wire bytes of a request's chunks that arrived after `from` and at or before `to`.
-function bytesIn(record, from = -Infinity, to = Infinity) {
-  return record.chunks.filter((chunk) => chunk.wall > from && chunk.wall <= to).reduce((sum, chunk) => sum + chunk.bytes, 0);
 }
 
 // Waits until every clear request sent after `mark` has ended. The page's clear sends its requests in the click
@@ -214,7 +182,7 @@ async function openPage(baseUrl, { accessKey = '', sessionId = '' } = {}) {
   });
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
-  const net = { list: trackNetwork(cdp) };
+  const net = { list: recordNetwork(cdp, categoryOf) };
   return {
     browser,
     page,
@@ -254,7 +222,7 @@ function readbackOf(session, inputWall, paintWall, e2eMs) {
   };
   const statusRequests = session.net.list.filter((r) => r.category === 'status' && inWindow(r.sentWall));
   const statusBytes = session.net.list.filter((r) => r.category === 'status')
-    .reduce((sum, r) => sum + bytesIn(r, inputWall, paintWall), 0);
+    .reduce((sum, r) => sum + wireBytesIn(r, inputWall, paintWall), 0);
   const frameRecords = session.frames.filter((f) => inWindow(f.t));
   const byType = {};
   for (const frame of frameRecords) {
@@ -288,19 +256,23 @@ function competingOf(session, inputWall, paintWall) {
 
 // One search from the reader's keystroke to the paint of its rows, with the request's Resource Timing and the traffic the
 // search's window carries. `scenario` is 'after-clear' (the input follows the clear's requests, or the fixed 2,500 ms
-// wait when WAIT_FOR_CLEAR is 0) or 'clear-then-retype' (the input comes 300 ms after the clear). The e2e time is the
-// paint minus the input event, and encodedBodySize is the body as it crossed the link.
+// wait when WAIT_FOR_CLEAR is 0), 'clear-then-retype' (the input comes 300 ms after the clear), or 'fresh-page' (no
+// clear: the page was loaded for this search alone, and its box is empty). The e2e time is the paint minus the input
+// event, and encodedBodySize is the body as it crossed the link.
 async function oneSearch(session, query, scenario = 'after-clear') {
   const { page, net } = session;
+  const fresh = scenario === 'fresh-page';
   const mark = net.list.length;
   const clickWall = Date.now();
-  await page.evaluate(() => clearSidebarSearch());
-  if (scenario === 'clear-then-retype') {
-    await page.waitForTimeout(300);
-  } else if (waitForClearFromEnvironment()) {
-    await waitForClearRequests(page, net, mark);
-  } else {
-    await page.waitForTimeout(2500);
+  if (!fresh) {
+    await page.evaluate(() => clearSidebarSearch());
+    if (scenario === 'clear-then-retype') {
+      await page.waitForTimeout(300);
+    } else if (waitForClearFromEnvironment()) {
+      await waitForClearRequests(page, net, mark);
+    } else {
+      await page.waitForTimeout(2500);
+    }
   }
   const before = await page.evaluate(() => ({ n: window.__inputs.length, r: window.__renders.length }));
   const countersBefore = await readCounters(page);
@@ -356,27 +328,43 @@ async function oneSearch(session, query, scenario = 'after-clear') {
   r.counters = counterDelta(countersBefore, countersAfter);
   r.stale_paints_observed = observedStale;
 
-  const clearRequests = net.list.slice(mark)
+  // A fresh page sends no clear, so it has no clear requests and no clear wait.
+  const clearRequests = fresh ? [] : net.list.slice(mark)
     .filter((q) => CLEAR_CATEGORIES.has(q.category) && q.sentWall <= inputWall);
   const lastClearEnd = Math.max(clickWall, ...clearRequests.map((q) => q.endWall ?? clickWall));
-  const L = clearRequests.reduce((sum, q) => sum + bytesIn(q, inputWall), 0);
+  const L = clearRequests.reduce((sum, q) => sum + wireBytesIn(q, inputWall), 0);
   // The wait runs from the clear's last request end when the input follows the requests; the fixed and the 300 ms
   // waits run from the click.
-  const waitPolicy = scenario === 'clear-then-retype' ? 'retype-300ms'
-    : (waitForClearFromEnvironment() ? 'clear-requests' : 'fixed-2500ms');
+  let waitPolicy = 'clear-requests';
+  if (fresh) waitPolicy = 'no-clear';
+  else if (scenario === 'clear-then-retype') waitPolicy = 'retype-300ms';
+  else if (!waitForClearFromEnvironment()) waitPolicy = 'fixed-2500ms';
   r.clear = {
     wait_policy: waitPolicy,
-    wait_ms: inputWall - (waitPolicy === 'clear-requests' ? lastClearEnd : clickWall),
+    wait_ms: fresh ? null : inputWall - (waitPolicy === 'clear-requests' ? lastClearEnd : clickWall),
     requests: clearRequests.map((q) => ({
       category: q.category,
       path: new URL(q.url).pathname,
-      encoded_bytes: q.chunks.reduce((sum, c) => sum + c.bytes, 0),
+      encoded_bytes: wireTotal(q),
       outcome: q.outcome,
-      bytes_after_input: bytesIn(q, inputWall),
+      bytes_after_input: wireBytesIn(q, inputWall),
     })),
   };
   r.L_bytes = L;
   r.readback = readbackOf(session, inputWall, paintWall, r.e2e_ms);
+  // Every request the span sent, from the clear (or the fresh page's search) to the settle. encoded_bytes is the
+  // request's wire total: Chrome's total when it finished, else the decoded body it received before it ended.
+  r.requests = net.list.slice(mark).map((q) => ({
+    category: q.category,
+    path: new URL(q.url).pathname,
+    outcome: q.outcome,
+    content_encoding: q.contentEncoding,
+    sent_ms: q.sentWall - inputWall,
+    end_ms: q.endWall === null ? null : q.endWall - inputWall,
+    encoded_bytes: wireTotal(q),
+    decoded_bytes: decodedTotal(q),
+    chrome_total_bytes: q.chromeTotal,
+  }));
   const competing = competingOf(session, inputWall, paintWall);
   r.competing = competing.classes;
   r.competing_active = competing.active;
@@ -440,10 +428,14 @@ function describeRun(run) {
 }
 
 // Runs the searches of one scenario over the queries and writes the run record to `out`. Each query runs once untimed
-// first when WARM_UP is 1. The record is written before the gates decide the exit code: a gate that fails exits 3.
+// first when WARM_UP is 1. A 'fresh-page' run loads a new page for every search, warm-up included, so each timed search
+// is the first on its page; the other scenarios share one page. The record is written before the gates decide the exit
+// code: a gate that fails exits 3.
 async function runScenario({ baseUrl, out, reps, queries, scenario }) {
   const warmUp = warmUpFromEnvironment();
-  const session = await openPage(baseUrl, { accessKey: accessKeyFromEnvironment() });
+  const accessKey = accessKeyFromEnvironment();
+  const fresh = scenario === 'fresh-page';
+  const sessions = [];
   const result = {
     phase: 'slow',
     scenario,
@@ -454,31 +446,58 @@ async function runScenario({ baseUrl, out, reps, queries, scenario }) {
     wait_for_clear: waitForClearFromEnvironment(),
     limits_T_s: LIMIT_T_S,
     link: SLOW,
-    started: new Date(session.started).toISOString(),
-    page_load_ms: session.pageLoadMs,
+    started: null,
+    page_load_ms: null,
     runs: [],
   };
-  try {
+  const loadPage = async () => {
+    const session = await openPage(baseUrl, { accessKey });
+    sessions.push(session);
     await session.cdp.send('Network.emulateNetworkConditions', SLOW);
+    return session;
+  };
+  let shared = null;
+  // One search: on the run's page, or on a page loaded for this search alone and closed after it.
+  const search = async (query) => {
+    if (!fresh) return oneSearch(shared, query, scenario);
+    const session = await loadPage();
+    try {
+      return await oneSearch(session, query, scenario);
+    } finally {
+      await session.browser.close();
+    }
+  };
+  try {
+    if (!fresh) shared = await loadPage();
     if (warmUp) {
-      for (const query of queries) await oneSearch(session, query, scenario);
+      for (const query of queries) await search(query);
     }
     for (let rep = 0; rep < reps; rep += 1) {
       for (const query of queries) {
-        const run = await oneSearch(session, query, scenario);
+        const run = await search(query);
         run.rep = rep;
         result.runs.push(run);
         console.log(describeRun(run));
       }
     }
   } finally {
-    result.blocked = session.blocked;
-    result.ws = session.wsCounts();
-    result.page_frames_total = session.frames.length;
+    const first = sessions[0];
+    if (first) {
+      result.started = new Date(first.started).toISOString();
+      result.page_load_ms = first.pageLoadMs;
+    }
+    result.blocked = sessions.flatMap((s) => s.blocked);
+    result.ws = { connected: 0, errors: 0 };
+    for (const session of sessions) {
+      const counts = session.wsCounts();
+      result.ws.connected += counts.connected;
+      result.ws.errors += counts.errors;
+    }
+    result.page_frames_total = sessions.reduce((sum, s) => sum + s.frames.length, 0);
     result.summary = summarize(result.runs);
     result.gates = gatesOf(result.runs);
     fs.writeFileSync(out, JSON.stringify(result, null, 1));
-    await session.browser.close();
+    if (shared) await shared.browser.close();
   }
   if (!result.gates.ok) {
     console.error(`${result.gates.failures.length} gate check(s) failed; see ${out}`);
@@ -546,6 +565,7 @@ module.exports = {
   accessKeyFromEnvironment,
   warmUpFromEnvironment,
   waitForClearFromEnvironment,
+  enableFreshPageFromEnvironment,
   openPage,
   oneSearch,
   gatesOf,

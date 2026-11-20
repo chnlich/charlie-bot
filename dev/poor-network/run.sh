@@ -13,6 +13,10 @@
 #                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
 #                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
+# --seed-home DIR  the view home that the run copies as its seed (default: the shared home
+#                  ~/improve/mock-home/<version>-view-<sessions>). A run with a pinned home names it here, so a
+#                  rebuild of the shared home cannot change the run's seed; each side still checks the copy's
+#                  content hash, which the run records in seed.sha256.
 #
 # Every side holds the bench lock of lock.sh around its trial, not the builds, waiting up to 2 h for it, so two bench
 # runs on a host never measure side by side; no option chooses another lock or skips it. One hold covers one side
@@ -57,6 +61,7 @@ assets_dir=
 detach=0
 lock_wait=$BENCH_LOCK_WAIT_SECONDS
 open_rate_args=()
+seed_home=
 
 usage() {
   # The header block runs from line 2 to the `set -euo pipefail` that ends it, so an added line never drops text.
@@ -87,6 +92,7 @@ while (($#)); do
     --open-cpu-rate) open_rate_args=(--open-cpu-rate "${2:?--open-cpu-rate needs a value}"); shift 2 ;;
     --assets-dir) assets_dir=${2:?--assets-dir needs a value}; shift 2 ;;
     --lock-wait) lock_wait=${2:?--lock-wait needs a value}; shift 2 ;;
+    --seed-home) seed_home=${2:?--seed-home needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
@@ -215,10 +221,15 @@ home_shape=view
 case ",$scenarios," in
   *,search,*) home_shape=search ;;
 esac
-mock_home="$HOME/improve/mock-home/$mock_version-$home_shape-$mock_sessions"
-if [[ ! -d $mock_home ]]; then
-  echo "poor-network: generating the $home_shape home of $mock_sessions sessions at $mock_home"
-  "$mock_bin" generate "$mock_home" --sessions "$mock_sessions" --shape "$home_shape"
+if [[ -n $seed_home ]]; then
+  [[ $home_shape == view ]] || die 2 "--seed-home holds the view home; the search scenario needs the search home"
+  mock_home=$seed_home
+else
+  mock_home="$HOME/improve/mock-home/$mock_version-$home_shape-$mock_sessions"
+  if [[ ! -d $mock_home ]]; then
+    echo "poor-network: generating the $home_shape home of $mock_sessions sessions at $mock_home"
+    "$mock_bin" generate "$mock_home" --sessions "$mock_sessions" --shape "$home_shape"
+  fi
 fi
 # Both sides read a copy of the home that this run owns: the shared home is also the improve trials' seed, and a change
 # to it would move the newest-row targets between the sides. The copy's content hash is recorded, and each side checks

@@ -2,8 +2,8 @@
 // defines it. Each repetition publishes one release (a comment appended to the trial tree's served config.js, then the
 // server restarted from the same launch as the trial's own), and times the measured tab's catch-up: the probe message
 // the bench posts during the restart is on screen when the page is current. The gated wait of each cell runs from its
-// return to the catch-up of the socket that carried the probe row; the probe row's paint is reported beside it. The
-// cells are:
+// return to the page's catch-up (its first catch-up after its last document started); the probe row's paint is reported
+// beside it. The cells are:
 //   restart-visible     the tab stays visible; the return is the replacement's server_ready.
 //   restart-hidden-1    the tab is hidden; it is shown 1 s after its catch-up completes, while the stored shell refresh
 //                       runs (expected: the refresh is cancelled, the page keeps its code, no navigation).
@@ -223,9 +223,9 @@ async function untilOrCap(check, capAt) {
   }
 }
 
-// The first catch-up that completes on the page's socket after the release.
-function catchupAfter(tab, readyMs) {
-  return tab.frames.find((frame) => frame.type === 'catchup_complete' && frame.at >= readyMs) ?? null;
+// The first catch-up that completes on any socket of the page at or after `at`.
+function catchupAfter(tab, at) {
+  return tab.frames.find((frame) => frame.type === 'catchup_complete' && frame.at >= at) ?? null;
 }
 
 // The catch-up bytes the page counted for its socket's replay after the release, from the socket telemetry it posts
@@ -399,23 +399,26 @@ async function restartRep(ctx, name) {
     );
     observer.state.stop = true;
     await observer.done;
-    // The page's first catch-up after the release: a hidden swap navigates after it, so the gap to the first document
-    // is the stored-shell refresh that landing requirement B adds. The page posts its catch-up bytes after the replay,
-    // so the catch-up frame is read after that post, when the frame has arrived.
+    // The gated catch-up is the page's first catch-up after its last document started, or after the replacement's
+    // server_ready when the page never reloaded: a reloaded page is gated on its own catch-up, not the old document's.
+    // The page posts its catch-up bytes after the replay, so the frames are read once that post has arrived.
+    const documents = observer.state.documents;
+    const since = Math.max(readyMs, documents.length > 0 ? documents[documents.length - 1] : readyMs);
+    const caughtUp = await poll(
+      async () => catchupAfter(tab, since),
+      SHOW_TIMEOUT_MS,
+      'the catch-up that brings the page current',
+    );
     const telemetry = await poll(async () => catchupBytesAfter(tab, readyMs), SHOW_TIMEOUT_MS, 'the catch-up telemetry');
-    const split = returnSplit(tab, releaseAt, readyMs, tag, cursor0, heldIds, rowAt);
-    if (split.catchupAtMs === null) {
-      throw new Error(`${name}: the probe row's socket reported no catchup_complete, so the repetition has no reading`);
-    }
     return {
       cell: name,
       serverReadyMs: readyMs - releaseAt,
       restoreMs: restoreAt - releaseAt,
       rowMs: rowAt - releaseAt,
-      // The gated quantity (plan 6 v4 section 4.2): the wait from the return to catch-up, the catch-up of the socket
-      // that carried the probe row. The return is the show, or the replacement's server_ready for a tab visible
-      // throughout. A catch-up before the return leaves no wait.
-      waitMs: Math.max(0, readyMs + split.catchupAtMs - restoreAt),
+      // The gated quantity (plan 6 v4 section 4.2): the wait from the return to the caught-up instant. The return is
+      // the show, or the replacement's server_ready for a tab visible throughout. A catch-up before the return leaves
+      // no wait.
+      waitMs: Math.max(0, caughtUp.at - restoreAt),
       // Report only: the wait from the return to the probe row's paint.
       probeWaitMs: Math.max(0, rowAt - restoreAt),
       documentsMs: observer.state.documents.map((at) => at - releaseAt),
@@ -425,7 +428,7 @@ async function restartRep(ctx, name) {
       blackoutMs: cell.reset ? LINK.blackoutSeconds * 1000 : null,
       assetVersions: [version0, version1],
       cursor: cursor0,
-      split,
+      split: returnSplit(tab, releaseAt, readyMs, tag, cursor0, heldIds, rowAt),
     };
   }, BOOT_SCRIPT);
 }

@@ -389,8 +389,9 @@ many repetitions reached the newest message, and the page reloads across its rep
 
 Plan 6 v4 section 4.2's return cells. Each repetition publishes one release (a comment appended to the trial tree's
 served `web/static/js/config.js`, then the trial server restarted from its own launch record in `/proc`), posts one
-probe message while the server is down, and times the measured tab's return to its catch-up: the catch-up of the
-socket that carried the probe row (`catchup_complete`). The probe row's paint is reported beside it, not gated.
+probe message while the server is down, and times the measured tab's return to its catch-up: the page's first
+`catchup_complete` after its last document started, or after the replacement's `server_ready` when it never reloaded.
+The probe row's paint is reported beside it, not gated.
 
 | Cell | The tab | Return point | Gated metric (target <= 2000 ms, median) | Report only |
 |---|---|---|---|---|

@@ -566,7 +566,7 @@ async fn session_usage(
   let mut payload = Map::new();
   payload.insert(
     "session".to_string(),
-    match session_metadata_value(&features.store, &meta) {
+    match listed_session_metadata(&features.store, &meta) {
       Ok(value) => value,
       Err(error) => return store_error(error),
     },
@@ -1173,7 +1173,7 @@ fn displayed_backend_id(meta: &SessionMetadata, run_backend: Option<&str>, defau
   active_backend.unwrap_or(default_backend).to_string()
 }
 
-fn session_metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
+fn listed_session_metadata(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   listing::metadata_value(store, &response_metadata(store, meta)?)
 }
 

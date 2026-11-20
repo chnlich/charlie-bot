@@ -1076,7 +1076,7 @@ mod tests {
   }
 
   /// `/history` answers a gzip client in its own per-response form, and those bytes decompress to the series. The
-  /// transport's memo never serves a body whose version moves with every request, so this route pays no level-9
+  /// transport's memo never serves a body whose version moves with every request, so this route pays no memoized
   /// deflate of it.
   #[tokio::test]
   async fn the_history_route_sends_its_own_gzip_form() {

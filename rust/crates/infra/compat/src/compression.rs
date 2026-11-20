@@ -3,8 +3,9 @@
 //! A response pays the deflate once per body it builds; a memo serves the repeats. The level-1
 //! deflator covers the per-response bodies of ordinary size, and its byte count is one counter. A
 //! per-response body too large for its short hash chain to find the long matches takes the level-4
-//! form instead. The level-9 deflator covers a body a memo keeps and serves on every repeat, where
-//! the smaller output reaches every repeat request and is worth a slower one-time deflate.
+//! form instead. A body a memo keeps and serves on every repeat deflates at the level-9 and level-8
+//! forms, and the memo keeps whichever is smaller: the output reaches every repeat request, so the
+//! second deflate is paid once per version and is worth it.
 //!
 //! A body a memo keeps also has a zstd form, which a client that accepts zstd takes instead. Zstd
 //! compresses a page's markup and inline script smaller than gzip does. The memo pays its slower
@@ -87,20 +88,32 @@ pub fn gzip_level_four(data: &[u8]) -> Vec<u8> {
   compress(data, 4)
 }
 
-/// The level-9 gzip form of a body a memo serves on every repeat request.
+/// The gzip levels a memoized body deflates at; the smaller form is the one the memo keeps.
 ///
-/// The memo keeps the output, so one body pays the slowest level once and every repeat request reads the smaller
-/// bytes. On the 7,160-session mock home the chat page body falls from 99,596 to 98,326 bytes (1.28%). That costs
-/// 2.2 ms more of a 5.3 ms deflate. The compact listing falls from 172,109 to 169,758 (1.37%).
+/// Level 9 is not the smaller form of every body with this backend. On the 14,451-row status answer of the mock home,
+/// level 9 produces 352,154 bytes where level 8 produces 308,813 (12.3% more), and level 8 takes 18 ms where level 9
+/// takes 24 ms. On the chat page body the level-9 form is 287 bytes smaller than the level-8 one (0.3%). The level a
+/// body prefers depends on the body, so a memoized body deflates at both and keeps the smaller form.
+const MEMOIZED_LEVELS: [u32; 2] = [9, 8];
+
+/// The smallest gzip form of a body a memo serves on every repeat request.
+///
+/// The memo keeps the output, so the deflates pay once per body version and every repeat request reads the smaller
+/// bytes: on the 14,451-session mock home's chat page the level-1 form is 143,335 bytes and the memoized form is
+/// 98,761 (31.1% smaller). The second deflate costs the level-8 form's own time once per version, which the repeat
+/// requests do not pay.
 pub fn gzip_memoized_body(data: &[u8]) -> Vec<u8> {
-  compress(data, 9)
+  let mut forms = MEMOIZED_LEVELS.iter().map(|level| compress(data, *level));
+  let first = forms.next().expect("MEMOIZED_LEVELS is not empty");
+  forms.fold(first, |smallest, form| if form.len() < smallest.len() { form } else { smallest })
 }
 
 /// The zstd level of a body a memo serves on every repeat request.
 ///
 /// The memo keeps the output, so the one-time compression buys the smaller bytes for every repeat request. Level 19
 /// trades a slower one-time compression for a smaller body. On the 7,160-session mock home the chat page body falls
-/// from 99,974 bytes (gzip level 9) to 86,817 (13.2%). That costs about 120 ms of a version's first request.
+/// from 99,974 bytes (the memoized gzip form) to 86,817 (13.2%). That costs about 120 ms of a version's first
+/// request.
 pub const ZSTD_MEMOIZED_LEVEL: i32 = 19;
 
 /// The level-19 zstd form of a body a memo serves on every repeat request.
@@ -280,6 +293,31 @@ mod tests {
     let decoded = zstd::decode_all(zstd.as_slice()).expect("the zstd form decodes");
     assert_eq!(decoded, body, "the zstd form decodes to the body it compressed");
     assert!(zstd.len() < gzip_memoized_body(&body).len(), "the memo's zstd form is smaller than its gzip form");
+  }
+
+  #[test]
+  fn a_memoized_body_takes_the_smaller_of_the_two_levels() {
+    // A body of near-identical Han-heavy rows, the shape of a status answer: this backend's level 9 runs past its
+    // level 8 on such a body, so the memoized form is the smaller of the two, not the level-9 form alone.
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut body = String::new();
+    for index in 0..200 {
+      let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        char::from_u32(0x4E00 + (state % 0x5000) as u32).expect("the Han block holds scalar values")
+      };
+      let goal: String = std::iter::repeat_with(&mut next).take(160).collect();
+      body.push_str(&format!("{{\"id\":\"{index:08x}\",\"goal\":\"{goal}\"}}\n"));
+    }
+    let smallest =
+      [8u32, 9].map(|level| compress(body.as_bytes(), level)).into_iter().min_by_key(Vec::len).expect("two forms");
+    let memoized = gzip_memoized_body(body.as_bytes());
+    assert_eq!(memoized, smallest, "the memoized form is the smaller of the two levels'");
+    let mut decoded = String::new();
+    flate2::read::GzDecoder::new(memoized.as_slice()).read_to_string(&mut decoded).unwrap();
+    assert_eq!(decoded, body, "the memoized form decodes to the body it compressed");
   }
 
   /// The static tail every body of the synthetic page carries.

@@ -10,8 +10,9 @@
 //!
 //! A complete body that carries an ETag has one version named by that ETag, so the memo keeps its
 //! deflated bytes and serves them to every repeat request. A body the memo can hold deflates once per
-//! version at the smaller level-9 form ([`charliebot_compat::compression::gzip_memoized_body`]); a body
-//! too long for the memo's cap, and a deflate that runs per response, keep the level-1 form.
+//! version into the smaller of the level-9 and level-8 forms
+//! ([`charliebot_compat::compression::gzip_memoized_body`]); a body too long for the memo's cap, and a
+//! deflate that runs per response, keep the level-1 form.
 
 use std::io::Write;
 use std::sync::{LazyLock, Mutex};
@@ -205,9 +206,9 @@ const MEMO_ENTRIES: usize = 64;
 /// The largest compressed body the memo holds; a larger one is compressed and sent without being kept.
 const MEMO_MAX_BODY_BYTES: usize = 256 * 1024;
 
-/// The longest body whose level-9 deflate the memo still holds: [`MEMO_MAX_BODY_BYTES`] less a margin for the gzip
+/// The longest body whose memoized deflate the memo still holds: [`MEMO_MAX_BODY_BYTES`] less a margin for the gzip
 /// header, trailer and worst-case stored-block overhead. A body at this length compresses to at most the cap, so a
-/// level-9 deflate of it is kept, and a longer body keeps the per-response level-1 deflate of the cap's own case.
+/// memoized deflate of it is kept, and a longer body keeps the per-response level-1 deflate of the cap's own case.
 const MEMO_MAX_INPUT_BYTES: usize = MEMO_MAX_BODY_BYTES - 512;
 
 /// One memo key: the request's path and query, and the ETag of the response it answered.
@@ -229,9 +230,9 @@ static BODY_MEMO: LazyLock<Mutex<BodyMemo<BodyKey>>> =
 /// The deflated body the gzip responder sends for one complete response: the bytes memoized for this request's
 /// resource and ETag, or a fresh deflate that the memo keeps for the next request.
 ///
-/// A body the memo can hold deflates once per version at level 9, and every repeat request reads the smaller bytes.
-/// A longer body, which the memo's cap would reject, keeps the level-1 deflate it pays once per response; a response
-/// with no ETag to key on takes the same per-response form.
+/// A body the memo can hold deflates once per version into the smaller of the level-9 and level-8 forms, and every
+/// repeat request reads the smaller bytes. A longer body, which the memo's cap would reject, keeps the level-1
+/// deflate it pays once per response; a response with no ETag to key on takes the same per-response form.
 fn compressed_body(uri: &Uri, parts: &http::response::Parts, body: &[u8]) -> Bytes {
   compressed_body_with_input_limit(uri, parts, body, MEMO_MAX_INPUT_BYTES)
 }
@@ -412,7 +413,8 @@ mod tests {
 
   #[test]
   fn a_body_past_the_memo_input_bound_keeps_its_level_one_deflate() {
-    // A body above the memo input bound uses level 1 instead of level 9, which a kept version's repeats pay once.
+    // A body above the memo input bound uses level 1 instead of a memoized form, which a kept version's repeats pay
+    // once.
     let body = "a".repeat(64);
     let response = Response::builder().header(header::ETAG, "\"v1\"").body(Body::empty()).unwrap();
     let (parts, _) = response.into_parts();

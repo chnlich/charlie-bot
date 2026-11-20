@@ -17,6 +17,9 @@ mod home;
 mod process;
 mod scan;
 
+/// The `charliebot` subcommand that reaches [`main`]: the CLI dispatcher lists it in its vocabulary and routes it here.
+pub const SUBCOMMAND: &str = "switch-helper";
+
 /// The entry point that runs one switch helper. `--help` exits 0 so that the switch can tell whether a release's
 /// binary carries the subcommand at all. An unknown name is a usage error.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {

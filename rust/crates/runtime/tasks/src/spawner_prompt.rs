@@ -105,6 +105,10 @@ pub const REMOTE_SCRATCH_SECTION: &str = "remote_scratch";
 /// The section that points a writer at the model-text rules (`TEXT_MODEL_READS_SECTION`).
 pub const TEXT_MODEL_READS_SECTION: &str = "text_model_reads";
 
+/// The section that states the screenshots a web page change carries and the checks a review runs on them
+/// (`WEB_UI_SCREENSHOTS_SECTION`).
+pub const WEB_UI_SCREENSHOTS_SECTION: &str = "web_ui_screenshots";
+
 /// The section that names the session (`SESSION_INFO_SECTION`).
 pub const SESSION_INFO_SECTION: &str = "session_info";
 

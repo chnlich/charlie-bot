@@ -9,7 +9,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -35,6 +35,7 @@ type Handler = Box<dyn Fn(&Value) -> Option<(u16, Value)> + Send + Sync>;
 struct StubApi {
   port: u16,
   bodies: Arc<Mutex<Vec<Value>>>,
+  requests: Arc<AtomicUsize>,
   stop: Arc<AtomicBool>,
   thread: Option<JoinHandle<()>>,
 }
@@ -45,14 +46,17 @@ impl StubApi {
     listener.set_nonblocking(true).expect("the listener goes nonblocking");
     let port = listener.local_addr().expect("the listener has an address").port();
     let bodies = Arc::new(Mutex::new(Vec::new()));
+    let requests = Arc::new(AtomicUsize::new(0));
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
       let bodies = bodies.clone();
+      let requests = requests.clone();
       let stop = stop.clone();
       std::thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
           match listener.accept() {
             Ok((mut stream, _)) => {
+              requests.fetch_add(1, Ordering::Relaxed);
               stream.set_nonblocking(false).expect("the connection goes blocking");
               stream.set_read_timeout(Some(PROCESS_TIMEOUT)).expect("the read timeout is set");
               let request = read_request(&mut stream);
@@ -74,11 +78,15 @@ impl StubApi {
         }
       })
     };
-    StubApi { port, bodies, stop, thread: Some(thread) }
+    StubApi { port, bodies, requests, stop, thread: Some(thread) }
   }
 
   fn bodies(&self) -> Vec<Value> {
     self.bodies.lock().expect("the body lock").clone()
+  }
+
+  fn request_count(&self) -> usize {
+    self.requests.load(Ordering::Relaxed)
   }
 }
 
@@ -205,9 +213,14 @@ impl Sandbox {
 
   /// Run `charliebot session trigger ARGS` with exactly `vars` set beyond PATH, whose stub `ssh` directory comes first.
   fn run_with(&self, args: &[&str], vars: &[(&str, &Path)]) -> Run {
+    self.run_cli_with(&["session", "trigger"], args, vars)
+  }
+
+  /// Run the named `charliebot` command with exactly `vars` set beyond PATH.
+  fn run_cli_with(&self, command_args: &[&str], args: &[&str], vars: &[(&str, &Path)]) -> Run {
     let path = format!("{}:/usr/bin:/bin", self.bin.display());
     let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot"));
-    command.arg("session").arg("trigger").args(args).current_dir(self.root.path()).env_clear().env("PATH", path);
+    command.args(command_args).args(args).current_dir(self.root.path()).env_clear().env("PATH", path);
     for (name, value) in vars {
       command.env(name, value);
     }
@@ -546,6 +559,31 @@ fn test_round_refuses_at_once_and_calls_no_server() {
   let error: Value = serde_json::from_str(&run.stderr).expect("stderr is a JSON error");
   assert_eq!(error["error"], base_url::ROUND_NO_SERVER_MESSAGE);
   assert!(stub.bodies().is_empty(), "the round reached the server: {:?}", stub.bodies());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_round_refuses_another_server_verb_at_once() {
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(registering(sandbox.home.clone()));
+  let (round_home, launch_dir) = round_sandbox(&sandbox, &stub);
+  let start = Instant::now();
+
+  let run = sandbox.run_cli_with(
+    &["session", "tree"],
+    &[],
+    &[
+      ("CHARLIEBOT_HOME", round_home.as_path()),
+      ("HOME", sandbox.root.path()),
+      ("IMPROVE_LAUNCH_DIR", launch_dir.as_path()),
+    ],
+  );
+
+  assert!(start.elapsed() < Duration::from_secs(5), "the round waited {:?} before it refused", start.elapsed());
+  assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+  let error: Value = serde_json::from_str(&run.stderr).expect("stderr is a JSON error");
+  assert_eq!(error["error"], base_url::ROUND_NO_SERVER_MESSAGE);
+  assert_eq!(stub.request_count(), 0, "the round reached the server");
 }
 
 #[test]

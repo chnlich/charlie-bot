@@ -11,7 +11,13 @@
 // - Send posts one message to the page owner, not the viewing session, after the undo window;
 // - Undo inside the window posts nothing.
 //
+// - with one pick made and one pending comment open, no floating control of the page layer (the pick bar, the
+//   pending-comment tray, the shortcut buttons, the anchored comment cards, the comment trigger and the composer)
+//   covers a content box at any scroll position, at each viewport width, and every control stays inside the viewport.
+//
 // CHARLIEBOT_TEST_CHROME_BIN names the headless Chrome binary. The test fails when it is unset or names no file.
+// CHARLIEBOT_COVER_PAGE names the plan page the cover checks open, in place of the template.
+// CHARLIEBOT_COVER_SHOTS names a file prefix: the cover checks save screenshots as <prefix>_<width>px_<state>_<label>.png.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -26,6 +32,8 @@ const {iconTable, iconTableScript} = require('./read_static');
 const WEB_DIR = path.join(__dirname, '..');
 const REPO_DIR = path.join(WEB_DIR, '..');
 const TEMPLATE_PATH = path.join(REPO_DIR, 'prompts', 'plan_template.html');
+// The plan page the cover checks open: the template, or the page CHARLIEBOT_COVER_PAGE names (a real plan on the host).
+const COVER_PAGE_PATH = process.env.CHARLIEBOT_COVER_PAGE || TEMPLATE_PATH;
 const FIXTURE_PATH = path.join(REPO_DIR, 'rust', 'crates', 'features', 'artifacts', 'tests', 'data',
   'plan_template_forks.json');
 const ICON_PARITY_PATH = path.join(WEB_DIR, 'tests', 'icons_parity.json');
@@ -37,8 +45,8 @@ const SEND_WAIT_MS = 9000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function serve(sent) {
-  const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
+function serve(sent, sourcePath) {
+  const template = fs.readFileSync(sourcePath, 'utf8');
   const tags = `<script>window.__cbcServerSessionId=${JSON.stringify(OWNER)};</script>\n` +
     `<script>${iconTableScript()}</script>\n` +
     '<script src="/static/js/icons.js"></script>\n' +
@@ -105,13 +113,17 @@ async function launchChrome(profileDir) {
   return {child, cdp};
 }
 
-async function openPage(cdp, url) {
+async function openPage(cdp, url, viewport) {
   const {Page} = await import('../../dev/poor-network/chrome.mjs');
   const {targetId} = await cdp.send('Target.createTarget', {url: 'about:blank'});
   const {sessionId} = await cdp.send('Target.attachToTarget', {targetId, flatten: true});
   const page = new Page(cdp, sessionId, targetId);
   await page.send('Page.enable');
   await page.send('Runtime.enable');
+  if (viewport) {
+    await page.send('Emulation.setDeviceMetricsOverride',
+      {width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false});
+  }
   await page.send('Page.navigate', {url});
   const deadline = Date.now() + 15000;
   while (!(await page.evaluate('typeof window.__cbcPageForks === "function" && !!document.querySelector(".__cbc-pickbar")'))) {
@@ -122,14 +134,15 @@ async function openPage(cdp, url) {
 }
 
 // Runs one check against a served plan page opened from the viewing session, then tears everything down.
-async function withPlanPage(check) {
+// The page is the template unless `source` names another file; a viewport, when given, is set before the page loads.
+async function withPlanPage(check, {viewport, source = TEMPLATE_PATH} = {}) {
   const sent = [];
-  const {server, base} = await serve(sent);
+  const {server, base} = await serve(sent, source);
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-picks-chrome-'));
   let chrome = null;
   try {
     chrome = await launchChrome(profileDir);
-    const page = await openPage(chrome.cdp, `${base}${PAGE_PATH}#cbsession=${VIEWER}`);
+    const page = await openPage(chrome.cdp, `${base}${PAGE_PATH}#cbsession=${VIEWER}`, viewport);
     await check(page, sent);
   } finally {
     if (chrome) {
@@ -211,3 +224,143 @@ test('Undo inside the undo window posts nothing', async () => {
     assert.equal(await page.evaluate('document.querySelector(".__cbc-pickbar-label").textContent'), 'Picked 1/1');
   });
 });
+
+// The widths and the scroll positions of the cover checks. The shots name the three positions a reader meets.
+const COVER_WIDTHS = [1570, 1280, 390];
+const COVER_VIEWPORT_HEIGHT = 800;
+const COVER_SCROLLS = [0, 0.2, 0.4, 0.5, 0.6, 0.8, 1];
+const COVER_SHOT_LABELS = {0: 'top', 0.5: 'mid', 1: 'end'};
+
+// One pick and one pending comment, typed into the composer and sent to the tray, then the trigger shown by a hover.
+const PICK_AND_COMMENT = `(() => {
+  const paragraphs = Array.from(document.querySelectorAll('p')).filter((p) =>
+    !p.closest('.fork, .__cbc-ui') && p.textContent.trim().length > 40 && p.getClientRects().length > 0);
+  document.querySelector('.__cbc-pick').click();
+  paragraphs[0].click();
+  document.querySelector('.__cbc-popover textarea').value = 'Check the tray against the page text.';
+  document.querySelector('.__cbc-add').click();
+  paragraphs[2].dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+  return {pickLabel: document.querySelector('.__cbc-pickbar-label').textContent,
+    trigger: document.querySelector('.__cbc-trigger').style.display};
+})()`;
+
+// The composer open on a block, as a click on page text opens it.
+const OPEN_COMPOSER = `(() => {
+  const paragraphs = Array.from(document.querySelectorAll('p')).filter((p) =>
+    !p.closest('.fork, .__cbc-ui') && p.textContent.trim().length > 40 && p.getClientRects().length > 0);
+  paragraphs[4].click();
+  return document.querySelector('.__cbc-popover') !== null;
+})()`;
+
+// Runs in the page. It reads the page's floating controls and its content boxes from the layout the browser computed,
+// clips each content box to the part of the page a reader sees, and reports each control box that covers a content
+// box and each control box that lies outside the viewport.
+function coverProbe() {
+  const area = (r) => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+  const clip = (a, b) => ({
+    left: Math.max(a.left, b.left),
+    top: Math.max(a.top, b.top),
+    right: Math.min(a.right, b.right),
+    bottom: Math.min(a.bottom, b.bottom),
+  });
+  const body = document.body;
+  const bodyBox = body.getBoundingClientRect();
+  const viewport = {left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight};
+  // The body's own box bottom, not clientHeight: clientHeight rounds to whole pixels, so a strip that starts exactly at
+  // the body's bottom edge would count as a sub-pixel overlap.
+  const reader = clip({
+    left: bodyBox.left + body.clientLeft,
+    top: bodyBox.top + body.clientTop,
+    right: bodyBox.left + body.clientLeft + body.clientWidth,
+    bottom: bodyBox.bottom,
+  }, viewport);
+  const contents = [];
+  for (const el of body.querySelectorAll('*')) {
+    if (el.closest('.__cbc-ui')) continue;
+    if (!Array.from(el.childNodes).some((node) => node.nodeType === 3 && node.textContent.trim())) continue;
+    for (const rect of el.getClientRects()) {
+      const box = clip(rect, reader);
+      if (area(box) > 0) contents.push({box, text: el.textContent.trim().slice(0, 40)});
+    }
+  }
+  // A control's visible box: its own box, cut by each scroll container between it and the fixed box that holds it.
+  // A control in the rail's scrolling stack shows only the part of it the rail shows.
+  const visibleBox = (el) => {
+    let box = el.getBoundingClientRect();
+    if (getComputedStyle(el).position === 'fixed') return box;
+    for (let node = el.parentElement; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.overflowX !== 'visible' || style.overflowY !== 'visible') box = clip(box, node.getBoundingClientRect());
+      if (style.position === 'fixed') break;
+    }
+    return box;
+  };
+  const controls = [];
+  const selector = '.__cbc-dock, .__cbc-dock > *, .__cbc-gutter, .__cbc-gutter .__cbc-tray-item, .__cbc-trigger';
+  for (const el of document.querySelectorAll(selector)) {
+    const box = visibleBox(el);
+    if (area(box) > 0) controls.push({el, box});
+  }
+  const overlaps = [];
+  for (const control of controls) {
+    for (const content of contents) {
+      if (area(clip(control.box, content.box)) > 1) {
+        overlaps.push(`${control.el.className} covers "${content.text}"`);
+      }
+    }
+  }
+  const offscreen = controls
+    .filter((control) => control.box.left < -0.5 || control.box.top < -0.5 ||
+      control.box.right > window.innerWidth + 0.5 || control.box.bottom > window.innerHeight + 0.5)
+    .map((control) => control.el.className);
+  return {overlaps, offscreen, contents: contents.length, controls: controls.length};
+}
+
+// Saves the viewport as <CHARLIEBOT_COVER_SHOTS>_<width>px_<state>_<top|mid|end>.png when that prefix is set.
+async function saveCoverShot(page, width, state, label) {
+  const prefix = process.env.CHARLIEBOT_COVER_SHOTS;
+  if (!prefix) return;
+  const {data} = await page.send('Page.captureScreenshot', {format: 'png'});
+  fs.mkdirSync(path.dirname(prefix), {recursive: true});
+  fs.writeFileSync(`${prefix}_${width}px_${state}_${label}.png`, Buffer.from(data, 'base64'));
+}
+
+// The cover findings at every scroll position from the top to the end of the page, one line per finding.
+async function coverFindings(page, width, state) {
+  const end = await page.evaluate(`(() => {
+    const body = document.body;
+    return Math.max(document.documentElement.scrollHeight - window.innerHeight, body.scrollHeight - body.clientHeight);
+  })()`);
+  const findings = [];
+  for (const fraction of COVER_SCROLLS) {
+    const y = Math.round(end * fraction);
+    await page.evaluate(`(() => { window.scrollTo(0, ${y}); document.body.scrollTop = ${y}; return true; })()`);
+    await sleep(60);
+    const report = await page.evaluate(`(${coverProbe})()`);
+    assert.ok(report.controls > 0, 'the page layer has floating controls to check');
+    assert.ok(report.contents > 0, 'the page has content boxes to check');
+    for (const overlap of report.overlaps) findings.push(`${state} at ${y}px: ${overlap}`);
+    for (const name of report.offscreen) findings.push(`${state} at ${y}px: ${name} lies outside the viewport`);
+    const label = COVER_SHOT_LABELS[fraction];
+    if (label) await saveCoverShot(page, width, state, label);
+  }
+  return findings;
+}
+
+for (const width of COVER_WIDTHS) {
+  test(`with a pick and a pending comment open, no floating control covers page content at ${width}px`, async () => {
+    await withPlanPage(async (page) => {
+      const state = await page.evaluate(PICK_AND_COMMENT);
+      // The tray's cards are built on the next animation frame, so the count waits for it.
+      await sleep(100);
+      const pending = await page.evaluate('document.querySelectorAll(".__cbc-tray-item").length');
+      assert.match(state.pickLabel, /^Picked 1\//, 'one pick is made');
+      assert.equal(pending, 1, 'one pending comment is open');
+      assert.equal(state.trigger, 'flex', 'the comment trigger shows over the hovered block');
+      const findings = await coverFindings(page, width, 'tray');
+      assert.equal(await page.evaluate(OPEN_COMPOSER), true, 'the composer opens');
+      findings.push(...await coverFindings(page, width, 'composer'));
+      assert.deepEqual(findings, []);
+    }, {viewport: {width, height: COVER_VIEWPORT_HEIGHT}, source: COVER_PAGE_PATH});
+  });
+}

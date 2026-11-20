@@ -1141,8 +1141,8 @@ fn active_backend_payload(
   );
   let active_option = cfg.get_backend_option(&active_backend);
   let known_active = cfg.backends.pool(&active_backend).is_some() || active_option.is_some();
-  // A session whose backend names no configured id keeps that id first, marked "(not in config)" by the page, so the
-  // picker shows the current value and lists the configured choices after it.
+  // A session whose backend names no configured id keeps that id first, marked "(not in config)" by the page.
+  // The picker then shows the current value and lists the configured choices after it.
   let mut switchable: Vec<String> = if known_active { Vec::new() } else { vec![active_backend.clone()] };
   switchable.extend(cfg.backends.options.iter().map(|option| option.id.clone()));
   switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));

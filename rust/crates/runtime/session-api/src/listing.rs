@@ -925,20 +925,15 @@ impl FirstScreenShape {
 
 /// The page's row text: one array per field, in row order, holding `null` where a row leaves the field out.
 ///
-/// The page's rows repeat the same field names and value shapes on every row. A gzip deflator finds the repetition
-/// inside one field's values before it finds any across interleaved rows, so grouping the values by field shrinks
-/// the page. On the 7,160-session mock home the sidebar costs 453 KB of the page's compressed bytes as columns and
-/// 506 KB as row objects.
+/// Grouping the values by field shrinks the page: a gzip deflator finds the repetition inside one field's values
+/// before any across interleaved rows. On the 7,160-session mock home the sidebar costs 453 KB of compressed bytes as
+/// columns and 506 KB as row objects.
 ///
-/// Two columns carry an encoding the page declares under [`COLUMN_ENCODING_KEY`], because their plain text costs
-/// bytes a client-side expansion removes. A session id is a canonical UUID, so [`UUID_ENCODING`] carries the ids' 16
-/// bytes in row order as one base64url string. The 36-character text costs a gzip deflator's 22 bytes per row, one
-/// base64url cell per row costs the same, and the string of them costs the 16 bytes' entropy. An `updated_at` is
-/// epoch minutes in newest-first order, so [`DELTA_ENCODING`] carries the differences, which are small numbers the
-/// deflator packs tightly.
+/// Two columns carry an encoding declared under [`COLUMN_ENCODING_KEY`]. [`UUID_ENCODING`] packs the ids' 16 bytes into
+/// one string, since a base64url cell per row costs a deflator the same 22 bytes as the 36-character text.
+/// [`DELTA_ENCODING`] stores `updated_at` as newest-first differences of epoch minutes, which a deflator packs tightly.
 ///
-/// A page row never carries a null value. The falsy fields it keeps are a name and a schedule flag, and
-/// [`drop_falsy_fields`] leaves every other falsy field out before this text is built.
+/// [`drop_falsy_fields`] leaves out each falsy field, null included, unless [`KEPT_FALSY_FIELDS`] names it.
 ///
 /// `fixed` names the columns the text carries, in order, when a caller's shape is fixed: each named column is written
 /// even where no row holds the field. `None` writes every field a row holds, sorted.
@@ -1464,8 +1459,8 @@ pub const SEARCH_FIELDS: [&str; 27] = [
 
 /// The search answer's rows in the sidebar's column form, with exactly [`SEARCH_FIELDS`] as its columns.
 ///
-/// Each row takes the listing's row pipeline, so a search row carries the fields the same session's listing row does,
-/// and the sidebar decodes the text with the expander its listing uses. The flags and the status are written as
+/// Each row takes the listing's row pipeline, so a search row carries the fields the same session's listing row does.
+/// The sidebar decodes the text with the expander its listing uses. The flags and the status are written as
 /// [`render_row`] and [`compact_page_fields`] leave them: `has_waiting_items` and `has_pending_plan_approval` are
 /// booleans on every row, and an archived row keeps `status`.
 pub(crate) fn search_columns_text(

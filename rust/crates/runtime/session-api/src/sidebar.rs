@@ -51,7 +51,7 @@ const SIDEBAR_SWEEP_SLICE: usize = 1024;
 /// A process's first sidebar read has no stored state, so it probes every active session: each probe reads that
 /// session's trigger, metadata and run files. On the 7,160-session mock home the first listing read spends about 760 ms
 /// of CPU on that walk. A probe reads one session's files and shares nothing with another, so the walk splits across
-/// threads; the self-heal sweep already runs the same probes on its own thread beside the request threads.
+/// threads. The self-heal sweep already runs the same probes on its own thread beside the request threads.
 const SIDEBAR_PROBE_THREADS: usize = 8;
 
 /// The fewest sessions worth splitting. A poll over the rows one view paints stays on its own thread, because the
@@ -375,8 +375,8 @@ fn sweep_corpus_key(sessions: &[Arc<SessionMetadata>]) -> (usize, u64) {
 /// The results of `work` over `items`, in `items`' order, split across [`SIDEBAR_PROBE_THREADS`] when the set is
 /// large enough to pay for them.
 ///
-/// Every item's work reads its own session's files and touches the shared memos only through their locks, so one
-/// worker's result never depends on another's and the order of the results is the order of the input.
+/// Every item's work reads its own session's files and touches the shared memos only through their locks. So one
+/// worker's result never depends on another's, and the order of the results is the order of the input.
 fn spread_across_threads<T, R, F>(items: &[T], work: F) -> Vec<R>
 where
   T: Sync,

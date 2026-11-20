@@ -330,6 +330,12 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   if !startup_stop.mark_ready() {
     return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
   }
+  // The socket handshake reports its uptime from this instant, so a watched restart's return point is the readiness.
+  state
+    .features
+    .startup
+    .insert(charliebot_session_api::api::ReadyClock(std::time::Instant::now()))
+    .expect("the ready clock is inserted once, at readiness");
   // `server_ready` is logged after the ready-phase services start.
   // The host_auth poller's 300 ms startup tail keeps its first state read after this line while preserving the stop
   // check: a boot stopped before readiness does not emit `server_ready`.

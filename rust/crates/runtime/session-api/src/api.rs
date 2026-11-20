@@ -45,3 +45,12 @@ pub fn parse_session_ids(raw: &str) -> Vec<String> {
 /// The replay websocket's last catch-up frame, in its `type` field: every event before it has been sent. A client that
 /// replays an earlier stretch of the session holds its frames until this one arrives.
 pub const CATCHUP_COMPLETE_FRAME: &str = "catchup_complete";
+
+/// The web protocol this server speaks: the calls, answer shapes and socket frames the page's JavaScript uses. A release
+/// that changes what an already-loaded page cannot work with raises it by one. The chat page renders it, and its socket
+/// handshake names it; a page on another protocol reloads to the current code, and a page on this one keeps its code.
+pub const WEB_PROTOCOL: u32 = 1;
+
+/// The instant the server became ready. `catchup_complete` reports the uptime from it, which places a watched restart's
+/// return point on the page's clock.
+pub struct ReadyClock(pub std::time::Instant);

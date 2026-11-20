@@ -875,7 +875,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
       "session_id": descendant.session_id,
       "name": descendant.metadata.name,
       "backend": descendant.metadata.backend,
-      "pool_member": descendant
+      (POOL_MEMBER_FIELD): descendant
         .metadata
         .extra(POOL_MEMBER_FIELD)
         .and_then(Value::as_str)
@@ -902,7 +902,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
       "session_id": child_id,
       "name": child.metadata.name,
       "backend": child.metadata.backend,
-      "pool_member": child
+      (POOL_MEMBER_FIELD): child
         .metadata
         .extra(POOL_MEMBER_FIELD)
         .and_then(Value::as_str)

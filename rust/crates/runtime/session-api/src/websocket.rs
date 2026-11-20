@@ -847,7 +847,8 @@ mod tests {
       json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "first "}]}}),
       json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "second"}]}}),
     ];
-    let mut live = charliebot_store::aggregator::MessageAggregator::new(0, true);
+    let mut live =
+      charliebot_store::aggregator::MessageAggregator::new(0, true, charliebot_core::config::BackendsConfig::default());
     live.set_omit_streamed_content(true);
     let mut live_frames = Vec::new();
     for event in &values {
@@ -869,7 +870,8 @@ mod tests {
       json!({"type": "master_done", "still_thinking": false, "run_id": "r1", "backend": "b", "total_ms": 5, "id": "m1", "timestamp": "t2"}),
       json!({"type": "result", "result": "", "usage": {"input_tokens": 1}, "id": "x1", "timestamp": "t3"}),
     ];
-    let mut live = charliebot_store::aggregator::MessageAggregator::new(0, true);
+    let mut live =
+      charliebot_store::aggregator::MessageAggregator::new(0, true, charliebot_core::config::BackendsConfig::default());
     live.set_omit_streamed_content(true);
     let mut live_frames = Vec::new();
     for (index, event) in values.iter().enumerate() {

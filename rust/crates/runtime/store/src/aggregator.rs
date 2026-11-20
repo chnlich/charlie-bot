@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use charliebot_core::config::BackendsConfig;
 use charliebot_core::event_types::{self, EventFields, is_truthy};
 use charliebot_core::int_text;
 use charliebot_core::text_repr::value_str;
@@ -81,12 +82,14 @@ pub struct MessageAggregator {
   /// The draft tool rows of the previous stream frame, so a frame repeats them only when they changed.
   streamed_tools: Option<Value>,
   event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
+  /// The pools the delegation message's member is checked against; see `render_builtin`.
+  backends: BackendsConfig,
 }
 
 impl MessageAggregator {
-  /// Build an aggregator with a global index offset and stream-delta policy.
-  pub fn new(event_index_offset: usize, emit_stream_deltas: bool) -> Self {
-    Self::with_renderers(event_index_offset, emit_stream_deltas, HashMap::new())
+  /// Build an aggregator with a global index offset, a stream-delta policy and the configured backends.
+  pub fn new(event_index_offset: usize, emit_stream_deltas: bool, backends: BackendsConfig) -> Self {
+    Self::with_renderers(event_index_offset, emit_stream_deltas, HashMap::new(), backends)
   }
 
   /// Build an aggregator with feature renderers supplied by the store.
@@ -94,6 +97,7 @@ impl MessageAggregator {
     event_index_offset: usize,
     emit_stream_deltas: bool,
     event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
+    backends: BackendsConfig,
   ) -> Self {
     Self {
       event_index_offset,
@@ -113,6 +117,7 @@ impl MessageAggregator {
       streamed_thinking_utf16: 0,
       streamed_tools: None,
       event_renderers,
+      backends,
     }
   }
 
@@ -161,6 +166,7 @@ impl MessageAggregator {
       streamed_thinking_utf16: self.streamed_thinking_utf16,
       streamed_tools: self.streamed_tools.clone(),
       event_renderers: self.event_renderers.clone(),
+      backends: self.backends.clone(),
     }
   }
 
@@ -421,7 +427,7 @@ impl MessageAggregator {
       self.tool_rows.forget_committed();
     }
     let rendered = if builtin_event_types().contains(&event_type) {
-      render_builtin(event_type, event)?
+      render_builtin(&self.backends, event_type, event)?
     } else {
       self.event_renderers[event_type].render(&event.to_owned_value())?
     };
@@ -658,7 +664,11 @@ fn render_system<E: EventFields>(event: &E) -> Option<Value> {
   )
 }
 
-fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Option<Value>> {
+fn render_builtin<E: EventFields>(
+  backends: &BackendsConfig,
+  event_type: &str,
+  event: &E,
+) -> StoreResult<Option<Value>> {
   let rendered = match event_type {
     event_types::MASTER_DONE => json!({
       "role": "separator",
@@ -683,7 +693,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       "thread_id": event.field("thread_id").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       event_types::CHILD_SESSION_ID: event.field(event_types::CHILD_SESSION_ID).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       event_types::DELEGATE_INVOCATION: event.field(event_types::DELEGATE_INVOCATION).map(EventFields::to_owned_value).unwrap_or(Value::Null),
-      "backend": preferred_value(event, "backend", "resolved_backend"),
+      "backend": delegated_member(backends, event),
       event_types::POOL: event.field(event_types::POOL).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or(Value::Null),
       "model": preferred_value(event, "model", "resolved_model"),
       "route": event.field("route").map(EventFields::to_owned_value).unwrap_or(Value::Null),
@@ -1224,6 +1234,17 @@ fn preferred_value<E: EventFields>(event: &E, primary: &str, fallback: &str) -> 
     .unwrap_or_else(|| json!(""))
 }
 
+/// The member a delegation message shows. A delegation that names a pool shows its member only while the pool still
+/// lists it, so a member the pool no longer lists shows none. A delegation without a pool shows its backend as it is.
+fn delegated_member<E: EventFields>(backends: &BackendsConfig, event: &E) -> Value {
+  let member = preferred_value(event, "backend", "resolved_backend");
+  let pool = event.field(event_types::POOL).filter(|value| is_truthy(*value)).and_then(EventFields::as_str_field);
+  match (pool, member.as_str()) {
+    (Some(pool), Some(member)) => backends.display_pool_member(pool, member).map_or(Value::Null, |shown| json!(shown)),
+    _ => member,
+  }
+}
+
 fn string_default<E: EventFields>(event: &E, key: &str, default: &str) -> String {
   event.field(key).map_or_else(|| default.to_string(), event_str)
 }
@@ -1447,7 +1468,7 @@ mod tests {
 
     for case in fixture["parity_chat_logs"].as_array().unwrap() {
       let session = case["session"].as_str().unwrap();
-      let mut aggregator = MessageAggregator::with_renderers(0, true, renderers.clone());
+      let mut aggregator = MessageAggregator::with_renderers(0, true, renderers.clone(), BackendsConfig::default());
       let mut actual = Vec::new();
       for event in case["events"].as_array().unwrap() {
         actual.extend(aggregator.feed(event).unwrap());
@@ -1458,7 +1479,8 @@ mod tests {
     for case in fixture["synthetic_sequences"].as_array().unwrap() {
       let name = case["name"].as_str().unwrap();
       let offset = case["event_index_offset"].as_u64().unwrap() as usize;
-      let mut aggregator = MessageAggregator::with_renderers(offset, true, renderers.clone());
+      let mut aggregator =
+        MessageAggregator::with_renderers(offset, true, renderers.clone(), BackendsConfig::default());
       let mut actual = Vec::new();
       for event in case["events"].as_array().unwrap() {
         actual.extend(aggregator.feed(event).unwrap());
@@ -1477,7 +1499,7 @@ mod tests {
 
   /// Every frame of the events, through a fresh aggregator and its final flush.
   fn frames_of(events: &[Value]) -> Vec<Value> {
-    let mut aggregator = MessageAggregator::new(0, false);
+    let mut aggregator = MessageAggregator::new(0, false, BackendsConfig::default());
     let mut frames = Vec::new();
     for event in events {
       frames.extend(aggregator.feed(event).unwrap());
@@ -1627,7 +1649,7 @@ mod tests {
 
   #[test]
   fn user_input_and_assistant_draft_match_the_rendered_shapes() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     let deltas = aggregator
       .feed(&json!({
         "type": "user",
@@ -1664,7 +1686,7 @@ mod tests {
 
   #[test]
   fn master_done_commits_the_draft_before_its_separator() {
-    let mut aggregator = MessageAggregator::new(10, true);
+    let mut aggregator = MessageAggregator::new(10, true, BackendsConfig::default());
     aggregator
       .feed(&json!({
         "type": "assistant",
@@ -1690,7 +1712,7 @@ mod tests {
 
   #[test]
   fn tool_result_text_is_attached_and_bounded_before_streaming() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     aggregator.feed(&json!({"type": "tool_use", "name": "Bash", "input": {"command": "ls"}})).unwrap();
     aggregator.feed(&json!({"type": "tool_result", "content": "z".repeat(10_000)})).unwrap();
     let draft = aggregator.pending_draft_message().unwrap();
@@ -1700,7 +1722,7 @@ mod tests {
 
   #[test]
   fn internal_tool_result_updates_the_draft_without_a_user_message() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     aggregator.feed(&json!({"type": "tool_use", "name": "Read", "input": {"file_path": "/a"}})).unwrap();
     let deltas = aggregator
       .feed(&json!({
@@ -1717,7 +1739,7 @@ mod tests {
 
   /// The stream frames of these events, as the live feed sends them.
   fn live_stream_frames(events: &[Value]) -> Vec<Value> {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     let mut frames = Vec::new();
     for event in events {
       frames.extend(aggregator.feed(event).unwrap());
@@ -1787,7 +1809,7 @@ mod tests {
       }),
       json!({"type": "master_done", "timestamp": "t"}),
     ];
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     let mut deltas = Vec::new();
     for event in &events {
       deltas.extend(aggregator.feed(event).unwrap());
@@ -1808,7 +1830,7 @@ mod tests {
       "feature_event".to_string(),
       Arc::new(|_event: &Value| Ok(Some(json!({"role": "system", "content": "feature"})))) as Arc<dyn EventRenderer>,
     )]);
-    let mut aggregator = MessageAggregator::with_renderers(4, false, renderers);
+    let mut aggregator = MessageAggregator::with_renderers(4, false, renderers, BackendsConfig::default());
     let deltas = aggregator.feed(&json!({"type": "feature_event", "timestamp": "t"})).unwrap();
     assert_eq!(
       deltas,
@@ -1827,7 +1849,7 @@ mod tests {
 
   #[test]
   fn user_event_with_an_input_mode_renders_a_message_that_carries_it() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     let deltas = aggregator
       .feed(&json!({
         "type": "user",
@@ -1842,7 +1864,7 @@ mod tests {
 
   #[test]
   fn user_event_delta_carries_request_id() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     let deltas = aggregator
       .feed(&json!({
         "type": "user",
@@ -1856,7 +1878,7 @@ mod tests {
 
   #[test]
   fn assistant_text_then_master_done_commits_message() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     aggregator
       .feed(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
       .unwrap();
@@ -1885,7 +1907,7 @@ mod tests {
 
   #[test]
   fn still_thinking_master_done_yields_separator_without_seconds() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     let deltas = aggregator.feed(&json!({"type": "master_done", "still_thinking": true, "timestamp": "t1"})).unwrap();
     assert_eq!(
       deltas,
@@ -1904,8 +1926,18 @@ mod tests {
 
   #[test]
   fn task_delegated_message_exposes_metadata_without_full_description_body() {
-    // The event route rides the delegation card.
-    let mut aggregator = MessageAggregator::new(0, true);
+    // The event route rides the delegation card. The pool lists the delegated member, so the card names it.
+    let backends = BackendsConfig {
+      pools: vec![charliebot_core::config::PoolConfig {
+        id: "human-communication".to_string(),
+        label: "Human communication".to_string(),
+        rule: charliebot_core::config::PoolRule::Priority,
+        members: vec![charliebot_core::config::PoolMember { backend: "codex-o3".to_string() }],
+        visible: true,
+      }],
+      ..BackendsConfig::default()
+    };
+    let mut aggregator = MessageAggregator::new(0, true, backends.clone());
     let long_description = "## Goal\nDo a long task spec that belongs in Workers.";
     let invocation = json!({
       "task_type": "implement",
@@ -1951,12 +1983,30 @@ mod tests {
     );
     assert!(!deltas[0]["message"]["content"].as_str().unwrap().contains(long_description));
     assert!(deltas[0]["message"].get("description").is_none());
+
+    // A member the pool does not list shows no member; the pool name still shows.
+    let mut outside = MessageAggregator::new(0, true, backends);
+    let outside_deltas = outside
+      .feed(&json!({
+        "type": "task_delegated",
+        "thread_id": "thread-id",
+        "description": long_description,
+        "timestamp": "2026-07-01T12:00:00Z",
+        "backend": "retired-o1",
+        "pool": "human-communication",
+        "model": "o3",
+        "route": {"backends": ["retired-o1"], "reason": "design"},
+        "delegate_invocation": invocation,
+      }))
+      .unwrap();
+    assert_eq!(outside_deltas[0]["message"]["backend"], Value::Null);
+    assert_eq!(outside_deltas[0]["message"]["pool"], "human-communication");
   }
 
   #[test]
   fn quota_failover_renders_the_backend_and_recovery_time() {
     // The recovery line names the backend and the time it recovers.
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     let deltas = aggregator
       .feed(&json!({
         "type": "quota_failover",
@@ -1984,7 +2034,7 @@ mod tests {
       (event_types::QUOTA_REASON_TIMEOUT, "Timeout on fake: switched to strong"),
       (event_types::QUOTA_REASON_ITERATION_FAILURE, "Iteration failed on fake: switched to strong"),
     ] {
-      let mut aggregator = MessageAggregator::new(0, true);
+      let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
       let deltas = aggregator
         .feed(&json!({
           "type": "quota_failover",
@@ -2004,7 +2054,7 @@ mod tests {
 
   #[test]
   fn quota_failover_states_an_unavailable_handoff_summary() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     let deltas = aggregator
       .feed(&json!({
         "type": "quota_failover",
@@ -2025,7 +2075,7 @@ mod tests {
 
   #[test]
   fn tool_use_attaches_to_buffer_then_tool_result_updates_output() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     aggregator.feed(&assistant_text_tool_use_event("Running", "Bash", json!({"command": "ls"}), "t1")).unwrap();
     aggregator
       .feed(&json!({
@@ -2071,7 +2121,7 @@ mod tests {
         "timestamp": "plan-time",
       }),
     ];
-    let mut aggregator = MessageAggregator::new(0, false);
+    let mut aggregator = MessageAggregator::new(0, false, BackendsConfig::default());
     let mut messages = Vec::new();
     for event in &events {
       messages.extend(
@@ -2119,7 +2169,7 @@ mod tests {
 
   #[test]
   fn thinking_is_flushed_with_assistant_draft() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     aggregator
       .feed(&json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
       .unwrap();
@@ -2133,7 +2183,7 @@ mod tests {
 
   #[test]
   fn stream_deltas_stay_bounded_after_a_giant_tool_result() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     aggregator.feed(&json!({"type": "tool_use", "name": "Bash", "input": {"cmd": "cat big.log"}})).unwrap();
     aggregator.feed(&json!({"type": "tool_result", "tool_name": "Bash", "content": "z".repeat(10_000_000)})).unwrap();
     let mut serialized = Vec::new();
@@ -2154,14 +2204,14 @@ mod tests {
       (json!({"type": "task_delegated", "timestamp": "t", "created_at": "c"}), json!("t")),
     ];
     for (event, expected) in cases {
-      let deltas = MessageAggregator::new(0, false).feed(&event).unwrap();
+      let deltas = MessageAggregator::new(0, false, BackendsConfig::default()).feed(&event).unwrap();
       assert_eq!(deltas[0]["message"]["timestamp"], expected, "event {event}");
     }
   }
 
   #[test]
   fn a_system_event_without_a_message_leaves_the_draft_open() {
-    let mut aggregator = MessageAggregator::new(0, true);
+    let mut aggregator = MessageAggregator::new(0, true, BackendsConfig::default());
     aggregator.feed(&assistant_text_event("draft")).unwrap();
     let deltas = aggregator.feed(&json!({"type": "system", "subtype": "status"})).unwrap();
     assert!(deltas.is_empty());
@@ -2172,7 +2222,7 @@ mod tests {
   fn a_feature_renderer_that_renders_nothing_still_commits_the_draft() {
     let renderers: HashMap<String, Arc<dyn EventRenderer>> =
       HashMap::from([("quiet_event".to_string(), Arc::new(|_: &Value| Ok(None)) as Arc<dyn EventRenderer>)]);
-    let mut aggregator = MessageAggregator::with_renderers(0, true, renderers);
+    let mut aggregator = MessageAggregator::with_renderers(0, true, renderers, BackendsConfig::default());
     aggregator.feed(&assistant_text_event("draft")).unwrap();
     let deltas = aggregator.feed(&json!({"type": "quiet_event"})).unwrap();
     assert_eq!(deltas.len(), 1);
@@ -2183,7 +2233,8 @@ mod tests {
 
   #[test]
   fn task_reopened_without_a_reason_drops_the_trailing_space() {
-    let deltas = MessageAggregator::new(0, false).feed(&json!({"type": "task_reopened"})).unwrap();
+    let deltas =
+      MessageAggregator::new(0, false, BackendsConfig::default()).feed(&json!({"type": "task_reopened"})).unwrap();
     assert_eq!(deltas[0]["message"]["content"], "Task reopened:");
   }
 

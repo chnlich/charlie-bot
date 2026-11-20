@@ -2593,7 +2593,8 @@ fn message_aggregator_accepts_every_recorded_shape() {
     },
     {"type": "context_compacted", "trigger": "auto", "compact_metadata": {"pre_tokens": true, "post_tokens": 1000}},
   ]);
-  let mut aggregator = charliebot_store::aggregator::MessageAggregator::new(0, true);
+  let mut aggregator =
+    charliebot_store::aggregator::MessageAggregator::new(0, true, charliebot_core::config::BackendsConfig::default());
   let mut rust_frames = Vec::new();
   for event in events.as_array().unwrap() {
     rust_frames.extend(aggregator.feed(event).unwrap());
@@ -2697,7 +2698,8 @@ fn extend_streamed(held: &str, append: &str, end: Option<u64>) -> String {
 fn message_aggregator_keeps_plain_tool_row_frames() {
   let fixture: Value = serde_json::from_str(GOLDEN_PLAIN_TOOL_ROWS_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "6784c2b3036646c3a90ddfea094dc1f8934d9f48");
-  let mut aggregator = charliebot_store::aggregator::MessageAggregator::new(0, true);
+  let mut aggregator =
+    charliebot_store::aggregator::MessageAggregator::new(0, true, charliebot_core::config::BackendsConfig::default());
   let mut frames = Vec::new();
   for event in fixture["request"].as_array().unwrap() {
     frames.extend(aggregator.feed(event).unwrap());

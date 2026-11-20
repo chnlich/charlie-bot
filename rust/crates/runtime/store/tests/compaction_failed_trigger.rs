@@ -3,7 +3,7 @@ use serde_json::json;
 
 #[test]
 fn idle_compaction_failure_line_names_its_trigger() {
-  let mut aggregator = MessageAggregator::new(0, false);
+  let mut aggregator = MessageAggregator::new(0, false, charliebot_core::config::BackendsConfig::default());
   let deltas = aggregator
     .feed(&json!({
       "type": "context_compact_failed",

@@ -65,22 +65,27 @@ impl Store {
 
   /// The messages rendered from `events` with this store's feature renderers.
   pub fn events_to_messages(&self, events: &[ChatEvent]) -> StoreResult<Vec<Value>> {
-    projection::events_to_messages(events, 0, self.event_renderers.clone())
+    projection::events_to_messages(events, 0, self.event_renderers.clone(), self.config().backends.clone())
   }
 
   /// The messages rendered from a shared event-cache slice without copying event payloads.
   pub fn events_to_messages_shared(&self, events: &[SharedChatEvent]) -> StoreResult<Vec<Value>> {
-    projection::events_to_messages(events, 0, self.event_renderers.clone())
+    projection::events_to_messages(events, 0, self.event_renderers.clone(), self.config().backends.clone())
   }
 
   /// The messages rendered from `events` in the global event-index space with this store's feature renderers.
   pub fn events_to_messages_at(&self, events: &[ChatEvent], event_index_offset: usize) -> StoreResult<Vec<Value>> {
-    projection::events_to_messages(events, event_index_offset, self.event_renderers.clone())
+    projection::events_to_messages(
+      events,
+      event_index_offset,
+      self.event_renderers.clone(),
+      self.config().backends.clone(),
+    )
   }
 
   /// The message view rendered from `events` with this store's feature renderers, with the live draft preserved.
   pub fn events_to_view(&self, events: &[ChatEvent]) -> StoreResult<(Vec<Value>, Option<Value>)> {
-    projection::events_to_view(events, 0, self.event_renderers.clone())
+    projection::events_to_view(events, 0, self.event_renderers.clone(), self.config().backends.clone())
   }
 
   /// The message view rendered from `events` at the supplied global event-index offset.
@@ -89,7 +94,7 @@ impl Store {
     events: &[ChatEvent],
     event_index_offset: usize,
   ) -> StoreResult<(Vec<Value>, Option<Value>)> {
-    projection::events_to_view(events, event_index_offset, self.event_renderers.clone())
+    projection::events_to_view(events, event_index_offset, self.event_renderers.clone(), self.config().backends.clone())
   }
 
   /// The message projection over `events`, built with this store's feature renderers.
@@ -98,7 +103,7 @@ impl Store {
     events: &[SharedChatEvent],
     event_index_offset: usize,
   ) -> StoreResult<MessageProjection> {
-    MessageProjection::new(events, event_index_offset, self.event_renderers.clone())
+    MessageProjection::new(events, event_index_offset, self.event_renderers.clone(), self.config().backends.clone())
   }
 
   /// The session named `session_id`, or the error carrying the route's 404 detail.
@@ -178,8 +183,20 @@ mod tests {
       json!({"type": "master_done", "thinking_seconds": 7, "timestamp": "t7"}),
     ];
 
-    let messages = projection::events_to_messages(&compact_events(&events), 0, Default::default()).unwrap();
-    let (view_messages, pending) = projection::events_to_view(&compact_events(&events), 0, Default::default()).unwrap();
+    let messages = projection::events_to_messages(
+      &compact_events(&events),
+      0,
+      Default::default(),
+      charliebot_core::config::BackendsConfig::default(),
+    )
+    .unwrap();
+    let (view_messages, pending) = projection::events_to_view(
+      &compact_events(&events),
+      0,
+      Default::default(),
+      charliebot_core::config::BackendsConfig::default(),
+    )
+    .unwrap();
 
     let roles: Vec<&str> = messages.iter().map(|message| message["role"].as_str().unwrap()).collect();
     assert_eq!(roles, ["user", "assistant", "user", "assistant", "separator", "assistant", "separator"]);
@@ -195,8 +212,20 @@ mod tests {
   fn stable_history_orders_queued_user_between_completed_runs() {
     let events = queued_user_reorder_events();
 
-    let messages = projection::events_to_messages(&compact_events(&events), 0, Default::default()).unwrap();
-    let (view_messages, pending) = projection::events_to_view(&compact_events(&events), 0, Default::default()).unwrap();
+    let messages = projection::events_to_messages(
+      &compact_events(&events),
+      0,
+      Default::default(),
+      charliebot_core::config::BackendsConfig::default(),
+    )
+    .unwrap();
+    let (view_messages, pending) = projection::events_to_view(
+      &compact_events(&events),
+      0,
+      Default::default(),
+      charliebot_core::config::BackendsConfig::default(),
+    )
+    .unwrap();
 
     assert_eq!(view_messages, messages);
     assert!(pending.is_none());

@@ -36,6 +36,7 @@ charliebot-store.workspace = true
 charliebot-switch-helper.workspace = true
 charliebot-tasks.workspace = true
 charliebot-triggers.workspace = true
+charliebot-usage-page.workspace = true
 charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
 clap.workspace = true

@@ -567,6 +567,7 @@ dependencies = [
  "charliebot-tasks",
  "charliebot-taste",
  "charliebot-triggers",
+ "charliebot-usage-page",
  "charliebot-voice",
  "charliebot-web-reply",
  "clap",

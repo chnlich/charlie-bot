@@ -22,5 +22,6 @@ pub mod session;
 pub mod session_trigger;
 pub mod setup;
 pub mod triage;
+pub mod usage;
 pub mod voice;
 pub mod wait_guard;

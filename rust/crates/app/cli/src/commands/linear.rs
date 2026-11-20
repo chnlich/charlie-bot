@@ -158,13 +158,15 @@ fn execute_graphql(body: &[u8], graphql_endpoint: &str, token_endpoint: &str, ho
       .build()
       .map_err(|error| response_failure(None, "request failed", Some(&error), &[secret]))?;
     let token = acquire_token(&client, home, &credentials, token_endpoint).await?;
-    let (status, response_body) = send_graphql(&client, body, graphql_endpoint, &token, &credentials).await?;
+    let (status, response_body) =
+      send_graphql(&client, body, graphql_endpoint, &token, &[secret, token.as_str()]).await?;
     if status != 401 {
-      return finish(status, &response_body, &token, &credentials);
+      return finish(status, &response_body, &[secret, token.as_str()]);
     }
     let retried_token = refresh_after_unauthorized(&client, home, &credentials, token_endpoint, &token).await?;
-    let (status, response_body) = send_graphql(&client, body, graphql_endpoint, &retried_token, &credentials).await?;
-    finish(status, &response_body, &retried_token, &credentials)
+    let secrets = [secret, token.as_str(), retried_token.as_str()];
+    let (status, response_body) = send_graphql(&client, body, graphql_endpoint, &retried_token, &secrets).await?;
+    finish(status, &response_body, &secrets)
   })
 }
 
@@ -214,7 +216,7 @@ async fn exchange_token(
   {
     return Ok(cached.access_token);
   }
-  mint_token(client, home, credentials, token_endpoint).await
+  mint_token(client, home, credentials, token_endpoint, &[credentials.client_secret.as_str()]).await
 }
 
 /// After a `401`: reuse the token another process already replaced, otherwise mint a fresh one and cache it.
@@ -233,17 +235,19 @@ async fn refresh_after_unauthorized(
   {
     return Ok(cached.access_token);
   }
-  mint_token(client, home, credentials, token_endpoint).await
+  let secrets = [credentials.client_secret.as_str(), failed_token];
+  mint_token(client, home, credentials, token_endpoint, &secrets).await
 }
 
-/// Trade the application credentials for an access token and write it to the cache.
+/// Trade the application credentials for an access token and write it to the cache. `secrets` are the values every
+/// error of this exchange redacts: the client secret, and any access token the caller has just seen rejected.
 async fn mint_token(
   client: &reqwest::Client,
   home: &Path,
   credentials: &LinearCredentials,
   token_endpoint: &str,
+  secrets: &[&str],
 ) -> Result<String, CliExit> {
-  let secret = credentials.client_secret.as_str();
   let form = urlencode(&[
     (GRANT_TYPE_FIELD.to_string(), CLIENT_CREDENTIALS_GRANT.to_string()),
     (CLIENT_ID_FIELD.to_string(), credentials.client_id.clone()),
@@ -256,24 +260,25 @@ async fn mint_token(
     .body(form.into_bytes())
     .send()
     .await
-    .map_err(|error| response_failure(None, "request failed", Some(&error), &[secret]))?;
+    .map_err(|error| response_failure(None, "request failed", Some(&error), secrets))?;
   let status = response.status().as_u16();
   let bytes = response
     .bytes()
     .await
-    .map_err(|error| response_failure(Some(status), "response body read failed", Some(&error), &[secret]))?;
+    .map_err(|error| response_failure(Some(status), "response body read failed", Some(&error), secrets))?;
   let text = String::from_utf8_lossy(&bytes);
   if status != 200 {
-    return Err(response_failure(Some(status), &text, None, &[secret]));
+    return Err(response_failure(Some(status), &text, None, secrets));
   }
   let value: Value =
-    serde_json::from_slice(&bytes).map_err(|_| response_failure(Some(status), &text, None, &[secret]))?;
+    serde_json::from_slice(&bytes).map_err(|_| response_failure(Some(status), &text, None, secrets))?;
   let Some(access_token) = value.get(ACCESS_TOKEN_FIELD).and_then(Value::as_str).filter(|token| !token.is_empty())
   else {
-    return Err(response_failure(Some(status), &text, None, &[secret]));
+    return Err(response_failure(Some(status), &text, None, secrets));
   };
   let Some(expires_in) = value.get(EXPIRES_IN_FIELD).and_then(Value::as_u64).filter(|seconds| *seconds > 0) else {
-    return Err(response_failure(Some(status), &text, None, &[secret, access_token]));
+    let known: Vec<&str> = secrets.iter().copied().chain([access_token]).collect();
+    return Err(response_failure(Some(status), &text, None, &known));
   };
   let cached = CachedToken {
     access_token: access_token.to_string(),
@@ -290,9 +295,8 @@ async fn send_graphql(
   body: &[u8],
   endpoint: &str,
   token: &str,
-  credentials: &LinearCredentials,
+  secrets: &[&str],
 ) -> Result<(u16, Vec<u8>), CliExit> {
-  let secrets = [credentials.client_secret.as_str(), token];
   let response = client
     .post(endpoint)
     .header(CONTENT_TYPE, APPLICATION_JSON)
@@ -300,24 +304,23 @@ async fn send_graphql(
     .body(body.to_vec())
     .send()
     .await
-    .map_err(|error| response_failure(None, "request failed", Some(&error), &secrets))?;
+    .map_err(|error| response_failure(None, "request failed", Some(&error), secrets))?;
   let status = response.status().as_u16();
   let bytes = response
     .bytes()
     .await
-    .map_err(|error| response_failure(Some(status), "response body read failed", Some(&error), &secrets))?;
+    .map_err(|error| response_failure(Some(status), "response body read failed", Some(&error), secrets))?;
   Ok((status, bytes.to_vec()))
 }
 
-fn finish(status: u16, body: &[u8], token: &str, credentials: &LinearCredentials) -> Result<Vec<u8>, CliExit> {
-  let secrets = [credentials.client_secret.as_str(), token];
+fn finish(status: u16, body: &[u8], secrets: &[&str]) -> Result<Vec<u8>, CliExit> {
   let text = String::from_utf8_lossy(body);
   if status != 200 {
-    return Err(response_failure(Some(status), &text, None, &secrets));
+    return Err(response_failure(Some(status), &text, None, secrets));
   }
-  let value: Value = serde_json::from_slice(body).map_err(|_| response_failure(Some(status), &text, None, &secrets))?;
+  let value: Value = serde_json::from_slice(body).map_err(|_| response_failure(Some(status), &text, None, secrets))?;
   if value.as_object().is_some_and(|object| object.contains_key("errors")) {
-    return Err(response_failure(Some(status), &text, None, &secrets));
+    return Err(response_failure(Some(status), &text, None, secrets));
   }
   Ok(body.to_vec())
 }
@@ -608,7 +611,7 @@ mod tests {
     let server = LoopbackServer::start(vec![
       (401, b"{}".to_vec()),
       (200, token_body(NEXT_ACCESS_TOKEN, 30 * DAY_SECS)),
-      (401, format!(r#"{{"message":"{NEXT_ACCESS_TOKEN}"}}"#).into_bytes()),
+      (401, format!(r#"{{"message":"{ACCESS_TOKEN} {NEXT_ACCESS_TOKEN}"}}"#).into_bytes()),
     ]);
     let (graphql_endpoint, token_endpoint) = endpoints(&server);
 
@@ -616,6 +619,23 @@ mod tests {
     assert_eq!(error.code, 1);
     let text = error_text(&error);
     assert!(text.contains("\"status\":401"), "{text}");
+    assert!(text.contains(credentials::REDACTED), "{text}");
+    assert_no_secrets(&text);
+  }
+
+  #[test]
+  fn a_failed_re_exchange_after_a_401_redacts_the_rejected_token() {
+    let home = credentials_home(Some(CLIENT_ID), Some(CLIENT_SECRET));
+    cache_valid_for(home.path(), ACCESS_TOKEN, CLIENT_ID, LINEAR_OAUTH_SCOPE);
+    let server = LoopbackServer::start(vec![
+      (401, b"{}".to_vec()),
+      (500, format!(r#"{{"message":"{ACCESS_TOKEN}"}}"#).into_bytes()),
+    ]);
+    let (graphql_endpoint, token_endpoint) = endpoints(&server);
+
+    let error = execute_graphql(REQUEST_BODY, &graphql_endpoint, &token_endpoint, home.path()).unwrap_err();
+    assert_eq!(error.code, 1);
+    let text = error_text(&error);
     assert!(text.contains(credentials::REDACTED), "{text}");
     assert_no_secrets(&text);
   }

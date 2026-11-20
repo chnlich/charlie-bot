@@ -22,7 +22,8 @@ whether a round whose change can affect one of those scenarios takes it as a top
 
 Measure each relevant scenario before and after the change on host3, using the shared scenario definitions and target
 verdicts in `dev/poor-network/profile.mjs`. The bench's verdict is authoritative; do not copy target values into this
-direction. A scenario that passes before and fails after blocks landing.
+direction. The background scenario runs 3 repetitions, so the check stays inside the round's time.
+A scenario that passes before and fails after blocks landing.
 
 Each poor-network side and each serve-trial side waits at most 15 minutes for the host's bench lock. If a wait expires,
 the timed-out side takes no measurement. The round reports no result from an incomplete pair, stops without opening a
@@ -59,28 +60,29 @@ when both sides complete under comparable conditions.
 
 ## Measures
 
-Report latency as the median of repeated requests. Keep warm-up requests out of warm samples and keep cold samples
-representative of first requests. Apply the same sample treatment to both sides.
+Report latency as the median of 50 requests, after 5 warm-up requests. Keep warm-up requests out of warm samples and
+keep cold samples representative of first requests. Apply the same sample treatment to both sides.
 
 Search latency covers a common query, a query that matches 200 rows and a rare query against the mock home's
-fixed word list. Keep its background event load separate from the shared task-tree load, and preserve both workloads
-between sides.
+fixed word list. Measure each query with the latency rule above. Keep its background event load separate from the
+shared task-tree load, and preserve both workloads between sides.
 
 Cold-query latency represents the first query with server content uncached, without changing the shared mock home.
-Report the median across cold samples.
+Take 10 cold samples per round and report their median.
 
 Slow-network page loads use the poor-network bench's shared link profile and shaping proxy. If the required relay cannot
 run on the host, report that defect instead of substituting another link model. A load includes the document, its GET
 API responses and its referenced static files in served order. Cold loads use one connection per fetch; warm loads use
 one kept-alive connection. Measure elapsed time from the document request until the final response byte and count all
 response-body bytes received by the client. The measured pages are the chat page with the largest mock-home session
-open, that session's events viewer and the home page.
+open, that session's events viewer and the home page. Each page takes 10 cold loads first, then 5 warm-up loads and
+10 warm loads, and reports the median of the 10 cold loads and of the 10 warm loads.
 
-Startup latency is the interval from the server's first log timestamp to its first successful HTTP request. Summarize
-repeated starts with their median.
+Startup latency is the interval from the server's first log timestamp to its first successful HTTP request. Repeat five
+runs and summarize them with their median.
 
-Memory reports peak resident memory after the same fixed request workload on each side. CPU reports user and system
-CPU time spent serving that workload. Keep the workload identical between sides.
+Memory reports peak resident memory after the same fixed 200 requests on each side. CPU reports user and system
+CPU time spent serving those 200 requests. Keep the workload identical between sides.
 
 ## Evidence
 

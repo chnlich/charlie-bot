@@ -262,6 +262,9 @@ fn parse_verdict(answer: &str, settled: &[Settled]) -> Result<Judgement, String>
       Ok(Judgement::Accepted { judged_kind: judged_kind(&parsed.judged_kind)? })
     }
     "refuse" => {
+      if !parsed.judged_kind.trim().is_empty() {
+        return Err("a refuse verdict names a kind".to_string());
+      }
       if cited.is_empty() {
         return Err("a refuse verdict cites no text".to_string());
       }
@@ -345,6 +348,7 @@ mod tests {
       r#"{"decision":"accept","judged_kind":"take_off","cited":"text","extra":1}"#,
       r#"{"decision":"accept","judged_kind":"approval","cited":""}"#,
       r#"{"decision":"accept","judged_kind":"","cited":"text"}"#,
+      r#"{"decision":"refuse","judged_kind":"take_off","cited":"text"}"#,
       r#"{"decision":"refuse","judged_kind":"","cited":""}"#,
       r#"{"decision":"refuse","judged_kind":"","cited":"invented"}"#,
       r#"{"decision":"maybe","judged_kind":"","cited":""}"#,

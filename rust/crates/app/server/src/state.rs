@@ -33,13 +33,15 @@ impl StaticMount {
       .iter()
       .map(|package| StaticMount {
         prefix: package_static_prefix(package),
-        directory: StaticDirectory::new(package_static_directory(repo_root, package)),
+        directory: StaticDirectory::bundled(package_static_directory(repo_root, package)),
       })
       .collect();
     let web_static = web_static_directory(repo_root);
     if web_static.exists() {
-      mounts
-        .push(StaticMount { prefix: static_mount_prefix().to_string(), directory: StaticDirectory::new(web_static) });
+      mounts.push(StaticMount {
+        prefix: static_mount_prefix().to_string(),
+        directory: StaticDirectory::bundled(web_static),
+      });
     }
     mounts
   }

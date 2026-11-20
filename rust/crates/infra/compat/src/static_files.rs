@@ -1,11 +1,11 @@
 //! Serving a directory of files: static file responses with validators, ranges and content-type guessing.
 //!
-//! A served file carries the content type the MIME table guesses, `accept-ranges`, `content-length`,
-//! `last-modified` and an `etag` of the md5 of the bytes it carries, so a release that rewrites a file with the same
-//! bytes keeps the tag. A matching `If-None-Match` or a newer
-//! `If-Modified-Since` answers 304, and a `Range` header answers 206, 400 or 416. The directory is checked per
-//! request until the check first passes, so a directory that appears later serves without a restart. A missing one
-//! answers 500.
+//! A served file carries the content type the MIME table guesses, `accept-ranges`, `content-length`, `last-modified`
+//! and an `etag`. A directory of bundled assets (`StaticDirectory::bundled`) tags each file with the md5 of the bytes
+//! it carries, so a release that rewrites a file with the same bytes keeps the tag. Any other directory tags a file
+//! with the md5 of its mtime and size, which reads no body. A matching `If-None-Match` or a newer `If-Modified-Since`
+//! answers 304, and a `Range` header answers 206, 400 or 416. The directory is checked per request until the check
+//! first passes, so a directory that appears later serves without a restart. A missing one answers 500.
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -17,7 +17,7 @@ use std::sync::{LazyLock, Mutex};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_core::{int_text, paths, posix_path, timefmt};
+use charliebot_core::{int_text, paths, posix_path, text_repr, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
@@ -86,17 +86,34 @@ fn reresolved_directory(path: &Path) -> PathBuf {
   resolved
 }
 
+/// How a served file's ETag is built.
+#[derive(Clone, Copy)]
+enum EtagSource {
+  /// The md5 of the file's mtime and size: no body is read, and a rewrite of the file changes the tag.
+  Identity,
+  /// The md5 of the file's bytes: a rewrite with the same bytes keeps the tag, at one read per file identity.
+  Bytes,
+}
+
 /// One served directory.
 pub struct StaticDirectory {
   /// The served directory as the caller names it (unresolved).
   path: PathBuf,
+  /// How this directory's files are tagged.
+  etag: EtagSource,
   /// Whether the directory check has passed once.
   checked: AtomicBool,
 }
 
 impl StaticDirectory {
+  /// A directory of user data, whose files are tagged from their mtime and size.
   pub fn new(path: PathBuf) -> StaticDirectory {
-    StaticDirectory { path, checked: AtomicBool::new(false) }
+    StaticDirectory { path, etag: EtagSource::Identity, checked: AtomicBool::new(false) }
+  }
+
+  /// A directory of bundled assets, whose files are tagged from their bytes.
+  pub fn bundled(path: PathBuf) -> StaticDirectory {
+    StaticDirectory { path, etag: EtagSource::Bytes, checked: AtomicBool::new(false) }
   }
 }
 
@@ -140,7 +157,7 @@ pub fn serve(
   if !metadata.is_file() {
     return responses::http_exception(StatusCode::NOT_FOUND);
   }
-  file_response(&full_path, &metadata, mime_types, None, method, headers)
+  file_response(&full_path, &metadata, mime_types, None, served.etag, method, headers)
 }
 
 /// Serve one known file with its validators and a caller-selected media type.
@@ -164,7 +181,7 @@ pub fn serve_file(path: &Path, content_type: &str, method: &Method, headers: &He
   if !metadata.is_file() {
     return responses::http_exception(StatusCode::NOT_FOUND);
   }
-  file_response(path, &metadata, &MimeTypes::builtin(), Some(content_type), method, headers)
+  file_response(path, &metadata, &MimeTypes::builtin(), Some(content_type), EtagSource::Identity, method, headers)
 }
 
 /// The 500 a mount answers while its directory is missing or not a directory.
@@ -201,6 +218,7 @@ impl FileHeaders {
     mime_types: &MimeTypes,
     override_content_type: Option<&str>,
     content_encoding: Option<&'static str>,
+    etag_source: EtagSource,
   ) -> std::io::Result<FileHeaders> {
     let content_type = override_content_type.map_or_else(
       || {
@@ -210,11 +228,15 @@ impl FileHeaders {
       str::to_string,
     );
     let mtime = timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec());
+    let etag = match etag_source {
+      EtagSource::Identity => identity_etag(mtime, metadata.size(), content_encoding.is_some()),
+      EtagSource::Bytes => content_etag(path, metadata)?,
+    };
     Ok(FileHeaders {
       content_type,
       size: metadata.size(),
       last_modified: timefmt::http_date(mtime.floor() as i64),
-      etag: content_etag(path, metadata)?,
+      etag,
       content_encoding,
       vary_accept_encoding: false,
     })
@@ -271,14 +293,16 @@ fn file_response(
   metadata: &std::fs::Metadata,
   mime_types: &MimeTypes,
   override_content_type: Option<&str>,
+  etag_source: EtagSource,
   method: &Method,
   headers: &HeaderMap,
 ) -> Response {
   let (path, metadata, encoding, vary) = precompressed(path, metadata, headers);
-  let mut file_headers = match FileHeaders::of(&path, &metadata, mime_types, override_content_type, encoding) {
-    Ok(headers) => headers,
-    Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
-  };
+  let mut file_headers =
+    match FileHeaders::of(&path, &metadata, mime_types, override_content_type, encoding, etag_source) {
+      Ok(headers) => headers,
+      Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
+    };
   if vary {
     file_headers.vary_accept_encoding = true;
   }
@@ -508,6 +532,15 @@ fn file_identity(path: &Path, metadata: &std::fs::Metadata) -> FileBodyKey {
     mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
     size: metadata.size(),
   }
+}
+
+/// The ETag of a file's identity: the md5 of its mtime and size, with `-br` for a precompressed form.
+fn identity_etag(mtime: f64, size: u64, precompressed: bool) -> String {
+  let mut etag_base = format!("{}-{}", text_repr::float_repr(mtime), size);
+  if precompressed {
+    etag_base.push_str("-br");
+  }
+  format!("\"{:x}\"", Md5::digest(etag_base.as_bytes()))
 }
 
 /// The ETag of a file's bytes: the md5 of the bytes the response carries. A release that rewrites a file with the same
@@ -748,7 +781,7 @@ mod tests {
     std::fs::create_dir(&root).unwrap();
     let file = root.join("lib.js");
     std::fs::write(&file, "console.log(1);").unwrap();
-    let served = StaticDirectory::new(root);
+    let served = StaticDirectory::bundled(root);
     let etag_of = |response: &Response| response.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
     let tag = etag_of(&serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &HeaderMap::new()));
 

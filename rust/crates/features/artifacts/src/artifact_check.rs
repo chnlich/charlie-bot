@@ -1030,7 +1030,7 @@ fn quoted_spans(text: &str) -> Vec<&str> {
 
 /// One open fork of a page, read as a pick: its question number, its named options as they show at open, and the
 /// name the recommendation quotes. The page script reads the same grammar in
-/// `web/features/artifacts/static/artifact-comments.js`; the fixture `tests/data/plan_template_forks.json` pins both
+/// `web/features/artifacts/static/artifact-comments.js`. The fixture `tests/data/plan_template_forks.json` pins both
 /// readings to one output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg(test)]

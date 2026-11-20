@@ -186,7 +186,8 @@ fn asset_versions(features: &FeatureContext) -> ViewResult<(String, String)> {
   Ok((comment_version, artifact_version))
 }
 
-/// The icon table for the artifact controls: comments use `comment` and `close`; picks use `done`, `undo` and `send`.
+/// The icon table for the artifact controls covers two groups. Comments use `comment` and `close`.
+/// Picks use `done`, `undo` and `send`.
 fn artifact_icon_script(features: &FeatureContext) -> ViewResult<String> {
   let templating = features
     .startup

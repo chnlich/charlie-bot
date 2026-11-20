@@ -5,7 +5,8 @@
 //! The session field is the same key in the drafts payload, so it comes from the shared field owner. The
 //! repository and base-branch fields are the same keys in the delegate payload and the run record, so the
 //! store's task-record owner defines them. The child-session field is the same key in the delegate and
-//! child-report facts, so the event-field owner in core defines it.
+//! child-report facts, so the event-field owner in core defines it. The backend field is the session record's key,
+//! so the store's metadata owner defines it.
 
 pub use charliebot_cli_common::fields::SESSION_ID;
 pub use charliebot_core::event_types::CHILD_SESSION_ID;
@@ -17,7 +18,7 @@ pub const START_PATH: &str = "/api/internal/improve";
 /// `improve stop`'s route.
 pub const STOP_PATH: &str = "/api/internal/improve/stop";
 
-pub const BACKEND: &str = "backend";
+pub const BACKEND: &str = charliebot_store::metadata::BACKEND_FIELD;
 pub const ITERATIONS: &str = "iterations";
 pub const GOAL: &str = "goal";
 pub const PLAN: &str = "plan";

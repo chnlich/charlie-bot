@@ -119,6 +119,9 @@ pub const REPO_PATH_FIELD: &str = "repo_path";
 /// The branch a task, its plan and its run record branch from. The delegate request, the improve request, the plan
 /// request and the run record carry the same name, so it is spelled once, here.
 pub const BASE_BRANCH_FIELD: &str = "base_branch";
+/// The session-metadata field naming the backend that runs the session. The delegate request and the improve request
+/// carry the same name, so it is spelled once, here.
+pub const BACKEND_FIELD: &str = "backend";
 /// The task-spec field holding a task's kind. The delegate request, the session write request and the stored task
 /// record carry the same name, so it is spelled once, here.
 pub const TASK_TYPE_FIELD: &str = "task_type";
@@ -708,7 +711,7 @@ impl SessionMetadata {
     push(&mut declared, "updated_at", &self.updated_at);
     push(&mut declared, CC_SESSION_ID_FIELD, &self.cc_session_id);
     push(&mut declared, CC_SESSION_STARTED_AT, &self.cc_session_started_at);
-    push(&mut declared, "backend", &self.backend);
+    push(&mut declared, BACKEND_FIELD, &self.backend);
     if !exclude_transient {
       push(&mut declared, SCHEDULE_CRON, &self.schedule_cron);
       push(&mut declared, SCHEDULE_ENABLED, &self.schedule_enabled);

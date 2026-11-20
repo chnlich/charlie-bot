@@ -16,7 +16,7 @@ This crate owns the process transport below the agent backends and the launch ma
 - `follow::DEFAULT_BUFFER_LIMIT`, `TAIL_POLL_INTERVAL`, `SilenceCallback`, `FollowSummary`, and its fields
 - `follow::tail_follow_events`
 - `identity::ProcessIdentity` and its fields, `pin_process_identity`
-- `identity::is_run_alive`
+- `identity::is_run_alive`, `identity::is_same_process`
 - `identity::ProcessStat` and its fields, `read_pid_stat`, `read_host_boot_time`
 - `kill::KILL_ESCALATION_GRACE`, `KILL_ESCALATION_POLL`
 - `kill::kill_process_group`, `kill_group_escalating`, `wait_or_kill_group`

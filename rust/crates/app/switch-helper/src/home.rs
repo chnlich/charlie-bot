@@ -11,6 +11,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::event_types;
+use charliebot_core::proc_identity::is_same_process;
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr;
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
@@ -19,7 +20,7 @@ use charliebot_store::run_records::{RUN_METADATA_NAME, read_run_metadata};
 use serde_json::Value;
 
 use crate::common::{USAGE, exact, failed, metadata_read_failure, read_config};
-use crate::{process, scan};
+use crate::scan;
 
 /// How long the outcome read waits for a manager turn's finish callback to persist its fact.
 const MANAGER_TURN_OUTCOME_WAIT: Duration = Duration::from_secs(10);
@@ -80,7 +81,7 @@ fn switches_text(document: &Value) -> anyhow::Result<String> {
 /// `alive PID PID_START`: `alive` while the recorded process instance runs, `ended` once it is gone or recycled.
 fn alive(args: &[OsString]) -> Result<(), CliExit> {
   let [pid, pid_start] = exact::<2>(args)?;
-  let running = pid.parse::<u32>().is_ok_and(|pid| process::instance(pid, &pid_start));
+  let running = pid.parse::<u32>().is_ok_and(|pid| is_same_process(pid, &pid_start));
   println!("{}", if running { "alive" } else { "ended" });
   Ok(())
 }

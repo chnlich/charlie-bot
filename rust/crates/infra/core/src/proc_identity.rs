@@ -36,6 +36,12 @@ pub fn read_self_storage_reads() -> Option<(u64, u64)> {
   Some((io.read_bytes, io.syscr))
 }
 
+/// Whether `pid` still names the process instance that started at tick `pid_start` and has not ended. A reused pid
+/// carries another start tick, and a zombie's argv is gone, so neither counts.
+pub fn is_same_process(pid: u32, pid_start: &str) -> bool {
+  read_pid_stat(pid).is_some_and(|stat| stat.pid_start == pid_start && stat.state != "Z")
+}
+
 /// Whether the recorded process id, start tick, non-zombie state, and current boot interval match a live process.
 pub fn is_run_alive(
   pid: Option<u32>,
@@ -46,10 +52,7 @@ pub fn is_run_alive(
   let (Some(pid), Some(pid_start), Some(started_at)) = (pid, pid_start, started_at) else {
     return false;
   };
-  let Some(current) = read_pid_stat(pid) else {
-    return false;
-  };
-  current.pid_start == pid_start && current.state != "Z" && started_at > host_boot_time
+  is_same_process(pid, pid_start) && started_at > host_boot_time
 }
 
 #[cfg(test)]

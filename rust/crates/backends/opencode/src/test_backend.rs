@@ -26,7 +26,7 @@ use super::{OpenCodeBackend, OpenCodeOption, OpenCodeTranslator};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::runner::{AgentRunner, RunOutcome, RunRequest};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
-use charliebot_agents::transport::identity::{ProcessIdentity, read_pid_stat};
+use charliebot_agents::transport::identity::{ProcessIdentity, is_same_process, read_pid_stat};
 use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::{cursor, follow, recovery};
 
@@ -104,7 +104,7 @@ impl Drop for RestartProcessGuard {
     let _ = self.owner.kill();
     let _ = self.owner.wait();
     for process in &self.processes {
-      if process.pid_start.as_deref().is_some_and(|start| super::relay::same_process(process.pid, start)) {
+      if process.pid_start.as_deref().is_some_and(|start| is_same_process(process.pid, start)) {
         kill_process_group(process.pid, Signal::SIGKILL);
       }
     }
@@ -158,7 +158,7 @@ async fn killed_server_process_leaves_relay_and_serve_for_adoption() {
   let output = Arc::clone(&delivered);
   let follow_dir = directory.clone();
   let follow = tokio::spawn(async move {
-    follow_from_cursor(&follow_dir, cursor, translator, move || super::relay::same_process(pid, &start), output).await
+    follow_from_cursor(&follow_dir, cursor, translator, move || is_same_process(pid, &start), output).await
   });
   let client = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings::default())
     .expect("the default client builds");
@@ -1129,7 +1129,7 @@ async fn a_turn_survives_a_server_restart_and_replays_translator_state() {
       &follow_directory,
       cursor,
       translator,
-      move || super::relay::same_process(relay_pid, &relay_start),
+      move || is_same_process(relay_pid, &relay_start),
       recovered_sink,
     )
     .await
@@ -1290,7 +1290,7 @@ async fn a_new_settings_snapshot_starts_a_new_serve_while_an_adopted_turn_finish
     .await
     .unwrap();
   tokio::time::timeout(Duration::from_secs(5), async {
-    while super::relay::same_process(identity.pid, &relay_start) {
+    while is_same_process(identity.pid, &relay_start) {
       tokio::time::sleep(Duration::from_millis(10)).await;
     }
   })
@@ -1353,7 +1353,7 @@ async fn a_turn_ending_during_downtime_delivers_its_answer_by_the_dead_process_r
     .unwrap();
   let relay_start = identity.pid_start.clone().expect("relay identity has a start time");
   tokio::time::timeout(Duration::from_secs(5), async {
-    while super::relay::same_process(identity.pid, &relay_start) {
+    while is_same_process(identity.pid, &relay_start) {
       tokio::time::sleep(Duration::from_millis(10)).await;
     }
   })
@@ -1415,7 +1415,7 @@ async fn stopping_an_adopted_turn_interrupts_through_its_connection_record_and_e
 
   server::finish_active_turn(identity.pid).await.unwrap();
   tokio::time::timeout(Duration::from_secs(5), async {
-    while super::relay::same_process(identity.pid, &relay_start) {
+    while is_same_process(identity.pid, &relay_start) {
       tokio::time::sleep(Duration::from_millis(10)).await;
     }
   })

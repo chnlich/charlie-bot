@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use tokio::signal::unix::{SignalKind, signal};
 
 use super::protocol;
-use charliebot_agents::transport::identity::{ProcessIdentity, pin_process_identity, read_pid_stat};
+use charliebot_agents::transport::identity::{ProcessIdentity, is_same_process, pin_process_identity};
 
 pub const RELAY_ARG: &str = "--opencode-relay";
 pub const TURN_RECORD_NAME: &str = "opencode.turn.json";
@@ -155,11 +155,6 @@ pub fn parent_identity() -> anyhow::Result<ProcessIdentity> {
   Ok(identity)
 }
 
-/// The process-instance check: whether a pid still names the recorded process instance.
-pub fn same_process(pid: u32, pid_start: &str) -> bool {
-  read_pid_stat(pid).is_some_and(|stat| stat.pid_start == pid_start && stat.state != "Z")
-}
-
 /// The connection-record name stored in each turn record.
 pub fn server_record_name(path: &Path) -> anyhow::Result<String> {
   path
@@ -193,7 +188,7 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
   let turn = loop {
     tokio::select! {
       _ = terminate.recv() => {
-        let reason = if same_process(parent_pid, parent_start) {
+        let reason = if is_same_process(parent_pid, parent_start) {
           "OpenCode relay stopped before the turn started"
         } else {
           "server restarted before the turn started"
@@ -205,7 +200,7 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
         if let Some(turn) = read_turn_record(directory)? {
           break turn;
         }
-        if !same_process(parent_pid, parent_start) {
+        if !is_same_process(parent_pid, parent_start) {
           append_end_record(raw_path, "server restarted before the turn started")?;
           return Ok(false);
         }
@@ -284,7 +279,7 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
         if interrupt_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
           bail!("OpenCode interrupt did not produce a terminal event");
         }
-        if !same_process(record.pid, &record.pid_start) {
+        if !is_same_process(record.pid, &record.pid_start) {
           bail!("opencode serve exited");
         }
       }
@@ -295,7 +290,7 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
           // run before the process has finished exiting, and it would report the disconnect instead of the crash.
           let reason = match wait_for_server_exit_reason(&record_path).await? {
             Some(reason) => reason,
-            None if same_process(record.pid, &record.pid_start) => "event stream disconnected".to_string(),
+            None if is_same_process(record.pid, &record.pid_start) => "event stream disconnected".to_string(),
             None => "opencode serve exited".to_string(),
           };
           bail!("{reason}");

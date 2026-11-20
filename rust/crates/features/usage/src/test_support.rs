@@ -22,6 +22,8 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
@@ -30,6 +32,8 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Codex",
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
@@ -38,6 +42,8 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "opencode",
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
@@ -46,7 +52,9 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Antigravity",
     id_prefixes: &["antigravity-", "agy-"],
     run_logs_only: true,
-    native_cache_read: NativeCacheRead::CachedTokens,
+    native_input: charliebot_registry::usage::NativeInput::Exclusive,
+    native_scope: charliebot_registry::usage::NativeScope::Conversation,
+    native_cache_read: NativeCacheRead::CacheReadInputTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("antigravity", "Antigravity")?;
@@ -54,6 +62,8 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "CLC",
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
@@ -62,7 +72,9 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Devin",
     id_prefixes: &["devin-"],
     run_logs_only: true,
-    native_cache_read: NativeCacheRead::CachedTokens,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
+    native_cache_read: NativeCacheRead::CacheReadInputTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("devin", "Devin")?;

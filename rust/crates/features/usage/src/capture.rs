@@ -14,7 +14,8 @@ use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{
-  CODEX_THREAD_STARTED, CODEX_TURN_COMPLETED, NativeCacheRead, RecordKind, UsageSource, UsageSourceImpl, file_signature,
+  CODEX_THREAD_STARTED, CODEX_TURN_COMPLETED, NativeCacheRead, NativeInput, NativeScope, RecordKind, UsageSource,
+  UsageSourceImpl, file_signature,
 };
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, read_metadata_object};
@@ -171,13 +172,15 @@ pub fn capture_runs(
 ) -> anyhow::Result<usize> {
   let mut live = LiveSessions::default();
   let mut written = 0;
+  let mut conversations = ConversationRuns::new(sessions_dir);
   for (path, metadata) in run_logs(sessions_dir)? {
     let signature = file_signature(&metadata);
     let path_text = path_text(&path)?;
     if captured.get(path_text) == Some(&signature) {
       continue;
     }
-    let records = run_file_records(&path, config, registry, &mut live)?;
+    let records = run_file_records(&path, config, registry, &mut live, &mut conversations)
+      .with_context(|| format!("capturing run {}", run_id(&path).unwrap_or("unknown")))?;
     written += ledger.record_stored_file(host, path_text, &signature, &records)?;
   }
   Ok(written)
@@ -189,13 +192,14 @@ fn run_file_records(
   config: &CharlieBotConfig,
   registry: &Registry,
   live: &mut LiveSessions,
+  conversations: &mut ConversationRuns,
 ) -> anyhow::Result<Vec<StoredRecord>> {
   let objects = ndjson::parse_marker_lines(path, &*RUN_MARKERS)?;
   let metadata = run_metadata(path)?;
   let backend = truthy_string(&metadata, "backend")?;
   let record = backend
     .as_deref()
-    .map(|backend| run_record(&objects, &metadata, config, registry, backend, run_id(path)?, live))
+    .map(|backend| run_record(&objects, &metadata, config, registry, backend, path, (live, conversations)))
     .transpose()?
     .flatten();
   Ok(record.into_iter().collect())
@@ -214,12 +218,14 @@ pub fn rebuild_run_records(
   let origins = ledger.native_run_origins(host)?;
   let mut live = LiveSessions::default();
   let mut rebuilt = Vec::with_capacity(origins.len());
+  let sessions_dir = config.sessions_dir();
+  let mut conversations = ConversationRuns::new(&sessions_dir);
   for (record_id, origin) in origins {
     let path = PathBuf::from(&origin);
     run_log_files::stored_metadata(&path)
       .with_context(|| format!("statting origin {origin} of {record_id}"))?
       .ok_or_else(|| anyhow!("origin {origin} of {record_id} is missing"))?;
-    let records = run_file_records(&path, config, registry, &mut live)
+    let records = run_file_records(&path, config, registry, &mut live, &mut conversations)
       .with_context(|| format!("rebuilding {record_id} from {origin}"))?;
     let [record] = <[StoredRecord; 1]>::try_from(records)
       .map_err(|records| anyhow!("origin {origin} of {record_id} yields {} run records, not one", records.len()))?;
@@ -514,9 +520,11 @@ fn run_record(
   config: &CharlieBotConfig,
   registry: &Registry,
   backend: &str,
-  id: &str,
-  live: &mut LiveSessions,
+  path: &Path,
+  state: (&mut LiveSessions, &mut ConversationRuns),
 ) -> anyhow::Result<Option<StoredRecord>> {
+  let (live, conversations) = state;
+  let id = run_id(path)?;
   let Some((verdict, source)) = backend_verdict(backend, config, registry)? else {
     return Ok(None);
   };
@@ -526,8 +534,23 @@ fn run_record(
         return Ok(None);
       };
       let usage = usage_object(result.get("usage"))?;
-      let (in_fresh, cache_read) = native_split(usage, source)?;
-      (in_fresh, Count::Int(0), cache_read, count(usage, USAGE_OUTPUT_TOKENS)?, RecordKind::Native, Vec::new())
+      let mut counts = native_counts(usage, source)?;
+      if source.native_scope == NativeScope::Conversation
+        && let Some(previous) = conversations.previous(path, objects, metadata, source, config, registry)?
+      {
+        let previous_objects = ndjson::parse_marker_lines(&previous, &*RUN_MARKERS)
+          .with_context(|| format!("reading predecessor run {}", run_id(&previous).unwrap_or("unknown")))?;
+        let result = last_result(&previous_objects)?
+          .ok_or_else(|| anyhow!("predecessor run {} has no result", run_id(&previous).unwrap_or("unknown")))?;
+        let previous_counts = native_counts(usage_object(result.get("usage"))?, source)?;
+        for (current, prior) in counts.iter_mut().zip(previous_counts) {
+          if current.compare(prior).is_lt() {
+            bail!("run {id} has a lower cumulative snapshot than predecessor run {}", run_id(&previous)?);
+          }
+          *current = current.sub(prior, "cumulative usage")?;
+        }
+      }
+      (counts[0], Count::Int(0), counts[1], counts[2], RecordKind::Native, Vec::new())
     }
     Verdict::CodexRule => {
       let Some((in_fresh, cache_read, output)) = turn_sums(objects)? else {
@@ -569,16 +592,96 @@ fn run_record(
   }))
 }
 
-/// A run-logs-only result's (in_fresh, cache_read). Its input count includes the cache hits that the source's
-/// `native_cache_read` field names, so the fresh part is the input less those hits.
-fn native_split(usage: &Map<String, Value>, source: &UsageSource) -> anyhow::Result<(Count, Count)> {
+/// The fresh input, cache reads and output in one native result snapshot.
+fn native_counts(usage: &Map<String, Value>, source: &UsageSource) -> anyhow::Result<[Count; 3]> {
   let input = count(usage, USAGE_INPUT_TOKENS)?;
   let cache_field = match source.native_cache_read {
     NativeCacheRead::CachedTokens => CACHED_TOKENS,
     NativeCacheRead::CacheReadInputTokens => USAGE_CACHE_READ_INPUT_TOKENS,
   };
   let cache_read = count(usage, cache_field)?;
-  Ok((input.sub(cache_read, "native run cached tokens")?, cache_read))
+  let fresh = match source.native_input {
+    NativeInput::Inclusive => input.sub(cache_read, "native run cached tokens")?,
+    NativeInput::Exclusive => input,
+  };
+  Ok([fresh, cache_read, count(usage, USAGE_OUTPUT_TOKENS)?])
+}
+
+type ConversationIndex = HashMap<(String, String), Vec<(String, String, PathBuf)>>;
+
+/// Indexes native conversations from run metadata, retaining paths even when their raw logs are missing.
+struct ConversationRuns<'a> {
+  sessions_dir: &'a Path,
+  entries: Option<ConversationIndex>,
+}
+
+impl<'a> ConversationRuns<'a> {
+  fn new(sessions_dir: &'a Path) -> Self {
+    Self { sessions_dir, entries: None }
+  }
+
+  fn previous(
+    &mut self,
+    path: &Path,
+    objects: &[Value],
+    metadata: &Map<String, Value>,
+    source: &UsageSource,
+    config: &CharlieBotConfig,
+    registry: &Registry,
+  ) -> anyhow::Result<Option<PathBuf>> {
+    if self.entries.is_none() {
+      let mut entries = ConversationIndex::new();
+      for session in subdirs(self.sessions_dir)?.unwrap_or_default() {
+        for run in subdirs(&layout::runs_dir(&session))?.unwrap_or_default() {
+          let candidate = run.join(RAW_LOG_NAME);
+          if !run.join(RUN_METADATA_NAME).try_exists()? && run_log_files::stored_metadata(&candidate)?.is_none() {
+            continue;
+          }
+          let meta = run_metadata(&candidate)?;
+          let Some(backend) = truthy_string(&meta, "backend")? else { continue };
+          let Some(candidate_source) = backend_source(&backend, config, registry)? else { continue };
+          if candidate_source.native_scope != NativeScope::Conversation {
+            continue;
+          }
+          let mut ids = run_session_ids(&[], &meta)?;
+          if ids.is_empty() && run_log_files::stored_metadata(&candidate)?.is_some() {
+            ids = run_session_ids(&ndjson::parse_marker_lines(&candidate, &*RUN_MARKERS)?, &meta)?;
+          }
+          for id in ids {
+            let candidate_id = run_id(&candidate)?;
+            let started = truthy_string(&meta, STARTED_AT_FIELD)?
+              .ok_or_else(|| anyhow!("run {} has no start time", candidate_id))?;
+            entries.entry((candidate_source.name.to_string(), id)).or_default().push((
+              started,
+              run_id(&candidate)?.to_string(),
+              candidate.clone(),
+            ));
+          }
+        }
+      }
+      for runs in entries.values_mut() {
+        runs.sort();
+      }
+      self.entries = Some(entries);
+    }
+    let ids = run_session_ids(objects, metadata)?;
+    if ids.len() != 1 {
+      bail!("run {} names {} conversations", run_id(path)?, ids.len());
+    }
+    let id = ids.into_iter().next().expect("one conversation id");
+    let current_id = run_id(path)?;
+    let runs = self
+      .entries
+      .as_ref()
+      .expect("index built")
+      .get(&(source.name.to_string(), id))
+      .ok_or_else(|| anyhow!("run {} is absent from the conversation index", current_id))?;
+    let index = runs
+      .iter()
+      .position(|(_, _, candidate)| candidate == path)
+      .ok_or_else(|| anyhow!("run {} is absent from its conversation", current_id))?;
+    Ok(index.checked_sub(1).map(|index| runs[index].2.clone()))
+  }
 }
 
 fn last_result(objects: &[Value]) -> anyhow::Result<Option<&Map<String, Value>>> {

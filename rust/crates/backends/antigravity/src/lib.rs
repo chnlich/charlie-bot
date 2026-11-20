@@ -55,7 +55,9 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     name: USAGE_SOURCE,
     id_prefixes: &["antigravity-", "agy-"],
     run_logs_only: true,
-    native_cache_read: NativeCacheRead::CachedTokens,
+    native_input: charliebot_registry::usage::NativeInput::Exclusive,
+    native_scope: charliebot_registry::usage::NativeScope::Conversation,
+    native_cache_read: NativeCacheRead::CacheReadInputTokens,
     implementation: Some(Arc::new(usage_quota::AntigravityUsageSource::new(account))),
   })?;
   registry.attribute_backend_type(TYPE_NAME, USAGE_SOURCE)

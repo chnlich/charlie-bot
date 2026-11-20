@@ -182,6 +182,8 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "CLC",
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
@@ -190,14 +192,28 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Devin",
     id_prefixes: &["devin-"],
     run_logs_only: true,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CacheReadInputTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("devin", "Devin")?;
   registry.usage_source(UsageSource {
+    name: "Antigravity",
+    id_prefixes: &["agy-"],
+    run_logs_only: true,
+    native_cache_read: NativeCacheRead::CacheReadInputTokens,
+    native_input: charliebot_registry::usage::NativeInput::Exclusive,
+    native_scope: charliebot_registry::usage::NativeScope::Conversation,
+    implementation: None,
+  })?;
+  registry.attribute_backend_type("antigravity", "Antigravity")?;
+  registry.usage_source(UsageSource {
     name: "External",
     id_prefixes: &["external-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(External)),
   })?;
@@ -205,6 +221,8 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Codex",
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(CliStub { name: "Codex", dir: "codex", account: "codex-main", codex: true })),
   })?;
@@ -213,6 +231,8 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(CliStub {
       name: "Claude Code",
@@ -226,6 +246,8 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "opencode",
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(CliStub {
       name: "opencode",
@@ -243,6 +265,8 @@ fn register_claude_source(registry: &mut Registry) -> Result<(), RegistryError> 
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(CliStub {
       name: "Claude Code",
@@ -1278,6 +1302,96 @@ fn rebuild_run_records_recomputes_a_row_from_its_raw_run_and_refuses_a_missing_o
   assert!(format!("{error:#}").contains("is missing"), "{error:#}");
   let rows = page_rows(&mut ledger);
   assert_eq!(row(&rows, "charlie-bot", "swe-2").in_fresh.int(), 3_971_522, "a failed rebuild writes nothing");
+}
+
+// Result snapshots from the same Antigravity conversation, in run order: fresh input, cache read, output.
+const CONVERSATION_SNAPSHOTS: [[i64; 3]; 21] = [
+  [54025, 301170, 10227],
+  [144499, 756455, 25974],
+  [170623, 1046199, 29100],
+  [540756, 4112053, 72799],
+  [1040288, 10480296, 157283],
+  [1064028, 10800884, 159516],
+  [1102917, 12335936, 165165],
+  [1136679, 13635883, 172368],
+  [1194635, 14647916, 182113],
+  [1216396, 14703416, 182654],
+  [1243151, 14911464, 184805],
+  [1329863, 15143577, 187470],
+  [1435621, 15341113, 188814],
+  [1571055, 15837816, 193641],
+  [1776812, 17863256, 220248],
+  [1814418, 19343289, 232904],
+  [1836623, 19806085, 233557],
+  [1865431, 20073645, 237965],
+  [1904902, 20375822, 243840],
+  [2008637, 21215038, 256872],
+  [2039802, 21761674, 259855],
+];
+
+fn write_conversation_run(home: &Path, index: usize, snapshot: [i64; 3]) -> PathBuf {
+  let id = format!("run-{index:02}");
+  let metadata = format!(
+    r#"{{"backend":"agy-model","model":"gemini","native_session_id":"conversation","started_at":"2026-11-{day:02}T00:00:00Z"}}"#,
+    day = index + 1,
+  );
+  let events = format!(
+    "{{\"type\":\"session_attached\",\"session_id\":\"conversation\"}}\n{{\"type\":\"result\",\"usage\":{{\"input_tokens\":{},\"cache_read_input_tokens\":{},\"output_tokens\":{}}}}}\n",
+    snapshot[0], snapshot[1], snapshot[2],
+  );
+  write_run_json(home, "s1", &id, &metadata, events.as_bytes())
+}
+
+#[test]
+fn cumulative_conversation_runs_sum_to_the_last_real_snapshot_and_rebuild_identically() {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture_with(&home, &option("devin-test", "devin", "other"));
+  for (index, snapshot) in CONVERSATION_SNAPSHOTS.iter().enumerate() {
+    write_conversation_run(&home, index, *snapshot);
+  }
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  capture_round(&mut ledger, &config, &registry);
+  let reader = Connection::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut previous = [0, 0, 0];
+  for (index, snapshot) in CONVERSATION_SNAPSHOTS.iter().enumerate() {
+    let actual: (i64, i64, i64) = reader
+      .query_row(
+        "SELECT in_fresh, cache_read, output FROM usage WHERE record_id = ?",
+        [format!("run:run-{index:02}")],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+      )
+      .unwrap();
+    assert_eq!(actual, (snapshot[0] - previous[0], snapshot[1] - previous[1], snapshot[2] - previous[2]));
+    previous = *snapshot;
+  }
+  let rows = page_rows(&mut ledger);
+  let totals = row(&rows, "charlie-bot", "gemini");
+  assert_eq!(
+    (totals.calls, totals.in_fresh.int(), totals.cache_read.int(), totals.output.int()),
+    (21, 2039802, 21761674, 259855)
+  );
+  assert_eq!(rebuild_run_records(&mut ledger, HOST, &config, &registry).unwrap(), 21);
+  let rows = page_rows(&mut ledger);
+  let totals = row(&rows, "charlie-bot", "gemini");
+  assert_eq!((totals.in_fresh.int(), totals.cache_read.int(), totals.output.int()), (2039802, 21761674, 259855));
+}
+
+#[test]
+fn cumulative_conversation_rejects_decrease_and_missing_predecessor() {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture_with(&home, &option("devin-test", "devin", "other"));
+  let first = write_conversation_run(&home, 0, [10, 20, 30]);
+  write_conversation_run(&home, 1, [9, 21, 31]);
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let error =
+    capture_runs(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &BTreeMap::new()).unwrap_err();
+  assert!(format!("{error:#}").contains("run-01"), "{error:#}");
+  fs::remove_file(first).unwrap();
+  let error =
+    capture_runs(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &BTreeMap::new()).unwrap_err();
+  assert!(format!("{error:#}").contains("run-00"), "{error:#}");
 }
 
 #[test]

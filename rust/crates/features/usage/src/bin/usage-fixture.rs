@@ -45,6 +45,8 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     name: "CLC",
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
@@ -53,6 +55,8 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     name: "Codex",
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(FixtureSource { codex_rule: true })),
   })?;
@@ -61,6 +65,8 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(FixtureSource { codex_rule: false })),
   })?;

@@ -97,6 +97,8 @@ fn register_source(registry: &mut Registry, db: PathBuf, proc_root: PathBuf) -> 
     name: USAGE_SOURCE,
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(OpencodeLogs::new(db, proc_root, quota_state))),
   })?;

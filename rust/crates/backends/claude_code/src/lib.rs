@@ -125,6 +125,8 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     name: USAGE_SOURCE,
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(ClaudeLogs::new(host, Arc::clone(&state), Arc::new(http)))),
   })?;

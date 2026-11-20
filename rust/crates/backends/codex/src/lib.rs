@@ -68,6 +68,8 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     name: USAGE_SOURCE,
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(usage_logs::CodexLogs::new(codex_home(host)))),
   })?;

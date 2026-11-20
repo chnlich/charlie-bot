@@ -202,6 +202,8 @@ fn register_claude_usage_source(registry: &mut Registry) -> Result<(), charliebo
     name: "Claude Code",
     id_prefixes: &[],
     run_logs_only: false,
+    native_input: charliebot_registry::usage::NativeInput::Inclusive,
+    native_scope: charliebot_registry::usage::NativeScope::PerRun,
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })

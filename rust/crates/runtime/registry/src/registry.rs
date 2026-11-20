@@ -2372,6 +2372,8 @@ mod usage_tests {
       name,
       id_prefixes: &[],
       run_logs_only: false,
+      native_input: crate::usage::NativeInput::Inclusive,
+      native_scope: crate::usage::NativeScope::PerRun,
       native_cache_read: NativeCacheRead::CachedTokens,
       implementation: Some(Arc::new(QuotaSource { error, calls })),
     }

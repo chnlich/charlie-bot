@@ -6,9 +6,7 @@
 //! inputs at the finish.
 
 use std::collections::HashSet;
-use std::fmt;
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Context;
 use charliebot_agents::backend_types;
@@ -17,14 +15,12 @@ use charliebot_core::event_types;
 use charliebot_core::text_repr::field_text;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
-use charliebot_registry::midturn_delivery::{IS_REPLAY_FIELD, is_gated_turn, offer as offer_write};
+use charliebot_registry::midturn_delivery::{is_gated_turn, offer as offer_write};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
-use charliebot_store::run_records::{RAW_LOG_NAME, RunKind, RunRecord};
+use charliebot_store::run_records::{RunKind, RunRecord};
 use futures_util::future::BoxFuture;
-use serde::de::{IgnoredAny, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
 use crate::task_input_prompt::compose_input_prompt;
@@ -76,99 +72,13 @@ pub fn record_ack(user_event_ids: &mut Vec<String>, item_run_id: &str, event: &V
   Ok(())
 }
 
-/// The three fields of a raw transport line that the echo scan reads. The map visitor keeps the last duplicate key
-/// and ignores unrelated fields without constructing their values.
-struct ReplayLine {
-  kind: Option<Value>,
-  is_replay: Option<Value>,
-  uuid: Option<Value>,
-}
-
-impl<'de> Deserialize<'de> for ReplayLine {
-  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-  where
-    D: Deserializer<'de>,
-  {
-    struct ReplayLineVisitor;
-
-    impl<'de> Visitor<'de> for ReplayLineVisitor {
-      type Value = ReplayLine;
-
-      fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON object")
-      }
-
-      fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-      where
-        A: MapAccess<'de>,
-      {
-        let mut line = ReplayLine { kind: None, is_replay: None, uuid: None };
-        while let Some(key) = map.next_key::<String>()? {
-          match key.as_str() {
-            "type" => line.kind = Some(map.next_value()?),
-            IS_REPLAY_FIELD => line.is_replay = Some(map.next_value()?),
-            "uuid" => line.uuid = Some(map.next_value()?),
-            _ => {
-              let _: IgnoredAny = map.next_value()?;
-            }
-          }
-        }
-        Ok(line)
-      }
-    }
-
-    deserializer.deserialize_map(ReplayLineVisitor)
-  }
-}
-
 /// Read non-initial replay uuids from every raw transport leg of this Run (`_echoed_input_ids`).
 ///
 /// A uuid the delivery wrote as a bound process's first line (`charliebot_registry::midturn_delivery::is_first_line`)
 /// names the initial or continuation prompt, not a pending web input. It therefore stays out of the set.
 fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSet<String>> {
-  if !transport_dir.is_dir() {
-    // `run_dir.glob` over an absent transport directory matches nothing.
-    return Ok(HashSet::new());
-  }
-  let mut raw_paths = std::fs::read_dir(transport_dir)
-    .with_context(|| format!("reading the run transport {}", transport_dir.display()))?
-    .filter_map(|entry| entry.ok())
-    .map(|entry| entry.path())
-    .filter(|path| {
-      path.is_file()
-        && path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(RAW_LOG_NAME))
-    })
-    .collect::<Vec<PathBuf>>();
-  raw_paths.sort();
-  let mut echoed = HashSet::new();
-  let mut line = Vec::new();
-  for raw_path in raw_paths {
-    let raw_file =
-      std::fs::File::open(&raw_path).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
-    let mut raw_lines = BufReader::new(raw_file);
-    loop {
-      line.clear();
-      raw_lines.read_until(b'\n', &mut line).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
-      // Only complete lines count: a line without its newline ends the scan of this leg.
-      let Some(complete) = line.strip_suffix(b"\n") else {
-        break;
-      };
-      let Ok(event) = serde_json::from_slice::<ReplayLine>(complete) else {
-        continue;
-      };
-      if event.kind.as_ref().and_then(Value::as_str) != Some(event_types::USER)
-        || event.is_replay.as_ref().and_then(Value::as_bool) != Some(true)
-      {
-        continue;
-      }
-      if let Some(input_id) = event.uuid.as_ref().and_then(Value::as_str)
-        && !input_id.is_empty()
-        && !charliebot_registry::midturn_delivery::is_first_line(run_id, input_id)
-      {
-        echoed.insert(input_id.to_string());
-      }
-    }
-  }
+  let mut echoed = charliebot_registry::midturn_delivery::replayed_user_uuids(transport_dir)?;
+  echoed.retain(|input_id| !charliebot_registry::midturn_delivery::is_first_line(run_id, input_id));
   Ok(echoed)
 }
 
@@ -259,7 +169,7 @@ mod tests {
   use charliebot_registry::backend::LaunchArgs;
   use charliebot_registry::midturn_delivery as claude_midturn;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-  use charliebot_store::run_records::RunKind;
+  use charliebot_store::run_records::{RAW_LOG_NAME, RunKind};
   use serde_json::json;
   use tokio::io::AsyncWrite;
 

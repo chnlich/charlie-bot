@@ -5,13 +5,17 @@
 //! first line carries the uuid `initial_line_uuid` derives and `bind_process` registers, so a relayed process never
 //! resends a uuid the transcript it resumes already holds. The dispatcher offers each pending web user message
 //! while the turn runs. The backend's replay of a delivered line becomes a non-rendered `input_delivered` event,
-//! and the first result closes stdin.
+//! and the first result closes stdin. A restarted server seeds a re-attached Run's first lines from the replayed uuids
+//! its raw logs hold (`seed_from_run_logs`), so the next process takes a line the conversation does not hold.
 //!
 //! The module is the delivery state both sides share: the agent runtime writes into it, and the task queue reads it.
 //! The stream-json launch arguments that turn the path on are the backend's, behind its lifecycle
 //! (`BackendLifecycle::midturn_launch_kwargs`).
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::sync::{
   Arc, Mutex, OnceLock,
   atomic::{AtomicBool, Ordering},
@@ -20,7 +24,9 @@ use std::sync::{
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_store::run_records::RunKind;
+use charliebot_store::run_records::{RAW_LOG_NAME, RunKind};
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
@@ -168,6 +174,46 @@ pub fn initial_line_uuid(run_id: &str, process: usize) -> String {
   }
 }
 
+/// Extend the Run's first lines past the ones this server bound, while `held` names the next one.
+///
+/// Process `n` of a Run takes `initial_line_uuid(run_id, n)`. The loop takes each consecutive first line that `held`
+/// names, so the next bound process takes the first line that `held` does not name. A Run this server has not seen
+/// gets a state with no initial prompt pending, so its mid-turn offers see no wait. Calling it again adds nothing new.
+pub fn seed_first_lines(run_id: &str, held: &HashSet<String>) {
+  let state = runs()
+    .lock()
+    .expect("mid-turn delivery registry is not poisoned")
+    .entry(run_id.to_string())
+    .or_insert_with(|| {
+      let state = DeliveryState::new();
+      state.initial_written.0.send_replace(true);
+      state
+    })
+    .clone();
+  let mut first_lines = state.first_lines.lock().expect("first-line mutex is not poisoned");
+  loop {
+    let next = initial_line_uuid(run_id, first_lines.len());
+    if !held.contains(&next) {
+      break;
+    }
+    first_lines.push(next);
+  }
+}
+
+/// Seed a re-attached Run's first lines from the replayed uuids its raw legs hold (`seed_first_lines`).
+///
+/// A restarted server holds no first lines in memory, so the Run's next bound process would number itself from zero
+/// and resend the Run id. The scan parses every raw line of the Run, so it rides a blocking thread. An unreadable leg
+/// stops the seed with its error.
+pub async fn seed_from_run_logs(run_id: &str, transport_dir: &Path) -> anyhow::Result<()> {
+  let scan_dir = transport_dir.to_path_buf();
+  let held = tokio::task::spawn_blocking(move || replayed_user_uuids(&scan_dir))
+    .await
+    .context("the raw-log scan task stopped before it finished")??;
+  seed_first_lines(run_id, &held);
+  Ok(())
+}
+
 /// Whether a replayed uuid names a first line this Run's delivery wrote, rather than a mid-turn web input. Such a
 /// uuid is the Run id itself, or the uuid one of the Run's bound processes registered at `bind_process`.
 pub fn is_first_line(run_id: &str, uuid: &str) -> bool {
@@ -177,6 +223,106 @@ pub fn is_first_line(run_id: &str, uuid: &str) -> bool {
   state_of(run_id).is_some_and(|state| {
     state.first_lines.lock().expect("first-line mutex is not poisoned").iter().any(|line| line == uuid)
   })
+}
+
+/// The three fields of a raw transport line that the replay scan reads. The map visitor keeps the last duplicate key
+/// and ignores unrelated fields without constructing their values.
+struct ReplayLine {
+  kind: Option<Value>,
+  is_replay: Option<Value>,
+  uuid: Option<Value>,
+}
+
+impl<'de> Deserialize<'de> for ReplayLine {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    struct ReplayLineVisitor;
+
+    impl<'de> Visitor<'de> for ReplayLineVisitor {
+      type Value = ReplayLine;
+
+      fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON object")
+      }
+
+      fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+      where
+        A: MapAccess<'de>,
+      {
+        let mut line = ReplayLine { kind: None, is_replay: None, uuid: None };
+        while let Some(key) = map.next_key::<String>()? {
+          match key.as_str() {
+            "type" => line.kind = Some(map.next_value()?),
+            IS_REPLAY_FIELD => line.is_replay = Some(map.next_value()?),
+            "uuid" => line.uuid = Some(map.next_value()?),
+            _ => {
+              let _: IgnoredAny = map.next_value()?;
+            }
+          }
+        }
+        Ok(line)
+      }
+    }
+
+    deserializer.deserialize_map(ReplayLineVisitor)
+  }
+}
+
+/// Read every replayed user uuid from every raw transport leg of one Run directory.
+///
+/// A replayed user line is the CLI's echo of a stdin line it accepted. The set therefore holds each uuid the Run's
+/// conversation received, the first lines included. A missing directory holds no legs. An unreadable directory or leg
+/// is an error, because a uuid the set omits could be one the conversation holds. A raw line that is not a JSON object
+/// is skipped, and a line without its newline ends the scan of its leg.
+pub fn replayed_user_uuids(transport_dir: &Path) -> anyhow::Result<HashSet<String>> {
+  let entries = match std::fs::read_dir(transport_dir) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+    Err(error) => {
+      return Err(error).with_context(|| format!("reading the run transport {}", transport_dir.display()));
+    }
+  };
+  let mut raw_paths = Vec::<PathBuf>::new();
+  for entry in entries {
+    let path = entry.with_context(|| format!("reading the run transport {}", transport_dir.display()))?.path();
+    let is_leg = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(RAW_LOG_NAME));
+    let is_file =
+      std::fs::metadata(&path).with_context(|| format!("reading the raw log {}", path.display()))?.is_file();
+    if is_leg && is_file {
+      raw_paths.push(path);
+    }
+  }
+  raw_paths.sort();
+  let mut replayed = HashSet::new();
+  let mut line = Vec::new();
+  for raw_path in raw_paths {
+    let raw_file =
+      std::fs::File::open(&raw_path).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
+    let mut raw_lines = BufReader::new(raw_file);
+    loop {
+      line.clear();
+      raw_lines.read_until(b'\n', &mut line).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
+      let Some(complete) = line.strip_suffix(b"\n") else {
+        break;
+      };
+      let Ok(event) = serde_json::from_slice::<ReplayLine>(complete) else {
+        continue;
+      };
+      if event.kind.as_ref().and_then(Value::as_str) != Some(event_types::USER)
+        || event.is_replay.as_ref().and_then(Value::as_bool) != Some(true)
+      {
+        continue;
+      }
+      if let Some(input_id) = event.uuid.as_ref().and_then(Value::as_str)
+        && !input_id.is_empty()
+      {
+        replayed.insert(input_id.to_string());
+      }
+    }
+  }
+  Ok(replayed)
 }
 
 /// The encoded stream-json line of one user input.
@@ -394,6 +540,21 @@ mod tests {
     let relay = written_first_uuid(&id).await;
     assert_eq!(relay, initial_line_uuid(&id, 1));
     assert_ne!(relay, first, "the relayed process resends no uuid the transcript already holds");
+    release_run(&id);
+  }
+
+  #[tokio::test]
+  async fn a_seed_extends_the_first_lines_past_the_uuids_the_logs_hold() {
+    let id = run_id("64");
+    let held = HashSet::from([id.clone(), initial_line_uuid(&id, 1), "web-input-1".to_string()]);
+    seed_first_lines(&id, &held);
+    seed_first_lines(&id, &held);
+    bind_process(&id, Some(id.clone())).await.unwrap();
+    assert_eq!(
+      written_first_uuid(&id).await,
+      initial_line_uuid(&id, 2),
+      "the next process takes the first line after the held ones, and a repeated seed adds nothing"
+    );
     release_run(&id);
   }
 

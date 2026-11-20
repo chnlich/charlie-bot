@@ -52,7 +52,9 @@ mod tests {
 
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs};
-  use charliebot_registry::midturn_delivery::{bind_process, initial_line_uuid, offer, release_run, translate_replay};
+  use charliebot_registry::midturn_delivery::{
+    bind_process, initial_line_uuid, offer, release_run, seed_from_run_logs, translate_replay,
+  };
   use serde_json::{Value, json};
 
   use crate::backend::ClaudeCodeBackend;
@@ -296,6 +298,27 @@ mod tests {
     }
   }
 
+  /// Stages the dedupe CLI as `claude` under `root`. Returns its path and the environment of each leg, which points
+  /// the stub at the transcript and at the markers that record each leg.
+  fn stage_dedupe_cli(root: &std::path::Path) -> (std::path::PathBuf, Env) {
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("claude");
+    charliebot_shell_harness::write_executable(&stub, DEDUPE_STUB);
+    let overlay = Env::from([
+      ("TRANSCRIPT".to_string(), root.join("transcript.jsonl").display().to_string()),
+      ("SKIPPED_MARKER".to_string(), root.join("skipped").display().to_string()),
+      ("RAN_MARKER".to_string(), root.join("ran").display().to_string()),
+    ]);
+    (stub, overlay)
+  }
+
+  /// The stream-json line the stub's last accepted leg received, so each leg is checked on its uuid and its prompt.
+  fn received_line(root: &std::path::Path) -> Value {
+    serde_json::from_str::<Value>(std::fs::read_to_string(root.join("ran")).unwrap().trim())
+      .expect("the CLI received one stream-json line")
+  }
+
   #[ignore = "integration"]
   // A relayed process receives its continuation prompt under a fresh uuid, so a CLI that skips duplicate uuids
   // still runs the turn to a result and the run finishes.
@@ -303,42 +326,51 @@ mod tests {
   async fn a_relayed_process_produces_a_result_when_the_cli_skips_duplicate_uuids() {
     let root = tempfile::tempdir().unwrap();
     let run_id = "11111111-2222-3333-4444-555555555564";
-    let transcript = root.path().join("transcript.jsonl");
-    let skipped = root.path().join("skipped");
-    let ran = root.path().join("ran");
-    let bin = root.path().join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let stub = bin.join("claude");
-    charliebot_shell_harness::write_executable(&stub, DEDUPE_STUB);
-    let overlay = || {
-      Env::from([
-        ("TRANSCRIPT".to_string(), transcript.display().to_string()),
-        ("SKIPPED_MARKER".to_string(), skipped.display().to_string()),
-        ("RAN_MARKER".to_string(), ran.display().to_string()),
-      ])
-    };
+    let (stub, overlay) = stage_dedupe_cli(root.path());
 
-    // The stub records the stream-json line it received, so each leg is checked on its uuid and its prompt.
-    let received = || {
-      serde_json::from_str::<Value>(std::fs::read_to_string(&ran).unwrap().trim())
-        .expect("the CLI received one stream-json line")
-    };
-
-    let first = run_one_leg(root.path(), &stub, run_id, "Initial prompt", overlay()).await;
+    let first = run_one_leg(root.path(), &stub, run_id, "Initial prompt", overlay.clone()).await;
     assert_eq!(first.exit_code, Some(0));
-    assert_eq!(received()["uuid"], run_id, "the first process received the Run id line");
-    assert_eq!(received()["message"]["content"], "Initial prompt");
+    assert_eq!(received_line(root.path())["uuid"], run_id, "the first process received the Run id line");
+    assert_eq!(received_line(root.path())["message"]["content"], "Initial prompt");
 
     // The relay binds the same Run again and hands the new process the continuation prompt, as the master loop does.
-    let second = run_one_leg(root.path(), &stub, run_id, crate::claude_relay::CONTINUATION_PROMPT, overlay()).await;
+    let second = run_one_leg(root.path(), &stub, run_id, crate::claude_relay::CONTINUATION_PROMPT, overlay).await;
     assert_eq!(second.exit_code, Some(0), "the relayed process produced a result and the run finished");
     assert_eq!(
-      received()["uuid"],
+      received_line(root.path())["uuid"],
       initial_line_uuid(run_id, 1),
       "the relay's first line carries a uuid the transcript does not hold"
     );
-    assert_eq!(received()["message"]["content"], crate::claude_relay::CONTINUATION_PROMPT);
-    assert!(!skipped.exists(), "the CLI ran the continuation prompt instead of skipping it as a duplicate");
+    assert_eq!(received_line(root.path())["message"]["content"], crate::claude_relay::CONTINUATION_PROMPT);
+    assert!(
+      !root.path().join("skipped").exists(),
+      "the CLI ran the continuation prompt instead of skipping it as a duplicate"
+    );
+    release_run(run_id);
+  }
+
+  // A server restart empties the Run's delivery state. The re-attach then seeds the first lines from the raw legs,
+  // which hold the first line the first process echoed. The follow-up takes the next line, so the CLI runs it.
+  #[ignore = "integration"]
+  #[tokio::test]
+  async fn a_follow_up_after_a_restart_takes_a_first_line_the_run_logs_do_not_hold() {
+    let root = tempfile::tempdir().unwrap();
+    let run_id = "11111111-2222-3333-4444-555555555565";
+    let (stub, overlay) = stage_dedupe_cli(root.path());
+
+    let first = run_one_leg(root.path(), &stub, run_id, "Initial prompt", overlay.clone()).await;
+    assert_eq!(first.exit_code, Some(0));
+
+    release_run(run_id);
+    seed_from_run_logs(run_id, &root.path().join("run")).await.unwrap();
+    let follow_up = run_one_leg(root.path(), &stub, run_id, crate::claude_relay::CONTINUATION_PROMPT, overlay).await;
+    assert_eq!(follow_up.exit_code, Some(0), "the follow-up produced a result after the restart");
+    assert_eq!(
+      received_line(root.path())["uuid"],
+      initial_line_uuid(run_id, 1),
+      "the follow-up's first line is one the run's logs and transcript do not hold"
+    );
+    assert!(!root.path().join("skipped").exists(), "the CLI ran the follow-up instead of skipping it");
     release_run(run_id);
   }
 }

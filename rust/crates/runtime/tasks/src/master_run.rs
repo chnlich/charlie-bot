@@ -1108,6 +1108,10 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     charliebot_agents::transport::final_stdout::event_buffer_limit(&log_dir, subprocess_buffer_bytes(&cfg)?);
   let resume_meta = metadata.clone();
   let resume_run_id = item.task_run.run_id.clone();
+  // A restarted server holds no bound first lines in memory, so the Run's raw logs supply them before any relay binds.
+  if crate::midturn_delivery::is_web_session(&metadata) {
+    charliebot_registry::midturn_delivery::seed_from_run_logs(&resume_run_id, &log_dir).await?;
+  }
   charliebot_agents::transport::final_stdout::recover(
     Arc::clone(&features.registry),
     Some(&option),

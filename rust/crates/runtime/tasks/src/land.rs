@@ -38,6 +38,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use charliebot_core::git::ancestry_args;
+use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_store::layout;
 use charliebot_store::metadata::{read_metadata_value, read_session_metadata};
 use charliebot_store::run_records::{self, RunRecord};
@@ -338,7 +339,7 @@ impl Drop for LeakStage {
 async fn run_scanner(stage: &LeakStage, args: &[&str], input: Option<&Path>) -> anyhow::Result<(i32, Vec<u8>, String)> {
   let scanner = stage.scanner();
   let mut command = tokio::process::Command::new("bash");
-  command.arg(&scanner).args(args).env("CHARLIEBOT_HOME", &stage.home).kill_on_drop(true);
+  command.arg(&scanner).args(args).env(CHARLIEBOT_HOME_ENV, &stage.home).kill_on_drop(true);
   if let Some(path) = input {
     let file = std::fs::File::open(path)
       .map_err(|error| anyhow::anyhow!("cannot open the text for the leak check {}: {error}", path.display()))?;

@@ -39,12 +39,14 @@ import {
   viewBackgroundRep,
 } from './scenarios.mjs';
 import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
+import { RESTART_SCENARIOS, stopRestartServer } from './restart.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 import { sleep } from './tabs.mjs';
 
 // `starred` and `threads` measure scenario 1's background with the visible tab on that sidebar view. They run only when
 // named, after the six scenarios' own.
+// The restart cells (restart.mjs) run only when named, like the two views above.
 const SCENARIOS = Object.freeze({
   background: backgroundRep,
   held: heldBlackoutRep,
@@ -53,6 +55,7 @@ const SCENARIOS = Object.freeze({
   tools: toolStreamRep,
   starred: viewBackgroundRep('starred'),
   threads: viewBackgroundRep('threads'),
+  ...RESTART_SCENARIOS,
 });
 const DEFAULT_SCENARIOS = Object.freeze(['background', 'held', 'reset', 'stream']);
 
@@ -317,7 +320,9 @@ function buildSide({
     side.calibration = calibrate(results.background);
   }
   for (const metric of METRICS) {
-    const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools' }[metric.scenario];
+    const repsOf = metric.reps ?? {
+      1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools',
+    }[metric.scenario];
     if (results[repsOf].length > 0 && status === 'measured') {
       side.metrics[metric.id] = summarize(results[repsOf], metric);
     }
@@ -401,6 +406,7 @@ async function main() {
     error = caught.stack ?? String(caught);
   } finally {
     trials.stop();
+    await stopRestartServer();
     if (cdn) {
       await cdn.close();
     }

@@ -21,7 +21,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
+| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open,restart-visible,restart-hidden-1,restart-hidden-2,restart-hidden-3,restart-frozen,restart-1006` (default the first four). `open` runs its own cells, see below; the restart cells, see "Restart cells". |
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
@@ -384,6 +384,25 @@ not compared with the page's own `page_load` numbers in the same run.
 `reps`, one object per repetition with the fields above. The table prints one row per cell: the median newest-message
 time, the five values in repetition order, the catch-up median, the bytes to the newest message and after the load, how
 many repetitions reached the newest message, and the page reloads across its repetitions.
+
+## Restart cells (`--scenarios restart-*`)
+
+Plan 6 v4 section 4.2's return cells. Each repetition publishes one release (a comment appended to the trial tree's
+served `web/static/js/config.js`, then the trial server restarted from its own launch record in `/proc`), posts one
+probe message while the server is down, and times the measured tab's return to the probe row.
+
+| Cell | The tab | Return point | Metric (target <= 2000 ms, median) |
+|---|---|---|---|
+| `restart-visible` | visible throughout | the replacement's `server_ready` | `readyToCaughtUpMs` |
+| `restart-hidden-1` | hidden; shown 1 s after catch-up | the show | `restoreToCaughtUpMs` |
+| `restart-hidden-2` | hidden; shown 0.3 s after the reload navigates | the show | `restoreToCaughtUpMs` |
+| `restart-hidden-3` | hidden; shown after the reloaded document loads | the show | `restoreToCaughtUpMs` |
+| `restart-frozen` | hidden, frozen across the release, thawed, then shown after the reload loads | the show | `restoreToCaughtUpMs` |
+| `restart-1006` | hidden; the link resets every connection when the server stops | the show | `restoreToCaughtUpMs` |
+
+A hidden cell whose phase never comes is shown at the 120 s cap, and its record says `capped: true`. A hidden
+repetition whose `replayBytes` is 0 caught up with nothing to replay, so it is invalid: rerun it. `restart.mjs` starts
+the replacement server and stops it in `bench.mjs`'s `finally`.
 
 ## Host requirements
 

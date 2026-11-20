@@ -32,6 +32,9 @@ export const TARGETS = Object.freeze({
   toolStreamRatio: 2.0,
   // Scenario 7's turn is background traffic while it runs, so its socket bytes per minute read the scenario 1
   // target (`backgroundKbPerMinute`), not a target of their own.
+  // Restart cells (restart.mjs): the median wait from the return (the replacement's server_ready for the visible cell)
+  // to the probe row is at most this, per plan 6 v4 section 4.2.
+  restartCatchupMs: 2000,
 });
 
 // The background load of scenarios 1 to 3: the task-tree changes a live turn produces, one burst per window.

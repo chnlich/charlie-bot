@@ -8,6 +8,22 @@ import { CALIBRATION_HOLD_MS, CALIBRATION_REFERENCE, LINK, LIVE_READBACK, TARGET
 
 const BYTES_PER_MS = LINK.bytesPerSecond / 1000;
 
+// A restart cell (restart.mjs) reads the wait from its return to the probe row. The visible cell has no return: its
+// wait runs from the replacement's server_ready. A hidden or frozen cell's capped repetitions are those whose phase
+// never came, and the cap ends them.
+const restartCell = (cell, title, value) => ({
+  id: cell,
+  reps: cell,
+  title,
+  unit: 'ms',
+  target: TARGETS.restartCatchupMs,
+  value,
+});
+const hiddenRestartCell = (cell, title) => ({
+  ...restartCell(cell, title, (rep) => rep.restoreToCaughtUpMs),
+  capped: (rep) => rep.capped,
+});
+
 // Each metric reads one repetition. Excess metrics are the time beyond the floor a step's bytes need on the link, so
 // their target is the allowance; the rest are compared as they are.
 export const METRICS = Object.freeze([
@@ -101,6 +117,12 @@ export const METRICS = Object.freeze([
     target: TARGETS.backgroundKbPerMinute,
     value: (rep) => rep.socketBytes / 1000 / (rep.turnMs / 60000),
   },
+  restartCell('restart-visible', 'restart, visible: server ready to probe row', (rep) => rep.readyToCaughtUpMs),
+  hiddenRestartCell('restart-hidden-1', 'restart, hidden, shown 1 s after catch-up: return to probe row'),
+  hiddenRestartCell('restart-hidden-2', 'restart, hidden, shown 0.3 s after the reload navigates: return to probe row'),
+  hiddenRestartCell('restart-hidden-3', 'restart, hidden, shown after the reload loads: return to probe row'),
+  hiddenRestartCell('restart-frozen', 'restart, frozen, shown after the reload loads: return to probe row'),
+  hiddenRestartCell('restart-1006', 'restart, hidden, 1006 reset, shown after the reload loads: return to probe row'),
 ]);
 
 // The nearest-rank percentile of `values`.

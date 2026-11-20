@@ -85,8 +85,9 @@ async function withCleanup(body, cleanup) {
   return value;
 }
 
-// One repetition's browser, proxy and tabs, torn down on every path.
-async function withLink(ctx, label, tabNames, body) {
+// One repetition's browser, proxy and tabs, torn down on every path. `initScript`, when given, runs in each document of
+// the first tab before the page's own scripts.
+export async function withLink(ctx, label, tabNames, body, initScript = null) {
   const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: ctx.frontPort } });
   const proxyPort = await proxy.start();
   const profile = `${ctx.runDir}/profile-${label}-${randomTag()}`;
@@ -103,8 +104,8 @@ async function withLink(ctx, label, tabNames, body) {
       browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'local',
     });
     const opened = [];
-    for (const name of tabNames) {
-      opened.push(await tabs.open(name));
+    for (const [index, name] of tabNames.entries()) {
+      opened.push(await tabs.open(name, index === 0 ? initScript : null));
     }
     return await body({ proxy, tabs, tab: opened[0], hidden: opened.slice(1) });
   } finally {

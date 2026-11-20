@@ -70,12 +70,15 @@ would alter a page, report that it needs rerouting before editing.
 - Capture each window size that `charliebot land --help` lists at device pixel ratio 1, filling each view with the
   longest real content that the page shows in use and capturing the whole screen with every related change applied.
 - Keep the screenshot files out of the commits.
-- For a landing through `charliebot land`, name each screenshot file by its absolute path on this host in the commit
-  or PR body.
+- For a landing through `charliebot land`, name the approved demo in the PR body's Demo line, the changed view's URL
+  path in its View line, and each screenshot by absolute path on this host in the commit or PR body.
 - For an improve round, follow `dev/improve/landing.md` Steps 5 and 9 for the screenshots' location, the pull request's
   naming of them and their delivery to the user.
 
-When you review such a change, check each screenshot it names before you land it, wherever the landing keeps the file.
+When you review such a change, check each screenshot it names before you land it, wherever the landing keeps the file,
+judging it against the demo the change names — or for an improve round against the same round's before screenshot and
+direction file — and pass it only when it matches that reference and every region outside the change keeps room for its
+content.
 - Look for overlap with page content, clipping and missing controls in every state the screenshots show.
 - Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.
 
@@ -84,6 +87,9 @@ When you review such a change, check each screenshot it names before you land it
 and a screenshot at each window size `charliebot land --help` lists by absolute path. An improve round merges through
 `dev/improve/github-post.sh pr-merge`, which refuses a web page change whose evidence directory lacks a screenshot at
 each window size or whose PR body lacks its `View:` line.
+
+After the release switch, compare each live screenshot that `scripts/switch-server.sh` prints for a commit with the demo
+before you report the change delivered.
 
 <!-- section: skills_discovery -->
 ## Skills Discovery

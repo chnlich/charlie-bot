@@ -24,14 +24,15 @@ Web UI Screenshots rule in `prompts/task_base.md`, and apply the screen-space ru
 
 ## Mock home
 
-The runner supplies the complete shared mock home before the round. Both sides read the same data, and the round does
-not change it. This keeps the before and after views comparable.
+The runner supplies the complete shared mock home before the round, and the round names the DATA_VERSION of that home.
+Both sides read the same data, and the round does not change it. This keeps the before and after views comparable.
 
 ## Servers
 
-The before and after servers use the same release profile on the same host. For a web-only change, both trees use the
-same server binary. For a change that affects server code, the before server represents `origin/main` and the after
-server represents the branch. The intended change is the only source difference between the sides.
+The before and after servers use the same release profile on the same host. For a web-only change, one release binary
+built from `origin/main` serves both the `origin/main` tree and the branch tree, so the change under test is the only
+difference between the sides. For a change that affects server code, the before server represents `origin/main` and the
+after server represents the branch. The intended change is the only source difference between the sides.
 
 ## Serving
 
@@ -44,15 +45,17 @@ Each side waits at most 15 minutes for the bench lock. If the wait expires, that
 measurement. The round reports no result from an incomplete pair, stops without opening a pull request and names the
 held bench lock in its stop reason. The next scheduled fire tries again.
 
-The mock-home check is a prerequisite for a side. If its server reads outside the shared mock home, stop the round
-without using that side's evidence.
+Each side's server passes `mock-home check` before that side takes any screenshot or measurement. Exit 1 means the
+server reads data outside the shared mock home, and it stops the round before any measurement.
 
 ## Screenshots
 
-Before and after evidence covers both widths in the Web UI Screenshots rule. Each pair shows the same view before and
-after the change, so the reader can see the user-facing difference.
+The round takes one before screenshot and one after screenshot for each width that the Web UI Screenshots rule in
+`prompts/task_base.md` names. Each pair shows the same view before and after the change, so the reader can see the
+user-facing difference.
 
 ## Evidence
 
-Evidence names the defect visible before and the resulting state after at each required width. The screenshots remain
-with the round's retained evidence so the reviewer and user can assess the change without rerunning it.
+Evidence names the defect visible before and the resulting state after at each required width. The screenshots stay in
+the round's evidence directory, and landing Step 9 carries them to the user, so the reviewer and user can assess the
+change without rerunning it.

@@ -620,7 +620,7 @@ impl Store {
           return Ok(Some(Arc::clone(&entry.facts)));
         }
         // A boot checkpoint covers this log's prefix: it answers the same fold from the appended bytes, without the
-        // whole-log load. It validates against the log first, so a stale one falls through to the load.
+        // whole-log load. It validates against the log first, so a stale one falls through to the scan below.
         if let Some(identity) = identity
           && let Some(facts) = self.checkpoint_facts_until(session_id, identity, archived, should_stop)?
         {
@@ -786,6 +786,7 @@ impl Store {
       LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
       LiveHistory::Cold(identity) => {
         let archived = self.read_archive_offset(session_id)?;
+        // A session with no live log has nothing to scan: its history is the archives, which the whole-log load reads.
         let Some(identity) = identity else {
           let (generation, list_identity, live) = self.live_events_with_generation(session_id)?;
           return self.node_state_of(session_id, generation, list_identity, &live);
@@ -798,7 +799,7 @@ impl Store {
         }
         // The checkpoint answers the fold the whole log answers, and memoizes it under the log's identity, so the
         // state and run facts below need no history read. A checkpoint that is absent, torn or stale folds nothing,
-        // and the whole-log load below answers.
+        // and the scan below answers.
         if let Some(facts) = self.checkpoint_facts_until(session_id, identity, archived, &mut || false)? {
           let version = self
             .sealed_state_version(session_id, identity, archived)

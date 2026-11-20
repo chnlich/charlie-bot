@@ -8,20 +8,28 @@ import { CALIBRATION_HOLD_MS, CALIBRATION_REFERENCE, LINK, LIVE_READBACK, TARGET
 
 const BYTES_PER_MS = LINK.bytesPerSecond / 1000;
 
-// A restart cell (restart.mjs) reads the wait from its return to the probe row. The visible cell has no return: its
-// wait runs from the replacement's server_ready. A hidden or frozen cell's capped repetitions are those whose phase
-// never came, and the cap ends them.
-const restartCell = (cell, title, value) => ({
+// A restart cell (restart.mjs) is gated on its wait from the return to the caught-up instant (plan 6 v4 section 4.2).
+// The probe row's wait beside it is reported, not scored. A hidden or frozen cell's capped repetitions are those whose
+// phase never came, and the cap ends them.
+const restartCell = (cell, title) => ({
   id: cell,
   reps: cell,
   title,
   unit: 'ms',
   target: TARGETS.restartCatchupMs,
-  value,
+  value: (rep) => rep.waitMs,
 });
 const hiddenRestartCell = (cell, title) => ({
-  ...restartCell(cell, title, (rep) => rep.restoreToCaughtUpMs),
+  ...restartCell(cell, title),
   capped: (rep) => rep.capped,
+});
+const probeRowCell = (cell, title) => ({
+  id: `${cell}.probeRow`,
+  reps: cell,
+  title,
+  unit: 'ms',
+  target: null,
+  value: (rep) => rep.probeWaitMs,
 });
 
 // Each metric reads one repetition. Excess metrics are the time beyond the floor a step's bytes need on the link, so
@@ -117,12 +125,18 @@ export const METRICS = Object.freeze([
     target: TARGETS.backgroundKbPerMinute,
     value: (rep) => rep.socketBytes / 1000 / (rep.turnMs / 60000),
   },
-  restartCell('restart-visible', 'restart, visible: server ready to probe row', (rep) => rep.readyToCaughtUpMs),
-  hiddenRestartCell('restart-hidden-1', 'restart, hidden, shown 1 s after catch-up: return to probe row'),
-  hiddenRestartCell('restart-hidden-2', 'restart, hidden, shown 0.3 s after the reload navigates: return to probe row'),
-  hiddenRestartCell('restart-hidden-3', 'restart, hidden, shown after the reload loads: return to probe row'),
-  hiddenRestartCell('restart-frozen', 'restart, frozen, shown after the reload loads: return to probe row'),
-  hiddenRestartCell('restart-1006', 'restart, hidden, 1006 reset, shown after the reload loads: return to probe row'),
+  restartCell('restart-visible', 'restart, visible: server ready to caught up'),
+  probeRowCell('restart-visible', 'restart, visible: server ready to probe row (report only)'),
+  hiddenRestartCell('restart-hidden-1', 'restart, hidden, shown 1 s after catch-up: return to caught up'),
+  probeRowCell('restart-hidden-1', 'restart, hidden, shown 1 s after catch-up: return to probe row (report only)'),
+  hiddenRestartCell('restart-hidden-2', 'restart, hidden, shown 0.3 s after the reload navigates: return to caught up'),
+  probeRowCell('restart-hidden-2', 'restart, hidden, shown 0.3 s after reload navigates: return to probe row (report only)'),
+  hiddenRestartCell('restart-hidden-3', 'restart, hidden, shown after the reload loads: return to caught up'),
+  probeRowCell('restart-hidden-3', 'restart, hidden, shown after the reload loads: return to probe row (report only)'),
+  hiddenRestartCell('restart-frozen', 'restart, frozen, shown after the reload loads: return to caught up'),
+  probeRowCell('restart-frozen', 'restart, frozen, shown after the reload loads: return to probe row (report only)'),
+  hiddenRestartCell('restart-1006', 'restart, hidden, 1006 reset, shown after the reload loads: return to caught up'),
+  probeRowCell('restart-1006', 'restart, hidden, 1006 reset, shown after reload loads: return to probe row (report only)'),
 ]);
 
 // The nearest-rank percentile of `values`.

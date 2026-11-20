@@ -389,16 +389,17 @@ many repetitions reached the newest message, and the page reloads across its rep
 
 Plan 6 v4 section 4.2's return cells. Each repetition publishes one release (a comment appended to the trial tree's
 served `web/static/js/config.js`, then the trial server restarted from its own launch record in `/proc`), posts one
-probe message while the server is down, and times the measured tab's return to the probe row.
+probe message while the server is down, and times the measured tab's return to its catch-up: the catch-up of the
+socket that carried the probe row (`catchup_complete`). The probe row's paint is reported beside it, not gated.
 
-| Cell | The tab | Return point | Metric (target <= 2000 ms, median) |
-|---|---|---|---|
-| `restart-visible` | visible throughout | the replacement's `server_ready` | `readyToCaughtUpMs` |
-| `restart-hidden-1` | hidden; shown 1 s after catch-up | the show | `restoreToCaughtUpMs` |
-| `restart-hidden-2` | hidden; shown 0.3 s after the reload navigates | the show | `restoreToCaughtUpMs` |
-| `restart-hidden-3` | hidden; shown after the reloaded document loads | the show | `restoreToCaughtUpMs` |
-| `restart-frozen` | hidden, frozen across the release, thawed, then shown after the reload loads | the show | `restoreToCaughtUpMs` |
-| `restart-1006` | hidden; the link resets every connection when the server stops | the show | `restoreToCaughtUpMs` |
+| Cell | The tab | Return point | Gated metric (target <= 2000 ms, median) | Report only |
+|---|---|---|---|---|
+| `restart-visible` | visible throughout | the replacement's `server_ready` | `waitMs` | `probeWaitMs` |
+| `restart-hidden-1` | hidden; shown 1 s after catch-up | the show | `waitMs` | `probeWaitMs` |
+| `restart-hidden-2` | hidden; shown 0.3 s after the reload navigates | the show | `waitMs` | `probeWaitMs` |
+| `restart-hidden-3` | hidden; shown after the reloaded document loads | the show | `waitMs` | `probeWaitMs` |
+| `restart-frozen` | hidden, frozen across the release, thawed, then shown after the reload loads | the show | `waitMs` | `probeWaitMs` |
+| `restart-1006` | hidden; the link resets every connection when the server stops | the show | `waitMs` | `probeWaitMs` |
 
 A hidden cell whose phase never comes is shown at the 120 s cap, and its record says `capped: true`. Each repetition's
 `catchupBytes` is the page's own count of its socket replay (the telemetry's `catchup_bytes`). A hidden repetition

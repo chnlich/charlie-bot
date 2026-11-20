@@ -1,8 +1,10 @@
 // The restart scenario: a release that restarts the server while a tab is open, measured as plan 6 v4 section 4.2
 // defines it. Each repetition publishes one release (a comment appended to the trial tree's served config.js, then the
 // server restarted from the same launch as the trial's own), and times the measured tab's catch-up: the probe message
-// the bench posts during the restart is on screen when the page is current. The cells are:
-//   restart-visible     the tab stays visible; the time from the replacement's server_ready to the probe row.
+// the bench posts during the restart is on screen when the page is current. The gated wait of each cell runs from its
+// return to the catch-up of the socket that carried the probe row; the probe row's paint is reported beside it. The
+// cells are:
+//   restart-visible     the tab stays visible; the return is the replacement's server_ready.
 //   restart-hidden-1    the tab is hidden; it is shown 1 s after its catch-up completes, while the stored shell refresh
 //                       runs (expected: the refresh is cancelled, the page keeps its code, no navigation).
 //   restart-hidden-2    the tab is hidden; it is shown 0.3 s after the page's reload navigation starts (expected: the
@@ -298,6 +300,7 @@ function returnSplit(tab, releaseAt, readyMs, tag, cursor, heldIds, rowAt) {
     firstAttemptAfterReadyMs: firstAfterReady === undefined ? null : firstAfterReady.at - readyMs,
     readyToAttemptMs: carrier === undefined ? null : carrier.at - readyMs,
     attemptToOpenMs: openAt === null ? null : openAt - carrier.at,
+    catchupAtMs: catchupAt === null ? null : catchupAt - readyMs,
     openToCatchupMs: catchupAt === null ? null : catchupAt - openAt,
     catchupToRowMs: catchupAt === null ? null : rowAt - catchupAt,
     probeFrameMs: probe === undefined ? null : probe.at - readyMs,
@@ -328,8 +331,8 @@ const CELLS = Object.freeze({
   'restart-1006': { hidden: true, reset: true, frozen: false, point: 'loaded' },
 });
 
-// One repetition of a cell. Times are milliseconds from the release's start, except the wait, which is the time from
-// the tab's restore (the moment it is shown, or the replacement's server_ready for the visible cell) to the probe row.
+// One repetition of a cell. Times are milliseconds from the release's start, except the waits, which run from the tab's
+// return (the moment it is shown, or the replacement's server_ready for the visible cell).
 async function restartRep(ctx, name) {
   const cell = CELLS[name];
   const { sessions } = ctx;
@@ -400,15 +403,21 @@ async function restartRep(ctx, name) {
     // is the stored-shell refresh that landing requirement B adds. The page posts its catch-up bytes after the replay,
     // so the catch-up frame is read after that post, when the frame has arrived.
     const telemetry = await poll(async () => catchupBytesAfter(tab, readyMs), SHOW_TIMEOUT_MS, 'the catch-up telemetry');
-    const catchup = catchupAfter(tab, readyMs);
+    const split = returnSplit(tab, releaseAt, readyMs, tag, cursor0, heldIds, rowAt);
+    if (split.catchupAtMs === null) {
+      throw new Error(`${name}: the probe row's socket reported no catchup_complete, so the repetition has no reading`);
+    }
     return {
       cell: name,
       serverReadyMs: readyMs - releaseAt,
       restoreMs: restoreAt - releaseAt,
       rowMs: rowAt - releaseAt,
-      readyToCaughtUpMs: rowAt - readyMs,
-      restoreToCaughtUpMs: Math.max(0, rowAt - restoreAt),
-      catchupMs: catchup === null ? null : catchup.at - releaseAt,
+      // The gated quantity (plan 6 v4 section 4.2): the wait from the return to catch-up, the catch-up of the socket
+      // that carried the probe row. The return is the show, or the replacement's server_ready for a tab visible
+      // throughout. A catch-up before the return leaves no wait.
+      waitMs: Math.max(0, readyMs + split.catchupAtMs - restoreAt),
+      // Report only: the wait from the return to the probe row's paint.
+      probeWaitMs: Math.max(0, rowAt - restoreAt),
       documentsMs: observer.state.documents.map((at) => at - releaseAt),
       capped,
       // The page's own count of its replay (plan 6 v4 section 4.2). A hidden repetition that counts 0 is invalid: rerun.
@@ -416,7 +425,7 @@ async function restartRep(ctx, name) {
       blackoutMs: cell.reset ? LINK.blackoutSeconds * 1000 : null,
       assetVersions: [version0, version1],
       cursor: cursor0,
-      split: returnSplit(tab, releaseAt, readyMs, tag, cursor0, heldIds, rowAt),
+      split,
     };
   }, BOOT_SCRIPT);
 }

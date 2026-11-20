@@ -107,7 +107,7 @@ changed state before you commit.
 
 When you review such a change, check each named screenshot before you land it.
 - Look for overlap with page content, clipping and missing controls in every state the screenshots show.
-- Report the landing as blocked, and do not land it, when a screenshot is missing or shows one of these defects.
+- Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.
 
 `charliebot land` refuses a landing whose diff changes `web/` or a page template under `prompts/` unless its PR body
 names a screenshot at 1280 px and a screenshot at 390 px by absolute path.

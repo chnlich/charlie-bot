@@ -19,9 +19,9 @@ pub(crate) fn parse(stdout: &str) -> Option<Envelope> {
   match serde_json::from_str::<Value>(stdout) {
     Ok(Value::Object(mut fields)) => match fields.remove(STATUS_FIELD) {
       Some(Value::String(status)) => Some(Envelope { status, fields }),
-      _ => None,
+      Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) | None => None,
     },
-    _ => None,
+    Ok(Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_)) | Err(_) => None,
   }
 }
 

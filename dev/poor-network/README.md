@@ -400,9 +400,10 @@ probe message while the server is down, and times the measured tab's return to t
 | `restart-frozen` | hidden, frozen across the release, thawed, then shown after the reload loads | the show | `restoreToCaughtUpMs` |
 | `restart-1006` | hidden; the link resets every connection when the server stops | the show | `restoreToCaughtUpMs` |
 
-A hidden cell whose phase never comes is shown at the 120 s cap, and its record says `capped: true`. A hidden
-repetition whose `replayBytes` is 0 caught up with nothing to replay, so it is invalid: rerun it. `restart.mjs` starts
-the replacement server and stops it in `bench.mjs`'s `finally`.
+A hidden cell whose phase never comes is shown at the 120 s cap, and its record says `capped: true`. Each repetition's
+`catchupBytes` is the page's own count of its socket replay (the telemetry's `catchup_bytes`). A hidden repetition
+whose count is 0 caught up with nothing to replay, so it is invalid: rerun it. `restart.mjs` starts the replacement
+server and stops it in `bench.mjs`'s `finally`.
 
 ## Host requirements
 

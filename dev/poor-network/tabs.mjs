@@ -443,6 +443,8 @@ export class Tab {
           connectionId: null,
           fromServiceWorker: null,
           fromDiskCache: null,
+          // The body of a POST, as the browser sent it (the page's telemetry carries its counts in it).
+          postData: request.postData ?? null,
         });
         return;
       }

@@ -224,6 +224,21 @@ function catchupAfter(tab, readyMs) {
   return tab.frames.find((frame) => frame.type === 'catchup_complete' && frame.at >= readyMs) ?? null;
 }
 
+// The catch-up bytes the page counted for its socket's replay after the release, from the socket telemetry it posts
+// (client-events.js: catchup_bytes). Null until that post has gone out.
+function catchupBytesAfter(tab, readyMs) {
+  for (const entry of tab.requests.values()) {
+    if (!entry.url.endsWith('/api/diag/client-events') || entry.postData === null) {
+      continue;
+    }
+    const body = JSON.parse(entry.postData);
+    if (body.kind === 'socket' && body.catchup_at && Date.parse(body.catchup_at) >= readyMs) {
+      return { bytes: body.catchup_bytes };
+    }
+  }
+  return null;
+}
+
 // The first document request of the page's reload navigation after the release (the shell's own request, which the
 // worker answers from the stored shell).
 function navigationAfter(tab, readyMs) {
@@ -299,8 +314,9 @@ async function restartRep(ctx, name) {
     observer.state.stop = true;
     await observer.done;
     // The page's first catch-up after the release: a hidden swap navigates after it, so the gap to the first document
-    // is the stored-shell refresh that landing requirement B adds.
+    // is the stored-shell refresh that landing requirement B adds. The page posts its catch-up bytes after the replay.
     const catchup = catchupAfter(tab, readyMs);
+    const telemetry = await poll(async () => catchupBytesAfter(tab, readyMs), SHOW_TIMEOUT_MS, 'the catch-up telemetry');
     return {
       cell: name,
       serverReadyMs: readyMs - releaseAt,
@@ -311,7 +327,8 @@ async function restartRep(ctx, name) {
       catchupMs: catchup === null ? null : catchup.at - releaseAt,
       documentsMs: observer.state.documents.map((at) => at - releaseAt),
       capped,
-      replayBytes: tab.framesBetween(readyMs, rowAt).reduce((sum, frame) => sum + frame.bytes, 0),
+      // The page's own count of its replay (plan 6 v4 section 4.2). A hidden repetition that counts 0 is invalid: rerun.
+      catchupBytes: telemetry.bytes,
       blackoutMs: cell.reset ? LINK.blackoutSeconds * 1000 : null,
       assetVersions: [version0, version1],
     };

@@ -9,7 +9,7 @@
           "-m",
           "gemini-synthetic-pro",
           "-p",
-          "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "Follow the task prompt supplied on stdin.",
           "-o",
           "stream-json",
           "-y",
@@ -28,7 +28,7 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {
@@ -38,7 +38,7 @@
           "-m",
           "gemini-synthetic-pro",
           "-p",
-          "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "Follow the task prompt supplied on stdin.",
           "-o",
           "stream-json",
           "-y",
@@ -61,7 +61,7 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {
@@ -71,7 +71,7 @@
           "-m",
           "gemini-synthetic-pro",
           "-p",
-          "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "Follow the task prompt supplied on stdin.",
           "-o",
           "stream-json",
           "-y",
@@ -90,7 +90,7 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {
@@ -100,7 +100,7 @@
           "-m",
           "gemini-synthetic-pro",
           "-p",
-          "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "Follow the task prompt supplied on stdin.",
           "-o",
           "stream-json",
           "-y",
@@ -119,7 +119,7 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {
@@ -362,7 +362,9 @@
         "id": "agy_plain",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print",
+          "--input-format",
+          "text",
           "--print-timeout",
           "1h",
           "--dangerously-skip-permissions",
@@ -384,14 +386,16 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {
         "id": "agy_print_timeout_flags",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print",
+          "--input-format",
+          "text",
           "--print-timeout",
           "30m",
           "--dangerously-skip-permissions",
@@ -414,14 +418,16 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {
         "id": "agy_resume",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print",
+          "--input-format",
+          "text",
           "--print-timeout",
           "1h",
           "--dangerously-skip-permissions",
@@ -445,14 +451,16 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {
         "id": "agy_content",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print=<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print",
+          "--input-format",
+          "text",
           "--print-timeout",
           "1h",
           "--dangerously-skip-permissions",
@@ -474,14 +482,16 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {
         "id": "agy_file_and_content",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print=<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print",
+          "--input-format",
+          "text",
           "--print-timeout",
           "5m",
           "--dangerously-skip-permissions",
@@ -503,7 +513,7 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": null,
+        "stdin": "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
         "instructions_target": null
       },
       {

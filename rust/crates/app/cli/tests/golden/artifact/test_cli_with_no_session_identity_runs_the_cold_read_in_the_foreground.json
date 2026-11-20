@@ -21,7 +21,7 @@
     "user/": ""
   },
   "executables": {
-    "bin/codex": "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"(1) answered.\"}}'\n"
+    "bin/codex": "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"(1) answered.\"}}'\n"
   },
   "responses": [],
   "expect": {

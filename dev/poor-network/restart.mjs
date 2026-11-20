@@ -241,6 +241,70 @@ function catchupBytesAfter(tab, readyMs) {
   return null;
 }
 
+// The four parts of a return, from the replacement's server_ready to the probe row (plan 6 v4 section 4.2's split):
+//   ready to attempt  the first socket the page creates after ready;
+//   attempt to open   from that attempt to the handshake response (101) of the first socket after ready that opened;
+//   open to catch-up  from that socket's open to its catchup_complete, with the replay's frames by kind and bytes;
+//   catch-up to row   from catchup_complete to the probe row's paint (negative when the row came in the replay).
+// Each replay frame names its event index and message id, and whether the page already held it before the release: an
+// event index below the page's cursor, or a message id the page had rendered. Every request the page started after
+// ready rides the same link, so the HTTP requests of the window are listed beside the replay.
+function returnSplit(tab, readyMs, tag, cursor, heldIds, rowAt) {
+  const attempts = tab.sockets.filter((socket) => socket.url.includes('/ws/sessions/') && socket.at >= readyMs);
+  const opened = attempts.find((socket) =>
+    tab.handshakes.some((handshake) => handshake.requestId === socket.requestId && handshake.status === 101));
+  const openAt = opened === undefined
+    ? null
+    : tab.handshakes.find((handshake) => handshake.requestId === opened.requestId).at;
+  const catchup = opened === undefined
+    ? undefined
+    : tab.frames.find((frame) => frame.requestId === opened.requestId && frame.type === 'catchup_complete');
+  const catchupAt = catchup === undefined ? null : catchup.at;
+  const replay = opened === undefined
+    ? []
+    : tab.frames.filter((frame) => frame.requestId === opened.requestId && frame.at >= openAt &&
+        (catchupAt === null || frame.at <= catchupAt));
+  const probe = tab.frames.find((frame) => frame.at >= readyMs && frame.text.includes(tag));
+  const frames = replay.map((frame) => {
+    const payload = JSON.parse(frame.text);
+    const eventIndex = payload.event_index ?? payload.message?.event_index ?? null;
+    const messageId = payload.message?.id ?? null;
+    const heldByIndex = eventIndex !== null && eventIndex < cursor;
+    const heldByMessage = messageId !== null && heldIds.includes(String(messageId));
+    return {
+      type: frame.type,
+      bytes: frame.bytes,
+      eventIndex,
+      messageId,
+      heldByIndex,
+      heldByMessage,
+      atMs: frame.at - readyMs,
+    };
+  });
+  const http = [...tab.requests.values()]
+    .filter((entry) => entry.startAt >= readyMs && !entry.url.includes('/ws/') && entry.finishAt !== null)
+    .map((entry) => ({
+      path: new URL(entry.url).pathname,
+      bytes: entry.bytes,
+      startMs: entry.startAt - readyMs,
+      finishMs: entry.finishAt - readyMs,
+    }));
+  return {
+    attempts: attempts.map((socket) => ({ atMs: socket.at - readyMs, opened: socket === opened })),
+    readyToAttemptMs: attempts.length === 0 ? null : attempts[0].at - readyMs,
+    attemptToOpenMs: openAt === null || attempts.length === 0 ? null : openAt - attempts[0].at,
+    openToCatchupMs: catchupAt === null ? null : catchupAt - openAt,
+    catchupToRowMs: catchupAt === null ? null : rowAt - catchupAt,
+    probeFrameMs: probe === undefined ? null : probe.at - readyMs,
+    replay: frames,
+    replayBytes: frames.reduce((sum, frame) => sum + frame.bytes, 0),
+    heldBytes: frames
+      .filter((frame) => frame.heldByIndex || frame.heldByMessage)
+      .reduce((sum, frame) => sum + frame.bytes, 0),
+    http,
+  };
+}
+
 // The first document request of the page's reload navigation after the release (the shell's own request, which the
 // worker answers from the stored shell).
 function navigationAfter(tab, readyMs) {
@@ -277,6 +341,11 @@ async function restartRep(ctx, name) {
     const tag = `restart probe ${Math.random().toString(16).slice(2, 10)}`;
     const bootAt0 = (await readPage(tab, tag)).boot;
     const version0 = await tab.evaluate('STATIC_ASSET_VERSION');
+    // What the page holds before the release: its event cursor, and the ids of the messages it has rendered. The
+    // replay's frames for events below the cursor, and for those messages, are the ones the page already held.
+    const cursor0 = await tab.evaluate('eventCursor');
+    const heldIds = await tab.evaluate(
+      "[...document.querySelectorAll('#messages [data-message-id]')].map((node) => node.dataset.messageId)");
     if (cell.reset) {
       proxy.blackout({ seconds: LINK.blackoutSeconds, mode: 'reset' });
     }
@@ -340,6 +409,8 @@ async function restartRep(ctx, name) {
       catchupBytes: telemetry.bytes,
       blackoutMs: cell.reset ? LINK.blackoutSeconds * 1000 : null,
       assetVersions: [version0, version1],
+      cursor: cursor0,
+      split: returnSplit(tab, readyMs, tag, cursor0, heldIds, rowAt),
     };
   }, BOOT_SCRIPT);
 }

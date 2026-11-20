@@ -586,6 +586,7 @@ fn a_round_without_its_written_review_key_exits_7_before_inventory_or_scope() {
     DIRECTION,
     &world.commit,
     "claude",
+    world::LOCAL_CLAUDE_VERSION,
   ]);
   let run = harness::run(&mut command);
 
@@ -2160,13 +2161,22 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
       world.remote_home.join("improve/mock-home").join(world::MOCK_HOME_VERSION).display().to_string(),
     );
     env.insert("FAKE_CLAUDE_BARRIER".to_string(), mock_home_barrier.display().to_string());
+    env.insert("FAKE_VENDOR_ROOT".to_string(), world.vendor_root.display().to_string());
+    env.insert("FAKE_CURL_LOG".to_string(), world.curl_log.display().to_string());
+    env.insert("FAKE_CLI_RUNS".to_string(), world.cli_runs.display().to_string());
     // The build runs long enough that the second runner arrives while the first one holds the
     // work, as two burst starts do on the host.
     env.insert("FAKE_CARGO_SLEEP".to_string(), "2".to_string());
     env.insert("GIT_CONFIG_GLOBAL".to_string(), "/dev/null".to_string());
     env.insert("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string());
     let mut command = harness::command("bash", &env);
-    command.arg(launch.join("remote-runner.sh")).args([&launch_id, direction, &commit, "claude"]);
+    command.arg(launch.join("remote-runner.sh")).args([
+      &launch_id,
+      direction,
+      &commit,
+      "claude",
+      world::LOCAL_CLAUDE_VERSION,
+    ]);
     commands.push(command);
   }
 
@@ -2209,8 +2219,12 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     let ran = records.join("claude-argv.txt");
     assert!(ran.is_file(), "the {direction} round did not run the tools of the commit:\n{}", run.describe());
     let env = fs::read_to_string(records.join("claude-env.txt")).expect("the round's environment");
+    // The round's PATH starts with its member CLI's bin, then the tools of this commit.
     let commit_bin = runner_bin.join(&commit).display().to_string();
-    assert!(env.contains(&format!("PATH={commit_bin}:")), "the {direction} round did not pin its tools:\n{env}");
+    let member_bin =
+      runner_bin.parent().expect("the runner root").join(format!("members/claude-{}/bin", world::LOCAL_CLAUDE_VERSION));
+    let pinned = format!("PATH={}:{commit_bin}:", member_bin.display());
+    assert!(env.contains(&pinned), "the {direction} round did not pin its tools:\n{env}");
   }
 }
 
@@ -2661,4 +2675,158 @@ fn a_launch_record_naming_the_worktree_claims_nothing() {
       run.describe()
     );
   }
+}
+
+/// The path that a fake member CLI records when the round or a probe runs the member's copy of `kind` at `version`.
+fn member_path(world: &World, kind: &str, version: &str) -> String {
+  world.remote_home.join(format!("improve/runner/members/{kind}-{version}/bin/{kind}")).display().to_string()
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_codex_round_runs_the_version_the_launcher_reads_not_the_hosts_copy() {
+  let world = World::new();
+  world.publish_member_cli("codex", "9.9.9", "codex-cli 9.9.9");
+  world.write_codex_login(world::now_seconds() + 200 * 3600);
+  let mut env = world.host_login_env();
+  env.insert("FAKE_LOCAL_CODEX_LINE".to_string(), "codex-cli 9.9.9".to_string());
+  let run = harness::run(&mut world.launcher_command_for(&env, &world.codex_arguments()));
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.cli_runs(), [member_path(&world, "codex", "9.9.9")], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_claude_round_runs_the_vendor_claude_at_the_launchers_version() {
+  let world = World::new();
+  let run = world.run(&world.env());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(world.cli_runs(), [member_path(&world, "claude", world::LOCAL_CLAUDE_VERSION)], "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_member_cli_the_vendor_does_not_publish_exits_7_and_starts_no_round() {
+  let world = World::new();
+  world.write_codex_login(world::now_seconds() + 200 * 3600);
+  let mut env = world.host_login_env();
+  env.insert("FAKE_LOCAL_CODEX_LINE".to_string(), "codex-cli 9.9.8".to_string());
+  let run = harness::run(&mut world.launcher_command_for(&env, &world.codex_arguments()));
+  assert_refused_before_start(&world, &run, "9.9.8");
+  assert!(stderr(&run).contains("improve host version none"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_member_cli_that_reports_another_version_exits_7_and_names_both() {
+  let world = World::new();
+  world.publish_member_cli("codex", "9.9.9", "codex-cli 9.9.8");
+  world.write_codex_login(world::now_seconds() + 200 * 3600);
+  let mut env = world.host_login_env();
+  env.insert("FAKE_LOCAL_CODEX_LINE".to_string(), "codex-cli 9.9.9".to_string());
+  let run = harness::run(&mut world.launcher_command_for(&env, &world.codex_arguments()));
+  assert_refused_before_start(&world, &run, "9.9.9");
+  assert!(stderr(&run).contains("improve host version codex-cli 9.9.8"), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_unparseable_local_cli_version_exits_7_before_any_input_is_sent() {
+  let world = World::new();
+  world.write_codex_login(world::now_seconds() + 200 * 3600);
+  let mut env = world.host_login_env();
+  env.insert("FAKE_LOCAL_CODEX_LINE".to_string(), "codex-cli banana".to_string());
+  let run = harness::run(&mut world.launcher_command_for(&env, &world.codex_arguments()));
+  assert_refused_before_input(&world, &run, "codex-cli banana");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_cached_member_cli_is_reused_without_a_download() {
+  let world = World::new();
+  world.write_codex_login(world::now_seconds() + 200 * 3600);
+  let env = world.host_login_env();
+  let arguments = world.codex_arguments();
+  let first = harness::run(&mut world.launcher_command_for(&env, &arguments));
+  assert_eq!(first.code, 0, "{}", first.describe());
+  // The release listing and the package: two fetches for the first install.
+  let fetched = world.curl_calls();
+  assert_eq!(fetched.len(), 2, "the first round fetched {fetched:?}");
+  let second = harness::run(&mut world.launcher_command_for(&env, &arguments));
+  assert_eq!(second.code, 0, "{}", second.describe());
+  assert_eq!(world.curl_calls(), fetched, "the second round fetched again");
+  let path = member_path(&world, "codex", world::LOCAL_CODEX_VERSION);
+  assert_eq!(world.cli_runs(), [path.clone(), path]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn concurrent_installs_of_one_member_cli_version_fetch_once_and_both_succeed() {
+  let world = World::new();
+  world.publish_member_cli("codex", "9.9.9", "codex-cli 9.9.9");
+  let mut first = world.member_cli_command("codex", "9.9.9");
+  first.env("FAKE_CURL_SLEEP", "1");
+  let mut second = world.member_cli_command("codex", "9.9.9");
+  second.env("FAKE_CURL_SLEEP", "1");
+  let first = first.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("the first install starts");
+  let second = second.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("the second install starts");
+  let first = first.wait_with_output().expect("the first install ends");
+  let second = second.wait_with_output().expect("the second install ends");
+  assert!(first.status.success(), "the first install: {}", String::from_utf8_lossy(&first.stderr));
+  assert!(second.status.success(), "the second install: {}", String::from_utf8_lossy(&second.stderr));
+  assert_eq!(world.curl_calls().len(), 2, "two installs of one version fetched {:?}", world.curl_calls());
+  assert!(Path::new(&member_path(&world, "codex", "9.9.9")).is_file(), "the installed CLI is missing");
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_member_cache_keeps_the_live_and_last_used_versions_and_prunes_the_rest() {
+  let world = World::new();
+  let members = world.remote_home.join("improve/runner/members");
+  for name in ["codex-0.100.0", "codex-0.101.0", "codex-0.102.0", ".stage-codex-0.90.0.abcdef"] {
+    fs::create_dir_all(members.join(name).join("bin")).expect("a member directory");
+  }
+  std::os::unix::fs::symlink("codex-0.102.0", members.join(".current-codex")).expect("the current pointer");
+  let stop = world.sandbox.root().join("stop-live-round");
+  let mut live = world.spawn_live_runner(&stop, &["launch", "perf", "0123456789abcdef", "codex", "0.101.0"]);
+  let run = harness::run(&mut world.member_cli_command("codex", world::LOCAL_CODEX_VERSION));
+  fs::write(&stop, "").expect("the stop file");
+  live.wait().expect("the live runner stand-in ends");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  // The live round's version and the installed current version stay; the other two versions and the stage go.
+  let mut kept: Vec<String> = fs::read_dir(&members)
+    .expect("the member directory")
+    .map(|entry| entry.expect("a member entry").file_name().to_string_lossy().into_owned())
+    .filter(|name| !name.starts_with('.'))
+    .collect();
+  kept.sort();
+  assert_eq!(kept, ["codex-0.101.0", "codex-0.167.0"], "{}", run.describe());
+  assert!(!members.join(".stage-codex-0.90.0.abcdef").exists(), "a stage directory stayed");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_round_prunes_the_tools_of_commits_that_no_live_process_names() {
+  let world = World::new();
+  let bin = world.remote_home.join("improve/runner/bin");
+  let live_commit = "1111111111111111111111111111111111111111";
+  let dead_commit = "2222222222222222222222222222222222222222";
+  for commit in [live_commit, dead_commit] {
+    fs::create_dir_all(bin.join(commit)).expect("a commit's directory");
+    for tool in ["charliebot", "improve-sandbox", "mock-home"] {
+      fs::write(bin.join(format!("{tool}-{commit}")), "stale tool\n").expect("a commit's tool");
+    }
+  }
+  let stop = world.sandbox.root().join("stop-live-round");
+  let mut live =
+    world.spawn_live_runner(&stop, &["launch", "perf", live_commit, "claude", world::LOCAL_CLAUDE_VERSION]);
+  let run = world.run(&world.env());
+  fs::write(&stop, "").expect("the stop file");
+  live.wait().expect("the live runner stand-in ends");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(bin.join(live_commit).is_dir(), "a live round's commit directory was pruned");
+  assert!(bin.join(format!("charliebot-{live_commit}")).exists(), "a live round's tools were pruned");
+  assert!(!bin.join(dead_commit).exists(), "a dead commit's directory stayed");
+  assert!(!bin.join(format!("charliebot-{dead_commit}")).exists(), "a dead commit's tools stayed");
+  assert!(bin.join(format!("charliebot-{}", world.commit)).exists(), "the round's own tools were pruned");
 }

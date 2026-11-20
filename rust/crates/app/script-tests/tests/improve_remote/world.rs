@@ -14,10 +14,12 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD as URL_SAFE_NO_PAD;
 use charliebot_shell_harness::{self as harness, Env, Sandbox, write_executable};
+use sha2::{Digest as _, Sha256};
 
 /// The committer identity of every fixture commit.
 const IDENTITY: [(&str, &str); 4] = [
@@ -123,6 +125,7 @@ fi
 "#;
 
 const CLAUDE: &str = r#"# Fake claude: record the arguments and environment it receives, then exit as the round asks.
+printf '%s\n' "$0" >>"$FAKE_CLI_RUNS"
 if [[ -n ${IMPROVE_DIRECTION:-} ]]; then
   if [[ ! -s $FAKE_MOCK_HOME_DIR/manifest.json ]]; then
     printf 'the shared mock home is missing its manifest before the round starts\n' >&2
@@ -179,6 +182,7 @@ exit "${FAKE_CLAUDE_EXIT:-0}"
 /// Fake codex: record the `CODEX_HOME` it runs with, its arguments, and the `auth.json` it finds there with that file's
 /// mode, outside the round's boundary.
 const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with, the arguments it receives and its login file.
+printf '%s\n' "$0" >>"$FAKE_CLI_RUNS"
 printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}" >"$FAKE_CODEX_ENV"
 printf '%s\n' "$@" >"$FAKE_CODEX_ARGV"
 if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
@@ -187,6 +191,73 @@ if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
 fi
 exit 0
 "#;
+
+/// The version lines of this host's CLIs, which the launcher reads with `--version`.
+pub const LOCAL_CLAUDE_VERSION: &str = "2.1.328";
+pub const LOCAL_CLAUDE_LINE: &str = "2.1.328 (Claude Code)";
+pub const LOCAL_CODEX_VERSION: &str = "0.167.0";
+pub const LOCAL_CODEX_LINE: &str = "codex-cli 0.167.0";
+/// The stale copies in the host's own `~/.local/bin`, older than the versions the launcher reads. A round must never run
+/// them.
+const HOST_CLAUDE_LINE: &str = "2.1.260 (Claude Code)";
+const HOST_CODEX_LINE: &str = "codex-cli 0.145.0";
+
+/// The launcher's view of this host's claude: it reads the `--version` line and runs nothing else.
+const LOCAL_CLAUDE: &str = r#"# Fake local claude: the launcher reads its --version line, and no round runs it on this host.
+if [[ ${1-} == --version ]]; then
+  printf '%s\n' "$FAKE_LOCAL_CLAUDE_LINE"
+  exit 0
+fi
+printf 'the launcher ran the local claude: %s\n' "$*" >&2
+exit 1
+"#;
+
+/// The launcher's view of this host's codex: it reads the `--version` line and runs nothing else.
+const LOCAL_CODEX: &str = r#"# Fake local codex: the launcher reads its --version line, and no round runs it on this host.
+if [[ ${1-} == --version ]]; then
+  printf '%s\n' "$FAKE_LOCAL_CODEX_LINE"
+  exit 0
+fi
+printf 'the launcher ran the local codex: %s\n' "$*" >&2
+exit 1
+"#;
+
+/// Fake curl: serves a URL from the fake vendor root as `curl -f` does, so a URL the vendor does not publish fails with
+/// 22. Every URL is recorded, and FAKE_CURL_SLEEP holds each call, so two installs can overlap.
+const CURL: &str = r#"# Fake curl: serve the URL from the fake vendor root, as curl -f does.
+url=${@: -1}
+output=
+previous=
+for argument in "$@"; do
+  if [[ $previous == -o ]]; then
+    output=$argument
+  fi
+  previous=$argument
+done
+printf '%s\n' "$url" >>"$FAKE_CURL_LOG"
+sleep "${FAKE_CURL_SLEEP:-0}"
+source_path="$FAKE_VENDOR_ROOT/${url#https://}"
+if [[ $url != https://* || ! -f $source_path ]]; then
+  printf 'curl: (22) The requested URL returned error: 404\n' >&2
+  exit 22
+fi
+if [[ -n $output ]]; then
+  cp -- "$source_path" "$output"
+else
+  cat -- "$source_path"
+fi
+"#;
+
+/// A member CLI as the vendor publishes it: `--version` prints `line`, and any other call runs `body`.
+fn cli_script(body: &str, line: &str) -> String {
+  format!("#!/usr/bin/env bash\nif [[ ${{1-}} == --version ]]; then\n  printf '%s\\n' '{line}'\n  exit 0\nfi\n{body}")
+}
+
+/// The SHA-256 of a file, in the form the vendor publishes.
+fn sha256_file(path: &Path) -> String {
+  let bytes = fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+  format!("{:x}", Sha256::digest(bytes))
+}
 
 /// Fake charlie-code: record the arguments and environment it receives. The key goes in as its digest.
 const CHARLIE_CODE: &str = r#"# Fake charlie-code: record the arguments and environment it receives.
@@ -427,6 +498,12 @@ pub struct World {
   pub scope_stopped: PathBuf,
   pub mock_home_log: PathBuf,
   pub mock_home_fixture: PathBuf,
+  /// The fake vendor's root: each URL the fake curl serves is a file under its host and path.
+  pub vendor_root: PathBuf,
+  /// Where the fake curl records each URL it serves.
+  pub curl_log: PathBuf,
+  /// Where each fake member CLI records its own path when it runs, so a test sees which copy a round ran.
+  pub cli_runs: PathBuf,
   /// The in-memory `$CLAUDE_CONFIG_DIR` of the launcher. It must not reach the round.
   pub local_config_dir: &'static str,
 }
@@ -516,10 +593,18 @@ impl World {
     let mock_home_fixture = sandbox.root().join("mock-home-fixture.sh");
     write_executable(&mock_home_fixture, format!("#!/usr/bin/env bash\n{MOCK_HOME}"));
 
+    // The launcher's CLIs report this host's versions. The improve host's own copies in `~/.local/bin` are older: a
+    // round that ran either would show it in `cli_runs`.
+    sandbox.stub("claude", LOCAL_CLAUDE);
+    sandbox.stub("codex", LOCAL_CODEX);
     let remote_bin = sandbox.dir("remote/.local/bin");
+    write_executable(&remote_bin.join("claude"), cli_script(CLAUDE, HOST_CLAUDE_LINE));
+    write_executable(&remote_bin.join("codex"), cli_script(CODEX, HOST_CODEX_LINE));
+    let vendor_root = sandbox.dir("vendor");
+    let curl_log = sandbox.root().join("curl.log");
+    let cli_runs = sandbox.root().join("cli-runs.log");
     for (name, body) in [
-      ("claude", CLAUDE),
-      ("codex", CODEX),
+      ("curl", CURL),
       ("charlie-code", CHARLIE_CODE),
       ("systemd-run", SYSTEMD_RUN),
       ("systemctl", SYSTEMCTL),
@@ -533,7 +618,7 @@ impl World {
       write_executable(&runner_bin.join(format!("{name}-{commit}")), format!("#!/usr/bin/env bash\n{body}"));
     }
 
-    Self {
+    let world = Self {
       _tmp_root: tmp_root,
       direction,
       ssh_args: sandbox.root().join("ssh-arguments.log"),
@@ -561,7 +646,101 @@ impl World {
       remote_home,
       profile_home,
       local_config_dir: LOCAL_CONFIG_DIR,
+      vendor_root,
+      curl_log,
+      cli_runs,
+    };
+    // The vendor publishes the defaults that the launcher's CLIs report, so a round installs them as the host would.
+    world.publish_member_cli("claude", LOCAL_CLAUDE_VERSION, LOCAL_CLAUDE_LINE);
+    world.publish_member_cli("codex", LOCAL_CODEX_VERSION, LOCAL_CODEX_LINE);
+    world
+  }
+
+  /// Publish one member CLI version on the fake vendor, as the vendor publishes it. Codex: the package asset of its
+  /// release, with the digest that GitHub lists for the asset. Claude: the native binary of its release, with the
+  /// checksum that its manifest lists. The published CLI prints `reported` for `--version`.
+  pub fn publish_member_cli(&self, kind: &str, version: &str, reported: &str) {
+    let arch = std::env::consts::ARCH;
+    match kind {
+      "codex" => {
+        let bin = self.sandbox.dir(&format!("stage/codex-{version}/bin"));
+        write_executable(&bin.join("codex"), cli_script(CODEX, reported));
+        let asset = format!("codex-package-{arch}-unknown-linux-musl.tar.gz");
+        let package =
+          self.vendor_root.join(format!("github.com/openai/codex/releases/download/rust-v{version}/{asset}"));
+        fs::create_dir_all(package.parent().expect("a package directory")).expect("the package directory");
+        let staged = bin.parent().expect("the stage directory");
+        let status =
+          Command::new("tar").arg("-czf").arg(&package).arg("-C").arg(staged).arg("bin").status().expect("tar runs");
+        assert!(status.success(), "tar could not write the fake package {}", package.display());
+        let release = self.vendor_root.join(format!("api.github.com/repos/openai/codex/releases/tags/rust-v{version}"));
+        fs::create_dir_all(release.parent().expect("a release directory")).expect("the release directory");
+        let digest = format!("sha256:{}", sha256_file(&package));
+        let listing = serde_json::json!({
+          "tag_name": format!("rust-v{version}"),
+          "assets": [{"name": asset, "digest": digest}],
+        });
+        fs::write(&release, listing.to_string()).expect("the fake release listing");
+      }
+      "claude" => {
+        let platform = match arch {
+          "aarch64" => "linux-arm64",
+          "x86_64" => "linux-x64",
+          other => panic!("the fake vendor has no Claude build for {other}"),
+        };
+        let script = cli_script(CLAUDE, reported);
+        let base = self.vendor_root.join(format!(
+          "storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{version}"
+        ));
+        let binary = base.join(platform).join("claude");
+        fs::create_dir_all(binary.parent().expect("a platform directory")).expect("the platform directory");
+        fs::write(&binary, &script).expect("the fake Claude binary");
+        let manifest = serde_json::json!({
+          "version": version,
+          "platforms": {(platform): {"binary": "claude", "checksum": sha256_file(&binary), "size": script.len()}},
+        });
+        fs::write(base.join("manifest.json"), manifest.to_string()).expect("the fake Claude manifest");
+      }
+      other => panic!("the fake vendor publishes no {other}"),
     }
+  }
+
+  /// The probe form of the runner under the remote home: `remote-runner.sh --member-cli <kind> <version>`, with the
+  /// remote PATH, so `curl` and the other tools are the stubs and the host's own.
+  pub fn member_cli_command(&self, kind: &str, version: &str) -> Command {
+    let mut env = self.env();
+    env.insert("HOME".to_string(), self.remote_home.display().to_string());
+    env.insert(
+      "PATH".to_string(),
+      format!("{}:/usr/local/bin:/usr/bin:/bin", self.remote_home.join(".local/bin").display()),
+    );
+    let mut command = harness::command("bash", &env);
+    command.arg(self.repo.join("dev/improve/remote-runner.sh")).args(["--member-cli", kind, version]);
+    command
+  }
+
+  /// A stand-in for a live round's wrapper: a process whose command line runs remote-runner.sh with `arguments`. It
+  /// stays alive until `stop` exists.
+  pub fn spawn_live_runner(&self, stop: &Path, arguments: &[&str]) -> Child {
+    let script = self.sandbox.dir("live").join("remote-runner.sh");
+    write_executable(&script, "while [[ ! -e \"$1\" ]]; do\n  sleep 0.05\ndone\n");
+    Command::new("bash")
+      .arg(&script)
+      .arg(stop)
+      .args(arguments)
+      .stdin(Stdio::null())
+      .spawn()
+      .expect("the live runner stand-in starts")
+  }
+
+  /// The paths of the fake member CLIs that ran, in the order they ran.
+  pub fn cli_runs(&self) -> Vec<String> {
+    lines_or_empty(&self.cli_runs)
+  }
+
+  /// The URLs that the runner's curl fetched from the fake vendor, in order.
+  pub fn curl_calls(&self) -> Vec<String> {
+    lines_or_empty(&self.curl_log)
   }
 
   pub fn launcher(&self) -> PathBuf {
@@ -613,6 +792,11 @@ impl World {
     env.insert("FAKE_SCOPE_STOPPED".to_string(), self.scope_stopped.display().to_string());
     env.insert("FAKE_MOCK_HOME_LOG".to_string(), self.mock_home_log.display().to_string());
     env.insert("FAKE_MOCK_HOME_FIXTURE".to_string(), self.mock_home_fixture.display().to_string());
+    env.insert("FAKE_VENDOR_ROOT".to_string(), self.vendor_root.display().to_string());
+    env.insert("FAKE_CURL_LOG".to_string(), self.curl_log.display().to_string());
+    env.insert("FAKE_CLI_RUNS".to_string(), self.cli_runs.display().to_string());
+    env.insert("FAKE_LOCAL_CLAUDE_LINE".to_string(), LOCAL_CLAUDE_LINE.to_string());
+    env.insert("FAKE_LOCAL_CODEX_LINE".to_string(), LOCAL_CODEX_LINE.to_string());
     env.insert(
       "FAKE_MOCK_HOME_DIR".to_string(),
       self.remote_home.join("improve/mock-home").join(MOCK_HOME_VERSION).display().to_string(),
@@ -844,6 +1028,11 @@ impl Default for World {
 /// The lines of a fake command's record of its arguments, one argument per line.
 fn record_lines(path: &Path) -> Vec<String> {
   fs::read_to_string(path).expect("the fake command recorded its arguments").lines().map(str::to_string).collect()
+}
+
+/// The lines of a fake command's record, or none when the command has not run.
+fn lines_or_empty(path: &Path) -> Vec<String> {
+  fs::read_to_string(path).unwrap_or_default().lines().map(str::to_string).collect()
 }
 
 /// The `NAME=value` lines of a fake command's record of its environment.

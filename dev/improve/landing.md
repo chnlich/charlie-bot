@@ -34,6 +34,29 @@ The launch exits 7 when a round dependency is missing, and its stderr names the 
 Neither exit starts a round.
 An exit 8 moves the round to another pool member when the pool has one; an exit 7 does not, because another member would miss the same item.
 
+## The member CLI version
+
+A round runs the version of its member CLI that the server host runs, so any model that the server host's CLI serves also works on the improve host.
+The launch reads that version from the agent binary's `--version` output: claude prints `X.Y.Z (Claude Code)` and codex prints `codex-cli X.Y.Z`.
+The launch exits 7 before it contacts the host when that output names no version.
+
+The runner installs that exact version from the vendor's distribution, and no other CLI on the improve host runs a round:
+
+- Codex: the standalone package `codex-package-<arch>-unknown-linux-musl.tar.gz` of the GitHub release `rust-v<version>`. Its sha256 is the digest that the release's asset list publishes.
+- Claude Code: the native binary of the version's release, for `linux-arm64` or `linux-x64`. Its sha256 is the digest that the version's `manifest.json` publishes.
+
+The install goes into `~/improve/runner/members/<kind>-<version>/` under the runner's build lock, before the write boundary starts.
+The round's PATH puts that directory's `bin` first, so `claude` and `codex` never resolve to a copy in `~/.local/bin`.
+The runner then checks the installed CLI's `--version` against the version the launch read.
+When the install or the check fails, the runner exits 7 and its stderr names the local version and the host's version (`none` when nothing is installed). No round starts, and no other CLI is tried.
+
+Retention bounds the disk: each kind keeps the version of its last round and every version that a live round names, and removes the rest when a round installs.
+The round tools under `~/improve/runner/bin/` keep the current commit and the commits that live rounds name.
+
+`remote-runner.sh --member-cli <kind> <version>` runs the same install alone, prints what the installed CLI reports and starts no round, so an operator can check a version before a round needs it.
+
+These scripts run from the server's checkout at each launch, so a change reaches host3 rounds when the server runs a release that carries it.
+
 ## Step 1: set the clone
 
 The whole round runs on the remote host, in the direction's own clone, `~/improve/<direction>/charlie-bot`.

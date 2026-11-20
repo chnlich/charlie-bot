@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Run one improve round on the remote host.
 #
-#   remote-runner.sh <launch id> <direction> <CLI commit> <member kind>
+#   remote-runner.sh <launch id> <direction> <CLI commit> <member kind> <member version>
 #   remote-runner.sh --in-scope <launch id> <direction> <member kind>
 #   remote-runner.sh --prepare <launch id>     (the review key and the member's login on standard input)
+#   remote-runner.sh --member-cli <member kind> <member version>     (a probe: install and report, no round)
 #
-# The member kind is `claude` or `codex`: the agent the round runs.
+# The member kind is `claude` or `codex`: the agent the round runs. The member version is the version of that CLI that
+# the server host runs; the runner installs exactly that version from the vendor and runs it, and no other CLI.
 #
 # dev/improve/remote-launch.sh sends this file, with the round's arguments and inputs, into
 # ~/improve/launch/<launch id>/ and runs the remaining forms over ssh. `--prepare` reads the round's
@@ -20,7 +22,9 @@
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
 # review); 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
 # of this direction still runs; 7 a round dependency is missing (a login, the review key, the round's
-# home or the write boundary), and stderr names it. Nothing starts on 4, 5 and 7.
+# home, the write boundary or the member CLI), and stderr names it. The member CLI exits 7 when the
+# vendor install or the installed `--version` check fails, and stderr names the local version and the
+# version the host runs. Nothing starts on 4, 5 and 7.
 #
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
@@ -47,14 +51,17 @@ fail() {
 }
 
 usage() {
-  printf 'usage: %s <launch id> <direction> <CLI commit> <member kind>\n       %s --in-scope <launch id> <direction> <member kind>\n       %s --prepare <launch id>\n' \
-    "${BASH_SOURCE[0]}" "${BASH_SOURCE[0]}" "${BASH_SOURCE[0]}" >&2
+  printf 'usage: %s <launch id> <direction> <CLI commit> <member kind> <member version>\n' "${BASH_SOURCE[0]}" >&2
+  printf '       %s --in-scope <launch id> <direction> <member kind>\n' "${BASH_SOURCE[0]}" >&2
+  printf '       %s --prepare <launch id>\n' "${BASH_SOURCE[0]}" >&2
+  printf '       %s --member-cli <member kind> <member version>\n' "${BASH_SOURCE[0]}" >&2
   exit 1
 }
 
 mode=run
 commit=
 kind=
+member_version=
 case ${1:-} in
   --in-scope)
     [[ $# -eq 4 ]] || usage
@@ -69,26 +76,38 @@ case ${1:-} in
     launch_id=$2
     direction=
     ;;
+  --member-cli)
+    [[ $# -eq 3 ]] || usage
+    mode=member_cli
+    launch_id=
+    direction=
+    kind=$2
+    member_version=$3
+    ;;
   '')
     usage
     ;;
   *)
-    [[ $# -eq 4 ]] || usage
+    [[ $# -eq 5 ]] || usage
     launch_id=$1
     direction=$2
     commit=$3
     kind=$4
+    member_version=$5
     ;;
 esac
-[[ $launch_id =~ ^[0-9A-Za-z._-]+$ ]] || fail 1 "not a launch id: $launch_id"
-if [[ $mode != prepare ]]; then
+if [[ $mode != member_cli ]]; then
+  [[ $launch_id =~ ^[0-9A-Za-z._-]+$ ]] || fail 1 "not a launch id: $launch_id"
+fi
+if [[ $mode == run || $mode == in_scope ]]; then
   [[ $direction =~ ^[a-z][a-z0-9_]*$ ]] || fail 1 "not an improve direction: $direction"
 fi
 
+readonly SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly HOME_DIR=${HOME:-}
 [[ $HOME_DIR == /* ]] || fail 1 'HOME must be an absolute path'
 readonly LAUNCH_DIR="$HOME_DIR/improve/launch/$launch_id"
-if [[ $mode != prepare ]]; then
+if [[ $mode == run || $mode == in_scope ]]; then
   member_kinds_file="$LAUNCH_DIR/member_kinds.txt"
   [[ -r $member_kinds_file ]] || fail 1 "the member kind list is missing or unreadable: $member_kinds_file"
   grep -q '[^[:space:]]' "$member_kinds_file" || fail 1 "the member kind list is empty: $member_kinds_file"
@@ -99,7 +118,7 @@ readonly RUNNER_ROOT="$HOME_DIR/improve/runner"
 # The member's login file of this launch: the records `--prepare` wrote, each `NAME=value` with a NUL after it.
 readonly MEMBER_CREDENTIAL="$LAUNCH_DIR/member-credential"
 [[ $LAUNCH_DIR == "$HOME_DIR"/improve/launch/* ]] || fail 1 "the launch directory is not under the improve root: $LAUNCH_DIR"
-if [[ $mode != prepare ]]; then
+if [[ $mode == run || $mode == in_scope ]]; then
   [[ -d $LAUNCH_DIR ]] || fail 1 "the launch directory is missing: $LAUNCH_DIR"
   readonly ROUND_ROOT="$HOME_DIR/improve/$direction"
   readonly ROUND_TMP="/tmp/improve-$direction"
@@ -422,7 +441,215 @@ ensure_cli() {
   ln -sfn -- "../charliebot-$commit" "$commit_bin/charliebot"
   ln -sfn -- "../improve-sandbox-$commit" "$commit_bin/improve-sandbox"
   ln -sfn -- "../mock-home-$commit" "$commit_bin/mock-home"
+  prune_commit_entries "$commit"
   flock -u "$lock_fd"
+}
+
+# The arguments after the script's path of each live process that runs remote-runner.sh, one line per process, each line
+# wrapped in spaces. A round's wrapper holds its commit, member kind and member version for as long as the round runs,
+# and a probe holds its member kind and version, so these lines show which installed artifacts a live process uses.
+live_runner_arguments() {
+  local proc argument
+  local -a arguments=()
+  for proc in /proc/[0-9]*/cmdline; do
+    [[ -r $proc ]] || continue
+    arguments=()
+    while IFS= read -r -d '' argument; do
+      arguments+=("$argument")
+    done 2>/dev/null <"$proc" || continue
+    (( ${#arguments[@]} >= 2 )) || continue
+    [[ ${arguments[1]} == */remote-runner.sh ]] || continue
+    printf ' %s \n' "${arguments[*]:2}"
+  done
+}
+
+# Whether a live process runs remote-runner.sh with every one of the given words among its arguments.
+runner_names() {
+  local line word all
+  while IFS= read -r line; do
+    all=1
+    for word in "$@"; do
+      [[ $line == *" $word "* ]] || all=0
+    done
+    if (( all )); then
+      return 0
+    fi
+  done < <(live_runner_arguments)
+  return 1
+}
+
+# The member CLI version line that a binary prints for `--version`, or nothing when no binary exists at that path. A
+# binary that exists and fails prints its own error on this runner's stderr, and the caller names the version as none.
+installed_member_version() {
+  local binary=$1 output
+  [[ -x $binary ]] || return 0
+  output=$("$binary" --version </dev/null) || return 0
+  printf '%s' "${output%%$'\n'*}"
+}
+
+# The line that `--version` prints for one member CLI version. claude prints `X.Y.Z (Claude Code)`,
+# codex prints `codex-cli X.Y.Z`.
+member_version_line() {
+  case $1 in
+    claude) printf '%s (Claude Code)' "$2" ;;
+    codex) printf 'codex-cli %s' "$2" ;;
+  esac
+}
+
+# Exit 1 unless the file's sha256 digest is the one the vendor publishes for it.
+check_sha256() {
+  local file=$1 expected=$2 actual
+  actual=$(sha256sum -- "$file" | cut -d' ' -f1) || return 1
+  if [[ $actual != "$expected" ]]; then
+    printf '%s %s has sha256 %s, and the vendor publishes %s\n' "$STDERR_PREFIX" "$file" "$actual" "$expected" >&2
+    return 1
+  fi
+}
+
+# Codex: the standalone package of the release `rust-v<version>`. Its root holds bin/codex with the resources beside it,
+# as the standalone install on this host does. The digest is the one GitHub publishes for the package asset.
+install_codex() {
+  local version=$1 arch=$2 stage=$3
+  local asset="codex-package-$arch-unknown-linux-musl.tar.gz"
+  local digest
+  local release="https://api.github.com/repos/openai/codex/releases/tags/rust-v$version"
+  digest=$(curl -fsSL --connect-timeout 30 --max-time 300 "$release" \
+    | jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // empty') || return 1
+  if [[ $digest != sha256:* ]]; then
+    printf '%s the release rust-v%s publishes no sha256 digest for %s\n' "$STDERR_PREFIX" "$version" "$asset" >&2
+    return 1
+  fi
+  curl -fsSL --connect-timeout 30 --max-time 900 -o "$stage/package.tar.gz" \
+    "https://github.com/openai/codex/releases/download/rust-v$version/$asset" || return 1
+  check_sha256 "$stage/package.tar.gz" "${digest#sha256:}" || return 1
+  tar -xzf "$stage/package.tar.gz" -C "$stage" || return 1
+  rm -f -- "$stage/package.tar.gz" || return 1
+}
+
+# Claude: the native build that the Claude Code release bucket publishes for the version. The version's manifest names
+# each platform's binary and its sha256 digest.
+install_claude() {
+  local version=$1 arch=$2 stage=$3
+  local platform base digest
+  case $arch in
+    aarch64) platform=linux-arm64 ;;
+    x86_64) platform=linux-x64 ;;
+    *)
+      printf '%s the Claude Code release has no build for %s\n' "$STDERR_PREFIX" "$arch" >&2
+      return 1
+      ;;
+  esac
+  base="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819"
+  base="$base/claude-code-releases/$version"
+  digest=$(curl -fsSL --connect-timeout 30 --max-time 300 "$base/manifest.json" \
+    | jq -r --arg platform "$platform" '.platforms[$platform].checksum // empty') || return 1
+  if [[ ! $digest =~ ^[0-9a-f]{64}$ ]]; then
+    printf '%s the Claude Code %s manifest publishes no sha256 digest for %s\n' \
+      "$STDERR_PREFIX" "$version" "$platform" >&2
+    return 1
+  fi
+  curl -fsSL --connect-timeout 30 --max-time 900 -o "$stage/claude" "$base/$platform/claude" || return 1
+  check_sha256 "$stage/claude" "$digest" || return 1
+  mkdir -- "$stage/bin" || return 1
+  mv -- "$stage/claude" "$stage/bin/claude" || return 1
+  chmod 755 -- "$stage/bin/claude" || return 1
+}
+
+# Install one member CLI version from the vendor into the stage directory, which then holds bin/<kind>.
+install_member_cli() {
+  local kind=$1 version=$2 stage=$3 arch
+  arch=$(uname -m) || return 1
+  case $kind in
+    codex) install_codex "$version" "$arch" "$stage" ;;
+    claude) install_claude "$version" "$arch" "$stage" ;;
+  esac
+}
+
+# The member CLI that a round runs: the version of its kind that the server host runs, installed from the vendor into
+# $RUNNER_ROOT/members/<kind>-<version>/. The round's PATH puts that bin first, so no other CLI on this host runs. The
+# build lock serializes the installs of rounds that start together. The install goes into a stage directory that is
+# renamed into place, so an interrupted install never passes for a finished one. A version that cannot be installed, or
+# whose installed binary reports another version, exits 7 and names the local version and the version the host runs.
+ensure_member_cli() {
+  local kind=$1 version=$2
+  local members="$RUNNER_ROOT/members"
+  local name="$kind-$version"
+  local lock_fd stage reported expected
+  [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 7 "the member CLI version is not x.y.z: '$version'"
+  mkdir -p -- "$RUNNER_ROOT" || fail 1 "cannot create the runner root: $RUNNER_ROOT"
+  exec {lock_fd}>>"$RUNNER_ROOT/build.lock"
+  flock "$lock_fd" || fail 1 "cannot lock the runner's build state: $RUNNER_ROOT/build.lock"
+  mkdir -p -- "$members" || fail 1 "cannot create the member CLI directory: $members"
+  if [[ ! -x $members/$name/bin/$kind ]]; then
+    stage=$(mktemp -d "$members/.stage-$name.XXXXXXXX") || fail 1 "cannot make an install directory under $members"
+    if ! install_member_cli "$kind" "$version" "$stage"; then
+      rm -rf -- "$stage"
+      fail 7 "member CLI $kind: local version $version, improve host version none; the vendor install failed"
+    fi
+    mv -T -- "$stage" "$members/$name" || fail 1 "cannot move the install into $members/$name"
+  fi
+  expected=$(member_version_line "$kind" "$version")
+  reported=$(installed_member_version "$members/$name/bin/$kind")
+  [[ $reported == "$expected" ]] || fail 7 \
+    "member CLI $kind: local version $version, improve host version ${reported:-none}; the CLI reports another version"
+  ln -sfn -- "$name" "$members/.current-$kind" || fail 1 "cannot record $name as the current $kind"
+  prune_member_cache
+  flock -u "$lock_fd" || fail 1 "cannot unlock the runner's build state: $RUNNER_ROOT/build.lock"
+}
+
+# Remove the member CLI directories that no live process names, except the last version of each kind: that one stays
+# so the next round of its kind reuses it without a download. The stage directories are removed too, because only a
+# lock holder creates them.
+prune_member_cache() {
+  local members="$RUNNER_ROOT/members" dir name kind
+  rm -rf -- "$members"/.stage-*
+  for dir in "$members"/*-*; do
+    [[ -d $dir ]] || continue
+    name=${dir##*/}
+    kind=${name%%-*}
+    if [[ $(readlink -- "$members/.current-$kind") == "$name" ]]; then
+      continue
+    fi
+    if runner_names "$kind" "${name#*-}"; then
+      continue
+    fi
+    rm -rf -- "$dir"
+  done
+}
+
+# Remove the round tools of the commits that no live process names, except the commit this round runs. A commit's tools
+# rebuild when a round next needs them, so only live rounds and the current commit keep theirs.
+prune_commit_entries() {
+  local keep=$1 bin_dir="$RUNNER_ROOT/bin" entry name commit
+  for entry in "$bin_dir"/*; do
+    name=${entry##*/}
+    if [[ $name =~ ^(charliebot|improve-sandbox|mock-home)-([0-9a-f]{40})$ ]]; then
+      commit=${BASH_REMATCH[2]}
+    elif [[ $name =~ ^[0-9a-f]{40}$ ]]; then
+      commit=$name
+    else
+      continue
+    fi
+    if [[ $commit == "$keep" ]]; then
+      continue
+    fi
+    if runner_names "$commit"; then
+      continue
+    fi
+    rm -rf -- "$entry"
+  done
+}
+
+# The probe form: install one member CLI version on this host and print the version that the installed CLI reports. It
+# reads no launch and starts no round.
+member_cli_probe() {
+  local binary
+  [[ -r $SCRIPT_DIR/member_kinds.txt ]] || fail 1 "the member kind list is missing: $SCRIPT_DIR/member_kinds.txt"
+  grep -Fxq -- "$kind" "$SCRIPT_DIR/member_kinds.txt" || fail 7 "not a member kind: $kind"
+  ensure_member_cli "$kind" "$member_version"
+  binary="$RUNNER_ROOT/members/$kind-$member_version/bin/$kind"
+  printf 'improve runner: member CLI %s %s is installed at %s and reports: %s\n' \
+    "$kind" "$member_version" "$binary" "$(installed_member_version "$binary")"
 }
 
 # mock-home writes manifest.json last and renames its staging directory into place only when the home is complete.
@@ -589,6 +816,11 @@ if [[ $mode == prepare ]]; then
   exit 0
 fi
 
+if [[ $mode == member_cli ]]; then
+  member_cli_probe
+  exit 0
+fi
+
 if [[ $mode == in_scope ]]; then
   rewrite_command
   run_in_scope
@@ -642,8 +874,10 @@ other_inflight_files >>"$LAUNCH_DIR/inflight-files.txt"
 check_clone
 
 # The round works in the direction's root, because `--resume` finds a Claude session by the
-# directory. The PATH puts the remote binaries first: claude, codex and charlie-code from ~/.local/bin,
-# cargo from ~/.cargo/bin, and the charliebot CLI that the hooks call from the runner's bin.
+# directory. The PATH puts the round's member CLI first, from ensure_member_cli, so claude and codex
+# resolve to the version the server host runs and never to a copy in ~/.local/bin. Then come the
+# round tools of this commit, the runner's bin with the charliebot CLI that the hooks call, charlie-code
+# from ~/.local/bin, and cargo from ~/.cargo/bin.
 export CHARLIEBOT_HOME="$ROUND_HOME"
 export CLAUDE_CONFIG_DIR="$HOME_DIR/.claude-improve"
 export TMPDIR="$ROUND_TMPDIR"
@@ -660,8 +894,9 @@ fi
 cd "$ROUND_ROOT"
 
 ensure_cli "$commit"
+ensure_member_cli "$kind" "$member_version"
 check_boundary_starts
-export PATH="$RUNNER_ROOT/bin/$commit:$PATH"
+export PATH="$RUNNER_ROOT/members/$kind-$member_version/bin:$RUNNER_ROOT/bin/$commit:$PATH"
 
 # A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run
 # then refuses the same unit name forever, so the runner clears it before the start.

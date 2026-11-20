@@ -16,6 +16,7 @@
 # The round path reads these inputs on this host and writes one directory:
 #   - for claude, the instructions file that --append-system-prompt-file names (codex carries its instructions in its
 #     arguments);
+#   - the agent binary's `--version` output, which names the member CLI version that the round runs on the host;
 #   - the review option's credential name, model and API base in $CHARLIEBOT_HOME/config.yaml, and that
 #     credential's api_key in $CHARLIEBOT_HOME/credentials.yaml;
 #   - the member's login: the gateway token in the environment, or a subscription member's access token in
@@ -31,7 +32,8 @@
 # approval or cannot be reached; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous
 # round of this direction still runs; 6 the round's direction cannot be read; 7 a round dependency is missing, and
 # stderr names it; 8 the member's login has less access-token life than a round needs, and stderr names the login
-# and its minutes left. Codes 3 to 8 start no agent and no scope, and codes 7 and 8 send nothing to the host.
+# and its minutes left. Codes 3 to 8 start no agent and no scope, and codes 7 and 8 send nothing to the host. A code 7
+# for the member CLI means this host's `--version` output names no version; the install and its check are the runner's.
 #
 # The member's login is forwarded for one round: a subscription member sends its access token, the one the Claude CLI
 # or Codex reads, and the refresh token stays on this host. The token reaches the host on ssh's standard input only, so
@@ -232,6 +234,22 @@ if [[ $kind == claude ]]; then
   [[ -f $instructions ]] || fail 1 "the instructions file is missing: $instructions"
 fi
 
+# ---------- 1a. The member CLI version ----------
+# The round runs the version of this member CLI that this host runs: the agent binary's own `--version` output. claude
+# prints `X.Y.Z (Claude Code)` and codex prints `codex-cli X.Y.Z`. The runner installs that version on the improve host
+# and runs no other CLI there. The binary gets /dev/null as standard input, because the round's prompt is on this one.
+case $kind in
+  claude) version_pattern='^([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)$' ;;
+  codex) version_pattern='^codex-cli ([0-9]+\.[0-9]+\.[0-9]+)$' ;;
+  *) fail 7 "the member kind '$kind' has no version format in this launcher" ;;
+esac
+cli_output=$("$agent_binary" --version </dev/null) \
+  || fail 7 "cannot run $agent_binary --version on this host, so the round's member CLI version is unknown"
+cli_line=${cli_output%%$'\n'*}
+[[ $cli_line =~ $version_pattern ]] \
+  || fail 7 "$agent_binary --version names no version: '$cli_line'"
+member_version=${BASH_REMATCH[1]}
+
 # The member token is the gateway token that the server put in the environment. A claude member whose environment
 # names a gateway (ANTHROPIC_BASE_URL) must carry it. A subscription member carries none: section 1b reads its login.
 member_token=${ANTHROPIC_AUTH_TOKEN-}
@@ -417,7 +435,7 @@ fi
 # ---------- 5. Start ----------
 set +e
 "${SSH[@]}" "$REMOTE_HOST" \
-  "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind" 3>&-
+  "bash \$HOME/improve/launch/$launch_id/remote-runner.sh $launch_id $direction $cli_commit $kind $member_version" 3>&-
 run_status=$?
 set -e
 

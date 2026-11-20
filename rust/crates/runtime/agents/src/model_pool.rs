@@ -530,18 +530,6 @@ pub async fn start_turn(
   }
 }
 
-/// The member a session's display names: its recorded `pool_member` when `session_backend` is a configured pool and that
-/// member belongs to the pool. A single-option backend, a deleted pool or a member outside the pool gives `None`, with
-/// no error. Only display reads it; selection keeps its own read in [`decide_turn`].
-pub fn display_pool_member<'a>(
-  cfg: &CharlieBotConfig,
-  session_backend: &str,
-  recorded: Option<&'a str>,
-) -> Option<&'a str> {
-  let pool = cfg.backends.pool(session_backend)?;
-  recorded.filter(|member| pool.members.iter().any(|pool_member| pool_member.backend == *member))
-}
-
 /// The member a turn of the session runs on, as the turn start decides it, read without recording anything or moving
 /// a position. `None` when no member is selectable: the turn then ends with the exhausted error and runs nothing.
 pub fn turn_member(
@@ -1045,18 +1033,6 @@ backends:
 
   fn loaded_cfg(features: &FeatureContext) -> Arc<CharlieBotConfig> {
     features.config.get().unwrap()
-  }
-
-  #[test]
-  fn the_display_member_is_shown_only_for_a_member_of_a_configured_pool() {
-    let (_home, features) = fixture_with(CONFIG);
-    let cfg = loaded_cfg(&features);
-    assert_eq!(display_pool_member(&cfg, "auto", Some("claude-sub")), Some("claude-sub"));
-    // A member the pool does not name, a single-option backend, a deleted pool and no record all show no member.
-    assert_eq!(display_pool_member(&cfg, "chatgpt-only", Some("spent")), None);
-    assert_eq!(display_pool_member(&cfg, "claude-sub", Some("claude-sub")), None);
-    assert_eq!(display_pool_member(&cfg, "retired-pool", Some("chatgpt")), None);
-    assert_eq!(display_pool_member(&cfg, "auto", None), None);
   }
 
   async fn pool_session(features: &FeatureContext, request_id: &str, pool_id: &str) -> SessionMetadata {

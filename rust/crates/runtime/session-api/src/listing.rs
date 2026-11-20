@@ -8,7 +8,8 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use charliebot_agents::model_pool::{POOL_MEMBER_FIELD, display_pool_member};
+use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
+use charliebot_agents::pool_display::{session_metadata_shown, show_display_member};
 use charliebot_compat::compression::accepts_gzip;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_core::event_types::POOL;
@@ -522,11 +523,7 @@ impl RowSchema {
   fn value(self, store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
     match self {
       // The page keeps the stored form its client reads, with the goal; only the member shown is replaced.
-      RowSchema::Page => {
-        let mut value = store.session_metadata_value(meta);
-        show_display_member(store, meta, value.as_object_mut().expect("session metadata serializes to an object"));
-        Ok(value)
-      }
+      RowSchema::Page => Ok(session_metadata_shown(store, meta)),
       RowSchema::Listing => metadata_value(store, meta),
       RowSchema::Move => {
         let mut value = metadata_value(store, meta)?;
@@ -1503,18 +1500,8 @@ pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResu
     task.remove("goal");
   }
   object.insert(THREAD_SESSION.to_string(), Value::Bool(is_thread_session(meta)));
-  show_display_member(store, meta, object);
+  show_display_member(&store.config().backends, object);
   Ok(value)
-}
-
-/// Replaces the recorded `pool_member` in a rendered session object with the member shown: the recorded one only
-/// inside the session's own pool. The stored record stays as it is.
-fn show_display_member(store: &Store, meta: &SessionMetadata, object: &mut Map<String, Value>) {
-  if object.contains_key(POOL_MEMBER_FIELD) {
-    let recorded = meta.extra(POOL_MEMBER_FIELD).and_then(Value::as_str);
-    let shown = display_pool_member(store.config(), &meta.backend, recorded);
-    object.insert(POOL_MEMBER_FIELD.to_string(), shown.map_or(Value::Null, |member| json!(member)));
-  }
 }
 
 /// `dump` with schedule model fields removed and the controller's row fields applied.

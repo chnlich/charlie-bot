@@ -13,6 +13,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use charliebot_agents::pool_display::session_detail_shown;
 use charliebot_compat::compression::{accepts_gzip, gzip_level_one};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::get_only;
@@ -468,7 +469,7 @@ pub(crate) async fn session_detail(
     Err(error) => return store_error(error),
   };
   let store = Arc::clone(&features.store);
-  match blocking_store(move || store.session_detail(&meta.id)).await {
+  match blocking_store(move || session_detail_shown(&store, &meta.id)).await {
     Ok(payload) => responses::fast_json(StatusCode::OK, &payload),
     Err(error) => task_http_error(error),
   }
@@ -1324,9 +1325,25 @@ backends:
       .await
       .expect("the member is recorded");
 
-    let payload = features.store.session_detail(&meta.id).expect("the detail reads");
+    let payload =
+      charliebot_agents::pool_display::session_detail_shown(&features.store, &meta.id).expect("the detail reads");
     assert_eq!(payload["backend"], "auto");
     assert_eq!(payload["pool_member"], "synthetic-a");
+
+    // A recorded member the pool no longer lists is not shown; the pool name still is.
+    features
+      .store
+      .update_slot_fields(
+        &meta.id,
+        charliebot_agents::model_pool::OWNER,
+        Map::from_iter([("pool_member".to_string(), json!("retired"))]),
+      )
+      .await
+      .expect("the member is recorded");
+    let payload =
+      charliebot_agents::pool_display::session_detail_shown(&features.store, &meta.id).expect("the detail reads");
+    assert_eq!(payload["backend"], "auto");
+    assert_eq!(payload["pool_member"], Value::Null);
 
     let cfg = features.config.get().expect("the test config loads");
     let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");

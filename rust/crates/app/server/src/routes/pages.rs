@@ -10,7 +10,8 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_agents::model_pool::{POOL_MEMBER_FIELD, display_pool_member};
+use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
+use charliebot_agents::pool_display::session_metadata_shown;
 use charliebot_cli_common::route;
 use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::mimetypes;
@@ -591,7 +592,7 @@ fn index_answer(
   let mut event_count = Value::from(0);
   let mut bootstrap_text = None;
   if let Some(meta) = meta {
-    active_session = state.features.store.session_metadata_value(meta);
+    active_session = session_metadata_shown(&state.features.store, meta);
     // A bootstrap that failed to load leaves only its own fields out; the session row itself still renders.
     if let Some(bootstrap) = bootstrap {
       let bootstrap_session = bootstrap.session.as_object().expect("a bootstrap session is an object");
@@ -614,9 +615,7 @@ fn index_answer(
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
   let session_backend = active_session.get("backend").and_then(Value::as_str).unwrap_or_default();
-  let recorded_member = active_session.get(POOL_MEMBER_FIELD).and_then(Value::as_str);
-  let active_pool_member =
-    display_pool_member(cfg, session_backend, recorded_member).map_or(Value::Null, |member| json!(member));
+  let active_pool_member = active_session.get(POOL_MEMBER_FIELD).cloned().unwrap_or(Value::Null);
   let active_native_model = active_session.get(NATIVE_MODEL).cloned().unwrap_or(Value::Null);
   let backend_compact = compact_facts(cfg, &state.features.registry)?;
   let context = json!({
@@ -810,7 +809,7 @@ fn events_page(
   };
   let answer = EVENTS_ANSWER_MEMO.lock().expect("the events answer memo mutex is not poisoned").answer(&key, || {
     let context = json!({
-      "session": state.features.store.session_metadata_value(session),
+      "session": session_metadata_shown(&state.features.store, session),
       "session_id": key.session_id,
       "events_url": key.events_url,
     });

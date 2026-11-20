@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use charliebot_agents::backend_pool::{BackendRoute, RouteTarget, RoutedRequest};
 use charliebot_agents::model_pool;
+use charliebot_agents::pool_display::session_detail_shown;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -1279,7 +1280,7 @@ async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Requ
     let status_code = if status == 202 { StatusCode::ACCEPTED } else { StatusCode::OK };
     return responses::json(status_code, &payload);
   }
-  let detail = match features.store.session_detail(&meta.id) {
+  let detail = match session_detail_shown(&features.store, &meta.id) {
     Ok(detail) => detail,
     Err(error) => return task_http_error(error),
   };
@@ -1306,7 +1307,7 @@ async fn cancel_task(State(features): State<Arc<FeatureContext>>, request: Reque
     Ok(result) => result,
     Err(error) => return task_http_error(error),
   };
-  let mut detail = match features.store.session_detail(&meta.id) {
+  let mut detail = match session_detail_shown(&features.store, &meta.id) {
     Ok(detail) => detail,
     Err(error) => return task_http_error(error),
   };

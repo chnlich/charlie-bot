@@ -8,6 +8,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use axum::routing::delete;
+use charliebot_agents::pool_display::session_metadata_shown;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::{post_only, refuse_other_methods};
@@ -235,7 +236,7 @@ fn resolve_request_caller(request: &Request<Body>, features: &FeatureContext) ->
 }
 
 fn metadata_response(store: &Store, meta: charliebot_store::metadata::SessionMetadata) -> Response {
-  let value = store.session_metadata_value(&meta);
+  let value = session_metadata_shown(store, &meta);
   responses::fast_json(StatusCode::OK, &value)
 }
 

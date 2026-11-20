@@ -736,6 +736,26 @@ impl ServeWorld {
       .args(command);
     harness::run(&mut trial)
   }
+
+  /// One serve trial without --tree-root: its tree goes under this world's TMPDIR.
+  fn serve_default_tree(&self, command: &[&str]) -> Run {
+    let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut trial = harness::command("bash", &self.env);
+    trial
+      .arg(self.repo.join("scripts/release/trial.sh"))
+      .args(["--serve", "--in-caller-scope"])
+      .arg(&self.commit)
+      .arg(self.release.join("charliebot-server"))
+      .arg("--")
+      .args(command);
+    harness::run(&mut trial)
+  }
+}
+
+/// The default tree of a trial of `commit` by this user under `tmp`: the user's id and the commit's first 12 hex.
+fn default_tree(tmp: &Path, commit: &str) -> PathBuf {
+  let uid = fs::metadata(tmp).expect("the TMPDIR").uid();
+  tmp.join(format!("charliebot-release-trial-{uid}-{}", &commit[..12]))
 }
 
 fn mock_home() -> PathBuf {
@@ -867,6 +887,27 @@ fn test_trial_serve_refuses_a_tmux_socket_path_of_108_bytes_or_more() {
     "the refusal made a tree: {}",
     run.describe()
   );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_trial_default_tree_refuses_an_existing_unwritable_tree_and_names_its_path_and_owner() {
+  let mut world = ServeWorld::new();
+  let tmp = world.sandbox.dir("default-tmp");
+  world.env.insert("TMPDIR".to_string(), tmp.display().to_string());
+  let tree = default_tree(&tmp, &world.commit);
+  fs::create_dir(&tree).expect("the existing tree path");
+  fs::set_permissions(&tree, fs::Permissions::from_mode(0o500)).expect("the tree path made unwritable");
+  let mut id = harness::command("id", &world.env);
+  id.arg("-un");
+  let owner = harness::run(&mut id);
+  assert_eq!(owner.code, 0, "{}", owner.describe());
+
+  let run = world.serve_default_tree(&["true"]);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  let refusal = format!("already exists: {} (owned by {})", tree.display(), owner.stdout.trim());
+  assert!(run.stderr.contains(&refusal), "{}", run.describe());
 }
 
 /// A git command in `cwd` with the fixture's identity. A failing command fails the test.

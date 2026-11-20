@@ -23,7 +23,9 @@
 # tests point it at a sandbox.
 #
 # Options: --tree-root <dir> builds the tree as <dir>/trial-<first 12 hex of the commit>, so runs of two commits under
-# one root share no tree; --seed-home <dir> copies each session directory of <dir> into the trial home before the
+# one root share no tree. Without it the tree is ${TMPDIR:-/tmp}/charliebot-release-trial-<uid>-<first 12 hex>, so one
+# user's trials of one commit name one path, and a tree path that already exists refuses the run, naming the path and
+# its owner; --seed-home <dir> copies each session directory of <dir> into the trial home before the
 # server starts, with the boot marker <dir>/boot_recovery.json when present (a task-tree mock home), and the trial
 # keeps its own config.yaml and credentials.yaml; --in-caller-scope keeps the server in the caller's cgroup, which must
 # already cap memory, and skips the scope probe and the scope start and stop. Every read of the release under test goes
@@ -209,14 +211,20 @@ if ! CHOSEN_PORT=$("$TRIAL_CLI" release-helper free-port "$PORT_MIN" "$PORT_MAX"
 fi
 readonly CHOSEN_PORT
 
+# Without --tree-root the tree sits in the caller's TMPDIR. The uid in its name keeps users apart, and a round's write
+# boundary allows the round's TMPDIR, so a round's trial needs no --tree-root.
 if [[ -n $TREE_ROOT ]]; then
   readonly TREE="${TREE_ROOT%/}/trial-${COMMIT:0:12}"
 else
-  readonly TREE="/tmp/charliebot-release-trial-$COMMIT"
+  readonly TREE="${TMPDIR:-/tmp}/charliebot-release-trial-$(id -u)-${COMMIT:0:12}"
+  if [[ $TREE != /* ]]; then
+    preflight_fail "the default trial tree needs an absolute TMPDIR, got: $TREE"
+  fi
 fi
 readonly TMUX_ROOT="$TREE/tmux"
 if [[ -e $TREE ]]; then
-  preflight_fail "trial tree does not already exist: $TREE"
+  tree_owner=$(stat -c %U -- "$TREE") || preflight_fail "the trial tree path exists and its owner cannot be read: $TREE"
+  preflight_fail "the trial tree path already exists: $TREE (owned by $tree_owner)"
 fi
 # tmux keeps each server's socket in $TMUX_TMPDIR/tmux-<uid>/, and sun_path holds 108 bytes with the final NUL.
 TMUX_SOCKET_PATH="$TMUX_ROOT/tmux-$(id -u)/charliebot"
@@ -224,9 +232,9 @@ if (( ${#TMUX_SOCKET_PATH} >= 108 )); then
   preflight_fail "the tmux socket path stays under 108 bytes, the sun_path size with its final NUL: $TMUX_SOCKET_PATH (${#TMUX_SOCKET_PATH} bytes)"
 fi
 
-# The trial tree is the one this run creates: the default tree or the tree under --tree-root. Removal accepts only these.
+# The trial tree is the one this run creates, and removal accepts only it.
 is_trial_tree() {
-  [[ $1 == "/tmp/charliebot-release-trial-$COMMIT" || ( -n $TREE_ROOT && $1 == "${TREE_ROOT%/}/trial-${COMMIT:0:12}" ) ]]
+  [[ $1 == "$TREE" ]]
 }
 
 setup_cleanup_on_exit() {
@@ -241,7 +249,9 @@ setup_cleanup_on_exit() {
 }
 
 if ! mkdir -m 700 "$TREE"; then
-  preflight_fail "create trial tree $TREE"
+  tree_parent=$(dirname -- "$TREE")
+  parent_owner=$(stat -c %U -- "$tree_parent") || exit 2
+  preflight_fail "create trial tree $TREE: mkdir failed above, and its directory $tree_parent is owned by $parent_owner"
 fi
 trap setup_cleanup_on_exit EXIT
 trap 'exit 130' INT

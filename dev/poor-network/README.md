@@ -290,8 +290,11 @@ comment-post dependency, the For-you worker summary, file links, draft cards and
 idle, after the first screen and the catch-up, so an offline open shows those views without their first online use. A
 same-origin loader file whose only function talks to the server is listed in `ON_DEMAND_EXCLUDED` with its reason. The
 cross-origin files stay out: the KaTeX loader and the terminal's xterm files (jsdelivr), and the diff page's CDN files.
-The server's ETag names a file's bytes (`static_files.rs`), so a release that leaves a stored file unchanged revalidates
-it with a 304 and sends no body; the earlier version's copy is the base of that revalidation.
+The server's ETag names a bundled static file's bytes: the package and `web/static` mounts are `StaticDirectory::bundled`
+(`static_files.rs`), and other mounts keep their mtime-and-size tag. So a release that leaves a stored file unchanged
+revalidates it with a 304 and sends no body. Server change: each bundled file's ETag changes once, at the first request after the
+release that carries it. A copy stored under the earlier tag matches no byte tag, so it is fetched whole once; later
+releases revalidate.
 `offline_shell_page.test.js` fails when a loader names a same-origin file that neither list names.
 
 The release open navigates within 10 s of the last read on A's and B's pooled connection. Chrome sends a request on an

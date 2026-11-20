@@ -18,7 +18,7 @@ Each direction keeps its own kind of change, so the review stays with one owner.
 ## Topics
 
 Take a defect that the before screenshot shows at either width, on the mock home described below.
-Use 1440 px as the desktop width and 390 px as the phone width.
+Use the two widths named in the Web UI Screenshots rule in `prompts/task_base.md`.
 The two widths stand for the desktop window and the phone screen.
 The mock home has the production number of sessions, so the pages show the layout that a user sees.
 Apply the screen-space rule in `AGENTS.md` to each defect you choose.
@@ -52,7 +52,7 @@ The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CH
 
 Take the screenshots with the playwright chromium under `~/.cache/ms-playwright`.
 Send `CHARLIEBOT_SERVE_AUTH_HEADER` with each page request, so that the pages load with the access key.
-Take one screenshot per width that the web UI screenshot rule names (`prompts/task_base.md`, section `web_ui_screenshots`), on each side: before the change, and the same widths after it.
+Take one screenshot per width named in the Web UI Screenshots rule in `prompts/task_base.md`, on each side: before the change, and the same widths after it.
 The pair at each width shows the change to the user.
 
 ## Evidence

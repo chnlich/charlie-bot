@@ -62,6 +62,21 @@ The codebase has a single user. Apply these principles:
     recursive search of the session store or a parent directory that reaches run logs. Its refusal
     names the bounded form.
 
+### Web UI Screenshots
+For any change that alters what a CharlieBot web page shows, use the reviewed `implement` workflow. If a quick-edit task
+would alter a page, report that it needs rerouting before editing.
+- Capture screenshots of the changed state before you commit.
+- Cover each state the change adds or alters, including open trays, menus and dialogs.
+- Take each screenshot at 1280 px and at 390 px width.
+- Name each screenshot file by its absolute path in the commit or PR body, and keep the files out of the commits.
+
+When you review such a change, check each named screenshot before you land it.
+- Look for overlap with page content, clipping and missing controls in every state the screenshots show.
+- Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.
+
+`charliebot land` refuses a landing whose diff changes `web/` or a page template under `prompts/` unless its PR body
+names a screenshot at 1280 px and a screenshot at 390 px by absolute path.
+
 <!-- section: skills_discovery -->
 ## Skills Discovery
 - **Before starting any task**, check for skills relevant to the target repo or task domain.
@@ -96,19 +111,4 @@ before anything else.
 ## Text a model reads
 - **Text a model reads**: before you write text for a model, read the "Text a model reads"
   subsection of `~/workspace/charlie-bot/prompts/master.md`.
-
-<!-- section: web_ui_screenshots -->
-## Web UI Screenshots
-When your change goes through `charliebot land` and alters what a CharlieBot web page shows, take screenshots of the
-changed state before you commit.
-- Cover each state the change adds or alters, including open trays, menus and dialogs.
-- Take each screenshot at 1280 px and at 390 px width.
-- Name each screenshot file by its absolute path in the commit body, and keep the files out of the commits.
-
-When you review such a change, check each named screenshot before you land it.
-- Look for overlap with page content, clipping and missing controls in every state the screenshots show.
-- Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.
-
-`charliebot land` refuses a landing whose diff changes `web/` or a page template under `prompts/` unless its PR body
-names a screenshot at 1280 px and a screenshot at 390 px by absolute path.
 

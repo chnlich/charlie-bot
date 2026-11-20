@@ -28,15 +28,13 @@ const COMMON_SECTIONS: [&str; 4] = [
 ];
 
 /// The base sections of a worker and a review contract. Workers carry the text-writing rule here; managers carry it as
-/// a subsection of `prompts/master.md` instead. A review contract also carries the screenshot rule here, because the
-/// implement worker and its reviewer read the same section.
-const WORKER_BASE_SECTIONS: [&str; 6] = [
+/// a subsection of `prompts/master.md` instead.
+const WORKER_BASE_SECTIONS: [&str; 5] = [
   spawner_prompt::CODING_PRINCIPLES_SECTION,
   spawner_prompt::SKILLS_DISCOVERY_SECTION,
   spawner_prompt::PROFILE_HOME_SECTION,
   spawner_prompt::REMOTE_SCRATCH_SECTION,
   spawner_prompt::TEXT_MODEL_READS_SECTION,
-  spawner_prompt::WEB_UI_SCREENSHOTS_SECTION,
 ];
 
 /// One chain link of the subtree scope: a node from the root down to this node, with its subtree rule ref.

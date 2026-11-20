@@ -151,6 +151,11 @@ pub fn display(path: &Path) -> String {
   path.to_string_lossy().into_owned()
 }
 
+/// The UTF-8 text of `path`, or `None` when its OS bytes are not valid UTF-8.
+pub fn utf8(path: &Path) -> Option<&str> {
+  path.to_str()
+}
+
 /// The last component, after empty and `.` components are dropped. A `..`
 /// component is kept.
 pub fn name(path: &str) -> &str {

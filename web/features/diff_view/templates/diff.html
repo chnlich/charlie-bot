@@ -209,10 +209,13 @@
     <div id="diff-output"></div>
   </main>
 
+  {# The page's own scripts travel inside the document, so the first paint waits for no second request and their
+     text compresses against the document's. Each keeps its own element, so one script's throw does not stop the
+     next. #}
   <script>{{ icon_script(['comment', 'disclosure', 'expand-down', 'expand-up', 'loading']) }}{% include 'js/icons.js' %}</script>
-  <script src="/static/features/diff_view/diff_page.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/comment_post.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/utils.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/features/diff_view/diff_comments.js?v={{ static_asset_version|urlencode }}"></script>
+  <script>{% include 'diff_page.js' %}</script>
+  <script>{% include 'js/comment_post.js' %}</script>
+  <script>{% include 'js/utils.js' %}</script>
+  <script>{% include 'diff_comments.js' %}</script>
 </body>
 </html>

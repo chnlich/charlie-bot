@@ -1,20 +1,24 @@
 // The diff page's "Open in code-server" button: the server starts code-server on
 // the repository the repo field names, and the page opens it in a new tab.
 // Progress shows in the diff page's #status line and a failure in its #error
-// box, the two elements the diff page reports through. The script loads
-// deferred, so every element it reads exists when it runs.
+// box, the two elements the diff page reports through. The script runs where the
+// toolbar declares the button, above the main area that holds those two elements,
+// so it binds the button there and reads the elements it reports through when the
+// button is clicked.
 (() => {
   const button = document.getElementById('open-codeserver');
-  const repoInput = document.getElementById('repo-input');
-  const statusEl = document.getElementById('status');
-  const errorEl = document.getElementById('error');
 
   function setError(msg) {
+    const errorEl = document.getElementById('error');
     errorEl.textContent = msg;
     errorEl.classList.remove('hidden');
   }
 
-  function clearError() { errorEl.classList.add('hidden'); errorEl.textContent = ''; }
+  function clearError() {
+    const errorEl = document.getElementById('error');
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+  }
 
   function responseDetail(data, status) {
     const detail = (data && (data.detail?.message || data.detail)) || `HTTP ${status}`;
@@ -22,6 +26,8 @@
   }
 
   async function openCodeServer() {
+    const repoInput = document.getElementById('repo-input');
+    const statusEl = document.getElementById('status');
     clearError();
     const repo = repoInput.value.trim();
     if (!repo) {

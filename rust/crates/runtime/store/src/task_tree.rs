@@ -21,6 +21,7 @@ use crate::event_types::ChatEvent;
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
+use crate::fact_scan::ColdSnapshot;
 use crate::layout;
 use crate::metadata::{
   EventRef, PROMPT_RULES_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE,
@@ -631,12 +632,16 @@ impl Store {
           if should_stop() {
             return Ok(None);
           }
-          return Ok(Some(self.scan_cold_snapshot(session_id)?.facts()));
+          match self.scan_cold_snapshot(session_id)? {
+            ColdSnapshot::Scanned(scanned) => return Ok(Some(scanned.facts())),
+            ColdSnapshot::Warm(events) => events,
+          }
+        } else {
+          let Some(events) = self.live_events_with_generation_until(session_id, should_stop)? else {
+            return Ok(None);
+          };
+          events
         }
-        let Some(events) = self.live_events_with_generation_until(session_id, should_stop)? else {
-          return Ok(None);
-        };
-        events
       }
     };
     self.node_facts_of(session_id, generation, list_identity, &live, should_stop)
@@ -806,9 +811,13 @@ impl Store {
             .expect("the checkpoint fold memoizes its state under the log identity");
           return Ok((version, self.node_state_view(session_id, facts)?));
         }
-        // The scan folds the log's snapshot and its seal memoizes the state, so a later read answers without a scan. A
-        // refused seal leaves the snapshot's version unmemoized, and the next read scans again.
-        let scanned = self.scan_cold_snapshot(session_id)?;
+        // The scan folds the log's snapshot and its seal memoizes the state, so a later read answers without a scan.
+        let scanned = match self.scan_cold_snapshot(session_id)? {
+          ColdSnapshot::Scanned(scanned) => scanned,
+          ColdSnapshot::Warm((generation, list_identity, live)) => {
+            return self.node_state_of(session_id, generation, list_identity, &live);
+          }
+        };
         self.history_work.node_state_full_folds.fetch_add(1, Ordering::Relaxed);
         self.history_work.node_state_folded_events.fetch_add(scanned.folded_events(), Ordering::Relaxed);
         let (sealed_identity, sealed_archived) = scanned.snapshot_key();

@@ -36,7 +36,8 @@ const CATCHUP_TO_SHOW_MS = 1000;
 // Point 2: the tab is shown this long after the reload navigation starts.
 const NAVIGATION_TO_SHOW_MS = 300;
 const RELEASE_MARK = '// bench restart release';
-const BOOT_SCRIPT = 'window.__bootAt = Date.now();';
+const BOOT_SCRIPT =
+  "window.__bootAt = Date.now(); document.addEventListener('charliebot:offline-shell-warm', (event) => { window.__warmReport = event.detail; });";
 const NAVIGATION_RACE = /Execution context was destroyed|Cannot find context with specified id|navigated or closed/;
 
 // The server the bench restarts: the trial's own at first, then the replacement this module started.
@@ -191,6 +192,7 @@ function observe(tab, tag, bootAt0) {
           lastBoot = page.boot;
           state.documents.push(at);
           state.loadedAt = null;
+          state.rowAt = null;
         }
         if (state.documents.length > 0 && page.complete && state.loadedAt === null) {
           state.loadedAt = at;
@@ -268,6 +270,7 @@ async function restartRep(ctx, name) {
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_TIMEOUT_MS);
+    await waitFor(() => tab.evaluate('Boolean(window.__warmReport)'), SETTLE_TIMEOUT_MS, 'the offline shell warm');
     if (cell.hidden) {
       await tabs.show(other);
     }
@@ -310,7 +313,13 @@ async function restartRep(ctx, name) {
       restoreAt = Date.now();
       await tabs.show(tab);
     }
-    const rowAt = await waitFor(() => observer.state.rowAt, SHOW_TIMEOUT_MS, 'the probe row on screen');
+    const rowAt = await waitFor(
+      () => (cell.point === 'navigation' && !capped
+        ? (observer.state.documents.length > 0 ? observer.state.rowAt : null)
+        : observer.state.rowAt),
+      SHOW_TIMEOUT_MS,
+      'the probe row on screen',
+    );
     observer.state.stop = true;
     await observer.done;
     // The page's first catch-up after the release: a hidden swap navigates after it, so the gap to the first document

@@ -1,8 +1,9 @@
 //! The synthetic session home of the improve rounds. `generate` writes it, and `check` reads a served copy back against
 //! the manifest that `generate` wrote beside it.
 //!
-//! The home holds one directory per session, with `metadata.json` and `data/chat_events.jsonl`, and one `manifest.json`
-//! beside the sessions. The event-log sizes follow the production shape in `session::SIZE_KNOTS`. Every sentence is
+//! The home holds one directory per session, with `metadata.json` and `data/chat_events.jsonl`, one `manifest.json`
+//! beside the sessions, and the scheduled-task files of `.cron.d` (`cron`). The event-log sizes follow the production
+//! shape in `session::SIZE_KNOTS`. Every sentence is
 //! written for this crate, so no text comes from a real session. One seed gives the same bytes on every run, so the
 //! servers under test load the same data.
 //!
@@ -13,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod check;
+mod cron;
 pub mod generate;
 mod manifest;
 pub mod recovery_check;
@@ -23,7 +25,7 @@ mod text;
 
 /// The data version. It names the mock home's directory, `~/improve/mock-home/<version>/`, and changes with any change
 /// to the bytes that `generate` writes.
-pub const DATA_VERSION: &str = "4";
+pub const DATA_VERSION: &str = "5";
 /// The session count of the production home, and the default of `generate`: the live store's session directories when
 /// it was measured (14,451 at 18:04Z on 2026-11-19).
 pub const PRODUCTION_SESSIONS: usize = 14_451;
@@ -50,7 +52,8 @@ pub const SEARCH_WORDS: SearchWords = SearchWords { common: "the", hits_200: "si
 #[serde(rename_all = "kebab-case")]
 pub enum Shape {
   /// Sessions with metadata and an event log: the home of the hourly improve rounds, named by `DATA_VERSION`. The newest
-  /// rows, `NEWEST_WEB_STATUS_ROWS` of them, carry a `web_status` goal.
+  /// rows, `NEWEST_WEB_STATUS_ROWS` of them, carry a `web_status` goal. Four of its manager sessions, in the middle of
+  /// the listing, carry the cron fixture's tasks, so a served round shows cron-bound session pages.
   #[default]
   Default,
   /// Sessions of the default size curve, written as the task nodes of a production startup (`task_tree`).

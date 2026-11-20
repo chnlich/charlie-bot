@@ -1087,6 +1087,7 @@ dependencies = [
  "anyhow",
  "charliebot-cli-common",
  "charliebot-core",
+ "charliebot-cron",
  "charliebot-session-api",
  "charliebot-store",
  "chrono",

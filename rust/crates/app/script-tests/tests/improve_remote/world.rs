@@ -179,6 +179,12 @@ if [[ -n ${FAKE_CLAUDE_REVIEW_TASK:-} ]]; then
   charlie-code --json --task-file "$FAKE_CLAUDE_REVIEW_TASK" \
     --session-dir "$HOME/improve/$IMPROVE_DIRECTION/clc-sessions"
 fi
+# One write of the round: the gh command a test sets, run in the round's environment, so the round's write checks
+# see it as the member's own call does.
+if [[ -n ${FAKE_CLAUDE_COMMAND:-} ]]; then
+  bash -c "$FAKE_CLAUDE_COMMAND"
+  exit "$?"
+fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
 "#;
 
@@ -529,11 +535,28 @@ impl World {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");
-    for name in
-      ["remote-launch.sh", "remote-runner.sh", "review-charlie-code.sh", "inflight-files.sh", "member_kinds.txt"]
-    {
+    for name in [
+      "remote-launch.sh",
+      "remote-runner.sh",
+      "review-charlie-code.sh",
+      "inflight-files.sh",
+      "member_kinds.txt",
+      "gh-shim.sh",
+    ] {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }
+    // The runner installs the round's gh shim and its scanner from the commit's objects, and its clone check requires
+    // the clone's pre-push hook. The commit carries them as a clone of the real repository does.
+    let hooks = sandbox.dir("repo/dev/git-hooks");
+    harness::write_executable(
+      &hooks.join("pre-push"),
+      std::fs::read(harness::repo_root().join("dev/git-hooks/pre-push")).unwrap(),
+    );
+    harness::copy_file(
+      &harness::repo_root().join("dev/check-skills-host-leak.sh"),
+      &repo.join("dev/check-skills-host-leak.sh"),
+    );
+    harness::copy_file(&harness::repo_root().join("dev/leak-patterns.sh"), &repo.join("dev/leak-patterns.sh"));
     let local_home = sandbox.dir("local");
     let remote_home = sandbox.dir("remote");
     let profile_home = sandbox.dir("profile");
@@ -599,6 +622,13 @@ impl World {
     fs::create_dir_all(&clone).expect("the direction clone");
     git(&sandbox, &git_env, &clone, &["init", "-q", "-b", "main"]);
     git(&sandbox, &git_env, &clone, &["config", "core.hooksPath", "dev/git-hooks"]);
+    // The clone's pre-push hook, which the runner's clone check requires.
+    let clone_hooks = clone.join("dev/git-hooks");
+    fs::create_dir_all(&clone_hooks).expect("the clone's hooks directory");
+    harness::write_executable(
+      &clone_hooks.join("pre-push"),
+      std::fs::read(harness::repo_root().join("dev/git-hooks/pre-push")).unwrap(),
+    );
     git(&sandbox, &git_env, &clone, &["remote", "add", "origin", "https://example.invalid/someone/charlie-bot.git"]);
     let evidence = round_root.join("evidence");
     fs::create_dir_all(&evidence).expect("the evidence directory");

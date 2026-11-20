@@ -7,8 +7,9 @@
 //!
 //! The rules live beside the data each check reads: `group_of_dir` and `allowed_groups` hold the group mapping and
 //! the directions. `RUNTIME_LAYERS` holds the layer order, `module_outgoing` the module-graph edges, `OWNER_TABLE`
-//! and `SPELLING_CLASSES` the owned names and name classes, `FORMAT_TABLE` the file-kind writers, and
-//! `UI_TEXT_EXEMPTIONS` the files whose Han, kana or Hangul letters a model or a user reads.
+//! and `SPELLING_CLASSES` the owned names and name classes, `FORMAT_TABLE` the file-kind writers,
+//! `POOL_MEMBER_RAW_RECORDS` and `POOL_MEMBER_FILTERS` the unfiltered session-record calls and the display filters,
+//! and `UI_TEXT_EXEMPTIONS` the files whose Han, kana or Hangul letters a model or a user reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1813,8 +1814,13 @@ const FORMAT_TABLE: &[FormatRow] = &[
 struct FunctionRecord {
   name: String,
   line: usize,
+  /// The line of the body's closing brace, or of the name when a trait method has no body.
+  end: usize,
   /// The identifiers the body names: path segments, method names and the identifiers in macro tokens.
   names: BTreeSet<String>,
+  /// The last segment of each function path the body calls, and each method name it calls. A call inside macro tokens
+  /// is not a call expression to the syntax tree, so it is not recorded here.
+  calls: BTreeSet<String>,
   /// The decode calls, by callee path.
   decodes: BTreeSet<String>,
   /// The encode calls, by callee path.
@@ -1879,11 +1885,13 @@ struct FunctionCollector {
 }
 
 impl FunctionCollector {
-  fn enter(&mut self, name: &syn::Ident) {
+  fn enter(&mut self, name: &syn::Ident, end: usize) {
     self.open.push(FunctionRecord {
       name: name.to_string(),
       line: name.span().start().line,
+      end,
       names: BTreeSet::new(),
+      calls: BTreeSet::new(),
       decodes: BTreeSet::new(),
       encodes: BTreeSet::new(),
       environment_writes: Vec::new(),
@@ -1919,19 +1927,23 @@ impl<'ast> Visit<'ast> for FunctionCollector {
   }
 
   fn visit_item_fn(&mut self, node: &'ast ItemFn) {
-    self.enter(&node.sig.ident);
+    self.enter(&node.sig.ident, node.block.brace_token.span.close().end().line);
     syn::visit::visit_item_fn(self, node);
     self.exit();
   }
 
   fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
-    self.enter(&node.sig.ident);
+    self.enter(&node.sig.ident, node.block.brace_token.span.close().end().line);
     syn::visit::visit_impl_item_fn(self, node);
     self.exit();
   }
 
   fn visit_trait_item_fn(&mut self, node: &'ast TraitItemFn) {
-    self.enter(&node.sig.ident);
+    let end = match &node.default {
+      Some(block) => block.brace_token.span.close().end().line,
+      None => node.sig.ident.span().end().line,
+    };
+    self.enter(&node.sig.ident, end);
     syn::visit::visit_trait_item_fn(self, node);
     self.exit();
   }
@@ -1966,6 +1978,9 @@ impl<'ast> Visit<'ast> for FunctionCollector {
       && let Some(record) = self.current()
     {
       let path = path_segments(&callee.path);
+      if let Some(name) = path.last() {
+        record.calls.insert(name.clone());
+      }
       record.note_call(&path);
       record.note_environment_write(&path, callee.path.span().start().line);
     }
@@ -1976,6 +1991,7 @@ impl<'ast> Visit<'ast> for FunctionCollector {
     if let Some(record) = self.current() {
       let method = node.method.to_string();
       record.names.insert(method.clone());
+      record.calls.insert(method.clone());
       record.note_call(std::slice::from_ref(&method));
     }
     syn::visit::visit_expr_method_call(self, node);
@@ -2029,6 +2045,58 @@ fn production_functions(items: &[Item]) -> Vec<FunctionRecord> {
     collector.visit_item(item);
   }
   collector.functions
+}
+
+/// The calls that serialize a session record without the pool member filter. A response that calls one shows the
+/// recorded `pool_member` only through a function in `POOL_MEMBER_FILTERS`.
+const POOL_MEMBER_RAW_RECORDS: &[&str] = &["session_metadata_value", "session_detail"];
+
+/// The names through which a response shows the member its pool lists: the predicate and the helpers that call it.
+const POOL_MEMBER_FILTERS: &[&str] =
+  &["display_pool_member", "show_display_member", "session_metadata_shown", "session_detail_shown"];
+
+/// A filter counts when the body names it, macro tokens included: a status row builds its `pool_member` inside `json!`.
+fn shows_pool_member(function: &FunctionRecord) -> bool {
+  POOL_MEMBER_FILTERS.iter().any(|name| function.names.contains(*name))
+}
+
+/// The pool member rule's failures: each production function that serializes a session record, or writes the
+/// `pool_member` key, and names no display filter. The store builds the raw record for its callers, so its own
+/// functions are not responses.
+fn pool_member_failures(workspace: &Workspace) -> Vec<String> {
+  let mut failures = BTreeSet::new();
+  for item in &workspace.crates {
+    for target in &item.targets {
+      for module in target.modules.values() {
+        let file = rel(&workspace.root, &module.file);
+        for function in &module.functions {
+          let serializes = POOL_MEMBER_RAW_RECORDS.iter().any(|name| function.calls.contains(*name));
+          if item.key() != "runtime/store" && serializes && !shows_pool_member(function) {
+            failures.insert(format!(
+              "{file}:{}: `{}` serializes a session record without a pool member filter. Show the record through \
+               `charliebot_agents::pool_display::session_metadata_shown` or `session_detail_shown`.",
+              function.line, function.name
+            ));
+          }
+        }
+        for literal in module.literals.iter().filter(|literal| literal.value == "pool_member") {
+          let owner = module
+            .functions
+            .iter()
+            .filter(|function| function.line <= literal.line && literal.line <= function.end)
+            .max_by_key(|function| function.line);
+          if let Some(function) = owner.filter(|function| !shows_pool_member(function)) {
+            failures.insert(format!(
+              "{file}:{}: `{}` writes the `pool_member` key without a pool member filter. Pass the member through \
+               `BackendsConfig::display_pool_member` first.",
+              function.line, function.name
+            ));
+          }
+        }
+      }
+    }
+  }
+  failures.into_iter().collect()
 }
 
 /// The format rule's failures: each production function outside a file kind's owner that names one of the kind's
@@ -2559,6 +2627,48 @@ fn no_name_is_spelled_outside_its_owner() {
 fn every_file_kind_is_read_and_written_by_its_owner() {
   let failures = format_failures(real_workspace(), FORMAT_TABLE);
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+#[ignore = "integration"]
+fn every_response_shows_the_pool_member_its_pool_lists() {
+  let failures = pool_member_failures(real_workspace());
+  assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_pool_member_rule_finds_each_unfiltered_send() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  let source = r##"pub fn unfiltered_record(store: &Store, meta: &SessionMetadata) -> Value {
+  store.session_metadata_value(meta)
+}
+
+pub fn filtered_record(store: &Store, meta: &SessionMetadata) -> Value {
+  session_metadata_shown(store, meta)
+}
+
+pub fn unfiltered_row(member: &str) -> Value {
+  json!({ "pool_member": member })
+}
+
+pub fn filtered_row(backends: &BackendsConfig, member: &str) -> Value {
+  json!({ "pool_member": backends.display_pool_member("pool", member) })
+}
+"##;
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/features/responder"])),
+      ("crates/features/responder/Cargo.toml", crate_manifest("charliebot-responder", &[], &[])),
+      ("crates/features/responder/src/lib.rs", source.to_string()),
+    ],
+  );
+  let failures = pool_member_failures(&load_workspace(root));
+  assert_eq!(failures.len(), 2, "{}", failures.join("\n"));
+  assert!(failures[0].starts_with("crates/features/responder/src/lib.rs:1: `unfiltered_record`"), "{}", failures[0]);
+  assert!(failures[1].starts_with("crates/features/responder/src/lib.rs:9: `unfiltered_row`"), "{}", failures[1]);
 }
 
 #[test]

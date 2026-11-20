@@ -686,6 +686,30 @@ test('a copy-less list re-reads its copy after one wait cap, then takes the netw
   assert.equal(await result.response.text(), '[]');
 });
 
+test('a list whose session has no copy takes the network, and offline the newest stored list with the same filters answers', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout', 'Date']});
+  const h = harness();
+  h.state.network = async () => new Response('["one"]', {status: 200, headers: {ETag: '"l1"'}});
+  await answerListWithCapWait(t, h, request(LIST_URL));
+  t.mock.timers.tick(1000);
+
+  const otherSession = ORIGIN + '/api/sessions/?compact=1&screen=1&active=session-b';
+  h.state.network = async () => new Response('["two"]', {status: 200, headers: {ETag: '"l2"'}});
+  const online = await answerListWithCapWait(t, h, request(otherSession));
+  assert.equal(await online.response.text(), '["two"]', 'online, a session with no copy takes the network answer');
+  t.mock.timers.tick(1000);
+
+  h.state.network = async () => { throw new TypeError('offline'); };
+  const offline = await answerListWithCapWait(t, h, request(ORIGIN + '/api/sessions/?compact=1&screen=1&active=session-c'));
+  assert.equal(await offline.response.text(), '["two"]', 'offline, the newest stored list with the same filters answers');
+  assert.ok(offline.response.headers.get(STORED_AT), 'the answer names its stored time, so the page marks it a copy');
+
+  const otherFilters = answer(h, request(ORIGIN + '/api/sessions/?compact=0&screen=1&active=session-c')).catch((error) => error);
+  await flush();
+  await settleCaps(t, 1);
+  assert.equal((await otherFilters).message, 'offline', 'a list with other filters has no stored copy to answer it');
+});
+
 test('a full store evicts the session opened longest ago and then stores the new first screen', async () => {
   const h = harness();
   const {copies: store, shells} = await openStores(h);

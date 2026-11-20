@@ -124,7 +124,8 @@ async function answerFile(event, request) {
 // wait cap: the network answers if it gives a usable 200 first; otherwise the copy answers and the network fetch is
 // aborted there. A sidebar list is not raced. Its copy is re-read once after the wait cap, and the network answers
 // only when that read misses too: a list the copy would beat is a fetch aborted mid-body, and the bytes it already
-// put on the link delay the requests that follow it. Without a stored copy the network answers.
+// put on the link delay the requests that follow it. Without a stored copy the network answers, and a list the network
+// cannot reach is answered by the newest stored list with the same filters (networkListOrNewestCopy).
 async function answerCopy(event, request) {
   const cache = await openCopyCache();
   if (request.headers.get(NETWORK_ONLY_HEADER) === '1') {
@@ -138,7 +139,7 @@ async function answerCopy(event, request) {
       queueCopyRefresh(request.url);
       return copy;
     }
-    return networkAnswer(event, request);
+    return networkListOrNewestCopy(event, request, cache);
   }
   const copy = await cache.match(request.url);
   if (copy) {
@@ -171,6 +172,38 @@ async function answerCopy(event, request) {
 async function rereadAfterWaitCap(cache, url) {
   await waitCap(WAIT_CAP_MS);
   return cache.match(url);
+}
+
+// A list the session has no copy for takes the network. When the network is down, the newest stored list with the
+// same filters answers it: a list is stored under the session that opened it (`active`), so an offline page with no
+// copy of its own session still paints the sidebar. The copy's stored-at header marks its rows as a copy.
+async function networkListOrNewestCopy(event, request, cache) {
+  try {
+    return await networkAnswer(event, request);
+  } catch (error) {
+    const copy = await newestListCopy(cache, request.url);
+    if (copy === null) throw error;
+    return copy;
+  }
+}
+
+async function newestListCopy(cache, url) {
+  const filters = listFilters(url);
+  let newest = null;
+  for (const {url: storedUrl} of await cache.keys()) {
+    if (new URL(storedUrl).pathname !== '/api/sessions/' || listFilters(storedUrl) !== filters) continue;
+    const copy = await cache.match(storedUrl);
+    if (!copy) continue;
+    if (newest === null || copy.headers.get(STORED_AT_HEADER) > newest.headers.get(STORED_AT_HEADER)) newest = copy;
+  }
+  return newest;
+}
+
+// A sidebar list's URL without the session it names as `active`: the filters the list answers.
+function listFilters(url) {
+  const filtered = new URL(url);
+  filtered.searchParams.delete('active');
+  return filtered.href;
 }
 
 // The abortable fetch of the first screen's race keeps its controller in answerCopy, where the race can stop it.

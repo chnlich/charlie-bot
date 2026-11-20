@@ -50,6 +50,15 @@ mod tests {
   }
 
   #[test]
+  fn gpt_6_2_ledger_ids_are_billed_at_their_list_rates() {
+    let usage = json!({"input_tokens": 1000000, "cached_input_tokens": 400000, "output_tokens": 1000000});
+    let astra = calculate_codex_usage_cost_usd("gpt-6.2-astra", usage.as_object().unwrap()).unwrap();
+    assert!((astra.unwrap() - 44.96).abs() < 1e-9);
+    let sol = calculate_codex_usage_cost_usd("gpt-6.2-sol", usage.as_object().unwrap()).unwrap();
+    assert!((sol.unwrap() - 11.24).abs() < 1e-9);
+  }
+
+  #[test]
   fn unpriced_and_unnamed_models_have_no_cost() {
     assert_eq!(cost_usd("gpt-unknown", 1.0, 0.0, 0.0), None);
     assert_eq!(cost_usd("", 1.0, 0.0, 0.0), None);

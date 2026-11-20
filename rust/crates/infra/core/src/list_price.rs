@@ -212,6 +212,27 @@ static LIST_PRICES: &[ListPrice] = &[
     source_url: KIMI,
     read_on: READ_ON,
   },
+  // OpenAI's Standard rates, for prompts up to 272,000 input tokens; the Batch, Fast and Ultrafast rates are not used.
+  // The ledger keeps no prompt length, so a longer prompt is priced at these rates too. OpenAI publishes 30-minute and
+  // 12-hour cache writes; the ledger merges them, so use the 30-minute rate.
+  ListPrice {
+    model: "gpt-6.2-astra",
+    input: 8.00,
+    cache_read: 0.40,
+    cache_write: Some(10.00),
+    output: 40.00,
+    source_url: OPENAI,
+    read_on: READ_ON,
+  },
+  ListPrice {
+    model: "gpt-6.2-sol",
+    input: 2.00,
+    cache_read: 0.10,
+    cache_write: Some(2.50),
+    output: 10.00,
+    source_url: OPENAI,
+    read_on: READ_ON,
+  },
   // OpenAI's short-context rates, for prompts up to 272,000 input tokens. The ledger keeps no prompt length, so a
   // longer prompt is priced at these rates too.
   ListPrice {
@@ -368,6 +389,8 @@ mod tests {
       ("swe-2-max", 3.0, 0.30, None, 15.0),
       ("gemini-4-argon-high", 4.0, 0.20, None, 20.0),
       ("gemini-3.8-flash-high", 1.5, 0.15, None, 7.5),
+      ("gpt-6.2-astra", 8.0, 0.40, Some(10.0), 40.0),
+      ("gpt-6.2-sol", 2.0, 0.10, Some(2.5), 10.0),
     ] {
       let price = lookup(name).unwrap();
       assert_eq!((price.input, price.cache_read, price.cache_write, price.output), (input, read, write, output));

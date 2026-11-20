@@ -160,7 +160,7 @@ The pinned target directory stays inside the write boundary.
 
 ## Step 5: write the evidence and open the pull request
 
-The pull request's evidence carries numbers, commands and conclusions only.
+The pull request's evidence carries numbers, commands and conclusions.
 Keep every screenshot, measurement log and other evidence file in the round's evidence directory, `~/improve/<direction>/evidence/<UTC round start, YYYYMMDDTHHMMZ>/`, one directory per round.
 Hourly rounds once overwrote each other's files under a per-day path, so the timestamp separates the rounds.
 The clone holds code only.
@@ -172,6 +172,7 @@ Before a `trial.sh --serve` run, set `CHARLIEBOT_RELEASE_RUN_DIR` to that round 
 The trial writes its own evidence under that directory.
 Without the variable the trial writes `~/charliebot-release-logs`, which the write boundary refuses, so the step fails.
 
+The pull request names each screenshot by its file name and width, at the widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets.
 The pull request names no link to an evidence file and no host path; the evidence text stands on its own.
 Step 9 carries the evidence files to the user.
 
@@ -186,7 +187,7 @@ One pull request per round is the unit that CI and the reviewer check.
 ## Step 6: review the diff
 
 The review is one direct `charlie-code` run, outside the clone.
-The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then one final line `PR: <number> <url>`.
+The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
 
 The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
 The command passes no `--model` or `--api-base` flag.

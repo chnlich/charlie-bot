@@ -50,9 +50,9 @@ server reads data outside the shared mock home, and it stops the round before an
 
 ## Screenshots
 
-The round takes one before screenshot and one after screenshot for each width that the Web UI Screenshots rule in
-`prompts/task_base.md` names. Each pair shows the same view before and after the change, so the reader can see the
-user-facing difference.
+For each width that the Web UI Screenshots rule in `prompts/task_base.md` names, the round takes a before and an after
+screenshot of each state the change alters, and an after screenshot of each state the change adds. Each pair shows the
+same view before and after the change, so the reader can see the user-facing difference.
 
 ## Evidence
 

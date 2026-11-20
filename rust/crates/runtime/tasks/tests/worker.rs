@@ -646,6 +646,46 @@ async fn test_worker_relays_a_rejected_run_onto_another_account() -> anyhow::Res
   Ok(())
 }
 
+/// A rejected process that ends with a clean result is not relayed at exit 0: one process runs, the exit code comes back
+/// as returned, and the log holds no error.
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_worker_clean_end_after_a_rejection_is_not_relayed_at_exit_zero() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![exits(&[assistant_text("done"), rate_limit("rejected", 1.0), result()], 0)]);
+  let config = pooled_config(&root, &["main", "ext-1", "ext-2"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  assert_eq!(task_worker.run().await?, 0);
+  assert_eq!(scripts.builds().len(), 1, "a clean end starts no relay process");
+  assert_eq!(task_worker.account_relays(), 0);
+  let logged = read_events(&root.events_log())?;
+  assert!(logged.iter().all(|event| event["type"] != ET::ERROR), "the rejection is not an error: {logged:?}");
+  Ok(())
+}
+
+/// The same clean end at exit 1: the exit code is not part of the decision, so the run is not relayed and the code is
+/// recorded as the process returned it.
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_worker_clean_end_after_a_rejection_is_not_relayed_at_exit_one() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![exits(&[assistant_text("done"), rate_limit("rejected", 1.0), result()], 1)]);
+  let config = pooled_config(&root, &["main", "ext-1", "ext-2"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  assert_eq!(task_worker.run().await?, 1, "the exit code is recorded as the process returned it");
+  assert_eq!(scripts.builds().len(), 1, "a clean end starts no relay process");
+  assert_eq!(task_worker.account_relays(), 0);
+  Ok(())
+}
+
 #[tokio::test]
 #[ignore = "integration"]
 async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::Result<()> {

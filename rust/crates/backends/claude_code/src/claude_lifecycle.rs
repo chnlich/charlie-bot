@@ -991,6 +991,33 @@ mod tests {
     })
   }
 
+  fn clean_result() -> Value {
+    json!({"type": "result", "subtype": "success", "is_error": false, "result": "done"})
+  }
+
+  /// After a run ends cleanly on a login that rejected a request, the pool's next real pick skips that login: its
+  /// headroom is zero until the reset. The run ends with no refusal, so no member is recorded out.
+  #[tokio::test]
+  async fn a_new_pick_after_a_clean_end_skips_the_login_that_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let (cfg, _current) = current_and_fresh(root.path());
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+    let first = context(cfg.clone(), LaunchKind::Task, None, None, None);
+    let launch = lifecycle.place(&first).await.unwrap();
+    assert_eq!(launch.account_label.as_deref(), Some("current"));
+
+    let mut watch = lifecycle.watch(&first, &launch).expect("a pooled launch carries a watch");
+    assert!(!watch.observe(&rate_limit("rejected", 1.0)));
+    assert!(!watch.observe(&clean_result()));
+    assert!(!watch.wants_next(0, ""), "the clean end is not relayed");
+
+    let mut next = context(cfg, LaunchKind::Task, None, None, None);
+    next.run_id = Some("next-run".to_string());
+    let next_launch = lifecycle.place(&next).await.expect("the pool still has a login with headroom");
+    assert_eq!(next_launch.account_label.as_deref(), Some("fresh"));
+  }
+
   #[tokio::test]
   async fn a_keyed_round_at_the_warning_line_is_not_relayed() {
     let root = tempfile::tempdir().unwrap();

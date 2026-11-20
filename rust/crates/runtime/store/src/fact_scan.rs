@@ -255,10 +255,10 @@ impl Store {
   }
 
   /// The cold node read's fold: the live log and its archive scanned as one snapshot, then sealed under the log's
-  /// identity. The scan runs under the session's event-cache lock, which a whole-log load also holds for its read, so no
-  /// append lands between the bytes the scan reads and its identity check. The cache stays cold, and the read parses no
-  /// chat content. The seal runs after the lock is released and is refused when an append lands in that gap. The read
-  /// then still answers from its snapshot, and the next read scans the appended events.
+  /// identity. The scan runs under the session's event-cache lock, which a whole-log load also holds for its read, so
+  /// no append lands between the bytes the scan reads and its identity check. The cache stays cold, and the read parses
+  /// no chat content. The seal runs after the lock is released and is refused when an append lands in that gap. The
+  /// read then still answers from its snapshot, and the next read scans the appended events.
   pub(crate) fn scan_cold_snapshot(&self, session_id: &str) -> StoreResult<ScannedLiveFacts> {
     let scanned = {
       let cache_entry = self.events_cache_entry(session_id);
@@ -1474,9 +1474,10 @@ mod tests {
     assert_eq!(stale, whole_log(&open()), "the rewritten log's scan folds as its whole-log fold does");
   }
 
-  /// A cold read's snapshot excludes an append that lands after its scan, and the seal refuses it. The read then answers
-  /// from the snapshot, and the next cold read scans the log again and includes the appended event. The interleaving is
-  /// the one the cold read has between releasing the cache lock and sealing, driven through the same two calls.
+  /// A cold read's snapshot excludes an append that lands after its scan, and the seal refuses it. The read then
+  /// answers from the snapshot, and the next cold read scans the log again and includes the appended event. The
+  /// interleaving is the one the cold read has between releasing the cache lock and sealing, driven through the same
+  /// two calls.
   #[test]
   fn an_append_during_a_cold_read_is_left_out_of_its_snapshot_and_the_next_read_includes_it() {
     let (home, writer) = make_test_store();

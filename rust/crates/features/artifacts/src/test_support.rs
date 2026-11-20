@@ -11,6 +11,7 @@ use charliebot_core::RepoRoot;
 use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
+use charliebot_core::paths::PROBE_FILE_NAME;
 use charliebot_registry::context::StartupState;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, Registry, store_hooks};
@@ -30,7 +31,7 @@ pub(crate) fn chrome_program(directory: &Path, steps: Value) -> PathBuf {
   fs::create_dir(&stub).expect("the stub directory is created");
   let program = stub.join("chrome");
   symlink(charliebot_shell_harness::built_binary("chrome-stub"), &program).expect("the fake links to the helper");
-  fs::write(stub.join("probe.json"), json!({"chrome": steps}).to_string()).expect("the fake's steps are written");
+  fs::write(stub.join(PROBE_FILE_NAME), json!({"chrome": steps}).to_string()).expect("the fake's steps are written");
   program
 }
 

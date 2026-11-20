@@ -284,6 +284,11 @@ of the release before it. The copies sit apart from the release, in a cache name
 (`web/static/js/offline-shell-worker.js`): a release keeps the copies the release before it stored (`release-offline`
 above), and a release that changes the copies' shape bumps the format, which drops them. A reply the socket delivered
 re-stores the session's copy once the reply's frames settle, after a 2 s quiet gap (`replied-offline`).
+A page whose session has no copy asks for the sidebar list under its own id (`active`). The list copies are per session,
+so that ask misses; when the network is down, the newest stored list with the same filters answers it
+(`networkListOrNewestCopy` in `offline-shell-worker.js`), marked "Not current". The page's own row may be absent from
+that list. A click on a stored row opens that session's copy. The header shows the raw session id: the listing's name
+is not read there.
 The worker also stores the session page's on-demand files that render stored content: the Status panel with its
 comment-post dependency, the For-you worker summary, file links, draft cards and artifact cards, each with its stylesheet
 (`ON_DEMAND_FILES` in `web/static/js/offline-shell.js`, eight same-origin files). The page asks once it is current and

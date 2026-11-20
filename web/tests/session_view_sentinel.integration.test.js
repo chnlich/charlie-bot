@@ -619,3 +619,25 @@ test('a switch cancels a pending older-page retry and starts the backoff over', 
   await context.Sidebar.loadOlderIfNeeded(messages);
   assert.deepEqual(retryTimers(timers).map((timer) => timer.ms), [1000]);
 });
+
+test('a second older-page load while one is in flight starts no second request', async () => {
+  const messages = makeMessages({scrollTop: 0});
+  const urls = [];
+  let settle = null;
+  const {context} = buildContext({
+    elements: new Map([['messages', messages]]),
+    fetch: async (url) => {
+      urls.push(url);
+      await new Promise((resolve) => { settle = resolve; });
+      return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
+    },
+  });
+  renderSessionViewWith(context, new Map([['messages', messages]]), true);
+
+  const first = context.Sidebar.loadOlderIfNeeded(messages);
+  const second = context.Sidebar.loadOlderIfNeeded(messages);
+  assert.equal(urls.length, 1, 'the second load finds the first page in flight and asks for nothing');
+  settle();
+  await Promise.all([first, second]);
+  assert.equal(urls.length, 1, 'the page that landed was the only request');
+});

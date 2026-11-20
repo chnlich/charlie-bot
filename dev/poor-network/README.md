@@ -284,6 +284,12 @@ of the release before it. The copies sit apart from the release, in a cache name
 (`web/static/js/offline-shell-worker.js`): a release keeps the copies the release before it stored (`release-offline`
 above), and a release that changes the copies' shape bumps the format, which drops them. A reply the socket delivered
 re-stores the session's copy once the reply's frames settle, after a 2 s quiet gap (`replied-offline`).
+The worker also stores the session page's on-demand files: the scripts and stylesheets a view or panel loads when
+it is first used (`ON_DEMAND_FILES` in `web/static/js/offline-shell.js`, 30 same-origin files, about 119 KB compressed).
+The page asks for them once it is current and idle, after the first screen and the catch-up, so an offline open after a
+release shows every view and panel, Status included, without the view having been opened online in that release. The
+cross-origin files stay out: the KaTeX loader and the terminal's xterm files (jsdelivr), and the diff page's CDN files.
+`offline_shell_page.test.js` fails when a loader names a same-origin file the list lacks.
 
 The release open navigates within 10 s of the last read on A's and B's pooled connection. Chrome sends a request on an
 HTTP/2 connection idle that long only after a PING, which the hold leaves unanswered; Chrome then drops the connection

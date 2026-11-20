@@ -553,6 +553,24 @@ mod tests {
     }
   }
 
+  #[tokio::test]
+  async fn a_group_write_reads_back_at_once_through_the_session_detail_route() {
+    let (_home, features) = feature_context();
+    add_session(&features, "group-read-back", Some("Old group"), false);
+    let router = crate::routes::routes(&features);
+    let (status, before) = send(&router, Method::GET, "/api/sessions/group-read-back", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(before["group"], "Old group");
+
+    let group = json!({"group": "New group"});
+    let (status, _) = send(&router, Method::POST, "/api/sessions/group-read-back/group", Some(group), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, after) = send(&router, Method::GET, "/api/sessions/group-read-back", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after["group"], "New group");
+  }
+
   #[tokio::test(flavor = "current_thread")]
   #[ignore = "integration"]
   async fn permanent_delete_routes_match_scope_errors_and_guards() {

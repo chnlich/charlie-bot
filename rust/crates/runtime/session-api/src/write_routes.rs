@@ -804,6 +804,27 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_backend_switch_reads_back_at_once_through_the_session_detail_route() {
+    let (_home, features) = feature_context();
+    let node = create_node(&features.store, "read-back-node", None, TaskProfile::Manager).await;
+    // The first read builds the task-tree index while the session still holds its first backend.
+    let (status, before) =
+      answer(crate::detail::session_detail(State(features.clone()), AxumPath(node.id.clone())).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(before["backend"], "synthetic-a");
+
+    let (headers, body) = json_request(json!({"backend": "synthetic-b"}));
+    let (status, _) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, after) =
+      answer(crate::detail::session_detail(State(features.clone()), AxumPath(node.id.clone())).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after["backend"], "synthetic-b");
+  }
+
+  #[tokio::test]
   async fn rename_answers_the_session_detail_form() {
     let (_home, features) = feature_context();
     let (logs, _subscriber) = capture_logs();

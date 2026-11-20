@@ -2169,10 +2169,14 @@ impl Store {
   }
 
   /// Build the session detail projection used by the session read and completion routes.
+  ///
+  /// The session's own fields come from the metadata cache, which every save replaces under the session lock, so a
+  /// write reads back at once without any invalidation. The task-tree index serves the ancestors and the descendants.
   pub fn session_detail(&self, session_id: &str) -> StoreResult<Value> {
     let index = self.tree_index()?;
-    let meta =
-      index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
+    let meta = self
+      .get_session_cached_or_read_sync(session_id)?
+      .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
     let mut detail = self.session_metadata_value(meta.as_ref());
     let mut reads = NodeReads::new(self);
     let object = detail.as_object_mut().expect("session metadata serializes to an object");

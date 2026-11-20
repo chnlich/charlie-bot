@@ -4,6 +4,8 @@
 use charliebot_chat_threads::thread_entry::{IdOrdering, ThreadPlatform};
 use charliebot_core::event_types::MENTION_ID;
 
+use crate::metadata::{DISCORD_ORIGIN, DISCORD_WATERMARK_ID};
+
 /// The command the reply-format contract names for posting a reply.
 pub const REPLY_COMMAND: &str = "charliebot discord reply";
 /// Discord's per-message text limit, which is also the chunking target.
@@ -24,8 +26,8 @@ pub const DISCORD: ThreadPlatform = ThreadPlatform {
   follow_trigger_prefix: FOLLOW_TRIGGER_PREFIX,
   id_key: IdOrdering::Snowflake,
   recheck_after_failed_post: false,
-  origin_field: "discord_origin",
-  watermark_field: "discord_watermark_id",
+  origin_field: DISCORD_ORIGIN,
+  watermark_field: DISCORD_WATERMARK_ID,
   id_label: "id",
   mention_key: MENTION_ID,
   block_keys: &["guild_id", "channel_id", "thread_id", MENTION_ID],

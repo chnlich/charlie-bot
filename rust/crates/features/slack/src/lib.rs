@@ -27,7 +27,7 @@ use turn_contribution::SlackTurnContribution;
 
 /// The thread fields of a Slack session's metadata slot.
 const THREAD_SLOT: ThreadSlot = ThreadSlot {
-  origin_field: "slack_origin",
+  origin_field: metadata::SLACK_ORIGIN,
   origin_type: "SlackOrigin",
   origin_keys: &["team_id", "channel_id", "thread_ts"],
   watermark_field: thread_contract::SLACK.watermark_field,

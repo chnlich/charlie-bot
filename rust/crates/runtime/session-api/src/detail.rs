@@ -2073,12 +2073,60 @@ backends:
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"].as_array().unwrap().len(), 1);
     let after_first = features.store.history_work();
-    assert_eq!(after_first.file_reads - before.file_reads, 1);
+    assert_eq!(after_first.file_reads - before.file_reads, 0, "the cold fold scans the log and loads none of it");
     assert_eq!(after_first.full_folds - before.full_folds, 1);
     let (second_status, _) =
       crate::test_support::answer(pending_task_inputs(State(Arc::clone(&features)), AxumPath(meta.id)).await).await;
     assert_eq!(second_status, StatusCode::OK);
     assert_eq!(features.store.history_work(), after_first);
+  }
+
+  /// The /runs page of a session with no fact checkpoint reads from a cold event cache the page and run states a warm read
+  /// reads, and the cold read loads no history. No scan has run for the session, so no checkpoint exists before the read.
+  #[tokio::test]
+  async fn runs_of_a_cold_session_without_a_checkpoint_answer_what_a_warm_read_answers() {
+    let (_home, features) = feature_context();
+    let meta = create_node(&features.store, "cold-runs", None, TaskProfile::Manager).await;
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"id": "ask", "type": "user", "content": "do the work"}))
+      .await
+      .unwrap();
+    features
+      .store
+      .append_chat_event(
+        &meta.id,
+        json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success",
+               "input_event_ids": ["ask"]}),
+      )
+      .await
+      .unwrap();
+    let mut record = run("run-1", &["ask"], None);
+    record.session_id = meta.id.clone();
+    let run_dir = features.store.run_dir(&meta.id, "run-1");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(
+      features.store.run_metadata_path(&meta.id, "run-1"),
+      charliebot_store::run_records::run_record_text(&record),
+    )
+    .unwrap();
+    features.store.clear_chat_events_cache(&meta.id);
+
+    let page = |features: &Arc<FeatureContext>, id: &str| {
+      let request =
+        Request::builder().uri(format!("/api/sessions/{id}/runs?order=asc&limit=500")).body(Body::empty()).unwrap();
+      session_runs(State(Arc::clone(features)), AxumPath(id.to_string()), request)
+    };
+    let reads = features.store.history_work().file_reads;
+    let (cold_status, cold) = crate::test_support::answer(page(&features, &meta.id).await).await;
+    assert_eq!(features.store.history_work().file_reads, reads, "the cold read loads no history");
+    features.store.load_chat_events_shared_sync(&meta.id).unwrap();
+    let (warm_status, warm) = crate::test_support::answer(page(&features, &meta.id).await).await;
+
+    assert_eq!(cold_status, StatusCode::OK);
+    assert_eq!((cold_status, &cold), (warm_status, &warm), "the cold page equals the warm page");
+    assert_eq!(cold["items"][0]["id"], "run-1");
+    assert_eq!(cold["items"][0]["state"], "success");
   }
 
   #[test]

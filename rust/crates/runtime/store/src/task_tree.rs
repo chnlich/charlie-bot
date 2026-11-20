@@ -626,6 +626,13 @@ impl Store {
         {
           return Ok(Some(facts));
         }
+        if identity.is_some() {
+          // A cold log folds from its scan and seal, which parse no chat content and keep no history.
+          if should_stop() {
+            return Ok(None);
+          }
+          return Ok(Some(self.scan_cold_snapshot(session_id)?.facts()));
+        }
         let Some(events) = self.live_events_with_generation_until(session_id, should_stop)? else {
           return Ok(None);
         };
@@ -772,7 +779,8 @@ impl Store {
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
   /// the archived extent are the ones it covers. The read parses no history. A cold read with no sealed state folds
   /// the log's fact checkpoint and the bytes past it when one covers the log, which memoizes the same facts and runs
-  /// under the log's identity. Any other cold read loads the history.
+  /// under the log's identity. Otherwise the log is scanned as one snapshot and sealed, which parses no chat content
+  /// and keeps no history; the cache stays cold.
   fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     let (generation, list_identity, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
@@ -797,8 +805,17 @@ impl Store {
             .expect("the checkpoint fold memoizes its state under the log identity");
           return Ok((version, self.node_state_view(session_id, facts)?));
         }
-        let (generation, list_identity, live) = self.live_events_with_generation(session_id)?;
-        return self.node_state_of(session_id, generation, list_identity, &live);
+        // The scan folds the log's snapshot and its seal memoizes the state, so a later read answers without a scan. A
+        // refused seal leaves the snapshot's version unmemoized, and the next read scans again.
+        let scanned = self.scan_cold_snapshot(session_id)?;
+        self.history_work.node_state_full_folds.fetch_add(1, Ordering::Relaxed);
+        self.history_work.node_state_folded_events.fetch_add(scanned.folded_events(), Ordering::Relaxed);
+        let (sealed_identity, sealed_archived) = scanned.snapshot_key();
+        let version = match self.sealed_state_version(session_id, sealed_identity, sealed_archived) {
+          Some(version) => version,
+          None => self.next_node_state_version.fetch_add(1, Ordering::Relaxed),
+        };
+        return Ok((version, self.node_state_from(session_id, scanned.facts(), scanned.runs())?));
       }
     };
     self.node_state_of(session_id, generation, list_identity, &live)
@@ -866,6 +883,17 @@ impl Store {
       Some(runs) => runs,
       None => self.run_facts(session_id)?,
     };
+    self.node_state_from(session_id, facts, runs)
+  }
+
+  /// A node state from the facts and run facts one fold produced. Malformed task facts keep the session's whole event
+  /// list for the state's report, which is the one history load a state read makes, and only for a malformed task.
+  fn node_state_from(
+    &self,
+    session_id: &str,
+    facts: Arc<NodeFacts>,
+    runs: Arc<RunFacts>,
+  ) -> StoreResult<Arc<NodeState>> {
     let malformed_task_events =
       if facts.task.is_err() { Some(self.load_all_facts_shared_sync(session_id)?) } else { None };
     Ok(Arc::new(NodeState { facts, runs, malformed_task_events }))
@@ -4885,27 +4913,27 @@ pub(crate) mod tests {
     assert!(error.to_string().contains("without a stable input_id"));
   }
 
+  /// Cold node-facts reads around appends scan the log and load none of its history, and each read's facts equal the
+  /// whole-log fold that `facts_of` makes.
   #[tokio::test]
-  async fn node_facts_fold_each_appended_event_once() {
+  async fn node_facts_cold_reads_load_no_history_and_match_the_full_fold() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let node = create_node(&store, "node-facts-suffix", None, TaskProfile::Manager).await;
 
-    let before = store.history_work();
     assert_eq!(store.node_facts(&node.id).unwrap().task().unwrap().task_state, "open");
     append(&store, &node.id, json!({"id": "user-a", "type": "user", "content": "first"})).await;
     append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
     append(&store, &node.id, json!({"id": "user-b", "type": "user", "content": "after close"})).await;
+    let reads = store.history_work().file_reads;
     let folded = store.node_facts(&node.id).unwrap();
     let folded = folded.task().unwrap();
+    assert_eq!(store.history_work().file_reads, reads, "the cold read scans the log and loads none of it");
     let full = store.facts_of(&node.id).unwrap();
     assert_eq!(folded.task_state, full.task_state);
     assert_eq!(folded.covered, full.covered);
     assert_eq!(folded.boundary_index, full.boundary_index);
     assert_eq!(folded.input_candidates, full.input_candidates);
-    let work = store.history_work();
-    assert_eq!(work.full_folds - before.full_folds, 1);
-    assert_eq!(work.folded_events - before.folded_events, full.covered as u64);
   }
 
   #[tokio::test]
@@ -5555,13 +5583,14 @@ pub(crate) mod tests {
     assert_eq!(store.task_tree_activity(&node.id).unwrap().work_state, "idle");
     assert_eq!(store.history_work().file_reads, reads, "the derivation walks the log and loads no cached history");
 
-    // A fold that misses the last append is not sealed: the read after the eviction parses the log.
+    // A fold that misses the last append is not sealed: the read after the eviction scans the log, and loads none of
+    // its history.
     store.node_facts(&node.id).unwrap();
     append(&store, &node.id, json!({"type": "task_closed", "outcome": "cancelled"})).await;
     store.evict_recovery_history(&node.id);
     let reads = store.history_work().file_reads;
     assert_eq!(store.task_state(&node.id).unwrap(), "cancelled");
-    assert_eq!(store.history_work().file_reads, reads + 1);
+    assert_eq!(store.history_work().file_reads, reads, "the cold scan loads no whole-log history");
   }
 
   #[tokio::test]
@@ -5780,8 +5809,10 @@ pub(crate) mod tests {
     assert_eq!(stop_checks, 3, "one block needs an initial, block-boundary, and completion stop check");
   }
 
+  /// A stop that lands during a cold read returns no facts and publishes no parsed history. The cold scan checks the stop
+  /// flag before it starts and before its facts are returned; the next read answers the full fold.
   #[tokio::test]
-  async fn node_facts_cold_read_checks_stop_between_event_lines_without_caching_a_prefix() {
+  async fn node_facts_cold_read_honors_a_stop_and_publishes_no_prefix() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let node = create_node(&store, "stop-cold-event-read", None, TaskProfile::Manager).await;
@@ -5795,13 +5826,14 @@ pub(crate) mod tests {
     let facts = store
       .node_facts_until(&node.id, &mut || {
         checks += 1;
-        checks == 5
+        checks >= 2
       })
       .unwrap();
 
     assert!(facts.is_none(), "the stopped recovery returns no partial node facts");
-    assert_eq!(checks, 5, "the recovery stop check reached the cold event reader before its third line");
+    assert_eq!(checks, 2, "the stop is checked before the cold scan starts and is honored there");
     assert!(store.cached_chat_events(&node.id).is_none(), "a cancelled read does not publish its parsed prefix");
+    assert_eq!(store.node_facts(&node.id).unwrap().task().unwrap().covered, expected_events);
     assert_eq!(store.load_chat_events_shared_sync(&node.id).unwrap().len(), expected_events);
   }
 

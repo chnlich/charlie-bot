@@ -1,4 +1,8 @@
-//! The route-pattern filler: it puts a pattern's `{name}` parameters into the request path that a client sends.
+//! The route-pattern filler: it puts a pattern's `{name}` parameters into the request path that a client sends. The
+//! session route pattern lives here, so the CLI, the session API and the tasks crate's screenshot check spell it once.
+
+/// The session route `GET /api/sessions/{session_id}`, registered by the session API.
+pub const SESSION_PATH: &str = "/api/sessions/{session_id}";
 
 /// The route pattern with its `{name}` parameters replaced by `values`, in order. The owner's pattern and the caller's
 /// values must agree in count, so a mismatch panics.

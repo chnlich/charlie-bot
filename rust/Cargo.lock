@@ -1322,6 +1322,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "charliebot-agents",
+ "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",

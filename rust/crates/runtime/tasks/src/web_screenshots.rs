@@ -35,7 +35,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use charliebot_cli_common::client;
+use charliebot_cli_common::{client, route};
 use charliebot_registry::pages::is_served_path;
 
 /// The CSS window sizes, at device pixel ratio 1, that a screenshot of a changed page shows: a 1920 wide
@@ -159,7 +159,7 @@ fn is_session_id(session: &str) -> bool {
 /// answer to its path.
 pub fn check_view_resolves(view: &str, status_of: &StatusOf) -> anyhow::Result<()> {
   let (path, session) = match session_of_view(view) {
-    Some(session) if is_session_id(session) => (format!("/api/sessions/{session}"), Some(session)),
+    Some(session) if is_session_id(session) => (route::fill(route::SESSION_PATH, &[session]), Some(session)),
     Some(session) => {
       bail!("the View line `{view}` must name a view on the live server, but `{session}` is not a session id")
     }

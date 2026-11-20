@@ -355,6 +355,15 @@ main > header > a[title="View JSONL events"]:hover {
    strip or label is added: the badge keeps its 30 px box and the switch its 24 px one. */
 #backend-badge:has(select) { border-color: #64748b; }
 #backend-badge select { border-color: transparent; }
+/* A pool session's badge can carry a 64-character label ("Human communication → CC · aigw Gemini Flash · …"). On a
+   desktop header the badge is the one item that gives way: it ellipsizes at its bound, and its title holds the full
+   label. The session name keeps a readable width, and the other controls keep theirs. */
+@media (min-width: 769px) {
+  main > header > .flex-1.min-w-0 { min-width: 8rem; margin-right: 0.5rem; }
+  #backend-badge { min-width: 0; max-width: clamp(10rem, 22vw, 18rem); overflow: hidden; text-overflow: ellipsis; }
+  #backend-badge select { width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  #usage-indicator, #compact-btn, #events-link, #tab-buttons, main > header > .cb-slot { flex-shrink: 0; }
+}
 @media (max-width: 768px) {
   .input-row { flex-wrap: nowrap; }
   .input-buttons { display: flex; gap: 0.5rem; margin-left: auto; }
@@ -382,7 +391,7 @@ main > header > a[title="View JSONL events"]:hover {
   main > header::after { content: ''; flex-basis: 100%; order: 98; }
   #backend-badge, #compact-btn { order: 1; }
   main > header > .cb-slot { order: 101; }
-  #backend-badge { max-width: 100%; overflow: hidden; }
+  #backend-badge { max-width: 100%; min-width: 0; flex: 0 1 auto; overflow: hidden; }
   #tab-buttons { width: auto; flex: 1 1 auto; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
   #tab-buttons button { white-space: nowrap; }
   main > header > a[title="View JSONL events"] { order: 100; align-self: center; }

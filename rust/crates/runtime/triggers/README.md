@@ -11,6 +11,8 @@ trigger records, waiters and startup recovery. The trigger step is registered af
 - `triggers::LocalPid`, `triggers::RemotePid` and `triggers::SlurmJob`, the three watch targets
 - `triggers::MAX_PENDING_TRIGGERS`
 - `triggers::routes`, `triggers::ROUTE_PATTERNS` and `triggers::trigger_step`
+- `charliebot_tasks::completion::PendingTriggerCancel`, implemented by `TriggerManager` and registered in startup state
+  by `trigger_step`; a worker's session cancel cancels the worker's pending triggers through it
 
 `TriggerManager::list_triggers` has the public signature
 `pub async fn list_triggers(&self, session_id: &str) -> anyhow::Result<Vec<charliebot_store::trigger_files::PendingTrigger>>`.

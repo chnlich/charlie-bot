@@ -24,9 +24,12 @@ use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunReco
 use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus};
 use charliebot_store::{CreateTask, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::completion::ArchiveAuthority;
-use charliebot_tasks::completion::{CompletionEvidence, LandingEvidence, RunEnd, SequenceCloseOutcome, TaskCompletion};
+use charliebot_tasks::completion::{
+  CompletionEvidence, LandingEvidence, PendingTriggerCancel, RunEnd, SequenceCloseOutcome, TaskCompletion,
+};
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use charliebot_tasks::routes;
+use charliebot_tasks::test_support::{FailingPendingTriggers, NoPendingTriggers};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tower::ServiceExt;
@@ -61,6 +64,10 @@ struct CompletionHarness {
 
 impl CompletionHarness {
   fn new() -> Self {
+    Self::with_pending_triggers(Arc::new(NoPendingTriggers))
+  }
+
+  fn with_pending_triggers(pending_triggers: Arc<dyn PendingTriggerCancel>) -> Self {
     let base = Harness::new();
     let startup = Arc::new(StartupState::default());
     let features = Arc::new(FeatureContext {
@@ -70,6 +77,7 @@ impl CompletionHarness {
       registry: Arc::clone(&base.registry),
       startup: Arc::clone(&startup),
     });
+    startup.insert(pending_triggers).expect("pending-trigger owner enters startup state once");
     startup.insert(TaskCompletion::new(Arc::clone(&features))).expect("completion enters startup state once");
     let completion = startup.require::<TaskCompletion>().expect("completion is registered");
     let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
@@ -693,6 +701,21 @@ async fn worker_cancel_stops_queued_runs_and_keeps_manager_and_sequence_blockers
   assert_eq!(h.base.store.task_state(&worker.id).unwrap(), "cancelled");
   let replay = h.completion.cancel_task(&worker.id, "cancel-worker", "changed", &caller).await.unwrap();
   assert_eq!(replay, result);
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn worker_cancel_fails_with_the_pending_trigger_error() {
+  let h = CompletionHarness::with_pending_triggers(Arc::new(FailingPendingTriggers));
+  let caller = CallerIdentity::Operator { session_id: None };
+  let manager = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
+  let worker = h.base.create_task("worker", Some(&manager.id), TaskProfile::Worker, "Worker").await;
+  let result = h.completion.cancel_task(&worker.id, "cancel-worker", "stop", &caller).await;
+  assert!(
+    matches!(result, Err(StoreError::Failure(message)) if message == "synthetic trigger store refused the cancel"),
+    "a failed trigger cancel should fail the worker cancel with its error"
+  );
+  assert_eq!(h.base.store.task_state(&worker.id).unwrap(), "cancelled");
 }
 
 #[tokio::test]
@@ -1957,6 +1980,7 @@ async fn agent_cancel_route_stops_a_live_worker_and_returns_its_outcome() {
   assert_eq!(status, StatusCode::OK, "{body}");
   assert_eq!(body["task_state"], "cancelled");
   assert_eq!(body["stopped_runs"], json!([{"run_id":"worker-run","outcome":"interrupted"}]));
+  assert_eq!(body["cancelled_triggers"], json!([]));
   assert!(process.try_wait().unwrap().is_some());
   assert_eq!(
     terminal_outcome(&h.base.store.load_all_facts(&worker.id).unwrap(), "worker-run").unwrap(),

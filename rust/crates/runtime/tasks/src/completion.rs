@@ -34,6 +34,7 @@ pub const RUN_REF_PREFIX: &str = "run:";
 /// them, so each name is spelled once, here.
 pub const CLOSED_EVENT_ID_FIELD: &str = "closed_event_id";
 pub const STOPPED_RUNS_FIELD: &str = "stopped_runs";
+pub const CANCELLED_TRIGGERS_FIELD: &str = "cancelled_triggers";
 const SPEC_REF_PREFIX: &str = "spec:";
 const REVIEW_REF_PREFIX: &str = "review:";
 const LANDING_REF_PREFIX: &str = "landed:";
@@ -127,6 +128,13 @@ impl SequenceCloseOutcome {
       Self::Cancelled => "cancelled",
     }
   }
+}
+
+/// The trigger owner that a worker's cancel stops. The trigger crate depends on this crate, so the cancel reaches the
+/// owner through startup state as this trait. The owner registers its value there at startup.
+pub trait PendingTriggerCancel: Send + Sync {
+  /// Cancel every pending trigger of the session, and return the ids of the triggers this call cancelled.
+  fn cancel_pending<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, StoreResult<Vec<String>>>;
 }
 
 /// The owner of close, cancel, reopen, acknowledgement, and close evidence for one server.
@@ -1169,7 +1177,7 @@ impl TaskCompletion {
       return self.cancel_worker_task(session_id, request_id, reason, actor, &meta).await;
     }
     if let Some((_, replay)) = self.replay_close_request(session_id, request_id)? {
-      return with_stopped_runs(replay, Vec::new());
+      return with_cancel_outcome(replay, Vec::new(), Vec::new());
     }
     let child_epoch = self.store().prime_aggregator(session_id).await?;
     let parent_epoch = match meta.task_parent_id.as_deref() {
@@ -1185,7 +1193,7 @@ impl TaskCompletion {
         )]));
       }
       if let Some((_, replay)) = self.replay_close_request(session_id, request_id)? {
-        return with_stopped_runs(replay, Vec::new());
+        return with_cancel_outcome(replay, Vec::new(), Vec::new());
       }
       let fresh_meta = self.store().load_task_meta(session_id).await?;
       let blockers = sorted_unique(self.cancellation_blockers(session_id)?);
@@ -1222,9 +1230,12 @@ impl TaskCompletion {
     {
       tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "cancel_parent_wake_failed");
     }
-    Ok(
-      json!({"session_id": session_id, CLOSED_EVENT_ID_FIELD: close_event.get("id").map(CompactValue::to_value), STOPPED_RUNS_FIELD: []}),
-    )
+    Ok(json!({
+      "session_id": session_id,
+      CLOSED_EVENT_ID_FIELD: close_event.get("id").map(CompactValue::to_value),
+      STOPPED_RUNS_FIELD: [],
+      CANCELLED_TRIGGERS_FIELD: [],
+    }))
   }
 
   async fn cancel_worker_task(
@@ -1246,7 +1257,8 @@ impl TaskCompletion {
       let fresh_meta = self.store().load_task_meta(session_id).await?;
       if let Some((status, replay)) = self.replay_close_request(session_id, request_id)? {
         if status == 202 {
-          return with_stopped_runs(replay, Vec::new());
+          let cancelled_triggers = self.cancel_worker_triggers(session_id).await?;
+          return with_cancel_outcome(replay, Vec::new(), cancelled_triggers);
         }
         let closed_event_id = replay
           .get(CLOSED_EVENT_ID_FIELD)
@@ -1321,6 +1333,10 @@ impl TaskCompletion {
       }
     };
 
+    // The close is durable here, so the worker's pending triggers go before the stop: no fire can resume the closed
+    // worker. A failure waits until the stop and the close announcement have run, so the parent still hears the close.
+    let cancelled_triggers = self.cancel_worker_triggers(session_id).await;
+
     let mut identity_error = None;
     for run in &stop_runs {
       if run.pid.is_none() {
@@ -1365,10 +1381,34 @@ impl TaskCompletion {
       }
     }
     if let Some(error) = identity_error {
+      if let Err(trigger_error) = &cancelled_triggers {
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id,
+          error = %trigger_error,
+          "worker_cancel_trigger_failed_behind_identity_conflict"
+        );
+      }
       return Err(error);
     }
+    let cancelled_triggers = cancelled_triggers?;
     let stopped_runs = self.cancellation_stop_results(session_id, &stop_request_id)?;
-    Ok(json!({"session_id": session_id, CLOSED_EVENT_ID_FIELD: closed_event_id, STOPPED_RUNS_FIELD: stopped_runs}))
+    Ok(json!({
+      "session_id": session_id,
+      CLOSED_EVENT_ID_FIELD: closed_event_id,
+      STOPPED_RUNS_FIELD: stopped_runs,
+      CANCELLED_TRIGGERS_FIELD: cancelled_triggers,
+    }))
+  }
+
+  /// Cancel the worker's pending triggers through the trigger owner, and return the ids this call cancelled.
+  async fn cancel_worker_triggers(&self, session_id: &str) -> StoreResult<Vec<String>> {
+    let triggers = self
+      .features
+      .startup
+      .require::<Arc<dyn PendingTriggerCancel>>()
+      .map_err(|error| StoreError::new(error.to_string()))?;
+    triggers.cancel_pending(session_id).await
   }
 
   fn cancellation_stop_runs(&self, session_id: &str, request_id: &str) -> StoreResult<Vec<RunRecord>> {
@@ -2129,9 +2169,15 @@ impl TaskCompletion {
   }
 }
 
-fn with_stopped_runs(mut response: Value, stopped_runs: Vec<Value>) -> StoreResult<Value> {
+/// Add the two lists every cancel answer carries: the runs it stopped and the pending triggers it cancelled.
+fn with_cancel_outcome(
+  mut response: Value,
+  stopped_runs: Vec<Value>,
+  cancelled_triggers: Vec<String>,
+) -> StoreResult<Value> {
   let object = response.as_object_mut().ok_or_else(|| StoreError::new("cancel response is not a JSON object"))?;
   object.insert(STOPPED_RUNS_FIELD.to_string(), json!(stopped_runs));
+  object.insert(CANCELLED_TRIGGERS_FIELD.to_string(), json!(cancelled_triggers));
   Ok(response)
 }
 

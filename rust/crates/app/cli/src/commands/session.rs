@@ -71,7 +71,7 @@ enum SessionCommand {
   Archive(ArchiveArgs),
   /// Acknowledge exact task inputs the operator handled out-of-band
   Acknowledge(AcknowledgeArgs),
-  /// Cancel a task; stop runs and end delegation for workers
+  /// Cancel a task; stop runs, end delegation, and cancel pending triggers for workers
   Cancel(CancelArgs),
   /// Move a task under a new parent; an agent moves tasks inside its own subtree only
   Reparent(ReparentArgs),

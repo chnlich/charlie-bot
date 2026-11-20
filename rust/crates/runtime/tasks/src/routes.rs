@@ -1305,6 +1305,9 @@ async fn cancel_task(State(features): State<Arc<FeatureContext>>, request: Reque
   let detail = detail.as_object_mut().expect("session detail is a JSON object");
   let stopped_runs = result.get(completion::STOPPED_RUNS_FIELD).expect("cancel result has stopped_runs").clone();
   detail.insert(completion::STOPPED_RUNS_FIELD.to_string(), stopped_runs);
+  let cancelled_triggers =
+    result.get(completion::CANCELLED_TRIGGERS_FIELD).expect("cancel result has cancelled_triggers").clone();
+  detail.insert(completion::CANCELLED_TRIGGERS_FIELD.to_string(), cancelled_triggers);
   responses::json(StatusCode::OK, &Value::Object(detail.clone()))
 }
 

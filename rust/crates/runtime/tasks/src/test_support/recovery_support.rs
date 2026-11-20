@@ -2,6 +2,7 @@
 //! Fixtures of the startup-recovery tests (`tests/recovery.rs`): the task-execution stack over a temporary home, the
 //! scripted `/bin/sh` backend, a fault seam on the run-finish completion, and a capture of the node pass's log events.
 
+use super::NoPendingTriggers;
 use super::process_guard;
 
 pub use charliebot_core::test_support::LogCapture;
@@ -15,7 +16,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::Context;
 
-use crate::completion::TaskCompletion;
+use crate::completion::{PendingTriggerCancel, TaskCompletion};
 use crate::dispatch::{Dispatcher, RunFinishedCompletion};
 use crate::execution::TaskExecutionAdapter;
 use crate::master_queue::MasterQueue;
@@ -773,6 +774,8 @@ impl Stack {
     features.startup.insert(MasterQueue::new(pool))?;
     let queue = features.startup.require::<MasterQueue>()?;
     features.startup.insert(TaskCompletion::new(Arc::clone(&features)))?;
+    let pending_triggers: Arc<dyn PendingTriggerCancel> = Arc::new(NoPendingTriggers);
+    features.startup.insert(pending_triggers)?;
     let completion = features.startup.require::<TaskCompletion>()?;
     let fault = Arc::new(FollowUpFault {
       inner: Arc::clone(&completion),

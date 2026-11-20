@@ -27,8 +27,9 @@ use charliebot_store::trigger_files::{
   self, EXIT_FILE_FIELD, FIRE_AT_FIELD, LOCAL_PID_KIND, PendingTrigger, REMOTE_PID_KIND, SLURM_JOB_KIND, TriggerStatus,
   WatchTarget, fresh_uuid,
 };
-use charliebot_store::{SESSION_NOT_FOUND_DETAIL, StoreError, layout};
-use futures_util::future::join_all;
+use charliebot_store::{SESSION_NOT_FOUND_DETAIL, StoreError, StoreResult, layout};
+use charliebot_tasks::completion::PendingTriggerCancel;
+use futures_util::future::{BoxFuture, join_all};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -533,11 +534,12 @@ impl TriggerManager {
     Ok(triggers)
   }
 
-  /// One pending trigger cancelled, with its waiter stopped.
-  pub async fn cancel_trigger(&self, session_id: &str, trigger_id: &str) -> anyhow::Result<()> {
+  /// One pending trigger cancelled, with its waiter stopped. Returns whether this call cancelled it: a trigger that is
+  /// no longer pending, such as one that fired first, stays as it is and returns false.
+  pub async fn cancel_trigger(&self, session_id: &str, trigger_id: &str) -> anyhow::Result<bool> {
     let mut trigger = self.load_trigger(session_id, trigger_id).await?;
     if trigger.status != TriggerStatus::Pending {
-      return Ok(());
+      return Ok(false);
     }
     trigger.status = TriggerStatus::Cancelled;
     self.save_trigger(&trigger).await?;
@@ -545,7 +547,7 @@ impl TriggerManager {
       task.abort();
     }
     tracing::info!(target: "charliebot_triggers", trigger_id, session = session_id, "trigger_cancelled");
-    Ok(())
+    Ok(true)
   }
 
   /// The restart of every pending trigger found under the configured sessions directory.
@@ -2263,13 +2265,38 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
 /// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
 pub const ROUTE_PATTERNS: &[&str] = &[SCHEDULE_TRIGGER_PATH, "/api/internal/triggers/{session_id}/{trigger_id}/cancel"];
 
-/// One manager built after recovery, with its durable pending triggers recovered.
+/// One manager built after recovery, with its durable pending triggers recovered. The manager also enters startup state
+/// as the pending-trigger owner that a worker's cancel reaches.
 pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
     features.startup.insert(Arc::clone(&manager))?;
+    let pending_cancel: Arc<dyn PendingTriggerCancel> = manager.clone();
+    features.startup.insert(pending_cancel)?;
     manager.recover_pending().await
   })
+}
+
+impl PendingTriggerCancel for TriggerManager {
+  fn cancel_pending<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, StoreResult<Vec<String>>> {
+    Box::pin(async move {
+      let mut cancelled = Vec::new();
+      for trigger in self.list_triggers(session_id).await.map_err(trigger_store_error)? {
+        if trigger.status != TriggerStatus::Pending {
+          continue;
+        }
+        if self.cancel_trigger(session_id, &trigger.id).await.map_err(trigger_store_error)? {
+          cancelled.push(trigger.id);
+        }
+      }
+      Ok(cancelled)
+    })
+  }
+}
+
+/// A trigger failure as the store error a task close answers with, carrying the whole cause chain.
+fn trigger_store_error(error: anyhow::Error) -> StoreError {
+  StoreError::new(format!("{error:#}"))
 }
 
 /// The schedule request the body model's validated fields name, in the model's declaration order.
@@ -2435,7 +2462,7 @@ async fn cancel_trigger_route(
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   match manager.cancel_trigger(&session_id, &trigger_id).await {
-    Ok(()) => responses::json(StatusCode::OK, &json!({ "ok": true })),
+    Ok(_) => responses::json(StatusCode::OK, &json!({ "ok": true })),
     Err(error)
       if error.downcast_ref::<io::Error>().is_some_and(|io_error| io_error.kind() == io::ErrorKind::NotFound) =>
     {
@@ -2497,6 +2524,7 @@ mod tests {
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
   use charliebot_core::test_support::LogCapture;
+  use charliebot_registry::caller::CallerIdentity;
   use charliebot_registry::context::StartupState;
   use charliebot_registry::route_claims::RouteClaims;
   use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
@@ -2506,6 +2534,7 @@ mod tests {
   use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
   use charliebot_store::{ControlGuard, CreateTask, Store, StoreError, StoreResult, TaskCaller};
   use charliebot_tasks::completion::ArchiveAuthority;
+  use charliebot_tasks::completion::CANCELLED_TRIGGERS_FIELD;
   use charliebot_tasks::completion::TaskCompletion;
   use futures_util::future::BoxFuture;
   use serde_json::Value;
@@ -4102,6 +4131,66 @@ mod tests {
     let fresh = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("read cancelled trigger");
     assert_eq!(fresh.status, TriggerStatus::Cancelled);
     assert_eq!(fresh.fire_reason.as_deref(), Some("target task is archived"));
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn cancelling_a_worker_cancels_its_pending_triggers_and_a_fire_resumes_nothing() {
+    let (_home, features) = feature_context();
+    add_task_node(&features, SESSION_ID).await;
+    install_dispatcher(&features);
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    let pending_cancel: Arc<dyn PendingTriggerCancel> = manager.clone();
+    features.startup.insert(pending_cancel).expect("the pending-trigger owner enters startup state");
+    let worker = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "create-synthetic-trigger-worker".to_string(),
+          task_parent_id: Some(SESSION_ID.to_string()),
+          profile: TaskProfile::Worker,
+          task: None,
+          name: Some("Synthetic trigger worker".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .expect("create worker task node");
+    let worker_trigger = manager
+      .create_trigger(&worker.id, 3600, "worker wake", None, None, None, true)
+      .await
+      .expect("register the worker's trigger");
+    let other_trigger = manager
+      .create_trigger(SESSION_ID, 3600, "manager wake", None, None, None, true)
+      .await
+      .expect("register the manager's trigger");
+    let other_before = manager.load_trigger(SESSION_ID, &other_trigger.id).await.expect("read manager trigger");
+
+    let completion = features.startup.require::<TaskCompletion>().expect("the completion is installed by the fixture");
+    let answer = completion
+      .cancel_task(&worker.id, "cancel-worker", "stop", &CallerIdentity::Operator { session_id: None })
+      .await
+      .expect("cancel the worker");
+    assert_eq!(answer[CANCELLED_TRIGGERS_FIELD], json!([worker_trigger.id]));
+
+    let cancelled = manager.load_trigger(&worker.id, &worker_trigger.id).await.expect("read worker trigger");
+    assert_eq!(cancelled.status, TriggerStatus::Cancelled);
+    // The fire of the trigger as it stood before the cancel finds no pending record, so it resumes nothing.
+    let stale_fire = pending_trigger(&worker_trigger.id, &worker.id, near_future(0), Vec::new());
+    manager.wait_and_fire(stale_fire, false).await.expect("a fire after the cancel returns");
+    assert_eq!(manager.load_trigger(&worker.id, &worker_trigger.id).await.expect("read worker trigger"), cancelled);
+    let events = features.store.load_all_facts(&worker.id).expect("read worker events");
+    assert!(
+      !events
+        .iter()
+        .any(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::SCHEDULED_TRIGGER))
+    );
+
+    assert_eq!(manager.load_trigger(SESSION_ID, &other_trigger.id).await.expect("read manager trigger"), other_before);
   }
 
   #[tokio::test]

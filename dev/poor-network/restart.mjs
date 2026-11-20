@@ -242,11 +242,11 @@ function catchupBytesAfter(tab, readyMs) {
 }
 
 // The four parts of a return, from the replacement's server_ready to the probe row (plan 6 v4 section 4.2's split):
-//   ready to attempt  from server_ready to the page's socket that opened. The attempt is the socket whose handshake
-//                     answered 101; it can be created before server_ready, because it crosses the proxy while the
-//                     replacement binds, so this part can be negative. firstAttemptAfterReadyMs names the first socket
-//                     the page created at or after server_ready, whether or not it opened;
-//   attempt to open   from that socket's creation to its handshake response (101);
+//   ready to attempt  from server_ready to the page's socket that carried the probe row (the carrier). The carrier can
+//                     be created before server_ready, because it crosses the proxy while the replacement binds, so
+//                     this part can be negative. firstAttemptAfterReadyMs names the first socket the page created at
+//                     or after server_ready, whether or not it carried the row;
+//   attempt to open   from the carrier's creation to its handshake response (101);
 //   open to catch-up  from that socket's open to its catchup_complete, with the replay's frames by kind and bytes;
 //   catch-up to row   from catchup_complete to the probe row's paint (negative when the row came in the replay).
 // Each replay frame names its event index and message id, and whether the page already held it before the release: an
@@ -254,21 +254,21 @@ function catchupBytesAfter(tab, readyMs) {
 // ready rides the same link, so the HTTP requests of the window are listed beside the replay.
 function returnSplit(tab, releaseAt, readyMs, tag, cursor, heldIds, rowAt) {
   const attempts = tab.sockets.filter((socket) => socket.url.includes('/ws/sessions/') && socket.at >= releaseAt);
-  const opened = attempts.find((socket) =>
-    tab.handshakes.some((handshake) => handshake.requestId === socket.requestId && handshake.status === 101));
-  const firstAfterReady = attempts.find((socket) => socket.at >= readyMs);
-  const openAt = opened === undefined
-    ? null
-    : tab.handshakes.find((handshake) => handshake.requestId === opened.requestId).at;
-  const catchup = opened === undefined
-    ? undefined
-    : tab.frames.find((frame) => frame.requestId === opened.requestId && frame.type === 'catchup_complete');
-  const catchupAt = catchup === undefined ? null : catchup.at;
-  const replay = opened === undefined
-    ? []
-    : tab.frames.filter((frame) => frame.requestId === opened.requestId && frame.at >= openAt &&
-        (catchupAt === null || frame.at <= catchupAt));
   const probe = tab.frames.find((frame) => frame.at >= readyMs && frame.text.includes(tag));
+  const carrier = probe === undefined ? undefined : attempts.find((socket) => socket.requestId === probe.requestId);
+  const firstAfterReady = attempts.find((socket) => socket.at >= readyMs);
+  const handshake = carrier === undefined
+    ? undefined
+    : tab.handshakes.find((entry) => entry.requestId === carrier.requestId && entry.status === 101);
+  const openAt = handshake === undefined ? null : handshake.at;
+  const catchup = handshake === undefined
+    ? undefined
+    : tab.frames.find((frame) => frame.requestId === carrier.requestId && frame.type === 'catchup_complete');
+  const catchupAt = catchup === undefined ? null : catchup.at;
+  const replay = handshake === undefined
+    ? []
+    : tab.frames.filter((frame) => frame.requestId === carrier.requestId && frame.at >= openAt &&
+        (catchupAt === null || frame.at <= catchupAt));
   const frames = replay.map((frame) => {
     const payload = JSON.parse(frame.text);
     const eventIndex = payload.event_index ?? payload.message?.event_index ?? null;
@@ -294,10 +294,10 @@ function returnSplit(tab, releaseAt, readyMs, tag, cursor, heldIds, rowAt) {
       finishMs: entry.finishAt - readyMs,
     }));
   return {
-    attempts: attempts.map((socket) => ({ atMs: socket.at - readyMs, opened: socket === opened })),
+    attempts: attempts.map((socket) => ({ atMs: socket.at - readyMs, carried: socket === carrier })),
     firstAttemptAfterReadyMs: firstAfterReady === undefined ? null : firstAfterReady.at - readyMs,
-    readyToAttemptMs: opened === undefined ? null : opened.at - readyMs,
-    attemptToOpenMs: openAt === null ? null : openAt - opened.at,
+    readyToAttemptMs: carrier === undefined ? null : carrier.at - readyMs,
+    attemptToOpenMs: openAt === null ? null : openAt - carrier.at,
     openToCatchupMs: catchupAt === null ? null : catchupAt - openAt,
     catchupToRowMs: catchupAt === null ? null : rowAt - catchupAt,
     probeFrameMs: probe === undefined ? null : probe.at - readyMs,

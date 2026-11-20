@@ -2,69 +2,57 @@
 
 You run the UX direction of the improve loop.
 Follow `dev/improve/landing.md` for the round protocol.
-That file carries the steps that every direction shares.
+That file carries the shared round contract.
 Your branch prefix is `improve/ux/`.
 
 ## Scope
 
-- `web/`
-- the `static/` and `templates/` directories of the features under `web/features/`
-- the endpoints that those files call
+Keep UX changes in these areas:
 
-A change inside this scope may touch the endpoint that the page calls.
-A change to the endpoint alone belongs to the performance direction.
-Each direction keeps its own kind of change, so the review stays with one owner.
+- `web/`
+- the `static/` and `templates/` directories of features under `web/features/`
+- endpoints those files call
+
+A page change may include its endpoint. An endpoint-only change belongs to the performance direction. Each direction
+keeps one category of change so the review has one scope owner.
 
 ## Topics
 
-Take a defect that the before screenshot shows at either width, on the mock home described below.
-Use the two widths named in the Web UI Screenshots rule in `prompts/task_base.md`.
-The two widths stand for the desktop window and the phone screen.
-The mock home has the production number of sessions, so the pages show the layout that a user sees.
-Apply the screen-space rule in `AGENTS.md` to each defect you choose.
+Choose a defect visible in the before screenshot on the shared mock home at a required desktop or phone width. The
+mock home has the production number of sessions, so the pages show a representative layout. Use the widths in the
+Web UI Screenshots rule in `prompts/task_base.md`, and apply the screen-space rule in `AGENTS.md` to each chosen defect.
 
 ## Mock home
 
-The runner supplies the complete shared mock home before the round starts.
-Its directory is `~/improve/mock-home/<version>/`, where `<version>` is the output of `mock-home version`.
-Read that directory throughout the round.
-The round only reads the shared mock home.
-The fixed data keeps the before and after servers on the same bytes, so the two sides compare like with like.
+The runner supplies the complete shared mock home before the round. Both sides read the same data, and the round does
+not change it. This keeps the before and after views comparable.
 
 ## Servers
 
-For a change to web files only, build one server from `origin/main` on the round's host with `cargo build --release --locked -p charliebot-server -p charliebot-cli` in `rust/`.
-Serve the `origin/main` tree and the branch tree with that one server.
-The server binary then stays equal, so the two trees differ only in the change under test.
+The before and after servers use the same release profile on the same host. For a web-only change, both trees use the
+same server binary. For a change that affects server code, the before server represents `origin/main` and the after
+server represents the branch. The intended change is the only source difference between the sides.
 
-For any other change, build the before server from an export of `origin/main`, and the after server from the branch.
-Both use the same release profile on one machine, so the change under test is the only difference between them.
+## Serving
 
-Each side is one serve trial of its commit on its server binary, with the mock home as its seed.
-The trial runs as `scripts/release/trial.sh --serve`, and the round runs it through `dev/improve/trial-side.sh`, which holds the host's bench lock from the trial's start to its stop.
-The tree root is under `/tmp/improve-ux/`, which keeps the two trees apart, and the seed gives both servers the same data.
-The round creates the tree root before its first side, so no side writes outside the round's own directory.
-The round's scope already caps memory on its host, so the trial adds no scope of its own.
-Builds finish before a side starts, so they stay outside the lock.
-A side waits at most 15 minutes for the bench lock.
-When the wait runs out, the round takes no screenshot and no measurement, opens no pull request, and ends with a stop reason that names the bench lock as held.
-The next scheduled fire starts the round again.
+Each side runs one serve trial against the shared mock home. The `dev/improve/trial-side.sh` entry holds the host's
+bench lock from trial startup through screenshots or measurements and trial shutdown. Builds stay outside the lock.
+The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to its measurement
+command; all requests and process reads use that trial's server.
 
-Run the mock home check against the trial's server first in the side's command.
-Stop the round when the check exits 1, because that server reads data other than the mock home.
-The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to `<command>`, so the screenshots and the requests name this trial's server and no other.
+Each side waits at most 15 minutes for the bench lock. If the wait expires, that side takes no screenshot or
+measurement. The round reports no result from an incomplete pair, stops without opening a pull request and names the
+held bench lock in its stop reason. The next scheduled fire tries again.
+
+The mock-home check is a prerequisite for a side. If its server reads outside the shared mock home, stop the round
+without using that side's evidence.
 
 ## Screenshots
 
-Take the screenshots with the playwright chromium under `~/.cache/ms-playwright`.
-Send `CHARLIEBOT_SERVE_AUTH_HEADER` with each page request, so that the pages load with the access key.
-Take one screenshot per width named in the Web UI Screenshots rule in `prompts/task_base.md`, on each side: before the change, and the same widths after it.
-The pair at each width shows the change to the user.
+Before and after evidence covers both widths in the Web UI Screenshots rule. Each pair shows the same view before and
+after the change, so the reader can see the user-facing difference.
 
 ## Evidence
 
-Write in the pull request's `## Evidence` section what the screenshots show, in words.
-For each width, name the defect that the before screenshot shows and the state that the after screenshot shows.
-Both sides come from one round on one server and one mock home, so the pair at each width shows only the change.
-The four screenshots stay in the round's evidence directory from the landing protocol; Step 9 of the landing protocol carries them to the user.
-The reviewer judges the change from the words, so the words must say what each screenshot shows.
+Evidence names the defect visible before and the resulting state after at each required width. The screenshots remain
+with the round's retained evidence so the reviewer and user can assess the change without rerunning it.

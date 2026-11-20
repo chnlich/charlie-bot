@@ -123,10 +123,10 @@ fn start_loop(args: &StartArgs) -> Result<(), CliExit> {
   payload.insert(wire::SESSION_ID.to_string(), json!(session_id));
   payload.insert(wire::REPO_PATH_FIELD.to_string(), json!(args.repo));
   payload.insert(wire::BASE_BRANCH_FIELD.to_string(), json!(args.base_branch));
-  payload.insert(wire::BACKEND.to_string(), optional_string(&args.backend));
+  payload.insert(wire::BACKEND.to_string(), json_out::optional_string(&args.backend));
   payload.insert(wire::ITERATIONS.to_string(), json!(args.iterations));
   payload.insert(wire::GOAL.to_string(), json!(goal));
-  payload.insert(wire::WORK_BRANCH.to_string(), optional_string(&args.work_branch));
+  payload.insert(wire::WORK_BRANCH.to_string(), json_out::optional_string(&args.work_branch));
   payload.insert(wire::MERGE_BACK.to_string(), json!(args.merge_back));
   if let Some(plan_text) = &plan {
     payload.insert(wire::PLAN.to_string(), json!(plan_text));
@@ -204,8 +204,4 @@ fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>
   )?;
   response.insert(wire::CHILD_SESSION_ID.to_string(), child.get("session_id")?.clone());
   Some(Value::Object(response))
-}
-
-fn optional_string(value: &Option<String>) -> Value {
-  value.as_ref().map_or(Value::Null, |value| json!(value))
 }

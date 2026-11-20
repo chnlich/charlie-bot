@@ -137,8 +137,8 @@ fn data_rows(body: &str) -> Vec<Value> {
 
 /// The byte index after the JSON value that starts at `start`.
 ///
-/// The statement terminator after the value does not name the value's end: the served script keeps a `;` beside the
-/// token before it and drops the line terminator, so the value's own matching bracket is what ends it. A bracket
+/// The statement terminator after the value does not name the value's end. The served script keeps a `;` beside the
+/// token before it and drops the line terminator. So the value's own matching bracket is what ends it. A bracket
 /// inside a string is part of the string.
 fn value_end(body: &str, start: usize) -> usize {
   let mut depth = 0usize;

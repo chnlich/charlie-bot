@@ -768,6 +768,9 @@ async fn judged_waiting(
   items: &[WaitingItem],
   stored: &[WaitingItem],
 ) -> Result<Vec<WaitingItem>, WebReplyError> {
+  if items.is_empty() {
+    return Ok(Vec::new());
+  }
   let stored_digests = stored
     .iter()
     .map(|item| Ok((item_sha256(item)?, item)))

@@ -398,9 +398,10 @@ last console lines and page errors, the requests the host's network change dropp
 repetition), and the interference reruns, so a missing time can be read against what the page reported. A release
 repetition records when its open navigated into the hold (`openInHoldMs` in the JSON).
 
-**The mark's DOM contract (task 3 implements it).** A page marks a stored copy as not current with the attribute
-`data-freshness="not-current"` on one element of its document. The bench watches for that element and reports the
-first time it appears. Before task 3 no page carries the attribute, so every cell reports the mark as absent.
+**The mark's DOM contract.** A page marks a stored copy as not current with the attribute
+`data-freshness="not-current"` on the chat column's mark element (`web/templates/index.html`; `sidebar/last-state.js`
+sets the attribute while the messages are a copy). The bench watches for that element and reports the first time it
+appears. A cell whose page shows only current messages reports the mark as absent.
 
 **Page's own timings.** A page reports `newest_message_ms` and `current_ms` in its `page_load` event
 (`web/features/diag/templates/diag/client-events.js`), with the open case, the content source and the render-blocking

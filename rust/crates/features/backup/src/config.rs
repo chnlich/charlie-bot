@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 /// The name of the registered `backup:` config section.
 pub const NAME: &str = "backup";
 
-/// The `backup:` section. A missing key fails a handler run with its reason, while the server loads the section and
-/// starts without either, so a release can land before the cutover writes them.
+/// The `backup:` section. A missing key fails a handler run with its reason.
+/// The server loads the section and starts without either, so a release can land before the cutover writes them.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackupConfig {

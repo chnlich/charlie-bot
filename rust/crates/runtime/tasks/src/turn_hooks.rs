@@ -401,6 +401,8 @@ pub(crate) async fn checkpoint(
     features.store.persist_and_broadcast(session_id, json!({"type": TURN_HOOKS, "results": results})).await?;
   record["id"].as_str().context("the persisted turn_hooks record carries its id")?;
   let record_value = record.to_value();
+  // The blocks show their reasons before an error ends the turn, so a block that an error follows is not lost.
+  show_reasons(features, session_id, &record_value, 0).await?;
 
   if let Some(Ran { name, outcome: Outcome::Error { message } }) =
     ran.iter().find(|run| matches!(run.outcome, Outcome::Error { .. }))
@@ -412,7 +414,6 @@ pub(crate) async fn checkpoint(
   if !ran.iter().any(|run| matches!(run.outcome, Outcome::Block { .. })) {
     return Ok(Checkpoint::Finish);
   }
-  show_reasons(features, session_id, &record_value, 0).await?;
   if blocks_before(&log.turn, log.turn.len()) >= MAX_CONTINUATIONS {
     return Ok(Checkpoint::Finish);
   }
@@ -792,6 +793,30 @@ mod tests {
     let errors: Vec<&Value> = turn.iter().filter(|event| event["type"] == ERROR).collect();
     assert_eq!(errors.len(), 1);
     assert!(errors[0]["message"].as_str().unwrap().starts_with("Turn-end check gate failed: "), "{}", errors[0]);
+  }
+
+  #[tokio::test]
+  async fn a_block_reason_shows_before_a_later_entry_errors_and_ends_the_turn() {
+    let home = tempfile::tempdir().unwrap();
+    let hooks = json!([
+      {"name": "test-gate", "command": GATE_ALWAYS_BLOCKS},
+      {"name": "test-failing", "command": "exit 3"},
+    ])
+    .to_string();
+    let (features, meta) = checkpoint_session(home.path(), &hooks, "turn-hooks-block-then-error").await;
+    let session_id = &meta.id;
+
+    assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
+    let turn = turn_events(&features, session_id);
+    let reason = turn
+      .iter()
+      .position(|event| {
+        event["type"] == AGENT_MESSAGE && event["from_session_name"] == "test-gate" && event["content"] == "needs work"
+      })
+      .expect("the block's reason is shown to the agent");
+    let error = turn.iter().position(|event| event["type"] == ERROR).expect("the failing entry's error is shown");
+    assert!(reason < error, "the reason shows before the error that ends the turn");
+    assert_eq!(count_of(&turn, TURN_HOOKS), 1);
   }
 
   #[tokio::test]

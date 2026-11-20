@@ -743,6 +743,21 @@ test('a watched restart returns at the server ready instant: the device time les
   assert.equal(socketEpisodeOf(h).return_at, new Date(h.clock() - 400).toISOString());
 });
 
+test('a 1000 close taken while visible where the tab hid before returning uses the return time, not uptime', () => {
+  const h = buildClientEventsHarness();
+  h.dispatch('charliebot:client-socket-close', {code: 1000});
+  h.advance(1000);
+  setTabHidden(h, true);
+  h.advance(60000);
+  setTabHidden(h, false);
+  const returnedAt = h.clock();
+  h.advance(200);
+  h.dispatch('charliebot:client-socket-open', {attempts: 1});
+  h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 0, uptimeMs: 55000});
+
+  assert.equal(socketEpisodeOf(h).return_at, new Date(returnedAt + 200).toISOString());
+});
+
 test('a close the page took while hidden, caught up while still hidden, has no return point', () => {
   const h = buildClientEventsHarness();
   setTabHidden(h, true);

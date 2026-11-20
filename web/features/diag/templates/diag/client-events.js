@@ -125,7 +125,10 @@
   let lastVisibleMs = Date.now();
   let lastVisibleLoadMs = 0;
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
+    if (document.hidden) {
+      if (socketEpisode) socketEpisode.visible_throughout = false;
+      return;
+    }
     lastVisibleMs = Date.now();
     lastVisibleLoadMs = performance.now();
   });
@@ -137,7 +140,7 @@
     socketEpisode = {
       close_at: new Date().toISOString(),
       close_code: event.detail.code == null ? null : event.detail.code,
-      visible_at_close: !document.hidden,
+      visible_throughout: !document.hidden,
       // The page's first answer after the close: a successful request, or the socket's own open.
       first_answer_ms: null,
       reconnect_at: null,
@@ -191,7 +194,7 @@
   // page's last visible moment and its first answer after the close.
   function returnPointMs(episode, uptimeMs, receivedMs) {
     if (document.hidden) return null;
-    if (episode.visible_at_close && episode.close_code === 1000) return receivedMs - uptimeMs;
+    if (episode.visible_throughout && episode.close_code === 1000) return receivedMs - uptimeMs;
     return Math.max(lastVisibleMs, episode.first_answer_ms);
   }
 

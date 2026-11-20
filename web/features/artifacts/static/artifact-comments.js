@@ -37,14 +37,15 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // Characters of the page text that precede a row's first character. A draft on a row whose
     // quote repeats on the page stores them, so a reload finds that row again.
     var BEFORE_CHARS = 32;
-    // The kind of one comment entry, which doubles as its dedup key and as the
+    // The kind of one pending entry, which doubles as its dedup key and as the
     // persisted draft discriminator. A manual block comment has the BLOCK kind;
-    // each shortcut below has its own.
+    // each shortcut below has its own; an option pick on a question has the PICK kind.
     var ENTRY_KIND = {
       BLOCK: 'block',
       IMPROVE: 'improve',
       SHORTEN: 'shorten',
       VERIFY: 'verify',
+      PICK: 'pick',
     };
     // Adding a button here needs no other change: the entry's kind is its own.
     var SHORTCUTS = [
@@ -99,20 +100,20 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var refDocTop = 0;
     var cardHeights = null;
     var reflowScheduled = false;
-    // Picks on the questions of plan, understanding and waiting pages only.
+    // Picks on the questions of plan, understanding and waiting pages only. A pick is an entry of `pending`,
+    // so the one tray holds picks and comments and one Send sends both.
     var PICK_PAGE_PATTERN = /(^|\/)(plan|understanding|waiting)_[^/]*$/;
     var QUOTE_CLOSERS = {'「': '」', '“': '”', '"': '"'};
-    // The pick stage names each step: editing picks change. In countdown the undo window is
-    // open. In sending the post is in flight, retried on a network error or 5xx. In sent the
-    // buttons stay off until a reload.
-    var pickStage = 'editing';
-    var pickCountdown = null;
+    // The tray stage names each step of a send. Editing changes the pending list. In countdown the undo window is
+    // open. In sending the post is in flight, retried on a network error or 5xx. Entries leave the list when the
+    // post lands.
+    var trayStage = 'editing';
+    var sendHandle = null;
     var picks = [];
-    var pickBar = null;
-    var pickLabel = null;
-    var pickRestButton = null;
-    var pickUndoButton = null;
-    var pickSendButton = null;
+    var trayPickRow = null;
+    var trayPickLabel = null;
+    var trayRestButton = null;
+    var trayUndoButton = null;
 
     window.__cbcResolveSessionId = resolveSessionId;
     window.__cbcBuildBatchMessage = buildBatchMessage;
@@ -133,8 +134,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     installStyles();
     installListeners();
     installShortcuts();
-    installBatchTray();
     installPicks();
+    installBatchTray();
 
     function extractSessionIdFromHash(hash) {
       var text = String(hash || '');
@@ -173,7 +174,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     function normalizeKind(kind) {
-      return isShortcutKind(kind) ? kind : ENTRY_KIND.BLOCK;
+      return kind === ENTRY_KIND.PICK || isShortcutKind(kind) ? kind : ENTRY_KIND.BLOCK;
     }
 
     function serializeDraft(entries) {
@@ -492,19 +493,17 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-send{border:1px solid #2ea043;border-radius:6px;padding:5px 10px;background:#238636;color:#fff;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-tray-send:hover:not(:disabled){background:#2ea043}' +
         '.' + GLOBAL_PREFIX + '-tray-send:disabled{cursor:not-allowed;opacity:.64;background:#30363d;border-color:#484f58;color:#c9d1d9}' +
-        '.' + GLOBAL_PREFIX + '-tray-clear{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
-        '.' + GLOBAL_PREFIX + '-tray-clear:hover{background:#262d36}' +
+        '.' + GLOBAL_PREFIX + '-tray-action{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer;white-space:nowrap}' +
+        '.' + GLOBAL_PREFIX + '-tray-action:hover:not(:disabled){background:#262d36}' +
+        '.' + GLOBAL_PREFIX + '-tray-action:disabled{cursor:not-allowed;opacity:.64}' +
+        '.' + GLOBAL_PREFIX + '-tray-picks{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 8px;color:#8b949e;font-size:12px}' +
+        '.' + GLOBAL_PREFIX + '-tray-picks-label{white-space:nowrap}' +
         '.' + GLOBAL_PREFIX + '-icon{display:inline-flex;vertical-align:middle;margin-right:5px}' +
         '.' + GLOBAL_PREFIX + '-icon:empty{display:none}' +
         '.' + GLOBAL_PREFIX + '-picks{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}' +
         '.' + GLOBAL_PREFIX + '-pick{border:1px solid #d0d7de;border-radius:6px;padding:4px 9px;background:#f6f8fa;color:#1b2430;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-pick[aria-pressed="true"]{background:#1163c0;border-color:#1163c0;color:#fff}' +
         '.' + GLOBAL_PREFIX + '-pick:disabled{cursor:not-allowed;opacity:.64}' +
-        '.' + GLOBAL_PREFIX + '-pickbar{display:flex;align-items:center;justify-content:flex-end;gap:7px;box-sizing:border-box;background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:8px 10px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
-        '.' + GLOBAL_PREFIX + '-pickbar-label{flex:1;color:#8b949e;white-space:nowrap}' +
-        '.' + GLOBAL_PREFIX + '-pickbar-btn{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer;white-space:nowrap}' +
-        '.' + GLOBAL_PREFIX + '-pickbar-btn:disabled{cursor:not-allowed;opacity:.64}' +
-        '.' + GLOBAL_PREFIX + '-pickbar-send{border-color:#2ea043;background:#238636;color:#fff}' +
         '.' + GLOBAL_PREFIX + '-gutter{position:fixed;top:0;left:0;width:300px;overflow-x:hidden;'
           + 'overflow-y:hidden;z-index:2147483644}' +
         '.' + GLOBAL_PREFIX + '-gutter .' + GLOBAL_PREFIX + '-tray-item{position:absolute;left:0;right:0;box-sizing:border-box}';
@@ -807,7 +806,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // them top to bottom from 1. One match, or an entry the page no longer holds,
     // renders no suffix.
     function occurrenceSuffix(entry) {
-      if (!entry.el) return '';
+      if (!entry.el || entry.quote === '') return '';
       var rows = collectCommentableBlocks();
       var k = 0;
       var m = 0;
@@ -999,11 +998,25 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return blocks;
     }
 
+    // The pick record a restored pick entry belongs to: the question it names, with the option it carries.
+    function pickRecordFor(entry) {
+      for (var i = 0; i < picks.length; i++) {
+        if (entry.context === 'Q' + picks[i].n && optionIndexOf(picks[i], entry.comment) !== -1) return picks[i];
+      }
+      return null;
+    }
+
     function reanchorPending() {
       var rows = collectCommentableBlocks();
       for (var i = 0; i < pending.length; i++) {
         var entry = pending[i];
-        if (entry.el || entry.quote === '') continue;
+        if (entry.el) continue;
+        if (entry.kind === ENTRY_KIND.PICK) {
+          var record = pickRecordFor(entry);
+          if (record) entry.el = record.fork;
+          continue;
+        }
+        if (entry.quote === '') continue;
         var row = rowForDraft(entry, rows);
         if (!row) continue;
         entry.el = row;
@@ -1019,8 +1032,18 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
       var header = document.createElement('div');
       header.className = GLOBAL_PREFIX + '-tray-header';
-      header.textContent = 'Pending comments (0)';
       container.appendChild(header);
+
+      // The question count of a page with questions: how many still have no pick, and the action that picks
+      // each of them as recommended.
+      var pickRow = document.createElement('div');
+      pickRow.className = GLOBAL_PREFIX + '-tray-picks';
+      var pickLabelNode = document.createElement('span');
+      pickLabelNode.className = GLOBAL_PREFIX + '-tray-picks-label';
+      var restBtn = makeButton('Rest as recommended', restPicksAsRecommended, GLOBAL_PREFIX + '-tray-action', null);
+      pickRow.appendChild(pickLabelNode);
+      pickRow.appendChild(restBtn);
+      container.appendChild(pickRow);
 
       var list = document.createElement('div');
       list.className = GLOBAL_PREFIX + '-tray-list';
@@ -1033,16 +1056,18 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
       var actions = document.createElement('div');
       actions.className = GLOBAL_PREFIX + '-tray-actions';
+      var undoBtn = makeButton('Undo', undoSend, GLOBAL_PREFIX + '-tray-action', iconSlotFor('undo', 14));
       var clearBtn = document.createElement('button');
       clearBtn.type = 'button';
       clearBtn.textContent = 'Clear';
-      clearBtn.className = GLOBAL_PREFIX + '-tray-clear';
+      clearBtn.className = GLOBAL_PREFIX + '-tray-action';
       clearBtn.addEventListener('click', resetPending);
       var sendBtn = document.createElement('button');
       sendBtn.type = 'button';
       sendBtn.textContent = 'Send';
       sendBtn.className = GLOBAL_PREFIX + '-tray-send';
       sendBtn.addEventListener('click', sendBatch);
+      actions.appendChild(undoBtn);
       actions.appendChild(clearBtn);
       actions.appendChild(sendBtn);
       container.appendChild(actions);
@@ -1050,6 +1075,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       injectInDock(container);
       tray = container;
       trayHeader = header;
+      trayPickRow = pickRow;
+      trayPickLabel = pickLabelNode;
+      trayRestButton = restBtn;
+      trayUndoButton = undoBtn;
       trayList = list;
       traySendBtn = sendBtn;
       trayClearBtn = clearBtn;
@@ -1100,16 +1129,20 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       remove.type = 'button';
       remove.className = GLOBAL_PREFIX + '-tray-remove';
       remove.innerHTML = cbIcon('close', 12);
-      remove.title = 'Remove this comment';
-      remove.setAttribute('aria-label', 'Remove this comment');
+      remove.title = 'Remove this entry';
+      remove.setAttribute('aria-label', 'Remove this entry');
       remove.addEventListener('click', function() {
         removeEntry(idx);
       });
+      // A send in flight holds the list still; an option pick's text is the option, so it has no edit.
+      var locked = trayStage !== 'editing';
+      remove.disabled = locked;
+      editBtn.disabled = locked;
 
       body.appendChild(quote);
       body.appendChild(draft);
       controls.appendChild(remove);
-      controls.appendChild(editBtn);
+      if (entry.kind !== ENTRY_KIND.PICK) controls.appendChild(editBtn);
       main.appendChild(body);
       main.appendChild(controls);
       item.appendChild(main);
@@ -1149,16 +1182,18 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       if (!tray) return;
       if (pending.length > 0 && sessionId) ensureTargetSessionName();
       var targetSuffix = targetSessionSuffix();
-      trayHeader.textContent = 'Pending comments (' + pending.length + ')' + targetSuffix;
-      traySendBtn.textContent = 'Send ' + pending.length + targetSuffix;
-      tray.style.display = pending.length > 0 ? 'flex' : 'none';
-      if (!sessionId) {
-        traySendBtn.disabled = true;
-        trayReason.style.display = 'block';
-      } else {
-        traySendBtn.disabled = false;
-        trayReason.style.display = 'none';
-      }
+      var idle = trayStage === 'editing';
+      trayHeader.textContent = 'Pending (' + pending.length + ')' + targetSuffix;
+      traySendBtn.textContent = idle ? 'Send ' + pending.length + targetSuffix : 'Sending';
+      tray.style.display = pending.length > 0 || picks.length > 0 ? 'flex' : 'none';
+      trayPickRow.style.display = picks.length > 0 ? 'flex' : 'none';
+      trayPickLabel.textContent = 'No pick on ' + unpickedCount() + ' of ' + picks.length + ' questions';
+      trayRestButton.disabled = !idle || unpickedRecommendedCount() === 0;
+      trayUndoButton.style.display = trayStage === 'countdown' ? 'inline-block' : 'none';
+      trayClearBtn.disabled = !idle;
+      traySendBtn.disabled = !idle || !sessionId || pending.length === 0;
+      trayReason.style.display = sessionId ? 'none' : 'block';
+      renderPicks();
       scheduleReflow();
     }
 
@@ -1178,7 +1213,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       if (hovered && !popover) positionTrigger(hovered);
     }
 
-    // The rail's size changes without a content change: the composer opens, a toast shows, the pick bar relabels,
+    // The rail's size changes without a content change: the composer opens, a toast shows, the pick count relabels,
     // a textarea is dragged taller. Only the geometry follows here, so the controls and any open edit stay as they are.
     function railSizeChanged() {
       var side = railIsSide();
@@ -1362,13 +1397,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     function removeEntry(idx) {
       if (idx < 0 || idx >= pending.length) return;
       var removed = pending.splice(idx, 1)[0];
-      if (removed.kind === ENTRY_KIND.BLOCK && removed.el) {
-        var stillMarked = false;
-        for (var i = 0; i < pending.length; i++) {
-          if (pending[i].kind === ENTRY_KIND.BLOCK && pending[i].el === removed.el) { stillMarked = true; break; }
-        }
-        if (!stillMarked) removed.el.classList.remove(GLOBAL_PREFIX + '-marked');
-      }
+      if (removed.kind === ENTRY_KIND.BLOCK && removed.el) unmarkBlockIfUnused(removed.el);
       saveDraft(pending, artifactPath);
       refreshTray();
     }
@@ -1386,39 +1415,85 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       refreshTray();
     }
 
-    async function sendBatch() {
-      if (!sessionId || pending.length === 0) return;
-      var count = pending.length;
-      var ordered = pending.slice();
-      ordered.sort(function(a, b) {
-        // Shortcut entries lead the batch. Among themselves the sort is stable,
-        // so they keep click order. Block comments follow in document order.
-        var aShortcut = a.kind !== ENTRY_KIND.BLOCK;
-        var bShortcut = b.kind !== ENTRY_KIND.BLOCK;
-        if (aShortcut && !bShortcut) return -1;
-        if (!aShortcut && bShortcut) return 1;
-        if (aShortcut && bShortcut) return 0;
-        if (!a.el || !b.el) return 0;
+    // The batch order: shortcut entries lead, then the entries with no anchor, each group in click order (the sort
+    // is stable). Anchored picks and block comments follow in document order, so each sits where the page puts it.
+    function batchRank(entry) {
+      if (isShortcutKind(entry.kind)) return 0;
+      return entry.el ? 2 : 1;
+    }
+
+    function batchOrder(entries) {
+      return entries.slice().sort(function(a, b) {
+        var rank = batchRank(a) - batchRank(b);
+        if (rank !== 0 || batchRank(a) !== 2) return rank;
         var mask = a.el.compareDocumentPosition(b.el);
         if (mask & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
         if (mask & Node.DOCUMENT_POSITION_PRECEDING) return 1;
         return 0;
       });
-      var sendBtn = traySendBtn;
-      var prevLabel = sendBtn.textContent;
-      sendBtn.disabled = true;
-      sendBtn.textContent = 'Sending';
-      try {
-        var result = await postCommentMessage(resolveTargetSessionId(), buildBatchMessage(ordered));
-        resetPending();
+    }
+
+    // The one send of the tray: every pending entry, picks and comments, goes as one message to the comment target
+    // after the undo window. Entries that land leave the list; entries added during the window stay pending.
+    function sendBatch() {
+      if (!sessionId || pending.length === 0 || trayStage !== 'editing') return;
+      var batch = batchOrder(pending);
+      var message = buildBatchMessage(batch);
+      trayStage = 'countdown';
+      refreshTray();
+      sendHandle = startUndoableSend(function() {
+        trayStage = 'sending';
+        refreshTray();
+        return postCommentMessage(resolveTargetSessionId(), message);
+      });
+      sendHandle.sent.then(function(result) {
+        sendHandle = null;
+        trayStage = 'editing';
+        if (result === null) {
+          refreshTray();
+          return;
+        }
+        dropSent(batch);
         if (result.dispatch_error) showToast(result.dispatch_error, true);
-        else showToast(count + ' comments sent to chat', false);
-      } catch (err) {
-        console.error('Batch comment send failed:', err);
+        else showToast(batch.length + ' sent to chat', false);
+        if (batch.some(function(entry) { return entry.kind === ENTRY_KIND.PICK; })) refreshStatusViewAfterPick();
+        refreshTray();
+      }, function(err) {
+        sendHandle = null;
+        trayStage = 'editing';
+        console.error('Batch send failed:', err);
         showToast(err.message, true);
-        sendBtn.disabled = false;
-        sendBtn.textContent = prevLabel;
+        refreshTray();
+      });
+    }
+
+    function undoSend() {
+      if (sendHandle) sendHandle.cancel();
+    }
+
+    // Takes the sent entries out of the pending list and records each sent pick on its question, which then holds
+    // its answer until a reload. Entries not in the batch stay.
+    function dropSent(batch) {
+      pending = pending.filter(function(entry) { return batch.indexOf(entry) === -1; });
+      for (var i = 0; i < batch.length; i++) {
+        var entry = batch[i];
+        if (entry.kind === ENTRY_KIND.PICK && entry.el) {
+          for (var j = 0; j < picks.length; j++) {
+            if (picks[j].fork === entry.el) picks[j].answered = entry.comment;
+          }
+        }
+        if (entry.kind === ENTRY_KIND.BLOCK && entry.el) unmarkBlockIfUnused(entry.el);
       }
+      if (pending.length === 0) clearDraft(artifactPath);
+      else saveDraft(pending, artifactPath);
+    }
+
+    // The block marker goes once no pending block comment still anchors to the block.
+    function unmarkBlockIfUnused(el) {
+      for (var i = 0; i < pending.length; i++) {
+        if (pending[i].kind === ENTRY_KIND.BLOCK && pending[i].el === el) return;
+      }
+      el.classList.remove(GLOBAL_PREFIX + '-marked');
     }
 
     // ---- Option picks on the page's open questions ----
@@ -1513,7 +1588,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     // One record per pickable open fork. The record holds the fork's number and its named options.
     // Each option carries the line text and, once rendered, its button. The record also holds the
-    // index of the recommended option or -1, and the picked index or -1.
+    // index of the recommended option or -1.
     function pageForkRecords() {
       var records = [];
       var blocks = document.querySelectorAll('.fork');
@@ -1551,94 +1626,93 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
             }
           }
         }
-        records.push({fork: fork, n: number, options: options, rec: rec, picked: -1});
+        // answered: the option text of the pick that landed, or null until one does.
+        records.push({fork: fork, n: number, options: options, rec: rec, answered: null});
       }
       return records;
     }
 
-    // Option picks go to the session that owns the page: the server injects it, and a worker's page
-    // carries its parent. This is the one place that chooses the target, and sendPicks is its one caller.
-    function pickTargetSessionId() {
-      return serverSessionId;
+    // A question holds at most one pick, and the pick is a pending entry: anchored to the question's block and
+    // carrying the option's text. A pick leaves the pending list when its message lands; its question then holds
+    // the answer until a reload.
+    function pickEntryOf(record) {
+      for (var i = 0; i < pending.length; i++) {
+        if (pending[i].kind === ENTRY_KIND.PICK && pending[i].el === record.fork) return pending[i];
+      }
+      return null;
     }
 
+    function optionIndexOf(record, text) {
+      for (var i = 0; i < record.options.length; i++) {
+        if (record.options[i].text === text) return i;
+      }
+      return -1;
+    }
+
+    function pickEntry(record, option) {
+      return {
+        kind: ENTRY_KIND.PICK,
+        el: record.fork,
+        quote: '',
+        context: 'Q' + record.n,
+        comment: option.text,
+        occurrence: 0,
+      };
+    }
+
+    // The questions with neither a pending pick nor an answer that landed.
+    function unpickedRecords() {
+      return picks.filter(function(record) { return record.answered === null && !pickEntryOf(record); });
+    }
+
+    function unpickedCount() {
+      return unpickedRecords().length;
+    }
+
+    function unpickedRecommendedCount() {
+      return unpickedRecords().filter(function(record) { return record.rec !== -1; }).length;
+    }
+
+    // Clicking an option picks it; clicking the picked option again takes the pick back.
     function togglePick(record, index) {
-      record.picked = record.picked === index ? -1 : index;
-      renderPicks();
+      var option = record.options[index];
+      var entry = pickEntryOf(record);
+      if (!entry) {
+        pending.push(pickEntry(record, option));
+      } else if (entry.comment === option.text) {
+        pending.splice(pending.indexOf(entry), 1);
+      } else {
+        entry.comment = option.text;
+      }
+      saveDraft(pending, artifactPath);
+      refreshTray();
     }
 
+    // Each question that has no pick yet takes its recommended option.
     function restPicksAsRecommended() {
-      for (var i = 0; i < picks.length; i++) {
-        if (picks[i].picked === -1 && picks[i].rec !== -1) picks[i].picked = picks[i].rec;
+      var rested = unpickedRecords();
+      for (var i = 0; i < rested.length; i++) {
+        if (rested[i].rec !== -1) pending.push(pickEntry(rested[i], rested[i].options[rested[i].rec]));
       }
-      renderPicks();
+      saveDraft(pending, artifactPath);
+      refreshTray();
     }
 
-    function pickedCount() {
-      var count = 0;
-      for (var i = 0; i < picks.length; i++) {
-        if (picks[i].picked !== -1) count++;
-      }
-      return count;
-    }
-
+    // Each option button shows its question's pick: the pending entry's option, or the answer that landed. The
+    // buttons are off outside the editing stage, and on a question that has been answered.
     function renderPicks() {
-      var editable = pickStage === 'editing';
-      var restAvailable = false;
+      var idle = trayStage === 'editing';
       for (var i = 0; i < picks.length; i++) {
         var record = picks[i];
-        if (record.picked === -1 && record.rec !== -1) restAvailable = true;
+        var entry = pickEntryOf(record);
+        var picked = optionIndexOf(record, entry ? entry.comment : record.answered);
         for (var j = 0; j < record.options.length; j++) {
           var option = record.options[j];
-          option.button.disabled = !editable;
-          option.button.setAttribute('aria-pressed', record.picked === j ? 'true' : 'false');
-          setIcon(option.mark, record.picked === j ? 'done' : null, 12);
+          option.button.disabled = !idle || record.answered !== null;
+          option.button.setAttribute('aria-pressed', picked === j ? 'true' : 'false');
+          setIcon(option.mark, picked === j ? 'done' : null, 12);
         }
       }
-      var picked = pickedCount();
-      if (pickStage === 'countdown' || pickStage === 'sending') pickLabel.textContent = 'Sending';
-      else pickLabel.textContent = 'Picked ' + picked + '/' + picks.length;
-      pickRestButton.disabled = !(editable && restAvailable);
-      pickSendButton.disabled = !(editable && picked > 0);
-      pickUndoButton.style.display = pickStage === 'countdown' ? 'inline-block' : 'none';
-    }
-
-    function sendPicks() {
-      var chosen = picks.filter(function(record) { return record.picked !== -1; });
-      var entries = chosen.map(function(record) {
-        return buildCommentEntry('', 'Q' + record.n, record.options[record.picked].text);
-      });
-      var message = buildClickMessage('[Artifact picks \u00B7 ' + artifactPath + '] (' + chosen.length + ')', entries);
-      pickStage = 'countdown';
-      pickCountdown = startUndoableSend(function() {
-        pickStage = 'sending';
-        renderPicks();
-        return postCommentMessage(pickTargetSessionId(), message);
-      });
-      pickCountdown.sent.then(function(result) {
-        pickCountdown = null;
-        if (result === null) {
-          pickStage = 'editing';
-          renderPicks();
-          return;
-        }
-        pickStage = 'sent';
-        renderPicks();
-        if (result.dispatch_error) showToast(result.dispatch_error, true);
-        else showToast(chosen.length + ' picks sent to chat', false);
-        refreshStatusViewAfterPick();
-      }, function(err) {
-        pickCountdown = null;
-        console.error('Pick send failed:', err);
-        showToast(err.message, true);
-        pickStage = 'editing';
-        renderPicks();
-      });
-      renderPicks();
-    }
-
-    function undoPicks() {
-      if (pickCountdown) pickCountdown.cancel();
     }
 
     // A pick that landed refreshes the Status view of the chat page this artifact sits in. The chat
@@ -1680,23 +1754,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return button;
     }
 
-    function installPickBar() {
-      pickBar = document.createElement('div');
-      pickBar.className = GLOBAL_PREFIX + '-pickbar';
-      pickBar.classList.add(UI_CLASS);
-      pickLabel = document.createElement('span');
-      pickLabel.className = GLOBAL_PREFIX + '-pickbar-label';
-      pickRestButton = makeButton('Rest as recommended', restPicksAsRecommended, GLOBAL_PREFIX + '-pickbar-btn', null);
-      pickUndoButton = makeButton('Undo', undoPicks, GLOBAL_PREFIX + '-pickbar-btn', iconSlotFor('undo', 14));
-      pickSendButton = makeButton('Send', sendPicks, GLOBAL_PREFIX + '-pickbar-btn ' + GLOBAL_PREFIX + '-pickbar-send',
-        iconSlotFor('send', 14));
-      pickBar.appendChild(pickLabel);
-      pickBar.appendChild(pickRestButton);
-      pickBar.appendChild(pickUndoButton);
-      pickBar.appendChild(pickSendButton);
-      injectInDock(pickBar);
-    }
-
     // One row of buttons under the question's option lines. The row carries the layer marker, so the
     // comment layer neither quotes it nor anchors a comment to it.
     function installPickRow(record) {
@@ -1718,10 +1775,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     function installPicks() {
       if (!PICK_PAGE_PATTERN.test(artifactPath)) return;
       picks = pageForkRecords();
-      if (picks.length === 0) return;
       picks.forEach(installPickRow);
-      installPickBar();
-      renderPicks();
     }
 
     // The page's pickable forks in the shape its fixture holds: the number, the named options as

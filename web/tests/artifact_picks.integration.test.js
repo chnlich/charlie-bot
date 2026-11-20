@@ -8,12 +8,14 @@
 // - the page's own parser reads the shared fixture (rust/.../tests/data/plan_template_forks.json),
 //   the browser side of the fixture that artifact_check.rs asserts on the Rust side;
 // - each option is a button, and no text box stands beside the options;
-// - Send posts one message to the page owner, not the viewing session, after the undo window;
+// - two picks and one comment share one tray and one Send; the Send posts one message after the undo window, to the
+//   session a comment on the page reaches (the session named in the address, or the session the app shows inside the
+//   plan panel);
 // - Undo inside the window posts nothing.
 //
-// - with one pick made and one pending comment open, no floating control of the page layer (the pick bar, the
-//   pending-comment tray, the shortcut buttons, the anchored comment cards, the comment trigger and the composer)
-//   covers a content box at any scroll position, at each viewport width, and every control stays inside the viewport.
+// - with one pick made and one pending comment open, no floating control of the page layer (the tray, the shortcut
+//   buttons, the anchored comment cards, the comment trigger and the composer) covers a content box at any scroll
+//   position, at each viewport width, and every control stays inside the viewport.
 //
 // CHARLIEBOT_TEST_CHROME_BIN names the headless Chrome binary. The test fails when it is unset or names no file.
 // CHARLIEBOT_COVER_PAGE names the plan page the cover checks open, in place of the template.
@@ -40,6 +42,18 @@ const ICON_PARITY_PATH = path.join(WEB_DIR, 'tests', 'icons_parity.json');
 const OWNER = 'owner-session';
 const VIEWER = 'viewer-session';
 const PAGE_PATH = `/sessions/${OWNER}/artifacts/plan_picks.html`;
+// The session the app shows when the page sits in the plan panel: the panel's live accessor reports it.
+const LIVE = 'live-session';
+// The plan panel: a page whose iframe holds the plan page, opened with the panel's marker in its hash.
+const PANEL_PATH = '/panel/plan_picks_panel.html';
+const PANEL_HTML = '<!doctype html><html><body>' +
+  `<script>window.planPanel = {currentSessionId: () => ${JSON.stringify(LIVE)}};</script>` +
+  `<iframe id="panel" src="${PAGE_PATH}#cbsession=${OWNER}&amp;cbpanel=1"></iframe>` +
+  '</body></html>';
+const PAGE_READY = 'typeof window.__cbcPageForks === "function" && !!document.querySelector(".__cbc-tray")';
+const PANEL_READY = '(() => { const frame = document.getElementById("panel"); ' +
+  'const doc = frame && frame.contentDocument; return !!doc && !!doc.defaultView && ' +
+  'typeof doc.defaultView.__cbcPageForks === "function" && !!doc.querySelector(".__cbc-tray"); })()';
 // The undo window is five seconds; the wait leaves room for the post.
 const SEND_WAIT_MS = 9000;
 
@@ -75,6 +89,17 @@ function serve(sent, sourcePath) {
     if (req.method === 'GET' && url.pathname === PAGE_PATH) {
       res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
       res.end(page);
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === PANEL_PATH) {
+      res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+      res.end(PANEL_HTML);
+      return;
+    }
+    // The tray names its target session; a name the server does not answer would fall back to the page owner.
+    if (req.method === 'GET' && url.pathname.startsWith('/api/sessions/')) {
+      res.writeHead(200, {'Content-Type': 'application/json; charset=utf-8'});
+      res.end(JSON.stringify({name: 'Viewing session'}));
       return;
     }
     if (req.method === 'GET' && statics[url.pathname]) {
@@ -113,7 +138,8 @@ async function launchChrome(profileDir) {
   return {child, cdp};
 }
 
-async function openPage(cdp, url, viewport) {
+// Opens `url` and waits until the expression `ready` is true in the page.
+async function openPage(cdp, url, viewport, ready) {
   const {Page} = await import('../../dev/poor-network/chrome.mjs');
   const {targetId} = await cdp.send('Target.createTarget', {url: 'about:blank'});
   const {sessionId} = await cdp.send('Target.attachToTarget', {targetId, flatten: true});
@@ -126,24 +152,39 @@ async function openPage(cdp, url, viewport) {
   }
   await page.send('Page.navigate', {url});
   const deadline = Date.now() + 15000;
-  while (!(await page.evaluate('typeof window.__cbcPageForks === "function" && !!document.querySelector(".__cbc-pickbar")'))) {
-    if (Date.now() > deadline) throw new Error('timed out waiting for the pick bar');
+  while (!(await page.evaluate(ready))) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for the tray');
     await sleep(50);
   }
   return page;
 }
 
-// Runs one check against a served plan page opened from the viewing session, then tears everything down.
-// The page is the template unless `source` names another file; a viewport, when given, is set before the page loads.
-async function withPlanPage(check, {viewport, source = TEMPLATE_PATH} = {}) {
+// The page as a check sees it when it sits in the plan panel: each expression runs in the panel iframe's document.
+function inPanelFrame(page) {
+  return {
+    evaluate: (expression) => page.evaluate(
+      `((document) => (${expression}))(document.getElementById("panel").contentDocument)`),
+  };
+}
+
+// Runs one check against a served page, then tears everything down. The page is the template unless `source` names
+// another file, and the browser opens `url`: by default the plan page opened from the viewing session. `inFrame` gives
+// the check the plan page inside the plan panel. A viewport, when given, is set before the page loads.
+async function withPlanPage(check, {
+  viewport,
+  source = TEMPLATE_PATH,
+  url = `${PAGE_PATH}#cbsession=${VIEWER}`,
+  ready = PAGE_READY,
+  inFrame = false,
+} = {}) {
   const sent = [];
   const {server, base} = await serve(sent, source);
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-picks-chrome-'));
   let chrome = null;
   try {
     chrome = await launchChrome(profileDir);
-    const page = await openPage(chrome.cdp, `${base}${PAGE_PATH}#cbsession=${VIEWER}`, viewport);
-    await check(page, sent);
+    const page = await openPage(chrome.cdp, `${base}${url}`, viewport, ready);
+    await check(inFrame ? inPanelFrame(page) : page, sent);
   } finally {
     if (chrome) {
       chrome.cdp.close();
@@ -178,51 +219,102 @@ test('the browser parser reads the shared fixture and offers a button per option
   });
 });
 
-test('Send posts one message to the page owner after the undo window, option text verbatim', async () => {
-  await withPlanPage(async (page, sent) => {
+// The template has one open question. Two picks need a second one, so the two-pick checks serve the template with this
+// question added after its last section. Its number and its options are the ones the entries below name.
+const SECOND_QUESTION_NUMBER = '3';
+const SECOND_QUESTION_OPTION = '「first」: run the check before the change.';
+const SECOND_QUESTION = `    <section class="plan-section">
+      <h2><span class="n">7</span> Run order</h2>
+      <div class="fork">
+        <p class="q"><span class="fn">${SECOND_QUESTION_NUMBER}</span> Which order should the steps run in?</p>
+        <ul>
+          <li>${SECOND_QUESTION_OPTION}
+          <li>「second」: run the change before the check.
+        </ul>
+        <p class="rec"><b>Recommendation:</b> 「first」, because the check guards the change.</p>
+      </div>
+    </section>
+`;
+
+// Runs one check against the template with the second open question, then removes the copy it served.
+async function withTwoQuestionPage(check, options = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-picks-questions-'));
+  try {
+    const html = fs.readFileSync(TEMPLATE_PATH, 'utf8');
+    const at = html.indexOf('  </main>');
+    if (at === -1) throw new Error('the template has no main element to add a question to');
+    const source = path.join(dir, 'plan_two_questions.html');
+    fs.writeFileSync(source, html.slice(0, at) + SECOND_QUESTION + html.slice(at));
+    await withPlanPage(check, {...options, source});
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+}
+
+// Picks the first option of each of the two open questions, then writes one comment on a paragraph. Returns what
+// the tray shows: its count of trays and Send buttons, and its header.
+const TWO_PICKS_AND_A_COMMENT = `(() => {
+  const paragraphs = Array.from(document.querySelectorAll('p')).filter((p) =>
+    !p.closest('.fork, .__cbc-ui') && p.textContent.trim().length > 40 && p.getClientRects().length > 0);
+  const forks = Array.from(document.querySelectorAll('.fork')).filter((fork) => fork.querySelector('.__cbc-pick'));
+  forks[0].querySelector('.__cbc-pick').click();
+  forks[1].querySelector('.__cbc-pick').click();
+  paragraphs[0].click();
+  document.querySelector('.__cbc-popover textarea').value = 'Check the tray against the page text.';
+  document.querySelector('.__cbc-add').click();
+  return {
+    trays: document.querySelectorAll('.__cbc-tray').length,
+    sends: document.querySelectorAll('.__cbc-tray-send').length,
+    header: document.querySelector('.__cbc-tray-header').textContent,
+  };
+})()`;
+
+test('two picks and a comment share one tray and one Send, which posts one message to the comment target', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
     const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
-    await page.evaluate('document.querySelector(".__cbc-pick").click()');
-    assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-pick svg").length'), 1,
-      'the picked option draws the done icon');
-    assert.equal(await page.evaluate('document.querySelector(".__cbc-pickbar-send svg") !== null'), true,
-      'Send draws its icon');
-    // A pick's Send starts the delayed send that Status clicks start too: the one global startUndoableSend.
-    await page.evaluate(`(() => {
-      window.__sendStarts = 0;
-      const start = window.startUndoableSend;
-      window.startUndoableSend = function(...args) {
-        window.__sendStarts += 1;
-        return start.apply(this, args);
-      };
-      return true;
-    })()`);
-    await page.evaluate('document.querySelector(".__cbc-pickbar-send").click()');
+    const shown = await page.evaluate(TWO_PICKS_AND_A_COMMENT);
+    // The entries are placed on the next animation frame, so the count waits for it.
+    await sleep(100);
+    assert.deepEqual([shown.trays, shown.sends], [1, 1], 'one tray and one Send');
+    assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-tray-item").length'), 3,
+      'the tray holds two picks and one comment');
+    assert.match(shown.header, /^Pending \(3\)/);
+    await page.evaluate('document.querySelector(".__cbc-tray-send").click()');
     await sleep(SEND_WAIT_MS);
 
-    assert.equal(await page.evaluate('window.__sendStarts'), 1, 'the pick goes through the shared delayed send');
     assert.equal(sent.length, 1, 'one message for the page');
-    assert.equal(sent[0].session, OWNER, 'the message goes to the page owner, not the viewing session');
-    const option = fixture[0].options[0];
-    assert.equal(sent[0].body.content, [
-      `[Artifact picks · ${PAGE_PATH}] (1)`,
-      '',
-      `1. ▸ Q${fixture[0].n}`,
-      `   ↳ ${option.text}`,
-    ].join('\n'));
+    assert.equal(sent[0].session, VIEWER, 'the message goes to the comment target, the session the page opened on');
+    const lines = sent[0].body.content.split('\n');
+    assert.equal(lines[0], `[Artifact comments · ${PAGE_PATH}] (3)`, 'one header line for the batch');
+    assert.equal(lines.filter((line) => /^\d+\. ▸ /.test(line)).length, 3, 'one numbered entry per pick or comment');
+    assert.ok(lines.some((line) => line.endsWith(`▸ Q${fixture[0].n}`)), 'the first pick names its question');
+    assert.ok(lines.includes(`   ↳ ${fixture[0].options[0].text}`), 'the first pick carries its option text verbatim');
+    assert.ok(lines.includes(`   ↳ ${SECOND_QUESTION_OPTION}`), 'the second pick carries its option text verbatim');
+    assert.ok(lines.includes('   ↳ Check the tray against the page text.'), 'the comment rides in the same message');
   });
 });
 
-test('Undo inside the undo window posts nothing', async () => {
-  await withPlanPage(async (page, sent) => {
-    await page.evaluate('document.querySelector(".__cbc-pick").click()');
-    await page.evaluate('document.querySelector(".__cbc-pickbar-send").click()');
-    await page.evaluate(
-      'Array.from(document.querySelectorAll(".__cbc-pickbar-btn")).find((button) => button.textContent.trim() === "Undo").click()');
+test('Undo inside the undo window posts nothing and keeps the picks and the comment pending', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    await page.evaluate(TWO_PICKS_AND_A_COMMENT);
+    await page.evaluate('document.querySelector(".__cbc-tray-send").click()');
+    await page.evaluate('Array.from(document.querySelectorAll(".__cbc-tray-action"))' +
+      '.find((button) => button.textContent.trim() === "Undo").click()');
     await sleep(SEND_WAIT_MS);
 
     assert.deepEqual(sent, []);
-    assert.equal(await page.evaluate('document.querySelector(".__cbc-pickbar-label").textContent'), 'Picked 1/1');
+    assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-tray-item").length'), 3);
   });
+});
+
+test('picks and a comment from a page in the plan panel reach the session the app shows, not the page owner', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    await page.evaluate(TWO_PICKS_AND_A_COMMENT);
+    await page.evaluate('document.querySelector(".__cbc-tray-send").click()');
+    await sleep(SEND_WAIT_MS);
+
+    assert.deepEqual(sent.map((entry) => entry.session), [LIVE], 'one message, to the session the app shows');
+  }, {url: PANEL_PATH, ready: PANEL_READY, inFrame: true});
 });
 
 // The widths and the scroll positions of the cover checks. The shots name the three positions a reader meets.
@@ -240,7 +332,7 @@ const PICK_AND_COMMENT = `(() => {
   document.querySelector('.__cbc-popover textarea').value = 'Check the tray against the page text.';
   document.querySelector('.__cbc-add').click();
   paragraphs[2].dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
-  return {pickLabel: document.querySelector('.__cbc-pickbar-label').textContent,
+  return {pickLabel: document.querySelector('.__cbc-tray-picks-label').textContent,
     trigger: document.querySelector('.__cbc-trigger').style.display};
 })()`;
 
@@ -354,8 +446,8 @@ for (const width of COVER_WIDTHS) {
       // The tray's cards are built on the next animation frame, so the count waits for it.
       await sleep(100);
       const pending = await page.evaluate('document.querySelectorAll(".__cbc-tray-item").length');
-      assert.match(state.pickLabel, /^Picked 1\//, 'one pick is made');
-      assert.equal(pending, 1, 'one pending comment is open');
+      assert.match(state.pickLabel, /\b0 of 1\b/, 'the one question is picked');
+      assert.equal(pending, 2, 'one pick and one comment are pending');
       assert.equal(state.trigger, 'flex', 'the comment trigger shows over the hovered block');
       const findings = await coverFindings(page, width, 'tray');
       assert.equal(await page.evaluate(OPEN_COMPOSER), true, 'the composer opens');

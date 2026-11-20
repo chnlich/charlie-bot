@@ -693,6 +693,30 @@ test('a failed shell refresh leaves the stored shell available to navigation', a
   assert.equal(await nav.response.text(), '<html>current</html>');
 });
 
+test('two refreshes that overlap share one shell fetch, and both tabs get its result', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-v1');
+  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const shellAnswer = deferred();
+  h.state.network = (req) => (req.url === SHELL_URL
+    ? shellAnswer.promise
+    : new Response('new app', {status: 200, headers: {ETag: '"app-v2"'}}));
+  const first = messageChannel();
+  const second = messageChannel();
+  const warms = [
+    h.fire('message', {data: {type: 'warm', refresh: true}, ports: [first.port2]}),
+    h.fire('message', {data: {type: 'warm', refresh: true}, ports: [second.port2]}),
+  ];
+  await flush();
+  shellAnswer.release(new Response('<html>new</html>', {status: 200}));
+  await Promise.all(warms.flatMap((event) => event.waits));
+
+  assert.equal(h.state.calls.filter((call) => call.url === SHELL_URL).length, 1, 'one shell download per release');
+  assert.equal(first.replies[0].stored, true);
+  assert.equal(second.replies[0].stored, true);
+  assert.equal(await (await store.match(SHELL_KEY)).text(), '<html>new</html>');
+});
+
 test('a shell refresh names the stored shell by its tag: a 304 keeps it, and a 200 stores its own tag', async () => {
   const h = harness();
   const store = await h.caches.api.open('last-state-v1');

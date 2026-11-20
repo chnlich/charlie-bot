@@ -195,3 +195,43 @@ test('the page-current event tells the active worker the catch-up is complete', 
   assert.deepEqual(JSON.parse(JSON.stringify(page.context.workerMessages)), [{type: 'catchup-complete'}],
       'the once-only warm does not repeat; the catch-up report does');
 });
+
+// A reload that replaces the page's code: the worker refreshes the stored shell first, and the page names the cause and
+// navigates only after the refresh answers. The page's events and its navigation share one log, so their order reads
+// straight off it.
+function buildReloadPage() {
+  const page = buildPage();
+  page.context.location.reload = () => page.events.push({type: 'reload'});
+  return page;
+}
+
+test('a code-changing reload refreshes the stored shell, then names its cause and navigates', async () => {
+  const page = buildReloadPage();
+  page.context.reloadAfterRefreshingShell('feature_version');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(page.context.workerMessages)), [{type: 'warm', refresh: true}]);
+  assert.deepEqual(page.events, [], 'no navigation before the worker answers');
+
+  page.context.reply({stored: true});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(page.events.map((event) => event.type), ['charliebot:page-load-cause', 'reload']);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.events[0].detail)), {cause: 'feature_version'});
+});
+
+test('a reload a return cancelled neither names its cause nor navigates', async () => {
+  const page = buildReloadPage();
+  page.context.reloadAfterRefreshingShell('stale_asset', () => false);
+  await new Promise((resolve) => setImmediate(resolve));
+  page.context.reply({stored: true});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(page.events, []);
+});
+
+test('a reload whose shell refresh fails reports the failure and leaves the page as it is', async () => {
+  const page = buildReloadPage();
+  page.context.reloadAfterRefreshingShell('stale_asset');
+  await new Promise((resolve) => setImmediate(resolve));
+  page.context.reply({error: 'shell fetch failed: 503'});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(page.events.map((event) => event.type), ['charliebot:offline-shell-refresh-failed']);
+});

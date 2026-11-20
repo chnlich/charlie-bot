@@ -59,6 +59,7 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
     INITIAL_SESSIONS: {$screen: {partial}},
     eventCursor: 0,
     STATIC_ASSET_VERSION: 'stub-asset-version',
+    WEB_PROTOCOL: 1,
     currentFilter: 'all',
     PAGE_HOSTNAME: 'localhost:8000',
     document,
@@ -307,17 +308,14 @@ test('every reopen that follows a close reloads the list once', async () => {
   assert.equal(page.listLoadCount(), 1, 'the reopened socket reloads the list');
 });
 
-test('a stale-page close reloads a hidden tab once it is visible', () => {
+test('a stale-page close reloads a hidden tab at once when the reload guard allows it', () => {
   const page = buildPage();
   page.connect();
   page.socket().emitOpen();
   page.hide();
 
   page.socket().emitClose({code: 4409});
-  assert.equal(page.reloads, 0, 'a hidden tab does not reload');
-
-  page.show();
-  assert.equal(page.reloads, 1, 'the reload runs once the tab is visible');
+  assert.equal(page.reloads, 1, 'a hidden tab reloads at once: the protocol changed and the guard is clear');
 });
 
 test('a starred-view row change fetches that row alone from the starred view', async () => {

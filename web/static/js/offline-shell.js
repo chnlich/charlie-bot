@@ -2,8 +2,8 @@
 // Offline shell: the page's side of the service worker (offline-shell-worker.js)
 // ---------------------------------------------------------------------------
 // The page registers the worker once its catch-up completes and asks it to store the shell then, refreshes
-// the stored shell before a 4409 reload, reports the catch-up's end to the worker, and drops the stored
-// copies on a 401. A browser without service workers keeps the page it always had.
+// the stored shell before each reload that replaces its code, reports the catch-up's end to the worker, and
+// drops the stored copies on a 401. A browser without service workers keeps the page it always had.
 
 const OFFLINE_SHELL_WORKER_PATH = '/offline-shell-worker.js';
 
@@ -110,19 +110,28 @@ function reportShellRefreshFailure(error) {
   }));
 }
 
-// The reload after a 4409 close. A worker refreshes the shell and its files before the cached navigation changes.
-function reloadAfterRefreshingShell() {
-  if (!offlineShellSupported()) {
+// A reload that replaces the page's code (websocket.js, utils.js). The worker refreshes the stored shell first, so the
+// navigation answers with the release's shell (landing requirement B). `beforeNavigate` runs once the refresh has
+// answered and returns false to cancel the reload. The page-load cause mark is written just before the navigation,
+// so the mark names this reload and not one that never started. The promise settles when the reload navigated, was
+// cancelled, or failed to refresh.
+function reloadAfterRefreshingShell(cause, beforeNavigate = () => true) {
+  const navigate = () => {
+    if (!beforeNavigate()) return;
+    document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause}}));
     location.reload();
-    return;
+  };
+  if (!offlineShellSupported()) {
+    navigate();
+    return Promise.resolve();
   }
-  withOfflineShellWorker((worker) => new Promise((resolve) => {
+  return withOfflineShellWorker((worker) => new Promise((resolve) => {
     const channel = new MessageChannel();
     channel.port1.onmessage = (event) => resolve(event.data ?? {});
     worker.postMessage({type: 'warm', refresh: true}, [channel.port2]);
   })).then((result) => {
     if (result === undefined || result.stored || result.unauthorized) {
-      location.reload();
+      navigate();
       return;
     }
     if (result.error) {

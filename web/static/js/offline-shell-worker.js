@@ -401,12 +401,21 @@ async function dropShell() {
   await cache.delete(SHELL_KEY);
 }
 
+// One refresh of the stored shell runs at a time. Each tab whose reload asks for one shares the fetch in flight, so a
+// release that every open tab swaps costs the link one shell download per worker, not one per tab.
+let shellRefresh = null;
+
+function refreshShell() {
+  if (shellRefresh === null) shellRefresh = warmShell(true).finally(() => { shellRefresh = null; });
+  return shellRefresh;
+}
+
 self.addEventListener('message', (event) => {
   const data = event.data || {};
   if (!WORKER_CONFIG.enabled) return;
   if (data.type === 'warm') {
     const warming = data.refresh === true
-      ? warmShell(true)
+      ? refreshShell()
       : warmShell().then(async (result) => {
         if (result.stored) await storePageCopies(data.copies);
         return result;

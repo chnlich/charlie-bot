@@ -20,6 +20,7 @@ function buildPage() {
     SESSION_ID: 'session-a',
     eventCursor: 0,
     STATIC_ASSET_VERSION: 'stub-asset-version',
+    WEB_PROTOCOL: 1,
     document: {getElementById: () => null, dispatchEvent: () => true, addEventListener() {}},
     CustomEvent,
     TextEncoder,

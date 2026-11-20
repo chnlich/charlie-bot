@@ -208,6 +208,7 @@ function finalFrameParity(markedSrc, text, finalHtml, { harnessOptions } = {}) {
 module.exports = {
   HLJS_URL,
   LIVE_CHAT_ROOT,
+  liveChatFiles,
   fetchUrl,
   largestAssistantDraft,
   assistantTexts,

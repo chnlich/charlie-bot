@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
 const { loadRendererContext, paint } = require('./marked_renderer_harness');
-const { LIVE_CHAT_ROOT, largestAssistantDraft } = require('./stream_collector_common');
+const { LIVE_CHAT_ROOT, largestAssistantDraft, liveChatFiles } = require('./stream_collector_common');
 const { mulberry32 } = require('./mulberry32');
 
 // The pre-incremental streaming render: lex the whole draft, record the code
@@ -132,9 +132,12 @@ test('a list continued across a blank line never freezes a mid-list cut', async 
 test('the largest on-disk draft paints identically on every step of its replay', async (t) => {
   // The corpus is host-local: a host without ~/.charliebot/sessions (CI, fresh
   // checkouts) has nothing to replay, so the subtest skips instead of failing.
+  // A root that exists but holds no chat file has nothing either: another
+  // process's transient directory under the same HOME leaves such a root.
   // t.skip() only marks the subtest skipped; without the return the collector
-  // below still walks the missing corpus root and the suite fails instead.
+  // below still walks the corpus and the suite fails instead.
   if (!fs.existsSync(LIVE_CHAT_ROOT)) return t.skip(`no live chat corpus at ${LIVE_CHAT_ROOT} on this host`);
+  if (liveChatFiles().length === 0) return t.skip(`no chat file under ${LIVE_CHAT_ROOT} on this host`);
   const context = await loadRendererContext({
     getLanguage: () => null,
     highlightAuto: (code) => ({ value: code }),

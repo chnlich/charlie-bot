@@ -13,6 +13,8 @@ const TAILNET_TEXT: &str = "measured on example.ts.net";
 const PATTERN_TERM: &str = "fictionalmarker";
 const PATTERN_FILE_COMMENT: &str = "# local leak patterns";
 const CLEAN_BODY: &str = "## Evidence\nbefore 259 ms, after 130 ms (n=50).\n";
+const PR_URL: &str = "https://github.com/chnlich/charlie-bot/pull/5046";
+const PATCH_PREFIX: &str = "api -X PATCH repos/chnlich/charlie-bot/pulls/5046";
 
 fn github_post() -> PathBuf {
   harness::repo_root().join("dev/improve/github-post.sh")
@@ -22,10 +24,17 @@ fn leak_scanner() -> PathBuf {
   harness::repo_root().join("dev/check-skills-host-leak.sh")
 }
 
-/// The github-post environment: the `gh` stub records its calls, the profile home carries the
-/// pattern file, and git identity and config are pinned for the pushes.
+/// The github-post environment: the `gh` stub records its calls and answers `gh pr view` with the PR's URL,
+/// the profile home carries the pattern file, and git identity and config are pinned for the pushes.
 fn post_env(sandbox: &Sandbox, home: &Path, gh_log: &Path) -> Env {
-  sandbox.stub("gh", "printf '%s\\n' \"$*\" >> \"$GH_CALL_LOG\"\n");
+  sandbox.stub(
+    "gh",
+    &format!(
+      r#"case "$1 $2" in 'pr view') printf '%s\n' '{PR_URL}' ;; esac
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+"#
+    ),
+  );
   let mut env = sandbox.env();
   env.insert("HOME".to_string(), sandbox.root().display().to_string());
   env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
@@ -258,6 +267,95 @@ fn inline_text_flags_are_refused() {
     .arg("123");
   assert_eq!(run_in(&mut inline_comment, sandbox.root()).code, 2);
 
+  assert!(gh_log_lines(&gh_log).is_empty());
+}
+
+// -- github-post.sh pr-edit --
+
+/// The REST PATCH calls the `gh` stub logged, one line per call.
+fn patch_lines(gh_log: &Path) -> Vec<String> {
+  gh_log_lines(gh_log).into_iter().filter(|line| line.starts_with("api -X PATCH")).collect()
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_edit_sends_the_title_alone() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["pr-edit", "--title", "clean topic", "5046"]);
+  let run = run_in(&mut command, sandbox.root());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(patch_lines(&gh_log), [format!("{PATCH_PREFIX} -f title=clean topic")]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_edit_sends_the_body_alone() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["pr-edit", "--body-file"]).arg(&body).arg("5046");
+  let run = run_in(&mut command, sandbox.root());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(patch_lines(&gh_log), [format!("{PATCH_PREFIX} -F body=@{}", body.display())]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_edit_sends_the_title_and_the_body_to_the_repo_it_names() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let body = body_file(&sandbox, "body.md", CLEAN_BODY);
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["pr-edit", "--title", "clean topic", "--body-file"]).arg(&body).args([
+    "--repo",
+    "chnlich/charlie-bot",
+    "5046",
+  ]);
+  let run = run_in(&mut command, sandbox.root());
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    gh_log_lines(&gh_log).contains(&"pr view 5046 --repo chnlich/charlie-bot --json url --jq .url".to_string()),
+    "{:?}",
+    gh_log_lines(&gh_log)
+  );
+  assert_eq!(patch_lines(&gh_log), [format!("{PATCH_PREFIX} -f title=clean topic -F body=@{}", body.display())]);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_edit_leak_hit_sends_nothing() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+
+  let mut title_hit = harness::command("bash", &env);
+  title_hit.arg(github_post()).args(["pr-edit", "--title"]).arg(format!("fix {HOME_PATH_TEXT}")).arg("5046");
+  let run = run_in(&mut title_hit, sandbox.root());
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("title"), "{}", run.stderr);
+
+  let leaky_body = body_file(&sandbox, "leaky.md", &format!("## Evidence\nthe {PATTERN_TERM} value\n"));
+  let mut body_hit = harness::command("bash", &env);
+  body_hit.arg(github_post()).args(["pr-edit", "--body-file"]).arg(&leaky_body).arg("5046");
+  let run = run_in(&mut body_hit, sandbox.root());
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("body"), "{}", run.stderr);
+
+  assert!(gh_log_lines(&gh_log).is_empty());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_edit_refuses_an_argument_it_does_not_send() {
+  let sandbox = Sandbox::new();
+  let (env, gh_log, _home) = post(&sandbox);
+  let mut command = harness::command("bash", &env);
+  command.arg(github_post()).args(["pr-edit", "--title", "clean topic", "--add-label", "bug", "5046"]);
+  let run = run_in(&mut command, sandbox.root());
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(run.stderr.contains("--add-label"), "{}", run.stderr);
   assert!(gh_log_lines(&gh_log).is_empty());
 }
 

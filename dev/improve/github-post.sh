@@ -10,11 +10,15 @@
 # Calls that carry no round-written text stay bare gh: gh pr merge,
 # gh pr update-branch, gh run rerun, and the read-only calls.
 #
+# pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
+# (classic) lookup. It reads the PR's URL with gh pr view, then sends the
+# checked title and body with gh api -X PATCH on the REST pull endpoint.
+#
 # usage:
 #   github-post.sh pr-create --title <title> --body-file <file> [gh pr create args...]
 #   github-post.sh pr-comment --body-file <file> [gh pr comment args...]
 #   github-post.sh pr-close --comment-file <file> [--delete-branch] [gh pr close args...]
-#   github-post.sh pr-edit [--title <title>] [--body-file <file>] [gh pr edit args...]
+#   github-post.sh pr-edit [--title <title>] [--body-file <file>] [--repo <owner/repo>] [<PR>]
 #   github-post.sh push [git push args...]
 #
 # Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent).
@@ -129,9 +133,52 @@ case "$subcommand" in
     ;;
   pr-edit)
     [[ -n "$title" || -n "$body_file" ]] || { usage; exit 2; }
+    # The PATCH sends only the title and body, and takes its PR from the selector and --repo.
+    # Any other argument would be dropped unsent, so it is refused by name before any check or call.
+    pr_selector='' pr_repo=''
+    set -- "${orig_args[@]}"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --title|-t|--body-file|-F) shift 2 ;;
+        --repo|-R)
+          [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused %s without a repo value.\n' "$1" >&2; exit 2; }
+          pr_repo=$2
+          shift 2
+          ;;
+        --repo=*)
+          pr_repo=${1#--repo=}
+          [[ -n "$pr_repo" ]] || { printf 'Refused --repo without a repo value.\n' >&2; exit 2; }
+          shift
+          ;;
+        -*)
+          printf 'Refused %s: pr-edit sends only --title, --body-file, --repo and a PR selector.\n' "${1%%=*}" >&2
+          exit 2
+          ;;
+        *)
+          [[ -n "$1" ]] || { printf 'Refused an empty PR selector.\n' >&2; exit 2; }
+          [[ -z "$pr_selector" ]] || { printf 'Refused a second PR selector: pr-edit takes one.\n' >&2; exit 2; }
+          pr_selector=$1
+          shift
+          ;;
+      esac
+    done
     [[ -z "$title" ]] || check_string title "$title"
     [[ -z "$body_file" ]] || { require_readable "$body_file" body; check_text body "$body_file"; }
-    gh pr edit "${orig_args[@]}"
+    # gh pr view resolves the PR from the same selector and --repo that gh pr edit took. Its URL carries the
+    # owner, repo and number for the REST call. Without a selector, gh picks the PR of the current branch.
+    view_args=(pr view)
+    [[ -z "$pr_selector" ]] || view_args+=("$pr_selector")
+    [[ -z "$pr_repo" ]] || view_args+=(--repo "$pr_repo")
+    pr_url=$(gh "${view_args[@]}" --json url --jq .url)
+    [[ "$pr_url" =~ ^https://[^/]+/([^/]+)/([^/]+)/pull/([0-9]+)$ ]] || {
+      printf 'Cannot read the owner, repo and number from the PR URL gh printed: %s\n' "$pr_url" >&2
+      exit 2
+    }
+    patch_args=(api -X PATCH "repos/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/pulls/${BASH_REMATCH[3]}")
+    [[ -z "$title" ]] || patch_args+=(-f "title=$title")
+    [[ -z "$body_file" ]] || patch_args+=(-F "body=@$body_file")
+    gh "${patch_args[@]}" > /dev/null
+    printf '%s\n' "$pr_url"
     ;;
   push)
     # The pushed branch name (each refspec side) and the current branch, then

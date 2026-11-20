@@ -228,9 +228,9 @@ pub(crate) fn token_usage_context(read: &LedgerRead, registry: &Registry) -> any
   }))
 }
 
-/// The last Pacific week's figures for the hero: its totals in compact and exact form, its share of all time, its
-/// change from the week before, and its API list-price equivalent. A change is null when the week before has no tokens
-/// to measure against.
+/// The hero shows the last Pacific week's figures. They are its totals in compact and exact form, its share of all
+/// time, its change from the week before, and its API list-price equivalent. A change is null when the week before has
+/// no tokens to measure against.
 fn week_context(
   read: &LedgerRead,
   week_tot: &Totals,

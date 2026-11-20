@@ -35,7 +35,7 @@ impl WrapArgs {
       .filter_map(|argument| match argument.to_str() {
         Some("--math") => Some(true),
         Some("--no-math") => Some(false),
-        _ => None,
+        None | Some(_) => None,
       })
       .next_back();
     override_value.unwrap_or_else(|| self.math || (!self.no_math && self.genre == "explain"))

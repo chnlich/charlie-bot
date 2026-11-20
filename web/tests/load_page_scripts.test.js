@@ -11,6 +11,10 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const UTILS_JS = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'utils.js'), 'utf8');
+// pageAssetUrl is defined in config.js, which the page loads before utils.js. The harness runs that one function,
+// so the loaders' URLs are the page's own.
+const PAGE_ASSET_URL_JS = /^function pageAssetUrl\(path\) \{\n[\s\S]*?\n\}/m.exec(
+  fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'config.js'), 'utf8'))[0];
 
 function buildContext() {
   const appended = [];
@@ -27,6 +31,7 @@ function buildContext() {
   };
   context.globalThis = context;
   vm.createContext(context);
+  vm.runInContext(PAGE_ASSET_URL_JS, context, {filename: 'config.js'});
   vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
   return {context, appended};
 }

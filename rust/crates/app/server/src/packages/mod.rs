@@ -1,7 +1,8 @@
 //! The server's composition root. `charliebot_packages` owns the runtime and package registration lists, which the
-//! server binary and the CLI binary share, so the two cannot drift. The tests here check the server's registry.
+//! server binary and the CLI binary share, so the two cannot drift. It also owns the boot-time seeding a package runs
+//! before the store opens. The tests here check the server's registry.
 
-pub use charliebot_packages::registry;
+pub use charliebot_packages::{registry, seed_default_cron_tasks};
 
 #[cfg(test)]
 mod thread_rules_tests;

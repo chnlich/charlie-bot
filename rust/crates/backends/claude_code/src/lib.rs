@@ -38,7 +38,7 @@ pub use usage_logs::USAGE_SOURCE;
 use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
-use charliebot_registry::usage::{CLAUDE_READING_KIND, UsageSource};
+use charliebot_registry::usage::{CLAUDE_READING_KIND, NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 use serde_json::{Map, Value};
 
@@ -125,6 +125,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     name: USAGE_SOURCE,
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(ClaudeLogs::new(host, Arc::clone(&state), Arc::new(http)))),
   })?;
   registry.attribute_backend_type("cc-claude", USAGE_SOURCE)?;

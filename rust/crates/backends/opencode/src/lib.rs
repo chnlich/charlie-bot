@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use charliebot_core::home;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
-use charliebot_registry::usage::{SNAPSHOT_READING_KIND, UsageSource};
+use charliebot_registry::usage::{NativeCacheRead, SNAPSHOT_READING_KIND, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 use usage_logs::OpencodeLogs;
 
@@ -97,6 +97,7 @@ fn register_source(registry: &mut Registry, db: PathBuf, proc_root: PathBuf) -> 
     name: USAGE_SOURCE,
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(OpencodeLogs::new(db, proc_root, quota_state))),
   })?;
   registry.attribute_backend_type("opencode", USAGE_SOURCE)

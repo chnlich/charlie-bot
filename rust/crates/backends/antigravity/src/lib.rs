@@ -11,7 +11,7 @@ mod usage_quota;
 use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
-use charliebot_registry::usage::UsageSource;
+use charliebot_registry::usage::{NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 
 use charliebot_agents::cli_base::CliHost;
@@ -55,6 +55,7 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     name: USAGE_SOURCE,
     id_prefixes: &["antigravity-", "agy-"],
     run_logs_only: true,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(usage_quota::AntigravityUsageSource::new(account))),
   })?;
   registry.attribute_backend_type(TYPE_NAME, USAGE_SOURCE)

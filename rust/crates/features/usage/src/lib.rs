@@ -28,7 +28,7 @@ use futures_util::FutureExt;
 
 use crate::capture::capture_into_default_ledger;
 
-pub use capture::{capture_charliebot, capture_local, capture_runs, capture_usage};
+pub use capture::{capture_charliebot, capture_local, capture_runs, capture_usage, host_name, rebuild_run_records};
 pub use count::Count;
 pub use ledger::{LedgerAccount, LedgerRow, UsageLedger, default_ledger_path};
 

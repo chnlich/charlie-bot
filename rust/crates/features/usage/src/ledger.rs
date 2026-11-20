@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use charliebot_registry::usage::{RecordKind, UsageRecord};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -258,6 +258,38 @@ impl UsageLedger {
     let mut statement = self.conn.prepare("SELECT path, sig FROM captured_files WHERE host = ?")?;
     let rows = statement.query_map([host], |row| Ok((row.get(0)?, row.get(1)?)))?;
     rows.collect::<rusqlite::Result<BTreeMap<_, _>>>().map_err(Into::into)
+  }
+
+  /// The `(record_id, origin)` of every native run record the host's rows hold, in record order.
+  pub fn native_run_origins(&self, host: &str) -> anyhow::Result<Vec<(String, String)>> {
+    let mut statement = self.conn.prepare(
+      "SELECT record_id, origin FROM usage WHERE host = ? AND kind = ? AND record_id LIKE 'run:%' ORDER BY record_id",
+    )?;
+    let rows =
+      statement.query_map(params![host, kind_value(RecordKind::Native)], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+  }
+
+  /// Rewrites the token counts of the row a record names. The row's identity columns and its captured signature are
+  /// left as they are, so a rebuild changes only the split.
+  pub(crate) fn rewrite_split(&mut self, record: &StoredRecord) -> anyhow::Result<()> {
+    let captured_at = charliebot_core::timefmt::isoformat(OffsetDateTime::now_utc());
+    let changed = self.conn.execute(
+      "UPDATE usage SET in_fresh = ?, cache_write = ?, cache_read = ?, in_unsplit = ?, output = ?, captured_at = ? WHERE record_id = ?",
+      params![
+        record.in_fresh,
+        record.cache_write,
+        record.cache_read,
+        record.in_unsplit,
+        record.output,
+        captured_at,
+        record.record_id,
+      ],
+    )?;
+    if changed != 1 {
+      bail!("record {} names {changed} ledger rows, not one", record.record_id);
+    }
+    Ok(())
   }
 
   pub fn record_file(&mut self, host: &str, path: &str, sig: &str, records: &[UsageRecord]) -> anyhow::Result<usize> {

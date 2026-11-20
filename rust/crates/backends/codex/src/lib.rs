@@ -18,7 +18,7 @@ mod usage_sweep;
 use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
-use charliebot_registry::usage::UsageSource;
+use charliebot_registry::usage::{NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
 
 pub use backend::CodexBackend;
@@ -68,6 +68,7 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     name: USAGE_SOURCE,
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(usage_logs::CodexLogs::new(codex_home(host)))),
   })?;
   registry.attribute_backend_type("codex", USAGE_SOURCE)?;

@@ -14,7 +14,7 @@ use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{
-  CODEX_THREAD_STARTED, CODEX_TURN_COMPLETED, RecordKind, UsageSource, UsageSourceImpl, file_signature,
+  CODEX_THREAD_STARTED, CODEX_TURN_COMPLETED, NativeCacheRead, RecordKind, UsageSource, UsageSourceImpl, file_signature,
 };
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, read_metadata_object};
@@ -31,6 +31,8 @@ use crate::ndjson;
 
 pub(crate) const CHARLIE_BOT_SOURCE: &str = "charlie-bot";
 const CLC_MASTER_ACCOUNT: &str = "clc-master";
+/// The charlie-code CLI's cache-hit count in a result's usage, a part of its input count.
+const CACHED_TOKENS: &str = "cached_tokens";
 const THREAD_MARKERS: [&[u8]; 2] = [b"\"type\": \"result\"", b"\"session_id\""];
 const MASTER_MARKERS: [&[u8]; 2] = [b"\"type\": \"context\"", b"\"type\": \"result\""];
 /// The `type` markers of the run-log lines that can contribute a record: a result, a codex turn's close or a line
@@ -128,7 +130,7 @@ pub(crate) fn capture_into_default_ledger(
 }
 
 /// This host's name, as the ledger keys its capture times.
-pub(crate) fn host_name() -> anyhow::Result<String> {
+pub fn host_name() -> anyhow::Result<String> {
   charliebot_core::hostname::os_name()?
     .into_string()
     .map_err(|hostname| anyhow!("hostname is not valid UTF-8: {}", hostname.to_string_lossy()))
@@ -175,18 +177,64 @@ pub fn capture_runs(
     if captured.get(path_text) == Some(&signature) {
       continue;
     }
-    let objects = ndjson::parse_marker_lines(&path, &*RUN_MARKERS)?;
-    let metadata = run_metadata(&path)?;
-    let backend = truthy_string(&metadata, "backend")?;
-    let record = backend
-      .as_deref()
-      .map(|backend| run_record(&objects, &metadata, config, registry, backend, run_id(&path)?, &mut live))
-      .transpose()?
-      .flatten();
-    let records = record.into_iter().collect::<Vec<_>>();
+    let records = run_file_records(&path, config, registry, &mut live)?;
     written += ledger.record_stored_file(host, path_text, &signature, &records)?;
   }
   Ok(written)
+}
+
+/// The record a run's raw log holds: none when the run names no backend or has no result.
+fn run_file_records(
+  path: &Path,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+  live: &mut LiveSessions,
+) -> anyhow::Result<Vec<StoredRecord>> {
+  let objects = ndjson::parse_marker_lines(path, &*RUN_MARKERS)?;
+  let metadata = run_metadata(path)?;
+  let backend = truthy_string(&metadata, "backend")?;
+  let record = backend
+    .as_deref()
+    .map(|backend| run_record(&objects, &metadata, config, registry, backend, run_id(path)?, live))
+    .transpose()?
+    .flatten();
+  Ok(record.into_iter().collect())
+}
+
+/// Recomputes this host's native run records from their raw logs under the current capture rules and rewrites the
+/// token counts of each row. The row's identity columns and its captured signature stay as they are. Every origin is
+/// read before any row is written, so a missing or unreadable origin fails the rebuild and leaves the ledger as it was.
+/// Returns the number of rows rebuilt.
+pub fn rebuild_run_records(
+  ledger: &mut UsageLedger,
+  host: &str,
+  config: &CharlieBotConfig,
+  registry: &Registry,
+) -> anyhow::Result<usize> {
+  let origins = ledger.native_run_origins(host)?;
+  let mut live = LiveSessions::default();
+  let mut rebuilt = Vec::with_capacity(origins.len());
+  for (record_id, origin) in origins {
+    let path = PathBuf::from(&origin);
+    run_log_files::stored_metadata(&path)
+      .with_context(|| format!("statting origin {origin} of {record_id}"))?
+      .ok_or_else(|| anyhow!("origin {origin} of {record_id} is missing"))?;
+    let records = run_file_records(&path, config, registry, &mut live)
+      .with_context(|| format!("rebuilding {record_id} from {origin}"))?;
+    let [record] = <[StoredRecord; 1]>::try_from(records)
+      .map_err(|records| anyhow!("origin {origin} of {record_id} yields {} run records, not one", records.len()))?;
+    if record.record_id != record_id {
+      bail!("origin {origin} yields record {}, not {record_id}", record.record_id);
+    }
+    rebuilt.push(record);
+  }
+  ledger.batch(|ledger| {
+    for record in &rebuilt {
+      ledger.rewrite_split(record)?;
+    }
+    Ok(())
+  })?;
+  Ok(rebuilt.len())
 }
 
 fn capture_source(
@@ -411,7 +459,7 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
   let model = model.as_str().ok_or_else(|| anyhow!("master context model is not a string"))?;
   let usage = usage_object(result.get("usage"))?;
   let input = count(usage, USAGE_INPUT_TOKENS)?;
-  let cached = count(usage, "cached_tokens")?;
+  let cached = count(usage, CACHED_TOKENS)?;
   let output = count(usage, USAGE_OUTPUT_TOKENS)?;
   let mut account = CLC_MASTER_ACCOUNT.to_string();
   for option in &config.backends.options {
@@ -478,16 +526,8 @@ fn run_record(
         return Ok(None);
       };
       let usage = usage_object(result.get("usage"))?;
-      let input = count(usage, USAGE_INPUT_TOKENS)?;
-      let cached = count(usage, "cached_tokens")?;
-      (
-        input.sub(cached, "native run cached tokens")?,
-        Count::Int(0),
-        cached,
-        count(usage, USAGE_OUTPUT_TOKENS)?,
-        RecordKind::Native,
-        Vec::new(),
-      )
+      let (in_fresh, cache_read) = native_split(usage, source)?;
+      (in_fresh, Count::Int(0), cache_read, count(usage, USAGE_OUTPUT_TOKENS)?, RecordKind::Native, Vec::new())
     }
     Verdict::CodexRule => {
       let Some((in_fresh, cache_read, output)) = turn_sums(objects)? else {
@@ -527,6 +567,18 @@ fn run_record(
     in_unsplit: Count::Int(0),
     sessions,
   }))
+}
+
+/// A run-logs-only result's (in_fresh, cache_read). Its input count includes the cache hits that the source's
+/// `native_cache_read` field names, so the fresh part is the input less those hits.
+fn native_split(usage: &Map<String, Value>, source: &UsageSource) -> anyhow::Result<(Count, Count)> {
+  let input = count(usage, USAGE_INPUT_TOKENS)?;
+  let cache_field = match source.native_cache_read {
+    NativeCacheRead::CachedTokens => CACHED_TOKENS,
+    NativeCacheRead::CacheReadInputTokens => USAGE_CACHE_READ_INPUT_TOKENS,
+  };
+  let cache_read = count(usage, cache_field)?;
+  Ok((input.sub(cache_read, "native run cached tokens")?, cache_read))
 }
 
 fn last_result(objects: &[Value]) -> anyhow::Result<Option<&Map<String, Value>>> {

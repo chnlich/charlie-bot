@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{self, ConfigSchema};
 use charliebot_registry::Registry;
-use charliebot_registry::usage::{RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl};
+use charliebot_registry::usage::{NativeCacheRead, RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl};
 use charliebot_usage_page::{UsageLedger, capture_usage};
 use serde_json::{Value, json};
 
@@ -45,6 +45,7 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     name: "CLC",
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("charlie-code", "CLC")?;
@@ -52,6 +53,7 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     name: "Codex",
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(FixtureSource { codex_rule: true })),
   })?;
   registry.attribute_backend_type("codex", "Codex")?;
@@ -59,6 +61,7 @@ fn register_fixture_sources(registry: &mut Registry) -> Result<(), charliebot_re
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(FixtureSource { codex_rule: false })),
   })?;
   registry.attribute_backend_type("cc-claude", "Claude Code")?;

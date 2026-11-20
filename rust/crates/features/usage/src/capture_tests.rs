@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::*;
 use crate::ledger::LedgerRow;
 use charliebot_core::config::{self, CharlieBotConfig, ConfigSchema};
-use charliebot_registry::usage::{RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl, file_signature};
+use charliebot_registry::usage::{
+  NativeCacheRead, RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl, file_signature,
+};
 use charliebot_registry::{Registry, RegistryError};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags};
@@ -180,19 +182,30 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "CLC",
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("charlie-code", "CLC")?;
   registry.usage_source(UsageSource {
+    name: "Devin",
+    id_prefixes: &["devin-"],
+    run_logs_only: true,
+    native_cache_read: NativeCacheRead::CacheReadInputTokens,
+    implementation: None,
+  })?;
+  registry.attribute_backend_type("devin", "Devin")?;
+  registry.usage_source(UsageSource {
     name: "External",
     id_prefixes: &["external-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(External)),
   })?;
   registry.usage_source(UsageSource {
     name: "Codex",
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(CliStub { name: "Codex", dir: "codex", account: "codex-main", codex: true })),
   })?;
   registry.attribute_backend_type("codex", "Codex")?;
@@ -200,6 +213,7 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(CliStub {
       name: "Claude Code",
       dir: "claude",
@@ -212,6 +226,7 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "opencode",
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(CliStub {
       name: "opencode",
       dir: "opencode",
@@ -228,6 +243,7 @@ fn register_claude_source(registry: &mut Registry) -> Result<(), RegistryError> 
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(CliStub {
       name: "Claude Code",
       dir: "claude",
@@ -266,7 +282,7 @@ fn fixture_with(home: &Path, options: &str) -> (CharlieBotConfig, Registry) {
   let schema = ConfigSchema {
     sections: Vec::new(),
     legacy_keys: Vec::new(),
-    backend_types: vec!["charlie-code", "codex", "cc-claude", "opencode"],
+    backend_types: vec!["charlie-code", "codex", "cc-claude", "opencode", "devin"],
   };
   let config = config::load_config(home, &schema).unwrap();
   CODEX_ROOT.with(|root| *root.borrow_mut() = Some(home.join("cli/codex")));
@@ -1204,6 +1220,64 @@ fn capture_runs_clc_run_is_native_with_the_cached_split() {
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
   assert_eq!((row.calls, row.in_fresh.int(), row.cache_read.int(), row.output.int()), (1, 60, 40, 5));
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the unchanged run file is skipped
+}
+
+/// The Devin run of the SWE-2 example: 3,971,522 input tokens, 3,901,760 of them cache hits.
+const DEVIN_RUN: &[u8] = b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 3971522, \"cache_read_input_tokens\": 3901760, \"cache_creation_input_tokens\": 0, \"output_tokens\": 42556}}\n";
+
+#[test]
+fn capture_runs_devin_run_splits_the_cache_reads_its_result_names() {
+  // A Devin result's input count includes its cache hits, which the result reports as cache_read_input_tokens.
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture_with(&home, &option("devin-swe2", "devin", "vendor/swe-2"));
+  write_run(&home, "s1", "r1", "devin-swe2", Some("vendor/swe-2"), None, DEVIN_RUN);
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
+  let rows = page_rows(&mut ledger);
+  let row = row(&rows, "charlie-bot", "swe-2");
+  assert_eq!((row.calls, row.in_fresh.int(), row.cache_read.int(), row.output.int()), (1, 69_762, 3_901_760, 42_556));
+}
+
+#[test]
+fn rebuild_run_records_recomputes_a_row_from_its_raw_run_and_refuses_a_missing_origin() {
+  // A row captured before the split was read holds the whole input uncached. The rebuild reads the raw run again.
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture_with(&home, &option("devin-swe2", "devin", "vendor/swe-2"));
+  let origin = write_run(&home, "s1", "r1", "devin-swe2", Some("vendor/swe-2"), None, DEVIN_RUN);
+  let ledger_path = dir.path().join("ledger.sqlite3");
+  let mut ledger = UsageLedger::open(ledger_path.clone()).unwrap();
+  capture_round(&mut ledger, &config, &registry);
+  // The account is an identity column the rebuild leaves as the capture wrote it.
+  let stale = Connection::open(&ledger_path).unwrap();
+  stale
+    .execute(
+      "UPDATE usage SET in_fresh = 3971522, cache_read = 0, account = 'captured-account' WHERE record_id = 'run:r1'",
+      [],
+    )
+    .unwrap();
+  drop(stale);
+
+  assert_eq!(rebuild_run_records(&mut ledger, HOST, &config, &registry).unwrap(), 1);
+  let rows = page_rows(&mut ledger);
+  let swe = row(&rows, "charlie-bot", "swe-2");
+  assert_eq!((swe.in_fresh.int(), swe.cache_read.int(), swe.output.int()), (69_762, 3_901_760, 42_556));
+  let account: String = Connection::open(&ledger_path)
+    .unwrap()
+    .query_row("SELECT account FROM usage WHERE record_id = 'run:r1'", [], |row| row.get(0))
+    .unwrap();
+  assert_eq!(account, "captured-account");
+  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0);
+
+  fs::remove_file(&origin).unwrap();
+  let stale = Connection::open(&ledger_path).unwrap();
+  stale.execute("UPDATE usage SET in_fresh = 3971522, cache_read = 0 WHERE record_id = 'run:r1'", []).unwrap();
+  drop(stale);
+  let error = rebuild_run_records(&mut ledger, HOST, &config, &registry).unwrap_err();
+  assert!(format!("{error:#}").contains("is missing"), "{error:#}");
+  let rows = page_rows(&mut ledger);
+  assert_eq!(row(&rows, "charlie-bot", "swe-2").in_fresh.int(), 3_971_522, "a failed rebuild writes nothing");
 }
 
 #[test]

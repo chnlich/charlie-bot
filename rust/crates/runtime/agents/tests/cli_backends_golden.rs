@@ -27,7 +27,7 @@ use charliebot_core::config::{
 use charliebot_gemini::factory::GeminiFactory;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
-use charliebot_registry::usage::{CLAUDE_READING_KIND, UsageSource};
+use charliebot_registry::usage::{CLAUDE_READING_KIND, NativeCacheRead, UsageSource};
 use serde_json::{Value, json};
 use serde_yaml::Mapping;
 
@@ -202,6 +202,7 @@ fn register_claude_usage_source(registry: &mut Registry) -> Result<(), charliebo
     name: "Claude Code",
     id_prefixes: &[],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })
 }

@@ -17,7 +17,7 @@ use charliebot_codex::CodexHost;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
 use charliebot_opencode::usage_logs::OpencodeLogs;
-use charliebot_registry::usage::{CategoryResult, UsageSource};
+use charliebot_registry::usage::{CategoryResult, NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::run_records::{CURSOR_NAME, DATA_DIR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME};
@@ -79,6 +79,7 @@ fn register_test_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "opencode",
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(OpencodeLogs::new(hosts.opencode_db, PathBuf::from("/proc"), Arc::default()))),
   })
 }

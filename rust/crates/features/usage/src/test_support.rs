@@ -11,7 +11,7 @@ use charliebot_core::event_types::{CONFIG_RELOAD_FAILED_EVENT, CREDENTIALS_RELOA
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::context::StartupState;
 use charliebot_registry::store_hooks::store_hooks;
-use charliebot_registry::usage::UsageSource;
+use charliebot_registry::usage::{NativeCacheRead, UsageSource};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::Store;
 
@@ -22,6 +22,7 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Claude Code",
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("cc-claude", "Claude Code")?;
@@ -29,6 +30,7 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Codex",
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("codex", "Codex")?;
@@ -36,6 +38,7 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "opencode",
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("opencode", "opencode")?;
@@ -43,6 +46,7 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Antigravity",
     id_prefixes: &["antigravity-", "agy-"],
     run_logs_only: true,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("antigravity", "Antigravity")?;
@@ -50,6 +54,7 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "CLC",
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("charlie-code", "CLC")?;
@@ -57,6 +62,7 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "Devin",
     id_prefixes: &["devin-"],
     run_logs_only: true,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("devin", "Devin")?;

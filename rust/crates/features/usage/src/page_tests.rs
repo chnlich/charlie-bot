@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::body::{Body, to_bytes};
 use charliebot_core::list_price;
 use charliebot_registry::templating::Templating;
-use charliebot_registry::usage::{RecordKind, UsageRecord, UsageSource};
+use charliebot_registry::usage::{NativeCacheRead, RecordKind, UsageRecord, UsageSource};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use http::{Method, Request, StatusCode};
 use serde_json::{Value, json};
@@ -270,6 +270,7 @@ fn register_reordered(registry: &mut Registry) -> Result<(), RegistryError> {
     name: CLC,
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("charlie-code", CLC)?;
@@ -277,6 +278,7 @@ fn register_reordered(registry: &mut Registry) -> Result<(), RegistryError> {
     name: OC,
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("opencode", OC)?;
@@ -284,6 +286,7 @@ fn register_reordered(registry: &mut Registry) -> Result<(), RegistryError> {
     name: CC,
     id_prefixes: &["claude-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("cc-claude", CC)?;
@@ -291,6 +294,7 @@ fn register_reordered(registry: &mut Registry) -> Result<(), RegistryError> {
     name: CODEX,
     id_prefixes: &["codex-"],
     run_logs_only: false,
+    native_cache_read: NativeCacheRead::CachedTokens,
     implementation: None,
   })?;
   registry.attribute_backend_type("codex", CODEX)?;

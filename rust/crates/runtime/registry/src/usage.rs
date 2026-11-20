@@ -215,12 +215,23 @@ pub fn member_reading_from_windows(
 
 /// One place usage is logged. `name` is the ledger's source value and the usage page's card title. A config backend
 /// id must start with one of `id_prefixes`. `run_logs_only` means CharlieBot's own run logs are the only source of
-/// token usage; the source may still implement quota-panel reads.
+/// token usage; the source may still implement quota-panel reads. `native_cache_read` names the result-usage field
+/// that holds a run-logs-only source's cache hits; the field's count is part of that source's input.
 pub struct UsageSource {
   pub name: &'static str,
   pub id_prefixes: &'static [&'static str],
   pub run_logs_only: bool,
+  pub native_cache_read: NativeCacheRead,
   pub implementation: Option<Arc<dyn UsageSourceImpl>>,
+}
+
+/// The result-usage field a run-logs-only source reports its cache hits under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeCacheRead {
+  /// The charlie-code CLI's `cached_tokens`.
+  CachedTokens,
+  /// The `cache_read_input_tokens` of a Devin run result.
+  CacheReadInputTokens,
 }
 
 /// The operations a source defines. Callers check a declaration before they call the operation.

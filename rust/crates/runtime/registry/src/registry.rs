@@ -2346,7 +2346,7 @@ mod usage_tests {
   use std::sync::atomic::{AtomicUsize, Ordering};
 
   use super::*;
-  use crate::usage::{QuotaAccount, UsageOps, UsageSourceImpl};
+  use crate::usage::{NativeCacheRead, QuotaAccount, UsageOps, UsageSourceImpl};
 
   struct QuotaSource {
     error: Option<&'static str>,
@@ -2372,6 +2372,7 @@ mod usage_tests {
       name,
       id_prefixes: &[],
       run_logs_only: false,
+      native_cache_read: NativeCacheRead::CachedTokens,
       implementation: Some(Arc::new(QuotaSource { error, calls })),
     }
   }

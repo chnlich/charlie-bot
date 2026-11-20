@@ -159,8 +159,8 @@ pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>
   // ATIF's `prompt_tokens` is the whole input, with `cached_tokens` as a subset of it (Harbor's
   // rfcs/0001-trajectory-format.md, MetricsSchema). The result keeps that OpenAI-style convention, as codex's
   // translator does: `input_tokens` is the prompt sum with the cached part. `cache_read_input_tokens` carries the
-  // cached count beside it. Devin's usage source is run-logs-only, whose ledger record reads `input_tokens` as the
-  // whole input, so each input token is counted once.
+  // cached count beside it. Devin's usage source is run-logs-only, and its ledger record takes that cached count out
+  // of `input_tokens`, so each input token is counted once.
   events.push(make_result_event(
     usage.prompt_tokens,
     usage.completion_tokens,

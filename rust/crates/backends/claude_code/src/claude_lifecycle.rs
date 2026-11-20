@@ -411,6 +411,7 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
       Arc::clone(&self.state),
       claude_accounts::option_pool(&ctx.option),
       Arc::clone(&pooled.decision),
+      keyed_round(ctx),
     )))
   }
 
@@ -421,15 +422,6 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
     native_id: Option<&'a str>,
   ) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
     Box::pin(async move {
-      // A keyed round forwards its login's token once, when it starts. A relay would need a second login's token on the
-      // host, which the round does not carry, so the round ends here.
-      if keyed_round(ctx) {
-        return Err(LaunchRefused {
-          message: "a round on another host cannot move to another login: its token is forwarded once".to_string(),
-          failure: MemberFailure::Other,
-          resets_at: None,
-        });
-      }
       let pooled = Self::pooled_state(launch).ok_or_else(|| LaunchRefused {
         message: "Claude relay launch has no account state".to_string(),
         failure: MemberFailure::Other,
@@ -447,6 +439,19 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
           .map_err(|error| refused(error, MemberFailure::Other, None))?;
       }
       let account_pool = claude_accounts::option_pool(&ctx.option);
+      // A keyed round forwards its login's token once, when it starts, so it cannot relay: its decision ends the round.
+      if keyed_round(ctx) {
+        return Err(
+          claude_relay::keyed_round_refusal(
+            &self.state,
+            &ctx.cfg,
+            Some(&ctx.option.model),
+            account_pool.as_deref(),
+            &decision,
+          )
+          .map_err(|error| refused(error, MemberFailure::Other, None))?,
+        );
+      }
       if let Some(cap_refusal) = claude_relay::relay_cap_refusal(
         &self.state,
         &ctx.cfg,
@@ -813,26 +818,147 @@ mod tests {
     assert_eq!(ClaudeCliLifecycle.checked_resume_id_for(&ctx, &config_dir).unwrap().as_deref(), Some(held));
   }
 
-  #[tokio::test]
-  async fn a_keyed_task_refuses_a_relay_before_preparing_another_login() {
-    let root = tempfile::tempdir().unwrap();
-    let home = root.path().join("home");
-    let account = root.path().join("account");
-    account_credentials(&account);
-    let cfg = config(&home, &[("a", &account)]);
-    let ctx = context(cfg, LaunchKind::Task, None, None, None);
-    ctx.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
-    let launch =
-      Launch { backend_kwargs: Map::new(), resume_id: None, prompt: None, account_label: None, private: None };
+  /// A pool of the login a round starts on, `current`, and a login `fresh` with no reading yet.
+  fn current_and_fresh(root: &Path) -> (CharlieBotConfig, PathBuf) {
+    let current = root.join("current");
+    let fresh = root.join("fresh");
+    account_credentials(&current);
+    account_credentials(&fresh);
+    (config(&root.join("home"), &[("current", &current), ("fresh", &fresh)]), current)
+  }
 
-    let refusal = match ClaudeCodeLifecycle::new().next_launch(&ctx, &launch, None).await {
+  /// The launch of the pool's `current` login from a task context, keyed to an improve host when `keyed` is set.
+  fn current_launch(
+    lifecycle: &ClaudeCodeLifecycle,
+    cfg: CharlieBotConfig,
+    current: &Path,
+    keyed: bool,
+  ) -> (LaunchContext, Launch) {
+    let ctx = context(cfg, LaunchKind::Task, None, None, None);
+    if keyed {
+      ctx.session_meta.lock().unwrap().task =
+        Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+    }
+    let account =
+      claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
+    let launch = lifecycle.pooled_launch(&ctx, account, None, None, 0).unwrap();
+    (ctx, launch)
+  }
+
+  /// A rate-limit event for the round's login: a window at `utilization`, resetting in 2030.
+  fn rate_limit(status: &str, utilization: f64) -> Value {
+    let reset = UtcDateTime::parse("2030-01-01T00:00:00Z").unwrap().into_inner().unix_timestamp() as f64;
+    json!({
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": status,
+        "resetsAt": reset,
+        "unifiedWindows": {"five_hour": {"utilization": utilization}}
+      }
+    })
+  }
+
+  fn tool_result() -> Value {
+    json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]}})
+  }
+
+  fn lost_login() -> Value {
+    json!({
+      "type": "assistant",
+      "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "Failed to authenticate"}]},
+      "error": "authentication_failed",
+      "is_api_error_message": true,
+      "api_error_status": 401
+    })
+  }
+
+  #[tokio::test]
+  async fn a_keyed_round_at_the_warning_line_is_not_relayed() {
+    let root = tempfile::tempdir().unwrap();
+    let (cfg, current) = current_and_fresh(root.path());
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    claude_accounts::observe_rate_limit(
+      &state,
+      "fresh",
+      &json!({"unifiedWindows": {"five_hour": {"utilization": 0.20}}}),
+      None,
+      None,
+    );
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+    let (ctx, launch) = current_launch(&lifecycle, cfg, &current, true);
+    let mut watch = lifecycle.watch(&ctx, &launch).expect("a pooled launch has a watch");
+
+    assert!(!watch.observe(&rate_limit("allowed_warning", 0.97)), "the keyed watch arms no warning relay");
+    assert!(!watch.observe(&tool_result()), "the keyed round is not stopped at its next tool result");
+    assert!(!watch.wants_next(0, ""), "the keyed round starts no relay after it exits");
+    let reading =
+      claude_accounts::latest_reading(&state, "current", None, None).expect("the watch records the reading");
+    assert_eq!(reading.utilization, 0.97);
+  }
+
+  #[tokio::test]
+  async fn an_unkeyed_round_at_the_warning_line_still_relays() {
+    let root = tempfile::tempdir().unwrap();
+    let (cfg, current) = current_and_fresh(root.path());
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    claude_accounts::observe_rate_limit(
+      &state,
+      "fresh",
+      &json!({"unifiedWindows": {"five_hour": {"utilization": 0.20}}}),
+      None,
+      None,
+    );
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+    let (ctx, launch) = current_launch(&lifecycle, cfg, &current, false);
+    let mut watch = lifecycle.watch(&ctx, &launch).expect("a pooled launch has a watch");
+
+    assert!(!watch.observe(&rate_limit("allowed_warning", 0.97)));
+    assert!(watch.observe(&tool_result()), "the unkeyed round stops at its next tool result to relay");
+  }
+
+  #[tokio::test]
+  async fn a_keyed_round_rejected_on_quota_ends_with_the_pool_reset() {
+    let root = tempfile::tempdir().unwrap();
+    let (cfg, current) = current_and_fresh(root.path());
+    let lifecycle = ClaudeCodeLifecycle::new();
+    let (ctx, launch) = current_launch(&lifecycle, cfg, &current, true);
+    let mut watch = lifecycle.watch(&ctx, &launch).expect("a pooled launch has a watch");
+
+    assert!(!watch.observe(&rate_limit("rejected", 1.0)));
+    assert!(watch.wants_next(1, ""));
+    let refusal = match lifecycle.next_launch(&ctx, &launch, None).await {
       Err(refusal) => refusal,
-      Ok(_) => panic!("the keyed task started a second login relay"),
+      Ok(_) => panic!("the keyed round relayed after its login was rejected on quota"),
     };
 
-    assert_eq!(refusal.failure, MemberFailure::Other);
-    assert!(refusal.message.contains("token is forwarded once"), "the relay refusal does not name its boundary");
+    assert_eq!(refusal.failure, MemberFailure::Quota);
+    assert_eq!(refusal.resets_at.map(|value| value.to_str()).as_deref(), Some("2030-01-01T00:00:00Z"));
+    assert!(refusal.failure.fails_over(), "the pool moves the round to its next member");
+  }
+
+  #[tokio::test]
+  async fn a_keyed_round_whose_login_is_lost_ends_as_a_token_shortage() {
+    let root = tempfile::tempdir().unwrap();
+    let (cfg, current) = current_and_fresh(root.path());
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+    let (ctx, launch) = current_launch(&lifecycle, cfg, &current, true);
+    let mut watch = lifecycle.watch(&ctx, &launch).expect("a pooled launch has a watch");
+
+    assert!(!watch.observe(&lost_login()));
+    assert!(watch.wants_next(1, ""));
+    let refusal = match lifecycle.next_launch(&ctx, &launch, None).await {
+      Err(refusal) => refusal,
+      Ok(_) => panic!("the keyed round relayed after its login was lost"),
+    };
+
+    assert_eq!(refusal.failure, MemberFailure::TokenShort);
+    assert_eq!(refusal.resets_at, None);
+    assert!(refusal.failure.fails_over(), "the pool moves the round to its next member");
+    assert!(!refusal.failure.records_out(), "a token shortage records no member out");
+    let account =
+      claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
+    assert!(!claude_accounts::healthy(&state, &account, None), "the refused login is cooled");
   }
 
   #[tokio::test]

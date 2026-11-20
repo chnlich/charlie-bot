@@ -301,6 +301,7 @@ fn relay_watch_matrix_matches_recorded_decisions_and_moves() {
       Arc::clone(&state),
       Some("alpha".to_string()),
       Arc::clone(&decision),
+      false,
     );
     let stop = case["events"].as_array().unwrap().iter().map(|event| watch.observe(event)).collect::<Vec<_>>();
     let wants_next = watch.wants_next(case["exit_code"].as_i64().unwrap() as i32, case["stderr"].as_str().unwrap());

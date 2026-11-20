@@ -43,7 +43,8 @@ impl Decision {
   }
 }
 
-/// Per-process quota and authentication watch.
+/// Per-process quota and authentication watch. A keyed round's watch records the readings and the decision, but it never
+/// arms the warning relay: the round's token lives on its improve host, so no second login can take the round over.
 pub struct RelayWatch {
   label: String,
   model: Option<String>,
@@ -55,6 +56,7 @@ pub struct RelayWatch {
   armed: bool,
   auth_failed: bool,
   decision: Arc<Mutex<Option<String>>>,
+  keyed: bool,
 }
 
 impl RelayWatch {
@@ -65,8 +67,21 @@ impl RelayWatch {
     state: Arc<claude_accounts::ClaudeAccountState>,
     account_pool: Option<String>,
     decision: Arc<Mutex<Option<String>>>,
+    keyed: bool,
   ) -> Self {
-    Self { label, model, cfg, state, account_pool, now: None, reason: None, armed: false, auth_failed: false, decision }
+    Self {
+      label,
+      model,
+      cfg,
+      state,
+      account_pool,
+      now: None,
+      reason: None,
+      armed: false,
+      auth_failed: false,
+      decision,
+      keyed,
+    }
   }
 
   fn decision(&self, exit_code: i32) -> Option<Decision> {
@@ -90,7 +105,8 @@ impl LaunchWatchTrait for RelayWatch {
             self.armed = false;
           }
           Some(RATE_LIMIT_STATUS_ALLOWED_WARNING)
-            if reading.is_some_and(|reading| reading.utilization >= claude_accounts::WARNING_UTILIZATION)
+            if !self.keyed
+              && reading.is_some_and(|reading| reading.utilization >= claude_accounts::WARNING_UTILIZATION)
               && reset_far_enough(info, moment) =>
           {
             self.armed = true;
@@ -242,6 +258,33 @@ pub fn relay_cap_refusal(
   }))
 }
 
+/// The refusal that ends a keyed round on its relay decision. The round's token reached its improve host once, at launch,
+/// so the round cannot move to another login. A spent quota ends it as a quota failure with the pool's earliest reset, so
+/// the pool moves the round to its next member. A lost login ends it as a token shortage: the next member is tried
+/// without recording any member out.
+pub fn keyed_round_refusal(
+  state: &ClaudeAccountStateRef,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  account_pool: Option<&str>,
+  decision: &str,
+) -> anyhow::Result<LaunchRefused> {
+  match decision {
+    RELAY_REJECTED => Ok(LaunchRefused {
+      message: "a keyed round's login rejected a request on quota; its token is forwarded once, so the round ends here"
+        .to_string(),
+      failure: MemberFailure::Quota,
+      resets_at: claude_accounts::earliest_reset(state, cfg, model, None, account_pool)?,
+    }),
+    LOGIN_FAILED => Ok(LaunchRefused {
+      message: "a keyed round's login was refused; its token is forwarded once, so the round ends here".to_string(),
+      failure: MemberFailure::TokenShort,
+      resets_at: None,
+    }),
+    other => anyhow::bail!("a keyed round has no launch for the relay decision {other}"),
+  }
+}
+
 pub fn login_required_event(account: &claude_config::ClaudeAccount, reason: &str) -> Value {
   json!({
     "type": event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED,
@@ -377,6 +420,7 @@ mod tests {
       Arc::clone(&state),
       Some("alpha".to_string()),
       decision.clone(),
+      false,
     );
 
     assert!(!watch.observe(&json!({
@@ -406,6 +450,7 @@ mod tests {
       state,
       None,
       decision.clone(),
+      false,
     );
     assert!(!watch.observe(&json!({
       "type":"rate_limit_event", "rate_limit_info":{"status":"rejected"}

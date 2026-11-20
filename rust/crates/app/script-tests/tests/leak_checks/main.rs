@@ -937,6 +937,36 @@ fn a_value_under_the_minimum_length_passes_the_credential_check() {
 
 #[test]
 #[ignore = "integration"]
+fn a_credentials_leaf_named_for_a_non_secret_is_left_out_of_the_values() {
+  let sandbox = Sandbox::new();
+  let (env, _) = planted_env(&sandbox, Kind::CredentialsLeaf);
+  // The four skipped names, each as a last segment, and two leaves whose names only start with one of them:
+  // `e.model_key` and `f.api_key` are the leaves that stay checked.
+  std::fs::write(
+    sandbox.dir("charliebot-home").join("credentials.yaml"),
+    "a:\n  description: fake-description-a-0001\n\
+     b:\n  model: fake-model-name-b-0002\n\
+     c:\n  client_id: fake-client-id-c-0003\n\
+     d:\n  app_id: fake-app-id-d-0004\n\
+     e:\n  model_key: fake-model-key-e-0005\n\
+     f:\n  api_key: fake-api-key-f-0006\n",
+  )
+  .unwrap();
+  let mut collect = harness::command("bash", &env);
+  collect.arg(leak_scanner()).arg("--credential-values");
+  let collected = run(&mut collect);
+  assert_eq!(collected.code, 0, "{}", collected.describe());
+  let kinds: Vec<&str> = collected.stdout.lines().map(|line| line.split('\t').next().unwrap()).collect();
+  assert_eq!(
+    kinds,
+    ["credentials.yaml leaf e.model_key", "credentials.yaml leaf f.api_key"],
+    "{}",
+    collected.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
 fn the_list_mode_checks_every_field_in_one_process_and_names_the_first_hit() {
   let sandbox = Sandbox::new();
   let (env, label) = planted_env(&sandbox, Kind::CredentialsLeaf);

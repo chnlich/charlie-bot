@@ -26,6 +26,23 @@ built_in_regex='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12
 # text carries, so an exact match on them would refuse text that holds no credential.
 readonly CREDENTIAL_MIN_LENGTH=12
 
+# A credentials.yaml leaf whose last key segment is one of these names holds no credential, so the check leaves it out.
+# The match is on the whole segment: `gemini.model` is left out and `gemini.model_key` is still checked. The reason for
+# each name:
+#   description  free text that describes an account or a provider in words; it grants no access
+#   model        the name of a model, the id a request selects; it names what to call and grants no access
+#   client_id    the public identifier of an OAuth client; it appears in authorization URLs, and the client secret is a
+#                separate leaf that stays checked
+#   app_id       the public identifier of a Feishu (Lark) app; the app secret is a separate leaf that stays checked
+# Admission rule: a name joins this list only after a real false refusal, reported through the parent session. A missed
+# secret leaks silently while a false refusal is loud, so the list grows from evidence and never in advance.
+readonly CREDENTIAL_NON_SECRET_KEYS=(
+  description
+  model
+  client_id
+  app_id
+)
+
 # The environment variables that hold a login token or an API key of the run. The round's environment holds the
 # member's login under the first three names; the rest are the review key and the GitHub tokens that `gh` reads.
 readonly CREDENTIAL_ENV_NAMES=(
@@ -37,16 +54,22 @@ readonly CREDENTIAL_ENV_NAMES=(
   GITHUB_TOKEN
 )
 
-# The leaves of a credentials file: each `section.key` of a two-space leaf and each top-level scalar. The file is read
-# as the subset the profile home writes (section lines, two-space `key: value` leaves, comments). Any other line stops the
-# read with exit 2, so a value this reader cannot see never passes unchecked. The message names the line, never its text.
+# The leaves of a credentials file: each `section.key` of a two-space leaf and each top-level scalar, except the leaves
+# whose last key segment is in CREDENTIAL_NON_SECRET_KEYS. Every leaf is parsed the same way, so a non-secret leaf that
+# the reader cannot read still stops the read. The file is read as the subset the profile home writes (section lines,
+# two-space `key: value` leaves, comments). Any other line stops the read with exit 2, so a value this reader cannot see
+# never passes unchecked. The message names the line, never its text.
 credentials_yaml_leaves() {  # <credentials file>
-  LC_ALL=C awk -v min="$CREDENTIAL_MIN_LENGTH" -v file="$1" '
+  LC_ALL=C awk -v min="$CREDENTIAL_MIN_LENGTH" -v file="$1" -v non_secret="${CREDENTIAL_NON_SECRET_KEYS[*]}" '
+    BEGIN {
+      count = split(non_secret, names, " ")
+      for (i = 1; i <= count; i++) non_secret_names[names[i]] = 1
+    }
     function fail(message) {
       printf "%s line %d: %s\n", file, NR, message > "/dev/stderr"
       exit 2
     }
-    function leaf(path, rest,   value) {
+    function leaf(path, rest,   value, last) {
       if (substr(rest, 1, 1) == "\"") {
         if (rest !~ /^"[^"\\]*"[ \t]*(#.*)?$/) fail("a double-quoted value this reader cannot read")
         value = substr(rest, 2)
@@ -61,7 +84,9 @@ credentials_yaml_leaves() {  # <credentials file>
         sub(/[ \t]+#.*$/, "", value)
         sub(/[ \t]+$/, "", value)
       }
-      if (length(value) >= min) printf "credentials.yaml leaf %s\t%s\n", path, value
+      last = path
+      sub(/.*\./, "", last)
+      if (length(value) >= min && !(last in non_secret_names)) printf "credentials.yaml leaf %s\t%s\n", path, value
     }
     { sub(/\r$/, "") }
     /^[ \t]*(#.*)?$/ { next }

@@ -2289,6 +2289,41 @@ mod synthetic_repo_tests {
     credential_check(&home, &repo, "origin/main", Some(&text)).await.expect("the check passes");
   }
 
+  /// A profile home whose credentials file holds both a non-secret leaf and a secret leaf, so each side of the skip
+  /// runs against the same file.
+  fn home_with_leaves(root: &Path, model: &str, secret: &str) -> PathBuf {
+    let home = root.join("home");
+    fs::create_dir(&home).expect("the profile home is created");
+    fs::write(home.join("credentials.yaml"), format!("gemini:\n  model: {model}\nplanted:\n  api_key: {secret}\n"))
+      .expect("the credentials file is written");
+    home
+  }
+
+  #[tokio::test]
+  async fn a_diff_that_quotes_a_non_secret_leaf_passes_the_credential_check() {
+    const MODEL: &str = "fake-model-name-0005";
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_leaves(root.path(), MODEL, "fake-landing-secret-0005");
+    let repo = synthetic_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", &format!("the model is {MODEL}\n"));
+    fetch_main(&repo).await;
+    credential_check(&home, &repo, "origin/main", None).await.expect("the model name is not a credential");
+  }
+
+  #[tokio::test]
+  async fn a_secret_leaf_beside_a_non_secret_leaf_refuses_the_landing() {
+    const SECRET: &str = "fake-landing-secret-0006";
+    let root = tempfile::tempdir().expect("temporary directory is available");
+    let home = home_with_leaves(root.path(), "fake-model-name-0006", SECRET);
+    let repo = synthetic_repo(root.path(), "feature");
+    commit(&repo, "notes.txt", &format!("the key is {SECRET}\n"));
+    fetch_main(&repo).await;
+    let error = credential_check(&home, &repo, "origin/main", None).await.expect_err("the secret leaf refuses");
+    let text = format!("{error:#}");
+    assert!(text.contains("credentials.yaml leaf planted.api_key"), "the kind is named: {text}");
+    assert!(!text.contains(SECRET), "the value never appears: {text}");
+  }
+
   #[tokio::test]
   async fn a_credentials_file_that_cannot_be_parsed_refuses_the_landing() {
     let root = tempfile::tempdir().expect("temporary directory is available");

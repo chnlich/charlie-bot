@@ -884,10 +884,69 @@ test('the store-files ask fetches each on-demand file the cache lacks, stores th
     ports: [channel.port2],
   }).waits);
   assert.deepEqual(fetched, [tagged, untagged], 'the held file is not fetched again');
-  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: 1}],
+  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: 1, revalidated: 0}],
       'only the tagged file is stored, and the reply counts it');
   assert.equal(await (await files.match(tagged)).text(), 'cron()');
   assert.equal(await files.match(untagged), undefined, 'a file without an ETag is not stored');
+});
+
+test('a kept file whose bytes a release leaves unchanged is revalidated with its stored ETag: no body crosses the link', async () => {
+  const h = harness();
+  const earlier = ORIGIN + '/static/js/chat/status-panel.js?v=1';
+  const current = '/static/js/chat/status-panel.js?v=2';
+  const files = await h.caches.api.open('last-state-files');
+  await files.put(earlier, new Response('status()', {status: 200, headers: {ETag: '"same"'}}));
+  const sent = [];
+  h.state.network = async (req, init) => {
+    sent.push({url: req.url, ifNoneMatch: init.headers['If-None-Match']});
+    if (init.headers['If-None-Match'] === '"same"') return new Response(null, {status: 304});
+    throw new Error('unexpected ' + req.url);
+  };
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'store-files', files: [current]}, ports: [channel.port2]}).waits);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [{url: ORIGIN + current, ifNoneMatch: '"same"'}],
+      'the request is a conditional revalidation of the earlier copy');
+  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: 0, revalidated: 1}]);
+  assert.equal(await (await files.match(ORIGIN + current)).text(), 'status()', 'the stored body answers the new version');
+  assert.equal(await files.match(earlier), undefined, 'the earlier version goes once its replacement is stored');
+});
+
+test('a kept file whose bytes changed is fetched whole and stored, and its earlier copy goes', async () => {
+  const h = harness();
+  const earlier = ORIGIN + '/static/js/chat/status-panel.js?v=1';
+  const current = '/static/js/chat/status-panel.js?v=2';
+  const files = await h.caches.api.open('last-state-files');
+  await files.put(earlier, new Response('status(1)', {status: 200, headers: {ETag: '"old"'}}));
+  h.state.network = async (req, init) => {
+    if (init.headers['If-None-Match'] === '"old"') return new Response('status(2)', {status: 200, headers: {ETag: '"new"'}});
+    throw new Error('unexpected ' + req.url);
+  };
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'store-files', files: [current]}, ports: [channel.port2]}).waits);
+  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: 1, revalidated: 0}]);
+  assert.equal(await (await files.match(ORIGIN + current)).text(), 'status(2)');
+  assert.equal(await files.match(earlier), undefined, 'the earlier version goes once its replacement is stored');
+});
+
+test('a warm keeps the earlier copy of a kept file until its replacement is stored', async () => {
+  const h = harness();
+  const earlier = ORIGIN + '/static/js/chat/status-panel.js?v=1';
+  const html = '<link href="/static/css/a.css?v=2" rel="stylesheet">';
+  h.state.network = async (req, init) => {
+    if (req.url === SHELL_URL) return new Response(html, {status: 200});
+    if (!init || init.cache !== 'only-if-cached') return new Response(null, {status: 304});
+    if (req.url === ORIGIN + '/static/css/a.css?v=2') return new Response('a', {status: 200, headers: {ETag: '"a"'}});
+    throw new Error('unexpected ' + req.url);
+  };
+  const files = await h.caches.api.open('last-state-files');
+  await files.put(earlier, new Response('status(1)', {status: 200, headers: {ETag: '"old"'}}));
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', copies: [], files: ['/static/js/chat/status-panel.js?v=2']},
+    ports: [channel.port2],
+  }).waits);
+  assert.equal(channel.replies[0].stored, true);
+  assert.equal(await (await files.match(earlier)).text(), 'status(1)', 'the earlier copy is the revalidation base until store-files runs');
 });
 
 test('a warm keeps the on-demand files it names and drops other stored files', async () => {

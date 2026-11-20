@@ -273,23 +273,34 @@ test('the warm names the on-demand files, so a later warm keeps them', async () 
   assert.deepEqual(JSON.parse(JSON.stringify(warm.files)), onDemandPaths().map((listed) => listed + '?v=test'));
 });
 
-test('every same-origin file a page loader names is on the on-demand list', () => {
-  const listed = new Set(onDemandPaths());
+test('every same-origin file a page loader names is either kept or excluded with a reason', () => {
+  const kept = onDemandPaths();
+  const excluded = onDemandExcluded();
+  assert.ok(kept.length > 0 && excluded.size > 0, 'the lists the test reads are not empty');
   const named = new Set();
   for (const file of pageSourceFiles()) {
     const text = fs.readFileSync(file, 'utf8');
     if (!/\bload(PageScripts|PageStyles)\(/.test(text)) continue;
     for (const match of text.matchAll(/['"](\/static\/[^'"]+)['"]/g)) named.add(match[1]);
   }
-  assert.ok(named.size > 0, 'the scan found the loader files it reads');
-  assert.deepEqual([...named].filter((file) => !listed.has(file)), [],
-      'a loader names a same-origin file that the on-demand list does not store offline');
+  assert.deepEqual([...named].filter((file) => !kept.includes(file) && !excluded.has(file)), [],
+      'a loader names a same-origin file that neither list names: keep it or exclude it with its reason');
+  assert.deepEqual(kept.filter((file) => !named.has(file)), [], 'a kept file that no loader names is stale');
+  assert.deepEqual([...excluded.keys()].filter((file) => !named.has(file)), [],
+      'an excluded file that no loader names is stale');
+  for (const [file, reason] of excluded) assert.ok(reason.length > 0, file + ' has no exclusion reason');
 });
 
 // The paths in offline-shell.js's ON_DEMAND_FILES, unversioned.
 function onDemandPaths() {
   const block = SOURCE.match(/const ON_DEMAND_FILES = Object\.freeze\(\[([\s\S]*?)\]\);/);
   return [...block[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+}
+
+// The excluded paths and their reasons, from ON_DEMAND_EXCLUDED.
+function onDemandExcluded() {
+  const block = SOURCE.match(/const ON_DEMAND_EXCLUDED = Object\.freeze\(\{([\s\S]*?)\}\);/);
+  return new Map([...block[1].matchAll(/'([^']+)': '([^']+)'/g)].map((match) => [match[1], match[2]]));
 }
 
 // The page's own source files: the templates and feature trees a session page includes, and the static scripts. Vendor

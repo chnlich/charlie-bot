@@ -56,51 +56,62 @@ function warmOfflineShell() {
 // ---------------------------------------------------------------------------
 // On-demand files: the same-origin files a view or panel loads when it is first used
 // ---------------------------------------------------------------------------
-// Each file a loadPageScripts or loadPageStyles call names on the session page (utils.js), and each sidebar
-// interaction file (sidebar/namespace.js). A view or panel opened offline needs its file stored, and the worker
-// stores a file only when it answers one: so the worker stores this list once the page is current and idle, after
-// the first screen and the catch-up have used the link. Cross-origin files stay out: the CDN loads are not the
-// worker's to answer. offline_shell_page.test.js fails when a loader names a same-origin file this list lacks.
+// The files the session page's loadPageScripts and loadPageStyles calls name (utils.js), and the sidebar interaction
+// files (sidebar/namespace.js). Each is either kept or excluded with its reason. A kept file renders stored content
+// offline, so the worker stores it once the page is current and idle: an offline open then shows that view without its
+// first online use. An excluded file's only function talks to the server, so its control shows its offline state and
+// needs no stored code. offline_shell_page.test.js fails when a loader names a same-origin file neither list names.
+//
+// Kept: status-panel.js draws the Status view with its offline mark; comment_post.js is loaded before it, and its send
+// path (startUndoableSend) registers the page-leave flush at load; worker-summary.js paints the For-you row's summary
+// from the stored bootstrap; file-links.js marks file links in stored messages, and a failed probe is not a missing
+// file; draft-cards.js paints the stored draft rows; artifact-cards.js renders artifact-page links in stored messages
+// as cards. Each stylesheet follows its script.
 const ON_DEMAND_FILES = Object.freeze([
-  '/static/js/chat/worker-summary.js',
-  '/static/js/chat/triggers-tray.js',
-  '/static/js/comment_post.js',
   '/static/js/chat/status-panel.js',
+  '/static/js/comment_post.js',
+  '/static/js/chat/worker-summary.js',
+  '/static/css/worker-summary.css',
   '/static/js/chat/file-links.js',
-  '/static/js/sidebar/archived.js',
-  '/static/js/file-upload.js',
   '/static/features/drafts/draft-cards.js',
   '/static/features/artifacts/artifact-cards.js',
-  '/static/features/artifacts/plan-panel.js',
-  '/static/features/usage/ext_usage.js',
-  '/static/features/explain/explain.js',
-  '/static/features/cron/cron.js',
-  '/static/features/terminal/terminal_b64.js',
-  '/static/features/terminal/terminal_clipboard.js',
-  '/static/features/terminal/terminal_mount.js',
-  '/static/features/terminal/terminal_panel.js',
-  '/static/features/voice/voice-input.js',
-  '/static/js/sidebar/row-menu.js',
-  '/static/js/sidebar/modals.js',
-  '/static/js/sidebar/session-actions.js',
-  '/static/js/sidebar/session-menus.js',
-  '/static/js/sidebar/session-move.js',
-  '/static/css/worker-summary.css',
-  '/static/css/triggers-tray.css',
-  '/static/css/file-upload.css',
   '/static/features/artifacts/artifacts.css',
-  '/static/features/usage/usage.css',
-  '/static/features/voice/voice-overlay.css',
-  '/static/css/sidebar-interactions.css',
 ]);
 
-// The versioned URLs the page requests for them (utils.js pageAssetUrl), so the worker's stored keys are the page's URLs.
+// Excluded: each same-origin file the loaders name that the worker does not store, with the reason.
+const ON_DEMAND_EXCLUDED = Object.freeze({
+  '/static/features/terminal/terminal_b64.js': 'terminal: a shell session on the server, no stored content',
+  '/static/features/terminal/terminal_clipboard.js': 'terminal: a shell session on the server, no stored content',
+  '/static/features/terminal/terminal_mount.js': 'terminal: a shell session on the server, no stored content',
+  '/static/features/terminal/terminal_panel.js': 'terminal: a shell session on the server, no stored content',
+  '/static/js/file-upload.js': 'file upload: sends the file to the server',
+  '/static/css/file-upload.css': 'file upload: the stylesheet of the upload control',
+  '/static/features/voice/voice-input.js': 'voice input: records and sends audio to the server',
+  '/static/features/voice/voice-overlay.css': 'voice input: the stylesheet of the voice control',
+  '/static/features/cron/cron.js': 'cron tasks: lists and edits the server tasks',
+  '/static/features/usage/ext_usage.js': 'usage: fetches the usage figures from the server',
+  '/static/features/usage/usage.css': 'usage: the stylesheet of the usage panel',
+  '/static/js/sidebar/archived.js': 'archived list: fetches the archived sessions from the server',
+  '/static/js/sidebar/session-actions.js': 'session actions: rename, archive, delete and unarchive on the server',
+  '/static/js/sidebar/session-menus.js': 'session menus: the menus of the session actions',
+  '/static/js/sidebar/row-menu.js': 'row menu widget: the menus of the session actions',
+  '/static/js/sidebar/modals.js': 'sidebar modals: the action dialogs and the group editor post to the server',
+  '/static/js/sidebar/session-move.js': 'move picker: fetches the groups and moves the session on the server',
+  '/static/css/sidebar-interactions.css': 'sidebar actions: the stylesheet of the session actions',
+  '/static/js/chat/triggers-tray.js': 'pending triggers: fetched from and cancelled on the server',
+  '/static/css/triggers-tray.css': 'pending triggers: the stylesheet of the triggers tray',
+  '/static/features/explain/explain.js': 'explain: asks the server for each explanation',
+  '/static/features/artifacts/plan-panel.js': 'plans panel: fetches the plans from the server; the copy holds none',
+});
+
+// The versioned URLs the page requests for the kept files (utils.js pageAssetUrl), so the worker's stored keys are the
+// page's URLs.
 function onDemandFileUrls() {
   return ON_DEMAND_FILES.map((path) => pageAssetUrl(path));
 }
 
-// The worker stores the list when the page is current and the browser is idle. The reply is one event per request,
-// {stored: n} or {error}; the poor-network bench waits for it before a warm browser closes.
+// The worker stores the kept files when the page is current and the browser is idle. The reply is one event per
+// request, {stored, revalidated} or {error}; the poor-network bench waits for it before a warm browser closes.
 function requestOnDemandFiles() {
   requestIdleCallback(() => {
     navigator.serviceWorker.ready.then((registration) => {

@@ -382,9 +382,12 @@ async function warmShell(refresh = false, onDemand = []) {
     if (file.headers.get('ETag')) fetchedFiles.push([ref, file]);
   }
   for (const [ref, file] of fetchedFiles) await files.put(ref, file);
+  // An on-demand file is kept under any version until storeOnDemandFiles replaces it: its earlier copy is the base of
+  // the ETag revalidation.
+  const onDemandPaths = onDemand.map((url) => new URL(url, self.location.origin).pathname);
   for (const request of await files.keys()) {
-    const path = new URL(request.url).pathname + new URL(request.url).search;
-    if (!refs.includes(path) && !onDemand.includes(path)) await files.delete(request);
+    const url = new URL(request.url);
+    if (!refs.includes(url.pathname + url.search) && !onDemandPaths.includes(url.pathname)) await files.delete(request);
   }
   await cache.put(SHELL_KEY, new Response(html, {
     headers: {'Content-Type': 'text/html; charset=utf-8', ETag: response.headers.get('ETag')},
@@ -392,22 +395,44 @@ async function warmShell(refresh = false, onDemand = []) {
   return {stored: true};
 }
 
-// Stores the page's on-demand files: the same-origin files a view or panel loads when it is first used. A file the
-// cache holds is skipped; any other is fetched through the network and stored only with an ETag, the rule the shell's
-// files follow. The page asks once it is current and idle, so the link has carried the first screen first.
+// Stores the page's on-demand files: the same-origin files a view or panel loads when it is first used. Each is stored
+// under the URL the page requests, which carries the release's version. A file the cache holds under that URL is
+// skipped. Otherwise the copy stored for the same path under an earlier version is revalidated with its ETag: a 304
+// keeps that body under the new URL with no body bytes, and a 200 stores the new body. The ETag names the file's bytes
+// (static_files.rs), so a file a release leaves unchanged costs a request and no body. The earlier copy goes once its
+// replacement is decided, and a response without an ETag is not stored. The page asks once it is current and idle, so
+// the link has carried the first screen first.
 async function storeOnDemandFiles(urls) {
   const files = await caches.open(FILE_CACHE);
   let stored = 0;
+  let revalidated = 0;
   for (const url of urls) {
     if (await files.match(url)) continue;
-    const response = await fetch(url, {credentials: 'same-origin'});
-    if (!response.ok) throw new Error('on-demand file fetch failed: ' + url + ' ' + response.status);
-    if (response.headers.get('ETag')) {
-      await files.put(url, response);
-      stored += 1;
+    const earlier = await storedCopyOfPath(files, new URL(url, self.location.origin).pathname);
+    const headers = earlier ? {'If-None-Match': earlier.response.headers.get('ETag')} : {};
+    const response = await fetch(url, {credentials: 'same-origin', cache: 'no-store', headers});
+    if (response.status === 304 && earlier) {
+      await files.put(url, earlier.response);
+      revalidated += 1;
+    } else if (response.ok) {
+      if (response.headers.get('ETag')) {
+        await files.put(url, response);
+        stored += 1;
+      }
+    } else {
+      throw new Error('on-demand file fetch failed: ' + url + ' ' + response.status);
     }
+    if (earlier) await files.delete(earlier.url);
   }
-  return {stored};
+  return {stored, revalidated};
+}
+
+// The copy the cache holds for a path under any version: its URL and response, or null.
+async function storedCopyOfPath(files, path) {
+  for (const request of await files.keys()) {
+    if (new URL(request.url).pathname === path) return {url: request.url, response: await files.match(request)};
+  }
+  return null;
 }
 
 // Called only after a refresh answers 401, so navigation reaches the server instead of using stale HTML.

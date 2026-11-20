@@ -267,7 +267,7 @@ mod tests {
       assert_eq!(document.root_element().tag_name().name(), "svg", "icon '{key}' has an SVG root");
       count += 1;
     }
-    assert_eq!(count, 50);
+    assert_eq!(count, 51);
   }
 
   #[test]

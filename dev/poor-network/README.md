@@ -356,9 +356,30 @@ cell reruns it under the same bound. In D2 (run 20261115T095852Z) the bench's ow
 3.6 s late in the two B release repetitions. The second open navigated about 8.7 s into the hold and failed with
 `net::ERR_TIMED_OUT` 40.3 s later. Every other load failure stays the repetition's record, as before.
 
+**The newest-row target.** The target of a repetition is the newest row the For you view paints on the first screen:
+the last message of the bootstrap whose role the view paints (`user`, `web_reply`, `web_reply_notice`, `draft`, or a
+`system` row whose text starts with `Error: `) and that carries an id. Separators and the other roles have no node in
+the view, so a first screen whose last message is a separator names an earlier row. The rule lives in
+`newest-row.mjs`, beside the view's filter it copies (`web/static/js/chat/for-you.js`, `showsInForYou`). Each
+repetition records its target as `newestTargetId`. A run that measures both sides passes the before side's JSON to the
+after side (`--expect-targets`): a repetition whose target differs from the before side's stops the after side with
+both ids, before it measures. Rows run on only one side still use the same target rule, but have no cross-side target
+to compare. A single-side run has no expectation and checks nothing.
+
+**The seed.** `run.sh` copies the mock home the run reads (`~/improve/mock-home/<version>-<shape>-<sessions>`) into
+`<run dir>/seed/` and records its content hash in `<run dir>/seed.sha256`. Both sides read the copy. Each side checks
+the copy's hash when it queues for the bench lock, and stops the run on a change. The shared home is the improve
+trials' seed too, so a rewrite of it cannot move a run's targets.
+
+**Stored-copy rows.** The shell cache is named for the release. The session-copy cache is named for its copy format,
+so activation keeps copies that the new page can read and drops copies of an older format. A page that receives a reply
+over its socket refreshes that session's copy. `release-offline` and `replied-offline` run on the after side only;
+main has no offline-copy client, so it cannot produce a meaningful before-side result for those rows. The after-side
+acceptance still requires every repetition to show the stored copy, including the reply delivered over the socket.
+
 **Measured per repetition.** Times are ms from the tab's first navigation: the first document's time origin. A reload
-inside the open stays part of it. `newest_message_ms` is when the first screen's last message is first in the chat of
-any document of the open, named by its `data-message-id` — the page's own `newest_message_ms` definition
+inside the open stays part of it. `newest_message_ms` is when the newest-row target is first in the chat of any
+document of the open, named by its `data-message-id` — the page's own `newest_message_ms` definition
 (`web/features/diag/templates/diag/client-events.js`); a text marker goes stale, because the scenarios before the open
 scenario send turns to the same session. `catchup_ms` is the first `catchup_complete` frame of the page's socket after
 the navigation, and `load_ms` is the load event of the last document, the one whose load ends the open.

@@ -38,6 +38,7 @@ import {
   toolStreamRep,
   viewBackgroundRep,
 } from './scenarios.mjs';
+import { expectedTargetsFrom } from './newest-row.mjs';
 import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
 import { formatSearch, searchScenario } from './search.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
@@ -92,6 +93,7 @@ function parseArgs(argv) {
     '--scenarios': 'scenarios',
     '--open-conditions': 'openConditions',
     '--open-cpu-rate': 'openCpuRate',
+    '--expect-targets': 'expectTargets',
   };
   for (let index = 0; index < argv.length; index += 2) {
     const key = flags[argv[index]];
@@ -355,6 +357,11 @@ async function main() {
     chromeVersion: null,
     backendId: STUB_BACKEND_ID,
     otherViews: {},
+    // The before side's newest-row targets, when this side runs after it in one invocation (run.sh): each repetition
+    // checks its target against them before it measures.
+    expectedTargets: args.expectTargets === undefined
+      ? null
+      : expectedTargetsFrom(JSON.parse(fs.readFileSync(args.expectTargets, 'utf8')).open),
   };
   const results = Object.fromEntries(Object.keys(SCENARIOS).map((name) => [name, []]));
   // The open scenario fills this object cell by cell, so a failure part-way leaves the cells measured so far.

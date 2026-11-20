@@ -13,6 +13,7 @@ import path from 'node:path';
 import { launchBrowser, chromeBinary } from './chrome.mjs';
 import { cdnRoutes } from './cdn.mjs';
 import { LINK, OPEN, LIVE_CPU_TAIL } from './profile.mjs';
+import { assertSameTargetAsBefore, newestRowMessage } from './newest-row.mjs';
 import { ShapingProxy } from './proxy.mjs';
 import { percentile } from './report.mjs';
 import { NETWORK_CHANGED_ERROR, PAGE_REPORT_BINDING, Tabs, sleep } from './tabs.mjs';
@@ -465,12 +466,17 @@ async function measureOnce(ctx, cell, repetition) {
       await deliverReplyOnline(tabs, session, repetition);
     }
 
-    // The newest message the measured open must show: the first screen's last message, fetched now, after the
-    // release condition has landed its turn. The request runs beside the link, so it costs the measurement no bytes.
+    // The newest message the measured open must show: the newest row the For you view paints on the first screen
+    // (newest-row.mjs), fetched now, after the release condition has landed its turn. The request runs beside the link,
+    // so it costs the measurement no bytes.
     const firstScreen = await ctx.api.json('GET', `/api/sessions/${session.id}/bootstrap`);
-    const newestMessage = firstScreen.messages[firstScreen.messages.length - 1];
-    if (newestMessage === undefined || newestMessage.id == null) {
-      throw new Error(`the open target's first screen (${firstScreen.messages.length} messages) names no last message id`);
+    const newestMessage = newestRowMessage(firstScreen.messages);
+    if (newestMessage === null) {
+      throw new Error(`the open target's first screen (${firstScreen.messages.length} messages) paints no For you row`);
+    }
+    // The two stored-copy setups exist only on the after side, so they have no before-side target to compare.
+    if (!STORED_COPY_CONDITIONS.includes(cell.condition)) {
+      assertSameTargetAsBefore(ctx.expectedTargets, cell.id, repetition, newestMessage.id);
     }
     const tab = await openMeasuredTab(tabs, newestMessage.id);
     await tab.page.send('Emulation.setCPUThrottlingRate', { rate: cell.rate });
@@ -549,6 +555,7 @@ async function measureOnce(ctx, cell, repetition) {
       rep: repetition,
       navigationError,
       networkChanged: tab.networkChanged,
+      newestTargetId: String(newestMessage.id),
       newestMs: newestWall === null ? null : newestWall - opened.startWall,
       catchupMs: catchup === null || opened.startWall === null ? null : catchup.at - opened.startWall,
       sockets: tab.sockets.length,
@@ -733,12 +740,13 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
     result.cells.push(cell);
     await runCell(ctx, cell, repetitions);
   }
-  // The stored-copy rows run last: a release-offline repetition lands its own release, and every cell that reads
-  // the served page at a settled version has already run.
-  for (const condition of STORED_COPY_CONDITIONS.filter((name) => conditions.includes(name))) {
-    const cell = { id: `A ${condition}`, case: 'A', condition, rate: cpuRate, warmDir: warm.A.dir };
-    result.cells.push(cell);
-    await runCell(ctx, cell, repetitions);
+  // Main has no offline-copy client, so the stored-copy rows are defined only on the after side.
+  if (ctx.side === 'after') {
+    for (const condition of STORED_COPY_CONDITIONS.filter((name) => conditions.includes(name))) {
+      const cell = { id: `A ${condition}`, case: 'A', condition, rate: cpuRate, warmDir: warm.A.dir };
+      result.cells.push(cell);
+      await runCell(ctx, cell, repetitions);
+    }
   }
   result.releases = ctx.releases;
   return result;

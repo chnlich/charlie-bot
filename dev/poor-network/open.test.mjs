@@ -14,6 +14,7 @@ import { chromeBinary, launchBrowser } from './chrome.mjs';
 import { assetVersionOf, hostInterference, openCpuRecord, openMeasuredTab, openRecord, openSettled, runRepetitions }
   from './open.mjs';
 import { LIVE_CPU_TAIL, OPEN } from './profile.mjs';
+import { assertSameTargetAsBefore, expectedTargetsFrom, newestRowMessage } from './newest-row.mjs';
 import { Tabs, waitFor } from './tabs.mjs';
 
 const DOC_URL = 'https://localhost:8443/?session=open';
@@ -132,6 +133,29 @@ test('a reload inside an open keeps the first navigation as the start', () => {
   assert.equal(record.startWall, 1000, 'the open starts at the first navigation');
   assert.equal(record.newestWall - record.startWall, 10600, 'the reloaded newest message counts from the first navigation');
   assert.equal(record.loadWall, 11700, 'the open ends with the last document\'s load');
+});
+
+test('the newest-row target is the last message the For you view paints, and a side that differs from the before side stops', () => {
+  const screen = [
+    { id: 'u1', role: 'user', content: 'hi' },
+    { id: 'w1', role: 'web_reply', content: 'answer' },
+    { id: 's1', role: 'separator', kind: 'run_end' },
+    { id: 'a1', role: 'assistant', content: 'worker text' },
+    { id: 'x1', role: 'system', content: 'Error: boom' },
+    { id: 'y1', role: 'system', content: 'note' },
+    { id: 'z1', role: 'separator' },
+  ];
+  assert.equal(newestRowMessage(screen).id, 'x1');
+  assert.equal(newestRowMessage(screen.slice(0, 2)).id, 'w1');
+  assert.equal(newestRowMessage([{ id: 'a', role: 'assistant' }, { role: 'user', content: 'no id' }]), null);
+  const before = expectedTargetsFrom({
+    reference: { id: 'reference A link rate 1', reps: [{ rep: 1, newestTargetId: 'x1' }] },
+    cells: [],
+  });
+  assertSameTargetAsBefore(before, 'reference A link rate 1', 1, 'x1');
+  assert.throws(() => assertSameTargetAsBefore(before, 'reference A link rate 1', 1, 'w1'),
+    /this side w1, the before side x1/);
+  assertSameTargetAsBefore(null, 'A link', 1, 'w1');
 });
 
 test('the newest message counts at the first document that shows it', () => {

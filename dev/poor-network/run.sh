@@ -20,8 +20,10 @@
 # --lock-wait SECONDS  how long each side waits for the bench lock (default 7200, the 2 h above). An improve round
 #                passes 900, its 15-minute wait.
 # --open-conditions LIST  the open scenario's cells: any of
-#                         link,held,reset,flaps,offline,release,release-offline,replied-offline (default all). The
-#                reference cell always runs, since the CPU rate is derived from it.
+#                         link,held,reset,flaps,offline,release,release-offline,replied-offline (default
+#                         link,held,reset,flaps,offline,release). The reference cell always runs, since the CPU rate
+#                is derived from it. Stored-copy rows are measured only on the after side because main has no
+#                offline-copy client.
 # --open-cpu-rate RATE  every side runs the open scenario's cells at RATE instead of a rate its reference derives, so
 #                sides of separate invocations (two benches on one product) compare at one CPU speed. Each side's JSON
 #                still records the rate its own reference cell derives.
@@ -66,6 +68,11 @@ die() {
   shift
   printf 'poor-network: %s\n' "$*" >&2
   exit "$code"
+}
+
+# The content hash of a seed home: the sha256 of the sha256sum listing of its files, in path order.
+seed_content_hash() {
+  (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
 }
 
 while (($#)); do
@@ -213,6 +220,17 @@ if [[ ! -d $mock_home ]]; then
   echo "poor-network: generating the $home_shape home of $mock_sessions sessions at $mock_home"
   "$mock_bin" generate "$mock_home" --sessions "$mock_sessions" --shape "$home_shape"
 fi
+# Both sides read a copy of the home that this run owns: the shared home is also the improve trials' seed, and a change
+# to it would move the newest-row targets between the sides. The copy's content hash is recorded, and each side checks
+# it before the side starts.
+seed_dir="$run_dir/seed"
+mkdir -p "$seed_dir"
+seed_copy="$seed_dir/$(basename "$mock_home")"
+cp -a "$mock_home" "$seed_copy"
+seed_hash=$(seed_content_hash "$seed_copy")
+printf '%s  %s\n' "$seed_hash" "$seed_copy" > "$run_dir/seed.sha256"
+echo "poor-network: seed $mock_home copied to $seed_copy (content sha256 $seed_hash)"
+mock_home=$seed_copy
 
 node "$BENCH_DIR/reply.mjs" "$tree" "$run_dir/replies"
 
@@ -245,6 +263,14 @@ run_side() {
   # Chrome's process-singleton socket lives under TMPDIR, and the trial points TMPDIR into its tree. The caller's own
   # TMPDIR is short and writable, so Chrome gets it back beside the trial's long one.
   export POOR_NETWORK_CHROME_TMPDIR=${TMPDIR:-/tmp}
+  # The seed copy must still hold the hash recorded at the run's start before this side reads it.
+  [[ $(seed_content_hash "$mock_home") == "$seed_hash" ]] \
+    || die 1 "the seed copy $mock_home changed since the run recorded $seed_hash; the $name side did not start"
+  # The after side of one invocation checks its newest-row targets against the before side's JSON.
+  local expect_args=()
+  if [[ $name == after && $side == both && ",$scenarios," == *",open,"* ]]; then
+    expect_args=(--expect-targets "$run_dir/before.json")
+  fi
   # The bench lock (lock.sh) covers this side's trial, so no other bench run on the host measures beside it.
   echo "poor-network: $name side queues for the bench lock"
   set +e
@@ -255,7 +281,7 @@ run_side() {
       --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
       --repetitions "$repetitions" --scenarios "$scenarios" --open-conditions "$open_conditions" \
-      ${open_rate_args+"${open_rate_args[@]}"} &
+      ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} &
   trial_pid=$!
   # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
   # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,

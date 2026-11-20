@@ -302,6 +302,9 @@ check_clone() {
   # The clone points at the runner checkout's hooks (an absolute path), so a clone from any layout runs them.
   [[ $hooks == dev/git-hooks || $hooks == */dev/git-hooks ]] \
     || fail 4 "the direction clone does not set core.hooksPath to dev/git-hooks: $clone"
+  # The pre-push hook checks each push's diffs and messages for the round's credential values.
+  [[ -x $clone/dev/git-hooks/pre-push ]] \
+    || fail 4 "the direction clone has no executable dev/git-hooks/pre-push: $clone"
   origin=$(git -C "$clone" remote get-url origin 2>/dev/null) || origin=
   [[ $(basename -- "${origin:-/nonexistent}" .git) == charlie-bot ]] \
     || fail 4 "the direction clone's origin does not point at charlie-bot: ${origin:-no origin}"
@@ -405,15 +408,17 @@ ensure_cli() {
   exec {lock_fd}>>"$RUNNER_ROOT/build.lock"
   flock "$lock_fd" || fail 1 "cannot lock the runner's build state: $RUNNER_ROOT/build.lock"
   mkdir -p -- "$bin_dir" "$RUNNER_ROOT/cargo-home" "$RUNNER_ROOT/tmp"
+  # The checkout holds the commit's sources for the build and for the round's gh shim and scanner below, so it moves to
+  # the commit on every start, not only on a build.
+  if [[ ! -d $checkout/.git ]]; then
+    origin=$(cat -- "$LAUNCH_DIR/origin")
+    git -C "$HOME_DIR" clone --quiet -- "$origin" "$checkout" \
+      || fail 1 "cannot clone the runner's checkout: $checkout"
+  fi
+  git -C "$checkout" fetch --quiet origin "$commit" || fail 1 "cannot fetch commit $commit into $checkout"
+  git -C "$checkout" -c advice.detachedHead=false checkout --quiet --detach "$commit" \
+    || fail 1 "cannot check out commit $commit in $checkout"
   if [[ ! -x $cli || ! -x $sandbox || ! -x $mock_home ]]; then
-    if [[ ! -d $checkout/.git ]]; then
-      origin=$(cat -- "$LAUNCH_DIR/origin")
-      git -C "$HOME_DIR" clone --quiet -- "$origin" "$checkout" \
-        || fail 1 "cannot clone the runner's checkout: $checkout"
-    fi
-    git -C "$checkout" fetch --quiet origin "$commit" || fail 1 "cannot fetch commit $commit into $checkout"
-    git -C "$checkout" -c advice.detachedHead=false checkout --quiet --detach "$commit" \
-      || fail 1 "cannot check out commit $commit in $checkout"
     ( cd "$checkout/rust" &&
       CARGO_HOME="$RUNNER_ROOT/cargo-home" TMPDIR="$RUNNER_ROOT/tmp" \
       CARGO_BUILD_JOBS=$BUILD_JOBS CARGO_TARGET_DIR="$RUNNER_ROOT/target" \
@@ -434,8 +439,22 @@ ensure_cli() {
   ln -sfn -- "../charliebot-$commit" "$commit_bin/charliebot"
   ln -sfn -- "../improve-sandbox-$commit" "$commit_bin/improve-sandbox"
   ln -sfn -- "../mock-home-$commit" "$commit_bin/mock-home"
+  # The round's gh shim and the scanner it runs come from this commit, so a round checks its writes with the code of the
+  # CLI it runs, and a later round that moves the checkout cannot change the copy a live round uses.
+  install_commit_file "$checkout/dev/improve/gh-shim.sh" "$commit_bin/gh" 755
+  install_commit_file "$checkout/dev/check-skills-host-leak.sh" "$commit_bin/check-skills-host-leak.sh" 755
+  install_commit_file "$checkout/dev/leak-patterns.sh" "$commit_bin/leak-patterns.sh" 644
   prune_commit_entries "$commit"
   flock -u "$lock_fd"
+}
+
+# Copy one file of the commit's checkout into the commit's tool directory. The copy is staged beside its destination and
+# renamed over it, so a round that runs the old copy keeps the inode it started with.
+install_commit_file() {  # <source> <destination> <mode>
+  local staged
+  staged=$(mktemp -- "$2.XXXXXXXX") || fail 1 "cannot make a staged copy beside $2"
+  cp -- "$1" "$staged" && chmod "$3" -- "$staged" && mv -f -- "$staged" "$2" \
+    || { rm -f -- "$staged"; fail 1 "cannot install $1 as $2"; }
 }
 
 # The arguments after the script's path of each live process that runs remote-runner.sh, one line per process, each line

@@ -127,6 +127,47 @@ test('a pool delegation card names its pool and compact member on the live state
   assert.match(html, /data-delegate-backend="Human communication → Opus"/);
 });
 
+test('a pool delegation reads the server-filtered member rather than the pool named on delegate_invocation', () => {
+  const context = loadChatRendering();
+  context.BACKEND_OPTIONS = {'claude-opus-5': 'CC · Opus'};
+  context.BACKEND_POOLS = [{id: 'human-communication', label: 'Human communication'}];
+
+  // When --backend passes the pool id, delegate_invocation.backend carries the pool id while msg.backend carries the member.
+  const active = context.renderMessage({
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'thread-inv-pool',
+    child_session_id: 'child-inv-pool',
+    backend: 'claude-opus-5',
+    model: 'claude-opus-5-5',
+    pool: 'human-communication',
+    delegate_invocation: {
+      task_type: 'implement',
+      backend: 'human-communication',
+    },
+  }, 'session-a');
+  assert.match(active, /Human communication → CC · Opus \/ claude-opus-5-5/);
+  assert.match(active, /data-delegate-backend="Human communication → Opus"/);
+
+  // When the server filters out a retired member (backend: null), delegate_invocation.backend must not leak back in.
+  const filtered = context.renderMessage({
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'thread-inv-filtered',
+    child_session_id: 'child-inv-filtered',
+    backend: null,
+    model: 'claude-opus-5-5',
+    pool: 'human-communication',
+    delegate_invocation: {
+      task_type: 'implement',
+      backend: 'human-communication',
+    },
+  }, 'session-a');
+  assert.match(filtered, /Human communication \/ claude-opus-5-5/);
+  assert.doesNotMatch(filtered, /Human communication →/);
+  assert.match(filtered, /data-delegate-backend="Human communication"/);
+});
+
 test('an empty route list renders pool and the router reason', () => {
   const context = loadChatRendering();
 

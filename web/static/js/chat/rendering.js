@@ -814,10 +814,12 @@ function renderMetadataRow(label, value) {
 }
 
 // The backend/model cell of a delegation card, from the event's own fields. A pool delegation carries `pool`, and its
-// member reads through the label function ("Human communication → CC · Opus"); an event without a pool shows its
-// member as it always did.
+// member reads through `msg.backend` (the server-filtered member, never `invocation.backend`, which names the pool the
+// caller asked for); an event without a pool shows its member as it always did.
 function delegateBackendModel(invocation, msg) {
-  var member = (invocation && invocation.backend) || msg.backend || msg.resolved_backend || '';
+  var member = msg.pool
+    ? (msg.backend || '')
+    : ((invocation && invocation.backend) || msg.backend || msg.resolved_backend || '');
   var model = displayMetadataValue(msg.model || msg.resolved_model, '');
   var backend = msg.pool
     ? sessionModelLabel(msg.pool, member || null, null, 'full')
@@ -847,7 +849,9 @@ function delegateLiveStateHtml(msg, sessionId) {
   const tracked = child || sessionId || '';
   if (!tracked) return '';
   const attr = child ? 'data-delegate-session' : 'data-delegate-parent-session';
-  const member = msg.backend || (msg.delegate_invocation && msg.delegate_invocation.backend) || '';
+  const member = msg.pool
+    ? (msg.backend || '')
+    : (msg.backend || (msg.delegate_invocation && msg.delegate_invocation.backend) || '');
   const backend = sessionModelLabel(msg.pool || member, msg.pool ? member : null, null, 'compact');
   return '<span class="delegate-live-state" ' + attr + '="' + escapeHtmlAttr(tracked) + '"'
     + ' data-delegate-backend="' + escapeHtmlAttr(backend) + '"></span>';

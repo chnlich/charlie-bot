@@ -231,7 +231,7 @@ A pull request without one waits: the round that posted no verdict leaves it ope
 
 Before the merge, the pull request's title and body describe its final commits.
 When the branch gained commits after the description was written, update the title and body through `dev/improve/github-post.sh pr-edit`.
-The edited body keeps its `## Evidence` section, because CI checks the body only when the pull request opens or gains commits.
+Keep the body's `## Evidence` section.
 
 Wait for the checks in this round:
 

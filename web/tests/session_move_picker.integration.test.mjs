@@ -34,7 +34,9 @@ const SHOTS_DIR = path.join(WEB_DIR, 'target', 'session-move-picker');
 
 // The stylesheets and scripts the picker's page loads, in page order. The page's config.js
 // runs auth code on load, so the page defines the one global the picker reads from it.
-const STYLESHEETS = ['css/styles.css', 'css/tailwind.css'];
+// sidebar-interactions.css carries the picker's touch rules, so the page loads it where the
+// real page's first sidebar control does.
+const STYLESHEETS = ['css/styles.css', 'css/tailwind.css', 'css/sidebar-interactions.css'];
 // The picker reads its rows through the sidebar's own column expander (utils.js, which groups.js re-exports), so the
 // page loads both, in the page's order.
 const PICKER_SCRIPTS = [
@@ -119,6 +121,7 @@ const PROBE_JS = `
           width: innerWidth,
           height: innerHeight,
           pageScrollWidth: document.documentElement.scrollWidth,
+          touch: matchMedia('(hover: none)').matches,
         },
         dialog: box(dialog),
         blocks: blocks.map((el, index) => ({index, ...sized(el)})),
@@ -236,6 +239,9 @@ async function launchChrome(profileDir) {
     '--disable-gpu',
     '--no-first-run',
     '--no-default-browser-check',
+    // Headless Chrome reports no pointer at all; the desktop viewport names a mouse, and the
+    // mobile viewport's touch emulation takes that back to (hover: none).
+    '--blink-settings=primaryHoverType=2,primaryPointerType=4',
     `--user-data-dir=${profileDir}`,
     '--remote-debugging-pipe',
     'about:blank',
@@ -302,6 +308,8 @@ function assertDialogLayout(m, label) {
 }
 
 // Each choice row is one line: its height is its line height plus its vertical padding, and its label is not clipped.
+// The sheet's touch rule raises the phone row's padding to 12 px, so the same arithmetic gives
+// the 44 px box there.
 // The message names the computed flex-shrink and min-height, which decide how a flex item gives up height.
 function assertRows(rows, label) {
   for (const row of rows) {
@@ -371,11 +379,15 @@ async function checkViewport(page, base, viewport, state) {
     deviceScaleFactor: 1,
     mobile: viewport.mobile,
   });
+  // The phone viewport names a touch screen, so the sheet's (hover: none) rules apply there
+  // as on a phone.
+  await page.send('Emulation.setTouchEmulationEnabled', {enabled: viewport.mobile, maxTouchPoints: 5});
   await page.send('Page.navigate', {url: `${base}/picker`});
   await until(page, "document.readyState === 'complete' && typeof openSessionMovePicker === 'function'", 'the page');
 
   await page.evaluate(`openSessionMovePicker(${JSON.stringify(MOVED_ID)})`);
   const open = await page.evaluate('pickerProbe.measure()');
+  assert.equal(open.viewport.touch, viewport.mobile, `${label}: the viewport is ${viewport.mobile ? 'a touch screen' : 'a pointer'}`);
   // The moved session's row and its parent are out of the list; the list keeps the Top level row and every manager.
   assert.equal(open.rows.length, MANAGER_NAMES.length + 1, `${label}, open: the choice rows`);
   assertPicker(open, `${label}, open`);

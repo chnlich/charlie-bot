@@ -164,7 +164,9 @@ function openConfirmDialog({iconKey = '', iconClass = '', heading, detail, confi
   overlay.id = CONFIRM_OVERLAY_ID;
   overlay.className = MODAL_OVERLAY_CLASS;
   const icon = iconKey ? cbIcon(iconKey, 32, `${iconClass} mx-auto mb-3`) : '';
-  const okClass = `px-3 py-1.5 text-xs rounded-lg ${confirmClass} text-white transition-colors`;
+  // The buttons carry the sheet's dialog-action-btn class, which gives a phone's box 44 px
+  // (sidebar-interactions.css).
+  const okClass = `dialog-action-btn px-3 py-1.5 text-xs rounded-lg ${confirmClass} text-white transition-colors`;
   overlay.innerHTML = `
     <div class="${MODAL_DIALOG_CLASS} text-center"
          onclick="event.stopPropagation()">
@@ -172,7 +174,7 @@ function openConfirmDialog({iconKey = '', iconClass = '', heading, detail, confi
       <p class="text-sm font-semibold text-slate-200 mb-1">${escapeHtml(heading)}</p>
       <p class="text-xs text-slate-400 mb-4 break-words max-h-[70vh] overflow-y-auto">${escapeHtml(detail)}</p>
       <div class="flex gap-2 justify-center">
-        <button id="confirm-cancel-btn" class="px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
+        <button id="confirm-cancel-btn" class="dialog-action-btn px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">Cancel</button>
         <button id="confirm-ok-btn" class="${okClass}">${escapeHtml(confirmLabel)}</button>
       </div>
     </div>`;
@@ -253,7 +255,7 @@ async function showGroupSelector(sessionId, currentGroup) {
   const groupButtons = groups.map(g => {
     const isActive = g === currentGroup;
     const activeClass = isActive ? 'bg-purple-600/30 text-purple-300 border-purple-500/50' : 'bg-slate-700 hover:bg-slate-600 text-slate-300 border-transparent';
-    return `<button data-group="${escapeHtmlAttr(g)}" class="w-full text-left px-3 py-2 rounded-lg text-sm border transition-colors ${activeClass}">${escapeHtml(g)}</button>`;
+    return `<button data-group="${escapeHtmlAttr(g)}" class="dialog-choice-row w-full text-left px-3 py-2 rounded-lg text-sm border transition-colors ${activeClass}">${escapeHtml(g)}</button>`;
   }).join('');
 
   // The Remove group row keeps the group rows' slate-300 label. Slate-400 reads 4.04:1 on the
@@ -281,13 +283,13 @@ async function showGroupSelector(sessionId, currentGroup) {
         </button>
       </div>
       <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">
-        ${currentGroup ? `<button data-group="" class="w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-red-600/20 hover:text-red-300 text-slate-300 transition-colors">Remove group</button>` : ''}
+        ${currentGroup ? `<button data-group="" class="dialog-choice-row w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-red-600/20 hover:text-red-300 text-slate-300 transition-colors">Remove group</button>` : ''}
         ${groupButtons}
       </div>
       <div class="flex gap-2">
         <input id="new-group-input" type="text" placeholder="New group name..."
-               class="flex-1 bg-slate-700 border rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none">
-        <button id="new-group-btn" class="px-3 py-1.5 text-sm rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition-colors">Add</button>
+               class="dialog-text-field flex-1 bg-slate-700 border rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none">
+        <button id="new-group-btn" class="dialog-action-btn px-3 py-1.5 text-sm rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition-colors">Add</button>
       </div>
     </div>`;
 

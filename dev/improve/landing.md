@@ -229,6 +229,10 @@ A silent skip breaks the protocol.
 Merge only when the pull request carries a review verdict comment.
 A pull request without one waits: the round that posted no verdict leaves it open, and Step 2 adopts it in the next round to run the review first.
 
+Before the merge, the pull request's title and body describe its final commits.
+When the branch gained commits after the description was written, update the title and body through `dev/improve/github-post.sh pr-edit`.
+The edited body keeps its `## Evidence` section, because CI checks the body only when the pull request opens or gains commits.
+
 Wait for the checks in this round:
 
     gh pr checks <PR> --watch --fail-fast

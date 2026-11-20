@@ -1329,9 +1329,9 @@ fn to_index(value: i64) -> usize {
 #[cfg(test)]
 mod tests {
   use charliebot_registry::{Registry, store_hooks};
-  use charliebot_store::for_you::{self, FOR_YOU_MAX_ROWS};
+  use charliebot_store::for_you::{self, FOR_YOU_MAX_JSON_BYTES, FOR_YOU_MAX_ROWS};
   use charliebot_store::run_records::RunKind;
-  use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, TaskCaller};
+  use charliebot_store::{CompactValue, CreateTask, SESSION_NOT_FOUND_DETAIL, TaskCaller};
 
   use super::*;
   use crate::test_support::{
@@ -2190,6 +2190,35 @@ backends:
     let rows = features.store.for_you_rows_before(&meta.id, base + 2).unwrap();
     assert_eq!(rows.len(), 1, "the newest row alone is over the cap, and it is kept");
     assert_eq!(rows[0]["content"].as_str().unwrap().split(' ').next(), Some("1"));
+  }
+
+  /// The JSON cap counts the array brackets and commas, so an array one byte over the cap drops its older row.
+  #[tokio::test]
+  async fn the_for_you_json_cap_counts_the_array_delimiters() {
+    let (_home, features) = feature_context();
+    let meta =
+      crate::test_support::create_node(&features.store, "for-you-json-boundary", None, TaskProfile::Manager).await;
+    let base = features.store.get_chat_event_count_sync(&meta.id).unwrap();
+    let mut events = vec![
+      json!({"type": "user", "content": "x"}),
+      json!({"type": "master_done"}),
+      json!({"type": "user", "content": "x"}),
+      json!({"type": "master_done"}),
+    ];
+    let compact_events: Vec<CompactValue> = events.iter().map(CompactValue::from_value).collect();
+    let projected = features.store.events_to_messages_at(&compact_events, base).unwrap();
+    let reply_rows: Vec<&Value> = projected.iter().filter(|message| for_you::is_reply_row(message)).collect();
+    assert_eq!(reply_rows.len(), 2);
+    // The old accounting adds one byte per row, but omits the brackets; make it land exactly on the cap.
+    let old_accounting = reply_rows.iter().map(|message| message.to_string().len() + 1).sum::<usize>();
+    let extra = FOR_YOU_MAX_JSON_BYTES - old_accounting;
+    events[2]["content"] = json!("x".repeat(extra + 1));
+    append_all(&features, &meta.id, events).await;
+
+    let rows = features.store.for_you_rows_before(&meta.id, base + 4).unwrap();
+    assert_eq!(rows.len(), 1, "the oldest row would make the serialized array one byte too large");
+    assert_eq!(rows[0]["content"].as_str().unwrap().len(), extra + 1);
+    assert!(serde_json::to_vec(&rows).unwrap().len() <= FOR_YOU_MAX_JSON_BYTES);
   }
 
   /// The scan reads 2,000 event lines back from the line it starts at and no further.

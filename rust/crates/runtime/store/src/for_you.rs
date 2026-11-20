@@ -51,7 +51,7 @@ impl Store {
   /// the next row would take the JSON past [`FOR_YOU_MAX_JSON_BYTES`]. The newest row is always kept.
   pub fn for_you_rows_before(&self, session_id: &str, before: usize) -> StoreResult<Vec<Value>> {
     let mut newest_first: Vec<Value> = Vec::new();
-    let mut json_bytes = 0;
+    let mut json_bytes = 2; // The array's opening and closing brackets.
     let mut end = before;
     let mut scanned = 0;
     'scan: while end > 0 && scanned < FOR_YOU_SCAN_MAX_LINES && newest_first.len() < FOR_YOU_MAX_ROWS {
@@ -62,11 +62,12 @@ impl Store {
         if !is_reply_row(&message) && !is_error_row(&message) {
           continue;
         }
-        let row_bytes = message.to_string().len() + 1;
-        if !newest_first.is_empty() && json_bytes + row_bytes > FOR_YOU_MAX_JSON_BYTES {
+        let row_bytes = message.to_string().len();
+        let separator_bytes = if newest_first.is_empty() { 0 } else { 1 };
+        if !newest_first.is_empty() && json_bytes + separator_bytes + row_bytes > FOR_YOU_MAX_JSON_BYTES {
           break 'scan;
         }
-        json_bytes += row_bytes;
+        json_bytes += separator_bytes + row_bytes;
         newest_first.push(message);
         if newest_first.len() == FOR_YOU_MAX_ROWS {
           break 'scan;

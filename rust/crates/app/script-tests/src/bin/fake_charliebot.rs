@@ -6,7 +6,7 @@ use std::process::exit;
 
 fn main() {
   let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-  if args.first().and_then(|argument| argument.to_str()) != Some("switch-helper") {
+  if args.first().and_then(|argument| argument.to_str()) != Some(charliebot_switch_helper::SUBCOMMAND) {
     eprintln!("charliebot: unknown subcommand");
     exit(2);
   }

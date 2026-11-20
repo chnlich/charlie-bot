@@ -45,7 +45,7 @@ const COMMANDS: [&str; 34] = [
   "session",
   "setup",
   "slack",
-  "switch-helper",
+  charliebot_switch_helper::SUBCOMMAND,
   "taste",
   "triage",
   "usage",
@@ -132,7 +132,7 @@ fn run_subcommand(
     "session" => commands::session::main(args),
     "setup" => commands::setup::main(args),
     "slack" => charliebot_slack::cli::main(args),
-    "switch-helper" => charliebot_switch_helper::main(args),
+    charliebot_switch_helper::SUBCOMMAND => charliebot_switch_helper::main(args),
     "taste" => {
       // The plan registry is composed only when `candidates` reads a session's notes.
       let read_plans = |session_dir: &Path| -> anyhow::Result<Option<Vec<serde_json::Value>>> {

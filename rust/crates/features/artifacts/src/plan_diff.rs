@@ -539,7 +539,7 @@ impl Parser {
         .iter()
         .filter_map(|child| match child {
           Child::Node(index) if matches!(self.nodes[*index].tag.as_str(), "td" | "th") => Some(*index),
-          _ => None,
+          Child::Node(_) | Child::Text(_) => None,
         })
         .count()
         .max(1);
@@ -1158,8 +1158,9 @@ pub fn diff_text(base_html: &str, new_html: &str) -> Result<String, String> {
           continue;
         }
       }
-      _ if old_text == new_text => continue,
-      _ => {}
+      (None, None) => continue,
+      (Some(_), None) | (None, Some(_)) if old_text == new_text => continue,
+      (Some(_), None) | (None, Some(_)) => {}
     }
     let (parser, leaves, index) = match (change.new, change.old) {
       (Some(new), _) => (&new_parser, &new_leaves, new),

@@ -284,7 +284,18 @@ impl WarmRenderer {
           {
             RenderFailure::Timeout
           }
-          _ => RenderFailure::Other(error.to_string()),
+          tungstenite::Error::ConnectionClosed
+          | tungstenite::Error::AlreadyClosed
+          | tungstenite::Error::Io(_)
+          | tungstenite::Error::Tls(_)
+          | tungstenite::Error::Capacity(_)
+          | tungstenite::Error::Protocol(_)
+          | tungstenite::Error::WriteBufferFull(_)
+          | tungstenite::Error::Utf8(_)
+          | tungstenite::Error::AttackAttempt
+          | tungstenite::Error::Url(_)
+          | tungstenite::Error::Http(_)
+          | tungstenite::Error::HttpFormat(_) => RenderFailure::Other(error.to_string()),
         })?;
       match message {
         Message::Text(text) => {

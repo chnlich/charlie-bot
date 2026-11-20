@@ -281,7 +281,7 @@ fn iter_items(value: &Value) -> Result<Vec<Value>, EscapedError> {
 fn plan_id_of(plan: &Value) -> Value {
   match plan {
     Value::Object(plan) => plan.get("id").cloned().unwrap_or(Value::Null),
-    _ => Value::Null,
+    Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => Value::Null,
   }
 }
 

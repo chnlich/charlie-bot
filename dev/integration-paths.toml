@@ -36,6 +36,11 @@ rust = "binary_id(charliebot-script-tests::improve) + binary_id(charliebot-scrip
 paths = ["scripts/switch-server.sh", "scripts/start-server.sh", "scripts/install-slice-units.sh", "scripts/release.sh", "scripts/release/**", "scripts/setup.sh", "scripts/systemd/**"]
 rust = "binary_id(charliebot-script-tests::switch_server) + binary_id(charliebot-script-tests::release) + binary_id(charliebot-script-tests::start_server) + binary_id(charliebot-script-tests::setup_scripts)"
 
+# The switch's live capture: its access-key test runs the script in a real Chrome.
+[[entry]]
+paths = ["scripts/live-shot.mjs"]
+rust = "binary_id(charliebot-script-tests::switch_server)"
+
 [[entry]]
 paths = ["scripts/sync-skills.sh", "scripts/preflight-charlie-code.sh"]
 rust = "binary_id(charliebot-script-tests::setup_scripts)"

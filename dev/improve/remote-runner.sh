@@ -403,22 +403,16 @@ ensure_cli() {
   local sandbox="$bin_dir/improve-sandbox-$commit"
   local mock_home="$bin_dir/mock-home-$commit"
   local commit_bin="$bin_dir/$commit"
-  local origin lock_fd
+  local lock_fd
   mkdir -p -- "$RUNNER_ROOT"
   exec {lock_fd}>>"$RUNNER_ROOT/build.lock"
   flock "$lock_fd" || fail 1 "cannot lock the runner's build state: $RUNNER_ROOT/build.lock"
   mkdir -p -- "$bin_dir" "$RUNNER_ROOT/cargo-home" "$RUNNER_ROOT/tmp"
-  # The checkout holds the commit's sources for the build and for the round's gh shim and scanner below, so it moves to
-  # the commit on every start, not only on a build.
-  if [[ ! -d $checkout/.git ]]; then
-    origin=$(cat -- "$LAUNCH_DIR/origin")
-    git -C "$HOME_DIR" clone --quiet -- "$origin" "$checkout" \
-      || fail 1 "cannot clone the runner's checkout: $checkout"
-  fi
-  git -C "$checkout" fetch --quiet origin "$commit" || fail 1 "cannot fetch commit $commit into $checkout"
-  git -C "$checkout" -c advice.detachedHead=false checkout --quiet --detach "$commit" \
-    || fail 1 "cannot check out commit $commit in $checkout"
   if [[ ! -x $cli || ! -x $sandbox || ! -x $mock_home ]]; then
+    ensure_runner_checkout
+    git -C "$checkout" fetch --quiet origin "$commit" || fail 1 "cannot fetch commit $commit into $checkout"
+    git -C "$checkout" -c advice.detachedHead=false checkout --quiet --detach "$commit" \
+      || fail 1 "cannot check out commit $commit in $checkout"
     ( cd "$checkout/rust" &&
       CARGO_HOME="$RUNNER_ROOT/cargo-home" TMPDIR="$RUNNER_ROOT/tmp" \
       CARGO_BUILD_JOBS=$BUILD_JOBS CARGO_TARGET_DIR="$RUNNER_ROOT/target" \
@@ -440,21 +434,35 @@ ensure_cli() {
   ln -sfn -- "../improve-sandbox-$commit" "$commit_bin/improve-sandbox"
   ln -sfn -- "../mock-home-$commit" "$commit_bin/mock-home"
   # The round's gh shim and the scanner it runs come from this commit, so a round checks its writes with the code of the
-  # CLI it runs, and a later round that moves the checkout cannot change the copy a live round uses.
-  install_commit_file "$checkout/dev/improve/gh-shim.sh" "$commit_bin/gh" 755
-  install_commit_file "$checkout/dev/check-skills-host-leak.sh" "$commit_bin/check-skills-host-leak.sh" 755
-  install_commit_file "$checkout/dev/leak-patterns.sh" "$commit_bin/leak-patterns.sh" 644
+  # CLI it runs. They are copied once per commit: a later round cannot change the copy that a live round runs.
+  if [[ ! -f $commit_bin/gh || ! -f $commit_bin/check-skills-host-leak.sh || ! -f $commit_bin/leak-patterns.sh ]]; then
+    ensure_runner_checkout
+    git -C "$checkout" fetch --quiet "$(cat -- "$LAUNCH_DIR/origin")" "$commit" \
+      || fail 1 "cannot fetch commit $commit from the launcher's origin into $checkout"
+    install_commit_file "$commit" dev/improve/gh-shim.sh "$commit_bin/gh" 755
+    install_commit_file "$commit" dev/check-skills-host-leak.sh "$commit_bin/check-skills-host-leak.sh" 755
+    install_commit_file "$commit" dev/leak-patterns.sh "$commit_bin/leak-patterns.sh" 644
+  fi
   prune_commit_entries "$commit"
   flock -u "$lock_fd"
 }
 
-# Copy one file of the commit's checkout into the commit's tool directory. The copy is staged beside its destination and
-# renamed over it, so a round that runs the old copy keeps the inode it started with.
-install_commit_file() {  # <source> <destination> <mode>
+# The runner's checkout, cloned from the launcher's origin on the first use. The checkout only builds the round tools.
+ensure_runner_checkout() {
+  if [[ ! -d $RUNNER_ROOT/charlie-bot/.git ]]; then
+    git -C "$HOME_DIR" clone --quiet -- "$(cat -- "$LAUNCH_DIR/origin")" "$RUNNER_ROOT/charlie-bot" \
+      || fail 1 "cannot clone the runner's checkout: $RUNNER_ROOT/charlie-bot"
+  fi
+}
+
+# Copy one file of a commit into the commit's tool directory. The file is read from the commit's objects, so the runner's
+# checkout keeps its own state. The copy is staged beside its destination and renamed over it.
+install_commit_file() {  # <commit> <path in the commit> <destination> <mode>
   local staged
-  staged=$(mktemp -- "$2.XXXXXXXX") || fail 1 "cannot make a staged copy beside $2"
-  cp -- "$1" "$staged" && chmod "$3" -- "$staged" && mv -f -- "$staged" "$2" \
-    || { rm -f -- "$staged"; fail 1 "cannot install $1 as $2"; }
+  staged=$(mktemp -- "$3.XXXXXXXX") || fail 1 "cannot make a staged copy beside $3"
+  git -C "$RUNNER_ROOT/charlie-bot" show "$1:$2" > "$staged" \
+    && chmod "$4" -- "$staged" && mv -f -- "$staged" "$3" \
+    || { rm -f -- "$staged"; fail 1 "cannot install $2 of commit $1 as $3"; }
 }
 
 # The arguments after the script's path of each live process that runs remote-runner.sh, one line per process, each line

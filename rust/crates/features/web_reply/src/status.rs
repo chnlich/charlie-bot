@@ -787,7 +787,7 @@ async fn judged_waiting(
       });
       continue;
     }
-    match waiting_judge::judge_item(features, session_id, goal, item).await? {
+    match waiting_judge::judge_item(features, session_id, goal, item, &[]).await? {
       Judgement::Accepted { judged_kind } => {
         judged.push(WaitingItem { judged_kind, judgement_basis: Some(String::new()), ..item.clone() });
       }

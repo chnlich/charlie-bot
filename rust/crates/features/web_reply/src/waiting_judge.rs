@@ -62,6 +62,13 @@ struct Settled {
   text: String,
 }
 
+/// Text the judge reads as context that never decides a refusal, such as a repository contract the item's step runs
+/// under. The judge can name it in no verdict: a refusal cites only settled text.
+pub struct ContextText {
+  pub label: String,
+  pub text: String,
+}
+
 /// The judge's answer as the prompt's output contract states it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,12 +78,14 @@ struct Answer {
   cited: String,
 }
 
-/// Judge one item of a status set using the session's project topic and `goal`.
+/// Judge one item of a status set using the session's project topic, `goal` and the `context` texts, which never
+/// decide a refusal.
 pub async fn judge_item(
   features: &FeatureContext,
   session_id: &str,
   goal: Option<&str>,
   item: &WaitingItem,
+  context: &[ContextText],
 ) -> Result<Judgement, WebReplyError> {
   let cfg = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
   let memo = read_memo(&features.store.session_dir(session_id))?;
@@ -96,7 +105,7 @@ pub async fn judge_item(
   )
   .map_err(WebReplyError::Failed)?;
   let kinds = user_only_kinds().map_err(WebReplyError::Failed)?;
-  let prompt = render_prompt(&item_block, goal, &user_messages, &settled, &kinds);
+  let prompt = render_prompt(&item_block, goal, &user_messages, &settled, context, &kinds);
   let answer = match light_answer(features, session_id, &prompt).await {
     Ok(answer) => answer,
     Err(error) => return Err(unavailable(&item.text, &format!("the model call failed: {error:#}"))),
@@ -201,13 +210,14 @@ fn user_only_kinds() -> anyhow::Result<String> {
   Ok(kinds.join("\n"))
 }
 
-/// The judge prompt's user message: the item and its page, the Goal, the user messages, the settled text and the
-/// user-only kinds, each under its heading.
+/// The judge prompt's user message: the item and its page, the Goal, the user messages, the settled text, the context
+/// texts and the user-only kinds, each under its heading.
 fn render_prompt(
   item_block: &str,
   goal: Option<&str>,
   user_messages: &[String],
   settled: &[Settled],
+  context: &[ContextText],
   kinds: &str,
 ) -> String {
   let mut sections = vec![format!("## Waiting on you item\n{item_block}")];
@@ -220,6 +230,9 @@ fn render_prompt(
   sections.push(format!("## Session user messages, oldest first\n{messages}"));
   for source in settled {
     sections.push(format!("## Settled text: {}\n{}", source.label, source.text));
+  }
+  for source in context {
+    sections.push(format!("## Context, never settled text: {}\n{}", source.label, source.text));
   }
   sections.push(format!("## User-only kinds (prompts/master.md)\n{kinds}"));
   sections.join("\n\n")
@@ -507,13 +520,25 @@ mod tests {
   #[test]
   fn the_judge_input_carries_the_goal_the_memo_the_user_messages_and_the_kinds() {
     let settled = [Settled { label: "memo.md".to_string(), text: "MEMO TEXT".to_string() }];
+    let context = [ContextText { label: "repo/gate.sh:1-2".to_string(), text: "CONTEXT TEXT".to_string() }];
     let messages = ["first user message".to_string()];
-    let prompt = render_prompt("ITEM BLOCK", Some("GOAL TEXT"), &messages, &settled, "KINDS TEXT");
+    let prompt = render_prompt("ITEM BLOCK", Some("GOAL TEXT"), &messages, &settled, &context, "KINDS TEXT");
     assert!(prompt.contains("## Waiting on you item\nITEM BLOCK"));
     assert!(prompt.contains("## Session Goal\nGOAL TEXT"));
     assert!(prompt.contains("- first user message"));
     assert!(prompt.contains("## Settled text: memo.md\nMEMO TEXT"));
+    assert!(prompt.contains("repo/gate.sh:1-2") && prompt.contains("CONTEXT TEXT"));
     assert!(prompt.contains("## User-only kinds (prompts/master.md)\nKINDS TEXT"));
+  }
+
+  #[test]
+  fn a_refusal_that_quotes_only_a_context_text_is_no_verdict() {
+    // Context texts stay out of the citable set: the judge checks a quote against the settled texts alone.
+    let context =
+      ContextText { label: "repo/gate.sh:1-2".to_string(), text: "The gate's paths are its own.".to_string() };
+    let settled = [source("memo.md", "Unrelated.")];
+    let verdict = parse_verdict(&refuse(&context.text), &settled);
+    assert!(verdict.is_err(), "a context text decides no refusal: {verdict:?}");
   }
 
   fn write_memory(home: &Home) {

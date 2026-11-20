@@ -13,7 +13,7 @@ mod reply;
 mod sidebar;
 pub mod status;
 mod turn_contribution;
-mod waiting_judge;
+pub mod waiting_judge;
 
 #[cfg(test)]
 mod test_support;

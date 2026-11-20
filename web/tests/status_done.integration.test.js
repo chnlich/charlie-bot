@@ -10,9 +10,10 @@
 // - checking it again sends, after the undo window, one click message to the owner in the landed format: the header,
 //   the reference with the list version and the position, and the answer Done. The message carries neither the item's
 //   text nor its context;
-// - at desktop width the Waiting on you heading keeps the top of its row: its label sits level with the first item's
-//   line and the heading does not stretch to the row's height. The page loads the built tailwind.css, so the layout is
-//   the app's.
+// - at desktop width the Waiting on you label is drawn in the label column the Now row uses, level with the first
+//   item's line and before it, and the heading does not stretch to the row's height;
+// - at mobile width the label is drawn above the first item, at the row's left edge.
+// The page loads the built tailwind.css, so the layout is the app's.
 //
 // CHARLIEBOT_TEST_CHROME_BIN names the headless Chrome binary. The test fails when it is unset or names no file.
 // ---------------------------------------------------------------------------
@@ -61,7 +62,8 @@ const STATUS = {
   derived_waiting: [],
 };
 
-function pageHtml() {
+// The page's platform stub: mobile is the platform.isMobile the status panel reads for its layout.
+function pageHtml(mobile) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Status done</title>
 <link rel="stylesheet" href="/static/css/tailwind.css"></head><body>
@@ -73,7 +75,7 @@ function pageHtml() {
 <script>
   window.__posts = [];
   const status = ${JSON.stringify(STATUS)};
-  window.platform = {onChange() {}};
+  window.platform = {onChange() {}, isMobile: ${mobile}};
   function relativeTime() { return 'now'; }
   window.Chat = {
     wire(fns) { window.__status = fns; },
@@ -95,8 +97,8 @@ function pageHtml() {
 </body></html>`;
 }
 
-function serve() {
-  const page = pageHtml();
+function serve(mobile) {
+  const page = pageHtml(mobile);
   const statics = {
     '/static/js/icons.js': path.join(WEB_DIR, 'static', 'js', 'icons.js'),
     '/static/js/comment_post.js': path.join(WEB_DIR, 'static', 'js', 'comment_post.js'),
@@ -175,9 +177,10 @@ async function waitForCheckbox(page) {
   }
 }
 
-// Runs one check against the served Status view of the parent, then tears everything down.
-async function withStatusPanel(check) {
-  const {server, base} = await serve();
+// Runs one check against the served Status view of the parent, then tears everything down. mobile selects the
+// platform stub's layout; the check sets the viewport.
+async function withStatusPanel(check, {mobile = false} = {}) {
+  const {server, base} = await serve(mobile);
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'status-done-chrome-'));
   let chrome = null;
   try {
@@ -232,7 +235,7 @@ test('a done checkbox sends one click after its undo window; unchecking inside t
   });
 });
 
-test('at desktop width the Waiting on you heading keeps the top of its row, level with the first item', async () => {
+test('at desktop width the Waiting on you label sits in the Now label column, level with the first item', async () => {
   await withStatusPanel(async (page) => {
     await page.send('Emulation.setDeviceMetricsOverride',
       {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
@@ -243,16 +246,57 @@ test('at desktop width the Waiting on you heading keeps the top of its row, leve
       const heading = row.firstElementChild;
       const label = heading.firstElementChild;
       const first = row.querySelector('[data-waiting-item]');
+      const nowLabel = document.querySelector('[data-status-row="now"]').firstElementChild;
+      const box = (el) => el.getBoundingClientRect();
       return {
-        labelTop: label.getBoundingClientRect().top,
-        firstTop: first.getBoundingClientRect().top,
-        headingHeight: heading.getBoundingClientRect().height,
-        rowHeight: row.getBoundingClientRect().height,
+        labelDrawn: getComputedStyle(label).visibility === 'visible' && label.textContent.trim().length > 0,
+        labelLeft: box(label).left,
+        labelWidth: box(label).width,
+        labelHeight: box(label).height,
+        labelTop: box(label).top,
+        nowLabelLeft: box(nowLabel).left,
+        nowLabelWidth: box(nowLabel).width,
+        precedesFirst: Boolean(label.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING),
+        firstTop: box(first).top,
+        headingHeight: box(heading).height,
+        rowHeight: box(row).height,
       };
     })()`);
+    assert.ok(layout.labelDrawn, 'the label is visible and carries text');
+    assert.ok(layout.labelWidth > 0 && layout.labelHeight > 0, 'the label takes a box');
+    assert.equal(layout.labelLeft, layout.nowLabelLeft, "the label starts in the Now row's label column");
+    assert.equal(layout.labelWidth, layout.nowLabelWidth, "the label is as wide as the Now row's label column");
+    assert.ok(layout.precedesFirst, 'the label precedes the first item in the document');
     assert.ok(Math.abs(layout.labelTop - layout.firstTop) <= 4,
       `the label's top ${layout.labelTop}px is level with the first item's top ${layout.firstTop}px`);
     assert.ok(layout.headingHeight < layout.rowHeight,
       `the heading is ${layout.headingHeight}px tall, not stretched to the row's ${layout.rowHeight}px`);
   });
+});
+
+test('at mobile width the Waiting on you label is drawn above the first item', async () => {
+  await withStatusPanel(async (page) => {
+    await page.send('Emulation.setDeviceMetricsOverride',
+      {width: 390, height: 900, deviceScaleFactor: 1, mobile: false});
+    const layout = await page.evaluate(`(() => {
+      const row = document.querySelector('[data-status-row="waiting"]');
+      const label = row.firstElementChild.firstElementChild;
+      const first = row.querySelector('[data-waiting-item]');
+      const box = (el) => el.getBoundingClientRect();
+      return {
+        labelDrawn: getComputedStyle(label).visibility === 'visible' && label.textContent.trim().length > 0
+          && box(label).height > 0,
+        labelLeft: box(label).left,
+        labelBottom: box(label).bottom,
+        rowLeft: box(row).left,
+        firstTop: box(first).top,
+        precedesFirst: Boolean(label.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING),
+      };
+    })()`);
+    assert.ok(layout.labelDrawn, 'the label is visible and carries text');
+    assert.ok(layout.precedesFirst, 'the label precedes the first item in the document');
+    assert.ok(layout.labelBottom <= layout.firstTop,
+      `the label's bottom ${layout.labelBottom}px sits above the first item's top ${layout.firstTop}px`);
+    assert.equal(layout.labelLeft, layout.rowLeft, "the label starts at the row's left edge");
+  }, {mobile: true});
 });

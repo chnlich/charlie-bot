@@ -23,18 +23,18 @@ use serde_json::Value;
 
 use crate::adapter::Bot;
 use crate::client::BASE_URL;
-use crate::fields::MESSAGE_ID;
-
-/// The download kinds the Open API resource endpoint takes.
-const DOWNLOAD_KINDS: &[&str] = &["image", "file"];
+use crate::fields::{
+  DOWNLOAD_KINDS, FILE_KEY, KIND, MESSAGE_ID, OUTPUT, PAGE, READ_MODE, READ_MODE_CHAT, READ_MODE_TOPIC, READ_MODES,
+  TOPIC_ID,
+};
 
 /// The read request's fields: the calling session, window size, and optional read mode parameters.
 const READ_FIELDS: &[Field] = &[
   Field::required(SESSION_ID, FieldType::String),
   Field::optional(LIMIT, FieldType::Integer).ge(Bound::Int(READ_LIMIT_MIN)).le(Bound::Int(READ_LIMIT_MAX)),
-  Field::optional("mode", FieldType::Literal(&["chat", "topic"])),
-  Field::optional("topic_id", FieldType::String),
-  Field::optional("page", FieldType::String),
+  Field::optional(READ_MODE, FieldType::Literal(READ_MODES)),
+  Field::optional(TOPIC_ID, FieldType::String),
+  Field::optional(PAGE, FieldType::String),
 ];
 const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 
@@ -43,9 +43,9 @@ const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 const DOWNLOAD_FIELDS: &[Field] = &[
   Field::required(SESSION_ID, FieldType::String),
   Field::required(MESSAGE_ID, FieldType::String),
-  Field::required("file_key", FieldType::String),
-  Field::required("kind", FieldType::Literal(DOWNLOAD_KINDS)),
-  Field::required("output", FieldType::String),
+  Field::required(FILE_KEY, FieldType::String),
+  Field::required(KIND, FieldType::Literal(DOWNLOAD_KINDS)),
+  Field::required(OUTPUT, FieldType::String),
 ];
 const DOWNLOAD_BODY: BodyModel = BodyModel::required(DOWNLOAD_FIELDS).forbid_extra();
 
@@ -119,13 +119,13 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   };
   let session_id = text_field(&fields, SESSION_ID);
   let limit = fields.get(LIMIT).and_then(Value::as_u64).unwrap_or(READ_LIMIT_DEFAULT as u64) as usize;
-  let mode = fields.get("mode").and_then(Value::as_str);
-  let topic_id = fields.get("topic_id").and_then(Value::as_str);
-  let page = fields.get("page").and_then(Value::as_str);
+  let mode = fields.get(READ_MODE).and_then(Value::as_str);
+  let topic_id = fields.get(TOPIC_ID).and_then(Value::as_str);
+  let page = fields.get(PAGE).and_then(Value::as_str);
   let result = match (mode, topic_id, page) {
     (None, None, None) => bot.read_thread(&session_id, limit).await,
-    (Some("chat"), None, page) => bot.read_chat(&session_id, limit, page).await,
-    (Some("topic"), Some(thread_id), page) => bot.read_topic(&session_id, thread_id, limit, page).await,
+    (Some(READ_MODE_CHAT), None, page) => bot.read_chat(&session_id, limit, page).await,
+    (Some(READ_MODE_TOPIC), Some(thread_id), page) => bot.read_topic(&session_id, thread_id, limit, page).await,
     _ => Err(ThreadReplyError::refused(
       StatusCode::UNPROCESSABLE_ENTITY,
       "read mode parameters do not match the selected mode",
@@ -151,9 +151,9 @@ async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Respon
       .download(
         &text_field(&fields, SESSION_ID),
         &text_field(&fields, MESSAGE_ID),
-        &text_field(&fields, "file_key"),
-        &text_field(&fields, "kind"),
-        &text_field(&fields, "output"),
+        &text_field(&fields, FILE_KEY),
+        &text_field(&fields, KIND),
+        &text_field(&fields, OUTPUT),
       )
       .await,
   )

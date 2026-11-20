@@ -131,7 +131,7 @@ fn account_selection_matrix_matches_recorded() {
       })
       .collect::<Vec<_>>();
     let last_request = case["last_request"].as_str().map(timestamp);
-    let (chosen, cold) = master_cc_relay::choose_turn_account(
+    let (chosen, cold, _) = master_cc_relay::choose_turn_account(
       &state,
       &cfg,
       &metadata,
@@ -140,6 +140,8 @@ fn account_selection_matrix_matches_recorded() {
       Some(now),
       case["pool"].as_str(),
       &running,
+      true,
+      "observer-run",
     )
     .unwrap();
     let unavailable = claude_accounts::unavailable_detail(&state, &cfg, Some(now), case["pool"].as_str()).unwrap();
@@ -321,6 +323,7 @@ fn relay_watch_matrix_matches_recorded_decisions_and_moves() {
         session_id,
         Some(now),
         Some("alpha"),
+        "observer-run",
       )
       .unwrap();
       json!({

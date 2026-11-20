@@ -9,7 +9,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
   BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, IMPROVE_TOKEN_MIN_SECONDS, IdleArmContext, Launch, LaunchContext,
-  LaunchKind, LaunchRefused, LaunchWatch, MemberFailure, QuotaOutlook,
+  LaunchKind, LaunchRefused, LaunchWatch, MemberFailure, QuotaOutlook, ReattachHold,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::RunKind;
@@ -141,6 +141,10 @@ struct PooledLaunch {
   account: claude_config::ClaudeAccount,
   relays: usize,
   decision: Arc<Mutex<Option<String>>>,
+  /// The reservation the run's placement took on `account`. Held until the launch drops, so the login counts the
+  /// run until the round ends or the relay replaces the launch. Nothing reads it; holding it is the point.
+  #[allow(dead_code)]
+  handle: Option<Arc<claude_accounts::ReservationHandle>>,
 }
 
 /// The cc-claude lifecycle and its one server-owned account observation state.
@@ -169,12 +173,13 @@ impl ClaudeCodeLifecycle {
     resume_id: Option<String>,
     prompt: Option<String>,
     relays: usize,
+    handle: Option<Arc<claude_accounts::ReservationHandle>>,
   ) -> anyhow::Result<Launch> {
     let mut backend_kwargs = Self::launch_args(ctx, relays == 0)?;
     backend_kwargs
       .insert("claude_account".to_string(), json!({"label": account.label, "config_dir": account.config_dir}));
     let decision = Arc::new(Mutex::new(None));
-    let private = PooledLaunch { account: account.clone(), relays, decision };
+    let private = PooledLaunch { account: account.clone(), relays, decision, handle };
     Ok(Launch {
       backend_kwargs,
       resume_id,
@@ -264,7 +269,20 @@ impl ClaudeCodeLifecycle {
         });
       };
       return self
-        .pooled_launch(ctx, holder, Some(session_id.to_string()), None, 0)
+        .pooled_launch(
+          ctx,
+          holder.clone(),
+          Some(session_id.to_string()),
+          None,
+          0,
+          Some(claude_accounts::reserve_on(
+            &self.state,
+            &claude_accounts::run_key(ctx),
+            &holder.label,
+            "redirect",
+            None,
+          )),
+        )
         .map_err(|error| refused(error, MemberFailure::Other, None));
     }
     // A keyed round ships its login's token to its host, so a login whose token lives too little for the round is
@@ -276,7 +294,7 @@ impl ClaudeCodeLifecycle {
     } else {
       HashSet::new()
     };
-    let account = claude_accounts::select(
+    let reservation = claude_accounts::reserve_pick(
       &self.state,
       &ctx.cfg,
       Some(&ctx.option.model),
@@ -284,10 +302,10 @@ impl ClaudeCodeLifecycle {
       None,
       None,
       account_pool.as_deref(),
-      0.0,
+      &claude_accounts::run_key(ctx),
     )
     .map_err(|error| refused(error, MemberFailure::Other, None))?;
-    let Some(account) = account else {
+    let Some(reservation) = reservation else {
       let no_login =
         claude_accounts::no_usable_login(&self.state, &ctx.cfg, Some(&ctx.option.model), None, account_pool.as_deref())
           .map_err(|error| refused(error, MemberFailure::Other, None))?;
@@ -315,7 +333,7 @@ impl ClaudeCodeLifecycle {
       return Err(LaunchRefused { message, failure: no_login.failure, resets_at: no_login.recovers_at });
     };
     self
-      .pooled_launch(ctx, account, held.map(str::to_string), None, 0)
+      .pooled_launch(ctx, reservation.account, held.map(str::to_string), None, 0, Some(reservation.handle))
       .map_err(|error| refused(error, MemberFailure::Other, None))
   }
 }
@@ -348,12 +366,12 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
           let resume_id = self.pooled_resume_id(ctx).await?;
           let (context_tokens, last_request_at) =
             (ctx.context_state)().await.map_err(|error| refused(error, MemberFailure::Other, None))?;
-          let account =
+          let placement =
             master_cc_relay::place_turn(&self.state, ctx, resume_id.as_deref(), context_tokens, last_request_at, None)
               .await?;
           let resume_id = if ctx.held_native_id.is_some() { self.pooled_resume_id(ctx).await? } else { resume_id };
           self
-            .pooled_launch(ctx, account, resume_id, None, 0)
+            .pooled_launch(ctx, placement.account, resume_id, None, 0, placement.handle)
             .map_err(|error| refused(error, MemberFailure::Other, None))
         }
         LaunchKind::Task => self.place_task(ctx).await,
@@ -400,6 +418,25 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
       claude_accounts::option_pool(option).as_deref(),
     )?;
     Ok(Some(QuotaOutlook { can_run, earliest_reset }))
+  }
+
+  /// The hold the login that a recovered run's process already uses takes for that run, read from the process's
+  /// environment. A process whose environment names no pool login is an unknown login: the follow continues without
+  /// a hold.
+  fn reattach_hold(&self, cfg: &CharlieBotConfig, pid: u32, run_id: &str) -> ReattachHold {
+    match claude_accounts::reattach_hold(&self.state, cfg, pid, run_id, None) {
+      Ok(Some(handle)) => ReattachHold { private: Some(Arc::new(handle) as Arc<dyn Any + Send + Sync>) },
+      Ok(None) => {
+        if claude_accounts::pool(cfg).is_ok_and(|pool| !pool.is_empty()) {
+          tracing::error!(target: "charliebot_agents", pid, run_id, "claude_reattach_login_unknown");
+        }
+        ReattachHold::none()
+      }
+      Err(error) => {
+        tracing::error!(target: "charliebot_agents", pid, run_id, error = %error, "claude_reattach_login_unknown");
+        ReattachHold::none()
+      }
+    }
   }
 
   fn watch(&self, ctx: &LaunchContext, launch: &Launch) -> Option<Box<dyn LaunchWatch>> {
@@ -465,20 +502,21 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         return Err(cap_refusal);
       }
       let relays = pooled.relays + 1;
-      let account =
+      let placement =
         master_cc_relay::prepare_relay(&self.state, ctx, &pooled.account, native_id, Some(&decision), relays).await?;
       if ctx.kind == LaunchKind::Turn {
-        (ctx.record_account)(account.label.clone())
+        (ctx.record_account)(placement.account.label.clone())
           .await
           .map_err(|error| refused(error, MemberFailure::Other, None))?;
       }
       self
         .pooled_launch(
           ctx,
-          account,
+          placement.account,
           native_id.map(str::to_string),
           Some(claude_relay::CONTINUATION_PROMPT.to_string()),
           relays,
+          placement.handle,
         )
         .map_err(|error| refused(error, MemberFailure::Other, None))
     })
@@ -803,6 +841,62 @@ mod tests {
     assert!(launch.account_label.is_some(), "the keyed task picks its login by the ordinary pool choice");
   }
 
+  /// A keyed round's login counts the round's handle, a concurrent pick sees it, and the handle ends with the round.
+  #[tokio::test]
+  async fn a_keyed_rounds_login_counts_a_handle_that_concurrent_picks_see() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    long_lived_credentials(&account_a);
+    long_lived_credentials(&account_b);
+    let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+    let mut keyed = context(cfg.clone(), LaunchKind::Task, None, None, None);
+    keyed.session_meta.lock().unwrap().task =
+      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+    keyed.run_id = Some("keyed-run".to_string());
+
+    let launch = lifecycle.place(&keyed).await.unwrap();
+    assert_eq!(launch.account_label.as_deref(), Some("a"));
+    let counts = state.reservation_counts(UtcDateTime::now());
+    assert_eq!(counts, std::collections::HashMap::from([("a".to_string(), 1)]));
+
+    // A concurrent pick sees the handle: "b"'s unreserved headroom outranks "a"'s, where the tie band would have
+    // kept the pool order on "a".
+    let mut plain = context(cfg, LaunchKind::Task, None, None, None);
+    plain.run_id = Some("plain-run".to_string());
+    let plain_launch = lifecycle.place(&plain).await.unwrap();
+    assert_eq!(plain_launch.account_label.as_deref(), Some("b"));
+
+    drop((launch, plain_launch));
+    assert!(state.reservation_counts(UtcDateTime::now()).is_empty(), "the handle ends with the round");
+  }
+
+  /// A task that returns to the login holding its transcript registers a handle there.
+  #[tokio::test]
+  async fn a_task_returning_to_its_transcript_holder_holds_a_handle() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    account_credentials(&account_a);
+    account_credentials(&account_b);
+    let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+    let transcript = account_a.join("projects/cwd/held-session.jsonl");
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::write(&transcript, "held transcript\n").unwrap();
+
+    let ctx = context(cfg, LaunchKind::Task, None, Some("held-session"), None);
+    let launch = lifecycle.place(&ctx).await.unwrap();
+    assert_eq!(launch.account_label.as_deref(), Some("a"));
+    let counts = state.reservation_counts(UtcDateTime::now());
+    assert_eq!(counts, std::collections::HashMap::from([("a".to_string(), 1)]));
+  }
+
   #[test]
   fn a_keyed_run_keeps_its_held_conversation_on_the_plain_path() {
     let root = tempfile::tempdir().unwrap();
@@ -866,7 +960,7 @@ mod tests {
     }
     let account =
       claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
-    let launch = lifecycle.pooled_launch(&ctx, account, None, None, 0).unwrap();
+    let launch = lifecycle.pooled_launch(&ctx, account, None, None, 0, None).unwrap();
     (ctx, launch)
   }
 
@@ -1137,8 +1231,8 @@ mod tests {
       claude_config::ClaudeAccount { label: "a".to_string(), config_dir: account_dir.display().to_string() };
     let lifecycle = ClaudeCodeLifecycle::new();
 
-    let first = lifecycle.pooled_launch(&ctx, account.clone(), None, None, 0).unwrap();
-    let relay = lifecycle.pooled_launch(&ctx, account, None, Some("continue".to_string()), 1).unwrap();
+    let first = lifecycle.pooled_launch(&ctx, account.clone(), None, None, 0, None).unwrap();
+    let relay = lifecycle.pooled_launch(&ctx, account, None, Some("continue".to_string()), 1, None).unwrap();
 
     assert_eq!(first.backend_kwargs["midturn_delivery"], json!(true));
     assert_eq!(relay.backend_kwargs["midturn_delivery"], json!(true));

@@ -1,20 +1,30 @@
-//! Claude account membership, quota readings, selection, and transcript custody.
+//! Claude account membership, quota readings, reservations, selection, and transcript custody.
 //!
 //! Selection observes one tier rule: accounts whose headroom strictly exceeds `1 - WARNING_UTILIZATION` form the
 //! under-line tier, and when that tier holds any account only it contends. An account at or above the warning line
 //! is a last resort shared with no rule of its own.
+//!
+//! Every placement of a run on a login — a launch, a relay, or a reattach after a restart — reserves a fixed share
+//! of the login's five-hour window under the reservation table's one lock, so runs placed together see one another
+//! before the readings rise. A placement picks on *unreserved* headroom, the five-hour headroom minus the login's
+//! live reservations capped by its raw headroom, and a reservation never refuses a run: the pick overflows to the
+//! login whose reservations overshoot least. The probes (`select`, `cool_destination`,
+//! `unreserved_cool_destination`) stay read-only.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Weak};
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, anyhow};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::text_repr::is_truthy;
-use charliebot_registry::backend::{IMPROVE_TOKEN_MIN_SECONDS, MemberFailure, MemberReading, MemberWindow};
-use charliebot_registry::usage::{self, WEEKLY_WINDOW_MINUTES};
+use charliebot_registry::backend::{
+  IMPROVE_TOKEN_MIN_SECONDS, LaunchContext, MemberFailure, MemberReading, MemberWindow,
+};
+use charliebot_registry::usage::{self, FIVE_HOUR_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
@@ -36,12 +46,19 @@ const SCORE_HOURS_FLOOR: f64 = 0.5;
 const SCORE_SCALE_HOURS: f64 = 168.0;
 /// The per-hour headroom band that ties contenders, in units of `SCORE_SCALE_HOURS`: 0.02 × 168 score points.
 const SCORE_TIE: f64 = 0.02;
+/// The share of a login's five-hour window that every run placed on it reserves (`RESERVED_HEADROOM_PER_RUN`), for
+/// as long as the run's placement lives or `RESERVATION_HOLD` passes.
+pub const RESERVED_HEADROOM_PER_RUN: f64 = 0.05;
+/// How long a placement's reservation counts, from the moment it was placed, even while its handle lives.
+pub const RESERVATION_HOLD: Duration = Duration::minutes(30);
 const STAGING_SUFFIX: &str = ".staging";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RateLimitReading {
   pub at: UtcDateTime,
   pub utilization: f64,
+  /// The same observation's five-hour utilization, when the observation read that window.
+  pub five_hour: Option<f64>,
 }
 
 /// The rejection key that holds every model of a login out: a rejection whose reading is the login's whole window,
@@ -83,11 +100,22 @@ pub(super) struct Warned {
   pub(super) limit_shapes: HashSet<(String, String, String)>,
 }
 
-/// One server's mutable observations for every Claude account. The quota accounts of the usage panel keep their
-/// process-wide state in `quota`.
+/// One live run's reservation of one login. The reservation table holds a weak reference; the placed run's launch
+/// (`PooledLaunch`) or the recovered run's follow holds the strong one, so the reservation ends when the placement
+/// ends, and never counts past `RESERVATION_HOLD`.
+#[derive(Debug)]
+pub struct ReservationHandle {
+  run_id: String,
+  label: String,
+  placed_at: UtcDateTime,
+}
+
+/// The lock order of the account state's three locks: a turn's `pool_choice` first, then the reservation table,
+/// then the readings.
 #[derive(Default)]
 pub struct ClaudeAccountState {
   readings: std::sync::Mutex<Readings>,
+  reservations: std::sync::Mutex<Vec<Weak<ReservationHandle>>>,
   pub(super) pool_choice: tokio::sync::Mutex<()>,
   pub quota: QuotaState,
 }
@@ -96,6 +124,19 @@ impl ClaudeAccountState {
   pub fn new() -> Self {
     Self::default()
   }
+
+  /// The live reservations per login: every placement still held and inside `RESERVATION_HOLD`, one per run on its
+  /// newest handle's login.
+  pub fn reservation_counts(&self, now: UtcDateTime) -> HashMap<String, usize> {
+    let mut table = self.reservations.lock().expect("Claude account reservation table is not poisoned");
+    live_counts(&mut table, now)
+  }
+}
+
+/// The login a placement picked and the handle that holds its reservation.
+pub struct LoginReservation {
+  pub account: claude_config::ClaudeAccount,
+  pub handle: Arc<ReservationHandle>,
 }
 
 pub fn now_or(now: Option<UtcDateTime>) -> UtcDateTime {
@@ -286,6 +327,10 @@ pub fn observe_rate_limit(
       }
     }
   }
+  let five_hour = windows
+    .and_then(|windows| windows.get("five_hour"))
+    .and_then(|window| window.get("utilization"))
+    .and_then(Value::as_f64);
   let rejected = info.get(RATE_LIMIT_STATUS).and_then(Value::as_str) == Some(RATE_LIMIT_STATUS_REJECTED);
   if values.is_empty() && !rejected {
     return None;
@@ -300,7 +345,7 @@ pub fn observe_rate_limit(
     let key = if utilization >= 1.0 { ALL_MODELS.to_string() } else { rejection_key(model) };
     readings.rejections.insert((label.to_string(), key), reset);
   }
-  let reading = RateLimitReading { at: moment, utilization };
+  let reading = RateLimitReading { at: moment, utilization, five_hour };
   readings.event.insert(label.to_string(), reading.clone());
   Some(reading)
 }
@@ -375,12 +420,21 @@ fn live_windows<'a>(reading: &'a PanelReading, model: Option<&str>, now: UtcDate
 }
 
 fn panel_reading(reading: &PanelReading, model: Option<&str>, now: UtcDateTime) -> Option<RateLimitReading> {
-  let utilization = live_windows(reading, model, now)
+  let windows = live_windows(reading, model, now);
+  let utilization = windows
     .iter()
     .filter_map(|window| window.get(usage::PANEL_UTILIZATION).and_then(Value::as_f64))
     .map(|value| value / 100.0)
     .reduce(f64::max)?;
-  Some(RateLimitReading { at: reading.at, utilization })
+  let five_hour = windows
+    .iter()
+    .filter(|window| {
+      window.get(usage::PANEL_WINDOW_MINUTES).and_then(Value::as_i64) == Some(FIVE_HOUR_WINDOW_MINUTES as i64)
+    })
+    .filter_map(|window| window.get(usage::PANEL_UTILIZATION).and_then(Value::as_f64))
+    .map(|value| value / 100.0)
+    .reduce(f64::max);
+  Some(RateLimitReading { at: reading.at, utilization, five_hour })
 }
 
 fn newest_reading(left: Option<RateLimitReading>, right: Option<RateLimitReading>) -> Option<RateLimitReading> {
@@ -416,9 +470,14 @@ pub fn latest_reading(
   let Some(scoped) = panel_reading(panel, Some(model), moment) else {
     return general;
   };
+  let general = general.expect("a scoped reading exists only beside a general one");
   Some(RateLimitReading {
-    at: general.as_ref().map_or(scoped.at, |reading| reading.at.max(scoped.at)),
-    utilization: general.map_or(scoped.utilization, |reading| reading.utilization.max(scoped.utilization)),
+    at: general.at.max(scoped.at),
+    utilization: general.utilization.max(scoped.utilization),
+    five_hour: match (general.five_hour, scoped.five_hour) {
+      (Some(left), Some(right)) => Some(left.max(right)),
+      (left, right) => left.or(right),
+    },
   })
 }
 
@@ -478,18 +537,30 @@ pub fn select(
 ) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
   let moment = now_or(now);
   let tier = tiered_candidates(state, cfg, model, exclude, Some(moment), account_pool, min_headroom)?;
-  if tier.is_empty() {
+  scored_pick(state, model, busy_accounts, moment, tier)
+}
+
+/// The contenders' pick: an idle login ahead of a busy one, the balancing score on `weight` with its tie group, and
+/// inside the group the most weight, then the least recently read `rate_limit_event`, then pool order.
+fn scored_pick(
+  state: &ClaudeAccountState,
+  model: Option<&str>,
+  busy: Option<&BTreeSet<String>>,
+  moment: UtcDateTime,
+  contenders: Vec<(claude_config::ClaudeAccount, f64)>,
+) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
+  if contenders.is_empty() {
     return Ok(None);
   }
-  let idle = tier
+  let idle = contenders
     .iter()
-    .filter(|(account, _)| busy_accounts.is_none_or(|busy| !busy.contains(&account.label)))
+    .filter(|(account, _)| busy.is_none_or(|busy| !busy.contains(&account.label)))
     .cloned()
     .collect::<Vec<_>>();
-  let contenders = if idle.is_empty() { tier } else { idle };
+  let contenders = if idle.is_empty() { contenders } else { idle };
   let scores = contenders
     .into_iter()
-    .map(|(account, remaining)| {
+    .map(|(account, weight)| {
       let weekly_resets_at =
         login_reading(state, &account.label, model, Some(moment)).and_then(|reading| reading.weekly_resets_at);
       let hours_to_reset = match weekly_resets_at {
@@ -499,8 +570,8 @@ pub fn select(
         }
         _ => SCORE_SCALE_HOURS,
       };
-      let score = remaining * SCORE_SCALE_HOURS / hours_to_reset;
-      (account, remaining, score)
+      let score = weight * SCORE_SCALE_HOURS / hours_to_reset;
+      (account, weight, score)
     })
     .collect::<Vec<_>>();
   let best = scores.iter().map(|(_, _, score)| *score).reduce(f64::max).expect("contenders is non-empty");
@@ -511,8 +582,8 @@ pub fn select(
     scores
       .into_iter()
       .filter(|(_, _, score)| (best - score) / SCORE_SCALE_HOURS <= SCORE_TIE)
-      .min_by(|(left, left_remaining, _), (right, right_remaining, _)| {
-        right_remaining.total_cmp(left_remaining).then(read_at(&left.label).cmp(&read_at(&right.label)))
+      .min_by(|(left, left_weight, _), (right, right_weight, _)| {
+        right_weight.total_cmp(left_weight).then(read_at(&left.label).cmp(&read_at(&right.label)))
       })
       .map(|(account, _, _)| account),
   )
@@ -526,6 +597,217 @@ pub fn cool_destination(
   now: Option<UtcDateTime>,
 ) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
   select(state, cfg, model, &HashSet::new(), None, now, account_pool, 1.0 - WARNING_UTILIZATION)
+}
+
+/// The headroom a login's reservations leave: the five-hour headroom minus every live run's share, capped by the raw
+/// headroom. A login whose newest reading read no five-hour window reserves against the raw headroom.
+fn unreserved_headroom(reading: Option<&RateLimitReading>, remaining: f64, handles: usize) -> f64 {
+  let reserved = RESERVED_HEADROOM_PER_RUN * handles as f64;
+  match reading.and_then(|reading| reading.five_hour.map(|utilization| (1.0 - utilization).max(0.0))) {
+    Some(five_hour) => (five_hour - reserved).min(remaining),
+    None => remaining - reserved,
+  }
+}
+
+/// One login's unreserved candidacy: its raw headroom and the headroom its reservations leave.
+struct UnreservedCandidate {
+  account: claude_config::ClaudeAccount,
+  unreserved: f64,
+}
+
+/// The pool's healthy logins with headroom left, with the headroom their reservations leave.
+fn unreserved_candidates(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  exclude: &HashSet<String>,
+  moment: UtcDateTime,
+  account_pool: Option<&str>,
+  counts: &HashMap<String, usize>,
+) -> anyhow::Result<Vec<UnreservedCandidate>> {
+  Ok(
+    pool_accounts(cfg, account_pool)?
+      .into_iter()
+      .filter(|account| !exclude.contains(&account.label) && healthy(state, account, Some(moment)))
+      .filter_map(|account| {
+        let remaining = headroom(state, &account.label, model, Some(moment));
+        if remaining <= 0.0 {
+          return None;
+        }
+        let reading = latest_reading(state, &account.label, model, Some(moment));
+        let unreserved =
+          unreserved_headroom(reading.as_ref(), remaining, counts.get(&account.label).copied().unwrap_or(0));
+        Some(UnreservedCandidate { account, unreserved })
+      })
+      .collect(),
+  )
+}
+
+/// The tier a placement takes and the contenders it ranks: the under-line tier first, then the logins with any
+/// unreserved headroom, then the overflow on every healthy login with headroom. The tier names the
+/// `claude_login_reserved` outcome.
+fn unreserved_tier(
+  candidates: Vec<UnreservedCandidate>,
+) -> Option<(&'static str, Vec<(claude_config::ClaudeAccount, f64)>)> {
+  let into = |candidates: Vec<UnreservedCandidate>| {
+    candidates.into_iter().map(|candidate| (candidate.account, candidate.unreserved)).collect::<Vec<_>>()
+  };
+  let under_line = candidates.iter().filter(|candidate| candidate.unreserved > 1.0 - WARNING_UTILIZATION).count();
+  if under_line > 0 {
+    let tier = candidates.into_iter().filter(|candidate| candidate.unreserved > 1.0 - WARNING_UTILIZATION).collect();
+    return Some(("redirect", into(tier)));
+  }
+  let positive = candidates.iter().filter(|candidate| candidate.unreserved > 0.0).count();
+  if positive > 0 {
+    let tier = candidates.into_iter().filter(|candidate| candidate.unreserved > 0.0).collect();
+    return Some(("redirect", into(tier)));
+  }
+  (!candidates.is_empty()).then(|| ("overflow", into(candidates)))
+}
+
+/// Count the live handles per login, pruning the ones whose placement ended or whose hold passed.
+fn live_counts(table: &mut Vec<Weak<ReservationHandle>>, now: UtcDateTime) -> HashMap<String, usize> {
+  let mut counts = HashMap::new();
+  table.retain(|weak| match weak.upgrade() {
+    Some(handle) if now.into_inner() - handle.placed_at.into_inner() < RESERVATION_HOLD => {
+      *counts.entry(handle.label.clone()).or_insert(0) += 1;
+      true
+    }
+    _ => false,
+  });
+  counts
+}
+
+/// Insert a run's handle, dropping its earlier handles: only the run's newest handle's login counts.
+fn register_reservation(
+  table: &mut Vec<Weak<ReservationHandle>>,
+  run_id: &str,
+  label: &str,
+  moment: UtcDateTime,
+) -> Arc<ReservationHandle> {
+  table.retain(|weak| weak.upgrade().is_none_or(|handle| handle.run_id != run_id));
+  let handle = Arc::new(ReservationHandle { run_id: run_id.to_string(), label: label.to_string(), placed_at: moment });
+  table.push(Arc::downgrade(&handle));
+  handle
+}
+
+/// Pick a login under the reservation table's lock, read the reservations, and insert the run's handle. The pick
+/// never refuses a run while any healthy login has headroom: it overflows to the login whose reservations overshoot
+/// least. `None` means no healthy login has headroom, and the caller refuses on the pool's own terms.
+#[allow(clippy::too_many_arguments)]
+pub fn reserve_pick(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  exclude: &HashSet<String>,
+  busy: Option<&BTreeSet<String>>,
+  now: Option<UtcDateTime>,
+  account_pool: Option<&str>,
+  run_id: &str,
+) -> anyhow::Result<Option<LoginReservation>> {
+  let moment = now_or(now);
+  let mut table = state.reservations.lock().expect("Claude account reservation table is not poisoned");
+  let counts = live_counts(&mut table, moment);
+  let candidates = unreserved_candidates(state, cfg, model, exclude, moment, account_pool, &counts)?;
+  let Some((outcome, contenders)) = unreserved_tier(candidates) else {
+    return Ok(None);
+  };
+  let Some(account) = scored_pick(state, model, busy, moment, contenders)? else {
+    return Ok(None);
+  };
+  let handles = counts.get(&account.label).copied().unwrap_or(0);
+  let handle = register_reservation(&mut table, run_id, &account.label, moment);
+  tracing::info!(
+    target: "charliebot_agents",
+    account = %account.label,
+    run_id,
+    outcome,
+    handles,
+    "claude_login_reserved"
+  );
+  Ok(Some(LoginReservation { account, handle }))
+}
+
+/// Register a run's handle on a known login, without picking: a holder's return, a kept turn, or a reattach.
+pub fn reserve_on(
+  state: &ClaudeAccountState,
+  run_id: &str,
+  label: &str,
+  outcome: &str,
+  now: Option<UtcDateTime>,
+) -> Arc<ReservationHandle> {
+  let moment = now_or(now);
+  let mut table = state.reservations.lock().expect("Claude account reservation table is not poisoned");
+  let handle = register_reservation(&mut table, run_id, label, moment);
+  tracing::info!(target: "charliebot_agents", account = label, run_id, outcome, "claude_login_reserved");
+  handle
+}
+
+/// The login a warning relay can move a run to: one whose reservations leave it more than `1 - WARNING_UTILIZATION`
+/// unreserved headroom. A read-only probe; a move registers through [`reserve_pick`] or [`reserve_on`].
+pub fn unreserved_cool_destination(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  account_pool: Option<&str>,
+  now: Option<UtcDateTime>,
+) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
+  let moment = now_or(now);
+  let mut table = state.reservations.lock().expect("Claude account reservation table is not poisoned");
+  let counts = live_counts(&mut table, moment);
+  let candidates = unreserved_candidates(state, cfg, model, &HashSet::new(), moment, account_pool, &counts)?;
+  let under_line = candidates
+    .into_iter()
+    .filter(|candidate| candidate.unreserved > 1.0 - WARNING_UTILIZATION)
+    .map(|candidate| (candidate.account, candidate.unreserved))
+    .collect::<Vec<_>>();
+  scored_pick(state, model, None, moment, under_line)
+}
+
+/// The login whose credentials directory the process `pid` carries as `CLAUDE_CONFIG_DIR` in its environment.
+fn process_login(cfg: &CharlieBotConfig, pid: u32) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
+  let data = match fs::read(format!("/proc/{pid}/environ")) {
+    Ok(data) => data,
+    Err(_) => return Ok(None),
+  };
+  let prefix = format!("{}=", login_dirs::CLAUDE_CONFIG_DIR_ENV);
+  let Some(config_dir) = data
+    .split(|byte| *byte == 0)
+    .filter_map(|entry| String::from_utf8(entry.to_vec()).ok())
+    .find_map(|entry| entry.strip_prefix(&prefix).map(str::to_string))
+  else {
+    return Ok(None);
+  };
+  let config_dir = PathBuf::from(config_dir);
+  Ok(
+    pool(cfg)?
+      .into_iter()
+      .find(|account| expand_account_path(&account.config_dir).is_ok_and(|expanded| expanded == config_dir)),
+  )
+}
+
+/// The hold a restart reattach takes: the login that the recovered run's process already uses, reserved for the run.
+/// `None` when the process carries no pool login's directory; the caller logs the unknown login and follows anyway.
+pub fn reattach_hold(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  pid: u32,
+  run_id: &str,
+  now: Option<UtcDateTime>,
+) -> anyhow::Result<Option<Arc<ReservationHandle>>> {
+  let Some(account) = process_login(cfg, pid)? else {
+    return Ok(None);
+  };
+  Ok(Some(reserve_on(state, run_id, &account.label, "reattach", now)))
+}
+
+/// The dedup key of a placement: the task-tree Run id, or the session id when the run records none.
+pub fn run_key(ctx: &LaunchContext) -> String {
+  ctx
+    .run_id
+    .clone()
+    .filter(|run_id| !run_id.is_empty())
+    .unwrap_or_else(|| ctx.session_meta.lock().expect("launch metadata mutex is not poisoned").id.clone())
 }
 
 /// One login's per-window reading: its utilization, the limiting window's reset, its weekly window's reset, and every
@@ -603,7 +885,8 @@ pub fn login_reading(
 
 /// The Auto set's reading of one Claude member. It carries the best login's windows and weekly reset, and the
 /// earliest reset among the healthy logins. It also says whether every healthy login sits at or above the 90% line
-/// with a reset beyond 45 minutes, and whether no healthy login has headroom left.
+/// with a reset beyond 45 minutes, whether no healthy login has headroom left, and whether every login that has
+/// headroom has all of it reserved by the runs placed on it.
 pub fn member_reading(
   state: &ClaudeAccountState,
   cfg: &CharlieBotConfig,
@@ -622,8 +905,23 @@ pub fn member_reading(
       weekly_resets_at: None,
       near_exhaustion: false,
       exhausted: true,
+      fully_reserved: false,
     }));
   }
+  let counts = state.reservation_counts(now);
+  let mut with_headroom = 0_usize;
+  let mut unreserved_left = false;
+  for account in &healthy {
+    let remaining = headroom(state, &account.label, model, Some(now));
+    if remaining > 0.0 {
+      with_headroom += 1;
+      let reading = latest_reading(state, &account.label, model, Some(now));
+      if unreserved_headroom(reading.as_ref(), remaining, counts.get(&account.label).copied().unwrap_or(0)) > 0.0 {
+        unreserved_left = true;
+      }
+    }
+  }
+  let fully_reserved = with_headroom > 0 && !unreserved_left;
   let readings =
     healthy.iter().filter_map(|account| login_reading(state, &account.label, model, Some(now))).collect::<Vec<_>>();
   let exhausted = healthy.iter().all(|account| headroom(state, &account.label, model, Some(now)) <= 0.0);
@@ -640,6 +938,7 @@ pub fn member_reading(
     weekly_resets_at: best.weekly_resets_at,
     near_exhaustion,
     exhausted,
+    fully_reserved,
   }))
 }
 
@@ -1550,5 +1849,225 @@ mod tests {
     let answer = no_usable_login(&state, &cfg, Some("claude-fable-5-1"), Some(now), None).unwrap();
     assert_eq!(answer.failure, MemberFailure::Quota);
     assert_eq!(answer.recovers_at, Some(UtcDateTime::from(reset)));
+  }
+
+  fn unreserved_candidate(label: &str, unreserved: f64) -> UnreservedCandidate {
+    UnreservedCandidate {
+      account: claude_config::ClaudeAccount { label: label.to_string(), config_dir: "/synthetic".to_string() },
+      unreserved,
+    }
+  }
+
+  #[test]
+  fn the_unreserved_tiers_take_the_under_line_first_then_positive_then_overflow() {
+    let (outcome, contenders) =
+      unreserved_tier(vec![unreserved_candidate("a", 0.37), unreserved_candidate("b", 0.05)]).unwrap();
+    assert_eq!(outcome, "redirect");
+    assert_eq!(contenders.iter().map(|(account, _)| account.label.as_str()).collect::<Vec<_>>(), ["a"]);
+
+    let (outcome, contenders) =
+      unreserved_tier(vec![unreserved_candidate("a", 0.08), unreserved_candidate("b", 0.05)]).unwrap();
+    assert_eq!(outcome, "redirect");
+    assert_eq!(contenders.iter().map(|(account, _)| account.label.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+
+    // The overflow takes every candidate and never refuses.
+    let (outcome, contenders) = unreserved_tier(vec![unreserved_candidate("a", -0.02)]).unwrap();
+    assert_eq!(outcome, "overflow");
+    assert_eq!(contenders.iter().map(|(account, _)| account.label.as_str()).collect::<Vec<_>>(), ["a"]);
+  }
+
+  #[test]
+  fn a_reset_login_absorbs_a_herd_in_tiers_and_overflows_instead_of_refusing() {
+    let (_root, cfg, state) = pool_fixture(&["r", "x1", "x2", "x3", "x4", "x5", "x6"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let rejected =
+      json!({"unifiedWindows":{"five_hour":{"utilization":1.0}},"status":"rejected","resetsAt":4102462800.0});
+    for label in ["x1", "x2", "x3", "x4", "x5", "x6"] {
+      observe_rate_limit(&state, label, &rejected, Some(now), None);
+    }
+    // "r" just reset: five-hour 0%, seven-day 63% -> raw headroom 0.37, five-hour headroom 1.0.
+    observe_rate_limit(
+      &state,
+      "r",
+      &json!({"unifiedWindows":{"five_hour":{"utilization":0.0},"seven_day":{"utilization":0.63}}}),
+      Some(now),
+      None,
+    );
+
+    // Placement 18 leaves unreserved at the 0.10 line, 20 at zero; the rest overflow. None refuses.
+    let mut counts = HashMap::new();
+    let mut live = Vec::new();
+    for index in 0..24 {
+      let pick = reserve_pick(&state, &cfg, None, &HashSet::new(), None, Some(now), None, &format!("run-{index}"))
+        .unwrap()
+        .expect("a reservation never refuses a run while a login has headroom");
+      *counts.entry(pick.account.label.clone()).or_insert(0) += 1;
+      live.push(pick.handle);
+    }
+    assert_eq!(counts, HashMap::from([("r".to_string(), 24)]));
+  }
+
+  #[test]
+  fn reservations_spread_a_reset_across_the_logins_instead_of_piling_one() {
+    let (_root, cfg, state) = pool_fixture(&["a", "b", "c"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a" just reset: five-hour 0%, seven-day 10%. "b" and "c" sit at 50% on both windows. All share the same
+    // hours-to-weekly-reset, so the score compares unreserved headroom alone.
+    let both = |five_hour: f64, seven_day: f64| json!({"unifiedWindows":{"five_hour":{"utilization":five_hour},"seven_day":{"utilization":seven_day}}});
+    observe_rate_limit(&state, "a", &both(0.0, 0.10), Some(now), None);
+    observe_rate_limit(&state, "b", &both(0.5, 0.5), Some(now), None);
+    observe_rate_limit(&state, "c", &both(0.5, 0.5), Some(now), None);
+
+    let mut counts = HashMap::new();
+    let mut live = Vec::new();
+    for index in 0..24 {
+      let pick = reserve_pick(&state, &cfg, None, &HashSet::new(), None, Some(now), None, &format!("run-{index}"))
+        .unwrap()
+        .expect("a reservation never refuses a run while a login has headroom");
+      *counts.entry(pick.account.label.clone()).or_insert(0) += 1;
+      live.push(pick.handle);
+    }
+    // "a" takes the herd until its unreserved headroom sinks under "b" and "c"'s, then the three share it; today's
+    // rule would put all 24 on "a".
+    assert!(counts["a"] >= 14 && counts["a"] <= 15, "the reset login still takes the bulk: {counts:?}");
+    assert!(counts["a"] <= 15, "the reservations cap the reset login's herd: {counts:?}");
+    assert!(counts["b"] >= 4 && counts["b"] <= 5, "the second login takes the overflow: {counts:?}");
+    assert!(counts["c"] >= 4 && counts["c"] <= 5, "the third login takes the overflow: {counts:?}");
+  }
+
+  #[test]
+  fn two_launches_see_each_others_reservations() {
+    let (_root, cfg, state) = pool_fixture(&["a", "b"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a" has 8 points of five-hour headroom left, "b" 5: both under the line, "a" ahead on the score.
+    observe_rate_limit(&state, "a", &window(0.92), Some(now), None);
+    observe_rate_limit(&state, "b", &window(0.95), Some(now), None);
+
+    let first = reserve_pick(&state, &cfg, None, &HashSet::new(), None, Some(now), None, "run-1").unwrap().unwrap();
+    assert_eq!(first.account.label, "a");
+    let second = reserve_pick(&state, &cfg, None, &HashSet::new(), None, Some(now), None, "run-2").unwrap().unwrap();
+    assert_eq!(second.account.label, "b", "the second launch sees the first run's reservation");
+  }
+
+  #[test]
+  fn a_run_counts_once_on_its_newest_handles_login() {
+    let (_root, _cfg, state) = pool_fixture(&["a", "b"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let first = reserve_on(&state, "run-1", "a", "reattach", Some(now));
+    assert_eq!(state.reservation_counts(now), HashMap::from([("a".to_string(), 1)]));
+    // The same run placed on "b" moves its one count there.
+    let second = reserve_on(&state, "run-1", "b", "redirect", Some(now));
+    assert_eq!(state.reservation_counts(now), HashMap::from([("b".to_string(), 1)]));
+    drop((first, second));
+  }
+
+  #[test]
+  fn a_reservation_counts_no_longer_after_thirty_minutes() {
+    let (_root, _cfg, state) = pool_fixture(&["a"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let handle = reserve_on(&state, "run-1", "a", "reattach", Some(now));
+    assert_eq!(state.reservation_counts(add_duration(now, Duration::minutes(29))).len(), 1);
+    assert!(state.reservation_counts(add_duration(now, Duration::minutes(30))).is_empty());
+    drop(handle);
+  }
+
+  #[test]
+  fn the_member_reading_says_when_every_headroom_login_is_fully_reserved() {
+    let (_root, cfg, state) = pool_fixture(&["a"]);
+    let option = cfg.get_backend_option("fable").expect("the fable option").clone();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    observe_rate_limit(&state, "a", &window(0.20), Some(now), None);
+
+    let reading = member_reading(&state, &cfg, &option, now).unwrap().expect("the login reads");
+    assert!(!reading.fully_reserved, "headroom with no reservations is not fully reserved");
+
+    // Twenty runs reserve the login's whole five-hour window while its headroom stays untouched.
+    let handles =
+      (0..20).map(|index| reserve_on(&state, &format!("run-{index}"), "a", "redirect", Some(now))).collect::<Vec<_>>();
+    let reading = member_reading(&state, &cfg, &option, now).unwrap().expect("the login reads");
+    assert!(reading.fully_reserved);
+    assert!(!reading.exhausted, "exhausted keeps its raw meaning");
+    drop(handles);
+
+    // A rejected login is exhausted, not fully reserved.
+    let rejected =
+      json!({"unifiedWindows":{"five_hour":{"utilization":1.0}},"status":"rejected","resetsAt":4102462800.0});
+    observe_rate_limit(&state, "a", &rejected, Some(now), None);
+    let reading = member_reading(&state, &cfg, &option, now).unwrap().expect("the login reads");
+    assert!(reading.exhausted);
+    assert!(!reading.fully_reserved);
+  }
+
+  #[test]
+  fn a_login_without_a_five_hour_reading_reserves_against_its_headroom() {
+    let (_root, cfg, state) = pool_fixture(&["a"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // A seven-day-only panel reading: headroom 0.40, no five-hour value.
+    observe_usage_panel(&state, "a", &panel_window(60.0, WEEKLY_WINDOW_MINUTES, "2025-01-08T12:00:00Z"));
+
+    // Eight runs reserve the whole 0.40 headroom; the login still takes the run, as the overflow.
+    let handles =
+      (0..8).map(|index| reserve_on(&state, &format!("run-{index}"), "a", "redirect", Some(now))).collect::<Vec<_>>();
+    let pick = reserve_pick(&state, &cfg, None, &HashSet::new(), None, Some(now), None, "run-8").unwrap().unwrap();
+    assert_eq!(pick.account.label, "a");
+    let reading =
+      member_reading(&state, &cfg, cfg.get_backend_option("fable").unwrap(), now).unwrap().expect("the login reads");
+    assert!(reading.fully_reserved);
+    drop((handles, pick));
+  }
+
+  #[test]
+  fn the_five_hour_reading_follows_its_observation() {
+    let (_root, _cfg, state) = pool_fixture(&["a"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    observe_rate_limit(
+      &state,
+      "a",
+      &json!({"unifiedWindows":{"five_hour":{"utilization":0.20},"seven_day":{"utilization":0.60}}}),
+      Some(now),
+      None,
+    );
+    assert_eq!(latest_reading(&state, "a", None, Some(now)).unwrap().five_hour, Some(0.20));
+
+    // A windowless rejection reads no five-hour value.
+    let rejected = json!({"unifiedWindows":{},"status":"rejected","resetsAt":4102462800.0});
+    observe_rate_limit(&state, "a", &rejected, Some(now), None);
+    assert_eq!(latest_reading(&state, "a", None, Some(now)).unwrap().five_hour, None);
+
+    // The panel's 300-minute window supplies it, and the newest reading wins whole.
+    observe_usage_panel(
+      &state,
+      "a",
+      &json!({"fetched_at":"2025-01-01T12:01:00Z","windows":[{"utilization":45.0,"window_minutes":300}]}),
+    );
+    let reading = latest_reading(&state, "a", None, Some(now)).unwrap();
+    assert_eq!(reading.utilization, 0.45);
+    assert_eq!(reading.five_hour, Some(0.45));
+  }
+
+  #[test]
+  fn a_reattach_holds_the_login_the_process_environ_names() {
+    let (root, cfg, state) = pool_fixture(&["a", "b"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+
+    let mut held = std::process::Command::new("/bin/sleep")
+      .arg("30")
+      .env("CLAUDE_CONFIG_DIR", root.path().join("a"))
+      .spawn()
+      .unwrap();
+    let handle =
+      reattach_hold(&state, &cfg, held.id(), "run-1", Some(now)).unwrap().expect("the environ names a pool login");
+    assert_eq!(state.reservation_counts(now), HashMap::from([("a".to_string(), 1)]));
+    drop(handle);
+    assert!(state.reservation_counts(now).is_empty(), "the hold ends with its handle");
+
+    let mut plain = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    assert!(reattach_hold(&state, &cfg, plain.id(), "run-2", Some(now)).unwrap().is_none());
+    assert!(state.reservation_counts(now).is_empty());
+
+    held.kill().unwrap();
+    plain.kill().unwrap();
+    held.wait().unwrap();
+    plain.wait().unwrap();
   }
 }

@@ -26,6 +26,9 @@ pub struct MemberReading {
   pub near_exhaustion: bool,
   /// A live window is at 100%, and its reset is not stated or has not passed.
   pub exhausted: bool,
+  /// The provider's logins that still have headroom have all of it reserved by the runs placed on them, so the
+  /// member can only take a run past its own pacing. A provider that tracks no reservations reports `false`.
+  pub fully_reserved: bool,
 }
 
 impl MemberReading {

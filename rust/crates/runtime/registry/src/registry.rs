@@ -1014,6 +1014,20 @@ pub struct QuotaOutlook {
   pub earliest_reset: Option<UtcDateTime>,
 }
 
+/// The hold a backend's login reservation took for a recovered run (`BackendLifecycle::reattach_hold`). The
+/// recovered run's follow keeps it alive, so the hold ends when the follow ends or the pool's own hold passes.
+pub struct ReattachHold {
+  /// The lifecycle's own reservation state, opaque to the runtime. `None` for a backend type that takes none.
+  pub private: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl ReattachHold {
+  /// The hold of a backend type with no login pool.
+  pub fn none() -> Self {
+    Self { private: None }
+  }
+}
+
 /// A backend type's lifecycle (`backend_lifecycle.BackendLifecycle`). The defaults serve a type with no login pool:
 /// one process per run, its conversation resumed as held.
 pub trait BackendLifecycle: Send + Sync {
@@ -1055,6 +1069,14 @@ pub trait BackendLifecycle: Send + Sync {
   /// earliest login recovers. `None` for a backend type with no login pool.
   fn quota_outlook(&self, _option: &BackendOption, _cfg: &CharlieBotConfig) -> anyhow::Result<Option<QuotaOutlook>> {
     Ok(None)
+  }
+
+  /// The hold the login that a recovered run's process already uses takes for that run, read from the process's
+  /// environment (`/proc/<pid>/environ`). The startup recovery takes it before it starts the run's follow, so the
+  /// next placement's selection sees the reattached run; the follow holds it until the run's follow ends. The
+  /// default takes none.
+  fn reattach_hold(&self, _cfg: &CharlieBotConfig, _pid: u32, _run_id: &str) -> ReattachHold {
+    ReattachHold::none()
   }
 
   /// Cleans up after the last process of a round, whether the round succeeded or not.

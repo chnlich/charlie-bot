@@ -27,9 +27,9 @@ use charliebot_core::oauth::{
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
-  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_UTILIZATION,
-  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, WEEKLY_WINDOW_MINUTES, as_utilization,
-  mark_expired_windows,
+  DEFAULT_ACCOUNT_LABEL, FIVE_HOUR_WINDOW_MINUTES, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT,
+  PANEL_SCOPE_LABEL, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT,
+  WEEKLY_WINDOW_MINUTES, as_utilization, mark_expired_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -64,9 +64,10 @@ const NO_DATA: &str = "no data";
 
 /// The plan windows the response names by field: `(camel name, snake name, window length in minutes)`.
 const CLAUDE_WINDOW_FIELDS: [(&str, &str, i64); 2] =
-  [("fiveHour", "five_hour", 300), ("sevenDay", "seven_day", WEEKLY_WINDOW_MINUTES)];
+  [("fiveHour", "five_hour", FIVE_HOUR_WINDOW_MINUTES as i64), ("sevenDay", "seven_day", WEEKLY_WINDOW_MINUTES)];
 /// The window length of each `limits[].group` the response reports. Any other group is skipped with a warning.
-const LIMIT_GROUP_WINDOW_MINUTES: [(&str, i64); 2] = [("session", 300), ("weekly", WEEKLY_WINDOW_MINUTES)];
+const LIMIT_GROUP_WINDOW_MINUTES: [(&str, i64); 2] =
+  [("session", FIVE_HOUR_WINDOW_MINUTES as i64), ("weekly", WEEKLY_WINDOW_MINUTES)];
 
 static CLI_VERSION: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+").expect("the version pattern is valid"));

@@ -55,6 +55,7 @@ pub struct RelayWatch {
   reason: Option<Decision>,
   armed: bool,
   auth_failed: bool,
+  held_logged: bool,
   decision: Arc<Mutex<Option<String>>>,
   keyed: bool,
 }
@@ -79,6 +80,7 @@ impl RelayWatch {
       reason: None,
       armed: false,
       auth_failed: false,
+      held_logged: false,
       decision,
       keyed,
     }
@@ -121,7 +123,7 @@ impl LaunchWatchTrait for RelayWatch {
       }
       _ if self.armed && self.reason.is_none() && is_tool_result_event(event) => {
         let moment = claude_accounts::now_or(self.now);
-        let destination = claude_accounts::cool_destination(
+        let destination = claude_accounts::unreserved_cool_destination(
           &self.state,
           &self.cfg,
           self.model.as_deref(),
@@ -130,6 +132,16 @@ impl LaunchWatchTrait for RelayWatch {
         )
         .expect("validated Claude account pools remain readable during a process");
         if destination.as_ref().is_none_or(|account| account.label == self.label) {
+          // The reservations leave no login over the line: the run holds here instead of relaying.
+          if !self.held_logged {
+            self.held_logged = true;
+            tracing::warn!(
+              target: "charliebot_agents",
+              account = %self.label,
+              outcome = "relay_held",
+              "claude_login_reserved"
+            );
+          }
           return false;
         }
         self.reason = Some(Decision::Warning);
@@ -299,8 +311,11 @@ pub struct RelayMove {
   pub error: Option<String>,
   pub refused_holder: Option<claude_config::ClaudeAccount>,
   pub pool_exhausted: bool,
+  /// The reservation the pick registered on the login it chose, held by the launch that adopts the move.
+  pub handle: Option<Arc<claude_accounts::ReservationHandle>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn relay_move(
   state: &ClaudeAccountStateRef,
   cfg: &CharlieBotConfig,
@@ -309,6 +324,7 @@ pub fn relay_move(
   session_id: Option<&str>,
   now: Option<UtcDateTime>,
   account_pool: Option<&str>,
+  run_id: &str,
 ) -> anyhow::Result<RelayMove> {
   let Some(session_id) = session_id.filter(|id| !id.is_empty()) else {
     return Ok(RelayMove {
@@ -316,20 +332,29 @@ pub fn relay_move(
       error: Some("Claude account relay impossible: the run produced no session id to resume.".to_string()),
       refused_holder: None,
       pool_exhausted: false,
+      handle: None,
     });
   };
   let exclude = HashSet::from([current.label.clone()]);
-  let next = claude_accounts::select(state, cfg, model, &exclude, None, now, account_pool, 0.0)?;
-  let Some(next) = next else {
+  let reservation = claude_accounts::reserve_pick(state, cfg, model, &exclude, None, now, account_pool, run_id)?;
+  let Some(pick) = reservation else {
     return Ok(RelayMove {
       account: None,
       error: Some(pool_exhausted_message(state, cfg, model, now, account_pool)?),
       refused_holder: None,
       pool_exhausted: true,
+      handle: None,
     });
   };
+  let next = pick.account;
   match claude_accounts::move_transcript(session_id, Path::new(&current.config_dir), Path::new(&next.config_dir)) {
-    Ok(_) => Ok(RelayMove { account: Some(next), error: None, refused_holder: None, pool_exhausted: false }),
+    Ok(_) => Ok(RelayMove {
+      account: Some(next),
+      error: None,
+      refused_holder: None,
+      pool_exhausted: false,
+      handle: Some(pick.handle),
+    }),
     Err(error) => {
       let refused = claude_accounts::is_newer_transcript_refusal(&error);
       Ok(RelayMove {
@@ -337,6 +362,7 @@ pub fn relay_move(
         error: Some(format!("Claude account relay failed: {error}")),
         refused_holder: refused.then_some(next),
         pool_exhausted: false,
+        handle: refused.then_some(pick.handle),
       })
     }
   }
@@ -568,8 +594,152 @@ mod tests {
     let current = claude_accounts::account_by_label(&cfg, Some("main")).unwrap().unwrap();
 
     let movement =
-      relay_move(&state, &cfg, Some("claude-fable-5-1"), &current, Some("uuid-1"), Some(now), None).unwrap();
+      relay_move(&state, &cfg, Some("claude-fable-5-1"), &current, Some("uuid-1"), Some(now), None, "run-1").unwrap();
 
     assert_eq!(movement.account.map(|account| account.label), Some("ext-1".to_string()));
+  }
+
+  /// The warning relay holds while the reservations leave no login over the line, and stops at the next tool result
+  /// once reservations free one.
+  #[test]
+  fn the_warning_relay_holds_while_no_login_has_unreserved_headroom_over_the_line() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let spent = root.path().join("spent");
+    let fresh = root.path().join("fresh");
+    for directory in [&spent, &fresh] {
+      std::fs::create_dir_all(directory).unwrap();
+      std::fs::write(directory.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#)
+        .unwrap();
+    }
+    let cfg = pooled_config(&home, &[("spent", &spent), ("fresh", &fresh)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
+    // "fresh" just reset: five-hour 0%. Nineteen runs hold all but 0.05 of its five-hour headroom.
+    let mut handles = (0..19)
+      .map(|index| claude_accounts::reserve_on(&state, &format!("run-{index}"), "fresh", "reattach", Some(now)))
+      .collect::<Vec<_>>();
+    let decision = Arc::new(Mutex::new(None));
+    let mut watch = RelayWatch::new(
+      "spent".to_string(),
+      Some("claude-fable-5-1".to_string()),
+      Arc::new(cfg),
+      Arc::clone(&state),
+      Some("alpha".to_string()),
+      decision,
+      false,
+    );
+    watch.now = Some(now);
+    let warning = json!({
+      "type":"rate_limit_event",
+      "rate_limit_info":{"status":"allowed_warning","resetsAt":4102462800.0,
+        "unifiedWindows":{"five_hour":{"utilization":0.92}}}
+    });
+    assert!(!watch.observe(&warning));
+    assert!(!watch.observe(&tool_result_event()), "no login has unreserved headroom over the line");
+    assert!(!watch.wants_next(0, ""), "the run holds instead of relaying");
+
+    handles.pop();
+    handles.pop();
+    assert!(watch.observe(&tool_result_event()), "the relay stops at the next tool result once two holds end");
+    assert!(watch.wants_next(0, ""));
+  }
+
+  fn tool_result_event() -> Value {
+    json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}})
+  }
+
+  /// A relay overflows onto a login whose raw headroom is entirely reserved rather than reporting the pool exhausted.
+  #[test]
+  fn a_relay_overflows_onto_a_fully_reserved_login_rather_than_refusing() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let spent = root.path().join("spent");
+    let fresh = root.path().join("fresh");
+    for directory in [&spent, &fresh] {
+      std::fs::create_dir_all(directory).unwrap();
+      std::fs::write(directory.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#)
+        .unwrap();
+    }
+    std::fs::create_dir_all(spent.join("projects/work")).unwrap();
+    std::fs::write(spent.join("projects/work/uuid-1.jsonl"), "synthetic transcript\n").unwrap();
+    let cfg = pooled_config(&home, &[("spent", &spent), ("fresh", &fresh)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
+    // "spent" is rejected; "fresh" has 0.40 raw headroom on its weekly reading, and nine runs reserve all of it.
+    let rejected = json!({
+      "type":"rate_limit_event",
+      "rate_limit_info":{"status":"rejected","resetsAt":4102462800.0,
+        "unifiedWindows":{"five_hour":{"utilization":1.0}}}
+    });
+    claude_accounts::observe_rate_limit(&state, "spent", &rejected["rate_limit_info"], Some(now), None);
+    claude_accounts::observe_usage_panel(
+      &state,
+      "fresh",
+      &json!({
+        "fetched_at":"2025-01-01T11:59:00Z",
+        "windows":[{"utilization":60.0,"window_minutes":charliebot_registry::usage::WEEKLY_WINDOW_MINUTES,"resets_at":"2025-01-08T12:00:00Z"}]
+      }),
+    );
+    for index in 0..9 {
+      claude_accounts::reserve_on(&state, &format!("run-{index}"), "fresh", "reattach", Some(now));
+    }
+    let current = claude_accounts::account_by_label(&cfg, Some("spent")).unwrap().unwrap();
+
+    let movement =
+      relay_move(&state, &cfg, Some("claude-fable-5-1"), &current, Some("uuid-1"), Some(now), None, "run-1").unwrap();
+
+    assert_eq!(movement.account.as_ref().map(|account| account.label.as_str()), Some("fresh"));
+    assert!(!movement.pool_exhausted, "the overflow is not a quota fact");
+    assert!(movement.handle.is_some(), "the relay's pick holds a reservation");
+  }
+
+  /// The relay cap judges raw headroom: a login over the line whose headroom is all reserved still relays past the
+  /// cap, and a rejected decision there is not a quota fact.
+  #[test]
+  fn the_relay_cap_judges_raw_headroom_not_reservations() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let spent = root.path().join("spent");
+    let fresh = root.path().join("fresh");
+    for directory in [&spent, &fresh] {
+      std::fs::create_dir_all(directory).unwrap();
+      std::fs::write(directory.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#)
+        .unwrap();
+    }
+    let cfg = pooled_config(&home, &[("spent", &spent), ("fresh", &fresh)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
+    let rejected = json!({
+      "unifiedWindows": {"five_hour": {"utilization": 1.0}},
+      "status": "rejected",
+      "resetsAt": 4102462800.0,
+    });
+    claude_accounts::observe_rate_limit(&state, "spent", &rejected, Some(now), None);
+    claude_accounts::observe_usage_panel(
+      &state,
+      "fresh",
+      &json!({
+        "fetched_at":"2025-01-01T11:59:00Z",
+        "windows":[{"utilization":50.0,"window_minutes":charliebot_registry::usage::WEEKLY_WINDOW_MINUTES,"resets_at":"2025-01-08T12:00:00Z"}]
+      }),
+    );
+    for index in 0..10 {
+      claude_accounts::reserve_on(&state, &format!("run-{index}"), "fresh", "reattach", Some(now));
+    }
+
+    assert!(
+      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_WARNING, None)
+        .unwrap()
+        .is_none(),
+      "raw headroom over the line relays past the cap"
+    );
+    let refused = relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_REJECTED, None)
+      .unwrap()
+      .expect("the cap refuses a rejected relay");
+    assert_eq!(refused.failure, MemberFailure::Other, "the reserved login is still raw headroom, not a quota fact");
   }
 }

@@ -14,7 +14,7 @@ import { chromeBinary, launchBrowser } from './chrome.mjs';
 import { assetVersionOf, hostInterference, openCpuRecord, openMeasuredTab, openRecord, openSettled, runRepetitions }
   from './open.mjs';
 import { LIVE_CPU_TAIL, OPEN } from './profile.mjs';
-import { assertSameTargetAsBefore, expectedTargetsFrom, newestRowMessage } from './newest-row.mjs';
+import { assertSameTargetAsBefore, expectedTargetsFrom, newestRowMessage, targetIdentity } from './newest-row.mjs';
 import { Tabs, waitFor } from './tabs.mjs';
 
 const DOC_URL = 'https://localhost:8443/?session=open';
@@ -149,13 +149,32 @@ test('the newest-row target is the last message the For you view paints, and a s
   assert.equal(newestRowMessage(screen.slice(0, 2)).id, 'w1');
   assert.equal(newestRowMessage([{ id: 'a', role: 'assistant' }, { role: 'user', content: 'no id' }]), null);
   const before = expectedTargetsFrom({
-    reference: { id: 'reference A link rate 1', reps: [{ rep: 1, newestTargetId: 'x1' }] },
+    reference: { id: 'reference A link rate 1', reps: [{ rep: 1, newestTargetIdentity: 'system@4' }] },
     cells: [],
   });
-  assertSameTargetAsBefore(before, 'reference A link rate 1', 1, 'x1');
-  assert.throws(() => assertSameTargetAsBefore(before, 'reference A link rate 1', 1, 'w1'),
-    /this side w1, the before side x1/);
-  assertSameTargetAsBefore(null, 'A link', 1, 'w1');
+  assertSameTargetAsBefore(before, 'reference A link rate 1', 1, 'system@4');
+  assert.throws(() => assertSameTargetAsBefore(before, 'reference A link rate 1', 1, 'user@2'),
+    /this side user@2, the before side system@4/);
+  assertSameTargetAsBefore(null, 'A link', 1, 'user@2');
+});
+
+test('two runs of one seed name the same newest-row target, though the server minted their message ids', () => {
+  // Each run's events are stored under ids the server mints, and the seed's own text carries a random tag, so the id
+  // and the text differ between runs. The event index is the seed's order, so the identity is the same in both.
+  const run = (id, text) => [{ id, role: 'user', event_index: 12, content: `pn-seed ${text} 2 3` }];
+  const identityOf = (screen) => targetIdentity(newestRowMessage(screen));
+  const before = expectedTargetsFrom({
+    reference: {
+      id: 'reference A link rate 1',
+      reps: [{ rep: 1, newestTargetIdentity: identityOf(run('b-1', 'a1b2c3d4')) }],
+    },
+    cells: [],
+  });
+  const reference = 'reference A link rate 1';
+  assertSameTargetAsBefore(before, reference, 1, identityOf(run('a-9', 'e5f6a7b8')));
+  const later = [{ id: 'a-9', role: 'user', event_index: 13, content: 'pn-seed later' }];
+  assert.throws(() => assertSameTargetAsBefore(before, reference, 1, identityOf(later)),
+    /this side user@13, the before side user@12/);
 });
 
 test('the newest message counts at the first document that shows it', () => {

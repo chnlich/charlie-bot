@@ -379,7 +379,9 @@ the last message of the bootstrap whose role the view paints (`user`, `web_reply
 `system` row whose text starts with `Error: `) and that carries an id. Separators and the other roles have no node in
 the view, so a first screen whose last message is a separator names an earlier row. The rule lives in
 `newest-row.mjs`, beside the view's filter it copies (`web/static/js/chat/for-you.js`, `showsInForYou`). Each
-repetition records its target as `newestTargetId`. A run that measures both sides passes the before side's JSON to the
+repetition records its target as `newestTargetIdentity`: the target's role and its event index in its session
+(`targetIdentity`). The message id is not compared: the server mints each stored event's id per append, so two runs of
+one seed never share it. A run that measures both sides passes the before side's JSON to the
 after side (`--expect-targets`): a repetition whose target differs from the before side's stops the after side with
 both ids, before it measures. Rows run on only one side still use the same target rule, but have no cross-side target
 to compare. A single-side run has no expectation and checks nothing.

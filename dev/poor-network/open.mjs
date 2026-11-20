@@ -13,7 +13,7 @@ import path from 'node:path';
 import { launchBrowser, chromeBinary } from './chrome.mjs';
 import { cdnRoutes } from './cdn.mjs';
 import { LINK, OPEN, LIVE_CPU_TAIL } from './profile.mjs';
-import { assertSameTargetAsBefore, newestRowMessage } from './newest-row.mjs';
+import { assertSameTargetAsBefore, newestRowMessage, targetIdentity } from './newest-row.mjs';
 import { ShapingProxy } from './proxy.mjs';
 import { percentile } from './report.mjs';
 import { NETWORK_CHANGED_ERROR, PAGE_REPORT_BINDING, Tabs, sleep } from './tabs.mjs';
@@ -479,7 +479,7 @@ async function measureOnce(ctx, cell, repetition) {
     }
     // The two stored-copy setups exist only on the after side, so they have no before-side target to compare.
     if (!STORED_COPY_CONDITIONS.includes(cell.condition)) {
-      assertSameTargetAsBefore(ctx.expectedTargets, cell.id, repetition, newestMessage.id);
+      assertSameTargetAsBefore(ctx.expectedTargets, cell.id, repetition, targetIdentity(newestMessage));
     }
     const tab = await openMeasuredTab(tabs, newestMessage.id);
     await tab.page.send('Emulation.setCPUThrottlingRate', { rate: cell.rate });
@@ -563,7 +563,7 @@ async function measureOnce(ctx, cell, repetition) {
       rep: repetition,
       navigationError,
       networkChanged: tab.networkChanged,
-      newestTargetId: String(newestMessage.id),
+      newestTargetIdentity: targetIdentity(newestMessage),
       newestMs: newestWall === null ? null : newestWall - opened.startWall,
       catchupMs: catchup === null || opened.startWall === null ? null : catchup.at - opened.startWall,
       sockets: tab.sockets.length,

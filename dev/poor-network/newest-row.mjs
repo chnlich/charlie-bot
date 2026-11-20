@@ -28,13 +28,24 @@ export function targetKey(cellId, repetition) {
   return `${cellId}#${repetition}`;
 }
 
+// The run-stable identity of a target: its role and its event index, the event's position in its session's log. A
+// message's id is the id its event was stored under, and the server mints that id on each append, so two runs of one
+// seed never share it. The seed's events are appended in the same order in every run, so the index is the same, and
+// the page reads the same field (`event_index`, web/static/js/chat/for-you.js).
+export function targetIdentity(msg) {
+  if (!Number.isInteger(msg.event_index)) {
+    throw new Error(`the newest-row message ${msg.id} carries no event_index`);
+  }
+  return `${msg.role}@${msg.event_index}`;
+}
+
 // The targets a before side measured, from its open result: one key per repetition of the reference cell and of each
 // cell. A side that runs after it in one invocation reads them as the expectation its own targets are checked against.
 export function expectedTargetsFrom(open) {
   const targets = new Map();
   for (const cell of [open.reference, ...open.cells]) {
     for (const rep of cell.reps) {
-      targets.set(targetKey(cell.id, rep.rep), rep.newestTargetId);
+      targets.set(targetKey(cell.id, rep.rep), rep.newestTargetIdentity);
     }
   }
   return targets;
@@ -42,14 +53,15 @@ export function expectedTargetsFrom(open) {
 
 // Stops the side when its newest-row target differs from the before side's, so the two sides never measure reaching
 // different messages. With no expectation (a single-side run) nothing is checked.
-export function assertSameTargetAsBefore(expectedTargets, cellId, repetition, targetId) {
+export function assertSameTargetAsBefore(expectedTargets, cellId, repetition, identity) {
   if (expectedTargets === null) return;
   const key = targetKey(cellId, repetition);
   if (!expectedTargets.has(key)) {
     throw new Error(`the before side measured no newest-row target for ${key}`);
   }
-  const beforeId = expectedTargets.get(key);
-  if (String(beforeId) !== String(targetId)) {
-    throw new Error(`the newest-row targets differ for ${key}: this side ${targetId}, the before side ${beforeId}`);
+  const beforeIdentity = expectedTargets.get(key);
+  if (beforeIdentity !== identity) {
+    throw new Error(`the newest-row targets differ for ${key}: this side ${identity}, `
+      + `the before side ${beforeIdentity}`);
   }
 }

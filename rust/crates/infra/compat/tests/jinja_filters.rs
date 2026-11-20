@@ -22,7 +22,7 @@ fn filters_and_printing_match_jinja2() {
   }
 }
 
-/// A page renders a value as text in the handler and prints it with `|safe`; those bytes are the filter's.
+/// A page renders a value as text in the handler and prints it with `|safe`. Those bytes are the filter's.
 #[test]
 fn tojson_text_matches_the_filter() {
   let value = serde_json::json!({

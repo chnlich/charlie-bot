@@ -43,7 +43,7 @@ pub fn environment(
   environment
 }
 
-/// The text of a template loaded by name: the first search directory holding the name wins; a `..`
+/// The text of a template loaded by name: the first search directory holding the name wins. A `..`
 /// segment names no template. The text is read as UTF-8 with universal newlines.
 fn load_template(directories: &[PathBuf], name: &str) -> Result<Option<String>, Error> {
   let mut pieces = Vec::new();
@@ -70,7 +70,7 @@ fn load_template(directories: &[PathBuf], name: &str) -> Result<Option<String>, 
   Ok(None)
 }
 
-/// Print a value under autoescaping: markup prints as is; anything else prints its text
+/// Print a value under autoescaping: markup prints as is. Anything else prints its text
 /// rendering, escaped with the HTML escape table.
 fn markupsafe_formatter(out: &mut Output, state: &State, value: &Value) -> Result<(), Error> {
   if value.is_safe() || state.auto_escape() == AutoEscape::None {
@@ -95,7 +95,7 @@ fn markupsafe_escape(text: &str) -> String {
   out
 }
 
-/// The text of a template value; an undefined value prints as nothing.
+/// The text of a template value. An undefined value prints as nothing.
 fn value_str(value: &Value) -> Result<String, Error> {
   Ok(match value.kind() {
     ValueKind::Undefined => String::new(),
@@ -110,7 +110,7 @@ fn to_json(value: &Value) -> Result<serde_json::Value, Error> {
 
 /// `htmlsafe_json_dumps`'s escaping of the JSON text: `< > & '` as unicode escapes.
 ///
-/// One scan that copies the runs between matches; four `str::replace` calls would each scan the whole
+/// One scan that copies the runs between matches. Four `str::replace` calls would each scan the whole
 /// text. A text with no match keeps its buffer.
 fn html_safe_json(json: String) -> String {
   fn escape(byte: u8) -> Option<&'static str> {
@@ -196,7 +196,7 @@ fn query_quote(text: &str) -> String {
 }
 
 /// The `format` filter: the value's text applied to the template with the one positional argument the
-/// pages pass. The conversions are `%f` and `%.Nf`, `%d`, `%s` and `%%`; any other conversion fails the render.
+/// pages pass. The conversions are `%f` and `%.Nf`, `%d`, `%s` and `%%`. Any other conversion fails the render.
 fn percent_format(template: Value, argument: Value) -> Result<String, Error> {
   let template = value_str(&template)?;
   let argument = to_json(&argument)?;
@@ -229,7 +229,7 @@ fn percent_format(template: Value, argument: Value) -> Result<String, Error> {
   Ok(out)
 }
 
-/// One conversion of `percent_format`. `%f` takes `.N` (six digits when the spec is empty); `%d` and `%s` take no spec.
+/// One conversion of `percent_format`. `%f` takes `.N` (six digits when the spec is empty). `%d` and `%s` take no spec.
 fn convert(spec: &str, conversion: char, value: &serde_json::Value) -> Result<String, Error> {
   match conversion {
     'f' => Ok(text_repr::format_f(real(value, conversion)?, precision(spec, conversion)?)),

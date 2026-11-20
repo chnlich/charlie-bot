@@ -65,7 +65,7 @@ fn orjson_float(value: f64) -> String {
   format!("{sign}{body}")
 }
 
-/// The digits `d1 d2 ...` read as `d1.d2... x 10^exponent`, in plain notation; an integral value ends in `.0`.
+/// The digits `d1 d2 ...` read as `d1.d2... x 10^exponent`, in plain notation. An integral value ends in `.0`.
 fn plain_notation(digits: &str, exponent: i32) -> String {
   if exponent < 0 {
     return format!("0.{}{digits}", "0".repeat((-exponent - 1) as usize));

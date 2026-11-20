@@ -57,7 +57,7 @@ fn build_tree(root: &Path) -> ScanContext {
   context
 }
 
-/// The case matrix. The live and missing pages sit under `root`; the retired URLs name the home's synthetic session.
+/// The case matrix. The live and missing pages sit under `root`. The retired URLs name the home's synthetic session.
 fn cases(root: &Path, context: &ScanContext) -> Vec<Case> {
   let root = root.display();
   let live = format!("http://localhost:18498{FILE_SERVER_MOUNT}{root}/live/page.html");

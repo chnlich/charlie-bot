@@ -41,7 +41,7 @@ struct FileBodyKey {
 /// How many whole-file bodies the memo holds.
 const FILE_BODY_MEMO_ENTRIES: usize = 64;
 
-/// The largest body the memo holds; a larger file is read and sent without being kept.
+/// The largest body the memo holds. A larger file is read and sent without being kept.
 const FILE_BODY_MEMO_MAX_BYTES: usize = 256 * 1024;
 
 /// The whole-file bodies served recently. A page load asks for the same few static files, and every request read its

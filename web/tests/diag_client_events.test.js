@@ -322,7 +322,7 @@ test('a click whose POST never returns still ages out silently', () => {
 
 test('a network close that reconnects and replays posts the episode and the replay record', () => {
   const h = buildClientEventsHarness();
-  h.dispatch('charliebot:client-socket-close', {cause: 'network', code: 1006});
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
   h.advance(1000);
   h.dispatch('charliebot:client-socket-open', {attempts: 1});
   h.advance(900);
@@ -335,9 +335,7 @@ test('a network close that reconnects and replays posts the episode and the repl
   assert.equal(replay.session_id, 'session-a');
   assert.equal(replay.catchup_bytes, 80860);
   assert.equal(replay.disconnect_at, null, 'the replay record reports no disconnect');
-  assert.equal(replay.cause, null);
   const episode = h.posts[1];
-  assert.equal(episode.cause, 'network');
   assert.equal(episode.close_code, 1006);
   assert.equal(episode.reconnect_count, 1);
   assert.equal(episode.catchup_bytes, 80860);
@@ -349,12 +347,11 @@ test('a network close that reconnects and replays posts the episode and the repl
 
 test('a network close with no reconnect posts when the next close supersedes it', () => {
   const h = buildClientEventsHarness();
-  h.dispatch('charliebot:client-socket-close', {cause: 'network', code: 1006});
-  h.dispatch('charliebot:client-socket-close', {cause: 'network', code: 1006});
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
 
   assert.equal(h.posts.length, 1, 'the first episode posts when the second close starts');
   const post = h.posts[0];
-  assert.equal(post.cause, 'network', 'the readback counts only network episodes as disconnect waits');
   assert.equal(post.close_code, 1006);
   assert.equal(post.reconnect_at, null);
   assert.equal(post.catchup_bytes, null);
@@ -362,9 +359,9 @@ test('a network close with no reconnect posts when the next close supersedes it'
 
 test('an episode that reconnects but never replays posts with null catch-up fields', () => {
   const h = buildClientEventsHarness();
-  h.dispatch('charliebot:client-socket-close', {cause: 'network', code: 1006});
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
   h.dispatch('charliebot:client-socket-open', {attempts: 3});
-  h.dispatch('charliebot:client-socket-close', {cause: 'network', code: 1006});
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
 
   assert.equal(h.posts.length, 1);
   assert.deepEqual(
@@ -386,7 +383,7 @@ test('each subscription replays into its own record: the page-load open included
 
 test('a subscribed replay does not touch the reconnect episode, which posts at its own replay', () => {
   const h = buildClientEventsHarness();
-  h.dispatch('charliebot:client-socket-close', {cause: 'network', code: 1006});
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
   h.dispatch('charliebot:client-socket-open', {attempts: 1});
   h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 10});
   h.dispatch('charliebot:client-socket-catchup', {subscription: 1, session_id: 'session-b', bytes: 20});
@@ -485,6 +482,8 @@ test('a navigating path announces its cause and the report consumes it once', ()
   h.dispatch('charliebot:page-load-cause', {cause: 'stale_asset'});
   assert.match(h.sessionStorageData.get('charliebot-page-load-cause'), /stale_asset/,
       'the announcement lands where the next page reads it');
+  // The navigation commits, so this page's clean-up timer never runs; the new page reads the mark it left.
+  h.timers.splice(0);
 
   h.setNavigation({responseEnd: 33000.4, domContentLoadedEventEnd: 34500.6, transferSize: 415115});
   h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 0});
@@ -503,15 +502,24 @@ test('a navigating path announces its cause and the report consumes it once', ()
       'the report consumes the marker, so a later report names a fresh open');
 });
 
-test('a cause marker past its minute reports as a fresh open', () => {
+test('a cause mark whose navigation never commits is removed after ten seconds, so the next load reads open', () => {
   const h = buildClientEventsHarness();
-  h.sessionStorageData.set('charliebot-page-load-cause',
-      JSON.stringify({cause: 'stale_asset', at: h.clock() - 61000}));
+  h.dispatch('charliebot:page-load-cause', {cause: 'feature_version'});
+  h.fireTimers();  // the page stayed alive: its clean-up timer runs
+  assert.equal(h.sessionStorageData.has('charliebot-page-load-cause'), false);
+
   h.setNavigation({responseEnd: 100, domContentLoadedEventEnd: 200, transferSize: 0});
-  h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 0});
+  h.dispatch('charliebot:page-current', {sessionId: 'session-a'});
   h.dispatch('load');
   h.fireTimers();  // the load handler schedules its report on a setTimeout
   assert.equal(h.posts.find((post) => post.kind === 'page_load').cause, 'open');
+});
+
+test('the mark is cleared ten seconds after the announcement, not sooner', () => {
+  const h = buildClientEventsHarness();
+  h.dispatch('charliebot:page-load-cause', {cause: 'stale_asset'});
+  assert.equal(h.timers.length, 1);
+  assert.equal(h.timers[0].ms, 10000);
 });
 
 test('a page load reports the newest message, the catch-up, the open case and the blocking files', () => {
@@ -626,13 +634,14 @@ test('a page without a Navigation Timing entry reports no page load', () => {
 function buildTransportHarness() {
   const announced = [];
   const timers = [];
+  const reloads = [];
   const {context, FakeWebSocket} = loadWebsocketContext({
     SESSION_ID: 'session-a',
     WebSocket: createFakeWebSocketClass(),
     wsUrlWithToken: (path) => path,
     setTimeout: (fn, ms) => { if (ms === CONNECT_DEADLINE_MS) return 0; timers.push({fn, ms}); return timers.length; },
     clearTimeout: () => {},
-    reloadAfterRefreshingShell: () => {},
+    reloadAfterRefreshingShell: (cause) => { reloads.push(cause); return Promise.resolve(); },
     document: {
       getElementById: () => null,
       dispatchEvent: (event) => {
@@ -642,7 +651,7 @@ function buildTransportHarness() {
     },
     console: {log: () => {}, error: () => {}},
   });
-  return {context, FakeWebSocket, announced, timers};
+  return {context, FakeWebSocket, announced, timers, reloads};
 }
 
 test('the transport announces a socket-driven close as a network close with the code', () => {
@@ -653,7 +662,7 @@ test('the transport announces a socket-driven close as a network close with the 
   socket.emitClose({code: 1006});
 
   const close = h.announced.filter((event) => event.type === 'charliebot:client-socket-close').pop();
-  assert.deepEqual({...close.detail}, {cause: 'network', code: 1006},
+  assert.deepEqual({...close.detail}, {code: 1006},
       'a switch keeps the socket, so every announced close is a network close');
   assert.deepEqual(h.timers.map((timer) => timer.ms), [1000, 250], 'the close schedules its reconnect and quick retry');
 });
@@ -666,9 +675,8 @@ test('the transport announces the stale-asset close once and marks the reload ca
   socket.emitClose({code: 4409});
 
   const close = h.announced.filter((event) => event.type === 'charliebot:client-socket-close').pop();
-  assert.deepEqual({...close.detail}, {cause: 'network', code: 4409});
-  const cause = h.announced.filter((event) => event.type === 'charliebot:page-load-cause').pop();
-  assert.deepEqual({...cause.detail}, {cause: 'stale_asset'});
+  assert.deepEqual({...close.detail}, {code: 4409});
+  assert.deepEqual(h.reloads, ['stale_asset'], 'the reload names its cause');
   assert.equal(h.timers.length, 0, 'the stale-asset close reloads instead of scheduling a reconnect');
 });
 
@@ -686,9 +694,9 @@ test('the transport announces the reopen with the reconnect attempt count', () =
   const open = h.announced.filter((event) => event.type === 'charliebot:client-socket-open').pop();
   assert.deepEqual({...open.detail}, {attempts: 2});
 
-  socket.emitMessage({type: 'catchup_complete', session_id: 'session-a', subscription: 0, event_total: 0});
+  socket.emitMessage({type: 'catchup_complete', session_id: 'session-a', subscription: 0, event_total: 0, uptime_ms: 0});
   const catchup = h.announced.filter((event) => event.type === 'charliebot:client-socket-catchup').pop();
-  assert.deepEqual({...catchup.detail}, {subscription: 0, session_id: 'session-a', bytes: 0, eventTotal: 0},
+  assert.deepEqual({...catchup.detail}, {subscription: 0, session_id: 'session-a', bytes: 0, eventTotal: 0, uptimeMs: 0},
       'an empty replay reports zero bytes');
 });
 
@@ -700,13 +708,117 @@ test('the transport counts the replay bytes up to catchup_complete', () => {
 
   socket.emitMessage({type: 'ping'});
   socket.emitMessage({type: 'message', message: {role: 'assistant', content: 'héllo 世界', event_index: 1}});
-  socket.emitMessage({type: 'catchup_complete', session_id: 'session-a', subscription: 0, event_total: 2});
+  socket.emitMessage({type: 'catchup_complete', session_id: 'session-a', subscription: 0, event_total: 2, uptime_ms: 0});
   socket.emitMessage({type: 'message', message: {role: 'assistant', content: 'after the replay', event_index: 2}});
 
   const catchup = h.announced.find((event) => event.type === 'charliebot:client-socket-catchup');
   const replayed = JSON.stringify({type: 'ping'}) + JSON.stringify(
     {type: 'message', message: {role: 'assistant', content: 'héllo 世界', event_index: 1}});
   assert.deepEqual({...catchup.detail},
-      {subscription: 0, session_id: 'session-a', bytes: Buffer.byteLength(replayed, 'utf8'), eventTotal: 2},
+      {subscription: 0, session_id: 'session-a', bytes: Buffer.byteLength(replayed, 'utf8'), eventTotal: 2, uptimeMs: 0},
       'the replay bytes are the frames before catchup_complete, in UTF-8');
+});
+
+// ---------------------------------------------------------------------------
+// The return point: when the page came back, for the wait from return to caught up
+// ---------------------------------------------------------------------------
+
+function socketEpisodeOf(h) {
+  return h.posts.filter((post) => post.kind === 'socket' && post.disconnect_at !== null).pop();
+}
+
+function setTabHidden(h, hidden) {
+  h.context.document.hidden = hidden;
+  h.dispatch('visibilitychange');
+}
+
+test('a watched restart returns at the server ready instant: the device time less the catch-up uptime', () => {
+  const h = buildClientEventsHarness();
+  h.dispatch('charliebot:client-socket-close', {code: 1000});
+  h.advance(1000);
+  h.dispatch('charliebot:client-socket-open', {attempts: 1});
+  h.advance(900);
+  h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 0, uptimeMs: 400});
+
+  assert.equal(socketEpisodeOf(h).return_at, new Date(h.clock() - 400).toISOString());
+});
+
+test('a close the page took while hidden, caught up while still hidden, has no return point', () => {
+  const h = buildClientEventsHarness();
+  setTabHidden(h, true);
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
+  h.advance(1000);
+  h.dispatch('charliebot:client-socket-open', {attempts: 1});
+  h.advance(300);
+  h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 0, uptimeMs: 0});
+
+  assert.equal(socketEpisodeOf(h).return_at, null, 'a replay finished while hidden waits for nothing');
+});
+
+test('a return from hidden is the later of the last visible moment and the first answer after the close', () => {
+  const h = buildClientEventsHarness();
+  setTabHidden(h, true);
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
+  h.advance(100);
+  h.dispatch('charliebot:page-answer');
+  h.advance(100);
+  setTabHidden(h, false);
+  const visibleAt = h.clock();
+  h.advance(100);
+  h.dispatch('charliebot:client-socket-open', {attempts: 1});
+  h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 0, uptimeMs: 0});
+
+  assert.equal(socketEpisodeOf(h).return_at, new Date(visibleAt).toISOString(),
+      'the answer came first, so the visible moment is the later');
+});
+
+test('an answer after the page became visible is the return point', () => {
+  const h = buildClientEventsHarness();
+  setTabHidden(h, true);
+  h.dispatch('charliebot:client-socket-close', {code: 1006});
+  h.advance(200);
+  setTabHidden(h, false);
+  h.advance(400);
+  h.dispatch('charliebot:page-answer');
+  const answeredAt = h.clock();
+  h.dispatch('charliebot:client-socket-open', {attempts: 1});
+  h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 0, uptimeMs: 0});
+
+  assert.equal(socketEpisodeOf(h).return_at, new Date(answeredAt).toISOString(), 'the answer came later');
+});
+
+test('a page loaded in the background reports the navigation millisecond it came back to view', () => {
+  const h = buildClientEventsHarness();
+  setTabHidden(h, true);
+  h.advance(1500);
+  setTabHidden(h, false);
+  h.advance(400);
+  h.setNavigation({responseEnd: 300, domContentLoadedEventEnd: 310, transferSize: 0});
+  h.dispatch('charliebot:page-current', {sessionId: 'session-a'});
+  h.dispatch('load');
+
+  const post = h.posts.find((candidate) => candidate.kind === 'page_load');
+  assert.equal(post.return_ms, 1500);
+  assert.equal(post.current_ms, 1900);
+});
+
+test('a page loaded in the background that completes its catch-up hidden reports no return point', () => {
+  const h = buildClientEventsHarness();
+  setTabHidden(h, true);
+  h.advance(300);
+  h.setNavigation({responseEnd: 300, domContentLoadedEventEnd: 310, transferSize: 0});
+  h.dispatch('charliebot:page-current', {sessionId: 'session-a'});
+  h.dispatch('load');
+
+  assert.equal(h.posts.find((candidate) => candidate.kind === 'page_load').return_ms, null);
+});
+
+test('a page loaded in view reports return 0', () => {
+  const h = buildClientEventsHarness();
+  h.advance(300);
+  h.setNavigation({responseEnd: 300, domContentLoadedEventEnd: 310, transferSize: 0});
+  h.dispatch('charliebot:page-current', {sessionId: 'session-a'});
+  h.dispatch('load');
+
+  assert.equal(h.posts.find((candidate) => candidate.kind === 'page_load').return_ms, 0);
 });

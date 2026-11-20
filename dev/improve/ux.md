@@ -55,6 +55,8 @@ The intercept may answer a recorded write locally, so the screen shows what it s
 
 The runner supplies the complete shared mock home before the round, and the round names the DATA_VERSION of that home.
 Both sides read the same data, and the round does not change it. This keeps the before and after views comparable.
+The shared mock home binds scheduled tasks to some of its manager sessions, so a served round shows cron-bound session
+pages and their Task & context dialogs.
 
 ## Servers
 

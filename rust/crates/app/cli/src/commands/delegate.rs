@@ -24,7 +24,7 @@ use serde_json::{Map, Value, json};
 const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
 
   ## Goal - one concise deliverable.
-  ## Source Files - absolute paths, or `- (none)`.
+  ## Source Files - absolute paths, or `- (none)`; verify requires a listed path.
   ## Required Behavior - the executable contract, state-machine semantics, and boundary rules.
   ## Acceptance Tests - focused tests or verification commands.
   ## Reviewer Checklist - concrete checks beyond "tests passed".
@@ -63,7 +63,9 @@ Requester Words:
   it: the words that asked the question, and each earlier user decision the task rests on, each
   quoted verbatim with its session id and event kind (user, agent, scheduled or thread).
   charliebot delegate checks each quote against its session's events of that kind; the section
-  also gives its worker the user-decisions rule, and a spec without it is accepted.
+  also gives its worker the user-decisions rule, and a spec without it is accepted. A verify
+  spec names the sessions whose user replies extend the yardstick (kind user); verify reads
+  every user reply from those sessions, and only those.
   - 「<verbatim>」 (session <36-char session id>, <user|agent|scheduled|thread>)
 
 Backend selection (--backend):
@@ -195,7 +197,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 
   let task_spec_file = cli.task_spec_file.as_deref().expect("clap requires --task-spec-file without --bound-task");
   let task_spec = files::read_required_text_file("--task-spec-file", task_spec_file)?;
-  validate_task_spec_markdown(&task_spec)?;
+  validate_task_spec_markdown(&task_spec, task_type)?;
   let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   validate_requester_words(&task_spec, &home)?;
 
@@ -324,7 +326,7 @@ fn validate_repo_and_branch(task_type: &str, repo: Option<&str>, base_branch: Op
   Ok(())
 }
 
-fn validate_task_spec_markdown(content: &str) -> Result<(), CliExit> {
+fn validate_task_spec_markdown(content: &str, task_type: &str) -> Result<(), CliExit> {
   let lines: Vec<&str> = content.lines().collect();
   let missing_headings: Vec<&str> = TASK_SPEC_REQUIRED_HEADINGS
     .iter()
@@ -350,6 +352,11 @@ fn validate_task_spec_markdown(content: &str) -> Result<(), CliExit> {
     }
     saw_source_entry = true;
     if stripped == "- (none)" {
+      if task_type == StoreTaskType::Verify.as_str() {
+        return Err(CliExit::usage(
+          "task spec Source Files section must name the lineage's first version for --task-type verify; - (none) is refused",
+        ));
+      }
       continue;
     }
     if stripped.starts_with("- /") {
@@ -546,7 +553,7 @@ mod tests {
     let help = help_text();
     assert!(help.contains("Delegate a task to a CharlieBot worker agent"));
     let char_count = help.chars().count();
-    assert!(char_count <= 4800, "help is {char_count} characters");
+    assert!(char_count <= 5000, "help is {char_count} characters");
     for name in [
       "--session",
       "--repo",
@@ -605,5 +612,33 @@ mod tests {
         assert!(error.contains(task_type), "{error}");
       }
     }
+  }
+
+  const SOURCE_FILES_SPEC: &str = "## Goal\n\nCheck the plan.\n\n## Source Files\n\n## Required Behavior\n\n## Acceptance Tests\n\n## Reviewer Checklist\n\n## Out of Scope\n";
+
+  #[test]
+  fn verify_refuses_an_empty_source_files_section() {
+    let error = validate_task_spec_markdown(SOURCE_FILES_SPEC, StoreTaskType::Verify.as_str()).unwrap_err();
+    assert!(error.body["error"].as_str().unwrap().contains("Source Files"), "{error:?}");
+  }
+
+  #[test]
+  fn verify_refuses_a_none_only_source_files_section() {
+    let spec = SOURCE_FILES_SPEC.replace("## Source Files\n", "## Source Files\n\n- (none)\n");
+    let error = validate_task_spec_markdown(&spec, StoreTaskType::Verify.as_str()).unwrap_err();
+    assert!(error.body["error"].as_str().unwrap().contains("- (none) is refused"), "{error:?}");
+  }
+
+  #[test]
+  fn verify_refuses_a_missing_source_files_heading() {
+    let spec = SOURCE_FILES_SPEC.replace("## Source Files\n", "");
+    let error = validate_task_spec_markdown(&spec, StoreTaskType::Verify.as_str()).unwrap_err();
+    assert!(error.body["error"].as_str().unwrap().contains("missing required headings"), "{error:?}");
+  }
+
+  #[test]
+  fn a_non_verify_spec_keeps_accepting_none_only_sources() {
+    let spec = SOURCE_FILES_SPEC.replace("## Source Files\n", "## Source Files\n\n- (none)\n");
+    validate_task_spec_markdown(&spec, StoreTaskType::Implement.as_str()).expect("- (none) stays legal off verify");
   }
 }

@@ -18,6 +18,12 @@ const BOOTSTRAP_URL = ORIGIN + '/api/sessions/' + SESSION + '/bootstrap';
 const LIST_URL = ORIGIN + '/api/sessions/?compact=1&screen=1&active=' + SESSION;
 
 const WAIT_CAP_MS = 400;
+// The copies sit in the data cache named for the copy format; the shell sits in the shell cache named for the release.
+const DATA_CACHE = 'last-state-data-1';
+const SHELL_CACHE = 'last-state-shell-v1';
+async function openStores(h) {
+  return {copies: await h.caches.api.open(DATA_CACHE), shells: await h.caches.api.open(SHELL_CACHE)};
+}
 
 // A network answer the test releases by hand, so no test waits on a real timer.
 function deferred() {
@@ -60,7 +66,7 @@ function makeCaches() {
           return entries.has(key) ? entries.get(key).clone() : undefined;
         },
         put: async (input, response) => {
-          if (api.quotaFailures > 0 && name.startsWith('last-state-v')) {
+          if (api.quotaFailures > 0 && name === DATA_CACHE) {
             api.quotaFailures -= 1;
             const error = new Error('storage is full');
             error.name = 'QuotaExceededError';
@@ -199,7 +205,7 @@ test('a warm stores server-rendered copies before it reports success', async () 
     ports: [channel.port2],
   }).waits);
 
-  const cache = await h.caches.api.open('last-state-v1');
+  const cache = await h.caches.api.open(DATA_CACHE);
   const storedBootstrap = await cache.match(BOOTSTRAP_URL);
   const storedListing = await cache.match(LIST_URL);
   assert.deepEqual(await storedBootstrap.json(), bootstrap);
@@ -212,8 +218,8 @@ test('a warm stores server-rendered copies before it reports success', async () 
 test('a shell match that races the cache index settles and answers the stored shell', async (t) => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();
-  const store = await h.caches.api.open('last-state-v1');
-  await store.put(SHELL_KEY, new Response('<html>stored</html>'));
+  const {copies: store, shells} = await openStores(h);
+  await shells.put(SHELL_KEY, new Response('<html>stored</html>'));
   h.caches.api.firstMatchMisses.add(SHELL_KEY);
   h.state.network = async () => {
     throw new TypeError('the network must not be reached while the stored shell answers');
@@ -269,7 +275,7 @@ test('a warm whose shell fetch fails reports the failure', async () => {
 test('a warm whose shell fetch answers 401 reports no stored shell without an error', async () => {
   const h = harness();
   h.state.network = async () => new Response('unauthorized', {status: 401});
-  const cache = await h.caches.api.open('last-state-v1');
+  const cache = await h.caches.api.open(DATA_CACHE);
   await cache.put(BOOTSTRAP_URL, firstScreen('private copy'));
   const channel = messageChannel();
   await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
@@ -285,7 +291,7 @@ test('a shell file 401 clears copies without storing an incomplete shell', async
   h.state.network = async (req) => (req.url === SHELL_URL
     ? new Response(html, {status: 200})
     : new Response('unauthorized', {status: 401}));
-  const cache = await h.caches.api.open('last-state-v1');
+  const cache = await h.caches.api.open(DATA_CACHE);
   await cache.put(BOOTSTRAP_URL, firstScreen('private copy'));
   const channel = messageChannel();
   await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
@@ -446,7 +452,7 @@ test('a copy hit on one URL leaves the copies of other URLs queued for the same 
 
   h.state.network = async (req) => (req.url === LIST_URL ? new Response('[]', {status: 200}) : firstScreen('two'));
   await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
-  const store = await h.caches.api.open('last-state-v1');
+  const {copies: store, shells} = await openStores(h);
   assert.equal(JSON.parse(await (await store.match(BOOTSTRAP_URL)).text()).body, 'two');
   assert.equal(await (await store.match(LIST_URL)).text(), '[]');
 });
@@ -461,7 +467,7 @@ test('a 401 during the catch-up refresh drops every copy', async () => {
 
   h.state.network = async () => new Response('no', {status: 401});
   await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
-  const store = await h.caches.api.open('last-state-v1');
+  const {copies: store, shells} = await openStores(h);
   assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'the refresh 401 empties the copy store');
 });
 
@@ -488,7 +494,7 @@ test('a refresh-copies ask re-fetches the stored first screen and reports the co
   }).waits);
   assert.equal(channel.replies.length, 1, 'the ask answers over its channel once');
   assert.equal(channel.replies[0].refreshed, 1, 'the reply names the copy the refresh re-stored');
-  const body = await (await (await h.caches.api.open('last-state-v1')).match(BOOTSTRAP_URL)).json();
+  const body = await (await (await h.caches.api.open(DATA_CACHE)).match(BOOTSTRAP_URL)).json();
   assert.equal(body.body, 'two', 'the stored copy carries the fresh answer');
 });
 
@@ -501,7 +507,7 @@ test('a refresh-copies ask for a URL with no stored copy re-stores nothing', asy
     ports: [channel.port2],
   }).waits);
   assert.equal(channel.replies[0].refreshed, 0);
-  const store = await h.caches.api.open('last-state-v1');
+  const {copies: store, shells} = await openStores(h);
   assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'a refresh stores nothing the page did not already hold');
 });
 
@@ -517,7 +523,7 @@ test('a 401 during a refresh-copies ask drops every copy', async () => {
     ports: [channel.port2],
   }).waits);
   assert.equal(channel.replies[0].refreshed, 0);
-  const store = await h.caches.api.open('last-state-v1');
+  const {copies: store, shells} = await openStores(h);
   assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'the refresh 401 empties the copy store');
 });
 
@@ -585,7 +591,7 @@ test('a 401 at the catch-up refresh drops every stored copy, including the list 
 
   h.state.network = async () => new Response('no', {status: 401});
   await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
-  const store = await h.caches.api.open('last-state-v1');
+  const {copies: store, shells} = await openStores(h);
   assert.equal(await store.match(LIST_URL), undefined, 'the refresh 401 empties the list copy too');
   assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'and the first-screen copy');
 });
@@ -682,7 +688,7 @@ test('a copy-less list re-reads its copy after one wait cap, then takes the netw
 
 test('a full store evicts the session opened longest ago and then stores the new first screen', async () => {
   const h = harness();
-  const store = await h.caches.api.open('last-state-v1');
+  const {copies: store, shells} = await openStores(h);
   await store.put(ORIGIN + '/api/sessions/old/bootstrap', new Response('old'));
   const oldListUrl = ORIGIN + '/api/sessions/?compact=1&screen=1&active=old';
   await store.put(oldListUrl, new Response('old list'));
@@ -702,8 +708,8 @@ test('a full store evicts the session opened longest ago and then stores the new
 
 test('a refresh replaces the stored shell after storing its versioned files', async () => {
   const h = harness();
-  const store = await h.caches.api.open('last-state-v1');
-  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const {copies: store, shells} = await openStores(h);
+  await shells.put(SHELL_KEY, new Response('<html>old</html>'));
   const html = '<script src="/static/js/app.js?v=2"></script>';
   h.state.network = async (req) => (req.url === SHELL_URL
     ? new Response(html, {status: 200})
@@ -716,15 +722,15 @@ test('a refresh replaces the stored shell after storing its versioned files', as
 
   assert.equal(channel.replies.length, 1);
   assert.equal(channel.replies[0].stored, true);
-  assert.equal(await (await store.match(SHELL_KEY)).text(), html);
+  assert.equal(await (await shells.match(SHELL_KEY)).text(), html);
   const files = await h.caches.api.open('last-state-files');
   assert.equal(await (await files.match(ORIGIN + '/static/js/app.js?v=2')).text(), 'new app');
 });
 
 test('a failed shell refresh leaves the stored shell available to navigation', async () => {
   const h = harness();
-  const store = await h.caches.api.open('last-state-v1');
-  await store.put(SHELL_KEY, new Response('<html>current</html>'));
+  const {copies: store, shells} = await openStores(h);
+  await shells.put(SHELL_KEY, new Response('<html>current</html>'));
   h.state.network = async (req) => (req.url === SHELL_URL
     ? new Response('<link href="/static/css/new.css?v=2" rel="stylesheet">', {status: 200})
     : new Response('busy', {status: 503}));
@@ -743,8 +749,8 @@ test('a failed shell refresh leaves the stored shell available to navigation', a
 
 test('a shell refresh names the stored shell by its tag: a 304 keeps it, and a 200 stores its own tag', async () => {
   const h = harness();
-  const store = await h.caches.api.open('last-state-v1');
-  await store.put(SHELL_KEY, new Response('<html>current</html>', {headers: {ETag: '"shell-1"'}}));
+  const {copies: store, shells} = await openStores(h);
+  await shells.put(SHELL_KEY, new Response('<html>current</html>', {headers: {ETag: '"shell-1"'}}));
   h.state.network = async () => new Response('<html>changed</html>', {status: 200, headers: {ETag: '"shell-2"'}});
   const first = messageChannel();
   await Promise.all(h.fire('message', {data: {type: 'warm', refresh: true}, ports: [first.port2]}).waits);
@@ -756,13 +762,13 @@ test('a shell refresh names the stored shell by its tag: a 304 keeps it, and a 2
   await Promise.all(h.fire('message', {data: {type: 'warm', refresh: true}, ports: [second.port2]}).waits);
   assert.equal(h.state.calls.at(-1).init.headers['If-None-Match'], '"shell-2"', 'the 200 stored its own tag');
   assert.equal(second.replies[0].stored, true);
-  assert.equal(await (await store.match(SHELL_KEY)).text(), '<html>changed</html>', 'the 304 keeps the stored shell');
+  assert.equal(await (await shells.match(SHELL_KEY)).text(), '<html>changed</html>', 'the 304 keeps the stored shell');
 });
 
 test('a 401 during refresh clears stored copies and the old shell', async () => {
   const h = harness();
-  const store = await h.caches.api.open('last-state-v1');
-  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const {copies: store, shells} = await openStores(h);
+  await shells.put(SHELL_KEY, new Response('<html>old</html>'));
   await store.put(BOOTSTRAP_URL, firstScreen('private copy'));
   h.state.network = async () => new Response('unauthorized', {status: 401});
   const channel = messageChannel();
@@ -775,14 +781,14 @@ test('a 401 during refresh clears stored copies and the old shell', async () => 
   assert.equal(channel.replies[0].stored, false);
   assert.equal(channel.replies[0].unauthorized, true);
   assert.equal('error' in channel.replies[0], false);
-  assert.equal(await store.match(SHELL_KEY), undefined);
+  assert.equal(await shells.match(SHELL_KEY), undefined);
   assert.equal(await store.match(BOOTSTRAP_URL), undefined);
 });
 
 test('a shell file 401 during refresh clears stored copies and the old shell', async () => {
   const h = harness();
-  const store = await h.caches.api.open('last-state-v1');
-  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const {copies: store, shells} = await openStores(h);
+  await shells.put(SHELL_KEY, new Response('<html>old</html>'));
   await store.put(BOOTSTRAP_URL, firstScreen('private copy'));
   h.state.network = async (req) => (req.url === SHELL_URL
     ? new Response('<link href="/static/css/private.css?v=2" rel="stylesheet">', {status: 200})
@@ -797,38 +803,45 @@ test('a shell file 401 during refresh clears stored copies and the old shell', a
   assert.equal(channel.replies[0].stored, false);
   assert.equal(channel.replies[0].unauthorized, true);
   assert.equal('error' in channel.replies[0], false);
-  assert.equal(await store.match(SHELL_KEY), undefined);
+  assert.equal(await shells.match(SHELL_KEY), undefined);
   assert.equal(await store.match(BOOTSTRAP_URL), undefined);
 });
 
-test('a release reuses its stored copy cache across worker restarts', async () => {
+test('a release keeps the stored copies and drops the shell of the release before it', async () => {
   const h = harness({version: 'v2'});
-  await h.caches.api.open('last-state-v2');
-  const previous = await h.caches.api.open('last-state-v1');
-  await previous.put(SHELL_KEY, new Response('<html>current</html>', {headers: {ETag: '"shell-1"'}}));
-  await previous.put(BOOTSTRAP_URL, new Response('{"session":"current"}'));
-  await previous.put(LIST_URL, new Response('{"sessions":[]}'));
+  const previousShell = await h.caches.api.open('last-state-shell-v1');
+  await previousShell.put(SHELL_KEY, new Response('<html>previous</html>', {headers: {ETag: '"shell-1"'}}));
+  const copies = await h.caches.api.open(DATA_CACHE);
+  await copies.put(BOOTSTRAP_URL, firstScreen('stored by the previous release'));
+  await copies.put(LIST_URL, new Response('{"sessions":[]}'));
   await h.caches.api.open('last-state-files');
   await h.caches.api.open('other-cache');
   await Promise.all(h.fire('activate').waits);
-  assert.deepEqual((await h.caches.api.keys()).sort(),
-      ['last-state-files', 'last-state-v1', 'other-cache']);
-  const shell = await previous.match(SHELL_KEY);
-  assert.equal(await shell.text(), '<html>current</html>');
-  assert.equal(shell.headers.get('ETag'), '"shell-1"');
-  assert.equal(await (await previous.match(BOOTSTRAP_URL)).text(), '{"session":"current"}');
-  assert.equal(await (await previous.match(LIST_URL)).text(), '{"sessions":[]}');
+  assert.deepEqual((await h.caches.api.keys()).sort(), [DATA_CACHE, 'last-state-files', 'other-cache']);
   assert.equal(h.state.unregistered, 0);
 
-  const restarted = harness({version: 'v2', cacheStorage: h.caches});
-  const navigation = await answer(restarted, request(SHELL_URL, {mode: 'navigate'}));
-  assert.equal(await navigation.response.text(), '<html>current</html>');
-  assert.equal(restarted.state.calls.length, 0, 'a restarted worker finds the prior cache without a shell fetch');
+  h.state.network = async () => new Response('<html>network</html>', {status: 200});
+  const navigation = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  assert.equal(await navigation.response.text(), '<html>network</html>', 'the previous release\'s shell answers no navigation');
+
+  const first = await answer(h, request(BOOTSTRAP_URL));
+  assert.equal((await first.response.json()).body, 'stored by the previous release', 'the stored copy answers the open');
+  assert.equal(await (await copies.match(LIST_URL)).text(), '{"sessions":[]}');
+  assert.deepEqual(h.state.calls.map((call) => call.url), [SHELL_URL], 'the copy answers with no request of its own');
+});
+
+test('activation drops a copy cache of another format, which no copy of it answers', async () => {
+  const h = harness();
+  const older = await h.caches.api.open('last-state-data-0');
+  await older.put(BOOTSTRAP_URL, firstScreen('a shape the page cannot read'));
+  await h.caches.api.open(DATA_CACHE);
+  await Promise.all(h.fire('activate').waits);
+  assert.deepEqual(await h.caches.api.keys(), [DATA_CACHE]);
 });
 
 test('the retired form empties the worker stores, claims the pages and unregisters itself', async () => {
   const h = harness({enabled: false});
-  await h.caches.api.open('last-state-v1');
+  await h.caches.api.open(DATA_CACHE);
   await h.caches.api.open('last-state-files');
   await h.caches.api.open('other-cache');
   await Promise.all(h.fire('activate').waits);

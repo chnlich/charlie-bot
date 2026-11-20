@@ -8,14 +8,20 @@
 // Interception is limited to the GETs listed below. Everything else (POSTs, the socket, other
 // /api/* requests) is not answered here and reaches the network unchanged.
 //
-// Storage: the copy cache holds the shell under SHELL_KEY, the copies of the first screen and the
-// sidebar list, and an index of session ids with their last open time. Its name carries the release
-// version that created it; activation keeps one existing copy cache so a shell already on the device
-// can answer the next open. FILE_CACHE holds the shell's same-origin files under their own versioned
-// paths; a file that did not change keeps its path, so a release does not fetch it again.
+// Storage has three parts. The shell is the page code of one release: it lives in the shell cache, named for
+// the release, and activation drops every other release's shell cache. The copies of the first screen and the
+// sidebar list, and an index of session ids with their last open time, live in the data cache, named for
+// COPY_FORMAT, the copy shape the page reads. A release keeps the data cache, so the copies answer its first
+// offline open; a release that changes the copy shape bumps COPY_FORMAT, and activation drops the data cache of
+// any other format, so no copy the running page cannot read is ever answered. FILE_CACHE holds the shell's
+// same-origin files under their own versioned paths; a file that did not change keeps its path, so a release does
+// not fetch it again.
 
 const COPY_PREFIX = 'last-state-';
-const COPY_CACHE = COPY_PREFIX + WORKER_CONFIG.version;
+// The copy shape the page reads. Bump it in the change that alters what a stored first screen or sidebar list holds.
+const COPY_FORMAT = 1;
+const SHELL_CACHE = COPY_PREFIX + 'shell-' + WORKER_CONFIG.version;
+const DATA_CACHE = COPY_PREFIX + 'data-' + COPY_FORMAT;
 const FILE_CACHE = COPY_PREFIX + 'files';
 const SHELL_KEY = self.location.origin + '/shell';
 const INDEX_KEY = self.location.origin + '/index';
@@ -25,7 +31,6 @@ const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
 // settled, so a copy's first match may miss although the copy is stored; one wait cap later the match answers. A
 // first screen's network race re-reads at each cap, and a sidebar list re-reads once before it asks the network.
 const WAIT_CAP_MS = 400;
-let copyCacheNamePromise = null;
 
 const SHELL_STATIC_REF = /<(?:link|script)\b[^>]*?\b(?:href|src)="(\/static\/[^"]+)"/g;
 
@@ -41,31 +46,16 @@ async function activateCurrent() {
   // A stored-shell navigation is answered from this worker's copy. The browser's parallel preload request reaches
   // the chat route, which answers it with a 204 and no body; this worker never reads the preload response.
   await self.registration.navigationPreload.enable();
-  const names = await caches.keys();
-  const previous = names.find((name) => name.startsWith(COPY_PREFIX) && name !== COPY_CACHE && name !== FILE_CACHE);
-  const copyCacheName = previous ?? COPY_CACHE;
-  copyCacheNamePromise = Promise.resolve(copyCacheName);
-  for (const name of names) {
-    if (name.startsWith(COPY_PREFIX) && name !== copyCacheName && name !== FILE_CACHE) {
-      await caches.delete(name);
-    }
+  const kept = [SHELL_CACHE, DATA_CACHE, FILE_CACHE];
+  for (const name of await caches.keys()) {
+    if (name.startsWith(COPY_PREFIX) && !kept.includes(name)) await caches.delete(name);
   }
   // The pages this load opened stay their own: a worker that claims a page mid-load reroutes the rest of
   // that load through itself. The next navigation in the worker's scope is controlled without a claim.
 }
 
-function selectedCopyCacheName() {
-  if (copyCacheNamePromise === null) {
-    copyCacheNamePromise = caches.keys().then((names) => {
-      const previous = names.find((name) => name.startsWith(COPY_PREFIX) && name !== COPY_CACHE && name !== FILE_CACHE);
-      return previous ?? COPY_CACHE;
-    });
-  }
-  return copyCacheNamePromise;
-}
-
 async function openCopyCache() {
-  return caches.open(await selectedCopyCacheName());
+  return caches.open(DATA_CACHE);
 }
 
 async function retire() {
@@ -109,7 +99,7 @@ function isSidebarListRequest(url) {
 // yet). A worker that just started can match before the cache's disk index has settled, while the same
 // cache answers a moment later, so a miss re-reads twice before it falls back to the network.
 async function answerShell(request) {
-  const cache = await openCopyCache();
+  const cache = await caches.open(SHELL_CACHE);
   for (let attempt = 0; attempt < 3; attempt++) {
     const shell = await cache.match(SHELL_KEY);
     if (shell) return shell;
@@ -303,7 +293,7 @@ async function storePageCopies(copies) {
 
 async function readIndex(cache) {
   const stored = await cache.match(INDEX_KEY);
-  return stored ? stored.json() : {sessions: {}, files: []};
+  return stored ? stored.json() : {sessions: {}};
 }
 
 async function writeIndex(cache, index) {
@@ -332,13 +322,10 @@ async function evictOldestSession(cache, keepSessionId) {
   return true;
 }
 
-// Every copy goes; the shell stays, since it holds no session's data.
+// Every copy and the index go; the shell stays in its own cache and holds no session's data.
 async function dropCopies() {
   const cache = await openCopyCache();
-  for (const request of await cache.keys()) {
-    if (request.url !== SHELL_KEY && request.url !== INDEX_KEY) await cache.delete(request);
-  }
-  await writeIndex(cache, {sessions: {}, files: []});
+  for (const request of await cache.keys()) await cache.delete(request);
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +342,7 @@ function shellStaticRefs(html) {
 // Fetches the shell and the files it names, stores them, and drops the stored files it no longer names.
 // A refresh leaves the current shell in place until the replacement and its files are ready.
 async function warmShell(refresh = false) {
-  const cache = await openCopyCache();
+  const cache = await caches.open(SHELL_CACHE);
   const stored = await cache.match(SHELL_KEY);
   if (!refresh && stored) return {stored: true};
   // A refresh revalidates the stored shell: its tag names the body the worker holds, and an unchanged page answers 304
@@ -398,9 +385,6 @@ async function warmShell(refresh = false) {
     const path = new URL(request.url).pathname + new URL(request.url).search;
     if (!refs.includes(path)) await files.delete(request);
   }
-  const index = await readIndex(cache);
-  index.files = refs;
-  await writeIndex(cache, index);
   await cache.put(SHELL_KEY, new Response(html, {
     headers: {'Content-Type': 'text/html; charset=utf-8', ETag: response.headers.get('ETag')},
   }));
@@ -409,7 +393,7 @@ async function warmShell(refresh = false) {
 
 // Called only after a refresh answers 401, so navigation reaches the server instead of using stale HTML.
 async function dropShell() {
-  const cache = await openCopyCache();
+  const cache = await caches.open(SHELL_CACHE);
   await cache.delete(SHELL_KEY);
 }
 

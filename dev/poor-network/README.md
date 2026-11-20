@@ -278,9 +278,11 @@ Conditions, each a fresh browser profile behind a fresh proxy, with the CDN file
 must cross the link in full (about 7.3 s at 12.5 KB/s), longer than one up window, so no window completes the body and
 their opens are recorded at the cap. The offline cells fail at once and show no page: main without the offline shell
 stores no page to show offline, so it has nothing to serve. With the shell, an opened session's stored copy answers the
-offline open; the copies' storage is the release's worker's to keep, and a release keeps the copies the release before
-it stored (`release-offline` above), while a reply the socket delivered re-stores the session's copy at once
-(`replied-offline`).
+offline open. The shell is per release: a release's first online open stores its shell, and activation drops the shell
+of the release before it. The copies sit apart from the release, in a cache named for `COPY_FORMAT`
+(`web/static/js/offline-shell-worker.js`): a release keeps the copies the release before it stored (`release-offline`
+above), and a release that changes the copies' shape bumps the format, which drops them. A reply the socket delivered
+re-stores the session's copy once the reply's frames settle, after a 2 s quiet gap (`replied-offline`).
 
 The release open navigates within 10 s of the last read on A's and B's pooled connection. Chrome sends a request on an
 HTTP/2 connection idle that long only after a PING, which the hold leaves unanswered; Chrome then drops the connection

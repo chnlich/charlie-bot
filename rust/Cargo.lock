@@ -1204,6 +1204,7 @@ dependencies = [
  "charliebot-voice",
  "charliebot-web-reply",
  "charliebot-web-search",
+ "tempfile",
 ]
 
 [[package]]
@@ -1409,6 +1410,7 @@ dependencies = [
 name = "charliebot-structure"
 version = "0.1.0"
 dependencies = [
+ "charliebot-core",
  "glob",
  "proc-macro2",
  "serde_json",

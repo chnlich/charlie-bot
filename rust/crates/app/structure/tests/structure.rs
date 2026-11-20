@@ -16,6 +16,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use charliebot_core::ui_text::is_ui_text;
 use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
 use syn::spanned::Spanned;
 use syn::visit::Visit;
@@ -2245,16 +2246,6 @@ fn production_global_state(items: &[Item]) -> (Vec<StaticRecord>, Vec<Environmen
 // files that production code embeds with `include_str!`. A line of a surface that holds a Han, kana or Hangul letter
 // fails, unless its file is in `UI_TEXT_EXEMPTIONS`.
 
-/// The ranges a product UI string must not hold: hiragana and katakana, the CJK ideographs (extension A, the unified
-/// block and the compatibility block), and Hangul syllables. CJK punctuation lies outside them.
-const UI_TEXT_RANGES: [(char, char); 5] = [
-  ('\u{3040}', '\u{30ff}'),
-  ('\u{3400}', '\u{4dbf}'),
-  ('\u{4e00}', '\u{9fff}'),
-  ('\u{ac00}', '\u{d7af}'),
-  ('\u{f900}', '\u{faff}'),
-];
-
 /// The Integration selection file, and the filter text of the entries that run this check.
 const INTEGRATION_PATHS: &str = "dev/integration-paths.toml";
 const STRUCTURE_BINARY: &str = "binary_id(charliebot-structure::structure)";
@@ -2322,10 +2313,6 @@ struct UiSurface {
 struct EmbeddedFile {
   file: String,
   declared_at: String,
-}
-
-fn is_ui_text(character: char) -> bool {
-  UI_TEXT_RANGES.iter().any(|&(low, high)| (low..=high).contains(&character))
 }
 
 /// The lines of `text` that hold a letter from `UI_TEXT_RANGES`, each with its 1-based number.

@@ -81,7 +81,8 @@ When you review such a change, check each screenshot it names before you land it
 
 `charliebot land` refuses a landing whose diff changes a file that a CharlieBot page serves, or a page template under
 `prompts/`, unless its PR body names the approved demo on a `Demo:` line, the changed view's URL path on a `View:` line,
-and a screenshot at each window size `charliebot land --help` lists by absolute path. An improve round merges through
+and a screenshot at each window size `charliebot land --help` lists by absolute path. The view that a `View:` line names
+exists on the live server. A `/?session=<id>` view names a session the server knows. An improve round merges through
 `dev/improve/github-post.sh pr-merge`, which refuses a web page change whose evidence directory lacks a screenshot at
 each window size or whose PR body lacks its `View:` line.
 

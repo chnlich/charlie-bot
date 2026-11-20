@@ -31,6 +31,9 @@ pub const AUTO_POOL_ID: &str = "auto";
 pub const KEYED_BACKEND_ID: &str = "claude";
 /// The `gemini` option of the login-host fixtures, a type that no keyed round may run on.
 pub const NON_KEYED_BACKEND_ID: &str = "gemini";
+/// The `cc-openai-compatible` option of the login-host fixtures: a Claude Code member that reaches its model through this
+/// server's proxy route, so no keyed round may run on it.
+pub const PROXY_BACKEND_ID: &str = "proxy";
 
 /// The priority pool `auto` over `members`, each billed as a subscription, in config order.
 fn auto_pool(members: &[&str]) -> PoolConfig {
@@ -64,13 +67,14 @@ pub fn feature_context_with_auto(members: &[&str]) -> (tempfile::TempDir, Arc<Fe
 /// A feature context whose config names `hosts` as browser-login hosts (`host_auth.browser_logins[].host`), so that a
 /// task's `improve_host` may name any of them.
 /// The second option is `claude`, a `cc-claude` type: the member kind that a keyed task's session holds (see
-/// [`keyed_manager`]). The third is `gemini`, a type no keyed round may run on.
+/// [`keyed_manager`]). The third is `gemini`, a type no keyed round may run on. The fourth is [`PROXY_BACKEND_ID`].
 pub fn feature_context_with_login_hosts(hosts: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
   feature_context_with_entries(
     &[
       ("synthetic", "synthetic", Mapping::new()),
       (KEYED_BACKEND_ID, "cc-claude", Mapping::new()),
       (NON_KEYED_BACKEND_ID, "gemini", Mapping::new()),
+      (PROXY_BACKEND_ID, "cc-openai-compatible", Mapping::new()),
     ],
     None,
     hosts,

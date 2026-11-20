@@ -25,8 +25,8 @@ pub(crate) fn bound_round_readers() -> BoundRoundReaders {
   BoundRoundReaders { binding: binding_reader, round: round_reader, round_in_flight: round_in_flight_reader }
 }
 
-/// The member kinds that the improve launcher accepts, one per line. The launch script, the remote runner, the login
-/// readback and this check all read this one file.
+/// The member kinds that the improve launcher accepts, one per line. `dev/improve/remote-launch.sh`,
+/// `dev/improve/remote-runner.sh`, and `rounds.rs` all read this one file.
 const MEMBER_KINDS_TEXT: &str = include_str!("../../../../../dev/improve/member_kinds.txt");
 
 /// The member kinds that a keyed round may run, read from the kind list text. A list with no kind is an error.
@@ -40,13 +40,30 @@ pub(crate) fn parse_member_kinds(text: &str) -> anyhow::Result<Vec<&str>> {
   Ok(kinds)
 }
 
-/// The member kind of a backend type: `claude` for the three types whose command starts with `claude`, `codex` for the
-/// codex type, and `None` for any other type, which no keyed round may run on.
+/// The member kind of a backend type: `claude` for the two types whose Claude Code member reaches its model directly,
+/// `codex` for the codex type, and `None` for any other type, which no keyed round may run on. A `cc-openai-compatible`
+/// member has no kind: it reaches its model through this server's proxy route, and its Claude Code token is this
+/// server's access key.
 pub(crate) fn member_kind(backend_type: &str) -> Option<&'static str> {
   match backend_type {
-    "cc-claude" | "cc-anthropic-compatible" | "cc-openai-compatible" => Some("claude"),
+    "cc-claude" | "cc-anthropic-compatible" => Some("claude"),
     "codex" => Some("codex"),
     _ => None,
+  }
+}
+
+/// The reason an improve round refuses the member `member` of backend type `backend_type`.
+fn member_refusal(member: &str, backend_type: &str) -> String {
+  if backend_type == "cc-openai-compatible" {
+    format!(
+      "backend '{member}' (type '{backend_type}') reaches its model through this CharlieBot server's own proxy route, \
+       which an improve round on its improve_host cannot reach; its Claude Code token is this server's access key"
+    )
+  } else {
+    format!(
+      "backend '{member}' (type '{backend_type}') has no member kind that the improve launcher accepts; \
+       a round runs only claude or codex"
+    )
   }
 }
 
@@ -74,10 +91,7 @@ pub(crate) fn session_backend_refusal(
       .get_backend_option(member)
       .ok_or_else(|| anyhow::anyhow!("backend '{member}' is not a configured backends.options id"))?;
     if !member_kind(&option.backend_type).is_some_and(|kind| kinds.contains(&kind)) {
-      return Ok(Some(format!(
-        "backend '{member}' (type '{}') has no member kind that the improve launcher accepts; a round runs only claude or codex",
-        option.backend_type
-      )));
+      return Ok(Some(member_refusal(member, &option.backend_type)));
     }
   }
   Ok(None)

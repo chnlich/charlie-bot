@@ -1022,6 +1022,7 @@ fn write_task_key(home: &Path, name: &str, key: &str, value: Value) -> anyhow::R
 mod tests {
   use std::sync::Arc;
 
+  use charliebot_core::config::{PoolConfig, PoolMember, PoolRule};
   use charliebot_core::event_types;
   use charliebot_registry::sequence::{QuotaFailure, SequenceBinding, SequenceController};
   use charliebot_store::metadata::{SCHEDULE_TASK, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
@@ -1161,7 +1162,7 @@ mod tests {
   #[test]
   fn a_keyed_binding_refuses_a_session_backend_the_launcher_refuses() {
     let (_home, features) = crate::test_support::feature_context_with_login_hosts(&["synthetic-login-host"]);
-    let cfg = features.config.get().unwrap();
+    let mut cfg = features.config.get().unwrap().as_ref().clone();
     let base = binding(&features, &["synthetic-keyed"]);
     let unkeyed =
       CronBinding { keyed: false, name: base.name.clone(), names: base.names.clone(), registry: base.registry.clone() };
@@ -1173,6 +1174,29 @@ mod tests {
       .expect("a gemini option is refused for a keyed binding");
     assert!(refusal.contains("(type 'gemini')"), "{refusal}");
     assert_eq!(unkeyed.backend_refusal(&cfg, crate::test_support::NON_KEYED_BACKEND_ID).unwrap(), None);
+
+    // A cc-openai-compatible member is refused at save with its proxy route named. A pool whose only refused member is
+    // that one is refused through it. An unkeyed binding takes both.
+    let proxy = crate::test_support::PROXY_BACKEND_ID;
+    let refusal =
+      keyed.backend_refusal(&cfg, proxy).unwrap().expect("a proxy-route option is refused for a keyed binding");
+    assert!(refusal.contains("'proxy' (type 'cc-openai-compatible')"), "{refusal}");
+    assert!(refusal.contains("proxy route"), "{refusal}");
+    cfg.backends.pools.push(PoolConfig {
+      id: "keyed-and-proxy".to_string(),
+      label: "Keyed and proxy".to_string(),
+      rule: PoolRule::Rotate,
+      members: vec![
+        PoolMember { backend: crate::test_support::KEYED_BACKEND_ID.to_string() },
+        PoolMember { backend: proxy.to_string() },
+      ],
+      visible: true,
+    });
+    let refusal =
+      keyed.backend_refusal(&cfg, "keyed-and-proxy").unwrap().expect("a pool holding the proxy member is refused");
+    assert!(refusal.contains("'proxy' (type 'cc-openai-compatible')"), "{refusal}");
+    assert_eq!(unkeyed.backend_refusal(&cfg, proxy).unwrap(), None);
+    assert_eq!(unkeyed.backend_refusal(&cfg, "keyed-and-proxy").unwrap(), None);
   }
 
   #[test]

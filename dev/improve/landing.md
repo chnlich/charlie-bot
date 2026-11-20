@@ -27,6 +27,7 @@ The host keeps the token in the launch's `member-credential` file, mode 600, and
   removes `auth.json` when its round ends or a later start finds no live round. Symlink and ownership checks protect
   the directory and its parent before cleanup or use.
 - A gateway member receives its token as `ANTHROPIC_AUTH_TOKEN`.
+- A `cc-openai-compatible` member never reaches a round. The server refuses its option at save, at fire and at round start: its model is reached through the server's own proxy route, which a host cannot reach, and its Claude Code token is the server's access key.
 
 The launch exits 8 before it contacts the host when the login's access token has less life left than `IMPROVE_TOKEN_MIN_SECONDS`, and its stderr names the login and the minutes left.
 The launch exits 7 when a round dependency is missing, and its stderr names the missing item.

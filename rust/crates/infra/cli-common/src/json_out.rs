@@ -1,7 +1,7 @@
 //! The one home of the CLI's JSON encoding.
 
 use charliebot_core::text_repr::{self, JsonStyle, ONE_LINE_JSON};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The rendered `value`: non-ASCII characters kept as written, insertion order, one line when
 /// `indent` is `None` else an indent block.
@@ -22,10 +22,14 @@ pub fn print_result(value: &Value) {
   print!("{}", render(value, Some(2)));
 }
 
+/// The JSON value of an optional text: the text as a string, or `null` when it is absent.
+pub fn optional_string(value: &Option<String>) -> Value {
+  value.as_ref().map_or(Value::Null, |value| json!(value))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
-  use serde_json::json;
 
   #[test]
   fn one_line_keeps_non_ascii_and_separators() {

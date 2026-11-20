@@ -181,8 +181,6 @@ pub struct Registry {
   pub(crate) bound_rounds: Ledger<BoundRoundReaders>,
   /// The one fork-assertion runner of a page, which `features/artifacts` registers.
   pub(crate) fork_assertions: Ledger<ForkAssertionsFn>,
-  /// The one reader of a page's open questions, which `features/artifacts` registers.
-  pub(crate) page_questions: Ledger<PageQuestionsFn>,
   /// The one runner that DMs a user, which `features/slack` registers.
   pub(crate) user_dm: Ledger<UserDmFn>,
   /// The one runner that DMs the host owner, which `features/slack` registers.
@@ -240,7 +238,6 @@ impl Registry {
       host_probes,
       bound_rounds,
       fork_assertions,
-      page_questions,
       user_dm,
       owner_dm,
       worktree_removals,
@@ -303,7 +300,6 @@ impl Registry {
     append_ledger_inventory(&mut inventory, host_probes);
     append_ledger_inventory(&mut inventory, bound_rounds);
     append_ledger_inventory(&mut inventory, fork_assertions);
-    append_ledger_inventory(&mut inventory, page_questions);
     append_ledger_inventory(&mut inventory, user_dm);
     append_ledger_inventory(&mut inventory, owner_dm);
     append_ledger_inventory(&mut inventory, worktree_removals);
@@ -644,10 +640,6 @@ pub struct BoundRoundReaders {
 /// The runner of one page's fork assertions, each failure as `(assertion name, detail)`. `None` means the page's file
 /// name carries no genre prefix, so no assertion set applies to it.
 pub type ForkAssertionsFn = fn(page: &Path, home: &Path) -> anyhow::Result<Option<Vec<(String, String)>>>;
-
-/// The reader of the open questions a page shows, each one as JSON: the `forks` of a Status item. The arguments are the
-/// sessions directory and the page's file. A page the artifact route does not serve has none.
-pub type PageQuestionsFn = fn(sessions_dir: &Path, page: &Path) -> anyhow::Result<Vec<Value>>;
 
 /// The sender of a DM to a user (`slack.user_dm`).
 pub type UserDmFn = for<'a> fn(&'a FeatureContext, &'a str, &'a str) -> BoxFuture<'a, anyhow::Result<String>>;
@@ -1627,22 +1619,6 @@ impl Registry {
       .next()
       .copied()
       .ok_or_else(|| anyhow::anyhow!("no package registers the fork assertions"))
-  }
-
-  /// The registration of the page-question reader. `web_reply`'s status read gives each item its open questions.
-  pub fn page_questions(&mut self, read: PageQuestionsFn) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.page_questions.insert_single(package, "page_questions", read)
-  }
-
-  /// The registered page-question reader; a host with none fails rather than serving a status without its options.
-  pub fn page_questions_reader(&self) -> anyhow::Result<PageQuestionsFn> {
-    self
-      .page_questions
-      .values()
-      .next()
-      .copied()
-      .ok_or_else(|| anyhow::anyhow!("no package registers the page questions"))
   }
 
   /// The registration of the user DM hook.

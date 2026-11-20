@@ -54,11 +54,6 @@ pub fn set_derived_waiting(home: &Path, rows: Vec<OpenWaitingRow>) {
   stored.extend(rows.into_iter().map(|row| (home.to_path_buf(), row)));
 }
 
-/// The page-question reader the server's artifacts package registers, the same function the server hands the registry.
-fn register_page_questions(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.page_questions(charliebot_artifacts::registered_page_questions)
-}
-
 fn register_derived_waiting(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.derived_waiting_items(read_derived_waiting)
 }
@@ -142,9 +137,6 @@ impl Home {
       registry
         .register_package("tests.derived_waiting", register_derived_waiting)
         .expect("the derived Waiting on you reader registers");
-      registry
-        .register_package("features.artifacts.page_questions", register_page_questions)
-        .expect("the page-question reader registers");
     }
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");

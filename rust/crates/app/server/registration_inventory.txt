@@ -205,7 +205,6 @@ host login reader	features.host_auth	host_logins
 host probe	features.host_auth	host_probe
 bound round readers	features.cron	bound_round
 fork assertions	features.artifacts	fork_assertions
-page questions	features.artifacts	page_questions
 user dm	features.slack	user_dm
 owner dm	features.slack	owner_dm
 worktree removal	runtime.tasks	worktree_removal

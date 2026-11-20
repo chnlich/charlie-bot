@@ -227,7 +227,7 @@ async fn light_answer(features: &FeatureContext, session_id: &str, prompt: &str)
   let pool = pools::backend_pool(features)?;
   let base_env = agent_environment::spawn_base_environment(features)?;
   let mut failures = Vec::new();
-  for option in pools::one_shot_members(&cfg, Arc::clone(&pool), "waiting_judge", target) {
+  for option in pools::one_shot_members(&cfg, Arc::clone(&pool), "probe", target) {
     let option = option?;
     let launch = LaunchArgs { cgroup_session_id: Some(session_id.to_string()), ..LaunchArgs::default() };
     let outcome = match backend_types::build_backend(Arc::clone(&features.registry), &option, &cfg, launch) {

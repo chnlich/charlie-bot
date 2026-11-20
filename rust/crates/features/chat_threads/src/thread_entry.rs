@@ -47,6 +47,7 @@ use charliebot_core::RepoRoot;
 use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::paths;
+use charliebot_core::reply::{OVER_BUDGET_FIELD, REPLY_BUDGET_CHARS, is_over_budget};
 use charliebot_core::str_methods;
 use charliebot_registry::turn::{DELIVERY_FULL, PromptSource, RuleSegment, SCOPE_BASE};
 use charliebot_registry::{FeatureContext, StateError};
@@ -85,8 +86,6 @@ const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs
 static TEST_RETRY_DELAYS: StdMutex<Option<[Duration; 2]>> = StdMutex::new(None);
 /// How much of an unread message's text the 412 refusal carries.
 const TEXT_PREVIEW_CHARS: usize = 200;
-/// The reply budget the format contract states: the depth goes to a page.
-const REPLY_BUDGET_CHARS: usize = 500;
 /// A thread-follow batch sleeps out this quiet delay from its newest message.
 const FOLLOW_QUIET_SECONDS: i64 = 10;
 /// A follow chain never runs past this cap from its first message.
@@ -976,7 +975,7 @@ pub async fn post_reply_with_caller_context(
   if let Some(block) = &ack_block {
     ack_clear(adapter, block, session_id);
   }
-  let over_budget = chars > REPLY_BUDGET_CHARS;
+  let over_budget = is_over_budget(chars);
   let event = format!("{}_reply_posted", platform.name);
   let thread = adapter.log_fields(&address);
   tracing::info!(
@@ -995,7 +994,7 @@ pub async fn post_reply_with_caller_context(
     "operator_only_note": note,
     "chars": chars,
     "chunks": bodies.len(),
-    "over_budget": over_budget,
+    (OVER_BUDGET_FIELD): over_budget,
   }))
 }
 
@@ -1019,7 +1018,7 @@ fn reply_receipt(event: &Value, operator_only_links: &[String], platform: &Threa
     "operator_only_note": operator_only_note(operator_only_links),
     "chars": chars,
     "chunks": payload["chunks"],
-    "over_budget": chars as usize > REPLY_BUDGET_CHARS,
+    (OVER_BUDGET_FIELD): is_over_budget(chars as usize),
   })
 }
 

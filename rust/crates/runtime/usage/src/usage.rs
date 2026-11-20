@@ -468,9 +468,10 @@ impl SessionUsage {
       cached.as_ref().map(|entry| entry.0),
       cached.as_ref().map_or(0, |entry| entry.1),
     )?;
+    // A stale entry must not seed the fold, because its generation or covered index no longer matches the events.
     let mut fold = match cached {
       Some((generation, covered, fold)) if generation == delta.generation && covered == delta.start_index => fold,
-      _ => UsageFold::default(),
+      Some(_) | None => UsageFold::default(),
     };
     let refs = delta.events[delta.start_index..].iter().map(Arc::as_ref).collect::<Vec<&ChatEvent>>();
     fold.feed(&refs)?;
@@ -679,7 +680,7 @@ mod tests {
       }
       Value::Array(values) => values.iter_mut().for_each(replace_fixture_hosts),
       Value::Object(fields) => fields.values_mut().for_each(replace_fixture_hosts),
-      _ => {}
+      Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
   }
 

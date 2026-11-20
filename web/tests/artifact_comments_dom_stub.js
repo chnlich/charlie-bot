@@ -220,6 +220,11 @@ function dockOf(body) {
   return findChildByClass(body, '__cbc-dock');
 }
 
+// The rail's stack: the controls (shortcuts, tray, pick bar, composer, toast) sit here, not in the dock itself.
+function stackOf(body) {
+  return findChildByClass(dockOf(body), '__cbc-stack');
+}
+
 function clickElement(el) {
   assert.ok(el && el._listeners.click && el._listeners.click.length > 0, 'click listener exists');
   return el._listeners.click[0]({preventDefault() {}, stopPropagation() {}});
@@ -230,7 +235,7 @@ function clickElement(el) {
 function addBlockComment(body, listeners, block, text) {
   const click = listeners.find((l) => l.target === 'document' && l.type === 'click').handler;
   click({target: block, preventDefault() {}, stopPropagation() {}});
-  const popover = body.children.find((c) => c.className === '__cbc-popover');
+  const popover = stackOf(body).children.find((c) => c.className === '__cbc-popover');
   popover.children[0].value = text;
   const actions = popover.children.find((c) => c.className === '__cbc-actions');
   clickElement(actions.children.find((c) => c.textContent === 'Add'));
@@ -244,4 +249,4 @@ async function flushPromises(times) {
   for (let i = 0; i < times; i++) await waitForPromises();
 }
 
-module.exports = {makeElement, findChildByClass, dockOf, clickElement, addBlockComment, waitForPromises, flushPromises};
+module.exports = {makeElement, findChildByClass, dockOf, stackOf, clickElement, addBlockComment, waitForPromises, flushPromises};

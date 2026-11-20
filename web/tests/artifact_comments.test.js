@@ -3,7 +3,7 @@ const test = require('node:test');
 
 const { readPackageStatic } = require('./read_static');
 
-const {dockOf, findChildByClass, makeElement, clickElement, addBlockComment, flushPromises} =
+const {dockOf, stackOf, findChildByClass, makeElement, clickElement, addBlockComment, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
@@ -146,12 +146,12 @@ test('batch tray labels and POST target use the hash session when it resolves', 
     fetch: sessionFetchStub(calls, 'view-session', 'Viewing Session'),
   });
 
-  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
+  const shortcuts = findChildByClass(stackOf(body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
   await flushPromises(3);
 
-  const tray = findChildByClass(dockOf(body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(body), '__cbc-tray');
   const header = findChildByClass(tray, '__cbc-tray-header');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
@@ -184,12 +184,12 @@ test('hash session name 404 falls back to the injected server session id', async
     },
   });
 
-  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
+  const shortcuts = findChildByClass(stackOf(body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
   await flushPromises(5);
 
-  const tray = findChildByClass(dockOf(body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(body), '__cbc-tray');
   const header = findChildByClass(tray, '__cbc-tray-header');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
@@ -302,77 +302,6 @@ test('buildBatchMessage renders no-quote Improve entries with context only', () 
       '   \u21B3 Think from scratch, how to improve this?',
     ].join('\n')
   );
-});
-
-test('comment trigger avoids overlapping artifact shortcut controls', () => {
-  const {window, body, listeners} = loadArtifactCommentsScript(
-    SESSION_270_PLAN_PATH
-  );
-  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
-  assert.ok(shortcuts, 'shortcut controls are installed');
-
-  const shortcutRect = {left: 960, top: 700, right: 1018, bottom: 760};
-  shortcuts.getBoundingClientRect = () => shortcutRect;
-
-  const block = makeBlock('Full height plan section');
-  block.getBoundingClientRect = () => ({left: 0, top: 760, right: 2000, bottom: 1600});
-  const naturalTriggerRect = {left: 982, top: 726, right: 1016, bottom: 760};
-  assert.equal(rectsIntersect(naturalTriggerRect, shortcutRect), true, 'test setup overlaps naturally');
-
-  const mouseover = listeners.find((listener) => (
-    listener.target === 'document' && listener.type === 'mouseover'
-  ));
-  mouseover.handler({target: block});
-
-  const trigger = body.children.find((child) => child.className === '__cbc-trigger');
-  assert.ok(trigger, 'comment trigger is installed');
-  const left = Number.parseFloat(trigger.style.left);
-  const top = Number.parseFloat(trigger.style.top);
-  const triggerRect = {left, top, right: left + 34, bottom: top + 34};
-
-  assert.equal(rectsIntersect(triggerRect, shortcutRect), false);
-  assert.ok(triggerRect.left >= 8);
-  assert.ok(triggerRect.top >= 8);
-  assert.ok(triggerRect.right <= window.innerWidth - 8);
-  assert.ok(triggerRect.bottom <= window.innerHeight - 8);
-});
-
-test('dock owns the corner coordinates for the shortcut column and the tray', () => {
-  const {head, body} = loadArtifactCommentsScript(
-    SESSION_270_PLAN_PATH
-  );
-
-  const dock = dockOf(body);
-  assert.ok(dock, '__cbc-dock is installed as a direct child of body');
-
-  const shortcuts = findChildByClass(dock, '__cbc-shortcuts');
-  const tray = findChildByClass(dock, '__cbc-tray');
-  assert.ok(shortcuts, 'shortcut column is a child of the dock');
-  assert.ok(tray, 'tray is a child of the dock');
-  assert.equal(shortcuts.parentNode, dock, 'shortcuts and tray share the dock as parent');
-  assert.equal(tray.parentNode, dock, 'tray and shortcuts share the dock as parent');
-  assert.equal(shortcuts.parentNode, tray.parentNode, 'shortcuts and tray share one parent node');
-
-  const styleText = head.children[0].textContent;
-  const shortcutsRule = cssRule(styleText, '.__cbc-shortcuts');
-  const trayRule = cssRule(styleText, '.__cbc-tray');
-  assert.doesNotMatch(shortcutsRule, /position:/, 'shortcuts rule carries no position declaration');
-  assert.doesNotMatch(shortcutsRule, /right:/, 'shortcuts rule carries no right declaration');
-  assert.doesNotMatch(shortcutsRule, /bottom:/, 'shortcuts rule carries no bottom declaration');
-  assert.doesNotMatch(shortcutsRule, /z-index:/, 'shortcuts rule carries no z-index declaration');
-  assert.doesNotMatch(trayRule, /position:/, 'tray rule carries no position declaration');
-  assert.doesNotMatch(trayRule, /right:/, 'tray rule carries no right declaration');
-  assert.doesNotMatch(trayRule, /bottom:/, 'tray rule carries no bottom declaration');
-  assert.doesNotMatch(trayRule, /z-index:/, 'tray rule carries no z-index declaration');
-
-  const dockRule = cssRule(styleText, '.__cbc-dock');
-  assert.match(dockRule, /position:fixed/, 'dock owns the corner position');
-  assert.match(dockRule, /right:14px/, 'dock owns the right offset');
-  assert.match(dockRule, /bottom:64px/, 'dock owns the bottom offset');
-  assert.match(dockRule, /z-index:2147483646/, 'dock owns the stacking layer');
-
-  const triggerRule = cssRule(styleText, '.__cbc-trigger');
-  assert.match(triggerRule, /z-index:2147483645/, 'trigger sits one level below the dock');
 });
 
 function loadFindBlock() {
@@ -524,42 +453,6 @@ test('tray item rule refuses to shrink so cards keep natural height and the list
   assert.match(listRule, /overflow:auto/, 'list keeps overflow:auto so it scrolls');
 });
 
-test('popover and tray edit windows are widened and share a single width source', () => {
-  const {head} = loadArtifactCommentsScript(
-    SESSION_270_PLAN_PATH
-  );
-  const styleText = head.children[0].textContent;
-
-  assert.match(ARTIFACT_COMMENTS_JS, /var POPOVER_WIDTH = 460;/, 'POPOVER_WIDTH constant is defined once');
-  assert.match(
-    ARTIFACT_COMMENTS_JS,
-    /Math\.min\(POPOVER_WIDTH, window\.innerWidth - 16\)/,
-    'positionPopover uses the POPOVER_WIDTH constant'
-  );
-  assert.doesNotMatch(ARTIFACT_COMMENTS_JS, /Math\.min\(300,/, 'no literal 300 popover width remains in positioning math');
-
-  const popover = cssRule(styleText, '.__cbc-popover');
-  assert.ok(popover.includes('min(460px,calc(100vw - 16px))'), 'popover width uses the constant value');
-  assert.doesNotMatch(popover, /min\(300px/, 'popover rule no longer hardcodes 300px');
-
-  const popoverTextarea = cssRule(styleText, '.__cbc-popover textarea');
-  assert.match(popoverTextarea, /min-height:140px/, 'popover textarea is widened to 140px');
-  assert.match(popoverTextarea, /resize:vertical/, 'popover textarea keeps resize:vertical');
-
-  const tray = cssRule(styleText, '.__cbc-tray');
-  assert.ok(tray.includes('min(400px'), 'tray width is widened to 400px');
-  assert.ok(tray.includes('calc(100vw - 28px)'), 'tray width keeps the narrow-screen cap');
-
-  const trayList = cssRule(styleText, '.__cbc-tray-list');
-  assert.match(trayList, /max-height:320px/, 'tray list is widened to 320px');
-
-  const trayEdit = cssRule(styleText, '.__cbc-tray-edit');
-  assert.match(trayEdit, /min-height:130px/, 'tray edit textarea is widened to 130px');
-  assert.match(trayEdit, /resize:vertical/, 'tray edit textarea keeps resize:vertical');
-
-  assert.doesNotMatch(styleText, /__cbc-tray-edited/, 'the draftText-keyed edited indicator rule is gone');
-});
-
 // ---------------------------------------------------------------------------
 // Panel review marker guard change (C3)
 // ---------------------------------------------------------------------------
@@ -635,10 +528,10 @@ test('resolveSessionId still extracts the session from a plain cbsession fragmen
 // ---------------------------------------------------------------------------
 
 function pendingTrayParts(body) {
-  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
+  const shortcuts = findChildByClass(stackOf(body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
-  const tray = findChildByClass(dockOf(body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(body), '__cbc-tray');
   return {
     header: findChildByClass(tray, '__cbc-tray-header'),
     sendBtn: findChildByClass(findChildByClass(tray, '__cbc-tray-actions'), '__cbc-tray-send'),
@@ -728,12 +621,12 @@ function loadWithShortcuts(width = 1024) {
 }
 
 function shortcutButtons(body) {
-  const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
+  const shortcuts = findChildByClass(stackOf(body), '__cbc-shortcuts');
   return shortcuts.children.filter((child) => child.className === '__cbc-shortcut');
 }
 
 function trayItemCount(body) {
-  const tray = findChildByClass(dockOf(body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(body), '__cbc-tray');
   const list = findChildByClass(tray, '__cbc-tray-list');
   return list.children.filter((child) => child.className === '__cbc-tray-item').length;
 }
@@ -868,8 +761,7 @@ test('stackCards places an uncontested card exactly at its anchor', () => {
 });
 
 // ---------------------------------------------------------------------------
-// fitColumn / chooseWidth: the margin column's two new pure functions, exported
-// as window.__cbcFitColumn / window.__cbcChooseWidth alongside __cbcStackCards.
+// fitColumn: the margin column's pure fit, exported as window.__cbcFitColumn alongside __cbcStackCards.
 // Properties are asserted over seeded randomised sets, never pixel literals.
 // Adjacent pairs stay at least gap apart, and the last card lies wholly inside
 // the band. The cap only ever raises a card, and the chosen width fits with a
@@ -879,15 +771,13 @@ test('stackCards places an uncontested card exactly at its anchor', () => {
 // total).
 // ---------------------------------------------------------------------------
 
-function loadFitColumnAndChooseWidth() {
+function loadFitColumn() {
   const {window} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH);
   assert.equal(typeof window.__cbcStackCards, 'function', 'stackCards is exported');
   assert.equal(typeof window.__cbcFitColumn, 'function', 'fitColumn is exported');
-  assert.equal(typeof window.__cbcChooseWidth, 'function', 'chooseWidth is exported');
   return {
     stackCards: window.__cbcStackCards,
     fitColumn: window.__cbcFitColumn,
-    chooseWidth: window.__cbcChooseWidth,
   };
 }
 
@@ -912,7 +802,7 @@ function randomisedAnchoredSets(rng, sets) {
 }
 
 test('fitColumn keeps every adjacent pair at least gap apart over 300 randomised sets', () => {
-  const {stackCards, fitColumn} = loadFitColumnAndChooseWidth();
+  const {stackCards, fitColumn} = loadFitColumn();
   const rng = mulberry32(20260732);
   for (const {anchors, heights, gap, band, scrolled} of randomisedAnchoredSets(rng, 300)) {
     const docTops = stackCards(anchors, heights, gap);
@@ -927,7 +817,7 @@ test('fitColumn keeps every adjacent pair at least gap apart over 300 randomised
 });
 
 test('fitColumn leaves the last card wholly inside the band over 300 randomised sets', () => {
-  const {stackCards, fitColumn} = loadFitColumnAndChooseWidth();
+  const {stackCards, fitColumn} = loadFitColumn();
   const rng = mulberry32(20260733);
   for (const {anchors, heights, gap, band, scrolled} of randomisedAnchoredSets(rng, 300)) {
     const docTops = stackCards(anchors, heights, gap);
@@ -943,7 +833,7 @@ test('fitColumn leaves the last card wholly inside the band over 300 randomised 
 });
 
 test('fitColumn only ever raises a card, never lowers it, over 300 randomised sets', () => {
-  const {stackCards, fitColumn} = loadFitColumnAndChooseWidth();
+  const {stackCards, fitColumn} = loadFitColumn();
   const rng = mulberry32(20260734);
   for (const {anchors, heights, gap, band, scrolled} of randomisedAnchoredSets(rng, 300)) {
     const docTops = stackCards(anchors, heights, gap);
@@ -958,7 +848,7 @@ test('fitColumn only ever raises a card, never lowers it, over 300 randomised se
 });
 
 test('fitColumn keeps the r7 regression input at least gap apart (no floor guard)', () => {
-  const {stackCards, fitColumn} = loadFitColumnAndChooseWidth();
+  const {stackCards, fitColumn} = loadFitColumn();
   // r7 pinned the top card to 0 here and drove it 42px into its neighbour;
   // fitColumn must have no floor guard, and adding one reintroduces that bug.
   const tops = fitColumn(stackCards([-50, 5], [100, 50], 8), [100, 50], 8, 600, 0);
@@ -968,40 +858,9 @@ test('fitColumn keeps the r7 regression input at least gap apart (no floor guard
   );
 });
 
-test('chooseWidth fits with a gap on both sides and lands in [240,300] over 300 randomised sets', () => {
-  const {chooseWidth} = loadFitColumnAndChooseWidth();
-  const rng = mulberry32(20260735);
-  for (let s = 0; s < 300; s++) {
-    const clientWidth = 320 + Math.floor(rng() * 2400);
-    const contentRight = Math.floor(rng() * clientWidth);
-    const w = chooseWidth(clientWidth, contentRight, 8, 240, 300);
-    if (!w) continue; // margin cannot hold the narrowest column: the corner list takes over
-    assert.ok(w >= 240 && w <= 300, 'chosen width lands in [240,300]: ' + JSON.stringify({clientWidth, contentRight, w}));
-    assert.ok(
-      contentRight + 8 + w + 8 <= clientWidth + 1e-9,
-      'chosen column leaves a gap on both sides: ' + JSON.stringify({clientWidth, contentRight, w})
-    );
-  }
-});
-
-test('chooseWidth never narrows as the window widens over 300 randomised sets', () => {
-  const {chooseWidth} = loadFitColumnAndChooseWidth();
-  const rng = mulberry32(20260736);
-  for (let s = 0; s < 300; s++) {
-    const clientWidth = 320 + Math.floor(rng() * 2400);
-    const contentRight = Math.floor(rng() * clientWidth);
-    const w = chooseWidth(clientWidth, contentRight, 8, 240, 300);
-    assert.ok(
-      chooseWidth(clientWidth + 1, contentRight, 8, 240, 300) >= w,
-      'widening the window never narrows the column: ' + JSON.stringify({clientWidth, contentRight, w})
-    );
-  }
-});
-
 // ---------------------------------------------------------------------------
-// comment-gutter (part 2a): wiring stackCards to a right-hand gutter at >=900px.
-// Gutter mode activates only when an anchored (el != null) entry exists, so the
-// corner-list tests below never flip; the threshold still governs placement.
+// comment-gutter: at >=900px the rail is a right-hand column, and its gutter holds the anchored cards
+// beside their blocks. Unanchored entries stay in the tray list in either mode.
 // ---------------------------------------------------------------------------
 
 function fireResize(listeners) {
@@ -1010,10 +869,75 @@ function fireResize(listeners) {
   }
 }
 
+test('the rail is a right column in a wide window and the bottom strip in a narrow one', async () => {
+  const block = makeBlock('anchored section');
+  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
+  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
+    bodyChildren: [block],
+    innerWidth: 1024,
+    serverSessionId: 'session-270',
+    fetch: FETCH_OK,
+  });
+  addBlockComment(body, listeners, block, 'cmt');
+  await flushPromises(3);
+  const dock = dockOf(body);
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  assert.equal(dock.classList.contains('__cbc-dock-side'), true, 'a 1024 px window takes the side');
+  assert.equal(documentElement.style['--cbc-rail-w'], '320px', 'the side rail reserves its column');
+  assert.equal(documentElement.style['--cbc-rail-h'], '0px', 'the side rail reserves no strip');
+  assert.equal(gutter.style.left, (1024 - 320 + 12) + 'px', 'the anchored column sits inside the rail');
+  assert.equal(gutter.style.width, '296px', 'the anchored column is the rail less its padding');
+
+  window.innerWidth = 800;
+  // A strip's layout height is fractional; the body must end exactly where the strip begins.
+  dock.getBoundingClientRect = () => ({left: 0, top: 500.5, right: 800, bottom: 754.7, width: 800, height: 254.2});
+  fireResize(listeners);
+  assert.equal(dock.classList.contains('__cbc-dock-bottom'), true, 'an 800 px window takes the bottom strip');
+  assert.equal(documentElement.style['--cbc-rail-w'], '0px', 'the strip reserves no column');
+  assert.equal(documentElement.style['--cbc-rail-h'], '254.2px', 'the strip reserves its exact layout height');
+  assert.equal(gutter.style.display, 'none', 'the strip has no column');
+});
+
+test('the rail writes no inline style of the artifact: only its own nodes and the two rail properties', async () => {
+  const block = makeBlock('anchored section');
+  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
+  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
+    bodyChildren: [block],
+    innerWidth: 1024,
+    serverSessionId: 'session-270',
+    fetch: FETCH_OK,
+  });
+  addBlockComment(body, listeners, block, 'cmt');
+  await flushPromises(3);
+  window.innerWidth = 800;
+  fireResize(listeners);
+  assert.deepEqual(Object.keys(body.style), [], 'the body carries no inline style of the layer');
+  assert.deepEqual(Object.keys(block.style), [], 'an artifact block carries no inline style of the layer');
+  assert.deepEqual(Object.keys(documentElement.style), ['--cbc-rail-w', '--cbc-rail-h'],
+    'the root carries only the two rail properties');
+});
+
+test('the comment trigger sits in the strip beside the page, level with its block', () => {
+  const block = makeBlock('a commentable paragraph');
+  block.getBoundingClientRect = () => ({left: 40, top: 200, right: 640, bottom: 250, width: 600, height: 50});
+  const {body, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
+    bodyChildren: [block],
+    innerWidth: 1024,
+    serverSessionId: 'session-270',
+    fetch: FETCH_OK,
+  });
+  body.getBoundingClientRect = () => ({left: 0, top: 0, right: 680, bottom: 700, width: 680, height: 700});
+  const mouseover = listeners.find((l) => l.target === 'document' && l.type === 'mouseover').handler;
+  mouseover({target: block});
+  const trigger = findChildByClass(body, '__cbc-trigger');
+  const left = parseFloat(trigger.style.left);
+  assert.equal(trigger.style.display, 'flex', 'hovering a block shows the trigger');
+  assert.ok(left >= 680 && left + 34 <= 680 + 40, 'the trigger sits in the strip the page leaves at its right edge');
+  assert.equal(trigger.style.top, '204px', 'the trigger is level with the top of its block');
+});
+
 test('gutter cards are positioned by the stackCards pure function (render glue)', async () => {
   // Colliding anchors force stackCards to push cards apart; raw anchors would not match.
-  // The rects also give the fake layout a 640px-wide article column so that
-  // measureContent() keeps the one-band reserve clean and gutter mode engages.
   const tops = [100, 110, 120];
   const blocks = tops.map((t) => {
     const b = makeBlock('section at ' + t);
@@ -1049,160 +973,6 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
   assert.doesNotMatch(gutterCardRule, /overflow:hidden/, 'gutter cards never clip their own content');
 });
 
-test('gutter mode never writes the artifact\'s own layout', async () => {
-  // The gutter layer writes no artifact style at all. The body's and
-  // documentElement's style attribute strings (el.attributes.style is this
-  // double's getAttribute) are captured at entry and asserted identical at
-  // every step.
-  const block = makeBlock('anchored section');
-  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
-  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    bodyChildren: [block],
-    serverSessionId: 'session-270',
-    fetch: FETCH_OK,
-  });
-  const contentRight = block.getBoundingClientRect().right;
-  assert.ok(
-    window.__cbcChooseWidth(documentElement.clientWidth, contentRight, window.__cbcGutterGap, 240, 300) >= 240,
-    'the column engages in this fake layout'
-  );
-  // Entry happens at load (the decision depends only on the window) and the
-  // layer runs synchronously inside loadArtifactCommentsScript, so the
-  // attribute strings captured here are also the pre-entry ones.
-  const bodyStyleAttr = body.attributes.style;
-  const documentStyleAttr = documentElement.attributes.style;
-
-  addBlockComment(body, listeners, block, 'cmt');
-  await flushPromises(3);
-  assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical after entry');
-  assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical after entry');
-  assert.equal(body.style.paddingRight, undefined, 'paddingRight is never set');
-
-  window.innerWidth = 800;
-  fireResize(listeners);
-  assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical below the threshold');
-  assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical below the threshold');
-  assert.equal(body.style.paddingRight, undefined, 'paddingRight is never set on exit either');
-
-  window.innerWidth = 1024;
-  fireResize(listeners);
-  assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical after re-entry');
-  assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical after re-entry');
-
-  window.innerWidth = 800;
-  fireResize(listeners);
-  // A pre-existing inline paddingRight on the body belongs to the artifact: it
-  // must survive entry and exit untouched, never reserved over, never emptied.
-  body.style.paddingRight = '10px';
-  window.innerWidth = 1024;
-  fireResize(listeners);
-  assert.equal(body.style.paddingRight, '10px', 'pre-existing inline paddingRight survives entry untouched');
-  assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute still identical after entry with preset padding');
-  window.innerWidth = 800;
-  fireResize(listeners);
-  assert.equal(body.style.paddingRight, '10px', 'pre-existing inline paddingRight survives exit untouched');
-});
-
-test('gutter mode aligns the dock to the column and restores its prior inline values on exit', async () => {
-  // The mechanism that replaces the removed inline-right reserve: the bar is
-  // never moved. It only aligns its left edge and width to the column, and on
-  // exit every inline value returns to what was there before entry.
-  const block = makeBlock('anchored section');
-  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
-  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    bodyChildren: [block],
-    serverSessionId: 'session-270',
-    fetch: FETCH_OK,
-  });
-  const dock = dockOf(body);
-  const tray = findChildByClass(dock, '__cbc-tray');
-
-  addBlockComment(body, listeners, block, 'cmt');
-  await flushPromises(3);
-
-  // Every expectation derives from the fake layout's own numbers. The bar's
-  // left edge is the content's right edge plus the gap, and its width is the
-  // width chooseWidth picks for this layout. Its right is auto, and the tray
-  // fills it.
-  const contentRight = block.getBoundingClientRect().right;
-  const gap = window.__cbcGutterGap;
-  const columnWidth = window.__cbcChooseWidth(documentElement.clientWidth, contentRight, gap, 240, 300);
-  assert.ok(columnWidth >= 240, 'the column engages in this fake layout');
-  assert.equal(dock.style.left, contentRight + gap + 'px', 'dock left edge aligns to the column left edge');
-  assert.equal(dock.style.right, 'auto', 'dock right is auto in the column');
-  assert.equal(dock.style.width, columnWidth + 'px', 'dock width is the chosen column width');
-  assert.equal(tray.style.width, '100%', 'tray fills the bar in the column');
-
-  window.innerWidth = 800;
-  fireResize(listeners);
-  assert.ok(!dock.style.left, 'dock inline left removed on exit when no inline value existed before');
-  assert.ok(!dock.style.right, 'dock inline right removed on exit when no inline value existed before');
-  assert.ok(!dock.style.width, 'dock inline width removed on exit when no inline value existed before');
-  assert.ok(!tray.style.width, 'tray inline width removed on exit when no inline value existed before');
-
-  // A preset inline value is captured on entry and restored exactly, not emptied.
-  dock.style.right = '14px';
-  window.innerWidth = 1024;
-  fireResize(listeners);
-  assert.equal(dock.style.left, contentRight + gap + 'px', 'dock left edge aligns to the column again on re-entry');
-  assert.equal(dock.style.right, 'auto', 'dock right is auto again in the column');
-  assert.equal(dock.style.width, columnWidth + 'px', 'dock width is the chosen column width again on re-entry');
-  assert.equal(tray.style.width, '100%', 'tray fills the bar again on re-entry');
-  window.innerWidth = 800;
-  fireResize(listeners);
-  assert.ok(!dock.style.left, 'dock inline left removed again when no inline value existed before');
-  assert.equal(dock.style.right, '14px', 'preset inline dock right restored exactly, not emptied');
-  assert.ok(!dock.style.width, 'dock inline width removed again when no inline value existed before');
-  assert.ok(!tray.style.width, 'tray inline width removed again when no inline value existed before');
-});
-
-test('gutter mode never relocates the action bar as window width changes', async () => {
-  // The reserved-column and card-column migration is gone: the bar stays a
-  // direct child of body at every width. Its inline left tracks the column's
-  // left edge while the column exists, and no width change ever writes the
-  // artifact.
-  const block = makeBlock('anchored section');
-  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 700, bottom: 250, width: 700, height: 50});
-  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    bodyChildren: [block],
-    innerWidth: 1400,
-    serverSessionId: 'session-270',
-    fetch: FETCH_OK,
-  });
-  const dock = dockOf(body);
-  const contentRight = block.getBoundingClientRect().right;
-  const columnLeft = contentRight + window.__cbcGutterGap + 'px';
-  const bodyStyleAttr = body.attributes.style;
-  const assertBarAtHome = (width) => {
-    assert.equal(dock.parentNode, body, 'the bar stays a direct child of body at ' + width + 'px');
-    assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical at ' + width + 'px');
-  };
-  assert.ok(
-    window.__cbcChooseWidth(documentElement.clientWidth, contentRight, window.__cbcGutterGap, 240, 300) >= 240,
-    'the column engages at 1400px in this fake layout'
-  );
-
-  addBlockComment(body, listeners, block, 'cmt');
-  await flushPromises(3);
-  assertBarAtHome(1400);
-  assert.equal(dock.style.left, columnLeft, 'bar inline left tracks the column left edge at 1400px');
-
-  window.innerWidth = 1024;
-  fireResize(listeners);
-  assertBarAtHome(1024);
-  assert.equal(dock.style.left, columnLeft, 'bar inline left still tracks the column left edge at 1024px');
-
-  window.innerWidth = 800;
-  fireResize(listeners);
-  assertBarAtHome(800);
-  assert.ok(!dock.style.left, 'bar inline left returns to its pre-entry state below the threshold');
-
-  window.innerWidth = 1400;
-  fireResize(listeners);
-  assertBarAtHome(1400);
-  assert.equal(dock.style.left, columnLeft, 'bar inline left tracks the column left edge again at 1400px');
-});
-
 // ---------------------------------------------------------------------------
 // Re-anchor, hover, and click affordances (comment-gutter part 2b)
 // ---------------------------------------------------------------------------
@@ -1218,9 +988,7 @@ function loadWithDrafts(drafts, children) {
   });
 }
 
-// A 640px-wide article column at the default 1024px viewport keeps the one-band
-// reserve clean (640 <= 1024 - 316), but not the two-band one (640 > 1024 - 624).
-// So measureContent() puts the dock inside the card column in these tests.
+// A block 640px wide at `top`: the anchor the gutter's cards are placed against.
 function rectAt(top) {
   return () => ({left: 0, top, right: 640, bottom: top + 40, width: 640, height: 40});
 }
@@ -1244,7 +1012,7 @@ test('re-anchor miss: entry stays unanchored, no block is marked, nothing throws
     [block]);
   assert.equal(block.classList.contains('__cbc-marked'), false, 'no block is marked on miss');
   const gutter = findChildByClass(body, '__cbc-gutter');
-  assert.ok(!gutter, 'gutter is not created when no entry is anchored');
+  assert.equal(gutter.children.length, 0, 'no entry is anchored, so the gutter holds no card');
 });
 
 test('re-anchor never mis-anchors to a prefix-sharing block', () => {
@@ -1276,7 +1044,7 @@ test('re-anchor is idempotent: running twice does not change anchors or marks', 
   assert.equal(gutterAfter.children.length, cardsBefore, 'card count unchanged after second re-anchor');
 });
 
-test('gutter mode routes anchored entries to the gutter and unanchored entries to the corner list', () => {
+test('gutter mode routes anchored entries to the gutter and unanchored entries to the tray list', () => {
   const blockA = makeBlock('anchored block A for routing');
   blockA.getBoundingClientRect = rectAt(200);
   const blockB = makeBlock('anchored block B for routing');
@@ -1294,12 +1062,10 @@ test('gutter mode routes anchored entries to the gutter and unanchored entries t
   assert.equal(gutter.children.length, 2, 'gutter child count equals the anchored count');
   const trayList = body.querySelector('.__cbc-tray-list');
   assert.ok(trayList, 'tray list exists');
-  assert.equal(trayList.children.length, 2, 'corner list card count equals the unanchored count');
+  assert.equal(trayList.children.length, 2, 'tray list card count equals the unanchored count');
 });
 
 test('gutter mode writes only stackCards tops to gutter children (single writer)', () => {
-  // The rects give the fake layout a 640px-wide article column so that
-  // measureContent() keeps the one-band reserve clean and gutter mode engages.
   const tops = [100, 110, 120];
   const blocks = tops.map((t) => {
     const b = makeBlock('single writer anchor ' + t);
@@ -1320,7 +1086,7 @@ test('gutter mode writes only stackCards tops to gutter children (single writer)
   const cards = gutter.children.filter((c) => c.className === '__cbc-tray-item');
   assert.equal(cards.length, blocks.length, 'one gutter card per anchored entry');
   const trayList = body.querySelector('.__cbc-tray-list');
-  assert.equal(trayList.children.length, 2, 'unanchored entries routed to the corner list');
+  assert.equal(trayList.children.length, 2, 'unanchored entries routed to the tray list');
 
   const anchors = blocks.map((b) => b.getBoundingClientRect().top + (window.scrollY || 0));
   const heights = cards.map((c) => c.offsetHeight);
@@ -1388,7 +1154,7 @@ test('click affordance: clicking an unanchored card is a no-op for scroll but st
     [{kind: 'block', quote: 'nonexistent quote', context: '', comment: 'unanchored'}],
     [block]);
   const trayList = body.querySelector('.__cbc-tray-list');
-  assert.ok(trayList, 'tray list exists in corner mode');
+  assert.ok(trayList, 'tray list exists beside the gutter');
   const card = trayList.children[0];
   assert.ok(card, 'card exists in tray list');
   let stopPropCalled = false;
@@ -1518,7 +1284,7 @@ async function sendCommentsFor(bodyChildren, comments) {
     addBlockComment(body, listeners, block, text);
     await flushPromises(2);
   }
-  const tray = findChildByClass(dockOf(body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(body), '__cbc-tray');
   const sendBtn = findChildByClass(findChildByClass(tray, '__cbc-tray-actions'), '__cbc-tray-send');
   await clickElement(sendBtn);
   await flushPromises(6);
@@ -1783,7 +1549,7 @@ function pickButton(fork, name) {
 }
 
 function pickBarOf(body) {
-  return findChildByClass(dockOf(body), '__cbc-pickbar');
+  return findChildByClass(stackOf(body), '__cbc-pickbar');
 }
 
 function pickBarButton(body, label) {
@@ -1948,7 +1714,7 @@ test('a 4xx shows the error, keeps the picks and lets Send run again', async () 
   clickElement(pickButton(fork, 'keep'));
   clickElement(pickBarButton(body, 'Send'));
   await flushPromises(3);
-  const toast = body.children.find((child) => child.textContent === 'Comment post failed: HTTP 409');
+  const toast = stackOf(body).children.find((child) => child.textContent === 'Comment post failed: HTTP 409');
   assert.ok(toast, 'the refusal shows as the toast');
   assert.equal(pickButton(fork, 'keep').attributes['aria-pressed'], 'true', 'the pick is kept');
   assert.equal(pickBarButton(body, 'Send').disabled, false, 'Send runs again');

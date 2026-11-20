@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const {dockOf, findChildByClass, makeElement, clickElement, addBlockComment, flushPromises} =
+const {dockOf, stackOf, findChildByClass, makeElement, clickElement, addBlockComment, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
@@ -220,12 +220,12 @@ function sessionFetch(ok) {
 
 async function addShortcutAndSend(fetch, storage) {
   const res = loadScript({storage, fetch, console: silentConsole()});
-  const shortcuts = findChildByClass(dockOf(res.body), '__cbc-shortcuts');
+  const shortcuts = findChildByClass(stackOf(res.body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
   assert.equal(res.storage.store.has(DRAFT_KEY), true, 'add persisted the draft');
 
-  const tray = findChildByClass(dockOf(res.body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(res.body), '__cbc-tray');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
   await clickElement(sendBtn);
@@ -308,7 +308,7 @@ test('tray restores pending draft on init with el null', () => {
     },
   });
 
-  const tray = findChildByClass(dockOf(body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(body), '__cbc-tray');
   const header = findChildByClass(tray, '__cbc-tray-header');
   assert.ok(
     header.textContent.startsWith('Pending comments (2)'),
@@ -370,7 +370,7 @@ test('send puts shortcut entries ahead of block comments and keeps their order',
   };
 
   const res = loadScript({storage, fetch, console: silentConsole()});
-  const tray = findChildByClass(dockOf(res.body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(res.body), '__cbc-tray');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   await clickElement(findChildByClass(actions, '__cbc-tray-send'));
   await flushPromises(6);
@@ -506,7 +506,7 @@ function capturingFetch(posted) {
 }
 
 async function sendTray(res) {
-  const tray = findChildByClass(dockOf(res.body), '__cbc-tray');
+  const tray = findChildByClass(stackOf(res.body), '__cbc-tray');
   await clickElement(findChildByClass(findChildByClass(tray, '__cbc-tray-actions'), '__cbc-tray-send'));
   await flushPromises(6);
 }

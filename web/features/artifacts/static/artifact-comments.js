@@ -17,21 +17,14 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var UI_CLASS = GLOBAL_PREFIX + '-ui';
     var HIDE_DELAY_MS = 300;
     var TRIGGER_SIZE = 34;
-    var POPOVER_WIDTH = 460;
-    var GUTTER_THRESHOLD = 900;
-    // The column also needs vertical room. The gate reads the window, never how many
-    // comments are pending. The action bar's own list is capped at 320px, so the bar
-    // has a height ceiling (522px measured). At 600px, the worst case still leaves
-    // band = innerHeight - 72 - barHeight positive. The usual bar leaves 326px.
-    var GUTTER_MIN_HEIGHT = 600;
-    // Properties that can make body or documentElement the containing block for the
-    // injected layer's fixed boxes. Declared with the other constants: installBatchTray
-    // runs during this same IIFE, long before the function that reads them is defined.
-    var CB_PROPS = ['transform', 'translate', 'rotate', 'scale', 'perspective',
-                    'filter', 'backdropFilter'];
+    // The strip the body leaves at its right edge for the comment trigger, which sits in it, never over text.
+    var TRIGGER_STRIP = 40;
+    // The rail: where every control of the layer sits. A window at least RAIL_SIDE_MIN_WIDTH wide gives it a
+    // right-hand column of RAIL_WIDTH; a narrower one gives it the bottom strip.
+    var RAIL_SIDE_MIN_WIDTH = 900;
+    var RAIL_WIDTH = 320;
+    var RAIL_PADDING = 12;
     var GUTTER_GAP = 8;
-    var COL_MAX = 300;
-    var COL_MIN = 240;
     var NO_SESSION_MESSAGE = 'Cannot parse session id from this artifact URL.';
     var SECTION_SELECTOR = 'section';
     // Characters of a fork's question text that the locator shows after the fork's
@@ -86,7 +79,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var trigger = null;
     var dock = null;
     var popover = null;
-    var showToast = createCommentToast(GLOBAL_PREFIX, injectRoot, 2200);
+    var showToast = createCommentToast(GLOBAL_PREFIX, injectInDock, 2200);
     var pending = [];
     var tray = null;
     var trayHeader = null;
@@ -94,17 +87,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var traySendBtn = null;
     var trayClearBtn = null;
     var trayReason = null;
+    var dockStack = null;
     var gutter = null;
-    var active = false;
-    var prevDockLeft = '';
-    var prevDockRight = '';
-    var prevDockWidth = '';
-    var prevTrayWidth = '';
-    var prevGutterLeft = '';
-    var prevGutterWidth = '';
-    var prevGutterBottom = '';
-    var column = 0;
-    var columnLeft = 0;
     var anchoredCards = [];
     var docTops = null;
     var bandHeight = 0;
@@ -140,7 +124,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     window.__cbcClearDraft = clearDraft;
     window.__cbcStackCards = stackCards;
     window.__cbcFitColumn = fitColumn;
-    window.__cbcChooseWidth = chooseWidth;
     window.__cbcGutterGap = GUTTER_GAP;
     window.__cbcReanchor = reanchorPending;
 
@@ -455,7 +438,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-hover{outline:2px solid rgba(88,166,255,.95)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.16)!important}' +
         '.' + GLOBAL_PREFIX + '-trigger{position:fixed;z-index:2147483645;width:34px;height:34px;border-radius:999px;border:1px solid rgba(88,166,255,.75);background:#0d1117;color:#e6edf3;display:none;align-items:center;justify-content:center;font-size:16px;line-height:1;box-shadow:0 8px 24px rgba(0,0,0,.35);cursor:pointer;padding:0}' +
         '.' + GLOBAL_PREFIX + '-trigger:hover{background:#1c2230;border-color:#58a6ff}' +
-        '.' + GLOBAL_PREFIX + '-popover{position:fixed;z-index:2147483647;width:min(' + POPOVER_WIDTH + 'px,calc(100vw - 16px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+        '.' + GLOBAL_PREFIX + '-popover{background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
         '.' + GLOBAL_PREFIX + '-popover textarea{box-sizing:border-box;width:100%;min-height:140px;resize:vertical;background:#0d1117;color:#e6edf3;border:1px solid #2d3340;border-radius:6px;padding:7px 8px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;outline:none}' +
         '.' + GLOBAL_PREFIX + '-popover textarea:focus{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.18)}' +
         '.' + GLOBAL_PREFIX + '-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:8px}' +
@@ -463,9 +446,22 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-actions button:disabled{cursor:not-allowed;opacity:.58}' +
         '.' + GLOBAL_PREFIX + '-add{background:#238636!important;border-color:#2ea043!important;color:#fff!important}' +
         '.' + GLOBAL_PREFIX + '-error{display:none;margin-top:8px;color:#ffb4ab;font-size:12px}' +
-        '.' + GLOBAL_PREFIX + '-toast{position:fixed;z-index:2147483647;max-width:min(360px,calc(100vw - 16px));left:50%;bottom:18px;transform:translateX(-50%);background:#1f6f3a;color:#dfffe5;border:1px solid rgba(63,185,80,.65);border-radius:999px;padding:7px 12px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
+        '.' + GLOBAL_PREFIX + '-toast{background:#1f6f3a;color:#dfffe5;border:1px solid rgba(63,185,80,.65);border-radius:999px;padding:7px 12px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
         '.' + GLOBAL_PREFIX + '-toast-error{background:#5f2120;color:#ffe2df;border-color:rgba(248,81,73,.7);border-radius:8px}' +
-        '.' + GLOBAL_PREFIX + '-dock{position:fixed;right:14px;bottom:64px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-end;gap:8px}' +
+        // The page's own body scrolls, so the rail is never over the content: the body's margin and height are
+        // the two custom properties placeRail and setRailHeight write. The rail is outside the body's box.
+        ':root{--cbc-rail-w:0px;--cbc-rail-h:0px}' +
+        'html{height:100%!important;overflow:hidden!important}' +
+        'body{box-sizing:border-box!important;height:calc(100% - var(--cbc-rail-h))!important;min-height:0!important;' +
+          'overflow-y:auto!important;margin-right:calc(var(--cbc-rail-w) + ' + TRIGGER_STRIP + 'px)!important}' +
+        // The stack takes the bottom with an auto top margin. Its overflow then runs down, where the rail scrolls
+        // to it; a flex-end justification would push the overflow above the rail, out of reach.
+        '.' + GLOBAL_PREFIX + '-dock{position:fixed;z-index:2147483646;display:flex;flex-direction:column;' +
+          'box-sizing:border-box;overflow-y:auto}' +
+        '.' + GLOBAL_PREFIX + '-dock-side{top:0;right:0;bottom:0;width:' + RAIL_WIDTH + 'px;padding:' + RAIL_PADDING + 'px}' +
+        '.' + GLOBAL_PREFIX + '-dock-bottom{left:0;right:0;bottom:0;max-height:60vh;padding:8px}' +
+        '.' + GLOBAL_PREFIX + '-stack{display:flex;flex-direction:column-reverse;gap:8px;min-width:0;margin-top:auto}' +
+        '.' + GLOBAL_PREFIX + '-stack>*{width:100%;box-sizing:border-box}' +
         '.' + GLOBAL_PREFIX + '-shortcuts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
         '.' + GLOBAL_PREFIX + '-shortcut{border:1px solid #2ea043;border-radius:7px;padding:7px 10px;background:#238636;color:#fff;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35);cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-shortcut:hover:not(:disabled){background:#2ea043}' +
@@ -473,7 +469,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-shortcut-reason{flex-basis:100%;max-width:220px;background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;line-height:1.3;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
         '.' + GLOBAL_PREFIX + '-marked{outline:2px solid rgba(88,166,255,.45)!important;outline-offset:2px!important;box-shadow:0 0 0 4px rgba(88,166,255,.08)!important}' +
         '.' + GLOBAL_PREFIX + '-card-hover{outline:3px solid rgba(255,196,0,.9)!important;outline-offset:3px!important;box-shadow:0 0 0 5px rgba(255,196,0,.18)!important}' +
-        '.' + GLOBAL_PREFIX + '-tray{width:min(400px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
+        '.' + GLOBAL_PREFIX + '-tray{background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:10px;font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:none;flex-direction:column;gap:8px}' +
         '.' + GLOBAL_PREFIX + '-tray-header{font-weight:600;font-size:12px;color:#8b949e}' +
         '.' + GLOBAL_PREFIX + '-tray-list{max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px}' +
         '.' + GLOBAL_PREFIX + '-tray-item{background:#0d1117;border:1px solid #2d3340;border-radius:6px;padding:7px;min-height:0;flex-shrink:0}' +
@@ -501,9 +497,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-pick{border:1px solid #d0d7de;border-radius:6px;padding:4px 9px;background:#f6f8fa;color:#1b2430;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-pick[aria-pressed="true"]{background:#1163c0;border-color:#1163c0;color:#fff}' +
         '.' + GLOBAL_PREFIX + '-pick:disabled{cursor:not-allowed;opacity:.64}' +
-        '.' + GLOBAL_PREFIX + '-pickbar{display:flex;align-items:center;justify-content:flex-end;gap:7px;box-sizing:border-box;width:min(400px,calc(100vw - 28px));background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:8px 10px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
-        '.' + GLOBAL_PREFIX + '-pickbar-label{flex:1;color:#8b949e}' +
-        '.' + GLOBAL_PREFIX + '-pickbar-btn{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
+        '.' + GLOBAL_PREFIX + '-pickbar{display:flex;align-items:center;justify-content:flex-end;gap:7px;box-sizing:border-box;background:#161b22;color:#e6edf3;border:1px solid #2d3340;border-radius:8px;box-shadow:0 18px 50px rgba(0,0,0,.45);padding:8px 10px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+        '.' + GLOBAL_PREFIX + '-pickbar-label{flex:1;color:#8b949e;white-space:nowrap}' +
+        '.' + GLOBAL_PREFIX + '-pickbar-btn{border:1px solid #2d3340;border-radius:6px;padding:5px 10px;background:#1c2230;color:#e6edf3;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer;white-space:nowrap}' +
         '.' + GLOBAL_PREFIX + '-pickbar-btn:disabled{cursor:not-allowed;opacity:.64}' +
         '.' + GLOBAL_PREFIX + '-pickbar-send{border-color:#2ea043;background:#238636;color:#fff}' +
         '.' + GLOBAL_PREFIX + '-gutter{position:fixed;top:0;left:0;width:300px;overflow-x:hidden;'
@@ -651,14 +647,16 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return trigger;
     }
 
+    // The trigger is centred in the strip the body leaves at its right edge, level with the top of its block.
+    // The strip is outside the body's box, so the trigger covers no page content.
     function positionTrigger(block) {
       var btn = ensureTrigger();
       var rect = block.getBoundingClientRect();
-      var left = clamp(rect.right - TRIGGER_SIZE, 8, window.innerWidth - TRIGGER_SIZE - 8);
-      var top = clamp(rect.top + 4, 8, window.innerHeight - TRIGGER_SIZE - 8);
-      var position = avoidShortcutOverlap(left, top);
-      btn.style.left = position.left + 'px';
-      btn.style.top = position.top + 'px';
+      var page = document.body.getBoundingClientRect();
+      var left = page.right + (TRIGGER_STRIP - TRIGGER_SIZE) / 2;
+      var top = clamp(rect.top + 4, page.top + 8, page.bottom - TRIGGER_SIZE - 8);
+      btn.style.left = left + 'px';
+      btn.style.top = top + 'px';
       btn.style.display = 'flex';
     }
 
@@ -685,81 +683,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         prevBottom = top + heights[idx];
       }
       return tops;
-    }
-
-    function rectForTrigger(left, top) {
-      return {
-        left: left,
-        top: top,
-        right: left + TRIGGER_SIZE,
-        bottom: top + TRIGGER_SIZE,
-      };
-    }
-
-    function rectsIntersect(a, b) {
-      return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-    }
-
-    function intersectsAnyShortcut(left, top, shortcuts) {
-      var triggerRect = rectForTrigger(left, top);
-      for (var i = 0; i < shortcuts.length; i++) {
-        if (rectsIntersect(triggerRect, shortcuts[i])) return true;
-      }
-      return false;
-    }
-
-    function addCandidate(values, value, min, max) {
-      var clamped = clamp(value, min, max);
-      if (values.indexOf(clamped) === -1) values.push(clamped);
-    }
-
-    function avoidShortcutOverlap(left, top) {
-      var shortcutNodes = Array.prototype.slice.call(document.querySelectorAll('.' + GLOBAL_PREFIX + '-shortcuts'));
-      var shortcuts = shortcutNodes.map(function(node) { return node.getBoundingClientRect(); });
-      if (!intersectsAnyShortcut(left, top, shortcuts)) return {left: left, top: top};
-
-      var minLeft = 8;
-      var minTop = 8;
-      var maxLeft = window.innerWidth - TRIGGER_SIZE - 8;
-      var maxTop = window.innerHeight - TRIGGER_SIZE - 8;
-      var lefts = [];
-      var tops = [];
-      addCandidate(lefts, left, minLeft, maxLeft);
-      addCandidate(lefts, minLeft, minLeft, maxLeft);
-      addCandidate(lefts, maxLeft, minLeft, maxLeft);
-      addCandidate(tops, top, minTop, maxTop);
-      addCandidate(tops, minTop, minTop, maxTop);
-      addCandidate(tops, maxTop, minTop, maxTop);
-
-      for (var i = 0; i < shortcuts.length; i++) {
-        var shortcut = shortcuts[i];
-        addCandidate(lefts, shortcut.left - TRIGGER_SIZE - 8, minLeft, maxLeft);
-        addCandidate(lefts, shortcut.left - TRIGGER_SIZE, minLeft, maxLeft);
-        addCandidate(lefts, shortcut.right, minLeft, maxLeft);
-        addCandidate(lefts, shortcut.right + 8, minLeft, maxLeft);
-        addCandidate(tops, shortcut.top - TRIGGER_SIZE - 8, minTop, maxTop);
-        addCandidate(tops, shortcut.top - TRIGGER_SIZE, minTop, maxTop);
-        addCandidate(tops, shortcut.bottom, minTop, maxTop);
-        addCandidate(tops, shortcut.bottom + 8, minTop, maxTop);
-      }
-
-      var best = null;
-      var bestDistance = Infinity;
-      for (var x = 0; x < lefts.length; x++) {
-        for (var y = 0; y < tops.length; y++) {
-          var candidateLeft = lefts[x];
-          var candidateTop = tops[y];
-          if (intersectsAnyShortcut(candidateLeft, candidateTop, shortcuts)) continue;
-          var distance = Math.pow(candidateLeft - left, 2) + Math.pow(candidateTop - top, 2);
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            best = {left: candidateLeft, top: candidateTop};
-          }
-        }
-      }
-
-      if (!best) throw new Error('Cannot position comment trigger without overlapping artifact shortcuts');
-      return best;
     }
 
     function setHovered(block) {
@@ -852,15 +775,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       popover = null;
     }
 
-    function positionPopover(node, block) {
-      var rect = block.getBoundingClientRect();
-      var width = Math.min(POPOVER_WIDTH, window.innerWidth - 16);
-      var left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-      var top = Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - node.offsetHeight - 8));
-      node.style.left = left + 'px';
-      node.style.top = top + 'px';
-    }
-
     function setPopoverError(node, message) {
       var error = node.querySelector('.' + GLOBAL_PREFIX + '-error');
       error.textContent = message;
@@ -913,13 +827,29 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return buildClickMessage('[Artifact comments \u00B7 ' + artifactPath + '] (' + entries.length + ')', clickEntries);
     }
 
+    // The rail: its root, the stack that holds the controls, and the gutter of anchored cards. The stack is
+    // observed, so a change in its size re-measures the rail: the body's height, the cards and the trigger follow.
     function ensureDock() {
-      if (dock) return dock;
-      var node = document.createElement('div');
-      node.className = GLOBAL_PREFIX + '-dock';
-      injectRoot(node);
-      dock = node;
-      return dock;
+      if (dock) return dockStack;
+      dock = document.createElement('div');
+      dock.className = GLOBAL_PREFIX + '-dock';
+      injectRoot(dock);
+      dockStack = document.createElement('div');
+      dockStack.className = GLOBAL_PREFIX + '-stack';
+      dock.appendChild(dockStack);
+      gutter = document.createElement('div');
+      gutter.className = GLOBAL_PREFIX + '-gutter';
+      gutter.style.display = 'none';
+      injectRoot(gutter);
+      new ResizeObserver(railSizeChanged).observe(dockStack);
+      return dockStack;
+    }
+
+    // Every control of the layer goes into the rail's stack, marked as the layer's own.
+    function injectInDock(node) {
+      node.classList.add(UI_CLASS);
+      ensureDock().appendChild(node);
+      return node;
     }
 
     function installShortcuts() {
@@ -952,7 +882,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         container.appendChild(reason);
       }
 
-      ensureDock().appendChild(container);
+      injectInDock(container);
     }
 
     function addShortcutComment(shortcut) {
@@ -1022,9 +952,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         });
       }
 
-      injectRoot(node);
+      injectInDock(node);
       popover = node;
-      positionPopover(node, block);
       textarea.focus();
     }
 
@@ -1115,7 +1044,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       actions.appendChild(sendBtn);
       container.appendChild(actions);
 
-      ensureDock().appendChild(container);
+      injectInDock(container);
       tray = container;
       trayHeader = header;
       trayList = list;
@@ -1123,7 +1052,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       trayClearBtn = clearBtn;
       trayReason = reason;
 
-      placeColumn();
       refreshTray();
       // The page's own scripts can rewrite its text after this script has run. The drafts
       // still unattached get a second look once the page has finished loading.
@@ -1228,17 +1156,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         traySendBtn.disabled = false;
         trayReason.style.display = 'none';
       }
-      if (gutterActive()) {
-        scheduleReflow();
-      } else {
-        presentCorner();
-      }
-    }
-
-    // The column exists whenever the reserve does, so the action bar sits at its
-    // bottom from first paint and never hops between the corner and the column.
-    function gutterActive() {
-      return column > 0;
+      scheduleReflow();
     }
 
     function scheduleReflow() {
@@ -1249,19 +1167,60 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function reflowGutter() {
       reflowScheduled = false;
-      placeColumn();
-      if (gutterActive()) {
-        presentGutter();
-      } else {
-        presentCorner();
-      }
+      var side = placeRail();
+      if (side) presentGutter();
+      else presentList();
+      setRailHeight(side);
+      // The trigger keeps its block's place once the rail has moved the page's edge.
+      if (hovered && !popover) positionTrigger(hovered);
     }
 
-    function presentCorner() {
-      if (gutter) {
-        gutter.innerHTML = '';
-        gutter.style.display = 'none';
+    // The rail's size changes without a content change: the composer opens, a toast shows, the pick bar relabels,
+    // a textarea is dragged taller. Only the geometry follows here, so the controls and any open edit stay as they are.
+    function railSizeChanged() {
+      var side = railIsSide();
+      setRailHeight(side);
+      if (side) {
+        setGutterBottom();
+        measureCards();
+        layoutColumn();
       }
+      if (hovered && !popover) positionTrigger(hovered);
+    }
+
+    // The rail's side for the window: a right-hand column when the window is wide enough, else the bottom strip.
+    function railIsSide() {
+      return window.innerWidth >= RAIL_SIDE_MIN_WIDTH;
+    }
+
+    // Places the rail for the window: its side class, the body's right margin (the --cbc-rail-w property), and the
+    // gutter's column. Runs before the cards are built, because a card's height depends on its width.
+    function placeRail() {
+      var side = railIsSide();
+      dock.classList.toggle(GLOBAL_PREFIX + '-dock-side', side);
+      dock.classList.toggle(GLOBAL_PREFIX + '-dock-bottom', !side);
+      document.documentElement.style.setProperty('--cbc-rail-w', (side ? RAIL_WIDTH : 0) + 'px');
+      if (side) {
+        gutter.style.left = (window.innerWidth - RAIL_WIDTH + RAIL_PADDING) + 'px';
+        gutter.style.width = (RAIL_WIDTH - 2 * RAIL_PADDING) + 'px';
+      }
+      return side;
+    }
+
+    // The bottom strip's height (the --cbc-rail-h property) is its controls' height, read once they are placed.
+    // The layout height, not offsetHeight: that rounds to whole pixels, and the body would then end a fraction of a
+    // pixel under the strip's top edge. A side rail has no strip, so the body keeps its full height.
+    function setRailHeight(side) {
+      document.documentElement.style.setProperty('--cbc-rail-h',
+        (side ? 0 : dock.getBoundingClientRect().height) + 'px');
+    }
+
+    // The bottom strip holds every pending entry in the tray's own list: it has no column for anchored cards.
+    function presentList() {
+      gutter.style.display = 'none';
+      gutter.innerHTML = '';
+      anchoredCards = [];
+      docTops = null;
       trayList.innerHTML = '';
       for (var i = 0; i < pending.length; i++) {
         trayList.appendChild(buildTrayItem(i, pending[i]));
@@ -1269,21 +1228,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     function presentGutter() {
-      if (!gutter) {
-        gutter = document.createElement('div');
-        gutter.className = GLOBAL_PREFIX + '-gutter';
-        injectRoot(gutter);
-        prevGutterLeft = gutter.style.left;
-        prevGutterWidth = gutter.style.width;
-        prevGutterBottom = gutter.style.bottom;
-      }
       gutter.style.display = '';
-      // The column exists now, so placeColumn() can read its geometry back. A refusal
-      // here means the artifact is out of range: keep the corner list unchanged instead.
-      if (!placeColumn()) {
-        presentCorner();
-        return;
-      }
       gutter.innerHTML = '';
       trayList.innerHTML = '';
       anchoredCards = [];
@@ -1297,11 +1242,16 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
           trayList.appendChild(card);
         }
       }
-      // Only now is the bar's height final: unanchored comments (every shortcut button
-      // makes one) live in the bar's own list.
-      setColumnBottom();
+      // Only now is the column's bottom final: unanchored comments (every shortcut button makes one) live in the
+      // stack's own list.
+      setGutterBottom();
       measureCards();
       layoutColumn();
+    }
+
+    // The column stops one gap above the controls. Read once the stack holds its final content.
+    function setGutterBottom() {
+      gutter.style.bottom = (window.innerHeight - dockStack.getBoundingClientRect().top + GUTTER_GAP) + 'px';
     }
 
     // Measured once per reflow: anchors in document space and card heights. Neither
@@ -1356,7 +1306,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     // Two regimes, chosen by whether the cards fit the column at all.
     function layoutColumn() {
-      if (!column || !gutter || !docTops || docTops.length === 0) return;
+      if (!docTops || docTops.length === 0) return;
       var L = bandHeight, total = 0, i;
       for (i = 0; i < cardHeights.length; i++) total += cardHeights[i] + (i ? GUTTER_GAP : 0);
       if (total > L) {
@@ -1389,181 +1339,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         s2.marginBottom = '';
         s2.top = tops[i] + 'px';
       }
-    }
-
-    // Right edge of everything the artifact itself renders. Every element we did not
-    // inject is measured, and nothing is filtered by position. Nothing reads
-    // scrollWidth, so out-of-flow panels, tables wider than their container and
-    // display:contents subtrees are all covered.
-    function measureContentRight() {
-      var rightmost = 0, seen = false;
-      var all = document.body.querySelectorAll('*');
-      for (var i = 0; i < all.length; i++) {
-        var el = all[i];
-        if (el.className && String(el.className).indexOf(GLOBAL_PREFIX) === 0) continue;
-        if (el.closest('.' + GLOBAL_PREFIX + '-dock,.' + GLOBAL_PREFIX + '-gutter')) continue;
-        var r = el.getBoundingClientRect();
-        if (r.width === 0 && r.height === 0) continue;
-        seen = true;
-        if (r.right > rightmost) rightmost = r.right;
-      }
-      return seen ? rightmost : null;
-    }
-
-    // Pure: the widest column that leaves a gap on both sides, or 0 when the free
-    // space to the right of the content cannot hold the narrowest one.
-    function chooseWidth(clientWidth, contentRight, gap, min, max) {
-      var w = Math.min(max, clientWidth - contentRight - 2 * gap);
-      return w < min ? 0 : Math.floor(w);
-    }
-
-    function chooseColumn() {
-      if (window.innerWidth < GUTTER_THRESHOLD) return 0;
-      if (window.innerHeight < GUTTER_MIN_HEIGHT) return 0;
-      if (!viewportIsContainingBlock()) return 0;
-      var right = measureContentRight();
-      if (right === null) return 0;
-      var w = chooseWidth(document.documentElement.clientWidth, right, GUTTER_GAP, COL_MIN, COL_MAX);
-      if (w) columnLeft = right + GUTTER_GAP;
-      return w;
-    }
-
-    // Owned by page layout, not by the comment list: decided at load and on the
-    // existing reflow paths, never as a function of how many comments are pending.
-    // Nothing outside the injected layer is written — not one artifact style.
-    function placeColumn() {
-      if (!active) {
-        prevDockLeft = dock.style.left;
-        prevDockRight = dock.style.right;
-        prevDockWidth = dock.style.width;
-        prevTrayWidth = tray.style.width;
-        active = true;
-      }
-      var w = chooseColumn();
-      if (!w) {
-        restoreColumn();
-        column = 0;
-        return 0;
-      }
-      // Width only. The bar's height depends on its own content, so its top -- and
-      // therefore this column's bottom -- can only be read after the bar is filled.
-      // The function setColumnBottom() does that, and the caller runs it once routing
-      // is done.
-      dock.style.left = columnLeft + 'px';
-      dock.style.right = 'auto';
-      dock.style.width = w + 'px';
-      tray.style.width = '100%';
-      column = w;
-      if (gutter) {
-        gutter.style.left = columnLeft + 'px';
-        gutter.style.width = w + 'px';
-      }
-      if (!resolvesAgainstViewport(w)) {
-        restoreColumn();
-        column = 0;
-        return 0;
-      }
-      return w;
-    }
-
-    // The column's whole coordinate model holds only while the viewport is the
-    // containing block for the injected layer's fixed boxes. That model measures the
-    // margin against the viewport, places cards from the viewport's top edge, and reads
-    // the bar's offset from the viewport's bottom. The walk below follows the layer's
-    // real ancestor chain rather than assuming it is exactly body and documentElement:
-    // an artifact can reparent the layer. The property enumeration is a known set plus
-    // an empirical backstop (resolvesAgainstViewport at placement time), not a complete
-    // test -- it can fall behind browser implementations. Residual: a property the set
-    // misses lets the column open anyway, so cards may stop tracking their paragraphs.
-    // Non-overlap with the bar stays structural regardless, because the column clips
-    // and the two boxes do not intersect.
-    function viewportIsContainingBlock() {
-      // The chain is walked rather than assumed: if anything ever reparents the layer,
-      // the hosts between it and the root are inspected too.
-      var hosts = [], el = dock ? dock.parentElement : document.body;
-      while (el) { hosts.push(el); el = el.parentElement; }
-      if (document.documentElement && hosts.indexOf(document.documentElement) === -1) {
-        hosts.push(document.documentElement);
-      }
-      for (var i = 0; i < hosts.length; i++) {
-        if (!hosts[i]) continue;
-        var cs = window.getComputedStyle(hosts[i]);
-        for (var j = 0; j < CB_PROPS.length; j++) {
-          var v = cs[CB_PROPS[j]];
-          if (v && v !== 'none' && v !== 'normal') return false;
-        }
-        var contain = cs.contain || '';
-        if (/paint|layout|strict|content/.test(contain)) return false;
-        var willChange = cs.willChange || '';
-        if (/transform|translate|rotate|scale|perspective|filter|contain|offset-path/.test(willChange)) {
-          return false;
-        }
-        if (cs.transformStyle === 'preserve-3d') return false;
-        if (cs.contentVisibility === 'auto') return false;
-        if (cs.offsetPath && cs.offsetPath !== 'none') return false;
-        var zoom = cs.zoom;
-        if (zoom && zoom !== 'normal' && parseFloat(zoom) !== 1) return false;
-        // Not a containing-block property, but it redefines which edge `left` counts
-        // from, which the margin measurement assumes.
-        if (cs.writingMode && cs.writingMode !== 'horizontal-tb') return false;
-      }
-      return true;
-    }
-
-    // Read back as well. The enumeration above is a known set, not a complete test for
-    // the causes the spec defines. This is the backstop for whatever the enumeration
-    // misses, at placement time.
-    // The free margin is measured in viewport coordinates (getBoundingClientRect) but
-    // written in containing-block coordinates (style.left), and the whole card layout
-    // assumes the column's top edge is the viewport's. Those hold only while the layer's
-    // own boxes resolve against the viewport. An artifact CSS rule can break that: a
-    // transform, zoom, filter or contain:paint anywhere up the tree, on any axis. So
-    // write the values and read them back. The column must land where it was put, and
-    // the bar must sit its own offset above the viewport's bottom edge. Whatever fails
-    // this is out of range by section 1 and keeps the corner list unchanged.
-    //
-    // Both readings must be non-degenerate before they can disagree, so an environment
-    // that reports no geometry at all (a test double) is not mistaken for a hostile one.
-    function resolvesAgainstViewport(w) {
-      if (!gutter) return true;
-      var gr = gutter.getBoundingClientRect();
-      if (gr.width > 0 && Math.abs(gr.left - columnLeft) > 1) return false;
-      var dr = dock.getBoundingClientRect();
-      var barBottom = parseFloat(window.getComputedStyle(dock).bottom);
-      if (dr.height > 0 && barBottom === barBottom
-          && Math.abs((window.innerHeight - dr.bottom) - barBottom) > 1) return false;
-      return true;
-    }
-
-    // The column stops one gap above the action bar. Run after the bar holds its final
-    // content, so the bar's own list can never grow into the column afterwards.
-    //
-    // Both boxes are fixed children of body, so they share one containing block, and
-    // `bottom` is measured from the same edge for both. The column's bottom therefore
-    // needs no viewport constant: it is the bar's own bottom offset, plus the bar's
-    // height, plus a gap. That sum holds whatever the containing block turns out to be.
-    // It still holds when an artifact makes itself the containing block with a
-    // transform, filter or contain:paint on body, where viewport arithmetic would be
-    // wrong.
-    function setColumnBottom() {
-      if (!gutter || !column) return;
-      var barBottom = parseFloat(window.getComputedStyle(dock).bottom) || 0;
-      gutter.style.bottom = (barBottom + dock.offsetHeight + GUTTER_GAP) + 'px';
-    }
-
-    function restoreColumn() {
-      if (!active) return;
-      dock.style.left = prevDockLeft;
-      dock.style.right = prevDockRight;
-      dock.style.width = prevDockWidth;
-      tray.style.width = prevTrayWidth;
-      if (gutter) {
-        gutter.style.left = prevGutterLeft;
-        gutter.style.width = prevGutterWidth;
-        gutter.style.bottom = prevGutterBottom;
-      }
-      active = false;
-      column = 0;
     }
 
     function removeEntry(idx) {
@@ -1901,7 +1676,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       pickBar.appendChild(pickRestButton);
       pickBar.appendChild(pickUndoButton);
       pickBar.appendChild(pickSendButton);
-      ensureDock().appendChild(pickBar);
+      injectInDock(pickBar);
     }
 
     // One row of buttons under the question's option lines. The row carries the layer marker, so the
@@ -1945,9 +1720,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
     function reposition() {
       layoutColumn();
-      if (!hovered) return;
-      if (popover) positionPopover(popover, hovered);
-      else positionTrigger(hovered);
+      if (hovered && !popover) positionTrigger(hovered);
     }
   })();
 }

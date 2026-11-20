@@ -34,11 +34,9 @@ function loadArtifactCommentsContext(opts = {}) {
       return {display: el.display || 'block'};
     },
   };
-  if (opts.syncRaf) {
-    // The tray's scroll path paints through rAF; a synchronous implementation
-    // keeps those callbacks on the same tick as the triggering call.
-    window.requestAnimationFrame = (fn) => { fn(); return 0; };
-  }
+  // Every tray refresh reflows the rail on the next frame. A synchronous frame keeps that callback on the same tick
+  // as the triggering call.
+  window.requestAnimationFrame = (fn) => { fn(); return 0; };
   window.self = window;
   window.parent = opts.framed ? (opts.parent || {}) : window;
   // The server's inline tag, reproduced by the tests that own a session identity.
@@ -53,6 +51,10 @@ function loadArtifactCommentsContext(opts = {}) {
   const documentElement = makeElement();
   documentElement.tagName = 'HTML';
   documentElement.clientWidth = window.innerWidth;
+  // Not enumerable, so a test that lists the root's written properties sees only the properties the layer sets.
+  Object.defineProperty(documentElement.style, 'setProperty', {
+    value: (name, value) => { documentElement.style[name] = String(value); },
+  });
   const document = {
     documentElement,
     head,
@@ -88,6 +90,11 @@ function loadArtifactCommentsContext(opts = {}) {
       throw new Error('fetch should not run while loading artifact-comments.js');
     },
     crypto: {randomUUID: () => `artifact-comment-request-${++requestSequence}`},
+    // The rail's stack is observed in a browser. The stub never reports a size change: a test drives each reflow.
+    ResizeObserver: class {
+      observe() {}
+      disconnect() {}
+    },
     // Timers run at once unless a suite supplies its own clock, as the pick undo tests do.
     setTimeout: opts.setTimeout || ((callback) => { callback(); return 1; }),
     clearTimeout: opts.clearTimeout || (() => {}),

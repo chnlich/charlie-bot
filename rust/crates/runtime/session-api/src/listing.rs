@@ -933,7 +933,7 @@ impl FirstScreenShape {
 /// one string, since a base64url cell per row costs a deflator the same 22 bytes as the 36-character text.
 /// [`DELTA_ENCODING`] stores `updated_at` as newest-first differences of epoch minutes, which a deflator packs tightly.
 ///
-/// A page row never holds null: [`drop_falsy_fields`] leaves out each falsy field but a name and a schedule flag.
+/// [`drop_falsy_fields`] leaves out each falsy field, null included, unless [`KEPT_FALSY_FIELDS`] names it.
 ///
 /// `fixed` names the columns the text carries, in order, when a caller's shape is fixed: each named column is written
 /// even where no row holds the field. `None` writes every field a row holds, sorted.

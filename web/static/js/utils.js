@@ -170,13 +170,6 @@ function sessionUpdatedMs(session) {
 const pageScriptLoads = new Map();
 const pageScriptProgress = new Map();
 
-// A same-origin file takes the page's asset version, so a release that changes it also changes its URL. A file on
-// another origin names its own version in its path (`xterm@5.3.0`), and a query the CDN does not serve would miss
-// the entry its own pin already keyed, so it keeps the URL its module wrote.
-function pageAssetUrl(path) {
-  return /^https?:\/\//.test(path) ? path : path + '?v=' + encodeURIComponent(STATIC_ASSET_VERSION);
-}
-
 function loadPageScripts(key, paths) {
   if (!pageScriptLoads.has(key)) {
     const start = pageScriptProgress.get(key) || 0;

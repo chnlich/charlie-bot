@@ -57,6 +57,14 @@ function offlinePanelMark() {
     'aria-label="' + OFFLINE_PANEL_LABEL + '">' + cbIcon('offline-panel', 16) + '</span>';
 }
 
+// A same-origin file takes the page's asset version, so a release that changes it also changes its URL. A file on
+// another origin names its own version in its path (`xterm@5.3.0`), and a query the CDN does not serve would miss
+// the entry its own pin already keyed, so it keeps the URL its module wrote. This file loads before utils.js and
+// offline-shell.js, which both name it; diff.html loads neither config.js nor the loaders, so it has no use here.
+function pageAssetUrl(path) {
+  return /^https?:\/\//.test(path) ? path : path + '?v=' + encodeURIComponent(STATIC_ASSET_VERSION);
+}
+
 // WebSocket endpoints take the access key as a 'token' query param: the
 // browser WebSocket API exposes no header channel for the fetch wrapper's
 // Bearer header. Loads before every script that opens a WebSocket.

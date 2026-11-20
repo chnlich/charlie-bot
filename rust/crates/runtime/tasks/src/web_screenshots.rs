@@ -56,7 +56,7 @@ pub fn changes_web_page(changed_paths: &[String]) -> bool {
   changed_paths.iter().any(|path| is_web_page_path(path))
 }
 
-/// The window sizes as help and refusal text writes them, e.g. `1536×900, 1400×1000, 390×844`.
+/// The window sizes as help and refusal text writes them, e.g. `1536x900, 1400x1000, 390x844`.
 pub fn window_sizes_text() -> String {
   WINDOW_SIZES.iter().map(|size| size_label(*size)).collect::<Vec<_>>().join(", ")
 }
@@ -194,9 +194,9 @@ fn named_png_paths(body: &str) -> Vec<&str> {
     .collect()
 }
 
-/// One window size's label, e.g. `1536×900` (`size_label`).
+/// One window size's label, e.g. `1536x900` (`size_label`).
 fn size_label(size: (u32, u32)) -> String {
-  format!("{}×{}", size.0, size.1)
+  format!("{}x{}", size.0, size.1)
 }
 
 /// The pixel width and height of a PNG file, read from its IHDR chunk (`png_size`).
@@ -248,7 +248,7 @@ mod tests {
     let body = format!("View: /?session=abc\n{}", named.join(" "));
     let refusal = check_pr_body(Some(&body)).unwrap_err().to_string();
     assert!(refusal.contains("Demo"), "{refusal}");
-    assert!(refusal.contains("1536×900"), "{refusal}");
+    assert!(refusal.contains("1536x900"), "{refusal}");
   }
 
   #[test]
@@ -291,8 +291,8 @@ mod tests {
     let demo = write_png(dir.path(), "demo.png", 10, 10);
     let body = format!("Demo: {}\nView: /", demo.display());
     let refusal = check_pr_body(Some(&body)).unwrap_err().to_string();
-    assert!(refusal.contains("1536×900"), "{refusal}");
-    assert!(refusal.contains("390×844"), "{refusal}");
+    assert!(refusal.contains("1536x900"), "{refusal}");
+    assert!(refusal.contains("390x844"), "{refusal}");
   }
 
   #[test]
@@ -301,8 +301,8 @@ mod tests {
     let mut shots = write_window_shots(dir.path(), 0, 1);
     shots[0] = write_png(dir.path(), "wrong.png", 1440, 1600);
     let refusal = check_screenshot_files(&shots, 1).unwrap_err().to_string();
-    assert!(refusal.contains("wrong.png (1440×1600)"), "{refusal}");
-    assert!(refusal.contains("1536×900"), "{refusal}");
+    assert!(refusal.contains("wrong.png (1440x1600)"), "{refusal}");
+    assert!(refusal.contains("1536x900"), "{refusal}");
   }
 
   #[test]
@@ -310,7 +310,7 @@ mod tests {
     let dir = tempfile::tempdir().expect("temporary directory is available");
     write_window_shots(dir.path(), 0, 1);
     let refusal = check_screenshot_dir(dir.path(), ROUND_SHOTS_PER_SIZE).unwrap_err().to_string();
-    assert!(refusal.contains("needs 2 at 1536×900"), "{refusal}");
+    assert!(refusal.contains("needs 2 at 1536x900"), "{refusal}");
     write_window_shots(dir.path(), 10, 1);
     check_screenshot_dir(dir.path(), ROUND_SHOTS_PER_SIZE).expect("two of each size pass");
   }
@@ -334,6 +334,6 @@ mod tests {
 
   #[test]
   fn the_window_sizes_text_names_every_size() {
-    assert_eq!(window_sizes_text(), "1536×900, 1400×1000, 390×844");
+    assert_eq!(window_sizes_text(), "1536x900, 1400x1000, 390x844");
   }
 }

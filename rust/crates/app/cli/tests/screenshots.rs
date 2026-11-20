@@ -74,7 +74,7 @@ fn a_web_page_change_with_one_screenshot_of_each_size_exits_1() {
   let output = check(dir.path(), "web/app.js\n");
 
   assert_eq!(output.status.code(), Some(1), "{}", text(&output));
-  assert!(text(&output).contains("1536×900"), "{}", text(&output));
+  assert!(text(&output).contains("1536x900"), "{}", text(&output));
 }
 
 #[test]
@@ -88,8 +88,8 @@ fn a_web_page_change_with_a_screenshot_of_the_wrong_height_exits_1() {
 
   assert_eq!(output.status.code(), Some(1), "{}", text(&output));
   let printed = text(&output);
-  assert!(printed.contains(&format!("{width}×{}", height * 2)), "{printed}");
-  assert!(printed.contains(&format!("{width}×{height}")), "{printed}");
+  assert!(printed.contains(&format!("{width}x{}", height * 2)), "{printed}");
+  assert!(printed.contains(&format!("{width}x{height}")), "{printed}");
 }
 
 #[test]

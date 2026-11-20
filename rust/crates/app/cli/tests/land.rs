@@ -433,7 +433,7 @@ fn a_web_page_change_without_a_demo_line_is_refused() {
   assert_ne!(output.status.code(), Some(0));
   let stderr = String::from_utf8_lossy(&output.stderr);
   assert!(stderr.contains("Demo"), "stderr: {stderr}");
-  assert!(stderr.contains("1536×900"), "the refusal names the window sizes: {stderr}");
+  assert!(stderr.contains("1536x900"), "the refusal names the window sizes: {stderr}");
   assert!(!venue.origin_has_task_branch());
   assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
 }
@@ -462,7 +462,7 @@ fn a_web_page_change_with_a_screenshot_of_the_wrong_height_is_refused() {
   let shots = web_change(&venue);
   let demo = demo_file(&venue);
   let mut named = write_window_screenshots(&shots);
-  // A 1440×1600 review screenshot and a 125%-scaled 1920 px wide capture are both outside the set.
+  // A 1440x1600 review screenshot and a 125%-scaled 1920 px wide capture are both outside the set.
   named.remove(0);
   named.push(write_screenshot(&shots, "review-1440x1600.png", 1440, 1600));
   named.push(write_screenshot(&shots, "scaled-1920x1125.png", 1920, 1125));
@@ -472,8 +472,8 @@ fn a_web_page_change_with_a_screenshot_of_the_wrong_height_is_refused() {
 
   assert_ne!(output.status.code(), Some(0));
   let stderr = String::from_utf8_lossy(&output.stderr);
-  assert!(stderr.contains("1536×900"), "the refusal names the missing size: {stderr}");
-  assert!(stderr.contains("1440×1600"), "the refusal names the mismatched file: {stderr}");
+  assert!(stderr.contains("1536x900"), "the refusal names the missing size: {stderr}");
+  assert!(stderr.contains("1440x1600"), "the refusal names the mismatched file: {stderr}");
   assert!(!venue.origin_has_task_branch());
   assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
 }
@@ -596,7 +596,7 @@ fn the_help_names_every_window_size() {
   assert_eq!(output.status.code(), Some(0));
   let help = String::from_utf8_lossy(&output.stdout);
   for size in charliebot_tasks::web_screenshots::WINDOW_SIZES {
-    let label = format!("{}×{}", size.0, size.1);
+    let label = format!("{}x{}", size.0, size.1);
     assert!(help.contains(&label), "the help names {label}: {help}");
   }
 }

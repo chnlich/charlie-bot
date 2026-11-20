@@ -13,10 +13,7 @@ _remote_wake_lock_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 source "$_remote_wake_lock_dir/../poor-network/lock.sh"
 unset _remote_wake_lock_dir
 
-# remote_wake_lock: hold the shared lock on this shell's file descriptor, waiting up to the limit. The lock stays held
-# until the shell exits, so every process the run starts lives under it.
+# remote_wake_lock: hold the shared lock until this shell exits, waiting up to the limit. bench_lock_hold owns the flock.
 remote_wake_lock() {
-  mkdir -p "$(dirname "$BENCH_LOCK_FILE")" || return $?
-  exec 9>"$BENCH_LOCK_FILE"
-  flock -w "$BENCH_LOCK_WAIT_SECONDS" -E "$BENCH_LOCK_TIMEOUT_EXIT" 9
+  bench_lock_hold "$BENCH_LOCK_WAIT_SECONDS"
 }

@@ -472,11 +472,10 @@ pub fn latest_reading(
   let Some(scoped) = panel_reading(panel, Some(model), moment) else {
     return general;
   };
-  let general = general.expect("a scoped reading exists only beside a general one");
   Some(RateLimitReading {
-    at: general.at.max(scoped.at),
-    utilization: general.utilization.max(scoped.utilization),
-    five_hour: match (general.five_hour, scoped.five_hour) {
+    at: general.as_ref().map_or(scoped.at, |reading| reading.at.max(scoped.at)),
+    utilization: general.as_ref().map_or(scoped.utilization, |reading| reading.utilization.max(scoped.utilization)),
+    five_hour: match (general.and_then(|reading| reading.five_hour), scoped.five_hour) {
       (Some(left), Some(right)) => Some(left.max(right)),
       (left, right) => left.or(right),
     },
@@ -1517,6 +1516,114 @@ mod tests {
     assert!((headroom(&state, "a", Some("claude-fable-5-1"), Some(now)) - 0.15).abs() < 1e-12);
     assert!((headroom(&state, "a", Some("claude-opus-4-8"), Some(now)) - 0.80).abs() < 1e-12);
     let _ = cfg;
+  }
+
+  #[test]
+  fn scoped_panel_usage_is_kept_when_no_general_reading_exists() {
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    observe_usage_panel(
+      &state,
+      "a",
+      &json!({
+        "fetched_at":"2025-01-01T12:00:00Z",
+        "windows":[{
+          "utilization":45.0,
+          "scope_label":"Fable five-hour",
+          "window_minutes":FIVE_HOUR_WINDOW_MINUTES,
+          "resets_at":"2025-01-01T17:00:00Z"
+        }]
+      }),
+    );
+
+    let reading = latest_reading(&state, "a", Some("claude-fable-5-1"), Some(now))
+      .expect("the scoped panel reading exists without a general reading");
+
+    assert_eq!(reading.at, now);
+    assert_eq!(reading.utilization, 0.45);
+    assert_eq!(reading.five_hour, Some(0.45));
+    // A caller that asks for the general reading gets none: the panel holds only the model's window.
+    assert_eq!(latest_reading(&state, "a", None, Some(now)), None);
+  }
+
+  #[test]
+  fn a_general_panel_window_reads_for_a_model_with_no_scoped_window() {
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    observe_usage_panel(
+      &state,
+      "a",
+      &json!({
+        "fetched_at":"2025-01-01T12:00:00Z",
+        "windows":[{
+          "utilization":45.0,
+          "window_minutes":FIVE_HOUR_WINDOW_MINUTES,
+          "resets_at":"2025-01-01T17:00:00Z"
+        }]
+      }),
+    );
+
+    for model in [Some("claude-fable-5-1"), Some("claude-opus-4-8"), None] {
+      let reading = latest_reading(&state, "a", model, Some(now)).expect("the general panel reading exists");
+
+      assert_eq!(reading.at, now);
+      assert_eq!(reading.utilization, 0.45);
+      assert_eq!(reading.five_hour, Some(0.45));
+    }
+  }
+
+  #[test]
+  fn a_panel_with_general_and_scoped_windows_merges_both_readings() {
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    observe_usage_panel(
+      &state,
+      "a",
+      &json!({
+        "fetched_at":"2025-01-01T12:00:00Z",
+        "windows":[
+          {"utilization":90.0,"window_minutes":WEEKLY_WINDOW_MINUTES,"resets_at":"2025-01-05T12:00:00Z"},
+          {"utilization":20.0,"window_minutes":FIVE_HOUR_WINDOW_MINUTES,"resets_at":"2025-01-01T17:00:00Z"},
+          {
+            "utilization":50.0,
+            "scope_label":"Fable five-hour",
+            "window_minutes":FIVE_HOUR_WINDOW_MINUTES,
+            "resets_at":"2025-01-01T17:00:00Z"
+          }
+        ]
+      }),
+    );
+
+    let reading = latest_reading(&state, "a", Some("claude-fable-5-1"), Some(now)).expect("both readings exist");
+
+    // The general window carries the larger utilization; the scoped five-hour window carries the larger five-hour.
+    assert_eq!(reading.at, now);
+    assert_eq!(reading.utilization, 0.90);
+    assert_eq!(reading.five_hour, Some(0.50));
+  }
+
+  #[test]
+  fn a_panel_with_no_window_for_the_model_reads_nothing() {
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    assert_eq!(latest_reading(&state, "a", Some("claude-fable-5-1"), Some(now)), None);
+    assert_eq!(latest_reading(&state, "a", None, Some(now)), None);
+
+    observe_usage_panel(
+      &state,
+      "a",
+      &json!({
+        "fetched_at":"2025-01-01T12:00:00Z",
+        "windows":[{
+          "utilization":80.0,
+          "scope_label":"Opus five-hour",
+          "window_minutes":FIVE_HOUR_WINDOW_MINUTES,
+          "resets_at":"2025-01-01T17:00:00Z"
+        }]
+      }),
+    );
+    assert_eq!(latest_reading(&state, "a", Some("claude-fable-5-1"), Some(now)), None);
+    assert_eq!(latest_reading(&state, "a", None, Some(now)), None);
   }
 
   fn panel_window(utilization: f64, minutes: i64, resets_at: &str) -> Value {

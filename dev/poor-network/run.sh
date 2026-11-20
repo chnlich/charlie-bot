@@ -19,7 +19,8 @@
 # attempt; a side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
 # --lock-wait SECONDS  how long each side waits for the bench lock (default 7200, the 2 h above). An improve round
 #                passes 900, its 15-minute wait.
-# --open-conditions LIST  the open scenario's cells: any of link,held,reset,flaps,offline,release (default all). The
+# --open-conditions LIST  the open scenario's cells: any of
+#                         link,held,reset,flaps,offline,release,release-offline,replied-offline (default all). The
 #                reference cell always runs, since the CPU rate is derived from it.
 # --open-cpu-rate RATE  every side runs the open scenario's cells at RATE instead of a rate its reference derives, so
 #                sides of separate invocations (two benches on one product) compare at one CPU speed. Each side's JSON

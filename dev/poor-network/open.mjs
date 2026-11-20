@@ -19,16 +19,28 @@ import { NETWORK_CHANGED_ERROR, PAGE_REPORT_BINDING, Tabs, sleep } from './tabs.
 
 const CONDITIONS = ['link', 'held', 'reset', 'flaps', 'offline'];
 const CASES = ['A', 'B', 'C'];
-// The conditions a run selects with --open-conditions: the link conditions, then the release cells.
-export const OPEN_CONDITIONS = Object.freeze([...CONDITIONS, 'release']);
+// The conditions a run selects with --open-conditions: the link conditions, then the release cells, then the
+// stored-copy rows. The stored-copy rows run case A only: each asks what an opened session's browser shows, and
+// only case A has opened the session its profile reads.
+export const OPEN_CONDITIONS = Object.freeze([...CONDITIONS, 'release', 'release-offline', 'replied-offline']);
+const STORED_COPY_CONDITIONS = Object.freeze(['release-offline', 'replied-offline']);
 const REFERENCE = Object.freeze({ id: 'reference A link rate 1', case: 'A', condition: 'link', rate: 1 });
 const SETTLE_MS = 300000;
 // The warm's report arrives when the service worker has stored the release's shell and files, which takes the link's
 // transfer time after the page settles. A page that never reports (a side without the offline shell) times out here.
 const WARM_REPORT_TIMEOUT_MS = 300000;
+// A reply turn's end and its stored-copy refresh's report wait at most this long. The turn is one message and the
+// stub's reply, whose transfer takes the link's time; a turn that outlives the bound failed the run that saw it.
+const REPLY_TIMEOUT_MS = 300000;
 // Keeps the page's warm report on the window, before the page's own scripts run, so the bench reads it after the load.
 const WARM_REPORT_INIT =
   "document.addEventListener('charliebot:offline-shell-warm', (event) => { window.__warmReport = event.detail; });";
+// Keeps the page's stored-copy refresh report on the window the same way: the reply prep waits on it, because the
+// measured offline open must read a copy that already carries the reply.
+const COPY_REFRESH_INIT =
+  "document.addEventListener('charliebot:offline-shell-copies-refreshed', (event) => { " +
+  "window.__copyRefresh = event.detail; });";
+const PREP_INIT = `${WARM_REPORT_INIT}\n${COPY_REFRESH_INIT}`;
 // The request a browser makes before a repetition to open a connection that stays idle in its pool. A and B have
 // opened CharlieBot before, so their browsers hold such a connection; C's does not, so it holds none.
 const PRECONNECT_PATH = '/api/concurrency/now';
@@ -312,6 +324,72 @@ async function warmReport(tab) {
   }
 }
 
+// One unmeasured online open at the version a release landed, in the measured browser's profile: the stored shell's
+// revalidation answers 200 with the release's page, whose 4409 reload the page runs itself, and the release's worker
+// activates. The open ends when the release's page has reported its warm, so the stored shell is the release's and
+// the stored copies are the ones the measured open reads.
+async function settleReleaseOnline(tabs, session, version) {
+  const tab = await tabs.open('release-activate', PREP_INIT);
+  try {
+    await tabs.navigate(tab, `/?session=${session.id}`);
+    await tab.ready();
+    await tabs.show(tab);
+    await tabs.waitIdle(SETTLE_MS);
+    const deadline = Date.now() + WARM_REPORT_TIMEOUT_MS;
+    for (;;) {
+      const state = await tab.evaluate(
+        "({version: typeof STATIC_ASSET_VERSION === 'undefined' ? null : STATIC_ASSET_VERSION, " +
+        'warm: window.__warmReport ?? null})');
+      if (state.version === version && state.warm !== null && state.warm.stored === true) {
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`the release page reported ${JSON.stringify(state)}, not the release's stored shell`);
+      }
+      await sleep(1000);
+    }
+  } finally {
+    await tabs.close(tab);
+  }
+}
+
+// One reply the socket delivered, sent from a page of the measured browser's profile: the page shows the reply
+// streaming, and the stored-copy refresh it asks for completes. The reply is the session's newest message when the
+// measured open fetches its first screen, so the offline open must show it from the stored copy.
+async function deliverReplyOnline(tabs, session, repetition) {
+  const tab = await tabs.open('reply-send', PREP_INIT);
+  try {
+    await tabs.navigate(tab, `/?session=${session.id}`);
+    await tab.ready();
+    await tabs.show(tab);
+    await tabs.waitIdle(SETTLE_MS);
+    const echo = `pn-reply ${repetition} ${randomTag()}`;
+    const sentAt = await tab.sendText(`${echo} answer with the reply`);
+    const deadline = Date.now() + REPLY_TIMEOUT_MS;
+    for (;;) {
+      if (tab.frames.some((frame) => frame.at >= sentAt && frame.type === 'master_done')) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`the reply to ${echo} did not finish within its bound`);
+      }
+      await sleep(500);
+    }
+    for (;;) {
+      const report = await tab.evaluate('window.__copyRefresh ?? null');
+      if (report !== null && report.refreshed >= 1) {
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`the reply's stored-copy refresh reported ${JSON.stringify(report)}, not a re-stored copy`);
+      }
+      await sleep(500);
+    }
+  } finally {
+    await tabs.close(tab);
+  }
+}
+
 async function startLink(ctx) {
   const proxy = new ShapingProxy({
     target: { host: '127.0.0.1', port: ctx.frontPort },
@@ -376,6 +454,15 @@ async function measureOnce(ctx, cell, repetition) {
           `${OPEN.openAfterMs} ms`);
       }
       await sleep(openIn);
+    } else if (cell.condition === 'release-offline') {
+      // A release lands, one online open activates the release's worker and revalidates the stored shell, and the
+      // measured open then reads the stored copy offline: the release keeps an opened session's stored copy.
+      const released = await release(ctx, session.id);
+      await settleReleaseOnline(tabs, session, released.after);
+    } else if (cell.condition === 'replied-offline') {
+      // A reply the socket delivered, from a page of the same profile: its stored-copy refresh completes before
+      // the measured open, so the offline reopen shows the newest reply the page received.
+      await deliverReplyOnline(tabs, session, repetition);
     }
 
     // The newest message the measured open must show: the first screen's last message, fetched now, after the
@@ -388,7 +475,9 @@ async function measureOnce(ctx, cell, repetition) {
     const tab = await openMeasuredTab(tabs, newestMessage.id);
     await tab.page.send('Emulation.setCPUThrottlingRate', { rate: cell.rate });
     await tabs.show(tab);
-    if (cell.condition === 'offline') {
+    // The offline open and the stored-copy rows' measured opens navigate with the network off: the stored shell and
+    // the stored copies are all the open has.
+    if (cell.condition === 'offline' || cell.condition.endsWith('-offline')) {
       await tab.page.send('Network.emulateNetworkConditions', {
         offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
       });
@@ -641,6 +730,13 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
     const built = await buildWarm(ctx, caseName);
     result.releaseWarmReports = { ...result.releaseWarmReports, [caseName]: built.report };
     const cell = { id: `${caseName} release`, case: caseName, condition: 'release', rate: cpuRate, warmDir: built.dir };
+    result.cells.push(cell);
+    await runCell(ctx, cell, repetitions);
+  }
+  // The stored-copy rows run last: a release-offline repetition lands its own release, and every cell that reads
+  // the served page at a settled version has already run.
+  for (const condition of STORED_COPY_CONDITIONS.filter((name) => conditions.includes(name))) {
+    const cell = { id: `A ${condition}`, case: 'A', condition, rate: cpuRate, warmDir: warm.A.dir };
     result.cells.push(cell);
     await runCell(ctx, cell, repetitions);
   }

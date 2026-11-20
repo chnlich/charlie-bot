@@ -22,7 +22,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
 | `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open,search` (default the first four). `open` runs its own cells, see below. `search` runs its own repetitions and variants, see "Search view". |
-| `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release`; default all. |
+| `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release,release-offline,replied-offline`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--lock-wait SECONDS` | How long each side waits for the bench lock (default 7200). An improve round passes 900. |
@@ -271,6 +271,8 @@ Conditions, each a fresh browser profile behind a fresh proxy, with the CDN file
 | `flaps` | Up 5 s, then down 5 s, six times (60 s). Each drop resets every connection, so each recovery reconnects. |
 | `offline` | Chrome's network emulation is offline for the open. The navigation fails at once with `net::ERR_INTERNET_DISCONNECTED` and the open is not reached. |
 | `release` | A held blackout starts; 2 s in, the server's static asset version changes (the bench appends a comment to the trial tree's served `web/static/js/config.js`, and the version the server answers must move); the open navigates 5 s in, inside the hold. The open's document request waits in the hold and reaches the server after the release. A page that revalidates its document, as main's does, receives the released page in full and does not reload. A page that opens from a stored copy without asking the server is older than the release: when the link returns, its socket closes with 4409 and the page reloads once, inside the open, and the open's time runs from the first navigation through that reload. |
+| `release-offline` | Case A only. A release lands; one unmeasured online open activates the release's worker and revalidates the stored shell (the open waits for that page's warm report); the measured open then navigates with the network off. The stored copy answers, so the row's verdict is the open's `reached` count: a release that emptied the stored copies shows no newest message offline. |
+| `replied-offline` | Case A only. A page of the warm profile sends one message; the reply streams back over the socket, and the page's stored-copy refresh reports the copy it re-stored; the measured open then navigates with the network off. The reply is the session's newest message, so the row's verdict is the open's `reached` count: a refresh that did not store the reply shows no newest message offline. |
 
 `A flaps` opens its page from the HTTP cache and reaches its newest message inside one up window. B's and C's documents
 must cross the link in full (about 7.3 s at 12.5 KB/s), longer than one up window, so no window completes the body and

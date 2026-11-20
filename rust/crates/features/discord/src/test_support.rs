@@ -102,7 +102,6 @@ pub const TEST_TOKEN: &str = "test-bot-token";
 const FIXTURE_BACKEND: &str = "fixture";
 
 /// The state of the Discord fake a route test drives: channels, the bot's identity and guilds, and what it recorded.
-#[derive(Default)]
 pub struct FakeDiscord {
   /// Channel id to its messages, oldest first.
   pub channels: HashMap<String, Vec<Value>>,
@@ -317,8 +316,22 @@ impl Home {
         .insert(Arc::new(charliebot_triggers::triggers::TriggerManager::new(Arc::clone(&features))))
         .expect("the trigger manager inserts once");
     }
-    let fake_discord =
-      FakeDiscord { user: json!({"id": "600000000000000001", "username": "synthetic-bot"}), ..FakeDiscord::default() };
+    let fake_discord = FakeDiscord {
+      channels: HashMap::new(),
+      channel_objects: HashMap::new(),
+      hidden: Vec::new(),
+      user: json!({"id": "600000000000000001", "username": "synthetic-bot"}),
+      application: Value::Null,
+      guilds: Value::Null,
+      gateway_url: None,
+      posts: Vec::new(),
+      post_bodies: Vec::new(),
+      nonce_messages: HashMap::new(),
+      accepted_post_failures_remaining: 0,
+      started_threads: Vec::new(),
+      calls: Vec::new(),
+      landing: None,
+    };
     let discord = Arc::new(Mutex::new(fake_discord));
     let fake = Arc::clone(&discord);
     let api = serve(move |request| fake.lock().expect("the fake lock is never poisoned").answer(request)).await;

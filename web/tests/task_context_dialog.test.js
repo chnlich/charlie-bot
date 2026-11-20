@@ -11,12 +11,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic} = require('./read_static');
+const {readStatic, readPackageStatic} = require('./read_static');
 const {createElement} = require('./dom_element_stub');
 const {escapeHtmlText} = require('./escape_html_stub');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const MODALS_JS = readStatic('sidebar/modals.js');
+const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 
 function jsonResponse(status, body) {
   return {ok: status >= 200 && status < 300, status, statusText: 'HTTP ' + status, json: async () => body};
@@ -336,4 +337,65 @@ test('a section that fails surfaces its error instead of painting a body without
   await h.context.openTaskContextModal('s1');
 
   assert.match(h.body.innerHTML, /section boom/);
+});
+
+// The cron package's script on the page: it runs after the sidebar's namespace and before the dialog's script. Its
+// sidebar row registrations stay stubs, since the sidebar modules that own them are not loaded here.
+function loadCronModule(context) {
+  Object.assign(context, {
+    registerWorkspaceBadge() {},
+    registerGroupPreviewLimitExemption() {},
+    registerSessionRowBadge() {},
+    registerSessionRowLine() {},
+  });
+  context.document.readyState = 'loading';
+  vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
+}
+
+const BOUND_PROMPT_TASK = {
+  name: 'weekly', cron: '0 7 * * 1', timezone: 'UTC', enabled: true, session_id: 's1', prompt_file: 'p.md',
+  prompt: 'Summarize the day', repo: null, allow_failure: false, mode: 'master', handler: null, improve_host: null,
+  steps: null, broken: false,
+};
+
+// The real field and prose helpers paint the Scheduled task section between the Goal and the next run context, and the
+// section carries no control.
+test('a bound task paints through the dialog helpers between TASK and NEXT RUN CONTEXT, with no control', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, DETAIL),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+    '/api/cron/tasks': jsonResponse(200, [BOUND_PROMPT_TASK]),
+  }, {beforeModals: loadCronModule});
+
+  await h.context.openTaskContextModal('s1');
+
+  const html = h.body.innerHTML;
+  const goal = html.indexOf('Migrate users to the new schema');
+  const section = html.indexOf('Scheduled task');
+  const next = html.indexOf('Next run context');
+  assert.ok(goal >= 0 && goal < section && section < next, html);
+  const sectionHtml = html.slice(section, next);
+  assert.match(sectionHtml, /<div class="text-xs text-slate-400 mb-1">Schedule<\/div>/, 'the real field helper labels it');
+  assert.match(sectionHtml, /<div class="prose-msg break-words" data-raw="Summarize the day">/, 'the prompt is prose');
+  assert.ok(h.context.__proseCalls.includes('Summarize the day'), 'the prompt goes through the Goal\'s prose renderer');
+  assert.doesNotMatch(sectionHtml, /<(input|select|textarea|button)\b/, 'the section holds no control');
+});
+
+// A session no task binds gets the dialog exactly as the dialog paints without the cron package.
+test('an unbound session paints the dialog byte-identical to a dialog without the cron package', async () => {
+  const routes = (tasks) => ({
+    '/api/sessions/s1': jsonResponse(200, DETAIL),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+    '/api/cron/tasks': jsonResponse(200, tasks),
+  });
+  const plain = buildHarness(routes([]));
+  await plain.context.openTaskContextModal('s1');
+  const unbound = buildHarness(routes([{...BOUND_PROMPT_TASK, session_id: 'other-session'}]), {
+    beforeModals: loadCronModule,
+  });
+
+  await unbound.context.openTaskContextModal('s1');
+
+  assert.equal(unbound.body.innerHTML, plain.body.innerHTML);
+  assert.doesNotMatch(unbound.body.innerHTML, /Scheduled task/);
 });

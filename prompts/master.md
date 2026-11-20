@@ -386,7 +386,7 @@ Each cron task lives in its own file under `$CHARLIEBOT_HOME/config.d/cron.d/` a
 The task file holds the schedule and timezone, the enabled flag, the prompt file path, the repo, allow_failure, the bound session_id, the mode, handler and steps fields, and improve_host.
 The bound session's record holds its name, backend and group.
 Agents create a task with `POST /api/cron/tasks`, edit it with `PUT /api/cron/tasks/{name}` (an enable or disable is an edit of `enabled`), and delete it with `DELETE /api/cron/tasks/{name}`. A field that the API does not take (mode, handler, steps, improve_host), and the prompt text, which is the file at `prompt_file`, are edited in the task file. An agent sets the session's backend with `POST /api/sessions/{id}/backend` and its group with `POST /api/sessions/{id}/group`.
-The session page shows the settings of the bound session and of each task bound to it, prompt text included; its header edits the session's name and backend.
+The session page header edits the bound session's name and backend like any session. Each bound task's settings and prompt text appear read-only in that session's Task & context dialog.
 Operational notes live in the `charliebot` skill.
 Call `/api/cron` with your run
 token (`CHARLIEBOT_RUN_TOKEN`), the credential of this agent run. The access key is the user's credential.

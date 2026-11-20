@@ -221,19 +221,20 @@ function taskContextSectionsHtml(sessionId) {
   return Promise.all(Sidebar.taskContextSectionLoaders.map((load) => load(sessionId))).then((parts) => parts.join(''));
 }
 
+// One labelled field of the dialog: the label in muted type over its value.
 function taskContextField(label, valueHtml) {
-  return `<div><div class="text-xs text-slate-400 mb-1">${label}</div>`
+  return `<div><div class="text-xs text-slate-400 mb-1">${escapeHtml(label)}</div>`
     + `<div class="break-words">${valueHtml}</div></div>`;
 }
 
-// A full goal body renders as prose through the chat bubble's pipeline:
+// Prose text (a goal, a scheduled task's prompt) renders as prose through the chat bubble's pipeline:
 // escape + renderProseMarkdown + data-raw round-trip. Delegation goals open
 // with a "## Goal" heading, and a field that shows it raw paints a literal
 // '## '. The renderer escapes raw HTML itself, so the field stays
 // injection-safe.
-function taskContextGoalHtml(goal) {
-  const raw = escapeHtml(goal).replace(/"/g, '&quot;');
-  return `<div class="prose-msg break-words" data-raw="${raw}">${renderProseMarkdown(goal)}</div>`;
+function taskContextProseHtml(text) {
+  const raw = escapeHtml(text).replace(/"/g, '&quot;');
+  return `<div class="prose-msg break-words" data-raw="${raw}">${renderProseMarkdown(text)}</div>`;
 }
 
 // The upper half: the session's Goal, with a visible empty state.
@@ -241,7 +242,7 @@ function taskContextTaskHtml(session) {
   const goal = String((session.web_status || {}).goal || '').trim();
   return `<div class="space-y-3">
     <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Task</div>
-    ${taskContextField('Goal', goal ? taskContextGoalHtml(goal) : TASK_CONTEXT_NONE)}
+    ${taskContextField('Goal', goal ? taskContextProseHtml(goal) : TASK_CONTEXT_NONE)}
   </div>`;
 }
 
@@ -410,6 +411,8 @@ const GLOBALS = {
   openTaskContextModal,
   closeTaskContextModal,
 };
-Sidebar.wire(GLOBALS);
+// The field and prose helpers stay off the onclick globals: the cron package's Scheduled task section reaches them as
+// Sidebar members.
+Sidebar.wire(GLOBALS, {taskContextField, taskContextProseHtml});
 
 })();

@@ -10,9 +10,9 @@
 //! that links every entry of `CHARLIEBOT_HOME` except its sessions and state, so the judge reads today's config,
 //! credentials and memory; `state/backend_availability.json` is copied in, so a member failure the replay records
 //! lands in the scratch home. The replay session is written under the scratch home, which is deleted when the
-//! example exits. The judge makes the call the server makes on its call class, and the verdict and its reason are
-//! printed for a human to assess. `--judge` names the one option that class runs on in place of the host's rotation,
-//! for a replay that must not depend on a rotation member that fails.
+//! example exits. The judge makes the call the server makes on its call class; the verdict, its reason and the call's
+//! time are printed for a human to assess. `--judge` names the one option that class runs on in place of the host's
+//! rotation, for a replay that must not depend on a rotation member that fails.
 //!
 //! The agent environment is built from this process and the checkout's gh and ssh guard wrappers.
 
@@ -21,6 +21,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use charliebot_agents::agent_environment;
@@ -162,7 +163,10 @@ async fn replay(fixture: &PathBuf, judge: Option<&str>) -> Result<()> {
   println!("user messages: {}", user_messages.len());
   println!("memo: {}", if memo.is_some() { "recovered" } else { "empty" });
   println!("context texts: {}", contexts.iter().map(|context| context.label.as_str()).collect::<Vec<_>>().join(", "));
-  match waiting_judge::judge_item(&features, &session_id, Some(goal), &item, &contexts).await {
+  let started = Instant::now();
+  let verdict = waiting_judge::judge_item(&features, &session_id, Some(goal), &item, &contexts).await;
+  println!("judge call time: {:.1}s", started.elapsed().as_secs_f64());
+  match verdict {
     Ok(Judgement::Refused { rule, reason }) => println!("verdict: refuse\nreason: {reason}\ncited: {rule}"),
     Ok(Judgement::Accepted { judged_kind, reason }) => {
       let kind = judged_kind.map_or_else(|| "none".to_string(), |kind| format!("{kind:?}"));

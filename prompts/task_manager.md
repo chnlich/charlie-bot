@@ -99,7 +99,8 @@ CJK characters, CJK punctuation, and fullwidth characters count 2; other charact
 - When a message gives you a decision outside your goal, keep your goal.
   Send the decision back to the sender, and continue the work that your goal
   names.
-- When another node's message changes no field of the session status, end the turn with a short confirmation.
+- When another node's message changes no field of the session status, end the turn with the status command that
+  prompts/web_reply.md requires for it.
   The user then reads only new facts in the session.
 
 ### Your Subtree

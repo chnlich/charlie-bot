@@ -112,27 +112,6 @@ const planPanel = (() => {
     return null;
   }
 
-  function parseOpenForks(doc) {
-    if (!doc || !doc.querySelectorAll) return [];
-    var forks = doc.querySelectorAll('div.fork');
-    var result = [];
-    for (var i = 0; i < forks.length; i++) {
-      var fork = forks[i];
-      var fnEl = fork.querySelector('span.fn');
-      var qEl = fork.querySelector('p.q');
-      var recEl = fork.querySelector('p.rec');
-      var resolvedEl = fork.querySelector('p.resolved');
-      if (!fnEl || !qEl || !recEl || resolvedEl) continue;
-      var n = (fnEl.textContent || '').trim();
-      var clone = qEl.cloneNode(true);
-      var fnInClone = clone.querySelector('span.fn');
-      if (fnInClone) fnInClone.remove();
-      var question = (clone.textContent || '').trim();
-      result.push({n: n, question: question});
-    }
-    return result;
-  }
-
   function formatPlanStateLabel(plan) {
     if (!plan) return '';
     if (plan.takeoff != null && plan.state === 'approved') {
@@ -334,57 +313,6 @@ const planPanel = (() => {
     }
   }
 
-  // The fork chips read the viewer's document, not a second fetch of the plan page: the iframe
-  // carries the page already, so an opened plan costs its one request. The viewer's load event
-  // fills the cache and paints the bar. The renders between reloads paint from the cache, so the
-  // chips always agree with the page the viewer shows.
-  var _forksByViewerKey = {};
-
-  function _currentViewerKey() {
-    return _viewerKey(_selectedPlanId, _selectedVersion, _currentSessionId(), _diffEnabled);
-  }
-
-  function _renderActionBar() {
-    var bar = _getEl('plan-action-bar');
-    if (!bar) return;
-    bar.innerHTML = '';
-    var plan = _findPlan(_selectedPlanId);
-    if (!plan || _selectedVersion == null) return;
-    if (!_findVersion(plan, _selectedVersion)) return;
-    if (_loadedViewerKey === null || _loadedViewerKey !== _currentViewerKey()) return;
-    var forks = _forksByViewerKey[_loadedViewerKey] || [];
-    forks.forEach(function(fork) {
-      var chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors';
-      var question = fork.question || '';
-      var hint = question.length > 40 ? question.slice(0, 40) + '\u2026' : question;
-      chip.textContent = hint;
-      chip.title = 'Prefill: Trade-off ' + fork.n;
-      chip.addEventListener('click', function() {
-        _prefillChat('Trade-off ' + fork.n + ': ');
-      });
-      bar.appendChild(chip);
-    });
-  }
-
-  // The viewer's load hook: parse the loaded page's open forks into the cache and paint the bar
-  // when the loaded page is still the selection's.
-  function _parseViewerForks() {
-    var iframe = _getEl('plan-viewer');
-    if (!iframe || _loadedViewerKey === null || !iframe.contentDocument) return;
-    _forksByViewerKey[_loadedViewerKey] = parseOpenForks(iframe.contentDocument);
-    if (_loadedViewerKey === _currentViewerKey()) _renderActionBar();
-  }
-
-  function _prefillChat(text) {
-    var input = _getEl('msg-input');
-    if (!input) return;
-    input.value = text;
-    input.focus();
-    if (typeof autoResize === 'function') autoResize(input);
-  }
-
   function _highlightTabBadge(on) {
     var btn = _getEl('btn-chat-plans');
     if (!btn) return;
@@ -426,8 +354,6 @@ const planPanel = (() => {
       if (notice) notice.classList.add('hidden');
       var diffWrap = _getEl('plan-diff-toggle-wrap');
       if (diffWrap) diffWrap.classList.add('hidden');
-      var bar = _getEl('plan-action-bar');
-      if (bar) bar.innerHTML = '';
       return;
     }
     if (toolbar) toolbar.classList.toggle('hidden', false);
@@ -473,7 +399,6 @@ const planPanel = (() => {
     _selectedVersion = null;
     _diffEnabled = false;
     _loadedViewerKey = null;
-    _forksByViewerKey = {};
     _highlightTabBadge(false);   // fallback for any path that skips the hook
     render();                    // empty state, synchronously
   }
@@ -572,7 +497,6 @@ const planPanel = (() => {
     if (!await _refetchRegistry(sid, 'plan-panel refresh failed:')) return;
     _ensureSelection();
     render();
-    _renderActionBar();
   }
 
   async function onPlanUpdated(planId) {
@@ -594,7 +518,6 @@ const planPanel = (() => {
       _ensureSelection();
     }
     render();
-    _renderActionBar();
   }
 
   function _refreshPlanCardBadges() {
@@ -614,7 +537,6 @@ const planPanel = (() => {
     _selectedPlanId = null;
     _selectedVersion = null;
     _loadedViewerKey = null;
-    _forksByViewerKey = {};
     var iframe = _getEl('plan-viewer');
     if (iframe) iframe.src = '';
     _highlightTabBadge(false);
@@ -626,7 +548,6 @@ const planPanel = (() => {
     if (_loadedSessionId !== sid) return;
     _ensureSelection();
     render();
-    _renderActionBar();
   }
 
   function invalidate() {
@@ -648,7 +569,6 @@ const planPanel = (() => {
       // changes.
       _ensureSelection();
       render();
-      _renderActionBar();
       return;
     }
     if (switched && _loadPromise && _loadPromiseSessionId === sid) {
@@ -660,19 +580,15 @@ const planPanel = (() => {
     }
     _ensureSelection();
     render();
-    _renderActionBar();
   }
 
   // -- Selection ----------------------------------------------------------
 
-  // The four panels every selection mutation repaints afterward. The action
-  // bar render is async and generation-guarded. These paths fire it without
-  // awaiting, and refresh() awaits it on its own path.
+  // The three panels every selection mutation repaints afterward.
   function _renderSelectionPanels() {
     _renderStaleNotice();
     _renderDiffToggle();
     _renderViewer();
-    _renderActionBar();
   }
 
   function selectPlan(planId) {
@@ -719,9 +635,6 @@ const planPanel = (() => {
     if (!iframe) return;
     iframe.addEventListener('load', function() {
       _highlightTabBadge(false);
-      // The page is in: the fork chips read it here, so an opened plan page
-      // costs the viewer's one request.
-      _parseViewerForks();
     });
   }
 
@@ -777,7 +690,6 @@ const planPanel = (() => {
     hasPredecessor,
     predecessorVersion,
     detectNewPlanOrVersion,
-    parseOpenForks,
     formatPlanStateLabel,
     buildIframeUrl,
     buildIframeUrlFromVersion,

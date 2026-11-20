@@ -106,7 +106,7 @@ node = ["web/tests/frontend_structure.integration.test.js"]
 paths = ["dev/client-readback/readback.mjs"]
 node = ["web/tests/client_readback.integration.test.mjs"]
 
-# web/tests/plan_panel.integration.test.js parses open forks from the committed plan template.
+# web/tests/plan_panel.integration.test.js checks the Plans tab with an open-fork page.
 [[entry]]
 paths = ["prompts/plan_template.html"]
 node = ["web/tests/plan_panel.integration.test.js"]

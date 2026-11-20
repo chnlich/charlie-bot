@@ -384,6 +384,44 @@ export class Tab {
     return counts;
   }
 
+  // The tab's requests and sockets as the trace records them, with times in ms from `origin`: every request in the order
+  // the browser sent it, with its type, initiator, connection and whether a service worker or the disk cache answered.
+  traceFrom(origin) {
+    const ms = (t) => (t === null || t === undefined ? null : Math.round(t - origin));
+    return {
+      requests: [...this.requests.entries()].map(([id, r]) => ({
+        id,
+        url: r.url,
+        type: r.type,
+        initiator: r.initiator,
+        initiatorUrl: r.initiatorUrl,
+        connectionId: r.connectionId,
+        fromServiceWorker: r.fromServiceWorker,
+        fromDiskCache: r.fromDiskCache,
+        status: r.status,
+        wireStatus: r.wireStatus,
+        failed: r.failed,
+        startMs: ms(r.startAt),
+        finishMs: ms(r.finishAt),
+        bytes: r.bytes,
+      })).sort((a, b) => a.startMs - b.startMs),
+      sockets: this.sockets.map((s) => ({ at: ms(s.at), url: s.url, requestId: s.requestId })),
+      handshakes: this.handshakes.map((h) => ({ at: ms(h.at), status: h.status })),
+      socketCloses: this.socketCloses.map((c) => ({ at: ms(c.at), error: c.error })),
+      frames: this.frames.map((f) => ({ at: ms(f.at), bytes: f.bytes, type: f.type })),
+    };
+  }
+
+  // Chrome reports no event for a request that a navigation cancels, so the requests of a replaced document end at the
+  // commit of the document that replaces it. A settle that waited on them would wait until its timeout.
+  endReplacedRequests(loaderId) {
+    for (const request of this.requests.values()) {
+      if (request.finishAt === null && request.failed === null && request.loaderId !== loaderId) {
+        request.failed = 'net::ERR_ABORTED: the document was replaced';
+      }
+    }
+  }
+
   // Routes one CDP event of this tab.
   handle(message, assets) {
     const at = Date.now();
@@ -398,12 +436,24 @@ export class Tab {
           status: null,
           wireStatus: null,
           failed: null,
+          loaderId: message.params.loaderId ?? null,
+          type: message.params.type ?? null,
+          initiator: message.params.initiator?.type ?? null,
+          initiatorUrl: message.params.initiator?.url ?? null,
+          connectionId: null,
+          fromServiceWorker: null,
+          fromDiskCache: null,
         });
         return;
       }
       case 'Network.responseReceived': {
         const request = this.requests.get(message.params.requestId);
-        if (request) request.status = message.params.response.status;
+        if (request) {
+          request.status = message.params.response.status;
+          request.connectionId = message.params.response.connectionId ?? null;
+          request.fromServiceWorker = message.params.response.fromServiceWorker ?? null;
+          request.fromDiskCache = message.params.response.fromDiskCache ?? null;
+        }
         return;
       }
       case 'Network.responseReceivedExtraInfo': {
@@ -420,6 +470,11 @@ export class Tab {
             this.#readBody(message.params.requestId, request);
           }
         }
+        return;
+      }
+      case 'Page.frameNavigated': {
+        // The main frame's new document has committed: the requests of the document it replaces end with it.
+        if (!message.params.frame.parentId) this.endReplacedRequests(message.params.frame.loaderId);
         return;
       }
       case 'Network.loadingFailed': {
@@ -530,6 +585,10 @@ export class Tabs {
   #origin;
   #cdn;
   #tabs = [];
+  // The origin's service worker targets, which the browser attaches to as they start. Their network events go to one
+  // record, so a trace can name the requests a worker sent for the page.
+  #worker = new Tab('service worker', null);
+  #workerSessions = new Set();
 
   // `origin` is the TLS front's https origin; the page and its socket live there. `cdn` says where the CDN files come
   // from: `local` answers them in the browser from the assets, so they never cross the link; `link` lets the browser
@@ -543,7 +602,30 @@ export class Tabs {
     this.#accessKey = accessKey;
     this.#origin = origin;
     this.#cdn = cdn;
+    browser.send('Target.setDiscoverTargets', { discover: true });
     browser.onMessage((message) => {
+      if (message.method === 'Target.targetCreated' && message.params.targetInfo.type === 'service_worker' &&
+          message.params.targetInfo.url.startsWith(this.#origin)) {
+        const { targetId } = message.params.targetInfo;
+        browser.send('Target.attachToTarget', { targetId, flatten: true })
+          .then(({ sessionId }) => {
+            this.#workerSessions.add(sessionId);
+            return browser.sendTo(sessionId, 'Network.enable');
+          })
+          .catch((error) => {
+            if (error.message === 'Target.attachToTarget: Inspected target navigated or closed' ||
+                error.message === 'Network.enable: Inspected target navigated or closed') {
+              console.warn('service worker target ' + targetId + ' closed during ' + error.message.split(':')[0]);
+              return;
+            }
+            throw error;
+          });
+        return;
+      }
+      if (message.sessionId && this.#workerSessions.has(message.sessionId)) {
+        this.#worker.handle(message);
+        return;
+      }
       if (!message.sessionId) {
         return;
       }
@@ -556,6 +638,11 @@ export class Tabs {
 
   get all() {
     return this.#tabs;
+  }
+
+  // The service worker requests of this browser, as Tab.traceFrom lists a tab's requests.
+  workerTrace(origin) {
+    return this.#worker.traceFrom(origin).requests;
   }
 
   // Opens a tab, with the access key on every request and, for `local` CDN files, the intercepted CDN patterns.

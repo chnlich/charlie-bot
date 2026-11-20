@@ -531,7 +531,8 @@
     const view = document.getElementById(VIEW_ID);
     if (view) {
       clearChildren(view);
-      if (panelSessionId) statusPanelBody(view);
+      if (pageIsOffline()) view.innerHTML = offlinePanelMark();
+      else if (panelSessionId) statusPanelBody(view);
     }
     renderWaitingBadge();
   }
@@ -558,6 +559,7 @@
   }
 
   async function fetchStatus(sessionId) {
+    if (pageIsOffline()) return null;
     const gen = ++panelFetchGen;
     let body;
     try {
@@ -615,6 +617,13 @@
 
   // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);
+
+  // The Status view shows the offline label while the page is offline and loads once it is back.
+  window.addEventListener('offline', renderPanel);
+  window.addEventListener('online', () => {
+    renderPanel();
+    refreshSessionStatusPanel();
+  });
 
   Chat.wire({
     openSessionStatusPanel,

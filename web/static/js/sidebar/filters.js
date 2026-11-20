@@ -25,17 +25,23 @@ function registerSidebarFilter(filter) {
   sidebarFiltersByName[normalized.name] = normalized;
 }
 
-// The Workspace paints group previews, so it asks for the rows a preview shows and each group's whole count. A
-// reader who expands a group fetches the full listing (groups.js, loadFullListing). The row refresh adds its ids to
-// this URL, and the route answers that branch before it reads the form.
-registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/?compact=1&screen=1',
-  restoreFromUrl: false});
+registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/?compact=1&screen=1', restoreFromUrl: false});
 registerSidebarFilter({name: 'starred', label: 'Later', url: '/api/sessions/starred'});
 registerSidebarFilter({name: 'archived', label: 'Archive', url: '/api/sessions/archived'});
 
 function getSidebarFilter(filter) {
   return sidebarFiltersByName[filter] || null;
 }
+
+function workspaceListingUrl(activeSessionId) {
+  const url = getSidebarFilter('all').url;
+  if (!activeSessionId) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return url + separator + 'active=' + encodeURIComponent(activeSessionId);
+}
+
+// The offline shell stores the first screen's listing under the URL this builds (offline-shell.js).
+registerOfflineShellListingUrl(workspaceListingUrl);
 
 function getRestorableSidebarFilters() {
   return sidebarFilters.filter(filter => filter.restoreFromUrl).map(filter => filter.name);
@@ -133,46 +139,91 @@ function switchSidebarFilter(filter) {
     return;
   }
   // Fetch sessions for this filter
-  const registeredFilter = getSidebarFilter(filter);
-  if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
-  const requestSeq = factSeqAtRequest();
   const generation = searchGeneration;
   const signal = listRequestSignal();
   if (filter === 'all') {
     // The Workspace badges and the session list load in parallel, so badges
     // and list paint together in the one render call.
-    // The open session's own row stays painted after the switch, whatever its rank in the list.
-    const url = typeof SESSION_ID !== 'undefined' && SESSION_ID
-      ? registeredFilter.url + '&active=' + encodeURIComponent(SESSION_ID)
-      : registeredFilter.url;
     const memoryVersion = workspaceInvalidations;
-    Promise.all([
-      fetch(url, {signal}).then(res => {
-        if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
-        return res.json();
-      }),
-      loadWorkspaceBadges(signal),
-    ])
-      .then(([payload, workspaceBadges]) => {
+    Promise.all([fetchFilterListing(filter, {networkOnly: false, signal}), loadWorkspaceBadges(signal)])
+      .then(([listing, workspaceBadges]) => {
         if (!listingMayPaint(generation)) return;
         workspaceMemoryVersion = memoryVersion;
         workspaceBadgesStale = false;
-        renderSessionList(listingRows(payload, requestSeq), filter,
-            {workspaceBadges, listing: payload.$screen || null});
+        paintListing(listing, filter, {workspaceBadges});
       })
       .catch(listingFailed);
     return;
   }
-  fetch(registeredFilter.url, {signal})
-    .then(res => {
-      if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
-      return res.json();
-    })
-    .then(payload => {
+  fetchFilterListing(filter, {networkOnly: false, signal})
+    .then(listing => {
       if (!listingMayPaint(generation)) return;
-      renderSessionList(listingRows(payload, requestSeq), filter);
+      paintListing(listing, filter);
     })
     .catch(listingFailed);
+}
+
+// One view's listing from its list route: `rows` and `stored`, which says a stored copy answered it. Rows the page
+// recorded an unread fact for after this request began keep that fact: fix E's gate (status.js replyIsCurrent)
+// refuses the older answer. `networkOnly` asks the worker for the network answer (last-state.js).
+function fetchFilterListing(filter, {networkOnly, signal}) {
+  const registeredFilter = getSidebarFilter(filter);
+  if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
+  const requestSeq = factSeqAtRequest();
+  const headers = networkOnly ? networkOnlyHeaders() : {};
+  // The open session's own row stays painted after the switch, whatever its rank in the list. The shell's stored
+  // listing is keyed by this same URL, so the page's session comes from the URL when the page has not opened it yet.
+  const activeSessionId = typeof SESSION_ID !== 'undefined' && SESSION_ID
+    ? SESSION_ID
+    : new URL(location.href).searchParams.get('session');
+  const url = filter === 'all' ? workspaceListingUrl(activeSessionId) : registeredFilter.url;
+  return fetch(url, {headers, signal}).then(res => {
+    if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
+    const stored = isStoredResponse(res);
+    return res.json().then(payload => ({
+      rows: listingRows(payload, requestSeq).map(row => keepCurrentUnread(row, requestSeq)),
+      listing: listingScreen(payload),
+      stored,
+    }));
+  });
+}
+
+function keepCurrentUnread(row, requestSeq) {
+  if (replyIsCurrent('unread', row.id, requestSeq)) return row;
+  return Object.assign({}, row, {has_unread: Sidebar.ownUnread(row.id)});
+}
+
+function paintListing({rows, listing, stored}, filter, options = {}) {
+  if (stored) document.dispatchEvent(new CustomEvent('charliebot:stored-list'));
+  renderSessionList(rows, filter, listing ? {...options, listing} : options);
+}
+
+// The sidebar list refresh that proves a copy current (last-state.js): the current view's list from the network,
+// painted while that view is still on screen. It rejects unless a network answer arrived. The archived view pages its
+// own rows and its list route is no copy source, so it has nothing to refresh here.
+function refreshCurrentList() {
+  const filter = currentFilter;
+  if (filter === 'archived') return Promise.resolve();
+  const generation = searchGeneration;
+  const signal = listRequestSignal();
+  const memoryVersion = workspaceInvalidations;
+  const listing = fetchFilterListing(filter, {networkOnly: true, signal});
+  const pending = filter === 'all'
+    ? Promise.all([listing, loadWorkspaceBadges(signal)])
+    : listing.then(result => [result]);
+  return pending.then(([result, workspaceBadges]) => {
+    if (result.stored) throw new Error('the list refresh was answered from a copy');
+    // A view the reader left, or a search that started during the refresh, leaves the list to its own owner; the
+    // refresh retries and proves the copy current once the list is on screen again.
+    if (currentFilter !== filter || !listingMayPaint(generation)) {
+      throw new Error('the list changed during its refresh');
+    }
+    if (filter === 'all') {
+      workspaceMemoryVersion = memoryVersion;
+      workspaceBadgesStale = false;
+    }
+    paintListing(result, filter, workspaceBadges ? {workspaceBadges} : {});
+  });
 }
 
 // A listing's rows: the Workspace fetch answers with the page's column form, which expandSessionColumns restores,
@@ -307,12 +358,22 @@ function renderSidebarLoadErrors(errors) {
 // row count, and whether the page left rows out. The page leaves a group's rows out once it paints more roots than
 // the preview limit, so the reader's "Show all" fetches them from the listing route.
 function pageScreen() {
-  const screen = INITIAL_SESSIONS && INITIAL_SESSIONS.$screen;
+  return listingScreen(INITIAL_SESSIONS);
+}
+
+function listingScreen(payload) {
+  const screen = payload && payload.$screen;
   return screen && screen.partial ? screen : null;
 }
 
 function restoreSidebarFromUrl() {
   renderSidebarFilterPills();
+  if (INITIAL_SESSIONS === null) {
+    // The shell carries no rows: the list is the listing route's, from a stored copy or the network.
+    const urlShellFilter = new URLSearchParams(location.search).get('filter');
+    switchSidebarFilter(getRestorableSidebarFilters().includes(urlShellFilter) ? urlShellFilter : 'all');
+    return;
+  }
   // The server rendered the page's rows before this page applied any fact.
   const initialSessions = listingRows(INITIAL_SESSIONS, 0);
   const params = new URLSearchParams(location.search);
@@ -530,6 +591,8 @@ const GLOBALS = {
   queueRowRefresh,
   refreshWorkspaceBadges,
   invalidateWorkspaceMemory,
+  refreshCurrentList,
+  workspaceListingUrl,
 };
 Sidebar.wire(GLOBALS);
 

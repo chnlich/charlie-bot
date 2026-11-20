@@ -16,6 +16,9 @@ const { createElement } = require('./dom_element_stub');
 const { answerArchiveConfirmations, baseSessionContext, buildSidebarFilterElements, createChatSidebarContext,
   inlinePageTimers, loadCronPackage, makeSessionMeta, makeSidebarRow } = require('./session_context_stub');
 
+// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
+const NO_STORED_COPY = {get: () => null};
+
 function makeSession(id, overrides = {}) {
   return makeSessionMeta(id, {group: 'Work', status: 'active', ...overrides});
 }
@@ -29,10 +32,10 @@ function rowStubs(ids) {
 function deleteOkFetch() {
   return async (url, opts = {}) => {
     if (opts.method === 'POST' && url.endsWith('/archive')) {
-      return {ok: true, json: async () => ({})};
+      return {ok: true, headers: NO_STORED_COPY, json: async () => ({})};
     }
     if (opts.method === 'DELETE' && url.endsWith('/permanent')) {
-      return {ok: true, json: async () => ({})};
+      return {ok: true, headers: NO_STORED_COPY, json: async () => ({})};
     }
     throw new Error('unexpected fetch ' + url);
   };
@@ -195,8 +198,10 @@ test('entering Workspace paints the badge and the list from one parallel fetch p
   ];
   const {context, nav, fetchCalls} = buildContext({
     fetchHandler: async (url) => {
-      if (url === '/api/sessions/?compact=1&screen=1&active=session-live') return {ok: true, json: async () => sessions};
-      if (url === '/api/cron/tasks') return {ok: true, json: async () => cronTasks};
+      if (url === '/api/sessions/?compact=1&screen=1&active=session-live') {
+        return {ok: true, headers: NO_STORED_COPY, json: async () => sessions};
+      }
+      if (url === '/api/cron/tasks') return {ok: true, headers: NO_STORED_COPY, json: async () => cronTasks};
       throw new Error('unexpected fetch ' + url);
     },
   });
@@ -217,7 +222,9 @@ test('a failed cron pull still paints the Workspace list, with no badge', async 
   const sessions = [makeSession('c1', {group: null}), makeSession('c2', {group: null})];
   const {context, nav, fetchCalls} = buildContext({
     fetchHandler: async (url) => {
-      if (url === '/api/sessions/?compact=1&screen=1&active=session-live') return {ok: true, json: async () => sessions};
+      if (url === '/api/sessions/?compact=1&screen=1&active=session-live') {
+        return {ok: true, headers: NO_STORED_COPY, json: async () => sessions};
+      }
       if (url === '/api/cron/tasks') throw new Error('cron endpoint down');
       throw new Error('unexpected fetch ' + url);
     },

@@ -145,6 +145,7 @@ function buildAppContext() {
   const noop = (name) => () => { calls.push(name); };
   const context = {
     document,
+    registerOfflineShell() {},
     SESSION_ID: 'session-a',
     SESSION_PROFILE: '',
     SESSION_BOOTSTRAP: null,
@@ -172,6 +173,7 @@ function buildAppContext() {
     setInputAreaVisible: noop('setInputAreaVisible'),
     BACKEND_TYPES: { 'backend-a': 'synthetic' },
     restoreSidebarFromUrl: noop('restoreSidebarFromUrl'),
+    openSession: () => Promise.resolve(),
     updateRelativeTimes: noop('updateRelativeTimes'),
     postProcessRenderedMessages: noop('postProcessRenderedMessages'),
     initScrollPagination: noop('initScrollPagination'),

@@ -152,7 +152,12 @@ function pageLeftRowsOut() {
 }
 
 // The status answers: the token to send back, the rows that moved, and the ids that left the filter's set.
+// An open's catch-up owns the link until its socket replay lands. The poll's row set is a download beside that replay:
+// on the poor-network bench's B open the first poll after the list copy paints named every row of the filter at 3.3 s
+// (3.4 KB before the open's newest message). A held poll sends nothing and answers no rows, so the row state stays as
+// it is; the first tick after the hold ends polls again.
 async function fetchStatusUrls(urls) {
+  if (statusPollHeld()) return [];
   const responses = await Promise.all(urls.map(url => fetch(url)));
   const answers = [];
   for (const r of responses) {
@@ -685,6 +690,10 @@ function resetSessionStatusPoll() {
   statusPollToken = '';
 }
 
+function anyRunningSession() {
+  return Object.values(appliedSessionStatus).some(st => st && st.has_running_tasks);
+}
+
 function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
   statusPollInflight = true;
@@ -704,7 +713,7 @@ function pollSessionStatus() {
         for (const sid of answer.gone || []) delete appliedSessionStatus[sid];
         if (scoped && answer.token) statusPollToken = answer.token;
       }
-      return Object.values(appliedSessionStatus).some(st => st && st.has_running_tasks);
+      return anyRunningSession();
     })
     .catch(err => {
       console.error('pollSessionStatus failed:', err);

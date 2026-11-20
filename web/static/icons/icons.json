@@ -48,5 +48,6 @@
   "expand-down": { "lucide": "arrow-down-from-line" },
   "comment": { "lucide": "message-square-plus" },
   "folder": { "lucide": "folder" },
-  "file": { "lucide": "file" }
+  "file": { "lucide": "file" },
+  "offline-panel": { "lucide": "cloud-off" }
 }

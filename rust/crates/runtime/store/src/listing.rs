@@ -625,8 +625,6 @@ mod tests {
   use std::sync::Arc;
   use std::sync::atomic::{AtomicUsize, Ordering};
 
-  static SUBTREE_MAP_BUILDS: AtomicUsize = AtomicUsize::new(0);
-
   struct Labels;
   impl crate::AccountLabelKeeper for Labels {
     fn record_account_label(&self, meta: &mut SessionMetadata, label: Option<&str>) -> StoreResult<bool> {
@@ -672,7 +670,7 @@ mod tests {
     }
   }
 
-  struct CountingSequence;
+  struct CountingSequence(Arc<AtomicUsize>);
   impl crate::SequenceListingFields for CountingSequence {
     fn owns_session(&self, _meta: &SessionMetadata) -> bool {
       false
@@ -685,11 +683,11 @@ mod tests {
       Ok(HashMap::new())
     }
     fn sequence_subtree_roots(&self, _: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
-      SUBTREE_MAP_BUILDS.fetch_add(1, Ordering::Relaxed);
+      self.0.fetch_add(1, Ordering::Relaxed);
       Ok(HashMap::new())
     }
     fn view_subtree_roots(&self, _: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
-      SUBTREE_MAP_BUILDS.fetch_add(1, Ordering::Relaxed);
+      self.0.fetch_add(1, Ordering::Relaxed);
       Ok(HashMap::new())
     }
   }
@@ -723,21 +721,23 @@ mod tests {
     .unwrap()
   }
 
-  fn counting_store(home: &std::path::Path) -> Store {
+  fn counting_store(home: &std::path::Path) -> (Store, Arc<AtomicUsize>) {
     let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
-    Store::new(
+    let builds = Arc::new(AtomicUsize::new(0));
+    let store = Store::new(
       cfg,
       slots(),
       StoreHooks {
         account_labels: Some(Arc::new(Labels)),
         anchor_reconciler: Some(Arc::new(Anchors)),
-        sequence_listing: Some(Arc::new(CountingSequence)),
+        sequence_listing: Some(Arc::new(CountingSequence(Arc::clone(&builds)))),
         runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
         sequence_archive: Some(Arc::new(crate::store::test_support::SequenceArchive)),
         sequence_binding_mover: Some(Arc::new(crate::store::test_support::BindingMover)),
       },
     )
-    .unwrap()
+    .unwrap();
+    (store, builds)
   }
 
   fn write_metadata(store: &Store, id: &str, status: SessionStatus, updated_at: &str, group: Option<&str>) {
@@ -872,21 +872,20 @@ mod tests {
   #[test]
   fn subtree_maps_build_once_per_metadata_identity_and_rebuild_after_invalidation() {
     let home = tempfile::tempdir().unwrap();
-    let store = counting_store(home.path());
+    let (store, builds) = counting_store(home.path());
     write_metadata(&store, "node-a", SessionStatus::Active, "2026-08-01T12:00:00Z", None);
     write_metadata(&store, "node-b", SessionStatus::Active, "2026-08-01T12:01:00Z", None);
-    SUBTREE_MAP_BUILDS.store(0, Ordering::Relaxed);
 
     let first = store.subtree_roots_shared().unwrap();
     let warm = store.subtree_roots_shared().unwrap();
     assert!(Arc::ptr_eq(&first.sequence, &warm.sequence));
     assert!(Arc::ptr_eq(&first.views, &warm.views));
-    assert_eq!(SUBTREE_MAP_BUILDS.load(Ordering::Relaxed), 2);
+    assert_eq!(builds.load(Ordering::Relaxed), 2);
 
     write_metadata(&store, "node-a", SessionStatus::Active, "2026-08-01T12:02:00Z", None);
     store.invalidate_cache("node-a");
     store.subtree_roots_shared().unwrap();
-    assert_eq!(SUBTREE_MAP_BUILDS.load(Ordering::Relaxed), 4);
+    assert_eq!(builds.load(Ordering::Relaxed), 4);
   }
 
   /// The chat page reads the subtree maps on every request, over a corpus of every stored session. Keying those maps
@@ -894,7 +893,7 @@ mod tests {
   #[test]
   fn a_subtree_map_read_borrows_the_memoized_corpus() {
     let home = tempfile::tempdir().unwrap();
-    let store = counting_store(home.path());
+    let (store, _) = counting_store(home.path());
     write_metadata(&store, "node-a", SessionStatus::Active, "2026-08-01T12:00:00Z", None);
 
     store.subtree_roots_shared().unwrap();

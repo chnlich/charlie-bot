@@ -171,6 +171,11 @@ export class Browser {
     return this.#cdp.send(method, params);
   }
 
+  // Sends a command to one of the browser's child sessions, such as a service worker target's.
+  sendTo(sessionId, method, params = {}) {
+    return this.#cdp.send(method, params, sessionId);
+  }
+
   // Asks Chrome to shut down, so it writes its profile (localStorage and the HTTP cache) to disk, and waits for the exit.
   // A Chrome that does not answer in time is stopped by close().
   async shutdown() {

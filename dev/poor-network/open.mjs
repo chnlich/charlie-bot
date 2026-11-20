@@ -23,6 +23,12 @@ const CASES = ['A', 'B', 'C'];
 export const OPEN_CONDITIONS = Object.freeze([...CONDITIONS, 'release']);
 const REFERENCE = Object.freeze({ id: 'reference A link rate 1', case: 'A', condition: 'link', rate: 1 });
 const SETTLE_MS = 300000;
+// The warm's report arrives when the service worker has stored the release's shell and files, which takes the link's
+// transfer time after the page settles. A page that never reports (a side without the offline shell) times out here.
+const WARM_REPORT_TIMEOUT_MS = 300000;
+// Keeps the page's warm report on the window, before the page's own scripts run, so the bench reads it after the load.
+const WARM_REPORT_INIT =
+  "document.addEventListener('charliebot:offline-shell-warm', (event) => { window.__warmReport = event.detail; });";
 // The request a browser makes before a repetition to open a connection that stays idle in its pool. A and B have
 // opened CharlieBot before, so their browsers hold such a connection; C's does not, so it holds none.
 const PRECONNECT_PATH = '/api/concurrency/now';
@@ -244,11 +250,17 @@ async function release(ctx, sessionId) {
 // in the HTTP cache and its record in localStorage. The record is the browser state the case names. The page writes it
 // when its client has the mechanism; the bench writes the same record when the side's client predates it, so both
 // sides start from the same browser state. C has no profile: its browser starts empty.
+//
+// The service worker stores the release's shell and files after the first load, and it stores a session's copy when
+// the first screen is fetched through the stored shell. The warm waits for the worker's report, then opens the session
+// a second time, so the profile holds the copies that a copy-served open reads. On the after side a profile without
+// stored copies is an error: its open rows would measure the network path under a case that names the copies.
+// Returns the profile's directory and the page's warm report (null when the page never reported).
 async function buildWarm(ctx, caseName) {
   const dir = path.join(ctx.runDir, `warm-${caseName}-${randomTag()}`);
   if (caseName === 'C') {
     fs.mkdirSync(dir, { recursive: true });
-    return dir;
+    return { dir, report: null };
   }
   const session = caseName === 'A' ? ctx.sessions.switchTarget : ctx.sessions.probes[0];
   const link = await startLink(ctx);
@@ -256,24 +268,48 @@ async function buildWarm(ctx, caseName) {
     binary: chromeBinary(), proxyPort: link.port, userDataDir: dir, logPath: `${ctx.runDir}/chrome.log`,
     trustedSpki: [ctx.trustedSpki, ctx.cdnSpki].filter(Boolean).join(","),
   });
+  let report;
   try {
     const tabs = new Tabs({
       browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'link',
     });
-    const tab = await tabs.open('warm');
+    const tab = await tabs.open('warm', WARM_REPORT_INIT);
     await tabs.navigate(tab, `/?session=${session.id}`);
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_MS);
+    // The main side has no offline-shell warm event, so only the after side waits for the stored-copy report.
+    report = ctx.side === 'after' ? await warmReport(tab) : null;
     const now = Date.now();
     const record = { first_open_ms: now, sessions: { [session.id]: now } };
     await tab.evaluate(`localStorage.setItem('charliebot_opened_pages', ${JSON.stringify(JSON.stringify(record))})`);
+    await tabs.navigate(tab, `/?session=${session.id}`);
+    await tab.ready();
+    await tabs.show(tab);
+    await tabs.waitIdle(SETTLE_MS);
     await tabs.close(tab);
   } finally {
     await browser.shutdown();
     await link.proxy.stop();
   }
-  return dir;
+  if (ctx.side === 'after' && (report === null || report.stored !== true)) {
+    throw new Error(
+      `the ${caseName} warm reported ${JSON.stringify(report)}, not stored copies; its rows are unmeasured`,
+    );
+  }
+  return { dir, report };
+}
+
+// The page's warm report, or null when the page reports none within WARM_REPORT_TIMEOUT_MS.
+async function warmReport(tab) {
+  const deadline = Date.now() + WARM_REPORT_TIMEOUT_MS;
+  for (;;) {
+    const report = await tab.evaluate('window.__warmReport ?? null');
+    if (report !== null || Date.now() >= deadline) {
+      return report;
+    }
+    await sleep(1000);
+  }
 }
 
 async function startLink(ctx) {
@@ -430,6 +466,13 @@ async function measureOnce(ctx, cell, repetition) {
       frames: tab.frames.length,
       frameTypes,
       requests: tab.requests.size,
+      trace: {
+        ...tab.traceFrom(navStart),
+        workers: tabs.workerTrace(navStart),
+        // The link's bytes (both directions) at each proxy sample from the navigation on, as [ms, bytes].
+        linkBytes: timeline.filter((sample) => sample.t >= navStart)
+          .map((sample) => [sample.t - navStart, sample.sent + sample.received]),
+      },
       wsState,
       consoleTail: tab.consoleLines.slice(-8).map((line) => line.text),
       pageErrors: tab.pageErrors.slice(-4).map((line) => line.text),
@@ -578,7 +621,8 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
     }
   }
   const warm = { A: await buildWarm(ctx, 'A'), B: await buildWarm(ctx, 'B'), C: await buildWarm(ctx, 'C') };
-  const reference = { ...REFERENCE, warmDir: warm[REFERENCE.case] };
+  result.warmReports = Object.fromEntries(Object.entries(warm).map(([name, built]) => [name, built.report]));
+  const reference = { ...REFERENCE, warmDir: warm[REFERENCE.case].dir };
   result.reference = reference;
   await runCell(ctx, reference, repetitions);
   result.cpu = openCpuRecord(sharedCpuRate, reference.reps);
@@ -587,15 +631,16 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
   for (const condition of CONDITIONS.filter((name) => conditions.includes(name))) {
     for (const caseName of CASES) {
       const cell = {
-        id: `${caseName} ${condition}`, case: caseName, condition, rate: cpuRate, warmDir: warm[caseName],
+        id: `${caseName} ${condition}`, case: caseName, condition, rate: cpuRate, warmDir: warm[caseName].dir,
       };
       result.cells.push(cell);
       await runCell(ctx, cell, repetitions);
     }
   }
   for (const caseName of conditions.includes('release') ? CASES : []) {
-    const warmDir = await buildWarm(ctx, caseName);
-    const cell = { id: `${caseName} release`, case: caseName, condition: 'release', rate: cpuRate, warmDir };
+    const built = await buildWarm(ctx, caseName);
+    result.releaseWarmReports = { ...result.releaseWarmReports, [caseName]: built.report };
+    const cell = { id: `${caseName} release`, case: caseName, condition: 'release', rate: cpuRate, warmDir: built.dir };
     result.cells.push(cell);
     await runCell(ctx, cell, repetitions);
   }

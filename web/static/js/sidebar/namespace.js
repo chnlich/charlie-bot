@@ -192,6 +192,16 @@
     taskContextSectionLoaders.push(load);
   }
 
+  // A file whose own requests ride the link holds the status poll with a predicate: the poll skips a tick while one
+  // answers true, and the first tick after that polls again. Each file registers its predicate when its script loads.
+  const statusPollHolds = [];
+  function registerStatusPollHold(holds) {
+    statusPollHolds.push(holds);
+  }
+  function statusPollHeld() {
+    return statusPollHolds.some((holds) => holds());
+  }
+
   Sidebar.wire = wire;
   wire({
     registerSidebarControl,
@@ -200,6 +210,8 @@
     searchBoxHasText,
     deferSidebarInteractions,
     registerTaskContextSection,
+    registerStatusPollHold,
+    statusPollHeld,
   }, {taskContextSectionLoaders});
   global.Sidebar = Sidebar;
 })(globalThis);

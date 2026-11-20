@@ -40,6 +40,7 @@ pub const FAMILY: Family = Family { routes, matches: |_, path| is_page_path(path
 fn routes() -> Router<Arc<AppState>> {
   Router::new()
     .route("/", get_only(index))
+    .route(crate::auth::OFFLINE_SHELL_WORKER_PATH, get_only(offline_shell_worker))
     .route("/home", get_only(home_page))
     .route("/sessions/{session_id}/events", get_only(events_viewer))
 }
@@ -74,6 +75,9 @@ const SESSION_BOOTSTRAP_PLACEHOLDER: &str = "\u{2}charliebot-session-bootstrap\u
 
 /// The text a page without a session bootstrap carries: JSON's `null`.
 const NO_SESSION_BOOTSTRAP: &str = "null";
+
+/// The text the shell carries for its sidebar rows: JSON's `null`, which makes the page fetch the listing itself.
+const NO_INITIAL_SESSIONS: &str = "null";
 
 /// The chat page's rendered row texts, reused across requests while a row's inputs are unchanged.
 static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::PageRowsMemo::default);
@@ -336,6 +340,21 @@ impl PageBodyMemo {
 
 static PAGE_BODY_MEMO: LazyLock<Mutex<PageBodyMemo>> = LazyLock::new(|| Mutex::new(PageBodyMemo::default()));
 
+/// The header a navigation preload carries. The offline shell worker answers a navigation from its stored shell and never
+/// reads the preload response, so the chat page answers a preload with no body.
+const NAVIGATION_PRELOAD: &str = "service-worker-navigation-preload";
+
+/// The body-less answer to a navigation preload, or `None` for any other request.
+fn preload_answer(headers: &HeaderMap) -> Option<Response> {
+  headers.contains_key(NAVIGATION_PRELOAD).then(|| {
+    Response::builder()
+      .status(StatusCode::NO_CONTENT)
+      .header(header::CACHE_CONTROL, "no-store")
+      .body(Body::empty())
+      .expect("a no-content response is valid")
+  })
+}
+
 /// The chat page's finished answers, up to [`PAGE_BODY_MEMO_ENTRIES_PER_PAGE`] of them, each kept while every
 /// input that shaped it still holds.
 ///
@@ -434,6 +453,9 @@ impl IndexAnswerMemo {
 static INDEX_ANSWER_MEMO: LazyLock<Mutex<IndexAnswerMemo>> = LazyLock::new(|| Mutex::new(IndexAnswerMemo::default()));
 
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
+  if let Some(answer) = preload_answer(&request.headers) {
+    return answer;
+  }
   let cfg = match state.config() {
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("ValueError", error.to_string()),
@@ -451,7 +473,12 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     .await
     .expect("the chat page task does not panic");
   match rendered {
-    Ok(response) => response,
+    Ok(mut response) => {
+      // The body answers a navigation without the preload header, so a cache keeps the page apart from the body-less
+      // answer to a preload.
+      response.headers_mut().append(header::VARY, HeaderValue::from_static("Service-Worker-Navigation-Preload"));
+      response
+    }
     Err(error) => responses::internal_error(&error.kind, error.detail),
   }
 }
@@ -495,22 +522,28 @@ fn chat_page(
     }
   }
 
-  // A page opened without a session redirects to the first row before any row renders.
+  // A page opened without a session redirects to the first row before any row renders. The shell (`?session=`
+  // with an empty value) names no session and embeds no sidebar rows: its list comes from the listing route.
   let redirect_to_first = session.is_none();
-  let listing_result = (|| -> StoreResult<PageListing> {
-    if redirect_to_first && let Some(first) = listing::first_page_row_id(&state.features.store)? {
-      return Ok(PageListing::Redirect(first));
-    }
-    let page = listing::active_page_rows(&state.features.store, &state.features.registry)?;
-    listing::active_page_json_text(
-      &state.features.store,
-      &page,
-      clear_unread.as_deref(),
-      session.as_deref(),
-      &PAGE_ROWS_MEMO,
-    )
-    .map(PageListing::Text)
-  })();
+  let shell = session.as_deref() == Some("");
+  let listing_result = if shell {
+    Ok(PageListing::Text(Arc::new(NO_INITIAL_SESSIONS.to_string())))
+  } else {
+    (|| -> StoreResult<PageListing> {
+      if redirect_to_first && let Some(first) = listing::first_page_row_id(&state.features.store)? {
+        return Ok(PageListing::Redirect(first));
+      }
+      let page = listing::active_page_rows(&state.features.store, &state.features.registry)?;
+      listing::active_page_json_text(
+        &state.features.store,
+        &page,
+        clear_unread.as_deref(),
+        session.as_deref(),
+        &PAGE_ROWS_MEMO,
+      )
+      .map(PageListing::Text)
+    })()
+  };
   let initial_sessions_json = match listing_result {
     Ok(PageListing::Redirect(session_id)) => return Ok(responses::redirect(&format!("/?session={session_id}"))),
     Ok(PageListing::Text(text)) => text,
@@ -531,6 +564,7 @@ fn chat_page(
       auth_enabled,
       &hostname,
       encoding,
+      shell,
       meta,
       bootstrap,
       Arc::clone(&initial_sessions_json),
@@ -581,6 +615,7 @@ fn index_answer(
   auth_enabled: bool,
   hostname: &str,
   encoding: PageEncoding,
+  shell: bool,
   meta: Option<&SessionMetadata>,
   bootstrap: Option<&detail::PageBootstrap>,
   sidebar_text: Arc<String>,
@@ -621,6 +656,7 @@ fn index_answer(
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
     "session_bootstrap_json": SESSION_BOOTSTRAP_PLACEHOLDER,
     "active_session": active_session,
+    "shell": shell,
     "pending_draft": pending_draft,
     "event_count": event_count,
     "backend_options": cfg.backends.options
@@ -640,6 +676,35 @@ fn index_answer(
   });
   let runtime = PageRuntime::Index { cfg: Arc::clone(cfg), auth_enabled, sidebar_text, bootstrap_text };
   page_answer(state, request, "index.html", context, &runtime, encoding, hostname)
+}
+
+/// The offline shell's worker script: the shell's worker source behind its config, the switch and the release version
+/// the worker's store names. The browser checks the script on navigation, so `no-cache` keeps a stale copy from
+/// outliving a release.
+async fn offline_shell_worker(State(state): State<Arc<AppState>>, request: Parts) -> Response {
+  let rendered = tokio::task::spawn_blocking(move || worker_script(&state, &request))
+    .await
+    .expect("rendering the worker script does not panic");
+  match rendered {
+    Ok(response) => response,
+    Err(error) => responses::internal_error(&error.kind, error.detail),
+  }
+}
+
+fn worker_script(state: &Arc<AppState>, request: &Parts) -> Result<Response, Failure> {
+  let cfg = state.config().map_err(|error| failure("ValueError", error))?;
+  let templating =
+    state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
+  let version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
+  let worker_config = json!({"version": version, "enabled": cfg.server.enable_offline_shell});
+  let context = json!({"worker_config_json": worker_config.to_string()});
+  let body = templating
+    .render_page_template(&state.features, "offline-shell-worker.js", &context, request)
+    .map_err(|error| failure(error.kind(), error))?;
+  let mut response = Response::new(Body::from((*body).clone()));
+  response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/javascript; charset=utf-8"));
+  response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+  Ok(response)
 }
 
 async fn home_page(State(state): State<Arc<AppState>>, request: Parts) -> Response {
@@ -1123,6 +1188,7 @@ mod tests {
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
         enable_local_work_guard: false,
+        enable_offline_shell: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),
@@ -1605,5 +1671,14 @@ mod tests {
   fn a_page_response_carries_the_status_its_caller_names() {
     let response = page_response(Bytes::from(page_html()), None, StatusCode::NOT_FOUND);
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  }
+
+  #[test]
+  fn a_navigation_preload_gets_no_body_and_a_plain_navigation_gets_no_special_answer() {
+    let mut preload = HeaderMap::new();
+    preload.insert(NAVIGATION_PRELOAD, HeaderValue::from_static("true"));
+    let answer = preload_answer(&preload).expect("a preload is answered without the page");
+    assert_eq!(answer.status(), StatusCode::NO_CONTENT);
+    assert!(preload_answer(&HeaderMap::new()).is_none());
   }
 }

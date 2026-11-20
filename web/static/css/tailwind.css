@@ -1116,6 +1116,10 @@ video {
   margin-bottom: calc(1rem * var(--tw-space-y-reverse));
 }
 
+.self-center {
+  align-self: center;
+}
+
 .overflow-hidden {
   overflow: hidden;
 }
@@ -1334,6 +1338,10 @@ video {
 
 .bg-amber-900\/30 {
   background-color: rgb(120 53 15 / 0.3);
+}
+
+.bg-amber-900\/40 {
+  background-color: rgb(120 53 15 / 0.4);
 }
 
 .bg-black {

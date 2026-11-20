@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
 
-import { Tab } from './tabs.mjs';
+import { Tab, Tabs } from './tabs.mjs';
 
 // The toggle's listing fetch: the rows paint this long after its click.
 const FETCH_MS = 30;
@@ -99,4 +99,54 @@ test('the tab records a request the host\'s network change dropped, and leaves o
   assert.equal(tab.requests.get('poll').failed, 'net::ERR_CONNECTION_RESET');
   assert.equal(tab.networkChanged.length, 1, 'only the network-change error names the host\'s doing');
   assert.equal(tab.networkChanged[0].url, 'https://front.test/?session=s');
+});
+
+test('a committed navigation ends the requests of the document it replaces, and no other', () => {
+  const tab = new Tab('warm', { evaluate: async () => null });
+  const request = (requestId, loaderId) => ({
+    method: 'Network.requestWillBeSent',
+    params: { requestId, loaderId, request: { url: `https://front.test/${requestId}` } },
+  });
+  tab.handle(request('old-poll', 'loader-1'));
+  tab.handle(request('old-done', 'loader-1'));
+  tab.handle({ method: 'Network.loadingFinished', params: { requestId: 'old-done', encodedDataLength: 10 } });
+  tab.handle({ method: 'Page.frameNavigated', params: { frame: { id: 'main', loaderId: 'loader-2' } } });
+  tab.handle(request('new-doc', 'loader-2'));
+  assert.match(tab.requests.get('old-poll').failed, /document was replaced/);
+  assert.equal(tab.requests.get('old-done').failed, null);
+  assert.equal(tab.requests.get('new-doc').failed, null);
+});
+
+test('a worker that closes during Network.enable ends its attach', async () => {
+  const targetId = 'worker-1';
+  const events = [];
+  let onMessage;
+  const originalWarn = console.warn;
+  console.warn = (message) => events.push(message);
+  try {
+    const browser = {
+      send: async (method) => (method === 'Target.attachToTarget' ? {sessionId: 'worker-session'} : {}),
+      onMessage: (listener) => { onMessage = listener; },
+      sendTo: (sessionId, method) => {
+        setImmediate(() => {
+          events.push('target destroyed');
+          onMessage({method: 'Target.targetDestroyed', params: {targetId}});
+        });
+        return Promise.reject(new Error(method + ': Inspected target navigated or closed'));
+      },
+    };
+    new Tabs({browser, assets: new Map(), accessKey: '', origin: 'https://front.test', cdn: 'link'});
+    onMessage({
+      method: 'Target.targetCreated',
+      params: {targetInfo: {targetId, type: 'service_worker', url: 'https://front.test/offline-shell-worker.js'}},
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, [
+      'service worker target worker-1 closed during Network.enable',
+      'target destroyed',
+    ]);
+  } finally {
+    console.warn = originalWarn;
+  }
 });

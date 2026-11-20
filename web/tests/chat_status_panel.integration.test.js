@@ -13,7 +13,7 @@ const {
   eMsg,
   eTurn,
 } = require('./turn_engine_harness');
-const {baseSessionContext, createChatSidebarContext} = require('./session_context_stub');
+const {baseSessionContext, createChatSidebarContext, OFFLINE_PANEL_MARK} = require('./session_context_stub');
 const {createFakeWebSocketClass} = require('./fake_websocket');
 const {loadWebsocketModules} = require('./websocket_context_stub');
 const {readStatic, runIconModule} = require('./read_static');
@@ -1133,4 +1133,14 @@ test('a platform.onChange switch redraws the shown Status view in the new layout
 
   switchLayout(rig, 'desktop');
   assert.equal(viewRow(rig.panel, 'goal').classList.contains('flex-col'), false, 'back to the label column');
+});
+
+test('offline, the status panel shows the offline label and asks the server for no status', () => {
+  const rig = panelRig();
+  rig.context.navigator = {userAgent: 'TestAgent/1.0', onLine: false};
+
+  rig.context.openSessionStatusPanel({id: 'session-c', profile: 'worker'}, []);
+
+  assert.equal(rig.panel.innerHTML, OFFLINE_PANEL_MARK);
+  assert.deepEqual(rig.statusGets, [], 'no status request goes out while offline');
 });

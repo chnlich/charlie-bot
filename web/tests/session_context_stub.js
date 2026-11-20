@@ -6,7 +6,8 @@
 // because the loaded chat/sidebar modules bind or shadow globals at load time.
 const vm = require('node:vm');
 
-const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
+const {readStatic, readPackageStatic, chatModules, sidebarModules, runStaticModules, runIconModule} =
+  require('./read_static');
 const {createElement, createEscapingElement} = require('./dom_element_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
@@ -27,6 +28,15 @@ const SANDBOX_TIME_FORMS = {
   relativeFireIn: () => '(in 0m)',
   updateRelativeTimes: () => {},
 };
+// The right-hand panels' offline mark, as config.js's offlinePanelMark builds it: the icon module's
+// offline-panel icon inside the labeled span. Drawn by the real cbIcon, so the fixed HTML tracks icons.json.
+const OFFLINE_PANEL_MARK_CONTEXT = vm.createContext({window: {}, mark: ''});
+runIconModule(OFFLINE_PANEL_MARK_CONTEXT);
+OFFLINE_PANEL_MARK_CONTEXT.OFFLINE_PANEL_LABEL = 'Offline, loads after reconnect';
+const OFFLINE_PANEL_MARK_HTML = vm.runInContext(
+    'mark = \'<span class="inline-flex text-amber-400" title="\' + OFFLINE_PANEL_LABEL + \'" role="img" \' +\n' +
+    '    \'aria-label="\' + OFFLINE_PANEL_LABEL + \'">\' + cbIcon(\'offline-panel\', 16) + \'</span>\';',
+    OFFLINE_PANEL_MARK_CONTEXT);
 
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
@@ -147,6 +157,12 @@ function baseSessionContext(overrides = {}) {
     // config.js before the chat/sidebar modules createChatSidebarContext fans
     // out to.
     JSON_HEADERS: {'Content-Type': 'application/json'},
+    // config.js's freshness labels (sidebar/last-state.js and the panels paint them). The offline
+    // mark is config.js's function, so the sandbox carries the fixed HTML it returns.
+    NOT_CURRENT_LABEL: 'Not current',
+    NO_LOCAL_COPY_LABEL: 'No local copy',
+    OFFLINE_PANEL_LABEL: 'Offline, loads after reconnect',
+    offlinePanelMark: () => OFFLINE_PANEL_MARK_HTML,
     crypto: {randomUUID: () => 'archive-request-id'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
     saveDraftNow: () => {},
@@ -168,6 +184,9 @@ function baseSessionContext(overrides = {}) {
 // /static/js/chat/ and /static/js/sidebar/ script tags in document order.
 function createChatSidebarContext(context, options = {}) {
   vm.createContext(context);
+  // The page inlines the icon module ahead of every script (partials/chat_scripts.html), and the
+  // offline panels paint through it at event time.
+  runIconModule(context);
   vm.runInContext(UTILS_JS, context, {filename: 'utils.js'});
   // A suite that reads real time strings keeps utils.js's own forms; the rest read SANDBOX_TIME_FORMS.
   if (!options.realTimeForms) Object.assign(context, SANDBOX_TIME_FORMS);
@@ -175,7 +194,14 @@ function createChatSidebarContext(context, options = {}) {
   vm.runInContext(VIEW_REQUESTS_JS, context, {filename: 'view-requests.js'});
   runStaticModules(context, chatModules());
   standInForUsageJs(context);
+  standInForOfflineShell(context);
   runStaticModules(context, sidebarModules());
+}
+
+// offline-shell.js loads before the sidebar modules on the page, and these harnesses do not load it. This stands
+// in for the listing-URL registration sidebar/filters.js makes at load.
+function standInForOfflineShell(context) {
+  context.registerOfflineShellListingUrl = () => {};
 }
 
 // usage.js loads between the chat and the sidebar modules on the page. These
@@ -332,6 +358,7 @@ function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweak
     ['header-session-name', createElement({id: 'header-session-name'})],
     ['backend-badge', createElement()],
     ['msg-input', createElement()],
+    ['freshness-mark', createElement({id: 'freshness-mark'})],
     ...rows.map((row) => [row.id, row]),
   ]);
   const h = {messages, elements, ...fields};
@@ -453,11 +480,13 @@ function buildUsageElements() {
 }
 
 module.exports = {
+  OFFLINE_PANEL_MARK: OFFLINE_PANEL_MARK_HTML,
   baseSessionContext,
   buildSidebarIndicatorContext,
   paintListReply,
   createChatSidebarContext,
   standInForUsageJs,
+  standInForOfflineShell,
   loadCronPackage,
   buildSidebarFilterElements,
   buildUsageElements,

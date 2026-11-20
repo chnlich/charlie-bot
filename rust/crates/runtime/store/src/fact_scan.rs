@@ -29,6 +29,7 @@ use crate::control_events::REPORT_TO_FIELD;
 use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::WHOLE_LOG_LOGGED_BYTES;
 use crate::fact_checkpoint::{ArchiveMark, FactCheckpoint, ParsedCheckpoint};
+use crate::lock::lock;
 use crate::ndjson;
 use crate::run_facts::RunFacts;
 use crate::task_tree::{PromptScope, fold_appended_history, fold_scanned_history, newest_prompt_change};
@@ -36,7 +37,7 @@ use crate::task_tree_state::{
   CachedNodeFacts, CachedNodeState, CachedRunFactsAt, LivePromptChanges, NodeFacts, NodeFactsKey, NodeStateKey,
   SealedPromptChanges,
 };
-use crate::{Store, StoreResult};
+use crate::{Store, StoreError, StoreResult};
 
 /// The event types that carry chat content: the facts fold reads only their `id` and `type`.
 const CHAT_CONTENT_TYPES: [&str; 9] = [
@@ -89,6 +90,26 @@ impl ScannedLiveFacts {
   /// The bytes the scan read from the live log: the whole log on a full scan, the appended tail on a resumed one.
   pub fn read_bytes(&self) -> u64 {
     self.read_bytes
+  }
+
+  /// The node facts the scan folded, shared with the seal that memoizes them.
+  pub(crate) fn facts(&self) -> Arc<NodeFacts> {
+    Arc::clone(&self.facts)
+  }
+
+  /// The run facts the scan folded, shared with the seal that memoizes them.
+  pub(crate) fn runs(&self) -> Arc<RunFacts> {
+    Arc::clone(&self.runs)
+  }
+
+  /// The log identity and the archived extent the scan read: the key a memo of this snapshot carries.
+  pub(crate) fn snapshot_key(&self) -> (FileIdentity, usize) {
+    (self.identity, self.archived)
+  }
+
+  /// The events the scan folded: the archived events and the live log's events.
+  pub(crate) fn folded_events(&self) -> u64 {
+    (self.archived + self.covered) as u64
   }
 
   /// The bytes the scan read from its fact checkpoint, 0 when it scanned the log whole.
@@ -231,6 +252,26 @@ impl Store {
       checkpoint_bytes,
       resume_offset,
     }))
+  }
+
+  /// The cold node read's fold: the live log and its archive scanned as one snapshot, then sealed under the log's
+  /// identity. The scan runs under the session's event-cache lock, which a whole-log load also holds for its read, so no
+  /// append lands between the bytes the scan reads and its identity check. The cache stays cold, and the read parses no
+  /// chat content. The seal runs after the lock is released and is refused when an append lands in that gap. The read
+  /// then still answers from its snapshot, and the next read scans the appended events.
+  pub(crate) fn scan_cold_snapshot(&self, session_id: &str) -> StoreResult<ScannedLiveFacts> {
+    let scanned = {
+      let cache_entry = self.events_cache_entry(session_id);
+      let _cache = lock(&cache_entry, "session event cache mutex");
+      self.scan_live_facts(session_id)?
+    };
+    let Some(scanned) = scanned else {
+      return Err(StoreError::new(format!(
+        "{session_id}: a cold read found no live log, or fewer archived events than its archive_offset"
+      )));
+    };
+    self.seal_scanned_facts(session_id, &scanned)?;
+    Ok(scanned)
   }
 
   /// Write the checkpoint a scan left, logging a failure rather than failing the scan: the file only makes the next
@@ -777,7 +818,9 @@ mod tests {
     assert!(scanned.seal_scanned_facts("synthetic", &scan).unwrap());
     // The scan left a checkpoint. Removing it makes the reference store fold the log itself, which this test compares.
     std::fs::remove_file(scanned.fact_checkpoint_path("synthetic")).unwrap();
+    // The reference folds the whole log: a warm cache keeps the chat content that the cold scan's stand-ins leave out.
     let cold = open().unwrap();
+    cold.load_chat_events_shared_sync("synthetic").unwrap();
 
     let (sealed, folded) = (scanned.node_facts("synthetic").unwrap(), cold.node_facts("synthetic").unwrap());
     let (sealed, folded) = (sealed.task().unwrap(), folded.task().unwrap());
@@ -1343,10 +1386,10 @@ mod tests {
   }
 
   /// A cold node-state read folds the fact checkpoint and the bytes past it, and reaches the task state, run facts and
-  /// task facts a whole-log fold reaches. A checkpoint that is absent, torn or stale folds nothing, and the read falls
-  /// back to the whole-log load that answers the same value.
+  /// task facts a whole-log fold reaches. A checkpoint that is absent, torn or stale folds nothing, and the read scans
+  /// the log as one snapshot instead: it loads no history, and it writes the checkpoint back for the next read.
   #[test]
-  fn a_cold_node_state_read_folds_the_checkpoint_and_its_mismatches_load_the_whole_log() {
+  fn a_cold_node_state_read_folds_the_checkpoint_and_its_mismatches_scan_the_log() {
     let (home, writer) = make_test_store();
     let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
     write_events(
@@ -1395,21 +1438,28 @@ mod tests {
       (value, store.history_work().file_reads - before)
     };
 
-    // Reference: no checkpoint, so the whole log answers.
+    // Reference: no checkpoint, so the scan folds the log and writes the checkpoint back.
     std::fs::remove_file(&checkpoint_path).unwrap();
-    let (reference, whole_log_reads) = cold_value(&open());
-    assert_eq!(whole_log_reads, 1, "a missing checkpoint loads the whole log once");
+    let (reference, scan_reads) = cold_value(&open());
+    assert_eq!(scan_reads, 0, "a missing checkpoint scans the log without a whole-log load");
+    assert!(checkpoint_path.exists(), "the cold scan writes the checkpoint");
+    // The whole-log fold: a store whose cache holds the parsed history folds every event, as the scan must.
+    let whole_log = |store: &Store| {
+      store.load_chat_events_shared_sync("synthetic").unwrap();
+      state_value(store)
+    };
+    assert_eq!(whole_log(&open()), reference, "the scan's fold equals the whole-log fold");
 
     // Matching: the checkpoint covers the first leg and the read folds the appended second leg onto it.
     std::fs::write(&checkpoint_path, &intact).unwrap();
     let (from_checkpoint, reads) = cold_value(&open());
     assert_eq!(reads, 0, "the checkpoint answers without a whole-log load");
-    assert_eq!(from_checkpoint, reference, "the checkpoint's fold equals the whole-log fold");
+    assert_eq!(from_checkpoint, reference, "the checkpoint's fold equals the scan's fold");
 
     // Torn: the checkpoint's bytes cut in half.
     std::fs::write(&checkpoint_path, &intact[..intact.len() / 2]).unwrap();
     let (torn, reads) = cold_value(&open());
-    assert_eq!(reads, 1, "a torn checkpoint loads the whole log");
+    assert_eq!(reads, 0, "a torn checkpoint scans the log without a whole-log load");
     assert_eq!(torn, reference);
 
     // Stale: a byte inside the covered prefix was rewritten, with the file's length unchanged.
@@ -1419,8 +1469,42 @@ mod tests {
     std::fs::write(&log_path, &rewritten).unwrap();
     std::fs::write(&checkpoint_path, &intact).unwrap();
     let (stale, reads) = cold_value(&open());
-    assert_eq!(reads, 1, "a stale checkpoint loads the whole log");
+    assert_eq!(reads, 0, "a stale checkpoint scans the log without a whole-log load");
     std::fs::remove_file(&checkpoint_path).unwrap();
-    assert_eq!(stale, state_value(&open()), "the rewritten log folds as a whole-log load of it folds");
+    assert_eq!(stale, whole_log(&open()), "the rewritten log's scan folds as its whole-log fold does");
+  }
+
+  /// A cold read's snapshot excludes an append that lands after its scan, and the seal refuses it. The read then answers
+  /// from the snapshot, and the next cold read scans the log again and includes the appended event. The interleaving is
+  /// the one the cold read has between releasing the cache lock and sealing, driven through the same two calls.
+  #[test]
+  fn an_append_during_a_cold_read_is_left_out_of_its_snapshot_and_the_next_read_includes_it() {
+    let (home, writer) = make_test_store();
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
+    write_events(
+      &writer,
+      [
+        json!({"id": "created", "type": "task_created", "actor": "user"}),
+        json!({"id": "ask", "type": "user", "content": "do the work"}),
+      ],
+    );
+
+    let reading = open();
+    let snapshot = reading.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
+    append_events(
+      &writer,
+      [json!({"id": "close-1", "type": "task_closed", "request_id": "close-1", "outcome": "cancelled"})],
+    );
+
+    assert!(
+      !reading.seal_scanned_facts("synthetic", &snapshot).unwrap(),
+      "a snapshot that an append outran is not sealed"
+    );
+    assert_eq!(snapshot.facts().task().unwrap().task_state, "open", "the snapshot answers without the appended event");
+
+    let next = open();
+    let state = next.node_state("synthetic").unwrap();
+    assert_eq!(state.task_state().unwrap(), "cancelled", "the next cold read includes the appended event");
+    assert_eq!(next.history_work().file_reads, 0, "the next cold read scans the log and loads none of it");
   }
 }

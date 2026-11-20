@@ -128,6 +128,13 @@ impl ScannedLiveFacts {
   }
 }
 
+/// One cold snapshot outcome: either scanned and sealed under a cold event cache, or the already-warm cached live
+/// events if another reader loaded the cache before the scan took the session lock.
+pub(crate) enum ColdSnapshot {
+  Scanned(ScannedLiveFacts),
+  Warm(crate::events::LiveEventSnapshot),
+}
+
 /// One node's fold, ready to memoize: the facts, the run facts, the newest prompt fact of each scope and the history
 /// they cover.
 struct FoldedNodeFacts {
@@ -254,24 +261,22 @@ impl Store {
     }))
   }
 
-  /// The cold node read's fold: the live log and its archive scanned as one snapshot, then sealed under the log's
-  /// identity. The scan runs under the session's event-cache lock, which a whole-log load also holds for its read, so
-  /// no append lands between the bytes the scan reads and its identity check. The cache stays cold, and the read parses
-  /// no chat content. The seal runs after the lock is released and is refused when an append lands in that gap. The
-  /// read then still answers from its snapshot, and the next read scans the appended events.
-  pub(crate) fn scan_cold_snapshot(&self, session_id: &str) -> StoreResult<ScannedLiveFacts> {
-    let scanned = {
-      let cache_entry = self.events_cache_entry(session_id);
-      let _cache = lock(&cache_entry, "session event cache mutex");
-      self.scan_live_facts(session_id)?
-    };
-    let Some(scanned) = scanned else {
+  /// The cold node read's fold: the live log and its archive scanned and sealed under the session's event-cache lock,
+  /// which a whole-log load and every append also hold, so no append lands between the scan and its seal. If another
+  /// reader already warmed the cache before the lock was taken, returns the warm snapshot so the caller folds from it.
+  pub(crate) fn scan_cold_snapshot(&self, session_id: &str) -> StoreResult<ColdSnapshot> {
+    let cache_entry = self.events_cache_entry(session_id);
+    let cache = lock(&cache_entry, "session event cache mutex");
+    if let Some(cached) = cache.as_ref() {
+      return Ok(ColdSnapshot::Warm((cached.generation, Arc::clone(&cached.identity), Arc::clone(&cached.events))));
+    }
+    let Some(scanned) = self.scan_live_facts(session_id)? else {
       return Err(StoreError::new(format!(
         "{session_id}: a cold read found no live log, or fewer archived events than its archive_offset"
       )));
     };
-    self.seal_scanned_facts(session_id, &scanned)?;
-    Ok(scanned)
+    self.insert_scanned_facts(session_id, &scanned);
+    Ok(ColdSnapshot::Scanned(scanned))
   }
 
   /// Write the checkpoint a scan left, logging a failure rather than failing the scan: the file only makes the next
@@ -329,6 +334,11 @@ impl Store {
       return Ok(false);
     }
     drop(cache);
+    self.insert_scanned_facts(session_id, scanned);
+    Ok(true)
+  }
+
+  fn insert_scanned_facts(&self, session_id: &str, scanned: &ScannedLiveFacts) {
     self.insert_facts(FoldedNodeFacts {
       session_id: session_id.to_string(),
       identity: scanned.identity,
@@ -341,7 +351,6 @@ impl Store {
         node: scanned.prompt_changes.node.clone(),
       },
     });
-    Ok(true)
   }
 
   /// A node's facts from its checkpoint, for a reader whose event cache is cold: the checkpoint's facts folded with the
@@ -1507,5 +1516,31 @@ mod tests {
     let state = next.node_state("synthetic").unwrap();
     assert_eq!(state.task_state().unwrap(), "cancelled", "the next cold read includes the appended event");
     assert_eq!(next.history_work().file_reads, 0, "the next cold read scans the log and loads none of it");
+  }
+
+  /// A cold `run_facts` read scans and seals under the session lock without loading whole history, and
+  /// `scan_cold_snapshot` yields `ColdSnapshot::Warm` when another reader warms the event cache before it takes the
+  /// lock.
+  #[test]
+  fn a_cold_run_facts_read_scans_without_loading_and_scan_cold_snapshot_yields_warm_cache() {
+    let (home, writer) = make_test_store();
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
+    write_events(
+      &writer,
+      [
+        json!({"id": "created", "type": "task_created", "actor": "user"}),
+        json!({"id": "ask", "type": "user", "content": "do the work"}),
+        json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success"}),
+      ],
+    );
+
+    let cold = open();
+    assert!(cold.run_has_terminal_outcome("synthetic", "run-1").unwrap());
+    assert_eq!(cold.history_work().file_reads, 0, "the cold run-facts read loads no whole-log history");
+
+    let warmed = open();
+    warmed.load_chat_events_shared_sync("synthetic").unwrap();
+    assert!(matches!(warmed.scan_cold_snapshot("synthetic").unwrap(), ColdSnapshot::Warm(_)));
+    assert!(warmed.run_has_terminal_outcome("synthetic", "run-1").unwrap());
   }
 }

@@ -368,15 +368,22 @@ main > header > a[title="View JSONL events"]:hover {
   .hamburger-btn { display: inline-flex !important; }
   /* Header on phones: the menu and the session name keep the first row, so the
      name shows its topic and number instead of the first few characters. The
-     bounded backend badge, Compact and the concurrency badge share the second
-     row. The badge's 144 px bound shows a pool's short label whole and
-     ellipsizes a longer one. The tabs and the events link share the third, the
-     link at its right end. */
+     backend badge and Compact share the second row, and the badge may paint up
+     to the row's remaining width: an id the config does not hold carries the
+     "(not in config)" state, and that label paints whole instead of
+     ellipsizing at "mock-backen…". The tabs, the events link and the
+     concurrency badge share the third, the concurrency badge at its right end.
+     The header's ::after item holds a line of its own, so the tabs always start
+     the third row; without it a short backend label would let them join the
+     second. No row is added: the third row already holds the tabs and the
+     link. */
   main > header { flex-wrap: wrap; }
   main > header > .flex-1.min-w-0 { flex-basis: calc(100% - 2.5rem); }
-  #backend-badge, #compact-btn, main > header > .cb-slot { order: 1; }
-  #backend-badge { max-width: 144px; overflow: hidden; }
-  #tab-buttons { width: auto; flex: 1 1 calc(100% - 2.5rem); overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
+  main > header::after { content: ''; flex-basis: 100%; order: 98; }
+  #backend-badge, #compact-btn { order: 1; }
+  main > header > .cb-slot { order: 101; }
+  #backend-badge { max-width: 100%; overflow: hidden; }
+  #tab-buttons { width: auto; flex: 1 1 auto; overflow-x: auto; order: 99; -webkit-overflow-scrolling: touch; }
   #tab-buttons button { white-space: nowrap; }
   main > header > a[title="View JSONL events"] { order: 100; align-self: center; }
   #usage-indicator { display: none !important; }

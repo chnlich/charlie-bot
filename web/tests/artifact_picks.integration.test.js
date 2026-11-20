@@ -328,6 +328,11 @@ const PICK_AND_OVERSIZED_COMMENT = `(() => {
 async function saveKeepaliveLimitScreenshot(page, width, height) {
   const directory = process.env.CHARLIEBOT_KEEPALIVE_LIMIT_SHOTS_DIR;
   if (!directory) return;
+  // Put the page and the rail at their lower edges so page text clears the tray and lower rail controls are visible.
+  await page.evaluate('document.body.scrollTo(0, document.body.scrollHeight)');
+  await page.evaluate('(() => { const dock = document.querySelector(".__cbc-dock"); ' +
+    'dock.scrollTop = dock.scrollHeight; })()');
+  await sleep(FRAME_WAIT_MS);
   const {data} = await page.send('Page.captureScreenshot', {format: 'png'});
   const outputDirectory = path.resolve(directory);
   fs.mkdirSync(outputDirectory, {recursive: true});
@@ -502,8 +507,10 @@ test('Send with nothing pending is disabled and the tray says what to do', async
   });
 });
 
-// The window sizes that `charliebot screenshots sizes` lists; each one's screenshot is the one the land gate reads.
-const LAND_WINDOW_SIZES = [{width: 1536, height: 900}, {width: 1400, height: 1000}, {width: 390, height: 844}];
+// The task's 1280 px capture plus each window size that `charliebot land --help` lists.
+const LAND_WINDOW_SIZES = [
+  {width: 1280, height: 800}, {width: 1536, height: 900}, {width: 1400, height: 1000}, {width: 390, height: 844},
+];
 for (const {width, height} of LAND_WINDOW_SIZES) {
   test(`an oversized leave flush keeps the entries and explains the 64 KiB limit in the tray at ${width}x${height}`,
     async () => {

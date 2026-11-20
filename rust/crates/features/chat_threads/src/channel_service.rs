@@ -3,10 +3,13 @@
 //! crate keeps its configuration gate and route paths; the lifecycle, the task bookkeeping and the answer shape live
 //! here.
 
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use axum::response::Response;
+use charliebot_compat::request_body::{self, BodyModel};
 use charliebot_compat::responses;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext, cancel_and_wait};
@@ -139,6 +142,27 @@ pub fn reply_response(result: Result<Value, ThreadReplyError>) -> Response {
       responses::json(status, &json!({"detail": detail}))
     }
   }
+}
+
+/// The check route's request model: the request carries no fields.
+pub const CHECK_BODY: BodyModel = BodyModel::required(&[]).forbid_extra();
+
+/// The answer of a channel's check route: the request's body must carry no fields, then `check`'s result answers
+/// through [`reply_response`]. The Discord and Feishu routes mount the same check over their own bot, so the body model
+/// and the handler body live here.
+pub async fn check_response(
+  request: Request<Body>,
+  check: impl Future<Output = Result<Value, ThreadReplyError>>,
+) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match request_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  if let Err(response) = body.declared_fields(&CHECK_BODY) {
+    return *response;
+  }
+  reply_response(check.await)
 }
 
 #[cfg(test)]

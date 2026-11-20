@@ -19,17 +19,20 @@ use serde_json::{Map, Value, json};
 
 use crate::{agent_binding, config, loader, scheduler};
 
+/// The task collection: `GET` lists the tasks, `POST` creates one.
+pub const TASKS_PATH: &str = "/api/cron/tasks";
+
 /// The cron task routes: list and create at the collection, update and delete at one task, and a run path for one task.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/api/cron/tasks", refuse_other_methods(get(list_tasks).post(create_task), "GET"))
+    .route(TASKS_PATH, refuse_other_methods(get(list_tasks).post(create_task), "GET"))
     .route("/api/cron/tasks/{name}", refuse_other_methods(put(update_task).delete(delete_task), "PUT"))
     .route("/api/cron/tasks/{name}/run", post_only(run_task))
     .with_state(Arc::clone(features))
 }
 
 /// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
-pub const ROUTE_PATTERNS: &[&str] = &["/api/cron/tasks", "/api/cron/tasks/{name}", "/api/cron/tasks/{name}/run"];
+pub const ROUTE_PATTERNS: &[&str] = &[TASKS_PATH, "/api/cron/tasks/{name}", "/api/cron/tasks/{name}/run"];
 
 async fn list_tasks(State(features): State<Arc<FeatureContext>>) -> Response {
   let cfg = match features.config.get() {

@@ -1,9 +1,11 @@
 //! The Feishu message, thread and internal-request field names, with the closed value sets a request field takes.
 //!
 //! One message or thread carries the same field names in the inbound event, the message list, the session origin,
-//! the summon block and the read command's output. The CLI builds an internal request and a route reads it. A reader
-//! and a writer that disagree on one of these names, or on a value of a closed set, fail silently, so each one is
-//! spelled here once.
+//! the summon block and the read command's output. A reader and a writer that disagree on one of them fail silently,
+//! so each name is spelled here once.
+//!
+//! An internal request spells its field names and closed-set values here too. The CLI builds the request and a route
+//! validates it, so a rename on one side compiles and then answers 422 at run time.
 
 /// The tenant a message belongs to, from the event header.
 pub const TENANT_KEY: &str = "tenant_key";

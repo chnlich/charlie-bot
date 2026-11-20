@@ -87,7 +87,7 @@ impl Fixture {
       {"stdout": "2.1.300 (Claude Code)\n"},
       {"exit": 0},
     ]});
-    fs::write(bin.join("probe.json"), probe.to_string()).unwrap();
+    fs::write(bin.join(charliebot_core::paths::PROBE_FILE_NAME), probe.to_string()).unwrap();
 
     Self {
       root,

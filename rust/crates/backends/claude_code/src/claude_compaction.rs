@@ -648,7 +648,7 @@ mod tests {
     let mut steps =
       vec![json!({"record_argv": root.join("arguments.txt")}), json!({"record_stdin": root.join("prompt.txt")})];
     steps.extend(mode);
-    fs::write(bin.join("probe.json"), json!({"claude": steps}).to_string()).unwrap();
+    fs::write(bin.join(charliebot_core::paths::PROBE_FILE_NAME), json!({"claude": steps}).to_string()).unwrap();
   }
 
   fn emit_sink() -> (EmitFn, Arc<Mutex<Vec<Value>>>) {

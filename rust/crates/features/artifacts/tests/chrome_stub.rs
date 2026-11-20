@@ -22,7 +22,7 @@ fn a_fake_plays_its_steps_in_order_and_exits_with_its_code() {
     {"stderr": "err\n"},
     {"exit": 3},
   ]);
-  fs::write(directory.path().join("probe.json"), json!({"chrome": steps}).to_string())
+  fs::write(directory.path().join(charliebot_core::paths::PROBE_FILE_NAME), json!({"chrome": steps}).to_string())
     .expect("the fake's steps are written");
 
   let output =

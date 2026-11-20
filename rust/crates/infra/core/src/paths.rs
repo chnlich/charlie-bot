@@ -174,6 +174,12 @@ pub fn executable_on_path(name: &str, search_path: &OsStr) -> Option<PathBuf> {
   std::env::split_paths(search_path).map(|directory| directory.join(name)).find(|candidate| is_executable(candidate))
 }
 
+/// The data file beside a fake program's symlink: the behavior of every role the program plays.
+///
+/// Every fake program reads the same file name, whatever vocabulary its steps use, so the name sits beside the
+/// `program_path` that resolves the link it sits next to.
+pub const PROBE_FILE_NAME: &str = "probe.json";
+
 /// The file the caller ran: `argv[0]` when it has a directory part, else the first `PATH` entry that holds it.
 ///
 /// A fake program links its role name to one binary and finds its data file beside the link. The entry it ran is

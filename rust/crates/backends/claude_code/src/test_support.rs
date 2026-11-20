@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::home::CLAUDE_CONFIG_DIR_NAME;
+use charliebot_core::paths::PROBE_FILE_NAME;
 use charliebot_registry::backend::Env;
 use charliebot_registry::{Registry, RegistryError};
 
@@ -84,7 +85,7 @@ pub fn stage_fake_claude(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
   let env_file = root.join("env.txt");
   let stdin = root.join("stdin.txt");
   fs::write(
-    bin.join("probe.json"),
+    bin.join(PROBE_FILE_NAME),
     serde_json::json!({"claude": [
       {"record_argv": argv},
       {"record_env": env_file},

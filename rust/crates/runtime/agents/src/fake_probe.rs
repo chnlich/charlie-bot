@@ -18,11 +18,8 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use charliebot_core::paths::program_path;
+use charliebot_core::paths::{PROBE_FILE_NAME, program_path};
 use serde::Deserialize;
-
-/// The data file beside a fake's symlink: the steps of every role the helper plays.
-const PROBE_FILE_NAME: &str = "probe.json";
 
 /// One step of a fake program. The variant names are the step keys of `probe.json`.
 #[derive(Deserialize)]

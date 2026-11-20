@@ -20,14 +20,14 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use charliebot_core::paths::program_path;
+use charliebot_core::paths::{PROBE_FILE_NAME, program_path};
 
 fn main() {
   let argv: Vec<String> = std::env::args().collect();
   let argv0 = argv.first().expect("the helper always receives argv[0]");
   let link = program_path(OsStr::new(argv0));
   let role = link.file_name().expect("argv[0] names the role").to_string_lossy().into_owned();
-  let data_path = link.with_file_name("probe.json");
+  let data_path = link.with_file_name(PROBE_FILE_NAME);
   let body = fs::read_to_string(&data_path)
     .unwrap_or_else(|error| panic!("read probe behavior {}: {error}", data_path.display()));
   let behavior: serde_json::Value =

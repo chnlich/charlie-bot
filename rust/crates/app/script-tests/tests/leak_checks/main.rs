@@ -737,7 +737,7 @@ impl MergeWorld {
 #[test]
 #[ignore = "integration"]
 fn a_pr_merge_refuses_a_web_page_change_whose_evidence_lacks_a_window_size() {
-  let world = MergeWorld::new("web/ui.js\nrust/crates/x/src/lib.rs\n", "View: /?session=abc\n");
+  let world = MergeWorld::new("web/static/ui.js\nrust/crates/x/src/lib.rs\n", "View: /?session=abc\n");
   world.write_screenshots(1);
 
   let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
@@ -751,7 +751,7 @@ fn a_pr_merge_refuses_a_web_page_change_whose_evidence_lacks_a_window_size() {
 #[test]
 #[ignore = "integration"]
 fn a_pr_merge_refuses_a_web_page_change_without_a_view_line() {
-  let world = MergeWorld::new("web/ui.js\n", "## Evidence\nbefore and after.\n");
+  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n");
   world.write_screenshots(2);
 
   let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);
@@ -775,7 +775,7 @@ fn a_pr_merge_of_a_non_web_change_needs_no_evidence_directory() {
 #[test]
 #[ignore = "integration"]
 fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
-  let world = MergeWorld::new("web/ui.js\n", "## Evidence\nbefore and after.\n\nView: /?session=abc\n");
+  let world = MergeWorld::new("web/static/ui.js\n", "## Evidence\nbefore and after.\n\nView: /?session=abc\n");
   world.write_screenshots(2);
 
   let run = world.merge(&["--evidence-dir", world.evidence.to_str().unwrap(), "5046"]);

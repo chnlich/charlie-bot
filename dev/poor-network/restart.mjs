@@ -267,6 +267,8 @@ function returnSplit(tab, releaseAt, readyMs, tag, cursor, heldIds, rowAt) {
     ? undefined
     : tab.frames.find((frame) => frame.requestId === carrier.requestId && frame.type === 'catchup_complete');
   const catchupAt = catchup === undefined ? null : catchup.at;
+  // The server's own account of the replay it built: the events it covered and its uptime when it built the frame.
+  const snapshot = catchup === undefined ? null : JSON.parse(catchup.text);
   const replay = handshake === undefined
     ? []
     : tab.frames.filter((frame) => frame.requestId === carrier.requestId && frame.at >= openAt &&
@@ -301,6 +303,8 @@ function returnSplit(tab, releaseAt, readyMs, tag, cursor, heldIds, rowAt) {
     readyToAttemptMs: carrier === undefined ? null : carrier.at - readyMs,
     attemptToOpenMs: openAt === null ? null : openAt - carrier.at,
     catchupAtMs: catchupAt === null ? null : catchupAt - readyMs,
+    serverUptimeMs: snapshot === null ? null : snapshot.uptime_ms,
+    catchupEventTotal: snapshot === null ? null : snapshot.event_total,
     openToCatchupMs: catchupAt === null ? null : catchupAt - openAt,
     catchupToRowMs: catchupAt === null ? null : rowAt - catchupAt,
     probeFrameMs: probe === undefined ? null : probe.at - readyMs,

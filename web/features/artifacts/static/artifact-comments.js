@@ -28,7 +28,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // The least band the anchored column can use: one card and a gap. A rail whose controls leave less than
     // that keeps every entry in the tray list, which the rail's own scroll reaches.
     var GUTTER_MIN_BAND = 80;
-    var NO_SESSION_MESSAGE = 'Cannot parse session id from this artifact URL.';
+    var NO_SESSION_MESSAGE = 'Cannot send: this page\'s address names no session. ' +
+      'Open the page from its session\'s chat.';
     var SECTION_SELECTOR = 'section';
     // Characters of a fork's question text that the locator shows after the fork's
     // number. The session reads them to tell which item a commented line belongs
@@ -83,14 +84,13 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var trigger = null;
     var dock = null;
     var popover = null;
-    var showToast = createCommentToast(GLOBAL_PREFIX, injectInDock, 2200);
     var pending = [];
     var tray = null;
     var trayHeader = null;
     var trayList = null;
     var traySendBtn = null;
     var trayClearBtn = null;
-    var trayReason = null;
+    var trayStatus = null;
     var dockStack = null;
     var gutter = null;
     var anchoredCards = [];
@@ -108,6 +108,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // open. In sending the post is in flight, retried on a network error or 5xx. Entries leave the list when the
     // post lands.
     var trayStage = 'editing';
+    // The session the send in flight posts to, fixed at the click, and the outcome of the last send
+    // ({text, error}), which the tray shows until the next Send click or Clear.
+    var sendTarget = null;
+    var trayNotice = null;
     var sendHandle = null;
     var picks = [];
     var trayPickRow = null;
@@ -368,10 +372,14 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return sessionId;
     }
 
+    function sessionLabelOf(id) {
+      return sessionNameCache[id] || fallbackSessionLabel(id);
+    }
+
     function targetSessionLabel() {
       var id = resolveTargetSessionId();
       if (!id) return '';
-      return sessionNameCache[id] || fallbackSessionLabel(id);
+      return sessionLabelOf(id);
     }
 
     function targetSessionSuffix() {
@@ -450,8 +458,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-actions button:disabled{cursor:not-allowed;opacity:.58}' +
         '.' + GLOBAL_PREFIX + '-add{background:#238636!important;border-color:#2ea043!important;color:#fff!important}' +
         '.' + GLOBAL_PREFIX + '-error{display:none;margin-top:8px;color:#ffb4ab;font-size:12px}' +
-        '.' + GLOBAL_PREFIX + '-toast{background:#1f6f3a;color:#dfffe5;border:1px solid rgba(63,185,80,.65);border-radius:999px;padding:7px 12px;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35)}' +
-        '.' + GLOBAL_PREFIX + '-toast-error{background:#5f2120;color:#ffe2df;border-color:rgba(248,81,73,.7);border-radius:8px}' +
         // The page's own body scrolls, so the rail is never over the content: the body's margin and height are
         // the two custom properties placeRail and setRailHeight write. The rail is outside the body's box.
         ':root{--cbc-rail-w:0px;--cbc-rail-h:0px}' +
@@ -488,7 +494,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         '.' + GLOBAL_PREFIX + '-tray-edit-btn:hover{background:#262d36}' +
         '.' + GLOBAL_PREFIX + '-tray-remove{width:18px;height:18px;border:none;border-radius:4px;background:transparent;color:#8b949e;font:14px/1 -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center}' +
         '.' + GLOBAL_PREFIX + '-tray-remove:hover{background:#21262d;color:#e6edf3}' +
-        '.' + GLOBAL_PREFIX + '-tray-reason{background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px;font-size:11px;line-height:1.3}' +
+        '.' + GLOBAL_PREFIX + '-tray-status{color:#c9d1d9;font-size:11px;line-height:1.3}' +
+        '.' + GLOBAL_PREFIX + '-tray-status-error{background:#5f2120;color:#ffe2df;border:1px solid rgba(248,81,73,.7);border-radius:6px;padding:5px 7px}' +
         '.' + GLOBAL_PREFIX + '-tray-actions{display:flex;justify-content:flex-end;gap:7px}' +
         '.' + GLOBAL_PREFIX + '-tray-send{border:1px solid #2ea043;border-radius:6px;padding:5px 10px;background:#238636;color:#fff;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;cursor:pointer}' +
         '.' + GLOBAL_PREFIX + '-tray-send:hover:not(:disabled){background:#2ea043}' +
@@ -866,7 +873,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
           button.textContent = shortcut.label;
           button.title = shortcut.prompt;
           button.setAttribute('aria-label', shortcut.prompt);
-          if (!sessionId) {
+          if (!resolveTargetSessionId()) {
             button.disabled = true;
           } else {
             button.addEventListener('click', function() {
@@ -877,7 +884,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         })(SHORTCUTS[i]);
       }
 
-      if (!sessionId) {
+      if (!resolveTargetSessionId()) {
         var reason = document.createElement('div');
         reason.className = GLOBAL_PREFIX + '-shortcut-reason';
         reason.textContent = NO_SESSION_MESSAGE;
@@ -945,7 +952,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         clearHover();
       });
 
-      if (!sessionId) {
+      if (!resolveTargetSessionId()) {
         addBtn.disabled = true;
         setPopoverError(node, NO_SESSION_MESSAGE);
       } else {
@@ -1049,10 +1056,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       list.className = GLOBAL_PREFIX + '-tray-list';
       container.appendChild(list);
 
-      var reason = document.createElement('div');
-      reason.className = GLOBAL_PREFIX + '-tray-reason';
-      reason.textContent = NO_SESSION_MESSAGE;
-      container.appendChild(reason);
+      var status = document.createElement('div');
+      status.className = GLOBAL_PREFIX + '-tray-status';
+      status.style.display = 'none';
+      container.appendChild(status);
 
       var actions = document.createElement('div');
       actions.className = GLOBAL_PREFIX + '-tray-actions';
@@ -1082,7 +1089,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       trayList = list;
       traySendBtn = sendBtn;
       trayClearBtn = clearBtn;
-      trayReason = reason;
+      trayStatus = status;
 
       refreshTray();
       // The page's own scripts can rewrite its text after this script has run. The drafts
@@ -1178,11 +1185,36 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
           refreshTray);
     }
 
+    // The tray's one status line: why Send cannot send and what to do, what the send in flight is doing, or what the
+    // last send did. Null when Send is ready and no send has reported.
+    function trayStatusOf() {
+      if (!resolveTargetSessionId()) return {text: NO_SESSION_MESSAGE, error: true};
+      if (trayStage === 'countdown') {
+        return {
+          text: 'Sends to ' + sessionLabelOf(sendTarget) + ' in ' + COMMENT_UNDO_MS / 1000 +
+            ' seconds unless you press Undo.',
+          error: false,
+        };
+      }
+      if (trayStage === 'sending') {
+        return {
+          text: 'Sending to ' + sessionLabelOf(sendTarget) + '. A lost connection is retried until the server answers.',
+          error: false,
+        };
+      }
+      if (trayNotice) return trayNotice;
+      if (pending.length === 0) {
+        return {text: 'Nothing to send. Pick an option or write a comment, then press Send.', error: false};
+      }
+      return null;
+    }
+
     function refreshTray() {
       if (!tray) return;
-      if (pending.length > 0 && sessionId) ensureTargetSessionName();
+      if (pending.length > 0 && resolveTargetSessionId()) ensureTargetSessionName();
       var targetSuffix = targetSessionSuffix();
       var idle = trayStage === 'editing';
+      var status = trayStatusOf();
       trayHeader.textContent = 'Pending (' + pending.length + ')' + targetSuffix;
       traySendBtn.textContent = idle ? 'Send ' + pending.length + targetSuffix : 'Sending';
       tray.style.display = pending.length > 0 || picks.length > 0 ? 'flex' : 'none';
@@ -1191,8 +1223,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       trayRestButton.disabled = !idle || unpickedRecommendedCount() === 0;
       trayUndoButton.style.display = trayStage === 'countdown' ? 'inline-block' : 'none';
       trayClearBtn.disabled = !idle;
-      traySendBtn.disabled = !idle || !sessionId || pending.length === 0;
-      trayReason.style.display = sessionId ? 'none' : 'block';
+      traySendBtn.disabled = !idle || !resolveTargetSessionId() || pending.length === 0;
+      trayStatus.textContent = status ? status.text : '';
+      trayStatus.style.display = status ? 'block' : 'none';
+      trayStatus.classList.toggle(GLOBAL_PREFIX + '-tray-status-error', Boolean(status && status.error));
       renderPicks();
       scheduleReflow();
     }
@@ -1411,6 +1445,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         }
       }
       pending = [];
+      trayNotice = null;
       clearDraft(artifactPath);
       refreshTray();
     }
@@ -1434,35 +1469,51 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // The one send of the tray: every pending entry, picks and comments, goes as one message to the comment target
-    // after the undo window. Entries that land leave the list; entries added during the window stay pending.
+    // after the undo window. The target is the one the click names. Entries that land leave the list; entries added
+    // during the window stay pending. Every outcome sets the tray's status line.
     function sendBatch() {
-      if (!sessionId || pending.length === 0 || trayStage !== 'editing') return;
+      var target = resolveTargetSessionId();
+      if (!target || pending.length === 0 || trayStage !== 'editing') return;
       var batch = batchOrder(pending);
       var message = buildBatchMessage(batch);
+      var count = batch.length;
+      var label = sessionLabelOf(target);
+      sendTarget = target;
+      trayNotice = null;
       trayStage = 'countdown';
       refreshTray();
       sendHandle = startUndoableSend(function() {
         trayStage = 'sending';
         refreshTray();
-        return postCommentMessage(resolveTargetSessionId(), message);
+        return postCommentMessage(target, message);
       });
       sendHandle.sent.then(function(result) {
         sendHandle = null;
         trayStage = 'editing';
         if (result === null) {
-          refreshTray();
-          return;
+          trayNotice = {text: 'Undone. Nothing was sent; the entries stay pending.', error: false};
+        } else {
+          dropSent(batch);
+          if (result.dispatch_error) {
+            trayNotice = {
+              text: 'Sent ' + count + ' to ' + label + ', but the session did not start a run: ' +
+                result.dispatch_error,
+              error: true,
+            };
+          } else {
+            trayNotice = {text: 'Sent ' + count + ' to ' + label + '.', error: false};
+          }
+          if (batch.some(function(entry) { return entry.kind === ENTRY_KIND.PICK; })) refreshStatusViewAfterPick();
         }
-        dropSent(batch);
-        if (result.dispatch_error) showToast(result.dispatch_error, true);
-        else showToast(batch.length + ' sent to chat', false);
-        if (batch.some(function(entry) { return entry.kind === ENTRY_KIND.PICK; })) refreshStatusViewAfterPick();
         refreshTray();
       }, function(err) {
         sendHandle = null;
         trayStage = 'editing';
         console.error('Batch send failed:', err);
-        showToast(err.message, true);
+        trayNotice = {
+          text: 'Not sent: ' + err.message + '. The entries are still pending; press Send to try again.',
+          error: true,
+        };
         refreshTray();
       });
     }

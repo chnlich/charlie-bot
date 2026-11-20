@@ -56,10 +56,16 @@ const PANEL_READY = '(() => { const frame = document.getElementById("panel"); ' 
   'typeof doc.defaultView.__cbcPageForks === "function" && !!doc.querySelector(".__cbc-tray"); })()';
 // The undo window is five seconds; the wait leaves room for the post.
 const SEND_WAIT_MS = 9000;
+// The tray's list is rebuilt on the next animation frame, so a count read straight after a click waits for one.
+const FRAME_WAIT_MS = 100;
+// The page's open questions that have option buttons, in page order.
+const PICKABLE_FORKS = '(() => Array.from(document.querySelectorAll(".fork"))' +
+  '.filter((fork) => fork.querySelector(".__cbc-pick")))()';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function serve(sent, sourcePath) {
+// `reply` is the status and body the fake server answers each message post with.
+function serve(sent, sourcePath, reply = {status: 202, body: {status: 'accepted'}}) {
   const template = fs.readFileSync(sourcePath, 'utf8');
   const tags = `<script>window.__cbcServerSessionId=${JSON.stringify(OWNER)};</script>\n` +
     `<script>${iconTableScript()}</script>\n` +
@@ -75,8 +81,8 @@ function serve(sent, sourcePath) {
       req.on('end', () => {
         const session = url.pathname.split('/')[3];
         sent.push({session, body: JSON.parse(body)});
-        res.writeHead(202, {'Content-Type': 'application/json'});
-        res.end(JSON.stringify({status: 'accepted'}));
+        res.writeHead(reply.status, {'Content-Type': 'application/json'});
+        res.end(JSON.stringify(reply.body));
       });
       return;
     }
@@ -176,9 +182,10 @@ async function withPlanPage(check, {
   url = `${PAGE_PATH}#cbsession=${VIEWER}`,
   ready = PAGE_READY,
   inFrame = false,
+  reply,
 } = {}) {
   const sent = [];
-  const {server, base} = await serve(sent, source);
+  const {server, base} = await serve(sent, source, reply);
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-picks-chrome-'));
   let chrome = null;
   try {
@@ -236,19 +243,41 @@ const SECOND_QUESTION = `    <section class="plan-section">
     </section>
 `;
 
-// Runs one check against the template with the second open question, then removes the copy it served.
-async function withTwoQuestionPage(check, options = {}) {
+// A question answered in the older form: no resolved line, and the answer is written in the rec line, which names
+// the chosen option first. Its options are the page's own, so the question is pickable like any open one.
+const OLDER_FORM_NUMBER = '4';
+const OLDER_FORM_OPTION = '「keep」: leave the sessions at the root.';
+const OLDER_FORM_QUESTION = `    <section class="plan-section">
+      <h2><span class="n">7</span> Session roots</h2>
+      <div class="fork">
+        <p class="q"><span class="fn">${OLDER_FORM_NUMBER}</span> Where should the five sessions hang?</p>
+        <ul>
+          <li>${OLDER_FORM_OPTION}
+          <li>「move」: hang them under the line.
+        </ul>
+        <p class="rec">已选「keep」（你在评论里选的；我原先推荐「move」）：they stay at the root.</p>
+      </div>
+    </section>
+`;
+
+// Runs one check against the template with `question` added after its last section, then removes the copy it served.
+async function withExtraQuestion(question, check, options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-picks-questions-'));
   try {
     const html = fs.readFileSync(TEMPLATE_PATH, 'utf8');
     const at = html.indexOf('  </main>');
     if (at === -1) throw new Error('the template has no main element to add a question to');
-    const source = path.join(dir, 'plan_two_questions.html');
-    fs.writeFileSync(source, html.slice(0, at) + SECOND_QUESTION + html.slice(at));
+    const source = path.join(dir, 'plan_extra_question.html');
+    fs.writeFileSync(source, html.slice(0, at) + question + html.slice(at));
     await withPlanPage(check, {...options, source});
   } finally {
     fs.rmSync(dir, {recursive: true, force: true});
   }
+}
+
+// Runs one check against the template with the second open question.
+function withTwoQuestionPage(check, options = {}) {
+  return withExtraQuestion(SECOND_QUESTION, check, options);
 }
 
 // Picks the first option of each of the two open questions, then writes one comment on a paragraph. Returns what
@@ -274,7 +303,7 @@ test('two picks and a comment share one tray and one Send, which posts one messa
     const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
     const shown = await page.evaluate(TWO_PICKS_AND_A_COMMENT);
     // The entries are placed on the next animation frame, so the count waits for it.
-    await sleep(100);
+    await sleep(FRAME_WAIT_MS);
     assert.deepEqual([shown.trays, shown.sends], [1, 1], 'one tray and one Send');
     assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-tray-item").length'), 3,
       'the tray holds two picks and one comment');
@@ -294,16 +323,120 @@ test('two picks and a comment share one tray and one Send, which posts one messa
   });
 });
 
-test('Undo inside the undo window posts nothing and keeps the picks and the comment pending', async () => {
-  await withTwoQuestionPage(async (page, sent) => {
-    await page.evaluate(TWO_PICKS_AND_A_COMMENT);
-    await page.evaluate('document.querySelector(".__cbc-tray-send").click()');
-    await page.evaluate('Array.from(document.querySelectorAll(".__cbc-tray-action"))' +
-      '.find((button) => button.textContent.trim() === "Undo").click()');
+// The tray's one status line, and whether it reports a failure.
+const TRAY_STATUS = 'document.querySelector(".__cbc-tray-status").textContent';
+const TRAY_STATUS_SHOWN = 'getComputedStyle(document.querySelector(".__cbc-tray-status")).display !== "none"';
+const TRAY_STATUS_IS_ERROR = 'document.querySelector(".__cbc-tray-status")' +
+  '.classList.contains("__cbc-tray-status-error")';
+const TRAY_ITEMS = 'document.querySelectorAll(".__cbc-tray-item").length';
+const SEND_DISABLED = 'document.querySelector(".__cbc-tray-send").disabled';
+const CLICK_SEND = 'document.querySelector(".__cbc-tray-send").click()';
+const CLICK_UNDO = 'Array.from(document.querySelectorAll(".__cbc-tray-action"))' +
+  '.find((button) => button.textContent.includes("Undo")).click()';
+
+test('Undo inside the undo window posts nothing, keeps the picks and the comment pending, and says so in the tray',
+  async () => {
+    await withTwoQuestionPage(async (page, sent) => {
+      await page.evaluate(TWO_PICKS_AND_A_COMMENT);
+      await page.evaluate(CLICK_SEND);
+      await page.evaluate(CLICK_UNDO);
+      await sleep(SEND_WAIT_MS);
+
+      assert.deepEqual(sent, []);
+      assert.equal(await page.evaluate(TRAY_ITEMS), 3);
+      assert.equal(await page.evaluate(TRAY_STATUS_SHOWN), true, 'the tray says the send was undone');
+      assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), false);
+    });
+  });
+
+// The live repro: a question whose answer sits only in its rec line (no resolved line) still has option buttons. A pick
+// there must send, and the tray must show the result, so Send never goes dark without a reason.
+test('a pick on a question whose answer is written in its rec line sends, and the tray shows the result', async () => {
+  await withExtraQuestion(OLDER_FORM_QUESTION, async (page, sent) => {
+    await page.evaluate(`(() => { const forks = ${PICKABLE_FORKS};` +
+      ' forks[forks.length - 1].querySelector(".__cbc-pick").click(); })()');
+    await sleep(FRAME_WAIT_MS);
+    assert.equal(await page.evaluate(TRAY_ITEMS), 1);
+    assert.equal(await page.evaluate(TRAY_STATUS_SHOWN), false, 'a ready Send shows no status');
+    assert.equal(await page.evaluate(SEND_DISABLED), false);
+
+    await page.evaluate(CLICK_SEND);
     await sleep(SEND_WAIT_MS);
 
-    assert.deepEqual(sent, []);
-    assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-tray-item").length'), 3);
+    assert.equal(sent.length, 1, 'one message');
+    assert.equal(sent[0].session, VIEWER, 'the message goes to the comment target');
+    const lines = sent[0].body.content.split('\n');
+    assert.equal(lines.filter((line) => /^\d+\. ▸ /.test(line)).length, 1, 'one numbered entry');
+    assert.ok(lines.includes(`1. ▸ Q${OLDER_FORM_NUMBER}`), 'the pick names its question');
+    assert.ok(lines.includes(`   ↳ ${OLDER_FORM_OPTION}`), 'the pick carries its option text verbatim');
+    // Send is dark once its entries have landed, so the tray must say what happened.
+    assert.equal(await page.evaluate(SEND_DISABLED), true);
+    assert.equal(await page.evaluate(TRAY_STATUS_SHOWN), true, 'the tray reports the send');
+    assert.ok((await page.evaluate(TRAY_STATUS)).includes('Viewing session'), 'the tray names the session it sent to');
+    assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), false, 'a delivered send is not shown as an error');
+  });
+});
+
+test('a send the server refuses keeps the entries pending and reports the reason in the tray', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    await page.evaluate(TWO_PICKS_AND_A_COMMENT);
+    await page.evaluate(CLICK_SEND);
+    await sleep(SEND_WAIT_MS);
+
+    assert.equal(sent.length, 1, 'the post was made');
+    assert.equal(await page.evaluate(TRAY_ITEMS), 3, 'the entries stay pending');
+    assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true);
+    assert.ok((await page.evaluate(TRAY_STATUS)).includes('log in to comment'), 'the reason the server gave');
+    assert.equal(await page.evaluate(SEND_DISABLED), false, 'Send is ready to try again');
+  }, {reply: {status: 401, body: {error: 'unauthorized'}}});
+});
+
+test('a message the server admits but cannot launch leaves the list and reports the reason in the tray', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    await page.evaluate(TWO_PICKS_AND_A_COMMENT);
+    await page.evaluate(CLICK_SEND);
+    await sleep(SEND_WAIT_MS);
+
+    assert.equal(sent.length, 1);
+    assert.equal(await page.evaluate(TRAY_ITEMS), 0, 'the admitted entries leave the list');
+    assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), true);
+    assert.ok((await page.evaluate(TRAY_STATUS)).includes('run already active'), 'the reason the server gave');
+  }, {reply: {status: 202, body: {status: 'accepted', dispatch_error: 'run already active'}}});
+});
+
+test('Send with nothing pending is disabled and the tray says what to do', async () => {
+  await withTwoQuestionPage(async (page) => {
+    // The first option of the first question, picked and then taken back: the list is empty again.
+    const pick = `${PICKABLE_FORKS}[0].querySelector(".__cbc-pick").click()`;
+    await page.evaluate(pick);
+    await page.evaluate(pick);
+    await sleep(FRAME_WAIT_MS);
+
+    assert.equal(await page.evaluate(TRAY_ITEMS), 0);
+    assert.equal(await page.evaluate(SEND_DISABLED), true);
+    assert.equal(await page.evaluate(TRAY_STATUS_SHOWN), true);
+    assert.equal(await page.evaluate(TRAY_STATUS_IS_ERROR), false);
+  });
+});
+
+test('Rest as recommended picks only the questions that have no pick', async () => {
+  await withTwoQuestionPage(async (page, sent) => {
+    // The first question's second option is not its recommendation, so Rest must leave this pick alone.
+    await page.evaluate(`${PICKABLE_FORKS}[0].querySelectorAll(".__cbc-pick")[1].click()`);
+    await sleep(FRAME_WAIT_MS);
+    await page.evaluate('Array.from(document.querySelectorAll(".__cbc-tray-action"))' +
+      '.find((button) => button.textContent.includes("Rest as recommended")).click()');
+    await sleep(FRAME_WAIT_MS);
+
+    assert.equal(await page.evaluate(TRAY_ITEMS), 2, 'the earlier pick and the one Rest added');
+    assert.equal(await page.evaluate(
+      `${PICKABLE_FORKS}[0].querySelectorAll(".__cbc-pick")[1].getAttribute("aria-pressed")`), 'true');
+    assert.equal(await page.evaluate(
+      `${PICKABLE_FORKS}[1].querySelectorAll(".__cbc-pick")[0].getAttribute("aria-pressed")`), 'true');
+    assert.equal(await page.evaluate(
+      'document.querySelector(".__cbc-tray-picks-label").textContent.includes("0 of 2")'),
+    true, 'no question is left without a pick');
+    assert.equal(sent.length, 0);
   });
 });
 

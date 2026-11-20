@@ -1,8 +1,10 @@
 //! The live capture step of the switch: the `View:` trailers it reads from the commits the switch moved across, the exit
 //! the switch reports when a capture fails, and where the access key goes during one capture.
 
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -10,7 +12,7 @@ use std::time::Duration;
 use charliebot_shell_harness::{self as harness, Sandbox};
 
 use crate::drain_line;
-use crate::world::World;
+use crate::world::{World, install_release};
 
 #[test]
 #[ignore = "integration"]
@@ -251,4 +253,30 @@ fn test_the_capture_sends_the_key_to_the_charliebot_origin_only() {
     assert!(header_values(&seen.head, "Authorization").is_empty(), "the second origin got an Authorization: {seen:?}");
     assert!(!seen.head.contains(LIVE_KEY), "the second origin got the key: {seen:?}");
   }
+}
+
+/// The switch's own capture step, run for real against a target whose View line the live server does not know: the
+/// capture fails before any picture, the log names the commit and the line, and the switch exits 7 on the new release.
+#[test]
+#[ignore = "integration"]
+fn test_a_view_the_live_server_does_not_know_exits_7_through_the_switch_and_stays_switched() {
+  let mut world = World::new();
+  world.seed_live_run("run-live", Some("claude-opus"));
+  world.record_outcome("run-live", "success");
+  let pid = world.live[0].id();
+  world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "Open the session\n\nView: /?session=5f1c0d2e"]);
+  let target = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  let short = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
+  install_release(&world.releases, &target);
+
+  let run = world.switch_forward_capturing(&target, pid, &drain_line("run-live"), "/?session=known-session");
+
+  assert_eq!(run.code, 7, "{}", world.report(&run));
+  assert!(!world.root().join("restored").exists(), "the switch did not switch back: {}", world.report(&run));
+  let current = fs::read_link(world.releases.join("current")).expect("current names a release");
+  assert_eq!(current, Path::new(&target), "the new release stays switched: {}", world.report(&run));
+  assert!(run.stdout.contains(&format!("live screenshot: commit {short}: ")), "{}", world.report(&run));
+  assert!(run.stdout.contains("View line `/?session=5f1c0d2e`"), "{}", world.report(&run));
+  assert!(run.stdout.contains("live screenshot capture failed"), "{}", world.report(&run));
+  assert!(!run.stdout.contains("SWITCH COMPLETE:"), "{}", world.report(&run));
 }

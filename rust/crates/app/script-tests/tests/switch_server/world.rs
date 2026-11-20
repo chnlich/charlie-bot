@@ -105,6 +105,12 @@ pub struct World {
   pub live: Vec<Child>,
 }
 
+/// The live capture step of a forward switch: a shell command that stands in for it, or the switch's own step.
+enum Capture<'a> {
+  Stub(&'a str),
+  Real { known_view: &'a str },
+}
+
 /// The layouts a backend registration takes across the builds.
 #[derive(Clone, Copy)]
 enum Layout {
@@ -350,37 +356,64 @@ impl World {
   /// [`World::switch_forward`] with `live` as the shell command standing in for the live capture step, so a test can
   /// make the capture fail and read the exit.
   pub fn switch_forward_with(&self, run_pid: u32, launch_output: &str, delegation: &str, live: &str) -> Run {
+    self.forward_to(&self.rust_sha, run_pid, launch_output, delegation, Capture::Stub(live))
+  }
+
+  /// The forward path to `target`, a commit above the old release, with the switch's own capture step. The target
+  /// release's CLI resolves only `known_view`, so a View line that names another view fails its capture.
+  pub fn switch_forward_capturing(&self, target: &str, run_pid: u32, launch_output: &str, known_view: &str) -> Run {
+    self.forward_to(target, run_pid, launch_output, ":", Capture::Real { known_view })
+  }
+
+  /// The forward path to `target` with the live capture step `capture` names.
+  fn forward_to(&self, target: &str, run_pid: u32, launch_output: &str, delegation: &str, capture: Capture) -> Run {
     let (launch_log, work) = self.launch_files(launch_output);
     let mut env = self.env.clone();
     env.insert("CLONE".to_string(), self.clone.display().to_string());
     env.insert("RUN_PID".to_string(), run_pid.to_string());
     env.insert("RESTORED".to_string(), self.root().join("restored").display().to_string());
     env.insert("RUNS_FILE".to_string(), self.root().join("switch.runs").display().to_string());
-    env.insert("WANT".to_string(), format!("rust {}", self.rust_sha));
+    env.insert("WANT".to_string(), format!("rust {target}"));
     env.insert("PORT".to_string(), self.port.to_string());
     env.insert("NEW_LOG".to_string(), launch_log.display().to_string());
     env.insert("NEW_OFFSET".to_string(), "0".to_string());
     env.insert("WORK".to_string(), work.display().to_string());
     env.insert("DELEGATION".to_string(), delegation.to_string());
-    env.insert("LIVE_SHOTS".to_string(), live.to_string());
     env.insert("SYSTEMCTL_RECORDS".to_string(), self.sandbox.bin().join("systemctl.records").display().to_string());
+    let live_stub = match capture {
+      Capture::Stub(live) => {
+        env.insert("LIVE_SHOTS".to_string(), live.to_string());
+        "live_screenshots() { $LIVE_SHOTS; }"
+      }
+      Capture::Real { known_view } => {
+        env.insert("KNOWN_VIEW".to_string(), known_view.to_string());
+        ""
+      }
+    };
     let script = r#"
 source "$1" rust "$2"
 REPO_ROOT="$CLONE"
 OLD_IMPL="$3"
 PREV_IMPL="$3"
+OLD_SHA="$4"
 stop_serving() { OLD_STOPPED=1; kill -KILL "$RUN_PID" 2>/dev/null; log "old server stopped"; }
 start_in_pane() { printf 'server-start\n' >> "$SYSTEMCTL_RECORDS"; }
 wait_ready() { :; }
 serving() { :; }
 probe_turn() { :; }
 delegation_check() { $DELEGATION; }
-live_screenshots() { $LIVE_SHOTS; }
+LIVE_STUB
 switch_back() { log "switch back: $*"; touch "$RESTORED"; exit 2; }
 switch_forward
-"#;
+"#
+    .replace("LIVE_STUB", live_stub);
     let mut command = harness::command("bash", &env);
-    command.args(["-c", script, "bash"]).arg(repo_switch()).arg(&self.rust_sha).arg(format!("rust {}", self.old_sha));
+    command
+      .args(["-c", &script, "bash"])
+      .arg(repo_switch())
+      .arg(target)
+      .arg(format!("rust {}", self.old_sha))
+      .arg(&self.old_sha);
     harness::run(&mut command)
   }
 

@@ -7,8 +7,10 @@
 //!
 //! The fixture holds one incident's session text: the item, the Goal, the user messages, the memo as recovered and,
 //! when the plan names one, a repository contract. It stays outside the repository. The example builds a scratch home
-//! that links every entry of `CHARLIEBOT_HOME` except its sessions, so the judge reads today's config, credentials and
-//! memory; the replay session is written under the scratch home, which is deleted when the example exits. The judge
+//! that links every entry of `CHARLIEBOT_HOME` except its sessions and state, so the judge reads today's config,
+//! credentials and memory; `state/backend_availability.json` is copied in, so a member failure the replay records
+//! lands in the scratch home. The replay session is written under the scratch home, which is deleted when the
+//! example exits. The judge
 //! makes the call the server makes on the `probe` class, and the verdict is printed for a human to assess. `--probe`
 //! names the one option the probe class runs on in place of the host's rotation, for a replay that must not depend on
 //! a rotation member that fails.
@@ -103,9 +105,17 @@ async fn replay(fixture: &PathBuf, group: &str, probe: Option<&str>) -> Result<(
   let home = scratch.path().to_path_buf();
   for entry in fs::read_dir(&real_home).with_context(|| format!("reading {}", real_home.display()))? {
     let entry = entry?;
-    if entry.file_name() != "sessions" {
+    if entry.file_name() != "sessions" && entry.file_name() != "state" {
       symlink(entry.path(), home.join(entry.file_name()))?;
     }
+  }
+  // Backend availability reads stay today's, but a member failure the replay records lands in the scratch home, not
+  // the live state the server reads.
+  let live_availability = charliebot_core::home::backend_availability_path(&real_home);
+  if live_availability.is_file() {
+    fs::create_dir_all(charliebot_core::home::state_dir(&home))?;
+    fs::copy(&live_availability, charliebot_core::home::backend_availability_path(&home))
+      .context("seeding the scratch backend availability")?;
   }
 
   let features = features_over(&home, probe)?;

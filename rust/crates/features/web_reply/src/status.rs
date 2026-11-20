@@ -628,6 +628,9 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
+  if patch.waiting.is_some() {
+    require_open_waiting_session(features, session_id).await?;
+  }
   if !reply::is_web_session(&meta) && patch.named() != ["goal"] {
     return Err(WebReplyError::refused(
       StatusCode::CONFLICT,
@@ -714,6 +717,9 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   let payload = payload_of(&status);
   {
     let guard = features.store.control_lock().await;
+    if changed.contains(&"waiting") {
+      require_open_waiting_session(features, session_id).await?;
+    }
     let values = Map::from_iter([(STATUS_FIELD.to_string(), payload.clone())]);
     features.store.update_task_slot_fields_locked(&guard, session_id, OWNER, values).await?;
   }
@@ -741,6 +747,18 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   result.insert("now_over_budget".to_string(), json!(now_chars > NOW_BUDGET_CHARS));
   result.insert("remaining_missing".to_string(), json!(missing));
   Ok(Value::Object(result))
+}
+
+async fn require_open_waiting_session(features: &FeatureContext, session_id: &str) -> Result<(), WebReplyError> {
+  let meta = features.store.read_metadata_fresh(session_id)?.ok_or_else(|| {
+    WebReplyError::Failed(anyhow::anyhow!("session {session_id} disappeared while setting its status"))
+  })?;
+  let id = session_id.to_string();
+  let state = tree_read(&features.store, move |store| store.task_state_fast(&id)).await?;
+  if meta.status == SessionStatus::Archived || state != "open" {
+    return Err(WebReplyError::refused(StatusCode::CONFLICT, "Closed or archived sessions cannot set waiting items"));
+  }
+  Ok(())
 }
 
 /// Confirm that the stored status needs no change and return it, with `remaining_missing`.
@@ -1710,6 +1728,28 @@ mod tests {
     let body = read_status(&home.features, &root).await.expect("the read answers");
 
     assert!(body["children"].as_array().unwrap().is_empty());
+  }
+
+  #[tokio::test]
+  async fn closed_and_archived_sessions_refuse_waiting_but_accept_now() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let closed = home.child(&root, "closed").await;
+    let archived = home.child(&root, "archived").await;
+    archive_task(&home.features, &closed).await;
+    home.features.store.archive_session(&archived).await.expect("the session archives");
+
+    for session_id in [&closed, &archived] {
+      let before = stored(&home, session_id).await;
+      let patch = json!({"waiting": [waiting_item("Choose")], "now": "Must not store"});
+      let error = set_status(&home.features, session_id, &patch.to_string()).await.expect_err("waiting is refused");
+      assert!(matches!(error, WebReplyError::Refused { status: StatusCode::CONFLICT, .. }));
+      assert_eq!(stored(&home, session_id).await, before);
+      assert!(status_events(&home, session_id).is_empty());
+
+      set_status(&home.features, session_id, VALID_SET).await.expect("now is accepted");
+      assert_eq!(stored(&home, session_id).await["now"], "Running");
+    }
   }
 
   #[test]

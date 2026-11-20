@@ -276,8 +276,11 @@ Conditions, each a fresh browser profile behind a fresh proxy, with the CDN file
 
 `A flaps` opens its page from the HTTP cache and reaches its newest message inside one up window. B's and C's documents
 must cross the link in full (about 7.3 s at 12.5 KB/s), longer than one up window, so no window completes the body and
-their opens are recorded at the cap. The offline cells fail at once and show no page: origin/main stores no page to show
-offline, so it has nothing to serve, and `web-offline-shell` is the branch that adds one.
+their opens are recorded at the cap. The offline cells fail at once and show no page: main without the offline shell
+stores no page to show offline, so it has nothing to serve. With the shell, an opened session's stored copy answers the
+offline open; the copies' storage is the release's worker's to keep, and a release keeps the copies the release before
+it stored (`release-offline` above), while a reply the socket delivered re-stores the session's copy at once
+(`replied-offline`).
 
 The release open navigates within 10 s of the last read on A's and B's pooled connection. Chrome sends a request on an
 HTTP/2 connection idle that long only after a PING, which the hold leaves unanswered; Chrome then drops the connection

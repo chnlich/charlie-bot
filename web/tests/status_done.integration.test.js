@@ -9,7 +9,10 @@
 // - checking the box and unchecking it inside the undo window sends nothing;
 // - checking it again sends, after the undo window, one click message to the owner in the landed format: the header,
 //   the reference with the list version and the position, and the answer Done. The message carries neither the item's
-//   text nor its context.
+//   text nor its context;
+// - at desktop width the Waiting on you heading keeps the top of its row: its label sits level with the first item's
+//   line and the heading does not stretch to the row's height. The page loads the built tailwind.css, so the layout is
+//   the app's.
 //
 // CHARLIEBOT_TEST_CHROME_BIN names the headless Chrome binary. The test fails when it is unset or names no file.
 // ---------------------------------------------------------------------------
@@ -60,7 +63,8 @@ const STATUS = {
 
 function pageHtml() {
   return `<!doctype html>
-<html><head><meta charset="utf-8"><title>Status done</title></head><body>
+<html><head><meta charset="utf-8"><title>Status done</title>
+<link rel="stylesheet" href="/static/css/tailwind.css"></head><body>
 <div id="status-panel"></div>
 <script>${iconTableScript()}</script>
 <script src="/static/js/icons.js"></script>
@@ -98,6 +102,7 @@ function serve() {
     '/static/js/comment_post.js': path.join(WEB_DIR, 'static', 'js', 'comment_post.js'),
     '/static/js/view-requests.js': path.join(WEB_DIR, 'static', 'js', 'view-requests.js'),
     '/static/js/chat/status-panel.js': path.join(WEB_DIR, 'static', 'js', 'chat', 'status-panel.js'),
+    '/static/css/tailwind.css': path.join(WEB_DIR, 'static', 'css', 'tailwind.css'),
   };
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -107,7 +112,9 @@ function serve() {
       return;
     }
     if (req.method === 'GET' && statics[url.pathname]) {
-      res.writeHead(200, {'Content-Type': 'text/javascript; charset=utf-8'});
+      // A stylesheet served as text/javascript is ignored by Chrome, so the type follows the file.
+      const type = url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8';
+      res.writeHead(200, {'Content-Type': type});
       res.end(fs.readFileSync(statics[url.pathname], 'utf8'));
       return;
     }
@@ -222,5 +229,30 @@ test('a done checkbox sends one click after its undo window; unchecking inside t
     ].join('\n'));
     assert.equal(posts[0].body.content.includes('Own decision'), false, 'the reference quotes no item text');
     assert.equal(posts[0].body.content.includes('Own context'), false, 'the reference quotes no item context');
+  });
+});
+
+test('at desktop width the Waiting on you heading keeps the top of its row, level with the first item', async () => {
+  await withStatusPanel(async (page) => {
+    await page.send('Emulation.setDeviceMetricsOverride',
+      {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
+    // The heading is the row's first child and its label the heading's first child. The own item's open Context keeps
+    // the row taller than one line, so a stretched heading would show here.
+    const layout = await page.evaluate(`(() => {
+      const row = document.querySelector('[data-status-row="waiting"]');
+      const heading = row.firstElementChild;
+      const label = heading.firstElementChild;
+      const first = row.querySelector('[data-waiting-item]');
+      return {
+        labelTop: label.getBoundingClientRect().top,
+        firstTop: first.getBoundingClientRect().top,
+        headingHeight: heading.getBoundingClientRect().height,
+        rowHeight: row.getBoundingClientRect().height,
+      };
+    })()`);
+    assert.ok(Math.abs(layout.labelTop - layout.firstTop) <= 4,
+      `the label's top ${layout.labelTop}px is level with the first item's top ${layout.firstTop}px`);
+    assert.ok(layout.headingHeight < layout.rowHeight,
+      `the heading is ${layout.headingHeight}px tall, not stretched to the row's ${layout.rowHeight}px`);
   });
 });

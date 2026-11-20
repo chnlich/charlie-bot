@@ -11,8 +11,9 @@ test-support = []
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
-charliebot-compat.workspace = true
 charliebot-agents.workspace = true
+charliebot-cli-common.workspace = true
+charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
 charliebot-triggers.workspace = true

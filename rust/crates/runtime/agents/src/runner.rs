@@ -893,7 +893,14 @@ mod tests {
     let launch = LaunchArgs {
       instructions_content: Some("synthetic instructions".to_string()),
       log_dir: Some(logs.clone()),
-      ..LaunchArgs::default()
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_file: None,
+      resume_session_id: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
     };
     // This test uses a tiny AgentBackend so the child is an explicit /bin/sh process.
     let backend: Box<dyn AgentBackend> =
@@ -933,7 +940,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       Box::new(ShellBackend::new("touch \"$MARKER\"; printf '%s\\n' '{\"type\":\"result\"}'")),
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let mut request = test_request(
       "prompt".to_string(),
@@ -1012,7 +1030,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       Box::new(ShellBackend::new("touch \"$MARKER\"; printf '%s\\n' '{\"type\":\"result\"}'")),
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let mut request = test_request(
       "prompt".to_string(),
@@ -1073,7 +1102,18 @@ mod tests {
       let runner = AgentRunner::new(
         "shell",
         Box::new(ShellBackend::filling_the_blocking_pool("touch \"$MARKER\"", pool_filled, pool_released)),
-        LaunchArgs { log_dir: Some(log_dir.clone()), ..LaunchArgs::default() },
+        LaunchArgs {
+          log_dir: Some(log_dir.clone()),
+          extra_flags: Vec::new(),
+          buffer_limit: None,
+          instructions_content: None,
+          instructions_file: None,
+          resume_session_id: None,
+          cgroup_session_id: None,
+          remote_launch: None,
+          backend_kwargs: serde_json::Map::new(),
+          manager_turn: false,
+        },
       );
       let mut request = test_request(
         "prompt".to_string(),
@@ -1133,7 +1173,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       Box::new(FinalStdoutShell::new("touch \"$MARKER\"; printf 'answer'", None, None)),
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let mut request = test_request(
       "prompt".to_string(),
@@ -1197,7 +1248,13 @@ mod tests {
         instructions_content: Some("synthetic harness rules".to_string()),
         instructions_file: Some(instructions.clone()),
         log_dir: Some(logs),
-        ..LaunchArgs::default()
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
     );
 
@@ -1223,7 +1280,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       Box::new(ShellBackend::new(r#"head -c 70000 /dev/zero | tr '\000' x >&2; printf '%s\n' '{"type":"result"}'"#)),
-      LaunchArgs { log_dir: Some(logs.clone()), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(logs.clone()),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let outcome = runner
       .run(test_request(
@@ -1247,7 +1315,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       Box::new(ShellBackend::new(r#"printf '%s\n' '{"type":"result"}'; kill -STOP $$"#)),
-      LaunchArgs { log_dir: Some(logs.clone()), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(logs.clone()),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let mut request = test_request(
       "prompt".to_string(),
@@ -1336,7 +1415,14 @@ mod tests {
       LaunchArgs {
         log_dir: Some(root.path().join("logs")),
         cgroup_session_id: Some("test1234-session".to_string()),
-        ..LaunchArgs::default()
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
     );
     let mut request = test_request(
@@ -1367,7 +1453,18 @@ mod tests {
     let runner = Arc::new(AgentRunner::new(
       "shell",
       Box::new(ShellBackend::new("exec /bin/sleep 30")),
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     ));
     let run_runner = Arc::clone(&runner);
     let run_root = root.path().to_path_buf();
@@ -1395,7 +1492,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       Box::new(ShellBackend::refusing_uploads(format!("touch {}", spawned.display()), "image refused")),
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let seen = Arc::new(Mutex::new(Vec::new()));
     let events = Arc::clone(&seen);
@@ -1435,7 +1543,18 @@ mod tests {
     let runner = Arc::new(AgentRunner::new(
       "shell",
       Box::new(ShellBackend::new(script)),
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     ));
     let run_runner = Arc::clone(&runner);
     let run_root = root.path().to_path_buf();
@@ -1475,7 +1594,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       Box::new(FinalStdoutShell::new("printf 'answer'; printf 'warned' >&2; exit 0", Some("envelope guard"), None)),
-      LaunchArgs { log_dir: Some(logs.clone()), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(logs.clone()),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let seen = Arc::new(Mutex::new(Vec::new()));
     let events = Arc::clone(&seen);
@@ -1512,7 +1642,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       Box::new(FinalStdoutShell::new("exit 3", None, Some(1))),
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
 
     let outcome = runner
@@ -1537,7 +1678,18 @@ mod tests {
       let runner = AgentRunner::new(
         "shell",
         Box::new(FinalStdoutShell::new(script, None, None)),
-        LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+        LaunchArgs {
+          log_dir: Some(root.path().join("logs")),
+          extra_flags: Vec::new(),
+          buffer_limit: None,
+          instructions_content: None,
+          instructions_file: None,
+          resume_session_id: None,
+          cgroup_session_id: None,
+          remote_launch: None,
+          backend_kwargs: serde_json::Map::new(),
+          manager_turn: false,
+        },
       );
       let outcome = runner
         .run(test_request("test".into(), root.path().to_path_buf(), Env::new(), root.path().join("cgroups")))
@@ -1554,7 +1706,18 @@ mod tests {
     let runner = Arc::new(AgentRunner::new(
       "shell",
       Box::new(FinalStdoutShell::new("exec sleep 300", None, None)),
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     ));
     let mut request = test_request(
       "test".into(),
@@ -1621,7 +1784,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       backend,
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let request = test_request(
       "prompt".to_string(),
@@ -1654,7 +1828,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       backend,
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let request = test_request(
       "prompt".to_string(),
@@ -1683,7 +1868,18 @@ mod tests {
     let runner = AgentRunner::new(
       "shell",
       backend,
-      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      LaunchArgs {
+        log_dir: Some(root.path().join("logs")),
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        remote_launch: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
+      },
     );
     let request = test_request(
       "prompt".to_string(),
@@ -1724,7 +1920,14 @@ mod tests {
       LaunchArgs {
         log_dir: Some(root.path().join("logs")),
         remote_launch: Some(RemoteLaunch { launcher: launcher.clone(), host: "host3".to_string() }),
-        ..LaunchArgs::default()
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        cgroup_session_id: None,
+        backend_kwargs: serde_json::Map::new(),
+        manager_turn: false,
       },
     );
     let request = test_request(

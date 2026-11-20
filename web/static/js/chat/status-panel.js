@@ -461,7 +461,9 @@
   function waitingRow(storedItems, derivedItems) {
     const waiting = statusRow('waiting');
     const heading = document.createElement('div');
-    heading.className = 'flex items-center gap-2';
+    // At desktop width the heading is a child of the flex row, which would stretch it to the row's height and centre
+    // the label on the middle item. self-start keeps it at its own height, so the label sits level with the first item.
+    heading.className = platform.isMobile ? 'flex items-center gap-2' : 'flex items-center gap-2 self-start';
     heading.appendChild(labelSpan('Waiting on you'));
     const controls = document.createElement('div');
     controls.className = 'flex items-center gap-2 text-xs';

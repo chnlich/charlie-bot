@@ -9,8 +9,8 @@
 // requested CSS size at device pixel ratio 1, so the PNG's pixel size must equal it; a capture that came out at
 // another size fails here instead of passing a screenshot the release's check would refuse.
 //
-// Chrome resolves from LIVE_SHOT_CHROME, then `google-chrome`, `chromium-browser`, `chromium`, then the newest
-// Playwright Chromium under ~/.cache/ms-playwright.
+// Chrome resolves from LIVE_SHOT_CHROME, then the newest Playwright Chromium under ~/.cache/ms-playwright,
+// then `chromium`, `chromium-browser` and `google-chrome`.
 //
 // Failure: the message goes to stderr and the process exits 1, so the switch's capture step reports the failure.
 

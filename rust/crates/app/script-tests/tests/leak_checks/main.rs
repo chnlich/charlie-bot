@@ -786,6 +786,12 @@ fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
   assert!(calls[0].starts_with("pr merge --squash 5046"), "{}", calls[0]);
   assert!(calls[0].contains("--subject Improve the status panel"), "{}", calls[0]);
   let message = std::fs::read_to_string(&world.merge_body).expect("the squash message was written");
+  // The View line moves out of the body copy to the message's end, so the switch's trailer read captures the view once.
+  assert_eq!(
+    message.lines().filter(|line| line.starts_with("View: ")).count(),
+    1,
+    "each View line lands once: {message}"
+  );
   assert!(message.lines().any(|line| line == "View: /?session=abc"), "{message}");
   assert!(message.contains("## Evidence"), "the pull request body stays in the squash message: {message}");
 }

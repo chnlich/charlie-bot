@@ -267,7 +267,9 @@ case "$subcommand" in
         printf 'PR %s changes a web page, so its body must carry a View: line; nothing was merged.\n' "$pr_selector" >&2
         exit 2
       fi
-      { cat "$tmp_dir/pr-body"; printf '\n'; sed 's/^/View: /' "$tmp_dir/views"; } > "$tmp_dir/merge-body"
+      # The View lines move to the message's end, so the squash commit carries each exactly once, as a trailer
+      # block; a duplicate line would capture the live page twice at the release switch.
+      { sed '/^View:/d' "$tmp_dir/pr-body"; printf '\n'; sed 's/^/View: /' "$tmp_dir/views"; } > "$tmp_dir/merge-body"
       check_string title "$pr_title"
       check_text body "$tmp_dir/merge-body"
       merge_args+=(--subject "$pr_title" --body-file "$tmp_dir/merge-body")

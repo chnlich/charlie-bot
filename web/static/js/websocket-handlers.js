@@ -35,6 +35,9 @@ function _commitMessage(msg) {
   hideStreaming();
   appendMessageObject(msg, SESSION_ID, false);
   observeWebStatusMessages([msg]);
+  // A reply that reached the page over the socket: the session's stored copy is behind the page now, so the
+  // page asks the offline shell's worker to re-fetch it while the link is up (offline-shell.js).
+  if (msg.role === 'assistant' || msg.role === 'plan') refreshStoredSessionCopies(SESSION_ID);
 }
 
 // Session rename can arrive at any time

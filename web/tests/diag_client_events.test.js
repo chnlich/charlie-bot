@@ -91,6 +91,8 @@ function buildClientEventsHarness(overrides = {}) {
     SESSION_BOOTSTRAP: {messages: [{id: 7}, {id: 8}]},
     OpenedSessions: {openCase: () => 'B'},
     openContentSource: () => 'network',
+    // The committed-reply handler asks the offline shell's worker (offline-shell.js); this harness reads none.
+    refreshStoredSessionCopies: () => {},
     offlineShellPresent: () => false,
     CSS: {escape: (value) => value},
     performance: {

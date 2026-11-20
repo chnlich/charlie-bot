@@ -37,6 +37,9 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
     performance: {now: () => 0},
     WebSocket: createFakeWebSocketClass(),
     wsUrlWithToken: (path) => path,
+    // The committed-reply handler asks the offline shell's worker (offline-shell.js); the test records the asks.
+    refreshStoredSessionCopies: (sessionId) => context.storedCopyRefreshes.push(sessionId),
+    storedCopyRefreshes: [],
     setTimeout: () => 1,
     clearTimeout() {},
     hideStreaming() {},
@@ -234,6 +237,9 @@ test('a frame without an id still draws', () => {
     'assistant\u0000without an id',
     'assistant\u0000without an id',
   ]);
+  // A reply that reached the page over the socket asks for the session's stored-copy refresh, whose
+  // offline reopen then shows the reply (offline-shell.js).
+  assert.deepEqual(page.context.storedCopyRefreshes, ['session-a', 'session-a']);
 });
 
 test('disposing a session engine clears its message records', () => {

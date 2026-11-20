@@ -43,6 +43,8 @@ function buildPage() {
     handleSidebarSearch() {},
     switchSidebarFilter() {},
     currentFilter: 'all',
+    // The committed-reply handler asks the offline shell's worker (offline-shell.js); these tests read none.
+    refreshStoredSessionCopies() {},
   };
   context.globalThis = context;
   vm.createContext(context);

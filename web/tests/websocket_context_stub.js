@@ -55,6 +55,9 @@ function loadWebsocketContext(extraContext) {
     clearTimeout: () => {},
     hideStreaming: () => {},
     showStreaming: () => {},
+    // The committed-reply handler asks the offline shell's worker (offline-shell.js); a harness that
+    // asserts on the asks records them by overriding this.
+    refreshStoredSessionCopies: () => {},
     appendMessage: () => {},
     appendMessageObject: () => {},
     observeWebStatusMessages: () => {},

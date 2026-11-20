@@ -62,6 +62,13 @@ function buildPage({
     },
     channels: [],
     workerMessages: [],
+    // The stored-copy refresh's debounce: the test runs the pending timer by hand.
+    timers: [],
+    setTimeout: (fn, ms) => {
+      context.timers.push({fn, ms});
+      return context.timers.length;
+    },
+    clearTimeout: (id) => { if (context.timers[id - 1]) context.timers[id - 1].cleared = true; },
   };
   if (!serviceWorker) context.navigator = {};
   context.window = context;
@@ -194,4 +201,44 @@ test('the page-current event tells the active worker the catch-up is complete', 
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(JSON.parse(JSON.stringify(page.context.workerMessages)), [{type: 'catchup-complete'}],
       'the once-only warm does not repeat; the catch-up report does');
+});
+
+test('a reply the socket delivered asks the worker to refresh the session\'s stored copy once the burst settles', async () => {
+  const page = buildPage();
+  // The committed-reply handler asks once per frame of the reply's burst; the debounce holds the asks
+  // until the gap, then one message covers them.
+  page.context.refreshStoredSessionCopies('session-a');
+  page.context.refreshStoredSessionCopies('session-a');
+  assert.equal(page.context.workerMessages.length, 0, 'the ask waits for the quiet gap');
+  assert.equal(page.context.timers.filter((timer) => !timer.cleared).length, 1, 'the burst shares one timer');
+
+  const pending = page.context.timers[page.context.timers.length - 1];
+  pending.fn();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(page.context.workerMessages)), [{
+    type: 'refresh-copies',
+    urls: ['https://charlie.test/api/sessions/session-a/bootstrap'],
+  }], 'the ask names the session\'s stored first screen');
+  assert.equal(pending.cleared, undefined, 'the settled ask leaves its timer run');
+
+  page.context.reply({refreshed: 1});
+  await new Promise((resolve) => setImmediate(resolve));
+  const reported = page.events.filter((event) => event.type === 'charliebot:offline-shell-copies-refreshed');
+  assert.equal(reported.length, 1, 'the refresh reports its end once');
+  assert.equal(reported[0].detail.refreshed, 1, 'the report carries the count the worker re-stored');
+});
+
+test('a reply burst that spans two sessions refreshes both stored copies in one ask', async () => {
+  const page = buildPage();
+  page.context.refreshStoredSessionCopies('session-a');
+  page.context.refreshStoredSessionCopies('session-b');
+  page.context.timers[page.context.timers.length - 1].fn();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(page.context.workerMessages)), [{
+    type: 'refresh-copies',
+    urls: [
+      'https://charlie.test/api/sessions/session-a/bootstrap',
+      'https://charlie.test/api/sessions/session-b/bootstrap',
+    ],
+  }]);
 });

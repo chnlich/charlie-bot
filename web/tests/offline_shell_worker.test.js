@@ -473,6 +473,54 @@ async function answerListWithCapWait(t, h, req) {
   return pending;
 }
 
+// The page's ask after a reply the socket delivered: the stored first screen is re-fetched and re-stored,
+// so an offline reopen reads a copy that carries the reply.
+test('a refresh-copies ask re-fetches the stored first screen and reports the copy it re-stored', async () => {
+  const h = harness();
+  h.state.network = async () => firstScreen('one');
+  await answer(h, request(BOOTSTRAP_URL));
+
+  h.state.network = async () => firstScreen('two');
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {
+    data: {type: 'refresh-copies', urls: [BOOTSTRAP_URL]},
+    ports: [channel.port2],
+  }).waits);
+  assert.equal(channel.replies.length, 1, 'the ask answers over its channel once');
+  assert.equal(channel.replies[0].refreshed, 1, 'the reply names the copy the refresh re-stored');
+  const body = await (await (await h.caches.api.open('last-state-v1')).match(BOOTSTRAP_URL)).json();
+  assert.equal(body.body, 'two', 'the stored copy carries the fresh answer');
+});
+
+test('a refresh-copies ask for a URL with no stored copy re-stores nothing', async () => {
+  const h = harness();
+  h.state.network = async () => firstScreen('one');
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {
+    data: {type: 'refresh-copies', urls: [BOOTSTRAP_URL]},
+    ports: [channel.port2],
+  }).waits);
+  assert.equal(channel.replies[0].refreshed, 0);
+  const store = await h.caches.api.open('last-state-v1');
+  assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'a refresh stores nothing the page did not already hold');
+});
+
+test('a 401 during a refresh-copies ask drops every copy', async () => {
+  const h = harness();
+  h.state.network = async () => firstScreen('one');
+  await answer(h, request(BOOTSTRAP_URL));
+
+  h.state.network = async () => new Response('no', {status: 401});
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {
+    data: {type: 'refresh-copies', urls: [BOOTSTRAP_URL]},
+    ports: [channel.port2],
+  }).waits);
+  assert.equal(channel.replies[0].refreshed, 0);
+  const store = await h.caches.api.open('last-state-v1');
+  assert.equal(await store.match(BOOTSTRAP_URL), undefined, 'the refresh 401 empties the copy store');
+});
+
 
 test('a stored list answers from its copy at once, sends no request, and the catch-up refresh replaces it', async (t) => {
   t.mock.timers.enable({apis: ['setTimeout']});

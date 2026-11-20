@@ -86,6 +86,34 @@ function reportCatchupComplete() {
 
 document.addEventListener('charliebot:page-current', () => reportCatchupComplete());
 
+// A reply the socket delivered leaves the session's stored copy behind: the copy holds the bootstrap the open
+// read, and the reply reached the page after it. The page asks the worker to re-fetch that session's stored copy
+// from the network while the link is up, so an offline reopen shows the newest reply the page received. A reply's
+// frames land as a burst of commits (a streamed draft's commit, the round's separator), so the ask waits for a
+// quiet gap and one fetch covers the burst. The page dispatches charliebot:offline-shell-copies-refreshed with
+// the count of copies the worker re-stored once the refresh is done, so a waiter holds until the storage settled.
+const STORED_COPY_REFRESH_DEBOUNCE_MS = 2000;
+let storedCopyRefreshSessions = null;
+let storedCopyRefreshTimer = null;
+
+function refreshStoredSessionCopies(sessionId) {
+  if (storedCopyRefreshSessions === null) storedCopyRefreshSessions = new Set();
+  storedCopyRefreshSessions.add(sessionId);
+  clearTimeout(storedCopyRefreshTimer);
+  storedCopyRefreshTimer = setTimeout(() => {
+    const sessions = storedCopyRefreshSessions;
+    storedCopyRefreshSessions = null;
+    const urls = [...sessions].map((id) => new URL('/api/sessions/' + id + '/bootstrap', location.href).href);
+    withOfflineShellWorker((worker) => new Promise((resolve) => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (event) => resolve(event.data ?? {});
+      worker.postMessage({type: 'refresh-copies', urls}, [channel.port2]);
+    })).then((result) => {
+      document.dispatchEvent(new CustomEvent('charliebot:offline-shell-copies-refreshed', {detail: result ?? {}}));
+    }, (err) => console.error('stored copy refresh failed:', err));
+  }, STORED_COPY_REFRESH_DEBOUNCE_MS);
+}
+
 // Runs `action` with the worker that holds this page, when one is registered and active.
 function withOfflineShellWorker(action) {
   if (!offlineShellSupported()) return Promise.resolve();

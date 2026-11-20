@@ -199,9 +199,11 @@ function createChatSidebarContext(context, options = {}) {
 }
 
 // offline-shell.js loads before the sidebar modules on the page, and these harnesses do not load it. This stands
-// in for the listing-URL registration sidebar/filters.js makes at load.
+// in for the listing-URL registration sidebar/filters.js makes at load, and for the stored-copy refresh the
+// committed-reply handler asks the worker for.
 function standInForOfflineShell(context) {
   context.registerOfflineShellListingUrl = () => {};
+  context.refreshStoredSessionCopies = () => {};
 }
 
 // usage.js loads between the chat and the sidebar modules on the page. These

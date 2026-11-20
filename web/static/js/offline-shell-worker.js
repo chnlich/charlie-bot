@@ -234,21 +234,33 @@ function queueCopyRefresh(url) {
 
 // Refreshes the queued copies from the network and drops every copy on a 401. An answer that carries no
 // body (a 304) or fails leaves its copy as it is; an error also keeps the queue, so the copies the page
-// read while offline are refreshed after the next catch-up.
+// read while offline are refreshed after the next catch-up. Returns the count of copies it re-stored.
 async function refreshCopies() {
+  let refreshed = 0;
   for (const url of refreshQueue) {
     const cache = await openCopyCache();
     if (await cache.match(url) === undefined) continue;
     const answer = await observe(fetch(url, {credentials: 'same-origin'}));
-    if (answer.error) return;
+    if (answer.error) return refreshed;
     if (answer.response.status === 401) {
       refreshQueue.clear();
       await dropCopies();
-      return;
+      return refreshed;
     }
-    if (answer.stored) await storeCopy(url, answer.stored);
+    if (answer.stored) {
+      await storeCopy(url, answer.stored);
+      refreshed++;
+    }
   }
   refreshQueue.clear();
+  return refreshed;
+}
+
+// Queues the page-named copies and refreshes them: the worker owns the copy keys, and the URL the page names
+// is the one its own fetch stored.
+async function refreshStoredCopies(urls) {
+  for (const url of urls) refreshQueue.add(url);
+  return refreshCopies();
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +428,12 @@ self.addEventListener('message', (event) => {
         (error) => replyTo(event, {stored: false, error: String(error)})));
   } else if (data.type === 'catchup-complete') {
     event.waitUntil(refreshCopies());
+  } else if (data.type === 'refresh-copies') {
+    // The page asks after a reply the socket delivered: the session's stored copy is behind the page now, and
+    // the link that carried the reply can carry the refresh (offline-shell.js).
+    event.waitUntil(refreshStoredCopies(data.urls).then(
+        (refreshed) => replyTo(event, {refreshed}),
+        (error) => replyTo(event, {error: String(error)})));
   } else if (data.type === 'drop-copies') {
     event.waitUntil(dropCopies());
   } else {

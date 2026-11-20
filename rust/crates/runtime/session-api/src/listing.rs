@@ -8,9 +8,10 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
+use charliebot_agents::model_pool::{POOL_MEMBER_FIELD, display_pool_member};
 use charliebot_compat::compression::accepts_gzip;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
+use charliebot_core::event_types::POOL;
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
@@ -118,13 +119,14 @@ impl ListingSource {
 }
 
 /// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run and display backends,
-/// and the controller's listing fields. Rows with equal inputs render equal values.
+/// the pool its backend names, and the controller's listing fields. Rows with equal inputs render equal values.
 pub(crate) struct RowInputs {
   meta: Arc<SessionMetadata>,
   derived: Option<Arc<Map<String, Value>>>,
   thinking_since: Value,
   run_backend: Option<String>,
   display_backend: Option<String>,
+  pool: Option<String>,
   listing: Option<Map<String, Value>>,
 }
 
@@ -143,6 +145,7 @@ impl PartialEq for RowInputs {
       && self.thinking_since == other.thinking_since
       && self.run_backend == other.run_backend
       && self.display_backend == other.display_backend
+      && self.pool == other.pool
       && self.listing == other.listing
   }
 }
@@ -518,7 +521,12 @@ pub(crate) enum RowSchema {
 impl RowSchema {
   fn value(self, store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
     match self {
-      RowSchema::Page => Ok(store.session_metadata_value(meta)),
+      // The page keeps the stored form its client reads, with the goal; only the member shown is replaced.
+      RowSchema::Page => {
+        let mut value = store.session_metadata_value(meta);
+        show_display_member(store, meta, value.as_object_mut().expect("session metadata serializes to an object"));
+        Ok(value)
+      }
       RowSchema::Listing => metadata_value(store, meta),
       RowSchema::Move => {
         let mut value = metadata_value(store, meta)?;
@@ -1427,7 +1435,7 @@ pub fn row_refresh_text_for(
 
 /// The fields one search row carries, in the order its columns are written. Each one is read by the sidebar's row
 /// renderer, so a search row paints as the same session's listing row does.
-pub const SEARCH_FIELDS: [&str; 27] = [
+pub const SEARCH_FIELDS: [&str; 28] = [
   ID_FIELD,
   "name",
   "status",
@@ -1437,6 +1445,7 @@ pub const SEARCH_FIELDS: [&str; 27] = [
   "group",
   TASK_PARENT_ID_FIELD,
   "backend",
+  POOL,
   POOL_MEMBER_FIELD,
   NATIVE_MODEL,
   THINKING_SINCE,
@@ -1494,7 +1503,18 @@ pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResu
     task.remove("goal");
   }
   object.insert(THREAD_SESSION.to_string(), Value::Bool(is_thread_session(meta)));
+  show_display_member(store, meta, object);
   Ok(value)
+}
+
+/// Replaces the recorded `pool_member` in a rendered session object with the member shown: the recorded one only
+/// inside the session's own pool. The stored record stays as it is.
+fn show_display_member(store: &Store, meta: &SessionMetadata, object: &mut Map<String, Value>) {
+  if object.contains_key(POOL_MEMBER_FIELD) {
+    let recorded = meta.extra(POOL_MEMBER_FIELD).and_then(Value::as_str);
+    let shown = display_pool_member(store.config(), &meta.backend, recorded);
+    object.insert(POOL_MEMBER_FIELD.to_string(), shown.map_or(Value::Null, |member| json!(member)));
+  }
 }
 
 /// `dump` with schedule model fields removed and the controller's row fields applied.
@@ -1552,6 +1572,15 @@ fn row_inputs(
         // Only a worker row renders a display backend. Another row keeps the backend its metadata carries.
         display_backend: if projection.display_backend && row.profile == TaskProfile::Worker {
           display_backend(store, row)?
+        } else {
+          None
+        },
+        // A worker whose backend is a configured pool names that pool, so its row reads "pool → member".
+        pool: if projection.display_backend
+          && row.profile == TaskProfile::Worker
+          && store.config().backends.pool(&row.backend).is_some()
+        {
+          Some(row.backend.clone())
         } else {
           None
         },
@@ -1627,6 +1656,9 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   {
     object.insert("backend".to_string(), Value::String(backend.clone()));
   }
+  if let Some(pool) = &row.pool {
+    object.insert(POOL.to_string(), Value::String(pool.clone()));
+  }
 }
 
 /// The row's `has_waiting_items` boolean: whether the session stores a Waiting on you item. A row whose overlay has no
@@ -1678,6 +1710,7 @@ mod tests {
       thinking_since: Value::Null,
       run_backend: None,
       display_backend: None,
+      pool: None,
       listing: None,
     };
     let value = render_row(&features.store, &row, LISTING_PROJECTION).unwrap();
@@ -1689,6 +1722,71 @@ mod tests {
     assert_eq!(fields["name"], "Null fields");
     assert_eq!(fields["has_unread"], false);
     assert!(fields.contains_key("created_at"));
+  }
+
+  /// `auto` is a pool over two options. `solo` is a single option that the pool does not name.
+  const POOL_ROW_CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a, billing: subscription}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b, billing: payg}
+    - {id: solo, label: Solo, type: synthetic, model: model-solo, billing: subscription}
+  pools:
+    - id: auto
+      label: Auto
+      rule: priority
+      members: [synthetic-a, synthetic-b]
+";
+
+  #[tokio::test]
+  async fn a_worker_row_names_its_pool_and_shows_a_recorded_member_only_inside_it() {
+    let (_home, features) = crate::test_support::feature_context_with_auto(POOL_ROW_CONFIG);
+    let cases = [("pooled", "auto", Some("synthetic-a")), ("outside", "auto", Some("solo")), ("single", "solo", None)];
+    let mut rows = Vec::new();
+    for (name, backend, member) in cases {
+      let meta = features
+        .store
+        .create_task(
+          charliebot_store::CreateTask {
+            request_id: name.to_string(),
+            task_parent_id: None,
+            profile: TaskProfile::Worker,
+            task: None,
+            name: Some(name.to_string()),
+            backend: Some(backend.to_string()),
+            group: None,
+            session_id: None,
+          },
+          charliebot_store::TaskCaller::System,
+          Map::new(),
+        )
+        .await
+        .expect("the worker row is created");
+      if let Some(member) = member {
+        let slot = Map::from_iter([(POOL_MEMBER_FIELD.to_string(), json!(member))]);
+        features
+          .store
+          .update_slot_fields(&meta.id, charliebot_agents::model_pool::OWNER, slot)
+          .await
+          .expect("the member is recorded");
+      }
+      rows.push(Arc::new(features.store.get_session(&meta.id).await.unwrap().unwrap()));
+    }
+
+    let values =
+      listed_values(&features.store, &rows, &DerivedSidebarMap::new(), &HashMap::new(), LISTING_PROJECTION).unwrap();
+    assert_eq!(values[0]["pool"], "auto");
+    assert_eq!(values[0][POOL_MEMBER_FIELD], "synthetic-a");
+    // The recorded member outside the pool shows no member; the pool name alone stays.
+    assert_eq!(values[1]["pool"], "auto");
+    assert!(values[1].get(POOL_MEMBER_FIELD).is_none());
+    // A single-option worker names no pool.
+    assert!(values[2].get("pool").is_none());
+    // The first-screen page rows apply the same member filter.
+    let paged = RowSchema::Page.value(&features.store, &rows[0]).unwrap();
+    assert_eq!(paged[POOL_MEMBER_FIELD], "synthetic-a");
+    let paged = RowSchema::Page.value(&features.store, &rows[1]).unwrap();
+    assert!(paged[POOL_MEMBER_FIELD].is_null());
   }
 
   #[tokio::test]

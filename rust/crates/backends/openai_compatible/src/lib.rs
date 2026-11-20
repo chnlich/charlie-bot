@@ -11,6 +11,7 @@ mod value_ops;
 
 use std::sync::Arc;
 
+use charliebot_core::backend_types;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::{Registry, RegistryError};
 
@@ -24,7 +25,7 @@ pub const PACKAGE: &str = "backends.openai_compatible";
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(anthropic_proxy::router, anthropic_proxy::matches)?;
   registry.backend_type(BackendTypeRegistration {
-    type_name: "cc-openai-compatible",
+    type_name: backend_types::CC_OPENAI_COMPATIBLE,
     traits: BackendTraits {
       resume: ResumeStyle::CliFlag,
       restart_reattach: true,
@@ -38,6 +39,6 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     lifecycle: Some(Arc::new(ClaudeCliLifecycle) as Arc<dyn BackendLifecycle>),
     translate_fallback: false,
   })?;
-  registry.option_schema("cc-openai-compatible", options::SCHEMA)?;
-  registry.attribute_backend_type("cc-openai-compatible", USAGE_SOURCE)
+  registry.option_schema(backend_types::CC_OPENAI_COMPATIBLE, options::SCHEMA)?;
+  registry.attribute_backend_type(backend_types::CC_OPENAI_COMPATIBLE, USAGE_SOURCE)
 }

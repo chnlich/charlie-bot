@@ -17,6 +17,7 @@ mod usage_sweep;
 
 use std::sync::Arc;
 
+use charliebot_core::backend_types;
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::{NativeCacheRead, UsageSource};
 use charliebot_registry::{Registry, RegistryError, registration_step};
@@ -41,7 +42,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 /// [`register`] over an explicit host.
 pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(), RegistryError> {
   registry.backend_type(BackendTypeRegistration {
-    type_name: "codex",
+    type_name: backend_types::CODEX,
     traits: BackendTraits {
       resume: ResumeStyle::NativeId,
       restart_reattach: true,
@@ -55,13 +56,15 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     lifecycle: None,
     translate_fallback: false,
   })?;
-  registry.option_schema("codex", options::SCHEMA)?;
+  registry.option_schema(backend_types::CODEX, options::SCHEMA)?;
   let sessions_dir = codex_home(host).join(rollout::CODEX_SESSIONS_DIR_NAME);
-  registry
-    .member_reading("codex", Arc::new(move |_cfg, _option, now| usage_quota::member_reading(&sessions_dir, now)))?;
+  registry.member_reading(
+    backend_types::CODEX,
+    Arc::new(move |_cfg, _option, now| usage_quota::member_reading(&sessions_dir, now)),
+  )?;
   let codex_home_dir = codex_home(host);
   registry.usage_resolver(
-    "codex",
+    backend_types::CODEX,
     Arc::new(move |usage_host| resolver::usage_resolver(codex_home_dir.clone(), usage_host)),
   )?;
   registry.usage_source(UsageSource {
@@ -73,7 +76,7 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     native_cache_read: NativeCacheRead::CachedTokens,
     implementation: Some(Arc::new(usage_logs::CodexLogs::new(codex_home(host)))),
   })?;
-  registry.attribute_backend_type("codex", USAGE_SOURCE)?;
+  registry.attribute_backend_type(backend_types::CODEX, USAGE_SOURCE)?;
   Ok(())
 }
 

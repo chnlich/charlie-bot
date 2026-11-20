@@ -2,6 +2,7 @@
 //! fields of a `cc-anthropic-compatible` entry.
 
 use charliebot_claude_code::options::EFFORT_KEY;
+use charliebot_core::backend_types;
 use charliebot_core::config::{
   API_BASE_KEY, CONTEXT_WINDOW_KEY, CREDENTIAL_KEY, EXTRA_BODY_KEY, OptionField, OptionFieldDefault,
 };
@@ -9,7 +10,7 @@ use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
 /// The backend type name these option fields and their errors are keyed by.
-pub const TYPE_NAME: &str = "cc-anthropic-compatible";
+pub const TYPE_NAME: &str = backend_types::CC_ANTHROPIC_COMPATIBLE;
 
 const HEADERS: &str = "headers";
 

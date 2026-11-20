@@ -258,6 +258,359 @@ impl Parser {
     self.parts.push(TextPart { start, text, raw_ranges });
     self.nodes[parent].children.push(Child::Text(index));
   }
+
+  fn visible_parts(&self, node_index: usize) -> Vec<usize> {
+    let node = &self.nodes[node_index];
+    if IGNORED_TAGS.contains(&node.tag.as_str()) {
+      return Vec::new();
+    }
+    let mut result = Vec::new();
+    for child in &node.children {
+      match child {
+        Child::Text(part) => result.push(*part),
+        Child::Node(child_node) => result.extend(self.visible_parts(*child_node)),
+      }
+    }
+    result
+  }
+
+  fn has_visible_text(&self, parts: &[usize]) -> bool {
+    parts.iter().any(|&index| self.parts[index].text.chars().any(|character| !str_methods::is_whitespace(character)))
+  }
+
+  fn document_root(&self) -> usize {
+    self.first_descendant(0, "body").unwrap_or(0)
+  }
+
+  fn first_descendant(&self, node_index: usize, tag: &str) -> Option<usize> {
+    for child in &self.nodes[node_index].children {
+      if let Child::Node(child_node) = child {
+        if self.nodes[*child_node].tag == tag {
+          return Some(*child_node);
+        }
+        if let Some(found) = self.first_descendant(*child_node, tag) {
+          return Some(found);
+        }
+      }
+    }
+    None
+  }
+
+  fn first_class_descendant(&self, node_index: usize, class_name: &str) -> Option<usize> {
+    for child in &self.nodes[node_index].children {
+      if let Child::Node(child_node) = child {
+        let classes = self.nodes[*child_node].attrs.get("class").and_then(Option::as_deref).unwrap_or("");
+        if str_methods::split_whitespace(classes).contains(&class_name) {
+          return Some(*child_node);
+        }
+        if let Some(found) = self.first_class_descendant(*child_node, class_name) {
+          return Some(found);
+        }
+      }
+    }
+    None
+  }
+
+  fn collect_leaves(&self, root: usize) -> Vec<Leaf> {
+    let mut leaves = Vec::new();
+    self.collect_leaves_at(root, &mut leaves);
+    leaves.retain(|leaf| self.has_visible_text(&leaf.parts));
+    leaves
+  }
+
+  fn collect_leaves_at(&self, node_index: usize, leaves: &mut Vec<Leaf>) {
+    let all_parts = self.visible_parts(node_index);
+    if !self.has_visible_text(&all_parts) {
+      return;
+    }
+    let node = &self.nodes[node_index];
+    if node.tag == "tr" {
+      leaves.push(Leaf { element: node_index, parts: all_parts, whole: true });
+      return;
+    }
+    let direct_parts: Vec<usize> = node
+      .children
+      .iter()
+      .filter_map(|child| match child {
+        Child::Text(part) => Some(*part),
+        Child::Node(_) => None,
+      })
+      .collect();
+    let has_block_children = node.children.iter().any(|child| match child {
+      Child::Node(child_node) => node_is_boundary(&self.nodes[*child_node]),
+      Child::Text(_) => false,
+    });
+    if has_block_children {
+      if self.has_visible_text(&direct_parts) {
+        leaves.push(Leaf { element: node_index, parts: direct_parts, whole: false });
+      }
+      for child in &node.children {
+        if let Child::Node(child_node) = child {
+          self.collect_leaves_at(*child_node, leaves);
+        }
+      }
+      return;
+    }
+    leaves.push(Leaf { element: node_index, parts: all_parts, whole: true });
+  }
+
+  fn leaf_text(&self, leaf: &Leaf) -> String {
+    leaf.parts.iter().map(|&part| self.parts[part].text.as_str()).collect()
+  }
+
+  fn leaf_tokens(&self, leaf: &Leaf) -> Vec<Token> {
+    let mut result = Vec::new();
+    let mut offset = 0;
+    for &part_index in &leaf.parts {
+      let part = &self.parts[part_index];
+      for (value, start, end) in tokenise(&part.text) {
+        result.push(Token {
+          value,
+          logical_start: offset + start,
+          logical_end: offset + end,
+          raw_start: part.raw_ranges[start].0,
+          raw_end: part.raw_ranges[end - 1].1,
+        });
+      }
+      offset += part.text.chars().count();
+    }
+    result
+  }
+
+  fn leaf_raw_map(&self, leaf: &Leaf) -> (Vec<(usize, usize)>, Vec<usize>) {
+    let mut raw_ranges = Vec::new();
+    let mut part_indices = Vec::new();
+    for (part_index, &part) in leaf.parts.iter().enumerate() {
+      raw_ranges.extend(self.parts[part].raw_ranges.iter().copied());
+      part_indices.extend(std::iter::repeat_n(part_index, self.parts[part].raw_ranges.len()));
+    }
+    (raw_ranges, part_indices)
+  }
+
+  fn align(&self, old: &[Leaf], new_parser: &Parser, new: &[Leaf]) -> Vec<LeafChange> {
+    let old_keys: Vec<String> = old.iter().map(|leaf| normalise(&self.leaf_text(leaf))).collect();
+    let new_keys: Vec<String> = new.iter().map(|leaf| normalise(&new_parser.leaf_text(leaf))).collect();
+    let mut changes = Vec::new();
+    for opcode in opcodes(&old_keys, &new_keys) {
+      match opcode.tag {
+        OpcodeTag::Equal => {
+          for old_index in opcode.a_start..opcode.a_end {
+            let new_index = opcode.b_start + old_index - opcode.a_start;
+            changes.push(LeafChange { old: Some(old_index), new: Some(new_index), new_index: Some(new_index) });
+          }
+        }
+        OpcodeTag::Replace => {
+          let paired = (opcode.a_end - opcode.a_start).min(opcode.b_end - opcode.b_start);
+          for index in 0..paired {
+            let old_index = opcode.a_start + index;
+            let new_index = opcode.b_start + index;
+            changes.push(LeafChange { old: Some(old_index), new: Some(new_index), new_index: Some(new_index) });
+          }
+          for index in paired..opcode.a_end - opcode.a_start {
+            changes.push(LeafChange {
+              old: Some(opcode.a_start + index),
+              new: None,
+              new_index: Some(opcode.b_start + paired),
+            });
+          }
+          for index in paired..opcode.b_end - opcode.b_start {
+            let new_index = opcode.b_start + index;
+            changes.push(LeafChange { old: None, new: Some(new_index), new_index: Some(new_index) });
+          }
+        }
+        OpcodeTag::Delete => {
+          for old_index in opcode.a_start..opcode.a_end {
+            changes.push(LeafChange { old: Some(old_index), new: None, new_index: Some(opcode.b_start) });
+          }
+        }
+        OpcodeTag::Insert => {
+          for new_index in opcode.b_start..opcode.b_end {
+            changes.push(LeafChange { old: None, new: Some(new_index), new_index: Some(new_index) });
+          }
+        }
+      }
+    }
+    changes
+  }
+
+  fn ancestor_details(&self, node: usize) -> Vec<usize> {
+    let mut details = Vec::new();
+    let mut current = Some(node);
+    while let Some(node) = current {
+      if self.nodes[node].tag == "details" {
+        details.push(node);
+      }
+      current = self.nodes[node].parent;
+    }
+    details
+  }
+
+  fn raw_bounds(&self, tokens: &[Token], start: usize, end: usize, leaf: &Leaf) -> Vec<(usize, usize)> {
+    if start >= end {
+      return Vec::new();
+    }
+    let (raw_ranges, part_indices) = self.leaf_raw_map(leaf);
+    let logical_start = tokens[start].logical_start;
+    let logical_end = tokens[end - 1].logical_end;
+    let mut result = Vec::new();
+    let mut current_part = part_indices[logical_start];
+    let mut current_start = logical_start;
+    for logical_index in logical_start + 1..logical_end {
+      let part = part_indices[logical_index];
+      if part != current_part {
+        result.push((raw_ranges[current_start].0, raw_ranges[logical_index - 1].1));
+        current_part = part;
+        current_start = logical_index;
+      }
+    }
+    result.push((raw_ranges[current_start].0, raw_ranges[logical_end - 1].1));
+    result
+  }
+
+  fn anchor_offset(&self, tokens: &[Token], start: usize, leaf: &Leaf) -> Result<usize, String> {
+    if start < tokens.len() {
+      return Ok(tokens[start].raw_start);
+    }
+    if let Some(token) = tokens.last() {
+      return Ok(token.raw_end);
+    }
+    if let Some(&part) = leaf.parts.first() {
+      return Ok(self.parts[part].start);
+    }
+    self.nodes[leaf.element].start_end.ok_or_else(|| "cannot anchor a mark without a source position".to_owned())
+  }
+
+  fn wrapping_removes_direct_text(&self, leaf: &Leaf, ranges: &[(usize, usize)]) -> bool {
+    let mut has_direct_text = false;
+    for child in &self.nodes[leaf.element].children {
+      let Child::Text(part_index) = child else { continue };
+      let part = &self.parts[*part_index];
+      for (index, character) in part.text.chars().enumerate() {
+        if str_methods::is_whitespace(character) {
+          continue;
+        }
+        has_direct_text = true;
+        let (raw_start, raw_end) = part.raw_ranges[index];
+        if !ranges.iter().any(|(start, end)| *start <= raw_start && raw_end <= *end) {
+          return false;
+        }
+      }
+    }
+    has_direct_text
+  }
+
+  fn descendant_nodes(&self, node: usize, output: &mut Vec<usize>) {
+    for child in &self.nodes[node].children {
+      if let Child::Node(child_node) = child {
+        output.push(*child_node);
+        self.descendant_nodes(*child_node, output);
+      }
+    }
+  }
+
+  fn is_ancestor(&self, ancestor: usize, node: usize) -> bool {
+    let mut current = Some(node);
+    while let Some(node) = current {
+      if node == ancestor {
+        return true;
+      }
+      current = self.nodes[node].parent;
+    }
+    false
+  }
+
+  fn ghost_markup(&self, leaf: &Leaf, base_source: &str) -> String {
+    let node = &self.nodes[leaf.element];
+    let text = if leaf.whole {
+      self.leaf_text(leaf)
+    } else {
+      self.leaf_text(&Leaf { element: leaf.element, parts: self.visible_parts(leaf.element), whole: true })
+    };
+    let trailing = node
+      .end_end
+      .map(|end| {
+        base_source[end..].chars().take_while(|character| str_methods::is_whitespace(*character)).collect::<String>()
+      })
+      .unwrap_or_default();
+    let data = escape(&format!("{text}{trailing}"), EscapeContext::QuotedAttribute);
+    if node.tag == "tr" {
+      let cells = node
+        .children
+        .iter()
+        .filter_map(|child| match child {
+          Child::Node(index) if matches!(self.nodes[*index].tag.as_str(), "td" | "th") => Some(*index),
+          _ => None,
+        })
+        .count()
+        .max(1);
+      format!("<tr class=\"cbd-del\" data-del=\"{data}\"><td colspan=\"{cells}\" data-cbd-del=\"{data}\"></td></tr>")
+    } else {
+      format!("<{} class=\"cbd-del\" data-del=\"{data}\"></{}>", node.tag, node.tag)
+    }
+  }
+
+  /// The nearest `section`'s heading without its number or revision badge. A leaf outside any section
+  /// takes the header chip marker for a `span.mtag`, else its tag.
+  fn section_label(&self, leaf: &Leaf) -> String {
+    let mut current = Some(leaf.element);
+    while let Some(node) = current {
+      if self.nodes[node].tag == "section" {
+        let Some(h2) = self.first_descendant(node, "h2") else { return "<unnamed section>".to_string() };
+        let heading: String = self.visible_parts(h2).into_iter().map(|part| self.parts[part].text.as_str()).collect();
+        let heading = LEADING_DIGITS_RE.replace(&normalise(&heading), "").into_owned();
+        return str_methods::strip(&TRAILING_CHANGED_RE.replace(&heading, "")).to_string();
+      }
+      current = self.nodes[node].parent;
+    }
+    let element = &self.nodes[leaf.element];
+    let classes = element.attrs.get("class").and_then(Option::as_deref).unwrap_or("");
+    if str_methods::split_whitespace(classes).contains(&"mtag") {
+      "header chip".to_string()
+    } else {
+      element.tag.clone()
+    }
+  }
+
+  fn token_text(
+    &self,
+    leaf: &Leaf,
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+    include_boundary_whitespace: bool,
+  ) -> String {
+    if start >= end {
+      return String::new();
+    }
+    let mut logical_start = tokens[start].logical_start;
+    let mut logical_end = tokens[end - 1].logical_end;
+    if include_boundary_whitespace {
+      if end < tokens.len() {
+        logical_end = tokens[end].logical_start;
+      } else if start > 0 {
+        logical_start = tokens[start - 1].logical_end;
+      }
+    }
+    self.leaf_text(leaf).chars().skip(logical_start).take(logical_end - logical_start).collect()
+  }
+
+  fn render_start_tag_additions(
+    &self,
+    source: &str,
+    classes: &BTreeMap<usize, BTreeSet<String>>,
+    details: &BTreeSet<usize>,
+    insertions: &mut HashMap<usize, Vec<String>>,
+  ) -> Result<(), String> {
+    for (&node, names) in classes {
+      for name in names {
+        add_class(source, &self.nodes[node], name, insertions)?;
+      }
+    }
+    for &node in details {
+      add_attr(source, &self.nodes[node], "open", None, insertions)?;
+    }
+    Ok(())
+  }
 }
 
 fn is_void_tag(tag: &str) -> bool {
@@ -304,105 +657,6 @@ fn node_is_boundary(node: &Node) -> bool {
   )
 }
 
-fn visible_parts(parser: &Parser, node_index: usize) -> Vec<usize> {
-  let node = &parser.nodes[node_index];
-  if IGNORED_TAGS.contains(&node.tag.as_str()) {
-    return Vec::new();
-  }
-  let mut result = Vec::new();
-  for child in &node.children {
-    match child {
-      Child::Text(part) => result.push(*part),
-      Child::Node(child_node) => result.extend(visible_parts(parser, *child_node)),
-    }
-  }
-  result
-}
-
-fn has_visible_text(parser: &Parser, parts: &[usize]) -> bool {
-  parts.iter().any(|&index| parser.parts[index].text.chars().any(|character| !str_methods::is_whitespace(character)))
-}
-
-fn collect_leaves(parser: &Parser, root: usize) -> Vec<Leaf> {
-  fn visit(parser: &Parser, node_index: usize, leaves: &mut Vec<Leaf>) {
-    let all_parts = visible_parts(parser, node_index);
-    if !has_visible_text(parser, &all_parts) {
-      return;
-    }
-    let node = &parser.nodes[node_index];
-    if node.tag == "tr" {
-      leaves.push(Leaf { element: node_index, parts: all_parts, whole: true });
-      return;
-    }
-    let direct_parts: Vec<usize> = node
-      .children
-      .iter()
-      .filter_map(|child| match child {
-        Child::Text(part) => Some(*part),
-        Child::Node(_) => None,
-      })
-      .collect();
-    let has_block_children = node.children.iter().any(|child| match child {
-      Child::Node(child_node) => node_is_boundary(&parser.nodes[*child_node]),
-      Child::Text(_) => false,
-    });
-    if has_block_children {
-      if has_visible_text(parser, &direct_parts) {
-        leaves.push(Leaf { element: node_index, parts: direct_parts, whole: false });
-      }
-      for child in &node.children {
-        if let Child::Node(child_node) = child {
-          visit(parser, *child_node, leaves);
-        }
-      }
-      return;
-    }
-    leaves.push(Leaf { element: node_index, parts: all_parts, whole: true });
-  }
-
-  let mut leaves = Vec::new();
-  visit(parser, root, &mut leaves);
-  leaves.retain(|leaf| has_visible_text(parser, &leaf.parts));
-  leaves
-}
-
-fn document_root(parser: &Parser) -> usize {
-  first_descendant(parser, 0, "body").unwrap_or(0)
-}
-
-fn first_descendant(parser: &Parser, node_index: usize, tag: &str) -> Option<usize> {
-  for child in &parser.nodes[node_index].children {
-    if let Child::Node(child_node) = child {
-      if parser.nodes[*child_node].tag == tag {
-        return Some(*child_node);
-      }
-      if let Some(found) = first_descendant(parser, *child_node, tag) {
-        return Some(found);
-      }
-    }
-  }
-  None
-}
-
-fn first_class_descendant(parser: &Parser, node_index: usize, class_name: &str) -> Option<usize> {
-  for child in &parser.nodes[node_index].children {
-    if let Child::Node(child_node) = child {
-      let classes = parser.nodes[*child_node].attrs.get("class").and_then(Option::as_deref).unwrap_or("");
-      if str_methods::split_whitespace(classes).contains(&class_name) {
-        return Some(*child_node);
-      }
-      if let Some(found) = first_class_descendant(parser, *child_node, class_name) {
-        return Some(found);
-      }
-    }
-  }
-  None
-}
-
-fn leaf_text(parser: &Parser, leaf: &Leaf) -> String {
-  leaf.parts.iter().map(|&part| parser.parts[part].text.as_str()).collect()
-}
-
 fn tokenise(text: &str) -> Vec<(String, usize, usize)> {
   let characters: Vec<char> = text.chars().collect();
   let mut tokens = Vec::new();
@@ -437,35 +691,6 @@ fn tokenise(text: &str) -> Vec<(String, usize, usize)> {
     index += 1;
   }
   tokens
-}
-
-fn leaf_tokens(parser: &Parser, leaf: &Leaf) -> Vec<Token> {
-  let mut result = Vec::new();
-  let mut offset = 0;
-  for &part_index in &leaf.parts {
-    let part = &parser.parts[part_index];
-    for (value, start, end) in tokenise(&part.text) {
-      result.push(Token {
-        value,
-        logical_start: offset + start,
-        logical_end: offset + end,
-        raw_start: part.raw_ranges[start].0,
-        raw_end: part.raw_ranges[end - 1].1,
-      });
-    }
-    offset += part.text.chars().count();
-  }
-  result
-}
-
-fn leaf_raw_map(parser: &Parser, leaf: &Leaf) -> (Vec<(usize, usize)>, Vec<usize>) {
-  let mut raw_ranges = Vec::new();
-  let mut part_indices = Vec::new();
-  for (part_index, &part) in leaf.parts.iter().enumerate() {
-    raw_ranges.extend(parser.parts[part].raw_ranges.iter().copied());
-    part_indices.extend(std::iter::repeat_n(part_index, parser.parts[part].raw_ranges.len()));
-  }
-  (raw_ranges, part_indices)
 }
 
 fn merged_opcodes(old: &[Token], new: &[Token]) -> Vec<Opcode> {
@@ -507,64 +732,6 @@ fn merged_opcodes(old: &[Token], new: &[Token]) -> Vec<Opcode> {
     index += 1;
   }
   merged
-}
-
-fn align(old_parser: &Parser, old: &[Leaf], new_parser: &Parser, new: &[Leaf]) -> Vec<LeafChange> {
-  let old_keys: Vec<String> = old.iter().map(|leaf| normalise(&leaf_text(old_parser, leaf))).collect();
-  let new_keys: Vec<String> = new.iter().map(|leaf| normalise(&leaf_text(new_parser, leaf))).collect();
-  let mut changes = Vec::new();
-  for opcode in opcodes(&old_keys, &new_keys) {
-    match opcode.tag {
-      OpcodeTag::Equal => {
-        for old_index in opcode.a_start..opcode.a_end {
-          let new_index = opcode.b_start + old_index - opcode.a_start;
-          changes.push(LeafChange { old: Some(old_index), new: Some(new_index), new_index: Some(new_index) });
-        }
-      }
-      OpcodeTag::Replace => {
-        let paired = (opcode.a_end - opcode.a_start).min(opcode.b_end - opcode.b_start);
-        for index in 0..paired {
-          let old_index = opcode.a_start + index;
-          let new_index = opcode.b_start + index;
-          changes.push(LeafChange { old: Some(old_index), new: Some(new_index), new_index: Some(new_index) });
-        }
-        for index in paired..opcode.a_end - opcode.a_start {
-          changes.push(LeafChange {
-            old: Some(opcode.a_start + index),
-            new: None,
-            new_index: Some(opcode.b_start + paired),
-          });
-        }
-        for index in paired..opcode.b_end - opcode.b_start {
-          let new_index = opcode.b_start + index;
-          changes.push(LeafChange { old: None, new: Some(new_index), new_index: Some(new_index) });
-        }
-      }
-      OpcodeTag::Delete => {
-        for old_index in opcode.a_start..opcode.a_end {
-          changes.push(LeafChange { old: Some(old_index), new: None, new_index: Some(opcode.b_start) });
-        }
-      }
-      OpcodeTag::Insert => {
-        for new_index in opcode.b_start..opcode.b_end {
-          changes.push(LeafChange { old: None, new: Some(new_index), new_index: Some(new_index) });
-        }
-      }
-    }
-  }
-  changes
-}
-
-fn ancestor_details(parser: &Parser, node: usize) -> Vec<usize> {
-  let mut details = Vec::new();
-  let mut current = Some(node);
-  while let Some(node) = current {
-    if parser.nodes[node].tag == "details" {
-      details.push(node);
-    }
-    current = parser.nodes[node].parent;
-  }
-  details
 }
 
 fn add_insertion(insertions: &mut HashMap<usize, Vec<String>>, offset: usize, value: String) {
@@ -697,103 +864,6 @@ fn add_attr(
   Ok(())
 }
 
-fn raw_bounds(parser: &Parser, tokens: &[Token], start: usize, end: usize, leaf: &Leaf) -> Vec<(usize, usize)> {
-  if start >= end {
-    return Vec::new();
-  }
-  let (raw_ranges, part_indices) = leaf_raw_map(parser, leaf);
-  let logical_start = tokens[start].logical_start;
-  let logical_end = tokens[end - 1].logical_end;
-  let mut result = Vec::new();
-  let mut current_part = part_indices[logical_start];
-  let mut current_start = logical_start;
-  for logical_index in logical_start + 1..logical_end {
-    let part = part_indices[logical_index];
-    if part != current_part {
-      result.push((raw_ranges[current_start].0, raw_ranges[logical_index - 1].1));
-      current_part = part;
-      current_start = logical_index;
-    }
-  }
-  result.push((raw_ranges[current_start].0, raw_ranges[logical_end - 1].1));
-  result
-}
-
-fn anchor_offset(tokens: &[Token], start: usize, parser: &Parser, leaf: &Leaf) -> Result<usize, String> {
-  if start < tokens.len() {
-    return Ok(tokens[start].raw_start);
-  }
-  if let Some(token) = tokens.last() {
-    return Ok(token.raw_end);
-  }
-  if let Some(&part) = leaf.parts.first() {
-    return Ok(parser.parts[part].start);
-  }
-  parser.nodes[leaf.element].start_end.ok_or_else(|| "cannot anchor a mark without a source position".to_owned())
-}
-
-fn token_text(
-  parser: &Parser,
-  leaf: &Leaf,
-  tokens: &[Token],
-  start: usize,
-  end: usize,
-  include_boundary_whitespace: bool,
-) -> String {
-  if start >= end {
-    return String::new();
-  }
-  let mut logical_start = tokens[start].logical_start;
-  let mut logical_end = tokens[end - 1].logical_end;
-  if include_boundary_whitespace {
-    if end < tokens.len() {
-      logical_end = tokens[end].logical_start;
-    } else if start > 0 {
-      logical_start = tokens[start - 1].logical_end;
-    }
-  }
-  leaf_text(parser, leaf).chars().skip(logical_start).take(logical_end - logical_start).collect()
-}
-
-fn wrapping_removes_direct_text(parser: &Parser, leaf: &Leaf, ranges: &[(usize, usize)]) -> bool {
-  let mut has_direct_text = false;
-  for child in &parser.nodes[leaf.element].children {
-    let Child::Text(part_index) = child else { continue };
-    let part = &parser.parts[*part_index];
-    for (index, character) in part.text.chars().enumerate() {
-      if str_methods::is_whitespace(character) {
-        continue;
-      }
-      has_direct_text = true;
-      let (raw_start, raw_end) = part.raw_ranges[index];
-      if !ranges.iter().any(|(start, end)| *start <= raw_start && raw_end <= *end) {
-        return false;
-      }
-    }
-  }
-  has_direct_text
-}
-
-fn descendant_nodes(parser: &Parser, node: usize, output: &mut Vec<usize>) {
-  for child in &parser.nodes[node].children {
-    if let Child::Node(child_node) = child {
-      output.push(*child_node);
-      descendant_nodes(parser, *child_node, output);
-    }
-  }
-}
-
-fn is_ancestor(parser: &Parser, ancestor: usize, node: usize) -> bool {
-  let mut current = Some(node);
-  while let Some(node) = current {
-    if node == ancestor {
-      return true;
-    }
-    current = parser.nodes[node].parent;
-  }
-  false
-}
-
 fn ghost_parent(context: &DiffContext<'_>, index: usize, old_leaf: &Leaf) -> Option<usize> {
   let parser = context.parser;
   let old_parser = context.old_parser;
@@ -823,11 +893,11 @@ fn ghost_parent(context: &DiffContext<'_>, index: usize, old_leaf: &Leaf) -> Opt
     if parser.nodes[root].tag == wanted_tag {
       descendants.push(root);
     }
-    descendant_nodes(parser, root, &mut descendants);
+    parser.descendant_nodes(root, &mut descendants);
     if let Some(found) = descendants
       .iter()
       .copied()
-      .filter(|&candidate| parser.nodes[candidate].tag == wanted_tag && is_ancestor(parser, candidate, target))
+      .filter(|&candidate| parser.nodes[candidate].tag == wanted_tag && parser.is_ancestor(candidate, target))
       .max_by_key(|&candidate| parser.nodes[candidate].start.unwrap_or(0))
     {
       return Some(found);
@@ -849,7 +919,7 @@ fn ghost_parent(context: &DiffContext<'_>, index: usize, old_leaf: &Leaf) -> Opt
   if parser.nodes[root].tag == wanted_tag {
     descendants.push(root);
   }
-  descendant_nodes(parser, root, &mut descendants);
+  parser.descendant_nodes(root, &mut descendants);
   descendants.into_iter().filter(|&candidate| parser.nodes[candidate].tag == wanted_tag).max_by_key(|&candidate| {
     parser.nodes[candidate]
       .end_end
@@ -857,36 +927,6 @@ fn ghost_parent(context: &DiffContext<'_>, index: usize, old_leaf: &Leaf) -> Opt
       .or_else(|| parser.nodes[candidate].start.filter(|&start| start != 0))
       .unwrap_or(0)
   })
-}
-
-fn ghost_markup(parser: &Parser, leaf: &Leaf, base_source: &str) -> String {
-  let node = &parser.nodes[leaf.element];
-  let text = if leaf.whole {
-    leaf_text(parser, leaf)
-  } else {
-    leaf_text(parser, &Leaf { element: leaf.element, parts: visible_parts(parser, leaf.element), whole: true })
-  };
-  let trailing = node
-    .end_end
-    .map(|end| {
-      base_source[end..].chars().take_while(|character| str_methods::is_whitespace(*character)).collect::<String>()
-    })
-    .unwrap_or_default();
-  let data = escape(&format!("{text}{trailing}"), EscapeContext::QuotedAttribute);
-  if node.tag == "tr" {
-    let cells = node
-      .children
-      .iter()
-      .filter_map(|child| match child {
-        Child::Node(index) if matches!(parser.nodes[*index].tag.as_str(), "td" | "th") => Some(*index),
-        _ => None,
-      })
-      .count()
-      .max(1);
-    format!("<tr class=\"cbd-del\" data-del=\"{data}\"><td colspan=\"{cells}\" data-cbd-del=\"{data}\"></td></tr>")
-  } else {
-    format!("<{} class=\"cbd-del\" data-del=\"{data}\"></{}>", node.tag, node.tag)
-  }
 }
 
 fn insert_ghost(
@@ -902,7 +942,7 @@ fn insert_ghost(
   let parent = ghost_parent(context, new_index, old_leaf);
   let (offset, target_context) = if new_index < new_leaves.len() {
     let target = new_leaves[new_index].element;
-    if let Some(parent) = parent.filter(|parent| !is_ancestor(parser, *parent, target))
+    if let Some(parent) = parent.filter(|parent| !parser.is_ancestor(*parent, target))
       && let Some(end) = parser.nodes[parent].end
     {
       (end, Some(parent))
@@ -922,9 +962,9 @@ fn insert_ghost(
   } else {
     (parser.source.len(), None)
   };
-  add_insertion(insertions, offset, ghost_markup(old_parser, old_leaf, &old_parser.source));
+  add_insertion(insertions, offset, old_parser.ghost_markup(old_leaf, &old_parser.source));
   if let Some(target_context) = target_context {
-    details.extend(ancestor_details(parser, target_context));
+    details.extend(parser.ancestor_details(target_context));
   }
   Ok(())
 }
@@ -947,13 +987,13 @@ fn render_leaf_changes(
   for change in changes {
     if let Some(old_index) = change.old {
       let element = old_leaves[old_index].element;
-      if replaced_old.iter().any(|&ancestor| ancestor != element && is_ancestor(old_parser, ancestor, element)) {
+      if replaced_old.iter().any(|&ancestor| ancestor != element && old_parser.is_ancestor(ancestor, element)) {
         continue;
       }
     }
     if let Some(new_index) = change.new {
       let element = new_leaves[new_index].element;
-      if replaced_new.iter().any(|&ancestor| ancestor != element && is_ancestor(parser, ancestor, element)) {
+      if replaced_new.iter().any(|&ancestor| ancestor != element && parser.is_ancestor(ancestor, element)) {
         continue;
       }
     }
@@ -969,9 +1009,9 @@ fn render_leaf_changes(
         let offset =
           (if position < new_leaves.len() { parser.nodes[target].start } else { parser.nodes[target].end_end })
             .ok_or_else(|| "cannot anchor a deleted text leaf".to_owned())?;
-        let data = escape(&leaf_text(old_parser, old_leaf), EscapeContext::QuotedAttribute);
+        let data = escape(&old_parser.leaf_text(old_leaf), EscapeContext::QuotedAttribute);
         add_insertion(insertions, offset, format!("<span class=\"cbd-del\" data-del=\"{data}\"></span>"));
-        details.extend(ancestor_details(parser, target));
+        details.extend(parser.ancestor_details(target));
       }
       continue;
     }
@@ -980,13 +1020,13 @@ fn render_leaf_changes(
     let new_leaf = &new_leaves[new_index];
     if change.old.is_none() {
       classes.entry(new_leaf.element).or_default().insert("cbd-new".to_owned());
-      details.extend(ancestor_details(parser, new_leaf.element));
+      details.extend(parser.ancestor_details(new_leaf.element));
       continue;
     }
 
     let old_leaf = &old_leaves[change.old.expect("a paired leaf has an old leaf")];
-    let old_tokens = leaf_tokens(old_parser, old_leaf);
-    let new_tokens = leaf_tokens(parser, new_leaf);
+    let old_tokens = old_parser.leaf_tokens(old_leaf);
+    let new_tokens = parser.leaf_tokens(new_leaf);
     let opcodes = merged_opcodes(&old_tokens, &new_tokens);
     let changed: Vec<Opcode> = opcodes.into_iter().filter(|opcode| opcode.tag != OpcodeTag::Equal).collect();
     if changed.is_empty() {
@@ -994,9 +1034,9 @@ fn render_leaf_changes(
     }
     let mut wrap_ranges = Vec::new();
     for opcode in &changed {
-      wrap_ranges.extend(raw_bounds(parser, &new_tokens, opcode.b_start, opcode.b_end, new_leaf));
+      wrap_ranges.extend(parser.raw_bounds(&new_tokens, opcode.b_start, opcode.b_end, new_leaf));
     }
-    if wrapping_removes_direct_text(parser, new_leaf, &wrap_ranges) {
+    if parser.wrapping_removes_direct_text(new_leaf, &wrap_ranges) {
       classes.entry(new_leaf.element).or_default().insert("cbd-new".to_owned());
       replaced_old.insert(old_leaf.element);
       replaced_new.insert(new_leaf.element);
@@ -1010,38 +1050,20 @@ fn render_leaf_changes(
       continue;
     }
 
-    details.extend(ancestor_details(parser, new_leaf.element));
+    details.extend(parser.ancestor_details(new_leaf.element));
     for opcode in changed {
       let old_text =
-        token_text(old_parser, old_leaf, &old_tokens, opcode.a_start, opcode.a_end, opcode.b_start == opcode.b_end);
+        old_parser.token_text(old_leaf, &old_tokens, opcode.a_start, opcode.a_end, opcode.b_start == opcode.b_end);
       if !old_text.is_empty() {
         let deletion =
           format!("<span class=\"cbd-del\" data-del=\"{}\"></span>", escape(&old_text, EscapeContext::QuotedAttribute));
-        add_insertion(insertions, anchor_offset(&new_tokens, opcode.b_start, parser, new_leaf)?, deletion);
+        add_insertion(insertions, parser.anchor_offset(&new_tokens, opcode.b_start, new_leaf)?, deletion);
       }
-      for (start, end) in raw_bounds(parser, &new_tokens, opcode.b_start, opcode.b_end, new_leaf) {
+      for (start, end) in parser.raw_bounds(&new_tokens, opcode.b_start, opcode.b_end, new_leaf) {
         add_insertion(insertions, start, "<ins class=\"cbd-ins\">".to_owned());
         add_insertion(insertions, end, "</ins>".to_owned());
       }
     }
-  }
-  Ok(())
-}
-
-fn render_start_tag_additions(
-  source: &str,
-  parser: &Parser,
-  classes: &BTreeMap<usize, BTreeSet<String>>,
-  details: &BTreeSet<usize>,
-  insertions: &mut HashMap<usize, Vec<String>>,
-) -> Result<(), String> {
-  for (&node, names) in classes {
-    for name in names {
-      add_class(source, &parser.nodes[node], name, insertions)?;
-    }
-  }
-  for &node in details {
-    add_attr(source, &parser.nodes[node], "open", None, insertions)?;
   }
   Ok(())
 }
@@ -1066,8 +1088,8 @@ fn append_style_and_header(source: &str) -> Result<String, String> {
   let parser = Parser::parse(source)?;
   let mut insertions = HashMap::new();
   let style_tag = format!("<style data-cbd-style>{CBD_STYLE}</style>");
-  let head = first_descendant(&parser, 0, "head");
-  let body = first_descendant(&parser, 0, "body");
+  let head = parser.first_descendant(0, "head");
+  let body = parser.first_descendant(0, "body");
   if let Some(head) = head.filter(|head| parser.nodes[*head].end.is_some()) {
     add_insertion(&mut insertions, parser.nodes[head].end.expect("the selected head has an end tag"), style_tag);
   } else {
@@ -1075,8 +1097,8 @@ fn append_style_and_header(source: &str) -> Result<String, String> {
     add_insertion(&mut insertions, offset, style_tag);
   }
   let offset = if let Some(body) = body.filter(|body| parser.nodes[*body].start_end.is_some()) {
-    let root = document_root(&parser);
-    let target = first_class_descendant(&parser, root, "wrap").or_else(|| first_descendant(&parser, root, "main"));
+    let root = parser.document_root();
+    let target = parser.first_class_descendant(root, "wrap").or_else(|| parser.first_descendant(root, "main"));
     target
       .and_then(|target| parser.nodes[target].start_end)
       .unwrap_or(parser.nodes[body].start_end.expect("the selected body has a start tag"))
@@ -1096,16 +1118,16 @@ fn append_style_and_header(source: &str) -> Result<String, String> {
 fn analyse(base_html: &str, new_html: &str) -> Result<Analysis, String> {
   let base_parser = Parser::parse(base_html)?;
   let new_parser = Parser::parse(new_html)?;
-  let base_leaves = collect_leaves(&base_parser, document_root(&base_parser));
-  let new_leaves = collect_leaves(&new_parser, document_root(&new_parser));
-  let changes = align(&base_parser, &base_leaves, &new_parser, &new_leaves);
+  let base_leaves = base_parser.collect_leaves(base_parser.document_root());
+  let new_leaves = new_parser.collect_leaves(new_parser.document_root());
+  let changes = base_parser.align(&base_leaves, &new_parser, &new_leaves);
   Ok((base_parser, new_parser, base_leaves, new_leaves, changes))
 }
 
 /// `new_html` with word-level marks against `base_html` embedded in its source.
 pub fn annotate(base_html: &str, new_html: &str) -> Result<String, String> {
   let (base_parser, new_parser, base_leaves, new_leaves, changes) = analyse(base_html, new_html)?;
-  let root = document_root(&new_parser);
+  let root = new_parser.document_root();
   let context = DiffContext {
     parser: &new_parser,
     old_parser: &base_parser,
@@ -1117,7 +1139,7 @@ pub fn annotate(base_html: &str, new_html: &str) -> Result<String, String> {
   let mut classes = BTreeMap::new();
   let mut details = BTreeSet::new();
   render_leaf_changes(&context, &changes, &mut insertions, &mut classes, &mut details)?;
-  render_start_tag_additions(new_html, &new_parser, &classes, &details, &mut insertions)?;
+  new_parser.render_start_tag_additions(new_html, &classes, &details, &mut insertions)?;
   append_style_and_header(&splice(new_html, &insertions))
 }
 
@@ -1126,12 +1148,12 @@ pub fn diff_text(base_html: &str, new_html: &str) -> Result<String, String> {
   let (base_parser, new_parser, old_leaves, new_leaves, changes) = analyse(base_html, new_html)?;
   let mut sections = Vec::new();
   for change in changes {
-    let old_text = change.old.map(|old| normalise(&leaf_text(&base_parser, &old_leaves[old]))).unwrap_or_default();
-    let new_text = change.new.map(|new| normalise(&leaf_text(&new_parser, &new_leaves[new]))).unwrap_or_default();
+    let old_text = change.old.map(|old| normalise(&base_parser.leaf_text(&old_leaves[old]))).unwrap_or_default();
+    let new_text = change.new.map(|new| normalise(&new_parser.leaf_text(&new_leaves[new]))).unwrap_or_default();
     match (change.old, change.new) {
       (Some(old), Some(new)) => {
-        let old_tokens = leaf_tokens(&base_parser, &old_leaves[old]);
-        let new_tokens = leaf_tokens(&new_parser, &new_leaves[new]);
+        let old_tokens = base_parser.leaf_tokens(&old_leaves[old]);
+        let new_tokens = new_parser.leaf_tokens(&new_leaves[new]);
         if !merged_opcodes(&old_tokens, &new_tokens).iter().any(|opcode| opcode.tag != OpcodeTag::Equal) {
           continue;
         }
@@ -1144,29 +1166,10 @@ pub fn diff_text(base_html: &str, new_html: &str) -> Result<String, String> {
       (None, Some(old)) => (&base_parser, &old_leaves, old),
       (None, None) => return Err("invalid empty leaf change".to_string()),
     };
-    let label = section_label(parser, &leaves[index]);
+    let label = parser.section_label(&leaves[index]);
     sections.push(format!("[{label}]\n- {old_text}\n+ {new_text}"));
   }
   Ok(sections.join("\n\n"))
-}
-
-/// The nearest `section`'s heading without its number or revision badge. A leaf outside any section
-/// takes the header chip marker for a `span.mtag`, else its tag.
-fn section_label(parser: &Parser, leaf: &Leaf) -> String {
-  let mut current = Some(leaf.element);
-  while let Some(node) = current {
-    if parser.nodes[node].tag == "section" {
-      let Some(h2) = first_descendant(parser, node, "h2") else { return "<unnamed section>".to_string() };
-      let heading: String =
-        visible_parts(parser, h2).into_iter().map(|part| parser.parts[part].text.as_str()).collect();
-      let heading = LEADING_DIGITS_RE.replace(&normalise(&heading), "").into_owned();
-      return str_methods::strip(&TRAILING_CHANGED_RE.replace(&heading, "")).to_string();
-    }
-    current = parser.nodes[node].parent;
-  }
-  let element = &parser.nodes[leaf.element];
-  let classes = element.attrs.get("class").and_then(Option::as_deref).unwrap_or("");
-  if str_methods::split_whitespace(classes).contains(&"mtag") { "header chip".to_string() } else { element.tag.clone() }
 }
 
 #[cfg(test)]

@@ -740,6 +740,33 @@ fn changed_server_port_takes_effect_on_the_next_call() {
   second.stop();
 }
 
+/// A server verb whose profile home has no config.yaml exits 1 with an error naming that file. The error comes from the
+/// port read, which runs before any request is built, so the verb fails before it could reach a guessed port.
+#[test]
+#[ignore = "integration"]
+fn a_server_verb_in_a_home_without_a_config_names_the_file_before_any_request() {
+  let temp = tempfile::tempdir().unwrap();
+  let home = temp.path().join("empty-home");
+  std::fs::create_dir_all(&home).unwrap();
+  let mut child = Command::new(env!("CARGO_BIN_EXE_charliebot"))
+    .args(["web", "status", "confirm"])
+    .current_dir(temp.path())
+    .env_clear()
+    .env("CHARLIEBOT_HOME", &home)
+    .env("CHARLIEBOT_SESSION_ID", "abc")
+    .env("HOME", temp.path().join("user-home"))
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .spawn()
+    .unwrap();
+  let status = wait_bounded(&mut child).unwrap().expect("the CLI finishes within the process timeout");
+  let mut stderr = String::new();
+  child.stderr.take().unwrap().read_to_string(&mut stderr).unwrap();
+  assert_eq!(status.code(), Some(1), "stderr: {stderr}");
+  assert!(stderr.contains(&home.join("config.yaml").display().to_string()), "stderr: {stderr}");
+}
+
 mod authenticated_commands {
   use super::*;
   use std::process::Output;

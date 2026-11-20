@@ -32,11 +32,20 @@ pub fn internal_base_url() -> Result<String, CliExit> {
   Ok(format!("http://localhost:{port}"))
 }
 
-/// The `server.port` of `<home>/config.yaml`, with the model's defaults when the section is absent.
-/// A config that does not parse is an error naming the file.
+/// The `server.port` of `<home>/config.yaml`, with the model's defaults when the file has no `server` section.
+/// A missing file is an error naming the file and the profile home, so no request goes to a guessed port. A config
+/// that does not parse is an error naming the file.
 pub fn server_port(home: &Path) -> Result<u16, CliExit> {
   let path = home.join(config::CONFIG_FILENAME);
   let path_text = paths::display(&path);
+  let present = path.try_exists().map_err(|error| CliExit::error(format!("{path_text}: {error}")))?;
+  if !present {
+    return Err(CliExit::error(format!(
+      "{path_text} is missing: the profile home {} has no config.yaml, so the server port is unknown; \
+       set CHARLIEBOT_HOME to a profile home that has one",
+      paths::display(home)
+    )));
+  }
   let document = config::read_yaml_document(&path).map_err(|error| CliExit::error(error.0))?;
   let section = match &document {
     Value::Mapping(mapping) => mapping.get(Value::String("server".to_string())).cloned(),
@@ -66,9 +75,19 @@ mod tests {
   }
 
   #[test]
-  fn a_missing_file_takes_the_model_defaults() {
+  fn a_config_without_a_server_section_takes_the_model_defaults() {
     let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(config::CONFIG_FILENAME), "backends:\n  options: []\n").unwrap();
     assert_eq!(server_port(home.path()).unwrap(), 18498);
+  }
+
+  #[test]
+  fn a_missing_file_is_an_error_naming_the_file() {
+    let home = tempfile::tempdir().unwrap();
+    let expected_path = home.path().join(config::CONFIG_FILENAME);
+    let error = server_port(home.path()).unwrap_err();
+    let message = error.body["error"].as_str().unwrap();
+    assert!(message.contains(&expected_path.display().to_string()), "{error:?}");
   }
 
   #[test]

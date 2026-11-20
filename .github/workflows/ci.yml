@@ -28,7 +28,6 @@ jobs:
   frontend-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,7 +83,6 @@ jobs:
   release-build:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     permissions:
       contents: read
     steps:
@@ -135,7 +133,6 @@ jobs:
 
   rust-test:
     runs-on: ubuntu-24.04
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     # The 0.1 s check runs parallel over-limit tests alone and gives a first alone run over 0.1 s two retries.
     timeout-minutes: 45
     permissions:
@@ -223,7 +220,6 @@ jobs:
   rust-lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     permissions:
       contents: read
     steps:

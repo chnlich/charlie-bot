@@ -2,11 +2,26 @@
 //! merge: a change that alters a CharlieBot web page must carry a screenshot of the changed state at each
 //! window size in [`WINDOW_SIZES`].
 //!
-//! A web page is any path under `web/`, or a page template directly under `prompts/` (`*_template.html`),
-//! which renders the plan, understanding, sitrep and report pages. Screenshots are captured at device pixel
-//! ratio 1, so a PNG's pixel size equals its CSS window size; the gate reads the width and height from the
-//! PNG's IHDR chunk, so a file's name does not decide its size. Overlap, clipping and missing controls stay
-//! with the reviewer.
+//! A web page change is a changed path that the server serves or renders, or a page template directly under
+//! `prompts/` (`*_template.html`), which the plan, understanding, sitrep and report pages follow. The served set
+//! is the registry's (`pages::is_served_path`), so a new page package under `web/features/` or `web/backends/` is
+//! counted without an edit here. The counted set is:
+//!
+//! - `web/templates/**` and `web/static/**`, such as `web/static/js/websocket.js` and `web/templates/index.html`;
+//! - each page package's `templates/**` and `static/**` under `web/features/<name>` or `web/backends/<name>`, such
+//!   as `web/features/cron/templates/cron/page_modals.html`, `web/features/cron/static/cron.js` and
+//!   `web/backends/codex/templates/codex/codex.css`;
+//! - `prompts/*_template.html`, such as `prompts/plan_template.html`.
+//!
+//! The exempt set passes the gate: every other path under `web/`, such as `web/tests/**`, `web/package.json`,
+//! `web/package-lock.json`, `web/tailwind*.config.js` and a package's own file outside its `templates/` and
+//! `static/`, such as `web/backends/opencode/cgroup_join.sh`. The Tailwind configs are exempt because
+//! `dev/build-css.sh` writes the served stylesheets under `web/static/css/` by hand, and those committed files are
+//! counted: a config change serves no byte until its regenerated CSS lands.
+//!
+//! Screenshots are captured at device pixel ratio 1, so a PNG's pixel size equals its CSS window size; the gate
+//! reads the width and height from the PNG's IHDR chunk, so a file's name does not decide its size. Overlap,
+//! clipping and missing controls stay with the reviewer.
 //!
 //! A landing's PR body also names the approved demo (`Demo: <absolute path>`, whose file must exist) and the
 //! changed view's URL path (`View: <URL path>`). A landing carries each View line into the landed commit as
@@ -16,7 +31,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use charliebot_registry::pages::WEB_DIR_NAME;
+use charliebot_registry::pages::is_served_path;
 
 /// The CSS window sizes, at device pixel ratio 1, that a screenshot of a changed page shows: a 1920 wide
 /// screen at 125% zoom (`1536`), a narrower desktop window, and a phone. A capture at another scale, such as
@@ -44,10 +59,10 @@ const VIEW_PREFIX: &str = "View:";
 /// The punctuation that wraps a path in prose or a Markdown list, which a named path sheds (`PATH_WRAPPERS`).
 const PATH_WRAPPERS: &[char] = &['`', '\'', '"', '(', ')', '[', ']', '<', '>', ',', ';', ':', '.'];
 
-/// Whether a changed path alters a CharlieBot web page: a file under `web/`, or a page template directly under
-/// `prompts/` (`changes_web_page`).
+/// Whether a changed path alters a CharlieBot web page: a file the server serves or renders (`is_served_path`), or
+/// a page template directly under `prompts/` (`changes_web_page`).
 pub fn is_web_page_path(path: &str) -> bool {
-  path.strip_prefix(WEB_DIR_NAME).is_some_and(|rest| rest.starts_with('/'))
+  is_served_path(path)
     || path.strip_prefix("prompts/").is_some_and(|name| !name.contains('/') && name.ends_with("_template.html"))
 }
 
@@ -325,11 +340,28 @@ mod tests {
   }
 
   #[test]
-  fn only_web_pages_need_screenshots() {
-    assert!(changes_web_page(&["web/app.js".to_string()]));
-    assert!(changes_web_page(&["prompts/plan_template.html".to_string()]));
-    assert!(!changes_web_page(&["rust/crates/x/src/lib.rs".to_string(), "prompts/master.md".to_string()]));
-    assert!(!changes_web_page(&["prompts/sub/plan_template.html".to_string()]));
+  fn only_served_pages_need_screenshots() {
+    for served in [
+      "web/static/js/websocket.js",
+      "web/templates/index.html",
+      "web/features/cron/templates/cron/page_modals.html",
+      "web/features/cron/static/cron.js",
+      "web/backends/codex/templates/codex/codex.css",
+      "prompts/plan_template.html",
+    ] {
+      assert!(changes_web_page(&[served.to_string()]), "{served} is served");
+    }
+    for exempt in [
+      "web/tests/websocket_reconnect_poke.test.js",
+      "web/package.json",
+      "web/backends/opencode/cgroup_join.sh",
+      "web/tailwind.config.js",
+      "rust/crates/x/src/lib.rs",
+      "prompts/master.md",
+      "prompts/sub/plan_template.html",
+    ] {
+      assert!(!changes_web_page(&[exempt.to_string()]), "{exempt} is not served");
+    }
   }
 
   #[test]

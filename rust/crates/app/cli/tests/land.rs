@@ -39,7 +39,10 @@ fn commit(dir: &Path, file: &str) -> String {
 }
 
 fn commit_with_message(dir: &Path, file: &str, subject: &str, body: &str) -> String {
-  fs::write(dir.join(file), format!("{file}\n")).expect("the file is written");
+  let path = dir.join(file);
+  fs::create_dir_all(path.parent().expect("a committed file has a parent directory"))
+    .expect("the file's directory is created");
+  fs::write(path, format!("{file}\n")).expect("the file is written");
   git(dir, &["add", file]);
   let mut args = vec!["commit", "-q", "-m", subject];
   if !body.is_empty() {
@@ -70,12 +73,11 @@ fn write_window_screenshots(dir: &Path) -> Vec<String> {
     .collect()
 }
 
-/// A page change on the task branch, committed with an empty message, so a test supplies the PR body.
+/// A served-page change on the task branch, committed with an empty message, so a test supplies the PR body.
 fn web_change(venue: &Venue) -> std::path::PathBuf {
   let shots = venue.home.join("shots");
   fs::create_dir(&shots).expect("the screenshot directory is created");
-  fs::create_dir(venue.worktree.join("web")).expect("the web directory is created");
-  commit_with_message(&venue.worktree, "web/tray.js", "Open the choice tray", "");
+  commit_with_message(&venue.worktree, "web/static/js/tray.js", "Open the choice tray", "");
   shots
 }
 
@@ -94,10 +96,11 @@ struct Venue {
 impl Venue {
   /// *with_ci* commits a `pull_request` workflow to main, which puts the landing under the CI gate.
   fn new(with_ci: bool) -> Venue {
-    Self::with_feature_message(with_ci, "feature.txt", "")
+    Self::with_feature_message(with_ci, "feature.txt", "feature.txt", "")
   }
 
-  fn with_feature_message(with_ci: bool, subject: &str, body: &str) -> Venue {
+  /// *file* is the one file the task branch's commit changes, so a test sets the diff the landing gates.
+  fn with_feature_message(with_ci: bool, file: &str, subject: &str, body: &str) -> Venue {
     let root = tempfile::tempdir().expect("a temporary directory");
     let origin = root.path().join("owner").join("repo.git");
     fs::create_dir_all(&origin).expect("the origin directory is created");
@@ -120,7 +123,7 @@ impl Venue {
 
     let worktree = root.path().join("worktree");
     git(&repo, &["worktree", "add", "-q", "-b", TASK_BRANCH, worktree.to_str().expect("the path is UTF-8"), "main"]);
-    commit_with_message(&worktree, "feature.txt", subject, body);
+    commit_with_message(&worktree, file, subject, body);
 
     let home = root.path().join("home");
     let session_dir = home.join("sessions").join(TASK_SESSION);
@@ -279,7 +282,7 @@ impl Venue {
 #[test]
 #[ignore = "integration"]
 fn a_single_commit_supplies_the_draft_pr_title_and_body() {
-  let venue = Venue::with_feature_message(true, "Add routing support", "Keep callers on a stable path.");
+  let venue = Venue::with_feature_message(true, "feature.txt", "Add routing support", "Keep callers on a stable path.");
 
   let (code, record) = venue.land();
 
@@ -495,6 +498,21 @@ fn a_web_page_change_lands_with_demo_view_and_each_window_size_and_carries_the_v
     landed.lines().any(|line| line == "View: /?session=tray"),
     "the landed commit carries the View trailer: {landed}"
   );
+}
+
+/// A web test file is no served page, so its landing carries no Demo, View or screenshot and lands.
+#[test]
+#[ignore = "integration"]
+fn a_change_to_web_tests_lands_without_demo_view_or_screenshots() {
+  let venue =
+    Venue::with_feature_message(false, "web/tests/websocket_reconnect_poke.test.js", "Cover the reconnect poke", "");
+
+  let (code, record) = venue.land();
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(record["state"], "landed-no-ci");
+  let landed = record["sha"].as_str().expect("the record names the landed sha").to_string();
+  assert_eq!(venue.origin_tip("main"), landed);
 }
 
 /// The path that left rebase-landed PRs open: a worker pushes the task branch and opens a PR, then main moves

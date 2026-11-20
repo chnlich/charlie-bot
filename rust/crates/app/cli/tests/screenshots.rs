@@ -51,7 +51,7 @@ fn text(output: &Output) -> String {
 #[ignore = "integration"]
 fn a_change_that_touches_no_web_page_passes_without_a_directory() {
   let missing = PathBuf::from("/nonexistent/evidence");
-  let output = check(&missing, "rust/crates/x/src/lib.rs\nprompts/master.md\n");
+  let output = check(&missing, "rust/crates/x/src/lib.rs\nprompts/master.md\nweb/tests/a.test.js\nweb/package.json\n");
 
   assert_eq!(output.status.code(), Some(0), "{}", text(&output));
   assert!(String::from_utf8_lossy(&output.stdout).is_empty());
@@ -61,7 +61,7 @@ fn a_change_that_touches_no_web_page_passes_without_a_directory() {
 #[ignore = "integration"]
 fn a_web_page_change_with_two_screenshots_of_each_size_passes_and_names_the_change() {
   let dir = evidence_dir(2);
-  let output = check(dir.path(), "web/app.js\n");
+  let output = check(dir.path(), "web/static/app.js\n");
 
   assert_eq!(output.status.code(), Some(0), "{}", text(&output));
   assert!(String::from_utf8_lossy(&output.stdout).contains("web page change: 1 path(s)"), "{}", text(&output));
@@ -71,7 +71,7 @@ fn a_web_page_change_with_two_screenshots_of_each_size_passes_and_names_the_chan
 #[ignore = "integration"]
 fn a_web_page_change_with_one_screenshot_of_each_size_exits_1() {
   let dir = evidence_dir(1);
-  let output = check(dir.path(), "web/app.js\n");
+  let output = check(dir.path(), "web/static/app.js\n");
 
   assert_eq!(output.status.code(), Some(1), "{}", text(&output));
   assert!(text(&output).contains("1536x900"), "{}", text(&output));

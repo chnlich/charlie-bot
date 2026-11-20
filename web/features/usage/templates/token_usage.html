@@ -137,6 +137,7 @@
 </style>
 </head>
 <body>
+{% set defer_concurrency_badge_poll = true %}
 {% include 'partials/concurrency_badge.html' %}
 <div class="wrap">
   <h1>Token usage</h1>
@@ -304,7 +305,7 @@
 
 <div class="tip" id="tip" role="tooltip" aria-hidden="true"></div>
 
-<script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
+<script>{{ icon_script(['disclosure', 'disclosure-open']) }}{% include 'js/icons.js' %}</script>
 <script>
 const DATA = {{ payload|safe }};
 const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)',

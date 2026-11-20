@@ -209,7 +209,7 @@
     <div id="diff-output"></div>
   </main>
 
-  <script>{{ icon_script() }}{% include 'js/icons.js' %}</script>
+  <script>{{ icon_script(['comment', 'disclosure', 'expand-down', 'expand-up', 'loading']) }}{% include 'js/icons.js' %}</script>
   <script src="/static/features/diff_view/diff_page.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/comment_post.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/utils.js?v={{ static_asset_version|urlencode }}"></script>

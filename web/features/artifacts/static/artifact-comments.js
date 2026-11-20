@@ -25,6 +25,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var RAIL_WIDTH = 320;
     var RAIL_PADDING = 12;
     var GUTTER_GAP = 8;
+    // The least band the anchored column can use: one card and a gap. A rail whose controls leave less than
+    // that keeps every entry in the tray list, which the rail's own scroll reaches.
+    var GUTTER_MIN_BAND = 80;
     var NO_SESSION_MESSAGE = 'Cannot parse session id from this artifact URL.';
     var SECTION_SELECTOR = 'section';
     // Characters of a fork's question text that the locator shows after the fork's
@@ -1182,8 +1185,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       setRailHeight(side);
       if (side) {
         setGutterBottom();
-        measureCards();
-        layoutColumn();
+        layoutGutter();
       }
       if (hovered && !popover) positionTrigger(hovered);
     }
@@ -1245,13 +1247,29 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       // Only now is the column's bottom final: unanchored comments (every shortcut button makes one) live in the
       // stack's own list.
       setGutterBottom();
-      measureCards();
-      layoutColumn();
+      layoutGutter();
     }
 
     // The column stops one gap above the controls. Read once the stack holds its final content.
     function setGutterBottom() {
       gutter.style.bottom = (window.innerHeight - dockStack.getBoundingClientRect().top + GUTTER_GAP) + 'px';
+    }
+
+    // The band the column has left above the controls, and the cards when it is tall enough. A stack that fills the
+    // rail leaves no band, and a card in it would be clipped to a sliver, so every entry stays in the tray list,
+    // which the rail's own scroll reaches. The mode flips only at that edge: a resize or a control that grows
+    // without crossing it re-measures the column instead of rebuilding the list under the user.
+    function layoutGutter() {
+      if (dockStack.getBoundingClientRect().top - GUTTER_GAP < GUTTER_MIN_BAND) {
+        if (gutter.style.display !== 'none') presentList();
+        return;
+      }
+      if (gutter.style.display === 'none') {
+        presentGutter();
+        return;
+      }
+      measureCards();
+      layoutColumn();
     }
 
     // Measured once per reflow: anchors in document space and card heights. Neither

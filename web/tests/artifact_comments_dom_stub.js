@@ -155,6 +155,11 @@ function makeElement() {
     focus() {},
     select() {},
     getBoundingClientRect() {
+      // The rail's stack sits at the bottom of the stub's 768 px window, leaving the column above it a band.
+      // A test that models a full rail or a bottom strip overrides this rect.
+      if (String(this.className).split(/\s+/).includes('__cbc-stack')) {
+        return {left: 0, top: 600, right: 320, bottom: 768, width: 320, height: 168};
+      }
       return {left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0};
     },
     scrollIntoView() {},
@@ -170,11 +175,9 @@ function makeElement() {
       }
       return null;
     },
-    // The comment layer measures layout at script load: placeColumn ->
-    // measureContentRight reads document.body.querySelectorAll('*'). So the
-    // stub must answer the '*' walk, not only class selectors. The heading walk
-    // (previousHeading) reads tag lists like 'h1,h2,h3,h4,h5,h6', so tag tokens
-    // match tagName case-insensitively.
+    // The layer walks the page for commentable blocks (findBlock, the heading walk), so the stub must answer
+    // the '*' walk, not only class selectors. The heading walk (previousHeading) reads tag lists like
+    // 'h1,h2,h3,h4,h5,h6', so tag tokens match tagName case-insensitively.
     querySelectorAll(selector) {
       const all = [];
       const stack = this.children.slice();

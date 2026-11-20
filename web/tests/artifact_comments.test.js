@@ -69,10 +69,6 @@ function sessionFetchStub(calls, sessionId, sessionName) {
 
 const FETCH_OK = async () => ({ok: true, status: 200, json: async () => ({name: 'S'})});
 
-function rectsIntersect(a, b) {
-  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-}
-
 function makeSessionStorage() {
   const data = {};
   return {
@@ -934,6 +930,39 @@ test('the comment trigger sits in the strip beside the page, level with its bloc
   assert.equal(trigger.style.display, 'flex', 'hovering a block shows the trigger');
   assert.ok(left >= 680 && left + 34 <= 680 + 40, 'the trigger sits in the strip the page leaves at its right edge');
   assert.equal(trigger.style.top, '204px', 'the trigger is level with the top of its block');
+});
+
+test('the anchored column gives its card to the tray list when the rail has no band', async () => {
+  const block = makeBlock('anchored section');
+  block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
+  const {body, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
+    bodyChildren: [block],
+    innerWidth: 1024,
+    serverSessionId: 'session-270',
+    fetch: FETCH_OK,
+  });
+  addBlockComment(body, listeners, block, 'cmt');
+  await flushPromises(3);
+
+  const stack = findChildByClass(dockOf(body), '__cbc-stack');
+  const gutter = findChildByClass(body, '__cbc-gutter');
+  const trayList = body.querySelector('.__cbc-tray-list');
+  assert.equal(gutter.children.length, 1, 'the card sits in the column while the rail leaves a band');
+
+  // A stack that fills the rail leaves the column no band: the card moves to the tray list, which the rail
+  // itself scrolls to, instead of being clipped into a few pixels.
+  stack.getBoundingClientRect = () => ({left: 0, top: 12, right: 296, bottom: 710, width: 296, height: 698});
+  fireResize(listeners);
+  assert.equal(gutter.style.display, 'none', 'the column yields');
+  assert.equal(gutter.children.length, 0, 'the column holds no card');
+  assert.equal(trayList.children.length, 1, 'the card is in the tray list');
+
+  // The band returns: the card goes back to its column.
+  stack.getBoundingClientRect = () => ({left: 0, top: 400, right: 296, bottom: 710, width: 296, height: 310});
+  fireResize(listeners);
+  assert.equal(gutter.style.display, '', 'the column returns');
+  assert.equal(gutter.children.length, 1, 'the card is back in the column');
+  assert.equal(trayList.children.length, 0, 'the tray list is empty again');
 });
 
 test('gutter cards are positioned by the stackCards pure function (render glue)', async () => {

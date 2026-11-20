@@ -8,10 +8,12 @@
 mod process_guard;
 mod recovery_support;
 
+use std::any::Any;
 use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
@@ -30,6 +32,7 @@ use charliebot_registry::backend::{
   LaunchContext, LaunchRefused, MemberFailure, ResumeStyle, Translate, TransportKind,
 };
 use charliebot_registry::caller::CallerIdentity;
+use charliebot_registry::registry::ReattachHold;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor};
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
@@ -512,6 +515,97 @@ async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
   let run = stack.store().read_run_sync(&worker.id, "run-live")?.expect("the launched run is recorded");
   assert_eq!(run.pid, Some(live.id()));
   assert_eq!(run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-live")?, Some(RunOutcomeKind::Success));
+  Ok(())
+}
+
+/// The logins a reattach hold took, as the recovered processes' environments name them, and how many holds are still
+/// alive. The lifecycle stands in for the Claude account pool's `/proc/<pid>/environ` reservation.
+static REATTACH_LOGINS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static REATTACH_HOLDS_ALIVE: AtomicUsize = AtomicUsize::new(0);
+
+struct ReattachHoldGuard;
+
+impl Drop for ReattachHoldGuard {
+  fn drop(&mut self) {
+    REATTACH_HOLDS_ALIVE.fetch_sub(1, Ordering::SeqCst);
+  }
+}
+
+struct ReattachLifecycle;
+
+impl BackendLifecycle for ReattachLifecycle {
+  fn reattach_hold(&self, _cfg: &CharlieBotConfig, pid: u32, _run_id: &str) -> ReattachHold {
+    let data = std::fs::read(format!("/proc/{pid}/environ")).unwrap_or_default();
+    let login = data
+      .split(|byte| *byte == 0)
+      .filter_map(|entry| String::from_utf8(entry.to_vec()).ok())
+      .find_map(|entry| entry.strip_prefix("CLAUDE_CONFIG_DIR=").map(str::to_string));
+    REATTACH_LOGINS.lock().expect("reattach logins mutex is not poisoned").push(login.unwrap_or_default());
+    REATTACH_HOLDS_ALIVE.fetch_add(1, Ordering::SeqCst);
+    ReattachHold { private: Some(Arc::new(ReattachHoldGuard) as Arc<dyn Any + Send + Sync>) }
+  }
+}
+
+fn register_reattach_pool(
+  registry: &mut charliebot_registry::Registry,
+) -> Result<(), charliebot_registry::RegistryError> {
+  registry.backend_type(scripted_type(
+    "reattach_pool",
+    BackendTraits {
+      resume: ResumeStyle::CliFlag,
+      restart_reattach: true,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    Some(Arc::new(ReattachLifecycle)),
+  ))
+}
+
+/// A boot whose live keyed run and live record-less run each take a login hold from their process's environment
+/// before the pass returns, one hold per run, released when the follow ends.
+#[tokio::test]
+#[ignore = "integration"]
+async fn boot_reattach_holds_the_login_each_live_process_environ_names() -> anyhow::Result<()> {
+  let guard = ProcessGroupGuard::new();
+  let option = BackendOption { backend_type: "reattach_pool".to_string(), ..script_option(BACKEND_ID, "exit 0") };
+  let stack =
+    Stack::start_with_package(vec![option], vec![BACKEND_ID.to_string()], ("reattach_pool", register_reattach_pool))
+      .await?;
+  let mut keyed_spec = script_run_spec();
+  keyed_spec.improve_host = Some("host3".to_string());
+  let keyed = stack.node("keyed", None, TaskProfile::Worker, Some(keyed_spec)).await?;
+  let plain = stack.node("plain", None, TaskProfile::Worker, Some(script_run_spec())).await?;
+
+  let mut keyed_process =
+    Command::new("/bin/sleep").arg("30").env("CLAUDE_CONFIG_DIR", "/synthetic/keyed-login").process_group(0).spawn()?;
+  guard.track(keyed_process.id());
+  let keyed_identity = identity::pin_process_identity(keyed_process.id());
+  let mut plain_process =
+    Command::new("/bin/sleep").arg("30").env("CLAUDE_CONFIG_DIR", "/synthetic/plain-login").process_group(0).spawn()?;
+  guard.track(plain_process.id());
+  let plain_identity = identity::pin_process_identity(plain_process.id());
+  stack.queue_run(&keyed.id, "run-keyed", RunKind::Work).await?;
+  stack.launch(&keyed.id, "run-keyed", keyed_process.id(), &keyed_identity.pid_start.context("a stat line")?).await?;
+  stack.queue_run(&plain.id, "run-plain", RunKind::Work).await?;
+  stack.launch(&plain.id, "run-plain", plain_process.id(), &plain_identity.pid_start.context("a stat line")?).await?;
+
+  stack.node_pass(&keyed.id).await?;
+  stack.node_pass(&plain.id).await?;
+
+  let mut logins = REATTACH_LOGINS.lock().expect("reattach logins mutex is not poisoned").clone();
+  logins.sort();
+  assert_eq!(logins, ["/synthetic/keyed-login", "/synthetic/plain-login"]);
+  assert_eq!(REATTACH_HOLDS_ALIVE.load(Ordering::SeqCst), 2, "each recovered run's hold lives while its follow runs");
+
+  keyed_process.kill()?;
+  plain_process.kill()?;
+  keyed_process.wait()?;
+  plain_process.wait()?;
+  settle_until(|| Ok(REATTACH_HOLDS_ALIVE.load(Ordering::SeqCst) == 0))
+    .await
+    .context("the holds end with their follows")?;
   Ok(())
 }
 
@@ -1124,7 +1218,7 @@ async fn run_ending_entry(
         .launch(&worker_id, run_id, pid, pin.pid_start.as_deref().context("the live process has an identity")?)
         .await?;
       stage_raw_429(&stack.store().run_dir(&worker_id, run_id), Duration::from_secs(30))?;
-      stack.adapter.resume_run(&worker_id, run_id, None).await?;
+      stack.adapter.resume_run(&worker_id, run_id, None, ReattachHold::none()).await?;
       wait_for_child(&mut child)?;
       // A live run ends now, not at its raw log's last write.
       None

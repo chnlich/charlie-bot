@@ -12,8 +12,8 @@
 // resize handle is not an interaction that can wait: the reader may drag it
 // before any control call, and app.js initializes its wiring at load. The
 // separator line's Clone to here and Elon-e buttons paint on the first render,
-// to which a sidebar click never comes back. The module's copy used to register
-// them at load, and core loads before every package, so these two lead the line.
+// to which a sidebar click never comes back. Core loads before every package,
+// so these registrations run before the first transcript paints.
 // The filter strip's four pills end 294 px from the sidebar's left edge. With
 // the strip's 12 px right padding, the sidebar needs 306 px for them. The New
 // Session label stops clipping just above 283 px. Below those widths the

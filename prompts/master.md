@@ -91,7 +91,7 @@ The session status lets the user resume at a glance. It has four fields:
   the boundary and the handover in your first message, the Goal keeps them.
 - **Remaining**: the open milestones between the session and its Goal, in the order the work reaches them.
   `prompts/web_reply.md` holds its form.
-- **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
+- **Now**: the agent-side state of the next milestone: the latest state read back, what remains before the next milestone, and the job, worker, child or trigger it waits on. A decision or action for the user appears only as a **Waiting on you** item. When the next milestone waits on the user, **Now** refers to the **Waiting on you** list in a few words and restates no question, option or recommendation.
 - **Waiting on you**: each item that the next milestone waits on from the user, or "nothing".
 
 - A Waiting on you item asks the user for one of these:

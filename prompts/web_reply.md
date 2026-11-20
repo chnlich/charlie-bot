@@ -68,7 +68,7 @@ Remaining lists the open milestones between the session and its Goal, so the use
 - Write the web reply and the session status in the language of your chat replies.
 - Write **Now** in one or two sentences.
 - Keep **Now** under 200 characters.
-- Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
+- Each set replaces the whole **Now** text. Write its content as the Status Block of `prompts/master.md` defines it.
 - Write your messages without the status block. The Status view is the one home of the session status.
 - Put the decisions and actions that one user reply settles into one Waiting on you item.
 - The high-consequence steps that one take off settles form one Waiting on you item.

@@ -7,8 +7,11 @@
 # hit. Text that the scanner refused is rewritten by the caller and resubmitted,
 # so what reaches GitHub has always passed the check.
 #
-# Calls that carry no round-written text stay bare gh: gh pr merge,
-# gh pr update-branch, gh run rerun, and the read-only calls.
+# Calls that carry no round-written text stay bare gh: gh pr update-branch,
+# gh run rerun, and the read-only calls. A merge goes through pr-merge, which
+# refuses a web page change whose evidence directory fails the screenshot check
+# or whose pull request body names no View line, and carries the View lines into
+# the squash commit message.
 #
 # pr-edit does not call gh pr edit: on gh 2.45 that fails on the Projects
 # (classic) lookup. It reads the PR's URL with gh pr view, then sends the
@@ -19,6 +22,7 @@
 #   github-post.sh pr-comment --body-file <file> [gh pr comment args...]
 #   github-post.sh pr-close --comment-file <file> [--delete-branch] [gh pr close args...]
 #   github-post.sh pr-edit [--title <title>] [--body-file <file>] [--repo <owner/repo>] [<PR>]
+#   github-post.sh pr-merge --evidence-dir <dir> <PR> [--repo <owner/repo>]
 #   github-post.sh push [git push args...]
 #
 # Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent).
@@ -179,6 +183,96 @@ case "$subcommand" in
     [[ -z "$body_file" ]] || patch_args+=(-F "body=@$body_file")
     gh "${patch_args[@]}" > /dev/null
     printf '%s\n' "$pr_url"
+    ;;
+  pr-merge)
+    # The round's merge. A web page change passes the screenshot check of
+    # `charliebot screenshots check`, which reads the changed paths on stdin, and
+    # its pull request body must carry a View line. The check prints a
+    # `web page change:` line exactly when the change alters a web page, so this
+    # script keeps no second copy of the rule. The View lines go into the squash
+    # commit message as trailers, which the release switch reads back to capture
+    # the live page.
+    evidence_dir='' pr_selector='' pr_repo=''
+    set -- "${orig_args[@]}"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --evidence-dir)
+          [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused --evidence-dir without a directory.\n' >&2; exit 2; }
+          evidence_dir=$2
+          shift 2
+          ;;
+        --evidence-dir=*)
+          evidence_dir=${1#--evidence-dir=}
+          [[ -n "$evidence_dir" ]] || { printf 'Refused --evidence-dir without a directory.\n' >&2; exit 2; }
+          shift
+          ;;
+        --repo|-R)
+          [[ $# -ge 2 && -n "$2" ]] || { printf 'Refused %s without a repo value.\n' "$1" >&2; exit 2; }
+          pr_repo=$2
+          shift 2
+          ;;
+        --repo=*)
+          pr_repo=${1#--repo=}
+          [[ -n "$pr_repo" ]] || { printf 'Refused --repo without a repo value.\n' >&2; exit 2; }
+          shift
+          ;;
+        -*)
+          printf 'Refused %s: pr-merge takes --evidence-dir, --repo and one PR selector.\n' "${1%%=*}" >&2
+          exit 2
+          ;;
+        *)
+          [[ -n "$1" ]] || { printf 'Refused an empty PR selector.\n' >&2; exit 2; }
+          [[ -z "$pr_selector" ]] || { printf 'Refused a second PR selector: pr-merge takes one.\n' >&2; exit 2; }
+          pr_selector=$1
+          shift
+          ;;
+      esac
+    done
+    [[ -n "$pr_selector" ]] || { usage; exit 2; }
+    repo_args=()
+    [[ -z "$pr_repo" ]] || repo_args=(--repo "$pr_repo")
+    changed=$(gh pr diff --name-only "$pr_selector" "${repo_args[@]}") || {
+      printf 'Cannot read the changed paths of PR %s; nothing was merged.\n' "$pr_selector" >&2
+      exit 2
+    }
+    # `charliebot` is the round's own build (dev/improve/remote-runner.sh builds it), so it carries
+    # the window sizes this check reads.
+    check_args=(screenshots check)
+    [[ -z "$evidence_dir" ]] || check_args+=(--dir "$evidence_dir")
+    set +e
+    web_change=$(printf '%s\n' "$changed" | charliebot "${check_args[@]}")
+    check_status=$?
+    set -e
+    if [[ "$check_status" -ne 0 ]]; then
+      if [[ -z "$evidence_dir" ]]; then
+        printf 'PR %s changes a web page, so pr-merge needs --evidence-dir naming the round evidence directory; nothing was merged.\n' \
+          "$pr_selector" >&2
+      else
+        printf 'PR %s did not pass the screenshot check; nothing was merged.\n' "$pr_selector" >&2
+      fi
+      exit 2
+    fi
+    merge_args=(pr merge --squash "$pr_selector" "${repo_args[@]}")
+    if [[ -n "$web_change" ]]; then
+      pr_title=$(gh pr view "$pr_selector" "${repo_args[@]}" --json title --jq .title) || {
+        printf 'Cannot read the title of PR %s; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+      }
+      gh pr view "$pr_selector" "${repo_args[@]}" --json body --jq .body > "$tmp_dir/pr-body" || {
+        printf 'Cannot read the body of PR %s; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+      }
+      sed -n 's/^View:[[:space:]]*//p' "$tmp_dir/pr-body" > "$tmp_dir/views"
+      if [[ ! -s "$tmp_dir/views" ]]; then
+        printf 'PR %s changes a web page, so its body must carry a View: line; nothing was merged.\n' "$pr_selector" >&2
+        exit 2
+      fi
+      { cat "$tmp_dir/pr-body"; printf '\n'; sed 's/^/View: /' "$tmp_dir/views"; } > "$tmp_dir/merge-body"
+      check_string title "$pr_title"
+      check_text body "$tmp_dir/merge-body"
+      merge_args+=(--subject "$pr_title" --body-file "$tmp_dir/merge-body")
+    fi
+    gh "${merge_args[@]}"
     ;;
   push)
     # The pushed branch name (each refspec side) and the current branch, then

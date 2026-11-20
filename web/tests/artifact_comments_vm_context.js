@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 const vm = require('node:vm');
+const {TextEncoder} = require('node:util');
 
 const { readStatic, readPackageStatic, runIconModule } = require('./read_static');
 const { makeElement } = require('./artifact_comments_dom_stub');
@@ -90,6 +91,7 @@ function loadArtifactCommentsContext(opts = {}) {
       throw new Error('fetch should not run while loading artifact-comments.js');
     },
     crypto: {randomUUID: () => `artifact-comment-request-${++requestSequence}`},
+    TextEncoder,
     // The rail's stack is observed in a browser. The stub never reports a size change: a test drives each reflow.
     ResizeObserver: class {
       observe() {}

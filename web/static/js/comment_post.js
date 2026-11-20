@@ -1,11 +1,31 @@
 // ---------------------------------------------------------------------------
 // Shared comment-tray client helpers (the diff page and package pages). The request
-// shape and the thrown messages are one contract: each tray catches the errors
-// and surfaces `err.message` in its own toast.
+// shape and the thrown messages are one contract: each caller catches errors
+// and surfaces `err.message` in its own feedback.
 // ---------------------------------------------------------------------------
+const COMMENT_KEEPALIVE_BODY_MAX_BYTES = 64 * 1024;
+const COMMENT_KEEPALIVE_SAMPLE_REQUEST_ID = '00000000-0000-4000-8000-000000000000';
+const COMMENT_KEEPALIVE_LIMIT_MESSAGE = 'This message exceeds the 64 KiB page-leave limit. ' +
+  'Keep this page open for the normal send.';
+
+function commentRequestBody(content, requestId) {
+  return JSON.stringify({content, uploaded_files: [], request_id: requestId});
+}
+
+function commentKeepaliveLimitMessage(content, requestId = COMMENT_KEEPALIVE_SAMPLE_REQUEST_ID) {
+  const body = commentRequestBody(content, requestId);
+  const bodyBytes = new TextEncoder().encode(body).byteLength;
+  return bodyBytes > COMMENT_KEEPALIVE_BODY_MAX_BYTES ? COMMENT_KEEPALIVE_LIMIT_MESSAGE : null;
+}
+
 // `keepalive` lets the post outlive the document that makes it; only a send flushed at page hide sets it.
 async function postCommentMessage(sessionId, content, {keepalive = false} = {}) {
   const requestId = crypto.randomUUID();
+  const body = commentRequestBody(content, requestId);
+  if (keepalive) {
+    const limitMessage = commentKeepaliveLimitMessage(content, requestId);
+    if (limitMessage) throw new Error(limitMessage);
+  }
   let retryDelay = 1000;
   const waitBeforeRetry = async () => {
     await new Promise((resolve) => setTimeout(resolve, retryDelay));
@@ -19,9 +39,15 @@ async function postCommentMessage(sessionId, content, {keepalive = false} = {}) 
         headers: {'Content-Type': 'application/json'},
         credentials: 'same-origin',
         keepalive,
-        body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
+        body,
       });
-    } catch (_error) {
+    } catch (error) {
+      if (keepalive) {
+        throw new Error(
+          'Page-leave send failed (' + error.message + '). Keep this page open and press Send to try again.',
+          {cause: error},
+        );
+      }
       await waitBeforeRetry();
       continue;
     }

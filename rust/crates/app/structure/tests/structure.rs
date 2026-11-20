@@ -1814,13 +1814,13 @@ const FORMAT_TABLE: &[FormatRow] = &[
 struct FunctionRecord {
   name: String,
   line: usize,
-  /// The line of the body's closing brace, or of the name when a trait method has no body.
-  end: usize,
   /// The identifiers the body names: path segments, method names and the identifiers in macro tokens.
   names: BTreeSet<String>,
   /// The last segment of each function path the body calls, and each method name it calls. A call inside macro tokens
   /// is not a call expression to the syntax tree, so it is not recorded here.
   calls: BTreeSet<String>,
+  /// The identifiers the body names inside a `json!` macro, where a response's object keys are written.
+  json_names: BTreeSet<String>,
   /// The decode calls, by callee path.
   decodes: BTreeSet<String>,
   /// The encode calls, by callee path.
@@ -1885,13 +1885,13 @@ struct FunctionCollector {
 }
 
 impl FunctionCollector {
-  fn enter(&mut self, name: &syn::Ident, end: usize) {
+  fn enter(&mut self, name: &syn::Ident) {
     self.open.push(FunctionRecord {
       name: name.to_string(),
       line: name.span().start().line,
-      end,
       names: BTreeSet::new(),
       calls: BTreeSet::new(),
+      json_names: BTreeSet::new(),
       decodes: BTreeSet::new(),
       encodes: BTreeSet::new(),
       environment_writes: Vec::new(),
@@ -1927,23 +1927,19 @@ impl<'ast> Visit<'ast> for FunctionCollector {
   }
 
   fn visit_item_fn(&mut self, node: &'ast ItemFn) {
-    self.enter(&node.sig.ident, node.block.brace_token.span.close().end().line);
+    self.enter(&node.sig.ident);
     syn::visit::visit_item_fn(self, node);
     self.exit();
   }
 
   fn visit_impl_item_fn(&mut self, node: &'ast ImplItemFn) {
-    self.enter(&node.sig.ident, node.block.brace_token.span.close().end().line);
+    self.enter(&node.sig.ident);
     syn::visit::visit_impl_item_fn(self, node);
     self.exit();
   }
 
   fn visit_trait_item_fn(&mut self, node: &'ast TraitItemFn) {
-    let end = match &node.default {
-      Some(block) => block.brace_token.span.close().end().line,
-      None => node.sig.ident.span().end().line,
-    };
-    self.enter(&node.sig.ident, end);
+    self.enter(&node.sig.ident);
     syn::visit::visit_trait_item_fn(self, node);
     self.exit();
   }
@@ -2000,6 +1996,9 @@ impl<'ast> Visit<'ast> for FunctionCollector {
   fn visit_macro(&mut self, node: &'ast syn::Macro) {
     if let Some(record) = self.current() {
       scan_macro_tokens(node.tokens.clone(), record);
+      if node.path.segments.last().is_some_and(|segment| segment.ident == "json") {
+        collect_token_idents(node.tokens.clone(), &mut record.json_names);
+      }
     }
   }
 }
@@ -2055,9 +2054,25 @@ const POOL_MEMBER_RAW_RECORDS: &[&str] = &["session_metadata_value", "session_de
 const POOL_MEMBER_FILTERS: &[&str] =
   &["display_pool_member", "show_display_member", "session_metadata_shown", "session_detail_shown"];
 
+/// The identifier of the `pool_member` key constant. A `json!` object that names it writes the key into a response.
+const POOL_MEMBER_KEY: &str = "POOL_MEMBER_FIELD";
+
 /// A filter counts when the body names it, macro tokens included: a status row builds its `pool_member` inside `json!`.
 fn shows_pool_member(function: &FunctionRecord) -> bool {
   POOL_MEMBER_FILTERS.iter().any(|name| function.names.contains(*name))
+}
+
+/// Every identifier in a token stream, groups included.
+fn collect_token_idents(tokens: TokenStream, out: &mut BTreeSet<String>) {
+  for tree in tokens {
+    match tree {
+      TokenTree::Group(group) => collect_token_idents(group.stream(), out),
+      TokenTree::Ident(ident) => {
+        out.insert(ident.to_string());
+      }
+      TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+    }
+  }
 }
 
 /// The pool member rule's failures: each production function that serializes a session record, or writes the
@@ -2070,22 +2085,18 @@ fn pool_member_failures(workspace: &Workspace) -> Vec<String> {
       for module in target.modules.values() {
         let file = rel(&workspace.root, &module.file);
         for function in &module.functions {
-          let serializes = POOL_MEMBER_RAW_RECORDS.iter().any(|name| function.calls.contains(*name));
-          if item.key() != "runtime/store" && serializes && !shows_pool_member(function) {
+          if shows_pool_member(function) {
+            continue;
+          }
+          if item.key() != "runtime/store" && POOL_MEMBER_RAW_RECORDS.iter().any(|name| function.calls.contains(*name))
+          {
             failures.insert(format!(
               "{file}:{}: `{}` serializes a session record without a pool member filter. Show the record through \
                `charliebot_agents::pool_display::session_metadata_shown` or `session_detail_shown`.",
               function.line, function.name
             ));
           }
-        }
-        for literal in module.literals.iter().filter(|literal| literal.value == "pool_member") {
-          let owner = module
-            .functions
-            .iter()
-            .filter(|function| function.line <= literal.line && literal.line <= function.end)
-            .max_by_key(|function| function.line);
-          if let Some(function) = owner.filter(|function| !shows_pool_member(function)) {
+          if function.json_names.contains(POOL_MEMBER_KEY) {
             failures.insert(format!(
               "{file}:{}: `{}` writes the `pool_member` key without a pool member filter. Pass the member through \
                `BackendsConfig::display_pool_member` first.",
@@ -2650,11 +2661,11 @@ pub fn filtered_record(store: &Store, meta: &SessionMetadata) -> Value {
 }
 
 pub fn unfiltered_row(member: &str) -> Value {
-  json!({ "pool_member": member })
+  json!({ (POOL_MEMBER_FIELD): member })
 }
 
 pub fn filtered_row(backends: &BackendsConfig, member: &str) -> Value {
-  json!({ "pool_member": backends.display_pool_member("pool", member) })
+  json!({ (POOL_MEMBER_FIELD): backends.display_pool_member("pool", member) })
 }
 "##;
   write_tree(

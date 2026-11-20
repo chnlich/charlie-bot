@@ -1096,3 +1096,25 @@ async fn a_fully_reserved_subscription_keeps_its_session_and_yields_a_new_one() 
   );
   Ok(())
 }
+
+/// A pool turn whose process logs a rejection and then ends with a clean result is one run: it has no retry and records
+/// no quota failover, whatever its exit code.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_pool_turn_that_ends_cleanly_after_a_rejection_is_one_run() -> anyhow::Result<()> {
+  let rejected = json!({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":4102462800.0}});
+  let clean = json!({"type":"result","subtype":"success","is_error":false,"result":"done"});
+  let script = scripted_process(
+    &[rejected, json!({"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}), clean],
+    0,
+  );
+  let stack = auto_stack(&script, &success_script()).await?;
+  let session = auto_session(&stack, "auto-clean-after-rejection").await?;
+  let turn = dispatch_turn(&stack, &session.id).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(runs.len(), 1, "a clean end starts no retry: {runs:?}");
+  assert_eq!(run_with_id(&runs, &turn).backend.as_deref(), Some(MEMBER_A));
+  assert!(quota_failovers(&stack, &session.id)?.is_empty(), "a clean end records no quota failover");
+  Ok(())
+}

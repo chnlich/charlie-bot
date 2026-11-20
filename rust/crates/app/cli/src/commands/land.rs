@@ -22,6 +22,15 @@ const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep 
      branch only after CI passed on the head sha, and leave no PR of the task branch open";
 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
+  let window_sizes = charliebot_tasks::web_screenshots::window_sizes_text();
+  let body_requirement = format!(
+    "A diff that changes a web page needs it to name the approved demo on a `Demo: <absolute path>` line, the \
+     changed view's URL path on a `View: <URL path>` line, and a screenshot at each CSS window size \
+     ({window_sizes}) by absolute path"
+  );
+  let body_help = format!("PR body; required with --title when the branch holds several commits. {body_requirement}");
+  let body_file_help =
+    format!("PR body from a file; required with --title when the branch holds several commits. {body_requirement}");
   let command = with_infer_long_args(
     Command::new("land")
       .about(ABOUT)
@@ -34,14 +43,8 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
           .value_name("TITLE")
           .help("PR title on a gated landing; required with a body when the branch holds several commits"),
       )
-      .arg(Arg::new("body").long("body").value_name("BODY").conflicts_with("body-file").help(
-        "PR body; required with --title when the branch holds several commits. A diff that changes a web page \
-           needs it to name a screenshot at 1280 px and at 390 px by absolute path",
-      ))
-      .arg(Arg::new("body-file").long("body-file").value_name("PATH").conflicts_with("body").help(
-        "PR body from a file; required with --title when the branch holds several commits. A diff that changes \
-             a web page needs it to name a screenshot at 1280 px and at 390 px by absolute path",
-      )),
+      .arg(Arg::new("body").long("body").value_name("BODY").conflicts_with("body-file").help(body_help))
+      .arg(Arg::new("body-file").long("body-file").value_name("PATH").conflicts_with("body").help(body_file_help)),
   );
   let matches = match command
     .clone()

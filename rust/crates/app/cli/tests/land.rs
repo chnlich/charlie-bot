@@ -49,16 +49,34 @@ fn commit_with_message(dir: &Path, file: &str, subject: &str, body: &str) -> Str
   git(dir, &["rev-parse", "HEAD"])
 }
 
-/// Writes a file that carries a PNG signature and an IHDR chunk of `width`, which is all the screenshot gate reads.
-fn write_screenshot(dir: &Path, name: &str, width: u32) -> String {
+/// Writes a file that carries a PNG signature and an IHDR chunk of `width` and `height`, which is all the
+/// screenshot gate reads.
+fn write_screenshot(dir: &Path, name: &str, width: u32, height: u32) -> String {
   let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
   bytes.extend_from_slice(&13u32.to_be_bytes());
   bytes.extend_from_slice(b"IHDR");
   bytes.extend_from_slice(&width.to_be_bytes());
-  bytes.extend_from_slice(&1u32.to_be_bytes());
+  bytes.extend_from_slice(&height.to_be_bytes());
   let path = dir.join(name);
   fs::write(&path, bytes).expect("the screenshot is written");
   path.display().to_string()
+}
+
+/// Writes one PNG per window size and returns their absolute paths, in the order the set lists them.
+fn write_window_screenshots(dir: &Path) -> Vec<String> {
+  charliebot_tasks::web_screenshots::WINDOW_SIZES
+    .iter()
+    .map(|(width, height)| write_screenshot(dir, &format!("shot-{width}x{height}.png"), *width, *height))
+    .collect()
+}
+
+/// A page change on the task branch, committed with an empty message, so a test supplies the PR body.
+fn web_change(venue: &Venue) -> std::path::PathBuf {
+  let shots = venue.home.join("shots");
+  fs::create_dir(&shots).expect("the screenshot directory is created");
+  fs::create_dir(venue.worktree.join("web")).expect("the web directory is created");
+  commit_with_message(&venue.worktree, "web/tray.js", "Open the choice tray", "");
+  shots
 }
 
 /// One landing venue: a bare origin, the main checkout, and a task worktree with one commit on the task branch.
@@ -396,30 +414,87 @@ fn ungated_landing_accepts_but_does_not_use_explicit_pr_text() {
   assert!(!venue.gh_calls().contains("pr create"));
 }
 
+/// The demo file a passing body names.
+fn demo_file(venue: &Venue) -> String {
+  let demo = venue.home.join("demo.html");
+  fs::write(&demo, "<html>the approved tray demo</html>").expect("the demo is written");
+  demo.display().to_string()
+}
+
 #[test]
 #[ignore = "integration"]
-fn a_web_page_change_lands_only_when_its_body_names_both_widths() {
+fn a_web_page_change_without_a_demo_line_is_refused() {
   let venue = Venue::new(false);
-  fs::create_dir(venue.worktree.join("web")).expect("the web directory is created");
-  commit_with_message(&venue.worktree, "web/tray.js", "Open the choice tray", "");
+  let shots = web_change(&venue);
+  let body = format!("View: /?session=tray\n{}", write_window_screenshots(&shots).join(" "));
 
-  let output = venue.land_output();
+  let output = venue.land_output_with_args(&["--body", &body]);
 
   assert_ne!(output.status.code(), Some(0));
   let stderr = String::from_utf8_lossy(&output.stderr);
-  assert!(stderr.contains("1280 px"), "stderr: {stderr}");
+  assert!(stderr.contains("Demo"), "stderr: {stderr}");
+  assert!(stderr.contains("1536×900"), "the refusal names the window sizes: {stderr}");
   assert!(!venue.origin_has_task_branch());
   assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
 
-  let shots = venue.home.join("shots");
-  fs::create_dir(&shots).expect("the screenshot directory is created");
-  let desktop = write_screenshot(&shots, "tray-1280.png", 1280);
-  let phone = write_screenshot(&shots, "tray-390.png", 390);
-  let body = format!("The tray open at 1280 px: `{desktop}`. At 390 px: `{phone}`.");
+#[test]
+#[ignore = "integration"]
+fn a_web_page_change_without_a_view_line_is_refused() {
+  let venue = Venue::new(false);
+  let shots = web_change(&venue);
+  let demo = demo_file(&venue);
+  let body = format!("Demo: {demo}\n{}", write_window_screenshots(&shots).join(" "));
+
+  let output = venue.land_output_with_args(&["--body", &body]);
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("View"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_page_change_with_a_screenshot_of_the_wrong_height_is_refused() {
+  let venue = Venue::new(false);
+  let shots = web_change(&venue);
+  let demo = demo_file(&venue);
+  let mut named = write_window_screenshots(&shots);
+  // A 1440×1600 review screenshot and a 125%-scaled 1920 px wide capture are both outside the set.
+  named.remove(0);
+  named.push(write_screenshot(&shots, "review-1440x1600.png", 1440, 1600));
+  named.push(write_screenshot(&shots, "scaled-1920x1125.png", 1920, 1125));
+  let body = format!("Demo: {demo}\nView: /?session=tray\n{}", named.join(" "));
+
+  let output = venue.land_output_with_args(&["--body", &body]);
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("1536×900"), "the refusal names the missing size: {stderr}");
+  assert!(stderr.contains("1440×1600"), "the refusal names the mismatched file: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_page_change_lands_with_demo_view_and_each_window_size_and_carries_the_view_trailer() {
+  let venue = Venue::new(false);
+  let shots = web_change(&venue);
+  let demo = demo_file(&venue);
+  let body = format!("Demo: {demo}\nView: /?session=tray\n{}", write_window_screenshots(&shots).join(" "));
+
   let (code, record) = venue.land_with_args(&["--body", &body]);
 
   assert_eq!(code, 0, "record: {record}");
   assert_eq!(record["state"], "landed-no-ci");
+  let landed = git(&venue.origin, &["log", "-1", "--format=%B", "refs/heads/main"]);
+  assert!(
+    landed.lines().any(|line| line == "View: /?session=tray"),
+    "the landed commit carries the View trailer: {landed}"
+  );
 }
 
 /// The path that left rebase-landed PRs open: a worker pushes the task branch and opens a PR, then main moves
@@ -508,4 +583,20 @@ fn a_hook_refused_base_push_fails_on_the_first_round_with_the_hooks_message() {
   assert!(!error.contains("kept moving"), "error: {error}");
   let calls = fs::read_to_string(&hook_calls).expect("the hook recorded the push");
   assert_eq!(calls.lines().count(), 1, "the hook ran on the landing's only push: {calls}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_help_names_every_window_size() {
+  let output = Command::new(env!("CARGO_BIN_EXE_charliebot"))
+    .args(["land", "--help"])
+    .output()
+    .expect("charliebot land --help runs");
+
+  assert_eq!(output.status.code(), Some(0));
+  let help = String::from_utf8_lossy(&output.stdout);
+  for size in charliebot_tasks::web_screenshots::WINDOW_SIZES {
+    let label = format!("{}×{}", size.0, size.1);
+    assert!(help.contains(&label), "the help names {label}: {help}");
+  }
 }

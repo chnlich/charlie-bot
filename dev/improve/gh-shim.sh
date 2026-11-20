@@ -13,17 +13,6 @@ set -euo pipefail
 self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 scanner="$self_dir/check-skills-host-leak.sh"
 
-real_gh=''
-IFS=: read -r -a path_entries <<< "$PATH"
-for entry in "${path_entries[@]}"; do
-  entry=${entry:-.}
-  dir=$(cd -- "$entry" 2>/dev/null && pwd -P) || continue
-  [[ $dir != "$self_dir" && -f $dir/gh && -x $dir/gh ]] || continue
-  real_gh=$dir/gh
-  break
-done
-[[ -n $real_gh ]] || { printf 'gh shim: no gh on PATH outside %s\n' "$self_dir" >&2; exit 2; }
-
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 "$scanner" --credential-values > "$tmp_dir/values" || exit 2
@@ -106,6 +95,19 @@ for arg in "$@"; do
     fi
   fi
 done
+
+# The real gh: the first gh on PATH outside this directory. It is looked up after the check, so a missing gh cannot turn a
+# credential hit into another exit.
+real_gh=''
+IFS=: read -r -a path_entries <<< "$PATH"
+for entry in "${path_entries[@]}"; do
+  entry=${entry:-.}
+  dir=$(cd -- "$entry" 2>/dev/null && pwd -P) || continue
+  [[ $dir != "$self_dir" && -f $dir/gh && -x $dir/gh ]] || continue
+  real_gh=$dir/gh
+  break
+done
+[[ -n $real_gh ]] || { printf 'gh shim: no gh on PATH outside %s\n' "$self_dir" >&2; exit 2; }
 
 status=0
 if [[ -n $stdin_file ]]; then

@@ -948,6 +948,12 @@ function ensureSentinel(container, state) {
     container.prepend(sentinel);
   }
   sentinel.setAttribute('data-state', state);
+  // Only the retry icon names itself; the text states carry no extra accessible name or tooltip. The element outlives
+  // the failed state, so a landed page clears the name the failed state gave it.
+  if (state !== 'failed') {
+    sentinel.removeAttribute('aria-label');
+    sentinel.removeAttribute('title');
+  }
   if (state === 'idle') {
     sentinel.innerHTML = 'Scroll up for older messages';
     sentinel.style.cursor = 'default';
@@ -1400,6 +1406,8 @@ function renderNoActiveSessionView() {
   teardownActiveSessionView();
   hideStreaming();
   abortViewRequests();
+  // The welcome view has no session to page, so a pending older-page retry would ask for a session that is gone.
+  cancelOlderPageRetry();
   // With no session displayed the page receives no session's frames: the socket closes, so an
   // archived session's live output does not spend the link on a view with nothing to show. The
   // welcome view's sidebar rows come from the page load that opens the next session.

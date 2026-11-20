@@ -641,3 +641,30 @@ test('a second older-page load while one is in flight starts no second request',
   await Promise.all([first, second]);
   assert.equal(urls.length, 1, 'the page that landed was the only request');
 });
+
+test('a landed page drops the failed sentinel\'s retry name and tooltip', async () => {
+  // A hidden list (clientHeight 0) takes no fill check, so the landed page settles the sentinel at idle.
+  const messages = makeMessages({scrollTop: 0, clientHeight: 0});
+  let calls = 0;
+  const {context, elements} = buildContext({
+    elements: new Map([['messages', messages]]),
+    fetch: async () => {
+      calls++;
+      if (calls === 1) return {ok: false, status: 500};
+      return {ok: true, async json() { return {has_more: true, next_before: 1, messages: []}; }};
+    },
+  });
+  renderSessionViewWith(context, elements, true);
+  const timers = heldTimers(context);
+
+  await context.Sidebar.loadOlderIfNeeded(messages);
+  assert.equal(findSentinel(elements).getAttribute('aria-label'), 'Retry loading older messages');
+
+  fireRetry(timers);
+  await flushed();
+
+  const idle = findSentinel(elements);
+  assert.equal(idle.getAttribute('data-state'), 'idle');
+  assert.ok(!idle.getAttribute('aria-label'), 'the text state carries no retry name');
+  assert.ok(!idle.getAttribute('title'), 'the text state carries no retry tooltip');
+});

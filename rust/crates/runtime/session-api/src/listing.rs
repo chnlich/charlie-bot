@@ -20,7 +20,7 @@ use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NATIVE_MODEL, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT,
   ROUND_RATINGS, RUN_BACKEND, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_FIELDS,
   SCHEDULE_NEXT_RUN, SCHEDULE_TASK, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
-  TASK_PARENT_ID_FIELD, TASK_SCHEDULE_SLOTS, THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
+  TASK_PARENT_ID_FIELD, TASK_SCHEDULE_SLOTS, THINKING_SINCE, TaskProfile, UPDATED_AT_FIELD, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::{HAS_PENDING_PLAN_APPROVAL, HAS_WAITING_ITEMS};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -965,7 +965,7 @@ fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>
   text.push(':');
   text.push_str(&charliebot_compat::jinja::tojson_text(&Value::Object(Map::from_iter([
     (ID_FIELD.to_string(), Value::String(UUID_ENCODING.to_string())),
-    (UPDATED_AT.to_string(), Value::String(DELTA_ENCODING.to_string())),
+    (UPDATED_AT_FIELD.to_string(), Value::String(DELTA_ENCODING.to_string())),
   ]))));
   if let Some(screen) = screen {
     text.push(',');
@@ -985,7 +985,7 @@ fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>
     text.push(':');
     match field {
       ID_FIELD => write_id_column(&mut text, rows),
-      UPDATED_AT => {
+      UPDATED_AT_FIELD => {
         text.push('[');
         write_updated_at_column(&mut text, rows);
         text.push(']');
@@ -1078,7 +1078,7 @@ fn write_updated_at_column(text: &mut String, rows: &[Arc<PageRowText>]) {
     if index > 0 {
       text.push(',');
     }
-    let Some(cell) = row.cell(UPDATED_AT) else {
+    let Some(cell) = row.cell(UPDATED_AT_FIELD) else {
       text.push_str("null");
       continue;
     };
@@ -1196,11 +1196,8 @@ fn compact_page_fields(value: &mut Value, updated_at: UtcDateTime) {
   if object.get(WORK_STATE).and_then(Value::as_str) == Some("idle") {
     object.remove(WORK_STATE);
   }
-  object.insert(UPDATED_AT.to_string(), Value::from(updated_at.into_inner().unix_timestamp().div_euclid(60)));
+  object.insert(UPDATED_AT_FIELD.to_string(), Value::from(updated_at.into_inner().unix_timestamp().div_euclid(60)));
 }
-
-/// The session-metadata field holding the session's last update, in the page's epoch-minute form.
-const UPDATED_AT: &str = "updated_at";
 
 /// Whether *value* is a value the page's client reads as falsy: null, false, zero or the empty string.
 ///
@@ -1437,7 +1434,7 @@ pub const SEARCH_FIELDS: [&str; 28] = [
   "name",
   "status",
   "profile",
-  UPDATED_AT,
+  UPDATED_AT_FIELD,
   "starred",
   "group",
   TASK_PARENT_ID_FIELD,
@@ -2137,7 +2134,7 @@ backends:
     // The page lists active sessions only, and the client reads an absent status as active.
     assert!(!row.contains_key("status"), "the page's rows carry the status its listing fixes");
     assert_eq!(
-      row[UPDATED_AT],
+      row[UPDATED_AT_FIELD],
       json!(meta.updated_at.into_inner().unix_timestamp().div_euclid(60)),
       "the page carries a row's time as epoch minutes"
     );

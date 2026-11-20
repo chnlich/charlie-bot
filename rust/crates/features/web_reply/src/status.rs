@@ -775,19 +775,40 @@ async fn judged_waiting(
     .iter()
     .map(|item| Ok((item_sha256(item)?, item)))
     .collect::<Result<Vec<(String, &WaitingItem)>, WebReplyError>>()?;
-  let mut judged = Vec::with_capacity(items.len());
-  let mut refusals = Vec::new();
+  // Each item keeps its stored judgement or takes a verdict from the judge; the new and changed items are judged
+  // concurrently, so a set costs about one judge call, and verdicts come back in the order of the items.
+  let mut kept = Vec::with_capacity(items.len());
+  let mut fresh = Vec::new();
   for item in items {
     let digest = item_sha256(item)?;
-    if let Some((_, kept)) = stored_digests.iter().find(|(stored_digest, _)| *stored_digest == digest) {
-      judged.push(WaitingItem {
-        judged_kind: kept.judged_kind,
-        judgement_basis: kept.judgement_basis.clone(),
+    match stored_digests.iter().find(|(stored_digest, _)| *stored_digest == digest) {
+      Some((_, stored_item)) => kept.push(Some(WaitingItem {
+        judged_kind: stored_item.judged_kind,
+        judgement_basis: stored_item.judgement_basis.clone(),
         ..item.clone()
-      });
+      })),
+      None => {
+        kept.push(None);
+        fresh.push(item);
+      }
+    }
+  }
+  let verdicts = futures_util::future::join_all(
+    fresh.iter().map(|item| waiting_judge::judge_item(features, session_id, goal, item, &[])),
+  )
+  .await
+  .into_iter()
+  .collect::<Result<Vec<Judgement>, WebReplyError>>()?;
+  let mut verdicts = verdicts.into_iter();
+  let mut judged = Vec::with_capacity(items.len());
+  let mut refusals = Vec::new();
+  for (item, kept) in items.iter().zip(kept) {
+    if let Some(kept) = kept {
+      judged.push(kept);
       continue;
     }
-    match waiting_judge::judge_item(features, session_id, goal, item, &[]).await? {
+    let verdict = verdicts.next().expect("one verdict per fresh item");
+    match verdict {
       Judgement::Accepted { judged_kind, .. } => {
         judged.push(WaitingItem { judged_kind, judgement_basis: Some(String::new()), ..item.clone() });
       }
@@ -1055,7 +1076,7 @@ mod tests {
 
   use super::*;
   use crate::metadata::JudgedKind;
-  use crate::test_support::{Home, set_derived_waiting};
+  use crate::test_support::{Home, JUDGE_ACCEPTS, set_derived_waiting};
   use charliebot_registry::registry::OpenWaitingRow;
 
   const VALID_SET: &str = r#"{"now": "Running"}"#;
@@ -2896,5 +2917,28 @@ mod tests {
       .await
       .expect_err("a changed item goes to the judge, which has no verdict");
     assert!(matches!(error, WebReplyError::Refused { status: StatusCode::SERVICE_UNAVAILABLE, .. }));
+  }
+
+  #[tokio::test]
+  async fn two_changed_items_are_judged_by_two_concurrent_calls() {
+    // The home's judge calls wait for each other, so a set that judged its items one after another would time out.
+    let home = Home::judging_overlapping(JUDGE_ACCEPTS, 2);
+    let sid = home.manager("session", None).await;
+    let item = |text: &str| WaitingItem {
+      text: text.to_string(),
+      context: Some("The window closed. Deploy now or wait.".to_string()),
+      link: None,
+      since: None,
+      since_exact: None,
+      judged_kind: None,
+      judgement_basis: None,
+    };
+    let items = [item("Deploy the release"), item("Deploy the hotfix")];
+    let judged = judged_waiting(&home.features, &sid, None, &items, &[])
+      .await
+      .expect("both judge calls overlap and both items are accepted");
+    let texts: Vec<_> = judged.iter().map(|item| item.text.as_str()).collect();
+    assert_eq!(texts, ["Deploy the release", "Deploy the hotfix"]);
+    assert!(judged.iter().all(|item| item.judgement_basis.as_deref() == Some("")));
   }
 }

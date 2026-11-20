@@ -1,10 +1,12 @@
 //! Fixtures for the web reply tests: store-backed feature contexts over temporary homes with registrations for each
 //! route the tests exercise.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use axum::Router;
@@ -33,20 +35,32 @@ use futures_util::future::BoxFuture;
 use http::{Method, Request};
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
+use tokio::sync::Barrier;
 use tower::ServiceExt;
 
 /// The verdict every test home's judge answers when the test names none: an accept with no kind.
 pub const JUDGE_ACCEPTS: &str =
   r#"{"reason": "no settled sentence decides the step", "decision": "accept", "judged_kind": "", "cited": ""}"#;
-/// The backend type and option id of the judge stub: a one-shot that answers the option's `model` text.
+/// The backend type of the judge stub: a one-shot that answers the option's `model` text.
 const JUDGE_TYPE: &str = "synthetic-judge";
-const JUDGE_OPTION: &str = "synthetic-judge";
+/// The longest a judge call waits for the other calls of its home when the home makes its calls overlap.
+const JUDGE_OVERLAP_WAIT: Duration = Duration::from_secs(5);
 
-/// The `backends` block that routes the judge's call class, `thread`, to the judge stub.
-fn judge_config(verdict: &str) -> String {
+/// How a home's judge calls behave: with a barrier, each call waits until the home's other calls reach it too, so a
+/// set whose calls run one after another times out instead of finishing.
+struct JudgeProbe {
+  overlap: Option<Barrier>,
+}
+
+/// Each home's judge option id, unique per home, names the probe its stub reads.
+static NEXT_JUDGE_OPTION: AtomicUsize = AtomicUsize::new(0);
+static JUDGE_PROBES: LazyLock<Mutex<HashMap<String, Arc<JudgeProbe>>>> = LazyLock::new(Mutex::default);
+
+/// The `backends` block that routes the judge's call class, `thread`, to the judge stub `option_id`.
+fn judge_config(option_id: &str, verdict: &str) -> String {
   let model = verdict.replace('\'', "''");
   format!(
-    "backends:\n  options:\n    - id: {JUDGE_OPTION}\n      label: Synthetic judge\n      model: '{model}'\n      type: {JUDGE_TYPE}\n  calls:\n    thread: {JUDGE_OPTION}\n"
+    "backends:\n  options:\n    - id: {option_id}\n      label: Synthetic judge\n      model: '{model}'\n      type: {JUDGE_TYPE}\n  calls:\n    thread: {option_id}\n"
   )
 }
 
@@ -54,6 +68,7 @@ fn judge_config(verdict: &str) -> String {
 /// a process.
 struct JudgeStub {
   answer: String,
+  probe: Arc<JudgeProbe>,
 }
 
 impl AgentBackend for JudgeStub {
@@ -93,7 +108,13 @@ impl AgentBackend for JudgeStub {
     _timeout: Option<Duration>,
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     let answer = self.answer.clone();
+    let probe = Arc::clone(&self.probe);
     Some(Box::pin(async move {
+      if let Some(barrier) = &probe.overlap {
+        tokio::time::timeout(JUDGE_OVERLAP_WAIT, barrier.wait())
+          .await
+          .map_err(|_| anyhow::anyhow!("the judge calls of the set did not overlap"))?;
+      }
       if answer.is_empty() {
         return Err(anyhow::anyhow!("the judge stub's call failed: its verdict is empty"));
       }
@@ -120,7 +141,9 @@ impl BackendFactory for JudgeStubFactory {
     _launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.expect("the judge builds its configured option");
-    Ok(Box::new(JudgeStub { answer: option.model.clone() }))
+    let probes = JUDGE_PROBES.lock().expect("the judge probes lock");
+    let probe = probes.get(&option.id).cloned().expect("the judge option has a probe");
+    Ok(Box::new(JudgeStub { answer: option.model.clone(), probe }))
   }
 }
 
@@ -218,30 +241,41 @@ enum PackageSet {
 impl Home {
   /// A home whose waiting-item judge accepts every item: see `JUDGE_ACCEPTS`.
   pub fn new() -> Self {
-    Self::build("", PackageSet::Full, JUDGE_ACCEPTS)
+    Self::build("", PackageSet::Full, JUDGE_ACCEPTS, 0)
   }
 
   /// A home whose waiting-item judge answers `verdict` to every item, as the judge's real call path reads it.
   pub fn judging(verdict: &str) -> Self {
-    Self::build("", PackageSet::Full, verdict)
+    Self::build("", PackageSet::Full, verdict, 0)
+  }
+
+  /// A home whose judge calls must overlap: each call waits until `calls` of them are in flight together, so a
+  /// status set whose calls run one after another fails with the overlap error.
+  pub fn judging_overlapping(verdict: &str, calls: usize) -> Self {
+    Self::build("", PackageSet::Full, verdict, calls)
   }
 
   pub fn with_config(config_yaml: &str) -> Self {
-    Self::build(config_yaml, PackageSet::Full, JUDGE_ACCEPTS)
+    Self::build(config_yaml, PackageSet::Full, JUDGE_ACCEPTS, 0)
   }
 
   pub fn status_only() -> Self {
-    Self::build("", PackageSet::StatusOnly, JUDGE_ACCEPTS)
+    Self::build("", PackageSet::StatusOnly, JUDGE_ACCEPTS, 0)
   }
 
   /// The web reply route and its user-text checks, with the running input ids set by `set_running`.
   pub fn reply_only() -> Self {
-    Self::build("", PackageSet::ReplyOnly, JUDGE_ACCEPTS)
+    Self::build("", PackageSet::ReplyOnly, JUDGE_ACCEPTS, 0)
   }
 
-  fn build(config_yaml: &str, packages: PackageSet, verdict: &str) -> Self {
+  /// The home over `config_yaml`, whose judge option answers `verdict`; `overlap` is the number of judge calls that
+  /// must overlap, or 0 for calls that run alone.
+  fn build(config_yaml: &str, packages: PackageSet, verdict: &str, overlap: usize) -> Self {
     assert!(!config_yaml.contains("backends:"), "the judge's backends block is appended to the synthetic config");
-    let config_yaml = format!("{config_yaml}{}", judge_config(verdict));
+    let option_id = format!("synthetic-judge-{}", NEXT_JUDGE_OPTION.fetch_add(1, Ordering::Relaxed));
+    let probe = Arc::new(JudgeProbe { overlap: (overlap > 0).then(|| Barrier::new(overlap)) });
+    JUDGE_PROBES.lock().expect("the judge probes lock").insert(option_id.clone(), probe);
+    let config_yaml = format!("{config_yaml}{}", judge_config(&option_id, verdict));
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
     if matches!(packages, PackageSet::Full) {

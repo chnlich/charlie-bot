@@ -2081,8 +2081,9 @@ backends:
     assert_eq!(features.store.history_work(), after_first);
   }
 
-  /// The /runs page of a session with no fact checkpoint reads from a cold event cache the page and run states a warm read
-  /// reads, and the cold read loads no history. No scan has run for the session, so no checkpoint exists before the read.
+  /// The /runs page of a session with no fact checkpoint reads from a cold event cache the page and run states a warm
+  /// read reads, and the cold read loads no history. No scan has run for the session, so no checkpoint exists before
+  /// the read.
   #[tokio::test]
   async fn runs_of_a_cold_session_without_a_checkpoint_answer_what_a_warm_read_answers() {
     let (_home, features) = feature_context();

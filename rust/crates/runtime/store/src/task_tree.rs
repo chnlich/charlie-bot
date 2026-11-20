@@ -5810,8 +5810,8 @@ pub(crate) mod tests {
     assert_eq!(stop_checks, 3, "one block needs an initial, block-boundary, and completion stop check");
   }
 
-  /// A stop that lands during a cold read returns no facts and publishes no parsed history. The cold scan checks the stop
-  /// flag before it starts and before its facts are returned; the next read answers the full fold.
+  /// A stop that lands during a cold read returns no facts and publishes no parsed history. The cold scan checks the
+  /// stop flag before it starts and before its facts are returned; the next read answers the full fold.
   #[tokio::test]
   async fn node_facts_cold_read_honors_a_stop_and_publishes_no_prefix() {
     let home = tempfile::tempdir().unwrap();

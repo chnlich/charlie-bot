@@ -24,9 +24,9 @@ The runner calls `prepare_transport` with the run's log directory. The turn then
    the steps after the last `user` step or compaction summary, whichever comes later, which are the ones this turn
    added (text, tool calls and tool results), and the usage summed over those steps' `metrics`, with a null cost.
    `input_tokens` is the prompt sum, the cached part included, and `cache_read_input_tokens` is the cached count, as
-   the codex translator reports OpenAI-style counts; the ledger's run-logs-only record reads `input_tokens`, so each
-   input token is counted once. The export also holds the earlier turns, whose steps become no events and add no
-   usage.
+   the codex translator reports OpenAI-style counts; the ledger splits `input_tokens` using
+   `cache_read_input_tokens`, so each input token is counted once. The export also holds the earlier turns, whose
+   steps become no events and add no usage.
 
 When a conversation grows long, Devin compacts it: a system step tagged `extra.telemetry` `source: "compaction"`,
 `operation: "summary"` replaces the earlier steps, the current turn's `user` step included. The turn then starts

@@ -10,13 +10,12 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::channel_service::{self, reply_response};
-use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN, REPLY_BODY};
-use charliebot_cli_common::fields::{LIMIT, SESSION_ID, TEXT};
+use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN};
+use charliebot_cli_common::fields::{LIMIT, SESSION_ID};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
 use charliebot_registry::FeatureContext;
-use charliebot_registry::caller;
 use serde_json::Value;
 
 use crate::discord_client::BASE_URL;
@@ -57,29 +56,16 @@ pub fn matches(path: &str) -> bool {
 
 /// `POST /api/internal/discord/reply`: checks the thread is fresh, then posts the text to it.
 async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response {
-  let (parts, stream) = request.into_parts();
-  let body = match request_body::read(&parts.headers, stream).await {
-    Ok(body) => body,
-    Err(response) => return *response,
-  };
-  let fields = match body.declared_fields(&REPLY_BODY) {
-    Ok(fields) => fields,
-    Err(response) => return *response,
-  };
-  let session_id = text_field(&fields, SESSION_ID);
-  let text = text_field(&fields, TEXT);
-  let identity = match caller::resolve_caller(&parts.headers, &bot.features) {
-    Ok(identity) => identity,
-    Err(response) => return response,
-  };
-  let (request_id, run_started_at) =
-    match identity.reply_context(&bot.features.store, "discord reply", &session_id, &text) {
-      Ok(context) => context,
-      Err(response) => return response,
-    };
-  let result =
-    bot.post_reply_with_caller_context(&session_id, &text, request_id.as_deref(), run_started_at.as_deref()).await;
-  reply_response(result)
+  let features = Arc::clone(&bot.features);
+  channel_service::post_reply_response(
+    &features,
+    request,
+    "discord reply",
+    move |session_id, text, request_id, run_started_at| async move {
+      bot.post_reply_with_caller_context(&session_id, &text, request_id.as_deref(), run_started_at.as_deref()).await
+    },
+  )
+  .await
 }
 
 /// `POST /api/internal/discord/read`: the session's own thread, or the channel the link names.

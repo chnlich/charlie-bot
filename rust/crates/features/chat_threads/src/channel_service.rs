@@ -9,10 +9,12 @@ use std::sync::{Arc, Mutex};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
-use charliebot_compat::request_body::{self, BodyModel};
+use charliebot_cli_common::channel_verb::REPLY_BODY;
+use charliebot_cli_common::fields::{SESSION_ID, TEXT};
+use charliebot_compat::request_body::{self, BodyModel, text_field};
 use charliebot_compat::responses;
-use charliebot_registry::FeatureContext;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext, cancel_and_wait};
+use charliebot_registry::{FeatureContext, caller};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -142,6 +144,42 @@ pub fn reply_response(result: Result<Value, ThreadReplyError>) -> Response {
       responses::json(status, &json!({"detail": detail}))
     }
   }
+}
+
+/// The answer of a channel's reply route: reads and validates the body against [`REPLY_BODY`], resolves the caller's
+/// reply context under `verb`, calls `post` with `(session_id, text, request_id, run_started_at)`, and answers through
+/// [`reply_response`]. The Discord and Feishu reply routes share this request flow and answer shape, so the handler
+/// body lives here.
+pub async fn post_reply_response<F, Fut>(
+  features: &FeatureContext,
+  request: Request<Body>,
+  verb: &str,
+  post: F,
+) -> Response
+where
+  F: FnOnce(String, String, Option<String>, Option<String>) -> Fut,
+  Fut: Future<Output = Result<Value, ThreadReplyError>>,
+{
+  let (parts, stream) = request.into_parts();
+  let body = match request_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let fields = match body.declared_fields(&REPLY_BODY) {
+    Ok(fields) => fields,
+    Err(response) => return *response,
+  };
+  let session_id = text_field(&fields, SESSION_ID);
+  let text = text_field(&fields, TEXT);
+  let identity = match caller::resolve_caller(&parts.headers, features) {
+    Ok(identity) => identity,
+    Err(response) => return response,
+  };
+  let (request_id, run_started_at) = match identity.reply_context(&features.store, verb, &session_id, &text) {
+    Ok(context) => context,
+    Err(response) => return response,
+  };
+  reply_response(post(session_id, text, request_id, run_started_at).await)
 }
 
 /// The check route's request model: the request carries no fields.

@@ -1273,6 +1273,8 @@ fn to_index(value: i64) -> usize {
 
 #[cfg(test)]
 mod tests {
+  use std::collections::HashMap;
+
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::run_records::RunKind;
   use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, TaskCaller};
@@ -1994,9 +1996,23 @@ backends:
       .await
       .unwrap();
     let facts = TaskFacts {
-      boundary_index: Some(0),
+      task_state: "open".to_string(),
+      run_outcomes: HashMap::new(),
+      run_outcome_string_none_ids: HashSet::new(),
+      run_finish_positions: HashMap::new(),
+      confirmed_input_ids: HashSet::new(),
       input_candidates: vec![Arc::new(json!({"id": "held"}).into()), Arc::new(json!({"id": "free"}).into())],
-      ..TaskFacts::default()
+      imported_pending_ids: HashSet::new(),
+      boundary_index: Some(0),
+      boundary_open: true,
+      close_events: Vec::new(),
+      close_requests: Vec::new(),
+      close_request_ids: HashSet::new(),
+      first_close_by_request: HashMap::new(),
+      delivered_reports: HashSet::new(),
+      clicked: Vec::new(),
+      events_by_id: Default::default(),
+      covered: 0,
     };
     let run_facts = features.store.run_facts("worker").unwrap();
     let pending = pending_input_events(&facts, &[run("stopped", &["held"], None)], &run_facts, "worker").unwrap();
@@ -2008,13 +2024,27 @@ backends:
   #[test]
   fn pending_inputs_remove_confirmed_and_claimed_ids() {
     let mut facts = TaskFacts {
-      boundary_index: Some(0),
+      task_state: "open".to_string(),
+      run_outcomes: HashMap::new(),
+      run_outcome_string_none_ids: HashSet::new(),
+      run_finish_positions: HashMap::new(),
+      confirmed_input_ids: HashSet::new(),
       input_candidates: vec![
         Arc::new(json!({"id": "confirmed"}).into()),
         Arc::new(json!({"id": "claimed"}).into()),
         Arc::new(json!({"id": "pending"}).into()),
       ],
-      ..TaskFacts::default()
+      imported_pending_ids: HashSet::new(),
+      boundary_index: Some(0),
+      boundary_open: true,
+      close_events: Vec::new(),
+      close_requests: Vec::new(),
+      close_request_ids: HashSet::new(),
+      first_close_by_request: HashMap::new(),
+      delivered_reports: HashSet::new(),
+      clicked: Vec::new(),
+      events_by_id: Default::default(),
+      covered: 0,
     };
     facts.confirmed_input_ids.insert("confirmed".to_string());
     let pending =

@@ -2420,7 +2420,12 @@ backends:
     meta.task = Some(charliebot_store::metadata::TaskSpec {
       task_type: Some(charliebot_store::metadata::TaskType::Implement),
       goal: "private goal".to_string(),
-      ..Default::default()
+      repo_path: None,
+      base_branch: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: charliebot_store::metadata::TaskApprover::User,
+      improve_host: None,
     });
     let value = metadata_value(&features.store, &meta).unwrap();
     assert!(value["task"].get("goal").is_none());

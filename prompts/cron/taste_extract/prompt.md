@@ -120,6 +120,11 @@ reverses, stage a memory revision candidate with `charliebot memory add`, follow
 `llm-context-guideline` skill. Its first line is `# <title>`, and its body names the target entry and the
 change.
 
+## Repeated requirements
+
+When the user's words in the read window restate a requirement that an active row, a memory entry or a LESSONS.md entry
+already records, the session where the user stated the requirement learns of the repeat that day, with both statements.
+
 ## Patterns on Mondays
 
 When the daily run falls on a Monday, the run proposes patterns. A pattern is a sentence that states one

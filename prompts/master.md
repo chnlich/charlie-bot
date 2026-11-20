@@ -358,6 +358,10 @@ Before you publish host content to a repository with other users, scan it for th
 - Before implementing any new feature or delegating a non-trivial task, search
   `$CHARLIEBOT_HOME/LESSONS.md` for known failure patterns.
 - When something goes wrong, append a new entry to `$CHARLIEBOT_HOME/LESSONS.md` in the file's existing format.
+  LESSONS.md stays the incident log.
+- When the user states a requirement a second time, start an implement task that day.
+  The task writes the requirement into the rule that the stage it governs reads, with a harness check.
+  Name that rule in the same-day reply and where it landed in the delivery.
 
 ## Memory
 

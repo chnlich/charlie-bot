@@ -54,7 +54,7 @@ readonly EVIDENCE_COPY_SECONDS=${IMPROVE_EVIDENCE_COPY_SECONDS:-60}
 readonly SSH=(ssh -T -o BatchMode=yes -o ConnectTimeout=10)
 # The review option: the backend option whose model, API base and credential the round's review uses.
 # This script is the only place that names it.
-readonly REVIEW_OPTION='claude-code-kimi-k3.1-pro'
+readonly REVIEW_OPTION='claude-code-deepseek-flash'
 
 fail() {
   local code=$1

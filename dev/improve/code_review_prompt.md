@@ -18,10 +18,10 @@ Check, in order of importance:
 6. Import form in Python files: import modules and access members as `module.attr` (Google style 2.2);
    flag direct class/function imports (`from x import Klass`) that the diff introduces.
    Rust and web diffs have no equivalent rule.
-7. Screenshots: when the task file has an `EVIDENCE:` line, check each screenshot that the pull request names in that
-   directory for overlap with page content, clipping and missing controls in every state it shows, at the widths and
-   states that the Web UI Screenshots rule in `prompts/task_base.md` sets. A finding names the screenshot by its
-   file name.
+7. Screenshots: when the task file has an `EVIDENCE:` line, read the direction file in its `DIRECTION:` line and
+   compare the attached after image named in its `IMAGES:` line with the attached before image named there, at the
+   widths and states that the Web UI Screenshots rule in `prompts/task_base.md` sets; report overlap with page content,
+   clipping and missing controls; a finding names the after image by its file name.
 
 Report every finding whose confidence is at least 80 on a 0-100 scale, as one list item:
 `- <finding> (confidence <n>) — <file>: <one-line reason>`. With no findings above the bar, output exactly:

@@ -23,7 +23,7 @@ from its cited source, and reads each current system value back from the system 
 Check each premise of every proposed option and acceptance criterion:
 - no existing path, or a lighter one, already serves its need;
 - the case it handles occurs in the current system;
-- no earlier user decision of the line rejects it;
+- no earlier user decision rejects it: the decisions of the line and the taste rows of each domain the page touches;
 - it fits the known limits of context length, compute, and token cost.
 
 ## Acceptance Tests
@@ -34,6 +34,8 @@ Check each premise of every proposed option and acceptance criterion:
 - The line for a derived number carries the recomputed value.
 - The line for a current system value carries the value read back and the system it came from.
 - Each premise has one line naming the code, config, or decision record read and saying whether the premise holds.
+- The report lists each matching taste row and whether the page cites it; a page that omits a matching row fails the
+  check.
 
 ## Reviewer Checklist
 

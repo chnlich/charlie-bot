@@ -905,6 +905,14 @@ function renderSessionList(sessions, filter, options = {}) {
   recordTreeShape(new Map(), new Map(), isTreeNodeExpanded);
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
+    if (filter !== 'search') {
+      lastGroupedRenderArgs = {
+        sessions,
+        filter,
+        workspaceBadges: options.workspaceBadges || '',
+        listing: options.listing || null,
+      };
+    }
     const labels = {
       all: 'No sessions yet',
       threads: 'No chat threads',

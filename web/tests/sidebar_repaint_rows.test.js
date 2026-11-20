@@ -97,6 +97,22 @@ test('a repaint after a row merge keeps the merged rows, not the last full list'
   assert.match(nav.innerHTML, /renamed session/);
 });
 
+test('an empty row merge leaves empty Workspace memory for the next clear', () => {
+  const {context, nav, box} = listWithSearchBox();
+  context.Sidebar.renderSessionList([SESSION], 'all');
+
+  context.Sidebar.mergeRowsIntoRenderedList([], ['s1']);
+  assert.match(nav.innerHTML, /No sessions yet/);
+
+  box.value = 'needle';
+  context.Sidebar.renderSessionList([OTHER], 'search');
+  box.value = '';
+  context.Sidebar.restoreWorkspaceFromMemory();
+
+  assert.match(nav.innerHTML, /No sessions yet/);
+  assert.doesNotMatch(nav.innerHTML, /demo session/);
+});
+
 test('a row removed inline stays removed on a resize repaint', () => {
   const {context, nav} = listWithSearchBox();
   context.Sidebar.renderSessionList([SESSION, OTHER], 'all');

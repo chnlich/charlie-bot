@@ -38,14 +38,16 @@ use crate::reply::{self, WebReplyError};
 
 /// The judge contract under `prompts/`, sent as the system prompt of every judge call.
 const JUDGE_PROMPT: &str = include_str!("../../../../../prompts/waiting_judge.md");
-/// The call class whose `backends.calls` pool answers the judge. The `thread` pool names one strong model and rotates
-/// nothing. The probe pool's first member, a light model, returned empty answers in the replays.
-pub const JUDGE_CALL_CLASS: CallClass = CallClass::Thread;
+/// The call class whose `backends.calls` pool answers the judge. A rule judgment is review work, so it runs on the
+/// `review` pool; the `thread` pool is the interactive Opus pool that host rules reserve for interactive sessions.
+pub const JUDGE_CALL_CLASS: CallClass = CallClass::Review;
 /// The longest wait for one judge call, which reads the whole effective prompt and every memory entry.
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(120);
 /// The newest user messages of the session the judge reads, each cut to `USER_MESSAGE_CHARS`.
 const USER_MESSAGE_COUNT: usize = 20;
 const USER_MESSAGE_CHARS: usize = 2000;
+/// The start of a judge answer that the "判定不可用" detail quotes when the answer holds no verdict object.
+const ANSWER_EXCERPT_CHARS: usize = 200;
 const USER_ONLY_KINDS_LEAD: &str = "- A Waiting on you item asks the user for one of these:";
 const MEMO_LABEL: &str = "memo.md";
 
@@ -294,13 +296,35 @@ async fn light_answer(features: &FeatureContext, session_id: &str, prompt: &str)
   bail!("no light backend answered: {}", failures.join("; "))
 }
 
-/// Parse the judge's answer against the contract, and check that a refusal's quote is in a settled text.
+/// The one extraction the judge's answer allows: a whole answer inside one outer code fence unwraps to the fenced
+/// text. Any other shape reads as it is, so text around the object keeps the answer from being one verdict object.
+fn strip_code_fence(answer: &str) -> &str {
+  let Some(rest) = answer.strip_prefix("```") else {
+    return answer;
+  };
+  let Some(first_line_end) = rest.find('\n') else {
+    return answer;
+  };
+  match rest[first_line_end + 1..].strip_suffix("```") {
+    Some(body) => body.trim(),
+    None => answer,
+  }
+}
+
+/// Parse the judge's answer against the contract, and check that a refusal's quote is in a settled text. The verdict
+/// is the whole answer, or the fenced text of an answer inside one outer code fence; every other answer, including
+/// free text and text around the object, reaches no verdict.
 fn parse_verdict(answer: &str, settled: &[Settled]) -> Result<Judgement, String> {
-  if answer.trim().is_empty() {
+  let trimmed = answer.trim();
+  if trimmed.is_empty() {
     return Err("the answer is empty".to_string());
   }
-  let parsed: Answer =
-    serde_json::from_str(answer.trim()).map_err(|error| format!("the answer is not the verdict object: {error}"))?;
+  let parsed: Answer = serde_json::from_str(strip_code_fence(trimmed)).map_err(|error| {
+    format!(
+      "the answer is not exactly one verdict object: {error}; the answer begins: {}",
+      take_chars(trimmed, ANSWER_EXCERPT_CHARS)
+    )
+  })?;
   let reason = parsed.reason.trim().to_string();
   if reason.is_empty() {
     return Err("the verdict gives no reason".to_string());
@@ -420,6 +444,26 @@ mod tests {
       r#"{"decision":"accept","judged_kind":"","cited":""}"#,
     ] {
       assert!(parse_verdict(answer, &settled).is_err(), "{answer} must not parse as a verdict");
+    }
+  }
+
+  #[test]
+  fn a_verdict_in_one_outer_code_fence_parses_and_text_around_the_object_reaches_no_verdict() {
+    let settled = [source("memo.md", "text")];
+    let fenced = format!("```json\n{TAKE_OFF_ACCEPT}\n```");
+    assert_eq!(
+      parse_verdict(&fenced, &settled),
+      Ok(Judgement::Accepted {
+        judged_kind: Some(JudgedKind::TakeOff),
+        reason: "an out-of-window deploy with no settled sentence".to_string(),
+      })
+    );
+    for answer in [
+      format!("Here is the verdict:\n```json\n{TAKE_OFF_ACCEPT}\n```\nDone."),
+      format!("the verdict is {TAKE_OFF_ACCEPT}"),
+      format!("{TAKE_OFF_ACCEPT}\n{TAKE_OFF_ACCEPT}"),
+    ] {
+      assert!(parse_verdict(&answer, &settled).is_err(), "{answer} must reach no verdict");
     }
   }
 

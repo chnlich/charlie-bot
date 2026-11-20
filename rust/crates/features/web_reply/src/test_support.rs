@@ -56,11 +56,12 @@ struct JudgeProbe {
 static NEXT_JUDGE_OPTION: AtomicUsize = AtomicUsize::new(0);
 static JUDGE_PROBES: LazyLock<Mutex<HashMap<String, Arc<JudgeProbe>>>> = LazyLock::new(Mutex::default);
 
-/// The `backends` block that routes the judge's call class, `thread`, to the judge stub `option_id`.
+/// The `backends` block that routes the judge's call class to the judge stub `option_id`.
 fn judge_config(option_id: &str, verdict: &str) -> String {
   let model = verdict.replace('\'', "''");
+  let class = crate::waiting_judge::JUDGE_CALL_CLASS.key();
   format!(
-    "backends:\n  options:\n    - id: {option_id}\n      label: Synthetic judge\n      model: '{model}'\n      type: {JUDGE_TYPE}\n  calls:\n    thread: {option_id}\n"
+    "backends:\n  options:\n    - id: {option_id}\n      label: Synthetic judge\n      model: '{model}'\n      type: {JUDGE_TYPE}\n  calls:\n    {class}: {option_id}\n"
   )
 }
 

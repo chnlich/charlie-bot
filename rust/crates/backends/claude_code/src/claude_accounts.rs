@@ -1096,18 +1096,6 @@ pub fn transcript_path(config_dir: &Path, session_id: &str) -> anyhow::Result<Op
   Ok(transcript_matches(config_dir, session_id)?.into_iter().next())
 }
 
-pub fn find_transcript_account(
-  cfg: &CharlieBotConfig,
-  session_id: &str,
-) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
-  for account in pool(cfg)? {
-    if transcript_path(Path::new(&account.config_dir), session_id)?.is_some() {
-      return Ok(Some(account));
-    }
-  }
-  Ok(None)
-}
-
 pub fn is_newer_transcript_refusal(error: &anyhow::Error) -> bool {
   error.to_string().contains(GUARD_REFUSAL_MARKER)
 }

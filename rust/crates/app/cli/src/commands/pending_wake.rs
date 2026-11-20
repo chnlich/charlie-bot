@@ -11,11 +11,12 @@ use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::route;
 use charliebot_core::config::sessions_dir_in;
-use charliebot_core::event_types::{TASK_CLOSE_REQUESTED, TURN_HOOKS, WEB_STATUS};
+use charliebot_core::event_types::{TURN_HOOKS, WEB_STATUS};
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
 use charliebot_store::metadata::read_session_metadata;
 use charliebot_tasks::turn_hooks::{CheckResult, TurnInput};
+use charliebot_web_reply::audit::web_turn_checks_apply;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -46,20 +47,13 @@ const OPEN: &str = "open";
 
 /// Answers the check for one turn of a turn-end run.
 pub fn check(input: &TurnInput) -> Result<CheckResult, CliExit> {
-  if !applies(input) || wake_found(input)? {
+  if !web_turn_checks_apply(input) || wake_found(input)? {
     return Ok(CheckResult::Pass);
   }
   if blocked_before(&input.turn) {
     return Ok(CheckResult::Notice(NOTICE.to_string()));
   }
   Ok(CheckResult::Block(BLOCK_REASON.to_string()))
-}
-
-/// The check's scope: a web session whose turn exited cleanly or as a failed continuation, and left no close request.
-fn applies(input: &TurnInput) -> bool {
-  input.kind.as_deref() == Some("web")
-    && input.exit_is_judged()
-    && !input.turn.iter().any(|event| event["type"] == TASK_CLOSE_REQUESTED)
 }
 
 /// Whether the turn already blocked on this check: one of its `turn_hooks` records holds the block.

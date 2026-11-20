@@ -150,3 +150,29 @@ test('a worker that closes during Network.enable ends its attach', async () => {
     console.warn = originalWarn;
   }
 });
+
+test('a worker whose Network.enable is still pending at the browser close ends its attach', async () => {
+  const targetId = 'worker-1';
+  const events = [];
+  let onMessage;
+  const originalWarn = console.warn;
+  console.warn = (message) => events.push(message);
+  try {
+    const browser = {
+      send: async (method) => (method === 'Target.attachToTarget' ? {sessionId: 'worker-session'} : {}),
+      onMessage: (listener) => { onMessage = listener; },
+      sendTo: (sessionId, method) => Promise.reject(
+        new Error(method + ': the browser\'s DevTools pipe was closed')),
+    };
+    new Tabs({browser, assets: new Map(), accessKey: '', origin: 'https://front.test', cdn: 'link'});
+    onMessage({
+      method: 'Target.targetCreated',
+      params: {targetInfo: {targetId, type: 'service_worker', url: 'https://front.test/offline-shell-worker.js'}},
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, ['service worker target worker-1 closed during Network.enable']);
+  } finally {
+    console.warn = originalWarn;
+  }
+});

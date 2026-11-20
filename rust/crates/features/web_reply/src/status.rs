@@ -788,10 +788,10 @@ async fn judged_waiting(
       continue;
     }
     match waiting_judge::judge_item(features, session_id, goal, item, &[]).await? {
-      Judgement::Accepted { judged_kind } => {
+      Judgement::Accepted { judged_kind, .. } => {
         judged.push(WaitingItem { judged_kind, judgement_basis: Some(String::new()), ..item.clone() });
       }
-      Judgement::Refused { rule } => {
+      Judgement::Refused { rule, .. } => {
         refusals.push(format!("Waiting on you item {:?} is refused by the settled rule {rule}", item.text));
       }
     }

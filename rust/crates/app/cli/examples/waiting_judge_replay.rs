@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! CHARLIEBOT_HOME=<profile home> cargo run -p charliebot-cli --example waiting_judge_replay -- \
-//!   <fixture.json> --group <topic> [--probe <option-id>]
+//!   <fixture.json> [--judge <option-id>]
 //! ```
 //!
 //! The fixture holds one incident's session text: the item, the Goal, the user messages, the memo as recovered and,
@@ -10,10 +10,9 @@
 //! that links every entry of `CHARLIEBOT_HOME` except its sessions and state, so the judge reads today's config,
 //! credentials and memory; `state/backend_availability.json` is copied in, so a member failure the replay records
 //! lands in the scratch home. The replay session is written under the scratch home, which is deleted when the
-//! example exits. The judge
-//! makes the call the server makes on the `probe` class, and the verdict is printed for a human to assess. `--probe`
-//! names the one option the probe class runs on in place of the host's rotation, for a replay that must not depend on
-//! a rotation member that fails.
+//! example exits. The judge makes the call the server makes on its call class, and the verdict and its reason are
+//! printed for a human to assess. `--judge` names the one option that class runs on in place of the host's rotation,
+//! for a replay that must not depend on a rotation member that fails.
 //!
 //! The agent environment is built from this process and the checkout's gh and ssh guard wrappers.
 
@@ -30,8 +29,9 @@ use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::gh_wrapper;
 use charliebot_agents::model_pool::RotationPositions;
 use charliebot_agents::ssh_guard;
+use charliebot_core::RepoRoot;
 use charliebot_core::config::{
-  CONFIG_FILENAME, CREDENTIALS_FILENAME, CallClass, CallTarget, CallsConfig, CharlieBotConfig, ConfigError,
+  CONFIG_FILENAME, CREDENTIALS_FILENAME, CallTarget, CallsConfig, CharlieBotConfig, ConfigError,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types::{self, CONFIG_RELOAD_FAILED_EVENT, CREDENTIALS_RELOAD_FAILED_EVENT};
@@ -42,27 +42,24 @@ use charliebot_registry::store_hooks::store_hooks;
 use charliebot_store::metadata::TaskProfile;
 use charliebot_store::{CreateTask, Store, TaskCaller, layout};
 use charliebot_web_reply::metadata::WaitingItem;
-use charliebot_web_reply::waiting_judge::{self, ContextText, Judgement};
+use charliebot_web_reply::waiting_judge::{self, ContextText, JUDGE_CALL_CLASS, Judgement};
 use serde_json::{Map, Value, json};
 
 fn main() -> Result<()> {
   tracing_subscriber::fmt().with_writer(std::io::stderr).init();
   let mut args = env::args().skip(1);
   let mut fixture = None;
-  let mut group = None;
-  let mut probe = None;
+  let mut judge = None;
   while let Some(arg) = args.next() {
     match arg.as_str() {
-      "--group" => group = Some(args.next().context("--group takes the project topic name")?),
-      "--probe" => probe = Some(args.next().context("--probe takes a backends.options id")?),
+      "--judge" => judge = Some(args.next().context("--judge takes a backends.options id")?),
       _ if fixture.is_none() => fixture = Some(PathBuf::from(arg)),
       _ => bail!("unexpected argument {arg:?}"),
     }
   }
-  let fixture = fixture.context("usage: waiting_judge_replay <fixture.json> --group <topic> [--probe <option-id>]")?;
-  let group = group.context("--group names the project topic of the session tree root")?;
+  let fixture = fixture.context("usage: waiting_judge_replay <fixture.json> [--judge <option-id>]")?;
   let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-  runtime.block_on(replay(&fixture, &group, probe.as_deref()))
+  runtime.block_on(replay(&fixture, judge.as_deref()))
 }
 
 /// The fixture's value under `name`: each recorded field keeps its text under `value`.
@@ -70,7 +67,7 @@ fn recorded<'a>(doc: &'a Value, name: &str) -> Option<&'a Value> {
   doc.get(name)?.get("value")
 }
 
-async fn replay(fixture: &PathBuf, group: &str, probe: Option<&str>) -> Result<()> {
+async fn replay(fixture: &PathBuf, judge: Option<&str>) -> Result<()> {
   let text = fs::read_to_string(fixture).with_context(|| format!("reading {}", fixture.display()))?;
   let doc: Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", fixture.display()))?;
   let item: WaitingItem =
@@ -118,7 +115,7 @@ async fn replay(fixture: &PathBuf, group: &str, probe: Option<&str>) -> Result<(
       .context("seeding the scratch backend availability")?;
   }
 
-  let features = features_over(&home, probe)?;
+  let features = features_over(&home, judge)?;
   let meta = features
     .store
     .create_task(
@@ -129,7 +126,7 @@ async fn replay(fixture: &PathBuf, group: &str, probe: Option<&str>) -> Result<(
         task: None,
         name: Some("waiting-judge-replay".to_string()),
         backend: None,
-        group: Some(group.to_string()),
+        group: None,
         session_id: None,
       },
       TaskCaller::Operator,
@@ -162,46 +159,46 @@ async fn replay(fixture: &PathBuf, group: &str, probe: Option<&str>) -> Result<(
     None => "none".to_string(),
   };
   println!("linked page: {page_state}");
-  println!("group: {group}");
   println!("user messages: {}", user_messages.len());
   println!("memo: {}", if memo.is_some() { "recovered" } else { "empty" });
   println!("context texts: {}", contexts.iter().map(|context| context.label.as_str()).collect::<Vec<_>>().join(", "));
   match waiting_judge::judge_item(&features, &session_id, Some(goal), &item, &contexts).await {
-    Ok(Judgement::Refused { rule }) => println!("verdict: refuse\ncited: {rule}"),
-    Ok(Judgement::Accepted { judged_kind }) => {
+    Ok(Judgement::Refused { rule, reason }) => println!("verdict: refuse\nreason: {reason}\ncited: {rule}"),
+    Ok(Judgement::Accepted { judged_kind, reason }) => {
       let kind = judged_kind.map_or_else(|| "none".to_string(), |kind| format!("{kind:?}"));
-      println!("verdict: accept\njudged_kind: {kind}");
+      println!("verdict: accept\nreason: {reason}\njudged_kind: {kind}");
     }
     Err(error) => bail!("the judge reached no verdict: {error:?}"),
   }
   Ok(())
 }
 
-/// The config with the probe class pinned to `probe` when one is named. The pin replaces every call target, since the
-/// judge reads only the probe class; a name that is no configured option fails here.
-fn probed_config(mut cfg: CharlieBotConfig, probe: Option<&str>) -> Result<CharlieBotConfig, ConfigError> {
-  let Some(option) = probe else {
+/// The config with the judge's call class pinned to `judge` when one is named. The pin replaces every call target, since
+/// the judge reads only its own class; a name that is no configured option fails here.
+fn judged_config(mut cfg: CharlieBotConfig, judge: Option<&str>) -> Result<CharlieBotConfig, ConfigError> {
+  let Some(option) = judge else {
     return Ok(cfg);
   };
   if !cfg.backends.options.iter().any(|configured| configured.id == option) {
-    return Err(ConfigError(format!("--probe {option:?} is not a configured backends.options id")));
+    return Err(ConfigError(format!("--judge {option:?} is not a configured backends.options id")));
   }
-  cfg.backends.calls = CallsConfig::from_iter([(CallClass::Probe, CallTarget::Backend(option.to_string()))]);
+  cfg.backends.calls = CallsConfig::from_iter([(JUDGE_CALL_CLASS, CallTarget::Backend(option.to_string()))]);
   Ok(cfg)
 }
 
 /// The feature context the server builds, over the scratch home: the config and credentials reload from it, and the
-/// backend pool and environment the judge's model call reads are in the startup state.
-fn features_over(home: &Path, probe: Option<&str>) -> Result<FeatureContext> {
+/// backend pool, environment and checkout root the judge's model call and effective prompt read are in the startup
+/// state.
+fn features_over(home: &Path, judge: Option<&str>) -> Result<FeatureContext> {
   let registry = Arc::new(charliebot_packages::registry()?);
-  let cfg = probed_config(registry.load_config(home)?, probe)?;
+  let cfg = judged_config(registry.load_config(home)?, judge)?;
   let reload_registry = Arc::clone(&registry);
   let reload_home = home.to_path_buf();
-  let reload_probe = probe.map(str::to_string);
+  let reload_judge = judge.map(str::to_string);
   let config = HotReload::new(
     home.join(CONFIG_FILENAME),
     CONFIG_RELOAD_FAILED_EVENT,
-    Box::new(move || probed_config(reload_registry.load_config(&reload_home)?, reload_probe.as_deref())),
+    Box::new(move || judged_config(reload_registry.load_config(&reload_home)?, reload_judge.as_deref())),
   );
   let credential_home = home.to_path_buf();
   let credentials = HotReload::new(
@@ -224,13 +221,16 @@ fn features_over(home: &Path, probe: Option<&str>) -> Result<FeatureContext> {
   let exe_dir =
     exe.parent().and_then(|examples| examples.parent()).context("the example binary has a profile directory")?;
   // The wrappers live in this checkout, the repository the example is built from.
-  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+  let repo_root = fs::canonicalize(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.."))?;
   let base = agent_environment::agent_base_environment(
     exe_dir,
     &gh_wrapper::dir_under(&repo_root),
     &ssh_guard::dir_under(&repo_root),
   )?;
   startup.insert(base).map_err(|error| anyhow!("{error}"))?;
+  // The effective prompt the judge reads comes from this checkout's `prompts/`.
+  let checkout = RepoRoot::new(Some(repo_root.into_os_string())).map_err(|error| anyhow!("{error}"))?;
+  startup.insert(checkout).map_err(|error| anyhow!("{error}"))?;
   Ok(FeatureContext {
     config: Arc::new(config),
     credentials: Arc::new(credentials),

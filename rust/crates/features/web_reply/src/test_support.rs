@@ -13,6 +13,7 @@ use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::model_pool::RotationPositions;
+use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::config::{BackendOption, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
@@ -35,16 +36,17 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 /// The verdict every test home's judge answers when the test names none: an accept with no kind.
-pub const JUDGE_ACCEPTS: &str = r#"{"decision": "accept", "judged_kind": "", "cited": ""}"#;
+pub const JUDGE_ACCEPTS: &str =
+  r#"{"reason": "no settled sentence decides the step", "decision": "accept", "judged_kind": "", "cited": ""}"#;
 /// The backend type and option id of the judge stub: a one-shot that answers the option's `model` text.
 const JUDGE_TYPE: &str = "synthetic-judge";
 const JUDGE_OPTION: &str = "synthetic-judge";
 
-/// The `backends` block that routes the probe class, which the judge calls, to the judge stub.
+/// The `backends` block that routes the judge's call class, `thread`, to the judge stub.
 fn judge_config(verdict: &str) -> String {
   let model = verdict.replace('\'', "''");
   format!(
-    "backends:\n  options:\n    - id: {JUDGE_OPTION}\n      label: Synthetic judge\n      model: '{model}'\n      type: {JUDGE_TYPE}\n  calls:\n    probe: {JUDGE_OPTION}\n"
+    "backends:\n  options:\n    - id: {JUDGE_OPTION}\n      label: Synthetic judge\n      model: '{model}'\n      type: {JUDGE_TYPE}\n  calls:\n    thread: {JUDGE_OPTION}\n"
   )
 }
 
@@ -302,6 +304,11 @@ impl Home {
     startup.insert(BackendPool::new(availability, Arc::clone(&registry), positions)).expect("the pool inserts once");
     // The judge's stub backend reads no environment, so the agent environment starts empty.
     startup.insert(AgentBaseEnvironment { values: Env::new() }).expect("the agent environment inserts once");
+    // The checkout whose `prompts/` the judge's effective prompt reads: the crate sits five levels under it.
+    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let checkout = checkout.ancestors().nth(4).expect("the checkout is an ancestor");
+    let checkout = RepoRoot::new(Some(checkout.as_os_str().to_os_string())).expect("the checkout root is valid");
+    startup.insert(checkout).expect("the checkout root inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     Self { _dir: dir, features }
   }

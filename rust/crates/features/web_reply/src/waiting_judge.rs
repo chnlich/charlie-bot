@@ -1,29 +1,35 @@
-//! The server's judge of Waiting on you items. A status set that stores a new or changed item asks the light backends
-//! one question about it: whether a settled rule or ruling already decides the step, which only the user could decide
-//! otherwise. The judge refuses the item only with a quoted settled sentence, and accepts every other item.
+//! The server's judge of Waiting on you items. A status set that stores a new or changed item asks one model call one
+//! question about it: whether a settled sentence already decides the step, which only the user could decide otherwise.
+//! The judge refuses the item only with a quoted settled sentence, and accepts every other item.
 //!
-//! The call runs on `backends.calls.probe` through the backend pool's rotation, as the cold read does. A call that
-//! fails, or an answer that is not the verdict contract, is the "判定不可用" error: the set stores nothing, and the
-//! error does not turn into an accept or a refusal.
+//! The settled text is the session's effective manager prompt, every memory entry, and the session memo. The call runs
+//! on the `backends.calls` pool of `JUDGE_CALL_CLASS`. A call that fails, or an answer that is not the verdict contract,
+//! is the "判定不可用" error: the set stores nothing, and the error does not turn into an accept or a refusal.
 
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use axum::http::StatusCode;
-use charliebot_agents::{agent_environment, backend_pool as pools, backend_types, one_shot_text};
+use charliebot_agents::{agent_environment, backend_pool as pools, backend_types, model_pool, one_shot_text};
 use charliebot_compat::file_urls;
-use charliebot_core::config::CallClass;
+use charliebot_core::RepoRoot;
+use charliebot_core::config::{CallClass, CharlieBotConfig};
 use charliebot_core::event_types;
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::str_methods::take_chars;
 use charliebot_memory::memory;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::backend::LaunchArgs;
+use charliebot_registry::turn::SCOPE_GOAL;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::layout;
+use charliebot_store::metadata::SessionMetadata;
 use charliebot_tasks::cold_read;
+use charliebot_tasks::prompts::{self, PromptBlock, PromptEnv};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -32,27 +38,29 @@ use crate::reply::{self, WebReplyError};
 
 /// The judge contract under `prompts/`, sent as the system prompt of every judge call.
 const JUDGE_PROMPT: &str = include_str!("../../../../../prompts/waiting_judge.md");
-/// The CharlieBot rules the judge reads its settled text and its user-only kinds from.
-const MASTER_PROMPT: &str = include_str!("../../../../../prompts/master.md");
-/// The memory topic of the host's approval rulings, read for every session.
-const RULINGS_TOPIC: &str = "rulings";
+/// The call class whose `backends.calls` pool answers the judge. The `thread` pool names one strong model and rotates
+/// nothing. The probe pool's first member, a light model, returned empty answers in the replays.
+pub const JUDGE_CALL_CLASS: CallClass = CallClass::Thread;
+/// The longest wait for one judge call, which reads the whole effective prompt and every memory entry.
+const JUDGE_TIMEOUT: Duration = Duration::from_secs(120);
 /// The newest user messages of the session the judge reads, each cut to `USER_MESSAGE_CHARS`.
 const USER_MESSAGE_COUNT: usize = 20;
 const USER_MESSAGE_CHARS: usize = 2000;
-const ACTION_BOUNDARIES_HEADING: &str = "## Action Boundaries";
 const USER_ONLY_KINDS_LEAD: &str = "- A Waiting on you item asks the user for one of these:";
 const MEMO_LABEL: &str = "memo.md";
-const ACTION_BOUNDARIES_LABEL: &str = "prompts/master.md, Action Boundaries";
 
-/// The judge's answer for one item: the item is stored with the kind it matched, or the rule that refuses it.
+/// The judge's answer for one item: the item is stored with the kind it matched, or the rule that refuses it. Each
+/// variant carries the reason the model gave, which the server logs with the verdict.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Judgement {
   Accepted {
     judged_kind: Option<JudgedKind>,
+    reason: String,
   },
   /// `rule` names the settled source and quotes the sentence that decides the step.
   Refused {
     rule: String,
+    reason: String,
   },
 }
 
@@ -62,6 +70,12 @@ struct Settled {
   text: String,
 }
 
+/// The settled text of a session and the user-only kinds that the effective prompt lists.
+struct Settlement {
+  settled: Vec<Settled>,
+  kinds: String,
+}
+
 /// Text the judge reads as context that never decides a refusal, such as a repository contract the item's step runs
 /// under. The judge can name it in no verdict: a refusal cites only settled text.
 pub struct ContextText {
@@ -69,17 +83,17 @@ pub struct ContextText {
   pub text: String,
 }
 
-/// The judge's answer as the prompt's output contract states it.
+/// The judge's answer as the prompt's output contract states it. The reason comes first, before the decision.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Answer {
+  reason: String,
   decision: String,
   judged_kind: String,
   cited: String,
 }
 
-/// Judge one item of a status set using the session's project topic, `goal` and the `context` texts, which never
-/// decide a refusal.
+/// Judge one item of a status set using the session's `goal` and the `context` texts, which never decide a refusal.
 pub async fn judge_item(
   features: &FeatureContext,
   session_id: &str,
@@ -88,29 +102,28 @@ pub async fn judge_item(
   context: &[ContextText],
 ) -> Result<Judgement, WebReplyError> {
   let cfg = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
+  let meta = reply::require_web_session(features, session_id).await?;
   let memo = read_memo(&features.store.session_dir(session_id))?;
   let user_messages = user_messages(features, session_id).await?;
-  let mut settled = memory_settled(features, session_id, &cfg.charliebot_home).await?;
+  let Settlement { mut settled, kinds } = prompt_settlement(features, &cfg, &meta).await?;
+  settled.extend(memory_settled(&cfg.charliebot_home).await?);
   if !memo.trim().is_empty() {
-    settled.insert(0, Settled { label: MEMO_LABEL.to_string(), text: memo });
+    settled.push(Settled { label: MEMO_LABEL.to_string(), text: memo });
   }
-  settled.push(Settled {
-    label: ACTION_BOUNDARIES_LABEL.to_string(),
-    text: action_boundaries().map_err(WebReplyError::Failed)?.to_string(),
-  });
   let item_block = cold_read::ask_probe_input(
     &serde_json::to_value(item).map_err(|e| WebReplyError::Failed(e.into()))?,
     linked_page(item)?.as_deref(),
     "",
   )
   .map_err(WebReplyError::Failed)?;
-  let kinds = user_only_kinds().map_err(WebReplyError::Failed)?;
   let prompt = render_prompt(&item_block, goal, &user_messages, &settled, context, &kinds);
   let answer = match light_answer(features, session_id, &prompt).await {
     Ok(answer) => answer,
     Err(error) => return Err(unavailable(&item.text, &format!("the model call failed: {error:#}"))),
   };
-  parse_verdict(&answer, &settled).map_err(|reason| unavailable(&item.text, &reason))
+  let judgement = parse_verdict(&answer, &settled).map_err(|reason| unavailable(&item.text, &reason))?;
+  tracing::info!(target: "charliebot_web_reply", session_id, item = %item.text, verdict = ?judgement, "waiting_judge_verdict");
+  Ok(judgement)
 }
 
 /// The "判定不可用" refusal: no verdict was reached, so nothing is stored and nothing is refused.
@@ -143,37 +156,54 @@ async fn user_messages(features: &FeatureContext, session_id: &str) -> Result<Ve
   Ok(messages[first..].to_vec())
 }
 
-/// The host's rulings and the topic matching the session tree root's group, using memory's name matching rule.
-async fn memory_settled(
-  features: &FeatureContext,
-  session_id: &str,
-  home: &Path,
-) -> Result<Vec<Settled>, WebReplyError> {
+/// Every memory entry of every topic, as settled text.
+async fn memory_settled(home: &Path) -> Result<Vec<Settled>, WebReplyError> {
   let memory_dir = home.join("memory");
-  let store = Arc::clone(&features.store);
-  let session_id = session_id.to_string();
   let entries = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Settled>> {
-    let ancestors = store.ancestor_ids(&session_id)?;
-    let root_id = ancestors.last().unwrap_or(&session_id);
-    let root = store.read_metadata_fresh(root_id)?.with_context(|| format!("session {root_id} not found"))?;
-    let group = root.group.as_deref().map(memory::normalized_name);
     let store = memory::load_store(&memory_dir)?;
-    Ok(
-      store
-        .entries
-        .iter()
-        .filter(|entry| {
-          entry.topic.as_deref().is_some_and(|topic| {
-            topic == RULINGS_TOPIC || group.as_ref().is_some_and(|group| *group == memory::normalized_name(topic))
-          })
-        })
-        .map(|entry| Settled { label: entry.id(), text: memory::full_text(entry) })
-        .collect(),
-    )
+    Ok(store.entries.iter().map(|entry| Settled { label: entry.id(), text: memory::full_text(entry) }).collect())
   })
   .await
   .map_err(|error| WebReplyError::Failed(error.into()))?;
   entries.map_err(WebReplyError::Failed)
+}
+
+/// The session's effective manager prompt, read as the session's next manager turn runs with it: the session's backend
+/// option decides its overlay, and the blocks are the same ones the launch injects. The Goal block is left out, since a
+/// Goal never decides a refusal. The user-only kinds come from the block that lists them.
+async fn prompt_settlement(
+  features: &FeatureContext,
+  cfg: &CharlieBotConfig,
+  meta: &SessionMetadata,
+) -> Result<Settlement, WebReplyError> {
+  let backend_id = model_pool::turn_member(features, cfg, meta)
+    .map_err(WebReplyError::Failed)?
+    .with_context(|| format!("session {} has no selectable backend member", meta.id))
+    .map_err(WebReplyError::Failed)?;
+  let option = cfg
+    .get_backend_option(&backend_id)
+    .with_context(|| format!("backend {backend_id} is not a backends.options id"))
+    .map_err(WebReplyError::Failed)?;
+  let repo_root = features.startup.require::<RepoRoot>().map_err(|error| WebReplyError::Failed(error.into()))?;
+  let env = PromptEnv { cfg, registry: &features.registry, checkout: &repo_root };
+  let coherent =
+    prompts::assemble_coherent_snapshot(&features.store, &env, meta, RunKind::ManagerTurn.as_str(), option)
+      .await
+      .map_err(WebReplyError::Failed)?;
+  let kinds = user_only_kinds(&coherent.snapshot.blocks).map_err(WebReplyError::Failed)?;
+  let settled = coherent.snapshot.blocks.iter().filter(|block| !is_goal_block(block)).map(settled_block).collect();
+  Ok(Settlement { settled, kinds })
+}
+
+/// Whether a block holds only the Goal lines.
+fn is_goal_block(block: &PromptBlock) -> bool {
+  !block.sources.is_empty() && block.sources.iter().all(|source| source.scope == SCOPE_GOAL)
+}
+
+/// One effective-prompt block as settled text: its label is the source files it merges.
+fn settled_block(block: &PromptBlock) -> Settled {
+  let label = block.sources.iter().map(|source| source.source_ref.as_str()).collect::<Vec<_>>().join(", ");
+  Settled { label, text: block.text.clone() }
 }
 
 /// The linked host file's text when the item links one; a link to a missing path or a directory has none.
@@ -188,26 +218,18 @@ fn linked_page(item: &WaitingItem) -> Result<Option<String>, WebReplyError> {
   fs::read_to_string(&path).map(Some).map_err(|error| WebReplyError::Failed(error.into()))
 }
 
-/// The Action Boundaries section of `prompts/master.md`: from its heading to the next level-two heading.
-fn action_boundaries() -> anyhow::Result<&'static str> {
-  let start = MASTER_PROMPT
-    .find(&format!("\n{ACTION_BOUNDARIES_HEADING}\n"))
-    .context("prompts/master.md has no Action Boundaries heading")?
-    + 1;
-  let section = &MASTER_PROMPT[start..];
-  let end = section[ACTION_BOUNDARIES_HEADING.len()..]
-    .find("\n## ")
-    .map_or(section.len(), |offset| ACTION_BOUNDARIES_HEADING.len() + offset);
-  Ok(section[..end].trim_end())
-}
-
-/// The bullet that lists the four user-only kinds of Waiting on you items, with its indented sub-bullets.
-fn user_only_kinds() -> anyhow::Result<String> {
-  let mut lines = MASTER_PROMPT.lines().skip_while(|line| *line != USER_ONLY_KINDS_LEAD);
-  let lead = lines.next().context("prompts/master.md has no user-only kinds list")?;
-  let mut kinds = vec![lead];
-  kinds.extend(lines.take_while(|line| line.starts_with("  ")));
-  Ok(kinds.join("\n"))
+/// The bullet that lists the four user-only kinds of Waiting on you items, with its indented sub-bullets, from the first
+/// effective-prompt block that holds it.
+fn user_only_kinds(blocks: &[PromptBlock]) -> anyhow::Result<String> {
+  for block in blocks {
+    let mut lines = block.text.lines().skip_while(|line| *line != USER_ONLY_KINDS_LEAD);
+    if let Some(lead) = lines.next() {
+      let mut kinds = vec![lead];
+      kinds.extend(lines.take_while(|line| line.starts_with("  ")));
+      return Ok(kinds.join("\n"));
+    }
+  }
+  bail!("the session's effective prompt lists no user-only kinds")
 }
 
 /// The judge prompt's user message: the item and its page, the Goal, the user messages, the settled text, the context
@@ -238,22 +260,23 @@ fn render_prompt(
   sections.join("\n\n")
 }
 
-/// One call to the light backends: `backends.calls.probe` in pool rotation. A member that fails is recorded out and the
-/// next member is tried; when none answers, the call fails with each member's failure.
+/// One call to the `JUDGE_CALL_CLASS` pool in pool rotation. A member that fails is recorded out and the next member is
+/// tried; when none answers, the call fails with each member's failure.
 async fn light_answer(features: &FeatureContext, session_id: &str, prompt: &str) -> anyhow::Result<String> {
   let cfg = features.config.get()?;
-  let target = cfg.backends.calls.get(CallClass::Probe);
+  let class = JUDGE_CALL_CLASS.key();
+  let target = cfg.backends.calls.get(JUDGE_CALL_CLASS);
   if target.is_none() {
-    bail!("backends.calls.probe is unset");
+    bail!("backends.calls.{class} is unset");
   }
   let pool = pools::backend_pool(features)?;
   let base_env = agent_environment::spawn_base_environment(features)?;
   let mut failures = Vec::new();
-  for option in pools::one_shot_members(&cfg, Arc::clone(&pool), "probe", target) {
+  for option in pools::one_shot_members(&cfg, Arc::clone(&pool), class, target) {
     let option = option?;
     let launch = LaunchArgs { cgroup_session_id: Some(session_id.to_string()), ..LaunchArgs::default() };
     let outcome = match backend_types::build_backend(Arc::clone(&features.registry), &option, &cfg, launch) {
-      Ok(built) => one_shot_text(built, &base_env.values, prompt, JUDGE_PROMPT, Some(cold_read::PROBE_TIMEOUT)).await,
+      Ok(built) => one_shot_text(built, &base_env.values, prompt, JUDGE_PROMPT, Some(JUDGE_TIMEOUT)).await,
       Err(error) => Err(error),
     };
     match outcome {
@@ -273,15 +296,22 @@ async fn light_answer(features: &FeatureContext, session_id: &str, prompt: &str)
 
 /// Parse the judge's answer against the contract, and check that a refusal's quote is in a settled text.
 fn parse_verdict(answer: &str, settled: &[Settled]) -> Result<Judgement, String> {
+  if answer.trim().is_empty() {
+    return Err("the answer is empty".to_string());
+  }
   let parsed: Answer =
     serde_json::from_str(answer.trim()).map_err(|error| format!("the answer is not the verdict object: {error}"))?;
+  let reason = parsed.reason.trim().to_string();
+  if reason.is_empty() {
+    return Err("the verdict gives no reason".to_string());
+  }
   let cited = parsed.cited.trim();
   match parsed.decision.as_str() {
     "accept" => {
       if !cited.is_empty() {
         return Err("an accept verdict cites text".to_string());
       }
-      Ok(Judgement::Accepted { judged_kind: judged_kind(&parsed.judged_kind)? })
+      Ok(Judgement::Accepted { judged_kind: judged_kind(&parsed.judged_kind)?, reason })
     }
     "refuse" => {
       if !parsed.judged_kind.trim().is_empty() {
@@ -295,7 +325,7 @@ fn parse_verdict(answer: &str, settled: &[Settled]) -> Result<Judgement, String>
         .iter()
         .find(|source| normalize(&source.text).contains(&quote))
         .ok_or_else(|| format!("the cited text is in no settled source: {cited}"))?;
-      Ok(Judgement::Refused { rule: format!("{}: {cited}", source.label) })
+      Ok(Judgement::Refused { rule: format!("{}: {cited}", source.label), reason })
     }
     other => Err(format!("unknown decision {other:?}")),
   }
@@ -318,8 +348,6 @@ fn normalize(text: &str) -> String {
 mod tests {
   use axum::http::StatusCode;
   use charliebot_core::event_types::WEB_STATUS;
-  use charliebot_store::metadata::TaskProfile;
-  use charliebot_store::{CreateTask, TaskCaller};
   use serde_json::json;
 
   use super::*;
@@ -331,23 +359,31 @@ mod tests {
   }
 
   #[test]
-  fn the_master_prompt_yields_its_action_boundaries_and_user_only_kinds() {
-    let boundaries = action_boundaries().unwrap();
-    assert!(boundaries.starts_with("## Action Boundaries"));
-    assert!(boundaries.contains("high-consequence steps"));
-    assert!(!boundaries.contains("\n## "));
-    let kinds = user_only_kinds().unwrap();
+  fn the_user_only_kinds_come_from_the_block_that_lists_them() {
+    let block = |text: &str| PromptBlock {
+      sources: Vec::new(),
+      body_ref: String::new(),
+      delivery: String::new(),
+      text: text.to_string(),
+    };
+    let listing = format!("{USER_ONLY_KINDS_LEAD}\n  - one\n  - two\n  - three\n  - four\n## Next");
+    let kinds = user_only_kinds(&[block("no list here"), block(&listing)]).unwrap();
     assert!(kinds.starts_with(USER_ONLY_KINDS_LEAD));
-    assert_eq!(kinds.lines().count(), 4);
+    assert_eq!(kinds.lines().count(), 5);
+    assert!(user_only_kinds(&[block("no list here")]).is_err());
   }
 
   #[test]
   fn an_accept_names_its_kind_and_an_empty_kind_is_none() {
     let settled = [source("memo.md", "anything")];
-    let verdict = parse_verdict(r#"{"decision":"accept","judged_kind":"take_off","cited":""}"#, &settled);
-    assert_eq!(verdict, Ok(Judgement::Accepted { judged_kind: Some(JudgedKind::TakeOff) }));
-    let verdict = parse_verdict(r#"{"decision":"accept","judged_kind":"","cited":""}"#, &settled);
-    assert_eq!(verdict, Ok(Judgement::Accepted { judged_kind: None }));
+    let verdict =
+      parse_verdict(r#"{"reason":"a step","decision":"accept","judged_kind":"take_off","cited":""}"#, &settled);
+    assert_eq!(
+      verdict,
+      Ok(Judgement::Accepted { judged_kind: Some(JudgedKind::TakeOff), reason: "a step".to_string() })
+    );
+    let verdict = parse_verdict(r#"{"reason":"a step","decision":"accept","judged_kind":"","cited":""}"#, &settled);
+    assert_eq!(verdict, Ok(Judgement::Accepted { judged_kind: None, reason: "a step".to_string() }));
   }
 
   #[test]
@@ -355,12 +391,15 @@ mod tests {
     let settled =
       [source("memo.md", "Unrelated."), source("surpass/gpuq", "The queue gate runs the\ntests on the CPU first.")];
     let verdict = parse_verdict(
-      r#"{"decision":"refuse","judged_kind":"","cited":"The queue gate runs the tests on the CPU first."}"#,
+      r#"{"reason":"a step","decision":"refuse","judged_kind":"","cited":"The queue gate runs the tests on the CPU first."}"#,
       &settled,
     );
     assert_eq!(
       verdict,
-      Ok(Judgement::Refused { rule: "surpass/gpuq: The queue gate runs the tests on the CPU first.".to_string() })
+      Ok(Judgement::Refused {
+        rule: "surpass/gpuq: The queue gate runs the tests on the CPU first.".to_string(),
+        reason: "a step".to_string(),
+      })
     );
   }
 
@@ -368,14 +407,17 @@ mod tests {
   fn a_contract_break_is_an_error_not_a_verdict() {
     let settled = [source("memo.md", "text")];
     for answer in [
+      "",
       "not json",
-      r#"{"decision":"accept","judged_kind":"take_off","cited":"text","extra":1}"#,
-      r#"{"decision":"accept","judged_kind":"approval","cited":""}"#,
-      r#"{"decision":"accept","judged_kind":"","cited":"text"}"#,
-      r#"{"decision":"refuse","judged_kind":"take_off","cited":"text"}"#,
-      r#"{"decision":"refuse","judged_kind":"","cited":""}"#,
-      r#"{"decision":"refuse","judged_kind":"","cited":"invented"}"#,
-      r#"{"decision":"maybe","judged_kind":"","cited":""}"#,
+      r#"{"reason":"r","decision":"accept","judged_kind":"take_off","cited":"text","extra":1}"#,
+      r#"{"reason":"r","decision":"accept","judged_kind":"approval","cited":""}"#,
+      r#"{"reason":"r","decision":"accept","judged_kind":"","cited":"text"}"#,
+      r#"{"reason":"r","decision":"refuse","judged_kind":"take_off","cited":"text"}"#,
+      r#"{"reason":"r","decision":"refuse","judged_kind":"","cited":""}"#,
+      r#"{"reason":"r","decision":"refuse","judged_kind":"","cited":"invented"}"#,
+      r#"{"reason":"r","decision":"maybe","judged_kind":"","cited":""}"#,
+      r#"{"reason":"","decision":"accept","judged_kind":"","cited":""}"#,
+      r#"{"decision":"accept","judged_kind":"","cited":""}"#,
     ] {
       assert!(parse_verdict(answer, &settled).is_err(), "{answer} must not parse as a verdict");
     }
@@ -383,10 +425,11 @@ mod tests {
 
   /// The settled sentence the refusal test writes into a rulings entry and quotes.
   const SETTLED: &str = "The unit tests of the gate run on the CPU, so they need no take off.";
-  const TAKE_OFF_ACCEPT: &str = r#"{"decision": "accept", "judged_kind": "take_off", "cited": ""}"#;
+  const TAKE_OFF_ACCEPT: &str = r#"{"reason": "an out-of-window deploy with no settled sentence", "decision": "accept", "judged_kind": "take_off", "cited": ""}"#;
 
   fn refuse(cited: &str) -> String {
-    json!({"decision": "refuse", "judged_kind": "", "cited": cited}).to_string()
+    json!({"reason": "a settled sentence decides the step", "decision": "refuse", "judged_kind": "", "cited": cited})
+      .to_string()
   }
 
   /// An item the judge reads as an out-of-window production take off, with its context.
@@ -555,46 +598,29 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_grandchild_reads_the_root_groups_topic() {
+  async fn the_settled_memory_is_every_entry_of_every_topic() {
     let home = Home::new();
     write_memory(&home);
-    let root = home
-      .features
-      .store
-      .create_task(
-        CreateTask {
-          request_id: "root".to_string(),
-          task_parent_id: None,
-          profile: TaskProfile::Manager,
-          task: None,
-          name: Some("root".to_string()),
-          backend: None,
-          group: Some("Surpass".to_string()),
-          session_id: None,
-        },
-        TaskCaller::Operator,
-        Default::default(),
-      )
-      .await
-      .expect("the root is created");
-    let child = home.child(&root.id, "child").await;
-    let grandchild = home.child(&child, "grandchild").await;
-    for session_id in [&root.id, &child, &grandchild] {
-      let settled = memory_settled(&home.features, session_id, &home.root()).await.expect("the settled text loads");
-      let labels: Vec<_> = settled.into_iter().map(|source| source.label).collect();
-      assert_eq!(labels, ["rulings/a", "surpass/gpuq"]);
-    }
+    let settled = memory_settled(&home.root()).await.expect("the settled memory loads");
+    let mut labels: Vec<_> = settled.into_iter().map(|source| source.label).collect();
+    labels.sort();
+    assert_eq!(labels, ["rulings/a", "surpass/gpuq", "workflow/w"]);
   }
 
   #[tokio::test]
-  async fn an_ungrouped_tree_reads_only_rulings() {
-    let home = Home::new();
-    write_memory(&home);
-    let root = home.manager("root", None).await;
-    let child = home.child(&root, "child").await;
-    let grandchild = home.child(&child, "grandchild").await;
-    let settled = memory_settled(&home.features, &grandchild, &home.root()).await.expect("the settled text loads");
-    let labels: Vec<_> = settled.into_iter().map(|source| source.label).collect();
-    assert_eq!(labels, ["rulings/a"]);
+  async fn the_effective_prompt_is_settled_text_but_its_goal_block_is_not() {
+    let home = Home::judging(TAKE_OFF_ACCEPT);
+    let sid = home.manager("session", None).await;
+    set_status(&home.features, &sid, &json!({"goal": "GOAL SENTENCE ONLY"}).to_string())
+      .await
+      .expect("the goal stores");
+    let meta = home.meta(&sid).await;
+    let cfg = home.features.config.get().expect("the config reads");
+
+    let Settlement { settled, kinds } =
+      prompt_settlement(&home.features, &cfg, &meta).await.expect("the effective prompt reads");
+    assert!(settled.iter().any(|source| source.label == "prompts/master.md"), "the master prompt is settled text");
+    assert!(settled.iter().all(|source| !source.text.contains("GOAL SENTENCE ONLY")));
+    assert!(kinds.starts_with(USER_ONLY_KINDS_LEAD));
   }
 }

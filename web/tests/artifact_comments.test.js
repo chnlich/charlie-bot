@@ -151,7 +151,7 @@ test('batch tray labels and POST target use the hash session when it resolves', 
   const header = findChildByClass(tray, '__cbc-tray-header');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
-  assert.equal(header.textContent, 'Pending comments (1) \u2192 Viewing Session');
+  assert.equal(header.textContent, 'Pending (1) \u2192 Viewing Session');
   assert.equal(sendBtn.textContent, 'Send 1 \u2192 Viewing Session');
 
   await clickElement(sendBtn);
@@ -189,7 +189,7 @@ test('hash session name 404 falls back to the injected server session id', async
   const header = findChildByClass(tray, '__cbc-tray-header');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
-  assert.equal(header.textContent, 'Pending comments (1) \u2192 Server Session');
+  assert.equal(header.textContent, 'Pending (1) \u2192 Server Session');
   assert.equal(sendBtn.textContent, 'Send 1 \u2192 Server Session');
 
   await clickElement(sendBtn);
@@ -540,7 +540,7 @@ function pendingTrayParts(body) {
 async function expectTrayPostsTo(body, calls, sessionId, sessionName, postMessage) {
   const {header, sendBtn} = pendingTrayParts(body);
   await flushPromises(5);
-  assert.equal(header.textContent, 'Pending comments (1) \u2192 ' + sessionName);
+  assert.equal(header.textContent, 'Pending (1) \u2192 ' + sessionName);
   assert.equal(sendBtn.textContent, 'Send 1 \u2192 ' + sessionName);
 
   await clickElement(sendBtn);
@@ -1577,18 +1577,6 @@ function pickButton(fork, name) {
   return findChildByClass(fork, '__cbc-picks').children.find((button) => button.textContent === name);
 }
 
-function pickBarOf(body) {
-  return findChildByClass(stackOf(body), '__cbc-pickbar');
-}
-
-function pickBarButton(body, label) {
-  return pickBarOf(body).children.find((button) => button.textContent === label);
-}
-
-function pickLabel(body) {
-  return pickBarOf(body).children.find((child) => child.className === '__cbc-pickbar-label').textContent;
-}
-
 function pickForkOne() {
   return makePickFork('1', [
     makeOption('「keep」: keep the file.', makeDemo('Ann')),
@@ -1602,170 +1590,6 @@ function pickForkTwo() {
     makeOption('「later」: act later.'),
   ], '「later」, to wait.');
 }
-
-test('a plan page offers one button per named option under each open question, none on a resolved one', () => {
-  const open = pickForkOne();
-  const resolved = makePickFork('3', [], null, {resolved: true});
-  const single = makePickFork('4', [makeOption('「only」: the one way.')], null);
-  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
-    bodyChildren: [open, resolved, single],
-    serverSessionId: 'owner',
-  });
-  assert.deepEqual(findChildByClass(open, '__cbc-picks').children.map((b) => b.textContent), ['keep', 'drop']);
-  assert.equal(findChildByClass(resolved, '__cbc-picks'), undefined, 'an answered question has no buttons');
-  assert.equal(findChildByClass(single, '__cbc-picks'), undefined, 'a question with one option has no pick');
-  assert.equal(pickLabel(body), 'Picked 0/1');
-});
-
-test('Send posts every pick in one message to the page owner, each option text verbatim under its number', async () => {
-  const calls = [];
-  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
-    hash: '#cbsession=viewer',
-    bodyChildren: [pickForkOne(), pickForkTwo()],
-    serverSessionId: 'owner',
-    fetch: pickFetchStub(calls),
-  });
-  const [forkOne, forkTwo] = body.children.filter((child) => child.className === 'fork');
-  clickElement(pickButton(forkOne, 'keep'));
-  clickElement(pickButton(forkTwo, 'later'));
-  clickElement(pickBarButton(body, 'Send'));
-  await flushPromises(3);
-
-  assert.equal(calls.length, 1, 'one message for the whole page');
-  assert.equal(calls[0].url, '/api/chat/owner/message', 'the message goes to the page owner, not the viewing session');
-  assert.equal(calls[0].body.content, [
-    '[Artifact picks · ' + PICK_PAGE_PATH + '] (2)',
-    '',
-    '1. ' + TICK + ' Q1',
-    '   ' + RETURN + ' 「keep」: keep the file.',
-    '',
-    '2. ' + TICK + ' Q2',
-    '   ' + RETURN + ' 「later」: act later.',
-  ].join('\n'));
-  assert.equal(pickLabel(body), 'Picked 2/2');
-  assert.equal(pickBarButton(body, 'Send').disabled, true, 'a sent page holds its picks until a reload');
-});
-
-test('Rest as recommended picks each open question its recommendation names and keeps a pick already made', async () => {
-  const calls = [];
-  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
-    bodyChildren: [pickForkOne(), pickForkTwo()],
-    serverSessionId: 'owner',
-    fetch: pickFetchStub(calls),
-  });
-  const [forkOne, forkTwo] = body.children.filter((child) => child.className === 'fork');
-  clickElement(pickButton(forkTwo, 'now'));
-  clickElement(pickBarButton(body, 'Rest as recommended'));
-  assert.equal(pickLabel(body), 'Picked 2/2');
-  assert.equal(pickButton(forkOne, 'keep').attributes['aria-pressed'], 'true');
-  assert.equal(pickButton(forkTwo, 'now').attributes['aria-pressed'], 'true', 'a pick made by hand stays');
-  assert.equal(pickButton(forkTwo, 'later').attributes['aria-pressed'], 'false');
-  clickElement(pickBarButton(body, 'Send'));
-  await flushPromises(3);
-  assert.equal(calls[0].body.content, [
-    '[Artifact picks · ' + PICK_PAGE_PATH + '] (2)',
-    '',
-    '1. ' + TICK + ' Q1',
-    '   ' + RETURN + ' 「keep」: keep the file.',
-    '',
-    '2. ' + TICK + ' Q2',
-    '   ' + RETURN + ' 「now」: act now.',
-  ].join('\n'));
-});
-
-test('Undo inside the five-second window posts nothing and returns the bar to the picks', async () => {
-  const calls = [];
-  const timers = [];
-  const cleared = [];
-  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
-    bodyChildren: [pickForkOne()],
-    serverSessionId: 'owner',
-    fetch: pickFetchStub(calls),
-    setTimeout: (callback) => {
-      timers.push(callback);
-      return timers.length;
-    },
-    clearTimeout: (id) => { cleared.push(id); },
-  });
-  const [fork] = body.children.filter((child) => child.className === 'fork');
-  clickElement(pickButton(fork, 'keep'));
-  clickElement(pickBarButton(body, 'Send'));
-  assert.equal(pickLabel(body), 'Sending', 'the undo window uses the approved state label');
-  assert.equal(pickButton(fork, 'drop').disabled, true, 'the picks hold during the countdown');
-  clickElement(pickBarButton(body, 'Undo'));
-  await flushPromises(3);
-  assert.deepEqual(cleared, [1], 'the pending tick is cancelled');
-  assert.equal(calls.length, 0, 'nothing is posted');
-  assert.equal(pickLabel(body), 'Picked 1/1');
-  assert.equal(pickButton(fork, 'drop').disabled, false);
-});
-
-test('a 5xx keeps the bar on Sending through the retry, then the sent picks hold until reload', async () => {
-  let attempts = 0;
-  const timers = [];
-  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
-    bodyChildren: [pickForkOne()],
-    serverSessionId: 'owner',
-    fetch: async () => {
-      attempts += 1;
-      if (attempts === 1) return {ok: false, status: 503};
-      return {ok: true, status: 202, json: async () => ({})};
-    },
-    setTimeout: (callback) => {
-      timers.push(callback);
-      return timers.length;
-    },
-  });
-  const [fork] = body.children.filter((child) => child.className === 'fork');
-  clickElement(pickButton(fork, 'keep'));
-  clickElement(pickBarButton(body, 'Send'));
-  // The undo window closes once and posts; the 5xx schedules the retry's backoff.
-  timers.shift()();
-  await flushPromises(3);
-  assert.equal(pickLabel(body), 'Sending', 'the bar holds Sending while the retry waits');
-  assert.equal(attempts, 1);
-  timers.shift()();
-  await flushPromises(3);
-  assert.equal(attempts, 2, 'the retry posts again');
-  assert.equal(pickLabel(body), 'Picked 1/1');
-  assert.equal(pickBarButton(body, 'Send').disabled, true);
-});
-
-test('a 4xx shows the error, keeps the picks and lets Send run again', async () => {
-  const calls = [];
-  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
-    bodyChildren: [pickForkOne()],
-    serverSessionId: 'owner',
-    fetch: pickFetchStub(calls, 409),
-    console: {error() {}},
-  });
-  const [fork] = body.children.filter((child) => child.className === 'fork');
-  clickElement(pickButton(fork, 'keep'));
-  clickElement(pickBarButton(body, 'Send'));
-  await flushPromises(3);
-  const toast = stackOf(body).children.find((child) => child.textContent === 'Comment post failed: HTTP 409');
-  assert.ok(toast, 'the refusal shows as the toast');
-  assert.equal(pickButton(fork, 'keep').attributes['aria-pressed'], 'true', 'the pick is kept');
-  assert.equal(pickBarButton(body, 'Send').disabled, false, 'Send runs again');
-});
-
-test('a landed pick refreshes the Status view of the framed page it sits in', async () => {
-  let refreshed = 0;
-  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, true, {
-    hash: '#cbsession=owner&cbpanel=1',
-    bodyChildren: [pickForkOne()],
-    serverSessionId: 'owner',
-    parent: {
-      refreshSessionStatusPanel() { refreshed += 1; },
-    },
-    fetch: pickFetchStub([]),
-  });
-  const [fork] = body.children.filter((child) => child.className === 'fork');
-  clickElement(pickButton(fork, 'keep'));
-  clickElement(pickBarButton(body, 'Send'));
-  await flushPromises(3);
-  assert.equal(refreshed, 1);
-});
 
 test('a question inside a closed details or a demo is not a pick, and a sitrep page has no picks', () => {
   const folded = makeElement();
@@ -1784,24 +1608,329 @@ test('a question inside a closed details or a demo is not a pick, and a sitrep p
     '/absolute_filepath/data/home/user/.charliebot/sessions/owner/artifacts/sitrep_week.html', false,
     {bodyChildren: [sitrep], serverSessionId: 'owner'});
   assert.equal(findChildByClass(sitrep, '__cbc-picks'), undefined);
-  assert.equal(pickBarOf(sitrepBody), undefined);
+  const sitrepTray = findChildByClass(stackOf(sitrepBody), '__cbc-tray');
+  assert.equal(findChildByClass(sitrepTray, '__cbc-tray-picks').style.display, 'none',
+    'a page without questions shows no pick row in the tray');
 });
 
-test('the pick controls draw their icons: a picked option shows done, Send and Undo their own', async () => {
+
+// ---- The one tray: picks and comments share its list, its count, its Send and its one message ----
+
+function forksOf(body) {
+  return body.children.filter((child) => child.className === 'fork');
+}
+
+function trayOf(body) {
+  return findChildByClass(stackOf(body), '__cbc-tray');
+}
+
+function traySend(body) {
+  return findChildByClass(findChildByClass(trayOf(body), '__cbc-tray-actions'), '__cbc-tray-send');
+}
+
+function trayButton(body, label) {
+  const actions = findChildByClass(trayOf(body), '__cbc-tray-actions');
+  const pickRow = findChildByClass(trayOf(body), '__cbc-tray-picks');
+  return [...actions.children, ...pickRow.children].find((button) => button.textContent === label);
+}
+
+function trayHeaderOf(body) {
+  return findChildByClass(trayOf(body), '__cbc-tray-header').textContent;
+}
+
+function pickRowLabel(body) {
+  return findChildByClass(findChildByClass(trayOf(body), '__cbc-tray-picks'), '__cbc-tray-picks-label').textContent;
+}
+
+// Every node under `node` with the class, in layer order. An entry shows in the rail's column or in its list.
+function nodesWithClass(node, className, found = []) {
+  if (node.className === className) found.push(node);
+  for (const child of node.children || []) nodesWithClass(child, className, found);
+  return found;
+}
+
+function trayItemsOf(body) {
+  return nodesWithClass(body, '__cbc-tray-item');
+}
+
+function pressedOf(button) {
+  return button.attributes['aria-pressed'] === 'true';
+}
+
+function postsOf(calls) {
+  return calls.filter((call) => call.method === 'POST');
+}
+
+// A timer list the test runs by hand: each send opens one undo window, and the test decides when it closes.
+function manualTimers() {
+  const timers = [];
+  return {timers, setTimeout: (callback) => { timers.push(callback); return timers.length; }};
+}
+
+test('two picks and a comment share one tray and one Send, and that Send posts one message to the comment target',
+  async () => {
+    const calls = [];
+    const clock = manualTimers();
+    const block = makeBlock('A paragraph the reader comments on.');
+    const {body, listeners} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+      hash: '#cbsession=viewer',
+      bodyChildren: [pickForkOne(), pickForkTwo(), block],
+      serverSessionId: 'owner',
+      fetch: pickFetchStub(calls),
+      setTimeout: clock.setTimeout,
+    });
+    const [fork1, fork2] = forksOf(body);
+    clickElement(pickButton(fork1, 'keep'));
+    clickElement(pickButton(fork2, 'now'));
+    addBlockComment(body, listeners, block, 'Check this paragraph.');
+
+    assert.equal(nodesWithClass(body, '__cbc-tray').length, 1, 'one tray');
+    assert.equal(nodesWithClass(body, '__cbc-tray-send').length, 1, 'one Send');
+    assert.equal(trayItemsOf(body).length, 3, 'the tray holds two picks and one comment');
+    assert.match(trayHeaderOf(body), /^Pending \(3\)/);
+
+    clickElement(traySend(body));
+    assert.equal(clock.timers.length, 1, 'one undo window opens');
+    clock.timers.shift()();
+    await flushPromises(5);
+
+    const posts = postsOf(calls);
+    assert.deepEqual(posts.map((call) => call.url), ['/api/chat/viewer/message'], 'one message, to the comment target');
+    assert.equal(posts[0].body.content, [
+      '[Artifact comments · ' + PICK_PAGE_PATH + '] (3)',
+      '',
+      '1. ▸ Q1',
+      '   ↳ 「keep」: keep the file.',
+      '',
+      '2. ▸ Q2',
+      '   ↳ 「now」: act now.',
+      '',
+      '3. ▸ "A paragraph the reader comments on."',
+      '   ↳ Check this paragraph.',
+    ].join('\n'));
+    assert.equal(trayItemsOf(body).length, 0, 'the sent entries leave the list');
+    assert.equal(pickButton(fork1, 'keep').disabled, true, 'a sent question holds its answer until a reload');
+  });
+
+test('a page opened on its own sends its picks to the session named in its address', async () => {
   const calls = [];
-  const {body, window} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+  const clock = manualTimers();
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
     bodyChildren: [pickForkOne()],
     serverSessionId: 'owner',
     fetch: pickFetchStub(calls),
+    setTimeout: clock.setTimeout,
   });
-  const [fork] = body.children.filter((child) => child.className === 'fork');
+  clickElement(pickButton(forksOf(body)[0], 'keep'));
+  clickElement(traySend(body));
+  clock.timers.shift()();
+  await flushPromises(5);
+  assert.deepEqual(postsOf(calls).map((call) => call.url), ['/api/chat/viewer/message']);
+});
+
+test('a page shown inside the app sends its picks to the session the app shows, not the page owner', async () => {
+  const calls = [];
+  const clock = manualTimers();
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, true, {
+    hash: '#cbsession=owner&cbpanel=1',
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    parent: {planPanel: {currentSessionId: () => 'live'}},
+    fetch: pickFetchStub(calls),
+    setTimeout: clock.setTimeout,
+  });
+  clickElement(pickButton(forksOf(body)[0], 'keep'));
+  clickElement(traySend(body));
+  clock.timers.shift()();
+  await flushPromises(5);
+  assert.deepEqual(postsOf(calls).map((call) => call.url), ['/api/chat/live/message']);
+});
+
+test('Undo inside the undo window posts nothing and leaves the pick and the comment pending', async () => {
+  const calls = [];
+  const clock = manualTimers();
+  const cleared = [];
+  const block = makeBlock('A paragraph.');
+  const {body, listeners} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne(), block],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+    setTimeout: clock.setTimeout,
+    clearTimeout: (id) => { cleared.push(id); },
+  });
+  const [fork] = forksOf(body);
+  clickElement(pickButton(fork, 'keep'));
+  addBlockComment(body, listeners, block, 'A note.');
+  clickElement(traySend(body));
+  assert.equal(traySend(body).disabled, true, 'Send is off during the countdown');
+  assert.equal(pickButton(fork, 'drop').disabled, true, 'the options hold during the countdown');
+  clickElement(trayButton(body, 'Undo'));
+  await flushPromises(3);
+  assert.deepEqual(cleared, [1], 'the undo timer is cancelled');
+  assert.deepEqual(postsOf(calls), [], 'nothing is posted');
+  assert.equal(trayItemsOf(body).length, 2, 'both entries stay pending');
+  assert.equal(pickButton(fork, 'drop').disabled, false, 'the options open again');
+});
+
+test('Rest as recommended picks only the questions that have no pick yet', () => {
+  const calls = [];
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne(), pickForkTwo()],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+  });
+  const [fork1, fork2] = forksOf(body);
+  clickElement(pickButton(fork1, 'drop'));
+  assert.match(pickRowLabel(body), /\b1 of 2\b/, 'one question has no pick');
+  clickElement(trayButton(body, 'Rest as recommended'));
+  assert.match(pickRowLabel(body), /\b0 of 2\b/, 'no question is left without a pick');
+  assert.equal(pressedOf(pickButton(fork1, 'drop')), true, 'the pick already made is kept');
+  assert.equal(pressedOf(pickButton(fork1, 'keep')), false, 'the recommended option of a picked question is not added');
+  assert.equal(pressedOf(pickButton(fork2, 'later')), true, 'the unpicked question takes its recommendation');
+  assert.equal(trayItemsOf(body).length, 2);
+});
+
+test('a pick and a comment stay pending across a reload, each on its own question', () => {
+  const storage = makeSessionStorage();
+  const block = makeBlock('A paragraph.');
+  const first = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne(), block],
+    serverSessionId: 'owner',
+    sessionStorage: storage,
+    fetch: pickFetchStub([]),
+  });
+  clickElement(pickButton(forksOf(first.body)[0], 'drop'));
+  addBlockComment(first.body, first.listeners, block, 'A note.');
+
+  const reloadedBlock = makeBlock('A paragraph.');
+  const second = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne(), reloadedBlock],
+    serverSessionId: 'owner',
+    sessionStorage: storage,
+    fetch: pickFetchStub([]),
+  });
+  assert.equal(trayItemsOf(second.body).length, 2, 'the reloaded tray holds both entries');
+  assert.equal(pressedOf(pickButton(forksOf(second.body)[0], 'drop')), true, 'the pick is back on its question');
+});
+
+test('a 5xx holds the tray on Sending through the retry, then the entries leave and the question keeps its answer',
+  async () => {
+    const clock = manualTimers();
+    let posts = 0;
+    const fetch = async (url) => {
+      if (!url.endsWith('/message')) return {ok: true, status: 200, async json() { return {name: ''}; }};
+      posts += 1;
+      if (posts === 1) return {ok: false, status: 503};
+      return {ok: true, status: 202, async json() { return {}; }};
+    };
+    const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+      hash: '#cbsession=viewer',
+      bodyChildren: [pickForkOne()],
+      serverSessionId: 'owner',
+      fetch,
+      setTimeout: clock.setTimeout,
+    });
+    const [fork] = forksOf(body);
+    clickElement(pickButton(fork, 'keep'));
+    clickElement(traySend(body));
+    clock.timers.shift()();
+    await flushPromises(3);
+    assert.equal(posts, 1, 'the first post failed');
+    assert.equal(traySend(body).disabled, true, 'the tray holds while the post retries');
+    assert.equal(trayItemsOf(body).length, 1, 'the entry stays until the post lands');
+    clock.timers.shift()();
+    await flushPromises(5);
+    assert.equal(posts, 2, 'the retry posts again');
+    assert.equal(trayItemsOf(body).length, 0, 'the sent entry leaves the list');
+    assert.equal(pickButton(fork, 'keep').disabled, true, 'the answered question holds until a reload');
+  });
+
+test('a 4xx shows the error, keeps the entries pending, and lets Send run again', async () => {
+  const clock = manualTimers();
+  const fetch = async (url) => {
+    if (!url.endsWith('/message')) return {ok: true, status: 200, async json() { return {name: ''}; }};
+    return {ok: false, status: 403};
+  };
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch,
+    setTimeout: clock.setTimeout,
+  });
+  clickElement(pickButton(forksOf(body)[0], 'keep'));
+  clickElement(traySend(body));
+  clock.timers.shift()();
+  await flushPromises(5);
+  assert.equal(trayItemsOf(body).length, 1, 'the pick stays pending');
+  assert.equal(traySend(body).disabled, false, 'Send runs again');
+});
+
+test('a landed pick refreshes the Status view of the framed page it sits in', async () => {
+  const clock = manualTimers();
+  const calls = [];
+  let refreshes = 0;
+  const {body} = loadArtifactCommentsScript(PICK_PAGE_PATH, true, {
+    hash: '#cbsession=owner&cbpanel=1',
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    parent: {
+      planPanel: {currentSessionId: () => 'live'},
+      refreshSessionStatusPanel: () => { refreshes += 1; },
+    },
+    fetch: pickFetchStub(calls),
+    setTimeout: clock.setTimeout,
+  });
+  clickElement(pickButton(forksOf(body)[0], 'keep'));
+  clickElement(traySend(body));
+  clock.timers.shift()();
+  await flushPromises(5);
+  assert.equal(refreshes, 1, 'the Status view refreshes once');
+});
+
+test('per-entry removal and Clear act on a pick as they do on a comment', () => {
+  const calls = [];
+  const block = makeBlock('A paragraph.');
+  const {body, listeners} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne(), block],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+  });
+  const [fork] = forksOf(body);
+  clickElement(pickButton(fork, 'keep'));
+  addBlockComment(body, listeners, block, 'A note.');
+  const pickItem = trayItemsOf(body).find((item) => nodesWithClass(item, '__cbc-tray-item-quote')[0].textContent === 'Q1');
+  clickElement(nodesWithClass(pickItem, '__cbc-tray-remove')[0]);
+  assert.equal(pressedOf(pickButton(fork, 'keep')), false, 'removing the pick unpicks its option');
+  assert.equal(trayItemsOf(body).length, 1, 'the comment stays');
+  clickElement(trayButton(body, 'Clear'));
+  assert.equal(trayItemsOf(body).length, 0, 'Clear empties the tray');
+  assert.match(trayHeaderOf(body), /^Pending \(0\)/);
+});
+
+test('the tray draws the done icon on a picked option and Undo its own icon, and Rest draws no icon', () => {
+  const calls = [];
+  const clock = manualTimers();
+  const {body, window} = loadArtifactCommentsScript(PICK_PAGE_PATH, false, {
+    hash: '#cbsession=viewer',
+    bodyChildren: [pickForkOne()],
+    serverSessionId: 'owner',
+    fetch: pickFetchStub(calls),
+    setTimeout: clock.setTimeout,
+  });
+  const [fork] = forksOf(body);
   const keep = pickButton(fork, 'keep');
   assert.equal(keep.children[0].innerHTML, '', 'an unpicked option draws no icon');
   clickElement(keep);
   assert.equal(keep.children[0].innerHTML, window.cbIcon('done', 12), 'a picked option draws the done icon');
   assert.equal(pickButton(fork, 'drop').children[0].innerHTML, '', 'the other option stays bare');
-  assert.equal(pickBarButton(body, 'Send').children[0].innerHTML, window.cbIcon('send', 14));
-  assert.equal(pickBarButton(body, 'Undo').children[0].innerHTML, window.cbIcon('undo', 14));
-  assert.equal(pickBarButton(body, 'Rest as recommended').children.length, 1, 'Rest draws no icon');
-  assert.equal(pickButton(fork, 'keep').textContent, 'keep', 'the icon leaves the label as the button text');
+  assert.equal(trayButton(body, 'Rest as recommended').children.length, 1, 'Rest draws no icon');
+  clickElement(traySend(body));
+  assert.equal(trayButton(body, 'Undo').children[0].innerHTML, window.cbIcon('undo', 14), 'Undo draws its icon');
 });

@@ -50,6 +50,7 @@ pub mod text_repr;
 pub mod timefmt;
 pub mod timeouts;
 pub mod tls;
+pub mod ui_text;
 pub mod utc_datetime;
 pub mod web_search;
 

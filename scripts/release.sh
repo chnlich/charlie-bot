@@ -12,7 +12,8 @@
 # Exit codes:
 #   2  the preflight refused and wrote nothing: the argument is not a full 40-character sha on origin/main, the
 #      release directory already exists, the user manager does not answer, gh is not authenticated for this repository,
-#      CI has no successful push run of both Rust jobs for the commit, or another release holds the host release lock.
+#      gh fails while it reads the CI runs, CI has no successful push run of both Rust jobs for the commit, or another
+#      release holds the host release lock.
 #   1  a stage failed; the stage name and its log path are printed. A download, units or install failure installs
 #      nothing. A prune failure leaves the new release installed, and the prune log names the directory it failed on.
 #   0  the release is installed; the switch command is printed.
@@ -109,25 +110,35 @@ git -C "$REPO_ROOT" merge-base --is-ancestor "$COMMIT" origin/main 2> /dev/null 
 [ ! -e "$RELEASES_DIR/$COMMIT" ] && [ ! -L "$RELEASES_DIR/$COMMIT" ] \
   || refuse "release $RELEASES_DIR/$COMMIT already exists"
 
-# ci_run_id: the newest push run of the CI workflow for COMMIT whose release-build and rust-test jobs succeeded. gh
-# filters its own JSON; the preflight runs before any release binary is downloaded, and gh is already required.
+# ci_run_id: the newest push run of the ci.yml workflow for COMMIT whose release-build and rust-test jobs succeeded.
+# The workflow is named by its file: gh cannot resolve the display name CI, which two workflows share. gh's stderr is
+# not redirected, so gh's own error reaches the user. The function returns 3 when a gh call fails and 1 when no run
+# qualifies. gh filters its own JSON; the preflight runs before any release binary is downloaded.
 ci_run_id() {
-  local id
+  local id runs green
+  runs="$(gh run list --repo "$REPO_SLUG" --workflow ci.yml --commit "$COMMIT" --limit 20 \
+      --json databaseId,event,headSha,conclusion \
+      --jq '.[] | select(.event == "push" and .headSha == "'"$COMMIT"'" and .conclusion == "success") | .databaseId')" \
+    || return 3
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    gh run view "$id" --repo "$REPO_SLUG" --json jobs \
-      --jq '([.jobs[] | select(.conclusion == "success") | .name] | (index("release-build") != null) and (index("rust-test") != null))' \
-      2> /dev/null | grep -qx true || continue
+    green="$(gh run view "$id" --repo "$REPO_SLUG" --json jobs \
+      --jq '[.jobs[] | select(.conclusion == "success") | .name]
+        | index("release-build") != null and index("rust-test") != null')" \
+      || return 3
+    [ "$green" = true ] || continue
     printf '%s' "$id"
     return 0
-  done < <(gh run list --repo "$REPO_SLUG" --workflow CI --commit "$COMMIT" --limit 20 \
-      --json databaseId,event,headSha,conclusion \
-      --jq '.[] | select(.event == "push" and .headSha == "'"$COMMIT"'" and .conclusion == "success") | .databaseId' \
-      2> /dev/null)
+  done <<< "$runs"
   return 1
 }
 
-RUN_ID="$(ci_run_id)" || refuse "CI has no successful push run of release-build and rust-test for $COMMIT"
+RUN_ID="$(ci_run_id)"
+case $? in
+  0) ;;
+  1) refuse "CI has no successful push run of release-build and rust-test for $COMMIT" ;;
+  3) refuse "gh could not read the CI runs for $COMMIT; gh's error is printed above" ;;
+esac
 
 RUN_DIR="$LOG_ROOT/${COMMIT}-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p -m 700 "$RUN_DIR" || refuse "cannot create the log directory $RUN_DIR"

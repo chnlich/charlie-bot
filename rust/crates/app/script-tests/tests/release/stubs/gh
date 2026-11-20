@@ -28,6 +28,24 @@ case "$1 $2" in
     cat "$behavior/slug"
     ;;
   "run list")
+    # The repository has two workflows named CI, so gh resolves only the file name: any other selector fails with the
+    # live gh's text for the shared name. A non-empty runs_error file is the failure of the query itself.
+    workflow=
+    previous=
+    for argument in "$@"; do
+      if [ "$previous" = "--workflow" ]; then
+        workflow="$argument"
+      fi
+      previous="$argument"
+    done
+    if [ "$workflow" != ci.yml ]; then
+      echo "could not resolve to a unique workflow; found: ci.yml pr-body.yml" >&2
+      exit 1
+    fi
+    if [ -s "$behavior/runs_error" ]; then
+      cat "$behavior/runs_error" >&2
+      exit 1
+    fi
     emit "$(cat "$behavior/runs")"
     ;;
   "run view")

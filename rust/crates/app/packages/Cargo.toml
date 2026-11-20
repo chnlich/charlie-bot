@@ -50,3 +50,6 @@ charliebot-user-text-checks.workspace = true
 charliebot-voice.workspace = true
 charliebot-web-reply.workspace = true
 charliebot-web-search.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

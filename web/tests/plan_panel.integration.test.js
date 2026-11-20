@@ -1,231 +1,188 @@
+// ---------------------------------------------------------------------------
+// The Plans tab in a headless Chrome at 1280 px and a 390 px phone width. The page uses the Plans tab's own markup
+// (web/features/artifacts/templates/artifacts/page_tab_panels.html), plan-panel.js, view-requests, and artifact styles.
+// The viewer opens prompts/plan_template.html, which has open trade-offs (div.fork blocks without p.resolved).
+//
+// The check: no visible button of the Plans tab sits outside its toolbar, so a plan page's open forks draw no question
+// button under the viewer.
+//
+// CHARLIEBOT_TEST_CHROME_BIN names the headless Chrome binary. The test fails when it is unset or names no file.
+// CHARLIEBOT_PLANS_SHOTS names a file prefix: each case saves <prefix>_<width>px.png before it asserts.
+// ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
-const test = require('node:test');
-const vm = require('node:vm');
-const { escapeHtml } = require('./escape_html_stub');
+const {after, before, test} = require('node:test');
 
-const { readPackageStatic } = require('./read_static');
+const {launchChrome, openPage, stopChrome, until} = require('./session_page_fixture');
 
-const { SESSIONS_ROOT } = require('./sessions_root_stub');
+const WEB_DIR = path.join(__dirname, '..');
+const REPO_DIR = path.join(WEB_DIR, '..');
+const PANEL_TEMPLATE_PATH = path.join(WEB_DIR, 'features', 'artifacts', 'templates', 'artifacts',
+  'page_tab_panels.html');
+const PLAN_PAGE_PATH = path.join(REPO_DIR, 'prompts', 'plan_template.html');
+const SESSION_ID = 'plans-session';
+const SESSIONS_ROOT_PATH = '/home/tester/.charliebot/sessions';
+const PLAN_FILE = 'artifacts/plan_01_v1.html';
+const VIEWPORTS = [{width: 1280, height: 800}, {width: 390, height: 844}];
+const SHOTS_PREFIX = process.env.CHARLIEBOT_PLANS_SHOTS || null;
 
-const PLAN_PANEL_JS = readPackageStatic('features', 'artifacts', 'plan-panel.js');
+// The URLs the page loads, mapped to the files the app serves them from.
+const STATIC_FILES = {
+  '/static/css/styles.css': path.join(WEB_DIR, 'static', 'css', 'styles.css'),
+  '/static/css/tailwind.css': path.join(WEB_DIR, 'static', 'css', 'tailwind.css'),
+  '/static/js/view-requests.js': path.join(WEB_DIR, 'static', 'js', 'view-requests.js'),
+  '/static/features/artifacts/artifacts.css': path.join(WEB_DIR, 'features', 'artifacts', 'static', 'artifacts.css'),
+  '/static/features/artifacts/plan-panel.js': path.join(WEB_DIR, 'features', 'artifacts', 'static', 'plan-panel.js'),
+};
 
-// ---------------------------------------------------------------------------
-// Minimal DOM shim used both as the `DOMParser` injected into the plan-panel
-// vm context (so `_renderActionBar` can parse fetched plan HTML) and directly
-// in the template contract test. It implements the small subset of the DOM
-// surface that `parseOpenForks` and the action-bar path rely on. That subset is
-// querySelector/querySelectorAll with `tag.class` selectors, cloneNode(deep),
-// child.remove(), and a live textContent computed from child nodes.
-// ---------------------------------------------------------------------------
-
-const VOID_TAGS = new Set([
-  'AREA', 'BASE', 'BR', 'COL', 'EMBED', 'HR', 'IMG', 'INPUT',
-  'LINK', 'META', 'PARAM', 'SOURCE', 'TRACK', 'WBR',
-]);
-const RAW_TEXT_TAGS = new Set(['SCRIPT', 'STYLE']);
-
-class MinimalElement {
-  constructor(tagName, attrs) {
-    this.tagName = String(tagName).toUpperCase();
-    this.attributes = attrs || {};
-    this.children = [];
-    this.parentNode = null;
-  }
-  get textContent() {
-    let text = '';
-    for (const child of this.children) {
-      if (typeof child === 'string') text += child;
-      else text += child.textContent;
-    }
-    return text;
-  }
-  cloneNode(deep) {
-    const clone = new MinimalElement(this.tagName, {...this.attributes});
-    if (deep) {
-      for (const child of this.children) {
-        if (typeof child === 'string') {
-          clone.children.push(child);
-        } else {
-          const c = child.cloneNode(true);
-          c.parentNode = clone;
-          clone.children.push(c);
-        }
-      }
-    }
-    return clone;
-  }
-  remove() {
-    if (!this.parentNode) return;
-    const idx = this.parentNode.children.indexOf(this);
-    if (idx >= 0) this.parentNode.children.splice(idx, 1);
-    this.parentNode = null;
-  }
-  querySelector(selector) {
-    const matches = this._all(selector);
-    return matches.length ? matches[0] : null;
-  }
-  querySelectorAll(selector) {
-    return this._all(selector);
-  }
-  _all(selector) {
-    const out = [];
-    for (const child of this.children) {
-      if (typeof child === 'string') continue;
-      if (_matchesSelector(child, selector)) out.push(child);
-      for (const n of child._all(selector)) out.push(n);
-    }
-    return out;
-  }
+// The panel's Jinja: the secondary-button class is set once in the template, and each button reads it.
+function renderPanel(markup) {
+  const secondary = /\{%\s*set plan_secondary = "([^"]*)"\s*%\}/.exec(markup);
+  if (!secondary) throw new Error('page_tab_panels.html sets no plan_secondary class');
+  return markup
+    .replace(/\{%\s*set plan_secondary = "[^"]*"\s*%\}/, '')
+    .replace(/\{\{\s*plan_secondary\s*\}\}/g, secondary[1]);
 }
 
-function _matchesSelector(el, selector) {
-  const m = /^([a-zA-Z][\w-]*)?(?:\.([a-zA-Z_][\w-]*))?$/.exec(selector || '');
-  if (!m) return false;
-  const wantTag = m[1] ? m[1].toUpperCase() : null;
-  const wantClass = m[2] || null;
-  if (wantTag && el.tagName !== wantTag) return false;
-  if (wantClass) {
-    const cls = (el.attributes.class || '').split(/\s+/);
-    if (!cls.includes(wantClass)) return false;
-  }
-  return true;
+const PANEL_HTML = renderPanel(fs.readFileSync(PANEL_TEMPLATE_PATH, 'utf8'));
+const PLAN_PAGE = fs.readFileSync(PLAN_PAGE_PATH, 'utf8');
+
+// The registry row the session's plans endpoint answers: one lineage with one version, whose page has open forks.
+const REGISTRY = {
+  plans: [{
+    id: 1,
+    title: 'Plan with open forks',
+    state: 'awaiting approval',
+    takeoff: null,
+    closed: null,
+    versions: [{v: 1, file: PLAN_FILE, created_at: '2026-11-19T00:00:00+00:00', trigger: 'initial', base: null}],
+  }],
+};
+
+// The tab and the viewer are the app's own: the page registers the Plans tab the way the app's tab registry does,
+// and the test shows the tab the way a tab switch does.
+function pageHtml() {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/css/styles.css">
+<link rel="stylesheet" href="/static/css/tailwind.css">
+<link rel="stylesheet" href="/static/features/artifacts/artifacts.css">
+</head>
+<body class="dark bg-slate-900 text-slate-100" style="margin:0">
+<div style="height:100vh;display:flex;flex-direction:column">
+${PANEL_HTML}
+</div>
+<script>
+var SESSION_ID = ${JSON.stringify(SESSION_ID)};
+var SESSIONS_ROOT = ${JSON.stringify(SESSIONS_ROOT_PATH)};
+var tabs = {};
+function registerTab(tab) { tabs[tab.id] = tab; }
+function switchTab(id) {
+  document.getElementById('tab-plans').classList.toggle('hidden', id !== 'chat-plans');
+  tabs[id].onShow();
+}
+function registerWsConnectHandler() {}
+function escapeHtmlAttr(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+</script>
+<script src="/static/js/view-requests.js"></script>
+<script src="/static/features/artifacts/plan-panel.js"></script>
+</body></html>`;
 }
 
-function parseHTML(html) {
-  const root = new MinimalElement('#document', {});
-  const stack = [root];
-  let i = 0;
-  while (i < html.length) {
-    if (html[i] === '<') {
-      if (html.substr(i, 4) === '<!--') {
-        const end = html.indexOf('-->', i + 4);
-        if (end === -1) break;
-        i = end + 3;
-        continue;
-      }
-      if (html[i + 1] === '!') {
-        const close = html.indexOf('>', i);
-        if (close === -1) break;
-        i = close + 1;
-        continue;
-      }
-      if (html[i + 1] === '/') {
-        const close = html.indexOf('>', i);
-        if (close === -1) break;
-        const tag = html.slice(i + 2, close).trim().toUpperCase();
-        for (let j = stack.length - 1; j > 0; j--) {
-          if (stack[j].tagName === tag) { stack.length = j; break; }
-        }
-        i = close + 1;
-        continue;
-      }
-      const close = html.indexOf('>', i);
-      if (close === -1) break;
-      let inner = html.slice(i + 1, close);
-      const selfClosing = inner.endsWith('/');
-      if (selfClosing) inner = inner.slice(0, -1).trim();
-      const sp = inner.search(/\s/);
-      let tagName, attrStr;
-      if (sp === -1) { tagName = inner.toUpperCase(); attrStr = ''; }
-      else { tagName = inner.slice(0, sp).toUpperCase(); attrStr = inner.slice(sp + 1); }
-      const attrs = {};
-      const are = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*"([^"]*)")?/g;
-      let am;
-      while ((am = are.exec(attrStr)) !== null) {
-        attrs[am[1].toLowerCase()] = am[2] != null ? am[2] : '';
-      }
-      const el = new MinimalElement(tagName, attrs);
-      el.parentNode = stack[stack.length - 1];
-      stack[stack.length - 1].children.push(el);
-      i = close + 1;
-      if (selfClosing || VOID_TAGS.has(tagName)) {
-        // no children
-      } else if (RAW_TEXT_TAGS.has(tagName)) {
-        const closeTag = '</' + tagName.toLowerCase() + '>';
-        const end = html.indexOf(closeTag, i);
-        if (end === -1) {
-          if (i < html.length) el.children.push(html.slice(i));
-          break;
-        }
-        if (end > i) el.children.push(html.slice(i, end));
-        i = end + closeTag.length;
-      } else {
-        stack.push(el);
-      }
-    } else {
-      let next = html.indexOf('<', i);
-      if (next === -1) next = html.length;
-      const text = html.slice(i, next).replace(/\s+/g, ' ');
-      if (text.trim()) stack[stack.length - 1].children.push(text);
-      i = next;
+function reply(res, status, contentType, body) {
+  res.writeHead(status, {'content-type': contentType});
+  res.end(body);
+}
+
+// Serves the page at /, the session's plan registry, the plan page at the viewer's address, and the static files.
+function startServer() {
+  const planUrl = `/absolute_filepath${SESSIONS_ROOT_PATH}/${SESSION_ID}/${PLAN_FILE}`;
+  const server = http.createServer((req, res) => {
+    const {pathname} = new URL(req.url, 'http://127.0.0.1');
+    if (req.method !== 'GET') return reply(res, 405, 'text/plain; charset=utf-8', 'method not allowed');
+    if (pathname === '/') return reply(res, 200, 'text/html; charset=utf-8', pageHtml());
+    if (pathname === `/api/sessions/${SESSION_ID}/plans`) {
+      return reply(res, 200, 'application/json; charset=utf-8', JSON.stringify(REGISTRY));
     }
-  }
-  return root;
+    if (pathname === planUrl) return reply(res, 200, 'text/html; charset=utf-8', PLAN_PAGE);
+    const file = STATIC_FILES[pathname];
+    if (!file) return reply(res, 404, 'text/plain; charset=utf-8', 'not found');
+    const type = file.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8';
+    return reply(res, 200, type, fs.readFileSync(file));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({server, base: `http://127.0.0.1:${server.address().port}`}));
+  });
 }
 
-class DOMParser {
-  parseFromString(html, mimeType) {
-    return parseHTML(html);
-  }
-}
+// Null until the viewer's plan page has loaded; then the number of its open forks.
+const VIEWER_STATE = `(() => {
+  const viewer = document.getElementById('plan-viewer');
+  const doc = viewer.contentDocument;
+  if (!viewer.getAttribute('src') || !doc || doc.readyState !== 'complete') return null;
+  const forks = [...doc.querySelectorAll('div.fork')];
+  return {openForks: forks.filter((fork) => !fork.querySelector('p.resolved')).length};
+})()`;
 
-function loadPlanPanelScript(opts = {}) {
-  const noop = () => {};
-  const document = opts.document || {
-    readyState: 'loading',
-    addEventListener: noop,
-    getElementById: () => null,
-    createElement: () => ({
-      _listeners: {},
-      addEventListener(ev, fn) { this._listeners[ev] = fn; },
-      appendChild() {},
-      set type(v) { this._type = v; },
-      get type() { return this._type; },
-    }),
+// The Plans tab's visible buttons, split by whether the toolbar holds them.
+const TAB_BUTTONS = `(() => {
+  const tab = document.getElementById('tab-plans');
+  const toolbar = document.getElementById('plan-toolbar');
+  const visible = [...tab.querySelectorAll('button')].filter((button) => button.getClientRects().length > 0);
+  return {
+    tabShown: tab.getClientRects().length > 0,
+    toolbarButtons: visible.filter((button) => toolbar.contains(button)).length,
+    outsideToolbar: visible.filter((button) => !toolbar.contains(button)).map((button) => button.textContent.trim()),
   };
-  const context = {
-    SESSION_ID: opts.sessionId || 'test-session',
-    SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT,
-    console: {error: noop, log: noop, warn: noop},
-    document,
-    window: {addEventListener() {}, SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT},
-    navigator: {onLine: true},
-    localStorage: {getItem: () => null, setItem: noop},
-    fetch: opts.fetch || (async () => {
-      throw new Error('fetch should not run during script load');
-    }),
-    DOMParser,
-    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
-    // The core entries the panel registers with at load; web/tests/page_registries.test.js covers them.
-    registerTab: noop,
-    registerWsConnectHandler: noop,
-    registerWsMessageHandler: noop,
-  };
-  vm.createContext(context);
-  vm.runInContext(PLAN_PANEL_JS, context, {filename: 'plan-panel.js'});
-  const planPanel = vm.runInContext('planPanel', context);
-  return {context, planPanel};
-}
+})()`;
 
-// ---------------------------------------------------------------------------
-// Item 6: template contract — parseOpenForks against prompts/plan_template.html
-// ---------------------------------------------------------------------------
-
-test('plan_template.html contract: open forks extracted, no question starts with its number, resolved excluded', () => {
-  const {planPanel} = loadPlanPanelScript();
-  const templatePath = path.join(__dirname, '..', '..', 'prompts', 'plan_template.html');
-  const html = fs.readFileSync(templatePath, 'utf8');
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const forks = planPanel.parseOpenForks(doc);
-  assert.ok(forks.length >= 1, 'template has at least one open fork');
-  for (const f of forks) {
-    assert.ok(f.n && f.question, 'each open fork has a number and a question');
-    assert.equal(String(f.question).startsWith(String(f.n)), false,
-      'question text must not start with its fork number');
-  }
-  const ns = forks.map((f) => String(f.n));
-  assert.ok(ns.includes('1'), 'open fork #1 (scope question) is present');
-  assert.equal(ns.includes('2'), false, 'resolved fork #2 is excluded');
+let profileDir = null;
+let chrome = null;
+let fixture = null;
+before(async () => {
+  profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plans-tab-chrome-'));
+  chrome = await launchChrome(profileDir);
+  fixture = await startServer();
 });
+after(() => {
+  if (chrome) stopChrome(chrome);
+  if (fixture) fixture.server.close();
+  if (profileDir) fs.rmSync(profileDir, {recursive: true, force: true});
+});
+
+async function checkPlansTab({width, height}) {
+  const page = await openPage(chrome.cdp, `${fixture.base}/`, {width, height});
+  try {
+    await until(async () => page.evaluate(`typeof tabs !== 'undefined' && !!tabs['chat-plans']`),
+      'the Plans tab to register');
+    await page.evaluate(`switchTab('chat-plans')`);
+    await until(async () => (await page.evaluate(VIEWER_STATE)) !== null, 'the plan page in the viewer');
+    // The panel's load hook runs after the viewer's document loads; the wait lets it finish before the measurement.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const viewer = await page.evaluate(VIEWER_STATE);
+    const tab = await page.evaluate(TAB_BUTTONS);
+    const {data} = await page.send('Page.captureScreenshot', {format: 'png'});
+    if (SHOTS_PREFIX) {
+      const file = `${SHOTS_PREFIX}_${width}px.png`;
+      fs.mkdirSync(path.dirname(file), {recursive: true});
+      fs.writeFileSync(file, Buffer.from(data, 'base64'));
+    }
+    assert.ok(viewer.openForks >= 1, 'the plan page has an open fork');
+    assert.equal(tab.tabShown, true, 'the Plans tab is not shown');
+    assert.ok(tab.toolbarButtons >= 1, 'the toolbar draws no button');
+    assert.deepEqual(tab.outsideToolbar, [], 'the Plans tab draws a button outside its toolbar');
+  } finally {
+    await chrome.cdp.send('Target.closeTarget', {targetId: page.targetId});
+  }
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`the Plans tab draws no question button for a plan page with open forks at ${viewport.width} px`,
+    {timeout: 120000}, () => checkPlansTab(viewport));
+}

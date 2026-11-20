@@ -9,6 +9,7 @@
 //! both. `helper_entry` owns the argv entries a binary serves before it registers, the OpenCode relay included.
 
 pub mod helper_entry;
+mod ui_text_config;
 
 use std::path::Path;
 
@@ -57,7 +58,7 @@ const PACKAGES: &[(&str, RegisterFn)] = &[
   (charliebot_openai_compatible::PACKAGE, charliebot_openai_compatible::register),
   (charliebot_antigravity::PACKAGE, charliebot_antigravity::register),
   (charliebot_charlie_code::PACKAGE, charliebot_charlie_code::register),
-  (charliebot_claude_code::PACKAGE, charliebot_claude_code::register),
+  (charliebot_claude_code::PACKAGE, ui_text_config::register_claude_code),
   (charliebot_codex::PACKAGE, charliebot_codex::register),
   (charliebot_devin::PACKAGE, charliebot_devin::register),
   (charliebot_gemini::PACKAGE, charliebot_gemini::register),

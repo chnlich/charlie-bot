@@ -311,7 +311,7 @@ test('tray restores pending draft on init with el null', () => {
   const tray = findChildByClass(stackOf(body), '__cbc-tray');
   const header = findChildByClass(tray, '__cbc-tray-header');
   assert.ok(
-    header.textContent.startsWith('Pending comments (2)'),
+    header.textContent.startsWith('Pending (2)'),
     'restored 2 entries on init: ' + header.textContent
   );
   const list = findChildByClass(tray, '__cbc-tray-list');

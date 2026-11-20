@@ -46,10 +46,11 @@ pub struct World {
 }
 
 /// The stub gh's answers. `runs` is the JSON array `run list` prints, and each `jobs` entry is the JSON array that
-/// `run view <id>` wraps in `{"jobs": ...}`.
+/// `run view <id>` wraps in `{"jobs": ...}`. `runs_error`, when set, is the stderr of a `run list` that fails.
 pub struct GhBehavior {
   pub auth: bool,
   pub runs: String,
+  pub runs_error: Option<String>,
   pub jobs: BTreeMap<String, String>,
   pub download_ok: bool,
   pub artifact_dir: PathBuf,
@@ -148,6 +149,7 @@ impl World {
         "conclusion": "success",
       }])
       .to_string(),
+      runs_error: None,
       jobs,
       download_ok: true,
       artifact_dir: self.artifact.clone(),
@@ -161,6 +163,9 @@ impl World {
     fs::write(dir.join("auth"), if behavior.auth { "1\n" } else { "0\n" }).expect("the auth answer");
     fs::write(dir.join("slug"), format!("{SLUG}\n")).expect("the slug answer");
     fs::write(dir.join("runs"), format!("{}\n", behavior.runs)).expect("the runs answer");
+    // An empty file means the run list succeeds.
+    let runs_error = behavior.runs_error.as_deref().map(|message| format!("{message}\n")).unwrap_or_default();
+    fs::write(dir.join("runs_error"), runs_error).expect("the run list error answer");
     for (id, jobs) in &behavior.jobs {
       fs::write(dir.join(format!("jobs-{id}")), format!("{{\"jobs\": {jobs}}}\n")).expect("a jobs answer");
     }

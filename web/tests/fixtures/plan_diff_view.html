@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CharlieBot Plan Template</title>
+<style>
+  :root{
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --acc:#1163c0; --grn:#187f37;
+    --amb:#9a6700; --red:#cf222e; --vio:#6a3fc0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--grn);color:#ffffff;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd)}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#ffffff;font-size:12px;font-weight:700;align-items:center;justify-content:center;margin-right:8px;vertical-align:-4px}
+  h2 .nb{background:var(--vio)}
+  h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  h3 .sn{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#ffffff;background:var(--vio);border-radius:5px;padding:1px 7px;margin-right:7px;vertical-align:baseline}
+  h3 .sn.read{background:var(--grn)}
+  h3 .layer{font-size:11px;font-weight:600;color:var(--mut);margin-left:7px}
+  p{margin:7px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
+  .plan-section{margin:0 0 18px}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  li .m,.muted{color:var(--mut)}
+  .src{font-size:11px;color:#66707b}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#7a4b00}
+  pre{background:#f6f8fa;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#24292f;margin:9px 0 0}
+  table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
+  th,td{border:1px solid var(--bd);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc);font-weight:600}
+  td .f,.f{font-family:var(--mono);color:#7a4b00}
+  .new{color:var(--grn);font-weight:600}
+  .edit{color:var(--amb);font-weight:600}
+  .callout{background:rgba(88,166,255,.08);border:1px solid #b6d3f2;border-left:3px solid var(--acc);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:#1c3f66}
+  .callout p{margin:0}
+  .callout.warn{background:rgba(210,153,34,.08);border-color:#e6d09b;border-left-color:var(--amb);color:#6b4e00}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px;margin:6px 0 0;font-size:12.5px}
+  .flow .b{background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+  .flow .b.n{border-color:var(--grn);color:#187f37}
+  .flow .ar{color:var(--mut)}
+  .fork{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--amb);border-radius:8px;padding:12px 15px;margin:12px 0}
+  .fork .q{font-weight:600;margin:0 0 4px}
+  .fork .fn{display:inline-flex;width:20px;height:20px;border-radius:6px;background:var(--amb);color:#ffffff;font-size:11.5px;font-weight:700;align-items:center;justify-content:center;margin-right:9px;vertical-align:-3px}
+  .fork .rec{margin:4px 0 0;font-size:12.5px}
+  .fork .rec b{color:var(--grn)}
+  .fork .trade{margin:3px 0 0;font-size:12.5px;color:var(--mut)}
+  .fork .resolved{margin:8px 0 0;padding-top:8px;border-top:1px dashed var(--bd);font-size:12.5px;font-weight:600;color:#187f37}
+  details.details-layer{background:var(--panel);border:1px solid var(--bd);border-radius:9px;margin:6px 0 0}
+  details.details-layer summary{cursor:pointer;padding:11px 15px;font-size:13px;font-weight:600;color:var(--mut)}
+  details.details-layer summary:hover{color:var(--tx)}
+  details.details-layer[open] summary{color:var(--tx);border-bottom:1px solid var(--bd)}
+  details.details-layer ul{margin:0;padding:10px 16px 13px 34px}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+  .foot p{margin:0}
+  .revbadge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;background:rgba(210,153,34,.18);color:#7a5a00;border:1px solid #e0c97f;border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .revnote{background:rgba(210,153,34,.07);border-left:3px solid var(--amb);border-radius:0 6px 6px 0;padding:6px 11px;margin:8px 0;font-size:12px;color:#7a5a00}
+  @media(max-width:760px){body{padding:18px}}
+  .demo{margin:5px 0 2px;padding:6px 10px;border:1px dashed var(--bd);border-radius:6px;background:#fafbfc;font-size:12px;color:var(--tx)}
+  .demo .who{font-weight:600}
+  .demo .st{display:inline-block;font-size:10.5px;font-weight:700;border-radius:4px;padding:0 6px;margin:0 4px;color:#fff;background:var(--mut)}
+  .demo .st.grn{background:var(--grn)}
+  .demo .st.amb{background:var(--amb)}
+  .demo .st.red{background:var(--red)}
+</style>
+<style data-cbd-style>.cbd-header { margin: 0 0 14px; padding: 8px 12px; border: 1px solid #d9dfe6; border-radius: 7px; background: #fff8df; color: #7a5a00; font-weight: 600; }
+.cbd-header::before { content: attr(data-cbd-header); }
+ins.cbd-ins { background: rgba(46, 160, 67, .18); text-decoration: none; }
+.cbd-del::after { content: attr(data-del); color: #cf222e; text-decoration: line-through; }
+.cbd-new { background: rgba(46, 160, 67, .10); }
+tr.cbd-del > td::after { content: attr(data-cbd-del); color: #cf222e; text-decoration: line-through; }
+</style></head>
+<body>
+<div class="wrap"><div class="cbd-header" data-cbd-header="This version · vs previous"></div>
+  <header>
+    <h1>List Scheduled Triggers<span class="status">PLAN</span></h1>
+    <p class="sub">Add a read-only CLI view of the triggers already scheduled for a session.</p>
+    <div class="meta">
+      <span class="mtag">repo · charlie-bot</span>
+      <span class="mtag">scope · trigger CLI</span>
+      <span class="mtag">deps · none</span>
+    </div>
+  </header>
+
+  <main>
+    <!--
+      USAGE — build each plan as artifacts/plan_NN.html (next free NN in the session's
+      artifacts/). Reuse this file's <head> and <style> verbatim; replace the <main>
+      content following the grammar below.
+
+      BLOCK KIT — canonical plan grammar and the only definition of its section semantics. A plan is a decision
+      surface, not a step list. It exposes the generalized contract and the choices the user must judge;
+      implementation steps belong in the worker task spec. Facts the plan establishes — the contract it
+      proposes, the measurements it took — belong in the plan. Facts that already live in the repository
+      belong to the source: cite them by path, so the plan stays right when the code moves. Keep content
+      in semantic blocks so inline comments can anchor to useful units.
+
+      Code identifiers locate an explanation;
+      the explanation itself stays in prose.
+
+      Header: show the title, a one-line summary, and meta chips naming where the plan applies and what it builds on.
+
+      Use these six sections, in this order:
+      1. Problem / Goal — one or two sentences stating what the plan resolves, plus at most one naming the
+                    non-goals; this section is their only home. State the outcome in its own words: explanation
+                    and support (the why, the how, the evidence) live in the sections built for them.
+      2. Context — establish the minimum complete mental model before the design: how the relevant system
+                    currently works, why the problem occurs, its impact, and the relationships among the
+                    components involved. Every current-reality claim carries a checkable source anchor.
+                    Supporting background and extended evidence follow the canonical Length contract.
+      3. High Level Solution: the overall mechanism, component relationships, data flow, state ownership,
+                    and the high-level observable contract the user judges. Include one figure and one worked example
+                    the reader can check by hand.
+                    Supporting detail belongs in 4.2 and follows the canonical Length contract.
+      4. Detailed Design — two read layers:
+         4.1 Schema: the persisted data structures (fields, types, meaning) and the request/response of
+                    externally consumed APIs and CLI commands. Keep the decision-level contract visible and put
+                    supporting schemas and data tables in folded blocks whose summaries name the thing defined.
+                    A plan with no persisted structures and no API change keeps 4.1 as a one-line declaration saying so.
+                    4.1 recommends its schema under Minimal schema (prompts/task_base.md, Coding Principles).
+                    4.1 closes with one p.dropped line outside every fold. The line names each dropped feature, its
+                    reason and the schema that would add it back, or states that the schema drops none.
+         4.2 Design Details: the internal mechanisms, algorithms, concurrency, compatibility, acceptance
+                    criteria, and verification approach, organized by subsystem or data flow.
+      5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
+                    the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
+                    (p.trade). When a question asks the reader to choose, list each option as one li outside
+                    every details-layer.
+                    Open each option li with its name in 「」.
+                    Write the recommendation (p.rec) with one option name in 「」.
+                    When the options of a fork differ in what the reader sees, each option line carries, outside
+                    every details-layer, a div.demo that draws that option's result (span.who names the actor;
+                    span.st is a state chip, colored by class grn, amb or red) or a p.no-demo line that
+                    states the reason a still picture cannot show the difference.
+                    Every open item also carries a folded explainer, a details.details-layer block
+                    collapsed by default, so the reader can verify the recommendation from the block alone while
+                    the choice and each consequence stay visible: it retells the decision from scratch, glosses per the
+                    Vocabulary rule (prompts/master.md), walks the causal chain through one worked example small
+                    enough to check by hand, and anchors each fact to its source. A resolved item keeps only the question and resolution
+                    (p.resolved); never record rejected alternatives. When nothing needs judging, keep one line
+                    stating there are no open trade-offs.
+                    A mechanism that outlives the task and that the request did not name enters the plan as an
+                    open Trade-off.
+      6. Other Details — a collapsed list of the autonomous decisions, each with its reason.
+
+      Section use: keep the section order and numbering. Sections 4.2 Design Details and 6. Other Details may be empty
+                    and omitted.
+      Page layers follow the first-draft contract in prompts/master.md under "Explaining to the user" → "Length".
+      Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
+                    resolution; unmentioned items accept the recommendation. Any Other Details entry the user
+                    asks to control is promoted and then joins the approval object.
+                    The parent node or the root line approves this plan after its Improve round and verify.
+                    Reply at any time to change it, or ask to stop the line.
+      Source anchors: every current-reality claim carries a checkable source. Use path:line for code facts, a URL
+                    for external material, and a reproducible one-line command for runtime facts. Restate any
+                    conclusion imported from an earlier plan, run, comment, or review in the current plan and
+                    anchor it directly to stable, checkable evidence.
+      Shared blocks: p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks;
+      div.callout highlights a note (.warn for amber); div.flow with span.b and span.ar sketches a data flow;
+      div.meta > span.mtag gives small metadata chips near the top of a plan.
+    -->
+
+    <section class="plan-section">
+      <h2><span class="n">1</span> Problem / Goal</h2>
+      <p>The goal is to make a session's persisted one-shot wake-ups, called scheduled triggers, inspectable before an operator adds another watch. Trigger scheduling and persistence are out of scope.</p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">2</span> Context</h2>
+      <p>A scheduled trigger resumes a CharlieBot session after a delay or when watched work finishes. Operators can create these triggers, but cannot inspect the triggers already scheduled for the session before adding another watch. <span class="src">Sources: rust/crates/app/server/src/app.rs; rust/crates/runtime/triggers/src/triggers.rs</span></p>
+      <p>The unified command dispatcher exposes trigger creation as <code>charliebot session trigger</code>. The component responsible for trigger lifecycle, <code>TriggerManager</code>, persists each record as a JSON file under the session's <code>triggers</code> directory; no read-only CLI path currently loads those records for inspection. <span class="src">Sources: rust/crates/app/server/src/app.rs; rust/crates/runtime/triggers/src/triggers.rs</span></p>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n nb">3</span> High Level Solution</h2>
+      <p>Add a read-only <code>charliebot triggers list</code> command that resolves the current session, loads its trigger records through the existing manager, and formats them for inspection. Trigger files remain the single source of truth in their existing persisted format; the command owns no state.</p>
+      <div class="flow">
+        <span class="b">sessions/{id}/triggers/*.json</span><span class="ar"><svg class="cb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 12h14" />
+  <path d="m12 5 7 7-7 7" />
+</svg></span>
+        <span class="b n">triggers list</span><span class="ar"><svg class="cb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 12h14" />
+  <path d="m12 5 7 7-7 7" />
+</svg></span>
+        <span class="b">one row per trigger</span>
+      </div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">4</span> Detailed Design</h2>
+
+      <h3><span class="sn read">4.1</span>Schema</h3>
+      <p>Request: <code>charliebot triggers list</code>, no arguments, session resolved from the current working directory. Response: exit 0 with one row per trigger in the columns below, or the literal <code>no triggers</code>.</p>
+      <details class="details-layer">
+        <summary>Response columns of triggers list</summary>
+        <table style="margin:10px 15px 13px;width:calc(100% - 30px)">
+          <tr><th>Column</th><th>Content</th></tr>
+          <tr><td class="f">id</td><td>Trigger id (the JSON file stem).</td></tr>
+          <tr><td class="f">state</td><td><code>pending</code> / <code>fired</code> / <code>expired</code>.</td></tr>
+          <tr><td class="f">watch</td><td>Watch targets, or <code>-</code> for a pure delay.</td></tr>
+          <tr><td class="f">fires-in</td><td>Time remaining until <code>--max-wait</code> elapses.</td></tr>
+          <tr><td class="f">message</td><td>The wake-up message.</td></tr>
+        </table>
+      </details>
+      <p class="dropped">Dropped features: none.</p>
+
+      <h3><span class="sn">4.2</span>Design Details</h3>
+      <ul>
+        <li><b>CLI integration:</b> register <code>triggers list</code> in the unified command map and reuse cwd-based session resolution.</li>
+        <li><b>Read path:</b> ask <code>TriggerManager</code> for records, derive display-only fields, then render aligned plain-text columns; a malformed record surfaces the loader error instead of being skipped.</li>
+        <li><b>Verification:</b> cover populated, empty, and malformed-record cases with command-level tests, then run the existing CLI suite.</li>
+      </ul>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">5</span> Trade-offs</h2>
+      <div class="fork">
+        <p class="q"><span class="fn">1</span> Scope: list triggers for the current session only, or across all sessions?</p>
+        <ul>
+          <li>「current session only」: list this session directory's triggers, and triggers written by other sessions stay invisible.</li>
+          <li>「all sessions」: list every trigger on the host, and the command reads directories this session did not write.</li>
+        </ul>
+        <p class="rec"><b>Recommendation:</b> 「current session only」, keeping the command's scope explicit.</p>
+        <p class="trade">Tradeoff: consistent with the rest of the CLI, but triggers created from other sessions stay invisible.</p>
+        <details class="details-layer" open>
+          <summary>Full story, no prior knowledge required — expand to check the recommendation by hand</summary>
+          <ul>
+            <li><b>Session</b> here names the working directory's persisted trigger collection: every
+              <code>charliebot session trigger</code> run on that directory writes its record there, and
+              <code>triggers list</code> would read only that collection.</li>
+            <li>Cross-session visibility inherits whatever the CLI's other read commands do, so changing
+              scope to "all sessions" reaches triggers the current directory did not write.</li>
+            <li>Worked example: a directory holds two published triggers; a third session elsewhere holds one.
+              Current-session scope shows those two only, cross-session shows all three.</li>
+            <li class="cbd-new">「current session only」的含义：命令只读本会话目录写入的触发器。
+            <li>Each row's existence is anchored to its JSON file, so the rendered list is checkable against
+              what was persisted <span class="src">Sources: rust/crates/runtime/triggers/src/triggers.rs</span>.</li>
+          </ul>
+        </details>
+      </div>
+      <div class="fork">
+        <p class="q"><span class="fn">2</span> Which trigger states should the command display?</p>
+        <p class="resolved">Resolved: all persisted states.</p>
+      </div>
+    </section>
+
+    <section class="plan-section">
+      <h2><span class="n">6</span> Other Details</h2>
+      <details class="details-layer">
+        <summary>Autonomous decisions — expand to inspect</summary>
+        <ul>
+          <li>Plain aligned text columns, no box-drawing characters. <span class="m">— survives copy-paste into chat and logs.</span></li>
+          <li>Keep table rendering in a private CLI helper. <span class="m">— isolates column-width calculation without adding a public interface.</span></li>
+        </ul>
+      </details>
+    </section>
+
+    <div class="foot">
+      <p><b>How to respond:</b> reply by Trade-off number to override a recommendation or resolution (for example, "1 all sessions"). Unmentioned items accept the recommendation. Ask to control any Other Details entry and it will be promoted into the approval object.
+      The parent node or the root line approves this plan after its Improve round and verify.
+      Reply at any time to change it, or ask to stop the line.</p>
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -14,171 +14,6 @@ const { makePlan, makeVersion } = require('./plan_factories_stub');
 
 const PLAN_PANEL_JS = readPackageStatic('features', 'artifacts', 'plan-panel.js');
 
-// ---------------------------------------------------------------------------
-// Minimal DOM shim used both as the `DOMParser` injected into the plan-panel
-// vm context (so `_renderActionBar` can parse fetched plan HTML) and directly
-// in the template contract test. It implements the small subset of the DOM
-// surface that `parseOpenForks` and the action-bar path rely on. That subset is
-// querySelector/querySelectorAll with `tag.class` selectors, cloneNode(deep),
-// child.remove(), and a live textContent computed from child nodes.
-// ---------------------------------------------------------------------------
-
-const VOID_TAGS = new Set([
-  'AREA', 'BASE', 'BR', 'COL', 'EMBED', 'HR', 'IMG', 'INPUT',
-  'LINK', 'META', 'PARAM', 'SOURCE', 'TRACK', 'WBR',
-]);
-const RAW_TEXT_TAGS = new Set(['SCRIPT', 'STYLE']);
-
-class MinimalElement {
-  constructor(tagName, attrs) {
-    this.tagName = String(tagName).toUpperCase();
-    this.attributes = attrs || {};
-    this.children = [];
-    this.parentNode = null;
-  }
-  get textContent() {
-    let text = '';
-    for (const child of this.children) {
-      if (typeof child === 'string') text += child;
-      else text += child.textContent;
-    }
-    return text;
-  }
-  cloneNode(deep) {
-    const clone = new MinimalElement(this.tagName, {...this.attributes});
-    if (deep) {
-      for (const child of this.children) {
-        if (typeof child === 'string') {
-          clone.children.push(child);
-        } else {
-          const c = child.cloneNode(true);
-          c.parentNode = clone;
-          clone.children.push(c);
-        }
-      }
-    }
-    return clone;
-  }
-  remove() {
-    if (!this.parentNode) return;
-    const idx = this.parentNode.children.indexOf(this);
-    if (idx >= 0) this.parentNode.children.splice(idx, 1);
-    this.parentNode = null;
-  }
-  querySelector(selector) {
-    const matches = this._all(selector);
-    return matches.length ? matches[0] : null;
-  }
-  querySelectorAll(selector) {
-    return this._all(selector);
-  }
-  _all(selector) {
-    const out = [];
-    for (const child of this.children) {
-      if (typeof child === 'string') continue;
-      if (_matchesSelector(child, selector)) out.push(child);
-      for (const n of child._all(selector)) out.push(n);
-    }
-    return out;
-  }
-}
-
-function _matchesSelector(el, selector) {
-  const m = /^([a-zA-Z][\w-]*)?(?:\.([a-zA-Z_][\w-]*))?$/.exec(selector || '');
-  if (!m) return false;
-  const wantTag = m[1] ? m[1].toUpperCase() : null;
-  const wantClass = m[2] || null;
-  if (wantTag && el.tagName !== wantTag) return false;
-  if (wantClass) {
-    const cls = (el.attributes.class || '').split(/\s+/);
-    if (!cls.includes(wantClass)) return false;
-  }
-  return true;
-}
-
-function parseHTML(html) {
-  const root = new MinimalElement('#document', {});
-  const stack = [root];
-  let i = 0;
-  while (i < html.length) {
-    if (html[i] === '<') {
-      if (html.substr(i, 4) === '<!--') {
-        const end = html.indexOf('-->', i + 4);
-        if (end === -1) break;
-        i = end + 3;
-        continue;
-      }
-      if (html[i + 1] === '!') {
-        const close = html.indexOf('>', i);
-        if (close === -1) break;
-        i = close + 1;
-        continue;
-      }
-      if (html[i + 1] === '/') {
-        const close = html.indexOf('>', i);
-        if (close === -1) break;
-        const tag = html.slice(i + 2, close).trim().toUpperCase();
-        for (let j = stack.length - 1; j > 0; j--) {
-          if (stack[j].tagName === tag) { stack.length = j; break; }
-        }
-        i = close + 1;
-        continue;
-      }
-      const close = html.indexOf('>', i);
-      if (close === -1) break;
-      let inner = html.slice(i + 1, close);
-      const selfClosing = inner.endsWith('/');
-      if (selfClosing) inner = inner.slice(0, -1).trim();
-      const sp = inner.search(/\s/);
-      let tagName, attrStr;
-      if (sp === -1) { tagName = inner.toUpperCase(); attrStr = ''; }
-      else { tagName = inner.slice(0, sp).toUpperCase(); attrStr = inner.slice(sp + 1); }
-      const attrs = {};
-      const are = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*"([^"]*)")?/g;
-      let am;
-      while ((am = are.exec(attrStr)) !== null) {
-        attrs[am[1].toLowerCase()] = am[2] != null ? am[2] : '';
-      }
-      const el = new MinimalElement(tagName, attrs);
-      el.parentNode = stack[stack.length - 1];
-      stack[stack.length - 1].children.push(el);
-      i = close + 1;
-      if (selfClosing || VOID_TAGS.has(tagName)) {
-        // no children
-      } else if (RAW_TEXT_TAGS.has(tagName)) {
-        const closeTag = '</' + tagName.toLowerCase() + '>';
-        const end = html.indexOf(closeTag, i);
-        if (end === -1) {
-          if (i < html.length) el.children.push(html.slice(i));
-          break;
-        }
-        if (end > i) el.children.push(html.slice(i, end));
-        i = end + closeTag.length;
-      } else {
-        stack.push(el);
-      }
-    } else {
-      let next = html.indexOf('<', i);
-      if (next === -1) next = html.length;
-      const text = html.slice(i, next).replace(/\s+/g, ' ');
-      if (text.trim()) stack[stack.length - 1].children.push(text);
-      i = next;
-    }
-  }
-  return root;
-}
-
-class DOMParser {
-  parseFromString(html, mimeType) {
-    return parseHTML(html);
-  }
-}
-
-// A label constant config.js declares. Read on use, so only the tests that paint the label depend on it.
-function configLabel(name) {
-  return new RegExp(`^const ${name} = '([^']*)';`, 'm').exec(readStatic('config.js'))[1];
-}
-
 function loadPlanPanelScript(opts = {}) {
   const noop = () => {};
   const document = opts.document || {
@@ -206,7 +41,6 @@ function loadPlanPanelScript(opts = {}) {
     fetch: opts.fetch || (async () => {
       throw new Error('fetch should not run during script load');
     }),
-    DOMParser,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     get OFFLINE_PANEL_LABEL() { return configLabel('OFFLINE_PANEL_LABEL'); },
     offlinePanelMark: () => OFFLINE_PANEL_MARK,
@@ -222,6 +56,11 @@ function loadPlanPanelScript(opts = {}) {
   vm.runInContext(PLAN_PANEL_JS, context, {filename: 'plan-panel.js'});
   const planPanel = vm.runInContext('planPanel', context);
   return {context, planPanel};
+}
+
+// A label constant config.js declares. Read on use, so only the tests that paint the label depend on it.
+function configLabel(name) {
+  return new RegExp(`^const ${name} = '([^']*)';`, 'm').exec(readStatic('config.js'))[1];
 }
 
 test('offline, the plan panel shows the offline label in place of its plans', () => {
@@ -316,7 +155,7 @@ test('isStaleVersion returns false for a plan with no versions', () => {
 test('render shows the stale notice when an older version is selected', async () => {
   const elements = {};
   for (const id of ['tab-plans', 'plan-empty-state', 'plan-viewer', 'plan-selector',
-    'plan-version-selector', 'plan-stale-notice', 'plan-action-bar']) {
+    'plan-version-selector', 'plan-stale-notice']) {
     const classes = new Set(id === 'plan-stale-notice' ? ['hidden'] : []);
     elements[id] = {
       style: {},
@@ -406,125 +245,6 @@ test('detectNewPlanOrVersion returns null when going from plans to empty', () =>
   const prev = {plans: [makePlan(1, [makeVersion(1)])]};
   const next = {plans: []};
   assert.equal(planPanel.detectNewPlanOrVersion(prev, next), null);
-});
-
-// ---------------------------------------------------------------------------
-// parseOpenForks
-// ---------------------------------------------------------------------------
-
-function makeForkElement(opts) {
-  const o = opts || {};
-  function makeFn() {
-    return o.fn === false ? null : {
-      textContent: String(o.fn != null ? o.fn : '1'),
-      remove() {},
-    };
-  }
-  function makeQ() {
-    if (o.q === false) return null;
-    const qText = o.q || 'Question?';
-    const qNode = {
-      textContent: qText,
-      querySelector(selector) {
-        if (selector === 'span.fn') return makeFn();
-        return null;
-      },
-      cloneNode(deep) {
-        // The clone carries the question text only; span.fn is modelled as
-        // a removable child so parseOpenForks can drop it. Removing it does
-        // not change textContent here because the stub's qText is already the
-        // clean question (the real DOM path is exercised by the template
-        // contract test).
-        const clone = {
-          textContent: qText,
-          querySelector(selector) {
-            if (selector === 'span.fn') return makeFn();
-            return null;
-          },
-        };
-        return clone;
-      },
-    };
-    return qNode;
-  }
-  return {
-    querySelector(selector) {
-      if (selector === 'span.fn') return makeFn();
-      if (selector === 'p.q') return makeQ();
-      if (selector === 'p.rec') return o.rec === false ? null : {textContent: 'Recommendation'};
-      if (selector === 'p.resolved') return o.resolved === true ? {textContent: 'Resolved'} : null;
-      return null;
-    },
-  };
-}
-
-function makeFakeDoc(forks) {
-  return {
-    querySelectorAll(selector) {
-      if (selector === 'div.fork') return forks;
-      return [];
-    },
-  };
-}
-
-test('parseOpenForks returns forks with p.rec and no p.resolved as open', () => {
-  const {planPanel} = loadPlanPanelScript();
-  const forks = [
-    makeForkElement({fn: '1', q: 'First trade-off'}),
-    makeForkElement({fn: '2', q: 'Second trade-off'}),
-  ];
-  const doc = makeFakeDoc(forks);
-  const result = planPanel.parseOpenForks(doc);
-  assert.equal(result.length, 2);
-  assert.equal(result[0].n, '1');
-  assert.equal(result[0].question, 'First trade-off');
-  assert.equal(result[1].n, '2');
-  assert.equal(result[1].question, 'Second trade-off');
-});
-
-test('parseOpenForks excludes resolved forks (those with p.resolved)', () => {
-  const {planPanel} = loadPlanPanelScript();
-  const forks = [
-    makeForkElement({fn: '1', q: 'Open trade-off'}),
-    makeForkElement({fn: '2', q: 'Resolved trade-off', resolved: true}),
-  ];
-  const doc = makeFakeDoc(forks);
-  const result = planPanel.parseOpenForks(doc);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].n, '1');
-  assert.equal(result[0].question, 'Open trade-off');
-});
-
-test('parseOpenForks excludes forks without p.rec (no recommendation)', () => {
-  const {planPanel} = loadPlanPanelScript();
-  const forks = [
-    makeForkElement({fn: '1', q: 'Has recommendation'}),
-    makeForkElement({fn: '2', q: 'No recommendation', rec: false}),
-  ];
-  const doc = makeFakeDoc(forks);
-  const result = planPanel.parseOpenForks(doc);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].n, '1');
-});
-
-test('parseOpenForks excludes forks missing span.fn or p.q', () => {
-  const {planPanel} = loadPlanPanelScript();
-  const forks = [
-    makeForkElement({fn: false, q: 'Missing fn'}),
-    makeForkElement({fn: '2', q: false}),
-    makeForkElement({fn: '3', q: 'Valid fork'}),
-  ];
-  const doc = makeFakeDoc(forks);
-  const result = planPanel.parseOpenForks(doc);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].n, '3');
-});
-
-test('parseOpenForks returns empty for null or empty documents', () => {
-  const {planPanel} = loadPlanPanelScript();
-  assert.equal(planPanel.parseOpenForks(null).length, 0);
-  assert.equal(planPanel.parseOpenForks(undefined).length, 0);
-  assert.equal(planPanel.parseOpenForks(makeFakeDoc([])).length, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -889,7 +609,7 @@ test('_commitRegistry warns and renders normally when the response carries a non
 function makePanelElements() {
   const elements = {};
   for (const id of ['tab-plans', 'plan-toolbar', 'plan-empty-state', 'plan-selector', 'plan-version-selector',
-    'plan-stale-notice', 'plan-action-bar']) {
+    'plan-stale-notice']) {
     const classes = new Set();
     elements[id] = {
       style: {},
@@ -960,70 +680,7 @@ test('onPlanUpdated keeps the badge + selection jump but does not force a tab sw
 });
 
 // ---------------------------------------------------------------------------
-// Item 4: action bar chip text and ellipsis
-// ---------------------------------------------------------------------------
-
-test('_renderActionBar chip text is the question without the fork number, truncated with ellipsis', async () => {
-  const longQuestion = 'A really long trade-off question that is definitely more than forty characters';
-  const forkHtml = '<div class="fork"><p class="q"><span class="fn">1</span> ' + longQuestion + '</p><p class="rec">R</p></div>';
-  const elements = makePanelElements();
-  const bar = {innerHTML: '', _children: [], appendChild(c) { this._children.push(c); }};
-  elements['plan-action-bar'] = bar;
-  // The viewer: its src write loads a page, whose load event parses the
-  // document \u2014 the action bar's only source, so an opened plan page costs the
-  // viewer's one request.
-  const loadListeners = [];
-  const viewer = {
-    style: {},
-    classList: {add() {}, toggle() {}, contains() { return false; }},
-    contentDocument: parseHTML(forkHtml),
-    addEventListener(ev, fn) { if (ev === 'load') loadListeners.push(fn); },
-  };
-  let srcVal = '';
-  Object.defineProperty(viewer, 'src', {
-    get() { return srcVal; },
-    set(v) { srcVal = v; queueMicrotask(() => loadListeners.forEach((fn) => fn())); },
-    configurable: true, enumerable: true,
-  });
-  elements['plan-viewer'] = viewer;
-  const document = {
-    // init() runs at script load in a completed document, registering the viewer's load hook.
-    readyState: 'complete',
-    addEventListener: () => {},
-    getElementById: (id) => elements[id] || null,
-    createElement: () => {
-      const o = {
-        _listeners: {}, _text: '', _title: '', _className: '', _type: '',
-        addEventListener(ev, fn) { this._listeners[ev] = fn; },
-        appendChild() {},
-      };
-      Object.defineProperties(o, {
-        type: {get() { return this._type; }, set(v) { this._type = v; }, configurable: true, enumerable: true},
-        className: {get() { return this._className; }, set(v) { this._className = v; }, configurable: true, enumerable: true},
-        textContent: {get() { return this._text; }, set(v) { this._text = v; }, configurable: true, enumerable: true},
-        title: {get() { return this._title; }, set(v) { this._title = v; }, configurable: true, enumerable: true},
-      });
-      return o;
-    },
-  };
-  const fetch = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'plan_01.html')])]})};
-    throw new Error('the plan page must not be fetched: ' + url);
-  };
-  const {planPanel} = loadPlanPanelScript({document, fetch, sessionId: 's1', sessionsRoot: '/home/u/.charliebot/sessions'});
-  await planPanel.refresh();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(bar._children.length, 1, 'one chip rendered for the one open fork');
-  const chip = bar._children[0];
-  assert.equal(chip.textContent.startsWith('1'), false, 'chip text must not start with the fork number');
-  assert.equal(chip.textContent.length, 41, 'chip text is 40 chars + ellipsis');
-  assert.ok(chip.textContent.endsWith('\u2026'), 'chip text ends with an ellipsis');
-  assert.equal(chip.title, 'Prefill: Trade-off 1');
-});
-
-// ---------------------------------------------------------------------------
-// Item 5: formatPlanStateLabel variants + selector label use
+// Item 4: formatPlanStateLabel variants + selector label use
 // ---------------------------------------------------------------------------
 
 test('formatPlanStateLabel: plain state, takeoff-qualified approved, and selector use', async () => {

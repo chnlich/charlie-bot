@@ -161,6 +161,36 @@ fn preflight_refuses_a_commit_without_both_rust_jobs_green(case: &str) {
   world.assert_refused_and_wrote_nothing(&run);
   assert!(run.stderr.contains("CI has no successful push run"), "{}", run.describe());
 }
+
+/// The stub gh refuses the display name CI, which two workflows share, so this release passes only when the lookup
+/// names the workflow by its file, ci.yml.
+#[test]
+#[ignore = "integration"]
+fn test_a_release_finds_the_ci_run_by_its_workflow_file_when_two_workflows_share_the_name_ci() {
+  let world = World::new();
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.releases.join(&world.on_main).is_dir(), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_preflight_stops_with_gh_error_when_gh_fails_reading_the_ci_runs() {
+  let world = World::new();
+  let gh_error = "HTTP 502: Bad Gateway (https://api.github.com/repos/example/charlie-bot/actions/runs)";
+  let mut behavior = world.gh_defaults();
+  behavior.runs_error = Some(gh_error.to_string());
+  world.write_gh(&behavior);
+
+  let run = world.release(&world.on_main);
+
+  world.assert_refused_and_wrote_nothing(&run);
+  assert!(run.stderr.contains(gh_error), "{}", run.describe());
+  assert!(!run.stderr.contains("CI has no successful push run"), "{}", run.describe());
+}
+
 // ---- the host release lock -----------------------------------------------------------------------------------------
 
 #[test]

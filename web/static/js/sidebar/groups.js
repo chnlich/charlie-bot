@@ -599,29 +599,19 @@ function expandSessionGroup(key) {
   localStorage.setItem(SESSION_GROUP_COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedState));
 }
 
-// Model label for a session row: BACKEND_OPTIONS carries the config-authored
-// label ("CC · Opus 5"). The row shows it without the backend-family prefix
-// because the 320px sidebar leaves only ~67px next to the timestamp. A pool
-// session shows its pool label and its current member, with the model the
-// session's records carry ("Auto → CC · Opus 5 · claude-opus-5").
-// Returns null when the session carries no backend id.
+// Model label for a session row, from the one label function. A worker row carries the pool id in `pool` when its
+// backend is a pool, since its `backend` then holds the member its run uses. A pool row shows its whole label; a
+// single-option row shows the option without the backend-family prefix, because the 320px sidebar leaves only
+// ~67px next to the timestamp. Returns null when the session carries no backend id.
 function sessionBackendLabel(session) {
   const backendId = (session && session.backend) || '';
   if (!backendId) return null;
-  const options = typeof BACKEND_OPTIONS === 'undefined' ? null : BACKEND_OPTIONS;
-  const pool = typeof BACKEND_POOLS !== 'undefined'
-    ? BACKEND_POOLS.find((candidate) => candidate.id === backendId)
-    : null;
-  if (pool) {
-    const member = session.pool_member;
-    if (!member) return { full: pool.label, display: pool.label };
-    let full = pool.label + ' → ' + ((options && options[member]) || member);
-    if (session.native_model) full += ' · ' + session.native_model;
-    return { full, display: full };
-  }
-  const full = (options && options[backendId]) || backendId;
-  const sep = full.indexOf(' · ');
-  return { full, display: sep === -1 ? full : full.slice(sep + 3) };
+  const sessionBackend = session.pool || backendId;
+  const full = sessionModelLabel(sessionBackend, session.pool_member, session.native_model, 'full');
+  const display = isPoolBackend(sessionBackend)
+    ? full
+    : sessionModelLabel(sessionBackend, null, null, 'compact');
+  return { full, display };
 }
 
 function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {

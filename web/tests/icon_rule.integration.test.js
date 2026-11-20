@@ -74,14 +74,6 @@ const EXCEPTIONS = [
     ["<path d=\"m12 5 7 7-7 7\" />", PLAN_COPY_REASON],
     ["t</span><span class=\"ar\"><svg class=\"cb-icon\" width=\"12\" height=\"1", PLAN_COPY_REASON],
   ]),
-  ...byFile('rust/crates/app/server/src/routes/pages.rs', [
-    ["me(model) => format!(\"{} → {member_label} · {model}\", pool.label),", PROSE_REASON],
-    ["None => format!(\"{} → {member_label}\", pool.label),", PROSE_REASON],
-    ["\"Auto → CC · Opus 5 · claude-opus-5-5\"", PROSE_REASON],
-    ["o\", &json!(\"claude-opus-5\"), &Value::Null), \"Auto → CC · Opus 5\");", PROSE_REASON],
-    ["\"Auto → retired · gpt-6-luna\"", PROSE_REASON],
-    ["&cfg, \"auto\", &json!(\"retired\"), &Value::Null), \"Auto → retired\");", PROSE_REASON],
-  ]),
   ...byFile('rust/crates/features/artifacts/src/artifact_check.rs', [
     ["let sentence = QUOTE.replace_all(sentence, \"「…」\").into_owned();", PROSE_REASON],
     ["r</span><span class=\"ar\">→</span><span class=\"b\">frame</span></div", FIXTURE_REASON],
@@ -241,6 +233,8 @@ const EXCEPTIONS = [
   ...byFile('web/static/js/chat/shared.js', [
     [" `<span id=\"${id}-short\">… <button onclick=\"document.getElementByI", PROSE_REASON],
     ["'none'?'block':'none'\" class=\"${buttonClass}\">Thinking…</button>`;", PROSE_REASON],
+    ["if (compact) return pool.label + ' → ' + withoutFamilyPrefix(", PROSE_REASON],
+    ["return pool.label + ' → ' + backendOptionLabel(poolMember) + (model", PROSE_REASON],
   ]),
   ...byFile('web/static/js/comment_post.js', [
     ["lines.push((i + 1) + '. ▸ ' + referenceLines[0]);", CHAT_TEXT_REASON],
@@ -264,7 +258,6 @@ const EXCEPTIONS = [
   ]),
   ...byFile('web/static/js/sidebar/groups.js', [
     ["button.textContent = 'Loading…';", PROSE_REASON],
-    ["et full = pool.label + ' → ' + ((options && options[member]) || me", PROSE_REASON],
   ]),
   ...byFile('web/static/js/sidebar/modals.js', [
     ["nId, headHtml + taskContextNoteHtml('Loading next run context…'));", PROSE_REASON],
@@ -278,7 +271,6 @@ const EXCEPTIONS = [
     ["heading.textContent = 'Move under…';", PROSE_REASON],
   ]),
   ...byFile('web/static/js/sidebar/session-view.js', [
-    ["return pool.label + ' → ' + memberLabel + (model ? ' · ' + model :", PROSE_REASON],
     ["abel.textContent = 'Opening ' + switchTargetName(sessionId) + '…';", PROSE_REASON],
     ["sentinel.innerHTML = 'Loading older messages&hellip;';", PROSE_REASON],
   ]),

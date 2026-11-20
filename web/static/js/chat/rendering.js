@@ -813,9 +813,15 @@ function renderMetadataRow(label, value) {
     + '</div>';
 }
 
+// The backend/model cell of a delegation card, from the event's own fields. A pool delegation carries `pool`, and its
+// member reads through the label function ("Human communication → CC · Opus"); an event without a pool shows its
+// member as it always did.
 function delegateBackendModel(invocation, msg) {
-  var backend = displayMetadataValue((invocation && invocation.backend) || msg.backend || msg.resolved_backend, '(none)');
+  var member = (invocation && invocation.backend) || msg.backend || msg.resolved_backend || '';
   var model = displayMetadataValue(msg.model || msg.resolved_model, '');
+  var backend = msg.pool
+    ? sessionModelLabel(msg.pool, member || null, null, 'full')
+    : displayMetadataValue(member, '(none)');
   return model ? backend + ' / ' + model : backend;
 }
 
@@ -833,15 +839,6 @@ function delegateChildLinkHtml(msg) {
     + escapeHtml(msg.child_session_id) + '</a>';
 }
 
-// The display label for a backend id (the config-authored text, family prefix
-// stripped the way the sidebar rows show it).
-function delegateBackendLabelText(backendId) {
-  const options = typeof BACKEND_OPTIONS === 'undefined' ? null : BACKEND_OPTIONS;
-  const full = (backendId && options && options[backendId]) ? options[backendId] : (backendId || '');
-  const sep = full.indexOf(' · ');
-  return sep === -1 ? full : full.slice(sep + 3);
-}
-
 // The live line the 3 s status poll paints into the card. A new-style card
 // reads the child session's own status. A legacy delegation has no session id
 // for the poll to resolve, so its line follows the owning session's status.
@@ -850,8 +847,8 @@ function delegateLiveStateHtml(msg, sessionId) {
   const tracked = child || sessionId || '';
   if (!tracked) return '';
   const attr = child ? 'data-delegate-session' : 'data-delegate-parent-session';
-  const backend = delegateBackendLabelText(
-      msg.backend || (msg.delegate_invocation && msg.delegate_invocation.backend) || '');
+  const member = msg.backend || (msg.delegate_invocation && msg.delegate_invocation.backend) || '';
+  const backend = sessionModelLabel(msg.pool || member, msg.pool ? member : null, null, 'compact');
   return '<span class="delegate-live-state" ' + attr + '="' + escapeHtmlAttr(tracked) + '"'
     + ' data-delegate-backend="' + escapeHtmlAttr(backend) + '"></span>';
 }

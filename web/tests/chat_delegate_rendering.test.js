@@ -84,6 +84,49 @@ test('a routed delegation renders its backend list and reason under the backend/
   assert.match(html, /design p=0\.9/);
 });
 
+test('a pool delegation names its pool and member from the event, and an event without a pool names the member alone', () => {
+  const context = loadChatRendering();
+  context.BACKEND_OPTIONS = {'claude-opus-5': 'CC · Opus'};
+  context.BACKEND_POOLS = [{id: 'human-communication', label: 'Human communication'}];
+
+  const pooled = context.renderMessage({
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'thread-pool',
+    backend: 'claude-opus-5',
+    model: 'claude-opus-5-5',
+    pool: 'human-communication',
+  }, 'session-a');
+  assert.match(pooled, /Human communication → CC · Opus \/ claude-opus-5-5/);
+
+  const old = context.renderMessage({
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'thread-old',
+    backend: 'claude-opus-5',
+    model: 'claude-opus-5-5',
+  }, 'session-a');
+  assert.match(old, /claude-opus-5 \/ claude-opus-5-5/);
+  assert.doesNotMatch(old, /Human communication/);
+});
+
+test('a pool delegation card names its pool and compact member on the live state line', () => {
+  const context = loadChatRendering();
+  context.BACKEND_OPTIONS = {'claude-opus-5': 'CC · Opus'};
+  context.BACKEND_POOLS = [{id: 'human-communication', label: 'Human communication'}];
+
+  const html = context.renderMessage({
+    role: 'task_delegated',
+    content: 'Task delegated',
+    thread_id: 'thread-live',
+    child_session_id: 'child-live',
+    backend: 'claude-opus-5',
+    model: 'claude-opus-5-5',
+    pool: 'human-communication',
+  }, 'session-a');
+  assert.match(html, /data-delegate-backend="Human communication → Opus"/);
+});
+
 test('an empty route list renders pool and the router reason', () => {
   const context = loadChatRendering();
 

@@ -20,6 +20,8 @@ const {escapeHtml, escapeHtmlText} = require('./escape_html_stub');
 
 const UTILS_JS = readStatic('utils.js');
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
+const CHAT_NAMESPACE_JS = readStatic('chat/namespace.js');
+const CHAT_SHARED_JS = readStatic('chat/shared.js');
 const STATUS_JS = readStatic('sidebar/status.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
 const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
@@ -75,6 +77,13 @@ function loadGroups() {
   context.formatBubbleTime = () => '';
   // namespace.js next: it supplies the shared sidebar namespace.
   vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
+  // chat/shared.js carries sessionModelLabel, the one label function the sidebar rows read. The page loads it after
+  // sidebar/namespace.js; its exports overwrite the escape and bubble-time stubs, so those land back after its load.
+  vm.runInContext(CHAT_NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
+  vm.runInContext(CHAT_SHARED_JS, context, {filename: 'chat/shared.js'});
+  context.escapeHtml = escapeHtmlText;
+  context.escapeHtmlAttr = (value) => escapeHtml(value == null ? '' : String(value));
+  context.formatBubbleTime = () => '';
   vm.runInContext(STATUS_JS, context, {filename: 'status.js'});
   Object.assign(context, STATUS_FAKES);
   vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});

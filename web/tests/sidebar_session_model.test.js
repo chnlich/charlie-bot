@@ -134,3 +134,19 @@ test('a plain-bound task row shows the recorded model alone', () => {
   assert.ok(model, 'a run plain-bound row names its model');
   assert.equal(model[3], 'claude-opus-5-5');
 });
+
+test('a pool worker row shows its pool, its member and the model its records carry', () => {
+  // The worker's backend is the member its run uses; `pool` names the pool that row belongs to.
+  const html = row({backend: 'claude-opus-5', pool: 'auto', pool_member: 'claude-opus-5', native_model: 'claude-opus-5-5'});
+  const model = modelSpan(html);
+  assert.ok(model, 'row is missing a .session-backend span');
+  assert.equal(model[3], 'Auto → CC · Opus 5 · claude-opus-5-5');
+});
+
+test('a worker switched from a pool to one option shows that option alone, whatever member it still records', () => {
+  const html = row({backend: 'claude-opus-5', pool_member: 'claude-opus-5', native_model: 'claude-opus-5-5'});
+  const model = modelSpan(html);
+  assert.ok(model, 'row is missing a .session-backend span');
+  assert.equal(model[3], 'Opus 5');
+  assert.equal(model[2], 'CC · Opus 5');
+});

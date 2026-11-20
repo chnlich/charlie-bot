@@ -926,6 +926,91 @@ async fn turn_end_block_continues_through_run_launches() -> anyhow::Result<()> {
   Ok(())
 }
 
+/// The status-reread loop through the real launch path: the input turn stored no set after its message, so the first
+/// miss blocks and its continuation runs as a second process. The second miss passes with the items left as the
+/// notice, and the check writes no status: the stored set is the one the session held before the turn.
+#[tokio::test]
+#[ignore = "integration"]
+async fn status_reread_blocks_once_then_passes_with_its_notice_through_run_launches() -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let checkout = web_checks_checkout(temp.path())?;
+
+  let prompt_capture = temp.path().join("backend-prompts.jsonl");
+  let script = scripted_process(
+    &[
+      json!({"type":"system","subtype":"init","session_id":"synthetic-native-session"}),
+      json!({"type":"assistant","message":{"content":[{"type":"text","text":"synthetic answer"}]}}),
+      json!({"type":"result","subtype":"success","result":"","usage":{"input_tokens":1,"output_tokens":1}}),
+    ],
+    0,
+    "",
+  )?;
+  let mut option = backend_option(script);
+  option.type_fields.insert(
+    YamlValue::String("prompt_capture".to_string()),
+    YamlValue::String(prompt_capture.to_string_lossy().into_owned()),
+  );
+  let registry = registry();
+  let home = temp.path().join("home");
+  let (cfg, features) =
+    config_with_features_at_checkout(&home, Some(option.clone()), Arc::clone(&registry), true, &checkout)?;
+  let meta = session_meta("turn-hook-status-reread", "web", "fresh");
+  save_session_metadata(&features, &registry, &meta)?;
+  // The previous turn stored one Waiting on you item and ended; this turn starts after its master_done.
+  features
+    .store
+    .persist_and_broadcast(
+      &meta.id,
+      json!({"id":"status-before","type":event_types::WEB_STATUS,"web_status_changed":["waiting"],
+             event_types::WEB_STATUS:{"waiting":[{"text":"Pick a layout"}]}}),
+    )
+    .await?;
+  features.store.persist_and_broadcast(&meta.id, json!({"id":"done-before","type":event_types::MASTER_DONE})).await?;
+  let unread = Arc::new(Mutex::new(Vec::new()));
+  let callbacks = callbacks(Arc::clone(&features), unread);
+  let queue = features.startup.require::<master_queue::MasterQueue>()?;
+  features
+    .store
+    .persist_and_broadcast(&meta.id, json!({"id":"hook-block","type":event_types::USER,"content":"the question"}))
+    .await?;
+  let mut run =
+    charliebot_tasks::test_support::recovery_support::synthetic_run(&meta.id, "run-hook-reread", RunKind::ManagerTurn);
+  run.input_event_ids.push("hook-block".to_string());
+  run.started_at = Some(UtcDateTime::now());
+  let guard = features.store.control_lock().await;
+  features.store.register_run_locked(&guard, &meta.id, run, None).await?;
+  drop(guard);
+
+  run_turn(queue.clone(), cfg, meta.clone(), callbacks, "hook-block".to_string(), option).await?;
+  queue.shutdown().await?;
+
+  let prompts = std::fs::read_to_string(prompt_capture)?
+    .lines()
+    .map(serde_json::from_str::<String>)
+    .collect::<Result<Vec<_>, _>>()?;
+  assert_eq!(prompts.len(), 2, "the first miss must launch one continuation process");
+
+  let events = features.store.load_chat_events_sync(&meta.id)?;
+  let events: Vec<Value> = events.iter().map(|event| event.to_value()).collect();
+  let hook_records: Vec<&Value> = events.iter().filter(|event| event["type"] == event_types::TURN_HOOKS).collect();
+  assert_eq!(hook_records.len(), 2, "the initial run and its continuation each reach the checkpoint");
+  assert_eq!(entry_result(hook_records[0], "status-reread")["result"], "block");
+  let second = entry_result(hook_records[1], "status-reread");
+  assert_eq!(second["result"], "pass");
+  let notice = second["system_message"].as_str().context("the second miss notices the items left")?;
+  assert!(notice.contains("Pick a layout"), "{notice}");
+  assert!(
+    events.iter().any(|event| event["type"] == event_types::WEB_REPLY_NOTICE && event["content"] == notice),
+    "the notice reaches the session"
+  );
+  assert_eq!(
+    events.iter().filter(|event| event["type"] == event_types::WEB_STATUS).count(),
+    1,
+    "the check writes no status: only the stored set is in the session"
+  );
+  Ok(())
+}
+
 /// The id of the priority pool that the pool tests name, and of its one member.
 const PRIORITY_POOL_ID: &str = "human-communication";
 const POOL_MEMBER_ID: &str = "pool-member";
@@ -968,7 +1053,7 @@ fn web_checks_checkout(temp: &Path) -> anyhow::Result<PathBuf> {
   // The served list runs `charliebot hook <check>` from PATH. This list names the workspace build of that binary by
   // its path, so the checks the test runs are this tree's, whatever `charliebot` the host's PATH holds or lacks.
   let charliebot = shlex::try_quote(charliebot.to_str().context("the built charliebot path is UTF-8")?)?;
-  let entries: Vec<Value> = ["web-reply", "web-status", "thread-reply"]
+  let entries: Vec<Value> = ["web-reply", "web-status", "thread-reply", "status-reread"]
     .into_iter()
     .map(|name| json!({"name": name, "command": format!("'{charliebot}' hook {name}")}))
     .collect();

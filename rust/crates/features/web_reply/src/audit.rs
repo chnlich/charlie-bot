@@ -1,11 +1,13 @@
-//! The web session's turn-end checks: the web reply to each user message the turn received (`web-reply`), and the
-//! status set or confirm that ends the turn (`web-status`).
+//! The web session's turn-end checks: the web reply to each user message the turn received (`web-reply`), the status
+//! set or confirm that ends the turn (`web-status`), and the status set that rewrites the Waiting on you list after the
+//! turn's last input (`status-reread`).
 //!
-//! Both are entries of the turn-end hook list. The `charliebot hook` command answers each one from the shared input
-//! (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason. A second
-//! miss passes: `web-reply` then shows the user the no-reply notice, and `web-status` passes quietly. A continuation
-//! that failed is a second miss too: `web-status` then shows its notice, so the failed turn never passes. A turn with a
-//! close request, and a turn that exits with an error other than a failed continuation, pass both checks.
+//! All three are entries of the turn-end hook list. The `charliebot hook` command answers each one from the shared
+//! input (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason. A
+//! second miss passes: `web-reply` then shows the user the no-reply notice, `web-status` passes quietly, and
+//! `status-reread` shows the Waiting on you items it left. A continuation that failed is a second miss too: `web-status`
+//! then shows its notice, so the failed turn never passes. A turn with a close request, and a turn that exits with an
+//! error other than a failed continuation, pass all three checks.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -28,11 +30,13 @@ use crate::reply;
 pub const WEB_REPLY_ENTRY: &str = "web-reply";
 /// The entry that checks the turn ran a status set or confirm.
 pub const WEB_STATUS_ENTRY: &str = "web-status";
+/// The entry that checks a turn which received an input and holds Waiting on you items stored a status set after it.
+pub const STATUS_REREAD_ENTRY: &str = "status-reread";
 
 /// The status instruction that ends a status reminder.
 const STATUS_SENTENCES: &str = concat!(
   "Run `charliebot web status set` when Goal, Remaining, Now or Waiting on you differs from the state that turn ",
-  "read back. ",
+  "read back, or when the turn received an input and Waiting on you holds items. ",
   "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back."
 );
 
@@ -104,6 +108,64 @@ pub fn check_web_status(input: &TurnInput) -> CheckResult {
   CheckResult::Block(status_reminder_text())
 }
 
+/// The `status-reread` entry: a turn that received an input and holds Waiting on you items stores a status set after
+/// its last input, and that set names the Waiting on you list. A confirm, or a set stored before the last input, does
+/// not count. The first miss blocks with the reason; a miss after that passes with the notice of the items left.
+pub fn check_status_reread(input: &TurnInput) -> CheckResult {
+  if !web_turn_checks_apply(input) {
+    return CheckResult::Pass;
+  }
+  let Some(last) = input.turn.iter().rposition(|event| event["received_at"].is_string()) else {
+    return CheckResult::Pass;
+  };
+  let items = waiting_texts(&input.status);
+  if items.is_empty() {
+    return CheckResult::Pass;
+  }
+  let rewritten = input.turn[last + 1..].iter().any(|event| {
+    event["type"] == WEB_STATUS
+      && event["web_status_changed"].as_array().is_some_and(|changed| changed.iter().any(|item| item == "waiting"))
+  });
+  if rewritten {
+    return CheckResult::Pass;
+  }
+  if blocked_before(&input.turn, STATUS_REREAD_ENTRY) {
+    return CheckResult::Notice(left_items_notice(&items));
+  }
+  CheckResult::Block(reread_reason(&input.turn[last], items.len()))
+}
+
+/// The text of each Waiting on you item of the stored status payload, in list order.
+fn waiting_texts(status: &Value) -> Vec<String> {
+  status["waiting"]
+    .as_array()
+    .into_iter()
+    .flatten()
+    .map(|item| item["text"].as_str().unwrap_or_default().to_string())
+    .collect()
+}
+
+/// The reason the `status-reread` check blocks with: the last input's receipt time and opening, and the item count.
+fn reread_reason(input: &Value, count: usize) -> String {
+  let received = input["received_at"].as_str().unwrap_or_default();
+  let opening = reply::message_opening(input["content"].as_str().unwrap_or_default());
+  let noun = if count == 1 { "item" } else { "items" };
+  format!(
+    "Session status reminder: your last turn received an input at {received}, which begins \"{opening}\", and \
+     Waiting on you holds {count} {noun}. Run `charliebot web status show`, then run `charliebot web status set` \
+     with the whole Waiting on you list as it stands after that input."
+  )
+}
+
+/// The notice of a `status-reread` second miss: the Waiting on you items that the turn left as stored.
+fn left_items_notice(items: &[String]) -> String {
+  format!(
+    "Session status check: your last turn received an input and stored no status set after it. The Waiting on you \
+     items left as stored: {}.",
+    items.join("; ")
+  )
+}
+
 /// The user messages the turn received that no web reply later than their receipt answers, each with its id and text.
 fn unanswered_user_messages(turn: &[Value]) -> anyhow::Result<Vec<(String, String)>> {
   let events: Vec<ChatEvent> = turn.iter().map(CompactValue::from_value).collect();
@@ -131,9 +193,10 @@ fn unanswered_user_messages(turn: &[Value]) -> anyhow::Result<Vec<(String, Strin
   Ok(unanswered)
 }
 
-/// Shows the no-reply notice `message` for each user message of the turn that no web reply answers, then marks the
-/// session unread. A message that already has its notice gets none, so a retried delivery adds nothing. A turn with no
-/// such message attaches nothing and resolves to `false`: the turn-end runner then posts the notice itself.
+/// Shows the notice `message` for each user message of the turn that no web reply answers, then marks the session
+/// unread. A message that already holds this notice gets none, so a retried delivery adds nothing; another notice
+/// on the same message still shows. A turn with no such message attaches nothing and resolves to `false`: the
+/// turn-end runner then posts the notice itself.
 pub async fn show_notice(
   features: &Arc<FeatureContext>,
   session_id: &str,
@@ -146,7 +209,7 @@ pub async fn show_notice(
   }
   let loaded = reply::load_events(features, session_id).await?;
   for (user_id, _) in unanswered {
-    if reply::noticed(loaded.as_slice(), &user_id) {
+    if reply::noticed(loaded.as_slice(), &user_id, message) {
       continue;
     }
     features

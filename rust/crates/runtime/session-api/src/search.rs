@@ -1381,9 +1381,10 @@ fn scan_contents(
 
 #[cfg(test)]
 mod tests {
-  use std::collections::HashMap;
+  use std::collections::{HashMap, HashSet};
   use std::fs;
   use std::io::{Seek, SeekFrom, Write};
+  use std::num::NonZeroUsize;
   use std::sync::{Arc, Mutex};
 
   use charliebot_store::hooks::EmptyRuntimeEventHooks;
@@ -1392,9 +1393,10 @@ mod tests {
     AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store,
     StoreHookFuture, StoreHooks, StoreResult,
   };
+  use lru::LruCache;
   use serde_json::{Map, Value};
 
-  use super::search_sessions;
+  use super::{SEARCH_CONTENT_INDEX_MEMO_LIMIT, SEARCH_FILE_MEMO_LIMIT, SEARCH_MATCH_MEMO_LIMIT, search_sessions};
 
   #[test]
   fn ascii_scan_finds_matches_across_chunk_boundaries() {
@@ -1827,8 +1829,20 @@ mod tests {
     let path = store.chat_events_path("content");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, "a needle for the repeat answer").unwrap();
-    let memos =
-      Mutex::new(super::SearchMemos { sweep_interval: std::time::Duration::from_secs(3600), ..Default::default() });
+    let memos = Mutex::new(super::SearchMemos {
+      corpus_work: None,
+      files: LruCache::new(NonZeroUsize::new(SEARCH_FILE_MEMO_LIMIT).expect("the file memo limit is nonzero")),
+      content: LruCache::new(
+        NonZeroUsize::new(SEARCH_CONTENT_INDEX_MEMO_LIMIT).expect("the content index memo limit is nonzero"),
+      ),
+      matches: LruCache::new(NonZeroUsize::new(SEARCH_MATCH_MEMO_LIMIT).expect("the match memo limit is nonzero")),
+      read_failures: HashSet::new(),
+      sweep_interval: std::time::Duration::from_secs(3600),
+      scan_calls: 0,
+      repeat_sweeps: 0,
+      scanned_candidates: 0,
+      swept_candidates: 0,
+    });
 
     let first = super::search_sessions_with_memos(&store, "needle", &memos).unwrap();
     first.source.expect("a fresh query names the match it built").remember_body(7, Arc::new(b"needle body".to_vec()));
@@ -1912,8 +1926,20 @@ mod tests {
       fs::create_dir_all(path.parent().unwrap()).unwrap();
       fs::write(&path, "no match here\n").unwrap();
     }
-    let memos =
-      Mutex::new(super::SearchMemos { sweep_interval: std::time::Duration::from_secs(1), ..Default::default() });
+    let memos = Mutex::new(super::SearchMemos {
+      corpus_work: None,
+      files: LruCache::new(NonZeroUsize::new(SEARCH_FILE_MEMO_LIMIT).expect("the file memo limit is nonzero")),
+      content: LruCache::new(
+        NonZeroUsize::new(SEARCH_CONTENT_INDEX_MEMO_LIMIT).expect("the content index memo limit is nonzero"),
+      ),
+      matches: LruCache::new(NonZeroUsize::new(SEARCH_MATCH_MEMO_LIMIT).expect("the match memo limit is nonzero")),
+      read_failures: HashSet::new(),
+      sweep_interval: std::time::Duration::from_secs(1),
+      scan_calls: 0,
+      repeat_sweeps: 0,
+      scanned_candidates: 0,
+      swept_candidates: 0,
+    });
 
     let first = super::search_sessions_with_memos(&store, "absentneedle", &memos).unwrap();
     assert!(first.rows.is_empty());
@@ -1938,8 +1964,20 @@ mod tests {
       fs::create_dir_all(path.parent().unwrap()).unwrap();
       fs::write(&path, "no match here\n").unwrap();
     }
-    let memos =
-      Mutex::new(super::SearchMemos { sweep_interval: std::time::Duration::from_secs(1), ..Default::default() });
+    let memos = Mutex::new(super::SearchMemos {
+      corpus_work: None,
+      files: LruCache::new(NonZeroUsize::new(SEARCH_FILE_MEMO_LIMIT).expect("the file memo limit is nonzero")),
+      content: LruCache::new(
+        NonZeroUsize::new(SEARCH_CONTENT_INDEX_MEMO_LIMIT).expect("the content index memo limit is nonzero"),
+      ),
+      matches: LruCache::new(NonZeroUsize::new(SEARCH_MATCH_MEMO_LIMIT).expect("the match memo limit is nonzero")),
+      read_failures: HashSet::new(),
+      sweep_interval: std::time::Duration::from_secs(1),
+      scan_calls: 0,
+      repeat_sweeps: 0,
+      scanned_candidates: 0,
+      swept_candidates: 0,
+    });
 
     assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
     assert_eq!(memos.lock().unwrap().swept_candidates, 4, "the first query reads every candidate's signature");

@@ -143,7 +143,8 @@ test('an aborted cron badge load rejects with the abort, and its fetch carries t
     signals.push(opts.signal);
     opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), {name: 'AbortError'})));
   });
-  const {registered} = loadCron(abortableFetch);
+  // Keep the page's initial cron panel fetch out of this badge-loader assertion.
+  const {registered} = loadCron(abortableFetch, {readyState: 'loading'});
   const controller = new AbortController();
   const load = registered.workspaceBadges[0](controller.signal);
 

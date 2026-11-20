@@ -148,8 +148,8 @@ impl BackendPool {
     Arc::clone(&self.registry)
   }
 
-  /// One selection over the process-wide owners this pool holds. A caller that also holds a store chains
-  /// [`model_pool::Selector::with_store`], so a priority pool orders its members by session load.
+  /// One selection over the process-wide owners this pool holds: the registry whose usage readings it consults, the
+  /// availability owner, and the lane positions.
   pub fn selector<'a>(&'a self, cfg: &'a CharlieBotConfig) -> model_pool::Selector<'a> {
     model_pool::Selector::new(cfg, &self.registry, Arc::clone(&self.availability), Arc::clone(&self.positions))
   }
@@ -646,6 +646,7 @@ mod tests {
             weekly_resets_at: None,
             near_exhaustion: false,
             exhausted: true,
+            fully_reserved: false,
           }))
         }),
       )

@@ -3,7 +3,10 @@
 //! A pool names `backends.options` ids and a rule. A priority pool takes its subscription members in turn, and takes
 //! its pay-as-you-go members in turn only when no subscription member is selectable. A rotate pool takes its members in
 //! turn. Both rules skip a member the caller excludes, that [`BackendAvailability`] holds out, or whose usage reading
-//! says it is exhausted. A member one pool recorded out is skipped by every pool that names it. A session whose backend
+//! says it is exhausted. A priority pool also skips a subscription member whose reading says it is fully reserved —
+//! every login that has headroom has all of it reserved by the runs placed on it — when a pay-as-you-go member is
+//! selectable, so the pool runs those runs on the pay-as-you-go member instead. A member one pool recorded out is
+//! skipped by every pool that names it. A session whose backend
 //! is a pool id runs each turn on the member this module picks, and records that member in its `pool_member` slot.
 //!
 //! Terms: a *member* is a `backends.options` id that a pool names. *Out* is the "out until" record that
@@ -320,8 +323,27 @@ fn select_priority(
   };
 
   let subscriptions = selectable(PoolBilling::Subscription);
+  let payg = selectable(PoolBilling::Payg);
+  // A subscription whose every login with headroom has all of it reserved by the runs placed on it yields to the
+  // pay-as-you-go tier, but only while a pay-as-you-go member can take the run: the reservation never refuses one.
+  let reserved = subscriptions
+    .iter()
+    .copied()
+    .filter(|&index| reading(index).is_some_and(|member| member.fully_reserved))
+    .collect::<Vec<_>>();
   let (tier, lane) = if subscriptions.is_empty() {
-    (selectable(PoolBilling::Payg), Lane::Payg)
+    (payg, Lane::Payg)
+  } else if !reserved.is_empty() && !payg.is_empty() {
+    for index in &reserved {
+      tracing::info!(target: "charliebot_agents", member = %pool.members[*index].backend, reason = "headroom reserved", "model_pool_skipped");
+    }
+    let open = subscriptions.iter().copied().filter(|index| !reserved.contains(index)).collect::<Vec<_>>();
+    if open.is_empty() {
+      (payg, Lane::Payg)
+    } else {
+      let under_line = open.iter().copied().filter(|&index| !near_exhaustion(reading(index))).collect::<Vec<_>>();
+      (if under_line.is_empty() { open } else { under_line }, Lane::Subscription)
+    }
   } else {
     let under_line =
       subscriptions.iter().copied().filter(|&index| !near_exhaustion(reading(index))).collect::<Vec<_>>();
@@ -802,6 +824,7 @@ pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyh
 #[cfg(test)]
 mod tests {
   use std::sync::Arc;
+  use std::sync::atomic::{AtomicBool, Ordering};
 
   use charliebot_core::config::BackendOption;
   use charliebot_core::credentials::load_credentials;
@@ -829,6 +852,10 @@ mod tests {
     }
   }
 
+  /// Whether `claude-res`'s reservations have left its headroom. Only `a_payg_session_keeps_its_member_while_fully_
+  /// reserved_and_returns_on_the_reset` sets it.
+  static RESERVED_RELEASE: AtomicBool = AtomicBool::new(false);
+
   /// The reading of a synthetic member: the canned windows the selection tests order.
   fn test_reading(option: &BackendOption, now: UtcDateTime) -> Option<MemberReading> {
     let reset = |minutes: i64| Some(UtcDateTime::from(now.into_inner() + time::Duration::minutes(minutes)));
@@ -837,6 +864,7 @@ mod tests {
       weekly_resets_at: reset(minutes),
       near_exhaustion: false,
       exhausted: false,
+      fully_reserved: false,
     };
     match option.id.as_str() {
       "chatgpt" => Some(weekly(0.80, 360)),
@@ -845,6 +873,12 @@ mod tests {
       "near" => Some(MemberReading { near_exhaustion: true, ..weekly(0.95, 180) }),
       // No capacity left, while the out record has not been written.
       "spent" => Some(MemberReading { exhausted: true, ..weekly(1.0, 60) }),
+      // Headroom left, but the runs placed on it reserved all of it.
+      "reserved" => Some(MemberReading { fully_reserved: true, ..weekly(0.49, 2_880) }),
+      // The same, until `RESERVED_RELEASE` frees it for the turn-level test.
+      "claude-res" => {
+        Some(MemberReading { fully_reserved: !RESERVED_RELEASE.load(Ordering::SeqCst), ..weekly(0.49, 2_880) })
+      }
       // No reading: counts as under the line until its first quota error.
       _ => None,
     }
@@ -940,6 +974,31 @@ backends:
       label: Cheap
       rule: priority
       members: [chatgpt, claude-sub, near, spent, payg-a, payg-b, payg-c]
+";
+
+  /// A priority pool over an open subscription, a subscription whose logins' headroom is all reserved (`test_reading`
+  /// reads `reserved` fully reserved, `claude-res` reserved until `RESERVED_RELEASE` is set), and one pay-as-you-go
+  /// member.
+  const RESERVED_CONFIG: &str = "\
+backends:
+  options:
+    - {id: claude-sub, label: Claude, type: synthetic, model: model-claude, billing: subscription}
+    - {id: reserved, label: Reserved, type: synthetic, model: model-reserved, billing: subscription}
+    - {id: claude-res, label: Claude reserved, type: synthetic, model: model-claude-res, billing: subscription}
+    - {id: payg-a, label: Payg A, type: synthetic, model: model-payg, billing: payg}
+  pools:
+    - id: cheap
+      label: Cheap
+      rule: priority
+      members: [claude-sub, reserved, payg-a]
+    - id: reserved-only
+      label: Reserved only
+      rule: priority
+      members: [reserved]
+    - id: reserved-pair
+      label: Reserved pair
+      rule: priority
+      members: [claude-res, payg-a]
 ";
 
   fn fixture() -> (tempfile::TempDir, Arc<FeatureContext>) {
@@ -1080,6 +1139,52 @@ backends:
     }
     let picks = (0..4).map(|_| pick(&features, "cheap", &[]).unwrap()).collect::<Vec<_>>();
     assert_eq!(picks, ["payg-a", "payg-b", "payg-c", "payg-a"]);
+  }
+
+  /// A fully reserved subscription yields to the pay-as-you-go member, and the skipped pick leaves the subscription
+  /// lane's position where it was.
+  #[tokio::test]
+  async fn a_fully_reserved_subscription_yields_to_pay_as_you_go_and_leaves_its_cursor() {
+    let (_home, features) = fixture_with(RESERVED_CONFIG);
+    // The open subscription contends first; the reserved one is skipped while the payg member is selectable.
+    assert_eq!(pick(&features, "cheap", &[]), Some("claude-sub".to_string()));
+    assert_eq!(pick(&features, "cheap", &["claude-sub"]), Some("payg-a".to_string()));
+    // The payg pick moved no subscription position: with the payg member out, the walk resumes at `reserved`.
+    assert_eq!(pick(&features, "cheap", &["payg-a"]), Some("reserved".to_string()));
+    assert_eq!(pick(&features, "cheap", &[]), Some("claude-sub".to_string()));
+  }
+
+  /// A reservation never refuses a run: with no payg member to yield to, the fully reserved subscription and the
+  /// model id that forms its one-member pool still take the run.
+  #[tokio::test]
+  async fn a_fully_reserved_subscription_takes_the_run_when_no_payg_member_is_selectable() {
+    let (_home, features) = fixture_with(RESERVED_CONFIG);
+    assert_eq!(pick(&features, "reserved-only", &[]), Some("reserved".to_string()));
+    let cfg = loaded_cfg(&features);
+    let selector = Selector::from_features(&features, &cfg).unwrap();
+    // The model id's one-member pool is the option id here; the same filter picks the reserved member through it.
+    assert_eq!(selector.peek("reserved", &[]).unwrap().map(|option| option.id), Some("reserved".to_string()));
+  }
+
+  /// A payg session keeps its member while the subscription stays fully reserved, and returns with a subscription
+  /// reset once the reservations leave headroom.
+  #[tokio::test]
+  async fn a_payg_session_keeps_its_member_while_fully_reserved_and_returns_on_the_reset() {
+    let (_home, features) = fixture_with(RESERVED_CONFIG);
+    let cfg = loaded_cfg(&features);
+    RESERVED_RELEASE.store(false, Ordering::SeqCst);
+    let mut meta = pool_session(&features, "payg-reserved-keep", "reserved-pair").await;
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap().as_deref(), Some("payg-a"));
+    start_turn(&features, &cfg, &mut meta).await.unwrap();
+    assert_eq!(current_member_id(&cfg, &meta).unwrap(), "payg-a");
+
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap().as_deref(), Some("payg-a"));
+
+    RESERVED_RELEASE.store(true, Ordering::SeqCst);
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap().as_deref(), Some("claude-res"));
+    let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
+    assert_eq!(change.to, "claude-res");
+    assert_eq!(change.reason, event_types::QUOTA_REASON_SUBSCRIPTION_RESET);
   }
 
   #[tokio::test]

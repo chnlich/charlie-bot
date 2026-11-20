@@ -761,7 +761,13 @@ fn register_member_reading(registry: &mut Registry) -> Result<(), RegistryError>
         } else {
           Vec::new()
         };
-        Ok(Some(MemberReading { windows, weekly_resets_at: None, near_exhaustion: near, exhausted: false }))
+        Ok(Some(MemberReading {
+          windows,
+          weekly_resets_at: None,
+          near_exhaustion: near,
+          exhausted: false,
+          fully_reserved: false,
+        }))
       },
     ),
   )

@@ -398,6 +398,7 @@ A skipped fire records its reason and wakes no session. When the server cannot r
 To run a scheduled task once now, POST `/api/cron/tasks/{name}/run`. Before it checks the bound session's backend, the server refuses a run of a `steps` task whose round is still in flight (409), and a run whose bound session is archived (error). It checks that backend on a run of a `prompt_file` or `steps` task. When that backend names no current option or pool id, the run records `failed`, posts the error to the bound session, queues no input, and returns the session id with no thread id. Otherwise, a run of a `prompt_file` task queues its input behind the current turn and has no busy check, and a run of a `steps` task writes no chat event. A `handler` task uses no backend, so a run of it starts the handler whatever the bound session's backend names. To stop this session's improve loop, run `charliebot improve stop`.
 To stop a running worker child, run `charliebot session cancel <worker id> --reason <text>`.
 The command stops the worker's runs and ends the delegation.
+It also cancels every pending trigger that the worker registered.
 A message from `charliebot session send` reaches a worker only after its current run ends.
 
 ### Diff comment batches

@@ -16,7 +16,9 @@ use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, json};
 
 use crate::api::{CHECK_PATH, DOWNLOAD_PATH, READ_PATH, REPLY_PATH};
-use crate::fields::MESSAGE_ID;
+use crate::fields::{
+  DOWNLOAD_KINDS, FILE_KEY, KIND, MESSAGE_ID, OUTPUT, PAGE, READ_MODE, READ_MODE_CHAT, READ_MODE_TOPIC, TOPIC_ID,
+};
 use crate::user_token::{self, Endpoints};
 
 #[derive(Parser)]
@@ -70,7 +72,7 @@ struct DownloadArgs {
   /// The image key or file key the message's content names
   file_key: String,
   /// Whether the resource is an image or a file
-  #[arg(long = "type", value_parser = ["image", "file"], value_name = "KIND")]
+  #[arg(long = "type", value_parser = clap::builder::PossibleValuesParser::new(DOWNLOAD_KINDS), value_name = "KIND")]
   kind: String,
   /// Where to write the bytes. It must resolve inside the session directory
   #[arg(long)]
@@ -138,15 +140,16 @@ fn read_mode_fields(args: &ReadArgs) -> Result<Option<Map<String, serde_json::Va
     return Err(CliExit::usage("--page requires --chat or --topic"));
   }
   let fields = if args.chat {
-    let mut fields = Map::from_iter([("mode".to_string(), json!("chat"))]);
+    let mut fields = Map::from_iter([(READ_MODE.to_string(), json!(READ_MODE_CHAT))]);
     if let Some(page) = &args.page {
-      fields.insert("page".to_string(), json!(page));
+      fields.insert(PAGE.to_string(), json!(page));
     }
     fields
   } else if let Some(topic) = &args.topic {
-    let mut fields = Map::from_iter([("mode".to_string(), json!("topic")), ("topic_id".to_string(), json!(topic))]);
+    let mut fields =
+      Map::from_iter([(READ_MODE.to_string(), json!(READ_MODE_TOPIC)), (TOPIC_ID.to_string(), json!(topic))]);
     if let Some(page) = &args.page {
-      fields.insert("page".to_string(), json!(page));
+      fields.insert(PAGE.to_string(), json!(page));
     }
     fields
   } else {
@@ -167,9 +170,9 @@ fn download(args: &DownloadArgs) -> Result<(), CliExit> {
     json!({
       (SESSION_ID): session_id,
       (MESSAGE_ID): args.message_id,
-      "file_key": args.file_key,
-      "kind": args.kind,
-      "output": output,
+      (FILE_KEY): args.file_key,
+      (KIND): args.kind,
+      (OUTPUT): output,
     }),
     None,
     &[],

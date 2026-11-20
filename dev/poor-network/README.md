@@ -25,15 +25,18 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
+| `--lock-wait SECONDS` | How long each side waits for the bench lock (default 7200). An improve round passes 900. |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
 precondition failed and nothing started; 3 the baseline calibration did not reproduce; 4 a scenario the bench passed
 on the before side fails on the after side; 75 a side's wait for the lock ran out. Every side takes the bench's own
-advisory lock, `$HOME/pn-runs/.bench.lock`, around its trial (not the builds), waiting up to 2 h for it; no option
-chooses another lock file or skips it. The remote-wake bench takes the same lock for its container's whole run,
-because each start and stop of that container adds or removes a veth interface, which Chrome reports as a network
-change and drops the page in transfer. One lock hold covers one side attempt: a caller that retries a timed-out side
+advisory lock that `lock.sh` names, around its trial (not the builds), waiting up to 2 h for it, or the `--lock-wait`
+seconds a caller names; no option chooses another lock file or skips it. The remote-wake bench takes the same lock for
+its container's whole run, because each start and stop of that container adds or removes a veth interface, which Chrome
+reports as a network change and drops the page in transfer. Each improve-ux and improve-perf trial side
+(`dev/improve/trial-side.sh`) takes the same lock from its trial's start to its stop, waiting at most 15 minutes; when
+the wait runs out, the side runs nothing and exits 75. One lock hold covers one side attempt: a caller that retries a timed-out side
 runs the command again, which takes the lock again at the back of the queue. The side JSON is the bench's last
 artifact; when it is 120 s old and the bench still runs, the runner ends the trial tree itself, so a bench that hangs
 after its work never holds the lock, and the summary is reprinted from the JSON.
@@ -86,9 +89,8 @@ spike is the link's time and not the page's, so the send's click waits out a hol
 Each scenario's median and 90th percentile go in the table, with the raw median next to them for the time metrics.
 
 Runs that measure side by side share the host: overlapping trials put a mode of about 3 s into the switch and send
-timings, while byte counts stay the same. Bench runs on a host never overlap: every side holds
-`$HOME/pn-runs/.bench.lock`, the host's one bench lock, which the remote-wake bench also holds while its container
-runs. Every repetition also records its start, its end and the other serve trials on the host
+timings, while byte counts stay the same. Bench runs on a host never overlap: every side holds the host's
+one bench lock, which the remote-wake bench also holds while its container runs and each improve trial side holds too. Every repetition also records its start, its end and the other serve trials on the host
 during it (`trials.mjs`, a sample every 30 s), and the summary prints them.
 
 Below the table, scenario 1's received bytes are split by endpoint. The visible tab's status polls are counted by the
@@ -527,5 +529,6 @@ navigation as its start, that the newest message counts at the first document th
 starting record come from the first document, and that each reload is recorded with its cause. One of them drives a
 Chrome against a page that reloads once and holds an iframe, through a forward proxy: the cause reaches the tab from the
 reloaded document, and the frame adds no document. The lock tests check that one concurrent side attempt holds the bench
-lock and the next waits for it, and that the bench code names the lock path only in `lock.sh`. The search tests check the search view's arithmetic (see "Search
+lock and the next waits for it, and that the lock file is named only in `lock.sh`. They also check that an improve trial
+side stops with the bench lock named when the lock stays held, and runs its command when the lock is free. The search tests check the search view's arithmetic (see "Search
 view").

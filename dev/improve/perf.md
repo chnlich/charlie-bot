@@ -18,7 +18,8 @@ The poor-network bench still decides whether a round whose change can move such 
 
 ## Poor-network scenarios
 
-A round that takes a scenario as its topic runs it before and after its change, on host3. The bench takes its own lock, so no other bench run on the host measures beside it.
+A round that takes a scenario as its topic runs it before and after its change, on host3. The bench takes the host's bench lock for each of its sides, so no other bench run on the host measures beside it.
+The round's bench run waits for that lock at most 15 minutes, the bench's `--lock-wait 900`. When the wait runs out, the round ends with the stop reason of the Serving rules below.
 The bench's entry is `dev/poor-network/run.sh`: it runs a named scenario set on both sides and prints the bench's verdict for each scenario.
 The target of a scenario is in `TARGETS` of `dev/poor-network/profile.mjs`, and the bench's verdict decides; this prompt copies no target value.
 Run only the scenarios the change can move, with the background scenario at 3 repetitions, so the check stays inside the round's time.
@@ -52,13 +53,18 @@ Shrink or move any test over 0.08 s before opening the pull request.
 
 ## Serving
 
-Start each side with `scripts/release/trial.sh --serve --tree-root /tmp/improve-perf/ --seed-home <mock home directory> --in-caller-scope <commit> <server binary> -- <command>`.
-The tree root keeps the two trees apart, and the seed gives both servers the same data.
-Create the tree root first: the preflight refuses a missing one, so a round never writes outside its own directory.
+Each side is one serve trial of its commit on its server binary, with the mock home as its seed.
+The trial runs as `scripts/release/trial.sh --serve`, and the round runs it through `dev/improve/trial-side.sh`, which holds the host's bench lock from the trial's start to its stop.
+The tree root is under `/tmp/improve-perf/`, which keeps the two trees apart, and the seed gives both servers the same data.
+The round creates the tree root before its first side, so no side writes outside the round's own directory.
 The caller's scope already caps memory on the round's host, so the trial adds no scope of its own.
+Builds finish before a side starts, so they stay outside the lock.
+A side waits at most 15 minutes for the bench lock.
+When the wait runs out, the round takes no measurement, opens no pull request, and ends with a stop reason that names the bench lock as held.
+The next scheduled fire starts the round again.
 
-Run `mock-home check <mock home directory> "$CHARLIEBOT_SERVE_URL"` first in `<command>`.
-Stop the round when it exits 1, because that server reads data other than the mock home.
+Run the mock home check against the trial's server first in the side's command.
+Stop the round when the check exits 1, because that server reads data other than the mock home.
 The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to `<command>`, so every request and every `/proc` read names this trial's server and no other.
 
 Measure the two sides back to back in one round, in the same order.

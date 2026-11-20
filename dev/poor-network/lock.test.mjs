@@ -1,8 +1,8 @@
 // Tests of the bench lock: every side attempt takes the one file lock.sh names, so two side attempts on a host run one
-// after the other, and no caller option picks another file or skips it.
+// after the other, and no caller option picks another file or skips it. The improve trial side waits on the same lock.
 
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,20 +11,47 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const BENCH_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEV_DIR = path.dirname(BENCH_DIR);
 const LOCK = path.join(BENCH_DIR, 'lock.sh');
 const RUN = path.join(BENCH_DIR, 'run.sh');
+const IMPROVE_SIDE = path.join(DEV_DIR, 'improve', 'trial-side.sh');
 const LOCK_FILE = 'pn-runs/.bench.lock';
 
 function scratch(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-// The lock file as the bench code computes it, read from a shell that sources the module under a scratch home.
-function lockFile(home) {
-  return execFileSync('bash', ['-c', 'source "$1"; printf "%s\\n" "$BENCH_LOCK_FILE"', 'bash', LOCK], {
+// A variable of the lock module, read from a shell that sources the module under a scratch home.
+function lockVariable(home, name) {
+  return execFileSync('bash', ['-c', 'source "$1"; printf "%s" "${!2}"', 'bash', LOCK, name], {
     env: { ...process.env, HOME: home },
     encoding: 'utf8',
-  }).trim();
+  });
+}
+
+// The lock file as the bench code computes it.
+function lockFile(home) {
+  return lockVariable(home, 'BENCH_LOCK_FILE');
+}
+
+// Every dev/ source that a reader or a script could carry the lock's name in, except the tests.
+function devSources(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return entry.name === 'node_modules' ? [] : devSources(full);
+    }
+    return /\.(sh|mjs|md)$/.test(entry.name) && !entry.name.endsWith('.test.mjs') ? [full] : [];
+  });
+}
+
+// Runs an improve trial side under a scratch home with a short wait. Its command touches `ran` and exits with `code`.
+function improveSide(home, ran, waitSeconds, code) {
+  return spawnSync('bash', [IMPROVE_SIDE, 'bash', '-c', 'touch "$1"; exit "$2"', 'bash', ran, String(code)], {
+    env: { ...process.env, HOME: home, IMPROVE_TRIAL_LOCK_WAIT_SECONDS: String(waitSeconds) },
+    encoding: 'utf8',
+    timeout: 30000,
+  });
 }
 
 // Starts one side attempt: the side script runs under the bench lock and records its start and end times in `log`.
@@ -57,20 +84,19 @@ function attemptEvents(log) {
     });
 }
 
-test('the bench takes its lock under $HOME/pn-runs, and lock.sh names it once', () => {
+test('the bench takes its lock under $HOME/pn-runs, and only lock.sh names the file', () => {
   const home = scratch('pn-lock-home-');
   try {
     assert.equal(lockFile(home), path.join(home, LOCK_FILE));
 
-    const sources = fs
-      .readdirSync(BENCH_DIR)
-      .filter((name) => (name.endsWith('.sh') || name.endsWith('.mjs')) && !name.endsWith('.test.mjs'));
-    const named = sources.reduce(
-      (count, name) =>
-        count + [...fs.readFileSync(path.join(BENCH_DIR, name), 'utf8').matchAll(/pn-runs\/\.bench\.lock/g)].length,
-      0,
+    const naming = devSources(DEV_DIR).filter((file) =>
+      /pn-runs\/\.bench\.lock|BENCH_LOCK_FILE/.test(fs.readFileSync(file, 'utf8')),
     );
-    assert.equal(named, 1, `the bench code names the lock path ${named} times, not once`);
+    assert.deepEqual(
+      naming,
+      [LOCK],
+      `the lock file is named outside lock.sh in ${naming.map((file) => path.relative(DEV_DIR, file)).join(', ')}`,
+    );
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -134,5 +160,43 @@ test('the bench refuses a caller-chosen lock file and takes the lock itself', { 
     assert.equal(fs.existsSync(chosen), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('an improve trial side waits out a held lock, then stops unrun and names the bench lock', { timeout: 60000 }, async () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const held = path.join(dir, 'held');
+  const ran = path.join(dir, 'ran');
+  const body = path.join(dir, 'hold.sh');
+  // The bench side holds the lock until the test writes the release file beside its marker.
+  fs.writeFileSync(body, '#!/usr/bin/env bash\ntouch "$1"\nwhile [[ ! -e "$1.release" ]]; do sleep 0.1; done\n');
+  const holder = sideAttempt(home, body, held);
+  try {
+    await waitFor(() => fs.existsSync(held));
+    const side = improveSide(home, ran, 1, 0);
+    assert.equal(side.status, Number(lockVariable(home, 'BENCH_LOCK_TIMEOUT_EXIT')), side.stderr);
+    assert.match(side.stderr, /improve trial side stopped: the bench lock stayed held for 1 s/);
+    assert.equal(fs.existsSync(ran), false, 'the trial command ran while the bench lock was held');
+  } finally {
+    fs.writeFileSync(`${held}.release`, '');
+    await holder.exited;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an improve trial side runs its command on a free lock and passes the exit code on', { timeout: 60000 }, () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const ran = path.join(dir, 'ran');
+  try {
+    const side = improveSide(home, ran, 5, 3);
+    assert.equal(side.status, 3, side.stderr);
+    assert.equal(fs.existsSync(ran), true, 'the trial command did not run with the bench lock free');
+    assert.equal(side.stderr, '');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

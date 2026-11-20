@@ -40,12 +40,18 @@ The server binary then stays equal, so the two trees differ only in the change u
 For any other change, build the before server from an export of `origin/main`, and the after server from the branch.
 Both use the same release profile on one machine, so the change under test is the only difference between them.
 
-Start each side with `scripts/release/trial.sh --serve --tree-root /tmp/improve-ux/ --seed-home <mock home directory> --in-caller-scope <commit> <server binary> -- <command>`.
-The tree root keeps the two trees apart, and the seed gives both servers the same data.
-Create the tree root first: the preflight refuses a missing one, so a round never writes outside its own directory.
+Each side is one serve trial of its commit on its server binary, with the mock home as its seed.
+The trial runs as `scripts/release/trial.sh --serve`, and the round runs it through `dev/improve/trial-side.sh`, which holds the host's bench lock from the trial's start to its stop.
+The tree root is under `/tmp/improve-ux/`, which keeps the two trees apart, and the seed gives both servers the same data.
+The round creates the tree root before its first side, so no side writes outside the round's own directory.
+The round's scope already caps memory on its host, so the trial adds no scope of its own.
+Builds finish before a side starts, so they stay outside the lock.
+A side waits at most 15 minutes for the bench lock.
+When the wait runs out, the round takes no screenshot and no measurement, opens no pull request, and ends with a stop reason that names the bench lock as held.
+The next scheduled fire starts the round again.
 
-Run `mock-home check <mock home directory> "$CHARLIEBOT_SERVE_URL"` first in `<command>`.
-Stop the round when it exits 1, because that server reads data other than the mock home.
+Run the mock home check against the trial's server first in the side's command.
+Stop the round when the check exits 1, because that server reads data other than the mock home.
 The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CHARLIEBOT_SERVE_PID` to `<command>`, so the screenshots and the requests name this trial's server and no other.
 
 ## Screenshots

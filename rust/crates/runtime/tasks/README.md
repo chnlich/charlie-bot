@@ -173,7 +173,9 @@ task. It then cancels the queue's consumers: a turn whose record is durable deta
 - `recovery::start_end_landing_retry`, `retry_while_out_of_space`, `RUN_END_LANDING_RETRY_INTERVAL`
 
 A manager turn that is alive enqueues a master resume through `MasterQueue::enqueue_master_resume`, and the follow is
-tracked and never awaited, so the boot pass does not wait on the queue. The resumed record carries no input ids.
+tracked and never awaited, so the boot pass does not wait on the queue. The resumed record carries no input ids. The
+resume is queued behind the session's turns, so a run that ends first is dropped when its item dequeues: the item writes
+no checkpoint, `master_done` or message.
 
 A re-attached or drained worker run ends through the end handling its first launch uses: `execute_worker_run` and
 `resume_worker_run` both call `TaskExecutionAdapter::end_worker_run`, which records the run's end and then takes the

@@ -417,6 +417,22 @@ impl MasterQueue {
     last_cc_session_id: &mut Option<String>,
     last_account_label: &mut Option<String>,
   ) -> anyhow::Result<()> {
+    // A re-attach is queued while its run is live, so the run can end before the item dequeues. An ended run has
+    // nothing to resume: the item writes no checkpoint, `master_done` or message, and its waiter gets no turn.
+    if item.resume_record.is_some()
+      && item.callbacks.features.store.run_has_terminal_outcome(session_id, &item.task_run.run_id)?
+    {
+      tracing::info!(
+        target: "charliebot_tasks",
+        session = %session_id,
+        run_id = %item.task_run.run_id,
+        "master_resume_dropped_ended_run"
+      );
+      if let Some(completion) = item.completion.take() {
+        let _ = completion.send(Ok(None));
+      }
+      return Ok(());
+    }
     item.callbacks.features.registry.settle_idle_compaction(session_id).await?;
     self.wait_for_idle_compaction_reservation(session_id).await?;
     item.callbacks.features.registry.settle_idle_compaction(session_id).await?;

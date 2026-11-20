@@ -516,6 +516,12 @@ impl Store {
     Ok(self.run_facts_until(session_id, &mut never_stop)?.expect("the no-stop run-facts read completes"))
   }
 
+  /// Whether the session's run facts give `run_id` a terminal outcome. A run with one has ended, so a resume of it has
+  /// nothing to follow.
+  pub fn run_has_terminal_outcome(&self, session_id: &str, run_id: &str) -> StoreResult<bool> {
+    Ok(self.run_facts(session_id)?.terminal_outcome(run_id)?.is_some())
+  }
+
   /// Read run facts with the memo bound and check the stop flag between event blocks.
   pub fn run_facts_until(
     &self,

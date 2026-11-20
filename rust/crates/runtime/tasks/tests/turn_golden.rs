@@ -22,6 +22,7 @@ use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::run_token::{RunTokenClaims, sign_run_token};
+use charliebot_core::test_support::LogCapture;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
@@ -1845,6 +1846,166 @@ async fn wait_until_busy(features: &Arc<charliebot_registry::FeatureContext>, se
   })
   .await
   .context("the master queue never reported the session busy")?
+}
+
+/// A re-attach queued while its manager run is live (the boot pass does this on a restart) runs after the turn's own
+/// item. The run has ended by then, so the re-attach drops at dequeue: the turn ends once, with one checkpoint, one
+/// `master_done` and one backend process, and the server log names the session and the run that was dropped. Without
+/// the dequeue check, the re-attach's checkpoint blocks on the run's fact, and its continuation starts a second process.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_reattach_queued_while_its_manager_run_is_live_drops_at_dequeue() -> anyhow::Result<()> {
+  let logs = LogCapture::default();
+  let _capture = logs.install();
+  let temp = tempfile::tempdir()?;
+  let guard = Arc::new(ProcessGroupGuard::new());
+  let home = temp.path().join("home");
+  let launches = temp.path().join("launches.txt");
+  let native_session = "reattach-native-session";
+  let events = [
+    json!({"type":"system","subtype":"init","session_id":native_session}),
+    json!({"type":"assistant","message":{"content":[{"type":"text","text":"in-flight answer"}]}}),
+  ];
+  let lines = events.iter().map(serde_json::to_string).collect::<Result<Vec<_>, _>>()?.join("\n");
+  let script = format!("echo launch >> '{}'\ncat <<'CB_FIRST'\n{lines}\nCB_FIRST\n/bin/sleep 1\n", launches.display());
+  let option = backend_option(script);
+  let registry = registry();
+  let (cfg, features) = config_with_features(&home, Some(option.clone()), Arc::clone(&registry), true)?;
+  // A turn-end check that blocks a checkpoint whose turn holds a run_finished fact. The turn's own checkpoint holds
+  // none, so only a re-attach that runs its checkpoint after the run ended is blocked.
+  let gate =
+    r#"if grep -q '"run_finished"'; then printf '%s\n' '{"decision":"block","reason":"the run ended again"}'; fi"#;
+  std::fs::write(
+    home.join("checkout").join("hooks/turn_end.json"),
+    json!([{"name": "gate", "command": gate}]).to_string(),
+  )?;
+  let meta = session_meta("reattach-session", "web", "fresh");
+  save_session_metadata(&features, &registry, &meta)?;
+  let queue = features.startup.require::<master_queue::MasterQueue>()?;
+  let mut callbacks = callbacks(Arc::clone(&features), Arc::new(Mutex::new(Vec::new())));
+  // The terminal fact is written right after the turn's `master_done`, as it is on a live server, so the re-attach's
+  // turn opens with run_finished.
+  let persist = Arc::clone(&callbacks.persist_and_broadcast);
+  let finish_store = Arc::clone(&features.store);
+  let finish_persist: PersistAndBroadcastFn = Arc::new(move |session_id: String, event: Value| {
+    let persist = Arc::clone(&persist);
+    let store = Arc::clone(&finish_store);
+    Box::pin(async move {
+      let done_run = (event["type"] == event_types::MASTER_DONE).then(|| event["run_id"].clone());
+      persist(session_id.clone(), event).await?;
+      if let Some(run_id) = done_run {
+        let fact = json!({"type": event_types::RUN_FINISHED, "run_id": run_id, "outcome": "success"});
+        store.append_chat_event(&session_id, fact).await?;
+      }
+      Ok(())
+    })
+  });
+  callbacks.persist_and_broadcast = finish_persist;
+  let run_id = "reattach-run".to_string();
+  let transport_dir = cfg.sessions_dir().join(&meta.id).join("runs").join(&run_id);
+  std::fs::create_dir_all(&transport_dir)?;
+
+  let (spawned_sender, spawned_receiver) = oneshot::channel();
+  let spawned_sender = Arc::new(Mutex::new(Some(spawned_sender)));
+  let spawn_guard = Arc::clone(&guard);
+  let on_task_spawn: TaskSpawnCallback = Arc::new(move |pid, pid_start| {
+    let sender = Arc::clone(&spawned_sender);
+    let spawn_guard = Arc::clone(&spawn_guard);
+    Box::pin(async move {
+      spawn_guard.track(pid);
+      let sender =
+        sender.lock().expect("spawn signal mutex is not poisoned").take().context("spawn signal sent twice")?;
+      let pid_start = pid_start.context("the spawned manager process has no pinned start time")?;
+      sender.send((pid, pid_start)).map_err(|_| anyhow::anyhow!("spawn signal receiver closed"))?;
+      Ok(())
+    })
+  });
+  let turn = tokio::spawn({
+    let queue = Arc::clone(&queue);
+    let cfg = Arc::clone(&cfg);
+    let session = meta.clone();
+    let callbacks = callbacks.clone();
+    let run_id = run_id.clone();
+    let transport_dir = transport_dir.clone();
+    async move {
+      queue
+        .run_message(MasterTurnRequest {
+          cfg,
+          session_meta: session.clone(),
+          user_content: "synthetic prompt".to_string(),
+          callbacks,
+          user_event_ids: vec!["reattach-input".to_string()],
+          task_instructions: "synthetic instructions".to_string(),
+          task_run: TaskRunBinding { session_id: session.id, run_id, transport_dir, fresh_native_context: false },
+          on_task_spawn,
+          on_task_finish: noop_task_finish(),
+          backend_option: Some(option),
+          extra_claude_flags: None,
+          uploaded_files: None,
+          extra_env: None,
+        })
+        .await
+    }
+  });
+  let (pid, pid_start) = tokio::time::timeout(TEST_DEADLINE, spawned_receiver)
+    .await
+    .context("the scripted manager process did not spawn")?
+    .context("the manager process spawn signal was dropped")?;
+
+  // The restart's re-attach of the live run: the resume item that `resume_run_checked` queues behind the turn. It
+  // carries the conversation the turn persists, which a re-attach reads from the session store.
+  let mut resumed = meta.clone();
+  resumed.cc_session_id = Some(native_session.to_string());
+  let receiver = queue
+    .enqueue_master_resume(MasterResumeRequest {
+      cfg: Arc::clone(&cfg),
+      session_meta: resumed,
+      record: MasterResumeRecord {
+        pid: Some(pid),
+        pid_start: Some(pid_start),
+        started_at: UtcDateTime::now(),
+        raw_log: transport_dir.join(run_records::RAW_LOG_NAME),
+        user_event_ids: Vec::new(),
+      },
+      callbacks: callbacks.clone(),
+      // The item dequeues after the process has exited.
+      is_alive: Arc::new(|| false),
+      task_run: TaskRunBinding {
+        session_id: meta.id.clone(),
+        run_id: run_id.clone(),
+        transport_dir: transport_dir.clone(),
+        fresh_native_context: false,
+      },
+      on_task_spawn: noop_task_spawn(),
+      on_task_finish: noop_task_finish(),
+      extra_env: None,
+    })
+    .await?;
+
+  turn.await.context("the manager turn task panicked")??;
+  let resumed = receiver.await.context("the queued re-attach closed its result")??;
+  queue.shutdown().await?;
+
+  assert_eq!(resumed, None, "a re-attach of an ended run runs no turn, so it names no conversation");
+  assert_eq!(std::fs::read_to_string(&launches)?.lines().count(), 1, "the turn is the only backend process");
+  assert_eq!(hook_records(&features, &meta.id)?.len(), 1, "the turn ends after one checkpoint");
+  let done: Vec<Value> = features
+    .store
+    .load_chat_events_sync(&meta.id)?
+    .iter()
+    .map(|event| event.to_value())
+    .filter(|event| event["type"] == event_types::MASTER_DONE)
+    .collect();
+  assert_eq!(done.len(), 1, "the turn writes one master_done: {done:?}");
+  assert_eq!(done[0][event_types::INPUT_EVENT_IDS], json!(["reattach-input"]));
+  let logged = logs.text();
+  assert!(
+    logged.lines().any(|line| {
+      line.contains("master_resume_dropped_ended_run") && line.contains(&meta.id) && line.contains(&run_id)
+    }),
+    "the dropped re-attach is logged with its session and run: {logged}"
+  );
+  Ok(())
 }
 
 #[tokio::test]

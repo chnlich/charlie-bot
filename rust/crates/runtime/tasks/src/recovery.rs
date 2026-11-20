@@ -1405,7 +1405,7 @@ async fn resume_run_checked(
   let (Some(pid), Some(pid_start)) = (run.pid, run.pid_start.clone()) else {
     bail!("run {run_id} records no launched process identity; nothing to re-attach");
   };
-  if store.run_facts(session_id)?.terminal_outcome(run_id)?.is_some() {
+  if store.run_has_terminal_outcome(session_id, run_id)? {
     return Ok(false);
   }
   let is_alive = match is_alive {
@@ -1568,7 +1568,7 @@ async fn land_manager_resume_failure(
 ) {
   let store = &adapter.features.store;
   let landing = async {
-    if store.run_facts(session_id)?.terminal_outcome(run_id)?.is_some() {
+    if store.run_has_terminal_outcome(session_id, run_id)? {
       return Ok(());
     }
     let Some(meta) = store.load_meta(session_id).await? else { return Ok(()) };

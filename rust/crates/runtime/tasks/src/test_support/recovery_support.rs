@@ -582,18 +582,6 @@ impl Stack {
     Stack::assemble(Arc::new(home), cfg, registry(Some(extra))?).await
   }
 
-  /// A stack with one additional package registration whose store runs the registry's turn contributions after a
-  /// turn, as the server's store does. The turn contributions need the bound feature context that the server binds.
-  pub async fn start_with_package_and_store_hooks(
-    options: Vec<BackendOption>,
-    pool: Vec<String>,
-    extra: (&'static str, RegisterFn),
-  ) -> anyhow::Result<Stack> {
-    let home = tempfile::tempdir()?;
-    let cfg = config(home.path(), options, pool, 0);
-    Stack::assemble_with_registry_hooks(Arc::new(home), cfg, registry(Some(extra))?).await
-  }
-
   pub async fn start_with_min_free_disk_gib(
     options: Vec<BackendOption>,
     pool: Vec<String>,
@@ -623,18 +611,6 @@ impl Stack {
   ) -> anyhow::Result<Stack> {
     let cfg = config(home.path(), options, pool, 0);
     Stack::assemble(home, cfg, registry(None)?).await
-  }
-
-  /// The stack of the next boot on an earlier home, with one additional package whose store runs the registry's turn
-  /// contributions after a turn.
-  pub async fn start_on_home_with_package_and_store_hooks(
-    home: Arc<TempDir>,
-    options: Vec<BackendOption>,
-    pool: Vec<String>,
-    extra: (&'static str, RegisterFn),
-  ) -> anyhow::Result<Stack> {
-    let cfg = config(home.path(), options, pool, 0);
-    Stack::assemble_with_registry_hooks(home, cfg, registry(Some(extra))?).await
   }
 
   /// A stack whose backends carry the priority pool `auto`.
@@ -695,20 +671,6 @@ impl Stack {
 
   async fn assemble(home: Arc<TempDir>, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
     Stack::assemble_with_hooks(home, cfg, Arc::new(registry), Arc::new(EmptyRuntimeEventHooks)).await
-  }
-
-  /// Assemble the stack, with the registry's turn contributions behind the store's runtime hooks when `registry_hooks`
-  /// holds the registry.
-  async fn assemble_with_registry_hooks(
-    home: Arc<TempDir>,
-    cfg: CharlieBotConfig,
-    registry: Registry,
-  ) -> anyhow::Result<Stack> {
-    let registry = Arc::new(registry);
-    let runtime_events = charliebot_registry::store_hooks::store_hooks(Arc::clone(&registry))
-      .runtime_events
-      .context("the registry's store hooks carry their runtime events")?;
-    Stack::assemble_with_hooks(home, cfg, registry, runtime_events).await
   }
 
   async fn assemble_with_hooks(

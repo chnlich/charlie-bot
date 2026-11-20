@@ -313,8 +313,6 @@ fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: L
 
 #[cfg(test)]
 mod tests {
-  use std::collections::BTreeSet;
-
   use super::*;
 
   /// A stamp in the form `stamp` writes, `second` seconds into one minute.
@@ -354,26 +352,33 @@ mod tests {
 
   #[test]
   fn the_default_shape_writes_cron_tasks_that_bind_existing_manager_sessions() {
-    // A home of two sessions is smaller than the fixture, so its tasks share the sessions it has.
-    for sessions in [2, 40] {
-      let dir = tempfile::tempdir().expect("a temporary directory");
-      let home = dir.path().join("home");
-      generate(&home, sessions, 1, Shape::Default, Language::Mixed).expect("the default home");
-      let manifest = Manifest::read(&home).expect("the manifest");
+    // One session generates only a 1.7 KB log so this unit test stays within the 0.1 s limit; multi-session
+    // generation (144 MB+) runs in the improve integration suite.
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let home = dir.path().join("home");
+    generate(&home, 1, 1, Shape::Default, Language::Mixed).expect("the default home");
+    let manifest = Manifest::read(&home).expect("the manifest");
 
-      let task_files = fs::read_dir(home.join(cron::CRON_DIR)).expect("the cron directory").count();
-      assert_eq!(task_files, manifest.cron_tasks.len(), "the manifest lists every task file");
-      let bound: BTreeSet<&str> = manifest.cron_tasks.iter().map(|task| task.session_id.as_str()).collect();
-      assert_eq!(bound.len(), sessions.min(BOUND_SESSIONS), "the fixture binds {sessions} sessions");
-      for task in &manifest.cron_tasks {
-        let file = home.join(cron::CRON_DIR).join(format!("{}.yaml", task.name));
-        let body = fs::read_to_string(&file).expect("a task file");
-        assert!(body.contains(&format!("session_id: {}\n", task.session_id)), "{} binds its session", task.name);
-        let metadata =
-          fs::read(layout::metadata_path(&home.join(&task.session_id))).expect("the bound session's metadata");
-        let metadata: Value = serde_json::from_slice(&metadata).expect("the metadata is JSON");
-        assert_eq!(metadata["profile"], "manager", "{} binds a manager", task.name);
-      }
+    let task_files = fs::read_dir(home.join(cron::CRON_DIR)).expect("the cron directory").count();
+    assert_eq!(task_files, manifest.cron_tasks.len(), "the manifest lists every task file");
+    assert_eq!(manifest.cron_tasks.len(), 5);
+    for task in &manifest.cron_tasks {
+      let file = home.join(cron::CRON_DIR).join(format!("{}.yaml", task.name));
+      let body = fs::read_to_string(&file).expect("a task file");
+      assert!(body.contains(&format!("session_id: {}\n", task.session_id)), "{} binds its session", task.name);
+      let metadata =
+        fs::read(layout::metadata_path(&home.join(&task.session_id))).expect("the bound session's metadata");
+      let metadata: Value = serde_json::from_slice(&metadata).expect("the metadata is JSON");
+      assert_eq!(metadata["profile"], "manager", "{} binds a manager", task.name);
     }
+
+    // Two rows repeat to fill the four slots; 40 rows pick the four middle rows of the listing.
+    let two: Vec<SessionMetadata> = (0..2).map(|index| row(&format!("s{index}"), index)).collect();
+    let two_bound = cron_bound_sessions(&two).expect("two sessions");
+    assert_eq!(two_bound, ["s0", "s1", "s0", "s1"]);
+
+    let forty: Vec<SessionMetadata> = (0..40).map(|index| row(&format!("s{index:02}"), index)).collect();
+    let forty_bound = cron_bound_sessions(&forty).expect("forty sessions");
+    assert_eq!(forty_bound, ["s18", "s19", "s20", "s21"]);
   }
 }

@@ -559,6 +559,8 @@ mod tests {
   use std::path::PathBuf;
   use std::sync::Arc;
 
+  use charliebot_agents::backend_availability::BackendAvailability;
+  use charliebot_agents::model_pool::{LaneStart, RotationPositions, Selector};
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{ContextStateFn, EmitFn, LaunchArgs, RecordAccountFn, RunningTurnsFn};
   use charliebot_store::metadata::{TaskProfile, TaskSpec, UtcDateTime};
@@ -827,6 +829,29 @@ mod tests {
     (config(&root.join("home"), &[("current", &current), ("fresh", &fresh)]), current)
   }
 
+  /// A config whose priority pool `cheap` holds two Claude members, `claude-haiku` then `claude-sonnet`. Both are paid
+  /// by the subscription and run on the login pool `alpha` of `accounts`.
+  fn cheap_config(home: &Path, accounts: &[(&str, &Path)]) -> CharlieBotConfig {
+    fs::create_dir_all(home).unwrap();
+    let mut configured = String::new();
+    let mut labels = Vec::new();
+    for (label, path) in accounts {
+      configured.push_str(&format!("    - label: {label}\n      config_dir: '{}'\n", path.display()));
+      labels.push((*label).to_string());
+    }
+    fs::write(
+      home.join("config.yaml"),
+      format!(
+        "backends:\n  options:\n    - id: claude-haiku\n      label: Haiku\n      type: cc-claude\n      model: claude-haiku-5-5\n      account_pool: alpha\n      billing: subscription\n    - id: claude-sonnet\n      label: Sonnet\n      type: cc-claude\n      model: claude-sonnet-5-5\n      account_pool: alpha\n      billing: subscription\n  pools:\n    - {{id: cheap, label: Cheap, rule: priority, members: [claude-haiku, claude-sonnet]}}\naccounts:\n  claude:\n{configured}  claude_pools:\n    alpha: [{}]\n",
+        labels.join(", ")
+      ),
+    )
+    .unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("backends.claude_code", crate::register).unwrap();
+    registry.load_config(home).unwrap()
+  }
+
   /// The launch of the pool's `current` login from a task context, keyed to an improve host when `keyed` is set.
   fn current_launch(
     lifecycle: &ClaudeCodeLifecycle,
@@ -959,6 +984,40 @@ mod tests {
     let account =
       claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
     assert!(!claude_accounts::healthy(&state, &account, None), "the refused login is cooled");
+  }
+
+  #[tokio::test]
+  async fn a_keyed_round_rejected_on_quota_moves_to_the_next_cheap_member() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let current = root.path().join("current");
+    let fresh = root.path().join("fresh");
+    account_credentials(&current);
+    account_credentials(&fresh);
+    let cfg = cheap_config(&home, &[("current", &current), ("fresh", &fresh)]);
+    let lifecycle = ClaudeCodeLifecycle::new();
+    let (ctx, launch) = current_launch(&lifecycle, cfg.clone(), &current, true);
+    let mut watch = lifecycle.watch(&ctx, &launch).expect("a pooled launch has a watch");
+
+    assert!(!watch.observe(&rate_limit("rejected", 1.0)));
+    assert!(watch.wants_next(1, ""));
+    let refusal = match lifecycle.next_launch(&ctx, &launch, None).await {
+      Err(refusal) => refusal,
+      Ok(_) => panic!("the keyed round relayed after its login was rejected on quota"),
+    };
+    assert!(refusal.failure.fails_over(), "the failed round moves to the pool's next member");
+
+    // The failover chain of a failed run: its member is recorded out for the failure's reason, and the pool's next
+    // pick leaves out every member the chain has left, `claude-haiku` among them.
+    let mut registry = Registry::new();
+    registry.register_package("backends.claude_code", crate::register).unwrap();
+    let availability = Arc::new(BackendAvailability::load(&home).unwrap());
+    let reason = refusal.failure.availability_reason().expect("a quota failure records its member out");
+    availability.record(&cfg, &registry, "claude-haiku", refusal.resets_at, reason, &refusal.message).unwrap();
+    let selector = Selector::new(&cfg, &registry, availability, Arc::new(RotationPositions::new(LaneStart::Head)));
+    let left = ["claude-haiku".to_string()];
+    let next = selector.select("cheap", &left).unwrap().expect("the cheap pool holds a second member");
+    assert_eq!(next.id, "claude-sonnet");
   }
 
   #[tokio::test]

@@ -286,13 +286,11 @@ function normalizeStatus(status) {
       ...item,
       since: item.since || status.updated_at,
       answered: item.answered === true,
-      forks: item.forks || [],
     })),
   };
 }
 
-// A descendant row as the status read answers it: its list version, and each stored item with its answered flag and
-// the open questions of its page (none unless a case gives them).
+// A descendant row as the status read answers it: its list version, and each stored item with its answered flag.
 function normalizeDescendantRow(row) {
   return {
     ...row,
@@ -300,7 +298,6 @@ function normalizeDescendantRow(row) {
     waiting: row.waiting.map((item) => ({
       ...item,
       answered: item.answered === true,
-      forks: item.forks || [],
     })),
   };
 }
@@ -326,12 +323,21 @@ function viewChildNowItems(panel) {
   return panel.querySelectorAll('[data-child-now-item]');
 }
 
-function ownControls(rig, index = 0) {
-  return viewWaitingItems(rig.panel)[index].querySelector('[data-item-controls]');
+// The done checkbox of an own stored item, by its place in the Waiting on you row.
+function doneCheck(rig, index = 0) {
+  return viewWaitingItems(rig.panel)[index].querySelector('[data-done-check]');
 }
 
-function markDoneButton(rig, index = 0) {
-  return ownControls(rig, index).querySelectorAll('button')[0];
+// A user's click on the checkbox: the box takes its new state, then its change event runs.
+function toggleDone(rig, index = 0) {
+  const box = doneCheck(rig, index);
+  box.checked = !box.checked;
+  box.onchange();
+}
+
+// Every button in the panel except the Context folds' toggles.
+function nonFoldButtons(panel) {
+  return allElements(panel).filter((el) => el.tagName === 'BUTTON' && !el.dataset.contextToggle);
 }
 
 function waitingHeaderControls(rig) {
@@ -549,13 +555,69 @@ test('a derived item shows under its holder: the session\'s own in Waiting on yo
   assert.equal(rig.badge.textContent, '2');
 });
 
-test('only stored own items have the 14px check icon; child answers show Marked done without a check', async () => {
+test('an own Waiting on you row holds its checkbox, text, age, Open link and Context fold, and no button', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {...STATUS, waiting: [{
+    text: 'Decide the size',
+    context: 'The sweep costs $5 an hour.',
+    since: '2026-11-19T08:30:00Z',
+    link: 'https://example.com/plan',
+    forks: [CHOICE_QUESTION, SECOND_QUESTION],
+  }]}});
+  selectStatus(rig);
+  const item = viewWaitingItems(rig.panel)[0];
+  const line = item.children[0];
+  assert.deepEqual(line.children.map((el) => el.tagName), ['INPUT', 'SPAN', 'SPAN', 'A'],
+    'the checkbox leads, then the text, the age and the Open link');
+  assert.equal(line.children[0].type, 'checkbox');
+  assert.equal(item.querySelectorAll('[data-context]').length, 1, 'the Context fold follows the line');
+  assert.deepEqual(nonFoldButtons(rig.panel).map((el) => el.textContent), [],
+    'no option button and no All as recommended renders, even for an item whose page has questions');
+});
+
+test('unchecking a done box inside the undo window sends nothing', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{text: 'Wait', since: '2026-11-19T08:30:00Z', link: null}],
+  }});
+  selectStatus(rig);
+  toggleDone(rig);
+  assert.equal(doneCheck(rig).checked, true);
+  rig.statusTimers.advance(2000);
+  toggleDone(rig);
+  assert.equal(doneCheck(rig).checked, false, 'the box shows unchecked again');
+  rig.statusTimers.advance(5000);
+  await settled();
+  assert.equal(rig.posts.length, 0, 'an unchecked click sends nothing');
+});
+
+test('an answered item shows its box checked and disabled; a list change without the answer unchecks it', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{text: 'Finished item', since: '2026-11-19T08:30:00Z', link: null, answered: true}],
+  }});
+  selectStatus(rig);
+  assert.equal(doneCheck(rig).checked, true);
+  assert.equal(doneCheck(rig).disabled, true);
+
+  rig.page.web_status = normalizeStatus({...rig.page.web_status, waiting_version: '2222222222222222',
+    waiting: [{text: 'New item', since: '2026-11-19T09:00:00Z', link: null}]});
+  await deliver(rig, {type: 'message', message: {
+    role: 'web_status', id: 'w-list', content: 'Status updated: Waiting on you', web_status: rig.page.web_status,
+  }});
+  assert.equal(doneCheck(rig).checked, false);
+  assert.equal(doneCheck(rig).disabled, false);
+});
+
+test('descendant items show no checkbox, and an answered one reads Marked done', async () => {
   const rig = panelRig();
   rig.page.descendants = [{
     session_id: CHILD_ID,
     name: 'Child one',
     updated_at: '2026-10-16T20:30:00Z',
-    waiting: [{text: 'Child finished', answered: true, link: null}],
+    waiting: [{text: 'Child finished', answered: true, link: null}, {text: 'Child open', link: null}],
   }];
   rig.page.derived_waiting = [{
     session_id: 'session-a', text: 'Derived host item', context: 'Host context', link: null,
@@ -565,17 +627,15 @@ test('only stored own items have the 14px check icon; child answers show Marked 
     waiting: [{text: 'Stored item', link: null}, {text: 'Second stored item', link: null}],
   }});
   selectStatus(rig);
-  const storedControls = ownControls(rig);
-  const iconButton = storedControls.querySelectorAll('button')[0];
-  assert.ok(iconButton, 'a stored own item has a done button');
-  assert.equal(iconButton.style.width, '24px');
-  assert.equal(iconButton.style.height, '24px');
-  assert.equal(iconButton.innerHTML, rig.context.cbIcon('done', 14), 'the done control renders the shared done icon');
-  assert.equal(viewWaitingItems(rig.panel)[2].querySelectorAll('[data-item-controls]').length, 0,
-    'a derived host item gets no done control');
-  const child = viewChildItems(rig.panel)[0];
-  assert.match(child.textContent, /Marked done/);
-  assert.equal(child.querySelectorAll('button').length, 0, 'a child item has no done control');
+  assert.ok(doneCheck(rig, 0), 'a stored own item has a done checkbox');
+  assert.ok(doneCheck(rig, 1));
+  assert.equal(viewWaitingItems(rig.panel)[2].querySelectorAll('[data-done-check]').length, 0,
+    'a derived host item gets no checkbox');
+  const [answered, open] = viewChildItems(rig.panel);
+  assert.match(answered.textContent, /Marked done/);
+  assert.equal(answered.querySelectorAll('[data-done-check]').length, 0, 'a child item has no checkbox');
+  assert.equal(open.querySelectorAll('[data-done-check]').length, 0);
+  assert.doesNotMatch(open.textContent, /Marked done/, 'an open child item shows no mark');
 });
 
 test('a done click keeps its undo timer through redraw and sends the exact text at five seconds', async () => {
@@ -586,14 +646,15 @@ test('a done click keeps its undo timer through redraw and sends the exact text 
     waiting: [{text: 'Private item text', context: 'Private context', since, link: null}],
   }});
   selectStatus(rig);
-  markDoneButton(rig).onclick();
-  assert.match(ownControls(rig).textContent, /Marked done · Undo/);
+  toggleDone(rig);
+  assert.equal(doneCheck(rig).checked, true);
+  assert.equal(doneCheck(rig).disabled, false, 'the click is still undoable');
   assert.equal(rig.posts.length, 0, 'the click is still undoable');
 
   rig.page.web_status = normalizeStatus({...rig.page.web_status, now: 'A redraw', updated_at: '2026-10-16T22:00:00Z'});
   rig.context.observeWebStatusMessages([{role: 'web_status', web_status: rig.page.web_status}]);
   await settled();
-  assert.match(ownControls(rig).textContent, /Marked done · Undo/);
+  assert.equal(doneCheck(rig).checked, true, 'the pending box survives a redraw');
   rig.statusTimers.advance(4999);
   await settled();
   assert.equal(rig.posts.length, 0, 'nothing is sent before five seconds');
@@ -622,11 +683,11 @@ test('an answered readback marks the item done after a 202', async () => {
     ]});
   });
   selectStatus(rig);
-  markDoneButton(rig).onclick();
+  toggleDone(rig);
   rig.statusTimers.advance(5000);
   await settled();
-  assert.match(ownControls(rig).textContent, /Marked done/);
-  assert.equal(ownControls(rig).querySelectorAll('button').length, 0);
+  assert.equal(doneCheck(rig).checked, true);
+  assert.equal(doneCheck(rig).disabled, true, 'the answered box is disabled');
   assert.equal(rig.statusGets.length, 2, 'the server status is read again after 202');
 });
 
@@ -649,155 +710,6 @@ const SECOND_QUESTION = {
   rec: 'later',
 };
 
-// The option labels of one item's control row, in order.
-function pickLabels(controls) {
-  return controls.querySelectorAll('[data-pick-choice]').map((button) => button.textContent);
-}
-
-function pickButton(controls, label) {
-  return controls.querySelectorAll('[data-pick-choice]').find((button) => button.textContent === label);
-}
-
-test('one button per option on a single-question item; the chosen line is sent at five seconds', async () => {
-  const rig = panelRig();
-  const since = '2026-11-19T08:30:00Z';
-  await openSession(rig, {web_status: {
-    ...STATUS,
-    waiting: [{
-      text: 'Private item text', context: 'Private context', since, link: 'https://example.com/plan',
-      forks: [CHOICE_QUESTION],
-    }],
-  }});
-  selectStatus(rig);
-  assert.deepEqual(pickLabels(ownControls(rig)), ['keep', 'drop']);
-  pickButton(ownControls(rig), 'drop').onclick();
-  assert.match(ownControls(rig).textContent, /drop · Undo/);
-  assert.equal(rig.posts.length, 0, 'the pick is still undoable');
-  rig.statusTimers.advance(5000);
-  await settled();
-  assert.equal(rig.posts.length, 1, 'one pick sends one request');
-  assert.equal(rig.posts[0].url, '/api/chat/session-a/message');
-  assert.equal(rig.posts[0].body.content,
-    '[Status · Waiting on you]\n\n1. ▸ Waiting on you · session session-a · list 1111111111111111 · since ' + since +
-      ' · #1\n   ↳ Q1 「drop」: drop the file.');
-  assert.equal(rig.posts[0].body.content.includes('Private item text'), false);
-  assert.equal(rig.posts[0].body.content.includes('Private context'), false);
-});
-
-test('several open questions offer one All as recommended button answering each question', async () => {
-  const rig = panelRig();
-  const since = '2026-11-19T08:30:00Z';
-  await openSession(rig, {web_status: {
-    ...STATUS,
-    waiting: [{
-      text: 'Two questions', since, link: 'https://example.com/plan', forks: [CHOICE_QUESTION, SECOND_QUESTION],
-    }],
-  }});
-  selectStatus(rig);
-  assert.deepEqual(pickLabels(ownControls(rig)), ['All as recommended'], 'one row for the page, not one per question');
-  pickButton(ownControls(rig), 'All as recommended').onclick();
-  rig.statusTimers.advance(5000);
-  await settled();
-  assert.equal(rig.posts[0].body.content,
-    '[Status · Waiting on you]\n\n1. ▸ Waiting on you · session session-a · list 1111111111111111 · since ' + since +
-      ' · #1\n   ↳ Q1 「keep」: keep the file.\n   ↳ Q2 「later」: act later.');
-});
-
-test('a page with a question that has no pick or no recommendation offers no buttons, so no click answers part of it',
-  async () => {
-    const rig = panelRig();
-    const since = '2026-11-19T08:30:00Z';
-    const onlyOneOption = {n: '2', options: [{name: 'now', text: '「now」: act now.'}], rec: null};
-    const noRecommendation = {n: '2', options: SECOND_QUESTION.options, rec: null};
-    await openSession(rig, {web_status: {
-      ...STATUS,
-      waiting: [
-        {
-          text: 'One question has one option', since, link: 'https://example.com/a',
-          forks: [CHOICE_QUESTION, onlyOneOption],
-        },
-        {
-          text: 'One question has no recommendation', since, link: 'https://example.com/b',
-          forks: [CHOICE_QUESTION, noRecommendation],
-        },
-        {text: 'No open question', since, link: 'https://example.com/c', forks: []},
-      ],
-    }});
-    selectStatus(rig);
-    for (const index of [0, 1, 2]) {
-      assert.deepEqual(pickLabels(ownControls(rig, index)), [], `item ${index + 1} offers no pick`);
-    }
-  });
-
-test('a child item pick goes to the child at its list version, with no done mark', async () => {
-  const rig = panelRig();
-  const since = '2026-11-19T08:00:00Z';
-  rig.page.descendants = [{
-    session_id: CHILD_ID,
-    name: 'Child one',
-    updated_at: '2026-10-16T20:30:00Z',
-    waiting_version: 'cccccccccccccccc',
-    waiting: [{
-      text: 'Child decision', context: 'Child context', since, link: 'https://example.com/child',
-      forks: [CHOICE_QUESTION, SECOND_QUESTION],
-    }],
-  }];
-  await openSession(rig, {web_status: {...STATUS, waiting: []}});
-  selectStatus(rig);
-  const child = viewChildItems(rig.panel)[0];
-  assert.deepEqual(pickLabels(child), ['All as recommended']);
-  assert.equal(child.querySelectorAll('button').some((button) => button.title === 'Mark done'), false,
-    'a child item has no done control');
-  assert.ok(child.querySelectorAll('[data-open-link]').some((link) => link.href === 'https://example.com/child'),
-    'a multi-question child item also offers its page');
-  pickButton(child, 'All as recommended').onclick();
-  rig.statusTimers.advance(5000);
-  await settled();
-  assert.equal(rig.posts.length, 1);
-  assert.equal(rig.posts[0].url, '/api/chat/' + CHILD_ID + '/message');
-  assert.equal(rig.posts[0].body.content,
-    '[Status · Waiting on you]\n\n1. ▸ Waiting on you · session ' + CHILD_ID + ' · list cccccccccccccccc · since ' +
-      since + ' · #1\n   ↳ Q1 「keep」: keep the file.\n   ↳ Q2 「later」: act later.');
-});
-
-test('Undo cancels a pick before it is sent, and the item offers its picks again', async () => {
-  const rig = panelRig();
-  await openSession(rig, {web_status: {
-    ...STATUS,
-    waiting: [{
-      text: 'Pick one', since: '2026-11-19T08:30:00Z', link: 'https://example.com/plan', forks: [CHOICE_QUESTION],
-    }],
-  }});
-  selectStatus(rig);
-  pickButton(ownControls(rig), 'keep').onclick();
-  ownControls(rig).querySelectorAll('button').find((button) => button.textContent === 'Undo').onclick();
-  rig.statusTimers.advance(5000);
-  await settled();
-  assert.equal(rig.posts.length, 0, 'a cancelled pick sends nothing');
-  assert.deepEqual(pickLabels(ownControls(rig)), ['keep', 'drop']);
-});
-
-test('a pick the server marks answered shows Marked done and no buttons', async () => {
-  const rig = panelRig();
-  await openSession(rig, {web_status: {
-    ...STATUS,
-    waiting: [{
-      text: 'Pick one', since: '2026-11-19T08:30:00Z', link: 'https://example.com/plan', forks: [CHOICE_QUESTION],
-    }],
-  }});
-  rig.setPostHandler(() => {
-    rig.page.web_status = normalizeStatus({...rig.page.web_status, waiting: [
-      {...rig.page.web_status.waiting[0], answered: true},
-    ]});
-  });
-  selectStatus(rig);
-  pickButton(ownControls(rig), 'drop').onclick();
-  rig.statusTimers.advance(5000);
-  await settled();
-  assert.match(ownControls(rig).textContent, /Marked done/);
-  assert.deepEqual(pickLabels(ownControls(rig)), []);
-});
-
 test('a Status click starts the one delayed send that page picks start too', async () => {
   const rig = panelRig();
   const shared = rig.context.startUndoableSend;
@@ -811,37 +723,39 @@ test('a Status click starts the one delayed send that page picks start too', asy
     waiting: [{text: 'Item', since: '2026-11-19T08:30:00Z', link: null}],
   }});
   selectStatus(rig);
-  markDoneButton(rig).onclick();
+  toggleDone(rig);
   assert.equal(starts.length, 1, 'the Status click starts the shared delayed send once');
   rig.statusTimers.advance(5000);
   await settled();
   assert.equal(rig.posts.length, 1, 'the shared window posts the click');
 });
 
-test('a changed list moves Undo to the header and still sends the clicked version', async () => {
+test('a changed list moves the pending checkbox to the header and still sends the clicked version', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Old item', link: null}]}});
   selectStatus(rig);
-  markDoneButton(rig).onclick();
+  toggleDone(rig);
   rig.page.web_status = normalizeStatus({...rig.page.web_status, waiting_version: '2222222222222222',
     waiting: [{text: 'New item', since: '2026-11-19T09:00:00Z', link: null}]});
   await deliver(rig, {type: 'message', message: {
     role: 'web_status', id: 'w-version', content: 'Status updated: Waiting on you', web_status: rig.page.web_status,
   }});
-  assert.match(waitingHeaderControls(rig).textContent, /Marked done · Undo/);
+  assert.equal(waitingHeaderControls(rig).querySelectorAll('[data-done-check]')[0].checked, true,
+    'the header keeps the pending box');
   assert.match(viewWaitingItems(rig.panel)[0].textContent, /New item/);
   rig.statusTimers.advance(5000);
   await settled();
   assert.match(rig.posts[0].body.content, /list 1111111111111111/);
   assert.match(waitingHeaderControls(rig).textContent, /Sent: the list changed/);
-  assert.equal(waitingHeaderControls(rig).querySelectorAll('button').length, 0);
+  assert.equal(waitingHeaderControls(rig).querySelectorAll('[data-done-check]').length, 0,
+    'the header box leaves once the click is sent');
 });
 
 test('a Now-only push refreshes status without changing the pending click version or timer', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Keep this', link: null}]}});
   selectStatus(rig);
-  markDoneButton(rig).onclick();
+  toggleDone(rig);
   rig.page.web_status = normalizeStatus({...rig.page.web_status, now: 'Now changed', updated_at: '2026-10-16T22:00:00Z'});
   const getsBefore = rig.statusGets.length;
   await deliver(rig, {type: 'message', message: {
@@ -849,24 +763,24 @@ test('a Now-only push refreshes status without changing the pending click versio
   }});
   assert.equal(rig.statusGets.length, getsBefore + 1);
   assert.equal(viewRow(rig.panel, 'now').children[1].children[0].textContent, 'Now changed');
-  assert.match(ownControls(rig).textContent, /Marked done · Undo/);
+  assert.equal(doneCheck(rig).checked, true);
   rig.statusTimers.advance(5000);
   await settled();
   assert.match(rig.posts[0].body.content, /list 1111111111111111/);
 });
 
-test('Undo, pagehide and session teardown cancel without sending', async (t) => {
+test('unchecking, pagehide and session teardown cancel without sending', async (t) => {
   const makePending = async () => {
     const rig = panelRig();
     await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Wait', link: null}]}});
     selectStatus(rig);
-    markDoneButton(rig).onclick();
+    toggleDone(rig);
     return rig;
   };
-  await t.test('Undo', async () => {
+  await t.test('unchecking the box', async () => {
     const rig = await makePending();
-    const undo = ownControls(rig).querySelectorAll('button')[0];
-    undo.onclick();
+    toggleDone(rig);
+    assert.equal(doneCheck(rig).checked, false);
     rig.statusTimers.advance(5000);
     await settled();
     assert.equal(rig.posts.length, 0);
@@ -901,7 +815,7 @@ test('post errors refresh status, keep confirmed marks, report failures and neve
     if (refetchError) rig.statusGetErrors.push(refetchError);
     rig.postResults.push(postResult);
     selectStatus(rig);
-    markDoneButton(rig).onclick();
+    toggleDone(rig);
     rig.statusTimers.advance(5000);
     await settled();
     return rig;
@@ -910,26 +824,29 @@ test('post errors refresh status, keep confirmed marks, report failures and neve
     await t.test('HTTP ' + status, async () => {
       const rig = await sendWith({status});
       assert.equal(rig.posts.length, 1, 'the failed request is never retried');
-      assert.match(ownControls(rig).textContent, /Not sent: HTTP/);
-      assert.equal(ownControls(rig).querySelectorAll('button').length, 1, 'the unanswered item remains available to mark');
+      assert.match(viewWaitingItems(rig.panel)[0].textContent, /Not sent: HTTP/);
+      assert.equal(doneCheck(rig).checked, false);
+      assert.equal(doneCheck(rig).disabled, false, 'the unanswered item remains available to mark');
       assert.equal(rig.statusGets.length, 2, 'status is re-read after the failure');
     });
   }
   await t.test('network failure', async () => {
     const rig = await sendWith(new Error('offline'));
     assert.equal(rig.posts.length, 1);
-    assert.match(ownControls(rig).textContent, /Not sent: offline/);
-    assert.equal(ownControls(rig).querySelectorAll('button').length, 1);
+    assert.match(viewWaitingItems(rig.panel)[0].textContent, /Not sent: offline/);
+    assert.equal(doneCheck(rig).disabled, false);
   });
   await t.test('confirmed despite the post error', async () => {
     const rig = await sendWith({status: 401}, {answered: true});
-    assert.match(ownControls(rig).textContent, /Marked done/);
-    assert.doesNotMatch(ownControls(rig).textContent, /Not sent/);
+    assert.equal(doneCheck(rig).checked, true);
+    assert.equal(doneCheck(rig).disabled, true);
+    assert.doesNotMatch(viewWaitingItems(rig.panel)[0].textContent, /Not sent/);
   });
   await t.test('status read also fails', async () => {
     const rig = await sendWith({status: 503}, {refetchError: new Error('read offline')});
-    assert.match(ownControls(rig).textContent, /Status unknown: read offline/);
-    assert.equal(ownControls(rig).querySelectorAll('button').length, 0, 'unknown status shows no mark');
+    assert.match(viewWaitingItems(rig.panel)[0].textContent, /Status unknown: read offline/);
+    assert.equal(doneCheck(rig).checked, false, 'unknown status shows no mark');
+    assert.equal(doneCheck(rig).disabled, true, 'unknown status cannot send a second click');
   });
 });
 

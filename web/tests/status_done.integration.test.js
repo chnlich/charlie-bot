@@ -1,14 +1,15 @@
 // ---------------------------------------------------------------------------
-// An option pick on a Waiting on you item of a child session, clicked in the parent's Status view in a headless
-// Chrome. The page loads the real chat/status-panel.js, comment_post.js, view-requests.js and icons.js with a stubbed
-// Chat namespace and fetch, the way the chat page loads them, and answers GET /api/internal/web/status with a parent
-// whose one open descendant child holds the item.
+// The done checkbox of a Waiting on you item, clicked in its owner's Status view in a headless Chrome. The page loads
+// the real chat/status-panel.js, comment_post.js, view-requests.js and icons.js with a stubbed Chat namespace and
+// fetch, the way the chat page loads them, and answers GET /api/internal/web/status with a parent whose own stored
+// item has no answer and whose one open child holds an item.
 //
 // Checks:
-// - the child item's control row offers one button per option of its page's one open question, and no done mark;
-// - a click sends, after the undo window, one click message to the child session in the landed format: the header,
-//   the reference with the child's list version, and Q<n> with the option text verbatim;
-// - the message carries neither the item's text nor its context.
+// - the own item's row holds one checkbox, and the child's item holds none;
+// - checking the box and unchecking it inside the undo window sends nothing;
+// - checking it again sends, after the undo window, one click message to the owner in the landed format: the header,
+//   the reference with the list version and the position, and the answer Done. The message carries neither the item's
+//   text nor its context.
 //
 // CHARLIEBOT_TEST_CHROME_BIN names the headless Chrome binary. The test fails when it is unset or names no file.
 // ---------------------------------------------------------------------------
@@ -26,6 +27,7 @@ const WEB_DIR = path.join(__dirname, '..');
 const PARENT = 'parent-session';
 const CHILD = 'child-session';
 const SINCE = '2026-11-19T08:00:00Z';
+const OWN_VERSION = 'aaaaaaaaaaaaaaaa';
 const CHILD_VERSION = 'cccccccccccccccc';
 const PAGE_PATH = '/chat';
 // The undo window is five seconds; the wait leaves room for the post.
@@ -33,8 +35,7 @@ const SEND_WAIT_MS = 9000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// The status read's answer: the parent has no items of its own, and its one child holds an item whose page shows one
-// open question with two options.
+// The status read's answer: the parent's own stored item, and its one child's item.
 const STATUS = {
   session_id: PARENT,
   own_task_state: 'open',
@@ -42,8 +43,8 @@ const STATUS = {
     goal: null,
     now: null,
     remaining: [],
-    waiting: [],
-    waiting_version: '1111111111111111',
+    waiting: [{text: 'Own decision', context: 'Own context', link: null, since: SINCE, answered: false}],
+    waiting_version: OWN_VERSION,
     updated_at: '2026-11-19T08:05:00Z',
   },
   descendants: [{
@@ -51,21 +52,7 @@ const STATUS = {
     name: 'Child',
     updated_at: '2026-11-19T08:05:00Z',
     waiting_version: CHILD_VERSION,
-    waiting: [{
-      text: 'Child decision',
-      context: 'Child context',
-      link: null,
-      since: SINCE,
-      answered: false,
-      forks: [{
-        n: '1',
-        options: [
-          {name: 'keep', text: '「keep」: keep the file.'},
-          {name: 'drop', text: '「drop」: drop the file.'},
-        ],
-        rec: 'keep',
-      }],
-    }],
+    waiting: [{text: 'Child decision', context: 'Child context', link: null, since: SINCE, answered: false}],
   }],
   children: [],
   derived_waiting: [],
@@ -73,7 +60,7 @@ const STATUS = {
 
 function pageHtml() {
   return `<!doctype html>
-<html><head><meta charset="utf-8"><title>Status picks</title></head><body>
+<html><head><meta charset="utf-8"><title>Status done</title></head><body>
 <div id="status-panel"></div>
 <script>${iconTableScript()}</script>
 <script src="/static/js/icons.js"></script>
@@ -171,12 +158,12 @@ async function openPage(cdp, url) {
   return page;
 }
 
-// Waits until the status read has answered and the child item's two picks are on the page.
-async function waitForPicks(page) {
+// Waits until the status read has answered and the own item's checkbox is on the page.
+async function waitForCheckbox(page) {
   const deadline = Date.now() + 15000;
-  const ready = 'document.querySelectorAll("[data-child-item] [data-pick-choice]").length === 2';
+  const ready = 'document.querySelectorAll("[data-waiting-item] [data-done-check]").length === 1';
   while (!(await page.evaluate(ready))) {
-    if (Date.now() > deadline) throw new Error('timed out waiting for the child item picks');
+    if (Date.now() > deadline) throw new Error('timed out waiting for the own done checkbox');
     await sleep(50);
   }
 }
@@ -184,13 +171,13 @@ async function waitForPicks(page) {
 // Runs one check against the served Status view of the parent, then tears everything down.
 async function withStatusPanel(check) {
   const {server, base} = await serve();
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'status-pick-chrome-'));
+  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'status-done-chrome-'));
   let chrome = null;
   try {
     chrome = await launchChrome(profileDir);
     const page = await openPage(chrome.cdp, `${base}${PAGE_PATH}`);
     await page.evaluate('window.__status.openSessionStatusPanel({id: ' + JSON.stringify(PARENT) + '})');
-    await waitForPicks(page);
+    await waitForCheckbox(page);
     await check(page);
   } finally {
     if (chrome) {
@@ -207,36 +194,33 @@ async function withStatusPanel(check) {
   }
 }
 
-test('a child item option click in the parent Status view posts to the child in the landed format', async () => {
+test('a done checkbox sends one click after its undo window; unchecking inside the window sends nothing', async () => {
   await withStatusPanel(async (page) => {
-    const labels = await page.evaluate(
-      'Array.from(document.querySelectorAll("[data-child-item] [data-pick-choice]"))' +
-        '.map((button) => button.textContent)');
-    assert.deepEqual(labels, ['keep', 'drop']);
     assert.equal(
-      await page.evaluate('Array.from(document.querySelectorAll("[data-child-item] button"))' +
-        '.some((button) => button.title === "Mark done")'),
-      false, 'a child item has no done control');
+      await page.evaluate('document.querySelectorAll("[data-child-item] input").length'), 0,
+      'a child item has no checkbox');
 
-    await page.evaluate(`(() => {
-      const button = Array.from(document.querySelectorAll('[data-child-item] [data-pick-choice]'))
-        .find((candidate) => candidate.textContent === 'drop');
-      if (!button) throw new Error('no drop pick button');
-      button.click();
-      return true;
-    })()`);
+    // Check, then uncheck inside the window: the click is cancelled.
+    await page.evaluate('document.querySelector("[data-done-check]").click()');
+    await sleep(1000);
+    await page.evaluate('document.querySelector("[data-done-check]").click()');
+    await sleep(SEND_WAIT_MS - 1000);
+    assert.equal(await page.evaluate('window.__posts.length'), 0, 'an unchecked click sends nothing');
+
+    // Check again and let the window close: one message goes to the owner.
+    await page.evaluate('document.querySelector("[data-done-check]").click()');
     await sleep(SEND_WAIT_MS);
 
     const posts = await page.evaluate('window.__posts');
-    assert.equal(posts.length, 1, 'one pick sends one message');
-    assert.equal(posts[0].url, '/api/chat/' + CHILD + '/message', 'the message goes to the item owner');
+    assert.equal(posts.length, 1, 'one checked click sends one message');
+    assert.equal(posts[0].url, '/api/chat/' + PARENT + '/message', 'the message goes to the item owner');
     assert.equal(posts[0].body.content, [
       '[Status · Waiting on you]',
       '',
-      `1. ▸ Waiting on you · session ${CHILD} · list ${CHILD_VERSION} · since ${SINCE} · #1`,
-      '   ↳ Q1 「drop」: drop the file.',
+      `1. ▸ Waiting on you · session ${PARENT} · list ${OWN_VERSION} · since ${SINCE} · #1`,
+      '   ↳ Done',
     ].join('\n'));
-    assert.equal(posts[0].body.content.includes('Child decision'), false, 'the reference quotes no item text');
-    assert.equal(posts[0].body.content.includes('Child context'), false, 'the reference quotes no item context');
+    assert.equal(posts[0].body.content.includes('Own decision'), false, 'the reference quotes no item text');
+    assert.equal(posts[0].body.content.includes('Own context'), false, 'the reference quotes no item context');
   });
 });

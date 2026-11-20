@@ -8,7 +8,7 @@ use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -382,6 +382,42 @@ switch_forward
     let mut command = harness::command("bash", &env);
     command.args(["-c", script, "bash"]).arg(repo_switch()).arg(&self.rust_sha).arg(format!("rust {}", self.old_sha));
     harness::run(&mut command)
+  }
+
+  /// The switch's capture step, `live_screenshots` as `scripts/switch-server.sh` defines it, over the commits from
+  /// `old` to `target`. The release's `charliebot` answers `screenshots sizes`, and `screenshots resolve` passes only
+  /// `known_view`. A `node` stub touches `captured` when a capture runs. Returns the step's run and whether it captured.
+  pub fn live_capture(&self, old: &str, target: &str, known_view: &str) -> (Run, bool) {
+    let release = self.root().join("release");
+    fs::create_dir_all(&release).expect("the release directory");
+    let cli = release.join("charliebot");
+    fs::write(&cli, CAPTURE_CLI_STUB).expect("the capture CLI stub");
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).expect("the capture CLI stub is executable");
+    let captured = self.root().join("captured");
+    self.sandbox.stub("node", "touch \"$CAPTURED\"\n");
+    let mut env = self.env.clone();
+    env.insert("CLONE".to_string(), self.clone.display().to_string());
+    env.insert("CAPTURE_OLD".to_string(), old.to_string());
+    env.insert("CAPTURE_TARGET".to_string(), target.to_string());
+    env.insert("CAPTURE_RELEASE".to_string(), release.display().to_string());
+    env.insert("KNOWN_VIEW".to_string(), known_view.to_string());
+    env.insert("CAPTURED".to_string(), captured.display().to_string());
+    env.insert("PORT".to_string(), self.port.to_string());
+    env.insert("KEY".to_string(), ACCESS_KEY.to_string());
+    env.insert("LOG".to_string(), self.root().join("switch.log").display().to_string());
+    env.insert("CHARLIEBOT_LOG_DIR".to_string(), self.root().join("logs").display().to_string());
+    let script = r#"
+source "$1" rust "$2"
+REPO_ROOT="$CLONE"
+OLD_SHA="$CAPTURE_OLD"
+TARGET_SHA="$CAPTURE_TARGET"
+RELEASE_DIR="$CAPTURE_RELEASE"
+live_screenshots
+"#;
+    let mut command = harness::command("bash", &env);
+    command.args(["-c", script, "bash"]).arg(repo_switch()).arg(target);
+    let run = harness::run(&mut command);
+    (run, captured.exists())
   }
 
   /// The switch's probe turn, run in a shell against a stand-in server that answers with `behavior`. Returns the
@@ -935,6 +971,19 @@ pub fn fake_pane_server() -> PathBuf {
 pub fn fake_charliebot() -> PathBuf {
   PathBuf::from(env!("CARGO_BIN_EXE_fake-charliebot"))
 }
+
+/// The release CLI that the capture step calls in [`World::live_capture`]: `screenshots sizes` prints one window size,
+/// and `screenshots resolve` passes only the view named by `KNOWN_VIEW`.
+const CAPTURE_CLI_STUB: &str = r#"#!/bin/sh
+case "$1 $2" in
+  "screenshots sizes") echo 1536x900 ;;
+  "screenshots resolve")
+    if [ "$3" = "$KNOWN_VIEW" ]; then exit 0; fi
+    echo "the View line \"$3\" must name a view on the live server" >&2
+    exit 1 ;;
+  *) echo "unexpected: $*" >&2; exit 2 ;;
+esac
+"#;
 
 /// The run_finished fact that a run's stop leaves in the session's chat events.
 pub fn record_outcome(home: &Path, run_id: &str, outcome: &str) {

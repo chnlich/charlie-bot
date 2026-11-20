@@ -47,6 +47,38 @@ fn test_a_commit_without_a_view_trailer_captures_nothing() {
 
 #[test]
 #[ignore = "integration"]
+fn test_a_view_the_live_server_does_not_resolve_fails_its_capture_before_any_picture() {
+  let world = World::new();
+  let before = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "Open the session\n\nView: /?session=5f1c0d2e"]);
+  let short = world.git(&world.clone, &["rev-parse", "--short", "HEAD"]);
+  let head = world.git(&world.clone, &["rev-parse", "HEAD"]);
+
+  let (run, captured) = world.live_capture(&before, &head, "/?session=known-session");
+
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(run.stdout.contains(&format!("live screenshot: commit {short}: ")), "{}", world.report(&run));
+  assert!(run.stdout.contains("View line \"/?session=5f1c0d2e\""), "{}", world.report(&run));
+  assert!(!captured, "a view that does not resolve is not captured: {}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_view_the_live_server_resolves_is_captured() {
+  let world = World::new();
+  let before = world.git(&world.clone, &["rev-parse", "HEAD"]);
+  world.git(&world.clone, &["commit", "-q", "--allow-empty", "-m", "Open the session\n\nView: /?session=5f1c0d2e"]);
+  let head = world.git(&world.clone, &["rev-parse", "HEAD"]);
+
+  let (run, captured) = world.live_capture(&before, &head, "/?session=5f1c0d2e");
+
+  assert_eq!(run.code, 0, "{}", world.report(&run));
+  assert!(captured, "{}", world.report(&run));
+  assert!(run.stdout.contains("view /?session=5f1c0d2e size 1536×900"), "{}", world.report(&run));
+}
+
+#[test]
+#[ignore = "integration"]
 fn test_a_failed_live_capture_exits_7_and_keeps_the_new_release_serving() {
   let mut world = World::new();
   world.seed_live_run("run-live", Some("claude-opus"));

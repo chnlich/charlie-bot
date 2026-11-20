@@ -60,8 +60,9 @@
 # `View:` trailer a commit in OLD_SHA..TARGET_SHA carries. It reads the window sizes from the target release's own
 # `charliebot screenshots sizes`, captures each view at every size from the new server on 127.0.0.1, and prints one
 # line per capture naming the file, the commit, the view and the size. The files stay under
-# CHARLIEBOT_LOG_DIR/live-screenshots/<switch log name>/<commit>/. A capture that fails keeps the new release serving
-# and exits 7.
+# CHARLIEBOT_LOG_DIR/live-screenshots/<switch log name>/<commit>/. A view the live server does not resolve, such as a
+# session id the server does not know, fails its capture. A capture that fails keeps the new release serving and exits
+# 7.
 #
 # The switch back runs the forward path's own steps with the previous release as the target: it stops the new release,
 # moves the clone and `current` back, installs the previous release's slice units, starts it, and reads back every run
@@ -1638,14 +1639,19 @@ view_slug() {
 # live_screenshots: capture the live page of each View line in [OLD_SHA, TARGET_SHA], at every window size the
 # target release's `charliebot screenshots sizes` prints, from the new server on 127.0.0.1. The access key travels in
 # the environment, so it never shows in a process's argv. Each capture prints one line naming the file, the commit,
-# the view and the size. The caller keeps the new release serving and exits 7 when a capture fails.
+# the view and the size. A View line whose view the live server does not resolve fails its commit's capture before any
+# picture of it is taken. The caller keeps the new release serving and exits 7 when a capture fails.
 live_screenshots() {
-  local trailers sizes size width height short view dir path
+  local trailers sizes size width height short view dir path resolved
   trailers="$(view_trailers "$OLD_SHA" "$TARGET_SHA")" || return 1
   [ -n "$trailers" ] || return 0
   sizes="$("$RELEASE_DIR/charliebot" screenshots sizes)" || return 1
   while read -r short view; do
     [ -n "$short" ] || continue
+    if ! resolved="$(CHARLIEBOT_HOME="$HOME_DIR" "$RELEASE_DIR/charliebot" screenshots resolve "$view" 2>&1)"; then
+      log "live screenshot: commit $short: $resolved"
+      return 1
+    fi
     for size in $sizes; do
       width=${size%x*}
       height=${size#*x}

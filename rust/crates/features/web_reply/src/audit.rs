@@ -48,9 +48,10 @@ const FAILED_CONTINUATION_STATUS_NOTICE: &str = concat!(
   "The panel shows the state the last turn read back."
 );
 
-/// Whether the web checks apply to this turn: a web session whose turn exited cleanly or as a failed continuation, and
-/// left no close request.
-fn applies(input: &TurnInput) -> bool {
+/// Whether a web session's turn-end checks judge this turn: the session is a web session, the turn exited cleanly or as
+/// a failed continuation, and it left no close request. The `web-reply` and `web-status` entries read their scope here,
+/// as does the `pending-wake` entry that the CLI answers.
+pub fn web_turn_checks_apply(input: &TurnInput) -> bool {
   input.kind.as_deref() == Some("web")
     && input.exit_is_judged()
     && !input.turn.iter().any(|event| event["type"] == TASK_CLOSE_REQUESTED)
@@ -69,7 +70,7 @@ fn blocked_before(turn: &[Value], name: &str) -> bool {
 /// The `web-reply` entry: each user message the turn received has a web reply later than its receipt. The first miss
 /// blocks with the nudge text of each unanswered message; a miss after that passes with the notice.
 pub fn check_web_reply(input: &TurnInput) -> anyhow::Result<CheckResult> {
-  if !applies(input) {
+  if !web_turn_checks_apply(input) {
     return Ok(CheckResult::Pass);
   }
   let unanswered = unanswered_user_messages(&input.turn)?;
@@ -86,7 +87,7 @@ pub fn check_web_reply(input: &TurnInput) -> anyhow::Result<CheckResult> {
 /// The `web-status` entry: the turn ran a status set or confirm. The first miss blocks with the reminder. A miss after
 /// that passes quietly, unless the turn is a failed continuation, which shows the notice that no status was set.
 pub fn check_web_status(input: &TurnInput) -> CheckResult {
-  if !applies(input) {
+  if !web_turn_checks_apply(input) {
     return CheckResult::Pass;
   }
   let recorded = input.turn.iter().any(|event| event["type"] == WEB_STATUS || event["type"] == WEB_STATUS_CONFIRMED);

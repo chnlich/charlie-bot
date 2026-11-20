@@ -36,10 +36,13 @@
 # selected or the server stops. Check A (the prior switch accounted for every run): the prior switch is the newest
 # switch record under CHARLIEBOT_LOG_DIR whose preflight passed, the switch that last moved the server. Each run in its
 # `.runs` file must be reattached on the server that served when that switch ended: a task_recovery_resume record for
-# it, with no task_run_launch_refused or task_run_error record for it after that. Or it must end with outcome success
-# in the switch's own log (`readback: run <id> ended during the switch: outcome success`). The server is the newest
-# server log launched inside the switch's window, from its first stamp to its last. A run that is neither refuses the
-# switch and is named. No switch record, or a record without its runs file, refuses it too.
+# it, with no task_run_launch_refused record for it after that. A task_run_error record for it after that refuses the
+# run too, except one that directly follows a task_run_quota_exhausted record for it: no other resume, quota, error or
+# refusal record of the run lies between the two. The server writes that pair for one quota end, and the failover then
+# retries the work in a run with its own id. Or it must end with outcome success in the switch's own log
+# (`readback: run <id> ended during the switch: outcome success`). The server is the newest server log launched inside
+# the switch's window, from its first stamp to its last. A run that is neither refuses the switch and is named. No
+# switch record, or a record without its runs file, refuses it too.
 # `--approve-unaccounted-runs` is the only override: pass it once the user approves the restart over the named runs.
 # Check B (no concurrent release or switch) is the host release lock. The switch takes it in run_detached before the
 # preflight, and scripts/release.sh takes it before its first stage, so a second release or switch exits at once while
@@ -1425,8 +1428,9 @@ new_server_log() {
   return 0
 }
 
-# reattached_in_log LOG RUN: LOG holds a task_recovery_resume record for RUN, and no task_run_launch_refused or
-# task_run_error record for RUN comes after the last such resume. A record's words are the runs of characters a run id
+# reattached_in_log LOG RUN: LOG holds a task_recovery_resume record for RUN, and after the last such resume RUN has no
+# task_run_launch_refused record and no task_run_error record, except a task_run_error that directly follows RUN's
+# task_run_quota_exhausted record (the header states the rule). A record's words are the runs of characters a run id
 # does not hold, so the match is the whole id, in the text form and in the JSON form that the server wrote before the
 # text form.
 reattached_in_log() {
@@ -1439,14 +1443,22 @@ reattached_in_log() {
     for (i = 1; i <= count; i++) {
       if (words[i] == run) named = 1
       if (words[i] == "task_recovery_resume") kind = "resume"
-      if (words[i] == "task_run_launch_refused" || words[i] == "task_run_error") kind = "refused"
+      if (words[i] == "task_run_quota_exhausted") kind = "quota"
+      if (words[i] == "task_run_error") kind = "error"
+      if (words[i] == "task_run_launch_refused") kind = "refused"
     }
     if (!named || kind == "") next
     if (kind == "resume") {
       resumed = 1
       refused = 0
-    } else if (resumed) {
-      refused = 1
+      after_quota = 0
+    } else if (kind == "quota") {
+      after_quota = 1
+    } else if (kind == "error" && after_quota) {
+      after_quota = 0
+    } else {
+      after_quota = 0
+      if (resumed) refused = 1
     }
   }
   END { exit !(resumed && !refused) }' "$1"

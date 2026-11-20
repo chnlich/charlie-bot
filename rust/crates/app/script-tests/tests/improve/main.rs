@@ -3,7 +3,7 @@
 //! output into a sandbox it owns. The served checks of the same generator run in the release tests, against a trial
 //! server.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +19,16 @@ fn generate(sandbox: &Sandbox, output: &Path, sessions: &str, seed: &str) {
   command.arg("generate").arg(output).args(["--sessions", sessions, "--seed", seed]);
   let run = harness::run(&mut command);
   assert_eq!(run.code, 0, "{}", run.describe());
+}
+
+/// The session directories of a generated home: its visible directories. The default home's `.cron.d` is hidden, as the
+/// seed copy of a trial skips it.
+fn session_dirs(output: &Path) -> Vec<PathBuf> {
+  fs::read_dir(output)
+    .expect("the output directory")
+    .map(|entry| entry.expect("a directory entry").path())
+    .filter(|path| path.is_dir() && !path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')))
+    .collect()
 }
 
 /// Every regular file under `root`, keyed by its path relative to `root`.
@@ -63,10 +73,8 @@ fn test_generate_mid_size_event_logs_follow_the_production_shape() {
   let output = sandbox.dir("mid-size");
   generate(&sandbox, &output, "100", "5");
 
-  let mut sizes: Vec<f64> = fs::read_dir(&output)
-    .expect("the output directory")
-    .map(|entry| entry.expect("a directory entry").path())
-    .filter(|path| path.is_dir())
+  let mut sizes: Vec<f64> = session_dirs(&output)
+    .into_iter()
     .map(|session| fs::metadata(session.join("data/chat_events.jsonl")).expect("an event log").len() as f64)
     .collect();
   sizes.sort_by(f64::total_cmp);
@@ -102,11 +110,7 @@ fn test_generate_separates_every_finished_turn_with_a_master_done() {
   generate(&sandbox, &output, "12", "5");
 
   let mut separators = 0;
-  for entry in fs::read_dir(&output).expect("the output directory") {
-    let session = entry.expect("a directory entry").path();
-    if !session.is_dir() {
-      continue;
-    }
+  for session in session_dirs(&output) {
     let text = fs::read_to_string(session.join("data/chat_events.jsonl")).expect("an event log");
     let events: Vec<serde_json::Value> =
       text.lines().map(|line| serde_json::from_str(line).expect("one JSON event per line")).collect();
@@ -128,4 +132,33 @@ fn test_generate_separates_every_finished_turn_with_a_master_done() {
     }
   }
   assert!(separators > 0, "the generated home holds no turn separator");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_generate_default_home_writes_cron_tasks_that_bind_manager_sessions() {
+  let sandbox = Sandbox::new();
+  for (sessions, expected_bound) in [("2", 2usize), ("40", 4usize)] {
+    let output = sandbox.dir(&format!("cron-{sessions}"));
+    generate(&sandbox, &output, sessions, "1");
+    let manifest: serde_json::Value =
+      serde_json::from_slice(&fs::read(output.join("manifest.json")).expect("the manifest"))
+        .expect("the manifest is JSON");
+    let tasks = manifest["cron_tasks"].as_array().expect("the manifest lists cron_tasks");
+    let task_files = fs::read_dir(output.join(".cron.d")).expect("the cron directory").count();
+    assert_eq!(task_files, tasks.len(), "the manifest lists every task file");
+    let bound: BTreeSet<&str> = tasks.iter().map(|task| task["session_id"].as_str().expect("a session id")).collect();
+    assert_eq!(bound.len(), expected_bound, "the fixture binds {expected_bound} sessions");
+    for task in tasks {
+      let name = task["name"].as_str().expect("a task name");
+      let session_id = task["session_id"].as_str().expect("a session id");
+      let body = fs::read_to_string(output.join(".cron.d").join(format!("{name}.yaml"))).expect("a task file");
+      assert!(body.contains(&format!("session_id: {session_id}\n")), "{name} binds its session");
+      let metadata: serde_json::Value = serde_json::from_slice(
+        &fs::read(output.join(session_id).join("metadata.json")).expect("the bound session's metadata"),
+      )
+      .expect("the metadata is JSON");
+      assert_eq!(metadata["profile"], "manager", "{name} binds a manager");
+    }
+  }
 }

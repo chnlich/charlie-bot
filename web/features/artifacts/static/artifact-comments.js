@@ -1551,7 +1551,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     //
     // The parser reads the grammar of the Rust checker's page_forks (artifact_check.rs).
     // An open div.fork holds no p.resolved, its question number is span.fn in a p.q, and its
-    // options are the li lines outside every closed details and every div.demo. Each option
+    // options are the li lines outside every details and every div.demo. Each option
     // opens with its name in 「」.
     // The shared fixture plan_template_forks.json pins this parser and the Rust one to one output.
     function isPickMarker(el) {
@@ -1600,10 +1600,12 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return spans;
     }
 
-    // True when a closed details lies between el and top (top null: among all ancestors).
-    function isFoldedBelow(el, top) {
+    // True when a details lies between el and top (top null: among all ancestors). A fold holds the explainer of an
+    // item, never an option, so nothing inside one offers an option button, open or shut. The diff view opens the
+    // folds that changed, and an opened fold's derivation lines can read like option lines.
+    function insideDetailsBelow(el, top) {
       for (var node = el.parentElement; node && node !== top; node = node.parentElement) {
-        if (node.tagName === 'DETAILS' && !node.open) return true;
+        if (node.tagName === 'DETAILS') return true;
       }
       return false;
     }
@@ -1645,13 +1647,13 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       var blocks = document.querySelectorAll('.fork');
       for (var i = 0; i < blocks.length; i++) {
         var fork = blocks[i];
-        if (fork.tagName !== 'DIV' || forkIsResolved(fork) || isFoldedBelow(fork, null)) continue;
+        if (fork.tagName !== 'DIV' || forkIsResolved(fork) || insideDetailsBelow(fork, null)) continue;
         var number = forkNumber(fork);
         if (!number) continue;
         var options = [];
         var lines = fork.querySelectorAll('li');
         for (var j = 0; j < lines.length; j++) {
-          if (isFoldedBelow(lines[j], fork) || insideDemoBelow(lines[j], fork)) continue;
+          if (insideDetailsBelow(lines[j], fork) || insideDemoBelow(lines[j], fork)) continue;
           var text = collapseText(optionLineText(lines[j]));
           var name = optionNameOf(text);
           if (name) options.push({name: name, text: text, line: lines[j], button: null});

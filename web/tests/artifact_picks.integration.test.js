@@ -226,6 +226,24 @@ test('the browser parser reads the shared fixture and offers a button per option
   });
 });
 
+// The diff view opens every fold that holds a change and marks the changed leaves. A fold is an item's explainer, and
+// its derivation lines can read like option lines. The fixture is the annotator's own output (plan_diff::annotate) for
+// the template with one derivation line added inside the first fork's fold; its named fork options are the template's.
+const DIFF_VIEW_PATH = path.join(__dirname, 'fixtures', 'plan_diff_view.html');
+
+test('a diff-view plan page offers one button per named fork option, and an opened fold adds none', async () => {
+  await withPlanPage(async (page) => {
+    const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
+    await sleep(FRAME_WAIT_MS);
+    assert.equal(await page.evaluate('document.querySelectorAll("details[open]").length > 0'), true,
+      'the fixture carries the opened fold the diff view renders');
+    assert.equal(await page.evaluate('document.querySelectorAll(".__cbc-picks button").length'),
+      fixture[0].options.length, 'one button per named fork option');
+    assert.equal(await page.evaluate('document.querySelectorAll("details .__cbc-pick").length'), 0,
+      'the opened fold holds no option button');
+  }, {source: DIFF_VIEW_PATH});
+});
+
 // The template has one open question. Two picks need a second one, so the two-pick checks serve the template with this
 // question added after its last section. Its number and its options are the ones the entries below name.
 const SECOND_QUESTION_NUMBER = '3';

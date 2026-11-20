@@ -52,7 +52,7 @@ The trial exports `CHARLIEBOT_SERVE_URL`, `CHARLIEBOT_SERVE_AUTH_HEADER` and `CH
 
 Take the screenshots with the playwright chromium under `~/.cache/ms-playwright`.
 Send `CHARLIEBOT_SERVE_AUTH_HEADER` with each page request, so that the pages load with the access key.
-Take one screenshot per width on each side: 1440 px and 390 px before the change, and the same two widths after it.
+Take one screenshot per width that the web UI screenshot rule names (`prompts/task_base.md`, section `web_ui_screenshots`), on each side: before the change, and the same widths after it.
 The pair at each width shows the change to the user.
 
 ## Evidence

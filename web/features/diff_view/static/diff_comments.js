@@ -24,6 +24,8 @@
   let sessions = [];
   let sessionLoadError = '';
   let sessionNotice = '';
+  let sessionsLoad = null;
+  let sessionsLoaded = false;
 
   let tray;
   let trayHeader;
@@ -42,12 +44,6 @@
   installStyles();
   installTray();
   installListeners();
-  initializeSessions().catch((error) => {
-    console.error('Diff comment session loading failed:', error);
-    sessionLoadError = error.message;
-    querySessionStatus = 'error';
-    refreshTray();
-  });
 
   function resolveTargetSession(queryId, selectedId, queryStatus) {
     if (queryId && queryStatus === 'found') return queryId;
@@ -494,6 +490,7 @@
       if (!batchContext) batchContext = {...currentComparison};
       closeEditor();
       refreshMarkers(anchor.filePath);
+      loadSessionsOnce();
       refreshTray();
     };
     bindEditorKeys(textarea, closeEditor, submit);
@@ -672,7 +669,20 @@
       sessionNotice = `Target session ${querySessionId} was not found. Choose another session.`;
     }
     populateSessionSelect();
+    sessionsLoaded = true;
     refreshTray();
+  }
+
+  // The target list and the query session load once, on the first pending comment: the first moment the tray needs a
+  // target. A visit that comments nothing never fetches the session corpus.
+  function loadSessionsOnce() {
+    if (sessionsLoad) return;
+    sessionsLoad = initializeSessions().catch((error) => {
+      console.error('Diff comment session loading failed:', error);
+      sessionLoadError = error.message;
+      querySessionStatus = 'error';
+      refreshTray();
+    });
   }
 
   function populateSessionSelect() {
@@ -696,7 +706,7 @@
   function targetReason(target) {
     if (target) return '';
     if (sessionLoadError) return `Unable to load target sessions: ${sessionLoadError}`;
-    if (querySessionStatus === 'loading') return 'Loading target session…';
+    if (querySessionStatus === 'loading' || !sessionsLoaded) return 'Loading target session…';
     return 'No target session is available.';
   }
 

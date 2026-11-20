@@ -42,4 +42,17 @@
 /* Touch targets: whole-item 44px rows, matching the sidebar's other touch rules. */
 @media (hover: none) {
   .row-menu-item { min-height: 44px; }
+  /* The dialogs these menus open keep their desktop heights on a phone: a Set Group row and a
+     Move under row draw 36 px, the group dialog's Add 34 px, and the confirm dialog's Cancel
+     and Archive 28 px. The close control beside them (close_button.html) and the row menu's
+     own items draw 44 px, so the dialog's rows are the smallest targets on the screen and a
+     fingertip covers two of them. Each rule names its element, so it wins over the utility
+     class that carries the desktop padding wherever this sheet loads. */
+  button.dialog-choice-row { min-height: 44px; padding-top: 12px; padding-bottom: 12px; }
+  button.dialog-action-btn { display: inline-flex; align-items: center; min-height: 44px; }
+  input.dialog-text-field { min-height: 44px; }
+  /* The session action modal's markup (index.html) carries no hook class on its footer buttons or
+     on its backend select, so its bordered footer and the select name them. */
+  #session-action-modal-overlay .border-t button { display: inline-flex; align-items: center; min-height: 44px; }
+  #session-action-modal-overlay select { min-height: 44px; }
 }

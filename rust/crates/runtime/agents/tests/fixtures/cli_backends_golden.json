@@ -362,9 +362,7 @@
         "id": "agy_plain",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print",
-          "--input-format",
-          "text",
+          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
           "--print-timeout",
           "1h",
           "--dangerously-skip-permissions",
@@ -386,16 +384,14 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "stdin": null,
         "instructions_target": null
       },
       {
         "id": "agy_print_timeout_flags",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print",
-          "--input-format",
-          "text",
+          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
           "--print-timeout",
           "30m",
           "--dangerously-skip-permissions",
@@ -418,16 +414,14 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "stdin": null,
         "instructions_target": null
       },
       {
         "id": "agy_resume",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print",
-          "--input-format",
-          "text",
+          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
           "--print-timeout",
           "1h",
           "--dangerously-skip-permissions",
@@ -451,16 +445,14 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "stdin": null,
         "instructions_target": null
       },
       {
         "id": "agy_content",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print",
-          "--input-format",
-          "text",
+          "--print=<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
           "--print-timeout",
           "1h",
           "--dangerously-skip-permissions",
@@ -482,16 +474,14 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "stdin": null,
         "instructions_target": null
       },
       {
         "id": "agy_file_and_content",
         "argv": [
           "$TMPROOT/bin/agy",
-          "--print",
-          "--input-format",
-          "text",
+          "--print=<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
           "--print-timeout",
           "5m",
           "--dangerously-skip-permissions",
@@ -513,7 +503,7 @@
           "ANTHROPIC_API_KEY": "inherited-value",
           "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
         },
-        "stdin": "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "stdin": null,
         "instructions_target": null
       },
       {
@@ -1006,31 +996,31 @@
           }
         ],
         "exit_code": 3,
-        "guard": null
+        "guard": "agy exited 3: quota"
       },
       {
         "id": "exit_with_plain_stdout",
         "events": [
           {
             "type": "error",
-            "message": "plain crash text",
-            "content": "plain crash text"
+            "message": "agy exited 2: stdout: plain crash text",
+            "content": "agy exited 2: stdout: plain crash text"
           }
         ],
         "exit_code": 2,
-        "guard": null
+        "guard": "agy exited 2: stdout: plain crash text"
       },
       {
         "id": "exit_with_empty_stdout",
         "events": [
           {
             "type": "error",
-            "message": "Antigravity CLI exited with code 5",
-            "content": "Antigravity CLI exited with code 5"
+            "message": "agy exited 5: no stderr or stdout",
+            "content": "agy exited 5: no stderr or stdout"
           }
         ],
         "exit_code": 5,
-        "guard": null
+        "guard": "agy exited 5: no stderr or stdout"
       },
       {
         "id": "exit_zero_non_envelope",
@@ -1054,7 +1044,7 @@
           }
         ],
         "exit_code": 1,
-        "guard": null
+        "guard": "agy print timeout after 30m: the turn was still running; agy returned partial output"
       },
       {
         "id": "failed_with_response",
@@ -1066,7 +1056,7 @@
           }
         ],
         "exit_code": 1,
-        "guard": null
+        "guard": "partial answer"
       },
       {
         "id": "failed_bare",
@@ -1078,7 +1068,7 @@
           }
         ],
         "exit_code": 1,
-        "guard": null
+        "guard": "Antigravity status FAILED"
       },
       {
         "id": "success_without_conversation",

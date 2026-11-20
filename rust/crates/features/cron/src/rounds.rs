@@ -4,6 +4,7 @@
 //! A round is the worker that a task's fire or a `--bound-task` delegation started, under the bound session, and the
 //! trigger input that a fire queued there. Both are read from persisted state, so a restart keeps a round in flight.
 
+use charliebot_core::backend_types;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
@@ -46,15 +47,15 @@ pub(crate) fn parse_member_kinds(text: &str) -> anyhow::Result<Vec<&str>> {
 /// server's access key.
 pub(crate) fn member_kind(backend_type: &str) -> Option<&'static str> {
   match backend_type {
-    "cc-claude" | "cc-anthropic-compatible" => Some("claude"),
-    "codex" => Some("codex"),
+    backend_types::CC_CLAUDE | backend_types::CC_ANTHROPIC_COMPATIBLE => Some("claude"),
+    backend_types::CODEX => Some("codex"),
     _ => None,
   }
 }
 
 /// The reason an improve round refuses the member `member` of backend type `backend_type`.
 fn member_refusal(member: &str, backend_type: &str) -> String {
-  if backend_type == "cc-openai-compatible" {
+  if backend_type == backend_types::CC_OPENAI_COMPATIBLE {
     format!(
       "backend '{member}' (type '{backend_type}') reaches its model through this CharlieBot server's own proxy route, \
        which an improve round on its improve_host cannot reach; its Claude Code token is this server's access key"

@@ -17,6 +17,7 @@ use charliebot_compat::http_client;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
+use charliebot_core::backend_types;
 use charliebot_core::credentials::API_KEY_FIELD;
 use charliebot_core::event_types::REQUEST_EXCEPTION_EVENT;
 use charliebot_core::headers::bearer_value;
@@ -98,10 +99,14 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
   let option = cfg
     .get_backend_option(backend_id)
     .ok_or_else(|| detail(StatusCode::NOT_FOUND, format!("unknown backend id: {backend_id}")))?;
-  if option.backend_type != "cc-openai-compatible" {
+  if option.backend_type != backend_types::CC_OPENAI_COMPATIBLE {
     return Err(detail(
       StatusCode::BAD_REQUEST,
-      format!("backend '{backend_id}' is not type 'cc-openai-compatible' (got '{}')", option.backend_type),
+      format!(
+        "backend '{backend_id}' is not type '{}' (got '{}')",
+        backend_types::CC_OPENAI_COMPATIBLE,
+        option.backend_type
+      ),
     ));
   }
   let fields = CcOpenAiOption::from_fields(&option.type_fields)

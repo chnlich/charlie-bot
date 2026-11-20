@@ -18,6 +18,7 @@ use std::sync::{Arc, Weak};
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, anyhow};
+use charliebot_core::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_REJECTED};
 use charliebot_core::text_repr::is_truthy;
@@ -163,7 +164,8 @@ fn expand_account_path(value: &str) -> anyhow::Result<PathBuf> {
 }
 
 pub fn is_pooled(option: &BackendOption, cfg: &CharlieBotConfig) -> bool {
-  option.backend_type == "cc-claude" && !cfg.section::<claude_config::AccountsConfig>("accounts").claude.is_empty()
+  option.backend_type == backend_types::CC_CLAUDE
+    && !cfg.section::<claude_config::AccountsConfig>("accounts").claude.is_empty()
 }
 
 pub fn option_pool(option: &BackendOption) -> Option<String> {
@@ -213,7 +215,7 @@ pub fn account_by_label(
 }
 
 pub fn continuation_domain(option: &BackendOption, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
-  if option.backend_type != "cc-claude" {
+  if option.backend_type != backend_types::CC_CLAUDE {
     return Ok(option.id.clone());
   }
   if is_pooled(option, cfg) {

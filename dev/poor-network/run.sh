@@ -17,6 +17,8 @@
 # Every side holds the bench lock of lock.sh around its trial, not the builds, waiting up to 2 h for it, so two bench
 # runs on a host never measure side by side; no option chooses another lock or skips it. One hold covers one side
 # attempt; a side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
+# --lock-wait SECONDS  how long each side waits for the bench lock (default 7200, the 2 h above). An improve round
+#                passes 900, its 15-minute wait.
 # --open-conditions LIST  the open scenario's cells: any of link,held,reset,flaps,offline,release (default all). The
 #                reference cell always runs, since the CPU rate is derived from it.
 # --open-cpu-rate RATE  every side runs the open scenario's cells at RATE instead of a rate its reference derives, so
@@ -50,6 +52,7 @@ scenarios=background,held,reset,stream
 open_conditions=link,held,reset,flaps,offline,release
 assets_dir=
 detach=0
+lock_wait=$BENCH_LOCK_WAIT_SECONDS
 open_rate_args=()
 
 usage() {
@@ -75,6 +78,7 @@ while (($#)); do
     --open-conditions) open_conditions=${2:?--open-conditions needs a value}; shift 2 ;;
     --open-cpu-rate) open_rate_args=(--open-cpu-rate "${2:?--open-cpu-rate needs a value}"); shift 2 ;;
     --assets-dir) assets_dir=${2:?--assets-dir needs a value}; shift 2 ;;
+    --lock-wait) lock_wait=${2:?--lock-wait needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
@@ -87,6 +91,7 @@ case $side in
 esac
 [[ -n $out_dir ]] || die 2 "--out-dir is required: the run's files go there, outside the tree"
 [[ $repetitions =~ ^[1-9][0-9]*$ ]] || die 2 "--repetitions must be a positive integer, got $repetitions"
+[[ $lock_wait =~ ^[1-9][0-9]*$ ]] || die 2 "--lock-wait must be a positive number of seconds, got $lock_wait"
 if [[ $side != after ]]; then
   [[ -n $before_clone ]] || die 2 "--before-clone is required for --side $side"
 fi
@@ -134,7 +139,8 @@ if ((detach)); then
     detached_env+=(--setenv="TMPDIR=$TMPDIR")
   fi
   forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions"
-    --scenarios "$scenarios" --open-conditions "$open_conditions" ${open_rate_args+"${open_rate_args[@]}"})
+    --scenarios "$scenarios" --open-conditions "$open_conditions" --lock-wait "$lock_wait"
+    ${open_rate_args+"${open_rate_args[@]}"})
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
@@ -241,8 +247,8 @@ run_side() {
   # The bench lock (lock.sh) covers this side's trial, so no other bench run on the host measures beside it.
   echo "poor-network: $name side queues for the bench lock"
   set +e
-  bench_lock systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="pn-$run_id-$name" \
-    "$trial_script" --serve --in-caller-scope --tree-root "$trial_root" --seed-home "$mock_home" \
+  bench_lock_within "$lock_wait" systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 \
+    --unit="pn-$run_id-$name" "$trial_script" --serve --in-caller-scope --tree-root "$trial_root" --seed-home "$mock_home" \
     "$commit" "$server_bin" -- \
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
       --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
@@ -277,7 +283,7 @@ run_side() {
   set -e
   # The timeout keeps flock's own exit code, so a caller that retries can tell it from a failed measurement and take
   # its place at the back of the queue again. One lock hold covers one side attempt; run.sh never retries inside it.
-  ((trial_status != BENCH_LOCK_TIMEOUT_EXIT)) || die "$BENCH_LOCK_TIMEOUT_EXIT" "the $name side did not get the bench lock within $BENCH_LOCK_WAIT_SECONDS s"
+  ((trial_status != BENCH_LOCK_TIMEOUT_EXIT)) || die "$BENCH_LOCK_TIMEOUT_EXIT" "the $name side did not get the bench lock within $lock_wait s"
   echo "poor-network: $name side exit $trial_status"
   [[ -f "$run_dir/$name.json" ]] || die 1 "the $name side wrote no JSON"
   return "$trial_status"

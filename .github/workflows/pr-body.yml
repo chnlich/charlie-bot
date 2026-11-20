@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+jobs:
+  contract-check:
+    runs-on: ubuntu-latest
+    env:
+      BODY: ${{ github.event.pull_request.body }}
+      HEAD_REF: ${{ github.head_ref }}
+    steps:
+      - name: Enforce improve PR body contract
+        run: |
+          if [[ "$HEAD_REF" == improve/* ]]; then
+            echo "$BODY" | grep -q '## Evidence' || { echo "PR body missing '## Evidence' section"; exit 1; }
+          fi

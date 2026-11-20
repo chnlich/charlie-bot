@@ -2,29 +2,12 @@ name: CI
 
 on:
   pull_request:
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - edited
   push:
     branches:
       - main
   workflow_dispatch:
 
 jobs:
-  contract-check:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'improve/')
-    env:
-      BODY: ${{ github.event.pull_request.body }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Enforce contract
-        run: |
-          echo "$BODY" | grep -q '## Evidence' || { echo "PR body missing '## Evidence' section"; exit 1; }
   frontend-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15

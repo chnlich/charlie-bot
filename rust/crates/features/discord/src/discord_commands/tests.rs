@@ -127,7 +127,7 @@ async fn read_continues_after_the_previous_window() {
   );
   let session_id = make_session(&home, Some(snowflake(7))).await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 4).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 4).await.unwrap();
 
   assert_eq!(ids(&result), [8, 9, 10].map(snowflake));
   assert_eq!(fields(&result, "unread"), [true, true, true].map(Value::Bool));
@@ -142,7 +142,7 @@ async fn read_without_unread_returns_the_newest_limit() {
   thread_messages(&home, &(1..=8).map(|i| Msg::new(i, &format!("m{i}"))).collect::<Vec<_>>());
   let session_id = make_session(&home, Some(snowflake(8))).await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 3).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 3).await.unwrap();
 
   assert_eq!(ids(&result), [6, 7, 8].map(snowflake));
   assert_eq!(fields(&result, "unread"), [false, false, false].map(Value::Bool));
@@ -160,7 +160,7 @@ async fn read_succeeds_when_a_message_lands_after_the_full_read() {
   // The new message lands right after the first full read, so the readback already taken does not hold it.
   home.fake().landing = Some((THREAD.to_string(), Msg::new(3, "arrived in between").value()));
 
-  let result = read_thread(&bot(&home), &session_id, None, 50).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 50).await.unwrap();
 
   assert_eq!(ids(&result), [1, 2].map(snowflake));
   assert_eq!(fields(&result, "unread"), [false, false].map(Value::Bool));
@@ -179,7 +179,7 @@ async fn read_flags_the_pending_summon_and_starts_the_window_at_it() {
   let session_id = make_session(&home, Some(snowflake(1))).await;
   home.append(&session_id, summon_event(&snowflake(1))).await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 2).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
 
   assert_eq!(ids(&result), [1, 2].map(snowflake));
   assert_eq!(fields(&result, "summon"), [true, false].map(Value::Bool));
@@ -213,7 +213,7 @@ async fn read_does_not_flag_a_summon_a_master_done_names() {
     )
     .await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 2).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
 
   // Not pending: the window keeps its old start (the oldest unread), so the answered mention stays out entirely.
   assert_eq!(
@@ -256,7 +256,7 @@ async fn read_does_not_flag_a_summon_a_resumed_turn_received() {
     )
     .await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 2).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
 
   assert_eq!(ids(&result), [snowflake(2)]);
   assert_eq!(fields(&result, "summon"), [json!(false)]);
@@ -281,7 +281,7 @@ async fn read_does_not_flag_a_summon_a_backfill_marker_names() {
     )
     .await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 2).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
 
   // Not pending: the window starts at the oldest unread, so the lost mention stays out and nothing carries the flag.
   assert_eq!(ids(&result), [snowflake(2)]);
@@ -300,7 +300,7 @@ async fn read_flags_a_starter_message_mention() {
   let session_id = make_session(&home, Some(THREAD.to_string())).await;
   home.append(&session_id, summon_event(THREAD)).await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 5).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 5).await.unwrap();
 
   assert_eq!(ids(&result), [THREAD.to_string(), snowflake(1)]);
   assert_eq!(fields(&result, "summon"), [true, false].map(Value::Bool));
@@ -317,7 +317,7 @@ async fn read_flags_a_nudge_neither() {
   nudge["discord"]["nudge_of"] = json!("s0");
   home.append(&session_id, nudge).await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 5).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 5).await.unwrap();
 
   assert_eq!(fields(&result, "summon"), [json!(false)]);
 }
@@ -333,7 +333,7 @@ async fn read_prepends_the_parent_starter_outside_the_limit() {
   thread_messages(&home, &[Msg::new(1, "first follow up"), Msg::new(2, "second follow up")]);
   let session_id = make_session(&home, None).await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 2).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
 
   assert_eq!(ids(&result), [THREAD.to_string(), snowflake(1), snowflake(2)]);
   // The starter rides first, unread false and not a summon. Limit=2 still delivered both unread.
@@ -375,7 +375,7 @@ async fn read_skips_a_404_starter() {
   thread_messages(&home, &[Msg::new(1, "first follow up"), Msg::new(2, "second follow up")]);
   let session_id = make_session(&home, None).await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 2).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, None, 2).await.unwrap();
 
   assert_eq!(ids(&result), [snowflake(1), snowflake(2)]);
   assert_eq!(fields(&result, "unread"), [json!(true), json!(true)]);
@@ -388,7 +388,7 @@ async fn read_names_the_author_person_for_listed_and_unlisted_authors() {
   thread_messages(&home, &[Msg::new(1, "mine"), Msg::new(2, "unlisted").by(UNLISTED)]);
   let session_id = make_session(&home, None).await;
 
-  let own = read_thread(&bot(&home), &session_id, None, 5).await.unwrap();
+  let own = bot(&home).read_thread(&session_id, None, 5).await.unwrap();
 
   assert_eq!(fields(&own, "person"), [json!(ALLOWED_PERSON), Value::Null]);
 }
@@ -409,7 +409,7 @@ async fn read_with_url_reads_the_linked_channel_and_marks_nothing() {
   let session_id = make_session(&home, None).await;
   let url = format!("https://discord.com/channels/{GUILD}/{OTHER_CHANNEL}");
 
-  let result = read_thread(&bot(&home), &session_id, Some(url.as_str()), 3).await.unwrap();
+  let result = bot(&home).read_thread(&session_id, Some(url.as_str()), 3).await.unwrap();
 
   assert_eq!(ids(&result), [3, 4, 5].map(snowflake));
   assert_eq!(fields(&result, "unread"), [false, false, false].map(Value::Bool));

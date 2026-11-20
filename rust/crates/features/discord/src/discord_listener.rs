@@ -85,6 +85,49 @@ impl Bot {
   pub(crate) fn config(&self) -> anyhow::Result<Arc<CharlieBotConfig>> {
     Ok(self.features.config.get()?)
   }
+
+  /// The adapter the wrappers hand the shared core.
+  fn adapter(&self) -> Arc<dyn ThreadAdapter> {
+    Arc::new(DiscordThreadAdapter::new(self.clone()))
+  }
+
+  /// The refusal of a reply while eligible thread messages sit above the session's watermark (`assert_thread_fresh`).
+  pub async fn assert_thread_fresh(&self, session_id: &str) -> Result<(), thread_entry::ThreadReplyError> {
+    thread_entry::assert_thread_fresh(&self.adapter(), &self.features, session_id).await
+  }
+
+  /// The readback of the session's read watermark advanced over `message_ids` (`ack_messages`).
+  pub async fn ack_messages(
+    &self,
+    session_id: &str,
+    message_ids: &[String],
+  ) -> Result<Value, thread_entry::ThreadReplyError> {
+    thread_entry::ack_messages(&self.adapter(), &self.features, session_id, message_ids).await
+  }
+
+  /// The readback the CLI prints from posting `text` to the session's Discord thread (`post_reply`).
+  pub async fn post_reply(&self, session_id: &str, text: &str) -> Result<Value, thread_entry::ThreadReplyError> {
+    self.post_reply_with_caller_context(session_id, text, None, None).await
+  }
+
+  /// A reply posted bound to the verified caller's run request.
+  pub async fn post_reply_with_caller_context(
+    &self,
+    session_id: &str,
+    text: &str,
+    request_id: Option<&str>,
+    run_started_at: Option<&str>,
+  ) -> Result<Value, thread_entry::ThreadReplyError> {
+    thread_entry::post_reply_with_caller_context(
+      &self.adapter(),
+      &self.features,
+      session_id,
+      text,
+      request_id,
+      run_started_at,
+    )
+    .await
+  }
 }
 
 /// The Discord thread's `ThreadAdapter` (`DiscordThreadAdapter`). The client is built on the first platform call and
@@ -228,49 +271,6 @@ fn origin_of(origin: &Value) -> anyhow::Result<DiscordOrigin> {
 /// A string field of a stored block or address.
 fn str_field<'a>(object: &'a Value, name: &str) -> anyhow::Result<&'a str> {
   object.get(name).and_then(Value::as_str).with_context(|| format!("the Discord block names no {name}"))
-}
-
-/// The adapter the wrappers hand the shared core.
-fn adapter(bot: &Bot) -> Arc<dyn ThreadAdapter> {
-  Arc::new(DiscordThreadAdapter::new(bot.clone()))
-}
-
-/// The refusal of a reply while eligible thread messages sit above the session's watermark (`assert_thread_fresh`).
-pub async fn assert_thread_fresh(bot: &Bot, session_id: &str) -> Result<(), thread_entry::ThreadReplyError> {
-  thread_entry::assert_thread_fresh(&adapter(bot), &bot.features, session_id).await
-}
-
-/// The readback of the session's read watermark advanced over `message_ids` (`ack_messages`).
-pub async fn ack_messages(
-  bot: &Bot,
-  session_id: &str,
-  message_ids: &[String],
-) -> Result<Value, thread_entry::ThreadReplyError> {
-  thread_entry::ack_messages(&adapter(bot), &bot.features, session_id, message_ids).await
-}
-
-/// The readback the CLI prints from posting `text` to the session's Discord thread (`post_reply`).
-pub async fn post_reply(bot: &Bot, session_id: &str, text: &str) -> Result<Value, thread_entry::ThreadReplyError> {
-  post_reply_with_caller_context(bot, session_id, text, None, None).await
-}
-
-/// A reply posted bound to the verified caller's run request.
-pub async fn post_reply_with_caller_context(
-  bot: &Bot,
-  session_id: &str,
-  text: &str,
-  request_id: Option<&str>,
-  run_started_at: Option<&str>,
-) -> Result<Value, thread_entry::ThreadReplyError> {
-  thread_entry::post_reply_with_caller_context(
-    &adapter(bot),
-    &bot.features,
-    session_id,
-    text,
-    request_id,
-    run_started_at,
-  )
-  .await
 }
 
 /// The listener implementation passed to the shared `ChannelService` (`run_listener`).
@@ -426,19 +426,19 @@ pub async fn show_turn_notice(
   message: &str,
 ) -> anyhow::Result<bool> {
   let bot = Bot::new(Arc::clone(features), crate::discord_client::BASE_URL);
-  Ok(thread_entry::show_turn_notice(&adapter(&bot), features, session_id, turn, message).await?)
+  Ok(thread_entry::show_turn_notice(&bot.adapter(), features, session_id, turn, message).await?)
 }
 
 /// Runs the existing thread nudge or notice behavior for an errored Discord turn.
 pub async fn after_failed_turn(features: &Arc<FeatureContext>, session_id: &str, done: &Value) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(features), crate::discord_client::BASE_URL);
-  thread_entry::audit_failed_turn(&adapter(&bot), features, session_id, done).await?;
+  thread_entry::audit_failed_turn(&bot.adapter(), features, session_id, done).await?;
   Ok(())
 }
 /// The queued Discord summons reported lost across a restart (`backfill_lost_summons`).
 pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> anyhow::Result<usize> {
   let bot = Bot::new(Arc::clone(features), crate::discord_client::BASE_URL);
-  Ok(thread_entry::backfill_lost_summons(&adapter(&bot), features).await?)
+  Ok(thread_entry::backfill_lost_summons(&bot.adapter(), features).await?)
 }
 
 /// The gateway intent and per-guild permissions checked once for a service start.

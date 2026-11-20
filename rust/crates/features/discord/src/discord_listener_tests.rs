@@ -666,7 +666,7 @@ async fn test_discord_accepted_post_timeout_retries_with_one_nonce_keyed_post() 
   home.fake().accepted_post_failures_remaining = 1;
   let bot = Bot::new(Arc::clone(&home.features), home.api.clone());
 
-  let result = post_reply(&bot, &sid, "accepted before the response failed").await.unwrap();
+  let result = bot.post_reply(&sid, "accepted before the response failed").await.unwrap();
 
   assert_eq!(result["posted"], true);
   let fake = home.fake();
@@ -694,7 +694,7 @@ async fn test_existing_bot_content_blocks_a_post_without_nonce_deduplication() {
   );
   let bot = Bot::new(Arc::clone(&home.features), home.api.clone());
 
-  let result = post_reply(&bot, &sid, text).await.unwrap();
+  let result = bot.post_reply(&sid, text).await.unwrap();
 
   assert_eq!(result["posted"], true);
   assert!(home.fake().posts.is_empty());
@@ -800,7 +800,7 @@ async fn test_post_reply_posts_a_published_url_byte_identical() {
   let sid = discord_session(&home).await;
   let text = "see https://example.test/Ab3dEf6hIj8kLm1nOp2q/page.html for details";
   let bot = Bot::new(Arc::clone(&home.features), home.api.clone());
-  let readback = post_reply(&bot, &sid, text).await.unwrap();
+  let readback = bot.post_reply(&sid, text).await.unwrap();
   assert_eq!(readback["text"], text);
   assert_eq!(home.fake().posts[0], (THREAD.to_string(), text.to_string()));
 }
@@ -812,7 +812,7 @@ async fn test_post_reply_names_an_application_route_link_for_the_operator() {
   let port = home.features.config.get().unwrap().server.port;
   let url = format!("http://127.0.0.1:{port}/diff");
   let bot = Bot::new(Arc::clone(&home.features), home.api.clone());
-  let readback = post_reply(&bot, &sid, &format!("open {url}")).await.unwrap();
+  let readback = bot.post_reply(&sid, &format!("open {url}")).await.unwrap();
   assert!(readback["operator_only_note"].as_str().unwrap().contains(&url));
 }
 
@@ -826,7 +826,7 @@ async fn test_post_reply_refuses_422_and_posts_nothing_on_a_file_server_link() {
     "https://charliebot.example/absolute_filepath/home/u/artifacts/page.html",
     "https://charliebot.example/absolute_filepath/home/u/caf%C3%A9/page.html?q=1#frag",
   ] {
-    let error = post_reply(&bot, &sid, &format!("see {link} for details")).await.unwrap_err();
+    let error = bot.post_reply(&sid, &format!("see {link} for details")).await.unwrap_err();
     assert_eq!(error.status.as_u16(), 422);
     assert!(error.to_string().contains(link));
     assert!(error.to_string().contains("charliebot publish"));

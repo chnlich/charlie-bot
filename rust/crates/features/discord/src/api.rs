@@ -20,8 +20,7 @@ use charliebot_registry::caller;
 use serde_json::Value;
 
 use crate::discord_client::BASE_URL;
-use crate::discord_commands;
-use crate::discord_listener::{self, Bot};
+use crate::discord_listener::Bot;
 
 /// `DiscordReadRequest`: the calling session's id, an optional channel link, and the window size.
 const READ_FIELDS: &[Field] = &[
@@ -81,14 +80,8 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
       Ok(context) => context,
       Err(response) => return response,
     };
-  let result = discord_listener::post_reply_with_caller_context(
-    &bot,
-    &session_id,
-    &text,
-    request_id.as_deref(),
-    run_started_at.as_deref(),
-  )
-  .await;
+  let result =
+    bot.post_reply_with_caller_context(&session_id, &text, request_id.as_deref(), run_started_at.as_deref()).await;
   reply_response(result)
 }
 
@@ -106,7 +99,7 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   let session_id = text_field(&fields, SESSION_ID);
   let url = fields.get("url").and_then(Value::as_str).map(str::to_string);
   let limit = fields.get(LIMIT).and_then(Value::as_u64).unwrap_or(READ_LIMIT_DEFAULT as u64) as usize;
-  reply_response(discord_commands::read_thread(&bot, &session_id, url.as_deref(), limit).await)
+  reply_response(bot.read_thread(&session_id, url.as_deref(), limit).await)
 }
 
 /// `POST /api/internal/discord/check`: the bot token's setup.
@@ -119,5 +112,5 @@ async fn post_check(State(bot): State<Bot>, request: Request<Body>) -> Response 
   if let Err(response) = body.declared_fields(&CHECK_BODY) {
     return *response;
   }
-  reply_response(discord_commands::check_setup(&bot).await)
+  reply_response(bot.check_setup().await)
 }

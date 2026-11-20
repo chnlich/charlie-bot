@@ -51,136 +51,139 @@ fn discord_failure(error: anyhow::Error) -> ThreadReplyError {
   }
 }
 
-/// The session's pending summons' mention ids, each rendered as text.
-async fn pending_summon_ids(bot: &Bot, session_id: &str) -> Result<HashSet<String>, ThreadReplyError> {
-  let events = thread_entry::load_chat_events(&bot.features, session_id).await?;
-  thread_entry::pending_summon_mention_ids(&DISCORD, &bot.features.store, session_id, &events, |mention| {
-    Ok(text_repr::value_str(&mention.to_value()))
-  })
-  .map_err(ThreadReplyError::failure)
-}
-
-/// The readback of the session's own Discord thread, with the unread messages the window returns acked. The
-/// window starts at the earlier of the oldest unread message and the oldest pending summon's mention, or holds the
-/// newest `limit` messages when neither exists. The starter rides first, outside the count, when it lives in the parent
-/// channel: a 404 there means the thread has none.
-async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Value, ThreadReplyError> {
-  let session = thread_entry::require_thread_session(&DISCORD, &bot.features, session_id).await?;
-  let origin: DiscordOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
-  let watermark = session.meta.extra(DISCORD.watermark_field).and_then(Value::as_str).map(str::to_string);
-  let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed_users = &config.section::<DiscordConfig>("discord").allowed_users;
-  let adapter = Arc::new(DiscordThreadAdapter::new(bot.clone()));
-  let client = adapter.client().await.map_err(ThreadReplyError::failure)?;
-  let thread_messages = client.all_messages(&origin.thread_id).await.map_err(discord_failure)?;
-  let starter = match client.get_message(&origin.parent_channel_id, &origin.thread_id).await {
-    Ok(message) => Some(message),
-    Err(error) if api_status(&error) == Some(404) => None,
-    Err(error) => return Err(discord_failure(error)),
-  };
-  // One read feeds both the window and the unread flags. A message that lands after this fetch is simply not in the
-  // readback, never an id the window pick misses.
-  let unread_ids: HashSet<String> = thread_entry::unread_after(
-    &thread_messages,
-    |message| eligible_message(message, allowed_users),
-    |message| message.id.as_str(),
-    watermark.as_deref(),
-    IdOrdering::Snowflake,
-  )
-  .into_iter()
-  .map(|message| message.id.clone())
-  .collect();
-  let pending = pending_summon_ids(bot, session_id).await?;
-  let window = thread_read::read_window(
-    &adapter,
-    &bot.features,
-    session_id,
-    thread_read::ThreadRead {
-      messages: &thread_messages,
-      unread_ids: &unread_ids,
-      pending: &pending,
-      watermark: watermark.as_deref(),
-      limit,
-    },
-    |message| message.id.as_str(),
-  )
-  .await?;
-  let mut messages = Vec::new();
-  if let Some(starter) = &starter {
-    messages.push(message_view(starter, false, pending.contains(&starter.id), allowed_users));
+impl Bot {
+  /// The session's pending summons' mention ids, each rendered as text.
+  async fn pending_summon_ids(&self, session_id: &str) -> Result<HashSet<String>, ThreadReplyError> {
+    let events = thread_entry::load_chat_events(&self.features, session_id).await?;
+    thread_entry::pending_summon_mention_ids(&DISCORD, &self.features.store, session_id, &events, |mention| {
+      Ok(text_repr::value_str(&mention.to_value()))
+    })
+    .map_err(ThreadReplyError::failure)
   }
-  messages.extend(thread_messages[window.first..window.last].iter().map(|message| {
-    message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed_users)
-  }));
-  Ok(json!({
-    (thread_read::MESSAGES): messages,
-    (DISCORD.watermark_key()): window.watermark,
-    (thread_read::MORE_UNREAD): window.more_unread,
-  }))
-}
 
-/// The readback of the newest `limit` messages of the channel a discord.com link names. Nothing is marked read.
-/// A link that is not one refuses with 422, a channel the bot cannot see with 404.
-async fn read_linked_channel(bot: &Bot, url: &str, limit: usize) -> Result<Value, ThreadReplyError> {
-  let link = parse_message_link(url)
-    .map_err(|error| ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
-  let client = bot.client().map_err(ThreadReplyError::failure)?;
-  let newest = match client.get_messages(&link.channel_id, None, limit).await {
-    Ok(newest) => newest,
-    Err(error) if matches!(api_status(&error), Some(403 | 404)) => {
-      return Err(ThreadReplyError::refused(StatusCode::NOT_FOUND, "the bot cannot see this channel"));
+  /// The readback of the session's own Discord thread, with the unread messages the window returns acked. The
+  /// window starts at the earlier of the oldest unread message and the oldest pending summon's mention, or holds the
+  /// newest `limit` messages when neither exists. The starter rides first, outside the count, when it lives in the parent
+  /// channel: a 404 there means the thread has none.
+  async fn read_own_thread(&self, session_id: &str, limit: usize) -> Result<Value, ThreadReplyError> {
+    let session = thread_entry::require_thread_session(&DISCORD, &self.features, session_id).await?;
+    let origin: DiscordOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
+    let watermark = session.meta.extra(DISCORD.watermark_field).and_then(Value::as_str).map(str::to_string);
+    let config = self.config().map_err(ThreadReplyError::failure)?;
+    let allowed_users = &config.section::<DiscordConfig>("discord").allowed_users;
+    let adapter = Arc::new(DiscordThreadAdapter::new(self.clone()));
+    let client = adapter.client().await.map_err(ThreadReplyError::failure)?;
+    let thread_messages = client.all_messages(&origin.thread_id).await.map_err(discord_failure)?;
+    let starter = match client.get_message(&origin.parent_channel_id, &origin.thread_id).await {
+      Ok(message) => Some(message),
+      Err(error) if api_status(&error) == Some(404) => None,
+      Err(error) => return Err(discord_failure(error)),
+    };
+    // One read feeds both the window and the unread flags. A message that lands after this fetch is simply not in the
+    // readback, never an id the window pick misses.
+    let unread_ids: HashSet<String> = thread_entry::unread_after(
+      &thread_messages,
+      |message| eligible_message(message, allowed_users),
+      |message| message.id.as_str(),
+      watermark.as_deref(),
+      IdOrdering::Snowflake,
+    )
+    .into_iter()
+    .map(|message| message.id.clone())
+    .collect();
+    let pending = self.pending_summon_ids(session_id).await?;
+    let window = thread_read::read_window(
+      &adapter,
+      &self.features,
+      session_id,
+      thread_read::ThreadRead {
+        messages: &thread_messages,
+        unread_ids: &unread_ids,
+        pending: &pending,
+        watermark: watermark.as_deref(),
+        limit,
+      },
+      |message| message.id.as_str(),
+    )
+    .await?;
+    let mut messages = Vec::new();
+    if let Some(starter) = &starter {
+      messages.push(message_view(starter, false, pending.contains(&starter.id), allowed_users));
     }
-    Err(error) => return Err(discord_failure(error)),
-  };
-  let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed_users = &config.section::<DiscordConfig>("discord").allowed_users;
-  let messages: Vec<Value> = newest.iter().map(|message| message_view(message, false, false, allowed_users)).collect();
-  Ok(json!({(thread_read::MESSAGES): messages, (DISCORD.watermark_key()): null, (thread_read::MORE_UNREAD): 0}))
-}
+    messages.extend(thread_messages[window.first..window.last].iter().map(|message| {
+      message_view(message, unread_ids.contains(&message.id), pending.contains(&message.id), allowed_users)
+    }));
+    Ok(json!({
+      (thread_read::MESSAGES): messages,
+      (DISCORD.watermark_key()): window.watermark,
+      (thread_read::MORE_UNREAD): window.more_unread,
+    }))
+  }
 
-/// The readback of `charliebot discord read`: the session's own thread (`url` None), or the newest messages of the
-/// channel a link names. Refusals: 404 unknown session, 409 no Discord thread, 422 a link that is not discord.com, 404
-/// a channel the bot cannot see, 502 Discord refused the read.
-pub async fn read_thread(
-  bot: &Bot,
-  session_id: &str,
-  url: Option<&str>,
-  limit: usize,
-) -> Result<Value, ThreadReplyError> {
-  match url {
-    Some(url) => read_linked_channel(bot, url, limit).await,
-    None => read_own_thread(bot, session_id, limit).await,
+  /// The readback of the newest `limit` messages of the channel a discord.com link names. Nothing is marked read.
+  /// A link that is not one refuses with 422, a channel the bot cannot see with 404.
+  async fn read_linked_channel(&self, url: &str, limit: usize) -> Result<Value, ThreadReplyError> {
+    let link = parse_message_link(url)
+      .map_err(|error| ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    let client = self.client().map_err(ThreadReplyError::failure)?;
+    let newest = match client.get_messages(&link.channel_id, None, limit).await {
+      Ok(newest) => newest,
+      Err(error) if matches!(api_status(&error), Some(403 | 404)) => {
+        return Err(ThreadReplyError::refused(StatusCode::NOT_FOUND, "the bot cannot see this channel"));
+      }
+      Err(error) => return Err(discord_failure(error)),
+    };
+    let config = self.config().map_err(ThreadReplyError::failure)?;
+    let allowed_users = &config.section::<DiscordConfig>("discord").allowed_users;
+    let messages: Vec<Value> =
+      newest.iter().map(|message| message_view(message, false, false, allowed_users)).collect();
+    Ok(json!({(thread_read::MESSAGES): messages, (DISCORD.watermark_key()): null, (thread_read::MORE_UNREAD): 0}))
   }
-}
 
-/// The readback of `charliebot discord check`: the bot user, the message-content intent, and each guild's missing
-/// permissions. `ok` is the intent on and no guild missing anything. Refusals: 409 when the bot token is unset, 502 when
-/// a Discord call fails.
-pub async fn check_setup(bot: &Bot) -> Result<Value, ThreadReplyError> {
-  let credentials = bot.features.credentials.get().map_err(ThreadReplyError::failure)?;
-  if credentials.get("discord", BOT_TOKEN_FIELD).is_none() {
-    return Err(ThreadReplyError::refused(StatusCode::CONFLICT, "credentials.discord.bot_token is not set"));
+  /// The readback of `charliebot discord read`: the session's own thread (`url` None), or the newest messages of the
+  /// channel a link names. Refusals: 404 unknown session, 409 no Discord thread, 422 a link that is not discord.com,
+  /// 404 a channel the bot cannot see, 502 Discord refused the read.
+  pub async fn read_thread(
+    &self,
+    session_id: &str,
+    url: Option<&str>,
+    limit: usize,
+  ) -> Result<Value, ThreadReplyError> {
+    match url {
+      Some(url) => self.read_linked_channel(url, limit).await,
+      None => self.read_own_thread(session_id, limit).await,
+    }
   }
-  let client = bot.client().map_err(ThreadReplyError::failure)?;
-  let user = client.get_current_user().await.map_err(discord_failure)?;
-  let application = client.get_current_application().await.map_err(discord_failure)?;
-  let guilds = client.list_current_user_guilds().await.map_err(discord_failure)?;
-  let intent = message_content_intent_enabled(application.flags);
-  let mut guild_views = Vec::with_capacity(guilds.len());
-  let mut any_missing = false;
-  for guild in &guilds {
-    let permissions: u64 = guild.permissions.parse().map_err(ThreadReplyError::failure)?;
-    let missing = missing_permissions(permissions);
-    any_missing |= !missing.is_empty();
-    guild_views.push(json!({"id": guild.id, "name": guild.name, "missing_permissions": missing}));
+
+  /// The readback of `charliebot discord check`: the bot user, the message-content intent, and each guild's missing
+  /// permissions. `ok` is the intent on and no guild missing anything. Refusals: 409 when the bot token is unset, 502
+  /// when a Discord call fails.
+  pub async fn check_setup(&self) -> Result<Value, ThreadReplyError> {
+    let credentials = self.features.credentials.get().map_err(ThreadReplyError::failure)?;
+    if credentials.get("discord", BOT_TOKEN_FIELD).is_none() {
+      return Err(ThreadReplyError::refused(StatusCode::CONFLICT, "credentials.discord.bot_token is not set"));
+    }
+    let client = self.client().map_err(ThreadReplyError::failure)?;
+    let user = client.get_current_user().await.map_err(discord_failure)?;
+    let application = client.get_current_application().await.map_err(discord_failure)?;
+    let guilds = client.list_current_user_guilds().await.map_err(discord_failure)?;
+    let intent = message_content_intent_enabled(application.flags);
+    let mut guild_views = Vec::with_capacity(guilds.len());
+    let mut any_missing = false;
+    for guild in &guilds {
+      let permissions: u64 = guild.permissions.parse().map_err(ThreadReplyError::failure)?;
+      let missing = missing_permissions(permissions);
+      any_missing |= !missing.is_empty();
+      guild_views.push(json!({"id": guild.id, "name": guild.name, "missing_permissions": missing}));
+    }
+    Ok(json!({
+      "ok": intent && !any_missing,
+      "bot_user": {"id": user.id, "username": user.username},
+      "application_id": application.id,
+      "message_content_intent": intent,
+      "guilds": guild_views,
+    }))
   }
-  Ok(json!({
-    "ok": intent && !any_missing,
-    "bot_user": {"id": user.id, "username": user.username},
-    "application_id": application.id,
-    "message_content_intent": intent,
-    "guilds": guild_views,
-  }))
 }
 
 #[cfg(test)]

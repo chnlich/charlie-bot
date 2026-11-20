@@ -5,13 +5,23 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
+use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backend_availability::BackendAvailability;
+use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::model_pool::RotationPositions;
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::config::{BackendOption, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+use charliebot_registry::backend::{
+  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
+  TransportKind,
+};
 use charliebot_registry::registry::OpenWaitingRow;
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
@@ -23,6 +33,112 @@ use http::{Method, Request};
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
+
+/// The verdict every test home's judge answers when the test names none: an accept with no kind.
+pub const JUDGE_ACCEPTS: &str = r#"{"decision": "accept", "judged_kind": "", "cited": ""}"#;
+/// The backend type and option id of the judge stub: a one-shot that answers the option's `model` text.
+const JUDGE_TYPE: &str = "synthetic-judge";
+const JUDGE_OPTION: &str = "synthetic-judge";
+
+/// The `backends` block that routes the probe class, which the judge calls, to the judge stub.
+fn judge_config(verdict: &str) -> String {
+  let model = verdict.replace('\'', "''");
+  format!(
+    "backends:\n  options:\n    - id: {JUDGE_OPTION}\n      label: Synthetic judge\n      model: '{model}'\n      type: {JUDGE_TYPE}\n  calls:\n    probe: {JUDGE_OPTION}\n"
+  )
+}
+
+/// A backend whose one-shot answers the text of its option's `model`, and fails when that text is empty; nothing starts
+/// a process.
+struct JudgeStub {
+  answer: String,
+}
+
+impl AgentBackend for JudgeStub {
+  fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
+    None
+  }
+
+  fn prepare_transport(&mut self, _log_dir: &Path) -> anyhow::Result<()> {
+    Ok(())
+  }
+
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    panic!("the judge stub's one-shot never builds a command")
+  }
+
+  fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+    Ok(env)
+  }
+
+  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
+    None
+  }
+
+  fn translator(&self) -> Box<dyn Translate> {
+    Box::new(IdentityTranslate)
+  }
+
+  fn transport(&self) -> TransportKind {
+    TransportKind::RawLog
+  }
+
+  fn one_shot_text<'a>(
+    &'a mut self,
+    _base_env: &'a Env,
+    _prompt: &'a str,
+    _system: &'a str,
+    _timeout: Option<Duration>,
+  ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+    let answer = self.answer.clone();
+    Some(Box::pin(async move {
+      if answer.is_empty() {
+        return Err(anyhow::anyhow!("the judge stub's call failed: its verdict is empty"));
+      }
+      Ok(answer)
+    }))
+  }
+}
+
+struct IdentityTranslate;
+
+impl Translate for IdentityTranslate {
+  fn translate(&mut self, event: Value) -> anyhow::Result<Vec<Value>> {
+    Ok(vec![event])
+  }
+}
+
+struct JudgeStubFactory;
+
+impl BackendFactory for JudgeStubFactory {
+  fn build(
+    &self,
+    option: Option<&BackendOption>,
+    _cfg: &CharlieBotConfig,
+    _launch: LaunchArgs,
+  ) -> anyhow::Result<Box<dyn AgentBackend>> {
+    let option = option.expect("the judge builds its configured option");
+    Ok(Box::new(JudgeStub { answer: option.model.clone() }))
+  }
+}
+
+fn register_judge(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.backend_type(BackendTypeRegistration {
+    type_name: JUDGE_TYPE,
+    traits: BackendTraits {
+      resume: ResumeStyle::NativeId,
+      restart_reattach: false,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    option_model: |_| Ok(()),
+    factory: Arc::new(JudgeStubFactory),
+    lifecycle: None,
+    translate_fallback: false,
+  })
+}
 
 /// The plan-registry reader the server's artifacts package registers; these tests read the same file the same way.
 pub fn read_plans_fixture(session_dir: &Path) -> anyhow::Result<Option<Vec<Value>>> {
@@ -98,24 +214,32 @@ enum PackageSet {
 }
 
 impl Home {
+  /// A home whose waiting-item judge accepts every item: see `JUDGE_ACCEPTS`.
   pub fn new() -> Self {
-    Self::build("", PackageSet::Full)
+    Self::build("", PackageSet::Full, JUDGE_ACCEPTS)
+  }
+
+  /// A home whose waiting-item judge answers `verdict` to every item, as the judge's real call path reads it.
+  pub fn judging(verdict: &str) -> Self {
+    Self::build("", PackageSet::Full, verdict)
   }
 
   pub fn with_config(config_yaml: &str) -> Self {
-    Self::build(config_yaml, PackageSet::Full)
+    Self::build(config_yaml, PackageSet::Full, JUDGE_ACCEPTS)
   }
 
   pub fn status_only() -> Self {
-    Self::build("", PackageSet::StatusOnly)
+    Self::build("", PackageSet::StatusOnly, JUDGE_ACCEPTS)
   }
 
   /// The web reply route and its user-text checks, with the running input ids set by `set_running`.
   pub fn reply_only() -> Self {
-    Self::build("", PackageSet::ReplyOnly)
+    Self::build("", PackageSet::ReplyOnly, JUDGE_ACCEPTS)
   }
 
-  fn build(config_yaml: &str, packages: PackageSet) -> Self {
+  fn build(config_yaml: &str, packages: PackageSet, verdict: &str) -> Self {
+    assert!(!config_yaml.contains("backends:"), "the judge's backends block is appended to the synthetic config");
+    let config_yaml = format!("{config_yaml}{}", judge_config(verdict));
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
     if matches!(packages, PackageSet::Full) {
@@ -129,6 +253,7 @@ impl Home {
         .expect("the user text checks package registers");
     }
     registry.register_package("features.web_reply", crate::register).expect("the web reply package registers");
+    registry.register_package("tests.judge", register_judge).expect("the judge stub backend registers");
     if matches!(packages, PackageSet::Full) {
       registry.register_package("tests.origins", register_origins).expect("the origin slots register");
       registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
@@ -166,7 +291,17 @@ impl Home {
       "web_reply_test_credentials_reload_failed",
       Box::new(move || load_credentials(&credential_home)),
     ));
+    // The startup values the server's pre-recovery and environment steps insert, so a judge call finds its pool and env.
     let startup = StartupState::default();
+    startup
+      .insert(BackendAvailability::load(dir.path()).expect("the availability owner loads"))
+      .expect("it inserts once");
+    startup.insert(RotationPositions::default()).expect("the rotation positions insert once");
+    let availability = startup.require::<BackendAvailability>().expect("the owner is in the startup state");
+    let positions = startup.require::<RotationPositions>().expect("the positions are in the startup state");
+    startup.insert(BackendPool::new(availability, Arc::clone(&registry), positions)).expect("the pool inserts once");
+    // The judge's stub backend reads no environment, so the agent environment starts empty.
+    startup.insert(AgentBaseEnvironment { values: Env::new() }).expect("the agent environment inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     Self { _dir: dir, features }
   }

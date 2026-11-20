@@ -142,6 +142,11 @@ Remaining lists the open milestones between the session and its Goal, so the use
   - When a part reads `NOT STATED`, reads `FOLDED`, reads `NO DEMO`, or differs from your intent, revise the item.
   - When an item asks about a reversible step that Action Boundaries in `prompts/master.md` allow directly, remove
     the item, carry out the step, and state how to undo it in the web reply.
+- The server judges each new or changed Waiting on you item before it stores the status. When the judge refutes an
+  item, the command refuses the set, stores nothing, and names the settled rule that decides the item's step: remove
+  the item, or carry out the step that the rule settles, then run the set again.
+- When the judge reaches no verdict, the command refuses the set with 「判定不可用」 and stores nothing. Report that
+  block in the web reply.
 - The command stores the status once the reader has read every item as it stands, and prints the stored session
   status with `now_chars`, `now_over_budget` and `remaining_missing`.
 - `charliebot web status confirm` records the confirmation and cold reads nothing. It refuses a stale stored plan

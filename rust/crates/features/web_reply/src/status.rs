@@ -31,6 +31,7 @@ use crate::metadata::WaitingItem;
 use crate::plan_links::{self, PlanLinks};
 use crate::reply;
 pub use crate::reply::WebReplyError;
+use crate::waiting_judge::{self, Judgement};
 
 /// The owner the web reply package registers its metadata under.
 pub const OWNER: &str = WEB_REPLY;
@@ -65,7 +66,7 @@ const NOW_BUDGET_CHARS: usize = 200;
 const ASK_CHECK_CONTENT: &str = "Cold read of a Waiting on you item";
 const ITEM_SHA256: &str = "item_sha256";
 /// The item fields that only the server writes; a set file carries neither.
-const SERVER_WRITTEN_ITEM_FIELDS: [&str; 2] = ["since", "since_exact"];
+const SERVER_WRITTEN_ITEM_FIELDS: [&str; 4] = ["since", "since_exact", "judged_kind", "judgement_basis"];
 /// The message a since field that is not a datetime raises.
 const NOT_A_DATETIME: &str = "Input should be a valid datetime";
 /// The message a since_exact field that is not a boolean raises.
@@ -583,7 +584,7 @@ fn waiting_item(item: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<
   {
     problems.push(Problem { loc: nested_loc(loc, key), msg: EXTRA_FORBIDDEN });
   }
-  text.map(|text| WaitingItem { text, context, link, since, since_exact })
+  text.map(|text| WaitingItem { text, context, link, since, since_exact, judged_kind: None, judgement_basis: None })
 }
 
 /// A nested validation location, including the root's empty location.
@@ -690,8 +691,15 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
       format!("Status set refused; nothing was stored:\n{}", refusal_lines(&refusal_details)),
     ));
   }
+  let judged = match patch.waiting.as_deref() {
+    Some(items) => {
+      let goal = patch.goal.clone().unwrap_or_else(|| base.goal.clone());
+      Some(judged_waiting(features, session_id, meta.group.as_deref(), goal.as_deref(), items, &stored_waiting).await?)
+    }
+    None => None,
+  };
   let now = UtcDateTime::now();
-  let waiting = match patch.waiting.as_deref() {
+  let waiting = match judged.as_deref() {
     Some([]) => Vec::new(),
     Some(items) => {
       let links = links.as_mut().expect("nonempty waiting items have plan-link validation");
@@ -747,6 +755,51 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   result.insert("now_over_budget".to_string(), json!(now_chars > NOW_BUDGET_CHARS));
   result.insert("remaining_missing".to_string(), json!(missing));
   Ok(Value::Object(result))
+}
+
+/// The waiting items a status set stores, each with its judgement. An item whose digest matches a stored item keeps that
+/// item's judgement; every other item goes to the judge. A refusal names each refused item's settled rule and stores
+/// nothing, and a judge that reaches no verdict fails the set with its own error.
+async fn judged_waiting(
+  features: &FeatureContext,
+  session_id: &str,
+  group: Option<&str>,
+  goal: Option<&str>,
+  items: &[WaitingItem],
+  stored: &[WaitingItem],
+) -> Result<Vec<WaitingItem>, WebReplyError> {
+  let stored_digests = stored
+    .iter()
+    .map(|item| Ok((item_sha256(item)?, item)))
+    .collect::<Result<Vec<(String, &WaitingItem)>, WebReplyError>>()?;
+  let mut judged = Vec::with_capacity(items.len());
+  let mut refusals = Vec::new();
+  for item in items {
+    let digest = item_sha256(item)?;
+    if let Some((_, kept)) = stored_digests.iter().find(|(stored_digest, _)| *stored_digest == digest) {
+      judged.push(WaitingItem {
+        judged_kind: kept.judged_kind,
+        judgement_basis: kept.judgement_basis.clone(),
+        ..item.clone()
+      });
+      continue;
+    }
+    match waiting_judge::judge_item(features, session_id, group, goal, item).await? {
+      Judgement::Accepted { judged_kind } => {
+        judged.push(WaitingItem { judged_kind, judgement_basis: Some(String::new()), ..item.clone() });
+      }
+      Judgement::Refused { rule } => {
+        refusals.push(format!("Waiting on you item {:?} is refused by the settled rule {rule}", item.text));
+      }
+    }
+  }
+  if !refusals.is_empty() {
+    return Err(WebReplyError::refused(
+      StatusCode::CONFLICT,
+      format!("Status set refused; nothing was stored:\n{}", refusal_lines(&refusals)),
+    ));
+  }
+  Ok(judged)
 }
 
 async fn require_open_waiting_session(features: &FeatureContext, session_id: &str) -> Result<(), WebReplyError> {
@@ -998,6 +1051,7 @@ mod tests {
   use serde_json::json;
 
   use super::*;
+  use crate::metadata::JudgedKind;
   use crate::test_support::{Home, set_derived_waiting};
   use charliebot_registry::registry::OpenWaitingRow;
 
@@ -1121,7 +1175,8 @@ mod tests {
       json!([{
         "text": "Pick a layout",
         "context": "The decision is active now. Options are continue or stop; continue is recommended.",
-        "link": null
+        "link": null,
+        "judgement_basis": ""
       }])
     );
     assert_eq!(second["waiting"][0]["since_exact"], json!(true), "a new item starts at the set's time");
@@ -1396,6 +1451,8 @@ mod tests {
           link: None,
           since: None,
           since_exact: None,
+          judged_kind: None,
+          judgement_basis: None,
         }],
         remaining: Vec::new(),
         updated_at,
@@ -1879,7 +1936,8 @@ mod tests {
       home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": text}))).await;
 
     assert_eq!(status, StatusCode::OK);
-    let expected = item.clone();
+    let mut expected = item.clone();
+    expected["judgement_basis"] = json!("");
     assert_eq!(without_item_times(&response["waiting"]), json!([expected.clone()]));
     assert_eq!(without_item_times(&stored(&home, &sid).await["waiting"]), json!([expected]));
   }
@@ -2247,6 +2305,7 @@ mod tests {
         "text": "Approve the deploy",
         "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
         "link": null,
+        "judgement_basis": "",
       }])
     );
     assert_eq!(stored(&home, &sid).await, without_echoes(&response));
@@ -2806,5 +2865,34 @@ mod tests {
     let after = read_status(&home.features, root).await.expect("the status reads after the set");
     assert_eq!(held(&after), [root.to_string(), child.to_string()]);
     assert_eq!(after[WEB_STATUS]["waiting"], json!([]));
+  }
+
+  #[tokio::test]
+  async fn an_unchanged_item_keeps_its_stored_judgement_and_a_changed_item_is_judged_again() {
+    // The judge of this home has no verdict, so any item it must judge fails the set.
+    let home = Home::judging("");
+    let sid = home.manager("session", None).await;
+    let stored_item = WaitingItem {
+      text: "Deploy the release".to_string(),
+      context: Some("The window closed. Deploy now or wait.".to_string()),
+      link: None,
+      since: None,
+      since_exact: None,
+      judged_kind: Some(JudgedKind::TakeOff),
+      judgement_basis: Some(String::new()),
+    };
+    let stored = [stored_item.clone()];
+    let unchanged = [WaitingItem { judged_kind: None, judgement_basis: None, ..stored_item.clone() }];
+    let kept = judged_waiting(&home.features, &sid, None, None, &unchanged, &stored)
+      .await
+      .expect("an unchanged item is not judged");
+    assert_eq!(kept[0].judged_kind, Some(JudgedKind::TakeOff));
+    assert_eq!(kept[0].judgement_basis.as_deref(), Some(""));
+
+    let changed = [WaitingItem { context: Some("A new reason to deploy now.".to_string()), ..unchanged[0].clone() }];
+    let error = judged_waiting(&home.features, &sid, None, None, &changed, &stored)
+      .await
+      .expect_err("a changed item goes to the judge, which has no verdict");
+    assert!(matches!(error, WebReplyError::Refused { status: StatusCode::SERVICE_UNAVAILABLE, .. }));
   }
 }

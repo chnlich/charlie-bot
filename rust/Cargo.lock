@@ -1668,6 +1668,7 @@ dependencies = [
  "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-memory",
  "charliebot-registry",
  "charliebot-session-api",
  "charliebot-store",

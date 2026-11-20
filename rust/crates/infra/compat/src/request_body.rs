@@ -130,7 +130,7 @@ pub enum FieldType {
   },
   /// A `list[A | B | C] | None` field discriminated on `discriminator`: null is valid, and each item of a list is
   /// validated as the variant whose tag it carries. An object without the discriminator reports
-  /// `union_tag_not_found` at its index; a tag matching no variant reports `union_tag_invalid` there, with the tag's
+  /// `union_tag_not_found` at its index. A tag matching no variant reports `union_tag_invalid` there, with the tag's
   /// text rendering. A member's errors sit under `[index, tag]`: a bad `pid` in a `local_pid` item at index 0 reports
   /// `["body", "watch_targets", 0, "local_pid", "pid"]`. Non-list values and list bounds follow `ModelList`.
   NullableTaggedUnionList {
@@ -181,7 +181,7 @@ pub struct Field {
   bounds: Bounds,
 }
 
-/// The bounds a `Field(...)` declares; `None` for each bound the field does not declare.
+/// The bounds a `Field(...)` declares. `None` marks each bound the field does not declare.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Bounds {
   gt: Option<validation::Bound>,
@@ -299,7 +299,7 @@ impl RequestBody {
   /// The validated fields of this body against a model, or the ordered errors for it.
   ///
   /// Errors come in field declaration order, then forbidden extra keys in input order. A number reports the first
-  /// violated bound in the order `le`, `ge`, `gt`; a list reports `max_length` before its items and `min_length`
+  /// violated bound in the order `le`, `ge`, `gt`. A list reports `max_length` before its items and `min_length`
   /// after them. A missing optional field stays absent from the returned object, so the handler applies its default.
   pub fn check(&self, model: &BodyModel) -> Result<Option<Value>, Vec<validation::FieldError>> {
     match self {
@@ -582,7 +582,7 @@ fn integer_item(item: &Value, loc: &[validation::Loc]) -> Result<Value, Vec<vali
 }
 
 /// A list field. `max_length` is checked before the items and `min_length` after them, and a list with an
-/// invalid item reports only the items' errors. `item` validates each item at its index; the list holds the items'
+/// invalid item reports only the items' errors. `item` validates each item at its index. The list holds the items'
 /// validated values in order.
 fn list_field(
   field: &Field,

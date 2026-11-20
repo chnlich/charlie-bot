@@ -4,7 +4,7 @@
 //! per failed value in declaration order. An entry names its `type`, its `loc` (the request part, the field,
 //! and a list index where one applies), its `msg` and the `input` that failed. Some types add a `ctx`
 //! with the bound or the choices. [`Kind`] lists the error types the routes produce with
-//! their texts; [`FieldError`] is one entry. The `parse_*` functions read a scalar query or path value in
+//! their texts. [`FieldError`] is one entry. The `parse_*` functions read a scalar query or path value in
 //! lax mode and return the entry for a value that it rejects.
 //!
 //! The texts are the recorded validation-error texts. `rust/fixtures/golden/validation_422_golden.json`
@@ -294,7 +294,7 @@ pub fn response(errors: &[FieldError]) -> Response {
   responses::json(StatusCode::UNPROCESSABLE_ENTITY, &detail(errors))
 }
 
-/// Where a parameter's text comes from; it is the first step of the parameter's `loc`.
+/// Where a parameter's text comes from. It is the first step of the parameter's `loc`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
   Path,
@@ -323,7 +323,7 @@ pub fn missing(source: Source, name: &str) -> FieldError {
 /// An `int` parameter's text, read in lax mode as a string, then checked against `ge` and `le`.
 ///
 /// A value beyond the i64 range that violates a bound reports that bound. A value beyond i64 that violates
-/// neither has no i64 to return, so it fails as `int_parsing`; no route parameter needs more than i64.
+/// neither has no i64 to return, so it fails as `int_parsing`. No route parameter needs more than i64.
 pub fn parse_int(
   source: Source,
   name: &str,
@@ -342,7 +342,7 @@ pub fn parse_int(
 }
 
 /// The lax string-to-int: `int(text)`, and an optional fraction of plain zeros (`"1.0"` reads as 1, `"1.0_0"`
-/// does not). Digits beyond i128 saturate; the caller compares them with an i64 bound, so the comparison stays
+/// does not). Digits beyond i128 saturate. The caller compares them with an i64 bound, so the comparison stays
 /// right.
 fn lax_int(text: &str) -> Option<i128> {
   let text = text.trim();

@@ -225,7 +225,7 @@ fn decimal_digit(character: char) -> Option<u32> {
   (digit < 10).then_some(digit)
 }
 
-/// The value of a URL port written in Unicode decimal digits; `None` when it exceeds `u64`.
+/// The value of a URL port written in Unicode decimal digits. The result is `None` when it exceeds `u64`.
 pub fn decimal_port(text: &str) -> Option<u64> {
   text.chars().try_fold(0_u64, |value, character| {
     let digit = decimal_digit(character)?;
@@ -528,7 +528,7 @@ pub fn is_file(path: &Path) -> io::Result<bool> {
 }
 
 /// The file links in `text`, each classified by form and liveness. URLs with a scheme
-/// are found anywhere in the text; Markdown targets can also name a local path.
+/// are found anywhere in the text. Markdown targets can also name a local path.
 pub fn scan_file_links(text: &str, context: Option<&ScanContext>) -> io::Result<Vec<FileLink>> {
   let mut findings = Vec::new();
   for candidate in candidates(text) {

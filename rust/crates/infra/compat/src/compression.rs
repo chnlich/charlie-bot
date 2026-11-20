@@ -1,6 +1,6 @@
 //! The request path's one-shot gzip deflators, and the zstd form of a body a memo serves.
 //!
-//! A response pays the deflate once per body it builds; a memo serves the repeats. The level-1
+//! A response pays the deflate once per body it builds. A memo serves the repeats. The level-1
 //! deflator covers the per-response bodies of ordinary size, and its byte count is one counter. A
 //! per-response body too large for its short hash chain to find the long matches takes the level-4
 //! form instead. A body a memo keeps and serves on every repeat deflates at the level-9 and level-8
@@ -72,7 +72,7 @@ pub fn accepts_gzip(headers: &HeaderMap) -> bool {
   header_text(headers, &header::ACCEPT_ENCODING).contains("gzip")
 }
 
-/// The level-1 gzip form of *data*; deterministic for equal input, with the gzip header's mtime
+/// The level-1 gzip form of *data*. The output is deterministic for equal input, with the gzip header's mtime
 /// field zeroed.
 pub fn gzip_level_one(data: &[u8]) -> Vec<u8> {
   LEVEL_ONE_BYTES_DEFLATED.fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -88,7 +88,7 @@ pub fn gzip_level_four(data: &[u8]) -> Vec<u8> {
   compress(data, 4)
 }
 
-/// The gzip levels a memoized body deflates at; the smaller form is the one the memo keeps.
+/// The gzip levels a memoized body deflates at. The smaller form is the one the memo keeps.
 ///
 /// Level 9 is not the smaller form of every body with this backend. On the 14,451-row status answer of the mock home,
 /// level 9 produces 352,154 bytes where level 8 produces 308,813 (14.03% more), and level 8 takes 18 ms where level 9

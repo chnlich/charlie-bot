@@ -103,9 +103,9 @@
       Header: show the title, a one-line summary, and meta chips naming where the plan applies and what it builds on.
 
       Use these sections, in this order:
-      1. Problem / Goal — one or two sentences stating what the plan resolves, plus at most one naming the
-                    non-goals; this section is their only home. State the outcome in its own words: explanation
-                    and support (the why, the how, the evidence) live in the sections built for them.
+      1. Problem / Goal — one or two sentences stating what the plan resolves. State the outcome in its own words.
+                    The plan's non-goals sit on the closing paragraph of section 3; explanation and support (the
+                    why, the how, the evidence) live in the sections built for them.
       2. Context — establish the minimum complete mental model before the design: how the relevant system
                     currently works, why the problem occurs, its impact, and the relationships among the
                     components involved. Every current-reality claim carries a checkable source anchor.
@@ -114,6 +114,10 @@
                     and the high-level observable contract the user judges. Include one figure and one worked example
                     the reader can check by hand.
                     Supporting detail belongs in 4.2 and follows the canonical Length contract.
+                    High Level Solution ends with one p.non-goals paragraph outside every fold. It names each non-goal
+                    of the plan, or states that the plan has none. When the plan has an understanding page, the
+                    paragraph points to that page's non-goals block and names the non-goals that the block leaves out.
+                    Non-goals appear in this paragraph only (the one list).
       4. Detailed Design — two read layers:
          4.1 Schema: the persisted data structures (fields, types, meaning) and the request/response of
                     externally consumed APIs and CLI commands. Keep the decision-level contract visible and put
@@ -165,7 +169,7 @@
 
     <section class="plan-section">
       <h2><span class="n">1</span> Problem / Goal</h2>
-      <p>The goal is to make a session's persisted one-shot wake-ups, called scheduled triggers, inspectable before an operator adds another watch. Trigger scheduling and persistence are out of scope.</p>
+      <p>The goal is to make a session's persisted one-shot wake-ups, called scheduled triggers, inspectable before an operator adds another watch.</p>
     </section>
 
     <section class="plan-section">
@@ -188,6 +192,7 @@
 </svg></span>
         <span class="b">one row per trigger</span>
       </div>
+      <p class="non-goals">Non-goals: trigger scheduling and persistence.</p>
     </section>
 
     <section class="plan-section">

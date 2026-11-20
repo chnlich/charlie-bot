@@ -11,12 +11,14 @@ Adequacy findings use the labelled block form defined in the plan scope block in
 Verification scope:
 Check exactly the scope the task spec declares. A spec that declares neither scope is verified as full.
 - Full verification (the spec declares full): read the canonical plan template at `{{canonical_template_path}}` and all task-provided evidence, and check the plan against every canonical rule in the template's BLOCK KIT.
-- Delta verification (the spec declares delta): check exactly the declared terms, their dependent claims, prior mismatches (including whether previously reported findings are closed), and document structure; unchanged content keeps its verdict from the round that checked it.
+- Delta verification (the spec declares delta): check exactly the declared terms, their dependent claims, prior mismatches (including whether previously reported findings are closed), and document structure. The scope check below runs on every round. Other unchanged content keeps its verdict from the round that checked it.
 - Adequacy (full scope only): assume the plan's claims are true and its design implemented as written, then test each outcome its section 1 claims by attempted refutation. Report one labelled block per claimed outcome, one aspect per line:
   `mismatch:` or `confirmed:` — the outcome being judged
   `gap-design:` — why the described mechanism does not entail it, or `gap-goal:` — why the goal statement itself is the defect (omit both when confirmed)
   `scenario:` — the counterexample you built, or the strongest you tried and why it failed, stated as a scenario rather than a restatement of the plan
   `anchor:` — where in the plan
-A boundary section 1 states explicitly is correct-as-scoped. When the spec quotes the originating request, also report `gap-goal:` for an outcome it asks that section 1 neither claims nor scopes out.
-Report a missing or unreadable plan artifact or canonical template, a missing required in-scope source anchor,
-or any in-scope canonical-rule deviation as `mismatch`.
+- Scope (every round). The ruler sits outside the plan page. The proposed reading is the answered understanding page as a whole, including its section 5 non-goals, or the originating request when there is no understanding page. Later user replies extend the ruler only through sessions named by the manager in Requester Words.
+- For a lineage first registered after the `plan amend` section 1 check took effect, compare section 1 and the non-goals paragraph with the lineage’s first version named under Source Files. A user reply that asks for a change makes that change confirmed; a change with no supporting reply is mismatch.
+- For a lineage whose first version carries the non-goals paragraph, report each exclusion stated outside it as mismatch. An exclusion is a sentence that puts a task or outcome outside the plan, with or without a label. Schema alternatives listed under 4.1 are not exclusions.
+- Measure section 1 and the non-goals paragraph against the ruler. Report gap-goal for an omitted requested outcome, an outcome claimed beyond the ruler, a non-goal that removes a requested outcome, or a fit the ruler leaves unclear. A non-goal explicitly supported by the decided ruler is confirmed.
+- A verify spec names the lineage’s first version under Source Files; a new lineage that replaces another also names the replaced lineage’s first version. A missing source section is refused before delegation; an absent or wrong path cannot receive a passing verdict.

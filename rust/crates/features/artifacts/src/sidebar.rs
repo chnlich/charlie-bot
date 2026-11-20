@@ -71,7 +71,7 @@ fn copy_plans_sync(parent_plans_path: &Path, parent_dir: &Path, child_dir: &Path
   // Every in-parent path is reserved before any outside-parent fallback is chosen, so a fallback can never alias an
   // artifact that a later version copies.
   let mut reserved: HashSet<String> = HashSet::from([PLANS_FILE.to_string()]);
-  reserved.extend(references.iter().filter_map(|reference| reference.relative.as_deref()).map(paths::display));
+  reserved.extend(references.iter().filter_map(|reference| reference.relative.as_deref()).map(posix));
 
   for reference in &references {
     let (file, inside_parent) = match &reference.relative {
@@ -81,14 +81,14 @@ fn copy_plans_sync(parent_plans_path: &Path, parent_dir: &Path, child_dir: &Path
         let fallback_name = fallback.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let mut file = fallback.clone();
         let mut suffix_number = 1;
-        while reserved.contains(&paths::display(&file)) || plan_paths::exists(&child_dir.join(&file))? {
+        while reserved.contains(&posix(&file)) || plan_paths::exists(&child_dir.join(&file))? {
           file = fallback.with_file_name(format!("{fallback_name}.outside-{suffix_number}"));
           suffix_number += 1;
         }
-        reserved.insert(paths::display(&file));
+        reserved.insert(posix(&file));
         tracing::warn!(
           file = %reference.candidate.display(),
-          relative_file = %paths::display(&file),
+          relative_file = %posix(&file),
           plan = %reference.plan_id,
           v = %reference.v,
           "plan_artifact_outside_parent_on_fork"
@@ -96,7 +96,7 @@ fn copy_plans_sync(parent_plans_path: &Path, parent_dir: &Path, child_dir: &Path
         (file, false)
       }
     };
-    set_version_file(&mut data, reference, &paths::display(&file));
+    set_version_file(&mut data, reference, &posix(&file));
     if !inside_parent {
       continue;
     }
@@ -188,6 +188,11 @@ fn copy2(source: &Path, destination: &Path) -> io::Result<()> {
   let metadata = fs::metadata(source)?;
   let times = FileTimes::new().set_accessed(metadata.accessed()?).set_modified(metadata.modified()?);
   fs::OpenOptions::new().write(true).open(destination)?.set_times(times)
+}
+
+/// The path with `/` separators.
+fn posix(path: &Path) -> String {
+  path.to_string_lossy().into_owned()
 }
 
 #[cfg(test)]

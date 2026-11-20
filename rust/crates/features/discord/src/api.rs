@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_chat_threads::channel_service::reply_response;
+use charliebot_chat_threads::channel_service::{self, reply_response};
 use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN, REPLY_BODY};
 use charliebot_cli_common::fields::{LIMIT, SESSION_ID, TEXT};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
@@ -29,9 +29,6 @@ const READ_FIELDS: &[Field] = &[
   Field::optional(LIMIT, FieldType::Integer).ge(Bound::Int(READ_LIMIT_MIN)).le(Bound::Int(READ_LIMIT_MAX)),
 ];
 const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
-
-/// `DiscordCheckRequest`: no fields.
-const CHECK_BODY: BodyModel = BodyModel::required(&[]).forbid_extra();
 
 /// The three internal route paths. The `cli` verbs build their requests from these names, so a rename here cannot
 /// leave a verb posting to a path the router no longer serves.
@@ -104,13 +101,5 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
 
 /// `POST /api/internal/discord/check`: the bot token's setup.
 async fn post_check(State(bot): State<Bot>, request: Request<Body>) -> Response {
-  let (parts, stream) = request.into_parts();
-  let body = match request_body::read(&parts.headers, stream).await {
-    Ok(body) => body,
-    Err(response) => return *response,
-  };
-  if let Err(response) = body.declared_fields(&CHECK_BODY) {
-    return *response;
-  }
-  reply_response(bot.check_setup().await)
+  channel_service::check_response(request, bot.check_setup()).await
 }

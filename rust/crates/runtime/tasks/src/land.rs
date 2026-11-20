@@ -357,22 +357,36 @@ async fn run_scanner(stage: &LeakStage, args: &[&str], input: Option<&Path>) -> 
   Ok((code, output.stdout, String::from_utf8_lossy(&output.stderr).trim().to_string()))
 }
 
-/// Checks one text for the exact value of a credential this process holds. A hit refuses the landing, and the message
-/// names the kind and the field that the scanner printed; the value never appears in it.
-async fn check_field(stage: &LeakStage, field: &str, text: &str) -> anyhow::Result<()> {
-  let text_path = stage.dir.join("text");
-  std::fs::write(&text_path, text)
-    .map_err(|error| anyhow::anyhow!("cannot write the text for the leak check {}: {error}", text_path.display()))?;
-  let values = stage.values();
-  let values = values.display().to_string();
-  let (code, stdout, stderr) = run_scanner(stage, &["--credential-check", &values, field], Some(&text_path)).await?;
+/// One text of the landing that the credential check scans, with the field its hit would name.
+struct CheckedText {
+  field: String,
+  text: String,
+}
+
+/// Checks the landing's texts for the exact value of a credential this process holds, in one scanner call: the
+/// scanner's `--credential-check-list` reads each field's text from a file of the private stage. A hit refuses the
+/// landing, and the message names the kind and the field that the scanner printed; the value never appears in it.
+async fn check_texts(stage: &LeakStage, texts: &[CheckedText]) -> anyhow::Result<()> {
+  let mut list = String::new();
+  for (index, checked) in texts.iter().enumerate() {
+    let path = stage.dir.join(format!("text-{index}"));
+    std::fs::write(&path, &checked.text)
+      .map_err(|error| anyhow::anyhow!("cannot write the text for the leak check {}: {error}", path.display()))?;
+    list.push_str(&format!("{}\t{}\n", checked.field, path.display()));
+  }
+  let list_path = stage.dir.join("check-list");
+  std::fs::write(&list_path, list)
+    .map_err(|error| anyhow::anyhow!("cannot write the leak check list {}: {error}", list_path.display()))?;
+  let values = stage.values().display().to_string();
+  let list_path = list_path.display().to_string();
+  let (code, stdout, stderr) = run_scanner(stage, &["--credential-check-list", &values, &list_path], None).await?;
   match code {
     0 => Ok(()),
     CREDENTIAL_HIT_EXIT => anyhow::bail!(
       "landing refused before any push or PR create: {}; the kind named is the reason",
       String::from_utf8_lossy(&stdout).trim()
     ),
-    _ => anyhow::bail!("the leak scanner refused the check of {field} (exit {code}): {stderr}"),
+    _ => anyhow::bail!("the leak scanner refused the check of {} texts (exit {code}): {stderr}", texts.len()),
   }
 }
 
@@ -395,6 +409,7 @@ async fn credential_check(
   std::fs::write(stage.values(), values)
     .map_err(|error| anyhow::anyhow!("cannot write the credential values {}: {error}", stage.values().display()))?;
 
+  let mut texts: Vec<CheckedText> = Vec::new();
   let range = format!("{base_ref}..HEAD");
   let (ok, shas, err) = git::git_stdout(worktree, &["rev-list", &range], GIT_READ_TIMEOUT, "git rev-list").await;
   if !ok {
@@ -406,7 +421,7 @@ async fn credential_check(
     if !ok {
       anyhow::bail!("git show {sha} failed in {}: {err}", worktree.display());
     }
-    check_field(&stage, &format!("commit {sha} message"), &message).await?;
+    texts.push(CheckedText { field: format!("commit {sha} message"), text: message });
     let (ok, diff, err) = git::git_stdout(
       worktree,
       &["show", "--format=", "--patch", "--no-color", "--no-ext-diff", sha],
@@ -417,13 +432,13 @@ async fn credential_check(
     if !ok {
       anyhow::bail!("git show --patch {sha} failed in {}: {err}", worktree.display());
     }
-    check_field(&stage, &format!("commit {sha} diff"), &diff).await?;
+    texts.push(CheckedText { field: format!("commit {sha} diff"), text: diff });
   }
   if let Some(text) = pr_text {
-    check_field(&stage, "PR title", &text.title).await?;
-    check_field(&stage, "PR body", &text.body).await?;
+    texts.push(CheckedText { field: "PR title".to_string(), text: text.title.clone() });
+    texts.push(CheckedText { field: "PR body".to_string(), text: text.body.clone() });
   }
-  Ok(())
+  check_texts(&stage, &texts).await
 }
 
 /// Run one landing: the whole flow, ending in a written `landing.json` and the record returned.

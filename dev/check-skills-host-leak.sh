@@ -5,6 +5,7 @@
 #   --stdin                             scan stdin with the repository rules and the host patterns
 #   --credential-values                 print the credential values this process holds, one `kind<TAB>value` per line
 #   --credential-check <values> <field> scan stdin for the exact value of any credential in the values file
+#   --credential-check-list <values> <list>  scan each `field<TAB>path` line of the list file, in one process
 #
 # Exit codes: 0 clean, 1 a pattern hit, 2 a setup refusal (nothing was checked), 3 a credential hit.
 # A credential hit prints the kind and the field; it never prints the value or the matched text.
@@ -172,6 +173,19 @@ credential_check() {  # <values file> <field>
   return "$status"
 }
 
+# Check every text of one list in this one process, so a caller with many fields pays one interpreter start. The list
+# holds one `field<TAB>path` line per text. The first hit prints its kind and field and exits 3; a clean list exits 0.
+credential_check_list() {  # <values file> <list file>
+  local values=$1 list=$2 field path status=0
+  while IFS=$'\t' read -r field path; do
+    [[ -n "$field" ]] || continue
+    credential_check "$values" "$field" < "$path" && continue
+    status=$?
+    return "$status"
+  done < "$list"
+  return 0
+}
+
 case "${1:-}" in
   --credential-values)
     [[ $# -eq 1 ]] || { printf 'usage: --credential-values takes no argument\n' >&2; exit 2; }
@@ -181,6 +195,11 @@ case "${1:-}" in
   --credential-check)
     [[ $# -eq 3 ]] || { printf 'usage: --credential-check <values file> <field>, with the text on stdin\n' >&2; exit 2; }
     credential_check "$2" "$3"
+    exit
+    ;;
+  --credential-check-list)
+    [[ $# -eq 3 ]] || { printf 'usage: --credential-check-list <values file> <list of field<TAB>path lines>\n' >&2; exit 2; }
+    credential_check_list "$2" "$3"
     exit
     ;;
 esac

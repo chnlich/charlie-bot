@@ -937,6 +937,28 @@ fn a_value_under_the_minimum_length_passes_the_credential_check() {
 
 #[test]
 #[ignore = "integration"]
+fn the_list_mode_checks_every_field_in_one_process_and_names_the_first_hit() {
+  let sandbox = Sandbox::new();
+  let (env, label) = planted_env(&sandbox, Kind::CredentialsLeaf);
+  let clean = sandbox.root().join("clean.txt");
+  std::fs::write(&clean, "a clean text\n").unwrap();
+  let leaking = sandbox.root().join("leaking.txt");
+  std::fs::write(&leaking, format!("the text holds {CREDENTIAL_VALUE}\n")).unwrap();
+  let values = sandbox.root().join("values");
+  let mut collect = harness::command("bash", &env);
+  collect.arg(leak_scanner()).arg("--credential-values");
+  let collected = run(&mut collect);
+  assert_eq!(collected.code, 0, "{}", collected.describe());
+  std::fs::write(&values, &collected.stdout).unwrap();
+  let list = sandbox.root().join("list");
+  std::fs::write(&list, format!("clean field\t{}\nleaking field\t{}\n", clean.display(), leaking.display())).unwrap();
+  let mut check = harness::command("bash", &env);
+  check.arg(leak_scanner()).arg("--credential-check-list").arg(&values).arg(&list);
+  assert_credential_refusal(&run(&mut check), label);
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_credentials_file_that_does_not_parse_stops_the_check_without_printing_it() {
   let sandbox = Sandbox::new();
   let (env, _) = planted_env(&sandbox, Kind::CredentialsLeaf);

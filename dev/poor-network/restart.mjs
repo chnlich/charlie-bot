@@ -397,9 +397,10 @@ async function restartRep(ctx, name) {
     observer.state.stop = true;
     await observer.done;
     // The page's first catch-up after the release: a hidden swap navigates after it, so the gap to the first document
-    // is the stored-shell refresh that landing requirement B adds. The page posts its catch-up bytes after the replay.
-    const catchup = catchupAfter(tab, readyMs);
+    // is the stored-shell refresh that landing requirement B adds. The page posts its catch-up bytes after the replay,
+    // so the catch-up frame is read after that post, when the frame has arrived.
     const telemetry = await poll(async () => catchupBytesAfter(tab, readyMs), SHOW_TIMEOUT_MS, 'the catch-up telemetry');
+    const catchup = catchupAfter(tab, readyMs);
     return {
       cell: name,
       serverReadyMs: readyMs - releaseAt,

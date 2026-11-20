@@ -25,7 +25,7 @@ use charliebot_tasks::test_support::recovery_support::{self, Scripts, Stack, Syn
 use futures_util::future::BoxFuture;
 use tower::ServiceExt;
 
-/// A pool whose availability owner reads the empty state of a fresh home; these sites never record.
+/// A pool whose availability owner reads the empty state of a fresh home. These sites never record.
 fn test_pool() -> BackendPool {
   let home = tempfile::tempdir().unwrap();
   BackendPool::new(
@@ -591,7 +591,7 @@ async fn a_token_short_round_runs_again_on_the_next_member_without_recording_it_
 
   harness.finish_loop(harness.start_loop(1)).await;
 
-  // Neither refused attempt starts a round; the retry chain excludes both until the available member runs.
+  // Neither refused attempt starts a round. The retry chain excludes both until the available member runs.
   let runs = harness.stack.run_records(&harness.child.id)?;
   let backends = runs.iter().map(|run| run.backend.as_deref()).collect::<Vec<_>>();
   assert_eq!(backends.len(), 3);

@@ -47,7 +47,7 @@ function makeElement() {
   };
 }
 
-function loadDiffCommentsScript() {
+function loadDiffCommentsScript(fetched = []) {
   const head = makeElement();
   const body = makeElement();
   const output = makeElement();
@@ -74,6 +74,7 @@ function loadDiffCommentsScript() {
     console,
     document,
     fetch: async (url) => {
+      fetched.push(url);
       assert.equal(url, '/api/sessions/?compact=1');
       return {
         ok: true,
@@ -179,6 +180,12 @@ test('resolveTargetSession prioritizes the query param and falls back after a 40
   assert.equal(resolve('query-session', 'dropdown-session', 'loading'), null);
   assert.equal(resolve('query-session', 'dropdown-session', 'missing'), 'dropdown-session');
   assert.equal(resolve(null, 'dropdown-session', 'none'), 'dropdown-session');
+});
+
+test('loading the page fetches no session list, so a visit that comments nothing never loads the corpus', () => {
+  const fetched = [];
+  loadDiffCommentsScript(fetched);
+  assert.deepEqual(fetched, []);
 });
 
 test('mostRecentSessionId chooses the latest updated session', () => {

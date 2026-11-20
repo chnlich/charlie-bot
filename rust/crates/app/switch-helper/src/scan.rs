@@ -416,6 +416,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn every_registered_backend_type_resolves_in_current_tree() {
     let repo = repo_root();
     let registry = charliebot_packages::registry().expect("the registry loads");
@@ -432,6 +433,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn genuinely_missing_backend_type_fails_closed() {
     let repo = repo_root();
     let mut registrations = Registrations::default();

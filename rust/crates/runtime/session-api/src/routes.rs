@@ -1530,8 +1530,8 @@ mod tests {
     assert_eq!(body["status"][row_of("search-shape-active")], Value::Null);
   }
 
-  /// The `has_waiting_items` cells of a listing body in any of its shapes: a row array, a column object, the `sessions`
-  /// of a row refresh, or the `sessions` array of the archived view.
+  /// The `has_waiting_items` cells of a listing body in any shape: a row array, a column object, a row refresh's
+  /// `sessions`, or the archived view's `sessions` array.
   fn waiting_cells(body: &Value) -> Vec<Value> {
     if let Some(sessions) = body.get("sessions") {
       return waiting_cells(sessions);
@@ -1551,8 +1551,8 @@ mod tests {
     cells
   }
 
-  /// Every listing shape answers each row's `has_waiting_items` as a boolean: the row array, the Workspace's and the
-  /// move picker's column forms, a row refresh, the starred view and the archived view.
+  /// Every listing shape answers each row's `has_waiting_items` as a boolean. The shapes are the row array, the
+  /// Workspace's and the move picker's column forms, a row refresh, the starred view and the archived view.
   #[tokio::test]
   async fn every_listing_shape_answers_a_boolean_waiting_flag() {
     let (_home, features) = crate::test_support::feature_context();

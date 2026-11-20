@@ -695,7 +695,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   let judged = match patch.waiting.as_deref() {
     Some(items) => {
       let goal = patch.goal.clone().unwrap_or_else(|| base.goal.clone());
-      Some(judged_waiting(features, session_id, meta.group.as_deref(), goal.as_deref(), items, &stored_waiting).await?)
+      Some(judged_waiting(features, session_id, goal.as_deref(), items, &stored_waiting).await?)
     }
     None => None,
   };
@@ -764,7 +764,6 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
 async fn judged_waiting(
   features: &FeatureContext,
   session_id: &str,
-  group: Option<&str>,
   goal: Option<&str>,
   items: &[WaitingItem],
   stored: &[WaitingItem],
@@ -788,7 +787,7 @@ async fn judged_waiting(
       });
       continue;
     }
-    match waiting_judge::judge_item(features, session_id, group, goal, item).await? {
+    match waiting_judge::judge_item(features, session_id, goal, item).await? {
       Judgement::Accepted { judged_kind } => {
         judged.push(WaitingItem { judged_kind, judgement_basis: Some(String::new()), ..item.clone() });
       }
@@ -2887,14 +2886,13 @@ mod tests {
     };
     let stored = [stored_item.clone()];
     let unchanged = [WaitingItem { judged_kind: None, judgement_basis: None, ..stored_item.clone() }];
-    let kept = judged_waiting(&home.features, &sid, None, None, &unchanged, &stored)
-      .await
-      .expect("an unchanged item is not judged");
+    let kept =
+      judged_waiting(&home.features, &sid, None, &unchanged, &stored).await.expect("an unchanged item is not judged");
     assert_eq!(kept[0].judged_kind, Some(JudgedKind::TakeOff));
     assert_eq!(kept[0].judgement_basis.as_deref(), Some(""));
 
     let changed = [WaitingItem { context: Some("A new reason to deploy now.".to_string()), ..unchanged[0].clone() }];
-    let error = judged_waiting(&home.features, &sid, None, None, &changed, &stored)
+    let error = judged_waiting(&home.features, &sid, None, &changed, &stored)
       .await
       .expect_err("a changed item goes to the judge, which has no verdict");
     assert!(matches!(error, WebReplyError::Refused { status: StatusCode::SERVICE_UNAVAILABLE, .. }));

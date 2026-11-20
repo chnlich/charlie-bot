@@ -51,7 +51,9 @@ fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {
   if let Some(status) = values.get_mut(event_types::WEB_STATUS)
     && !normalize_web_status(status)
   {
-    return Some("web_status must be a WebStatus or null".to_string());
+    return Some(
+      "web_status must be a WebStatus or null with an empty waiting list; use status set for waiting items".to_string(),
+    );
   }
   None
 }
@@ -76,45 +78,8 @@ fn normalize_web_status(value: &mut Value) -> bool {
     return false;
   }
   let waiting = status.entry("waiting".to_string()).or_insert_with(|| json!([]));
-  let Some(items) = waiting.as_array_mut() else { return false };
-  for item in items {
-    let Some(item) = item.as_object_mut() else { return false };
-    if item.keys().any(|name| !["text", "context", "link", "since", "since_exact"].contains(&name.as_str())) {
-      return false;
-    }
-    if !item.get("text").and_then(Value::as_str).is_some_and(|text| !text.trim().is_empty()) {
-      return false;
-    }
-    if item.get("link").is_some_and(|link| !link.is_null() && !link.is_string()) {
-      return false;
-    }
-    match item.get("context") {
-      None => {}
-      Some(Value::Null) => {
-        item.remove("context");
-      }
-      Some(Value::String(context)) if !context.trim().is_empty() => {}
-      Some(_) => return false,
-    }
-    // `since` and `since_exact` are written by the server; an item stored before they existed carries neither, so a
-    // null reads as absent, the same as a key the item leaves out.
-    match item.get("since") {
-      None => {}
-      Some(Value::Null) => {
-        item.remove("since");
-      }
-      Some(Value::String(value)) if UtcDateTime::parse(value).is_ok() => {}
-      Some(_) => return false,
-    }
-    match item.get("since_exact") {
-      None => {}
-      Some(Value::Null) => {
-        item.remove("since_exact");
-      }
-      Some(Value::Bool(_)) => {}
-      Some(_) => return false,
-    }
-    item.entry("link".to_string()).or_insert(Value::Null);
+  if !waiting.as_array().is_some_and(Vec::is_empty) {
+    return false;
   }
   let updated_at = status.entry("updated_at".to_string()).or_insert_with(|| Value::String(UtcDateTime::now().to_str()));
   updated_at.as_str().is_some_and(|value| UtcDateTime::parse(value).is_ok())
@@ -450,10 +415,22 @@ mod tests {
 
     let trial_form = json!({"goal": "Ship", "remaining": [{"text": "Build", "done": true}]});
     let mut values = Map::from_iter([(event_types::WEB_STATUS.to_string(), trial_form)]);
-    assert_eq!(
-      validate_session_fields(&mut values),
-      Some("web_status must be a WebStatus or null".to_string()),
-      "the old {{text, done}} list is refused, not kept"
-    );
+    assert!(validate_session_fields(&mut values).is_some(), "the old {{text, done}} list is refused");
+  }
+
+  #[tokio::test]
+  async fn session_creation_cannot_store_unjudged_waiting_items() {
+    let home = test_support::Home::new();
+    let body = json!({"name": "session", "web_status": {
+      "waiting": [{"text": "Approve", "context": "Choose whether to proceed."}]
+    }});
+    let request = Request::builder()
+      .method(Method::POST)
+      .uri("/api/sessions/")
+      .header("content-type", "application/json")
+      .body(Body::from(body.to_string()))
+      .unwrap();
+    let response = charliebot_session_api::routes(&home.features).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
   }
 }

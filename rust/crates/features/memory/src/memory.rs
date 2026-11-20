@@ -481,7 +481,7 @@ pub fn select_worker_memory(memory_dir: &Path, repo_basename: &str) -> anyhow::R
 }
 
 /// A topic or repo name in the form that topic matching compares: lowercase, with `-` and `_` removed.
-fn normalized_name(name: &str) -> String {
+pub fn normalized_name(name: &str) -> String {
   name.chars().filter(|c| !matches!(c, '-' | '_')).flat_map(char::to_lowercase).collect()
 }
 

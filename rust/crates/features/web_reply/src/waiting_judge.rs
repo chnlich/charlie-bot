@@ -71,18 +71,17 @@ struct Answer {
   cited: String,
 }
 
-/// Judge one item of a status set whose session has `group` as its project topic and `goal` as its Goal.
+/// Judge one item of a status set using the session's project topic and `goal`.
 pub async fn judge_item(
   features: &FeatureContext,
   session_id: &str,
-  group: Option<&str>,
   goal: Option<&str>,
   item: &WaitingItem,
 ) -> Result<Judgement, WebReplyError> {
   let cfg = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
   let memo = read_memo(&features.store.session_dir(session_id))?;
   let user_messages = user_messages(features, session_id).await?;
-  let mut settled = memory_settled(&cfg.charliebot_home, group).await?;
+  let mut settled = memory_settled(features, session_id, &cfg.charliebot_home).await?;
   if !memo.trim().is_empty() {
     settled.insert(0, Settled { label: MEMO_LABEL.to_string(), text: memo });
   }
@@ -135,19 +134,29 @@ async fn user_messages(features: &FeatureContext, session_id: &str) -> Result<Ve
   Ok(messages[first..].to_vec())
 }
 
-/// The memory entries of the host's rulings topic and of the session's project topic, which is its group when the
-/// group names a topic.
-async fn memory_settled(home: &Path, group: Option<&str>) -> Result<Vec<Settled>, WebReplyError> {
+/// The host's rulings and the topic matching the session tree root's group, using memory's name matching rule.
+async fn memory_settled(
+  features: &FeatureContext,
+  session_id: &str,
+  home: &Path,
+) -> Result<Vec<Settled>, WebReplyError> {
   let memory_dir = home.join("memory");
-  let group = group.map(str::to_string);
+  let store = Arc::clone(&features.store);
+  let session_id = session_id.to_string();
   let entries = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Settled>> {
+    let ancestors = store.ancestor_ids(&session_id)?;
+    let root_id = ancestors.last().unwrap_or(&session_id);
+    let root = store.read_metadata_fresh(root_id)?.with_context(|| format!("session {root_id} not found"))?;
+    let group = root.group.as_deref().map(memory::normalized_name);
     let store = memory::load_store(&memory_dir)?;
     Ok(
       store
         .entries
         .iter()
         .filter(|entry| {
-          entry.topic.as_deref().is_some_and(|topic| topic == RULINGS_TOPIC || group.as_deref() == Some(topic))
+          entry.topic.as_deref().is_some_and(|topic| {
+            topic == RULINGS_TOPIC || group.as_ref().is_some_and(|group| *group == memory::normalized_name(topic))
+          })
         })
         .map(|entry| Settled { label: entry.id(), text: memory::full_text(entry) })
         .collect(),
@@ -296,6 +305,8 @@ fn normalize(text: &str) -> String {
 mod tests {
   use axum::http::StatusCode;
   use charliebot_core::event_types::WEB_STATUS;
+  use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::{CreateTask, TaskCaller};
   use serde_json::json;
 
   use super::*;
@@ -505,9 +516,7 @@ mod tests {
     assert!(prompt.contains("## User-only kinds (prompts/master.md)\nKINDS TEXT"));
   }
 
-  #[tokio::test]
-  async fn the_settled_text_is_the_rulings_topic_and_the_sessions_project_topic() {
-    let home = Home::new();
+  fn write_memory(home: &Home) {
     let memory = home.root().join("memory");
     fs::create_dir_all(&memory).expect("the memory directory writes");
     fs::write(memory.join("topics"), "rulings resident\nsurpass\nworkflow resident\n")
@@ -518,11 +527,49 @@ mod tests {
       let entry = format!("---\nscope: user\ntopic: {topic}\naudience: master, worker\ntitle: {slug}\n---\n- a rule\n");
       fs::write(dir.join(format!("{slug}.md")), entry).expect("the entry writes");
     }
+  }
 
-    let labels = |settled: Vec<Settled>| settled.into_iter().map(|source| source.label).collect::<Vec<_>>();
-    let settled = memory_settled(&home.root(), Some("surpass")).await.expect("the settled text loads");
-    assert_eq!(labels(settled), ["rulings/a".to_string(), "surpass/gpuq".to_string()]);
-    let settled = memory_settled(&home.root(), None).await.expect("the settled text loads");
-    assert_eq!(labels(settled), ["rulings/a".to_string()]);
+  #[tokio::test]
+  async fn a_grandchild_reads_the_root_groups_topic() {
+    let home = Home::new();
+    write_memory(&home);
+    let root = home
+      .features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "root".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("root".to_string()),
+          backend: None,
+          group: Some("Surpass".to_string()),
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Default::default(),
+      )
+      .await
+      .expect("the root is created");
+    let child = home.child(&root.id, "child").await;
+    let grandchild = home.child(&child, "grandchild").await;
+    for session_id in [&root.id, &child, &grandchild] {
+      let settled = memory_settled(&home.features, session_id, &home.root()).await.expect("the settled text loads");
+      let labels: Vec<_> = settled.into_iter().map(|source| source.label).collect();
+      assert_eq!(labels, ["rulings/a", "surpass/gpuq"]);
+    }
+  }
+
+  #[tokio::test]
+  async fn an_ungrouped_tree_reads_only_rulings() {
+    let home = Home::new();
+    write_memory(&home);
+    let root = home.manager("root", None).await;
+    let child = home.child(&root, "child").await;
+    let grandchild = home.child(&child, "grandchild").await;
+    let settled = memory_settled(&home.features, &grandchild, &home.root()).await.expect("the settled text loads");
+    let labels: Vec<_> = settled.into_iter().map(|source| source.label).collect();
+    assert_eq!(labels, ["rulings/a"]);
   }
 }

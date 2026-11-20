@@ -256,7 +256,7 @@ fn render_prompt(
   for source in context {
     sections.push(format!("## Context, never settled text: {}\n{}", source.label, source.text));
   }
-  sections.push(format!("## User-only kinds (prompts/master.md)\n{kinds}"));
+  sections.push(format!("## User-only kinds (effective prompt)\n{kinds}"));
   sections.join("\n\n")
 }
 
@@ -571,7 +571,7 @@ mod tests {
     assert!(prompt.contains("- first user message"));
     assert!(prompt.contains("## Settled text: memo.md\nMEMO TEXT"));
     assert!(prompt.contains("repo/gate.sh:1-2") && prompt.contains("CONTEXT TEXT"));
-    assert!(prompt.contains("## User-only kinds (prompts/master.md)\nKINDS TEXT"));
+    assert!(prompt.contains("## User-only kinds (effective prompt)\nKINDS TEXT"));
   }
 
   #[test]

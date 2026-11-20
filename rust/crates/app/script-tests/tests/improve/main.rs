@@ -21,6 +21,16 @@ fn generate(sandbox: &Sandbox, output: &Path, sessions: &str, seed: &str) {
   assert_eq!(run.code, 0, "{}", run.describe());
 }
 
+/// The session directories of a generated home: its visible directories. The default home's `.cron.d` is hidden, as the
+/// seed copy of a trial skips it.
+fn session_dirs(output: &Path) -> Vec<PathBuf> {
+  fs::read_dir(output)
+    .expect("the output directory")
+    .map(|entry| entry.expect("a directory entry").path())
+    .filter(|path| path.is_dir() && !path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')))
+    .collect()
+}
+
 /// Every regular file under `root`, keyed by its path relative to `root`.
 fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
   let mut found = BTreeMap::new();
@@ -63,10 +73,8 @@ fn test_generate_mid_size_event_logs_follow_the_production_shape() {
   let output = sandbox.dir("mid-size");
   generate(&sandbox, &output, "100", "5");
 
-  let mut sizes: Vec<f64> = fs::read_dir(&output)
-    .expect("the output directory")
-    .map(|entry| entry.expect("a directory entry").path())
-    .filter(|path| path.is_dir())
+  let mut sizes: Vec<f64> = session_dirs(&output)
+    .into_iter()
     .map(|session| fs::metadata(session.join("data/chat_events.jsonl")).expect("an event log").len() as f64)
     .collect();
   sizes.sort_by(f64::total_cmp);
@@ -102,11 +110,7 @@ fn test_generate_separates_every_finished_turn_with_a_master_done() {
   generate(&sandbox, &output, "12", "5");
 
   let mut separators = 0;
-  for entry in fs::read_dir(&output).expect("the output directory") {
-    let session = entry.expect("a directory entry").path();
-    if !session.is_dir() {
-      continue;
-    }
+  for session in session_dirs(&output) {
     let text = fs::read_to_string(session.join("data/chat_events.jsonl")).expect("an event log");
     let events: Vec<serde_json::Value> =
       text.lines().map(|line| serde_json::from_str(line).expect("one JSON event per line")).collect();

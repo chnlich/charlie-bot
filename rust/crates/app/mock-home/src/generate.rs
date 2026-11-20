@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use crate::Language;
 use crate::Shape;
+use crate::cron::{self, BOUND_SESSIONS};
 use crate::manifest::{MANIFEST_NAME, Manifest, ManifestSession, SessionMetadata};
 use crate::rng::Rng;
 use crate::session::{
@@ -236,11 +237,22 @@ fn write_search_matches(home: &Path, rng: &mut Rng, language: Language) -> Resul
   Ok(())
 }
 
+/// The manager sessions that the default shape's cron fixture binds: the middle rows of the listing order. The listing
+/// is sorted newest first by `give_newest_web_status`, so these rows stay out of the newest rows that the perf
+/// measurement reads. A home smaller than the fixture repeats its rows, so tasks share a session.
+fn cron_bound_sessions(listed: &[SessionMetadata]) -> Result<[String; BOUND_SESSIONS]> {
+  if listed.is_empty() {
+    bail!("the default home holds no session for its cron fixture to bind");
+  }
+  let start = listed.len().saturating_sub(BOUND_SESSIONS) / 2;
+  Ok(std::array::from_fn(|index| listed[(start + index) % listed.len()].id.clone()))
+}
+
 /// Writes the sessions and the manifest into `home`, and returns the total event-log bytes. The view and search shapes
 /// add a task spec to each session; the other shapes write the same bytes. The default shape gives the newest rows a
-/// `web_status` goal; the view and search shapes keep their bytes, because the bench reads them. The search shape adds
-/// its match sets after the view's sessions, which the manifest does not list: the bench counts the active sessions,
-/// and these are archived.
+/// `web_status` goal and binds its cron fixture to four manager sessions; the view and search shapes keep their bytes,
+/// because the bench reads them. The search shape adds its match sets after the view's sessions, which the manifest does
+/// not list: the bench counts the active sessions, and these are archived.
 fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: Language) -> Result<u64> {
   let view = matches!(shape, Shape::View | Shape::Search);
   let (mut rng, text, sizes) = planned_home(sessions, seed, language);
@@ -281,17 +293,28 @@ fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: L
   for metadata in &listed {
     write_json(&layout::metadata_path(&home.join(&metadata.id)), metadata, b"  ")?;
   }
+  let cron_tasks =
+    if shape == Shape::Default { cron::write_fixture(home, &cron_bound_sessions(&listed)?)? } else { Vec::new() };
   if shape == Shape::Search {
     write_search_matches(home, &mut rng, language)?;
   }
-  let manifest =
-    Manifest { seed, session_count: sessions, event_log_bytes: total, sessions: manifest_sessions, shape, language };
+  let manifest = Manifest {
+    seed,
+    session_count: sessions,
+    event_log_bytes: total,
+    sessions: manifest_sessions,
+    shape,
+    language,
+    cron_tasks,
+  };
   write_json(&home.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
 }
 
 #[cfg(test)]
 mod tests {
+  use std::collections::BTreeSet;
+
   use super::*;
 
   /// A stamp in the form `stamp` writes, `second` seconds into one minute.
@@ -327,5 +350,30 @@ mod tests {
     assert_eq!(carrying, ["b", "c", "a", "e", "f"]);
     let goal = rows[0].web_status.as_ref().expect("the newest row carries a goal")["goal"].as_str().expect("a goal");
     assert_eq!(goal.chars().count(), NEWEST_WEB_STATUS_GOAL_CHARS);
+  }
+
+  #[test]
+  fn the_default_shape_writes_cron_tasks_that_bind_existing_manager_sessions() {
+    // A home of two sessions is smaller than the fixture, so its tasks share the sessions it has.
+    for sessions in [2, 40] {
+      let dir = tempfile::tempdir().expect("a temporary directory");
+      let home = dir.path().join("home");
+      generate(&home, sessions, 1, Shape::Default, Language::Mixed).expect("the default home");
+      let manifest = Manifest::read(&home).expect("the manifest");
+
+      let task_files = fs::read_dir(home.join(cron::CRON_DIR)).expect("the cron directory").count();
+      assert_eq!(task_files, manifest.cron_tasks.len(), "the manifest lists every task file");
+      let bound: BTreeSet<&str> = manifest.cron_tasks.iter().map(|task| task.session_id.as_str()).collect();
+      assert_eq!(bound.len(), sessions.min(BOUND_SESSIONS), "the fixture binds {sessions} sessions");
+      for task in &manifest.cron_tasks {
+        let file = home.join(cron::CRON_DIR).join(format!("{}.yaml", task.name));
+        let body = fs::read_to_string(&file).expect("a task file");
+        assert!(body.contains(&format!("session_id: {}\n", task.session_id)), "{} binds its session", task.name);
+        let metadata =
+          fs::read(layout::metadata_path(&home.join(&task.session_id))).expect("the bound session's metadata");
+        let metadata: Value = serde_json::from_slice(&metadata).expect("the metadata is JSON");
+        assert_eq!(metadata["profile"], "manager", "{} binds a manager", task.name);
+      }
+    }
   }
 }

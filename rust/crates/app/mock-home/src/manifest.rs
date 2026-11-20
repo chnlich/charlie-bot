@@ -34,9 +34,10 @@ pub struct SessionMetadata {
   pub web_status: Option<Value>,
 }
 
-/// The home's `manifest.json`: the seed, count, shape and language that produced it, and each session's log size and
-/// newest message, in the order `generate` wrote the sessions. A default home's manifest has no `shape` or `language`
-/// key, so its bytes stay those of the data version.
+/// The home's `manifest.json`: the seed, count, shape and language that produced it, each session's log size and newest
+/// message in the order `generate` wrote the sessions, and the scheduled tasks of `.cron.d`. A default home's manifest
+/// has no `shape` or `language` key, so its bytes stay those of the data version. The views write no tasks, so they have
+/// no `cron_tasks` key.
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
   pub seed: u64,
@@ -47,6 +48,8 @@ pub struct Manifest {
   pub shape: Shape,
   #[serde(default, skip_serializing_if = "Language::is_mixed")]
   pub language: Language,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub cron_tasks: Vec<ManifestCronTask>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -54,6 +57,13 @@ pub struct ManifestSession {
   pub id: String,
   pub event_log_bytes: u64,
   pub last_message: String,
+}
+
+/// One scheduled task of `.cron.d`, and the manager session that its file binds.
+#[derive(Serialize, Deserialize)]
+pub struct ManifestCronTask {
+  pub name: String,
+  pub session_id: String,
 }
 
 impl Manifest {

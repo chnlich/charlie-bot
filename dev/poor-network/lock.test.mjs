@@ -97,6 +97,17 @@ test('the bench takes its lock under $HOME/pn-runs, and only lock.sh names the f
       [LOCK],
       `the lock file is named outside lock.sh in ${naming.map((file) => path.relative(DEV_DIR, file)).join(', ')}`,
     );
+    const flockCalls = devSources(DEV_DIR).filter((file) => {
+      const source = fs.readFileSync(file, 'utf8');
+      return /pn-runs\/\.bench\.lock|BENCH_LOCK_FILE/.test(source) && /\bflock\s+-/.test(source);
+    });
+    assert.deepEqual(
+      flockCalls,
+      [LOCK],
+      `the bench lock's flock call is outside lock.sh in ${
+        flockCalls.map((file) => path.relative(DEV_DIR, file)).join(', ')
+      }`,
+    );
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -163,7 +174,7 @@ test('the bench refuses a caller-chosen lock file and takes the lock itself', { 
   }
 });
 
-test('an improve trial side waits out a held lock, then stops unrun and names the bench lock', { timeout: 60000 }, async () => {
+test('an improve side times out under the held lock without running its command', { timeout: 60000 }, async () => {
   const home = scratch('pn-lock-home-');
   const dir = scratch('pn-lock-run-');
   const held = path.join(dir, 'held');
@@ -195,6 +206,12 @@ test('an improve trial side runs its command on a free lock and passes the exit 
     assert.equal(side.status, 3, side.stderr);
     assert.equal(fs.existsSync(ran), true, 'the trial command did not run with the bench lock free');
     assert.equal(side.stderr, '');
+
+    const ran75 = path.join(dir, 'ran-75');
+    const side75 = improveSide(home, ran75, 5, 75);
+    assert.equal(side75.status, 75, side75.stderr);
+    assert.equal(fs.existsSync(ran75), true, 'the trial command did not run with the bench lock free');
+    assert.equal(side75.stderr, '', 'a command exit of 75 was reported as a lock timeout');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });

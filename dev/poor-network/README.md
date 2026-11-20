@@ -36,10 +36,10 @@ seconds a caller names; no option chooses another lock file or skips it. The rem
 its container's whole run, because each start and stop of that container adds or removes a veth interface, which Chrome
 reports as a network change and drops the page in transfer. Each improve-ux and improve-perf trial side
 (`dev/improve/trial-side.sh`) takes the same lock from its trial's start to its stop, waiting at most 15 minutes; when
-the wait runs out, the side runs nothing and exits 75. One lock hold covers one side attempt: a caller that retries a timed-out side
-runs the command again, which takes the lock again at the back of the queue. The side JSON is the bench's last
-artifact; when it is 120 s old and the bench still runs, the runner ends the trial tree itself, so a bench that hangs
-after its work never holds the lock, and the summary is reprinted from the JSON.
+the wait runs out, the side runs nothing and exits 75. One lock hold covers one side attempt: a caller that retries a
+timed-out side runs the command again, which takes the lock again at the back of the queue. The side JSON is the
+bench's final artifact. If the bench is still running 120 s later, the runner ends its trial tree to release the lock
+and reprints the summary from that JSON.
 
 Chrome comes from `POOR_NETWORK_CHROME`, or else the newest `~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`.
 The trial replaces `HOME`, so the discovery happens in `run.sh`.
@@ -529,6 +529,7 @@ navigation as its start, that the newest message counts at the first document th
 starting record come from the first document, and that each reload is recorded with its cause. One of them drives a
 Chrome against a page that reloads once and holds an iframe, through a forward proxy: the cause reaches the tab from the
 reloaded document, and the frame adds no document. The lock tests check that one concurrent side attempt holds the bench
-lock and the next waits for it, and that the lock file is named only in `lock.sh`. They also check that an improve trial
-side stops with the bench lock named when the lock stays held, and runs its command when the lock is free. The search tests check the search view's arithmetic (see "Search
-view").
+lock and the next waits for it, and that the bench lock's file name and `flock` call live only in `lock.sh`. They also
+check that an improve trial side stops with the bench lock named when the lock stays held, runs its command when the
+lock is free, and passes through a command exit of 75 without reporting a lock timeout. The search tests check the
+search view's arithmetic (see "Search view").

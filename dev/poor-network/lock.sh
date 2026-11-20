@@ -7,14 +7,14 @@
 #
 # A side attempt is one trial's start, measurement and stop, not the run's builds: a run builds before it queues, and a
 # run with two sides takes the lock once per side. A side that cannot take the lock within its wait exits with
-# BENCH_LOCK_TIMEOUT_EXIT, which no trial or bench exit code uses.
+# BENCH_LOCK_TIMEOUT_EXIT, the status flock uses when its wait runs out.
 #
 # Sourced by run.sh and the other holders; a test sources it to drive the lock on its own.
 
 readonly BENCH_LOCK_FILE="$HOME/pn-runs/.bench.lock"
 # The bench's own wait. A holder with another wait passes it to bench_lock_within.
 readonly BENCH_LOCK_WAIT_SECONDS=7200
-# flock's own exit code when the wait runs out: one no trial or bench exit code uses.
+# The status flock uses when the wait runs out.
 readonly BENCH_LOCK_TIMEOUT_EXIT=75
 
 # bench_lock_within <wait seconds> <command> [args...]: exec the command under the bench lock, waiting up to the wait.

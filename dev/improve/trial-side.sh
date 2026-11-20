@@ -26,10 +26,23 @@ if (( $# == 0 )); then
   exit 2
 fi
 
+if ! marker_dir=$(mktemp -d "${TMPDIR:-/tmp}/improve-trial-side.XXXXXX"); then
+  exit 1
+fi
+started_marker="$marker_dir/started"
+cleanup_marker() {
+  if [[ -e $started_marker ]]; then
+    rm -- "$started_marker"
+  fi
+  rmdir -- "$marker_dir"
+}
+trap cleanup_marker EXIT
+
 status=0
 # The subshell keeps bench_lock_within's exec from replacing this script, so the stop reason can follow a timeout.
-(bench_lock_within "$IMPROVE_TRIAL_LOCK_WAIT_SECONDS" "$@") || status=$?
-if (( status == BENCH_LOCK_TIMEOUT_EXIT )); then
+(bench_lock_within "$IMPROVE_TRIAL_LOCK_WAIT_SECONDS" bash -c \
+  'started=$1; shift; : > "$started" || exit $?; exec "$@"' improve-trial-side "$started_marker" "$@") || status=$?
+if (( status == BENCH_LOCK_TIMEOUT_EXIT )) && [[ ! -e $started_marker ]]; then
   printf 'improve trial side stopped: the bench lock stayed held for %s s\n' "$IMPROVE_TRIAL_LOCK_WAIT_SECONDS" >&2
 fi
 exit "$status"

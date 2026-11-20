@@ -17,6 +17,7 @@ use charliebot_core::event_types::{
 };
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_automata_regex;
+use charliebot_core::reply::{OVER_BUDGET_FIELD, is_over_budget};
 use charliebot_core::str_methods;
 use charliebot_registry::{FeatureContext, StateError};
 #[cfg(test)]
@@ -59,9 +60,6 @@ pub fn message_opening(text: &str) -> String {
 
 /// The notice the user reads when the nudge turn also ended without a reply.
 pub const NOTICE_TEXT: &str = "No reply was posted for this message. The Everything view shows this turn's output.";
-
-/// The reply budget the readback's `over_budget` flag measures; an over-budget reply still posts.
-pub const REPLY_BUDGET_CHARS: usize = 500;
 
 /// The language check holds a reply when the answered user message has at least this many Han characters.
 const LANGUAGE_CHECK_MIN_USER_HAN: usize = 5;
@@ -553,9 +551,9 @@ pub async fn post_web_reply_with_identity(
   };
   features.store.announce_appended_event(session_id, &event, epoch).await?;
   features.store.mark_unread(session_id).await?;
-  let over_budget = chars > REPLY_BUDGET_CHARS;
+  let over_budget = is_over_budget(chars);
   tracing::info!(session = %session_id, chars, over_budget, "web_reply_posted");
-  Ok(json!({"posted": true, "chars": chars, "over_budget": over_budget}))
+  Ok(json!({"posted": true, "chars": chars, (OVER_BUDGET_FIELD): over_budget}))
 }
 
 fn web_reply_receipt(event: &Value) -> Value {
@@ -564,7 +562,7 @@ fn web_reply_receipt(event: &Value) -> Value {
   json!({
     "posted": true,
     "chars": chars,
-    "over_budget": chars as usize > REPLY_BUDGET_CHARS,
+    (OVER_BUDGET_FIELD): is_over_budget(chars as usize),
   })
 }
 

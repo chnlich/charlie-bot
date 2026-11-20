@@ -1016,6 +1016,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
   OwnerRow { name: "WebSearch", owner: "infra/core", hint: "Use `charliebot_core::web_search::TOOL_NAME`." },
   OwnerRow {
+    name: "over_budget",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::reply::OVER_BUDGET_FIELD` and `charliebot_core::reply::is_over_budget`.",
+  },
+  OwnerRow {
     name: "merge-base",
     owner: "infra/core",
     hint: "Use `charliebot_core::git::merge_base_args` or `charliebot_core::git::ancestry_args`.",

@@ -35,6 +35,7 @@ pub mod proc_identity;
 pub mod proc_status;
 pub mod proxy_env;
 pub mod regex_classes;
+pub mod reply;
 pub mod repo_root;
 pub mod run_kind;
 pub mod run_token;

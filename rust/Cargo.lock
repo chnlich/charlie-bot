@@ -1448,6 +1448,7 @@ dependencies = [
  "charliebot-antigravity",
  "charliebot-charlie-code",
  "charliebot-claude-code",
+ "charliebot-cli-common",
  "charliebot-codex",
  "charliebot-compat",
  "charliebot-core",

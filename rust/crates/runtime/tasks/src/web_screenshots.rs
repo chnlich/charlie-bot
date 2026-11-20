@@ -26,11 +26,16 @@
 //! A landing's PR body also names the approved demo (`Demo: <absolute path>`, whose file must exist) and the
 //! changed view's URL path (`View: <URL path>`). A landing carries each View line into the landed commit as
 //! a trailer, which `scripts/switch-server.sh` reads back to capture the live page after the switch.
+//!
+//! A view resolves on the live server when `check_view_resolves` passes it: a `/?session=<id>` view when the server
+//! knows the session, any other view on a 2xx answer. The landing refuses a session view the server does not know.
+//! The switch refuses each view that does not resolve, before it captures that view.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use charliebot_cli_common::client;
 use charliebot_registry::pages::is_served_path;
 
 /// The CSS window sizes, at device pixel ratio 1, that a screenshot of a changed page shows: a 1920 wide
@@ -85,9 +90,18 @@ pub struct BodyContract {
 }
 
 /// Refuses a web page change's PR body unless it names `Demo: <absolute path>` whose file exists,
-/// `View: <URL path>`, and a PNG at each window size by absolute path. The caller decides that the change
-/// alters a web page. A named file that cannot be read or is not a PNG also refuses (`check_pr_body`).
+/// `View: <URL path>`, and a PNG at each window size by absolute path, and unless each `/?session=<id>` view it
+/// names is a session the live server knows. The caller decides that the change alters a web page. A named file
+/// that cannot be read or is not a PNG also refuses (`check_pr_body`).
 pub fn check_pr_body(pr_body: Option<&str>) -> anyhow::Result<BodyContract> {
+  // The live lookups block on a runtime of their own, which cannot start on the thread that drives `land`, so they
+  // run on a thread of their own.
+  std::thread::scope(|scope| scope.spawn(|| check_pr_body_with(pr_body, &live_status)).join())
+    .map_err(|_| anyhow::anyhow!("the live server check of the PR body panicked"))?
+}
+
+/// `check_pr_body` with the server's answers read from `status_of`.
+fn check_pr_body_with(pr_body: Option<&str>, status_of: &StatusOf) -> anyhow::Result<BodyContract> {
   let body = pr_body.unwrap_or_default();
   let required = format!(
     "the diff changes a web page, so the PR body must name the approved demo on a `Demo: <absolute path>` line, the \
@@ -116,7 +130,59 @@ pub fn check_pr_body(pr_body: Option<&str>) -> anyhow::Result<BodyContract> {
   }
   let named: Vec<PathBuf> = named_png_paths(body).into_iter().map(PathBuf::from).collect();
   check_screenshot_files(&named, LANDING_SHOTS_PER_SIZE)?;
+  check_session_views(&views, status_of)?;
   Ok(BodyContract { demo, views })
+}
+
+/// The HTTP status the server answers for one GET of a path.
+pub type StatusOf = dyn Fn(&str) -> anyhow::Result<u16> + Sync;
+
+/// The live server's status for one GET of `path`, through the CLI's server client and its credential.
+pub fn live_status(path: &str) -> anyhow::Result<u16> {
+  client::get_status(path).map_err(|error| anyhow::anyhow!("cannot reach the live server: {}", error.body))
+}
+
+/// The session id a `/?session=<id>` view names: the `session` query of the index page, which opens that session.
+pub fn session_of_view(view: &str) -> Option<&str> {
+  view.strip_prefix("/?")?.split('&').find_map(|pair| pair.strip_prefix("session="))
+}
+
+/// Whether `session` has the shape of a session id: letters, digits, `-` and `_`. The id becomes a path segment.
+fn is_session_id(session: &str) -> bool {
+  !session.is_empty() && session.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// Refuses a view that the live server does not resolve, with the server's answers read from `status_of`.
+///
+/// A `/?session=<id>` view resolves when the server knows the session, which its session route answers with a 2xx.
+/// The index page answers 200 for any id, so the page's own status proves nothing. Any other view resolves on a 2xx
+/// answer to its path.
+pub fn check_view_resolves(view: &str, status_of: &StatusOf) -> anyhow::Result<()> {
+  let (path, session) = match session_of_view(view) {
+    Some(session) if is_session_id(session) => (format!("/api/sessions/{session}"), Some(session)),
+    Some(session) => {
+      bail!("the View line `{view}` must name a view on the live server, but `{session}` is not a session id")
+    }
+    None => (view.to_string(), None),
+  };
+  let status = status_of(&path)?;
+  if (200..300).contains(&status) {
+    return Ok(());
+  }
+  let reason = match session {
+    Some(session) if status == 404 => format!("the live server does not know session {session}"),
+    _ => format!("GET {path} answered {status}, not 2xx"),
+  };
+  bail!("the View line `{view}` must name a view on the live server, but {reason}")
+}
+
+/// Refuses each `/?session=<id>` view the live server does not resolve. A path the PR adds cannot resolve before the
+/// switch, so the landing checks session ids only (`check_pr_body`).
+fn check_session_views(views: &[String], status_of: &StatusOf) -> anyhow::Result<()> {
+  for view in views.iter().filter(|view| session_of_view(view).is_some()) {
+    check_view_resolves(view, status_of)?;
+  }
+  Ok(())
 }
 
 /// Refuses PNG paths that do not cover each window size `count_per_size` times. A path that cannot be read
@@ -287,17 +353,81 @@ mod tests {
     assert!(refusal.contains("View"), "{refusal}");
   }
 
+  /// A server that answers every GET with `status`.
+  fn answers(status: u16) -> impl Fn(&str) -> anyhow::Result<u16> + Sync {
+    move |_| Ok(status)
+  }
+
+  /// The live server's answers for a session it does not know: the index page answers 200 for every id, and the
+  /// session route answers 404.
+  fn unknown_session_server(path: &str) -> anyhow::Result<u16> {
+    Ok(if path.starts_with("/api/sessions/") { 404 } else { 200 })
+  }
+
+  /// A PR body with a demo, one PNG at each window size, and `view_lines` as its View lines.
+  fn body_with_views(dir: &Path, view_lines: &str) -> String {
+    let demo = write_png(dir, "demo.png", 10, 10);
+    let shots = write_window_shots(dir, 0, 1);
+    let named: Vec<String> = shots.iter().map(|path| path.display().to_string()).collect();
+    format!("Demo: {}\n{view_lines}\nShots: `{}`", demo.display(), named.join("` `"))
+  }
+
   #[test]
   fn a_body_naming_one_screenshot_at_each_window_size_passes() {
     let dir = tempfile::tempdir().expect("temporary directory is available");
-    let demo = write_png(dir.path(), "demo.png", 10, 10);
-    let shots = write_window_shots(dir.path(), 0, 1);
-    let named: Vec<String> = shots.iter().map(|path| path.display().to_string()).collect();
-    let body = format!("Demo: {}\nView: /?session=abc\nShots: `{}`", demo.display(), named.join("` `"));
-    let contract = check_pr_body(Some(&body)).expect("each window size is named");
-    assert_eq!(contract.demo, demo);
+    let body = body_with_views(dir.path(), "View: /?session=abc");
+    let contract = check_pr_body_with(Some(&body), &answers(200)).expect("each window size is named");
+    assert_eq!(contract.demo, dir.path().join("demo.png"));
     assert_eq!(contract.views, vec!["/?session=abc".to_string()]);
     assert!(check_pr_body(None).is_err());
+  }
+
+  #[test]
+  fn a_body_naming_an_unknown_session_is_refused_with_the_reason() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let body = body_with_views(dir.path(), "View: /?session=5f1c0d2e-7a3b");
+    let refusal = check_pr_body_with(Some(&body), &unknown_session_server).unwrap_err().to_string();
+    assert!(refusal.contains("must name a view on the live server"), "{refusal}");
+    assert!(refusal.contains("does not know session 5f1c0d2e-7a3b"), "{refusal}");
+  }
+
+  #[test]
+  fn a_body_whose_path_view_is_not_probed_before_the_switch() {
+    let dir = tempfile::tempdir().expect("temporary directory is available");
+    let body = body_with_views(dir.path(), "View: /plans");
+    let probe_refused = |path: &str| -> anyhow::Result<u16> { bail!("the path view was probed at {path}") };
+    check_pr_body_with(Some(&body), &probe_refused).expect("only session ids are checked at landing");
+  }
+
+  #[test]
+  fn a_session_view_the_server_does_not_know_is_refused_whatever_the_index_page_answers() {
+    let refusal = check_view_resolves("/?session=5f1c0d2e", &unknown_session_server).unwrap_err().to_string();
+    assert!(refusal.contains("does not know session 5f1c0d2e"), "{refusal}");
+  }
+
+  #[test]
+  fn a_session_view_the_server_knows_resolves_through_its_session_route() {
+    let known_route = |path: &str| -> anyhow::Result<u16> {
+      assert_eq!(path, "/api/sessions/abc");
+      Ok(200)
+    };
+    check_view_resolves("/?session=abc", &known_route).expect("a known session resolves");
+  }
+
+  #[test]
+  fn a_view_that_names_no_session_is_refused_without_a_probe() {
+    let probe_refused = |path: &str| -> anyhow::Result<u16> { bail!("the view was probed at {path}") };
+    for view in ["/?session=", "/?session=a/../b"] {
+      let refusal = check_view_resolves(view, &probe_refused).unwrap_err().to_string();
+      assert!(refusal.contains("is not a session id"), "{refusal}");
+    }
+  }
+
+  #[test]
+  fn a_path_view_resolves_on_a_2xx_answer_only() {
+    check_view_resolves("/plans", &answers(200)).expect("a served page resolves");
+    let refusal = check_view_resolves("/plans", &answers(404)).unwrap_err().to_string();
+    assert!(refusal.contains("GET /plans answered 404"), "{refusal}");
   }
 
   #[test]

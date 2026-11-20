@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -31,7 +32,6 @@ const FORK_DEMOS: &str = "fork-demos";
 const FORK_EXPLAINER: &str = "fork-explainer";
 const FACT_ANCHORED: &str = "fact-anchored";
 const REQ_CHIPS: &str = "req-chips";
-const RUN_STATED: &str = "run-stated";
 const RENDER_PATH: &str = "render-path";
 const GOAL_SECTION: &str = "goal-section";
 const PAGE_HEIGHT: &str = "page-height";
@@ -101,18 +101,6 @@ const KATEX_CSS_HINT: &str = "katex.min.css";
 const KATEX_JS_HINT: &str = "katex.min.js";
 const KATEX_AUTO_RENDER_HINT: &str = "auto-render.min.js";
 
-static RUN_DECIMAL_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"\d+\.\d+"));
-static RUN_HELD_RE: LazyLock<Regex> = LazyLock::new(|| {
-  compile_regex(
-    r"(?i)\b(?:held|kept|stayed|stays|remained|remains)\s+(?:the\s+)?(?:fixed|constant|unchanged|same)\b|\b(?:fixed|constant|unchanged|retained|controlled|same)\b|保持不变|固定不变|保持一致|不变|未变|没变|未改动|没改动|未改|没改|恒定|固定|控制变量",
-  )
-});
-static RUN_CHANGED_RE: LazyLock<Regex> = LazyLock::new(|| {
-  compile_regex(
-    r"(?i)\b(?:changed?|changing|changes?|varied|varying|modified|altered|variable|tweaked)\b|改(?:动|变|了|成|为)|更改|修改|变更|变量|变化",
-  )
-});
-
 /// `artifact_shared.GENRE_TEMPLATES`: the genre template whose `<style>` block a genre's pages carry.
 pub(crate) fn genre_template(genre: &str) -> &'static str {
   match genre {
@@ -124,14 +112,33 @@ pub(crate) fn genre_template(genre: &str) -> &'static str {
   }
 }
 
-/// The numbered-h2 count per genre, and whether it is exact.
-fn section_count_rule(genre: &str) -> (usize, bool) {
+/// A genre's numbered-h2 rule. `Run` requires the numbers to run 1..=n in order, with n in the range. `Subset` requires
+/// the numbers to ascend within 1..=max, so a page carries any subset of its numbered sections, or none.
+enum SectionRule {
+  Run(RangeInclusive<usize>),
+  Subset(usize),
+}
+
+fn section_count_rule(genre: &str) -> SectionRule {
   match genre {
-    "plan" => (6, true),
-    "understanding" => (5, false),
-    "sitrep" | "debug" | "explain" => (5, true),
+    "plan" => SectionRule::Run(5..=6),
+    "understanding" => SectionRule::Run(5..=usize::MAX),
+    "sitrep" | "debug" => SectionRule::Run(5..=5),
+    "explain" => SectionRule::Subset(5),
     "waiting" => unreachable!("the waiting set omits sections-numbered, so it has no section-count rule"),
     other => unreachable!("genre {other:?} is registered, so it has a section-count rule"),
+  }
+}
+
+/// The words for a section count range in a failure, such as `at least 5` or `5 to 6`.
+fn describe_count(count: &RangeInclusive<usize>) -> String {
+  let (start, end) = (*count.start(), *count.end());
+  if end == usize::MAX {
+    format!("at least {start}")
+  } else if start == end {
+    format!("exactly {start}")
+  } else {
+    format!("{start} to {end}")
   }
 }
 
@@ -183,7 +190,6 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FORK_EXPLAINER,
       FACT_ANCHORED,
       REQ_CHIPS,
-      RUN_STATED,
       PAGE_HEIGHT,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
@@ -427,7 +433,6 @@ fn run_assertions_sync_with_user_text(
       FORK_EXPLAINER => check_fork_explainer,
       FACT_ANCHORED => check_fact_anchored,
       REQ_CHIPS => check_req_chips,
-      RUN_STATED => check_run_stated,
       RENDER_PATH => check_render_path,
       GOAL_SECTION => check_goal_section,
       PAGE_HEIGHT => check_page_height,
@@ -669,29 +674,37 @@ fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<Assertio
     }
     values.push(decimal_integer(&number).map_err(|error| anyhow!("{error}"))?);
   }
-  let expected = (1..=values.len()).map(|value| value.to_string()).collect::<Vec<_>>();
-  if values != expected {
-    let read = if values.is_empty() { "(none)".to_owned() } else { values.join(", ") };
-    return Ok(vec![outcome(
-      SECTIONS_NUMBERED,
-      false,
-      format!("section numbers read {read}, expected 1..{} contiguously", values.len()),
-    )]);
-  }
-  let (required, exact) = section_count_rule(context.genre);
-  if exact && values.len() != required {
-    return Ok(vec![outcome(
-      SECTIONS_NUMBERED,
-      false,
-      format!("{} requires exactly {required} numbered sections, found {}", context.genre, values.len()),
-    )]);
-  }
-  if !exact && values.len() < required {
-    return Ok(vec![outcome(
-      SECTIONS_NUMBERED,
-      false,
-      format!("{} requires at least {required} numbered sections, found {}", context.genre, values.len()),
-    )]);
+  let read = if values.is_empty() { "(none)".to_owned() } else { values.join(", ") };
+  match section_count_rule(context.genre) {
+    SectionRule::Run(count) => {
+      let expected = (1..=values.len()).map(|value| value.to_string()).collect::<Vec<_>>();
+      if values != expected {
+        return Ok(vec![outcome(
+          SECTIONS_NUMBERED,
+          false,
+          format!("section numbers read {read}, expected 1..{} contiguously", values.len()),
+        )]);
+      }
+      if !count.contains(&values.len()) {
+        return Ok(vec![outcome(
+          SECTIONS_NUMBERED,
+          false,
+          format!("{} requires {} numbered sections, found {}", context.genre, describe_count(&count), values.len()),
+        )]);
+      }
+    }
+    SectionRule::Subset(max) => {
+      let numbers = values.iter().map(|value| value.parse::<usize>().ok()).collect::<Vec<_>>();
+      let ascending_subset = numbers.iter().all(|number| number.is_some_and(|number| (1..=max).contains(&number)))
+        && numbers.windows(2).all(|pair| pair[0] < pair[1]);
+      if !ascending_subset {
+        return Ok(vec![outcome(
+          SECTIONS_NUMBERED,
+          false,
+          format!("section numbers read {read}, expected an ascending subset of 1..={max}"),
+        )]);
+      }
+    }
   }
   Ok(vec![outcome(SECTIONS_NUMBERED, true, "")])
 }
@@ -1454,12 +1467,13 @@ fn check_explain_triad(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOut
   }
 }
 
-/// `explain-figures`: each `div.step` holds an svg of at least `FIGURE_MIN_ELEMENTS` shape or text elements, or an img
-/// with a src. In a section that holds steps, every p sits in a step, apart from one opening p before the first step.
+/// `explain-figures`: a page without a `div.step` passes. Each `div.step` holds an svg of at least
+/// `FIGURE_MIN_ELEMENTS` shape or text elements, or an img with a src. In a section that holds steps, every p sits in a
+/// step, apart from one opening p before the first step.
 fn check_explain_figures(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let steps = find(&context.nodes, 0, "div", &["step"]);
   if steps.is_empty() {
-    return Ok(vec![outcome(EXPLAIN_FIGURES, false, "no div.step on the page")]);
+    return Ok(vec![outcome(EXPLAIN_FIGURES, true, "")]);
   }
   let mut failures = Vec::new();
   for (index, &step) in steps.iter().enumerate() {
@@ -1527,12 +1541,13 @@ fn check_explain_figures(context: &Context<'_>) -> anyhow::Result<Vec<AssertionO
   if failures.is_empty() { Ok(vec![outcome(EXPLAIN_FIGURES, true, "")]) } else { Ok(failures) }
 }
 
-/// `explain-examples`: the page holds a `div.example.e2e` and a `div.example.contrast`, and each `div.example` names its
-/// source in a `span.src`.
+/// `explain-examples`: a page with a `div.step` holds a `div.example.e2e` and a `div.example.contrast`. Each
+/// `div.example` names its source in a `span.src`.
 fn check_explain_examples(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let mut failures = Vec::new();
+  let has_steps = !find(&context.nodes, 0, "div", &["step"]).is_empty();
   for (kind, label) in [("e2e", "div.example.e2e"), ("contrast", "div.example.contrast")] {
-    if find(&context.nodes, 0, "div", &["example", kind]).is_empty() {
+    if has_steps && find(&context.nodes, 0, "div", &["example", kind]).is_empty() {
       failures.push(outcome(EXPLAIN_EXAMPLES, false, format!("no {label} on the page")));
     }
   }
@@ -1607,11 +1622,11 @@ fn marked_element_text(nodes: &[Element], element: usize, target: usize) -> Stri
 }
 
 /// Each `span.req` chip carries a gloss, readable text after the chip in the sentence that holds
-/// it, before that sentence's terminator.
+/// it, before that sentence's terminator. A page with no chip passes.
 fn check_req_chips(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let chips = find(&context.nodes, 0, "span", &["req"]);
   if chips.is_empty() {
-    return Ok(vec![outcome(REQ_CHIPS, false, "no span.req requirement chips on the page")]);
+    return Ok(vec![outcome(REQ_CHIPS, true, "no span.req requirement chips on the page")]);
   }
   let mut failures = Vec::new();
   for (index, chip) in chips.iter().enumerate() {
@@ -1651,132 +1666,6 @@ fn check_req_chips(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome
   } else {
     Ok(failures)
   }
-}
-
-/// One text chunk per td/th cell of each row descendant.
-fn table_rows(nodes: &[Element], block: usize) -> Vec<Vec<String>> {
-  let mut rows = Vec::new();
-  for row in find(nodes, block, "tr", &[]) {
-    let cells: Vec<String> = nodes[row]
-      .children
-      .iter()
-      .filter_map(|child| match child {
-        Child::Element(child) if nodes[*child].tag == "td" || nodes[*child].tag == "th" => {
-          Some(element_text(nodes, *child))
-        }
-        _ => None,
-      })
-      .collect();
-    if !cells.is_empty() {
-      rows.push(cells);
-    }
-  }
-  rows
-}
-
-/// One chunk list per dl entry, the dt text followed by the dd texts that belong to it.
-fn dl_rows(nodes: &[Element], block: usize) -> Vec<Vec<String>> {
-  let mut rows = Vec::new();
-  let mut chunks: Option<Vec<String>> = None;
-  for element in descendants(nodes, block) {
-    if nodes[element].tag == "dt" {
-      if let Some(finished) = chunks.take() {
-        rows.push(finished);
-      }
-      chunks = Some(vec![element_text(nodes, element)]);
-    } else if nodes[element].tag == "dd"
-      && let Some(current) = chunks.as_mut()
-    {
-      current.push(element_text(nodes, element));
-    }
-  }
-  if let Some(finished) = chunks {
-    rows.push(finished);
-  }
-  rows
-}
-
-/// `held` or `changed` when a row names that role and carries readable text besides it.
-fn run_row_role(chunks: &[String]) -> Option<&'static str> {
-  for (role, pattern) in [("held", &*RUN_HELD_RE), ("changed", &*RUN_CHANGED_RE)] {
-    for (index, chunk) in chunks.iter().enumerate() {
-      let Ok(Some(found)) = pattern.find(chunk) else { continue };
-      let mut value = String::new();
-      value.push_str(&chunk[..found.start()]);
-      value.push_str(&chunk[found.end()..]);
-      for (other_index, other) in chunks.iter().enumerate() {
-        if other_index != index {
-          value.push(' ');
-          value.push_str(other);
-        }
-      }
-      if has_readable_text(&value) {
-        return Some(role);
-      }
-    }
-  }
-  None
-}
-
-/// A page that shows a decimal in a table cell states its run's changed and held-fixed factors,
-/// in another table or in a dl.
-fn check_run_stated(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
-  let mut cells = find(&context.nodes, 0, "td", &[]);
-  cells.extend(find(&context.nodes, 0, "th", &[]));
-  let numeric_cells: Vec<usize> = cells
-    .into_iter()
-    .filter(|&cell| RUN_DECIMAL_RE.is_match(&element_text(&context.nodes, cell)).unwrap_or(false))
-    .collect();
-  if numeric_cells.is_empty() {
-    return Ok(vec![outcome(RUN_STATED, true, "no numeric table cell")]);
-  }
-
-  let mut numeric_tables = HashSet::new();
-  for cell in numeric_cells {
-    let mut table = context.nodes[cell].parent;
-    while let Some(current) = table {
-      if context.nodes[current].tag == "table" {
-        numeric_tables.insert(current);
-        break;
-      }
-      table = context.nodes[current].parent;
-    }
-  }
-
-  let mut observed_roles = HashSet::new();
-  for block in descendants(&context.nodes, 0) {
-    let tag = context.nodes[block].tag.as_str();
-    if tag != "table" && tag != "dl" {
-      continue;
-    }
-    if numeric_tables.contains(&block) && numeric_tables.len() == 1 {
-      continue;
-    }
-    let rows = if tag == "table" { table_rows(&context.nodes, block) } else { dl_rows(&context.nodes, block) };
-    let roles: HashSet<&str> = rows.iter().filter_map(|chunks| run_row_role(chunks)).collect();
-    if roles.contains("changed") && roles.contains("held") {
-      return Ok(vec![outcome(RUN_STATED, true, "another table or dl states the changed and held-fixed factors")]);
-    }
-    observed_roles.extend(roles);
-  }
-
-  let mut missing: Vec<&str> = Vec::new();
-  for (role, label) in [("changed", "changed-factor row"), ("held", "held-fixed-factor row")] {
-    if !observed_roles.contains(role) {
-      missing.push(label);
-    }
-  }
-  if missing.is_empty() {
-    missing.push("changed-factor row and held-fixed-factor row in the same block");
-  }
-  Ok(vec![outcome(
-    RUN_STATED,
-    false,
-    format!(
-      "a table cell holds a decimal number, but no other table or dl states the {} with a value",
-      missing.join(" and the ")
-    ),
-  )])
 }
 
 /// Pre-rendered `class="katex"` markup, or the full KaTeX script injection.
@@ -2723,43 +2612,37 @@ mod tests {
     )
   }
 
-  const NUMERIC_TABLE: &str = concat!(
-    "<table><thead><tr><th>checkpoint</th><th>score</th></tr></thead>",
-    "<tbody><tr><td>10</td><td>0.002378</td></tr></tbody></table>",
-  );
-
-  /// The sitrep page with a measured table and `variable_block`.
-  fn sitrep_run_doc(variable_block: &str) -> String {
-    sitrep_ok_doc().replace(
-      r#"<p>Done. <span class="src">s</span></p>"#,
-      &format!("{NUMERIC_TABLE}{variable_block}{}", r#"<p>Done. <span class="src">s</span></p>"#),
-    )
-  }
-
-  fn run_sitrep(directory: &Path, source: &str) -> Vec<AssertionOutcome> {
-    let page = write_page(directory, "page.html", source);
-    run_assertions_sync("sitrep", &page, "", &repo_root()).unwrap()
+  /// The outcomes of `req-chips` on a sitrep page, run alone so no Chrome render runs.
+  fn run_sitrep(source: &str) -> Vec<AssertionOutcome> {
+    run_only("sitrep", source, &[REQ_CHIPS])
   }
 
   #[test]
-  #[ignore = "integration"]
+  fn test_sitrep_with_a_decimal_table_and_no_changed_factor_block_passes_every_sitrep_assertion() {
+    let table = "<table><tr><td>10</td><td>0.002378</td></tr></table>";
+    let doc = sitrep_ok_doc().replace(
+      r#"<p>Done. <span class="src">s</span></p>"#,
+      &format!("{table}<p>Done. <span class=\"src\">s</span></p>"),
+    );
+    let outcomes = run_only("sitrep", &doc, assertion_set("sitrep").unwrap());
+    assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
+  }
+
+  #[test]
   fn test_req_chips_passes_when_the_chip_is_glossed_in_its_sentence() {
-    let directory = tempfile::tempdir().unwrap();
-    let outcomes = run_sitrep(directory.path(), &sitrep_ok_doc());
+    let outcomes = run_sitrep(&sitrep_ok_doc());
     let chips = by_name(&outcomes, REQ_CHIPS);
     assert_eq!(chips.len(), 1, "{outcomes:#?}");
     assert!(chips[0].passed, "{:?}", chips[0].detail);
   }
 
   #[test]
-  #[ignore = "integration"]
   fn test_req_chips_fails_when_the_sentence_ends_after_the_chip() {
-    let directory = tempfile::tempdir().unwrap();
     let doc = sitrep_ok_doc().replace(
       r#"<span class="req">r1</span> states the first requirement."#,
       r#"<span class="req">r1</span>. A later sentence names the requirement."#,
     );
-    let outcomes = run_sitrep(directory.path(), &doc);
+    let outcomes = run_sitrep(&doc);
     let chips = by_name(&outcomes, REQ_CHIPS);
     assert_eq!(chips.len(), 1, "{outcomes:#?}");
     assert!(!chips[0].passed);
@@ -2768,129 +2651,73 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "integration"]
-  fn test_req_chips_accepts_a_gloss_in_another_unicode_script() {
-    let directory = tempfile::tempdir().unwrap();
-    let doc = sitrep_ok_doc().replace(
-      r#"<span class="req">r1</span> states the first requirement."#,
-      r#"<span class="req">r1</span> 要件の説明です。"#,
-    );
-    let outcomes = run_sitrep(directory.path(), &doc);
+  fn test_req_chips_passes_a_sitrep_without_chips() {
+    let doc = sitrep_ok_doc()
+      .replace(r#"<span class="req">r1</span> states the first requirement."#, "States the first requirement.");
+    let outcomes = run_sitrep(&doc);
     let chips = by_name(&outcomes, REQ_CHIPS);
     assert_eq!(chips.len(), 1, "{outcomes:#?}");
     assert!(chips[0].passed, "{:?}", chips[0].detail);
   }
 
   #[test]
-  #[ignore = "integration"]
-  fn test_run_stated_passes_when_a_table_or_dl_states_both_roles() {
-    let directory = tempfile::tempdir().unwrap();
-    let variable_blocks = [
-      concat!(
-        "<table><tr><th>role</th><th>value</th></tr>",
-        "<tr><td>Changed</td><td>weights randomly initialized; 3,506 columns dropped</td></tr>",
-        "<tr><td>Held fixed</td><td>commit e0852cbb; seed 3</td></tr></table>",
-      ),
-      concat!(
-        "<table><tr><td>Changed</td><td>learning rate 0.0001</td></tr>",
-        "<tr><td>Held fixed</td><td>seed 3</td></tr></table>",
-      ),
-      concat!(
-        "<dl><dt>改了什么</dt><dd>权重随机初始化，删掉 3,506 列</dd>",
-        "<dt>保持不变</dt><dd>提交 e0852cbb，种子 3</dd></dl>",
-      ),
-    ];
-    for variable_block in variable_blocks {
-      let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(variable_block));
-      let stated = by_name(&outcomes, RUN_STATED);
-      assert_eq!(stated.len(), 1, "{variable_block}: {outcomes:#?}");
-      assert!(stated[0].passed, "{variable_block}: {:?}", stated[0].detail);
+  fn test_req_chips_accepts_a_gloss_in_another_unicode_script() {
+    let doc = sitrep_ok_doc().replace(
+      r#"<span class="req">r1</span> states the first requirement."#,
+      r#"<span class="req">r1</span> 要件の説明です。"#,
+    );
+    let outcomes = run_sitrep(&doc);
+    let chips = by_name(&outcomes, REQ_CHIPS);
+    assert_eq!(chips.len(), 1, "{outcomes:#?}");
+    assert!(chips[0].passed, "{:?}", chips[0].detail);
+  }
+
+  /// Sections numbered `numbers` in order, each with a heading and one paragraph.
+  fn numbered_sections(numbers: &[usize]) -> String {
+    numbers
+      .iter()
+      .map(|number| {
+        format!(r#"<section><h2><span class="n">{number}</span> Section {number}</h2><p>Text.</p></section>"#)
+      })
+      .collect()
+  }
+
+  #[test]
+  fn test_sections_numbered_accepts_a_plan_of_five_or_six_sections() {
+    for count in [5, 6] {
+      let numbers = (1..=count).collect::<Vec<_>>();
+      let outcomes = run_only("plan", &genre_doc("plan", &numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
+      assert!(outcomes[0].passed, "{count} sections: {outcomes:#?}");
     }
   }
 
   #[test]
-  #[ignore = "integration"]
-  fn test_run_stated_fails_when_the_numeric_table_has_no_variable_block() {
-    let directory = tempfile::tempdir().unwrap();
-    let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(""));
-    let stated = by_name(&outcomes, RUN_STATED);
-    assert_eq!(stated.len(), 1, "{outcomes:#?}");
-    assert!(!stated[0].passed);
-    assert!(stated[0].detail.contains("changed-factor row"), "{}", stated[0].detail);
-    assert!(stated[0].detail.contains("held-fixed-factor row"), "{}", stated[0].detail);
+  fn test_sections_numbered_fails_a_plan_of_four_or_seven_sections() {
+    for count in [4, 7] {
+      let numbers = (1..=count).collect::<Vec<_>>();
+      let outcomes = run_only("plan", &genre_doc("plan", &numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
+      let failures = failed(&outcomes, SECTIONS_NUMBERED);
+      assert_eq!(failures.len(), 1, "{count} sections: {outcomes:#?}");
+      assert_eq!(failures[0].detail, format!("plan requires 5 to 6 numbered sections, found {count}"));
+    }
   }
 
   #[test]
-  #[ignore = "integration"]
-  fn test_run_stated_requires_a_block_separate_from_the_numeric_table() {
-    let directory = tempfile::tempdir().unwrap();
-    let table_with_inline_factors = NUMERIC_TABLE.replace(
-      "</tbody></table>",
-      concat!(
-        "<tr><td>Changed</td><td>3,506 columns dropped</td></tr>",
-        "<tr><td>Held fixed</td><td>seed 3</td></tr></tbody></table>",
-      ),
-    );
-    let doc = sitrep_ok_doc().replace(
-      r#"<p>Done. <span class="src">s</span></p>"#,
-      &format!("{table_with_inline_factors}{}", r#"<p>Done. <span class="src">s</span></p>"#),
-    );
-    let outcomes = run_sitrep(directory.path(), &doc);
-    let stated = by_name(&outcomes, RUN_STATED);
-    assert_eq!(stated.len(), 1, "{outcomes:#?}");
-    assert!(!stated[0].passed);
-    assert!(stated[0].detail.contains("changed-factor row"), "{}", stated[0].detail);
-    assert!(stated[0].detail.contains("held-fixed-factor row"), "{}", stated[0].detail);
+  fn test_sections_numbered_accepts_any_subset_of_the_explain_sections_and_none() {
+    for numbers in [vec![], vec![2, 5], vec![1, 3, 4], vec![1, 2, 3, 4, 5]] {
+      let outcomes = run_only("explain", &explain_doc(&numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
+      assert!(outcomes[0].passed, "{numbers:?}: {outcomes:#?}");
+    }
   }
 
   #[test]
-  #[ignore = "integration"]
-  fn test_run_stated_requires_both_role_rows_in_one_block() {
-    let directory = tempfile::tempdir().unwrap();
-    let variable_blocks = concat!(
-      "<table><tr><td>Changed</td><td>3,506 columns dropped</td></tr></table>",
-      "<dl><dt>Held fixed</dt><dd>seed 3</dd></dl>",
-    );
-    let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(variable_blocks));
-    let stated = by_name(&outcomes, RUN_STATED);
-    assert_eq!(stated.len(), 1, "{outcomes:#?}");
-    assert!(!stated[0].passed);
-    assert!(
-      stated[0].detail.contains("changed-factor row and held-fixed-factor row in the same block"),
-      "{}",
-      stated[0].detail
-    );
-  }
-
-  #[test]
-  #[ignore = "integration"]
-  fn test_run_stated_names_the_one_missing_role_row() {
-    let directory = tempfile::tempdir().unwrap();
-    let block = "<table><tr><td>Changed</td><td>3,506 columns dropped</td></tr></table>";
-    let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(block));
-    let stated = by_name(&outcomes, RUN_STATED);
-    assert_eq!(stated.len(), 1, "{outcomes:#?}");
-    assert!(!stated[0].passed);
-    assert!(stated[0].detail.contains("held-fixed-factor row"), "{}", stated[0].detail);
-    assert!(!stated[0].detail.contains("changed-factor row"), "{}", stated[0].detail);
-  }
-
-  #[test]
-  #[ignore = "integration"]
-  fn test_run_stated_is_inert_without_a_decimal_table_cell() {
-    let directory = tempfile::tempdir().unwrap();
-    let doc = sitrep_ok_doc().replace(
-      r#"<p>Done. <span class="src">s</span></p>"#,
-      concat!(
-        r#"<table><tr><td>checkpoint</td><td>10</td></tr></table>"#,
-        r#"<p>Done. <span class="src">s</span></p>"#,
-      ),
-    );
-    let outcomes = run_sitrep(directory.path(), &doc);
-    let stated = by_name(&outcomes, RUN_STATED);
-    assert_eq!(stated.len(), 1, "{outcomes:#?}");
-    assert!(stated[0].passed, "{:?}", stated[0].detail);
-    assert_eq!(stated[0].detail, "no numeric table cell");
+  fn test_sections_numbered_fails_explain_numbers_out_of_order_or_outside_one_to_five() {
+    for numbers in [vec![3, 2], vec![2, 2], vec![1, 6], vec![0]] {
+      let outcomes = run_only("explain", &explain_doc(&numbered_sections(&numbers)), &[SECTIONS_NUMBERED]);
+      let failures = failed(&outcomes, SECTIONS_NUMBERED);
+      assert_eq!(failures.len(), 1, "{numbers:?}: {outcomes:#?}");
+      assert!(failures[0].detail.ends_with("expected an ascending subset of 1..=5"), "{}", failures[0].detail);
+    }
   }
 
   /// The explain template with `body` as its `<main>` content. The head, the render path and the style block stay the
@@ -2979,12 +2806,24 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "integration"]
-  fn test_explain_figures_fails_a_page_with_no_step() {
-    let outcomes = run_explain(&explain_body(OPENING, &format!("{E2E}{CONTRAST}")));
-    let failures = failed(&outcomes, EXPLAIN_FIGURES);
-    assert_eq!(failures.len(), 1, "{outcomes:#?}");
-    assert_eq!(failures[0].detail, "no div.step on the page");
+  fn test_explain_figures_passes_a_page_without_steps() {
+    let outcomes = run_only("explain", &explain_doc(OPENING), &[EXPLAIN_FIGURES]);
+    assert!(failed(&outcomes, EXPLAIN_FIGURES).is_empty(), "{outcomes:#?}");
+  }
+
+  #[test]
+  fn test_explain_examples_passes_a_page_without_steps_or_examples() {
+    let outcomes = run_only("explain", &explain_doc(OPENING), &[EXPLAIN_EXAMPLES]);
+    assert!(failed(&outcomes, EXPLAIN_EXAMPLES).is_empty(), "{outcomes:#?}");
+  }
+
+  #[test]
+  fn test_explain_examples_still_fails_a_page_with_steps_and_no_examples() {
+    let mechanism = format!("{OPENING}{}", step(FIGURE));
+    let outcomes = run_only("explain", &explain_doc(&explain_body(&mechanism, "")), &[EXPLAIN_EXAMPLES]);
+    let failures = failed(&outcomes, EXPLAIN_EXAMPLES);
+    assert_eq!(failures.len(), 2, "{outcomes:#?}");
+    assert_eq!(failures[0].detail, "no div.example.e2e on the page");
   }
 
   #[test]

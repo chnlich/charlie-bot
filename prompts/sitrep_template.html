@@ -106,19 +106,19 @@
          as a div.fork block whose folded explainer carries the material needed to judge it
          (fork grammar: plan_template.html's block kit, section 5). "Nothing waits on you."
          is a valid one-line body.
-      2. "What is this and why?" — the problem from scratch for a cold reader, ending with a short
-         list of the named requirements the page answers, rendered as span.req chips; each
-         requirement's name carries its meaning for the reader in the reader's own words.
-      3. "What was verified?" — deliverables and acceptance evidence, and, for a reported run,
-         what that run changed and what it held fixed; every claim carries a span.src anchor.
+      2. "What is this and why?" — the problem from scratch for a cold reader. When the page answers named
+         requirements, end with a short list of them rendered as span.req chips; give each chip one sentence of
+         its meaning for the reader, in the reader's own words.
+      3. "What was verified?" — deliverables and acceptance evidence; when the page reports a comparison run,
+         state what that run changed and what it held fixed; every claim carries a span.src anchor.
       4. "Risks & open questions" — a fact label (span.tag.fact) requires a source anchor; an
          open-hypothesis label (span.tag.hyp) carries a confidence level (high / moderate / low)
          and the observation that would decide it.
       5. "What happens next?" — the schedule, in-flight work, and the recommended order.
 
       Five readability rules, one line each:
-      - facts-answer-requirements: every fact block opens by naming which requirement from
-        section 2 it discharges.
+      - facts-answer-requirements: when section 2 names requirements, open every fact block by naming the one it
+        discharges.
       - one-topic-one-place: each topic is told fully in one place; anywhere else, at most one
         referencing sentence.
       - walked-causality: a causal claim walks every step of its chain, or carries a worked

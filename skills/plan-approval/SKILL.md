@@ -44,15 +44,16 @@ An understanding page lists the divergences of a request that admits several rea
 (the trigger and its exemptions live in the master prompt).
 
 - The page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and style of
-  `prompts/plan_template.html`. Six blocks: goal in one sentence carrying the why one level up; the
+  `prompts/plan_template.html`. Five blocks: goal in one sentence carrying the why one level up; the
   deliverable through one concrete worked example and one figure showing the main reading or outcome;
   acceptance criteria, each a trigger condition and an observable result in the page's natural language; non-goals; numbered
   divergences rendered as `div.fork` blocks, each carrying its options and their consequences outside folds
-  and the fork grammar's folded explainer (block kit section 5, `prompts/plan_template.html`);
-  Linear.
-- The Linear block appears only for a repo marked Linear-tracked on the memory entry
-  `charliebot/workspace-repos`; a repo not tracked carries no block, and an absent marker list gets one line
-  saying the whitelist is not configured. Use the `linear` skill to list candidates or prepare a ready-to-file
+  and the fork grammar's folded explainer (block kit section 5, `prompts/plan_template.html`). Add the Linear block
+  when the next bullet applies.
+- Include the Linear block only when the repo is Linear-tracked on the memory entry
+  `charliebot/workspace-repos` (that whitelist decides which repos are tracked) or a ticket already exists for the
+  work. When the marker list is absent, write one line saying the whitelist is not configured instead. Use the
+  `linear` skill to list candidates or prepare a ready-to-file
   draft. For a root session, the user decides which and the `linear` skill's confirmation rule applies.
   For a sub session, follow the master prompt's External System Writes rule. Fill the draft from the Linear defaults
   in memory.

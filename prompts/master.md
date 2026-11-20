@@ -249,7 +249,8 @@ it does.
 - Write debug, explain, plan, understanding, sitrep, and waiting pages in layers from the first draft. Aim for an
   open-part height of 2000 px or less at the 1280 px probe width.
   Keep the conclusion, one figure, one worked example the reader can check by hand, and every choice with its options,
-  demos, recommendation, and tradeoff open.
+  demos, recommendation, and tradeoff open. On an explain page, the GRAMMAR comment of `prompts/explain_template.html`
+  sets the figures and examples instead.
   Use folding alone for an overage: fold secondary material until the page fits or only the required content remains
   open, and keep all page text and the template style verbatim.
   `charliebot artifact check` reports the measured height and overage; page sharing, plan registration, and

@@ -504,4 +504,25 @@ mod tests {
     assert!(prompt.contains("## Settled text: memo.md\nMEMO TEXT"));
     assert!(prompt.contains("## User-only kinds (prompts/master.md)\nKINDS TEXT"));
   }
+
+  #[tokio::test]
+  async fn the_settled_text_is_the_rulings_topic_and_the_sessions_project_topic() {
+    let home = Home::new();
+    let memory = home.root().join("memory");
+    fs::create_dir_all(&memory).expect("the memory directory writes");
+    fs::write(memory.join("topics"), "rulings resident\nsurpass\nworkflow resident\n")
+      .expect("the topics vocabulary writes");
+    for (topic, slug) in [("rulings", "a"), ("surpass", "gpuq"), ("workflow", "w")] {
+      let dir = memory.join("entries").join(topic);
+      fs::create_dir_all(&dir).expect("the topic directory writes");
+      let entry = format!("---\nscope: user\ntopic: {topic}\naudience: master, worker\ntitle: {slug}\n---\n- a rule\n");
+      fs::write(dir.join(format!("{slug}.md")), entry).expect("the entry writes");
+    }
+
+    let labels = |settled: Vec<Settled>| settled.into_iter().map(|source| source.label).collect::<Vec<_>>();
+    let settled = memory_settled(&home.root(), Some("surpass")).await.expect("the settled text loads");
+    assert_eq!(labels(settled), ["rulings/a".to_string(), "surpass/gpuq".to_string()]);
+    let settled = memory_settled(&home.root(), None).await.expect("the settled text loads");
+    assert_eq!(labels(settled), ["rulings/a".to_string()]);
+  }
 }

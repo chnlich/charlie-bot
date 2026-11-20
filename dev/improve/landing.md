@@ -191,10 +191,10 @@ One pull request per round is the unit that CI and the reviewer check.
 ## Step 6: review the diff
 
 The review is one direct `charlie-code` run, outside the clone, unless the pull request names screenshots.
-When the pull request names screenshots, the review compares the before screenshot with the after screenshot of each window size, and each review run receives one size's before-screenshot and after-screenshot as images, split by state when a size has more than one, so that no run receives more than the four images that charlie-code accepts.
-The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
+When the pull request names screenshots, review each window size and state against its same-round before screenshot. Each review run receives that pair as images through two `--image <path>` options in before-then-after order; a size with multiple states gets one run per state, within charlie-code's four-image limit.
+The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`. For each screenshot review run, it writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then `EVIDENCE: <the round's evidence directory>`, `DIRECTION: dev/improve/<direction>.md`, `IMAGES: <before filename> <after filename>` (both names relative to the evidence directory), and one final line `PR: <number> <url>`.
 
-The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
+The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file`, the sessions on `--session-dir ~/improve/<direction>/clc-sessions`, and the two image paths from the `IMAGES:` line on repeated `--image` options.
 The command passes no `--model` or `--api-base` flag.
 `charlie-code` reads the review option's settings from these environment variables, which the runner sets whichever model runs the round:
 

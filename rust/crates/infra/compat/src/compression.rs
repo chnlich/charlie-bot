@@ -91,7 +91,7 @@ pub fn gzip_level_four(data: &[u8]) -> Vec<u8> {
 /// The gzip levels a memoized body deflates at; the smaller form is the one the memo keeps.
 ///
 /// Level 9 is not the smaller form of every body with this backend. On the 14,451-row status answer of the mock home,
-/// level 9 produces 352,154 bytes where level 8 produces 308,813 (12.3% more), and level 8 takes 18 ms where level 9
+/// level 9 produces 352,154 bytes where level 8 produces 308,813 (14.03% more), and level 8 takes 18 ms where level 9
 /// takes 24 ms. On the chat page body the level-9 form is 287 bytes smaller than the level-8 one (0.3%). The level a
 /// body prefers depends on the body, so a memoized body deflates at both and keeps the smaller form.
 const MEMOIZED_LEVELS: [u32; 2] = [9, 8];

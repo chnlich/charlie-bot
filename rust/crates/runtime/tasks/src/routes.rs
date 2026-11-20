@@ -602,7 +602,7 @@ async fn delegate_bound_round(
   drop(guard);
   let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(|_| DelegateError::AdapterMissing)?;
   adapter.launch(&child.id, &run_id)?;
-  let task_event = json!({
+  let mut task_event = json!({
     "type": event_types::TASK_DELEGATED,
     "thread_id": run_id,
     "description": request.description,
@@ -610,6 +610,10 @@ async fn delegate_bound_round(
     "model": round.model.as_deref().unwrap_or_default(),
     event_types::CHILD_SESSION_ID: child.id,
   });
+  // The pool id is the child's session backend; a single-option child carries none.
+  if let Some(pool) = &round.session_backend {
+    task_event[event_types::POOL] = json!(pool);
+  }
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, bound_task, "task_delegated_bound_round");
   Ok(json!({
@@ -726,7 +730,7 @@ async fn delegate_task_tree(
   }
   let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(|_| DelegateError::AdapterMissing)?;
   adapter.launch(&child.id, &run_id)?;
-  let task_event = json!({
+  let mut task_event = json!({
     "type": charliebot_core::event_types::TASK_DELEGATED,
     "thread_id": run_id,
     "description": request.description,
@@ -736,6 +740,10 @@ async fn delegate_task_tree(
     "route": route,
     charliebot_core::event_types::DELEGATE_INVOCATION: delegate_invocation_event_payload(request),
   });
+  // A child whose session backend is a pool runs its member under the pool id; a single-option child names no pool.
+  if subagent.session_backend != subagent.run_backend {
+    task_event[event_types::POOL] = json!(subagent.session_backend);
+  }
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, "task_delegated_task_tree");
   Ok(json!({

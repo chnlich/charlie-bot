@@ -684,6 +684,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       event_types::CHILD_SESSION_ID: event.field(event_types::CHILD_SESSION_ID).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       event_types::DELEGATE_INVOCATION: event.field(event_types::DELEGATE_INVOCATION).map(EventFields::to_owned_value).unwrap_or(Value::Null),
       "backend": preferred_value(event, "backend", "resolved_backend"),
+      event_types::POOL: event.field(event_types::POOL).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or(Value::Null),
       "model": preferred_value(event, "model", "resolved_model"),
       "route": event.field("route").map(EventFields::to_owned_value).unwrap_or(Value::Null),
       // A falsy timestamp falls back to created_at, so both fields absent give null.
@@ -1922,6 +1923,7 @@ mod tests {
         "description": long_description,
         "timestamp": "2026-07-01T12:00:00Z",
         "backend": "codex-o3",
+        "pool": "human-communication",
         "model": "o3",
         "route": {"backends": ["codex-o3"], "reason": "design"},
         "delegate_invocation": invocation,
@@ -1938,6 +1940,7 @@ mod tests {
           "child_session_id": "",
           "delegate_invocation": invocation,
           "backend": "codex-o3",
+          "pool": "human-communication",
           "model": "o3",
           "route": {"backends": ["codex-o3"], "reason": "design"},
           "event_index": 0,

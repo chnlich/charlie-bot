@@ -103,13 +103,21 @@ async fn auto_stack(script_a: &str, script_b: &str) -> anyhow::Result<Stack> {
 }
 
 async fn auto_session(stack: &Stack, request_id: &str) -> anyhow::Result<SessionMetadata> {
+  auto_session_under(stack, request_id, None).await
+}
+
+async fn auto_session_under(
+  stack: &Stack,
+  request_id: &str,
+  parent_id: Option<&str>,
+) -> anyhow::Result<SessionMetadata> {
   Ok(
     stack
       .store()
       .create_task(
         CreateTask {
           request_id: request_id.to_string(),
-          task_parent_id: None,
+          task_parent_id: parent_id.map(str::to_string),
           profile: TaskProfile::Manager,
           task: None,
           name: Some("Auto session".to_string()),
@@ -332,25 +340,44 @@ async fn an_access_refused_turn_continues_on_the_next_member_with_the_refusal_re
   Ok(())
 }
 
+/// Record both auto members out until the far-future reset, so the auto pool selects none.
+fn put_every_member_out(stack: &Stack) -> anyhow::Result<()> {
+  let reset = UtcDateTime::parse("2999-01-02T03:04:05Z")?;
+  record_out(stack, MEMBER_A, Some(reset))?;
+  record_out(stack, MEMBER_B, Some(reset))
+}
+
+/// Pool cooling: a child manager whose pool has every member out ends its turn with the exhausted error. That end is
+/// not a refusal, so its parent hears nothing.
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_exhausted_child_manager_turn_sends_its_parent_no_notice() -> anyhow::Result<()> {
+  let stack = auto_stack(&success_script(), &success_script()).await?;
+  let parent = auto_session(&stack, "auto-parent").await?;
+  let child = auto_session_under(&stack, "auto-child", Some(&parent.id)).await?;
+  put_every_member_out(&stack)?;
+  dispatch_turn(&stack, &child.id).await?;
+  settle(&stack, &child.id).await?;
+
+  let errors = stack
+    .run_event_values(&child.id)?
+    .into_iter()
+    .filter(|event| event["type"] == event_types::ASSISTANT_ERROR)
+    .collect::<Vec<_>>();
+  assert_eq!(errors.len(), 1, "the exhausted turn ends with one error: {errors:?}");
+  assert_eq!(errors[0]["quota_exhausted"], json!(true));
+  let parent_events = stack.run_event_values(&parent.id)?;
+  assert!(!parent_events.iter().any(|event| event["type"] == event_types::AGENT_MESSAGE), "{parent_events:?}");
+  Ok(())
+}
+
 /// Test ③: with every member out, the turn ends with one error that lists each member.
 #[tokio::test]
 #[ignore = "integration"]
 async fn an_exhausted_set_ends_the_turn_with_one_error_listing_every_member() -> anyhow::Result<()> {
   let stack = auto_stack(&success_script(), &success_script()).await?;
   let session = auto_session(&stack, "auto-exhausted").await?;
-  let availability = backend_availability::backend_availability(&stack.features)?;
-  let reset = UtcDateTime::parse("2999-01-02T03:04:05Z")?;
-  for member in [MEMBER_A, MEMBER_B] {
-    let cfg = stack.features.config.get()?;
-    availability.record(
-      &cfg,
-      &stack.features.registry,
-      member,
-      Some(reset),
-      backend_availability::REASON_QUOTA_ERROR,
-      QUOTA_ERROR,
-    )?;
-  }
+  put_every_member_out(&stack)?;
   dispatch_turn(&stack, &session.id).await?;
   let runs = settle(&stack, &session.id).await?;
 

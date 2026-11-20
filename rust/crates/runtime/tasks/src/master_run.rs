@@ -328,6 +328,26 @@ async fn report_turn_error_and_salvage(
   salvage_silent_turn(tracker, error_msg, &item.callbacks, &metadata.id).await
 }
 
+/// Tell a child manager's parent that the live turn `item` ended with `message`. A root session has no parent to tell.
+/// A quota end sends none. The notice's id is the run's, so a second end of the same run admits no second notice.
+async fn notify_parent_of_run_error(
+  item: &WorkItem,
+  message: &str,
+  quota_exhausted: Option<bool>,
+) -> anyhow::Result<()> {
+  let metadata = item.session_metadata();
+  if quota_exhausted == Some(true) || metadata.task_parent_id.is_none() {
+    return Ok(());
+  }
+  let completion = item.callbacks.features.startup.require::<TaskCompletion>()?;
+  completion.notify_initiator_of_run_error(&metadata.id, &item.task_run.run_id, message).await?;
+  Ok(())
+}
+
+/// Ends a turn that starts no agent: the error shows on the session and the session is marked unread, then a child
+/// manager's parent hears the refusal. `run_cc` is this function's only caller, so the end is live. A restart replays
+/// a refused run through the recovery pass, which launches nothing. A pool whose members are all out ends its turn in
+/// the dispatch layer, not here, so a pool-cooling end sends no notice.
 async fn refuse_turn(
   item: &WorkItem,
   message: &str,
@@ -336,6 +356,7 @@ async fn refuse_turn(
   let session_id = item.session_metadata().id;
   (item.callbacks.persist_and_broadcast)(session_id.clone(), agent_error_event(message, quota_exhausted)).await?;
   (item.callbacks.mark_unread)(session_id).await?;
+  notify_parent_of_run_error(item, message, quota_exhausted).await?;
   Ok(MasterRunOutcome {
     cc_session_id: None,
     exit_code: 1,
@@ -989,13 +1010,8 @@ pub(crate) async fn run_cc(
   // This turn's end is live: its process ended under this server. A restart resumes a turn through resume_cc, which
   // sends no notice. The notice follows the unread mark. The parent's dispatch only schedules the parent's turn, so
   // this turn does not wait for that turn to end.
-  if !pool_member_end
-    && quota_exhausted != Some(true)
-    && metadata.task_parent_id.is_some()
-    && let Some(message) = error_msg.as_deref()
-  {
-    let completion = process.item.callbacks.features.startup.require::<TaskCompletion>()?;
-    completion.notify_initiator_of_run_error(&session_id, &process.item.task_run.run_id, message).await?;
+  if !pool_member_end && let Some(message) = error_msg.as_deref() {
+    notify_parent_of_run_error(process.item, message, quota_exhausted).await?;
   }
   let cc_session_id = cc_session_id.lock().expect("session id mutex is not poisoned").clone();
   Ok(MasterRunOutcome {

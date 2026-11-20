@@ -842,6 +842,18 @@ impl Stack {
     profile: TaskProfile,
     task: Option<TaskSpec>,
   ) -> anyhow::Result<SessionMetadata> {
+    self.node_on(request_id, parent, profile, task, BACKEND_ID).await
+  }
+
+  /// A session like `node`, on the backend `backend` names instead of the fixture's option.
+  pub async fn node_on(
+    &self,
+    request_id: &str,
+    parent: Option<&str>,
+    profile: TaskProfile,
+    task: Option<TaskSpec>,
+    backend: &str,
+  ) -> anyhow::Result<SessionMetadata> {
     let meta = self
       .store()
       .create_task(
@@ -851,7 +863,7 @@ impl Stack {
           profile,
           task,
           name: Some(format!("Synthetic {request_id}")),
-          backend: Some(BACKEND_ID.to_string()),
+          backend: Some(backend.to_string()),
           group: None,
           session_id: None,
         },

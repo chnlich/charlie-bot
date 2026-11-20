@@ -41,13 +41,15 @@ use charliebot_store::trigger_files::{self, PendingTrigger, TriggerStatus};
 use charliebot_store::write_faults::{self, Hit};
 use charliebot_store::{CreateTask, PatchTask, TaskCaller, control_events};
 use charliebot_tasks::execution::{TaskExecutionAdapter, is_out_of_space_error};
+use charliebot_tasks::master_queue::MasterQueue;
+use charliebot_tasks::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
 use charliebot_tasks::recovery::{self, PassCounters};
 use futures_util::future::BoxFuture;
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, LOOP_KIND, LogCapture, LoopClose, LoopMarker, PROBE_KIND, Scripts, Stack, SyntheticRepo,
-  assert_logged_node_failure, cold_read_spec, implement_spec, last_child_report, script_option, scripted_type,
-  synthetic_run,
+  BACKEND_ID, BACKEND_TYPE, LOOP_KIND, LogCapture, LoopClose, LoopMarker, PROBE_KIND, ROTATION_POOL_ID, Scripts, Stack,
+  SyntheticRepo, assert_logged_node_failure, cold_read_spec, implement_spec, last_child_report, script_option,
+  scripted_type, synthetic_run,
 };
 use serde_json::{Map, Value, json};
 use tower::ServiceExt;
@@ -2321,6 +2323,117 @@ async fn restart_replay_sends_no_run_error_notice() -> anyhow::Result<()> {
   assert_eq!(run_error_notices(&stack, &parent.id, &child.id, &run_id)?.len(), 1);
   assert_eq!(stack.run_records(&child.id)?.len(), 1, "the replay launches no run of its own");
   assert_eq!(counters.followups, 2, "{counters:?}");
+  Ok(())
+}
+
+/// A backend id that `backends.options` and `backends.pools` do not list.
+const UNLISTED_BACKEND: &str = "unlisted-backend";
+
+/// Run a manager turn through the queue with no backend option. The queue resolves the session's backend and refuses the
+/// turn when it cannot: an unlisted id, or the rotation pool with no member recorded.
+async fn refuse_manager_turn(stack: &Stack, manager: &SessionMetadata, run_id: &str) -> anyhow::Result<()> {
+  stack.queue_run(&manager.id, run_id, RunKind::ManagerTurn).await?;
+  let transport_dir = stack.home.path().join("runs").join(run_id);
+  std::fs::create_dir_all(&transport_dir)?;
+  let on_task_spawn: TaskSpawnCallback = Arc::new(|_pid, _start| Box::pin(async { Ok(()) }));
+  let on_task_finish: TaskFinishCallback =
+    Arc::new(|_native_id, _exit_code, _extras, _done_event| Box::pin(async { Ok(false) }));
+  let queue = stack.features.startup.require::<MasterQueue>()?;
+  let callbacks = queue.session_callbacks(Arc::clone(&stack.features), Arc::new(|_| Ok((false, String::new()))));
+  queue
+    .run_message(MasterTurnRequest {
+      cfg: Arc::clone(&stack.cfg),
+      session_meta: manager.clone(),
+      user_content: "Start the refused turn.".to_string(),
+      callbacks,
+      user_event_ids: Vec::new(),
+      task_instructions: String::new(),
+      task_run: TaskRunBinding {
+        session_id: manager.id.clone(),
+        run_id: run_id.to_string(),
+        transport_dir,
+        fresh_native_context: false,
+      },
+      on_task_spawn,
+      on_task_finish,
+      backend_option: None,
+      extra_claude_flags: None,
+      uploaded_files: None,
+      extra_env: None,
+    })
+    .await?;
+  Ok(())
+}
+
+/// The refusal text a session shows: the content of its one Agent error.
+fn shown_refusal(events: &[Value]) -> anyhow::Result<String> {
+  let errors = events
+    .iter()
+    .filter(|event| event["type"] == event_types::ASSISTANT_ERROR)
+    .map(|event| event["content"].as_str().map(str::to_string).context("the error carries its text"))
+    .collect::<anyhow::Result<Vec<_>>>()?;
+  anyhow::ensure!(errors.len() == 1, "one refusal shows one Agent error: {errors:?}");
+  let shown = errors[0].strip_prefix("Agent error: ").context("the error is an Agent error")?;
+  Ok(shown.to_string())
+}
+
+/// A child manager whose pinned backend id `backends.options` does not list. The queue refuses its turn, and the parent
+/// gets one notice with the refusal text the child shows and the run id.
+#[tokio::test]
+#[ignore = "integration"]
+async fn child_manager_refusal_notifies_the_parent_once() -> anyhow::Result<()> {
+  let stack = Stack::start("printf 'synthetic turn failure\\n' >&2; exit 1").await?;
+  stack.write_access_key()?;
+  let parent = stack.node("parent", None, TaskProfile::Manager, None).await?;
+  let child = stack.node_on("child", Some(&parent.id), TaskProfile::Manager, None, UNLISTED_BACKEND).await?;
+  let run_id = "refused-child-run";
+
+  refuse_manager_turn(&stack, &child, run_id).await?;
+  let refusal = shown_refusal(&stack.run_event_values(&child.id)?)?;
+  assert!(refusal.contains("backend 'unlisted-backend' is not a backends.options or backends.pools id"), "{refusal}");
+  settle_manager(&stack, &parent.id).await?;
+  let notices = run_error_notices(&stack, &parent.id, &child.id, run_id)?;
+  assert_eq!(notices.len(), 1, "{notices:?}");
+  let content = notices[0]["content"].as_str().context("the notice carries its text")?;
+  assert!(content.contains(&refusal), "{content}");
+  assert!(content.contains(run_id), "{content}");
+  Ok(())
+}
+
+/// A root manager's refusal keeps today's display: an Agent error on its own session and no notice, since a root has no
+/// parent to tell.
+#[tokio::test]
+#[ignore = "integration"]
+async fn root_manager_refusal_sends_no_notice() -> anyhow::Result<()> {
+  let stack = Stack::start("exit 0").await?;
+  stack.write_access_key()?;
+  let root = stack.node_on("root", None, TaskProfile::Manager, None, ROTATION_POOL_ID).await?;
+
+  refuse_manager_turn(&stack, &root, "refused-root-run").await?;
+  let events = stack.run_event_values(&root.id)?;
+  shown_refusal(&events)?;
+  assert!(!events.iter().any(|event| event["type"] == event_types::AGENT_MESSAGE), "{events:?}");
+  Ok(())
+}
+
+/// A restart replays a refused child run through the boot pass's manager branch. The notice keeps its stable id and stays
+/// one, and the replay launches no run of its own.
+#[tokio::test]
+#[ignore = "integration"]
+async fn restart_replay_of_a_refused_child_run_keeps_one_notice() -> anyhow::Result<()> {
+  let stack = Stack::start("printf 'synthetic turn failure\\n' >&2; exit 1").await?;
+  stack.write_access_key()?;
+  let parent = stack.node("parent", None, TaskProfile::Manager, None).await?;
+  let child = stack.node_on("child", Some(&parent.id), TaskProfile::Manager, None, ROTATION_POOL_ID).await?;
+  let run_id = "refused-child-run";
+  refuse_manager_turn(&stack, &child, run_id).await?;
+  stack.record_terminal(&child.id, run_id, RunOutcomeKind::Failed).await?;
+  settle_manager(&stack, &parent.id).await?;
+  assert_eq!(run_error_notices(&stack, &parent.id, &child.id, run_id)?.len(), 1);
+
+  stack.boot().await?;
+  assert_eq!(run_error_notices(&stack, &parent.id, &child.id, run_id)?.len(), 1);
+  assert_eq!(stack.run_records(&child.id)?.len(), 1, "the replay launches no run of its own");
   Ok(())
 }
 

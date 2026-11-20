@@ -46,7 +46,7 @@ fn select_options(html: &str, id: &str) -> Vec<(String, String)> {
 }
 
 #[test]
-fn the_backend_dropdown_lists_each_visible_option_and_pool_in_picker_order() {
+fn the_cron_dropdown_matches_the_new_session_dropdown_and_the_index_page_declares_the_for_you_rule() {
   let (_home, features) = feature_context();
   let backends = BackendsConfig {
     routing: None,
@@ -112,4 +112,12 @@ fn the_backend_dropdown_lists_each_visible_option_and_pool_in_picker_order() {
     new_session_options[..],
     "the cron dropdown options match new session options in value, label, and order"
   );
+
+  // The page's For-you rule is the store's: the declaration in the head script parses to the same rule. The served
+  // script folds the spaces around `=`, so the pattern allows any spacing there.
+  let declaration = Regex::new(r"const\s+FOR_YOU_RULE\s*=\s*").expect("the declaration pattern compiles");
+  let found = declaration.find(&page_html).expect("the page declares FOR_YOU_RULE");
+  let rule_end = found.end() + page_html[found.end()..].find(';').expect("the declaration ends");
+  let declared: Value = serde_json::from_str(&page_html[found.end()..rule_end]).expect("the declared rule is JSON");
+  assert_eq!(declared, charliebot_store::for_you::page_rule());
 }

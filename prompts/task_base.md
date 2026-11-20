@@ -68,14 +68,19 @@ would alter a page, report that it needs rerouting before editing.
 - Capture screenshots of the changed state before you commit.
 - Cover each state the change adds or alters, including open trays, menus and dialogs.
 - Take each screenshot at 1280 px and at 390 px width.
-- Name each screenshot file by its absolute path in the commit or PR body, and keep the files out of the commits.
+- Keep the screenshot files out of the commits.
+- For a landing through `charliebot land`, name each screenshot file by its absolute path on this host in the commit
+  or PR body.
+- For an improve round, follow `dev/improve/landing.md` Steps 5 and 9 for the screenshots' location, the pull request's
+  naming of them and their delivery to the user.
 
-When you review such a change, check each named screenshot before you land it.
+When you review such a change, check each screenshot it names before you land it, wherever the landing keeps the file.
 - Look for overlap with page content, clipping and missing controls in every state the screenshots show.
 - Report the landing as blocked instead of landing it when a screenshot is missing or shows one of these defects.
 
 `charliebot land` refuses a landing whose diff changes `web/` or a page template under `prompts/` unless its PR body
-names a screenshot at 1280 px and a screenshot at 390 px by absolute path.
+names a screenshot at 1280 px and a screenshot at 390 px by absolute path. An improve round does not pass through
+`charliebot land`, so this refusal does not reach its pull request.
 
 <!-- section: skills_discovery -->
 ## Skills Discovery

@@ -66,6 +66,9 @@ function loadGroups() {
 }
 
 
+// The prose renderer's stand-in: the escaped text inside a tag, so a test can see which text the section handed over.
+const proseStub = (text) => `<md>${escapeHtmlText(text)}</md>`;
+
 // cron.js is an IIFE over the sidebar's registration entries and the page's
 // active session; the sandbox records what it registers and which session is
 // active, so each test drives a part the way the page does.
@@ -82,7 +85,11 @@ function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session'} 
       wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); },
       repaintRenderedRows() { repaints.push('rows'); },
       refreshWorkspaceBadges() { repaints.push('badges'); },
+      // modals.js is not loaded here; these stand in for its dialog helpers with the same shape.
+      taskContextField: (label, valueHtml) => `<field label="${escapeHtmlText(label)}">${valueHtml}</field>`,
+      taskContextProseHtml: (text) => `<prose>${proseStub(text)}</prose>`,
     },
+    renderProseMarkdown: proseStub,
     console: {error: () => {}},
     document: {
       readyState,
@@ -209,21 +216,46 @@ test('a cron module that lands while the page still parses repaints nothing', ()
   assert.equal(repaints.length, 0);
 });
 
-const BOUND_TASKS = [
-  {name: 'weekly', cron: '0 7 * * 1', timezone: 'UTC', enabled: true, session_id: 's1', prompt_file: 'p.md',
-    prompt: 'Summarize the day', repo: null, allow_failure: true, mode: 'master', handler: null,
-    improve_host: 'host3', steps: null},
-  {name: 'boba-order', cron: '3,33 8-12 * * 1-5', timezone: 'America/Los_Angeles', enabled: true,
-    session_id: 's1', prompt: 'Check the order'},
-  {name: 'elsewhere', cron: '0 5 * * *', timezone: 'UTC', enabled: true, session_id: 's2', prompt: 'Other session'},
-  {name: 'paused', cron: '0 17 15 12 *', timezone: 'UTC', enabled: false, session_id: 's1', prompt: 'Wait',
-    steps: [{name: 'work', backend: 'claude-opus', distinct_backend_from: null, prompt_file: 'w.md',
-      prompt: 'Do the work'}]},
-];
+// The four task shapes the section renders, as GET /api/cron/tasks serializes them (every field present, unset ones null).
+const PROMPT_TASK = {
+  name: 'weekly', cron: '0 7 * * 1', timezone: 'UTC', enabled: true, session_id: 's1', prompt_file: 'p.md',
+  prompt: 'Summarize the day', repo: '/repo', allow_failure: false, mode: 'worker', handler: null,
+  improve_host: 'host3', steps: null, broken: false,
+};
+const MASTER_TASK = {
+  name: 'okr-envelope-weekly', cron: '0 17 15 12 *', timezone: 'UTC', enabled: true, session_id: 's1',
+  prompt_file: 'okr.md', prompt: 'Weekly envelope', repo: null, allow_failure: true, mode: 'master', handler: null,
+  improve_host: null, steps: null, broken: false,
+};
+const STEPS_TASK = {
+  name: 'memory-curator', cron: '27 6 * * *', timezone: 'America/Los_Angeles', enabled: true, session_id: 's1',
+  prompt_file: null, prompt: null, repo: null, allow_failure: false, mode: null, handler: null, improve_host: null,
+  steps: [
+    {name: 'selector', backend: null, distinct_backend_from: null, prompt_file: 'selector.md', prompt: '# Select'},
+    {name: 'reviewer', backend: 'claude-opus-5', distinct_backend_from: 'selector', prompt_file: 'reviewer.md',
+      prompt: 'Review the picks'},
+  ],
+  broken: false,
+};
+const HANDLER_TASK = {
+  name: 'storage-cool', cron: '30 4 * * *', timezone: 'America/Los_Angeles', enabled: false, session_id: 's1',
+  prompt_file: null, prompt: null, repo: null, allow_failure: false, mode: null, handler: 'cool_storage',
+  improve_host: null, steps: null, broken: false,
+};
+const ELSEWHERE_TASK = {
+  name: 'elsewhere', cron: '0 5 * * *', timezone: 'UTC', enabled: true, session_id: 's2', prompt_file: 'e.md',
+  prompt: 'Other session', repo: null, allow_failure: false, mode: null, handler: null, improve_host: null,
+  steps: null, broken: false,
+};
 
-test('the Scheduled task section lists the bound tasks with their schedule and whole prompt', async () => {
+// The number of times a substring occurs in the section HTML.
+const occurrences = (html, text) => html.split(text).length - 1;
+
+test('the Scheduled task section lists only the tasks bound to the session, with a readable schedule title', async () => {
   const requests = [];
-  const {registered} = loadCron(tasksFetch(BOUND_TASKS, requests));
+  const boba = {...PROMPT_TASK, name: 'boba-order', cron: '3,33 8-12 * * 1-5', timezone: 'America/Los_Angeles',
+    prompt: 'Check the order', mode: null, repo: null, improve_host: null};
+  const {registered} = loadCron(tasksFetch([PROMPT_TASK, ELSEWHERE_TASK, boba], requests));
   assert.equal(registered.taskContextSections.length, 1, 'the module registers one dialog section');
   const [loadSection] = registered.taskContextSections;
   requests.length = 0;
@@ -231,25 +263,93 @@ test('the Scheduled task section lists the bound tasks with their schedule and w
   const html = await loadSection('s1');
 
   assert.deepEqual(requests.map((req) => req.url), ['/api/cron/tasks']);
-  assert.ok(html.includes('weekly') && html.includes('paused'), html);
+  assert.ok(html.includes('weekly') && html.includes('boba-order'), html);
   assert.ok(!html.includes('elsewhere'), 'a task bound to another session is not listed');
   assert.ok(html.includes('Every Monday at 07:00'), 'the weekly schedule has a readable title');
   assert.ok(
     html.includes('At minutes 03 and 33 past each hour from 08:00 through 12:00 on Monday through Friday'),
     'a weekday schedule with minute and hour ranges has a readable title',
   );
-  assert.ok(html.includes('Every December 15 at 17:00'), 'the yearly schedule has a readable title');
-  for (const text of ['0 7 * * 1', 'UTC', 'p.md', 'Summarize the day']) {
-    assert.ok(html.includes(text), `${text} is shown: ${html}`);
-  }
-  const scrollingPrompt = (text) => new RegExp(`<pre class="[^"]*overflow-y-auto[^"]*">${text}</pre>`);
-  assert.match(html, scrollingPrompt('Summarize the day'), 'the prompt is a scrolling block');
-  assert.match(html, scrollingPrompt('Wait'), 'every bound task carries its prompt');
   assert.doesNotMatch(html, /<(input|select|button|textarea)\b/, 'the section holds no control');
 });
 
+test('a prompt task shows its schedule, its set settings and its prompt, with no default line and no dash', async () => {
+  const {registered} = loadCron(tasksFetch([PROMPT_TASK]));
+
+  const html = await registered.taskContextSections[0]('s1');
+
+  assert.ok(html.includes('0 7 * * 1 (UTC)'), 'the Schedule field reads the cron and its timezone');
+  assert.ok(html.includes('<field label="Mode">worker</field>'), html);
+  assert.ok(html.includes('<field label="Repo">/repo</field>'), html);
+  assert.ok(html.includes('<field label="Improve host">host3</field>'), html);
+  assert.ok(html.includes('<field label="Prompt file">p.md</field>'), html);
+  assert.ok(html.includes('<field label="Prompt"><prose><md>Summarize the day</md></prose></field>'), html);
+  assert.ok(!html.includes('label="Enabled"') && !html.includes('Enabled:'), 'an enabled task omits the default line');
+  assert.ok(!html.includes('label="Allow failure"'), 'an unset allow_failure is omitted');
+  assert.ok(!html.includes('Disabled'), 'an enabled task carries no Disabled line');
+  assert.ok(!html.includes('—'), 'no empty value shows a dash');
+});
+
+test('a master task shows its mode, and allow failure shows only when it is set', async () => {
+  const {registered} = loadCron(tasksFetch([MASTER_TASK]));
+
+  const html = await registered.taskContextSections[0]('s1');
+
+  assert.ok(html.includes('<field label="Mode">master</field>'), html);
+  assert.ok(html.includes('<field label="Allow failure">yes</field>'), html);
+  assert.ok(!html.includes('label="Repo"') && !html.includes('label="Improve host"'), 'unset settings are omitted');
+});
+
+test('a steps task lists each step in its declared order, with the backend and prompt each step sets', async () => {
+  const {registered} = loadCron(tasksFetch([STEPS_TASK]));
+
+  const html = await registered.taskContextSections[0]('s1');
+
+  assert.ok(html.includes('<field label="Steps">'), html);
+  assert.ok(html.indexOf('selector') < html.indexOf('reviewer'), 'the steps keep their declared order');
+  assert.ok(html.includes('<field label="Backend">claude-opus-5</field>'), html);
+  assert.ok(html.includes('<field label="Distinct backend from">selector</field>'), html);
+  assert.ok(html.includes('<prose><md>Review the picks</md></prose>'), html);
+  assert.equal(occurrences(html, 'label="Backend"'), 1, 'a step with no backend shows no Backend line');
+  assert.equal(occurrences(html, 'label="Prompt file"'), 2, 'each step shows its own prompt file');
+  assert.equal(occurrences(html, 'label="Prompt"'), 2, 'each step shows its own prompt text');
+});
+
+test('a handler task shows its handler and the Disabled line, with no prompt or steps', async () => {
+  const {registered} = loadCron(tasksFetch([HANDLER_TASK]));
+
+  const html = await registered.taskContextSections[0]('s1');
+
+  assert.ok(html.includes('<field label="Handler">cool_storage</field>'), html);
+  assert.ok(html.includes('text-xs font-medium text-amber-400">Disabled</div>'), html);
+  assert.ok(!html.includes('label="Prompt'), 'a handler task has no prompt line');
+  assert.ok(!html.includes('label="Steps"'), 'a handler task has no steps');
+  assert.ok(!html.includes('label="Enabled"'), 'a disabled task says Disabled, not Enabled');
+  assert.ok(!html.includes('—'), 'no empty value shows a dash');
+});
+
+test('a multi-task section separates its tasks with one flat divider each, in the order the list gives', async () => {
+  const {registered} = loadCron(tasksFetch([PROMPT_TASK, HANDLER_TASK]));
+
+  const html = await registered.taskContextSections[0]('s1');
+
+  assert.ok(html.indexOf('weekly') < html.indexOf('storage-cool'), 'tasks keep the order the list gives');
+  assert.equal(occurrences(html, 'border-t border-slate-700/60'), 2, 'one divider per task');
+});
+
+test('the section holds no control, no nested scroll box and no dash across every task shape', async () => {
+  const {registered} = loadCron(tasksFetch([PROMPT_TASK, MASTER_TASK, STEPS_TASK, HANDLER_TASK]));
+
+  const html = await registered.taskContextSections[0]('s1');
+
+  assert.doesNotMatch(html, /<(input|select|button|textarea)\b/, 'the section holds no control');
+  assert.ok(!html.includes('max-h-56') && !html.includes('overflow-y-auto') && !html.includes('<pre'),
+    'no nested scroll box');
+  assert.ok(!html.includes('—'), 'no empty value shows a dash');
+});
+
 test('the Scheduled task section stays empty for a session that no task binds', async () => {
-  const {registered} = loadCron(tasksFetch(BOUND_TASKS));
+  const {registered} = loadCron(tasksFetch([ELSEWHERE_TASK]));
 
   assert.equal(await registered.taskContextSections[0]('no-tasks'), '');
 });
@@ -264,7 +364,7 @@ test('a failed task-list fetch is visible in the section instead of looking like
 
 test('a task that fails to load stays out of the sections and shows in the Workspace badge', async () => {
   const {registered} = loadCron(tasksFetch([
-    {name: 'bad', error: 'boom', broken: true, path: '/h/config.d/cron.d/bad.yaml', enabled: null},
+    {name: 'bad', error: 'boom', broken: true, session_id: 's1', path: '/h/config.d/cron.d/bad.yaml', enabled: null},
   ]));
 
   assert.equal(await registered.taskContextSections[0]('s1'), '');

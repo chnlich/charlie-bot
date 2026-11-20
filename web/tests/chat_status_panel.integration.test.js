@@ -218,9 +218,13 @@ function panelRig() {
   function fireWindow(type) {
     for (const fn of windowListeners.get(type) || []) fn({type});
   }
+  function removePanel() {
+    elements.delete('status-panel');
+    elements.delete('status-waiting-count');
+  }
   return {context, root, stream, chat, panel, badge, toggles, scrollButton, inputArea, page, statusGets, posts,
     postResults, statusGetErrors, setPostHandler(fn) { postHandler = fn; }, layout, timers, statusTimers,
-    fireDocument, fireWindow, FakeWebSocket: context.WebSocket};
+    fireDocument, fireWindow, removePanel, FakeWebSocket: context.WebSocket};
 }
 
 // A layout switch as platform.js makes it: the mode changes, then each callback runs with the new and old mode.
@@ -670,6 +674,7 @@ test('a done click keeps its undo timer through redraw and sends the exact text 
       ' · #1\n   ↳ Done');
   assert.equal(post.body.content.includes('Private item text'), false);
   assert.equal(post.body.content.includes('Private context'), false);
+  assert.equal(post.options.keepalive, false, 'a click sent when its window closes is not keepalive');
   assert.match(waitingHeaderControls(rig).textContent, /Sent: the list changed/,
     'a 202 readback without the answered mark reports that the list changed');
 });
@@ -769,7 +774,7 @@ test('a Now-only push refreshes status without changing the pending click versio
   assert.match(rig.posts[0].body.content, /list 1111111111111111/);
 });
 
-test('unchecking, pagehide and session teardown cancel without sending', async (t) => {
+test('a leave inside the undo window sends the click once with keepalive; Undo sends nothing', async (t) => {
   const makePending = async () => {
     const rig = panelRig();
     await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Wait', link: null}]}});
@@ -777,27 +782,54 @@ test('unchecking, pagehide and session teardown cancel without sending', async (
     toggleDone(rig);
     return rig;
   };
-  await t.test('unchecking the box', async () => {
+  await t.test('pagehide posts at once to the owner session, keepalive, and the window timer adds no second post',
+    async () => {
+      const rig = await makePending();
+      const getsBefore = rig.statusGets.length;
+      rig.fireWindow('pagehide');
+      assert.equal(rig.posts.length, 1, 'the leave posts without waiting for the window');
+      assert.equal(rig.posts[0].url, '/api/chat/session-a/message');
+      assert.equal(rig.posts[0].options.keepalive, true, 'the post outlives the page');
+      rig.statusTimers.advance(5000);
+      await settled();
+      assert.equal(rig.posts.length, 1, 'exactly one post');
+      assert.equal(rig.statusGets.length, getsBefore + 1, 'the flushed click reads its owner status back once');
+    });
+  await t.test('a session switch posts once to the owner session, keepalive, after the panel shows the next session',
+    async () => {
+      const rig = await makePending();
+      rig.fireDocument('charliebot:session-view-teardown');
+      await openSession(rig, {id: 'session-b'});
+      rig.statusTimers.advance(5000);
+      await settled();
+      assert.equal(rig.posts.length, 1, 'exactly one post');
+      assert.equal(rig.posts[0].url, '/api/chat/session-a/message', 'the click goes to the session it was made in');
+      assert.equal(rig.posts[0].options.keepalive, true, 'the post outlives the switch');
+      assert.ok(rig.statusGets.some((url) => url.endsWith('session_id=session-a')),
+        'the flushed click reads its owner status back after the switch');
+    });
+  await t.test('Undo, then a later pagehide, sends nothing', async () => {
     const rig = await makePending();
     toggleDone(rig);
     assert.equal(doneCheck(rig).checked, false);
-    rig.statusTimers.advance(5000);
-    await settled();
-    assert.equal(rig.posts.length, 0);
-  });
-  await t.test('pagehide', async () => {
-    const rig = await makePending();
     rig.fireWindow('pagehide');
     rig.statusTimers.advance(5000);
     await settled();
-    assert.equal(rig.posts.length, 0);
+    assert.equal(rig.posts.length, 0, 'an undone click sends nothing, also when the reader leaves');
   });
-  await t.test('session teardown', async () => {
+  await t.test('a leave flushed after the panel is removed from the DOM settles without errors', async () => {
     const rig = await makePending();
+    const childrenBefore = [...rig.panel.children];
+    rig.postResults.push(new Error('network down'));
+    rig.statusGetErrors.push(new Error('network down'));
+    rig.removePanel();
     rig.fireDocument('charliebot:session-view-teardown');
-    rig.statusTimers.advance(5000);
+    rig.context.clearSessionStatusPanel();
     await settled();
-    assert.equal(rig.posts.length, 0);
+    assert.equal(rig.posts.length, 1);
+    assert.equal(rig.posts[0].options.keepalive, true);
+    assert.deepEqual(rig.panel.children, childrenBefore,
+      'no render touches the removed view after teardown');
   });
 });
 

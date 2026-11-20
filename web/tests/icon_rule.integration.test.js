@@ -198,10 +198,6 @@ const EXCEPTIONS = [
   ...byFile('web/features/code_server/static/open-in-code-server.js', [
     ["statusEl.textContent = 'preparing code-server…';", PROSE_REASON],
   ]),
-  ...byFile('web/features/cron/static/cron.js', [
-    ["n [{label: 'Edit schedule…', onSelect: () => openCronEditor(attrs.", PROSE_REASON],
-    ["rn [{label: 'Add schedule…', onSelect: () => openCronAdder({sessio", PROSE_REASON],
-  ]),
   ...byFile('web/features/diff_view/static/diff_comments.js', [
     ["lines.push(`   ▸ \"${parts[0]}\"`);", CHAT_TEXT_REASON],
     ["lines.push(`   ▸ \"${parts[0]}`);", CHAT_TEXT_REASON],

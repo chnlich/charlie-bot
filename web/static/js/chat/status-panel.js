@@ -52,14 +52,6 @@
     return [...pendingDone.values()].filter((entry) => entry.sessionId === sessionId);
   }
 
-  function cancelPendingDone() {
-    for (const [key, entry] of pendingDone) {
-      entry.undo.cancel();
-      pendingDone.delete(key);
-    }
-    renderPanel();
-  }
-
   function textSpan(className, text) {
     const span = document.createElement('span');
     span.className = className;
@@ -264,17 +256,19 @@
   }
 
   // The one click path of the Status view: a checked done checkbox. The click waits its undo window, then posts one
-  // click message to the owning session. A new click replaces the item's earlier notice.
+  // click message to the owning session. Leaving the page or switching sessions flushes the window at once
+  // (comment_post.js startUndoableSend), so the post runs then with keepalive. A new click replaces the item's earlier
+  // notice.
   function scheduleClick(click) {
     const key = doneKey(click.sessionId, click.waitingVersion, click.position);
     if (pendingDone.has(key)) return;
     itemNotices.delete(key);
     const entry = {...click, clickMs: Date.now(), undo: null};
-    entry.undo = startUndoableSend(() => postClick(entry));
+    entry.undo = startUndoableSend((options) => postClick(entry, options));
     pendingDone.set(key, entry);
     entry.undo.sent.then(
       (posted) => {
-        // A cancelled click has already left pendingDone, in cancelDone or cancelPendingDone.
+        // A cancelled click has already left pendingDone, in cancelDone.
         if (posted !== null) finishClick(key, entry, null);
       },
       (err) => finishClick(key, entry, err),
@@ -301,7 +295,8 @@
 
   // The Status click's post, the delayed send's one attempt: an answer other than 202 is an error.
   // A failed click reports "Not sent" and the user clicks again; the post itself never retries.
-  async function postClick(entry) {
+  // keepalive is startUndoableSend's flag: true only when a leave flushed the send.
+  async function postClick(entry, {keepalive}) {
     renderPanel();
     const content = buildClickMessage(CLICK_HEADER, [{
       reference: 'Waiting on you · session ' + entry.sessionId + ' · list ' + entry.waitingVersion +
@@ -313,6 +308,7 @@
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       credentials: 'same-origin',
+      keepalive,
       body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
     });
     if (response.status !== 202) throw new Error('HTTP ' + response.status);
@@ -613,9 +609,6 @@
   function refreshSessionStatusPanel() {
     if (panelSessionId) fetchStatus(panelSessionId);
   }
-
-  window.addEventListener('pagehide', cancelPendingDone);
-  document.addEventListener('charliebot:session-view-teardown', cancelPendingDone);
 
   // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);

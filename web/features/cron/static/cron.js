@@ -120,35 +120,63 @@ function cronScheduleTitle(cron) {
 // ---------------------------------------------------------------------------
 // Scheduled task section of Task & context
 // ---------------------------------------------------------------------------
-// The section lists the tasks bound to the session, read from GET /api/cron/tasks each time the dialog opens: the
-// schedule sentence, cron, timezone, enabled, the prompt file, and the whole prompt in a block that scrolls. It holds
-// no control. A session no task binds gets no section. A failed fetch shows in the section, so an unreadable task list
-// does not look like an unbound session.
-function scheduledTaskField(label, valueHtml) {
-  return `<div><div class="text-xs text-slate-400 mb-1">${escapeHtml(label)}</div>`
-    + `<div class="break-words">${valueHtml}</div></div>`;
-}
-
-// One bound task: its schedule sentence heads the block, its name sits under it in small type since agents address the
-// task by it, then its settings and its prompt text.
-function renderScheduledTask(task) {
-  return `<div class="flex flex-col gap-3 border-t border-slate-700/60 pt-2 first:border-t-0 first:pt-0">`
-    + `<div><div class="text-sm font-medium text-slate-200">${escapeHtml(cronScheduleTitle(task.cron))}</div>`
-    + `<div class="font-mono text-[11px] text-slate-400">${escapeHtml(cronValue(task.name))}</div></div>`
-    + scheduledTaskField('Cron', escapeHtml(cronValue(task.cron)))
-    + scheduledTaskField('Timezone', escapeHtml(cronValue(task.timezone)))
-    + scheduledTaskField('Enabled', task.enabled ? 'yes' : 'no')
-    + scheduledTaskField('Prompt file', escapeHtml(cronValue(task.prompt_file)))
-    + scheduledTaskField('Prompt', '<pre class="max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded '
-      + `bg-slate-900/60 px-2 py-1 font-mono text-xs text-slate-200">${escapeHtml(cronValue(task.prompt))}</pre>`)
-    + '</div>';
-}
-
+// The section lists the tasks bound to the session, read from GET /api/cron/tasks each time the dialog opens. Each task
+// shows its schedule, its name, the settings it sets and its prompt text, in the dialog's flat fields. The prompt
+// renders like the Goal, in the dialog's one scroll. The section holds no control. A session no task binds gets no
+// section. A failed fetch shows in the section, so an unreadable task list does not look like an unbound session.
 function scheduledTaskSection(body) {
   return `<div class="space-y-3">
     <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Scheduled task</div>
-    ${body}
+    <div class="space-y-3">${body}</div>
   </div>`;
+}
+
+// A setting shows as a field only when it holds a value: an unset or empty setting is left out of the section.
+function scheduledTaskSetting(label, value) {
+  return value ? Sidebar.taskContextField(label, escapeHtml(value)) : '';
+}
+
+// A prompt shows as its file and its text, each only when it holds a value.
+function scheduledTaskPrompt(promptFile, prompt) {
+  return scheduledTaskSetting('Prompt file', promptFile)
+    + (prompt ? Sidebar.taskContextField('Prompt', Sidebar.taskContextProseHtml(prompt)) : '');
+}
+
+// One step of a steps task, in the order its config declares it: its name, the backend settings it
+// sets, then its prompt. Each step after the first starts under a flat divider.
+function renderScheduledStep(step) {
+  return `<div class="flex flex-col gap-3 border-t border-slate-700/60 pt-2 first:border-t-0 first:pt-0">`
+    + `<div class="text-sm font-medium text-slate-200">${escapeHtml(step.name)}</div>`
+    + scheduledTaskSetting('Backend', step.backend)
+    + scheduledTaskSetting('Distinct backend from', step.distinct_backend_from)
+    + scheduledTaskPrompt(step.prompt_file, step.prompt)
+    + '</div>';
+}
+
+// What a task runs: a handler names its built-in work; a steps task lists its steps; any other task has one prompt.
+function renderScheduledTaskBody(task) {
+  if (task.handler) return scheduledTaskSetting('Handler', task.handler);
+  if (task.steps && task.steps.length > 0) {
+    const steps = task.steps.map(renderScheduledStep).join('');
+    return Sidebar.taskContextField('Steps', `<div class="flex flex-col gap-3">${steps}</div>`);
+  }
+  return scheduledTaskPrompt(task.prompt_file, task.prompt);
+}
+
+// One bound task: its schedule sentence heads the block, its name sits under it in small type since agents address the
+// task by it, and a disabled task says so. Its schedule, its settings and its body follow.
+function renderScheduledTask(task) {
+  const disabled = task.enabled === false ? '<div class="text-xs font-medium text-amber-400">Disabled</div>' : '';
+  return `<div class="flex flex-col gap-3 border-t border-slate-700/60 pt-2 first:border-t-0 first:pt-0">`
+    + `<div><div class="text-sm font-medium text-slate-200">${escapeHtml(cronScheduleTitle(task.cron))}</div>`
+    + `<div class="font-mono text-[11px] text-slate-400">${escapeHtml(task.name)}</div>${disabled}</div>`
+    + Sidebar.taskContextField('Schedule', escapeHtml(`${task.cron} (${task.timezone})`))
+    + scheduledTaskSetting('Mode', task.mode)
+    + scheduledTaskSetting('Repo', task.repo)
+    + scheduledTaskSetting('Improve host', task.improve_host)
+    + scheduledTaskSetting('Allow failure', task.allow_failure === true ? 'yes' : '')
+    + renderScheduledTaskBody(task)
+    + '</div>';
 }
 
 async function loadScheduledTaskSection(sessionId) {
@@ -156,7 +184,7 @@ async function loadScheduledTaskSection(sessionId) {
   try {
     const res = await fetch('/api/cron/tasks');
     if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
-    tasks = (await res.json()).filter((task) => task.session_id === sessionId);
+    tasks = (await res.json()).filter((task) => !task.broken && task.session_id === sessionId);
   } catch (err) {
     console.error('Scheduled task fetch failed:', err);
     return scheduledTaskSection(

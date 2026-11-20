@@ -1,21 +1,20 @@
 // ---------------------------------------------------------------------------
-// Scheduled tasks (cron): the read-only task panel under a bound session's
-// header, the error view of a task that failed to load, the Workspace error
-// badge, and a bound node's clock badge and schedule lines. Every task setting
-// is changed by the session's agent through /api/cron or the task file; no
-// control here writes one. The sidebar reaches this file through the entries it
-// registers with.
+// Scheduled tasks (cron): the Scheduled task section of a bound session's
+// Task & context dialog, the error view of a task that failed to load, the
+// Workspace error badge, and a bound node's clock badge and schedule lines.
+// Every task setting is changed by the session's agent through /api/cron or
+// the task file; no control here writes one. The sidebar reaches this file
+// through the entries it registers with.
 // ---------------------------------------------------------------------------
 (function() {
   const Sidebar = globalThis.Sidebar;
 
 // ---------------------------------------------------------------------------
-// Read-only task panel
+// Schedule sentence
 // ---------------------------------------------------------------------------
-// The panel lists the tasks bound to the active session, read from GET
-// /api/cron/tasks. It sends no write request and has no input, select, or
-// button. It redraws when the active session changes; no timer polls it.
-function cronPanelValue(value) {
+// cronScheduleTitle reads a five-field cron as a plain sentence and returns the
+// raw text for any form it does not read.
+function cronValue(value) {
   return value === null || value === undefined || value === '' ? '—' : String(value);
 }
 
@@ -75,7 +74,7 @@ function cronTimeDescription(minute, hour) {
 }
 
 function cronScheduleTitle(cron) {
-  const raw = cronPanelValue(cron);
+  const raw = cronValue(cron);
   const fields = raw.trim().split(/\s+/);
   if (fields.length !== 5) return raw;
   const [minute, hour, dayOfMonth, month, dayOfWeek] = fields;
@@ -118,75 +117,52 @@ function cronScheduleTitle(cron) {
   return raw;
 }
 
-function renderCronPanelRow(label, value) {
-  return `<div class="flex gap-2"><span class="w-28 flex-shrink-0 text-slate-400">${escapeHtml(label)}</span>`
-    + `<span class="min-w-0 break-words text-slate-200">${escapeHtml(cronPanelValue(value))}</span></div>`;
+// ---------------------------------------------------------------------------
+// Scheduled task section of Task & context
+// ---------------------------------------------------------------------------
+// The section lists the tasks bound to the session, read from GET /api/cron/tasks each time the dialog opens: the
+// schedule sentence, cron, timezone, enabled, the prompt file, and the whole prompt in a block that scrolls. It holds
+// no control. A session no task binds gets no section. A failed fetch shows in the section, so an unreadable task list
+// does not look like an unbound session.
+function scheduledTaskField(label, valueHtml) {
+  return `<div><div class="text-xs text-slate-400 mb-1">${escapeHtml(label)}</div>`
+    + `<div class="break-words">${valueHtml}</div></div>`;
 }
 
-function renderCronPanelPrompt(label, prompt) {
-  return `<div class="flex flex-col gap-1"><span class="text-slate-400">${escapeHtml(label)}</span>`
-    + `<pre class="whitespace-pre-wrap break-words rounded bg-slate-900/60 px-2 py-1 font-mono text-slate-200">${escapeHtml(cronPanelValue(prompt))}</pre></div>`;
+// One bound task: its schedule sentence heads the block, its name sits under it in small type since agents address the
+// task by it, then its settings and its prompt text.
+function renderScheduledTask(task) {
+  return `<div class="flex flex-col gap-3 border-t border-slate-700/60 pt-2 first:border-t-0 first:pt-0">`
+    + `<div><div class="text-sm font-medium text-slate-200">${escapeHtml(cronScheduleTitle(task.cron))}</div>`
+    + `<div class="font-mono text-[11px] text-slate-400">${escapeHtml(cronValue(task.name))}</div></div>`
+    + scheduledTaskField('Cron', escapeHtml(cronValue(task.cron)))
+    + scheduledTaskField('Timezone', escapeHtml(cronValue(task.timezone)))
+    + scheduledTaskField('Enabled', task.enabled ? 'yes' : 'no')
+    + scheduledTaskField('Prompt file', escapeHtml(cronValue(task.prompt_file)))
+    + scheduledTaskField('Prompt', '<pre class="max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded '
+      + `bg-slate-900/60 px-2 py-1 font-mono text-xs text-slate-200">${escapeHtml(cronValue(task.prompt))}</pre>`)
+    + '</div>';
 }
 
-// One task's block: the schedule as its title, then every setting in the order the file lists them, then each step
-// of a steps task. The task's name sits in small type, since agents address the task by it.
-function renderCronPanelTask(task) {
-  const disabled = task.enabled === false;
-  let html = `<div class="flex flex-col gap-1.5 border-b border-slate-700/50 pb-2 last:border-b-0">`
-    + `<div class="flex items-baseline gap-2"><span class="text-sm font-medium text-slate-200">${escapeHtml(cronScheduleTitle(task.cron))}</span>`
-    + (disabled ? '<span class="text-amber-400">Disabled</span>' : '')
-    + `</div><span class="font-mono text-[11px] text-slate-400">${escapeHtml(task.name)}</span>`
-    + renderCronPanelRow('Session ID', task.session_id)
-    + renderCronPanelRow('Cron', task.cron)
-    + renderCronPanelRow('Timezone', task.timezone)
-    + renderCronPanelRow('Enabled', task.enabled ? 'yes' : 'no')
-    + renderCronPanelRow('Prompt file', task.prompt_file)
-    + renderCronPanelPrompt('Prompt', task.prompt)
-    + renderCronPanelRow('Repo', task.repo)
-    + renderCronPanelRow('Allow failure', task.allow_failure ? 'yes' : 'no')
-    + renderCronPanelRow('Mode', task.mode)
-    + renderCronPanelRow('Handler', task.handler)
-    + renderCronPanelRow('Improve host', task.improve_host);
-  for (const step of task.steps || []) {
-    html += `<div class="flex flex-col gap-1 rounded border border-slate-700/50 px-2 py-1.5">`
-      + renderCronPanelRow('Step', step.name)
-      + renderCronPanelRow('Backend', step.backend)
-      + renderCronPanelRow('Distinct from', step.distinct_backend_from)
-      + renderCronPanelRow('Prompt file', step.prompt_file)
-      + renderCronPanelPrompt('Prompt', step.prompt)
-      + '</div>';
-  }
-  return html + '</div>';
+function scheduledTaskSection(body) {
+  return `<div class="space-y-3">
+    <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Scheduled task</div>
+    ${body}
+  </div>`;
 }
 
-async function renderCronPanel() {
-  const panel = document.getElementById('cron-session-panel');
-  if (!panel) return;
-  const body = document.getElementById('cron-session-panel-body');
-  const sessionId = SESSION_ID;
-  panel.classList.add('hidden');
-  body.textContent = '';
-  let tasks = [];
-  let error = null;
-  if (sessionId) {
-    try {
-      const res = await fetch('/api/cron/tasks');
-      if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
-      tasks = (await res.json()).filter((task) => task.session_id === sessionId);
-    } catch (err) {
-      console.error('Cron panel fetch failed:', err);
-      error = err;
-    }
+async function loadScheduledTaskSection(sessionId) {
+  let tasks;
+  try {
+    const res = await fetch('/api/cron/tasks');
+    if (!res.ok) throw new Error(`cron tasks fetch failed: ${res.status}`);
+    tasks = (await res.json()).filter((task) => task.session_id === sessionId);
+  } catch (err) {
+    console.error('Scheduled task fetch failed:', err);
+    return scheduledTaskSection(
+      `<div class="text-xs text-amber-400">Could not load scheduled tasks: ${escapeHtml(String(err))}</div>`);
   }
-  // A session switch that landed during the fetch owns the panel now.
-  if (sessionId !== SESSION_ID) return;
-  if (error) {
-    body.textContent = `Could not load scheduled tasks: ${error}`;
-    panel.classList.remove('hidden');
-    return;
-  }
-  panel.classList.toggle('hidden', tasks.length === 0);
-  body.innerHTML = tasks.map(renderCronPanelTask).join('');
+  return tasks.length === 0 ? '' : scheduledTaskSection(tasks.map(renderScheduledTask).join(''));
 }
 
 // ---------------------------------------------------------------------------
@@ -332,18 +308,17 @@ registerGroupPreviewLimitExemption((s) => !!s.schedule_task);
 // view.
 registerSessionRowBadge((s) => (s.schedule_task ? renderScheduledBadge(s) : ''));
 registerSessionRowLine((s) => (s.schedule_task ? renderSessionScheduleLine(s) : null));
+// A bound session's Task & context dialog shows the Scheduled task section.
+registerTaskContextSection(loadScheduledTaskSection);
 
 const GLOBALS = {
   openCronErrorView,
   closeCronModal,
 };
-Sidebar.wire(GLOBALS, {showCronErrorView, renderCronPanel});
+Sidebar.wire(GLOBALS, {showCronErrorView});
 
-// The panel follows the active session: it redraws at each switch. The page fetches this module after its document,
-// so the first draw runs here when the document has already parsed.
-document.addEventListener('charliebot:active-session-changed', renderCronPanel);
+// The page fetches this module after its document, so the first repaint runs here when the document has already parsed.
 if (document.readyState !== 'loading') {
-  renderCronPanel();
   // The sidebar's rows were already painted without the schedule badge and line registered above. Repaint the rows
   // the sidebar still shows, then re-read the Workspace badges with this module's loader in the list.
   Sidebar.repaintRenderedRows();

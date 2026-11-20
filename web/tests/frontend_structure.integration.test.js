@@ -50,6 +50,7 @@
 //     registerSidebarControl      web/static/js/sidebar/namespace.js (the handler a rendered sidebar control calls by name)
 //     registerSidebarFilter       web/static/js/sidebar/filters.js (a sidebar filter button)
 //     registerTab                 web/static/js/tabs.js (a tab: its layout, show and hide callbacks)
+//     registerTaskContextSection  web/static/js/sidebar/namespace.js (a section of the Task & context dialog)
 //     registerWorkspaceBadge      web/static/js/sidebar/filters.js (a badge at the top of the Workspace list)
 //     registerWsConnectHandler    web/static/js/websocket.js (a handler of every socket (re)connect)
 //     registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)

@@ -205,7 +205,8 @@ function eloneSession(sessionId, eventIndex) {
 // item per managed block with its sources, delivery and measured length. The
 // dialog shell shares the session-action modal's chrome in index.html. The
 // body is fetched on every open, so it shows the current configuration and
-// stores nothing.
+// stores nothing. A package adds a section between the task record and the
+// context through registerTaskContextSection.
 // ---------------------------------------------------------------------------
 // The dialog's muted tone: its empty values, source labels and each block's delivery line sit on
 // the modal's slate-800, where slate-500 renders 3.07:1. That is under the 4.5:1 floor for text
@@ -214,6 +215,11 @@ const TASK_CONTEXT_MUTED = 'text-slate-400';
 const TASK_CONTEXT_NONE = `<span class="${TASK_CONTEXT_MUTED}">(none)</span>`;
 
 let taskContextModalSession = null;
+
+// The sections packages registered through Sidebar's registerTaskContextSection (namespace.js), in registration order.
+function taskContextSectionsHtml(sessionId) {
+  return Promise.all(Sidebar.taskContextSectionLoaders.map((load) => load(sessionId))).then((parts) => parts.join(''));
+}
 
 function taskContextField(label, valueHtml) {
   return `<div><div class="text-xs text-slate-400 mb-1">${label}</div>`
@@ -317,11 +323,14 @@ function sessionBackendKnown(backend) {
 }
 
 // Assembles the dialog body for one session: the task record from the
-// session detail, then the effective-prompt preview. A session without a
-// profile is not a task node yet, so its context section says so in place of
-// a preview request the server would refuse.
+// session detail, the sections packages register, then the effective-prompt
+// preview. A session without a profile is not a task node yet, so its context
+// section says so in place of a preview request the server would refuse.
 async function loadTaskContextModal(sessionId) {
-  const detail = await fetchJsonOrDetail('/api/sessions/' + sessionId);
+  const [detail, sectionsHtml] = await Promise.all([
+    fetchJsonOrDetail('/api/sessions/' + sessionId),
+    taskContextSectionsHtml(sessionId),
+  ]);
   if (!detail.ok) {
     setTaskContextModalBody(sessionId, taskContextNoteHtml('Session unavailable: ' + detail.detail));
     return;
@@ -332,14 +341,14 @@ async function loadTaskContextModal(sessionId) {
     titleEl.textContent = 'Task & context · ' + (session.name || sessionId);
     titleEl.title = titleEl.textContent;
   }
-  const taskHtml = taskContextTaskHtml(session);
+  const headHtml = taskContextTaskHtml(session) + sectionsHtml;
   if (!session.profile) {
-    setTaskContextModalBody(sessionId, taskHtml + taskContextNoteHtml(
+    setTaskContextModalBody(sessionId, headHtml + taskContextNoteHtml(
         'Not a task node yet: this session becomes one on its first child session or delegation; '
         + 'its next run context is assembled from then on.'));
     return;
   }
-  setTaskContextModalBody(sessionId, taskHtml + taskContextNoteHtml('Loading next run context…'));
+  setTaskContextModalBody(sessionId, headHtml + taskContextNoteHtml('Loading next run context…'));
   const preview = await fetchJsonOrDetail('/api/sessions/' + sessionId + '/effective-prompt');
   let contextHtml;
   if (preview.ok) {
@@ -354,7 +363,7 @@ async function loadTaskContextModal(sessionId) {
   } else {
     contextHtml = taskContextNoteHtml('Next run context unavailable: ' + preview.detail);
   }
-  setTaskContextModalBody(sessionId, taskHtml + contextHtml);
+  setTaskContextModalBody(sessionId, headHtml + contextHtml);
 }
 
 function openTaskContextModal(sessionId) {

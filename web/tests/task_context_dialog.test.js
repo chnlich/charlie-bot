@@ -22,8 +22,9 @@ function jsonResponse(status, body) {
   return {ok: status >= 200 && status < 300, status, statusText: 'HTTP ' + status, json: async () => body};
 }
 
-// routes: url -> response, or a function returning a (possibly pending) response.
-function buildHarness(routes) {
+// routes: url -> response, or a function returning a (possibly pending) response. beforeModals(context) runs after the
+// namespace loads and before the dialog's script does, the order a package's registration meets on the page.
+function buildHarness(routes, {beforeModals = () => {}} = {}) {
   const overlay = createElement({id: 'task-context-modal-overlay', className: 'hidden fixed'});
   const title = createElement({id: 'task-context-modal-title'});
   const body = createElement({id: 'task-context-modal-body'});
@@ -58,6 +59,7 @@ function buildHarness(routes) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
+  beforeModals(context);
   vm.runInContext(MODALS_JS, context, {filename: 'modals.js'});
   return {context, overlay, title, body, calls};
 }
@@ -269,4 +271,69 @@ test('task text is escaped, and a preview that lands after close does not repain
   release();
   await opened;
   assert.doesNotMatch(h.body.innerHTML, /manager_turn/, 'the late preview does not repaint a closed dialog');
+});
+
+// A package adds its section between the task record and the next run context (cron's Scheduled task section).
+test('a registered section paints between the task record and the next run context', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, DETAIL),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  });
+  const loadedFor = [];
+  h.context.registerTaskContextSection(async (sessionId) => {
+    loadedFor.push(sessionId);
+    return '<section data-test="bound">bound task prompt</section>';
+  });
+
+  await h.context.openTaskContextModal('s1');
+
+  assert.deepEqual(loadedFor, ['s1']);
+  const html = h.body.innerHTML;
+  const goal = html.indexOf('Migrate users to the new schema');
+  const section = html.indexOf('bound task prompt');
+  const context = html.indexOf('manager_turn');
+  assert.ok(goal >= 0 && goal < section && section < context, html);
+});
+
+test('a section loader that finds no binding leaves the dialog exactly as without it', async () => {
+  const routes = () => ({
+    '/api/sessions/s1': jsonResponse(200, DETAIL),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  });
+  const plain = buildHarness(routes());
+  await plain.context.openTaskContextModal('s1');
+  const unbound = buildHarness(routes());
+  unbound.context.registerTaskContextSection(async () => '');
+
+  await unbound.context.openTaskContextModal('s1');
+
+  assert.equal(unbound.body.innerHTML, plain.body.innerHTML);
+});
+
+// The dialog's script is a deferred sidebar interaction, so a package's registration runs before the script has. The
+// page's cron module registers this way; a registration that found no function would stop the module's load.
+test('a section registered before the dialog script loads paints when the dialog opens', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, DETAIL),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  }, {
+    beforeModals: (context) => context.registerTaskContextSection(
+      async () => '<section data-test="early">registered before the dialog script</section>'),
+  });
+
+  await h.context.openTaskContextModal('s1');
+
+  assert.match(h.body.innerHTML, /registered before the dialog script/);
+});
+
+test('a section that fails surfaces its error instead of painting a body without it', async () => {
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, DETAIL),
+    '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
+  });
+  h.context.registerTaskContextSection(async () => { throw new Error('section boom'); });
+
+  await h.context.openTaskContextModal('s1');
+
+  assert.match(h.body.innerHTML, /section boom/);
 });

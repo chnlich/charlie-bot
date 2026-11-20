@@ -83,10 +83,12 @@ function loadGroups() {
 
 // loadGroups plus the cron script, run after groups.js as the page runs a
 // package's script after core. The script also registers its Workspace badge
-// with filters.js, which this harness does not load, so a stub takes it.
+// with filters.js and its Task & context section with namespace.js, which this
+// harness does not load, so stubs take both.
 function loadGroupsWithCron() {
   const context = loadGroups();
   context.registerWorkspaceBadge = () => {};
+  context.registerTaskContextSection = () => {};
   // The load sequence runs while the document parses; a real page fetches this module after the document, and the
   // late-load path (repaint of the painted rows, re-read of the Workspace badges) has its own tests.
   context.document.readyState = 'loading';

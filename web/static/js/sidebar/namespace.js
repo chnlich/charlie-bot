@@ -180,7 +180,26 @@
     Sidebar.wire(globals, sidebarOnly);
   }
 
+  // The sections a package adds to the Task & context dialog (modals.js). The dialog's script is one of the deferred
+  // interaction scripts above, so it loads after the packages that register: the registry lives here, with the core
+  // registrations. load(sessionId) resolves to the section's HTML, or '' when the session has none; the dialog paints
+  // the sections in registration order, between the task record and the next run context.
+  const taskContextSectionLoaders = [];
+
+  function registerTaskContextSection(load) {
+    if (typeof load !== 'function') throw new Error('Invalid Task & context section registration');
+    if (taskContextSectionLoaders.includes(load)) throw new Error('Duplicate Task & context section');
+    taskContextSectionLoaders.push(load);
+  }
+
   Sidebar.wire = wire;
-  wire({registerSidebarControl, sidebarControl, sidebarRowsRefreshable, searchBoxHasText, deferSidebarInteractions});
+  wire({
+    registerSidebarControl,
+    sidebarControl,
+    sidebarRowsRefreshable,
+    searchBoxHasText,
+    deferSidebarInteractions,
+    registerTaskContextSection,
+  }, {taskContextSectionLoaders});
   global.Sidebar = Sidebar;
 })(globalThis);

@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // The session page's chat column in a headless Chrome, built from the page's own files: the header and the tab column
-// of web/templates/index.html, the cron panel part of web/features/cron/templates/cron/page_below_header.html, the
-// inline styles.css and the tailwind.css the page links. Jinja tags are removed, and an icon call leaves a box of its
-// size. cron.js fills the panel from GET /api/cron/tasks, which this server answers from the tasks the caller gives.
+// of web/templates/index.html, the usage quota strip the page's below_header slot carries, the inline styles.css and
+// the tailwind.css the page links, and the cron and usage modules the page loads after its document. Jinja tags are
+// removed, and an icon call leaves a box of its size. GET /api/ext-usage answers the payload the caller gives.
 //
 // CHARLIEBOT_TEST_CHROME_BIN names the headless Chrome binary. launchChrome throws when it is unset or names no file.
 // ---------------------------------------------------------------------------
@@ -15,6 +15,9 @@ const {readPackageStatic} = require('./read_static');
 
 const WEB_DIR = path.join(__dirname, '..');
 const INDEX_HTML = fs.readFileSync(path.join(WEB_DIR, 'templates', 'index.html'), 'utf8');
+const CRON_MODULE_PATH = '/features/cron/static/cron.js';
+const USAGE_MODULE_PATH = '/features/usage/static/ext_usage.js';
+const USAGE_STYLE_PATH = '/features/usage/static/usage.css';
 
 // The text from the start marker through the end marker, both included.
 function section(text, startMarker, endMarker) {
@@ -35,11 +38,12 @@ function renderJinja(markup) {
     .replace(/\{%[\s\S]*?%\}/g, '');
 }
 
-// The page of a session: its header, the cron panel part, and the tab column, in the order index.html places them.
-function sessionPageHtml(sessionId) {
+// The page: its header and tab column, in the order index.html places them, then the cron module the page loads.
+function sessionPageHtml() {
   const styles = fs.readFileSync(path.join(WEB_DIR, 'static', 'css', 'styles.css'), 'utf8');
   const header = renderJinja(section(INDEX_HTML, '<header class="flex items-center border-b', '</header>'));
-  const panel = renderJinja(readPackageStatic('features', 'cron', 'page_below_header.html'));
+  // The page's below_header slot: the usage quota strip is the part that fills it.
+  const usageStrip = renderJinja(readPackageStatic('features', 'usage', 'page_below_header.html'));
   const column = renderJinja(section(INDEX_HTML, '<div class="flex-1 flex min-h-0">',
     '<!-- end tab content wrapper -->'));
   return `<!doctype html>
@@ -47,23 +51,30 @@ function sessionPageHtml(sessionId) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${styles}</style>
 <link rel="stylesheet" href="/static/css/tailwind.css">
+<link rel="stylesheet" href="${USAGE_STYLE_PATH}">
 </head>
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
 <div class="flex" style="height:var(--app-h,100dvh)">
 <main class="flex-1 flex flex-col min-w-0">
 ${header}
-${panel}
+${usageStrip}
 ${column}
 </main>
 </div>
 <script>
-let SESSION_ID = ${JSON.stringify(sessionId)};
 // The sidebar registers these when it loads. This page has no sidebar, so each registration is a no-op.
 window.Sidebar = {wire() {}, repaintRenderedRows() {}, refreshWorkspaceBadges() {}};
 window.registerWorkspaceBadge = () => {};
 window.registerGroupPreviewLimitExemption = () => {};
 window.registerSessionRowBadge = () => {};
 window.registerSessionRowLine = () => {};
+window.registerTaskContextSection = () => {};
+// The page's websocket and timer helpers, and the icon call the usage strip's chip draws, which this page lacks. The
+// meter-fill class is config.js's constant; the fixture leaves config.js out because it reads server-rendered values.
+window.registerWsMessageHandler = () => {};
+window.startPageTimer = () => {};
+window.PROGRESS_BAR_FILL_CLASS = 'h-full rounded-full transition-all duration-300';
+window.cbIcon = (key, size) => '<span style="display:inline-block;width:' + size + 'px;height:' + size + 'px"></span>';
 // The page's escapeHtml (web/static/js/chat/shared.js), which cron.js calls.
 function escapeHtml(str) {
   const d = document.createElement('div');
@@ -71,8 +82,8 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 </script>
-<script src="/features/cron/static/cron.js"></script>
-<script>document.dispatchEvent(new Event('charliebot:active-session-changed'));</script>
+<script src="${USAGE_MODULE_PATH}"></script>
+<script src="${CRON_MODULE_PATH}"></script>
 </body></html>`;
 }
 
@@ -81,24 +92,26 @@ function reply(res, status, contentType, body) {
   res.end(body);
 }
 
-// Serves the session page at / and GET /api/cron/tasks answered with `tasks`. `served.cronTasks` counts the task
-// reads, so a caller waits for the panel's fetch to land before it measures.
-function startFixtureServer({sessionId, tasks}) {
-  const page = sessionPageHtml(sessionId);
-  const served = {cronTasks: 0};
+// Serves the session page at /, GET /api/ext-usage answered with `usage`, and the files the page links under web/static
+// and web/features. `served.cronModule` counts the cron module's fetches and `served.extUsage` the usage reads, so a
+// caller waits for the modules to load before it measures.
+function startFixtureServer({usage = {providers: {}}} = {}) {
+  const page = sessionPageHtml();
+  const served = {cronModule: 0, extUsage: 0};
   const server = http.createServer((req, res) => {
     const {pathname} = new URL(req.url, 'http://127.0.0.1');
     if (req.method !== 'GET') return reply(res, 405, 'text/plain; charset=utf-8', 'method not allowed');
     if (pathname === '/') return reply(res, 200, 'text/html; charset=utf-8', page);
-    if (pathname === '/api/cron/tasks') {
-      served.cronTasks += 1;
-      return reply(res, 200, 'application/json; charset=utf-8', JSON.stringify(tasks));
+    if (pathname === '/api/ext-usage') {
+      served.extUsage += 1;
+      return reply(res, 200, 'application/json; charset=utf-8', JSON.stringify(usage));
     }
     const file = path.normalize(path.join(WEB_DIR, pathname));
     const roots = [path.join(WEB_DIR, 'static'), path.join(WEB_DIR, 'features')];
     if (!roots.some((root) => file.startsWith(root + path.sep)) || !fs.existsSync(file)) {
       return reply(res, 404, 'text/plain; charset=utf-8', 'not found');
     }
+    if (pathname === CRON_MODULE_PATH) served.cronModule += 1;
     const type = file.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8';
     return reply(res, 200, type, fs.readFileSync(file));
   });

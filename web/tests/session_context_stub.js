@@ -189,6 +189,8 @@ function standInForUsageJs(context) {
 // cron parts runs it after createChatSidebarContext. The page runs a package's
 // script after the core modules the same way.
 function loadCronPackage(context) {
+  // The module's Task & context section registers with namespace.js, which this harness does not load.
+  context.registerTaskContextSection = () => {};
   // A harness runs the page's scripts in include order, as the document parses: the module's page part fetches it
   // after the document on a real page, and the late-load path has its own tests (cron_broken_ui.test.js).
   const readyState = context.document.readyState;

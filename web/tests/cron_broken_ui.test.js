@@ -73,6 +73,7 @@ function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session'} 
   const elements = {};
   const registered = {
     workspaceBadges: [], rowBadges: [], rowLines: [], menuItems: [], groupMenuItems: [], previewLimitExemptions: [],
+    taskContextSections: [],
   };
   const repaints = [];
   const listeners = {};
@@ -100,6 +101,7 @@ function loadCron(fetch, {readyState = 'complete', sessionId = 'other-session'} 
     registerSessionMenuItems: (source) => registered.menuItems.push(source),
     registerGroupMenuItem: (item) => registered.groupMenuItems.push(item),
     registerGroupPreviewLimitExemption: (predicate) => registered.previewLimitExemptions.push(predicate),
+    registerTaskContextSection: (load) => registered.taskContextSections.push(load),
   };
   context.globalThis = context;
   vm.createContext(context);
@@ -219,16 +221,16 @@ const BOUND_TASKS = [
       prompt: 'Do the work'}]},
 ];
 
-test('the panel lists the tasks bound to the active session, with every setting and its prompt text', async () => {
+test('the Scheduled task section lists the bound tasks with their schedule and whole prompt', async () => {
   const requests = [];
-  const {context, elements} = loadCron(tasksFetch(BOUND_TASKS, requests), {sessionId: 's1'});
-  // The module's own load draws the panel once; this test counts the draw it asks for.
+  const {registered} = loadCron(tasksFetch(BOUND_TASKS, requests));
+  assert.equal(registered.taskContextSections.length, 1, 'the module registers one dialog section');
+  const [loadSection] = registered.taskContextSections;
   requests.length = 0;
 
-  await context.Sidebar.renderCronPanel();
+  const html = await loadSection('s1');
 
   assert.deepEqual(requests.map((req) => req.url), ['/api/cron/tasks']);
-  const html = elements['cron-session-panel-body'].innerHTML;
   assert.ok(html.includes('weekly') && html.includes('paused'), html);
   assert.ok(!html.includes('elsewhere'), 'a task bound to another session is not listed');
   assert.ok(html.includes('Every Monday at 07:00'), 'the weekly schedule has a readable title');
@@ -237,56 +239,34 @@ test('the panel lists the tasks bound to the active session, with every setting 
     'a weekday schedule with minute and hour ranges has a readable title',
   );
   assert.ok(html.includes('Every December 15 at 17:00'), 'the yearly schedule has a readable title');
-  for (const text of ['s1', 'Summarize the day', 'UTC', 'p.md', 'host3', 'Do the work', 'claude-opus']) {
+  for (const text of ['0 7 * * 1', 'UTC', 'p.md', 'Summarize the day']) {
     assert.ok(html.includes(text), `${text} is shown: ${html}`);
   }
-  assert.ok(html.includes('Disabled'), 'a disabled task keeps its block, marked disabled');
-  assert.doesNotMatch(html, /<(input|select|button|textarea)\b/, 'the panel holds no control');
-  assert.ok(!elements['cron-session-panel'].classList.contains('hidden'));
+  const scrollingPrompt = (text) => new RegExp(`<pre class="[^"]*overflow-y-auto[^"]*">${text}</pre>`);
+  assert.match(html, scrollingPrompt('Summarize the day'), 'the prompt is a scrolling block');
+  assert.match(html, scrollingPrompt('Wait'), 'every bound task carries its prompt');
+  assert.doesNotMatch(html, /<(input|select|button|textarea)\b/, 'the section holds no control');
 });
 
-test('the panel stays hidden for a session that no task binds', async () => {
-  const {context, elements} = loadCron(tasksFetch(BOUND_TASKS), {sessionId: 'no-tasks'});
+test('the Scheduled task section stays empty for a session that no task binds', async () => {
+  const {registered} = loadCron(tasksFetch(BOUND_TASKS));
 
-  await context.Sidebar.renderCronPanel();
-
-  assert.ok(elements['cron-session-panel'].classList.contains('hidden'));
-  assert.equal(elements['cron-session-panel-body'].innerHTML, '');
+  assert.equal(await registered.taskContextSections[0]('no-tasks'), '');
 });
 
-test('the panel redraws for the session that becomes active', async () => {
-  const {context, elements, listeners} = loadCron(tasksFetch(BOUND_TASKS), {sessionId: 's1'});
-  assert.ok(listeners['charliebot:active-session-changed'], 'the panel listens for session switches');
+test('a failed task-list fetch is visible in the section instead of looking like an unbound session', async () => {
+  const {registered} = loadCron(async () => { throw new Error('network unavailable'); });
 
-  context.SESSION_ID = 's2';
-  await listeners['charliebot:active-session-changed']();
+  const html = await registered.taskContextSections[0]('s1');
 
-  const html = elements['cron-session-panel-body'].innerHTML;
-  assert.ok(html.includes('elsewhere') && !html.includes('weekly'), html);
+  assert.ok(html.includes('Error: network unavailable'), html);
 });
 
-test('a session switch clears the old panel while its task list is loading', async () => {
-  const {context, elements, listeners} = loadCron(tasksFetch(BOUND_TASKS), {readyState: 'loading', sessionId: 's1'});
-  await context.Sidebar.renderCronPanel();
-  assert.ok(!elements['cron-session-panel'].classList.contains('hidden'));
+test('a task that fails to load stays out of the sections and shows in the Workspace badge', async () => {
+  const {registered} = loadCron(tasksFetch([
+    {name: 'bad', error: 'boom', broken: true, path: '/h/config.d/cron.d/bad.yaml', enabled: null},
+  ]));
 
-  context.SESSION_ID = 'no-tasks';
-  let finishFetch;
-  context.fetch = () => new Promise((resolve) => { finishFetch = resolve; });
-  const pending = listeners['charliebot:active-session-changed']();
-  assert.ok(elements['cron-session-panel'].classList.contains('hidden'));
-  assert.equal(elements['cron-session-panel-body'].textContent, '');
-
-  finishFetch({ok: true, json: async () => BOUND_TASKS});
-  await pending;
-  assert.ok(elements['cron-session-panel'].classList.contains('hidden'));
-});
-
-test('a failed task-list fetch is visible instead of looking like an unbound session', async () => {
-  const {context, elements} = loadCron(async () => { throw new Error('network unavailable'); }, {sessionId: 's1'});
-
-  await context.Sidebar.renderCronPanel();
-
-  assert.ok(!elements['cron-session-panel'].classList.contains('hidden'));
-  assert.equal(elements['cron-session-panel-body'].textContent, 'Could not load scheduled tasks: Error: network unavailable');
+  assert.equal(await registered.taskContextSections[0]('s1'), '');
+  assert.notEqual(await registered.workspaceBadges[0](), '');
 });

@@ -271,7 +271,7 @@ const EXCEPTIONS = [
     ["et full = pool.label + ' → ' + ((options && options[member]) || me", PROSE_REASON],
   ]),
   ...byFile('web/static/js/sidebar/modals.js', [
-    ["nId, taskHtml + taskContextNoteHtml('Loading next run context…'));", PROSE_REASON],
+    ["nId, headHtml + taskContextNoteHtml('Loading next run context…'));", PROSE_REASON],
     ["if (bodyEl) bodyEl.innerHTML = taskContextNoteHtml('Loading…');", PROSE_REASON],
   ]),
   ...byFile('web/static/js/sidebar/session-menus.js', [

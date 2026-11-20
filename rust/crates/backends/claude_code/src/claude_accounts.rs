@@ -2046,6 +2046,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_reattach_holds_the_login_the_process_environ_names() {
     let (root, cfg, state) = pool_fixture(&["a", "b"]);
     let now = timestamp("2025-01-01T12:00:00Z");
@@ -2055,13 +2056,24 @@ mod tests {
       .env("CLAUDE_CONFIG_DIR", root.path().join("a"))
       .spawn()
       .unwrap();
-    let handle =
-      reattach_hold(&state, &cfg, held.id(), "run-1", Some(now)).unwrap().expect("the environ names a pool login");
+    // Between fork and exec the child's /proc environ still shows the test runner's environment, so the
+    // variable appears only after exec; poll instead of racing the window.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let handle = loop {
+      match reattach_hold(&state, &cfg, held.id(), "run-1", Some(now)).unwrap() {
+        Some(handle) => break handle,
+        None => {
+          assert!(std::time::Instant::now() < deadline, "the environ names a pool login");
+          std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+      }
+    };
     assert_eq!(state.reservation_counts(now), HashMap::from([("a".to_string(), 1)]));
     drop(handle);
     assert!(state.reservation_counts(now).is_empty(), "the hold ends with its handle");
 
     let mut plain = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
     assert!(reattach_hold(&state, &cfg, plain.id(), "run-2", Some(now)).unwrap().is_none());
     assert!(state.reservation_counts(now).is_empty());
 

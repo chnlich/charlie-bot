@@ -10,6 +10,9 @@
 
 pub mod helper_entry;
 
+use std::path::Path;
+
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
 
 /// Runtime registrations run before the package list, matching the server's pre-recovery ordering.
@@ -74,4 +77,14 @@ pub fn registry() -> Result<Registry, RegistryError> {
     registry.register_package(package, register)?;
   }
   Ok(registry)
+}
+
+/// The boot-time seeding the package list owns: the cron package writes the repo's default cron tasks into
+/// `config.d/cron.d/` on every server start, before the store opens. The server's startup calls this after
+/// `init_charliebot_home`; a package that must seed before the store opens adds its call here.
+pub fn seed_default_cron_tasks(
+  cfg: &CharlieBotConfig,
+  repo_root: &Path,
+) -> Result<Vec<charliebot_cron::seed::SeedReport>, String> {
+  charliebot_cron::seed::seed_default_cron_tasks(cfg, repo_root, false)
 }

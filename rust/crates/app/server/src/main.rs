@@ -257,7 +257,7 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
     return ExitCode::from(EXIT_STARTUP);
   }
   clock.segment("home_init");
-  match charliebot_cron::seed::seed_default_cron_tasks(&cfg, repo_root.path(), false) {
+  match packages::seed_default_cron_tasks(&cfg, repo_root.path()) {
     Ok(seeded) => {
       for item in seeded.iter().filter(|item| item.status == charliebot_core::home_init::SEED_CREATED) {
         tracing::info!(task = %item.name, "cron_default_task_seeded");

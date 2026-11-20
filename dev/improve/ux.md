@@ -18,9 +18,38 @@ keeps one category of change so the review has one scope owner.
 
 ## Topics
 
-Choose a defect visible in the before screenshot on the shared mock home at a required desktop or phone width. The
-mock home has the production number of sessions, so the pages show a representative layout. Use the widths in the
-Web UI Screenshots rule in `prompts/task_base.md`, and apply the screen-space rule in `AGENTS.md` to each chosen defect.
+Choose a defect at a required desktop or phone width on the shared mock home. The mock home has the production number
+of sessions, so the pages show representative content and layout. Use the widths in the Web UI Screenshots rule in
+`prompts/task_base.md`, and apply the screen-space rule in `AGENTS.md` to each chosen defect.
+
+A defect is one of two kinds:
+
+- a layout defect that the before screenshot shows;
+- a click defect, as the Clicks section defines.
+
+## Clicks
+
+The round clicks each control on the screen it examines.
+
+The round records each click's result in the evidence. A result names whether the click gives a visible effect on that
+screen (a state change, a message or a navigation), and the non-GET requests the click issues.
+
+A control that the mock home cannot exercise, or that the screen shows as disabled, is recorded as not clicked, with
+its reason.
+
+A click defect is a control whose click has one of these results:
+
+- the screen shows no change, or the change falls where the user cannot see it;
+- the screen changes but does not show what the control did;
+- a write that the screen shows as pending or sent never reaches the session, including when the user leaves the
+  screen before the control's delay ends.
+
+A click that the control's design leaves without effect, such as a send with no text, is not a click defect.
+For a control that starts a delayed write, the round also clicks it and leaves the screen during the delay.
+
+The clicks run only against a serve trial on the shared mock home.
+Every non-GET request a click issues is intercepted and recorded, so no click writes to a real session.
+The intercept may answer a recorded write locally, so the screen shows what it shows after a successful write.
 
 ## Mock home
 
@@ -56,6 +85,7 @@ same view before and after the change, so the reader can see the user-facing dif
 
 ## Evidence
 
-Evidence names the defect visible before and the resulting state after at each required width. The screenshots stay in
-the round's evidence directory, and landing Step 9 carries them to the user, so the reviewer and user can assess the
-change without rerunning it.
+Evidence names the defect visible before and the resulting state after at each required width. For a click defect, the
+before evidence shows the screen before and after the click, with the recorded click result that shows no effect. The
+screenshots stay in the round's evidence directory, and landing Step 9 carries them to the user, so the reviewer and
+user can assess the change without rerunning it.

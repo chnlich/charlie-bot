@@ -32,6 +32,7 @@ pub mod tool_line;
 pub mod turn_hooks;
 pub mod upload;
 pub mod verify_trailer;
+pub mod web_screenshots;
 pub mod worker;
 
 #[cfg(test)]

@@ -49,6 +49,18 @@ fn commit_with_message(dir: &Path, file: &str, subject: &str, body: &str) -> Str
   git(dir, &["rev-parse", "HEAD"])
 }
 
+/// Writes a file that carries a PNG signature and an IHDR chunk of `width`, which is all the screenshot gate reads.
+fn write_screenshot(dir: &Path, name: &str, width: u32) -> String {
+  let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+  bytes.extend_from_slice(&13u32.to_be_bytes());
+  bytes.extend_from_slice(b"IHDR");
+  bytes.extend_from_slice(&width.to_be_bytes());
+  bytes.extend_from_slice(&1u32.to_be_bytes());
+  let path = dir.join(name);
+  fs::write(&path, bytes).expect("the screenshot is written");
+  path.display().to_string()
+}
+
 /// One landing venue: a bare origin, the main checkout, and a task worktree with one commit on the task branch.
 /// The venue also holds the task's session in a synthetic profile home and the gh stand-in's state.
 struct Venue {
@@ -382,6 +394,32 @@ fn ungated_landing_accepts_but_does_not_use_explicit_pr_text() {
   assert_eq!(code, 0, "record: {record}");
   assert_eq!(record["state"], "landed-no-ci");
   assert!(!venue.gh_calls().contains("pr create"));
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_page_change_lands_only_when_its_body_names_both_widths() {
+  let venue = Venue::new(false);
+  fs::create_dir(venue.worktree.join("web")).expect("the web directory is created");
+  commit_with_message(&venue.worktree, "web/tray.js", "Open the choice tray", "");
+
+  let output = venue.land_output();
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("1280 px"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
+
+  let shots = venue.home.join("shots");
+  fs::create_dir(&shots).expect("the screenshot directory is created");
+  let desktop = write_screenshot(&shots, "tray-1280.png", 1280);
+  let phone = write_screenshot(&shots, "tray-390.png", 390);
+  let body = format!("The tray open at 1280 px: `{desktop}`. At 390 px: `{phone}`.");
+  let (code, record) = venue.land_with_args(&["--body", &body]);
+
+  assert_eq!(code, 0, "record: {record}");
+  assert_eq!(record["state"], "landed-no-ci");
 }
 
 /// The path that left rebase-landed PRs open: a worker pushes the task branch and opens a PR, then main moves

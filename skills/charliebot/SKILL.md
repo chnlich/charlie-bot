@@ -27,11 +27,12 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
    either `--body` or `--body-file`, both written by `~/.claude/skills/writing-style/genres/commits-and-prs.md`.
    `--body` and `--body-file` are exclusive. An existing open PR is synchronized to the landed title and body, and a
    new draft PR uses them. A blank title or unreadable or blank body file fails before landing. An ungated landing
-   accepts these values and leaves them unused. When the base is the default branch and declares a
+   accepts these values and leaves them unused, except that a diff that changes a web page checks its body as below. When the base is the default branch and declares a
    `pull_request` workflow, the command moves the base only when its CI gate passes on the landed commit. When that
    gate does not apply, the landing does not wait for CI and reports `landed-no-ci`. `landed` and `landed-no-ci` exit
    0 and leave the task branch's PR merged or closed. Every other state leaves the change unlanded and names what
-   holds it.
+   holds it. Before any push, a diff that changes a web page (a path under `web/`, or a page template directly under
+   `prompts/`) is refused unless its PR body names a screenshot at 1280 px and one at 390 px by absolute path.
 5. On landing → master agent gets summary
 
 ### Merge-back failover

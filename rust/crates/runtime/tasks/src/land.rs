@@ -6,6 +6,9 @@
 //! the repository's default branch and that branch declares a workflow with a `pull_request`
 //! trigger; every other landing pushes as today and records `landed-no-ci`.
 //!
+//! Before any push, a diff that changes a CharlieBot web page refuses the call unless its PR body names a
+//! screenshot at each width (`web_screenshots`).
+//!
 //! Under the gate the call rebases onto `origin/<base>`, pushes the task branch with
 //! `--force-with-lease`, keeps one draft PR for the branch, and pushes `<sha>:<base>` only when
 //! every expected workflow ran green on the head sha and every check run and commit status on it is
@@ -37,6 +40,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::git;
 use crate::review_text;
+use crate::web_screenshots;
 
 /// The landing record's file beside a task session's `metadata.json` (`LANDING_FILE_NAME`).
 pub const LANDING_FILE_NAME: &str = "landing.json";
@@ -272,6 +276,11 @@ pub async fn land(home: &Path, task_session_id: &str, options: &LandOptions) -> 
   let published = review_text::review_published_branch(&ctx.base_branch);
   let base_ref = format!("origin/{published}");
   fetch_base(&ctx.worktree, published).await?;
+  let changed = changed_paths(&ctx.worktree, &base_ref).await?;
+  if web_screenshots::changes_web_page(&changed) {
+    let body = report_body(&ctx.worktree, published, options).await?;
+    web_screenshots::check_screenshots(body.as_deref())?;
+  }
 
   let gated = matches!(gate_applicability(&ctx.repo_path, published).await?, GateApplicability::Applies);
   let prev = read_landing_record(&ctx.session_dir)?;
@@ -450,6 +459,29 @@ const GIT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_PUSH_TIMEOUT: Duration = Duration::from_secs(120);
 const GH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The paths the task branch changes against the base, from the three-dot range that a review reads.
+async fn changed_paths(worktree: &Path, base_ref: &str) -> anyhow::Result<Vec<String>> {
+  let range = format!("{base_ref}...HEAD");
+  let (ok, out, err) = git::git_stdout(worktree, &["diff", "--name-only", &range], GIT_READ_TIMEOUT, "git diff").await;
+  if !ok {
+    anyhow::bail!("git diff --name-only {range} failed in {}: {err}", worktree.display());
+  }
+  Ok(out.lines().map(str::to_string).collect())
+}
+
+/// The PR body a landing is judged on: the explicit body, else the body of the branch's single commit. A branch of
+/// several commits without an explicit body has none (`report_body`).
+async fn report_body(worktree: &Path, published_base: &str, options: &LandOptions) -> anyhow::Result<Option<String>> {
+  if let Some(body) = &options.body {
+    return Ok(Some(body.clone()));
+  }
+  let commits = commits_ahead(worktree, published_base).await?;
+  Ok(match commits.as_slice() {
+    [single] => Some(single.body.clone()),
+    _ => None,
+  })
+}
 
 async fn fetch_base(worktree: &Path, published: &str) -> anyhow::Result<()> {
   let (ok, _, err) = git::git_stdout(worktree, &["fetch", "origin", published], GIT_WRITE_TIMEOUT, "git fetch").await;
@@ -1141,17 +1173,22 @@ async fn resolve_draft_pr_text(
 ) -> anyhow::Result<ResolvedPrText> {
   options.validate()?;
   let commits = if options.title.is_none() || options.body.is_none() {
-    let range = format!("origin/{published_base}..HEAD");
-    let (ok, out, err) =
-      git::git_stdout(worktree, &["log", "-z", "--format=%s%n%b", &range], GIT_READ_TIMEOUT, "git log").await;
-    if !ok {
-      anyhow::bail!("git log {range} failed: {err}");
-    }
-    parse_commit_messages(&out)
+    commits_ahead(worktree, published_base).await?
   } else {
     Vec::new()
   };
   resolve_pr_text(&commits, options)
+}
+
+/// The commits the task branch holds ahead of the published base, each as its subject and body (`commits_ahead`).
+async fn commits_ahead(worktree: &Path, published_base: &str) -> anyhow::Result<Vec<CommitMessage>> {
+  let range = format!("origin/{published_base}..HEAD");
+  let (ok, out, err) =
+    git::git_stdout(worktree, &["log", "-z", "--format=%s%n%b", &range], GIT_READ_TIMEOUT, "git log").await;
+  if !ok {
+    anyhow::bail!("git log {range} failed: {err}");
+  }
+  Ok(parse_commit_messages(&out))
 }
 
 fn parse_commit_messages(output: &str) -> Vec<CommitMessage> {

@@ -22,32 +22,27 @@ const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep 
      branch only after CI passed on the head sha, and leave no PR of the task branch open";
 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command =
-    with_infer_long_args(
-      Command::new("land")
-        .about(ABOUT)
-        .arg(Arg::new("task").long("task").value_name("SESSION_ID").help(
-          "Task session id (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the run environment)",
-        ))
-        .arg(
-          Arg::new("title")
-            .long("title")
-            .value_name("TITLE")
-            .help("PR title on a gated landing; required with a body when the branch holds several commits"),
-        )
-        .arg(
-          Arg::new("body")
-            .long("body")
-            .value_name("BODY")
-            .conflicts_with("body-file")
-            .help("PR body on a gated landing; required with --title when the branch holds several commits"),
-        )
-        .arg(
-          Arg::new("body-file").long("body-file").value_name("PATH").conflicts_with("body").help(
-            "PR body from a file on a gated landing; required with --title when the branch holds several commits",
-          ),
-        ),
-    );
+  let command = with_infer_long_args(
+    Command::new("land")
+      .about(ABOUT)
+      .arg(Arg::new("task").long("task").value_name("SESSION_ID").help(
+        "Task session id (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the run environment)",
+      ))
+      .arg(
+        Arg::new("title")
+          .long("title")
+          .value_name("TITLE")
+          .help("PR title on a gated landing; required with a body when the branch holds several commits"),
+      )
+      .arg(Arg::new("body").long("body").value_name("BODY").conflicts_with("body-file").help(
+        "PR body; required with --title when the branch holds several commits. A diff that changes a web page \
+           needs it to name a screenshot at 1280 px and at 390 px by absolute path",
+      ))
+      .arg(Arg::new("body-file").long("body-file").value_name("PATH").conflicts_with("body").help(
+        "PR body from a file; required with --title when the branch holds several commits. A diff that changes \
+             a web page needs it to name a screenshot at 1280 px and at 390 px by absolute path",
+      )),
+  );
   let matches = match command
     .clone()
     .try_get_matches_from(std::iter::once(OsString::from("charliebot land")).chain(args.iter().cloned()))

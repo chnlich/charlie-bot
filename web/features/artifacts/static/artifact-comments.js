@@ -35,8 +35,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var NO_SESSION_MESSAGE = 'Cannot parse session id from this artifact URL.';
     var SECTION_SELECTOR = 'section';
     // Characters of a fork's question text that the locator shows after the fork's
-    // number, so the session can tell which item a commented line belongs to
-    // without opening the page.
+    // number. The session reads them to tell which item a commented line belongs
+    // to without opening the page.
     var QUESTION_HEAD_CHARS = 30;
     // Characters of the page text that precede a row's first character. A draft on a row whose
     // quote repeats on the page stores them, so a reload finds that row again.
@@ -115,8 +115,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // Picks on the questions of plan, understanding and waiting pages only.
     var PICK_PAGE_PATTERN = /(^|\/)(plan|understanding|waiting)_[^/]*$/;
     var QUOTE_CLOSERS = {'「': '」', '“': '”', '"': '"'};
-    // editing: picks change; countdown: the undo window is open; sending: the post is in flight, retried
-    // on a network error or 5xx; sent: the buttons stay off until a reload.
+    // The pick stage names each step: editing picks change. In countdown the undo window is
+    // open. In sending the post is in flight, retried on a network error or 5xx. In sent the
+    // buttons stay off until a reload.
     var pickStage = 'editing';
     var pickCountdown = null;
     var picks = [];
@@ -1628,9 +1629,11 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // ---- Option picks on the page's open questions ----
-    // The parser reads the grammar of the Rust checker's page_forks (artifact_check.rs): an open
-    // div.fork holds no p.resolved, its question number is span.fn in a p.q, and its options are the
-    // li lines outside every closed details and every div.demo, each opening with its name in 「」.
+    //
+    // The parser reads the grammar of the Rust checker's page_forks (artifact_check.rs).
+    // An open div.fork holds no p.resolved, its question number is span.fn in a p.q, and its
+    // options are the li lines outside every closed details and every div.demo. Each option
+    // opens with its name in 「」.
     // The shared fixture plan_template_forks.json pins this parser and the Rust one to one output.
     function isPickMarker(el) {
       return el.classList.contains('demo') || el.classList.contains('no-demo');
@@ -1715,8 +1718,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return false;
     }
 
-    // One record per pickable open fork: its number, its named options (each with the line text and
-    // its button once rendered), the index of the recommended option or -1, and the picked index or -1.
+    // One record per pickable open fork. The record holds the fork's number and its named options.
+    // Each option carries the line text and, once rendered, its button. The record also holds the
+    // index of the recommended option or -1, and the picked index or -1.
     function pageForkRecords() {
       var records = [];
       var blocks = document.querySelectorAll('.fork');

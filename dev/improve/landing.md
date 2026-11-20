@@ -149,15 +149,18 @@ The round lands a whole topic, not a fragment.
 For a fresh topic, create the branch with `git switch -c improve/<direction>/<topic slug> origin/main`.
 The branch name records the topic for the abandoned-topic check.
 
-When the topic touches `rust/`, run the checks on the remote host, in the `rust/` directory:
-
-    CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=~/.cache/improve-target/<direction> nice -n 19 cargo check
-    CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=~/.cache/improve-target/<direction> nice -n 19 cargo test -p <crate>
-
-Add `-p <crate>` for every crate that the change touches.
-Run no other test, because CI runs the full suite.
-Four build jobs at nice level 19 leave the host's CPU to the other owners' builds.
-The pinned target directory stays inside the write boundary.
+When the topic touches `rust/`, run the checks from the `rust/` directory of the clone, on the remote host where
+  the round already runs.
+The remote host is the host that the host rule names for agent compiles, so the checks satisfy that rule.
+The checks reach no other host, so the round uses neither the remote-run runner (`dev/remote-run/`) nor an ssh
+  connection.
+The round's profile home, `~/improve/home`, leaves `remote_run.host` unset by design.
+Finding it unset is expected, and the round runs its checks directly in the clone.
+The checks use the direction's pinned target directory, `~/.cache/improve-target/<direction>`, which the write
+  boundary allows.
+The round runs `cargo check` for the workspace and `cargo test` for each crate that the change touches.
+The round limits its tests to those crates, because CI runs the full suite.
+The builds run with four build jobs at nice level 19, so the host's CPU stays with the other owners' builds.
 
 ## Step 5: write the evidence and open the pull request
 

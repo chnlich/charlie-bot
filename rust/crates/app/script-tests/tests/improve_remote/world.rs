@@ -540,6 +540,7 @@ impl World {
       "remote-runner.sh",
       "review-charlie-code.sh",
       "inflight-files.sh",
+      "clone-check.sh",
       "member_kinds.txt",
       "gh-shim.sh",
     ] {
@@ -618,18 +619,16 @@ impl World {
 
     let round_root = sandbox.dir(&format!("remote/improve/{direction}"));
     sandbox.dir("remote/improve/home");
+    // The direction clone is a clone of its origin, a bare repository named charlie-bot as the protocol's clones are.
+    // The origin's main carries the commit's pre-push hook, so the clone's tree has the hook the runner's clone check
+    // requires, and the runner's sync fetches from this origin. A hook the clone held untracked would block that sync's
+    // checkout, because git refuses to overwrite an untracked file.
+    let direction_origin = sandbox.dir("remotes/charlie-bot.git");
+    let direction_origin_text = direction_origin.display().to_string();
+    git(&sandbox, &git_env, &repo, &["clone", "-q", "--bare", ".", &direction_origin_text]);
+    git(&sandbox, &git_env, &round_root, &["clone", "-q", &direction_origin_text, "charlie-bot"]);
     let clone = round_root.join("charlie-bot");
-    fs::create_dir_all(&clone).expect("the direction clone");
-    git(&sandbox, &git_env, &clone, &["init", "-q", "-b", "main"]);
     git(&sandbox, &git_env, &clone, &["config", "core.hooksPath", "dev/git-hooks"]);
-    // The clone's pre-push hook, which the runner's clone check requires.
-    let clone_hooks = clone.join("dev/git-hooks");
-    fs::create_dir_all(&clone_hooks).expect("the clone's hooks directory");
-    harness::write_executable(
-      &clone_hooks.join("pre-push"),
-      std::fs::read(harness::repo_root().join("dev/git-hooks/pre-push")).unwrap(),
-    );
-    git(&sandbox, &git_env, &clone, &["remote", "add", "origin", "https://example.invalid/someone/charlie-bot.git"]);
     let evidence = round_root.join("evidence");
     fs::create_dir_all(&evidence).expect("the evidence directory");
     let mock_home_log = sandbox.root().join("mock-home.log");
@@ -1017,12 +1016,13 @@ impl World {
     PathBuf::from(format!("/tmp/improve-{}/codex-home", self.direction))
   }
 
-  /// A launch directory the runner reads, created as the launcher's payload creates it: the member kind list
-  /// that the payload carries sits beside the runner.
+  /// A launch directory the runner reads, created as the launcher's payload creates it: the member kind list and the
+  /// clone check that the payload carries sit beside the runner.
   pub fn stage_launch(&self, launch_id: &str) -> PathBuf {
     let launch = self.remote_home.join("improve/launch").join(launch_id);
     fs::create_dir_all(&launch).expect("the launch directory");
     harness::copy_file(&self.repo.join("dev/improve/member_kinds.txt"), &launch.join("member_kinds.txt"));
+    harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
     launch
   }
 

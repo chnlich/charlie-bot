@@ -26,6 +26,10 @@ const DATA_CACHE = COPY_PREFIX + 'data-' + COPY_FORMAT;
 const FILE_CACHE = COPY_PREFIX + 'files';
 const SHELL_KEY = self.location.origin + '/shell';
 const INDEX_KEY = self.location.origin + '/index';
+// The worker's own state, outside the copy caches so activation keeps it. The stale-shell flag names the release whose
+// shell a 4409 found older than the server (markShellStale).
+const STATE_CACHE = 'offline-shell-state';
+const STALE_SHELL_KEY = self.location.origin + '/stale-shell';
 const STORED_AT_HEADER = 'X-CharlieBot-Stored-At';
 const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
 // The address parameter a reload past the stored shell carries (offline-shell.js reloadPastStoredShell). A navigation
@@ -106,10 +110,31 @@ function isSidebarListRequest(url) {
   return url.pathname === '/api/sessions/' && !url.searchParams.has('ids');
 }
 
+// A page of this release's shell found a newer release on the server (its socket closed 4409). The flag names this
+// release, so a newer worker, which stores its own shell, never reads it.
+async function markShellStale() {
+  const cache = await caches.open(STATE_CACHE);
+  await cache.put(STALE_SHELL_KEY, new Response(WORKER_CONFIG.version));
+}
+
+async function shellIsStale() {
+  const cache = await caches.open(STATE_CACHE);
+  const flag = await cache.match(STALE_SHELL_KEY);
+  return flag !== undefined && (await flag.text()) === WORKER_CONFIG.version;
+}
+
 // The navigation's shell: the stored one, or the network's full page on the first load (no shell stored
 // yet). A worker that just started can match before the cache's disk index has settled, while the same
 // cache answers a moment later, so a miss re-reads twice before it falls back to the network.
 async function answerShell(request) {
+  // A stale shell answers no online navigation. A network failure (the offline open) keeps the stored shell.
+  if (await shellIsStale()) {
+    try {
+      return await fetch(request);
+    } catch (error) {
+      if (error.name !== 'TypeError') throw error;
+    }
+  }
   const cache = await caches.open(SHELL_CACHE);
   for (let attempt = 0; attempt < 3; attempt++) {
     const shell = await cache.match(SHELL_KEY);
@@ -548,8 +573,13 @@ self.addEventListener('message', (event) => {
       if (result.stored) await storePageCopies(data.copies);
       return result;
     });
-    const reply = (result) => replyTo(event, {...result, fetchHolds: {...fetchHolds}});
+    // The version names the release whose shell this worker holds, so the page can tell a worker of another release.
+    const reply = (result) => replyTo(event, {...result, version: WORKER_CONFIG.version, fetchHolds: {...fetchHolds}});
     event.waitUntil(warming.then(reply, (error) => reply({stored: false, error: String(error)})));
+  } else if (data.type === 'stale-shell') {
+    event.waitUntil(markShellStale().then(
+        () => replyTo(event, {}),
+        (error) => replyTo(event, {error: String(error)})));
   } else if (data.type === 'store-files') {
     event.waitUntil(storeOnDemandFiles(data.files).then(
         (result) => replyTo(event, result),

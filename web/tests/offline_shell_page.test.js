@@ -52,6 +52,7 @@ function buildPage({
     idleCallbacks: [],
     requestIdleCallback: (fn) => { context.idleCallbacks.push(fn); },
     pageAssetUrl: (assetPath) => assetPath + '?v=test',
+    STATIC_ASSET_VERSION: 'v2',
     SESSION_ID: sessionId,
     SESSION_BOOTSTRAP: sessionBootstrap,
     INITIAL_SESSIONS: initialSessions,
@@ -157,7 +158,7 @@ test('the warm waits for the page-current event, then asks the active worker and
   assert.equal(page.context.postMessage.message.type, 'warm');
   assert.deepEqual(JSON.parse(JSON.stringify(page.context.postMessage.message.copies)), []);
   assert.equal(page.context.postMessage.transfer.length, 1, 'the reply channel travels with the message');
-  page.context.reply({stored: true});
+  page.context.reply({stored: true, version: 'v2'});
   assert.equal(page.events.length, 1);
   assert.equal(page.events[0].type, 'charliebot:offline-shell-warm');
   assert.equal(page.events[0].detail.stored, true);
@@ -248,6 +249,51 @@ test('a warm waits for the update the registration is installing, and goes to th
       'the warm goes to the worker that took over');
 });
 
+// The registration's active worker is the release before this page's: its warm reply names that release, and it has
+// its own stored shell, so the report is not this release's. The page checks for the update, and warms the worker
+// that takes over instead of reporting the old one's shell as stored.
+test('a warm an older release worker answers waits for the update, then warms the one that takes over', async () => {
+  const sent = [];
+  const old = {postMessage: (message, transfer) => sent.push({to: 'old', message, transfer})};
+  const next = {postMessage: (message, transfer) => sent.push({to: 'next', message, transfer})};
+  const registration = {
+    active: old,
+    installing: null,
+    update: async () => {
+      registration.installing = {state: 'activated', addEventListener: () => {}};
+      registration.active = next;
+    },
+  };
+  const page = buildPage({registration});
+  page.firePageCurrent();
+  await settled();
+  const warmTo = (to) => sent.find((entry) => entry.to === to && entry.message.type === 'warm');
+  const replyTo = (entry, data) => page.context.channels.find((c) => c.port2 === entry.transfer[0]).port1.onmessage({data});
+  assert.ok(warmTo('old'), 'the first warm goes to the active worker');
+  replyTo(warmTo('old'), {stored: true, version: 'v1'});
+  await settled();
+  assert.ok(warmTo('next'), 'the warm goes to the worker that takes over');
+  assert.equal(page.events.length, 0, 'the older release worker\'s report is not reported');
+  replyTo(warmTo('next'), {stored: true, version: 'v2'});
+  assert.equal(page.events.length, 1);
+  assert.equal(page.events[0].detail.stored, true);
+});
+
+// A 4409 reload asks the worker that answered this page's shell to stop answering online navigations from it, and
+// navigates once the worker has said so.
+test('a reload past the stored shell marks the controlling worker stale first, and navigates once it replies', () => {
+  const page = buildPage();
+  const sent = [];
+  const controller = {postMessage: (message, transfer) => sent.push({message, transfer})};
+  page.context.navigator.serviceWorker.controller = controller;
+  page.context.location.href = 'https://charlie.test/?session=session-a';
+  page.context.reloadPastStoredShell();
+  assert.deepEqual(sent.map((entry) => entry.message.type), ['stale-shell']);
+  assert.deepEqual(page.context.replaced, [], 'the navigation waits for the worker');
+  page.context.channels[0].port1.onmessage({data: {}});
+  assert.deepEqual(page.context.replaced, ['https://charlie.test/?session=session-a&reloading=1']);
+});
+
 // The cap bounds a stuck update: past PAGE_UPDATE_CAP_MS the warm reports an error, and the warm never waits longer.
 test('an update that never takes over fails the warm at the cap', async () => {
   const PAGE_UPDATE_CAP_MS = 20000;
@@ -303,7 +349,7 @@ test('an update that activated before the page attached its listener takes over 
       'the cap timer is cleared');
 
   const channel = page.context.channels.find((candidate) => candidate.port2 === warms[0].transfer[0]);
-  channel.port1.onmessage({data: {stored: true}});
+  channel.port1.onmessage({data: {stored: true, version: 'v2'}});
   assert.deepEqual(JSON.parse(JSON.stringify(page.events[0].detail.update)), {activated: 0});
 });
 

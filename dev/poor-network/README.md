@@ -306,7 +306,11 @@ A release's page posts its warm to the worker only after the worker update takes
 first sight of the installed worker to its activation, took 4.1 to 8.8 s in eight of nine release reps and 13.0 s in the
 ninth (`[takeover]` lines of the run log, on eba6eb936a). A 4409 close reloads past the stored shell: the navigation
 carries `reloading=1`, which the worker passes to the network, and the page removes the parameter after load. A visible
-release reload therefore costs what a network reload costs; no shell refresh runs before it.
+release reload therefore costs what a network reload costs; no shell refresh runs before it. Before that reload the page
+sends `stale-shell` to its controlling worker and waits for the reply: the worker then answers online navigations of its
+release from the network (a network failure keeps the stored shell), so a later navigation of the tab cannot take the
+stale shell and close 4409 again. A warm whose reply names another release's worker waits for the update, then warms
+the worker that takes over.
 
 The server's ETag names a bundled static file's bytes: the package and `web/static` mounts are `StaticDirectory::bundled`
 (`static_files.rs`), and other mounts keep their mtime-and-size tag. So a release that leaves a stored file unchanged

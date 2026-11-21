@@ -47,11 +47,30 @@ function warmOfflineShell() {
       reportWarm({supported: false});
       return;
     }
-    const channel = new MessageChannel();
-    channel.port1.onmessage = (event) => reportWarm(event.data ?? {});
-    registration.active.postMessage({type: 'warm', copies: offlineShellSeedCopies(), files: onDemandFileUrls()},
-        [channel.port2]);
+    postWarm(registration, true);
   }).catch((err) => reportWarm({error: String(err)}));
+}
+
+// The warm goes to the registration's active worker. An older release's worker answers from its own stored shell (its
+// cache is named for its release), so a reply from another release means the update has not taken over yet: the page
+// checks for the update, waits for the worker that takes over, and warms that one.
+function postWarm(registration, mayCheckUpdate) {
+  const channel = new MessageChannel();
+  channel.port1.onmessage = (event) => {
+    const report = event.data ?? {};
+    if (report.version === STATIC_ASSET_VERSION) {
+      reportWarm(report);
+    } else if (!mayCheckUpdate) {
+      reportWarm({stored: false, error: `the worker is release ${report.version}, not ${STATIC_ASSET_VERSION}`});
+    } else {
+      registration.update()
+          .then(() => whenUpdateTakesOver(registration))
+          .then((taken) => postWarm(taken, false))
+          .catch((err) => reportWarm({error: String(err)}));
+    }
+  };
+  registration.active.postMessage({type: 'warm', copies: offlineShellSeedCopies(), files: onDemandFileUrls()},
+      [channel.port2]);
 }
 
 // The registration the page's messages to the current release's worker go to, once any update it holds has taken
@@ -269,10 +288,22 @@ window.addEventListener('charliebot:unauthorized', () => dropOfflineShellCopies(
 // The page the server now serves loads as it does on a network reload, and the new page's warm stores the new shell.
 const RELOAD_PAST_SHELL_PARAM = 'reloading';
 
+// The worker that answered this page's shell learns that the server runs a newer release first, so the navigation the
+// reload makes goes to the network: a later navigation of this tab cannot take the same stale shell (4409 again).
 function reloadPastStoredShell() {
   const url = new URL(location.href);
   url.searchParams.set(RELOAD_PAST_SHELL_PARAM, '1');
-  location.replace(url.href);
+  const controller = offlineShellSupported() ? navigator.serviceWorker.controller : null;
+  if (!controller) {
+    location.replace(url.href);
+    return;
+  }
+  const channel = new MessageChannel();
+  channel.port1.onmessage = (event) => {
+    if (event.data.error !== undefined) console.warn('offline shell: the stale-shell mark failed:', event.data.error);
+    location.replace(url.href);
+  };
+  controller.postMessage({type: 'stale-shell'}, [channel.port2]);
 }
 
 // The page takes the parameter out of the address bar once it has loaded: the marked navigation is the one that loaded

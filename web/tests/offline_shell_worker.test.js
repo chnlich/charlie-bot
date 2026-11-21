@@ -971,6 +971,29 @@ test('a user request in flight past ten seconds holds the shell install until it
 
 // A reload past the stored shell carries the reload parameter; the worker leaves that navigation to the network, so
 // the stored shell never answers it, while a plain navigation still takes the stored shell.
+// A page that found the server on a newer release marks this worker's shell stale: online navigations then go to the
+// network, so a tab's next navigation cannot take the stale shell again. Offline, the stored shell still answers.
+test('after a stale-shell mark a navigation goes to the network; offline the stored shell answers', async () => {
+  const h = harness();
+  h.state.network = async () => new Response('<html>shell</html>', {status: 200, headers: {ETag: '"s"'}});
+  const warm = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [warm.port2]}).waits);
+  assert.equal(warm.replies[0].stored, true, 'a shell is stored');
+  assert.equal(warm.replies[0].version, 'v1', 'the warm reply names the release the worker serves');
+
+  const mark = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'stale-shell'}, ports: [mark.port2]}).waits);
+  assert.equal(mark.replies.length, 1, 'the mark is acknowledged');
+
+  h.state.network = async () => new Response('<html>release</html>', {status: 200});
+  const online = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  assert.equal(await online.response.text(), '<html>release</html>', 'the navigation takes the network page');
+
+  h.state.network = async () => { throw new TypeError('network unreachable'); };
+  const offline = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  assert.equal(await offline.response.text(), '<html>shell</html>', 'offline, the stored shell answers');
+});
+
 test('a navigation that carries the reload parameter goes to the network, though a shell is stored', async () => {
   const h = harness();
   h.state.network = async () => new Response('<html>shell</html>', {status: 200, headers: {ETag: '"s"'}});

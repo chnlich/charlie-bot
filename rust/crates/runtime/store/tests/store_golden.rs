@@ -711,10 +711,7 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
   );
   assert_eq!(
     normalized_files(&python_home),
-    normalized_files_with_expected_checkpoints(
-      &rust_home,
-      &["sessions/synthetic-task-root/data/fact_checkpoint.json"],
-    )
+    normalized_files_with_expected_checkpoints(&rust_home, &["sessions/synthetic-task-root/data/fact_checkpoint.json"],)
   );
   rust_seed.invalidate_cache("synthetic-task-worker");
   rust_seed.invalidate_tree_index();

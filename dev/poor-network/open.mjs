@@ -25,6 +25,21 @@ const CASES = ['A', 'B', 'C'];
 // only case A has opened the session its profile reads.
 export const OPEN_CONDITIONS = Object.freeze([...CONDITIONS, 'release', 'release-offline', 'replied-offline']);
 const STORED_COPY_CONDITIONS = Object.freeze(['release-offline', 'replied-offline']);
+// The measured document's worker state, read after its navigation: whether a worker controlled the document, whether a
+// worker answered its navigation (workerStart is 0 when none did), the registration's worker states and the cache
+// names. A stored-copy open that reads the network names the worker that failed to answer it.
+const DOCUMENT_WORKER_STATE = `(async () => {
+  const entry = performance.getEntriesByType('navigation')[0] ?? null;
+  const registration = await navigator.serviceWorker.getRegistration(location.href);
+  return {
+    controlled: navigator.serviceWorker.controller !== null,
+    workerStart: entry === null ? null : entry.workerStart,
+    active: registration?.active?.state ?? null,
+    waiting: registration?.waiting?.state ?? null,
+    installing: registration?.installing?.state ?? null,
+    caches: await caches.keys(),
+  };
+})()`;
 const REFERENCE = Object.freeze({ id: 'reference A link rate 1', case: 'A', condition: 'link', rate: 1 });
 const SETTLE_MS = 300000;
 // The warm's report arrives when the service worker has stored the release's shell and files, which takes the link's
@@ -566,10 +581,13 @@ async function measureOnce(ctx, cell, repetition) {
           '{ responseEnd: entry.responseEnd, transferSize: entry.transferSize, encodedBodySize: entry.encodedBodySize } ' +
           ': null; })()')
       : null;
-    // A stored-copy open is answered by the stored shell, so its document moves no bytes on the wire.
+    // A stored-copy open is answered by the stored shell, so its document moves no bytes on the wire. The error names
+    // the document's worker state, so a failed open shows whether a worker controlled it and answered its navigation.
     if (STORED_COPY_CONDITIONS.includes(cell.condition) && navigation?.transferSize !== 0) {
+      // The probe runs only on this failure path; if it fails too, its message joins the open's error.
+      const worker = await tab.evaluate(DOCUMENT_WORKER_STATE).catch((error) => `unreadable: ${error.message}`);
       throw new Error(`${cell.id} moved ${navigation?.transferSize ?? 'no'} document bytes on the wire; ` +
-        'its open must read the stored shell');
+        `its open must read the stored shell (document worker state ${JSON.stringify(worker)})`);
     }
     const responseEnd = navigation === null ? null : navigation.responseEnd;
     const dclMs = opened.domContentLoadedMs;

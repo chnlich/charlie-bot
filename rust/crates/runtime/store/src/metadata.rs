@@ -152,6 +152,9 @@ pub const CONTEXT_REFS_FIELD: &str = "context_refs";
 /// The response field holding a session's display name. The voice recordings page's rows carry the same name, so it
 /// is spelled once, here.
 pub const SESSION_NAME_FIELD: &str = "session_name";
+/// The session-metadata field holding the session's creation time. The store writes it, and the session listing and
+/// the mock home's fixtures name it through this constant.
+pub const CREATED_AT_FIELD: &str = "created_at";
 /// The session-metadata field holding the session's last update time. The store writes it; the session listing and the
 /// usage page and the mock home's fixtures name it too, so it is spelled once, here.
 pub const UPDATED_AT_FIELD: &str = "updated_at";
@@ -713,7 +716,7 @@ impl SessionMetadata {
       push(&mut declared, THINKING_SINCE, &self.thinking_since);
       push(&mut declared, RUN_BACKEND, &self.run_backend);
     }
-    push(&mut declared, "created_at", &self.created_at);
+    push(&mut declared, CREATED_AT_FIELD, &self.created_at);
     push(&mut declared, UPDATED_AT_FIELD, &self.updated_at);
     push(&mut declared, CC_SESSION_ID_FIELD, &self.cc_session_id);
     push(&mut declared, CC_SESSION_STARTED_AT, &self.cc_session_started_at);

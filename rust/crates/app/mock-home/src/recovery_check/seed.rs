@@ -14,8 +14,9 @@ use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_store::control_events::{SOURCE_SESSION_ID_FIELD, TASK_SPEC_HASH_FIELD};
 use charliebot_store::layout;
 use charliebot_store::metadata::{
-  ACCEPTANCE_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, CONTEXT_REFS_FIELD, EXIT_CODE_FIELD, HAS_UNREAD,
-  KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD, UPDATED_AT_FIELD,
+  ACCEPTANCE_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, CONTEXT_REFS_FIELD, CREATED_AT_FIELD, EXIT_CODE_FIELD,
+  HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
+  UPDATED_AT_FIELD,
 };
 use charliebot_store::run_records::{
   ENDED_AT_FIELD, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
@@ -153,7 +154,7 @@ fn session_meta(session_id: &str, case: &Case, index: usize) -> Value {
     "status": "active",
     "profile": if worker { "worker" } else { "manager" },
     "backend": BACKEND,
-    "created_at": format!("{}.000000Z", stamp(index, 0)),
+    (CREATED_AT_FIELD): format!("{}.000000Z", stamp(index, 0)),
     (UPDATED_AT_FIELD): format!("{}.000000Z", stamp(index, 9)),
     (SCHEMA_VERSION_FIELD): 2,
     (HAS_UNREAD): false,

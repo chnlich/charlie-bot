@@ -732,7 +732,8 @@ test('a full store evicts the session opened longest ago and then stores the new
   assert.ok(keys.includes(BOOTSTRAP_URL), 'the new first screen is stored');
 });
 
-test('a release keeps the stored copies and drops the shell of the release before it', async () => {
+test('a release keeps the stored copies and drops the shell of the release before it', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness({version: 'v2'});
   const previousShell = await h.caches.api.open('last-state-shell-v1');
   await previousShell.put(SHELL_KEY, new Response('<html>previous</html>', {headers: {ETag: '"shell-1"'}}));
@@ -746,8 +747,13 @@ test('a release keeps the stored copies and drops the shell of the release befor
   assert.equal(h.state.unregistered, 0);
 
   h.state.network = async () => new Response('<html>network</html>', {status: 200});
-  const navigation = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
-  assert.equal(await navigation.response.text(), '<html>network</html>', 'the previous release\'s shell answers no navigation');
+  // This release stores no shell, so the navigation misses twice (the just-started worker's match
+  // race) on the fake clock and falls back to the network.
+  const navigation = answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  await flush();
+  await settleCaps(t, 2);
+  const answered = await navigation;
+  assert.equal(await answered.response.text(), '<html>network</html>', 'the previous release\'s shell answers no navigation');
 
   const first = await answer(h, request(BOOTSTRAP_URL));
   assert.equal((await first.response.json()).body, 'stored by the previous release', 'the stored copy answers the open');

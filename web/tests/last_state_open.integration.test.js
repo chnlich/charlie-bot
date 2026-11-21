@@ -240,8 +240,9 @@ test('a shell list copy waits for the first screen before starting its refresh',
   assert.deepEqual(page.readPosts, ['/api/sessions/session-b/read?page_dot=false']);
 });
 
-test('an offline open with no stored copy names the missing copy in the placeholder', async () => {
+test('an offline open with no stored copy names the missing copy and shows the offline mark', async () => {
   const {h, page} = buildOpenHarness();
+  for (const [id, el] of buildUsageElements()) h.elements.set(id, el);
   h.context.navigator = {userAgent: 'TestAgent/1.0', onLine: false};
 
   h.context.switchSession('session-b');
@@ -252,6 +253,7 @@ test('an offline open with no stored copy names the missing copy in the placehol
   const placeholder = h.messages.children.find((child) => child.id === 'switch-placeholder');
   assert.ok(placeholder, 'the switch placeholder stays on screen while the open retries');
   assert.equal(placeholder.textContent, h.context.NO_LOCAL_COPY_LABEL);
+  assert.equal(h.elements.get('usage-text')?.innerHTML, OFFLINE_PANEL_MARK, 'the usage cell carries the offline mark');
 });
 
 test('an offline usage panel shows the offline label and loads no usage', async () => {

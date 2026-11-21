@@ -563,7 +563,8 @@ function waitForBootstrapRetry(delayMs) {
 // Resolves {data, stored}: the parsed first screen and whether a stored copy answered it. Resolves null when a
 // newer click superseded this open. Throws on the failures no retry can fix. `headers` carries the
 // network-only header of a request that must reach the server (last-state.js). A rejected request while the page
-// is offline means no copy exists, so the placeholder names that until the request lands.
+// is offline means no copy exists, so the placeholder names that and the usage cell shows the offline mark until the
+// request lands.
 async function fetchBootstrapWithRetry(sessionId, gen, headers) {
   let retryDelay = BOOTSTRAP_RETRY_BASE_MS;
   for (;;) {
@@ -577,7 +578,10 @@ async function fetchBootstrapWithRetry(sessionId, gen, headers) {
       // way. A body that does not parse is not a transfer fault and throws.
       if (err instanceof SyntaxError) throw err;
       if (gen !== switchGeneration) return null;
-      if (pageIsOffline()) showNoLocalCopy();
+      if (pageIsOffline()) {
+        showNoLocalCopy();
+        paintUsageOffline();
+      }
       await waitForBootstrapRetry(retryDelay);
       if (gen !== switchGeneration) return null;
       retryDelay = Math.min(retryDelay * 2, BOOTSTRAP_RETRY_MAX_MS);

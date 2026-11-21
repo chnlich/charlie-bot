@@ -355,6 +355,9 @@ main > header > a[title="View JSONL events"]:hover {
    strip or label is added: the badge keeps its 30 px box and the switch its 24 px one. */
 #backend-badge:has(select) { border-color: #64748b; }
 #backend-badge select { border-color: transparent; }
+/* A badge with no backend to name does not render. A no-copy open never writes one (session-view.js), so the
+   header shows no empty pill where a stored session shows its backend. */
+#backend-badge:empty { display: none; }
 @media (max-width: 768px) {
   .input-row { flex-wrap: nowrap; }
   .input-buttons { display: flex; gap: 0.5rem; margin-left: auto; }

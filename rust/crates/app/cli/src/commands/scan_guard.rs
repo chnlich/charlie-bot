@@ -22,7 +22,7 @@ use charliebot_core::config::SESSIONS_DIR_NAME;
 use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::str_methods;
-use charliebot_store::layout::DATA_DIR_NAME;
+use charliebot_store::layout::{DATA_DIR_NAME, RUNS_DIR_NAME};
 use charliebot_store::run_logs::COMPRESSED_SUFFIX;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, STDERR_LOG_NAME};
 use regex::{Captures, Regex};
@@ -421,7 +421,7 @@ fn reaches_run_logs(token: &str) -> Result<bool, String> {
   if !is_wild(session) || names_one_session(session) {
     return Ok(false);
   }
-  if under_session.starts_with(&["data", "runs"]) {
+  if under_session.starts_with(&[DATA_DIR_NAME, RUNS_DIR_NAME]) {
     let rest = &under_session[2..];
     let run_directory_glob = rest.first().is_some_and(|first| is_wild(first));
     let names_run_log = rest.len() == 1 || rest.last().is_some_and(|last| is_run_log_glob(last));

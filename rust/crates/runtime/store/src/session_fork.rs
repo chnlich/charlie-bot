@@ -439,7 +439,7 @@ mod tests {
 
   use super::*;
   use crate::control_events::archived_close_event;
-  use crate::metadata::TaskSpec;
+  use crate::metadata::{TaskApprover, TaskSpec};
   use crate::task_tree::tests::{create_node, make_store, queued_run};
   use crate::{CreateTask, TaskCaller};
 
@@ -491,7 +491,16 @@ mod tests {
           request_id: request_id.to_string(),
           task_parent_id: parent.map(str::to_string),
           profile,
-          task: Some(TaskSpec { goal: goal.to_string(), ..TaskSpec::default() }),
+          task: Some(TaskSpec {
+            goal: goal.to_string(),
+            repo_path: None,
+            base_branch: None,
+            task_type: None,
+            keep_worktree: false,
+            cold_read: None,
+            approver: TaskApprover::User,
+            improve_host: None,
+          }),
           name: Some(request_id.to_string()),
           backend: Some("synthetic".to_string()),
           group: None,

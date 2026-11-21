@@ -1935,7 +1935,9 @@ mod tests {
         members: vec![charliebot_core::config::PoolMember { backend: "codex-o3".to_string() }],
         visible: true,
       }],
-      ..BackendsConfig::default()
+      routing: None,
+      options: Vec::new(),
+      calls: charliebot_core::config::CallsConfig::default(),
     };
     let mut aggregator = MessageAggregator::new(0, true, backends.clone());
     let long_description = "## Goal\nDo a long task spec that belongs in Workers.";

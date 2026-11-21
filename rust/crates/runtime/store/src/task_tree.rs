@@ -1458,7 +1458,16 @@ impl Store {
 
     if let Some(existing) = self.read_metadata_fresh(&task_id)? {
       if matches!(caller, TaskCaller::Agent { .. }) {
-        let replay = CreateTask { profile: existing.profile, task: existing.task.clone(), ..request };
+        let replay = CreateTask {
+          request_id: request.request_id,
+          task_parent_id: request.task_parent_id,
+          profile: existing.profile,
+          task: existing.task.clone(),
+          name: request.name,
+          backend: request.backend,
+          group: request.group,
+          session_id: request.session_id,
+        };
         self.runtime_gate(&replay, &caller)?;
       }
       return Ok(existing);
@@ -1866,7 +1875,16 @@ impl Store {
         if let Some(task) = task {
           // A task body carries no approver, so the replaced record keeps the approver it had.
           let approver = meta.task.as_ref().map_or(TaskApprover::User, |current| current.approver);
-          meta.task = task.map(|task| TaskSpec { approver, ..task });
+          meta.task = task.map(|task| TaskSpec {
+            goal: task.goal,
+            repo_path: task.repo_path,
+            base_branch: task.base_branch,
+            task_type: task.task_type,
+            keep_worktree: task.keep_worktree,
+            cold_read: task.cold_read,
+            approver,
+            improve_host: task.improve_host,
+          });
         }
         if let Some(approver) = approver {
           meta.task.get_or_insert_with(TaskSpec::default).approver = approver;
@@ -3246,7 +3264,7 @@ pub(crate) mod tests {
   use crate::compact::CompactValue;
 
   use super::*;
-  use crate::metadata::{TaskProfile, TaskSpec, TaskType};
+  use crate::metadata::{TaskApprover, TaskProfile, TaskSpec, TaskType};
   use crate::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
   use crate::store::{
     AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
@@ -3427,7 +3445,16 @@ pub(crate) mod tests {
       request_id: "child-request".to_string(),
       task_parent_id: Some(root.id.clone()),
       profile: TaskProfile::Worker,
-      task: Some(TaskSpec { goal: "child goal".to_string(), ..TaskSpec::default() }),
+      task: Some(TaskSpec {
+        goal: "child goal".to_string(),
+        repo_path: None,
+        base_branch: None,
+        task_type: None,
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: None,
+      }),
       name: Some("Child".to_string()),
       backend: Some("synthetic".to_string()),
       group: Some("group-a".to_string()),
@@ -3577,7 +3604,12 @@ pub(crate) mod tests {
         CreateTask {
           request_id: "closed-ancestor-worker".to_string(),
           task_parent_id: Some(child.id.clone()),
-          ..worker_request
+          profile: worker_request.profile,
+          task: worker_request.task,
+          name: worker_request.name,
+          backend: worker_request.backend,
+          group: worker_request.group,
+          session_id: worker_request.session_id,
         },
         TaskCaller::Agent { session_id: child.id.clone() },
         Map::new(),
@@ -3591,7 +3623,16 @@ pub(crate) mod tests {
     );
 
     let verify_request = CreateTask {
-      task: Some(TaskSpec { task_type: Some(TaskType::Verify), ..TaskSpec::default() }),
+      task: Some(TaskSpec {
+        goal: String::new(),
+        repo_path: None,
+        base_branch: None,
+        task_type: Some(TaskType::Verify),
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: None,
+      }),
       request_id: "closed-ancestor-verify".to_string(),
       task_parent_id: Some(child.id.clone()),
       profile: TaskProfile::Worker,
@@ -4137,25 +4178,57 @@ pub(crate) mod tests {
     let pending = format!("{} has an unprocessed input", worker.id);
     let guards = StubGuards { pending: HashMap::from([(worker.id.clone(), vec![pending.clone()])]) };
 
-    let demotion = PatchTask { profile: Some(Some(TaskProfile::Worker)), ..Default::default() };
+    let demotion = PatchTask {
+      name: None,
+      task_parent_id: None,
+      profile: Some(Some(TaskProfile::Worker)),
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&root.id, demotion, TaskCaller::Operator, &guards).await.unwrap_err();
     let blocker = "demotion to worker requires a task with no child tasks".to_string();
     assert_eq!(error.status_code(), Some(409));
     assert_eq!(error.blockers(), Some(std::slice::from_ref(&blocker)));
 
     // The node's own guard counts once for the structural change and once for the moving subtree.
-    let reparent = PatchTask { task_parent_id: Some(Some(other.id.clone())), ..Default::default() };
+    let reparent = PatchTask {
+      name: None,
+      task_parent_id: Some(Some(other.id.clone())),
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&worker.id, reparent, TaskCaller::Operator, &guards).await.unwrap_err();
     let mut expected = vec![pending.clone(), format!("{}: {pending}", worker.id)];
     expected.sort();
     assert_eq!(error.blockers(), Some(expected.as_slice()));
 
-    let ghost = PatchTask { task_parent_id: Some(Some("ghost".to_string())), ..Default::default() };
+    let ghost = PatchTask {
+      name: None,
+      task_parent_id: Some(Some("ghost".to_string())),
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&worker.id, ghost, TaskCaller::Operator, &guards).await.unwrap_err();
     assert_eq!(error.status_code(), Some(404));
     assert_eq!(error.to_string(), "task ghost not found");
 
-    let renamed = PatchTask { name: Some("renamed".to_string()), ..Default::default() };
+    let renamed = PatchTask {
+      name: Some("renamed".to_string()),
+      task_parent_id: None,
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&root.id, renamed, TaskCaller::System, &guards).await.unwrap_err();
     assert_eq!(error.to_string(), "task metadata mutations require operator credentials");
     assert_eq!(error.status_code(), Some(403));
@@ -4177,9 +4250,12 @@ pub(crate) mod tests {
     let node_ref = store.store_prompt_body("node rule\n").unwrap();
     let edit = || PatchTask {
       name: Some("renamed".to_string()),
+      task_parent_id: None,
+      profile: None,
+      task: None,
       subtree_prompt: Some(Some("subtree rule\n".to_string())),
       node_prompt: Some(Some("node rule\n".to_string())),
-      ..Default::default()
+      approver: None,
     };
 
     let guards = StubGuards::default();
@@ -4192,7 +4268,15 @@ pub(crate) mod tests {
     store.patch_task(&root.id, edit(), TaskCaller::Operator, &guards).await.unwrap();
     assert_eq!(prompt_facts(&store, &root.id).len(), 2);
 
-    let cleared = PatchTask { node_prompt: Some(None), ..Default::default() };
+    let cleared = PatchTask {
+      name: None,
+      task_parent_id: None,
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: Some(None),
+      approver: None,
+    };
     let patched = store.patch_task(&root.id, cleared, TaskCaller::Operator, &guards).await.unwrap();
     assert_eq!(patched.node_prompt_ref, None);
     let facts = prompt_facts(&store, &root.id);
@@ -5730,7 +5814,8 @@ pub(crate) mod tests {
       task_type: Some(TaskType::Implement),
       keep_worktree: true,
       cold_read: None,
-      ..TaskSpec::default()
+      approver: TaskApprover::User,
+      improve_host: None,
     };
     let text = serde_json::to_string(&implement).unwrap();
     assert_eq!(
@@ -5742,7 +5827,16 @@ pub(crate) mod tests {
     );
     assert_eq!(task_spec_hash(&implement).unwrap(), "e7fbf6373f6bd68ec36edba7afc6737364e61cea3e41a40e14d2c8aa8d745891");
 
-    let verify = TaskSpec { goal: "check".to_string(), task_type: Some(TaskType::Verify), ..TaskSpec::default() };
+    let verify = TaskSpec {
+      goal: "check".to_string(),
+      repo_path: None,
+      base_branch: None,
+      task_type: Some(TaskType::Verify),
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: None,
+    };
     assert_eq!(
       serde_json::to_string(&verify).unwrap(),
       concat!(

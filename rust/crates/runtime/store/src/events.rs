@@ -635,10 +635,14 @@ impl Store {
             let mut lines = prefix;
             lines.extend(entry.lines.iter().cloned());
             let covered = LiveRangeMemo {
+              mtime_ns: entry.mtime_ns,
+              size: entry.size,
+              inode: entry.inode,
+              lines: Arc::new(lines),
+              covered_byte_end: entry.covered_byte_end,
+              ends_on_boundary: entry.ends_on_boundary,
               first_line_index: rel_start,
               covered_byte_start: walk.byte_start,
-              lines: Arc::new(lines),
-              ..entry
             };
             let result = Arc::clone(&covered.lines);
             lock(&self.event_read_caches, "event read cache mutex").live_ranges.store(path.clone(), covered);

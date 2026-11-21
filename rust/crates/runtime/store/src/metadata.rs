@@ -1128,13 +1128,31 @@ mod tests {
   /// keyed spec round-trips its host.
   #[test]
   fn improve_host_is_written_only_when_set() {
-    let plain = TaskSpec { goal: "ship".to_string(), ..TaskSpec::default() };
+    let plain = TaskSpec {
+      goal: "ship".to_string(),
+      repo_path: None,
+      base_branch: None,
+      task_type: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: None,
+    };
     let plain_json = serde_json::to_string(&plain).unwrap();
     assert_eq!(
       plain_json,
       r#"{"goal":"ship","repo_path":null,"base_branch":null,"task_type":null,"keep_worktree":false,"cold_read":null}"#,
     );
-    let keyed = TaskSpec { improve_host: Some("host3".to_string()), ..plain };
+    let keyed = TaskSpec {
+      goal: plain.goal,
+      repo_path: plain.repo_path,
+      base_branch: plain.base_branch,
+      task_type: plain.task_type,
+      keep_worktree: plain.keep_worktree,
+      cold_read: plain.cold_read,
+      approver: plain.approver,
+      improve_host: Some("host3".to_string()),
+    };
     let keyed_json = serde_json::to_value(&keyed).unwrap();
     assert_eq!(keyed_json["improve_host"], "host3");
     assert_eq!(serde_json::from_value::<TaskSpec>(keyed_json).unwrap(), keyed);

@@ -14,7 +14,8 @@ use charliebot_registry::Registry;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::SequenceCompletion;
 use charliebot_store::metadata::{
-  SessionMetadata, TASK_SCHEDULE_SLOTS, TaskProfile, TaskSpec, TaskType, UtcDateTime, read_metadata_object,
+  SessionMetadata, TASK_SCHEDULE_SLOTS, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime,
+  read_metadata_object,
 };
 use charliebot_store::run_records::terminal_outcome;
 use charliebot_store::session_fork::{CloseReportRedelivery, ReplacedSourceArchive};
@@ -638,7 +639,16 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
   let child_event_count = rust_seed.load_chat_events_sync(&child.id).unwrap().len();
   let replay = rust_seed
     .create_task(
-      CreateTask { name: Some("ignored replay name".to_string()), ..child_request },
+      CreateTask {
+        request_id: child_request.request_id,
+        task_parent_id: child_request.task_parent_id,
+        profile: child_request.profile,
+        task: child_request.task,
+        name: Some("ignored replay name".to_string()),
+        backend: child_request.backend,
+        group: child_request.group,
+        session_id: child_request.session_id,
+      },
       TaskCaller::System,
       Map::new(),
     )
@@ -892,7 +902,8 @@ async fn delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
     task_type: Some(TaskType::Implement),
     keep_worktree: true,
     cold_read: None,
-    ..TaskSpec::default()
+    approver: TaskApprover::User,
+    improve_host: None,
   };
   let store = make_store(&shared_home);
   let child = store
@@ -915,11 +926,31 @@ async fn delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
   assert_eq!(child.name, "Ship the synthetic change.");
   let guard = store.control_lock().await;
   let record = RunRecord {
+    id: "synthetic-delegate-run".to_string(),
+    session_id: child.id.clone(),
+    kind: RunKind::Work,
+    input_event_ids: Vec::new(),
+    task_spec_hash: None,
+    task_spec_ref: None,
+    prompt_snapshot_ref: None,
+    retry_of_run_id: None,
+    review_of_run_id: None,
     backend: Some("synthetic".to_string()),
+    model: None,
+    native_session_id: None,
+    pid: None,
+    pid_start: None,
+    started_at: None,
+    ended_at: None,
+    exit_code: None,
     repo_path: spec.repo_path.clone(),
     base_branch: spec.base_branch.clone(),
-    session_id: child.id.clone(),
-    ..empty_run("synthetic-delegate-run", RunKind::Work)
+    branch_name: None,
+    worktree_path: None,
+    sequence_ref: None,
+    raw_log_ref: None,
+    events_ref: None,
+    result_ref: None,
   };
   store.register_run_locked(&guard, &child.id, record, Some(&serde_json::to_string(&spec).unwrap())).await.unwrap();
   drop(guard);

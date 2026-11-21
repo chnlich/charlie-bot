@@ -91,20 +91,6 @@ impl Bot {
     Arc::new(DiscordThreadAdapter::new(self.clone()))
   }
 
-  /// The refusal of a reply while eligible thread messages sit above the session's watermark (`assert_thread_fresh`).
-  pub async fn assert_thread_fresh(&self, session_id: &str) -> Result<(), thread_entry::ThreadReplyError> {
-    thread_entry::assert_thread_fresh(&self.adapter(), &self.features, session_id).await
-  }
-
-  /// The readback of the session's read watermark advanced over `message_ids` (`ack_messages`).
-  pub async fn ack_messages(
-    &self,
-    session_id: &str,
-    message_ids: &[String],
-  ) -> Result<Value, thread_entry::ThreadReplyError> {
-    thread_entry::ack_messages(&self.adapter(), &self.features, session_id, message_ids).await
-  }
-
   /// The readback the CLI prints from posting `text` to the session's Discord thread (`post_reply`).
   pub async fn post_reply(&self, session_id: &str, text: &str) -> Result<Value, thread_entry::ThreadReplyError> {
     self.post_reply_with_caller_context(session_id, text, None, None).await

@@ -128,7 +128,8 @@ export class Page {
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (result.exceptionDetails) {
-      throw new Error(`page script failed: ${result.exceptionDetails.text}`);
+      const exception = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
+      throw new Error(`page script failed: ${exception}`);
     }
     return result.result.value;
   }

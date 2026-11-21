@@ -132,6 +132,9 @@ export class Tab {
   // without bound: what the page said about its own sockets and failures.
   consoleLines = [];
   pageErrors = [];
+  // Every main-frame navigation the tab's page committed: {at, url}. A send that fails names the navigations it
+  // overlapped (sendText).
+  navigations = [];
   // Every request the host's network change dropped: {at, url}. A document among them means the measurement
   // recorded the host's behaviour, not the page's.
   networkChanged = [];
@@ -251,17 +254,32 @@ export class Tab {
   }
 
   // Writes the text into the composer and clicks send, as a person does. Returns the click's wall-clock time.
+  // A failed send names what the page did while it ran: the URL before and after, and the navigations, page errors and
+  // console lines since the send began. The error keeps its cause, so a page failure is not a bare 'Uncaught'.
   async sendText(text) {
-    const at = await this.evaluate(`(() => {
-      const input = document.getElementById('msg-input');
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-      setter.call(input, ${JSON.stringify(text)});
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      const at = Date.now();
-      document.getElementById('send-btn').click();
-      return at;
-    })()`);
-    return at;
+    const sendStart = Date.now();
+    const urlBefore = await this.evaluate('location.href');
+    try {
+      return await this.evaluate(`(() => {
+        const input = document.getElementById('msg-input');
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(input, ${JSON.stringify(text)});
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        const at = Date.now();
+        document.getElementById('send-btn').click();
+        return at;
+      })()`);
+    } catch (err) {
+      const urlAfter = await this.evaluate('location.href').catch((readErr) => `unreadable: ${readErr.message}`);
+      const evidence = {
+        urlBefore,
+        urlAfter,
+        navigations: this.navigations.filter((nav) => nav.at >= sendStart),
+        pageErrors: this.pageErrors.filter((error) => error.at >= sendStart),
+        consoleLines: this.consoleLines.filter((line) => line.at >= sendStart),
+      };
+      throw new Error(`${err.message}; the send window: ${JSON.stringify(evidence)}`, { cause: err });
+    }
   }
 
   // Starts watching the chat for `marker`. The page records the wall-clock time the marker first shows in the chat.
@@ -474,7 +492,10 @@ export class Tab {
       }
       case 'Page.frameNavigated': {
         // The main frame's new document has committed: the requests of the document it replaces end with it.
-        if (!message.params.frame.parentId) this.endReplacedRequests(message.params.frame.loaderId);
+        if (!message.params.frame.parentId) {
+          this.endReplacedRequests(message.params.frame.loaderId);
+          this.navigations.push({ at, url: message.params.frame.url });
+        }
         return;
       }
       case 'Network.loadingFailed': {

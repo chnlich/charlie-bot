@@ -2579,6 +2579,20 @@ mod tests {
     }
   }
 
+  /// The history events before a checkpoint's suffix window, or zero when recovery made a full fold.
+  fn checkpoint_prefix_events(store: &Store, session_id: &str, full_folds: u64) -> u64 {
+    if full_folds > 0 {
+      return 0;
+    }
+    let path = charliebot_store::layout::fact_checkpoint_path(&store.session_dir(session_id));
+    let bytes = std::fs::read(&path).expect("the suffix fold leaves its checkpoint");
+    let header_end = bytes.iter().position(|byte| *byte == b'\n').expect("the checkpoint has a header line");
+    let header: Value = serde_json::from_slice(&bytes[..header_end]).expect("the checkpoint header is JSON");
+    let archived = header["archived"].as_u64().expect("the checkpoint records its archived prefix");
+    let covered = header["covered"].as_u64().expect("the checkpoint records its covered live prefix");
+    archived + covered
+  }
+
   #[tokio::test]
   #[ignore = "integration"]
   async fn recovery_history_reads_and_folds_do_not_grow_with_run_count() {
@@ -2594,8 +2608,18 @@ mod tests {
     assert_eq!(large.owned_event_clones, 0, "many-run recovery copied event payloads: {large:?}");
     let small_events = features.store.load_all_facts(&small_id).expect("the one-run history loads").len();
     let large_events = features.store.load_all_facts(&large_id).expect("the many-run history loads").len();
-    assert_eq!(small.folded_events, small_events as u64, "each event folds once: one={small:?}");
-    assert_eq!(large.folded_events, large_events as u64, "each event folds once: many={large:?}");
+    let small_prefix = checkpoint_prefix_events(&features.store, &small_id, small.full_folds);
+    let large_prefix = checkpoint_prefix_events(&features.store, &large_id, large.full_folds);
+    assert_eq!(
+      small.folded_events + small_prefix,
+      small_events as u64,
+      "each event folds once across checkpoint and window: one={small:?}"
+    );
+    assert_eq!(
+      large.folded_events + large_prefix,
+      large_events as u64,
+      "each event folds once across checkpoint and window: many={large:?}"
+    );
   }
 
   #[cfg(feature = "test-hooks")]

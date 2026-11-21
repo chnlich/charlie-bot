@@ -701,26 +701,19 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
     "verify_tasks",
     root.path(),
     &["python-task-home"],
-    &["python-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json"],
+    &["rust-task-home/sessions/synthetic-task-root/data/fact_checkpoint.json"],
   );
   run_golden_helper_with_checkpoints(
     "verify_tasks",
     root.path(),
     &["rust-task-home"],
-    &[
-      "python-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json",
-      "rust-created-home/sessions/rust-created-root/data/fact_checkpoint.json",
-      "rust-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json",
-    ],
+    &["rust-task-home/sessions/synthetic-task-root/data/fact_checkpoint.json"],
   );
   assert_eq!(
-    normalized_files_with_expected_checkpoints(
-      &python_home,
-      &["sessions/synthetic-task-worker/data/fact_checkpoint.json"],
-    ),
+    normalized_files(&python_home),
     normalized_files_with_expected_checkpoints(
       &rust_home,
-      &["sessions/synthetic-task-worker/data/fact_checkpoint.json"],
+      &["sessions/synthetic-task-root/data/fact_checkpoint.json"],
     )
   );
   rust_seed.invalidate_cache("synthetic-task-worker");

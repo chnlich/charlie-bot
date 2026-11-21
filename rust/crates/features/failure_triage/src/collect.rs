@@ -25,6 +25,7 @@ use charliebot_registry::backend::Env;
 use charliebot_store::CompactValue;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout::{chat_events_path, runs_dir};
+use charliebot_store::metadata::EXIT_CODE_FIELD;
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   self, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF, RUN_METADATA_NAME, STDERR_LOG_NAME, stop_requested_in_events,
@@ -202,7 +203,7 @@ fn run_fields(path: &Path) -> Result<RunFields> {
   Ok(RunFields {
     id: id.to_string(),
     kind: value.get("kind").and_then(serde_json::Value::as_str).unwrap_or(RunKind::Work.as_str()).to_string(),
-    exit_code: value.get("exit_code").and_then(serde_json::Value::as_i64).map(|code| code as i32),
+    exit_code: value.get(EXIT_CODE_FIELD).and_then(serde_json::Value::as_i64).map(|code| code as i32),
     backend: value.get("backend").and_then(serde_json::Value::as_str).unwrap_or("unknown").to_string(),
     event_log: named_event_log(&value),
   })

@@ -14,8 +14,8 @@ use charliebot_core::proc_identity::PID_START_FIELD;
 use charliebot_store::control_events::{SOURCE_SESSION_ID_FIELD, TASK_SPEC_HASH_FIELD};
 use charliebot_store::layout;
 use charliebot_store::metadata::{
-  ACCEPTANCE_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, CONTEXT_REFS_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD,
-  REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD, UPDATED_AT_FIELD,
+  ACCEPTANCE_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, CONTEXT_REFS_FIELD, EXIT_CODE_FIELD, HAS_UNREAD,
+  KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD, UPDATED_AT_FIELD,
 };
 use charliebot_store::run_records::{
   ENDED_AT_FIELD, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
@@ -202,7 +202,7 @@ fn run_record(run: RunRecord) -> Value {
     (PID_START_FIELD): "12345",
     (STARTED_AT_FIELD): format!("{}Z", run.started_at),
     (ENDED_AT_FIELD): run.ended_at.as_ref().map(|at| format!("{at}Z")),
-    "exit_code": run.ended_at.as_ref().map(|_| 0),
+    (EXIT_CODE_FIELD): run.ended_at.as_ref().map(|_| 0),
     (OBSERVATION_REPO_PATH): null,
     (OBSERVATION_BASE_BRANCH): null,
     (OBSERVATION_BRANCH_NAME): null,

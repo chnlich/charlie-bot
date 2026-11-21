@@ -105,7 +105,7 @@ impl ListingSource {
     // still matches, and the source takes that allocation so the next request pays one comparison.
     let rows_hold = match (self.shared.as_ref(), shared) {
       (Some(before), Some(now)) if Arc::ptr_eq(before, now) => true,
-      _ => {
+      (Some(_), Some(_)) | (None, _) | (_, None) => {
         let equal = self.rows.len() == rows.len()
           && self.rows.iter().zip(rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now));
         if equal {
@@ -1067,7 +1067,7 @@ fn write_id_cells(text: &mut String, rows: &[Arc<PageRowText>]) {
 fn canonical_uuid(id: &str) -> Option<[u8; 16]> {
   match uuid::Uuid::parse_str(id) {
     Ok(uuid) if uuid.to_string() == id => Some(*uuid.as_bytes()),
-    _ => None,
+    Ok(_) | Err(_) => None,
   }
 }
 
@@ -2275,7 +2275,7 @@ backends:
         Value::Array(cells) => cells.len(),
         // The `id` column's string form carries one 16-byte id per row.
         Value::String(blob) => URL_SAFE_NO_PAD.decode(blob).expect("the id blob is base64url").len() / 16,
-        _ => 0,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => 0,
       })
       .max()
       .unwrap_or(0);
@@ -2307,7 +2307,8 @@ backends:
             running += cell.as_i64().expect("a delta cell is an integer");
             Value::from(running)
           }
-          _ => cell.clone(),
+          None => cell.clone(),
+          Some(other) => unreachable!("the page declares no column encoding named {other}"),
         };
         rows[index].insert(field.clone(), value);
       }

@@ -281,7 +281,7 @@ fn run_header_event(
 fn run_end_event(run: &RunRecord) -> Value {
   let duration_seconds = match (run.started_at, run.ended_at) {
     (Some(started), Some(ended)) => Some((ended.into_inner() - started.into_inner()).whole_seconds()),
-    _ => None,
+    (None, _) | (_, None) => None,
   };
   json!({
     "type": event_types::RUN_END,
@@ -346,6 +346,7 @@ fn delivery_event(
           );
         }
       }
+      // The facts log holds every fact type; this fold reads only the two types named above.
       _ => {}
     }
   }
@@ -403,6 +404,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         let run_id = text_repr::field_text(event.get("run_id"));
         outcomes.insert(run_id, text_repr::truthy_field_text(event.get("outcome")));
       }
+      // The facts log holds every fact type; this fold reads only the two types named above.
       _ => {}
     }
   }

@@ -833,6 +833,7 @@ mod tests {
           }
           draft.clear();
         }
+        // Frames of other types, and frames without a type, carry no draft or turn text.
         _ => {}
       }
     }

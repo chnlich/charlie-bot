@@ -406,6 +406,7 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
       match name {
         HAS_PENDING_PLAN_APPROVAL => pending_plan_approval |= value,
         HAS_WAITING_ITEMS => waiting_items |= value,
+        // A contribution may name a flag that this row does not show, so other names are skipped.
         _ => {}
       }
     }

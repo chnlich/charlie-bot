@@ -855,7 +855,7 @@ fn file_signatures(
 fn file_signature(file: &WatchedFile, sessions_dir: Option<&File>) -> io::Result<FileSignature> {
   match (sessions_dir, &file.below_sessions) {
     (Some(dir), Some(relative)) => file_signature_at(dir, relative),
-    _ => file_signature_unlogged(&file.path),
+    (None, _) | (_, None) => file_signature_unlogged(&file.path),
   }
 }
 

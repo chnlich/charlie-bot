@@ -3,8 +3,9 @@
 // ---------------------------------------------------------------------------
 // The page registers the worker once its catch-up completes and asks it to store the shell then, asks it to store
 // the session page's on-demand files once the page is idle, refreshes the stored shell before a 4409 reload, reports
-// the catch-up's end to the worker, and drops the stored copies on a 401. A browser without service workers keeps
-// the page it always had.
+// the catch-up's end to the worker, reports the start and the end of its user-waiting requests so the worker holds
+// its installs off them, and drops the stored copies on a 401. A browser without service workers keeps the page it
+// always had.
 
 const OFFLINE_SHELL_WORKER_PATH = '/offline-shell-worker.js';
 
@@ -237,3 +238,52 @@ function reloadAfterRefreshingShell() {
     throw new Error('offline shell refresh returned no result');
   }).catch(reportShellRefreshFailure);
 }
+
+// ---------------------------------------------------------------------------
+// The user-waiting requests: the worker holds its installs while one is in flight
+// ---------------------------------------------------------------------------
+// The requests the user waits on are a first screen, a session's older events, the sidebar's full list, and a send.
+// The request goes out unchanged; its start and its end are reported to the worker, which aborts or defers the shell
+// and on-demand fetches it has in flight (offline-shell-worker.js, pageRequestStarted). The end is the response's
+// arrival: the worker's quiet gap covers the body that follows it.
+function isUserWaitingRequest(input, init) {
+  const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+  if (url.origin !== location.origin) return false;
+  const method = (init?.method ?? input.method ?? 'GET').toUpperCase();
+  if (method === 'POST') return /^\/api\/chat\/[^/]+\/message$/.test(url.pathname);
+  if (method !== 'GET') return false;
+  return /^\/api\/sessions\/[^/]+\/(bootstrap|events)$/.test(url.pathname) ||
+    (url.pathname === '/api/sessions/' && !url.searchParams.has('ids'));
+}
+
+// The worker that holds this page takes the report once its registration is active. Reports wait in order, so a
+// report made before the first registration reaches the worker with the reports after it.
+function reportUserRequest(type, id) {
+  navigator.serviceWorker.ready.then((registration) => registration.active.postMessage({type, id}));
+}
+
+// The reported requests that have not ended. An unload ends them, so no worker install waits on a page that is gone.
+const userRequestsOpen = new Set();
+let userRequestCount = 0;
+
+function reportUserWaitingRequests() {
+  const pageFetch = window.fetch;
+  window.fetch = function(input, init) {
+    if (!isUserWaitingRequest(input, init)) return pageFetch.call(window, input, init);
+    const id = `${performance.timeOrigin}:${++userRequestCount}`;
+    userRequestsOpen.add(id);
+    reportUserRequest('page-request-start', id);
+    return pageFetch.call(window, input, init).finally(() => endUserRequest(id));
+  };
+  window.addEventListener('pagehide', () => {
+    for (const id of userRequestsOpen) reportUserRequest('page-request-end', id);
+    userRequestsOpen.clear();
+  });
+}
+
+function endUserRequest(id) {
+  if (!userRequestsOpen.delete(id)) return;
+  reportUserRequest('page-request-end', id);
+}
+
+if (offlineShellSupported()) reportUserWaitingRequests();

@@ -6,7 +6,8 @@
 // this file is the retired form: it empties the worker's caches and unregisters itself.
 //
 // Interception is limited to the GETs listed below. Everything else (POSTs, the socket, other
-// /api/* requests) is not answered here and reaches the network unchanged.
+// /api/* requests) is not answered here and reaches the network unchanged. The page reports the start and the end
+// of its user-waiting requests (offline-shell.js); the worker only holds its own installs against them.
 //
 // Storage has three parts. The shell is the page code of one release: it lives in the shell cache, named for
 // the release, and activation drops every other release's shell cache. The copies of the first screen and the
@@ -31,6 +32,15 @@ const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
 // settled, so a copy's first match may miss although the copy is stored; one wait cap later the match answers. A
 // first screen's network race re-reads at each cap, and a sidebar list re-reads once before it asks the network.
 const WAIT_CAP_MS = 400;
+// The page's user-waiting requests take the link before the shell and the on-demand files (installFetch). An install in
+// flight is aborted when the page reports a request start, and runs again once the page has been quiet for
+// PAGE_QUIET_MS after its last request's end. An install waits at most PAGE_DEFER_CAP_MS from its first attempt, then
+// runs to its end without abort: a release reload waits for the warm's reply (reloadAfterRefreshingShell), so a busy
+// page cannot hold it longer. The cap is about the 87 KB shell's own time on the 100 kbit/s link (about 7 s), so a
+// deferred install still gets that time.
+const ENABLE_PAGE_PRIORITY = true;
+const PAGE_QUIET_MS = 1000;
+const PAGE_DEFER_CAP_MS = 10000;
 
 const SHELL_STATIC_REF = /<(?:link|script)\b[^>]*?\b(?:href|src)="(\/static\/[^"]+)"/g;
 
@@ -362,6 +372,81 @@ async function dropCopies() {
 }
 
 // ---------------------------------------------------------------------------
+// The page's requests and the installs
+// ---------------------------------------------------------------------------
+// The worker does not see the page's requests the user waits on, so the page reports each start and each end
+// (offline-shell.js). The installs in flight are the shell's and the on-demand files' network fetches.
+
+// The reported requests in flight, and the installs in flight (see installFetch).
+const pageRequests = new Set();
+let quietTimer = null;
+let quietWaiters = [];
+const installs = new Set();
+
+function pageRequestStarted(id) {
+  pageRequests.add(id);
+  clearTimeout(quietTimer);
+  quietTimer = null;
+  for (const install of installs) {
+    if (!install.cap.expired) install.controller.abort();
+  }
+}
+
+function pageRequestEnded(id) {
+  if (!pageRequests.delete(id) || pageRequests.size > 0) return;
+  quietTimer = setTimeout(() => {
+    quietTimer = null;
+    const waiters = quietWaiters;
+    quietWaiters = [];
+    for (const resolve of waiters) resolve();
+  }, PAGE_QUIET_MS);
+}
+
+// Resolves once no reported request is in flight and the page has been quiet for PAGE_QUIET_MS.
+function pageQuiet() {
+  if (pageRequests.size === 0 && quietTimer === null) return Promise.resolve();
+  return new Promise((resolve) => quietWaiters.push(resolve));
+}
+
+// One network fetch of an install: the shell's or an on-demand file's. It starts once the page is quiet. A page request
+// that starts while it is in flight aborts it, and it starts again once the page is quiet. Once its cap has passed
+// (PAGE_DEFER_CAP_MS) it runs to its end, and no request aborts it.
+async function installFetch(url, init) {
+  if (!ENABLE_PAGE_PRIORITY) return fetch(url, init);
+  const cap = deferCap();
+  try {
+    for (;;) {
+      await Promise.race([pageQuiet(), cap.passed]);
+      const install = {controller: new AbortController(), cap};
+      installs.add(install);
+      try {
+        return await fetch(url, {...init, signal: install.controller.signal});
+      } catch (error) {
+        if (!install.controller.signal.aborted) throw error;
+      } finally {
+        installs.delete(install);
+      }
+    }
+  } finally {
+    cap.clear();
+  }
+}
+
+// The cap of one install's deferral: `passed` resolves once PAGE_DEFER_CAP_MS has passed since the install was asked,
+// and `expired` is then true.
+function deferCap() {
+  const cap = {expired: false, passed: null, clear: null};
+  cap.passed = new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      cap.expired = true;
+      resolve();
+    }, PAGE_DEFER_CAP_MS);
+    cap.clear = () => clearTimeout(timer);
+  });
+  return cap;
+}
+
+// ---------------------------------------------------------------------------
 // The shell, after the page has loaded
 // ---------------------------------------------------------------------------
 
@@ -382,7 +467,7 @@ async function warmShell(refresh = false, onDemand = []) {
   // A refresh revalidates the stored shell: its tag names the body the worker holds, and an unchanged page answers 304
   // with no body, which keeps the stored shell.
   const headers = refresh && stored ? {'If-None-Match': stored.headers.get('ETag')} : {};
-  const response = await fetch('/?session=', {cache: 'no-store', credentials: 'same-origin', headers});
+  const response = await installFetch('/?session=', {cache: 'no-store', credentials: 'same-origin', headers});
   if (response.status === 304) return {stored: true};
   if (response.status === 401) {
     if (refresh) await dropShell();
@@ -443,7 +528,7 @@ async function storeOnDemandFiles(urls) {
     if (await files.match(url)) continue;
     const earlier = await storedCopyOfPath(files, new URL(url, self.location.origin).pathname);
     const headers = earlier ? {'If-None-Match': earlier.response.headers.get('ETag')} : {};
-    const response = await fetch(url, {credentials: 'same-origin', cache: 'no-store', headers});
+    const response = await installFetch(url, {credentials: 'same-origin', cache: 'no-store', headers});
     if (response.status === 304 && earlier) {
       await files.put(url, earlier.response);
       revalidated += 1;
@@ -499,6 +584,10 @@ self.addEventListener('message', (event) => {
     event.waitUntil(refreshStoredCopies(data.urls).then(
         (refreshed) => replyTo(event, {refreshed}),
         (error) => replyTo(event, {error: String(error)})));
+  } else if (data.type === 'page-request-start') {
+    pageRequestStarted(data.id);
+  } else if (data.type === 'page-request-end') {
+    pageRequestEnded(data.id);
   } else if (data.type === 'drop-copies') {
     event.waitUntil(dropCopies());
   } else {

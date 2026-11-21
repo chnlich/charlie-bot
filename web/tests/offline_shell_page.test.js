@@ -22,13 +22,15 @@ function buildPage({
   sessionBootstrap = null,
   initialSessions = null,
   initialLoadErrors = [],
+  pageFetch = undefined,
 } = {}) {
   const events = [];
   const documentListeners = new Map();
   const windowListeners = new Map();
   const context = {
     console: {error: () => {}},
-    location: {href: 'https://charlie.test/?session='},
+    location: {href: 'https://charlie.test/?session=', origin: 'https://charlie.test'},
+    performance: {timeOrigin: 1000},
     URL,
     // The idle callbacks wait in a list the test runs by hand; the page's versioned URLs are the utils.js form.
     idleCallbacks: [],
@@ -76,6 +78,7 @@ function buildPage({
   };
   if (!serviceWorker) context.navigator = {};
   context.window = context;
+  context.fetch = pageFetch;
   context.addEventListener = (type, listener) => {
     if (!windowListeners.has(type)) windowListeners.set(type, []);
     windowListeners.get(type).push(listener);
@@ -111,6 +114,9 @@ function buildPage({
     firePageCurrent: () => {
       // A copy of the list: a once-only listener removes itself from the list as it runs.
       for (const listener of [...(documentListeners.get(PAGE_CURRENT) || [])]) listener();
+    },
+    firePageHide: () => {
+      for (const listener of windowListeners.get('pagehide') || []) listener();
     },
   };
 }
@@ -320,3 +326,42 @@ function pageSourceFiles() {
   for (const root of ['templates', 'features', path.join('static', 'js')]) walk(path.join(__dirname, '..', root));
   return files;
 }
+
+// Lets the reports queued on the registration's ready promise reach the active worker.
+const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+test('a user-waiting request reports its start and its end, unchanged; other requests report nothing', async () => {
+  const seen = [];
+  const pageFetch = (input, init) => {
+    seen.push({input, init});
+    return Promise.resolve({ok: true});
+  };
+  const page = buildPage({pageFetch});
+  const bootstrapInit = {headers: {'X-Probe': 'kept'}};
+  await page.context.fetch('/api/sessions/s1/bootstrap', bootstrapInit);
+  await page.context.fetch('/api/sessions/status');
+  await page.context.fetch('/api/chat/s1/message', {method: 'POST', body: 'hi'});
+  await settled();
+
+  assert.deepEqual(seen.map((call) => call.input), [
+    '/api/sessions/s1/bootstrap', '/api/sessions/status', '/api/chat/s1/message',
+  ], 'every request goes out');
+  assert.equal(seen[0].init, bootstrapInit, 'the request is the page\'s own, with its own init');
+  const [start, end, sendStart, sendEnd] = page.context.workerMessages;
+  assert.deepEqual([start.type, end.type, sendStart.type, sendEnd.type],
+      ['page-request-start', 'page-request-end', 'page-request-start', 'page-request-end']);
+  assert.equal(start.id, end.id, 'the end names the request its start named');
+  assert.notEqual(sendStart.id, start.id, 'each request has its own id');
+  assert.equal(page.context.workerMessages.length, 4, 'the status poll reports nothing');
+});
+
+test('a page unload ends the requests that have not finished', async () => {
+  const pageFetch = () => new Promise(() => {});
+  const page = buildPage({pageFetch});
+  page.context.fetch('/api/sessions/s1/events?before=3');
+  await settled();
+  page.firePageHide();
+  await settled();
+  const types = page.context.workerMessages.map((message) => message.type);
+  assert.deepEqual(types, ['page-request-start', 'page-request-end'], 'the unload ends the open request');
+});

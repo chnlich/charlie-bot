@@ -996,3 +996,91 @@ test('a warm keeps the on-demand files it names and drops other stored files', a
   assert.deepEqual(stored, [ORIGIN + '/static/css/a.css?v=2', onDemand].sort(),
       'the on-demand file survives the warm; the file of an older version is dropped');
 });
+
+// The quiet gap and the deferral cap as offline-shell-worker.js names them.
+const PAGE_QUIET_MS = 1000;
+const PAGE_DEFER_CAP_MS = 10000;
+
+// A shell fetch the test answers by hand. It rejects when the worker aborts it, as a fetch does.
+function heldShellFetches(h) {
+  const fetches = [];
+  h.state.network = (req, init) => {
+    if (req.url !== SHELL_URL) throw new Error('unexpected ' + req.url);
+    const attempt = deferred();
+    fetches.push({signal: init.signal, finish: attempt.release});
+    return new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new TypeError('This request was aborted')));
+      attempt.promise.then(() => resolve(new Response('<html>shell</html>', {status: 200, headers: {ETag: '"s"'}})));
+    });
+  };
+  return fetches;
+}
+
+test('a page request aborts the shell fetch, and the shell runs again once the page has been quiet', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const h = harness();
+  const fetches = heldShellFetches(h);
+  const channel = messageChannel();
+  const warming = Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
+  await flush();
+  assert.equal(fetches.length, 1, 'the shell fetch starts on an idle page');
+
+  h.fire('message', {data: {type: 'page-request-start', id: 'p1'}});
+  assert.equal(fetches[0].signal.aborted, true, 'a page request start aborts the shell fetch in flight');
+  await flush();
+  h.fire('message', {data: {type: 'page-request-end', id: 'p1'}});
+  t.mock.timers.tick(PAGE_QUIET_MS - 1);
+  await flush();
+  assert.equal(fetches.length, 1, 'the shell waits out the quiet gap');
+  t.mock.timers.tick(1);
+  await flush();
+  assert.equal(fetches.length, 2, 'the shell runs again once the page has been quiet');
+  fetches[1].finish();
+  await warming;
+  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: true}]);
+});
+
+test('a release-time refresh completes on a busy page once its deferral cap has passed', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const h = harness();
+  h.state.network = async () => new Response('<html>v1</html>', {status: 200, headers: {ETag: '"v1"'}});
+  const first = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [first.port2]}).waits);
+  assert.deepEqual(JSON.parse(JSON.stringify(first.replies)), [{stored: true}]);
+
+  const signals = [];
+  const refreshed = deferred();
+  h.state.network = (req, init) => {
+    signals.push(init.signal);
+    return new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new TypeError('This request was aborted')));
+      refreshed.promise.then(() => resolve(new Response('<html>v2</html>', {status: 200, headers: {ETag: '"v2"'}})));
+    });
+  };
+  const refresh = messageChannel();
+  const refreshing = Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true, files: []},
+    ports: [refresh.port2],
+  }).waits);
+  await flush();
+  assert.equal(signals.length, 1, 'the refresh fetches on an idle page');
+
+  // This page request never ends, so the page stays busy for the whole wait.
+  h.fire('message', {data: {type: 'page-request-start', id: 'busy-1'}});
+  assert.equal(signals[0].aborted, true, 'the busy page aborts the refresh');
+  await flush();
+  t.mock.timers.tick(PAGE_DEFER_CAP_MS - 1);
+  await flush();
+  assert.equal(signals.length, 1, 'the refresh waits out its cap');
+  t.mock.timers.tick(1);
+  await flush();
+  assert.equal(signals.length, 2, 'the refresh runs once its cap has passed, though the page is still busy');
+
+  h.fire('message', {data: {type: 'page-request-start', id: 'busy-2'}});
+  assert.equal(signals[1].aborted, false, 'a page request after the cap does not abort the refresh');
+  refreshed.release();
+  await refreshing;
+  assert.deepEqual(JSON.parse(JSON.stringify(refresh.replies)), [{stored: true}]);
+  const shells = await h.caches.api.open(SHELL_CACHE);
+  assert.equal(await (await shells.match(SHELL_KEY)).text(), '<html>v2</html>', 'the refreshed shell is stored');
+});

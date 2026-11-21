@@ -1643,8 +1643,10 @@ mod tests {
   /// store's rule. A page without the declaration gives the For-you view no rule, so it shows no row.
   #[test]
   fn the_index_page_declares_the_store_for_you_rule() {
-    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repo");
-    let template = std::fs::read_to_string(repo_root.join("web/templates/index.html")).expect("the index template reads");
+    let repo_root =
+      std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repo");
+    let template =
+      std::fs::read_to_string(repo_root.join("web/templates/index.html")).expect("the index template reads");
     assert!(template.contains("const FOR_YOU_RULE = {{ for_you_rule|tojson }};"));
   }
 }

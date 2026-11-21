@@ -11,8 +11,10 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { chromeBinary, launchBrowser } from './chrome.mjs';
-import { assetVersionOf, hostInterference, openCpuRecord, openMeasuredTab, openRecord, openSettled, runRepetitions }
-  from './open.mjs';
+import {
+  assetVersionOf, hostInterference, openCpuRecord, openMeasuredTab, openRecord, openSettled, runRepetitions,
+  warmFailure,
+} from './open.mjs';
 import { LIVE_CPU_TAIL, OPEN } from './profile.mjs';
 import { assertSameTargetAsBefore, expectedTargetsFrom, newestRowMessage, targetIdentity } from './newest-row.mjs';
 import { Tabs, waitFor } from './tabs.mjs';
@@ -156,6 +158,18 @@ test('the newest-row target is the last message the For you view paints, and a s
   assert.throws(() => assertSameTargetAsBefore(before, 'reference A link rate 1', 1, 'user@2'),
     /this side user@2, the before side system@4/);
   assertSameTargetAsBefore(null, 'A link', 1, 'user@2');
+});
+
+test('a warm profile is measured only when its shell and its on-demand files both stored', () => {
+  const stored = { stored: 2, revalidated: 0 };
+  assert.equal(warmFailure({ side: 'before', caseName: 'A', report: null, filesStored: null }), null);
+  assert.equal(warmFailure({ side: 'after', caseName: 'A', report: { stored: true }, filesStored: stored }), null);
+  assert.notEqual(warmFailure({ side: 'after', caseName: 'A', report: { stored: false }, filesStored: stored }), null);
+  assert.notEqual(warmFailure({ side: 'after', caseName: 'B', report: { stored: true }, filesStored: null }), null);
+  assert.notEqual(
+    warmFailure({ side: 'after', caseName: 'B', report: { stored: true }, filesStored: { error: 'fetch failed' } }),
+    null,
+  );
 });
 
 test('two runs of one seed name the same newest-row target, though the server minted their message ids', () => {

@@ -33,9 +33,12 @@ const WARM_REPORT_TIMEOUT_MS = 300000;
 // A reply turn's end and its stored-copy refresh's report wait at most this long. The turn is one message and the
 // stub's reply, whose transfer takes the link's time; a turn that outlives the bound failed the run that saw it.
 const REPLY_TIMEOUT_MS = 300000;
-// Keeps the page's warm report on the window, before the page's own scripts run, so the bench reads it after the load.
+// Keeps the page's warm report and its on-demand file store report on the window, before the page's own scripts run,
+// so the bench reads them after the load.
 const WARM_REPORT_INIT =
-  "document.addEventListener('charliebot:offline-shell-warm', (event) => { window.__warmReport = event.detail; });";
+  "document.addEventListener('charliebot:offline-shell-warm', (event) => { window.__warmReport = event.detail; });\n" +
+  "document.addEventListener('charliebot:offline-shell-files-stored', (event) => { " +
+  "window.__filesStored = event.detail; });";
 // Keeps the page's stored-copy refresh report on the window the same way: the reply prep waits on it, because the
 // measured offline open must read a copy that already carries the reply.
 const COPY_REFRESH_INIT =
@@ -265,10 +268,11 @@ async function release(ctx, sessionId) {
 // sides start from the same browser state. C has no profile: its browser starts empty.
 //
 // The service worker stores the release's shell and files after the first load, and it stores a session's copy when
-// the first screen is fetched through the stored shell. The warm waits for the worker's report, then opens the session
-// a second time, so the profile holds the copies that a copy-served open reads. On the after side a profile without
-// stored copies is an error: its open rows would measure the network path under a case that names the copies.
-// Returns the profile's directory and the page's warm report (null when the page never reported).
+// the first screen is fetched through the stored shell. The warm waits for the worker's report and for the page's
+// on-demand file store, then opens the session a second time, so the profile holds the shell, the copies and the
+// on-demand files that a measured open reads. On the after side a profile without them is an error: its open rows would
+// measure the network path under a case that names the copies, or would fetch the on-demand files again in every open.
+// Returns the profile's directory and the page's reports (null when the page never reported).
 async function buildWarm(ctx, caseName) {
   const dir = path.join(ctx.runDir, `warm-${caseName}-${randomTag()}`);
   if (caseName === 'C') {
@@ -282,6 +286,7 @@ async function buildWarm(ctx, caseName) {
     trustedSpki: [ctx.trustedSpki, ctx.cdnSpki].filter(Boolean).join(","),
   });
   let report;
+  let filesStored;
   try {
     const tabs = new Tabs({
       browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'link',
@@ -291,8 +296,10 @@ async function buildWarm(ctx, caseName) {
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_MS);
-    // The main side has no offline-shell warm event, so only the after side waits for the stored-copy report.
-    report = ctx.side === 'after' ? await warmReport(tab) : null;
+    // The main side has no offline-shell events, so only the after side waits for the worker's report and the page's
+    // on-demand file store.
+    report = ctx.side === 'after' ? await reportOnWindow(tab, '__warmReport') : null;
+    filesStored = ctx.side === 'after' ? await reportOnWindow(tab, '__filesStored') : null;
     const now = Date.now();
     const record = { first_open_ms: now, sessions: { [session.id]: now } };
     await tab.evaluate(`localStorage.setItem('charliebot_opened_pages', ${JSON.stringify(JSON.stringify(record))})`);
@@ -305,24 +312,42 @@ async function buildWarm(ctx, caseName) {
     await browser.shutdown();
     await link.proxy.stop();
   }
-  if (ctx.side === 'after' && (report === null || report.stored !== true)) {
-    throw new Error(
-      `the ${caseName} warm reported ${JSON.stringify(report)}, not stored copies; its rows are unmeasured`,
-    );
+  const failure = warmFailure({ side: ctx.side, caseName, report, filesStored });
+  if (failure !== null) {
+    throw new Error(failure);
   }
-  return { dir, report };
+  return { dir, report, filesStored };
 }
 
-// The page's warm report, or null when the page reports none within WARM_REPORT_TIMEOUT_MS.
-async function warmReport(tab) {
+// The value the page reports on the window as `name`, or null when it reports none within WARM_REPORT_TIMEOUT_MS.
+async function reportOnWindow(tab, name) {
   const deadline = Date.now() + WARM_REPORT_TIMEOUT_MS;
   for (;;) {
-    const report = await tab.evaluate('window.__warmReport ?? null');
-    if (report !== null || Date.now() >= deadline) {
-      return report;
+    const value = await tab.evaluate(`window.${name} ?? null`);
+    if (value !== null || Date.now() >= deadline) {
+      return value;
     }
     await sleep(1000);
   }
+}
+
+// Why a warm profile cannot serve the after side's measured opens, or null when it can. The worker must have stored the
+// release's shell and copies, and the page's on-demand store must have answered without an error. The before side has
+// no offline shell, so its warm has nothing to check.
+export function warmFailure({ side, caseName, report, filesStored }) {
+  if (side !== 'after') {
+    return null;
+  }
+  if (report === null || report.stored !== true) {
+    return `the ${caseName} warm reported ${JSON.stringify(report)}, not stored copies; its rows are unmeasured`;
+  }
+  if (filesStored === null) {
+    return `the ${caseName} warm closed before its on-demand files stored; every measured open would fetch them`;
+  }
+  if (filesStored.error !== undefined) {
+    return `the ${caseName} warm's on-demand files failed to store: ${filesStored.error}`;
+  }
+  return null;
 }
 
 // One unmeasured online open at the version a release landed, in the measured browser's profile: the stored shell's
@@ -726,6 +751,7 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
   }
   const warm = { A: await buildWarm(ctx, 'A'), B: await buildWarm(ctx, 'B'), C: await buildWarm(ctx, 'C') };
   result.warmReports = Object.fromEntries(Object.entries(warm).map(([name, built]) => [name, built.report]));
+  result.warmFilesStored = Object.fromEntries(Object.entries(warm).map(([name, built]) => [name, built.filesStored]));
   const reference = { ...REFERENCE, warmDir: warm[REFERENCE.case].dir };
   result.reference = reference;
   await runCell(ctx, reference, repetitions);

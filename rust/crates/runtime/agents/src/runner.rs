@@ -1757,7 +1757,14 @@ mod tests {
       values.insert("PATH".to_string(), format!("{}:{path}", wrapper_dir.display()));
       values.insert(crate::gh_wrapper::WRAPPER_PATH_VAR.to_string(), wrapper.display().to_string());
     }
-    let cgroup_config = SessionCgroupConfig { base_dir: cgroup_base, ..SessionCgroupConfig::disabled() };
+    let cgroup_config = SessionCgroupConfig {
+      base_dir: cgroup_base,
+      memory_max_mb: 0,
+      swap_max_mb: 0,
+      tasks_max: 0,
+      enable_cpu_weight: false,
+      enable_io_weight: false,
+    };
     RunRequest::new(prompt, cwd, AgentBaseEnvironment { values }, cgroup_config, Arc::new(Registry::new()))
   }
 

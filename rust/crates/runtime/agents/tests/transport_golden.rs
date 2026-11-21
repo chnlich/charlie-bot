@@ -67,7 +67,14 @@ async fn share_cursors_follow_offsets_and_pid_start() {
     None,
     HashMap::new(),
     None,
-    SessionCgroupConfig { base_dir: base, ..SessionCgroupConfig::disabled() },
+    SessionCgroupConfig {
+      base_dir: base,
+      memory_max_mb: 0,
+      swap_max_mb: 0,
+      tasks_max: 0,
+      enable_cpu_weight: false,
+      enable_io_weight: false,
+    },
   );
   let spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
   let (mut spawned, pinned) = pin_identity_and_on_spawn(spawned, |_| async { Ok::<(), ()>(()) }).await.unwrap();

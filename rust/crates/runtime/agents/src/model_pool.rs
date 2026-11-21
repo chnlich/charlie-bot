@@ -859,26 +859,53 @@ mod tests {
   /// The reading of a synthetic member: the canned windows the selection tests order.
   fn test_reading(option: &BackendOption, now: UtcDateTime) -> Option<MemberReading> {
     let reset = |minutes: i64| Some(UtcDateTime::from(now.into_inner() + time::Duration::minutes(minutes)));
-    let weekly = |utilization: f64, minutes: i64| MemberReading {
-      windows: vec![MemberWindow { utilization, window_minutes: Some(10_080), resets_at: reset(minutes) }],
-      weekly_resets_at: reset(minutes),
-      near_exhaustion: false,
-      exhausted: false,
-      fully_reserved: false,
-    };
     match option.id.as_str() {
-      "chatgpt" => Some(weekly(0.80, 360)),
-      "claude-sub" => Some(weekly(0.49, 2_880)),
+      "chatgpt" => Some(MemberReading {
+        windows: vec![MemberWindow { utilization: 0.80, window_minutes: Some(10_080), resets_at: reset(360) }],
+        weekly_resets_at: reset(360),
+        near_exhaustion: false,
+        exhausted: false,
+        fully_reserved: false,
+      }),
+      "claude-sub" => Some(MemberReading {
+        windows: vec![MemberWindow { utilization: 0.49, window_minutes: Some(10_080), resets_at: reset(2_880) }],
+        weekly_resets_at: reset(2_880),
+        near_exhaustion: false,
+        exhausted: false,
+        fully_reserved: false,
+      }),
       // Near exhaustion: 95% used with a reset beyond the 45-minute horizon.
-      "near" => Some(MemberReading { near_exhaustion: true, ..weekly(0.95, 180) }),
+      "near" => Some(MemberReading {
+        windows: vec![MemberWindow { utilization: 0.95, window_minutes: Some(10_080), resets_at: reset(180) }],
+        weekly_resets_at: reset(180),
+        near_exhaustion: true,
+        exhausted: false,
+        fully_reserved: false,
+      }),
       // No capacity left, while the out record has not been written.
-      "spent" => Some(MemberReading { exhausted: true, ..weekly(1.0, 60) }),
+      "spent" => Some(MemberReading {
+        windows: vec![MemberWindow { utilization: 1.0, window_minutes: Some(10_080), resets_at: reset(60) }],
+        weekly_resets_at: reset(60),
+        near_exhaustion: false,
+        exhausted: true,
+        fully_reserved: false,
+      }),
       // Headroom left, but the runs placed on it reserved all of it.
-      "reserved" => Some(MemberReading { fully_reserved: true, ..weekly(0.49, 2_880) }),
+      "reserved" => Some(MemberReading {
+        windows: vec![MemberWindow { utilization: 0.49, window_minutes: Some(10_080), resets_at: reset(2_880) }],
+        weekly_resets_at: reset(2_880),
+        near_exhaustion: false,
+        exhausted: false,
+        fully_reserved: true,
+      }),
       // The same, until `RESERVED_RELEASE` frees it for the turn-level test.
-      "claude-res" => {
-        Some(MemberReading { fully_reserved: !RESERVED_RELEASE.load(Ordering::SeqCst), ..weekly(0.49, 2_880) })
-      }
+      "claude-res" => Some(MemberReading {
+        windows: vec![MemberWindow { utilization: 0.49, window_minutes: Some(10_080), resets_at: reset(2_880) }],
+        weekly_resets_at: reset(2_880),
+        near_exhaustion: false,
+        exhausted: false,
+        fully_reserved: !RESERVED_RELEASE.load(Ordering::SeqCst),
+      }),
       // No reading: counts as under the line until its first quota error.
       _ => None,
     }

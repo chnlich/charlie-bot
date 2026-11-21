@@ -173,6 +173,14 @@ export const METRICS = Object.freeze([
     value: (rep) => rep.open.large.pages,
   },
   {
+    id: 'foryou.open.large.document-bytes',
+    scenario: 8,
+    title: 'For-you first open, large target, document bytes',
+    unit: 'bytes',
+    target: null,
+    value: (rep) => rep.open.large.documentBytes,
+  },
+  {
     id: 'foryou.open.typical',
     scenario: 8,
     title: 'For-you first open, typical target, navigation to the first row',

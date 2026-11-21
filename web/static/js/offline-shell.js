@@ -40,9 +40,8 @@ function registerOfflineShell() {
 }
 
 function warmOfflineShell() {
-  navigator.serviceWorker.register(OFFLINE_SHELL_WORKER_PATH, {scope: '/?session='})
-    .catch((err) => console.error('offline shell worker registration failed:', err));
-  navigator.serviceWorker.ready.then((registration) => {
+  currentWorkerRegistration().then((registration) => {
+    if (registration === undefined) throw new Error('the offline shell has no registration');
     if (!registration.active) {
       reportWarm({supported: false});
       return;
@@ -51,7 +50,41 @@ function warmOfflineShell() {
     channel.port1.onmessage = (event) => reportWarm(event.data ?? {});
     registration.active.postMessage({type: 'warm', copies: offlineShellSeedCopies(), files: onDemandFileUrls()},
         [channel.port2]);
-  }, (err) => reportWarm({error: String(err)}));
+  }).catch((err) => reportWarm({error: String(err)}));
+}
+
+// The registration the page's messages to the current release's worker go to, once any update it holds has taken
+// over. The register call checks the server for a new worker script. Until an update takes over, the worker the
+// registration still reports as active is the release the update replaces: it answers a warm from its own shell,
+// and the new worker drops that shell when it activates. The worker's skipWaiting makes the takeover take
+// milliseconds. PAGE_UPDATE_CAP_MS bounds a stuck update: past it the request fails with an error, so a release
+// reload never waits on an update that does not finish.
+const PAGE_UPDATE_CAP_MS = 10000;
+
+function currentWorkerRegistration() {
+  return navigator.serviceWorker.register(OFFLINE_SHELL_WORKER_PATH, {scope: '/?session='})
+    .catch((err) => console.error('offline shell worker registration failed:', err))
+    .then(() => navigator.serviceWorker.getRegistration())
+    .then((registration) => (registration === undefined ? undefined : whenUpdateTakesOver(registration)));
+}
+
+function whenUpdateTakesOver(registration) {
+  const next = registration.installing ?? registration.waiting ?? null;
+  if (next === null) return Promise.resolve(registration);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+        () => reject(new Error(`the worker update did not take over within ${PAGE_UPDATE_CAP_MS} ms`)),
+        PAGE_UPDATE_CAP_MS);
+    next.addEventListener('statechange', () => {
+      if (next.state === 'activated') {
+        clearTimeout(timer);
+        resolve(registration);
+      } else if (next.state === 'redundant') {
+        clearTimeout(timer);
+        reject(new Error('the worker update was discarded before it took over'));
+      }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -222,11 +255,14 @@ function reloadAfterRefreshingShell() {
     location.reload();
     return;
   }
-  withOfflineShellWorker((worker) => new Promise((resolve) => {
-    const channel = new MessageChannel();
-    channel.port1.onmessage = (event) => resolve(event.data ?? {});
-    worker.postMessage({type: 'warm', refresh: true, files: onDemandFileUrls()}, [channel.port2]);
-  })).then((result) => {
+  currentWorkerRegistration().then((registration) => {
+    if (registration === undefined || !registration.active) return undefined;
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (event) => resolve(event.data ?? {});
+      registration.active.postMessage({type: 'warm', refresh: true, files: onDemandFileUrls()}, [channel.port2]);
+    });
+  }).then((result) => {
     if (result === undefined || result.stored || result.unauthorized) {
       location.reload();
       return;

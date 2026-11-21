@@ -14,10 +14,12 @@ const WORKER_PATH = '/offline-shell-worker.js';
 const PAGE_CURRENT = 'charliebot:page-current';
 
 // One page: the events it dispatched, the registration's worker, the messages the active worker got, and
-// the document listeners the script installed. `readyError` rejects `navigator.serviceWorker.ready`.
+// the document listeners the script installed. `registration` is the registration the page gets (an installing or
+// waiting worker in it is an update in progress); `noRegistration` leaves the page with none.
 function buildPage({
   serviceWorker = true,
-  readyError = null,
+  registration = null,
+  noRegistration = false,
   sessionId = null,
   sessionBootstrap = null,
   initialSessions = null,
@@ -29,7 +31,12 @@ function buildPage({
   const windowListeners = new Map();
   const context = {
     console: {error: () => {}},
-    location: {href: 'https://charlie.test/?session=', origin: 'https://charlie.test'},
+    location: {
+      href: 'https://charlie.test/?session=',
+      origin: 'https://charlie.test',
+      reload: () => { context.reloads += 1; },
+    },
+    reloads: 0,
     performance: {timeOrigin: 1000},
     URL,
     // The idle callbacks wait in a list the test runs by hand; the page's versioned URLs are the utils.js form.
@@ -67,6 +74,8 @@ function buildPage({
       },
     },
     channels: [],
+    // The reply function of each message type's channel: the warm and the on-demand ask each open their own.
+    replyTo: {},
     workerMessages: [],
     // The stored-copy refresh's debounce: the test runs the pending timer by hand.
     timers: [],
@@ -89,18 +98,22 @@ function buildPage({
         context.workerMessages.push(message);
         context.postMessage = {message, transfer};
         const channel = context.channels[context.channels.length - 1];
-        if (channel) context.reply = (data) => channel.port1.onmessage({data});
+        if (channel) {
+          context.reply = (data) => channel.port1.onmessage({data});
+          context.replyTo[message.type] = context.reply;
+        }
       },
     };
+    const registrationFor = noRegistration ? undefined : (registration ?? {active});
     context.navigator = {
       serviceWorker: {
         registered: [],
         register: (path_, options) => {
           context.navigator.serviceWorker.registered.push({path: path_, options});
-          return Promise.resolve();
+          return Promise.resolve(registrationFor);
         },
-        ready: readyError !== null ? Promise.reject(readyError) : Promise.resolve({active}),
-        getRegistration: async () => ({active}),
+        ready: Promise.resolve(registrationFor),
+        getRegistration: async () => registrationFor,
       },
     };
   }
@@ -190,13 +203,98 @@ test('a browser without service workers reports that the warm cannot run', () =>
   assert.equal(page.events[0].detail.supported, false);
 });
 
-test('a registration that never became active reports the error', async () => {
-  const failure = new Error('register refused');
-  const page = buildPage({readyError: failure});
+test('a page with no registration reports the warm error', async () => {
+  const page = buildPage({noRegistration: true});
   page.firePageCurrent();
-  await Promise.resolve();
+  await settled();
   assert.equal(page.events.length, 1);
-  assert.equal(page.events[0].detail.error, String(failure));
+  assert.equal(typeof page.events[0].detail.error, 'string');
+});
+
+// A release's first page: the worker the registration still holds is the release before it, and the new worker
+// installs. The warm goes to the worker that takes over, not to the one it replaces.
+test('a warm waits for the update the registration is installing, and goes to the worker that takes over', async () => {
+  const sent = {replaced: [], next: []};
+  const replaced = {postMessage: (message) => sent.replaced.push(message)};
+  const next = {postMessage: (message) => sent.next.push(message)};
+  let onStateChange = null;
+  const installing = {state: 'installing', addEventListener: (type, listener) => { onStateChange = listener; }};
+  const registration = {active: replaced, installing};
+  const page = buildPage({registration});
+  page.firePageCurrent();
+  await settled();
+  assert.deepEqual(sent.replaced.filter((message) => message.type === 'warm'), [],
+      'the worker the update replaces is not asked for the warm');
+
+  registration.active = next;
+  registration.installing = null;
+  installing.state = 'activated';
+  onStateChange();
+  await settled();
+  assert.deepEqual(sent.next.filter((message) => message.type === 'warm').map((message) => message.type), ['warm'],
+      'the warm goes to the worker that took over');
+});
+
+// The release reload's refresh follows the same rule: it goes to the worker that takes over, and the reload follows
+// its reply.
+test('a release reload waits for the update the registration is installing, then refreshes the worker that took over',
+    async () => {
+      const sent = {replaced: [], next: []};
+      const replaced = {postMessage: (message) => sent.replaced.push(message)};
+      const next = {postMessage: (message, transfer) => sent.next.push({message, transfer})};
+      let onStateChange = null;
+      const installing = {state: 'installing', addEventListener: (type, listener) => { onStateChange = listener; }};
+      const registration = {active: replaced, installing};
+      const page = buildPage({registration});
+      page.context.reloadAfterRefreshingShell();
+      await settled();
+      assert.deepEqual(sent.replaced, [], 'the worker the update replaces gets no refresh');
+
+      registration.active = next;
+      registration.installing = null;
+      installing.state = 'activated';
+      onStateChange();
+      await settled();
+      assert.equal(sent.next.length, 1);
+      assert.equal(sent.next[0].message.type, 'warm');
+      assert.equal(sent.next[0].message.refresh, true);
+      assert.equal(page.context.reloads, 0, 'the page reloads once the refresh replies');
+
+      const channel = page.context.channels.find((candidate) => candidate.port2 === sent.next[0].transfer[0]);
+      channel.port1.onmessage({data: {stored: true}});
+      await settled();
+      assert.equal(page.context.reloads, 1);
+    });
+
+// The cap bounds a stuck update: past PAGE_UPDATE_CAP_MS the warm reports an error, and a release reload is not
+// performed; the failure is reported instead.
+test('an update that never takes over fails the warm and the release reload at the cap', async () => {
+  const PAGE_UPDATE_CAP_MS = 10000;
+  const stuck = () => ({
+    active: {postMessage: () => {}},
+    installing: {state: 'installing', addEventListener: () => {}},
+  });
+
+  const warmPage = buildPage({registration: stuck()});
+  warmPage.firePageCurrent();
+  await settled();
+  const warmCap = warmPage.context.timers.filter((timer) => timer.ms === PAGE_UPDATE_CAP_MS && !timer.cleared);
+  assert.equal(warmCap.length, 1, 'the warm waits under one cap timer');
+  warmCap[0].fn();
+  await settled();
+  assert.equal(warmPage.events.length, 1);
+  assert.ok(warmPage.events[0].detail.error, 'the warm reports the stuck update as an error');
+
+  const reloadPage = buildPage({registration: stuck()});
+  reloadPage.context.reloadAfterRefreshingShell();
+  await settled();
+  const reloadCap = reloadPage.context.timers.filter((timer) => timer.ms === PAGE_UPDATE_CAP_MS && !timer.cleared);
+  assert.equal(reloadCap.length, 1, 'the reload waits under one cap timer');
+  reloadCap[0].fn();
+  await settled();
+  assert.equal(reloadPage.context.reloads, 0, 'a reload does not follow a failed refresh');
+  assert.equal(reloadPage.events.length, 1);
+  assert.equal(reloadPage.events[0].type, 'charliebot:offline-shell-refresh-failed');
 });
 
 test('the page-current event tells the active worker the catch-up is complete', async () => {
@@ -266,7 +364,7 @@ test('the on-demand files are asked of the active worker once the page is curren
   assert.ok(asked[0].files.every((url) => url.endsWith('?v=test')), 'each file is named by the URL the page requests');
 
   // The worker's reply reaches the page as the event the bench and the screenshots wait for.
-  page.context.reply({stored: 3});
+  page.context.replyTo['store-files']({stored: 3});
   const reported = page.events.filter((event) => event.type === 'charliebot:offline-shell-files-stored');
   assert.deepEqual(reported.map((event) => event.detail), [{stored: 3}]);
 });

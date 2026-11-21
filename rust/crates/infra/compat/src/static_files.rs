@@ -17,7 +17,7 @@ use std::sync::{LazyLock, Mutex};
 use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
-use charliebot_core::{int_text, paths, posix_path, text_repr, timefmt};
+use charliebot_core::{headers::ACCEPT_ENCODING, int_text, paths, posix_path, text_repr, timefmt};
 use futures_util::stream;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use md5::{Digest, Md5};
@@ -258,7 +258,7 @@ impl FileHeaders {
 
   fn apply_vary(&self, response: &mut Response) {
     if self.vary_accept_encoding {
-      response.headers_mut().insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+      response.headers_mut().insert(header::VARY, HeaderValue::from_static(ACCEPT_ENCODING));
     }
   }
 }

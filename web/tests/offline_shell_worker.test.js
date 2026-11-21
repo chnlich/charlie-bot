@@ -1037,7 +1037,8 @@ test('a page request aborts the shell fetch, and the shell runs again once the p
   assert.equal(fetches.length, 2, 'the shell runs again once the page has been quiet');
   fetches[1].finish();
   await warming;
-  assert.deepEqual(JSON.parse(JSON.stringify(channel.replies)), [{stored: true}]);
+  assert.equal(channel.replies[0].stored, true);
+  assert.equal(channel.replies[0].fetchHolds.count, 1, 'the reply counts the one wait the page request imposed');
 });
 
 test('a release-time refresh completes on a busy page once its deferral cap has passed', async (t) => {
@@ -1046,7 +1047,7 @@ test('a release-time refresh completes on a busy page once its deferral cap has 
   h.state.network = async () => new Response('<html>v1</html>', {status: 200, headers: {ETag: '"v1"'}});
   const first = messageChannel();
   await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [first.port2]}).waits);
-  assert.deepEqual(JSON.parse(JSON.stringify(first.replies)), [{stored: true}]);
+  assert.deepEqual(JSON.parse(JSON.stringify(first.replies)), [{stored: true, fetchHolds: {count: 0, heldMs: 0}}]);
 
   const signals = [];
   const refreshed = deferred();
@@ -1080,7 +1081,8 @@ test('a release-time refresh completes on a busy page once its deferral cap has 
   assert.equal(signals[1].aborted, false, 'a page request after the cap does not abort the refresh');
   refreshed.release();
   await refreshing;
-  assert.deepEqual(JSON.parse(JSON.stringify(refresh.replies)), [{stored: true}]);
+  assert.equal(refresh.replies[0].stored, true);
+  assert.equal(refresh.replies[0].fetchHolds.count, 1, 'the refresh counts the wait its cap ended');
   const shells = await h.caches.api.open(SHELL_CACHE);
   assert.equal(await (await shells.match(SHELL_KEY)).text(), '<html>v2</html>', 'the refreshed shell is stored');
 });

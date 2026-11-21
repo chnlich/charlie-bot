@@ -99,19 +99,6 @@ test('a second 4409 within 60 seconds shows the banner and neither reloads nor r
   assert.deepEqual(reloaded, [5000, 30000]);
 });
 
-test('a failed shell refresh offers a retry without reloading the current page', () => {
-  const clock = {now: 5000};
-  const {context, reloaded, bodyChildren, document} = buildHarness(clock);
-
-  document.dispatchEvent(new context.CustomEvent('charliebot:offline-shell-refresh-failed'));
-
-  assert.deepEqual(reloaded, []);
-  assert.equal(bodyChildren.length, 1);
-  assert.equal(bodyChildren[0].children[0].textContent, 'Reload');
-  bodyChildren[0].children[0].onclick();
-  assert.deepEqual(reloaded, [5000]);
-});
-
 test('a 4409 at least 60 seconds after the stored time reloads again', () => {
   const clock = {now: 5000};
   const {context, FakeWebSocket, reloaded, timers, sessionStorage} = buildHarness(clock);

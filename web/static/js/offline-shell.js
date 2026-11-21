@@ -20,10 +20,11 @@ function offlineShellPresent() {
 
 // The warm's outcome, one event per page load: the worker's reply once it has stored this release's
 // shell and files ({stored: true}, {stored: false} for a 401, or {stored: false, error} for another failure),
-// or {supported: false} when this browser has no service worker to ask. The poor-network bench waits for it
-// before it closes a warm browser, so a shell the warm was storing survives the close.
+// or {supported: false} when this browser has no service worker to ask. Each report carries `update`: the
+// states of the update the warm waited for (whenUpdateTakesOver), or null. The poor-network bench waits for
+// the report before it closes a warm browser, so a shell the warm was storing survives the close.
 function reportWarm(detail) {
-  document.dispatchEvent(new CustomEvent('charliebot:offline-shell-warm', {detail}));
+  document.dispatchEvent(new CustomEvent('charliebot:offline-shell-warm', {detail: {...detail, update: updateStates}}));
 }
 
 function registerOfflineShell() {
@@ -61,6 +62,15 @@ function warmOfflineShell() {
 // reload never waits on an update that does not finish.
 const PAGE_UPDATE_CAP_MS = 10000;
 
+// The states the page saw of the update it waits for, each with its time in ms since the page's time origin. Every
+// warm report carries them (reportWarm), so a takeover that runs long shows the state it stalled in. Null until the
+// page waits for an update.
+let updateStates = null;
+
+function recordUpdateState(worker) {
+  if (!(worker.state in updateStates)) updateStates[worker.state] = Math.round(performance.now());
+}
+
 function currentWorkerRegistration() {
   return navigator.serviceWorker.register(OFFLINE_SHELL_WORKER_PATH, {scope: '/?session='})
     .catch((err) => console.error('offline shell worker registration failed:', err))
@@ -71,11 +81,13 @@ function currentWorkerRegistration() {
 function whenUpdateTakesOver(registration) {
   const next = registration.installing ?? registration.waiting ?? null;
   if (next === null) return Promise.resolve(registration);
+  updateStates = {};
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
         () => reject(new Error(`the worker update did not take over within ${PAGE_UPDATE_CAP_MS} ms`)),
         PAGE_UPDATE_CAP_MS);
-    next.addEventListener('statechange', () => {
+    const settle = () => {
+      recordUpdateState(next);
       if (next.state === 'activated') {
         clearTimeout(timer);
         resolve(registration);
@@ -83,7 +95,11 @@ function whenUpdateTakesOver(registration) {
         clearTimeout(timer);
         reject(new Error('the worker update was discarded before it took over'));
       }
-    });
+    };
+    next.addEventListener('statechange', settle);
+    // The worker may have reached its state before the listener attached, and then no statechange reaches it:
+    // the state is read once the listener is in place, so such a state resolves at once.
+    settle();
   });
 }
 
@@ -242,14 +258,10 @@ function dropOfflineShellCopies() {
 
 window.addEventListener('charliebot:unauthorized', () => dropOfflineShellCopies());
 
-function reportShellRefreshFailure(error) {
-  console.error('offline shell refresh failed:', error);
-  document.dispatchEvent(new CustomEvent('charliebot:offline-shell-refresh-failed', {
-    detail: {error: String(error)},
-  }));
-}
-
 // The reload after a 4409 close. A worker refreshes the shell and its files before the cached navigation changes.
+// The reload is the required action and the refresh its optimization: a refresh that fails, or waits past the
+// update cap, warns with its error and the page reloads without it. A page left on the old code against a new
+// server is the worse failure, so no failure keeps the page from reloading.
 function reloadAfterRefreshingShell() {
   if (!offlineShellSupported()) {
     location.reload();
@@ -263,16 +275,12 @@ function reloadAfterRefreshingShell() {
       registration.active.postMessage({type: 'warm', refresh: true, files: onDemandFileUrls()}, [channel.port2]);
     });
   }).then((result) => {
-    if (result === undefined || result.stored || result.unauthorized) {
-      location.reload();
-      return;
+    if (result !== undefined && !result.stored && !result.unauthorized) {
+      throw new Error(result.error ?? 'offline shell refresh returned no result');
     }
-    if (result.error) {
-      reportShellRefreshFailure(new Error(result.error));
-      return;
-    }
-    throw new Error('offline shell refresh returned no result');
-  }).catch(reportShellRefreshFailure);
+  }).catch((err) => {
+    console.warn('offline shell refresh failed; reloading without it:', err);
+  }).then(() => location.reload());
 }
 
 // ---------------------------------------------------------------------------

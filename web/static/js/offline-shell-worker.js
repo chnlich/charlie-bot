@@ -402,11 +402,20 @@ function pageRequestEnded(id) {
   }, PAGE_QUIET_MS);
 }
 
+function pageIsQuiet() {
+  return pageRequests.size === 0 && quietTimer === null;
+}
+
 // Resolves once no reported request is in flight and the page has been quiet for PAGE_QUIET_MS.
 function pageQuiet() {
-  if (pageRequests.size === 0 && quietTimer === null) return Promise.resolve();
+  if (pageIsQuiet()) return Promise.resolve();
   return new Promise((resolve) => quietWaiters.push(resolve));
 }
+
+// The waits the page's priority imposed on install fetches since this worker started: each wait for a quiet page
+// counts once, and heldMs sums their lengths. Every warm reply carries them, so the bench can show whether a
+// takeover or a warm was held.
+const fetchHolds = {count: 0, heldMs: 0};
 
 // One network fetch of an install: the shell's or an on-demand file's. It starts once the page is quiet. A page request
 // that starts while it is in flight aborts it, and it starts again once the page is quiet. Once its cap has passed
@@ -416,7 +425,13 @@ async function installFetch(url, init) {
   const cap = deferCap();
   try {
     for (;;) {
+      const held = !pageIsQuiet();
+      const waitFrom = Date.now();
       await Promise.race([pageQuiet(), cap.passed]);
+      if (held) {
+        fetchHolds.count += 1;
+        fetchHolds.heldMs += Date.now() - waitFrom;
+      }
       const install = {controller: new AbortController(), cap};
       installs.add(install);
       try {
@@ -569,9 +584,8 @@ self.addEventListener('message', (event) => {
         if (result.stored) await storePageCopies(data.copies);
         return result;
       });
-    event.waitUntil(warming.then(
-        (result) => replyTo(event, result),
-        (error) => replyTo(event, {stored: false, error: String(error)})));
+    const reply = (result) => replyTo(event, {...result, fetchHolds: {...fetchHolds}});
+    event.waitUntil(warming.then(reply, (error) => reply({stored: false, error: String(error)})));
   } else if (data.type === 'store-files') {
     event.waitUntil(storeOnDemandFiles(data.files).then(
         (result) => replyTo(event, result),

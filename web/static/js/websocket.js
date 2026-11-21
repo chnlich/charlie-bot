@@ -452,8 +452,6 @@ function reloadStalePage() {
   reloadAfterRefreshingShell();
 }
 
-document.addEventListener('charliebot:offline-shell-refresh-failed', showStalePageBanner);
-
 function showStalePageBanner() {
   const banner = document.createElement('div');
   banner.style.cssText =

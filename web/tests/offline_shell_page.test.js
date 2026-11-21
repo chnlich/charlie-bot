@@ -27,17 +27,18 @@ function buildPage({
   pageFetch = undefined,
 } = {}) {
   const events = [];
+  const warnings = [];
   const documentListeners = new Map();
   const windowListeners = new Map();
   const context = {
-    console: {error: () => {}},
+    console: {error: () => {}, warn: (...args) => warnings.push(args)},
     location: {
       href: 'https://charlie.test/?session=',
       origin: 'https://charlie.test',
       reload: () => { context.reloads += 1; },
     },
     reloads: 0,
-    performance: {timeOrigin: 1000},
+    performance: {timeOrigin: 1000, now: () => 0},
     URL,
     // The idle callbacks wait in a list the test runs by hand; the page's versioned URLs are the utils.js form.
     idleCallbacks: [],
@@ -122,6 +123,7 @@ function buildPage({
   context.registerOfflineShell();
   return {
     events,
+    warnings,
     context,
     registered: () => context.navigator?.serviceWorker.registered ?? [],
     firePageCurrent: () => {
@@ -266,9 +268,9 @@ test('a release reload waits for the update the registration is installing, then
       assert.equal(page.context.reloads, 1);
     });
 
-// The cap bounds a stuck update: past PAGE_UPDATE_CAP_MS the warm reports an error, and a release reload is not
-// performed; the failure is reported instead.
-test('an update that never takes over fails the warm and the release reload at the cap', async () => {
+// The cap bounds a stuck update: past PAGE_UPDATE_CAP_MS the warm reports an error, and a release reload warns with
+// the error and reloads without the refresh.
+test('an update that never takes over fails the warm at the cap; the release reload warns and reloads', async () => {
   const PAGE_UPDATE_CAP_MS = 10000;
   const stuck = () => ({
     active: {postMessage: () => {}},
@@ -292,9 +294,48 @@ test('an update that never takes over fails the warm and the release reload at t
   assert.equal(reloadCap.length, 1, 'the reload waits under one cap timer');
   reloadCap[0].fn();
   await settled();
-  assert.equal(reloadPage.context.reloads, 0, 'a reload does not follow a failed refresh');
-  assert.equal(reloadPage.events.length, 1);
-  assert.equal(reloadPage.events[0].type, 'charliebot:offline-shell-refresh-failed');
+  assert.equal(reloadPage.context.reloads, 1, 'the reload follows the failed refresh');
+  assert.deepEqual(reloadPage.events, [], 'no banner event: the page is reloading itself');
+  assert.equal(reloadPage.warnings.length, 1);
+  assert.match(String(reloadPage.warnings[0][1]), /did not take over within 10000 ms/);
+});
+
+// A refresh the worker answers with an error still reloads the page, once and with a warning.
+test('a release reload whose refresh replies with an error warns and reloads once, with no banner event', async () => {
+  const sent = [];
+  const active = {postMessage: (message, transfer) => sent.push({message, transfer})};
+  const page = buildPage({registration: {active}});
+  page.context.reloadAfterRefreshingShell();
+  await settled();
+  assert.equal(sent.length, 1);
+  const channel = page.context.channels.find((candidate) => candidate.port2 === sent[0].transfer[0]);
+  channel.port1.onmessage({data: {stored: false, error: 'shell fetch failed: 500'}});
+  await settled();
+  assert.equal(page.context.reloads, 1);
+  assert.deepEqual(page.events, []);
+  assert.equal(page.warnings.length, 1);
+  assert.match(String(page.warnings[0][1]), /shell fetch failed: 500/);
+});
+
+// Chromium can attach a worker's statechange after the worker has reached its state: then no event reaches the
+// listener. The page reads the state once the listener is attached, so a worker that already activated takes over
+// at once, with no wait for the cap. The warm's report names the state the page saw.
+test('an update that activated before the page attached its listener takes over at once', async () => {
+  const PAGE_UPDATE_CAP_MS = 10000;
+  const sent = [];
+  const active = {postMessage: (message, transfer) => sent.push({message, transfer})};
+  const installing = {state: 'activated', addEventListener: () => {}};
+  const page = buildPage({registration: {active, installing}});
+  page.firePageCurrent();
+  await settled();
+  const warms = sent.filter((entry) => entry.message.type === 'warm');
+  assert.equal(warms.length, 1, 'the warm goes out without a state change');
+  assert.equal(page.context.timers.filter((timer) => timer.ms === PAGE_UPDATE_CAP_MS && !timer.cleared).length, 0,
+      'the cap timer is cleared');
+
+  const channel = page.context.channels.find((candidate) => candidate.port2 === warms[0].transfer[0]);
+  channel.port1.onmessage({data: {stored: true}});
+  assert.deepEqual(JSON.parse(JSON.stringify(page.events[0].detail.update)), {activated: 0});
 });
 
 test('the page-current event tells the active worker the catch-up is complete', async () => {

@@ -382,6 +382,11 @@ async function settleReleaseOnline(tabs, session, version) {
         "({version: typeof STATIC_ASSET_VERSION === 'undefined' ? null : STATIC_ASSET_VERSION, " +
         'warm: window.__warmReport ?? null})');
       if (state.version === version && state.warm !== null && state.warm.stored === true) {
+        // The update's states (ms since the page's time origin) and the install fetches the page's priority held.
+        process.stderr.write(`[takeover] ${version} ${JSON.stringify({
+          update: state.warm.update,
+          fetchHolds: state.warm.fetchHolds,
+        })}\n`);
         return;
       }
       if (Date.now() > deadline) {

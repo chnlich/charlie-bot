@@ -37,7 +37,14 @@ fn assert_pdeath_child_survives_blocking_keep_alive() {
     None,
     HashMap::new(),
     None,
-    SessionCgroupConfig { base_dir: base, ..SessionCgroupConfig::disabled() },
+    SessionCgroupConfig {
+      base_dir: base,
+      memory_max_mb: 0,
+      swap_max_mb: 0,
+      tasks_max: 0,
+      enable_cpu_weight: false,
+      enable_io_weight: false,
+    },
   );
   let runtime =
     Builder::new_current_thread().enable_all().thread_keep_alive(Duration::from_millis(100)).build().unwrap();
@@ -137,7 +144,14 @@ async fn spawn_and_exit_subprocess_entry() {
     None,
     HashMap::new(),
     None,
-    SessionCgroupConfig { base_dir: base, ..SessionCgroupConfig::disabled() },
+    SessionCgroupConfig {
+      base_dir: base,
+      memory_max_mb: 0,
+      swap_max_mb: 0,
+      tasks_max: 0,
+      enable_cpu_weight: false,
+      enable_io_weight: false,
+    },
   );
   let pid = if mode == "raw" {
     let child = spawn_raw_log(&spec, &raw_path, &stderr_path, RawStdin::Null, |_| ()).await.unwrap().0.child;

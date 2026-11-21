@@ -1178,7 +1178,14 @@ mod tests {
       None,
       HashMap::new(),
       None,
-      SessionCgroupConfig { base_dir: base.to_path_buf(), ..SessionCgroupConfig::disabled() },
+      SessionCgroupConfig {
+        base_dir: base.to_path_buf(),
+        memory_max_mb: 0,
+        swap_max_mb: 0,
+        tasks_max: 0,
+        enable_cpu_weight: false,
+        enable_io_weight: false,
+      },
     )
   }
 
@@ -1268,7 +1275,8 @@ mod tests {
         memory_max_mb: 64,
         swap_max_mb: 32,
         tasks_max: 0,
-        ..SessionCgroupConfig::disabled()
+        enable_cpu_weight: false,
+        enable_io_weight: false,
       },
     );
     let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
@@ -1292,7 +1300,14 @@ mod tests {
       None,
       HashMap::new(),
       None,
-      SessionCgroupConfig { base_dir: base, ..SessionCgroupConfig::disabled() },
+      SessionCgroupConfig {
+        base_dir: base,
+        memory_max_mb: 0,
+        swap_max_mb: 0,
+        tasks_max: 0,
+        enable_cpu_weight: false,
+        enable_io_weight: false,
+      },
     );
     let mut spawned = spawn_with_setup(&spec, Some(Signal::SIGKILL), ChildStdin::Null, SpawnSetup::None).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1323,7 +1338,8 @@ mod tests {
         memory_max_mb: 64,
         swap_max_mb: 0,
         tasks_max: 16,
-        ..SessionCgroupConfig::disabled()
+        enable_cpu_weight: false,
+        enable_io_weight: false,
       },
     );
     let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
@@ -1354,7 +1370,8 @@ mod tests {
         memory_max_mb: 64,
         swap_max_mb: 0,
         tasks_max: 16,
-        ..SessionCgroupConfig::disabled()
+        enable_cpu_weight: false,
+        enable_io_weight: false,
       },
     );
     let mut spawned = spawn_one_shot(&spec, None).await.unwrap();
@@ -1392,7 +1409,8 @@ mod tests {
         memory_max_mb: 64,
         swap_max_mb: 0,
         tasks_max: 16,
-        ..SessionCgroupConfig::disabled()
+        enable_cpu_weight: false,
+        enable_io_weight: false,
       },
     );
     let mut child =
@@ -1439,7 +1457,8 @@ mod tests {
         memory_max_mb: 64,
         swap_max_mb: 0,
         tasks_max: 16,
-        ..SessionCgroupConfig::disabled()
+        enable_cpu_weight: false,
+        enable_io_weight: false,
       },
     );
     let mut child = spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideCgroup).await.unwrap().child;

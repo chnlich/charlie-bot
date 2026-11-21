@@ -511,7 +511,14 @@ mod tests {
   fn an_io_switch_off_with_the_cpu_on_enables_only_cpu() {
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let config = SessionCgroupConfig { tasks_max: 50, ..cgroup_config_with(root.path(), 64, true, false) };
+    let config = SessionCgroupConfig {
+      base_dir: root.path().to_path_buf(),
+      memory_max_mb: 64,
+      swap_max_mb: 32,
+      tasks_max: 50,
+      enable_cpu_weight: true,
+      enable_io_weight: false,
+    };
     let path = ensure_session_cgroup(&config, SESSION_ID).unwrap();
     assert_eq!(
       fs::read_to_string(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
@@ -585,7 +592,14 @@ mod tests {
     let root = fake_slices();
     let path = fake_leaf(root.path(), AGENTS_SLICE);
     fs::write(path.join("pids.max"), "50").unwrap();
-    let config = SessionCgroupConfig { tasks_max: 0, enable_io_weight: false, ..cgroup_config(root.path(), 64) };
+    let config = SessionCgroupConfig {
+      base_dir: root.path().to_path_buf(),
+      memory_max_mb: 64,
+      swap_max_mb: 32,
+      tasks_max: 0,
+      enable_cpu_weight: true,
+      enable_io_weight: false,
+    };
     assert_eq!(ensure_session_cgroup(&config, SESSION_ID).unwrap(), path);
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max\n");
   }
@@ -676,9 +690,15 @@ mod tests {
     // so the test checks the bytes that the refusal depends on.
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let path =
-      ensure_session_cgroup(&SessionCgroupConfig { swap_max_mb: -32, ..cgroup_config(root.path(), 64) }, SESSION_ID)
-        .unwrap();
+    let config = SessionCgroupConfig {
+      base_dir: root.path().to_path_buf(),
+      memory_max_mb: 64,
+      swap_max_mb: -32,
+      tasks_max: 4096,
+      enable_cpu_weight: true,
+      enable_io_weight: true,
+    };
+    let path = ensure_session_cgroup(&config, SESSION_ID).unwrap();
     assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), "-33554432\n");
   }
 
@@ -686,9 +706,15 @@ mod tests {
   fn negative_task_limit_writes_no_task_cap() {
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let path =
-      ensure_session_cgroup(&SessionCgroupConfig { tasks_max: -1, ..cgroup_config(root.path(), 64) }, SESSION_ID)
-        .unwrap();
+    let config = SessionCgroupConfig {
+      base_dir: root.path().to_path_buf(),
+      memory_max_mb: 64,
+      swap_max_mb: 32,
+      tasks_max: -1,
+      enable_cpu_weight: true,
+      enable_io_weight: true,
+    };
+    let path = ensure_session_cgroup(&config, SESSION_ID).unwrap();
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max\n");
   }
 }

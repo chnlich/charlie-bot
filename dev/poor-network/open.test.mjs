@@ -12,8 +12,8 @@ import { test } from 'node:test';
 
 import { chromeBinary, launchBrowser } from './chrome.mjs';
 import {
-  assetVersionOf, hostInterference, openCpuRecord, openMeasuredTab, openRecord, openSettled, runRepetitions,
-  warmFailure,
+  assetVersionOf, failIfNavigatedAfter, hostInterference, openCpuRecord, openMeasuredTab, openRecord, openSettled,
+  runRepetitions, warmFailure,
 } from './open.mjs';
 import { LIVE_CPU_TAIL, OPEN } from './profile.mjs';
 import { assertSameTargetAsBefore, expectedTargetsFrom, newestRowMessage, targetIdentity } from './newest-row.mjs';
@@ -25,6 +25,12 @@ test('the asset version is read from the folded declaration the server serves, a
   assert.equal(assetVersionOf('<script>const STATIC_ASSET_VERSION="-c648d5b36ecf";</script>'), '-c648d5b36ecf');
   assert.equal(assetVersionOf('const STATIC_ASSET_VERSION = "v9";\n'), 'v9');
   assert.throws(() => assetVersionOf('<html></html>'), /carries no STATIC_ASSET_VERSION/);
+});
+
+test('a reply tab that navigates after its send fails the rep; a navigation before the send does not', () => {
+  const tab = { navigations: [{ at: 100, url: 'https://localhost:8443/?session=x' }] };
+  failIfNavigatedAfter(tab, 101);
+  assert.throws(() => failIfNavigatedAfter(tab, 100), /navigated after its send: https:\/\/localhost:8443\/\?session=x/);
 });
 
 // A repetition's record, with the fields the decisions read.

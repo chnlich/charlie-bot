@@ -399,6 +399,15 @@ async function settleReleaseOnline(tabs, session, version) {
   }
 }
 
+// A reload or navigation of the reply tab after its send stops the rep: the reply would then be measured in a page
+// that did not send it.
+export function failIfNavigatedAfter(tab, sentAt) {
+  const navigated = tab.navigations.filter((nav) => nav.at >= sentAt);
+  if (navigated.length > 0) {
+    throw new Error(`the reply tab navigated after its send: ${navigated.map((nav) => nav.url).join(' ')}`);
+  }
+}
+
 // One reply the socket delivered, sent from a page of the measured browser's profile: the page shows the reply
 // streaming, and the stored-copy refresh it asks for completes. The reply is the session's newest message when the
 // measured open fetches its first screen, so the offline open must show it from the stored copy.
@@ -413,6 +422,7 @@ async function deliverReplyOnline(tabs, session, repetition) {
     const sentAt = await tab.sendText(`${echo} answer with the reply`);
     const deadline = Date.now() + REPLY_TIMEOUT_MS;
     for (;;) {
+      failIfNavigatedAfter(tab, sentAt);
       if (tab.frames.some((frame) => frame.at >= sentAt && frame.type === 'master_done')) {
         break;
       }
@@ -422,6 +432,7 @@ async function deliverReplyOnline(tabs, session, repetition) {
       await sleep(500);
     }
     for (;;) {
+      failIfNavigatedAfter(tab, sentAt);
       const report = await tab.evaluate('window.__copyRefresh ?? null');
       if (report !== null && report.refreshed >= 1) {
         return;

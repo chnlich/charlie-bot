@@ -41,6 +41,7 @@ import {
 import { expectedTargetsFrom } from './newest-row.mjs';
 import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
 import { formatSearch, searchScenario } from './search.mjs';
+import { FOR_YOU_SCENARIO, forYouRep, seedForYouTargets } from './foryou.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 import { sleep } from './tabs.mjs';
@@ -55,6 +56,7 @@ const SCENARIOS = Object.freeze({
   tools: toolStreamRep,
   starred: viewBackgroundRep('starred'),
   threads: viewBackgroundRep('threads'),
+  foryou: forYouRep,
 });
 const DEFAULT_SCENARIOS = Object.freeze(['background', 'held', 'reset', 'stream']);
 
@@ -190,12 +192,13 @@ async function describeBootstrap(api, sessionId) {
   return `the bootstrap carries ${page.messages.length} messages ${JSON.stringify(roles)}, raw ${Buffer.byteLength(JSON.stringify(page))} bytes, largest message ${Math.max(...sizes)} bytes`;
 }
 
-// Creates and seeds the sessions the bench uses.
+// Creates and seeds the sessions the bench uses. The For-you scenario's two targets seed plain here; the scenario
+// sizes the large one and gives both the trigger tail when it runs (`seedForYouTargets`).
 async function createSessions(api) {
   const tag = crypto.randomBytes(4).toString('hex');
   const made = [];
   for (let index = 1; index <= BENCH_SESSIONS; index++) {
-    const sized = index >= FIRST_SIZED_INDEX && index < BENCH_SESSIONS;
+    const sized = index >= FIRST_SIZED_INDEX && index < BENCH_SESSIONS - 2;
     made.push(await seedSession(api, tag, index, sized ? VIEW.bootstrapUntrimmedWireBytes : null));
   }
   return {
@@ -203,8 +206,10 @@ async function createSessions(api) {
     background: made[1],
     probes: made.slice(2, 5),
     switchTarget: made[FIRST_SIZED_INDEX - 1],
-    held: made.slice(FIRST_SIZED_INDEX, BENCH_SESSIONS - 1),
-    churn: made[BENCH_SESSIONS - 1],
+    held: made.slice(FIRST_SIZED_INDEX, BENCH_SESSIONS - 3),
+    churn: made[BENCH_SESSIONS - 3],
+    foryouLarge: made[BENCH_SESSIONS - 2],
+    foryouTypical: made[BENCH_SESSIONS - 1],
   };
 }
 
@@ -311,6 +316,7 @@ function buildSide({
       switchTarget: sessions.switchTarget.id,
       held: sessions.held.map((session) => session.id),
       churn: sessions.churn.id,
+      foryou: sessions.foryou && { large: sessions.foryou.large.id, typical: sessions.foryou.typical.id },
       sizedTargets: [sessions.switchTarget, ...sessions.held].map(({ id, turns, bootstrapWireBytes }) => ({
         id,
         turns,
@@ -327,7 +333,7 @@ function buildSide({
     side.calibration = calibrate(results.background);
   }
   for (const metric of METRICS) {
-    const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools' }[metric.scenario];
+    const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools', 8: 'foryou' }[metric.scenario];
     if (results[repsOf].length > 0 && status === 'measured') {
       side.metrics[metric.id] = summarize(results[repsOf], metric);
     }
@@ -383,6 +389,9 @@ async function main() {
     ctx.assets = await loadAssets(args.assets);
     ctx.replyBytes = replyTextBytes(args.replyDir);
     ctx.sessions = await createSessions(api);
+    if (args.scenarios.includes(FOR_YOU_SCENARIO)) {
+      ctx.sessions.foryou = await seedForYouTargets(api, ctx.sessions);
+    }
     ctx.view = await measureView(api);
     const serve = new URL(api.base);
     const tls = makeCertificate(path.join(ctx.runDir, `tls-${args.side}`));

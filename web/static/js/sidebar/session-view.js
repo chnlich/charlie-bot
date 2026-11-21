@@ -506,6 +506,7 @@ function buildEmptySessionBootstrap(session) {
     active_backend_type: BACKEND_TYPES ? (BACKEND_TYPES[backend] || '') : '',
     switchable_backends: [],
     has_more: false,
+    older_for_you: [],
   };
 }
 
@@ -568,9 +569,6 @@ function switchTargetName(sessionId) {
 // the same request on the send path's backoff (chat/input.js): 1 s doubling to a 30 s cap,
 // unbounded attempts. A failure no longer navigates the page to a full load, which on the
 // measured link costs 415 KB. A 4xx fails the open: the server refused the bootstrap.
-const BOOTSTRAP_RETRY_BASE_MS = 1000;
-const BOOTSTRAP_RETRY_MAX_MS = 30000;
-
 function waitForBootstrapRetry(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
@@ -581,7 +579,7 @@ function waitForBootstrapRetry(delayMs) {
 // is offline means no copy exists, so the placeholder names that and the usage cell shows the offline mark until the
 // request lands.
 async function fetchBootstrapWithRetry(sessionId, gen, headers) {
-  let retryDelay = BOOTSTRAP_RETRY_BASE_MS;
+  let retryDelay = PAGE_REQUEST_RETRY_BASE_MS;
   for (;;) {
     let response;
     let data;
@@ -599,7 +597,7 @@ async function fetchBootstrapWithRetry(sessionId, gen, headers) {
       }
       await waitForBootstrapRetry(retryDelay);
       if (gen !== switchGeneration) return null;
-      retryDelay = Math.min(retryDelay * 2, BOOTSTRAP_RETRY_MAX_MS);
+      retryDelay = Math.min(retryDelay * 2, PAGE_REQUEST_RETRY_MAX_MS);
       continue;
     }
     if (data !== undefined) return {data, stored: isStoredResponse(response)};
@@ -607,7 +605,7 @@ async function fetchBootstrapWithRetry(sessionId, gen, headers) {
     if (gen !== switchGeneration) return null;
     await waitForBootstrapRetry(retryDelay);
     if (gen !== switchGeneration) return null;
-    retryDelay = Math.min(retryDelay * 2, BOOTSTRAP_RETRY_MAX_MS);
+    retryDelay = Math.min(retryDelay * 2, PAGE_REQUEST_RETRY_MAX_MS);
   }
 }
 
@@ -684,6 +682,7 @@ registerStatusPollHold(() => switching);
 // paints the first screen, then catches up (last-state.js) and posts the session's read only once current.
 async function openSession(sessionId, fromSessionId) {
   switching = true;
+  cancelOlderPageRetry();
   const gen = ++switchGeneration;
   const switchStartedAt = Date.now();
   const reportSuperseded = () => reportSwitchEvent('superseded', fromSessionId, sessionId, gen, {
@@ -785,6 +784,7 @@ async function openSession(sessionId, fromSessionId) {
   if (fromSessionId) history.pushState({session: sessionId}, '', '/?session=' + sessionId);
 
   // Render content
+  switchTiming = {fromSessionId, sessionId, generation: gen, startedAt: switchStartedAt, firstRowReported: false};
   try {
     globalThis.renderSessionView(screen.data);
   } catch (err) {
@@ -864,6 +864,18 @@ async function refetchFirstScreen(open) {
   requestSessionSubscription(open.sessionId, screen.data.event_count, null);
 }
 
+// The first For-you row a switch paints. The engine reports it once per mounted view through renderSessionView; the
+// switch that mounted the view is the one that timed it. A page load has no switch and reports nothing.
+let switchTiming = null;
+function reportForYouFirstRow(sessionId) {
+  const timing = switchTiming;
+  if (!timing || timing.firstRowReported || timing.sessionId !== sessionId) return;
+  timing.firstRowReported = true;
+  reportSwitchEvent('first_for_you_row', timing.fromSessionId, timing.sessionId, timing.generation, {
+    elapsed_ms: Date.now() - timing.startedAt,
+  });
+}
+
 // The open paths' mount choice in one function: first load, session switch
 // and new-session bootstrap all render through renderSessionView. An idle
 // master session with a committed reply mounts anchored at that reply's top
@@ -932,7 +944,11 @@ function renderSessionView(data) {
   const view = Chat.ForYou.viewFor(session);
   const mountOptions = view === Chat.ForYou.FOR_YOU ? null : openMountOptions(session, data, messages);
   const turnEngine = globalThis.Chat && Chat.TurnEngine
-    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, Object.assign({view}, mountOptions))
+    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, Object.assign({
+        view,
+        forYouHead: data.older_for_you,
+        onForYouFirstRow: () => reportForYouFirstRow(session.id),
+      }, mountOptions))
     : null;
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
   Chat.ForYou.applySessionChatView(session, turnEngine ? view : Chat.ForYou.EVERYTHING, turnEngine);
@@ -1009,6 +1025,12 @@ function ensureSentinel(container, state) {
     container.prepend(sentinel);
   }
   sentinel.setAttribute('data-state', state);
+  // Only the retry icon names itself; the text states carry no extra accessible name or tooltip. The element outlives
+  // the failed state, so a landed page clears the name the failed state gave it.
+  if (state !== 'failed') {
+    sentinel.removeAttribute('aria-label');
+    sentinel.removeAttribute('title');
+  }
   if (state === 'idle') {
     sentinel.innerHTML = 'Scroll up for older messages';
     sentinel.style.cursor = 'default';
@@ -1018,7 +1040,9 @@ function ensureSentinel(container, state) {
     sentinel.style.cursor = 'default';
     sentinel.onclick = null;
   } else if (state === 'failed') {
-    sentinel.innerHTML = 'Failed to load older messages &mdash; click to retry';
+    sentinel.innerHTML = cbIcon('retry', 14);
+    sentinel.setAttribute('aria-label', 'Retry loading older messages');
+    sentinel.title = 'Retry loading older messages';
     sentinel.style.cursor = 'pointer';
     sentinel.onclick = () => loadOlderIfNeeded(container);
   }
@@ -1057,6 +1081,46 @@ function fillIfShort(container, isContinuation) {
 
 Chat.registerProjectionCheck((container) => { fillIfShort(container, false); });
 
+// The older-page retry. A failed older page keeps its cursor and its place: a network failure, a timeout or a 5xx
+// retries the same request on the page-request backoff, and at once when the browser comes back online. A 4xx is the
+// server's refusal, so only the reader's click retries it. Starting a load clears the pending timer, so one request is
+// in flight at a time.
+let olderPageRetryTimer = null;
+let olderPageRetryDelayMs = PAGE_REQUEST_RETRY_BASE_MS;
+let olderPageRetryOnline = null;
+
+// Clears the pending timer and the online listener. The backoff keeps its progress.
+function stopOlderPageRetry() {
+  if (olderPageRetryTimer !== null) clearTimeout(olderPageRetryTimer);
+  olderPageRetryTimer = null;
+  if (olderPageRetryOnline !== null) window.removeEventListener('online', olderPageRetryOnline);
+  olderPageRetryOnline = null;
+}
+
+// A switch cancels the retry and starts the backoff over.
+function cancelOlderPageRetry() {
+  stopOlderPageRetry();
+  olderPageRetryDelayMs = PAGE_REQUEST_RETRY_BASE_MS;
+}
+
+function scheduleOlderPageRetry(container) {
+  if (navigator.onLine === false) {
+    olderPageRetryOnline = () => {
+      stopOlderPageRetry();
+      loadOlderIfNeeded(container);
+    };
+    window.addEventListener('online', olderPageRetryOnline);
+    return;
+  }
+  const delayMs = olderPageRetryDelayMs;
+  olderPageRetryDelayMs = Math.min(delayMs * 2, PAGE_REQUEST_RETRY_MAX_MS);
+  // The timer runs the same viewport check as a scroll: a reader away from the top waits for the scroll to bring them.
+  olderPageRetryTimer = setTimeout(() => {
+    olderPageRetryTimer = null;
+    loadOlderIfNeeded(container);
+  }, delayMs);
+}
+
 // `isContinuation` marks a call that continues a chain. Any other call (a user
 // gesture, a click on the failed sentinel, a fresh fill) starts a burst and
 // resets the trigger-zone counter.
@@ -1079,18 +1143,30 @@ async function loadOlderIfNeeded(container, isContinuation) {
   // In-flight token: the landing paths below apply only while this session
   // and switch generation still own the view.
   const flight = {sessionId: SESSION_ID, generation: switchGeneration};
+  stopOlderPageRetry();
   sessionLoadingMore = flight;
   ensureSentinel(container, 'loading');
   const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionOlderBeforeCursor + '&limit=40';
   const abortCtrl = new AbortController();
   const timeout = setTimeout(() => abortCtrl.abort(), 10000);
   let pageLanded = false;
+  let retryable = false;
   const stale = () => flight.generation !== switchGeneration || flight.sessionId !== SESSION_ID;
   try {
     // The page's own timeout and the switch's view abort both cancel the flight.
-    const res = await fetch(url, {signal: AbortSignal.any([abortCtrl.signal, viewRequestSignal()])});
+    let res;
+    try {
+      res = await fetch(url, {signal: AbortSignal.any([abortCtrl.signal, viewRequestSignal()])});
+    } catch (err) {
+      // A network failure or the page's timeout: the same cursor retries.
+      retryable = true;
+      throw err;
+    }
     clearTimeout(timeout);
-    if (!res.ok) throw new Error(res.status);
+    if (!res.ok) {
+      retryable = res.status >= 500;
+      throw new Error(res.status);
+    }
     const data = await res.json();
     if (!Number.isFinite(data.next_before)) throw new Error('events page missing next_before');
 
@@ -1169,6 +1245,7 @@ async function loadOlderIfNeeded(container, isContinuation) {
       sentinel.remove();
     }
     pageLanded = true;
+    olderPageRetryDelayMs = PAGE_REQUEST_RETRY_BASE_MS;
   } catch (err) {
     clearTimeout(timeout);
     // Stale flight: the new session's view owns the sentinel — do not paint
@@ -1180,6 +1257,7 @@ async function loadOlderIfNeeded(container, isContinuation) {
     // so the user can retry the same cursor.
     if (sessionHasMore) {
       ensureSentinel(container, 'failed');
+      if (retryable) scheduleOlderPageRetry(container);
     }
   } finally {
     if (sessionLoadingMore === flight) sessionLoadingMore = false;
@@ -1418,6 +1496,8 @@ function renderNoActiveSessionView() {
   teardownActiveSessionView();
   hideStreaming();
   abortViewRequests();
+  // The welcome view has no session to page, so a pending older-page retry would ask for a session that is gone.
+  cancelOlderPageRetry();
   // With no session displayed the page receives no session's frames: the socket closes, so an
   // archived session's live output does not spend the link on a view with nothing to show. The
   // welcome view's sidebar rows come from the page load that opens the next session.
@@ -1484,6 +1564,7 @@ const API = {
 Sidebar.wire(API, {
   switchBackend,
   loadOlderIfNeeded,
+  cancelOlderPageRetry,
   createSessionNode,
 });
 

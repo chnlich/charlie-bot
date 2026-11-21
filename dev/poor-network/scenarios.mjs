@@ -1,4 +1,4 @@
-// The six scenarios of the README. Each repetition starts from a fresh browser profile behind a fresh proxy, so
+// The scenarios of the README. Each repetition starts from a fresh browser profile behind a fresh proxy, so
 // the page's own cache and state never carry from one repetition to the next. A repetition returns the raw numbers of
 // its scenario; report.mjs turns them into the medians, the targets and the verdicts.
 //
@@ -86,6 +86,8 @@ async function withCleanup(body, cleanup) {
 }
 
 // One repetition's browser, proxy and tabs, torn down on every path.
+// One fresh browser profile behind one fresh proxy, with the tabs `tabNames` names. Exported for the For-you
+// scenario's first-open cells, which need a fresh profile that has opened no page yet.
 export async function withLink(ctx, label, tabNames, body) {
   const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: ctx.frontPort } });
   const proxyPort = await proxy.start();
@@ -334,8 +336,9 @@ async function clickDuringListRefresh(tab, sessionId) {
 // The background load: one visible and two hidden tabs on the open session, the background session running a held turn,
 // the task-tree driver renaming `renamed` at the live rate, and `churn` carrying the status churn — the turn churn it
 // broadcasts and the trigger churn it does not. The visible tab shows the sidebar view `filter` (null: the Workspace);
-// the hidden tabs show the Workspace. `body` runs inside the load, which ends on every path.
-async function withBackground(ctx, { label, filter, renamed, churn }, body) {
+// the hidden tabs show the Workspace. `body` runs inside the load, which ends on every path. Exported for the
+// For-you scenario's switch cells, which measure under the same load the diagnostic run they replace used.
+export async function withBackground(ctx, { label, filter, renamed, churn }, body) {
   const { api, sessions } = ctx;
   return withLink(ctx, label, ['visible', 'hidden-1', 'hidden-2'], async ({ proxy, tabs, tab, hidden }) => {
     const open = sessions.open;

@@ -656,6 +656,7 @@ fn index_answer(
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
     "session_bootstrap_json": SESSION_BOOTSTRAP_PLACEHOLDER,
+    "for_you_rule": charliebot_store::for_you::page_rule(),
     "active_session": active_session,
     "shell": shell,
     "pending_draft": pending_draft,
@@ -1636,5 +1637,14 @@ mod tests {
     let answer = preload_answer(&preload).expect("a preload is answered without the page");
     assert_eq!(answer.status(), StatusCode::NO_CONTENT);
     assert!(preload_answer(&HeaderMap::new()).is_none());
+  }
+
+  /// The index head script declares `FOR_YOU_RULE` from the context's `for_you_rule`, which `index_answer` sets from the
+  /// store's rule. A page without the declaration gives the For-you view no rule, so it shows no row.
+  #[test]
+  fn the_index_page_declares_the_store_for_you_rule() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repo");
+    let template = std::fs::read_to_string(repo_root.join("web/templates/index.html")).expect("the index template reads");
+    assert!(template.contains("const FOR_YOU_RULE = {{ for_you_rule|tojson }};"));
   }
 }

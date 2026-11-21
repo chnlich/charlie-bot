@@ -59,7 +59,7 @@ const WARM_REPORT_INIT =
 const COPY_REFRESH_INIT =
   "document.addEventListener('charliebot:offline-shell-copies-refreshed', (event) => { " +
   "window.__copyRefresh = event.detail; });";
-const PREP_INIT = `${WARM_REPORT_INIT}\n${COPY_REFRESH_INIT}`;
+export const PREP_INIT = `${WARM_REPORT_INIT}\n${COPY_REFRESH_INIT}`;
 // The request a browser makes before a repetition to open a connection that stays idle in its pool. A and B have
 // opened CharlieBot before, so their browsers hold such a connection; C's does not, so it holds none.
 const PRECONNECT_PATH = '/api/concurrency/now';

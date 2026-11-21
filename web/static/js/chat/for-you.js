@@ -28,7 +28,8 @@
 const FOR_YOU = 'foryou';
 const EVERYTHING = 'everything';
 const STATUS = 'status';
-const SHOWN_ROLES = ['user', 'web_reply', 'web_reply_notice', 'draft'];
+// The roles For you shows, from FOR_YOU_RULE (the store's for_you module).
+const SHOWN_ROLES = FOR_YOU_RULE.roles;
 // The manual view choice of each session on this page: the message view the
 // engine mounts, and whether the Status view is selected on top of it. A reload
 // empties the map, as the sidebar's expanded nodes reset.

@@ -2115,8 +2115,10 @@ backends:
     assert!(serde_json::to_vec(&rows).unwrap().len() <= FOR_YOU_MAX_JSON_BYTES);
   }
 
-  /// The scan reads 2,000 event lines back from the line it starts at and no further.
+  /// The scan reads 2,000 event lines back from the line it starts at and no further. The fixture appends 2,600 event
+  /// lines one write at a time, which is past the unit-test time bound, so the test runs with the integration suite.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_for_you_scan_stops_at_its_2000_line_bound() {
     let (_home, features) = feature_context();
     let meta = crate::test_support::create_node(&features.store, "for-you-bound", None, TaskProfile::Manager).await;

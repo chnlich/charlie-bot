@@ -3,6 +3,7 @@
 use serde_json::{Map, Value, json};
 
 use charliebot_core::event_types;
+use charliebot_store::metadata::EXIT_CODE_FIELD;
 
 pub fn make_text_event(text: &str) -> Value {
   json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}})
@@ -15,7 +16,7 @@ pub fn make_error_event(message: &str) -> Value {
 pub fn make_master_done_event(exit_code: i32, still_thinking: bool) -> Value {
   json!({
     "type": event_types::MASTER_DONE,
-    "exit_code": exit_code,
+    (EXIT_CODE_FIELD): exit_code,
     event_types::STILL_THINKING: still_thinking
   })
 }

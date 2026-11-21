@@ -119,8 +119,8 @@ pub const REPO_PATH_FIELD: &str = "repo_path";
 /// The branch a task, its plan and its run record branch from. The delegate request, the improve request, the plan
 /// request and the run record carry the same name, so it is spelled once, here.
 pub const BASE_BRANCH_FIELD: &str = "base_branch";
-/// The thread-metadata field named `exit_code`. The store's thread field list and Claude Code's slot anchor carry the
-/// same name, so it is spelled once, here.
+/// The field named `exit_code`: a run's process exit code in thread metadata, run records and the events that end
+/// a run. Production readers and writers name it through this const.
 pub const EXIT_CODE_FIELD: &str = "exit_code";
 /// The session-metadata field naming the backend that runs the session. The delegate request and the improve request
 /// carry the same name, so it is spelled once, here.

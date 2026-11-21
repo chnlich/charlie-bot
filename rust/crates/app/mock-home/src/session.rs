@@ -10,6 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use charliebot_core::event_types;
+use charliebot_store::metadata::EXIT_CODE_FIELD;
 use charliebot_store::run_records;
 use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use serde::Serialize;
@@ -135,7 +136,7 @@ fn opens_turn(event: &Value) -> bool {
 fn master_done_event(rng: &mut Rng, timestamp: &str) -> Value {
   json!({
     "type": event_types::MASTER_DONE,
-    "exit_code": 0,
+    (EXIT_CODE_FIELD): 0,
     event_types::STILL_THINKING: false,
     event_types::THINKING_SECONDS: rng.range(1, 120),
     "timestamp": timestamp,

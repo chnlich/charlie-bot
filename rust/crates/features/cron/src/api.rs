@@ -412,7 +412,7 @@ mod tests {
         "prompt_file": prompt,
         "backend": "synthetic",
         "project": "synthetic-project",
-        "improve_host": "host3",
+        "improve_host": "remote-test-host",
         "ignored": "discarded",
       }),
     )
@@ -453,22 +453,23 @@ mod tests {
 
   #[tokio::test]
   async fn list_shows_the_file_host_and_update_preserves_it() {
-    let (home, features) = feature_context_with_login_hosts(&["host3"]);
-    let path = write_prompted_task(home.path(), "hosted-task", &json!({"cron":"0 8 * * *", "improve_host":"host3"}));
+    let (home, features) = feature_context_with_login_hosts(&["remote-test-host"]);
+    let path =
+      write_prompted_task(home.path(), "hosted-task", &json!({"cron":"0 8 * * *", "improve_host":"remote-test-host"}));
     let router = routes(&features);
 
     let (status, listed) = send(&router, "GET", "/api/cron/tasks", json!(null)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed[0]["name"], "hosted-task");
-    assert_eq!(listed[0]["improve_host"], "host3");
+    assert_eq!(listed[0]["improve_host"], "remote-test-host");
 
     let (status, updated) =
       send(&router, "PUT", "/api/cron/tasks/hosted-task", json!({"enabled": false, "improve_host": "host9"})).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["enabled"], false);
-    assert_eq!(updated["improve_host"], "host3");
+    assert_eq!(updated["improve_host"], "remote-test-host");
     let persisted = serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(persisted["improve_host"].as_str(), Some("host3"));
+    assert_eq!(persisted["improve_host"].as_str(), Some("remote-test-host"));
   }
 
   #[tokio::test]

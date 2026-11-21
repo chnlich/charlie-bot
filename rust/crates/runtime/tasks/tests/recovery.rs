@@ -574,7 +574,7 @@ async fn boot_reattach_holds_the_login_each_live_process_environ_names() -> anyh
     Stack::start_with_package(vec![option], vec![BACKEND_ID.to_string()], ("reattach_pool", register_reattach_pool))
       .await?;
   let mut keyed_spec = script_run_spec();
-  keyed_spec.improve_host = Some("host3".to_string());
+  keyed_spec.improve_host = Some("remote-test-host".to_string());
   let keyed = stack.node("keyed", None, TaskProfile::Worker, Some(keyed_spec)).await?;
   let plain = stack.node("plain", None, TaskProfile::Worker, Some(script_run_spec())).await?;
 

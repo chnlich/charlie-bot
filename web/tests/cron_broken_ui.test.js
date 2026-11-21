@@ -220,7 +220,7 @@ test('a cron module that lands while the page still parses repaints nothing', ()
 const PROMPT_TASK = {
   name: 'weekly', cron: '0 7 * * 1', timezone: 'UTC', enabled: true, session_id: 's1', prompt_file: 'p.md',
   prompt: 'Summarize the day', repo: '/repo', allow_failure: false, mode: 'worker', handler: null,
-  improve_host: 'host3', steps: null, broken: false,
+  improve_host: 'remote-test-host', steps: null, broken: false,
 };
 const MASTER_TASK = {
   name: 'okr-envelope-weekly', cron: '0 17 15 12 *', timezone: 'UTC', enabled: true, session_id: 's1',
@@ -281,7 +281,7 @@ test('a prompt task shows its schedule, its set settings and its prompt, with no
   assert.ok(html.includes('0 7 * * 1 (UTC)'), 'the Schedule field reads the cron and its timezone');
   assert.ok(html.includes('<field label="Mode">worker</field>'), html);
   assert.ok(html.includes('<field label="Repo">/repo</field>'), html);
-  assert.ok(html.includes('<field label="Improve host">host3</field>'), html);
+  assert.ok(html.includes('<field label="Improve host">remote-test-host</field>'), html);
   assert.ok(html.includes('<field label="Prompt file">p.md</field>'), html);
   assert.ok(html.includes('<field label="Prompt"><prose><md>Summarize the day</md></prose></field>'), html);
   assert.ok(!html.includes('label="Enabled"') && !html.includes('Enabled:'), 'an enabled task omits the default line');

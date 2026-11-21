@@ -28,14 +28,14 @@ fn settings_expand_the_home_variable_and_a_tilde() {
   let home = Path::new("/synthetic/home");
   let configured = parse(
     "\
-repository: sftp:host3:/synthetic/repository
+repository: sftp:backup-host:/synthetic/repository
 password_file: $CHARLIEBOT_HOME/secrets/backup-restic.key
 ",
   );
   assert_eq!(
     configured.settings(home).unwrap(),
     ResticSettings {
-      repository: "sftp:host3:/synthetic/repository".to_string(),
+      repository: "sftp:backup-host:/synthetic/repository".to_string(),
       password_file: PathBuf::from("/synthetic/home/secrets/backup-restic.key"),
     }
   );

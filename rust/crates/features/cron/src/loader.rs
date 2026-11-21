@@ -722,33 +722,37 @@ mod tests {
 
   #[test]
   fn improve_host_is_checked_per_file_against_the_login_hosts_and_refused_off_a_prompted_worker_task() {
-    let (home, features) = feature_context_with_login_hosts(&["host3"]);
+    let (home, features) = feature_context_with_login_hosts(&["remote-test-host"]);
     let cfg = features.config.get().unwrap();
     let prompt = write_prompt(home.path(), "prompt.md", "Synthetic body\n");
-    write_task(&cfg, "keyed", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "improve_host":"host3"}));
+    write_task(&cfg, "keyed", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "improve_host":"remote-test-host"}));
     write_task(&cfg, "other-host", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "improve_host":"host9"}));
     write_task(
       &cfg,
       "master",
-      &json!({"cron":"0 8 * * *", "prompt_file":prompt, "mode":"master", "improve_host":"host3"}),
+      &json!({"cron":"0 8 * * *", "prompt_file":prompt, "mode":"master", "improve_host":"remote-test-host"}),
     );
-    write_task(&cfg, "handler", &json!({"cron":"0 8 * * *", "handler":"synthetic_handler", "improve_host":"host3"}));
+    write_task(
+      &cfg,
+      "handler",
+      &json!({"cron":"0 8 * * *", "handler":"synthetic_handler", "improve_host":"remote-test-host"}),
+    );
     write_task(
       &cfg,
       "steps",
-      &json!({"cron":"0 8 * * *", "steps":[{"name":"first", "prompt_file":prompt}], "improve_host":"host3"}),
+      &json!({"cron":"0 8 * * *", "steps":[{"name":"first", "prompt_file":prompt}], "improve_host":"remote-test-host"}),
     );
 
     let snapshot = load_snapshot(&features, &cfg).unwrap();
 
     assert_eq!(snapshot.tasks.iter().map(|task| task.name.as_str()).collect::<Vec<_>>(), ["keyed"]);
-    assert_eq!(snapshot.tasks[0].improve_host.as_deref(), Some("host3"));
+    assert_eq!(snapshot.tasks[0].improve_host.as_deref(), Some("remote-test-host"));
     let logins = &cfg
       .section_value("host_auth")
       .and_then(|value| value.downcast_ref::<HostAuthConfig>())
       .expect("host_auth parses as HostAuthConfig")
       .browser_logins;
-    assert_eq!(logins[0].host.as_deref(), Some("host3"));
+    assert_eq!(logins[0].host.as_deref(), Some("remote-test-host"));
     assert_eq!(logins[0].input_prompt.as_deref(), Some("synthetic-code"), "the Phase 1 input_prompt survives the load");
     assert_eq!(logins[0].lifetime_sec, Some(86400), "the Phase 1 lifetime_sec survives the load");
     assert_eq!(

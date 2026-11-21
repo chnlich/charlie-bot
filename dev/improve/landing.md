@@ -59,7 +59,7 @@ The round tools under `~/improve/runner/bin/` keep the current commit and the co
 
 `remote-runner.sh --member-cli <kind> <version>` runs the same install alone, prints what the installed CLI reports and starts no round, so an operator can check a version before a round needs it.
 
-These scripts run from the server's checkout at each launch, so a change reaches host3 rounds when the server runs a release that carries it.
+These scripts run from the server's checkout at each launch, so a change reaches rounds on the remote test host when the server runs a release that carries it.
 
 ## Step 1: set the clone
 

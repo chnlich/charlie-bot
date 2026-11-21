@@ -859,7 +859,7 @@ mod tests {
     let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
     let ctx = context(cfg, LaunchKind::Task, None, None, None);
     ctx.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
 
     let refusal = match ClaudeCodeLifecycle::new().place(&ctx).await {
       Err(refusal) => refusal,
@@ -903,7 +903,7 @@ mod tests {
     // A keyed run keeps the id: its transcript is on the improve host, and the run forwards a chosen login's token.
     let keyed = context(cfg, LaunchKind::Task, None, Some(held), None);
     keyed.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
     let launch = ClaudeCodeLifecycle::new().place(&keyed).await.unwrap();
     assert_eq!(launch.resume_id.as_deref(), Some(held));
     assert!(launch.account_label.is_some(), "the keyed task picks its login by the ordinary pool choice");
@@ -923,7 +923,7 @@ mod tests {
     let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
     let mut keyed = context(cfg.clone(), LaunchKind::Task, None, None, None);
     keyed.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
     keyed.run_id = Some("keyed-run".to_string());
 
     let launch = lifecycle.place(&keyed).await.unwrap();
@@ -978,7 +978,7 @@ mod tests {
 
     // A keyed run keeps the id: its transcript is on the improve host, so no local search decides.
     ctx.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
     assert_eq!(ClaudeCliLifecycle.checked_resume_id_for(&ctx, &config_dir).unwrap().as_deref(), Some(held));
   }
 
@@ -1024,7 +1024,7 @@ mod tests {
     let ctx = context(cfg, LaunchKind::Task, None, None, None);
     if keyed {
       ctx.session_meta.lock().unwrap().task =
-        Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+        Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
     }
     let account =
       claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };

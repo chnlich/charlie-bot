@@ -1919,7 +1919,7 @@ mod tests {
       backend,
       LaunchArgs {
         log_dir: Some(root.path().join("logs")),
-        remote_launch: Some(RemoteLaunch { launcher: launcher.clone(), host: "host3".to_string() }),
+        remote_launch: Some(RemoteLaunch { launcher: launcher.clone(), host: "remote-test-host".to_string() }),
         extra_flags: Vec::new(),
         buffer_limit: None,
         instructions_content: None,
@@ -1942,7 +1942,7 @@ mod tests {
     assert_eq!(outcome.exit_code, Some(0));
     assert_eq!(
       fs::read_to_string(&record).unwrap().lines().collect::<Vec<_>>(),
-      ["host3", "/bin/sh", "-c", "printf 'ran\\n'"],
+      ["remote-test-host", "/bin/sh", "-c", "printf 'ran\\n'"],
     );
   }
 

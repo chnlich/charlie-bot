@@ -1151,10 +1151,10 @@ mod tests {
       keep_worktree: plain.keep_worktree,
       cold_read: plain.cold_read,
       approver: plain.approver,
-      improve_host: Some("host3".to_string()),
+      improve_host: Some("remote-test-host".to_string()),
     };
     let keyed_json = serde_json::to_value(&keyed).unwrap();
-    assert_eq!(keyed_json["improve_host"], "host3");
+    assert_eq!(keyed_json["improve_host"], "remote-test-host");
     assert_eq!(serde_json::from_value::<TaskSpec>(keyed_json).unwrap(), keyed);
   }
 

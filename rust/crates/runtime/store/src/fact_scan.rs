@@ -17,7 +17,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use charliebot_core::event_types;
@@ -52,6 +52,30 @@ const CHAT_CONTENT_TYPES: [&str; 9] = [
   event_types::MASTER_DONE,
 ];
 
+/// What one fold books on the history counters. A fold from the node's first event books one full fold and every event
+/// it covers. A fold that extends a checkpoint's facts books only the tail events it read, as a suffix extension.
+#[derive(Clone, Copy)]
+enum FoldBooking {
+  /// A fold from the node's first event, over `events` archived and live events.
+  Full { events: u64 },
+  /// An extension of a checkpoint's facts, over `events` log events past the checkpoint's offset.
+  Suffix { events: u64 },
+}
+
+impl FoldBooking {
+  /// Adds this fold to the full-fold and folded-event counters.
+  fn book(self, full_folds: &AtomicU64, folded_events: &AtomicU64) {
+    let events = match self {
+      Self::Full { events } => {
+        full_folds.fetch_add(1, Ordering::Relaxed);
+        events
+      }
+      Self::Suffix { events } => events,
+    };
+    folded_events.fetch_add(events, Ordering::Relaxed);
+  }
+}
+
 /// A live log's facts, scanned outside the session lock for a later [`Store::seal_scanned_facts`].
 pub struct ScannedLiveFacts {
   identity: FileIdentity,
@@ -67,6 +91,8 @@ pub struct ScannedLiveFacts {
   checkpoint_bytes: u64,
   /// The live-log offset the checkpoint covered. A tail of an eighth of it or more is cheaper rescanned whole.
   resume_offset: u64,
+  /// What the scan books on the history counters when it is folded.
+  booking: FoldBooking,
 }
 
 impl LivePromptChanges {
@@ -107,11 +133,6 @@ impl ScannedLiveFacts {
     (self.identity, self.archived)
   }
 
-  /// The events the scan folded: the archived events and the live log's events.
-  pub(crate) fn folded_events(&self) -> u64 {
-    (self.archived + self.covered) as u64
-  }
-
   /// The bytes the scan read from its fact checkpoint, 0 when it scanned the log whole.
   pub fn checkpoint_bytes(&self) -> u64 {
     self.checkpoint_bytes
@@ -142,6 +163,7 @@ struct FoldedNodeFacts {
   identity: FileIdentity,
   archived: usize,
   covered: usize,
+  booking: FoldBooking,
   facts: Arc<NodeFacts>,
   runs: Arc<RunFacts>,
   prompt_changes: LivePromptChanges,
@@ -205,6 +227,7 @@ impl Store {
       read_bytes: file.len() as u64,
       checkpoint_bytes: 0,
       resume_offset: file.len() as u64,
+      booking: FoldBooking::Full { events: (archived + events.len()) as u64 },
     }))
   }
 
@@ -258,6 +281,7 @@ impl Store {
       read_bytes: (file.len() - offset) as u64,
       checkpoint_bytes,
       resume_offset,
+      booking: FoldBooking::Suffix { events: tail.len() as u64 },
     }))
   }
 
@@ -298,13 +322,13 @@ impl Store {
     }
   }
 
-  /// The cold node-state read of a session with a live log. A scanned snapshot counts one node-state fold and seals
-  /// its state under the snapshot's identity; the cache's events answer through the warm state path.
+  /// The cold node-state read of a session with a live log. A scanned snapshot books its fold, as one node-state fold
+  /// for a full scan and as a suffix extension for a checkpoint's tail, and seals its state under the snapshot's
+  /// identity. The cache's events answer through the warm state path.
   pub(crate) fn cold_node_state(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     match self.scan_cold_snapshot(session_id)? {
       ColdSnapshot::Scanned(scanned) => {
-        self.history_work.node_state_full_folds.fetch_add(1, Ordering::Relaxed);
-        self.history_work.node_state_folded_events.fetch_add(scanned.folded_events(), Ordering::Relaxed);
+        scanned.booking.book(&self.history_work.node_state_full_folds, &self.history_work.node_state_folded_events);
         let (sealed_identity, sealed_archived) = scanned.snapshot_key();
         let version = match self.sealed_state_version(session_id, sealed_identity, sealed_archived) {
           Some(version) => version,
@@ -383,6 +407,7 @@ impl Store {
       identity: scanned.identity,
       archived: scanned.archived,
       covered: scanned.covered,
+      booking: scanned.booking,
       facts: Arc::clone(&scanned.facts),
       runs: Arc::clone(&scanned.runs),
       prompt_changes: LivePromptChanges {
@@ -439,6 +464,7 @@ impl Store {
       identity,
       archived,
       covered,
+      booking: FoldBooking::Suffix { events: tail.len() as u64 },
       facts: Arc::clone(&facts),
       runs,
       prompt_changes,
@@ -448,9 +474,8 @@ impl Store {
 
   /// Memoize one node's folded facts, run facts and newest prompt facts under the log identity they cover.
   fn insert_facts(&self, folded: FoldedNodeFacts) {
-    let FoldedNodeFacts { session_id, identity, archived, covered, facts, runs, prompt_changes } = folded;
-    self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
-    self.history_work.folded_events.fetch_add((archived + covered) as u64, Ordering::Relaxed);
+    let FoldedNodeFacts { session_id, identity, archived, covered, booking, facts, runs, prompt_changes } = folded;
+    booking.book(&self.history_work.full_folds, &self.history_work.folded_events);
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(
       session_id.to_string(),
       CachedNodeFacts { key: NodeFactsKey::File(identity), list_identity: Arc::new(()), archived, covered, facts },

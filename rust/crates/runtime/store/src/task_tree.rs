@@ -21,7 +21,6 @@ use crate::event_types::ChatEvent;
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
-use crate::fact_scan::ColdSnapshot;
 use crate::layout;
 use crate::metadata::{
   EventRef, PROMPT_RULES_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_SCHEDULE_SLOTS, TASK_STATE,
@@ -629,25 +628,18 @@ impl Store {
         }
         if identity.is_some() {
           // A cold log folds from its scan and seal, which parse no chat content and keep no history.
-          if should_stop() {
-            return Ok(None);
-          }
-          match self.scan_cold_snapshot(session_id)? {
-            ColdSnapshot::Scanned(scanned) => return Ok(Some(scanned.facts())),
-            ColdSnapshot::Warm(events) => events,
-          }
-        } else {
-          let Some(events) = self.live_events_with_generation_until(session_id, should_stop)? else {
-            return Ok(None);
-          };
-          events
+          return self.cold_node_facts_until(session_id, should_stop);
         }
+        let Some(events) = self.live_events_with_generation_until(session_id, should_stop)? else {
+          return Ok(None);
+        };
+        events
       }
     };
     self.node_facts_of(session_id, generation, list_identity, &live, should_stop)
   }
 
-  fn node_facts_of(
+  pub(crate) fn node_facts_of(
     &self,
     session_id: &str,
     generation: u64,
@@ -812,27 +804,14 @@ impl Store {
           return Ok((version, self.node_state_view(session_id, facts)?));
         }
         // The scan folds the log's snapshot and its seal memoizes the state, so a later read answers without a scan.
-        let scanned = match self.scan_cold_snapshot(session_id)? {
-          ColdSnapshot::Scanned(scanned) => scanned,
-          ColdSnapshot::Warm((generation, list_identity, live)) => {
-            return self.node_state_of(session_id, generation, list_identity, &live);
-          }
-        };
-        self.history_work.node_state_full_folds.fetch_add(1, Ordering::Relaxed);
-        self.history_work.node_state_folded_events.fetch_add(scanned.folded_events(), Ordering::Relaxed);
-        let (sealed_identity, sealed_archived) = scanned.snapshot_key();
-        let version = match self.sealed_state_version(session_id, sealed_identity, sealed_archived) {
-          Some(version) => version,
-          None => self.next_node_state_version.fetch_add(1, Ordering::Relaxed),
-        };
-        return Ok((version, self.node_state_from(session_id, scanned.facts(), scanned.runs())?));
+        return self.cold_node_state(session_id);
       }
     };
     self.node_state_of(session_id, generation, list_identity, &live)
   }
 
   /// The version of the memoized state that covers `identity` at `archived`, when one does.
-  fn sealed_state_version(&self, session_id: &str, identity: FileIdentity, archived: usize) -> Option<u64> {
+  pub(crate) fn sealed_state_version(&self, session_id: &str, identity: FileIdentity, archived: usize) -> Option<u64> {
     let states = self.node_state_cache.lock().expect("node-state cache mutex is not poisoned");
     states
       .get(session_id)
@@ -841,7 +820,7 @@ impl Store {
   }
 
   /// [`Store::node_state_versioned`] for a caller that holds the live events and their cache generation.
-  fn node_state_of(
+  pub(crate) fn node_state_of(
     &self,
     session_id: &str,
     generation: u64,
@@ -898,7 +877,7 @@ impl Store {
 
   /// A node state from the facts and run facts one fold produced. Malformed task facts keep the session's whole event
   /// list for the state's report, which is the one history load a state read makes, and only for a malformed task.
-  fn node_state_from(
+  pub(crate) fn node_state_from(
     &self,
     session_id: &str,
     facts: Arc<NodeFacts>,

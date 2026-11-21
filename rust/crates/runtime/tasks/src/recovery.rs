@@ -2588,7 +2588,12 @@ mod tests {
     let bytes = std::fs::read(&path).expect("the suffix fold leaves its checkpoint");
     let header_end = bytes.iter().position(|byte| *byte == b'\n').expect("the checkpoint has a header line");
     let header: Value = serde_json::from_slice(&bytes[..header_end]).expect("the checkpoint header is JSON");
-    let archived = header["archived"].as_u64().expect("the checkpoint records its archived prefix");
+    let archived = store
+      .read_metadata_fresh(session_id)
+      .expect("the node metadata reads")
+      .expect("the node metadata exists")
+      .archive_offset
+      .max(0) as u64;
     let covered = header["covered"].as_u64().expect("the checkpoint records its covered live prefix");
     archived + covered
   }
@@ -2613,12 +2618,12 @@ mod tests {
     assert_eq!(
       small.folded_events + small_prefix,
       small_events as u64,
-      "each event folds once across checkpoint and window: one={small:?}"
+      "each event folds once across the checkpoint and the window"
     );
     assert_eq!(
       large.folded_events + large_prefix,
       large_events as u64,
-      "each event folds once across checkpoint and window: many={large:?}"
+      "each event folds once across the checkpoint and the window"
     );
   }
 

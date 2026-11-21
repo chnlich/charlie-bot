@@ -78,7 +78,7 @@ mod tests {
 
   use charliebot_core::RepoRoot;
   use charliebot_core::test_support::synthetic_config;
-  use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
+  use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
 
   use super::*;
 
@@ -92,7 +92,12 @@ mod tests {
     meta.task = Some(TaskSpec {
       goal: "synthetic goal".to_string(),
       repo_path: repo_path.map(str::to_string),
-      ..Default::default()
+      base_branch: None,
+      task_type: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: None,
     });
     meta
   }

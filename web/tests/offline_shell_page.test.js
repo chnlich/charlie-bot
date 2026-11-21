@@ -114,7 +114,7 @@ function buildPage({
         }
       },
     };
-    const registrationFor = noRegistration ? undefined : (registration ?? {active});
+    const registrationFor = noRegistration ? undefined : (registration ?? {active, update: async () => {}});
     context.navigator = {
       serviceWorker: {
         registered: [],
@@ -292,6 +292,25 @@ test('a reload past the stored shell marks the controlling worker stale first, a
   assert.deepEqual(page.context.replaced, [], 'the navigation waits for the worker');
   page.context.channels[0].port1.onmessage({data: {}});
   assert.deepEqual(page.context.replaced, ['https://charlie.test/?session=session-a&reloading=1']);
+});
+
+// The reload's update check fetches the release's worker script before the navigation, so the install starts at the
+// first stale 4409 rather than at the next warm.
+test('a reload past the stored shell starts the update check, and navigates after the worker replies', async () => {
+  const updates = [];
+  const registration = {
+    active: {postMessage: () => {}},
+    update: async () => { updates.push('update'); },
+  };
+  const page = buildPage({registration});
+  page.context.navigator.serviceWorker.controller = {postMessage: () => {}};
+  page.context.location.href = 'https://charlie.test/?session=session-a';
+  page.context.reloadPastStoredShell();
+  await settled();
+  assert.deepEqual(updates, ['update'], 'the release\'s worker script is checked before the reload');
+  assert.deepEqual(page.context.replaced, [], 'the navigation waits for the worker');
+  page.context.channels[0].port1.onmessage({data: {}});
+  assert.equal(page.context.replaced.length, 1);
 });
 
 // The cap bounds a stuck update: past PAGE_UPDATE_CAP_MS the warm reports an error, and the warm never waits longer.

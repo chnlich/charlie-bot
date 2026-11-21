@@ -14,6 +14,8 @@ const SHELL_KEY = ORIGIN + '/shell';
 const STORED_AT = 'X-CharlieBot-Stored-At';
 const NETWORK_ONLY = 'X-CharlieBot-Network-Only';
 const SESSION = 'session-a';
+const SHELL_FLAG_URL = ORIGIN + '/stale-shell';
+const STALE_NETWORK_CAP_MS = 5000;
 const BOOTSTRAP_URL = ORIGIN + '/api/sessions/' + SESSION + '/bootstrap';
 const LIST_URL = ORIGIN + '/api/sessions/?compact=1&screen=1&active=' + SESSION;
 
@@ -992,6 +994,49 @@ test('after a stale-shell mark a navigation goes to the network; offline the sto
   h.state.network = async () => { throw new TypeError('network unreachable'); };
   const offline = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
   assert.equal(await offline.response.text(), '<html>shell</html>', 'offline, the stored shell answers');
+});
+
+// A blackout holds the stale navigation's network attempt without a fast error: past the deadline the attempt is
+// aborted and the stored shell answers, so the offline view still opens.
+test('a stale navigation whose network attempt hangs past the deadline is answered from the stored shell', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const h = harness();
+  h.state.network = async () => new Response('<html>shell</html>', {status: 200, headers: {ETag: '"s"'}});
+  const warm = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [warm.port2]}).waits);
+  const mark = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'stale-shell'}, ports: [mark.port2]}).waits);
+
+  let aborted = false;
+  h.state.network = (req, init) => new Promise((resolve, reject) => {
+    init.signal.addEventListener('abort', () => {
+      aborted = true;
+      const error = new Error('the attempt was aborted');
+      error.name = 'AbortError';
+      reject(error);
+    });
+  });
+  const pending = answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  await flush();
+  assert.equal(aborted, false, 'the attempt waits for the network until the deadline');
+  t.mock.timers.tick(STALE_NETWORK_CAP_MS);
+  await flush();
+  const served = await pending;
+  assert.equal(aborted, true, 'the deadline aborts the attempt');
+  assert.equal(await served.response.text(), '<html>shell</html>', 'past the deadline the stored shell answers');
+});
+
+// The release's activation drops the stale flag an older release's worker set, so the flag never outlives that worker.
+test('activating a release drops the stale flag an older release set', async () => {
+  const cacheStorage = makeCaches();
+  const older = harness({version: 'v1', cacheStorage});
+  await Promise.all(older.fire('message', {data: {type: 'stale-shell'}, ports: [messageChannel().port2]}).waits);
+  const stateKeys = () => [...(cacheStorage.stores.get('offline-shell-state')?.keys() ?? [])];
+  assert.deepEqual(stateKeys(), [SHELL_FLAG_URL], 'the older release set its flag');
+
+  const newer = harness({version: 'v2', cacheStorage});
+  await Promise.all(newer.fire('activate', {}).waits);
+  assert.deepEqual(stateKeys(), [], 'the newer release\'s activation drops the flag');
 });
 
 test('a navigation that carries the reload parameter goes to the network, though a shell is stored', async () => {

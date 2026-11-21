@@ -30,6 +30,11 @@ const INDEX_KEY = self.location.origin + '/index';
 // shell a 4409 found older than the server (markShellStale).
 const STATE_CACHE = 'offline-shell-state';
 const STALE_SHELL_KEY = self.location.origin + '/stale-shell';
+// The longest a stale release's navigation waits for the network before the stored shell answers. A blackout drops
+// packets without a fast error, so the attempt needs a deadline. A 100 kbit/s page load takes about 8 s, so the
+// deadline sits a little under that: a slow link's stale navigation gives way to the stored shell, whose 4409 reload
+// then loads the network page (the reload itself is not deadline-bound).
+const STALE_NETWORK_CAP_MS = 5000;
 const STORED_AT_HEADER = 'X-CharlieBot-Stored-At';
 const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
 // The address parameter a reload past the stored shell carries (offline-shell.js reloadPastStoredShell). A navigation
@@ -61,6 +66,8 @@ async function activateCurrent() {
   // A stored-shell navigation is answered from this worker's copy. The browser's parallel preload request reaches
   // the chat route, which answers it with a 204 and no body; this worker never reads the preload response.
   await self.registration.navigationPreload.enable();
+  // The state cache holds only the stale flag, which an older release's worker set: this activation drops it.
+  await caches.delete(STATE_CACHE);
   const kept = [SHELL_CACHE, DATA_CACHE, FILE_CACHE];
   for (const name of await caches.keys()) {
     if (name.startsWith(COPY_PREFIX) && !kept.includes(name)) await caches.delete(name);
@@ -126,14 +133,26 @@ async function shellIsStale() {
 // The navigation's shell: the stored one, or the network's full page on the first load (no shell stored
 // yet). A worker that just started can match before the cache's disk index has settled, while the same
 // cache answers a moment later, so a miss re-reads twice before it falls back to the network.
+// The network page of a navigation a stale flag sends online. A network failure, or no answer by the deadline, leaves
+// the stored shell to answer, as the offline open needs.
+async function fetchStaleNavigation(request) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), STALE_NETWORK_CAP_MS);
+  try {
+    return await fetch(request, {signal: controller.signal});
+  } catch (error) {
+    if (error.name === 'TypeError' || error.name === 'AbortError') return undefined;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function answerShell(request) {
-  // A stale shell answers no online navigation. A network failure (the offline open) keeps the stored shell.
+  // A stale shell answers no online navigation while the network page can be had.
   if (await shellIsStale()) {
-    try {
-      return await fetch(request);
-    } catch (error) {
-      if (error.name !== 'TypeError') throw error;
-    }
+    const page = await fetchStaleNavigation(request);
+    if (page !== undefined) return page;
   }
   const cache = await caches.open(SHELL_CACHE);
   for (let attempt = 0; attempt < 3; attempt++) {

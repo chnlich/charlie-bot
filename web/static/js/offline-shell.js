@@ -289,11 +289,19 @@ window.addEventListener('charliebot:unauthorized', () => dropOfflineShellCopies(
 const RELOAD_PAST_SHELL_PARAM = 'reloading';
 
 // The worker that answered this page's shell learns that the server runs a newer release first, so the navigation the
-// reload makes goes to the network: a later navigation of this tab cannot take the same stale shell (4409 again).
+// reload makes goes to the network: a later navigation of this tab cannot take the same stale shell (4409 again). The
+// update check runs first, so the release's worker script is fetched and its install starts before the reload.
 function reloadPastStoredShell() {
   const url = new URL(location.href);
   url.searchParams.set(RELOAD_PAST_SHELL_PARAM, '1');
-  const controller = offlineShellSupported() ? navigator.serviceWorker.controller : null;
+  if (!offlineShellSupported()) {
+    location.replace(url.href);
+    return;
+  }
+  navigator.serviceWorker.getRegistration()
+      .then((registration) => registration?.update())
+      .catch((err) => console.warn('offline shell: the update check failed:', err));
+  const controller = navigator.serviceWorker.controller;
   if (!controller) {
     location.replace(url.href);
     return;

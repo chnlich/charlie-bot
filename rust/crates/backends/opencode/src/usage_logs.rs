@@ -166,7 +166,7 @@ fn record(message_id: &str, session_id: &str, data: &str) -> anyhow::Result<Opti
       utc_isoformat(number.as_f64().context("time.created is not a finite number")? / 1000.0)?
     }
     Some(Value::Bool(flag)) => utc_isoformat(f64::from(u8::from(*flag)) / 1000.0)?,
-    _ => String::new(),
+    Some(Value::Null | Value::String(_) | Value::Array(_) | Value::Object(_)) | None => String::new(),
   };
 
   Ok(Some(UsageRecord {
@@ -196,7 +196,7 @@ fn text_or(value: Option<&Value>, default: &str) -> anyhow::Result<String> {
     Some(value) if is_truthy(value) => {
       Ok(value.as_str().with_context(|| format!("{value} is not a string"))?.to_string())
     }
-    _ => Ok(default.to_string()),
+    Some(_) | None => Ok(default.to_string()),
   }
 }
 
@@ -204,7 +204,7 @@ fn text_or(value: Option<&Value>, default: &str) -> anyhow::Result<String> {
 fn count(value: Option<&Value>) -> anyhow::Result<i64> {
   match value {
     Some(value) if is_truthy(value) => value.as_i64().with_context(|| format!("token count {value} is not an integer")),
-    _ => Ok(0),
+    Some(_) | None => Ok(0),
   }
 }
 

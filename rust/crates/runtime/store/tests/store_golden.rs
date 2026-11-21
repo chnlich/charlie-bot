@@ -574,7 +574,12 @@ async fn run_operations_share_record_and_fact_bytes() {
     assert_eq!(store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap().id, run_id);
   }
 
-  run_golden_helper("verify_runs", root.path(), &[]);
+  run_golden_helper_with_checkpoints(
+    "verify_runs",
+    root.path(),
+    &[],
+    &["finish/shared-home/sessions/00000000-0000-4000-8000-000000000101/data/fact_checkpoint.json"],
+  );
 }
 
 #[tokio::test]
@@ -680,9 +685,20 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
   );
   drop(guard);
 
-  run_golden_helper("verify_tasks", root.path(), &["python-task-home"]);
+  run_golden_helper_with_checkpoints(
+    "verify_tasks",
+    root.path(),
+    &["python-task-home"],
+    &["python-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json"],
+  );
   run_golden_helper("verify_tasks", root.path(), &["rust-task-home"]);
-  assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
+  assert_eq!(
+    normalized_files_with_expected_checkpoints(
+      &python_home,
+      &["sessions/synthetic-task-worker/data/fact_checkpoint.json"],
+    ),
+    normalized_files(&rust_home)
+  );
   rust_seed.invalidate_cache("synthetic-task-worker");
   rust_seed.invalidate_tree_index();
   assert_eq!(rust_seed.task_state("synthetic-task-worker").unwrap(), "archived");
@@ -722,7 +738,13 @@ async fn name_an_unnamed_node_from_a_corrupt_counter_the_same_way() {
     .await
     .unwrap();
   assert_eq!(node.name, "Session 2");
-  assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
+  assert_eq!(
+    normalized_files(&python_home),
+    normalized_files_with_expected_checkpoints(
+      &rust_home,
+      &["sessions/synthetic-counter-root/data/fact_checkpoint.json"],
+    )
+  );
 }
 
 #[tokio::test]
@@ -754,7 +776,13 @@ async fn archive_a_subtree_into_the_same_fact_bytes() {
   let leaf_facts =
     fs::read_to_string(rust_home.join("sessions/synthetic-archive-leaf/data/chat_events.jsonl")).unwrap();
   assert!(leaf_facts.contains("\"archived_with\": \"synthetic-archive-root\""));
-  assert_eq!(normalized_files(&python_home), normalized_files(&rust_home));
+  assert_eq!(
+    normalized_files(&python_home),
+    normalized_files_with_expected_checkpoints(
+      &rust_home,
+      &["sessions/synthetic-archive-root/data/fact_checkpoint.json"],
+    )
+  );
 }
 
 const FORK_ROOT_ID: &str = "synthetic-fork-root";
@@ -832,8 +860,16 @@ fn fresh_sessions(home: &Path, base: &BTreeSet<String>) -> Vec<String> {
 
 /// The home's normalized files, with each fresh session id replaced by one name: each implementation draws its own.
 fn normalized_home(home: &Path, base: &BTreeSet<String>) -> BTreeMap<PathBuf, Vec<u8>> {
+  normalized_home_with_expected_checkpoints(home, base, &[])
+}
+
+fn normalized_home_with_expected_checkpoints(
+  home: &Path,
+  base: &BTreeSet<String>,
+  expected_checkpoints: &[&str],
+) -> BTreeMap<PathBuf, Vec<u8>> {
   let fresh = fresh_sessions(home, base);
-  normalized_files(home)
+  normalized_files_with_expected_checkpoints(home, expected_checkpoints)
     .into_iter()
     .map(|(path, bytes)| {
       let mut path = path.to_string_lossy().into_owned();
@@ -876,7 +912,15 @@ async fn fork_and_elone_write_the_same_session_files_at_every_index() {
     let created = usize::from(!rust_refused);
     assert_eq!(fresh_sessions(&python_home, &base_sessions).len(), created, "{name}: python session dirs");
     assert_eq!(fresh_sessions(&rust_home, &base_sessions).len(), created, "{name}: rust session dirs");
-    assert_eq!(normalized_home(&python_home, &base_sessions), normalized_home(&rust_home, &base_sessions), "{name}");
+    assert_eq!(
+      normalized_home(&python_home, &base_sessions),
+      normalized_home_with_expected_checkpoints(
+        &rust_home,
+        &base_sessions,
+        &["sessions/synthetic-fork-root/data/fact_checkpoint.json"],
+      ),
+      "{name}"
+    );
   }
 }
 
@@ -967,7 +1011,11 @@ async fn delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
   assert!(created["task_spec_hash"].is_string());
   let base_sessions = session_names(&base);
   let python_files = normalized_home(&python_home, &base_sessions);
-  let rust_files = normalized_home(&shared_home, &base_sessions);
+  let rust_files = normalized_home_with_expected_checkpoints(
+    &shared_home,
+    &base_sessions,
+    &["sessions/synthetic-delegate-root/data/fact_checkpoint.json"],
+  );
   if python_files != rust_files {
     for (path, python_bytes) in &python_files {
       if rust_files.get(path) != Some(python_bytes) {
@@ -1805,9 +1853,13 @@ impl SequenceListingFields for TestSequenceListing {
 }
 
 fn run_golden_helper(mode: &str, root: &Path, extra: &[&str]) {
+  run_golden_helper_with_checkpoints(mode, root, extra, &[]);
+}
+
+fn run_golden_helper_with_checkpoints(mode: &str, root: &Path, extra: &[&str], expected_checkpoints: &[&str]) {
   let mut args = vec![mode];
   args.extend_from_slice(extra);
-  let _ = run_golden_helper_args(root, &args);
+  let _ = run_golden_helper_args_with_checkpoints(root, &args, expected_checkpoints);
 }
 
 fn run_golden_message_aggregator(events: &Value) -> Value {
@@ -1818,6 +1870,10 @@ fn run_golden_message_aggregator(events: &Value) -> Value {
 }
 
 fn run_golden_helper_args(root: &Path, args: &[&str]) -> String {
+  run_golden_helper_args_with_checkpoints(root, args, &[])
+}
+
+fn run_golden_helper_args_with_checkpoints(root: &Path, args: &[&str], expected_checkpoints: &[&str]) -> String {
   let fixture: Value = serde_json::from_str(GOLDEN_STORE_FIXTURE).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let calls = fixture["calls"].as_array().unwrap();
@@ -1834,7 +1890,7 @@ fn run_golden_helper_args(root: &Path, args: &[&str]) -> String {
   let expected_files = call["files"].as_array().unwrap();
   let stdout = materialize_fixture_text(call["stdout"].as_str().unwrap(), root);
   if args[0].starts_with("verify") {
-    assert_recorded_tree(root, expected_files);
+    assert_recorded_tree(root, expected_files, expected_checkpoints);
   } else if args[0] != "read_runs" {
     fs::remove_dir_all(root).unwrap();
     fs::create_dir_all(root).unwrap();
@@ -1890,7 +1946,7 @@ fn decode_hex(value: &str) -> Vec<u8> {
     .collect()
 }
 
-fn assert_recorded_tree(root: &Path, expected_files: &[Value]) {
+fn assert_recorded_tree(root: &Path, expected_files: &[Value], expected_checkpoints: &[&str]) {
   fn normalize_content(text: &str) -> Vec<u8> {
     let uuid = Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
     let timestamp = Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})").unwrap();
@@ -1909,7 +1965,7 @@ fn assert_recorded_tree(root: &Path, expected_files: &[Value]) {
       .to_string()
   }
 
-  let actual_files = normalized_files(root);
+  let actual_files = normalized_files_with_expected_checkpoints(root, expected_checkpoints);
   let mut actual = actual_files
     .into_iter()
     .map(|(path, content)| (normalize_path(path.to_str().unwrap()), content))
@@ -2009,8 +2065,7 @@ fn read_blockers(store: &Store) -> Value {
   json!({ "blockers": reasons })
 }
 
-/// The home's files for a parity comparison. The fact checkpoint is a Rust-only derived cache that a cold read writes
-/// and the Python reference never does, so the comparison leaves it out and covers every other file.
+/// The home's files for a parity comparison.
 fn normalized_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
   fn normalize(text: &str) -> Vec<u8> {
     use std::sync::OnceLock;
@@ -2036,7 +2091,7 @@ fn normalized_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
       let path = entry.path();
       if entry.file_type().unwrap().is_dir() {
         collect(root, &path, output);
-      } else if entry.file_name().to_str() != Some(FACT_CHECKPOINT_FILE_NAME) {
+      } else {
         let bytes = fs::read(&path).unwrap();
         let normalized = match std::str::from_utf8(&bytes) {
           Ok(text) => normalize(text),
@@ -2050,6 +2105,30 @@ fn normalized_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
   let mut output = BTreeMap::new();
   collect(root, root, &mut output);
   output
+}
+
+/// Compare every file except the checkpoint paths the test expects this Rust read to write.
+fn normalized_files_with_expected_checkpoints(
+  root: &Path,
+  expected_checkpoints: &[&str],
+) -> BTreeMap<PathBuf, Vec<u8>> {
+  let mut files = normalized_files(root);
+  let expected = expected_checkpoints.iter().map(PathBuf::from).collect::<BTreeSet<_>>();
+  let actual = files
+    .keys()
+    .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some(FACT_CHECKPOINT_FILE_NAME))
+    .cloned()
+    .collect::<BTreeSet<_>>();
+  assert_eq!(actual, expected, "Rust wrote the expected fact checkpoint paths");
+  for path in expected {
+    let bytes = files.remove(&path).expect("the expected fact checkpoint is present");
+    let header_end = bytes.iter().position(|byte| *byte == b'\n').expect("the checkpoint has a header line");
+    let header: Value = serde_json::from_slice(&bytes[..header_end]).expect("the checkpoint header is JSON");
+    assert!(header["archived"].as_u64().is_some(), "the checkpoint records its archived prefix");
+    assert!(header["covered"].as_u64().is_some(), "the checkpoint records its covered live prefix");
+    assert!(header["offset"].as_u64().is_some(), "the checkpoint records its live-log offset");
+  }
+  files
 }
 
 fn gate_node_ids(name: &str) -> (String, String, String) {

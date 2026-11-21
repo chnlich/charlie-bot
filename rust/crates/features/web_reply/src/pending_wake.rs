@@ -409,11 +409,10 @@ mod tests {
   async fn a_running_101st_child_on_the_last_page_passes() {
     let home = new_home();
     let root = home.manager("root", None).await;
-    for index in 0..100 {
-      home.worker(&root, &format!("child-{index:03}")).await;
+    for index in 0..101 {
+      home.seed_worker(&format!("child-{index:03}"), Some(&root));
     }
-    let last = home.worker(&root, "child-100").await;
-    running_run(&home, &last);
+    running_run(&home, "child-100");
     assert_eq!(answer(&home, &web_turn(&root)).await, CheckResult::Pass);
   }
 
@@ -422,7 +421,7 @@ mod tests {
     let home = new_home();
     let root = home.manager("root", None).await;
     for index in 0..101 {
-      home.worker(&root, &format!("child-{index:03}")).await;
+      home.seed_worker(&format!("child-{index:03}"), Some(&root));
     }
     assert_eq!(answer(&home, &web_turn(&root)).await, CheckResult::Block(BLOCK_REASON.to_string()));
   }

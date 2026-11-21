@@ -251,13 +251,22 @@ impl Home {
 
   /// Seeds one manager row for tests whose behavior depends on a stored parent chain.
   pub fn seed_manager(&self, id: &str, parent: Option<&str>) {
-    let mut metadata = SessionMetadata::new(id, id, TaskProfile::Manager);
+    self.seed(id, parent, TaskProfile::Manager);
+  }
+
+  /// Seeds one worker row for tests whose behavior depends on a stored parent chain.
+  pub fn seed_worker(&self, id: &str, parent: Option<&str>) {
+    self.seed(id, parent, TaskProfile::Worker);
+  }
+
+  fn seed(&self, id: &str, parent: Option<&str>, profile: TaskProfile) {
+    let mut metadata = SessionMetadata::new(id, id, profile);
     metadata.backend = "synthetic-web".to_string();
     metadata.task_parent_id = parent.map(str::to_string);
     let path = self.features.store.metadata_path(id);
     fs::create_dir_all(path.parent().expect("metadata path has a session directory")).expect("session directory");
     fs::write(path, metadata.to_json_string(&self.features.registry.metadata_slots(), true))
-      .expect("manager metadata writes");
+      .expect("session metadata writes");
   }
 
   async fn create(&self, request: CreateTask, slots: Map<String, Value>) -> String {

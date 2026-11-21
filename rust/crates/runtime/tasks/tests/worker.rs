@@ -513,7 +513,8 @@ impl Setup {
       .ancestors()
       .nth(4)
       .context("tasks crate manifest has no repository root ancestor")?;
-    startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
+    let served_repo = charliebot_tasks::test_support::served_checkout(checkout, &home)?;
+    startup.insert(RepoRoot::new(Some(served_repo.into_os_string()))?)?;
     let config_value = Arc::new(cfg.clone());
     let config_reload =
       HotReload::new(cfg.config_file(), "worker_config_reload_failed", Box::new(move || Ok((*config_value).clone())));

@@ -697,9 +697,11 @@ impl Stack {
       .ancestors()
       .nth(4)
       .context("tasks crate manifest has no repository root ancestor")?;
+    let served_repo = super::served_checkout(checkout, &cfg.charliebot_home)?;
     let startup = Arc::new(StartupState::default());
-    startup
-      .insert(AgentBaseEnvironment { values: Stack::agent_base_env(&cfg.charliebot_home, checkout, "/usr/bin")? })?;
+    startup.insert(AgentBaseEnvironment {
+      values: Stack::agent_base_env(&cfg.charliebot_home, &served_repo, "/usr/bin")?,
+    })?;
     startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
     startup.insert(RotationPositions::default())?;
     startup.insert(BackendPool::new(
@@ -707,7 +709,7 @@ impl Stack {
       Arc::clone(&registry),
       startup.require::<RotationPositions>()?,
     ))?;
-    startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
+    startup.insert(RepoRoot::new(Some(served_repo.into_os_string()))?)?;
     let served = Arc::new(Mutex::new((*cfg).clone()));
     let config_source = Arc::clone(&served);
     let config_reload = HotReload::new(

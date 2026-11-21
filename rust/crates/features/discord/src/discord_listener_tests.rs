@@ -930,6 +930,7 @@ fn test_thread_check_blocks_a_summon_round_without_a_reply_then_notices_the_seco
     exit_code: 0,
     continuation_failed: false,
     status: Value::Null,
+    last_input_provenance: None,
     turn: vec![summon],
   };
   let first = check_thread_reply(&DISCORD, &input).unwrap();

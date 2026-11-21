@@ -20,8 +20,9 @@ use anyhow::Context;
 use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_core::RepoRoot;
 use charliebot_core::event_types::{
-  AGENT_MESSAGE, FROM_SESSION_NAME, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID, WEB_STATUS,
+  AGENT_MESSAGE, CHILD_REPORT, CHILD_SESSION_ID, FROM_SESSION_NAME, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID, WEB_STATUS,
 };
+use charliebot_core::text_repr::field_text;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::TurnContribution;
 use charliebot_store::MessageProvenance;
@@ -61,6 +62,9 @@ pub struct TurnInput {
   pub continuation_failed: bool,
   /// The session's stored status payload (goal, now, updated_at, waiting), or null when it stores none.
   pub status: Value,
+  /// The provenance fragment of the last received input's child report (`clone of <id>`), or null when that input is
+  /// not a report. The prompt names the report's source with it, so a check quotes the report as the prompt renders it.
+  pub last_input_provenance: Option<String>,
   /// The events since the previous `master_done`, in order, up to the call. An input the running run received carries
   /// `received_at`, the moment of its receipt.
   pub turn: Vec<Value>,
@@ -257,6 +261,23 @@ fn read_log(features: &FeatureContext, session_id: &str) -> anyhow::Result<Sessi
   Ok(SessionLog { turn, status })
 }
 
+/// The index of the turn's last input that the running run received: the last event with a `received_at` stamp.
+pub fn last_received_index(turn: &[Value]) -> Option<usize> {
+  turn.iter().rposition(|event| event["received_at"].is_string())
+}
+
+/// The provenance fragment of the turn's last received input when that input is a child report, else `None`. The
+/// dispatcher answers it as the prompt builder does, so the reminder quotes the report as the prompt renders it.
+async fn last_input_provenance(features: &FeatureContext, turn: &[Value]) -> anyhow::Result<Option<String>> {
+  let Some(index) = last_received_index(turn) else { return Ok(None) };
+  let input = &turn[index];
+  if input["type"] != CHILD_REPORT {
+    return Ok(None);
+  }
+  let child_id = field_text(input.get(CHILD_SESSION_ID));
+  Ok(crate::dispatch::dispatcher(features)?.child_report_provenance(&child_id).await?)
+}
+
 /// The turn's received inputs, each with the moment the running run received it, from the `received_at` stamps.
 pub fn received_receipts(turn: &[Value]) -> anyhow::Result<Vec<Receipt>> {
   let mut receipts = Vec::new();
@@ -385,6 +406,7 @@ pub(crate) async fn checkpoint(
     // Past the pending check, a block in this turn has run its continuation, and this checkpoint judges that run.
     continuation_failed: exit_code != 0 && log.turn.iter().any(is_block_record),
     status: log.status.clone(),
+    last_input_provenance: last_input_provenance(features, &log.turn).await?,
     turn: log.turn.clone(),
   };
   let mut ran = run_entries(&entries, &input, checkout.path(), ENTRY_TIMEOUT).await?;
@@ -506,6 +528,7 @@ mod tests {
       exit_code: 0,
       continuation_failed: false,
       status: Value::Null,
+      last_input_provenance: None,
       turn,
     }
   }

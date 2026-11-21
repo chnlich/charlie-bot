@@ -875,6 +875,7 @@ fn fakechat_turn(turn: Vec<Value>, exit_code: i64) -> TurnInput {
     exit_code,
     continuation_failed: false,
     status: Value::Null,
+    last_input_provenance: None,
     turn,
   }
 }

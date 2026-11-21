@@ -19,7 +19,7 @@ tmp_patterns="$tmp_dir/patterns"
 : > "$tmp_patterns"
 source "$script_dir/leak-patterns.sh"
 
-built_in_regex='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}|/data/(checkpoints|datasets|home)/|/home/[^/[:space:]]+/|\.ts\.net\b|[a-z][a-z0-9-]{2,}\.slack\.com'
+built_in_regex='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}|/data/(checkpoints|datasets|home)/|/home/[^/[:space:]]+/|\.ts\.net\b|\bhost3\b|[a-z][a-z0-9-]{2,}\.slack\.com'
 
 # A credential value shorter than this is left out of the check. The shortest credential this profile home holds is 25
 # characters; values of 11 characters and fewer are region names, booleans, ports and short user names, which ordinary

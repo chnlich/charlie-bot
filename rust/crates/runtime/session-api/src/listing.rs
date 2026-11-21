@@ -17,10 +17,11 @@ use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NATIVE_MODEL, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT,
-  ROUND_RATINGS, RUN_BACKEND, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_FIELDS,
-  SCHEDULE_NEXT_RUN, SCHEDULE_TASK, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
-  TASK_PARENT_ID_FIELD, TASK_SCHEDULE_SLOTS, THINKING_SINCE, TaskProfile, UPDATED_AT_FIELD, UtcDateTime, WORK_STATE,
+  CREATED_AT_FIELD, HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NATIVE_MODEL, NEXT_TRIGGER_AT,
+  PENDING_TRIGGER_COUNT, ROUND_RATINGS, RUN_BACKEND, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED,
+  SCHEDULE_FIELDS, SCHEDULE_NEXT_RUN, SCHEDULE_TASK, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD, SessionMetadata,
+  SessionStatus, TASK_PARENT_ID_FIELD, TASK_SCHEDULE_SLOTS, THINKING_SINCE, TaskProfile, UPDATED_AT_FIELD, UtcDateTime,
+  WORK_STATE,
 };
 use charliebot_store::sidebar_state::{HAS_PENDING_PLAN_APPROVAL, HAS_WAITING_ITEMS};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -1161,7 +1162,7 @@ fn drop_falsy_fields(value: &mut Value) {
 /// field. The tree listing orders and pages by `created_at` on the server, and `schema_version` is the store's own
 /// compatibility marker. On the 7,160-session mock home the two fields are 365,160 bytes of the page's 2,347,241-byte
 /// sidebar text.
-const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", SCHEMA_VERSION_FIELD];
+const UNREAD_PAGE_FIELDS: [&str; 2] = [CREATED_AT_FIELD, SCHEMA_VERSION_FIELD];
 
 /// Leave out the fields no page client reads, and an empty `round_ratings`.
 ///

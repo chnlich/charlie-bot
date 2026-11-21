@@ -1162,7 +1162,14 @@ fn a_start_removes_an_idle_directions_codex_login_and_keeps_a_live_rounds() {
   stop_live_round(&mut leader);
   let _ = fs::remove_file(&login);
 
-  assert_eq!(live_run.code, 0, "{}", live_run.describe());
+  // The clone sync refuses a live round of the direction before the sweep, so the second start exits 5 and the live
+  // login stays. The start refuses the live round's leader with that exit code, as the runner's header says.
+  assert_eq!(live_run.code, 5, "{}", live_run.describe());
+  assert!(
+    stderr(&live_run).contains("the previous round still runs"),
+    "a start did not refuse the live round:\n{}",
+    live_run.describe()
+  );
   assert!(kept.as_ref().is_ok_and(|login| login == "LIVE-CODEX-LOGIN"), "a start removed a live round's login");
 }
 

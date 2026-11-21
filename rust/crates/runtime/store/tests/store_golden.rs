@@ -578,7 +578,10 @@ async fn run_operations_share_record_and_fact_bytes() {
     "verify_runs",
     root.path(),
     &[],
-    &["finish/shared-home/sessions/00000000-0000-4000-8000-000000000101/data/fact_checkpoint.json"],
+    &[
+      "finish/shared-home/sessions/00000000-0000-4000-8000-000000000101/data/fact_checkpoint.json",
+      "repeat_finish/shared-home/sessions/00000000-0000-4000-8000-000000000101/data/fact_checkpoint.json",
+    ],
   );
 }
 
@@ -691,13 +694,25 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
     &["python-task-home"],
     &["python-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json"],
   );
-  run_golden_helper("verify_tasks", root.path(), &["rust-task-home"]);
+  run_golden_helper_with_checkpoints(
+    "verify_tasks",
+    root.path(),
+    &["rust-task-home"],
+    &[
+      "python-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json",
+      "rust-created-home/sessions/rust-created-root/data/fact_checkpoint.json",
+      "rust-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json",
+    ],
+  );
   assert_eq!(
     normalized_files_with_expected_checkpoints(
       &python_home,
       &["sessions/synthetic-task-worker/data/fact_checkpoint.json"],
     ),
-    normalized_files(&rust_home)
+    normalized_files_with_expected_checkpoints(
+      &rust_home,
+      &["sessions/synthetic-task-worker/data/fact_checkpoint.json"],
+    )
   );
   rust_seed.invalidate_cache("synthetic-task-worker");
   rust_seed.invalidate_tree_index();
@@ -914,11 +929,7 @@ async fn fork_and_elone_write_the_same_session_files_at_every_index() {
     assert_eq!(fresh_sessions(&rust_home, &base_sessions).len(), created, "{name}: rust session dirs");
     assert_eq!(
       normalized_home(&python_home, &base_sessions),
-      normalized_home_with_expected_checkpoints(
-        &rust_home,
-        &base_sessions,
-        &["sessions/synthetic-fork-root/data/fact_checkpoint.json"],
-      ),
+      normalized_home(&rust_home, &base_sessions),
       "{name}"
     );
   }

@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# The pre-push hook: refuses a push whose ref names, commit messages or diffs carry the exact value of a credential
+# that this process holds. The clone's hooks path runs it for every push, so the round's own pushes are checked too.
+#
+# git gives one line per ref: <local ref> <local sha> <remote ref> <remote sha>. The commits that a push publishes are
+# those the remote does not hold yet: remote..local, or, for a new branch, every commit that no remote ref reaches. Each
+# such commit's message and diff are checked, because a later commit that removes a value still publishes it in history.
+#
+# A credential hit prints the kind and the field, then exits 3; git's push then exits 1. When
+# CHARLIEBOT_CREDENTIAL_HIT_FILE names a file, the hit is also written there, so the caller of git push can pass the exit
+# code 3 through.
+set -euo pipefail
+
+helper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+scanner="$helper_dir/check-skills-host-leak.sh"
+
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+"$scanner" --credential-values > "$tmp_dir/values" || exit 2
+
+# check_text <field> <file>: exit 3 on a credential hit, and stop the push there.
+check_text() {
+  local field=$1 file=$2 status=0
+  "$scanner" --credential-check "$tmp_dir/values" "$field" < "$file" > "$tmp_dir/hit" || status=$?
+  case "$status" in
+    0) return 0 ;;
+    3)
+      cat -- "$tmp_dir/hit" >&2
+      printf 'nothing was pushed\n' >&2
+      if [[ -n "${CHARLIEBOT_CREDENTIAL_HIT_FILE:-}" ]]; then
+        cp -- "$tmp_dir/hit" "$CHARLIEBOT_CREDENTIAL_HIT_FILE"
+      fi
+      exit 3
+      ;;
+    *) exit "$status" ;;
+  esac
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # A deletion publishes no content.
+  [[ ! "$local_sha" =~ ^0+$ ]] || continue
+  printf '%s\n%s\n' "$local_ref" "$remote_ref" > "$tmp_dir/refs"
+  check_text 'ref name' "$tmp_dir/refs"
+  if [[ "$remote_sha" =~ ^0+$ ]]; then
+    shas=$(git rev-list "$local_sha" --not --remotes) \
+      || { printf 'cannot list the commits of %s for the credential check\n' "$local_ref" >&2; exit 2; }
+  else
+    shas=$(git rev-list "$remote_sha..$local_sha") \
+      || { printf 'cannot list the commits of %s for the credential check\n' "$local_ref" >&2; exit 2; }
+  fi
+  while IFS= read -r sha; do
+    [[ -n "$sha" ]] || continue
+    git show -s --format=%B "$sha" > "$tmp_dir/message"
+    check_text "commit $sha message" "$tmp_dir/message"
+    git show --format= --patch --no-color --no-ext-diff "$sha" > "$tmp_dir/diff"
+    check_text "commit $sha diff" "$tmp_dir/diff"
+  done <<< "$shas"
+done

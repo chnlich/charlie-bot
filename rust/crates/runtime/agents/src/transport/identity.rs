@@ -1,6 +1,8 @@
 //! Run identities delegate all procfs reads to `charliebot-core`.
 
-pub use charliebot_core::proc_identity::{ProcessStat, is_run_alive, read_host_boot_time, read_pid_stat};
+pub use charliebot_core::proc_identity::{
+  ProcessStat, is_run_alive, is_same_process, read_host_boot_time, read_pid_stat,
+};
 
 /// The process identity pinned before the launch callback runs.
 #[derive(Clone, Debug, PartialEq, Eq)]

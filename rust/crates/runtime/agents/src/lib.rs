@@ -13,6 +13,7 @@ pub mod launch_loop;
 pub mod local_work_guard;
 pub mod model_pool;
 pub mod one_shot;
+pub mod pool_display;
 pub mod runner;
 pub mod runs;
 pub mod ssh_guard;

@@ -548,7 +548,7 @@ fn merged_spans(records: &[(String, RunRecord)], now: OffsetDateTime) -> Vec<Spa
       Some(last) if last.session == span.session && last.manager == span.manager && span.start <= last.end => {
         last.end = last.end.max(span.end);
       }
-      _ => merged.push(span),
+      None | Some(_) => merged.push(span),
     }
   }
   merged

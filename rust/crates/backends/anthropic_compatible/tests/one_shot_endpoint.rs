@@ -77,5 +77,17 @@ fn endpoint_backend(type_fields: &str) -> Box<dyn AgentBackend> {
   };
   let home = tempfile::tempdir().unwrap();
   let cfg = Registry::new().load_config(home.path()).unwrap();
-  AnthropicCompatibleFactory.build(Some(&option), &cfg, LaunchArgs::default()).unwrap()
+  let launch = LaunchArgs {
+    extra_flags: Vec::new(),
+    buffer_limit: None,
+    instructions_content: None,
+    instructions_file: None,
+    resume_session_id: None,
+    log_dir: None,
+    cgroup_session_id: None,
+    remote_launch: None,
+    backend_kwargs: serde_json::Map::new(),
+    manager_turn: false,
+  };
+  AnthropicCompatibleFactory.build(Some(&option), &cfg, launch).unwrap()
 }

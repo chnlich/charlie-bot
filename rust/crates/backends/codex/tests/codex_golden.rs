@@ -558,9 +558,12 @@ fn check_argv(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec<
     let backend = build_backend(fx, &option_of(case), launch_of(case));
     let base = env_map(&fx.env_base());
     let prepared = backend.prepare_env(base.clone()).unwrap();
+    let command = backend.build_command(PROMPT).unwrap();
+    assert!(command.windows(2).any(|args| args == ["--config", "agents.enabled=false"]), "{command:?}");
+    assert!(command.windows(2).any(|args| args == ["--disable", "multi_agent_v2"]), "{command:?}");
     let mut rust = json!({
       "id": case["id"],
-      "argv": backend.build_command(PROMPT).unwrap(),
+      "argv": command,
       "env_delta": env_delta(&prepared, &base),
       "stdin": backend.stdin_prompt(PROMPT),
       "instructions_target": backend.instructions_target().map(|(file, event)| json!([file, event])),

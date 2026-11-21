@@ -252,7 +252,8 @@ fn register(
   let reminder = match verb {
     "present" => Some(PRESENT_REMINDER),
     "amend" => Some(AMEND_REMINDER),
-    _ => None,
+    "approve" | "close" => None,
+    _ => unreachable!("register takes the verbs present, amend, approve and close, not {verb}"),
   };
   if let Some(reminder) = reminder
     && let Value::Object(members) = &mut result
@@ -269,7 +270,7 @@ fn listing_plans(session_id: &str) -> Result<Option<Vec<Value>>, CliExit> {
   let listing = client::get(&route::fill(api::PLANS_PATH, &[session_id]), None)?;
   Ok(match listing.get("plans") {
     Some(Value::Array(plans)) => Some(plans.clone()),
-    _ => None,
+    None | Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_)) => None,
   })
 }
 
@@ -282,7 +283,7 @@ fn readback_plan(session_id: &str, readback: impl FnOnce(&[Value]) -> Option<Val
 fn same_file(left: Option<&str>, right: Option<&str>) -> bool {
   match (left, right) {
     (Some(left), Some(right)) => posix_path::normpath(left) == posix_path::normpath(right),
-    _ => false,
+    (None, None) | (Some(_), None) | (None, Some(_)) => false,
   }
 }
 
@@ -332,7 +333,7 @@ fn readback_approve(plans: &[Value], plan_id: Option<i64>) -> Option<Value> {
     .collect();
   match candidates.as_slice() {
     [plan] => Some(readback_verdict(plan)),
-    _ => None,
+    [] | [_, _, ..] => None,
   }
 }
 
@@ -349,7 +350,7 @@ fn build_diff(session_id: &str, args: &DiffArgs, lazy_host: &LazyHost) -> Result
   let listing = client::get(&route::fill(api::PLANS_PATH, &[session_id]), None)?;
   let plans: Vec<Value> = match listing.get("plans") {
     Some(Value::Array(plans)) => plans.clone(),
-    _ => Vec::new(),
+    None | Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_)) => Vec::new(),
   };
   let (plan, from_version, to_version) = resolve_diff_plan(&plans, args).map_err(CliExit::error)?;
   let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;

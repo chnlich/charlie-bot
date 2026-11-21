@@ -1,7 +1,1 @@
-[
-  {"name": "web-reply", "command": "charliebot hook web-reply"},
-  {"name": "web-status", "command": "charliebot hook web-status"},
-  {"name": "thread-reply", "command": "charliebot hook thread-reply"},
-  {"name": "pending-wake", "command": "charliebot hook pending-wake"},
-  {"name": "status-reread", "command": "charliebot hook status-reread"}
-]
+["web-reply", "web-status", "thread-reply", "pending-wake", "status-reread"]

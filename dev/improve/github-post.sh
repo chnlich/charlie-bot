@@ -2,10 +2,14 @@
 # The single entry point for a round's text-carrying GitHub writes.
 #
 # Every pull-request title, body, comment, commit message and branch name that a
-# round sends goes through here: the script first scans the text with the full
-# leak rules (dev/check-skills-host-leak.sh --stdin) and sends nothing on a
-# hit. Text that the scanner refused is rewritten by the caller and resubmitted,
-# so what reaches GitHub has always passed the check.
+# round sends goes through here. The script first scans the text for the exact
+# value of each credential the round holds, then with the leak rules
+# (dev/check-skills-host-leak.sh), and sends nothing on a hit. A leak-rule hit
+# is rewritten by the caller and resubmitted. A credential hit stops the round:
+# the scanner names the kind, and nothing is rewritten.
+#
+# The push subcommand's diffs are checked by the pre-push hook of the clone
+# (dev/git-hooks/pre-push), which this script runs through git push.
 #
 # Calls that carry no round-written text stay bare gh: gh pr update-branch,
 # gh run rerun, and the read-only calls. A merge goes through pr-merge, which
@@ -25,7 +29,8 @@
 #   github-post.sh pr-merge --evidence-dir <dir> <PR> [--repo <owner/repo>]
 #   github-post.sh push [git push args...]
 #
-# Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent).
+# Exit codes: 0 sent, 1 leak hit (nothing sent), 2 setup refusal (nothing sent),
+# 3 credential hit (nothing sent; the round stops).
 set -euo pipefail
 
 usage() {
@@ -50,10 +55,24 @@ if [[ ! -r "$patterns_file" ]]; then
 fi
 export EXTRA_PATTERNS_FILE="$patterns_file"
 
-# check_text <field> <file>: scan the file as one text.
-# A hit names the field; the scanner output above carries the matched lines.
+# The credential values of this process, read once: a setup refusal (exit 2) sends nothing.
+credential_values="$tmp_dir/credential-values"
+"$scanner" --credential-values > "$credential_values" || exit 2
+
+# check_text <field> <file>: scan the file as one text, first for the credential values, then with the leak rules.
+# The scanner output above names the hit: a credential hit prints its kind and field, a leak-rule hit the matched lines.
 check_text() {
   local field=$1 file=$2 status
+  set +e
+  "$scanner" --credential-check "$credential_values" "$field" < "$file"
+  status=$?
+  set -e
+  if [[ "$status" -eq 3 ]]; then
+    printf 'credential check hit in %s; nothing was sent. The round stops here: the kind named above is the reason.\n' \
+      "$field" >&2
+    exit 3
+  fi
+  [[ "$status" -eq 0 ]] || exit "$status"
   set +e
   "$scanner" --stdin < "$file"
   status=$?
@@ -321,9 +340,19 @@ case "$subcommand" in
     while IFS= read -r sha; do
       [[ -n "$sha" ]] || continue
       git show -s --format=%B "$sha" > "$tmp_dir/field"
-      check_text "commit $sha" "$tmp_dir/field"
+      check_text "commit $sha message" "$tmp_dir/field"
     done <<< "$commits"
-    git push "${orig_args[@]}"
+    # The pre-push hook checks each pushed diff. Its refusal exits git's push with 1, so the hook also writes the
+    # credential hit to this file, and the round's exit names the hit with code 3.
+    hit_file="$tmp_dir/credential-hit"
+    push_status=0
+    CHARLIEBOT_CREDENTIAL_HIT_FILE="$hit_file" git push "${orig_args[@]}" || push_status=$?
+    if [[ -s "$hit_file" ]]; then
+      cat -- "$hit_file" >&2
+      printf 'nothing was pushed; the round stops here: the kind named above is the reason.\n' >&2
+      exit 3
+    fi
+    exit "$push_status"
     ;;
   *)
     usage

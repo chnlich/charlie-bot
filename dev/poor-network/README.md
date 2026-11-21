@@ -354,7 +354,7 @@ parsed while it arrives, so its tail keeps only the last chunk's work: about 10 
 21.68 to 30.31 in six invocations of 2026-11-14 and 11-15. A reference repetition whose document crossed the link
 (`document_transfer_bytes` not below `document_body_bytes`) therefore gives no rate, and the run stops. The one
 revalidated open in the live log of Chao's other device (100.103.185.111, 2026-11-14) had a 282 ms tail, within 5% of
-`LIVE_CPU_TAIL`. On main 00574379c (2026-11-15), every reference document of nine open-scenario invocations on host3 was
+`LIVE_CPU_TAIL`. On main 00574379c (2026-11-15), every reference document of nine open-scenario invocations on the remote test host was
 a `304`. Eight gave median tails of 78.2 to 87.8 ms and rates of 3.38 to 3.8; the ninth, in a busier window of the host,
 gave tails of 78, 203.8 and 121.9 ms, so its median gave 2.44, and its loads ran two to three times as long as the other
 invocations' loads. At rate 3.8, A link's tail was 309 to 412 ms, against the live 297 ms. A median outlasts slow

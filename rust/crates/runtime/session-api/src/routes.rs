@@ -710,7 +710,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     let owned;
     let sessions: &[Arc<SessionMetadata>] = match &page {
       Some((rows, _)) if answer == StatusAnswer::Set => rows.as_slice(),
-      _ if probe => {
+      None | Some(_) if probe => {
         let source = if answer == StatusAnswer::Named {
           extra.as_slice()
         } else {

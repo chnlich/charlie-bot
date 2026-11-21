@@ -976,7 +976,7 @@ mod tests {
   #[ignore = "integration"]
   async fn amend_of_an_in_flight_lineage_keeps_its_landed_section_1_and_form() {
     let (_home, features) = plan_session("sess", Some(IN_FLIGHT_REGISTRY));
-    // v1 carried section 1 "Goal A." and no non-goals paragraph; v2 landed with section 1 "Goal B.".
+    // v1 carried section 1 "Goal A." and no non-goals paragraph. v2 landed with section 1 "Goal B.".
     write_plan_artifact(&features, "sess", "plan_01.html", &page_without_non_goals("Goal A."));
     write_plan_artifact(&features, "sess", "plan_02.html", &page_without_non_goals("Goal B."));
     // The candidate keeps B, changes other content, and adds no non-goals paragraph.

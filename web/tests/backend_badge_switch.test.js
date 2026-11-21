@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { readStatic, runIconModule } = require('./read_static');
 
 // Minimal fake for a badge element. `innerHTML` replacement produces a
 // queriable `select[data-backend-switch]` child; `textContent` assignment
@@ -39,13 +39,17 @@ function makeDocument(elements) {
   return { getElementById: (id) => elements.get(id) || null };
 }
 
-function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_POOL_MEMBER, ACTIVE_NATIVE_MODEL, SESSION_ID, fetchImpl}) {
+// The globals match the page's server render: the session's own backend, the backend the header reads, and the
+// member and model its records carry.
+function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_POOL_MEMBER, ACTIVE_NATIVE_MODEL, SESSION_ID, SESSION_BACKEND, ACTIVE_BACKEND_ID, fetchImpl}) {
   const context = {
     document: makeDocument(elements),
     console: { error: () => {}, log: () => {} },
     showToast: () => {},
     BACKEND_OPTIONS: BACKEND_OPTIONS || {},
     BACKEND_POOLS,
+    ACTIVE_SESSION_BACKEND: SESSION_BACKEND,
+    ACTIVE_BACKEND_ID,
     ACTIVE_POOL_MEMBER,
     ACTIVE_NATIVE_MODEL,
     SESSION_ID: SESSION_ID || 'session-a',
@@ -61,8 +65,12 @@ function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_PO
   context.window = { addEventListener() {} };
   context.document.addEventListener = () => {};
   vm.createContext(context);
+  runIconModule(context);
   vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
   vm.runInContext(readStatic('sidebar/last-state.js'), context, { filename: 'sidebar/last-state.js' });
+  // The page loads chat/shared.js before session-view.js; the header's label comes from its sessionModelLabel.
+  vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
+  vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
   vm.runInContext(readStatic('sidebar/session-view.js'), context, { filename: 'sidebar/session-view.js' });
   return context;
 }
@@ -192,6 +200,8 @@ test('an Auto session badge shows the label and the current member', () => {
     SESSION_ID: 'session-a',
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
     BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
+    SESSION_BACKEND: 'auto',
+    ACTIVE_BACKEND_ID: 'auto',
     ACTIVE_POOL_MEMBER: 'claude-opus-5',
   });
   context.setSwitchableBackends(['auto']);
@@ -207,6 +217,8 @@ test('an Auto session badge names the recorded model after its member', () => {
     SESSION_ID: 'session-a',
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
     BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
+    SESSION_BACKEND: 'auto',
+    ACTIVE_BACKEND_ID: 'auto',
     ACTIVE_POOL_MEMBER: 'claude-opus-5',
     ACTIVE_NATIVE_MODEL: 'claude-opus-5-5',
   });
@@ -237,6 +249,8 @@ test('the switch dropdown offers Auto with its member label', () => {
     SESSION_ID: 'session-a',
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
     BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
+    SESSION_BACKEND: 'auto',
+    ACTIVE_BACKEND_ID: 'auto',
     ACTIVE_POOL_MEMBER: 'claude-fable-5',
   });
   context.setSwitchableBackends(['claude-opus-5', 'auto']);
@@ -290,4 +304,47 @@ test('selecting Auto in the switch dropdown posts auto and lands the session on 
   assert.equal(calls[0].opts.method, 'POST');
   assert.deepEqual(JSON.parse(calls[0].opts.body), { backend: 'auto' });
   assert.equal(context.getActiveBackendId(), 'auto');
+});
+
+// ---------------------------------------------------------------------------
+// 7. A manual switch to another pool drops the member the previous pool ran on;
+//    the session view's own update keeps the member it reads from the server.
+// ---------------------------------------------------------------------------
+test('a manual switch to another pool clears the member the previous pool ran on', () => {
+  const elements = headerFixtures();
+  const context = loadSessionContext({
+    elements,
+    SESSION_ID: 'session-a',
+    BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
+    BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }, { id: 'cheap', label: 'Cheap' }],
+    SESSION_BACKEND: 'auto',
+    ACTIVE_BACKEND_ID: 'auto',
+    ACTIVE_POOL_MEMBER: 'claude-opus-5',
+    ACTIVE_NATIVE_MODEL: 'claude-opus-5-5',
+  });
+  context.setActiveBackendId('cheap');
+  context.updateActiveBackendBadges();
+  assert.equal(context.ACTIVE_POOL_MEMBER, null);
+  assert.equal(context.ACTIVE_NATIVE_MODEL, null);
+  assert.equal(context.getActiveSessionBackend(), 'cheap');
+  assert.equal(elements.get('backend-badge').textContent, 'Cheap');
+});
+
+test('a session view update keeps the member it reads when the active id moves', () => {
+  const elements = headerFixtures();
+  const context = loadSessionContext({
+    elements,
+    SESSION_ID: 'session-a',
+    BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
+    BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
+    SESSION_BACKEND: 'auto',
+    ACTIVE_BACKEND_ID: 'auto',
+    ACTIVE_POOL_MEMBER: 'claude-fable-5',
+  });
+  // A worker's run member is the active id; the session's own backend stays the pool.
+  context.setActiveBackendId('claude-fable-5', { keepDisplayPool: true });
+  context.updateActiveBackendBadges();
+  assert.equal(context.getActiveSessionBackend(), 'auto');
+  assert.equal(context.ACTIVE_POOL_MEMBER, 'claude-fable-5');
+  assert.equal(elements.get('backend-badge').textContent, 'Auto → Fable 5');
 });

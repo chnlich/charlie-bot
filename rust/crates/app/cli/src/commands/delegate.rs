@@ -204,12 +204,12 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let keep_worktree = cli.keep_worktree.expect("clap requires --keep-worktree without --bound-task") == 1;
   let mut invocation = Map::new();
   invocation.insert(task_routes::DELEGATE_TASK_TYPE_FIELD.to_string(), json!(task_type));
-  invocation.insert(task_routes::DELEGATE_REPO_PATH_FIELD.to_string(), optional_string(&cli.repo));
-  invocation.insert(task_routes::DELEGATE_BASE_BRANCH_FIELD.to_string(), optional_string(&cli.base_branch));
+  invocation.insert(task_routes::DELEGATE_REPO_PATH_FIELD.to_string(), json_out::optional_string(&cli.repo));
+  invocation.insert(task_routes::DELEGATE_BASE_BRANCH_FIELD.to_string(), json_out::optional_string(&cli.base_branch));
   invocation.insert(task_routes::DELEGATE_TASK_SPEC_FILE_FIELD.to_string(), json!(task_spec_file));
   invocation.insert(task_routes::DELEGATE_REVIEWER_CONTEXT_FILE_FIELD.to_string(), Value::Null);
   invocation.insert(KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
-  invocation.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), optional_string(&cli.backend));
+  invocation.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), json_out::optional_string(&cli.backend));
 
   let mut payload = Map::new();
   payload.insert(task_routes::DELEGATE_SESSION_ID_FIELD.to_string(), json!(session_id));
@@ -527,10 +527,6 @@ fn is_heading(line: &str, heading: &str) -> bool {
 
 fn is_next_heading(line: &&str) -> bool {
   line.starts_with("## ") && line.len() > 3
-}
-
-fn optional_string(value: &Option<String>) -> Value {
-  value.as_ref().map_or(Value::Null, |value| json!(value))
 }
 
 #[cfg(test)]

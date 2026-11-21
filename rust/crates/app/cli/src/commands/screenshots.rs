@@ -4,9 +4,11 @@
 //! web page. Otherwise the directory it names must hold two PNGs of each window size, the states before and
 //! after the change, and the pass prints a `web page change: <n> path(s)` line, which is how a caller tells a
 //! web page change from any other. `sizes` prints each window size, one `WIDTHxHEIGHT` per line, which is how
-//! `scripts/switch-server.sh` reads the set for its live capture without a second copy of it.
+//! `scripts/switch-server.sh` reads the set for its live capture without a second copy of it. `resolve` asks the
+//! live server whether it resolves one View line's view, which the switch checks before it captures that view.
 //!
-//! Exit codes: 0 passed, 1 a missing or mismatched screenshot, 2 a usage error.
+//! Exit codes: 0 passed, 1 a missing or mismatched screenshot or a view the live server does not resolve, 2 a usage
+//! error.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -34,6 +36,12 @@ enum ScreenshotsCommand {
   },
   /// Print each CSS window size, one `WIDTHxHEIGHT` per line.
   Sizes,
+  /// Pass when the live server resolves the View line's view: a `/?session=<id>` view names a session it knows, and
+  /// any other view answers 2xx.
+  Resolve {
+    /// The View line's URL path, such as `/?session=<id>` or `/plans`.
+    view: String,
+  },
 }
 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
@@ -46,6 +54,8 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
       }
       Ok(())
     }
+    ScreenshotsCommand::Resolve { view } => web_screenshots::check_view_resolves(&view, &web_screenshots::live_status)
+      .map_err(|error| CliExit::error(format!("{error:#}"))),
   }
 }
 

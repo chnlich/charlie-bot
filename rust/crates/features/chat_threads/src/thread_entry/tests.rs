@@ -17,6 +17,7 @@ use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::store_hooks::store_hooks;
+use charliebot_registry::turn::{CheckResult, TurnInput};
 use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::reply_order::Receipt;
@@ -24,7 +25,6 @@ use charliebot_store::trigger_files::PendingTrigger;
 use charliebot_store::{CreateTask, SIDEBAR_CHANNEL, Store, StoreResult, Subscription, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher};
-use charliebot_tasks::turn_hooks::{CheckResult, TurnInput};
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -875,6 +875,7 @@ fn fakechat_turn(turn: Vec<Value>, exit_code: i64) -> TurnInput {
     exit_code,
     continuation_failed: false,
     status: Value::Null,
+    last_input_provenance: None,
     turn,
   }
 }

@@ -9,16 +9,19 @@ use axum::response::Response;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
+use charliebot_agents::pool_display::{session_metadata_shown, show_display_member};
 use charliebot_compat::compression::accepts_gzip;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
+use charliebot_core::event_types::POOL;
 use charliebot_core::headers::ACCEPT_ENCODING;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NATIVE_MODEL, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT,
-  ROUND_RATINGS, RUN_BACKEND, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_FIELDS,
-  SCHEDULE_NEXT_RUN, SCHEDULE_TASK, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus,
-  TASK_PARENT_ID_FIELD, TASK_SCHEDULE_SLOTS, THINKING_SINCE, TaskProfile, UtcDateTime, WORK_STATE,
+  CREATED_AT_FIELD, HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NATIVE_MODEL, NEXT_TRIGGER_AT,
+  PENDING_TRIGGER_COUNT, ROUND_RATINGS, RUN_BACKEND, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED,
+  SCHEDULE_FIELDS, SCHEDULE_NEXT_RUN, SCHEDULE_TASK, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD, SessionMetadata,
+  SessionStatus, TASK_PARENT_ID_FIELD, TASK_SCHEDULE_SLOTS, THINKING_SINCE, TaskProfile, UPDATED_AT_FIELD, UtcDateTime,
+  WORK_STATE,
 };
 use charliebot_store::sidebar_state::{HAS_PENDING_PLAN_APPROVAL, HAS_WAITING_ITEMS};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -103,7 +106,7 @@ impl ListingSource {
     // still matches, and the source takes that allocation so the next request pays one comparison.
     let rows_hold = match (self.shared.as_ref(), shared) {
       (Some(before), Some(now)) if Arc::ptr_eq(before, now) => true,
-      _ => {
+      (Some(_), Some(_)) | (None, _) | (_, None) => {
         let equal = self.rows.len() == rows.len()
           && self.rows.iter().zip(rows.iter()).all(|(before, now)| Arc::ptr_eq(before, now));
         if equal {
@@ -118,13 +121,14 @@ impl ListingSource {
 }
 
 /// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run and display backends,
-/// and the controller's listing fields. Rows with equal inputs render equal values.
+/// the pool its backend names, and the controller's listing fields. Rows with equal inputs render equal values.
 pub(crate) struct RowInputs {
   meta: Arc<SessionMetadata>,
   derived: Option<Arc<Map<String, Value>>>,
   thinking_since: Value,
   run_backend: Option<String>,
   display_backend: Option<String>,
+  pool: Option<String>,
   listing: Option<Map<String, Value>>,
 }
 
@@ -143,6 +147,7 @@ impl PartialEq for RowInputs {
       && self.thinking_since == other.thinking_since
       && self.run_backend == other.run_backend
       && self.display_backend == other.display_backend
+      && self.pool == other.pool
       && self.listing == other.listing
   }
 }
@@ -518,7 +523,8 @@ pub(crate) enum RowSchema {
 impl RowSchema {
   fn value(self, store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
     match self {
-      RowSchema::Page => Ok(store.session_metadata_value(meta)),
+      // The page keeps the stored form its client reads, with the goal; only the member shown is replaced.
+      RowSchema::Page => Ok(session_metadata_shown(store, meta)),
       RowSchema::Listing => metadata_value(store, meta),
       RowSchema::Move => {
         let mut value = metadata_value(store, meta)?;
@@ -960,7 +966,7 @@ fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>
   text.push(':');
   text.push_str(&charliebot_compat::jinja::tojson_text(&Value::Object(Map::from_iter([
     (ID_FIELD.to_string(), Value::String(UUID_ENCODING.to_string())),
-    (UPDATED_AT.to_string(), Value::String(DELTA_ENCODING.to_string())),
+    (UPDATED_AT_FIELD.to_string(), Value::String(DELTA_ENCODING.to_string())),
   ]))));
   if let Some(screen) = screen {
     text.push(',');
@@ -980,7 +986,7 @@ fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>
     text.push(':');
     match field {
       ID_FIELD => write_id_column(&mut text, rows),
-      UPDATED_AT => {
+      UPDATED_AT_FIELD => {
         text.push('[');
         write_updated_at_column(&mut text, rows);
         text.push(']');
@@ -1062,7 +1068,7 @@ fn write_id_cells(text: &mut String, rows: &[Arc<PageRowText>]) {
 fn canonical_uuid(id: &str) -> Option<[u8; 16]> {
   match uuid::Uuid::parse_str(id) {
     Ok(uuid) if uuid.to_string() == id => Some(*uuid.as_bytes()),
-    _ => None,
+    Ok(_) | Err(_) => None,
   }
 }
 
@@ -1073,7 +1079,7 @@ fn write_updated_at_column(text: &mut String, rows: &[Arc<PageRowText>]) {
     if index > 0 {
       text.push(',');
     }
-    let Some(cell) = row.cell(UPDATED_AT) else {
+    let Some(cell) = row.cell(UPDATED_AT_FIELD) else {
       text.push_str("null");
       continue;
     };
@@ -1156,7 +1162,7 @@ fn drop_falsy_fields(value: &mut Value) {
 /// field. The tree listing orders and pages by `created_at` on the server, and `schema_version` is the store's own
 /// compatibility marker. On the 7,160-session mock home the two fields are 365,160 bytes of the page's 2,347,241-byte
 /// sidebar text.
-const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", SCHEMA_VERSION_FIELD];
+const UNREAD_PAGE_FIELDS: [&str; 2] = [CREATED_AT_FIELD, SCHEMA_VERSION_FIELD];
 
 /// Leave out the fields no page client reads, and an empty `round_ratings`.
 ///
@@ -1191,11 +1197,8 @@ fn compact_page_fields(value: &mut Value, updated_at: UtcDateTime) {
   if object.get(WORK_STATE).and_then(Value::as_str) == Some("idle") {
     object.remove(WORK_STATE);
   }
-  object.insert(UPDATED_AT.to_string(), Value::from(updated_at.into_inner().unix_timestamp().div_euclid(60)));
+  object.insert(UPDATED_AT_FIELD.to_string(), Value::from(updated_at.into_inner().unix_timestamp().div_euclid(60)));
 }
-
-/// The session-metadata field holding the session's last update, in the page's epoch-minute form.
-const UPDATED_AT: &str = "updated_at";
 
 /// Whether *value* is a value the page's client reads as falsy: null, false, zero or the empty string.
 ///
@@ -1427,16 +1430,17 @@ pub fn row_refresh_text_for(
 
 /// The fields one search row carries, in the order its columns are written. Each one is read by the sidebar's row
 /// renderer, so a search row paints as the same session's listing row does.
-pub const SEARCH_FIELDS: [&str; 27] = [
+pub const SEARCH_FIELDS: [&str; 28] = [
   ID_FIELD,
   "name",
   "status",
   "profile",
-  UPDATED_AT,
+  UPDATED_AT_FIELD,
   "starred",
   "group",
   TASK_PARENT_ID_FIELD,
   "backend",
+  POOL,
   POOL_MEMBER_FIELD,
   NATIVE_MODEL,
   THINKING_SINCE,
@@ -1494,6 +1498,7 @@ pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResu
     task.remove("goal");
   }
   object.insert(THREAD_SESSION.to_string(), Value::Bool(is_thread_session(meta)));
+  show_display_member(&store.config().backends, object);
   Ok(value)
 }
 
@@ -1552,6 +1557,15 @@ fn row_inputs(
         // Only a worker row renders a display backend. Another row keeps the backend its metadata carries.
         display_backend: if projection.display_backend && row.profile == TaskProfile::Worker {
           display_backend(store, row)?
+        } else {
+          None
+        },
+        // A worker whose backend is a configured pool names that pool, so its row reads "pool → member".
+        pool: if projection.display_backend
+          && row.profile == TaskProfile::Worker
+          && store.config().backends.pool(&row.backend).is_some()
+        {
+          Some(row.backend.clone())
         } else {
           None
         },
@@ -1627,6 +1641,9 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   {
     object.insert("backend".to_string(), Value::String(backend.clone()));
   }
+  if let Some(pool) = &row.pool {
+    object.insert(POOL.to_string(), Value::String(pool.clone()));
+  }
 }
 
 /// The row's `has_waiting_items` boolean: whether the session stores a Waiting on you item. A row whose overlay has no
@@ -1678,6 +1695,7 @@ mod tests {
       thinking_since: Value::Null,
       run_backend: None,
       display_backend: None,
+      pool: None,
       listing: None,
     };
     let value = render_row(&features.store, &row, LISTING_PROJECTION).unwrap();
@@ -1689,6 +1707,71 @@ mod tests {
     assert_eq!(fields["name"], "Null fields");
     assert_eq!(fields["has_unread"], false);
     assert!(fields.contains_key("created_at"));
+  }
+
+  /// `auto` is a pool over two options. `solo` is a single option that the pool does not name.
+  const POOL_ROW_CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a, billing: subscription}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b, billing: payg}
+    - {id: solo, label: Solo, type: synthetic, model: model-solo, billing: subscription}
+  pools:
+    - id: auto
+      label: Auto
+      rule: priority
+      members: [synthetic-a, synthetic-b]
+";
+
+  #[tokio::test]
+  async fn a_worker_row_names_its_pool_and_shows_a_recorded_member_only_inside_it() {
+    let (_home, features) = crate::test_support::feature_context_with_auto(POOL_ROW_CONFIG);
+    let cases = [("pooled", "auto", Some("synthetic-a")), ("outside", "auto", Some("solo")), ("single", "solo", None)];
+    let mut rows = Vec::new();
+    for (name, backend, member) in cases {
+      let meta = features
+        .store
+        .create_task(
+          charliebot_store::CreateTask {
+            request_id: name.to_string(),
+            task_parent_id: None,
+            profile: TaskProfile::Worker,
+            task: None,
+            name: Some(name.to_string()),
+            backend: Some(backend.to_string()),
+            group: None,
+            session_id: None,
+          },
+          charliebot_store::TaskCaller::System,
+          Map::new(),
+        )
+        .await
+        .expect("the worker row is created");
+      if let Some(member) = member {
+        let slot = Map::from_iter([(POOL_MEMBER_FIELD.to_string(), json!(member))]);
+        features
+          .store
+          .update_slot_fields(&meta.id, charliebot_agents::model_pool::OWNER, slot)
+          .await
+          .expect("the member is recorded");
+      }
+      rows.push(Arc::new(features.store.get_session(&meta.id).await.unwrap().unwrap()));
+    }
+
+    let values =
+      listed_values(&features.store, &rows, &DerivedSidebarMap::new(), &HashMap::new(), LISTING_PROJECTION).unwrap();
+    assert_eq!(values[0]["pool"], "auto");
+    assert_eq!(values[0][POOL_MEMBER_FIELD], "synthetic-a");
+    // The recorded member outside the pool shows no member; the pool name alone stays.
+    assert_eq!(values[1]["pool"], "auto");
+    assert!(values[1].get(POOL_MEMBER_FIELD).is_none());
+    // A single-option worker names no pool.
+    assert!(values[2].get("pool").is_none());
+    // The first-screen page rows apply the same member filter.
+    let paged = RowSchema::Page.value(&features.store, &rows[0]).unwrap();
+    assert_eq!(paged[POOL_MEMBER_FIELD], "synthetic-a");
+    let paged = RowSchema::Page.value(&features.store, &rows[1]).unwrap();
+    assert!(paged[POOL_MEMBER_FIELD].is_null());
   }
 
   #[tokio::test]
@@ -2052,7 +2135,7 @@ mod tests {
     // The page lists active sessions only, and the client reads an absent status as active.
     assert!(!row.contains_key("status"), "the page's rows carry the status its listing fixes");
     assert_eq!(
-      row[UPDATED_AT],
+      row[UPDATED_AT_FIELD],
       json!(meta.updated_at.into_inner().unix_timestamp().div_euclid(60)),
       "the page carries a row's time as epoch minutes"
     );
@@ -2193,7 +2276,7 @@ mod tests {
         Value::Array(cells) => cells.len(),
         // The `id` column's string form carries one 16-byte id per row.
         Value::String(blob) => URL_SAFE_NO_PAD.decode(blob).expect("the id blob is base64url").len() / 16,
-        _ => 0,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => 0,
       })
       .max()
       .unwrap_or(0);
@@ -2225,7 +2308,8 @@ mod tests {
             running += cell.as_i64().expect("a delta cell is an integer");
             Value::from(running)
           }
-          _ => cell.clone(),
+          None => cell.clone(),
+          Some(other) => unreachable!("the page declares no column encoding named {other}"),
         };
         rows[index].insert(field.clone(), value);
       }
@@ -2335,7 +2419,12 @@ mod tests {
     meta.task = Some(charliebot_store::metadata::TaskSpec {
       task_type: Some(charliebot_store::metadata::TaskType::Implement),
       goal: "private goal".to_string(),
-      ..Default::default()
+      repo_path: None,
+      base_branch: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: charliebot_store::metadata::TaskApprover::User,
+      improve_host: None,
     });
     let value = metadata_value(&features.store, &meta).unwrap();
     assert!(value["task"].get("goal").is_none());

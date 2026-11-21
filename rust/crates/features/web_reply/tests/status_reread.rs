@@ -1,6 +1,6 @@
 //! The `status-reread` check answers each JSON sample of a turn: the verdict and the reason's named parts.
 
-use charliebot_tasks::turn_hooks::{CheckResult, TurnInput};
+use charliebot_registry::turn::{CheckResult, TurnInput};
 use charliebot_web_reply::audit::check_status_reread;
 use serde::Deserialize;
 

@@ -20,8 +20,17 @@ function getActiveBackendId() {
   return globalThis.ACTIVE_BACKEND_ID || getDefaultBackendId();
 }
 
-function setActiveBackendId(backendId) {
-  globalThis.ACTIVE_BACKEND_ID = backendId || getDefaultBackendId();
+// Sets the backend id the header and its menu read. A move to another id is a manual switch unless `keepDisplayPool`
+// is set: the session's own backend moves with it, and the member and model of the previous pool no longer apply.
+// The session view sets the session's backend and the member its turn runs on around its call with the flag set.
+function setActiveBackendId(backendId, { keepDisplayPool = false } = {}) {
+  const next = backendId || getDefaultBackendId();
+  if (!keepDisplayPool && next !== globalThis.ACTIVE_BACKEND_ID) {
+    setActiveSessionBackend(next);
+    globalThis.ACTIVE_POOL_MEMBER = null;
+    globalThis.ACTIVE_NATIVE_MODEL = null;
+  }
+  globalThis.ACTIVE_BACKEND_ID = next;
 }
 
 let switchableBackends = [];
@@ -69,22 +78,26 @@ function rollbackBackendSelect(badge) {
   if (select) select.value = getActiveBackendId();
 }
 
-// The label a backend id shows in the header and the switch menu. The active pool shows the
-// member its current turn runs on with the model the session's records carry:
-// "<pool label> → <member> · <model>". Other pools show their label alone. An id that the config
-// holds as neither an option nor a pool shows as "<id> (not in config)".
+function isKnownBackend(backendId) {
+  return isPoolBackend(backendId) || Boolean(typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[backendId]);
+}
+
+// The header's label for the open session: its own backend, with the member its current turn runs on and the model
+// its records carry. A session on an id the config holds as neither an option nor a pool carries the
+// "(not in config)" mark.
+function sessionHeaderLabel() {
+  const sessionBackend = getActiveSessionBackend() || getActiveBackendId();
+  const label = sessionModelLabel(
+    sessionBackend, globalThis.ACTIVE_POOL_MEMBER, globalThis.ACTIVE_NATIVE_MODEL, 'full');
+  return isKnownBackend(sessionBackend) ? label : `${label} (not in config)`;
+}
+
+// The label a backend id shows in the switch menu. The active entry shows the session's header label; any other
+// entry shows its own label, and an id the config holds as neither an option nor a pool shows "<id> (not in config)".
 function backendDisplayLabel(backendId) {
-  const pool = typeof BACKEND_POOLS !== 'undefined'
-    ? BACKEND_POOLS.find((candidate) => candidate.id === backendId)
-    : null;
-  if (!pool) {
-    return (typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[backendId]) || `${backendId} (not in config)`;
-  }
-  const member = backendId === getActiveBackendId() ? globalThis.ACTIVE_POOL_MEMBER : null;
-  if (!member) return pool.label;
-  const memberLabel = (typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[member]) || member;
-  const model = globalThis.ACTIVE_NATIVE_MODEL;
-  return pool.label + ' → ' + memberLabel + (model ? ' · ' + model : '');
+  if (backendId === getActiveBackendId()) return sessionHeaderLabel();
+  if (!isKnownBackend(backendId)) return `${backendId} (not in config)`;
+  return sessionModelLabel(backendId, null, null, 'full');
 }
 
 function updateActiveBackendBadges() {
@@ -93,6 +106,7 @@ function updateActiveBackendBadges() {
 
   const backendBadge = document.getElementById('backend-badge');
   if (backendBadge) {
+    backendBadge.title = activeBackendLabel;
     if (switchableBackends.length > 1 && SESSION_ID) {
       renderSwitchableBackendBadge(backendBadge, switchableBackends, activeBackendId);
     } else {
@@ -372,9 +386,10 @@ async function pollActiveSessionView(opts) {
     if (pollSessionId !== SESSION_ID) return;
 
     THINKING_SINCE = data.session.thinking_since || null;
+    setActiveSessionBackend(data.session.backend);
+    setActiveBackendId(data.active_backend, { keepDisplayPool: true });
     globalThis.ACTIVE_POOL_MEMBER = data.session.pool_member || null;
     globalThis.ACTIVE_NATIVE_MODEL = data.session.native_model || null;
-    setActiveBackendId(data.active_backend);
     setSwitchableBackends(data.switchable_backends);
     updateActiveBackendBadges();
     globalThis.renderUsageFromData(data.usage);
@@ -870,9 +885,10 @@ function openMountOptions(session, data, messages) {
 function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages || [];
+  setActiveSessionBackend(session.backend);
+  setActiveBackendId(data.active_backend, { keepDisplayPool: true });
   globalThis.ACTIVE_POOL_MEMBER = session.pool_member || null;
   globalThis.ACTIVE_NATIVE_MODEL = session.native_model || null;
-  setActiveBackendId(data.active_backend);
   setSwitchableBackends(data.switchable_backends);
   setActiveRoundRatings(session.round_ratings || {});
   const backendType = data.active_backend_type || (BACKEND_TYPES ? BACKEND_TYPES[data.active_backend] : '') || '';

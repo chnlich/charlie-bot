@@ -11,6 +11,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts
 use axum::response::Response;
 use bytes::Bytes;
 use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
+use charliebot_agents::pool_display::session_metadata_shown;
 use charliebot_cli_common::route;
 use charliebot_compat::compression::{PageTail, gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::mimetypes;
@@ -626,7 +627,7 @@ fn index_answer(
   let mut event_count = Value::from(0);
   let mut bootstrap_text = None;
   if let Some(meta) = meta {
-    active_session = state.features.store.session_metadata_value(meta);
+    active_session = session_metadata_shown(&state.features.store, meta);
     // A bootstrap that failed to load leaves only its own fields out; the session row itself still renders.
     if let Some(bootstrap) = bootstrap {
       let bootstrap_session = bootstrap.session.as_object().expect("a bootstrap session is an object");
@@ -648,9 +649,9 @@ fn index_answer(
     cfg.backends.pools.iter().map(|pool| json!({"id": pool.id, "label": pool.label})).collect::<Vec<_>>();
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
+  let session_backend = active_session.get("backend").and_then(Value::as_str).unwrap_or_default();
   let active_pool_member = active_session.get(POOL_MEMBER_FIELD).cloned().unwrap_or(Value::Null);
   let active_native_model = active_session.get(NATIVE_MODEL).cloned().unwrap_or(Value::Null);
-  let active_backend_label = active_backend_label(cfg, active_backend, &active_pool_member, &active_native_model);
   let backend_compact = compact_facts(cfg, &state.features.registry)?;
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
@@ -665,12 +666,12 @@ fn index_answer(
       .collect::<Vec<_>>(),
     "backend_pools": backend_pools,
     "picker_entries": picker_entries,
+    "active_session_backend": session_backend,
     "active_pool_member": active_pool_member,
     "active_native_model": active_native_model,
     "backend_compact": Value::Object(backend_compact),
     "default_backend_id": default_backend_id,
     (detail::ACTIVE_BACKEND_FIELD): active_backend,
-    "active_backend_label": active_backend_label,
     (detail::ACTIVE_BACKEND_TYPE_FIELD): active_option.map_or("", |option| option.backend_type.as_str()),
     "load_errors": load_errors,
   });
@@ -873,7 +874,7 @@ fn events_page(
   };
   let answer = EVENTS_ANSWER_MEMO.lock().expect("the events answer memo mutex is not poisoned").answer(&key, || {
     let context = json!({
-      "session": state.features.store.session_metadata_value(session),
+      "session": session_metadata_shown(&state.features.store, session),
       "session_id": key.session_id,
       "events_url": key.events_url,
     });
@@ -1097,29 +1098,6 @@ fn active_backend_id<'a>(cfg: &CharlieBotConfig, session: &'a Value, default_bac
     .unwrap_or(default_backend)
 }
 
-/// The header label of a session's backend: a pool session names the member its current turn runs on,
-/// with the model its records hold.
-fn active_backend_label(
-  cfg: &CharlieBotConfig,
-  active_backend: &str,
-  active_pool_member: &Value,
-  active_native_model: &Value,
-) -> String {
-  if let Some(pool) = cfg.backends.pool(active_backend) {
-    return match active_pool_member.as_str() {
-      Some(member) => {
-        let member_label = cfg.get_backend_option(member).map_or(member, |option| option.label.as_str());
-        match active_native_model.as_str().filter(|model| !model.is_empty()) {
-          Some(model) => format!("{} → {member_label} · {model}", pool.label),
-          None => format!("{} → {member_label}", pool.label),
-        }
-      }
-      None => pool.label.clone(),
-    };
-  }
-  cfg.get_backend_option(active_backend).map_or_else(|| active_backend.to_string(), |option| option.label.clone())
-}
-
 /// `_compact_facts`: per configured backend type, whether manual compaction runs and the hint.
 fn compact_facts(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Map<String, Value>, Failure> {
   let mut facts = Map::new();
@@ -1225,18 +1203,6 @@ mod tests {
   }
 
   #[test]
-  fn the_header_label_names_the_member_a_pool_session_runs_on() {
-    let cfg = label_config();
-    assert_eq!(
-      active_backend_label(&cfg, "auto", &json!("claude-opus-5"), &json!("claude-opus-5-5")),
-      "Auto → CC · Opus 5 · claude-opus-5-5"
-    );
-    assert_eq!(active_backend_label(&cfg, "auto", &json!("claude-opus-5"), &Value::Null), "Auto → CC · Opus 5");
-    assert_eq!(active_backend_label(&cfg, "auto", &Value::Null, &json!("claude-opus-5-5")), "Auto");
-    assert_eq!(active_backend_label(&cfg, "claude-opus-5", &Value::Null, &json!("claude-opus-5-5")), "CC · Opus 5");
-  }
-
-  #[test]
   fn a_pool_session_stays_active_while_a_run_records_its_member() {
     let cfg = label_config();
     let pooled = json!({"backend": "auto", "run_backend": "claude-opus-5", "pool_member": "claude-opus-5"});
@@ -1246,16 +1212,6 @@ mod tests {
     assert_eq!(active_backend_id(&cfg, &pinned, "claude-opus-5"), "claude-fable-5", "a live run's backend still wins");
 
     assert_eq!(active_backend_id(&cfg, &json!({}), "synthetic-default"), "synthetic-default");
-  }
-
-  #[test]
-  fn a_retired_pool_member_renders_its_raw_id() {
-    let cfg = label_config();
-    assert_eq!(
-      active_backend_label(&cfg, "auto", &json!("retired"), &json!("gpt-6-luna")),
-      "Auto → retired · gpt-6-luna"
-    );
-    assert_eq!(active_backend_label(&cfg, "auto", &json!("retired"), &Value::Null), "Auto → retired");
   }
 
   /// A repeat page request serves the answer the memo kept, and a moved input renders again.

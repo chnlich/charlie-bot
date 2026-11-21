@@ -30,6 +30,7 @@ use charliebot_registry::backend::{
 };
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::context::{FeatureContext, StartupState};
+use charliebot_registry::turn::{CheckResult, TurnContribution, TurnInput};
 use charliebot_store::metadata::{NATIVE_BACKEND, SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records;
 use charliebot_store::{
@@ -275,6 +276,48 @@ fn registry() -> Arc<Registry> {
   Arc::new(registry)
 }
 
+/// The turn-end check `gate` of `a_reattach_queued_while_its_manager_run_is_live_drops_at_dequeue`: it owns the
+/// sessions that carry the `gate_check` marker, and it blocks a turn that holds a `run_finished` fact, the way the
+/// re-attach's own checkpoint finds one.
+struct GateCheck;
+
+impl TurnContribution for GateCheck {
+  fn turn_kind(&self, meta: &SessionMetadata) -> Option<&'static str> {
+    meta.extra("gate_check").is_some().then_some("gate")
+  }
+
+  fn turn_end_check_names(&self) -> &'static [&'static str] {
+    &["gate"]
+  }
+
+  fn run_turn_end_check<'a>(
+    &'a self,
+    _name: &'a str,
+    _features: &'a Arc<FeatureContext>,
+    input: &'a TurnInput,
+  ) -> BoxFuture<'a, anyhow::Result<CheckResult>> {
+    Box::pin(async move {
+      let ended = input.turn.iter().any(|event| event["type"] == event_types::RUN_FINISHED);
+      Ok(if ended { CheckResult::Block("the run ended again".to_string()) } else { CheckResult::Pass })
+    })
+  }
+}
+
+/// The standard registry with the gate ahead of the web contribution, so the gate owns the sessions it marks.
+fn registry_with_gate() -> Arc<Registry> {
+  let mut registry = Registry::new();
+  registry.register_package("test.scripted_backend", register_scripted_backend).unwrap();
+  registry.register_package("charliebot_agents.claude_code", charliebot_claude_code::register).unwrap();
+  registry
+    .register_package("test.gate", |registry| {
+      registry.turn_contribution("gate", Arc::new(GateCheck))?;
+      Ok(())
+    })
+    .unwrap();
+  registry.register_package("charliebot.web_reply", charliebot_web_reply::register).unwrap();
+  Arc::new(registry)
+}
+
 fn register_test_devin(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
   let host = DEVIN_HOST.with(|cell| cell.borrow_mut().take().expect("the fake Devin host is set before registration"));
   charliebot_devin::register_with_host(registry, host)
@@ -470,19 +513,10 @@ fn config_with_features_from_config(
   config_with_features_from_config_and_agent_path(cfg, registry, install_queue, "/usr/bin".to_string(), &checkout)
 }
 
-/// A checkout for a turn test: the repository's prompt docs, and an empty turn-end hook list, so the test's persisted
+/// A checkout for a turn test: the repository's files, and an empty turn-end hook list, so the test's persisted
 /// event stream carries the turn's own events and not the served list's checks.
 fn turn_test_checkout(repo: &Path, home: &Path) -> anyhow::Result<PathBuf> {
-  let checkout = home.join("checkout");
-  std::fs::create_dir_all(checkout.join("hooks"))?;
-  for name in ["prompts", "skills"] {
-    let link = checkout.join(name);
-    if !link.exists() {
-      std::os::unix::fs::symlink(repo.join(name), link)?;
-    }
-  }
-  std::fs::write(checkout.join("hooks/turn_end.json"), "[]")?;
-  Ok(checkout)
+  charliebot_tasks::test_support::served_checkout(repo, home)
 }
 
 fn config_with_features_at_checkout(
@@ -1043,22 +1077,17 @@ fn pool_member(capture: &Path, fail_continuation: bool) -> anyhow::Result<Backen
   Ok(option)
 }
 
-/// A checkout whose turn-end list is the served web checks, and whose prompts are the repository's. The list runs the
-/// workspace build of `charliebot` by its path, so the checks are this tree's whatever the host's PATH holds.
+/// A checkout whose turn-end list is the served web checks, and whose prompts are the repository's. The list names the
+/// checks that `registry()` answers in process, so the checks run are this tree's whatever the host's PATH holds.
 fn web_checks_checkout(temp: &Path) -> anyhow::Result<PathBuf> {
   let checkout = temp.join("checkout");
   std::fs::create_dir_all(checkout.join("hooks"))?;
   std::fs::create_dir_all(checkout.join("prompts"))?;
   std::fs::write(checkout.join("prompts/web_reply.md"), "Synthetic web reply rules")?;
-  let charliebot = charliebot_shell_harness::built_binary("charliebot");
-  // The served list runs `charliebot hook <check>` from PATH. This list names the workspace build of that binary by
-  // its path, so the checks the test runs are this tree's, whatever `charliebot` the host's PATH holds or lacks.
-  let charliebot = shlex::try_quote(charliebot.to_str().context("the built charliebot path is UTF-8")?)?;
-  let entries: Vec<Value> = ["web-reply", "web-status", "thread-reply", "status-reread"]
-    .into_iter()
-    .map(|name| json!({"name": name, "command": format!("'{charliebot}' hook {name}")}))
-    .collect();
-  std::fs::write(checkout.join("hooks/turn_end.json"), serde_json::to_string(&entries)?)?;
+  std::fs::write(
+    checkout.join("hooks/turn_end.json"),
+    json!(["web-reply", "web-status", "status-reread"]).to_string(),
+  )?;
   Ok(checkout)
 }
 
@@ -1955,17 +1984,13 @@ async fn a_reattach_queued_while_its_manager_run_is_live_drops_at_dequeue() -> a
   let lines = events.iter().map(serde_json::to_string).collect::<Result<Vec<_>, _>>()?.join("\n");
   let script = format!("echo launch >> '{}'\ncat <<'CB_FIRST'\n{lines}\nCB_FIRST\n/bin/sleep 1\n", launches.display());
   let option = backend_option(script);
-  let registry = registry();
+  let registry = registry_with_gate();
   let (cfg, features) = config_with_features(&home, Some(option.clone()), Arc::clone(&registry), true)?;
   // A turn-end check that blocks a checkpoint whose turn holds a run_finished fact. The turn's own checkpoint holds
   // none, so only a re-attach that runs its checkpoint after the run ended is blocked.
-  let gate =
-    r#"if grep -q '"run_finished"'; then printf '%s\n' '{"decision":"block","reason":"the run ended again"}'; fi"#;
-  std::fs::write(
-    home.join("checkout").join("hooks/turn_end.json"),
-    json!([{"name": "gate", "command": gate}]).to_string(),
-  )?;
-  let meta = session_meta("reattach-session", "web", "fresh");
+  std::fs::write(home.join("checkout").join("hooks/turn_end.json"), json!(["gate"]).to_string())?;
+  let mut meta = session_meta("reattach-session", "web", "fresh");
+  meta.set_extra("gate_check", json!(true));
   save_session_metadata(&features, &registry, &meta)?;
   let queue = features.startup.require::<master_queue::MasterQueue>()?;
   let mut callbacks = callbacks(Arc::clone(&features), Arc::new(Mutex::new(Vec::new())));

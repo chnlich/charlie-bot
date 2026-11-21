@@ -8,6 +8,7 @@ use std::fs;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use charliebot_agents::model_pool::POOL_MEMBER_FIELD;
 use charliebot_compat::file_urls;
 use charliebot_compat::file_urls::ScanContext;
 use charliebot_core::config::sessions_dir_in;
@@ -863,6 +864,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   let mut holders = HashSet::from([session_id.to_string()]);
   holders.extend(tree.open.iter().cloned());
   let derived = derived_items(features, Some(&holders)).await?;
+  let config = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
   let mut rows: Vec<(UtcDateTime, Value)> = Vec::new();
   for descendant in &tree.statuses {
     if descendant.status.waiting.is_empty() {
@@ -872,6 +874,12 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     let row = json!({
       "session_id": descendant.session_id,
       "name": descendant.metadata.name,
+      "backend": descendant.metadata.backend,
+      (POOL_MEMBER_FIELD): descendant
+        .metadata
+        .extra(POOL_MEMBER_FIELD)
+        .and_then(Value::as_str)
+        .and_then(|member| config.backends.display_pool_member(&descendant.metadata.backend, member)),
       "updated_at": descendant.status.updated_at.to_str(),
       "waiting_version": payload["waiting_version"],
       "waiting": payload["waiting"],
@@ -893,6 +901,12 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     let row = json!({
       "session_id": child_id,
       "name": child.metadata.name,
+      "backend": child.metadata.backend,
+      (POOL_MEMBER_FIELD): child
+        .metadata
+        .extra(POOL_MEMBER_FIELD)
+        .and_then(Value::as_str)
+        .and_then(|member| config.backends.display_pool_member(&child.metadata.backend, member)),
       "now": now,
       "updated_at": child.status.updated_at.to_str(),
     });
@@ -1653,6 +1667,31 @@ mod tests {
       body["children"].as_array().unwrap().iter().map(|row| row["now"].as_str().unwrap()).collect::<Vec<_>>(),
       ["New step", "Old step"]
     );
+    // Each row names its backend; a child on one option holds no pool member to show.
+    assert!(body["children"].as_array().unwrap().iter().all(|row| row["backend"].is_string()));
+    assert!(body["children"].as_array().unwrap().iter().all(|row| row["pool_member"].is_null()));
+  }
+
+  #[tokio::test]
+  async fn the_status_read_shows_no_member_for_a_recorded_member_off_a_pool() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let child = home.child(&root, "child").await;
+    set_status(&home.features, &child, r#"{"now": "Child step"}"#).await.expect("the child sets");
+    // The child's backend is one option, not a pool, so the member recorded on it is not shown.
+    let mut metadata =
+      home.features.store.read_metadata_fresh(&child).expect("the metadata reads").expect("the child exists");
+    metadata.set_extra(POOL_MEMBER_FIELD, json!("retired"));
+    fs::write(
+      home.features.store.metadata_path(&child),
+      metadata.to_json_string(&home.features.registry.metadata_slots(), true),
+    )
+    .expect("the member is recorded");
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+
+    assert_eq!(body["children"].as_array().unwrap().len(), 1);
+    assert!(body["children"][0]["pool_member"].is_null());
   }
 
   #[tokio::test]

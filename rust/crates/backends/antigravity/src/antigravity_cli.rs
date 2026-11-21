@@ -32,6 +32,10 @@ static SYSTEM_MESSAGE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// How many characters of a non-envelope stdout a message quotes.
 const NON_ENVELOPE_PREVIEW_CHARS: usize = 200;
 
+/// The byte size at which the kernel refuses one argument (`MAX_ARG_STRLEN`, 128 KiB, the terminating NUL included).
+/// `agy` reads its prompt only from the `--print` argument, so a prompt at or over this size cannot reach it.
+const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
+
 /// The `agy --print` backend of one launch.
 pub struct AntigravityBackend {
   agy_bin: String,
@@ -63,13 +67,19 @@ impl AntigravityBackend {
     }
   }
 
-  /// The headless command. Antigravity's text input format reads the framed prompt from stdin.
-  fn argv(&self) -> Vec<String> {
+  /// The headless command. `agy` takes the prompt as the value of `--print` and reads no prompt from stdin, so the
+  /// framed prompt is attached to the flag as `--print=<prompt>`.
+  fn argv(&self, framed: &str) -> anyhow::Result<Vec<String>> {
+    let print = format!("--print={framed}");
+    if print.len() >= MAX_ARGUMENT_BYTES {
+      bail!(
+        "agy takes the prompt as one argument of under {MAX_ARGUMENT_BYTES} bytes; this prompt is {} bytes",
+        framed.len()
+      );
+    }
     let mut command = vec![
       self.agy_bin.clone(),
-      "--print".to_string(),
-      "--input-format".to_string(),
-      "text".to_string(),
+      print,
       "--print-timeout".to_string(),
       self.print_timeout.clone(),
       SKIP_PERMISSIONS_FLAG.to_string(),
@@ -82,7 +92,7 @@ impl AntigravityBackend {
       command.extend(["--conversation".to_string(), session_id.clone()]);
     }
     command.extend(self.extra_flags.iter().cloned());
-    command
+    Ok(command)
   }
 
   /// The child env: the Google API keys stripped, so the CLI bills through its OAuth login, and the user-local bin on
@@ -98,8 +108,7 @@ impl AntigravityBackend {
   fn finish(&self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
     let stdout_text = str_methods::strip(stdout);
     if exit_code != 0 {
-      let message = nonzero_exit_message(stdout_text, exit_code);
-      return finished(vec![make_error_event(&message)], exit_code, None);
+      return failed(nonzero_exit_message(stdout_text, stderr, exit_code), exit_code);
     }
 
     // The envelope is the only machine-readable source of the conversation id and the usage, so stdout that is not an
@@ -116,7 +125,7 @@ impl AntigravityBackend {
     if let Some(timeout) = PRINT_TIMEOUT_RE.captures(stderr).map(|captures| captures[1].to_string()) {
       let message =
         format!("agy print timeout after {timeout}: the turn was still running; agy returned partial output");
-      return finished(vec![make_error_event(&message)], 1, None);
+      return failed(message, 1);
     }
 
     if envelope.status != envelope::SUCCESS {
@@ -125,7 +134,7 @@ impl AntigravityBackend {
         .filter_map(|key| envelope.fields.get(*key))
         .find(|value| is_truthy(value))
         .map_or_else(|| format!("Antigravity status {}", envelope.status), value_str);
-      return finished(vec![make_error_event(&message)], 1, None);
+      return failed(message, 1);
     }
 
     let Some(conversation_id) = envelope.fields.get("conversation_id").filter(|value| is_truthy(value)) else {
@@ -158,7 +167,11 @@ impl AntigravityBackend {
         return finished(events, exit_code, Some(guard));
       }
     };
-    events.push(make_text_event(&strip_platform_notifications(response)));
+    let answer = strip_platform_notifications(response);
+    if answer.trim().is_empty() {
+      return failed("agy SUCCESS envelope carried an empty answer".to_string(), 1);
+    }
+    events.push(make_text_event(&answer));
     match usage_event(&envelope.fields) {
       Ok(event) => events.push(event),
       Err(error) => return finished(events, exit_code, Some(format!("{error:#}"))),
@@ -176,16 +189,16 @@ impl AgentBackend for AntigravityBackend {
     Ok(())
   }
 
-  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
-    Ok(self.argv())
+  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
+    self.argv(&framed_prompt(self.instructions_content.as_deref(), prompt))
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
     Ok(self.child_env(env))
   }
 
-  fn stdin_prompt(&self, prompt: &str) -> Option<String> {
-    Some(framed_prompt(self.instructions_content.as_deref(), prompt))
+  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
+    None
   }
 
   fn translator(&self) -> Box<dyn Translate> {
@@ -201,15 +214,29 @@ impl AgentBackend for AntigravityBackend {
   }
 }
 
-/// The message of a nonzero exit: the envelope's error when it names one, else the stdout, else the exit code.
-fn nonzero_exit_message(stdout_text: &str, exit_code: i32) -> String {
+/// The message of a nonzero exit: the exit status, then the envelope's error and the run's stderr. The stdout is named
+/// only when neither of those carries text.
+fn nonzero_exit_message(stdout_text: &str, stderr: &str, exit_code: i32) -> String {
+  let mut details = Vec::new();
   let envelope_error = envelope::parse(stdout_text)
     .and_then(|envelope| envelope.fields.get("error").and_then(Value::as_str).map(str::to_string));
-  match envelope_error {
-    Some(error) => format!("agy exited {exit_code}: {error}"),
-    None if stdout_text.is_empty() => format!("Antigravity CLI exited with code {exit_code}"),
-    None => stdout_text.to_string(),
+  details.extend(envelope_error);
+  let stderr = str_methods::strip(stderr);
+  if !stderr.is_empty() {
+    details.push(format!("stderr: {stderr}"));
   }
+  if details.is_empty() && !stdout_text.is_empty() {
+    details.push(format!("stdout: {stdout_text}"));
+  }
+  if details.is_empty() {
+    details.push("no stderr or stdout".to_string());
+  }
+  format!("agy exited {exit_code}: {}", details.join("; "))
+}
+
+/// The outcome of a run that failed: the error event, and the guard error that makes the run fail for its caller.
+fn failed(message: String, exit_code: i32) -> FinalStdoutOutcome {
+  finished(vec![make_error_event(&message)], exit_code, Some(message))
 }
 
 fn strip_platform_notifications(text: &str) -> String {
@@ -244,9 +271,7 @@ mod tests {
   use charliebot_agents::runner::{AgentRunner, RunRequest};
   use charliebot_agents::transport::cgroup::SessionCgroupConfig;
   use charliebot_agents::transport::{cursor, final_stdout, follow, identity, kill, recovery};
-  use std::ffi::OsString;
   use std::fs;
-  use std::os::unix::ffi::OsStrExt;
   use std::os::unix::fs::symlink;
   use std::process::{Command, Stdio};
   use std::sync::{Arc, Mutex};
@@ -361,31 +386,6 @@ mod tests {
     fs::write(root.join("reply.json"), SUCCESS).unwrap();
     symlink(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/final_stdout_agy.sh"), root.join("agy"))
       .unwrap();
-  }
-
-  #[ignore = "integration"]
-  #[tokio::test]
-  async fn a_200_kib_prompt_reaches_agy_on_stdin_and_no_argv_element_carries_it() {
-    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
-    let root = tempfile::tempdir().unwrap();
-    stage_capture(root.path());
-    fs::write(root.path().join("release"), "").unwrap();
-    let prompt = "\u{fc}".repeat(100 * 1024);
-
-    let (outcome, _) = capture_run(root.path(), &prompt).await.unwrap();
-
-    assert_eq!(outcome.exit_code, Some(0));
-    assert_eq!(fs::read(root.path().join("received_prompt")).unwrap(), prompt.as_bytes());
-    let context: Value =
-      serde_json::from_slice(&fs::read(root.path().join("logs/final_stdout.context.json")).unwrap()).unwrap();
-    let command: Vec<OsString> = serde_json::from_value(context["command"].clone()).unwrap();
-    assert!(command.iter().all(|argument| argument.as_os_str().as_bytes().len() <= MAX_ARGUMENT_BYTES), "{command:?}");
-    assert!(
-      command.iter().all(|argument| {
-        !argument.as_os_str().as_bytes().windows(prompt.len()).any(|window| window == prompt.as_bytes())
-      }),
-      "{command:?}"
-    );
   }
 
   async fn cut_server(root: &Path) -> u32 {
@@ -509,7 +509,7 @@ mod tests {
   }
 
   #[test]
-  fn argv_uses_text_input_and_splices_the_conversation() {
+  fn argv_attaches_the_prompt_to_print_and_splices_the_conversation() {
     let resumed = backend(LaunchArgs {
       extra_flags: vec!["--sandbox".to_string()],
       buffer_limit: None,
@@ -524,9 +524,7 @@ mod tests {
     });
     let expected: Vec<&str> = vec![
       "/usr/bin/agy",
-      "--print",
-      "--input-format",
-      "text",
+      "--print=hello",
       "--print-timeout",
       "1h",
       "--dangerously-skip-permissions",
@@ -538,13 +536,11 @@ mod tests {
       "conv-abc",
       "--sandbox",
     ];
-    assert_eq!(resumed.argv(), expected);
+    assert_eq!(resumed.argv("hello").unwrap(), expected);
   }
 
   #[test]
-  fn a_200_kib_prompt_uses_stdin_and_no_argv_element_carries_it() {
-    const MAX_ARGUMENT_BYTES: usize = 128 * 1024;
-    let prompt = "\u{fc}".repeat(100 * 1024);
+  fn a_prompt_at_the_argument_limit_fails_before_the_spawn() {
     let backend = backend(LaunchArgs {
       extra_flags: Vec::new(),
       buffer_limit: None,
@@ -557,14 +553,15 @@ mod tests {
       backend_kwargs: Map::new(),
       manager_turn: false,
     });
-    let argv = AgentBackend::build_command(&backend, &prompt).unwrap();
-    assert!(argv.iter().all(|argument| argument.len() <= MAX_ARGUMENT_BYTES), "{argv:?}");
-    assert!(argv.iter().all(|argument| !argument.contains(&prompt)), "{argv:?}");
-    assert_eq!(AgentBackend::stdin_prompt(&backend, &prompt).as_deref(), Some(prompt.as_str()));
+    let prompt = "x".repeat(MAX_ARGUMENT_BYTES);
+    let error = AgentBackend::build_command(&backend, &prompt).unwrap_err();
+    assert!(error.to_string().contains("one argument"), "{error:#}");
+    assert!(AgentBackend::build_command(&backend, &"x".repeat(1024)).is_ok());
+    assert_eq!(AgentBackend::stdin_prompt(&backend, &prompt), None);
   }
 
   #[test]
-  fn the_instructions_are_framed_into_stdin() {
+  fn the_instructions_are_framed_into_the_print_argument() {
     let instructed = backend(LaunchArgs {
       extra_flags: Vec::new(),
       buffer_limit: None,
@@ -577,10 +574,9 @@ mod tests {
       backend_kwargs: Map::new(),
       manager_turn: false,
     });
-    assert_eq!(
-      AgentBackend::stdin_prompt(&instructed, "do the work").as_deref(),
-      Some(frame_system_prompt("Build stuff.", "do the work").as_str())
-    );
+    let framed = frame_system_prompt("Build stuff.", "do the work");
+    let argv = AgentBackend::build_command(&instructed, "do the work").unwrap();
+    assert_eq!(argv[1], format!("--print={framed}"));
   }
 
   #[test]
@@ -665,7 +661,8 @@ mod tests {
     assert_eq!(outcome.events.len(), 1);
     assert_eq!(outcome.events[0]["type"], "error");
     assert!(outcome.events[0]["message"].as_str().unwrap().contains("2s"));
-    assert_eq!((outcome.exit_code, outcome.guard_error), (1, None));
+    assert_eq!(outcome.exit_code, 1);
+    assert!(outcome.guard_error.unwrap().contains("2s"));
   }
 
   #[test]
@@ -687,7 +684,7 @@ mod tests {
       failed.events,
       vec![json!({"type": "error", "message": "quota exhausted", "content": "quota exhausted"})]
     );
-    assert_eq!((failed.exit_code, failed.guard_error), (1, None));
+    assert_eq!((failed.exit_code, failed.guard_error), (1, Some("quota exhausted".to_string())));
 
     let named = backend(LaunchArgs {
       extra_flags: Vec::new(),
@@ -703,7 +700,7 @@ mod tests {
     })
     .finish(r#"{"status":"ERROR","error":"bad model"}"#, "", 1);
     assert_eq!(named.events[0]["message"], "agy exited 1: bad model");
-    assert_eq!((named.exit_code, named.guard_error), (1, None));
+    assert_eq!((named.exit_code, named.guard_error), (1, Some("agy exited 1: bad model".to_string())));
 
     let silent = backend(LaunchArgs {
       extra_flags: Vec::new(),
@@ -718,8 +715,52 @@ mod tests {
       manager_turn: false,
     })
     .finish("", "", 137);
-    assert_eq!(silent.events[0]["message"], "Antigravity CLI exited with code 137");
-    assert_eq!((silent.exit_code, silent.guard_error), (137, None));
+    assert_eq!(silent.events[0]["message"], "agy exited 137: no stderr or stdout");
+    assert_eq!((silent.exit_code, silent.guard_error), (137, Some("agy exited 137: no stderr or stdout".to_string())));
+  }
+
+  #[test]
+  fn a_nonzero_exit_names_its_status_and_the_stderr_the_cli_wrote() {
+    let stderr =
+      "Error: --print took \"--output-format\" as its prompt, so the intended prompt was left as an argument.\n";
+    let outcome = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: Map::new(),
+      manager_turn: false,
+    })
+    .finish("", stderr, 2);
+    let message = outcome.guard_error.expect("a nonzero exit is a run failure");
+    assert!(message.starts_with("agy exited 2: "), "{message}");
+    assert!(message.contains("--print took"), "{message}");
+    assert_eq!(outcome.exit_code, 2);
+  }
+
+  #[test]
+  fn an_empty_answer_on_a_success_envelope_is_a_run_failure() {
+    let empty =
+      r#"{"status":"SUCCESS","conversation_id":"conv-abc","response":"<SYSTEM_MESSAGE>x</SYSTEM_MESSAGE>\n"}"#;
+    let outcome = backend(LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: Map::new(),
+      manager_turn: false,
+    })
+    .finish(empty, "", 0);
+    assert_eq!(outcome.guard_error.as_deref(), Some("agy SUCCESS envelope carried an empty answer"));
+    assert_eq!((outcome.exit_code, outcome.events.len()), (1, 1));
   }
 
   #[test]

@@ -2,6 +2,7 @@
 
 mod agent_binding;
 mod api;
+pub use api::TASKS_PATH;
 mod boundary;
 pub mod config;
 mod firing;

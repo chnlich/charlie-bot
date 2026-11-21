@@ -8,6 +8,7 @@ pub mod audit;
 pub mod cli;
 mod json_input;
 pub mod metadata;
+pub mod pending_wake;
 mod plan_links;
 mod reply;
 mod sidebar;

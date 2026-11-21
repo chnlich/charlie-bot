@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use charliebot_core::event_types;
 use charliebot_core::run_token::{self, RunTokenClaims};
 use charliebot_store::control_events;
-use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{ColdReadSpec, PARENT_SESSION_ID, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::{CreateTask, TaskCaller};
 use charliebot_tasks::completion::ArchiveAuthority;
@@ -152,14 +152,30 @@ async fn assert_launched_on(
   assert_first_run(stack, guard, response, backend, backend).await
 }
 
-/// A launched run routed through the pool: the child keeps the pool id and the first run launched on `member`.
+/// A launched run routed through the pool: the child keeps the pool id and the first run launched on `member`, and the
+/// parent's delegation event for that run names the pool.
 async fn assert_launched_in_pool(
   stack: &Stack,
   guard: &ProcessGroupGuard,
   response: &Value,
   member: &str,
 ) -> anyhow::Result<()> {
-  assert_first_run(stack, guard, response, ROTATION_POOL_ID, member).await
+  assert_first_run(stack, guard, response, ROTATION_POOL_ID, member).await?;
+  let (parent, run_id) = (text(response, PARENT_SESSION_ID)?, text(response, "run_id")?);
+  let delegated = stack
+    .run_events(&parent)?
+    .into_iter()
+    .find(|event| {
+      event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::TASK_DELEGATED)
+        && event.get("thread_id").and_then(charliebot_store::compact::CompactValue::as_str) == Some(run_id.as_str())
+    })
+    .expect("the parent holds the delegation event of the launched run");
+  assert_eq!(
+    delegated.get(event_types::POOL).and_then(charliebot_store::compact::CompactValue::as_str),
+    Some(ROTATION_POOL_ID),
+    "the delegation event names the pool"
+  );
+  Ok(())
 }
 
 /// The launched process is tracked; the child record names `child_backend` and the first run `run_backend`.

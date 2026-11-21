@@ -620,11 +620,15 @@ impl Store {
           return Ok(Some(Arc::clone(&entry.facts)));
         }
         // A boot checkpoint covers this log's prefix: it answers the same fold from the appended bytes, without the
-        // whole-log load. It validates against the log first, so a stale one falls through to the load.
+        // whole-log load. It validates against the log first, so a stale one falls through to the scan below.
         if let Some(identity) = identity
           && let Some(facts) = self.checkpoint_facts_until(session_id, identity, archived, should_stop)?
         {
           return Ok(Some(facts));
+        }
+        if identity.is_some() {
+          // A cold log folds from its scan and seal, which parse no chat content and keep no history.
+          return self.cold_node_facts_until(session_id, should_stop);
         }
         let Some(events) = self.live_events_with_generation_until(session_id, should_stop)? else {
           return Ok(None);
@@ -635,7 +639,7 @@ impl Store {
     self.node_facts_of(session_id, generation, list_identity, &live, should_stop)
   }
 
-  fn node_facts_of(
+  pub(crate) fn node_facts_of(
     &self,
     session_id: &str,
     generation: u64,
@@ -772,12 +776,14 @@ impl Store {
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
   /// the archived extent are the ones it covers. The read parses no history. A cold read with no sealed state folds
   /// the log's fact checkpoint and the bytes past it when one covers the log, which memoizes the same facts and runs
-  /// under the log's identity. Any other cold read loads the history.
+  /// under the log's identity. Otherwise the log is scanned as one snapshot and sealed, which parses no chat content
+  /// and keeps no history; the cache stays cold.
   fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
     let (generation, list_identity, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
       LiveHistory::Cold(identity) => {
         let archived = self.read_archive_offset(session_id)?;
+        // A session with no live log has nothing to scan: its history is the archives, which the whole-log load reads.
         let Some(identity) = identity else {
           let (generation, list_identity, live) = self.live_events_with_generation(session_id)?;
           return self.node_state_of(session_id, generation, list_identity, &live);
@@ -790,22 +796,22 @@ impl Store {
         }
         // The checkpoint answers the fold the whole log answers, and memoizes it under the log's identity, so the
         // state and run facts below need no history read. A checkpoint that is absent, torn or stale folds nothing,
-        // and the whole-log load below answers.
+        // and the scan below answers.
         if let Some(facts) = self.checkpoint_facts_until(session_id, identity, archived, &mut || false)? {
           let version = self
             .sealed_state_version(session_id, identity, archived)
             .expect("the checkpoint fold memoizes its state under the log identity");
           return Ok((version, self.node_state_view(session_id, facts)?));
         }
-        let (generation, list_identity, live) = self.live_events_with_generation(session_id)?;
-        return self.node_state_of(session_id, generation, list_identity, &live);
+        // The scan folds the log's snapshot and its seal memoizes the state, so a later read answers without a scan.
+        return self.cold_node_state(session_id);
       }
     };
     self.node_state_of(session_id, generation, list_identity, &live)
   }
 
   /// The version of the memoized state that covers `identity` at `archived`, when one does.
-  fn sealed_state_version(&self, session_id: &str, identity: FileIdentity, archived: usize) -> Option<u64> {
+  pub(crate) fn sealed_state_version(&self, session_id: &str, identity: FileIdentity, archived: usize) -> Option<u64> {
     let states = self.node_state_cache.lock().expect("node-state cache mutex is not poisoned");
     states
       .get(session_id)
@@ -814,7 +820,7 @@ impl Store {
   }
 
   /// [`Store::node_state_versioned`] for a caller that holds the live events and their cache generation.
-  fn node_state_of(
+  pub(crate) fn node_state_of(
     &self,
     session_id: &str,
     generation: u64,
@@ -866,6 +872,17 @@ impl Store {
       Some(runs) => runs,
       None => self.run_facts(session_id)?,
     };
+    self.node_state_from(session_id, facts, runs)
+  }
+
+  /// A node state from the facts and run facts one fold produced. Malformed task facts keep the session's whole event
+  /// list for the state's report, which is the one history load a state read makes, and only for a malformed task.
+  pub(crate) fn node_state_from(
+    &self,
+    session_id: &str,
+    facts: Arc<NodeFacts>,
+    runs: Arc<RunFacts>,
+  ) -> StoreResult<Arc<NodeState>> {
     let malformed_task_events =
       if facts.task.is_err() { Some(self.load_all_facts_shared_sync(session_id)?) } else { None };
     Ok(Arc::new(NodeState { facts, runs, malformed_task_events }))
@@ -1458,7 +1475,16 @@ impl Store {
 
     if let Some(existing) = self.read_metadata_fresh(&task_id)? {
       if matches!(caller, TaskCaller::Agent { .. }) {
-        let replay = CreateTask { profile: existing.profile, task: existing.task.clone(), ..request };
+        let replay = CreateTask {
+          request_id: request.request_id,
+          task_parent_id: request.task_parent_id,
+          profile: existing.profile,
+          task: existing.task.clone(),
+          name: request.name,
+          backend: request.backend,
+          group: request.group,
+          session_id: request.session_id,
+        };
         self.runtime_gate(&replay, &caller)?;
       }
       return Ok(existing);
@@ -1866,7 +1892,16 @@ impl Store {
         if let Some(task) = task {
           // A task body carries no approver, so the replaced record keeps the approver it had.
           let approver = meta.task.as_ref().map_or(TaskApprover::User, |current| current.approver);
-          meta.task = task.map(|task| TaskSpec { approver, ..task });
+          meta.task = task.map(|task| TaskSpec {
+            goal: task.goal,
+            repo_path: task.repo_path,
+            base_branch: task.base_branch,
+            task_type: task.task_type,
+            keep_worktree: task.keep_worktree,
+            cold_read: task.cold_read,
+            approver,
+            improve_host: task.improve_host,
+          });
         }
         if let Some(approver) = approver {
           meta.task.get_or_insert_with(TaskSpec::default).approver = approver;
@@ -3246,7 +3281,7 @@ pub(crate) mod tests {
   use crate::compact::CompactValue;
 
   use super::*;
-  use crate::metadata::{TaskProfile, TaskSpec, TaskType};
+  use crate::metadata::{TaskApprover, TaskProfile, TaskSpec, TaskType};
   use crate::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
   use crate::store::{
     AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
@@ -3427,7 +3462,16 @@ pub(crate) mod tests {
       request_id: "child-request".to_string(),
       task_parent_id: Some(root.id.clone()),
       profile: TaskProfile::Worker,
-      task: Some(TaskSpec { goal: "child goal".to_string(), ..TaskSpec::default() }),
+      task: Some(TaskSpec {
+        goal: "child goal".to_string(),
+        repo_path: None,
+        base_branch: None,
+        task_type: None,
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: None,
+      }),
       name: Some("Child".to_string()),
       backend: Some("synthetic".to_string()),
       group: Some("group-a".to_string()),
@@ -3577,7 +3621,12 @@ pub(crate) mod tests {
         CreateTask {
           request_id: "closed-ancestor-worker".to_string(),
           task_parent_id: Some(child.id.clone()),
-          ..worker_request
+          profile: worker_request.profile,
+          task: worker_request.task,
+          name: worker_request.name,
+          backend: worker_request.backend,
+          group: worker_request.group,
+          session_id: worker_request.session_id,
         },
         TaskCaller::Agent { session_id: child.id.clone() },
         Map::new(),
@@ -3591,7 +3640,16 @@ pub(crate) mod tests {
     );
 
     let verify_request = CreateTask {
-      task: Some(TaskSpec { task_type: Some(TaskType::Verify), ..TaskSpec::default() }),
+      task: Some(TaskSpec {
+        goal: String::new(),
+        repo_path: None,
+        base_branch: None,
+        task_type: Some(TaskType::Verify),
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+        improve_host: None,
+      }),
       request_id: "closed-ancestor-verify".to_string(),
       task_parent_id: Some(child.id.clone()),
       profile: TaskProfile::Worker,
@@ -4137,25 +4195,57 @@ pub(crate) mod tests {
     let pending = format!("{} has an unprocessed input", worker.id);
     let guards = StubGuards { pending: HashMap::from([(worker.id.clone(), vec![pending.clone()])]) };
 
-    let demotion = PatchTask { profile: Some(Some(TaskProfile::Worker)), ..Default::default() };
+    let demotion = PatchTask {
+      name: None,
+      task_parent_id: None,
+      profile: Some(Some(TaskProfile::Worker)),
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&root.id, demotion, TaskCaller::Operator, &guards).await.unwrap_err();
     let blocker = "demotion to worker requires a task with no child tasks".to_string();
     assert_eq!(error.status_code(), Some(409));
     assert_eq!(error.blockers(), Some(std::slice::from_ref(&blocker)));
 
     // The node's own guard counts once for the structural change and once for the moving subtree.
-    let reparent = PatchTask { task_parent_id: Some(Some(other.id.clone())), ..Default::default() };
+    let reparent = PatchTask {
+      name: None,
+      task_parent_id: Some(Some(other.id.clone())),
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&worker.id, reparent, TaskCaller::Operator, &guards).await.unwrap_err();
     let mut expected = vec![pending.clone(), format!("{}: {pending}", worker.id)];
     expected.sort();
     assert_eq!(error.blockers(), Some(expected.as_slice()));
 
-    let ghost = PatchTask { task_parent_id: Some(Some("ghost".to_string())), ..Default::default() };
+    let ghost = PatchTask {
+      name: None,
+      task_parent_id: Some(Some("ghost".to_string())),
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&worker.id, ghost, TaskCaller::Operator, &guards).await.unwrap_err();
     assert_eq!(error.status_code(), Some(404));
     assert_eq!(error.to_string(), "task ghost not found");
 
-    let renamed = PatchTask { name: Some("renamed".to_string()), ..Default::default() };
+    let renamed = PatchTask {
+      name: Some("renamed".to_string()),
+      task_parent_id: None,
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&root.id, renamed, TaskCaller::System, &guards).await.unwrap_err();
     assert_eq!(error.to_string(), "task metadata mutations require operator credentials");
     assert_eq!(error.status_code(), Some(403));
@@ -4177,9 +4267,12 @@ pub(crate) mod tests {
     let node_ref = store.store_prompt_body("node rule\n").unwrap();
     let edit = || PatchTask {
       name: Some("renamed".to_string()),
+      task_parent_id: None,
+      profile: None,
+      task: None,
       subtree_prompt: Some(Some("subtree rule\n".to_string())),
       node_prompt: Some(Some("node rule\n".to_string())),
-      ..Default::default()
+      approver: None,
     };
 
     let guards = StubGuards::default();
@@ -4192,7 +4285,15 @@ pub(crate) mod tests {
     store.patch_task(&root.id, edit(), TaskCaller::Operator, &guards).await.unwrap();
     assert_eq!(prompt_facts(&store, &root.id).len(), 2);
 
-    let cleared = PatchTask { node_prompt: Some(None), ..Default::default() };
+    let cleared = PatchTask {
+      name: None,
+      task_parent_id: None,
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: Some(None),
+      approver: None,
+    };
     let patched = store.patch_task(&root.id, cleared, TaskCaller::Operator, &guards).await.unwrap();
     assert_eq!(patched.node_prompt_ref, None);
     let facts = prompt_facts(&store, &root.id);
@@ -4801,27 +4902,27 @@ pub(crate) mod tests {
     assert!(error.to_string().contains("without a stable input_id"));
   }
 
+  /// Cold node-facts reads around appends scan the log and load none of its history, and each read's facts equal the
+  /// whole-log fold that `facts_of` makes.
   #[tokio::test]
-  async fn node_facts_fold_each_appended_event_once() {
+  async fn node_facts_cold_reads_load_no_history_and_match_the_full_fold() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let node = create_node(&store, "node-facts-suffix", None, TaskProfile::Manager).await;
 
-    let before = store.history_work();
     assert_eq!(store.node_facts(&node.id).unwrap().task().unwrap().task_state, "open");
     append(&store, &node.id, json!({"id": "user-a", "type": "user", "content": "first"})).await;
     append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
     append(&store, &node.id, json!({"id": "user-b", "type": "user", "content": "after close"})).await;
+    let reads = store.history_work().file_reads;
     let folded = store.node_facts(&node.id).unwrap();
     let folded = folded.task().unwrap();
+    assert_eq!(store.history_work().file_reads, reads, "the cold read scans the log and loads none of it");
     let full = store.facts_of(&node.id).unwrap();
     assert_eq!(folded.task_state, full.task_state);
     assert_eq!(folded.covered, full.covered);
     assert_eq!(folded.boundary_index, full.boundary_index);
     assert_eq!(folded.input_candidates, full.input_candidates);
-    let work = store.history_work();
-    assert_eq!(work.full_folds - before.full_folds, 1);
-    assert_eq!(work.folded_events - before.folded_events, full.covered as u64);
   }
 
   #[tokio::test]
@@ -5471,13 +5572,14 @@ pub(crate) mod tests {
     assert_eq!(store.task_tree_activity(&node.id).unwrap().work_state, "idle");
     assert_eq!(store.history_work().file_reads, reads, "the derivation walks the log and loads no cached history");
 
-    // A fold that misses the last append is not sealed: the read after the eviction parses the log.
+    // A fold that misses the last append is not sealed: the read after the eviction scans the log, and loads none of
+    // its history.
     store.node_facts(&node.id).unwrap();
     append(&store, &node.id, json!({"type": "task_closed", "outcome": "cancelled"})).await;
     store.evict_recovery_history(&node.id);
     let reads = store.history_work().file_reads;
     assert_eq!(store.task_state(&node.id).unwrap(), "cancelled");
-    assert_eq!(store.history_work().file_reads, reads + 1);
+    assert_eq!(store.history_work().file_reads, reads, "the cold scan loads no whole-log history");
   }
 
   #[tokio::test]
@@ -5696,8 +5798,10 @@ pub(crate) mod tests {
     assert_eq!(stop_checks, 3, "one block needs an initial, block-boundary, and completion stop check");
   }
 
+  /// A stop that lands during a cold read returns no facts and publishes no parsed history. The cold scan checks the
+  /// stop flag before it starts and before its facts are returned; the next read answers the full fold.
   #[tokio::test]
-  async fn node_facts_cold_read_checks_stop_between_event_lines_without_caching_a_prefix() {
+  async fn node_facts_cold_read_honors_a_stop_and_publishes_no_prefix() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let node = create_node(&store, "stop-cold-event-read", None, TaskProfile::Manager).await;
@@ -5711,13 +5815,14 @@ pub(crate) mod tests {
     let facts = store
       .node_facts_until(&node.id, &mut || {
         checks += 1;
-        checks == 5
+        checks >= 2
       })
       .unwrap();
 
     assert!(facts.is_none(), "the stopped recovery returns no partial node facts");
-    assert_eq!(checks, 5, "the recovery stop check reached the cold event reader before its third line");
+    assert_eq!(checks, 2, "the stop is checked before the cold scan starts and is honored there");
     assert!(store.cached_chat_events(&node.id).is_none(), "a cancelled read does not publish its parsed prefix");
+    assert_eq!(store.node_facts(&node.id).unwrap().task().unwrap().covered, expected_events);
     assert_eq!(store.load_chat_events_shared_sync(&node.id).unwrap().len(), expected_events);
   }
 
@@ -5730,7 +5835,8 @@ pub(crate) mod tests {
       task_type: Some(TaskType::Implement),
       keep_worktree: true,
       cold_read: None,
-      ..TaskSpec::default()
+      approver: TaskApprover::User,
+      improve_host: None,
     };
     let text = serde_json::to_string(&implement).unwrap();
     assert_eq!(
@@ -5742,7 +5848,16 @@ pub(crate) mod tests {
     );
     assert_eq!(task_spec_hash(&implement).unwrap(), "e7fbf6373f6bd68ec36edba7afc6737364e61cea3e41a40e14d2c8aa8d745891");
 
-    let verify = TaskSpec { goal: "check".to_string(), task_type: Some(TaskType::Verify), ..TaskSpec::default() };
+    let verify = TaskSpec {
+      goal: "check".to_string(),
+      repo_path: None,
+      base_branch: None,
+      task_type: Some(TaskType::Verify),
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: None,
+    };
     assert_eq!(
       serde_json::to_string(&verify).unwrap(),
       concat!(

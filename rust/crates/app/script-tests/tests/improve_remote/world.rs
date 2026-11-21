@@ -159,6 +159,9 @@ for name in ANTHROPIC_AUTH_TOKEN CHARLIE_CODE_API_KEY CLAUDE_CODE_OAUTH_TOKEN; d
     printf '%s_SHA256=unset\n' "$name"
   fi
 done >>"$FAKE_CLAUDE_ENV"
+# A tool shell is a child of the member: its record shows whether the review key reaches it.
+printf 'TOOL_SHELL_CHARLIE_CODE_API_KEY=%s\n' \
+  "$(bash -c 'if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then echo set; else echo unset; fi')" >>"$FAKE_CLAUDE_ENV"
 if [[ -n ${FAKE_CLAUDE_STDIN:-} ]]; then
   cat >"$FAKE_CLAUDE_STDIN"
 fi
@@ -176,14 +179,28 @@ if [[ -n ${FAKE_CLAUDE_REVIEW_TASK:-} ]]; then
   charlie-code --json --task-file "$FAKE_CLAUDE_REVIEW_TASK" \
     --session-dir "$HOME/improve/$IMPROVE_DIRECTION/clc-sessions"
 fi
+# One write of the round: the gh command a test sets, run in the round's environment, so the round's write checks
+# see it as the member's own call does.
+if [[ -n ${FAKE_CLAUDE_COMMAND:-} ]]; then
+  bash -c "$FAKE_CLAUDE_COMMAND"
+  exit "$?"
+fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
 "#;
 
-/// Fake codex: record the `CODEX_HOME` it runs with, its arguments, and the `auth.json` it finds there with that file's
-/// mode, outside the round's boundary.
+/// Fake codex: record the `CODEX_HOME` it runs with, whether its environment holds the review key, its arguments, and
+/// the `auth.json` it finds there with that file's mode, outside the round's boundary.
 const CODEX: &str = r#"# Fake codex: record the CODEX_HOME it runs with, the arguments it receives and its login file.
 printf '%s\n' "$0" >>"$FAKE_CLI_RUNS"
 printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}" >"$FAKE_CODEX_ENV"
+if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then
+  printf 'CHARLIE_CODE_API_KEY=set\n' >>"$FAKE_CODEX_ENV"
+else
+  printf 'CHARLIE_CODE_API_KEY=unset\n' >>"$FAKE_CODEX_ENV"
+fi
+# A tool shell is a child of the member: its record shows whether the review key reaches it.
+printf 'TOOL_SHELL_CHARLIE_CODE_API_KEY=%s\n' \
+  "$(bash -c 'if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then echo set; else echo unset; fi')" >>"$FAKE_CODEX_ENV"
 printf '%s\n' "$@" >"$FAKE_CODEX_ARGV"
 if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
   cp -- "$CODEX_HOME/auth.json" "$FAKE_CODEX_AUTH"
@@ -518,9 +535,29 @@ impl World {
     let sandbox = Sandbox::new();
     let repo = sandbox.dir("repo");
     let scripts = sandbox.dir("repo/dev/improve");
-    for name in ["remote-launch.sh", "remote-runner.sh", "inflight-files.sh", "member_kinds.txt"] {
+    for name in [
+      "remote-launch.sh",
+      "remote-runner.sh",
+      "review-charlie-code.sh",
+      "inflight-files.sh",
+      "clone-check.sh",
+      "member_kinds.txt",
+      "gh-shim.sh",
+    ] {
       harness::copy_file(&harness::repo_root().join("dev/improve").join(name), &scripts.join(name));
     }
+    // The runner installs the round's gh shim and its scanner from the commit's objects, and its clone check requires
+    // the clone's pre-push hook. The commit carries them as a clone of the real repository does.
+    let hooks = sandbox.dir("repo/dev/git-hooks");
+    harness::write_executable(
+      &hooks.join("pre-push"),
+      std::fs::read(harness::repo_root().join("dev/git-hooks/pre-push")).unwrap(),
+    );
+    harness::copy_file(
+      &harness::repo_root().join("dev/check-skills-host-leak.sh"),
+      &repo.join("dev/check-skills-host-leak.sh"),
+    );
+    harness::copy_file(&harness::repo_root().join("dev/leak-patterns.sh"), &repo.join("dev/leak-patterns.sh"));
     let local_home = sandbox.dir("local");
     let remote_home = sandbox.dir("remote");
     let profile_home = sandbox.dir("profile");
@@ -582,11 +619,16 @@ impl World {
 
     let round_root = sandbox.dir(&format!("remote/improve/{direction}"));
     sandbox.dir("remote/improve/home");
+    // The direction clone is a clone of its origin, a bare repository named charlie-bot as the protocol's clones are.
+    // The origin's main carries the commit's pre-push hook, so the clone's tree has the hook the runner's clone check
+    // requires, and the runner's sync fetches from this origin. A hook the clone held untracked would block that sync's
+    // checkout, because git refuses to overwrite an untracked file.
+    let direction_origin = sandbox.dir("remotes/charlie-bot.git");
+    let direction_origin_text = direction_origin.display().to_string();
+    git(&sandbox, &git_env, &repo, &["clone", "-q", "--bare", ".", &direction_origin_text]);
+    git(&sandbox, &git_env, &round_root, &["clone", "-q", &direction_origin_text, "charlie-bot"]);
     let clone = round_root.join("charlie-bot");
-    fs::create_dir_all(&clone).expect("the direction clone");
-    git(&sandbox, &git_env, &clone, &["init", "-q", "-b", "main"]);
     git(&sandbox, &git_env, &clone, &["config", "core.hooksPath", "dev/git-hooks"]);
-    git(&sandbox, &git_env, &clone, &["remote", "add", "origin", "https://example.invalid/someone/charlie-bot.git"]);
     let evidence = round_root.join("evidence");
     fs::create_dir_all(&evidence).expect("the evidence directory");
     let mock_home_log = sandbox.root().join("mock-home.log");
@@ -974,12 +1016,13 @@ impl World {
     PathBuf::from(format!("/tmp/improve-{}/codex-home", self.direction))
   }
 
-  /// A launch directory the runner reads, created as the launcher's payload creates it: the member kind list
-  /// that the payload carries sits beside the runner.
+  /// A launch directory the runner reads, created as the launcher's payload creates it: the member kind list and the
+  /// clone check that the payload carries sit beside the runner.
   pub fn stage_launch(&self, launch_id: &str) -> PathBuf {
     let launch = self.remote_home.join("improve/launch").join(launch_id);
     fs::create_dir_all(&launch).expect("the launch directory");
     harness::copy_file(&self.repo.join("dev/improve/member_kinds.txt"), &launch.join("member_kinds.txt"));
+    harness::copy_file(&self.repo.join("dev/improve/clone-check.sh"), &launch.join("clone-check.sh"));
     launch
   }
 

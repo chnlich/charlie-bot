@@ -406,6 +406,7 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
       match name {
         HAS_PENDING_PLAN_APPROVAL => pending_plan_approval |= value,
         HAS_WAITING_ITEMS => waiting_items |= value,
+        // A contribution may name a flag that this row does not show, so other names are skipped.
         _ => {}
       }
     }
@@ -571,7 +572,43 @@ mod tests {
       id: "synthetic-archived".to_string(),
       name: "Archived synthetic session".to_string(),
       status: SessionStatus::Archived,
-      ..SessionMetadata::new("unused", "unused", charliebot_store::metadata::TaskProfile::Manager)
+      has_unread: false,
+      has_running_tasks: false,
+      work_state: None,
+      has_pending_trigger: false,
+      pending_trigger_count: 0,
+      next_trigger_at: None,
+      has_pending_plan_approval: false,
+      starred: false,
+      thinking_since: None,
+      run_backend: None,
+      created_at: charliebot_store::metadata::UtcDateTime::now(),
+      updated_at: charliebot_store::metadata::UtcDateTime::now(),
+      cc_session_id: None,
+      cc_session_started_at: None,
+      backend: String::new(),
+      schedule_cron: None,
+      schedule_enabled: None,
+      schedule_next_run: None,
+      schedule_timezone: None,
+      schedule_allow_failure: None,
+      parent_session_id: None,
+      successor_session_id: None,
+      schema_version: 2,
+      task_parent_id: None,
+      profile: charliebot_store::metadata::TaskProfile::Manager,
+      task: None,
+      created_by_event: None,
+      origin_ref: None,
+      subtree_prompt_ref: None,
+      node_prompt_ref: None,
+      native_prompt_hash: None,
+      native_backend: None,
+      native_model: None,
+      round_ratings: charliebot_store::metadata::RoundRatings::default(),
+      group: None,
+      archive_offset: 0,
+      extra: Map::new(),
     };
     let mut entry = Map::new();
     entry.insert(HAS_RUNNING_TASKS.to_string(), Value::Bool(false));

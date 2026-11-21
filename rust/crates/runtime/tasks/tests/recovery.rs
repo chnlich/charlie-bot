@@ -574,7 +574,7 @@ async fn boot_reattach_holds_the_login_each_live_process_environ_names() -> anyh
     Stack::start_with_package(vec![option], vec![BACKEND_ID.to_string()], ("reattach_pool", register_reattach_pool))
       .await?;
   let mut keyed_spec = script_run_spec();
-  keyed_spec.improve_host = Some("host3".to_string());
+  keyed_spec.improve_host = Some("remote-test-host".to_string());
   let keyed = stack.node("keyed", None, TaskProfile::Worker, Some(keyed_spec)).await?;
   let plain = stack.node("plain", None, TaskProfile::Worker, Some(script_run_spec())).await?;
 
@@ -2619,10 +2619,13 @@ async fn recovery_skips_the_replay_of_a_failed_run_whose_failover_registered_its
   let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, None).await?;
   stack.queue_run(&worker.id, "run-failed", RunKind::Work).await?;
   stack.finish(&worker.id, "run-failed", RunOutcomeKind::Failed).await?;
+  // The failover requests its retry under the request id it derives, and the store stores the retry under that id's
+  // stable run id: the replay matches the stored form.
+  let failover_request = control_events::stable_run_id(&worker.id, "quota-failover:run-failed");
   let guard = stack.store().control_lock().await;
   stack
     .store()
-    .create_retry_run_locked(&guard, &worker.id, "quota-failover:run-failed", "run-failed", None, retry_fields())
+    .create_retry_run_locked(&guard, &worker.id, &failover_request, "run-failed", None, retry_fields())
     .await?;
   drop(guard);
 
@@ -2632,6 +2635,37 @@ async fn recovery_skips_the_replay_of_a_failed_run_whose_failover_registered_its
     0,
     "the failover's retry owns the follow-up; the replay adds no report"
   );
+  Ok(())
+}
+
+/// After a real pool failover the failed run's retry is stored under the failover's stored id, and a node pass reports
+/// the failed run to no parent. The live failover already took the run's follow-up, so this pass does not reach the
+/// replay's failed branch; `recovery_skips_the_replay_of_a_failed_run_whose_failover_registered_its_retry` covers it.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_restart_after_a_real_failover_reports_nothing_for_the_failed_run() -> anyhow::Result<()> {
+  let (stack, manager_id, worker_id, run_id, _staged) = run_ending_entry(RunEntry::Launch, true).await?;
+  assert_ending(&stack, &manager_id, &worker_id, &run_id, true).await?;
+  let retry = stack
+    .run_records(&worker_id)?
+    .into_iter()
+    .find(|candidate| candidate.retry_of_run_id.as_deref() == Some(run_id.as_str()))
+    .context("the failover registered its retry")?;
+  let request = control_events::stable_run_id(&worker_id, &format!("quota-failover:{run_id}"));
+  assert_eq!(
+    retry.id,
+    control_events::stable_run_id(&worker_id, &request),
+    "the retry is stored under the stored form"
+  );
+
+  stack.node_pass(&worker_id).await?;
+  // The retry's own completion may report to the parent; the failed run must not be reported as failed.
+  let reports = stack.child_reports(&manager_id)?;
+  let reported_failure = reports.iter().any(|report| {
+    report["outcome"] == "failed"
+      || report["result_refs"].as_array().is_some_and(|refs| refs.contains(&json!(format!("run:{run_id}"))))
+  });
+  assert!(!reported_failure, "the failover's retry owns the follow-up; the replay reports no failure: {reports:?}");
   Ok(())
 }
 

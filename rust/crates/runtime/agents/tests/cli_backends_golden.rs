@@ -1,7 +1,9 @@
 //! Golden checks of the gemini, charlie-code, antigravity and Anthropic-compatible backend types.
 //! The recorded reference (`fixtures/cli_backends_golden.json`) holds every section's recorded answer over the
-//! synthetic inputs built here. The test fails with every section that differs. Gemini and Antigravity send the
-//! prompt on stdin, so their recorded argv and stdin are the Rust launch, not the Python package's prompt argv.
+//! synthetic inputs built here. The test fails with every section that differs. Gemini sends the prompt on stdin, so
+//! its recorded argv and stdin are the Rust launch, not the Python package's prompt argv. Antigravity's recorded
+//! entries are the Rust launch too: the installed `agy` takes the prompt only as the value of `--print`
+//! (`--print=<prompt>`), so the Python package's `--input-format text` argv does not reach the answer.
 //!
 //! Sections: the argv/env/stdin/instructions matrix, built through each type's factory (19 cases). The translator
 //! streams of gemini and charlie-code come next (2). The antigravity finish cases follow, each run through the
@@ -169,9 +171,7 @@ fn write_fixtures(root: &Path) -> Fixture {
   for spec in finish_specs() {
     let dir = root.join("finish").join(spec.id);
     fs::create_dir_all(dir.join("cwd")).unwrap();
-    // A fake agy reads its prompt from stdin before it answers, as the CLI does.
     let steps = json!([
-      {"record_stdin": path_text(&dir.join("stdin.txt"))},
       {"stdout": spec.stdout},
       {"stderr": spec.stderr},
       {"exit": spec.exit}

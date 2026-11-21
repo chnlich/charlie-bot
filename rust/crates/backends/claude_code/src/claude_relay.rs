@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
-  API_ERROR_STATUS, ASSISTANT, MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RATE_LIMIT_RESETS_AT,
-  RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_ALLOWED_WARNING, RATE_LIMIT_STATUS_REJECTED, TOOL_RESULT, USER,
+  API_ERROR_STATUS, ASSISTANT, IS_ERROR, MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO,
+  RATE_LIMIT_RESETS_AT, RATE_LIMIT_STATUS, RATE_LIMIT_STATUS_ALLOWED_WARNING, RATE_LIMIT_STATUS_REJECTED, RESULT,
+  TOOL_RESULT, USER,
 };
 use charliebot_registry::backend::{LaunchRefused, LaunchWatch as LaunchWatchTrait, MemberFailure};
 use charliebot_store::metadata::UtcDateTime;
@@ -45,6 +46,8 @@ impl Decision {
 
 /// Per-process quota and authentication watch. A keyed round's watch records the readings and the decision, but it never
 /// arms the warning relay: the round's token lives on its improve host, so no second login can take the round over.
+/// A process whose last result reports no error and is followed by no assistant or user event ended cleanly: it is not
+/// relayed, whatever its exit code.
 pub struct RelayWatch {
   label: String,
   model: Option<String>,
@@ -55,6 +58,7 @@ pub struct RelayWatch {
   reason: Option<Decision>,
   armed: bool,
   auth_failed: bool,
+  clean_end: bool,
   held_logged: bool,
   decision: Arc<Mutex<Option<String>>>,
   keyed: bool,
@@ -80,20 +84,37 @@ impl RelayWatch {
       reason: None,
       armed: false,
       auth_failed: false,
+      clean_end: false,
       held_logged: false,
       decision,
       keyed,
     }
   }
 
+  /// The relay decision for a process that exited with `exit_code`. A clean end has no decision, whatever the exit code:
+  /// the run's work is done, and nothing is left to move.
   fn decision(&self, exit_code: i32) -> Option<Decision> {
-    if exit_code != 0 && self.auth_failed { Some(Decision::LoginFailed) } else { self.reason }
+    if self.clean_end {
+      None
+    } else if exit_code != 0 && self.auth_failed {
+      Some(Decision::LoginFailed)
+    } else {
+      self.reason
+    }
   }
 }
 
 impl LaunchWatchTrait for RelayWatch {
   fn observe(&mut self, event: &Value) -> bool {
-    match event.get("type").and_then(Value::as_str) {
+    let event_type = event.get("type").and_then(Value::as_str);
+    if matches!(event_type, Some(ASSISTANT | USER)) {
+      self.clean_end = false;
+    }
+    match event_type {
+      Some(RESULT) => {
+        self.clean_end = event.get(IS_ERROR).and_then(Value::as_bool) == Some(false);
+        false
+      }
       Some(RATE_LIMIT_EVENT) => {
         let Some(info) = event.get(RATE_LIMIT_INFO).filter(|value| value.is_object()) else {
           return false;
@@ -741,5 +762,96 @@ mod tests {
       .unwrap()
       .expect("the cap refuses a rejected relay");
     assert_eq!(refused.failure, MemberFailure::Other, "the reserved login is still raw headroom, not a quota fact");
+  }
+
+  fn result_event(is_error: bool) -> Value {
+    json!({"type":"result","subtype":"success","is_error":is_error,"result":"done"})
+  }
+
+  fn rejected_event() -> Value {
+    json!({"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}})
+  }
+
+  fn watch_for(home: &std::path::Path, keyed: bool) -> (RelayWatch, Arc<Mutex<Option<String>>>) {
+    let decision = Arc::new(Mutex::new(None));
+    let watch = RelayWatch::new(
+      "synthetic".to_string(),
+      Some("claude-fable-5-1".to_string()),
+      config(home),
+      Arc::new(claude_accounts::ClaudeAccountState::new()),
+      None,
+      decision.clone(),
+      keyed,
+    );
+    (watch, decision)
+  }
+
+  /// A rejected process that ends with a clean result is not relayed, at exit 0 or at exit 1: the exit code does not
+  /// decide a clean end.
+  #[test]
+  fn a_rejection_followed_by_a_clean_result_is_not_relayed_at_any_exit_code() {
+    let home = tempfile::tempdir().unwrap();
+    for exit_code in [0, 1] {
+      let (mut watch, decision) = watch_for(home.path(), false);
+      assert!(!watch.observe(&rejected_event()));
+      assert!(!watch.observe(&result_event(false)));
+      assert!(!watch.wants_next(exit_code, ""), "exit {exit_code} after a clean result is not relayed");
+      assert_eq!(decision.lock().unwrap().as_deref(), None);
+    }
+  }
+
+  #[test]
+  fn a_rejection_followed_by_an_errored_result_is_relayed() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut watch, decision) = watch_for(home.path(), false);
+    assert!(!watch.observe(&rejected_event()));
+    assert!(!watch.observe(&result_event(true)));
+    assert!(watch.wants_next(0, ""));
+    assert_eq!(decision.lock().unwrap().as_deref(), Some(RELAY_REJECTED));
+  }
+
+  #[test]
+  fn a_rejection_after_a_clean_result_and_an_assistant_turn_is_relayed() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut watch, _decision) = watch_for(home.path(), false);
+    assert!(!watch.observe(&result_event(false)));
+    assert!(!watch.observe(&json!({"type":"assistant","message":{"content":[{"type":"text","text":"more"}]}})));
+    assert!(!watch.observe(&rejected_event()));
+    assert!(watch.wants_next(1, ""));
+  }
+
+  #[test]
+  fn a_rejection_after_a_clean_result_with_no_assistant_or_user_event_is_not_relayed() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut watch, _decision) = watch_for(home.path(), false);
+    assert!(!watch.observe(&result_event(false)));
+    assert!(!watch.observe(&rejected_event()));
+    assert!(!watch.wants_next(0, ""));
+  }
+
+  #[test]
+  fn a_warning_that_armed_before_a_clean_result_is_not_relayed() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut watch, _decision) = watch_for(home.path(), false);
+    watch.now = Some(UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap());
+    let warning = json!({
+      "type":"rate_limit_event",
+      "rate_limit_info":{"status":"allowed_warning","resetsAt":4102462800.0,
+        "unifiedWindows":{"five_hour":{"utilization":0.92}}}
+    });
+    assert!(!watch.observe(&warning));
+    assert!(!watch.observe(&result_event(false)));
+    assert!(!watch.wants_next(0, ""));
+  }
+
+  /// A keyed round's clean end is not relayed either: the keyed rule ends a rejected round, a clean round is not rejected.
+  #[test]
+  fn a_keyed_round_with_a_rejection_and_a_clean_result_is_not_relayed() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut watch, decision) = watch_for(home.path(), true);
+    assert!(!watch.observe(&rejected_event()));
+    assert!(!watch.observe(&result_event(false)));
+    assert!(!watch.wants_next(1, ""));
+    assert_eq!(decision.lock().unwrap().as_deref(), None);
   }
 }

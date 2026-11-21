@@ -11,6 +11,9 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+#[path = "common/stand_in.rs"]
+mod stand_in;
+
 const GH_STUB: &str = include_str!("fixtures/land/gh");
 const TASK_SESSION: &str = "5f0c2a8e-1b2c-4d3e-8f40-516273849500";
 const TASK_RUN: &str = "9a8b7c6d-1b2c-4d3e-8f40-516273849500";
@@ -242,6 +245,17 @@ impl Venue {
   /// Run `charliebot land --task` from the task worktree; returns the process output.
   fn land_output(&self) -> std::process::Output {
     self.land_output_with_args(&[])
+  }
+
+  /// Starts a stand-in live server that knows `sessions`, and points the home's config and credential at it, so the
+  /// landing's session check reads that server. The landing makes one session check per `/?session=` View line.
+  fn live_server_knows(&self, sessions: &[&str]) {
+    let routes: Vec<String> = sessions.iter().map(|session| format!("/api/sessions/{session}")).collect();
+    let (port, _server) =
+      stand_in::serve(1, move |path| if routes.iter().any(|route| route == path) { 200 } else { 404 });
+    fs::write(self.home.join("config.yaml"), format!("server:\n  port: {port}\n")).expect("the config is written");
+    fs::write(self.home.join("credentials.yaml"), "charliebot:\n  access_key: test-key\n")
+      .expect("the credentials are written");
   }
 
   fn land_output_with_args(&self, extra_args: &[&str]) -> std::process::Output {
@@ -487,6 +501,7 @@ fn a_web_page_change_lands_with_demo_view_and_each_window_size_and_carries_the_v
   let venue = Venue::new(false);
   let shots = web_change(&venue);
   let demo = demo_file(&venue);
+  venue.live_server_knows(&["tray"]);
   let body = format!("Demo: {demo}\nView: /?session=tray\n{}", write_window_screenshots(&shots).join(" "));
 
   let (code, record) = venue.land_with_args(&["--body", &body]);
@@ -498,6 +513,25 @@ fn a_web_page_change_lands_with_demo_view_and_each_window_size_and_carries_the_v
     landed.lines().any(|line| line == "View: /?session=tray"),
     "the landed commit carries the View trailer: {landed}"
   );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_web_page_change_naming_a_session_the_live_server_does_not_know_is_refused_before_the_merge() {
+  let venue = Venue::new(false);
+  let shots = web_change(&venue);
+  let demo = demo_file(&venue);
+  venue.live_server_knows(&["tray"]);
+  let body = format!("Demo: {demo}\nView: /?session=unknown\n{}", write_window_screenshots(&shots).join(" "));
+
+  let output = venue.land_output_with_args(&["--body", &body]);
+
+  assert_ne!(output.status.code(), Some(0));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("must name a view on the live server"), "stderr: {stderr}");
+  assert!(stderr.contains("does not know session unknown"), "stderr: {stderr}");
+  assert!(!venue.origin_has_task_branch());
+  assert!(venue.gh_calls().is_empty(), "gh calls:\n{}", venue.gh_calls());
 }
 
 /// A web test file is no served page, so its landing carries no Demo, View or screenshot and lands.

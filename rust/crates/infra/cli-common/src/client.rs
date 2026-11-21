@@ -235,6 +235,20 @@ pub fn get(endpoint: &str, params: Option<Vec<(String, String)>>) -> Result<Valu
   })
 }
 
+/// The HTTP status of one GET of `endpoint` on the process transport, with the caller's credential. The status is the
+/// answer whatever it is: a route that does not know its id answers 404 here instead of failing the call. Only a
+/// transport failure is an error.
+pub fn get_status(endpoint: &str) -> Result<u16, CliExit> {
+  let request = WireRequest {
+    method: Method::Get,
+    url: build_url(&crate::base_url::internal_base_url()?, endpoint, None),
+    headers: crate::headers::internal_api_auth_headers()?,
+    body: None,
+    timeout: crate::timeouts::HTTP_INTERNAL_API_TIMEOUT,
+  };
+  crate::http::send_http(&request).map(|response| response.status).map_err(|error| CliExit::error(error.message()))
+}
+
 fn run_call(call: ApiCall<'_>) -> Result<Value, CliExit> {
   let call_context = CallContext {
     base_url: crate::base_url::internal_base_url()?,

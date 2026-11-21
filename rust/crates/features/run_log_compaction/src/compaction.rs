@@ -1,9 +1,9 @@
 //! The compaction of a finished run's log files to zstd.
 //!
 //! A run whose record holds an end at least [`PLAIN_RETENTION`] old has each of its log files stored as `<name>.zst`.
-//! The handler writes the compressed file without thinking-token progress events, decompresses it and compares it byte
-//! for byte with the plain file after those events are removed, and only then removes the plain file. A run without a
-//! recorded end is left alone, and a second pass finds nothing to do.
+//! The handler writes the compressed file without thinking-token progress events. It then decompresses that file and
+//! compares it byte for byte with the plain file after those events are removed. The plain file is removed only when
+//! the two match. A run without a recorded end is left alone, and a second pass finds nothing to do.
 
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
@@ -282,7 +282,7 @@ fn remove_partial(path: &Path) {
   }
 }
 
-/// The subdirectories of `path`, in name order; a missing directory has none.
+/// The subdirectories of `path`, in name order. A missing directory has none.
 fn subdirectories(path: &Path) -> anyhow::Result<Vec<PathBuf>> {
   let entries = match fs::read_dir(path) {
     Ok(entries) => entries,

@@ -16,9 +16,9 @@ use charliebot_compat::http_client::{self, Settings};
 use charliebot_compat::ws_client::{self, Options};
 use charliebot_core::event_types;
 use charliebot_registry::turn::TurnContribution;
+use charliebot_registry::turn::{CheckResult, TurnInput};
 use charliebot_store::metadata::SessionStatus;
 use charliebot_store::trigger_files::TriggerStatus;
-use charliebot_tasks::turn_hooks::{CheckResult, TurnInput};
 use charliebot_triggers::triggers::TriggerManager;
 use futures_util::SinkExt;
 use serde_json::{Value, json};
@@ -47,20 +47,6 @@ struct GatewayScript {
   close_after_sequenced_heartbeat: Option<u16>,
 }
 
-impl GatewayScript {
-  fn new(after_identify: Vec<Value>) -> Self {
-    Self {
-      interval_ms: 60_000,
-      after_identify,
-      close_after_identify: None,
-      acknowledge_heartbeats: false,
-      close_after_heartbeats: None,
-      close_after_sequenced_heartbeat: None,
-    }
-  }
-}
-
-#[derive(Default)]
 struct GatewayState {
   scripts: Mutex<VecDeque<GatewayScript>>,
   connections: AtomicUsize,
@@ -75,7 +61,11 @@ struct Gateway {
 
 impl Gateway {
   async fn start(scripts: Vec<GatewayScript>) -> Self {
-    let state = Arc::new(GatewayState::default());
+    let state = Arc::new(GatewayState {
+      scripts: Mutex::new(VecDeque::new()),
+      connections: AtomicUsize::new(0),
+      received: Mutex::new(Vec::new()),
+    });
     state.scripts.lock().unwrap().extend(scripts);
     let app = Router::new()
       .route("/gateway", get(upgrade_gateway))
@@ -259,8 +249,15 @@ async fn run_one_connection(home: &Home, gateway: &Gateway) -> anyhow::Result<Co
 #[tokio::test]
 async fn test_identify_carries_token_and_intents() {
   let home = Home::new(true).await;
-  let gateway =
-    Gateway::start(vec![GatewayScript { close_after_identify: Some(4004), ..GatewayScript::new(Vec::new()) }]).await;
+  let gateway = Gateway::start(vec![GatewayScript {
+    interval_ms: 60_000,
+    after_identify: Vec::new(),
+    close_after_identify: Some(4004),
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  }])
+  .await;
   configure_gateway(&home, &gateway, 1 << 18);
   assert!(matches!(run_one_connection(&home, &gateway).await.unwrap(), ConnectionExit::Stopped { code: 4004 }));
   let identify = &gateway.received()[0][0];
@@ -274,7 +271,14 @@ async fn test_identify_carries_token_and_intents() {
 #[tokio::test]
 async fn test_heartbeat_carries_the_last_seq() {
   let home = Home::new_without_thread_runtime(true).await;
-  let mut script = GatewayScript::new(vec![ready(7)]);
+  let mut script = GatewayScript {
+    interval_ms: 60_000,
+    after_identify: vec![ready(7)],
+    close_after_identify: None,
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  };
   script.interval_ms = 15;
   script.acknowledge_heartbeats = true;
   // The heartbeat timer starts at HELLO, so an early heartbeat can carry null before READY is read.
@@ -310,7 +314,14 @@ fn acknowledged_heartbeats_keep_beating_one_interval_apart() {
 #[tokio::test]
 async fn test_server_op1_is_answered_at_once() {
   let home = Home::new(true).await;
-  let mut script = GatewayScript::new(vec![ready(7), json!({"op": 1})]);
+  let mut script = GatewayScript {
+    interval_ms: 60_000,
+    after_identify: vec![ready(7), json!({"op": 1})],
+    close_after_identify: None,
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  };
   script.interval_ms = 3_600_000;
   script.acknowledge_heartbeats = true;
   script.close_after_heartbeats = Some((1, 4004));
@@ -324,9 +335,23 @@ async fn test_server_op1_is_answered_at_once() {
 #[tokio::test]
 async fn test_missing_ack_closes_and_reconnects() {
   let home = Home::new(true).await;
-  let mut missed = GatewayScript::new(vec![ready(2)]);
+  let mut missed = GatewayScript {
+    interval_ms: 60_000,
+    after_identify: vec![ready(2)],
+    close_after_identify: None,
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  };
   missed.interval_ms = 10;
-  let stop = GatewayScript { close_after_identify: Some(4004), ..GatewayScript::new(Vec::new()) };
+  let stop = GatewayScript {
+    interval_ms: 60_000,
+    after_identify: Vec::new(),
+    close_after_identify: Some(4004),
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  };
   let gateway = Gateway::start(vec![missed, stop]).await;
   configure_gateway(&home, &gateway, 1 << 18);
   tokio::time::timeout(
@@ -360,8 +385,22 @@ async fn assert_gateway_op_ends_connection_and_reconnects(op: u64) {
   assert_eq!(reconnect_backoff_after_drop(Duration::from_secs(32), false, initial_backoff), Duration::from_secs(32));
 
   let home = Home::new_without_thread_runtime(true).await;
-  let first = GatewayScript::new(vec![json!({"op": op})]);
-  let second = GatewayScript { close_after_identify: Some(4004), ..GatewayScript::new(Vec::new()) };
+  let first = GatewayScript {
+    interval_ms: 60_000,
+    after_identify: vec![json!({"op": op})],
+    close_after_identify: None,
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  };
+  let second = GatewayScript {
+    interval_ms: 60_000,
+    after_identify: Vec::new(),
+    close_after_identify: Some(4004),
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  };
   let gateway = Gateway::start(vec![first, second]).await;
   configure_gateway(&home, &gateway, 1 << 18);
   tokio::time::timeout(
@@ -397,8 +436,15 @@ async fn test_op9_ends_the_connection_and_reconnects() {
 async fn test_stop_close_code_stops_without_reconnecting() {
   let code = 4004;
   let home = Home::new(true).await;
-  let gateway =
-    Gateway::start(vec![GatewayScript { close_after_identify: Some(code), ..GatewayScript::new(Vec::new()) }]).await;
+  let gateway = Gateway::start(vec![GatewayScript {
+    interval_ms: 60_000,
+    after_identify: Vec::new(),
+    close_after_identify: Some(code),
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  }])
+  .await;
   configure_gateway(&home, &gateway, 1 << 18);
   tokio::time::timeout(
     Duration::from_secs(2),
@@ -426,7 +472,14 @@ fn a_thread_session_id_is_the_namespaced_uuid_of_its_guild_and_thread() {
 #[tokio::test]
 async fn test_ready_runs_the_backfill_per_connection() {
   let home = Home::new(true).await;
-  let mut script = GatewayScript::new(vec![ready(2)]);
+  let mut script = GatewayScript {
+    interval_ms: 60_000,
+    after_identify: vec![ready(2)],
+    close_after_identify: None,
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  };
   script.close_after_identify = Some(4004);
   let gateway = Gateway::start(vec![script]).await;
   configure_gateway(&home, &gateway, 1 << 18);
@@ -461,11 +514,18 @@ async fn test_message_create_reaches_the_handler_and_survives_its_errors() {
     "id": "900000000000000062", "channel_id": DM_CHANNEL, "author": {"id": ALLOWED_USER}, "type": 0,
     "content": "<@600000000000000001> hello", "mentions": [{"id": BOT_USER}],
   });
-  let mut script = GatewayScript::new(vec![
-    ready(2),
-    json!({"op": 0, "s": 3, "t": "MESSAGE_CREATE", "d": failed}),
-    json!({"op": 0, "s": 4, "t": "MESSAGE_CREATE", "d": dm}),
-  ]);
+  let mut script = GatewayScript {
+    interval_ms: 60_000,
+    after_identify: vec![
+      ready(2),
+      json!({"op": 0, "s": 3, "t": "MESSAGE_CREATE", "d": failed}),
+      json!({"op": 0, "s": 4, "t": "MESSAGE_CREATE", "d": dm}),
+    ],
+    close_after_identify: None,
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  };
   script.close_after_identify = Some(4004);
   let gateway = Gateway::start(vec![script]).await;
   configure_gateway(&home, &gateway, 1 << 18);
@@ -482,7 +542,15 @@ async fn test_message_create_reaches_the_handler_and_survives_its_errors() {
 #[tokio::test]
 async fn test_preflight_intent_off_returns_before_connecting() {
   let home = Home::new(true).await;
-  let gateway = Gateway::start(vec![GatewayScript::new(Vec::new())]).await;
+  let gateway = Gateway::start(vec![GatewayScript {
+    interval_ms: 60_000,
+    after_identify: Vec::new(),
+    close_after_identify: None,
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  }])
+  .await;
   configure_gateway(&home, &gateway, 0);
   tokio::time::timeout(
     Duration::from_secs(1),
@@ -498,8 +566,15 @@ async fn test_preflight_intent_off_returns_before_connecting() {
 #[tokio::test]
 async fn test_preflight_logs_missing_permission_names_and_keeps_running() {
   let home = Home::new(true).await;
-  let gateway =
-    Gateway::start(vec![GatewayScript { close_after_identify: Some(4004), ..GatewayScript::new(Vec::new()) }]).await;
+  let gateway = Gateway::start(vec![GatewayScript {
+    interval_ms: 60_000,
+    after_identify: Vec::new(),
+    close_after_identify: Some(4004),
+    acknowledge_heartbeats: false,
+    close_after_heartbeats: None,
+    close_after_sequenced_heartbeat: None,
+  }])
+  .await;
   configure_gateway(&home, &gateway, 1 << 18);
   let permissions = crate::discord_client::REQUIRED_PERMISSIONS
     .iter()
@@ -855,6 +930,7 @@ fn test_thread_check_blocks_a_summon_round_without_a_reply_then_notices_the_seco
     exit_code: 0,
     continuation_failed: false,
     status: Value::Null,
+    last_input_provenance: None,
     turn: vec![summon],
   };
   let first = check_thread_reply(&DISCORD, &input).unwrap();

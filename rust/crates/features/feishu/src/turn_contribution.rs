@@ -8,7 +8,7 @@ use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::run_kind::RunKind;
 use charliebot_registry::FeatureContext;
-use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
+use charliebot_registry::turn::{CheckResult, EventRenderer, RuleSegment, TurnContribution, TurnInput};
 use charliebot_store::metadata::SessionMetadata;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -61,6 +61,23 @@ impl TurnContribution for FeishuTurnContribution {
     done_event: &'a Value,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(adapter::after_failed_turn(features, session_id, done_event))
+  }
+  fn turn_end_check_names(&self) -> &'static [&'static str] {
+    &[thread_entry::THREAD_REPLY_ENTRY]
+  }
+
+  fn run_turn_end_check<'a>(
+    &'a self,
+    name: &'a str,
+    _features: &'a Arc<FeatureContext>,
+    input: &'a TurnInput,
+  ) -> BoxFuture<'a, anyhow::Result<CheckResult>> {
+    Box::pin(async move {
+      match name {
+        thread_entry::THREAD_REPLY_ENTRY => thread_entry::check_thread_reply(&FEISHU, input),
+        other => anyhow::bail!("the Feishu contribution answers no turn-end check named {other}"),
+      }
+    })
   }
 }
 

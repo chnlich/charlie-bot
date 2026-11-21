@@ -119,6 +119,12 @@ pub const REPO_PATH_FIELD: &str = "repo_path";
 /// The branch a task, its plan and its run record branch from. The delegate request, the improve request, the plan
 /// request and the run record carry the same name, so it is spelled once, here.
 pub const BASE_BRANCH_FIELD: &str = "base_branch";
+/// The field named `exit_code`: a run's process exit code in thread metadata, run records and the events that end
+/// a run. Production readers and writers name it through this const.
+pub const EXIT_CODE_FIELD: &str = "exit_code";
+/// The session-metadata field naming the backend that runs the session. The delegate request and the improve request
+/// carry the same name, so it is spelled once, here.
+pub const BACKEND_FIELD: &str = "backend";
 /// The task-spec field holding a task's kind. The delegate request, the session write request and the stored task
 /// record carry the same name, so it is spelled once, here.
 pub const TASK_TYPE_FIELD: &str = "task_type";
@@ -146,6 +152,12 @@ pub const CONTEXT_REFS_FIELD: &str = "context_refs";
 /// The response field holding a session's display name. The voice recordings page's rows carry the same name, so it
 /// is spelled once, here.
 pub const SESSION_NAME_FIELD: &str = "session_name";
+/// The session-metadata field holding the session's creation time. The store writes it, and the session listing and
+/// the mock home's fixtures name it through this constant.
+pub const CREATED_AT_FIELD: &str = "created_at";
+/// The session-metadata field holding the session's last update time. The store writes it; the session listing and the
+/// usage page and the mock home's fixtures name it too, so it is spelled once, here.
+pub const UPDATED_AT_FIELD: &str = "updated_at";
 
 pub use charliebot_core::utc_datetime::UtcDateTime;
 
@@ -704,11 +716,11 @@ impl SessionMetadata {
       push(&mut declared, THINKING_SINCE, &self.thinking_since);
       push(&mut declared, RUN_BACKEND, &self.run_backend);
     }
-    push(&mut declared, "created_at", &self.created_at);
-    push(&mut declared, "updated_at", &self.updated_at);
+    push(&mut declared, CREATED_AT_FIELD, &self.created_at);
+    push(&mut declared, UPDATED_AT_FIELD, &self.updated_at);
     push(&mut declared, CC_SESSION_ID_FIELD, &self.cc_session_id);
     push(&mut declared, CC_SESSION_STARTED_AT, &self.cc_session_started_at);
-    push(&mut declared, "backend", &self.backend);
+    push(&mut declared, BACKEND_FIELD, &self.backend);
     if !exclude_transient {
       push(&mut declared, SCHEDULE_CRON, &self.schedule_cron);
       push(&mut declared, SCHEDULE_ENABLED, &self.schedule_enabled);
@@ -1116,15 +1128,33 @@ mod tests {
   /// keyed spec round-trips its host.
   #[test]
   fn improve_host_is_written_only_when_set() {
-    let plain = TaskSpec { goal: "ship".to_string(), ..TaskSpec::default() };
+    let plain = TaskSpec {
+      goal: "ship".to_string(),
+      repo_path: None,
+      base_branch: None,
+      task_type: None,
+      keep_worktree: false,
+      cold_read: None,
+      approver: TaskApprover::User,
+      improve_host: None,
+    };
     let plain_json = serde_json::to_string(&plain).unwrap();
     assert_eq!(
       plain_json,
       r#"{"goal":"ship","repo_path":null,"base_branch":null,"task_type":null,"keep_worktree":false,"cold_read":null}"#,
     );
-    let keyed = TaskSpec { improve_host: Some("host3".to_string()), ..plain };
+    let keyed = TaskSpec {
+      goal: plain.goal,
+      repo_path: plain.repo_path,
+      base_branch: plain.base_branch,
+      task_type: plain.task_type,
+      keep_worktree: plain.keep_worktree,
+      cold_read: plain.cold_read,
+      approver: plain.approver,
+      improve_host: Some("remote-test-host".to_string()),
+    };
     let keyed_json = serde_json::to_value(&keyed).unwrap();
-    assert_eq!(keyed_json["improve_host"], "host3");
+    assert_eq!(keyed_json["improve_host"], "remote-test-host");
     assert_eq!(serde_json::from_value::<TaskSpec>(keyed_json).unwrap(), keyed);
   }
 

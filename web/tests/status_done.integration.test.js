@@ -78,7 +78,9 @@ function pageHtml(mobile) {
   window.platform = {onChange() {}, isMobile: ${mobile}};
   function relativeTime() { return 'now'; }
   window.Chat = {
-    wire(fns) { window.__status = fns; },
+    // As the page's chat namespace does, a wired module's functions become globals: shared.js's label function
+    // is read by the status panel's child rows.
+    wire(fns) { window.__status = fns; Object.assign(window, fns); },
     ForYou: {isWebSession: () => true},
     disclosureIcon: () => '',
   };
@@ -93,6 +95,7 @@ function pageHtml(mobile) {
     return {ok: true, status: 200, json: async () => []};
   };
 </script>
+<script src="/static/js/chat/shared.js"></script>
 <script src="/static/js/chat/status-panel.js"></script>
 </body></html>`;
 }
@@ -103,6 +106,7 @@ function serve(mobile) {
     '/static/js/icons.js': path.join(WEB_DIR, 'static', 'js', 'icons.js'),
     '/static/js/comment_post.js': path.join(WEB_DIR, 'static', 'js', 'comment_post.js'),
     '/static/js/view-requests.js': path.join(WEB_DIR, 'static', 'js', 'view-requests.js'),
+    '/static/js/chat/shared.js': path.join(WEB_DIR, 'static', 'js', 'chat', 'shared.js'),
     '/static/js/chat/status-panel.js': path.join(WEB_DIR, 'static', 'js', 'chat', 'status-panel.js'),
     '/static/css/tailwind.css': path.join(WEB_DIR, 'static', 'css', 'tailwind.css'),
   };

@@ -34,6 +34,7 @@ use crate::route_claims::RouteClaims;
 use crate::sequence::{SequenceBinding, SequenceController};
 use crate::sidebar::SidebarContribution;
 use crate::startup_stop::StartupStop;
+use crate::turn::{CheckResult, TurnInput};
 use crate::usage::{QuotaAccount, SourceSweep, SweepScope, UsageSource};
 /// A package's `register` function: the package's contributions, made through the registry's typed methods.
 pub type RegisterFn = fn(&mut Registry) -> Result<(), RegistryError>;
@@ -1936,11 +1937,25 @@ pub trait TurnContribution: Send + Sync {
   fn claims_turn_end_unread(&self, _meta: &SessionMetadata) -> bool {
     false
   }
+
+  /// The names of the turn-end checks this contribution answers. A session's turn runs the checks of its turn owner
+  /// by name, and a name in the hook list that no contribution answers fails the checkpoint.
+  fn turn_end_check_names(&self) -> &'static [&'static str] {
+    &[]
+  }
+
+  /// Answers the turn-end check `name` for the turn `input`. Called only for a name that `turn_end_check_names` lists.
+  fn run_turn_end_check<'a>(
+    &'a self,
+    _name: &'a str,
+    _features: &'a Arc<FeatureContext>,
+    _input: &'a TurnInput,
+  ) -> BoxFuture<'a, anyhow::Result<CheckResult>> {
+    Box::pin(async { Err(anyhow::anyhow!("this contribution owns no turn-end checks")) })
+  }
 }
 
 impl Registry {
-  /// The registration of a turn contribution. A chat renderer type that an
-  /// earlier contribution, or this one, already renders fails here, at the aggregator's build.
   /// The contribution that owns the turn-end checks of `meta`'s session, with the session kind it claims.
   pub fn turn_owner(&self, meta: &SessionMetadata) -> Option<(&'static str, Arc<dyn TurnContribution>)> {
     self
@@ -1949,6 +1964,13 @@ impl Registry {
       .find_map(|contribution| contribution.turn_kind(meta).map(|kind| (kind, Arc::clone(contribution))))
   }
 
+  /// Whether some registered contribution answers the turn-end check `name`.
+  pub fn answers_turn_end_check(&self, name: &str) -> bool {
+    self.turn_contributions.values().any(|contribution| contribution.turn_end_check_names().contains(&name))
+  }
+
+  /// The registration of a turn contribution. A chat renderer type that an
+  /// earlier contribution, or this one, already renders fails here, at the aggregator's build.
   pub fn turn_contribution(
     &mut self,
     name: &'static str,

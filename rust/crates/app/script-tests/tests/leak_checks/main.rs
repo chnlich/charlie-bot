@@ -795,3 +795,353 @@ fn a_pr_merge_carries_the_view_line_into_the_squash_message() {
   assert!(message.lines().any(|line| line == "View: /?session=abc"), "{message}");
   assert!(message.contains("## Evidence"), "the pull request body stays in the squash message: {message}");
 }
+
+// -- the credential check: one scanner for the round's writes and the landing --
+
+/// The fake credential value every case plants. It is long enough to pass the scanner's minimum length.
+const CREDENTIAL_VALUE: &str = "fake-credential-value-0042";
+/// The environment variables the scanner reads, each planted alone in one case.
+const CREDENTIAL_ENV_NAMES: [&str; 6] = [
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CHARLIEBOT_RUN_TOKEN",
+  "CHARLIE_CODE_API_KEY",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+];
+
+/// The kinds of credential source the scanner reads.
+#[derive(Clone, Copy, Debug)]
+enum Kind {
+  CredentialsLeaf,
+  EnvToken,
+  ClaudeFile,
+  CodexFile,
+}
+
+const KINDS: [Kind; 4] = [Kind::CredentialsLeaf, Kind::EnvToken, Kind::ClaudeFile, Kind::CodexFile];
+
+/// The sandbox environment with one credential value of `kind` planted, and the kind label the scanner must print.
+fn planted_env(sandbox: &Sandbox, kind: Kind) -> (Env, &'static str) {
+  let home = sandbox.dir("charliebot-home");
+  std::fs::write(home.join("skills_leak_patterns.local.txt"), format!("{PATTERN_FILE_COMMENT}\n{PATTERN_TERM}\n"))
+    .unwrap();
+  let gh_log = sandbox.root().join("gh-calls.log");
+  let mut env = post_env(sandbox, &home, &gh_log);
+  let label = match kind {
+    Kind::CredentialsLeaf => {
+      std::fs::write(home.join("credentials.yaml"), format!("planted:\n  api_key: {CREDENTIAL_VALUE}\n")).unwrap();
+      "credentials.yaml leaf planted.api_key"
+    }
+    Kind::EnvToken => {
+      env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), CREDENTIAL_VALUE.to_string());
+      "environment variable ANTHROPIC_AUTH_TOKEN"
+    }
+    Kind::ClaudeFile => {
+      let dir = sandbox.dir("claude-config");
+      std::fs::write(
+        dir.join(".credentials.json"),
+        format!(r#"{{"claudeAiOauth":{{"accessToken":"{CREDENTIAL_VALUE}","scopes":["user:inference"]}}}}"#),
+      )
+      .unwrap();
+      env.insert("CLAUDE_CONFIG_DIR".to_string(), dir.display().to_string());
+      "Claude credentials file"
+    }
+    Kind::CodexFile => {
+      let dir = sandbox.dir("codex-home");
+      std::fs::write(dir.join("auth.json"), format!(r#"{{"tokens":{{"access_token":"{CREDENTIAL_VALUE}"}}}}"#))
+        .unwrap();
+      env.insert("CODEX_HOME".to_string(), dir.display().to_string());
+      "Codex auth.json"
+    }
+  };
+  (env, label)
+}
+
+/// A refused write: exit 3, the kind named on a stream, and the value on neither stream.
+fn assert_credential_refusal(run: &Run, label: &str) {
+  assert_eq!(run.code, 3, "{}", run.describe());
+  assert!(run.stdout.contains(label) || run.stderr.contains(label), "the kind is named: {}", run.describe());
+  assert!(
+    !run.stdout.contains(CREDENTIAL_VALUE) && !run.stderr.contains(CREDENTIAL_VALUE),
+    "the value is never printed: {}",
+    run.describe()
+  );
+}
+
+/// The round's gh shim with its scanner beside it, on a PATH whose real gh stub logs its arguments. Returns the
+/// environment, the shim's path and the kind label.
+fn shim_setup(sandbox: &Sandbox, kind: Kind) -> (Env, PathBuf, &'static str) {
+  let (mut env, label) = planted_env(sandbox, kind);
+  let tools = sandbox.dir("tools");
+  let read = |path: PathBuf| std::fs::read(path).unwrap();
+  harness::write_executable(&tools.join("gh"), read(harness::repo_root().join("dev/improve/gh-shim.sh")));
+  harness::write_executable(&tools.join("check-skills-host-leak.sh"), read(leak_scanner()));
+  harness::write_executable(&tools.join("leak-patterns.sh"), read(harness::repo_root().join("dev/leak-patterns.sh")));
+  let real = sandbox.dir("real-bin");
+  harness::write_executable(&real.join("gh"), "printf '%s\\n' \"$*\" >> \"$GH_CALL_LOG\"\n");
+  let inherited = env.get("PATH").cloned().expect("PATH is set");
+  env.insert("PATH".to_string(), format!("{}:{}:{inherited}", tools.display(), real.display()));
+  (env, tools.join("gh"), label)
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_credential_check_names_each_kind_and_never_its_value() {
+  let mut cases: Vec<(Kind, Option<&str>)> = KINDS.iter().map(|kind| (*kind, None)).collect();
+  cases.extend(CREDENTIAL_ENV_NAMES.iter().map(|name| (Kind::EnvToken, Some(*name))));
+  for (kind, env_name) in cases {
+    let sandbox = Sandbox::new();
+    let (mut env, label) = planted_env(&sandbox, kind);
+    let label = match env_name {
+      Some(name) => {
+        env.remove("ANTHROPIC_AUTH_TOKEN");
+        env.insert(name.to_string(), CREDENTIAL_VALUE.to_string());
+        format!("environment variable {name}")
+      }
+      None => label.to_string(),
+    };
+    let values = sandbox.root().join("values");
+    let mut collect = harness::command("bash", &env);
+    collect.arg(leak_scanner()).arg("--credential-values");
+    let collected = run(&mut collect);
+    assert_eq!(collected.code, 0, "{}", collected.describe());
+    std::fs::write(&values, &collected.stdout).unwrap();
+    let mut check = harness::command("bash", &env);
+    check.arg(leak_scanner()).arg("--credential-check").arg(&values).arg("scanned field");
+    let refused = run_with_stdin(&mut check, sandbox.root(), &format!("the text holds {CREDENTIAL_VALUE}\n"));
+    assert_credential_refusal(&refused, &label);
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_value_under_the_minimum_length_passes_the_credential_check() {
+  let sandbox = Sandbox::new();
+  let (env, _) = planted_env(&sandbox, Kind::CredentialsLeaf);
+  // Eleven characters: under the scanner's minimum, so the value is not checked.
+  std::fs::write(sandbox.dir("charliebot-home").join("credentials.yaml"), "planted:\n  api_key: fake-short1\n")
+    .unwrap();
+  let values = sandbox.root().join("values");
+  let mut collect = harness::command("bash", &env);
+  collect.arg(leak_scanner()).arg("--credential-values");
+  let collected = run(&mut collect);
+  assert_eq!(collected.code, 0, "{}", collected.describe());
+  assert!(collected.stdout.is_empty(), "no value is collected: {}", collected.describe());
+  std::fs::write(&values, &collected.stdout).unwrap();
+  let mut check = harness::command("bash", &env);
+  check.arg(leak_scanner()).arg("--credential-check").arg(&values).arg("scanned field");
+  let passed = run_with_stdin(&mut check, sandbox.root(), "the text holds fake-short1\n");
+  assert_eq!(passed.code, 0, "{}", passed.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_credentials_leaf_named_for_a_non_secret_is_left_out_of_the_values() {
+  let sandbox = Sandbox::new();
+  let (env, _) = planted_env(&sandbox, Kind::CredentialsLeaf);
+  // The four skipped names, each as a last segment, and two leaves whose names only start with one of them:
+  // `e.model_key` and `f.api_key` are the leaves that stay checked.
+  std::fs::write(
+    sandbox.dir("charliebot-home").join("credentials.yaml"),
+    "a:\n  description: fake-description-a-0001\n\
+     b:\n  model: fake-model-name-b-0002\n\
+     c:\n  client_id: fake-client-id-c-0003\n\
+     d:\n  app_id: fake-app-id-d-0004\n\
+     e:\n  model_key: fake-model-key-e-0005\n\
+     f:\n  api_key: fake-api-key-f-0006\n",
+  )
+  .unwrap();
+  let mut collect = harness::command("bash", &env);
+  collect.arg(leak_scanner()).arg("--credential-values");
+  let collected = run(&mut collect);
+  assert_eq!(collected.code, 0, "{}", collected.describe());
+  let kinds: Vec<&str> = collected.stdout.lines().map(|line| line.split('\t').next().unwrap()).collect();
+  assert_eq!(
+    kinds,
+    ["credentials.yaml leaf e.model_key", "credentials.yaml leaf f.api_key"],
+    "{}",
+    collected.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_list_mode_checks_every_field_in_one_process_and_names_the_first_hit() {
+  let sandbox = Sandbox::new();
+  let (env, label) = planted_env(&sandbox, Kind::CredentialsLeaf);
+  let clean = sandbox.root().join("clean.txt");
+  std::fs::write(&clean, "a clean text\n").unwrap();
+  let leaking = sandbox.root().join("leaking.txt");
+  std::fs::write(&leaking, format!("the text holds {CREDENTIAL_VALUE}\n")).unwrap();
+  let values = sandbox.root().join("values");
+  let mut collect = harness::command("bash", &env);
+  collect.arg(leak_scanner()).arg("--credential-values");
+  let collected = run(&mut collect);
+  assert_eq!(collected.code, 0, "{}", collected.describe());
+  std::fs::write(&values, &collected.stdout).unwrap();
+  let list = sandbox.root().join("list");
+  std::fs::write(&list, format!("clean field\t{}\nleaking field\t{}\n", clean.display(), leaking.display())).unwrap();
+  let mut check = harness::command("bash", &env);
+  check.arg(leak_scanner()).arg("--credential-check-list").arg(&values).arg(&list);
+  assert_credential_refusal(&run(&mut check), label);
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_credentials_file_that_does_not_parse_stops_the_check_without_printing_it() {
+  let sandbox = Sandbox::new();
+  let (env, _) = planted_env(&sandbox, Kind::CredentialsLeaf);
+  std::fs::write(sandbox.dir("charliebot-home").join("credentials.yaml"), "planted:\n  - listed-unparsed-value\n")
+    .unwrap();
+  let mut collect = harness::command("bash", &env);
+  collect.arg(leak_scanner()).arg("--credential-values");
+  let refused = run(&mut collect);
+  assert_eq!(refused.code, 2, "{}", refused.describe());
+  assert!(refused.stdout.is_empty(), "nothing is collected: {}", refused.describe());
+  assert!(!refused.stderr.contains("listed-unparsed-value"), "the content is not printed: {}", refused.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_pr_comment_and_a_pr_create_refuse_a_credential_value_for_each_kind() {
+  for kind in KINDS {
+    let sandbox = Sandbox::new();
+    let (env, label) = planted_env(&sandbox, kind);
+    let body = body_file(&sandbox, "comment.md", &format!("Evidence with {CREDENTIAL_VALUE}\n"));
+    let mut comment = harness::command("bash", &env);
+    comment.arg(github_post()).args(["pr-comment", "--body-file"]).arg(&body).arg("5");
+    assert_credential_refusal(&run_in(&mut comment, sandbox.root()), label);
+
+    let clean = body_file(&sandbox, "clean.md", "## Evidence\nclean\n");
+    let mut create = harness::command("bash", &env);
+    create.arg(github_post()).args(["pr-create", "--title", &format!("Title {CREDENTIAL_VALUE}"), "--body-file"]);
+    create.arg(&clean).args(["--base", "main", "--head", "improve/perf/topic-slug"]);
+    assert_credential_refusal(&run_in(&mut create, sandbox.root()), label);
+    assert!(gh_log_lines(&sandbox.root().join("gh-calls.log")).is_empty(), "no gh call was sent");
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_push_refuses_a_credential_value_in_a_commit_message_for_each_kind() {
+  for kind in KINDS {
+    let sandbox = Sandbox::new();
+    let (env, label) = planted_env(&sandbox, kind);
+    let clone = push_repo(&sandbox, &env);
+    std::fs::write(clone.join("bad.txt"), "bad\n").unwrap();
+    git(&env, &clone, &["add", "bad.txt"]);
+    git(&env, &clone, &["commit", "-q", "-m", &format!("follow {CREDENTIAL_VALUE}")]);
+    let mut command = harness::command("bash", &env);
+    command.arg(github_post()).args(["push", "-u", "origin", "improve/perf/topic-slug"]);
+    assert_credential_refusal(&run_in(&mut command, &clone), label);
+    assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"), "nothing was pushed");
+  }
+}
+
+/// A clone that runs the repository's pre-push hook, its scanner and its pattern loader from its own dev directory.
+fn hooked_clone(sandbox: &Sandbox, env: &Env) -> PathBuf {
+  let clone = push_repo(sandbox, env);
+  let hooks = clone.join("dev/git-hooks");
+  std::fs::create_dir_all(&hooks).unwrap();
+  let root = harness::repo_root();
+  harness::copy_file(&root.join("dev/git-hooks/pre-push"), &hooks.join("pre-push"));
+  harness::copy_file(&leak_scanner(), &clone.join("dev/check-skills-host-leak.sh"));
+  harness::copy_file(&root.join("dev/leak-patterns.sh"), &clone.join("dev/leak-patterns.sh"));
+  git(env, &clone, &["config", "core.hooksPath", "dev/git-hooks"]);
+  clone
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_push_refuses_a_credential_value_in_a_diff_through_the_pre_push_hook_for_each_kind() {
+  for kind in KINDS {
+    let sandbox = Sandbox::new();
+    let (env, label) = planted_env(&sandbox, kind);
+    let clone = hooked_clone(&sandbox, &env);
+    std::fs::write(clone.join("bad.txt"), format!("the key is {CREDENTIAL_VALUE}\n")).unwrap();
+    git(&env, &clone, &["add", "bad.txt"]);
+    git(&env, &clone, &["commit", "-q", "-m", "clean message"]);
+
+    // A bare git push: the hook refuses it, and git exits 1 with the kind named.
+    let mut bare = harness::command("git", &env);
+    bare.args(["push", "-q", "origin", "improve/perf/topic-slug"]);
+    let refused = run_in(&mut bare, &clone);
+    assert_ne!(refused.code, 0, "{}", refused.describe());
+    assert_credential_refusal_text(&refused, label);
+    assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"), "nothing was pushed");
+
+    // The round's push: github-post passes the hook's refusal through as exit 3.
+    let mut post = harness::command("bash", &env);
+    post.arg(github_post()).args(["push", "-u", "origin", "improve/perf/topic-slug"]);
+    assert_credential_refusal(&run_in(&mut post, &clone), label);
+    assert!(!ls_remote(&env, &clone).contains("improve/perf/topic-slug"), "nothing was pushed");
+  }
+}
+
+/// A refusal on the text streams only: a git push reports the hook's output on stderr.
+fn assert_credential_refusal_text(run: &Run, label: &str) {
+  assert!(run.stderr.contains(label), "the kind is named: {}", run.describe());
+  assert!(!run.stdout.contains(CREDENTIAL_VALUE) && !run.stderr.contains(CREDENTIAL_VALUE), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_gh_shim_refuses_a_credential_value_in_an_argument_for_each_kind() {
+  for kind in KINDS {
+    let sandbox = Sandbox::new();
+    let (env, shim, label) = shim_setup(&sandbox, kind);
+    let mut command = harness::command(&shim, &env);
+    command.args(["pr", "comment", "5", "--body", &format!("Evidence with {CREDENTIAL_VALUE}")]);
+    assert_credential_refusal(&run_in(&mut command, sandbox.root()), label);
+    assert!(gh_log_lines(&sandbox.root().join("gh-calls.log")).is_empty(), "the real gh did not run");
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_gh_shim_refuses_a_credential_value_in_a_file_argument_for_each_kind() {
+  for kind in KINDS {
+    let sandbox = Sandbox::new();
+    let (env, shim, label) = shim_setup(&sandbox, kind);
+    let body = body_file(&sandbox, "comment.md", &format!("Evidence with {CREDENTIAL_VALUE}\n"));
+    let mut comment = harness::command(&shim, &env);
+    comment.args(["pr", "comment", "5", "--body-file"]).arg(&body);
+    assert_credential_refusal(&run_in(&mut comment, sandbox.root()), label);
+
+    let mut api = harness::command(&shim, &env);
+    api.args(["api", "-X", "PATCH", "repos/o/r/pulls/5", "-F"]).arg(format!("body=@{}", body.display()));
+    assert_credential_refusal(&run_in(&mut api, sandbox.root()), label);
+
+    let mut stdin_body = harness::command(&shim, &env);
+    stdin_body.args(["pr", "comment", "5", "--body-file", "-"]);
+    let refused = run_with_stdin(&mut stdin_body, sandbox.root(), &format!("stdin holds {CREDENTIAL_VALUE}\n"));
+    assert_credential_refusal(&refused, label);
+    assert!(gh_log_lines(&sandbox.root().join("gh-calls.log")).is_empty(), "the real gh did not run");
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_gh_api_field_refuses_a_credential_value_for_each_kind() {
+  for kind in KINDS {
+    let sandbox = Sandbox::new();
+    let (env, shim, label) = shim_setup(&sandbox, kind);
+    let mut command = harness::command(&shim, &env);
+    command.args(["api", "-X", "PATCH", "repos/o/r/pulls/5", "-f"]).arg(format!("title=Title {CREDENTIAL_VALUE}"));
+    assert_credential_refusal(&run_in(&mut command, sandbox.root()), label);
+    assert!(gh_log_lines(&sandbox.root().join("gh-calls.log")).is_empty(), "the real gh did not run");
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_gh_shim_passes_a_clean_call_to_the_real_gh() {
+  let sandbox = Sandbox::new();
+  let (env, shim, _) = shim_setup(&sandbox, Kind::CredentialsLeaf);
+  let mut command = harness::command(&shim, &env);
+  command.args(["pr", "view", "5", "--json", "url"]);
+  let passed = run_in(&mut command, sandbox.root());
+  assert_eq!(passed.code, 0, "{}", passed.describe());
+  assert_eq!(gh_log_lines(&sandbox.root().join("gh-calls.log")), vec!["pr view 5 --json url".to_string()]);
+}

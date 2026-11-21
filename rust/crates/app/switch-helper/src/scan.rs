@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 use anyhow::{Context as _, Result};
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
-use charliebot_core::proc_identity::PID_START_FIELD;
+use charliebot_core::proc_identity::{PID_START_FIELD, is_same_process};
 use charliebot_core::text_repr;
 use charliebot_improve::command::{active_lock_path_in, loop_dir_in, read_active_lock_loop_id, read_loop_controller};
 use charliebot_store::layout;
@@ -168,7 +168,7 @@ fn live_run(run: &Value, boot: i64) -> Result<Option<(u32, String, Value)>> {
   let Ok(pid) = u32::try_from(pid) else {
     return Ok(None);
   };
-  if !process::instance(pid, pid_start) || !process::started_after_boot(started_at, boot)? {
+  if !is_same_process(pid, pid_start) || !process::started_after_boot(started_at, boot)? {
     return Ok(None);
   }
   Ok(Some((pid, pid_start.to_string(), run.get("backend").cloned().unwrap_or(Value::Null))))

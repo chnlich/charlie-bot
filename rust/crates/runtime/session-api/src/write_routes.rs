@@ -11,6 +11,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use charliebot_agents::pool_display::{session_detail_shown, session_metadata_shown};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::{responses, validation};
 use charliebot_core::config::CharlieBotConfig;
@@ -437,7 +438,7 @@ async fn patch(
     dispatch::dispatcher(features).map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
   let meta =
     features.store.patch_task(session_id, patch, caller.task_caller(), &*guards).await.map_err(task_http_error)?;
-  features.store.session_detail(&meta.id).map_err(task_http_error)
+  session_detail_shown(&features.store, &meta.id).map_err(task_http_error)
 }
 
 /// The name-only PATCH: the legacy rename, answered with the session detail form.
@@ -460,7 +461,7 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
 }
 
 fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Response> {
-  let mut detail = store.session_metadata_value(meta);
+  let mut detail = session_metadata_shown(store, meta);
   let object = detail.as_object_mut().expect("session metadata serializes to an object");
   object.insert(TASK_STATE.to_string(), json!("open"));
   if object.get(WORK_STATE).is_none_or(Value::is_null) {
@@ -537,7 +538,7 @@ fn list_repr(items: &[&str]) -> String {
 /// The `SessionMetadata` response form, which `response_model=models.SessionMetadata` serializes. Like every API return
 /// path it carries the live run backend and busy-since (`session_store.stamp_thinking_since`).
 pub(crate) fn model_response(store: &Store, meta: &SessionMetadata) -> Response {
-  let value = response_metadata(store, meta).map(|meta| store.session_metadata_value(&meta));
+  let value = response_metadata(store, meta).map(|meta| session_metadata_shown(store, &meta));
   match value {
     Ok(value) => responses::json(StatusCode::OK, &value),
     Err(error) => store_error(error),

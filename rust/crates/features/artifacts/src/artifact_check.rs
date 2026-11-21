@@ -729,7 +729,7 @@ fn check_schema_dropped(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
   let heading = match headings.as_slice() {
     [] => return Ok(vec![outcome(SCHEMA_DROPPED, false, "missing 4.1 Schema heading")]),
     [heading] => *heading,
-    _ => return Ok(vec![outcome(SCHEMA_DROPPED, false, "more than one 4.1 Schema heading")]),
+    [_, _, ..] => return Ok(vec![outcome(SCHEMA_DROPPED, false, "more than one 4.1 Schema heading")]),
   };
 
   let mut ancestor = context.nodes[heading].parent;
@@ -773,7 +773,7 @@ fn check_schema_dropped(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
         Ok(vec![outcome(SCHEMA_DROPPED, true, "")])
       }
     }
-    _ => Ok(vec![outcome(
+    [_, _, ..] => Ok(vec![outcome(
       SCHEMA_DROPPED,
       false,
       format!("more than one p.dropped in 4.1 Schema (found {})", dropped.len()),
@@ -798,7 +798,7 @@ fn check_non_goals_line(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
       return Ok(vec![outcome(NON_GOALS_LINE, false, "missing p.non-goals in High Level Solution")]);
     }
     [paragraph] => *paragraph,
-    _ => {
+    [_, _, ..] => {
       return Ok(vec![outcome(
         NON_GOALS_LINE,
         false,
@@ -1018,7 +1018,8 @@ fn quoted_spans(text: &str) -> Vec<&str> {
     let closer = match opener {
       '「' => '」',
       '“' => '”',
-      _ => '"',
+      '"' => '"',
+      _ => unreachable!("the search matches only the three opening quotes"),
     };
     let after = &rest[start + opener.len_utf8()..];
     let Some(end) = after.find(closer) else { break };
@@ -1030,7 +1031,7 @@ fn quoted_spans(text: &str) -> Vec<&str> {
 
 /// One open fork of a page, read as a pick: its question number, its named options as they show at open, and the
 /// name the recommendation quotes. The page script reads the same grammar in
-/// `web/features/artifacts/static/artifact-comments.js`; the fixture `tests/data/plan_template_forks.json` pins both
+/// `web/features/artifacts/static/artifact-comments.js`. The fixture `tests/data/plan_template_forks.json` pins both
 /// readings to one output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg(test)]
@@ -1395,11 +1396,11 @@ fn ordinal_named_scan(context: &Context<'_>) -> anyhow::Result<(HashSet<String>,
           if INTERNAL_UNLESS_QUALIFIED.is_match(kind)? {
             continue;
           }
-          let dotted = match (captures.get(4), captures.get(5), captures.get(6), captures.get(7)) {
-            (Some(first), Some(second), _, _) => Some((first.as_str(), second.as_str())),
-            (_, _, Some(first), Some(second)) => Some((first.as_str(), second.as_str())),
-            _ => None,
-          };
+          let dotted = captures
+            .get(4)
+            .zip(captures.get(5))
+            .or_else(|| captures.get(6).zip(captures.get(7)))
+            .map(|(first, second)| (first.as_str(), second.as_str()));
           if let Some((first, second)) = dotted {
             own = section_numbers.contains(&format!("{first}.{second}"))
               || (1..=h2_count).contains(&first.parse::<usize>().expect("the dotted section has one ASCII digit"));

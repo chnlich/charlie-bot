@@ -280,7 +280,7 @@ function taskContextPromptHtml(preview) {
   const overlayNote = preview.overlay && preview.overlay.error
     ? `<div class="text-xs text-amber-400">Launch overlay unavailable: ${escapeHtml(preview.overlay.error)}</div>` : '';
   return `<div class="space-y-2">
-    <div class="flex items-baseline justify-between gap-3">
+    <div class="flex flex-wrap items-baseline justify-between gap-3">
       <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Next run context</div>
       <div class="text-xs text-slate-400">${escapeHtml(preview.kind || '')} · ${formatCharCount(total)} chars</div>
     </div>

@@ -20,7 +20,7 @@ whether a round whose change can affect one of those scenarios takes it as a top
 
 ## Poor-network scenarios
 
-Measure each relevant scenario before and after the change on host3, using the shared scenario definitions and target
+Measure each relevant scenario before and after the change on the remote test host, using the shared scenario definitions and target
 verdicts in `dev/poor-network/profile.mjs`. The bench's verdict is authoritative; do not copy target values into this
 direction. The background scenario runs 3 repetitions, so the check stays inside the round's time.
 A scenario that passes before and fails after blocks landing.

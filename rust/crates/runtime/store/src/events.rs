@@ -635,10 +635,14 @@ impl Store {
             let mut lines = prefix;
             lines.extend(entry.lines.iter().cloned());
             let covered = LiveRangeMemo {
+              mtime_ns: entry.mtime_ns,
+              size: entry.size,
+              inode: entry.inode,
+              lines: Arc::new(lines),
+              covered_byte_end: entry.covered_byte_end,
+              ends_on_boundary: entry.ends_on_boundary,
               first_line_index: rel_start,
               covered_byte_start: walk.byte_start,
-              lines: Arc::new(lines),
-              ..entry
             };
             let result = Arc::clone(&covered.lines);
             lock(&self.event_read_caches, "event read cache mutex").live_ranges.store(path.clone(), covered);
@@ -1158,14 +1162,9 @@ impl Store {
     if let Some(meta) = lock(&self.metadata_cache, "metadata cache mutex").get(session_id) {
       return Ok(meta.value.archive_offset.max(0) as usize);
     }
-    let meta = match self.read_metadata_fresh(session_id) {
-      Ok(meta) => meta,
-      Err(error) => {
-        // `read_archive_offset_sync` falls back to 0 when metadata.json is missing or unreadable.
-        tracing::debug!(session_id, error = %error, "archive_offset_read_failed");
-        return Ok(0);
-      }
-    };
+    // A missing metadata.json has no archive; one that cannot be read or parsed fails the read, because folding
+    // without its archive would answer a different history.
+    let meta = self.read_metadata_fresh(session_id)?;
     Ok(meta.map_or(0, |meta| meta.archive_offset.max(0) as usize))
   }
 
@@ -1176,10 +1175,7 @@ impl Store {
     let metadata = match fs::metadata(&dir) {
       Ok(metadata) => metadata,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Arc::new(Vec::new())),
-      Err(error) => {
-        tracing::debug!(path = %dir.display(), error = %error, "archive_dir_stat_failed");
-        return Ok(Arc::new(Vec::new()));
-      }
+      Err(error) => return Err(StoreError::new(format!("{}: {error}", dir.display()))),
     };
     let signature = FileSignature::from_metadata(&metadata);
     if let Some(paths) = lock(&self.event_read_caches, "event read cache mutex").archive_paths.fresh(&dir, signature) {
@@ -1188,10 +1184,7 @@ impl Store {
     let entries = match fs::read_dir(&dir) {
       Ok(entries) => entries,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Arc::new(Vec::new())),
-      Err(error) => {
-        tracing::debug!(path = %dir.display(), error = %error, "archive_dir_stat_failed");
-        return Ok(Arc::new(Vec::new()));
-      }
+      Err(error) => return Err(StoreError::new(format!("{}: {error}", dir.display()))),
     };
     let mut paths = Vec::new();
     for entry in entries {
@@ -1813,6 +1806,19 @@ mod tests {
   use serde_json::json;
   use std::sync::{Mutex, mpsc};
   use std::time::Duration;
+
+  /// A missing metadata.json has no archive, so its offset is 0. One that exists but cannot be parsed fails the read: a
+  /// fold without its archive would answer a different history.
+  #[test]
+  fn an_unparseable_metadata_file_fails_the_archive_offset_read_and_a_missing_one_has_offset_zero() {
+    let (_home, store) = make_test_store();
+    assert_eq!(store.read_archive_offset("synthetic").unwrap(), 0, "a missing metadata.json has no archive");
+
+    let path = store.metadata_path("synthetic");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{\"archive_offset\": 3, ").unwrap();
+    store.read_archive_offset("synthetic").unwrap_err();
+  }
 
   #[test]
   fn event_timestamp_matches_isoformat_offset() {

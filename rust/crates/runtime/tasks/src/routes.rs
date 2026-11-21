@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use charliebot_agents::backend_pool::{BackendRoute, RouteTarget, RoutedRequest};
 use charliebot_agents::model_pool;
+use charliebot_agents::pool_display::session_detail_shown;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -23,9 +24,9 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD, COLD_READ_TRIGGER_FIELD,
-  ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD, SessionMetadata, TASK_TYPE_FIELD, TaskProfile,
-  TaskSpec, TaskType,
+  BACKEND_FIELD, BASE_BRANCH_FIELD, COLD_READ_FIELD, COLD_READ_GENRE_FIELD, COLD_READ_PAGE_PATH_FIELD,
+  COLD_READ_TRIGGER_FIELD, ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD, SessionMetadata,
+  TASK_TYPE_FIELD, TaskProfile, TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, StoreError};
@@ -68,7 +69,7 @@ pub const SESSION_MESSAGE_PATH: &str = "/api/internal/session-message";
 pub const SESSION_MESSAGE_TARGET_SESSION_ID_FIELD: &str = "target_session_id";
 
 /// The delegate request's field names. The route validates against them and the CLI builds the body from them, so each
-/// name is spelled once, here. `keep_worktree`, `repo_path`, `base_branch` and `task_type` name the stored task
+/// name is spelled once, here. `keep_worktree`, `repo_path`, `base_branch`, `task_type` and `backend` name the stored
 /// record too, so `charliebot_store::metadata` defines them.
 pub const DELEGATE_SESSION_ID_FIELD: &str = "session_id";
 pub const DELEGATE_DESCRIPTION_FIELD: &str = "description";
@@ -77,7 +78,7 @@ pub const DELEGATE_REPO_PATH_FIELD: &str = REPO_PATH_FIELD;
 pub const DELEGATE_BASE_BRANCH_FIELD: &str = BASE_BRANCH_FIELD;
 pub const DELEGATE_TASK_SPEC_FILE_FIELD: &str = "task_spec_file";
 pub const DELEGATE_REVIEWER_CONTEXT_FILE_FIELD: &str = "reviewer_context_file";
-pub const DELEGATE_BACKEND_FIELD: &str = "backend";
+pub const DELEGATE_BACKEND_FIELD: &str = BACKEND_FIELD;
 pub const DELEGATE_REQUEST_ID_FIELD: &str = "request_id";
 /// The scheduled task whose round a delegation starts in its bound session.
 pub const DELEGATE_BOUND_TASK_FIELD: &str = "bound_task";
@@ -602,7 +603,7 @@ async fn delegate_bound_round(
   drop(guard);
   let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(|_| DelegateError::AdapterMissing)?;
   adapter.launch(&child.id, &run_id)?;
-  let task_event = json!({
+  let mut task_event = json!({
     "type": event_types::TASK_DELEGATED,
     "thread_id": run_id,
     "description": request.description,
@@ -610,6 +611,10 @@ async fn delegate_bound_round(
     "model": round.model.as_deref().unwrap_or_default(),
     event_types::CHILD_SESSION_ID: child.id,
   });
+  // The pool id is the child's session backend; a single-option child carries none.
+  if let Some(pool) = &round.session_backend {
+    task_event[event_types::POOL] = json!(pool);
+  }
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, bound_task, "task_delegated_bound_round");
   Ok(json!({
@@ -726,7 +731,7 @@ async fn delegate_task_tree(
   }
   let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(|_| DelegateError::AdapterMissing)?;
   adapter.launch(&child.id, &run_id)?;
-  let task_event = json!({
+  let mut task_event = json!({
     "type": charliebot_core::event_types::TASK_DELEGATED,
     "thread_id": run_id,
     "description": request.description,
@@ -736,6 +741,10 @@ async fn delegate_task_tree(
     "route": route,
     charliebot_core::event_types::DELEGATE_INVOCATION: delegate_invocation_event_payload(request),
   });
+  // A child whose session backend is a pool runs its member under the pool id; a single-option child names no pool.
+  if subagent.session_backend != subagent.run_backend {
+    task_event[event_types::POOL] = json!(subagent.session_backend);
+  }
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, "task_delegated_task_tree");
   Ok(json!({
@@ -1271,7 +1280,7 @@ async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Requ
     let status_code = if status == 202 { StatusCode::ACCEPTED } else { StatusCode::OK };
     return responses::json(status_code, &payload);
   }
-  let detail = match features.store.session_detail(&meta.id) {
+  let detail = match session_detail_shown(&features.store, &meta.id) {
     Ok(detail) => detail,
     Err(error) => return task_http_error(error),
   };
@@ -1298,7 +1307,7 @@ async fn cancel_task(State(features): State<Arc<FeatureContext>>, request: Reque
     Ok(result) => result,
     Err(error) => return task_http_error(error),
   };
-  let mut detail = match features.store.session_detail(&meta.id) {
+  let mut detail = match session_detail_shown(&features.store, &meta.id) {
     Ok(detail) => detail,
     Err(error) => return task_http_error(error),
   };

@@ -6,12 +6,6 @@ use anyhow::{Context as _, Result};
 use charliebot_core::proc_identity::{read_host_boot_time, read_pid_stat};
 use chrono::DateTime;
 
-/// Whether `(pid, pid_start)` still names one live process instance. A zombie has ended: its argv is gone and nothing
-/// can follow it, so it never counts.
-pub fn instance(pid: u32, pid_start: &str) -> bool {
-  matches!(read_pid_stat(pid), Some(stat) if stat.pid_start == pid_start && stat.state != "Z")
-}
-
 /// Whether a pid still names a live process, for a recorded pid that carries no start time. A zombie has ended: its
 /// argv is gone and nothing can follow it, so it never counts.
 pub fn alive(pid: u32) -> bool {
@@ -31,6 +25,8 @@ pub fn started_after_boot(started_at: &str, boot: i64) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_core::proc_identity::is_same_process;
+
   use super::*;
 
   #[test]
@@ -40,8 +36,8 @@ mod tests {
     let pid = child.id();
     let stat = read_pid_stat(pid).expect("the child's stat");
     assert_ne!(stat.state, "Z");
-    assert!(instance(pid, &stat.pid_start));
-    assert!(!instance(pid, &format!("{}0", stat.pid_start)));
+    assert!(is_same_process(pid, &stat.pid_start));
+    assert!(!is_same_process(pid, &format!("{}0", stat.pid_start)));
     child.kill().expect("kill sleep");
     child.wait().expect("reap sleep");
   }

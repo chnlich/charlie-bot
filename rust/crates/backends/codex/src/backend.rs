@@ -154,14 +154,17 @@ impl CodexBackend {
     args
   }
 
-  /// The argv shared by streaming, resume and one-shot `codex exec` runs.
+  /// The argv shared by streaming, resume and one-shot `codex exec` runs. Disable sub-agents so each run's tool calls
+  /// stay in its record; the v2 feature override must also be off for `agents.enabled` to override model presets.
   fn exec_args(&self) -> Vec<String> {
     let mut args: Vec<String> = [
       "--json",
       "--skip-git-repo-check",
       "--dangerously-bypass-approvals-and-sandbox",
+      "--config",
+      "agents.enabled=false",
       "--disable",
-      "multi_agent",
+      "multi_agent_v2",
       "--model",
     ]
     .iter()
@@ -488,6 +491,22 @@ mod tests {
     assert_eq!(env["PATH"], "/usr/bin:/home/a/.local/bin");
     prepend_path_dir(&mut env, "/home/a/bin");
     assert_eq!(env["PATH"], "/home/a/bin:/usr/bin:/home/a/.local/bin");
+  }
+
+  #[test]
+  fn one_shot_disables_sub_agents() {
+    let backend = CodexBackend::from_launch(
+      PathBuf::from("/synthetic/codex"),
+      Path::new("/synthetic/bin"),
+      "gpt-5.5",
+      &CodexOptions::default(),
+      LaunchArgs::default(),
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+    let command = backend.exec_command_head();
+    assert!(command.windows(2).any(|args| args == ["--config", "agents.enabled=false"]), "{command:?}");
+    assert!(command.windows(2).any(|args| args == ["--disable", "multi_agent_v2"]), "{command:?}");
   }
 
   /// A manager turn's context names the session memo after a compaction. A worker run carries no memo and no hook.

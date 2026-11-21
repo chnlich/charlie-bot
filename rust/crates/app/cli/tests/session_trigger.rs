@@ -157,6 +157,7 @@ fn registering(home: PathBuf) -> Handler {
     fs::create_dir_all(&triggers).expect("the triggers directory is created");
     let stored = json!({
       "id": "trig-1",
+      "session_id": "s1",
       "status": "pending",
       "message": body["message"],
       "watch_targets": body["watch_targets"],
@@ -419,6 +420,130 @@ fn test_cmd_exit_3_writes_the_launch_record_and_the_exit_file() {
   assert_eq!(out, expected);
 
   assert_eq!(wait_for_exit_code(&PathBuf::from(meta["exit_file"].as_str().expect("text"))), "3");
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_missing_cmd_wakes_as_watch_failed() {
+  use charliebot_core::config::CREDENTIALS_FILENAME;
+  use charliebot_core::credentials::load_credentials;
+  use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::context::StartupState;
+  use charliebot_registry::store_hooks;
+  use charliebot_registry::{FeatureContext, Registry};
+  use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec};
+  use charliebot_store::{CreateTask, Store, TaskCaller};
+  use charliebot_tasks::completion::TaskCompletion;
+  use charliebot_tasks::dispatch::Dispatcher;
+  use charliebot_triggers::triggers::TriggerManager;
+
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(registering(sandbox.home.clone()));
+  sandbox.write_config(stub.port);
+  fs::write(sandbox.home.join(CREDENTIALS_FILENAME), "charliebot: {}\n").expect("credentials file");
+  let registry = Arc::new(Registry::new());
+  let config_value = registry.load_config(&sandbox.home).expect("test config");
+  let store = Arc::new(
+    Store::new(config_value.clone(), registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry)))
+      .expect("test store"),
+  );
+  let config_registry = Arc::clone(&registry);
+  let config_home = sandbox.home.clone();
+  let config = Arc::new(HotReload::new(
+    config_value.config_file(),
+    "trigger_test_config_reload_failed",
+    Box::new(move || config_registry.load_config(&config_home)),
+  ));
+  let credential_home = sandbox.home.clone();
+  let credentials = Arc::new(HotReload::new(
+    sandbox.home.join(CREDENTIALS_FILENAME),
+    "trigger_test_credentials_reload_failed",
+    Box::new(move || load_credentials(&credential_home)),
+  ));
+  let features =
+    Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(StartupState::default()) });
+  features
+    .store
+    .create_task(
+      CreateTask {
+        request_id: "create-s1".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: Some(TaskSpec {
+          goal: "Synthetic trigger test".to_string(),
+          repo_path: None,
+          base_branch: None,
+          task_type: None,
+          keep_worktree: false,
+          cold_read: None,
+          approver: TaskApprover::User,
+          improve_host: None,
+        }),
+        name: Some("Synthetic trigger test".to_string()),
+        backend: Some("synthetic".to_string()),
+        group: None,
+        session_id: Some("s1".to_string()),
+      },
+      TaskCaller::Operator,
+      serde_json::Map::new(),
+    )
+    .await
+    .expect("create task");
+  let completion = Arc::new(TaskCompletion::new(Arc::clone(&features)));
+  features
+    .startup
+    .insert(Dispatcher::new(Arc::clone(&features.store), Arc::clone(&features), completion.clone(), completion))
+    .expect("install dispatcher");
+
+  let run = sandbox.run(&[
+    "--session",
+    "s1",
+    "--max-wait",
+    "60",
+    "--message",
+    "m",
+    "--cmd",
+    "charliebot-test-command-that-does-not-exist",
+  ]);
+  assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+  let meta = only_launch_record(&sandbox);
+  let _group = GroupGuard(pid_of(&meta));
+  assert_eq!(wait_for_exit_code(Path::new(meta["exit_file"].as_str().expect("exit file"))), "127");
+
+  let trigger_path = sandbox.home.join(SESSION_TRIGGERS).join("trig-1.json");
+  let mut stored: Value = serde_json::from_slice(&fs::read(&trigger_path).expect("read registered trigger"))
+    .expect("registered trigger is JSON");
+  stored["fire_at"] = json!(
+    (time::OffsetDateTime::now_utc() + time::Duration::seconds(60))
+      .format(&time::format_description::well_known::Rfc3339)
+      .expect("format deadline")
+  );
+  fs::write(trigger_path, stored.to_string()).expect("set the watch deadline");
+  let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+  manager.recover_pending().await.expect("recover the registered watch");
+  let fired = tokio::time::timeout(PROCESS_TIMEOUT, async {
+    loop {
+      let triggers = manager.list_triggers("s1").await.expect("read trigger");
+      if triggers[0].fire_reason.is_some() {
+        break triggers[0].clone();
+      }
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the watch fires");
+  assert_eq!(fired.fire_reason.as_deref(), Some("watch failed"));
+  let events = features.store.load_all_facts("s1").expect("read task events");
+  let content = events
+    .iter()
+    .find(|event| {
+      event.get("type").and_then(|value| value.as_str()) == Some(charliebot_core::event_types::SCHEDULED_TRIGGER)
+    })
+    .and_then(|event| event.get("content"))
+    .and_then(|value| value.as_str())
+    .expect("the wake is admitted to the session");
+  assert!(content.contains("[Scheduled trigger fired | watch failed]"), "{content}");
+  assert!(!content.contains("completed"), "{content}");
 }
 
 #[test]

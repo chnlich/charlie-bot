@@ -15,7 +15,8 @@
 # (rust/crates/runtime/agents/src/transport/cgroup.rs, rust/crates/infra/core/src/cgroup.rs or
 # rust/crates/runtime/agents/src/agent_environment.rs): the serve server runs only binaries whose cgroup code equals
 # main's. It runs with session cgroups off (session_memory_max_mb 0), starts no agent and installs nothing, so it needs
-# no writable agents slice; its tmux socket must keep its path under 108 bytes, the sun_path size with the final NUL.
+# no writable agents slice; the tmux and Chrome singleton sockets under its temp paths must keep their paths under 108
+# bytes, the sun_path size with the final NUL.
 #
 # The config carries the live config's weight switches, server.enable_session_cpu_weight and
 # server.enable_session_io_weight, read by `release-helper backend-option`; an absent switch takes the server's
@@ -23,7 +24,11 @@
 # tests point it at a sandbox.
 #
 # Options: --tree-root <dir> builds the tree as <dir>/trial-<first 12 hex of the commit>, so runs of two commits under
-# one root share no tree; --seed-home <dir> copies each session directory of <dir> into the trial home before the
+# one root share no tree. Without it the tree is ${TMPDIR:-/tmp}/charliebot-release-trial-<uid>-<first 12 hex>, so one
+# user's trials of one commit name one path, and a tree path that already exists refuses the run, naming the path and
+# its owner. The temp root that the trial exports as TMPDIR is <tree>/tmp with --tree-root, and without it the short
+# directory ${TMPDIR:-/tmp}/trial-tmp-<uid>-<first 12 hex> beside the tree; the cleanup removes both. --seed-home <dir>
+# copies each session directory of <dir> into the trial home before the
 # server starts, with the boot marker <dir>/boot_recovery.json when present (a task-tree mock home), and the trial
 # keeps its own config.yaml and credentials.yaml; --in-caller-scope keeps the server in the caller's cgroup, which must
 # already cap memory, and skips the scope probe and the scope start and stop. Every read of the release under test goes
@@ -209,39 +214,74 @@ if ! CHOSEN_PORT=$("$TRIAL_CLI" release-helper free-port "$PORT_MIN" "$PORT_MAX"
 fi
 readonly CHOSEN_PORT
 
+# Without --tree-root the tree sits in the caller's TMPDIR. The uid in its name keeps users apart, and a round's write
+# boundary allows the round's TMPDIR, so a round's trial needs no --tree-root.
 if [[ -n $TREE_ROOT ]]; then
   readonly TREE="${TREE_ROOT%/}/trial-${COMMIT:0:12}"
+  readonly TMP_ROOT="$TREE/tmp"
 else
-  readonly TREE="/tmp/charliebot-release-trial-$COMMIT"
+  readonly TREE="${TMPDIR:-/tmp}/charliebot-release-trial-$(id -u)-${COMMIT:0:12}"
+  # Inside the tree, Chrome's singleton socket path passes 108 bytes under the round's TMPDIR, /tmp/improve-ux-tmp (the
+  # tree's name adds 39 bytes plus the uid to TMPDIR, and the socket adds 45 under the temp root). So the default temp
+  # root is a short sibling of the tree, and the cleanup removes it with the tree.
+  readonly TMP_ROOT="${TMPDIR:-/tmp}/trial-tmp-$(id -u)-${COMMIT:0:12}"
+  if [[ $TREE != /* ]]; then
+    preflight_fail "the default trial tree needs an absolute TMPDIR, got: $TREE"
+  fi
 fi
 readonly TMUX_ROOT="$TREE/tmux"
 if [[ -e $TREE ]]; then
-  preflight_fail "trial tree does not already exist: $TREE"
+  tree_owner=$(stat -c %U -- "$TREE") || preflight_fail "the trial tree path exists and its owner cannot be read: $TREE"
+  preflight_fail "the trial tree path already exists: $TREE (owned by $tree_owner)"
 fi
-# tmux keeps each server's socket in $TMUX_TMPDIR/tmux-<uid>/, and sun_path holds 108 bytes with the final NUL.
-TMUX_SOCKET_PATH="$TMUX_ROOT/tmux-$(id -u)/charliebot"
-if (( ${#TMUX_SOCKET_PATH} >= 108 )); then
-  preflight_fail "the tmux socket path stays under 108 bytes, the sun_path size with its final NUL: $TMUX_SOCKET_PATH (${#TMUX_SOCKET_PATH} bytes)"
-fi
+# The sockets that the trial's processes create under its temp paths: tmux keeps its server socket in
+# $TMUX_TMPDIR/tmux-<uid>/, and Chrome keeps its singleton socket in a mkdtemp directory under TMPDIR. The six random
+# characters of that directory name are written XXXXXX, which has the same length. sun_path holds 108 bytes with the
+# final NUL.
+socket_paths_fit() {
+  local socket_path socket_bytes failed=0
+  for socket_path in "$TMUX_ROOT/tmux-$(id -u)/charliebot" "$TMP_ROOT/org.chromium.Chromium.XXXXXX/SingletonSocket"; do
+    socket_bytes=$(printf '%s' "$socket_path" | wc -c)
+    if (( socket_bytes >= 108 )); then
+      printf 'preflight failed: socket path must stay under 108 bytes (sun_path with final NUL): %s (%s bytes)\n' \
+        "$socket_path" "$socket_bytes" >&2
+      failed=1
+    else
+      printf 'PREFLIGHT PASS socket: %s (%s bytes)\n' "$socket_path" "$socket_bytes"
+    fi
+  done
+  return "$failed"
+}
+socket_paths_fit || exit 2
 
-# The trial tree is the one this run creates: the default tree or the tree under --tree-root. Removal accepts only these.
-is_trial_tree() {
-  [[ $1 == "/tmp/charliebot-release-trial-$COMMIT" || ( -n $TREE_ROOT && $1 == "${TREE_ROOT%/}/trial-${COMMIT:0:12}" ) ]]
+# remove_trial_paths removes the trial's tree and temp root when they exist. This run creates both, and removal touches
+# no other path. The setup trap and the cleanup both call it.
+remove_trial_paths() {
+  local path
+  for path in "$TREE" "$TMP_ROOT"; do
+    if [[ -e $path ]] && ! rm -rf -- "$path"; then
+      return 1
+    fi
+  done
 }
 
 setup_cleanup_on_exit() {
   local exit_status=$?
   trap - EXIT INT TERM
-  if [[ -d $TREE ]] && is_trial_tree "$TREE"; then
-    if ! rm -rf -- "$TREE"; then
-      exit_status=1
-    fi
+  if ! remove_trial_paths; then
+    exit_status=1
   fi
   exit "$exit_status"
 }
 
 if ! mkdir -m 700 "$TREE"; then
-  preflight_fail "create trial tree $TREE"
+  tree_parent=$(dirname -- "$TREE")
+  parent_owner=$(stat -c %U -- "$tree_parent") || exit 2
+  preflight_fail "create trial tree $TREE: mkdir failed above, and its directory $tree_parent is owned by $parent_owner"
+fi
+if ! mkdir -m 700 "$TMP_ROOT"; then
+  rmdir -- "$TREE"
+  preflight_fail "create trial temp root $TMP_ROOT: mkdir failed above"
 fi
 trap setup_cleanup_on_exit EXIT
 trap 'exit 130' INT
@@ -256,7 +296,6 @@ readonly TRIAL_CB_HOME="$TRIAL_HOME/.charliebot"
 readonly REPO_ROOT="$TREE/repo"
 readonly WORKSPACE="$TREE/workspace"
 readonly WORKTREE_ROOT="$TREE/worktrees"
-readonly TMP_ROOT="$TREE/tmp"
 readonly HTTP_ROOT="$TREE/http"
 SERVER_LOG=
 SERVER_LOGS=()
@@ -264,11 +303,11 @@ readonly AUTH_CONFIG="$TREE/trial-auth.curl"
 readonly CREDENTIALS="$TRIAL_CB_HOME/credentials.yaml"
 readonly SESSIONS_DIR="$TRIAL_CB_HOME/sessions"
 
-if ! mkdir -m 700 -p "$TRIAL_HOME" "$TRIAL_CB_HOME" "$REPO_ROOT" "$WORKSPACE" "$WORKTREE_ROOT" "$TMP_ROOT" "$TMUX_ROOT" "$HTTP_ROOT"; then
+if ! mkdir -m 700 -p "$TRIAL_HOME" "$TRIAL_CB_HOME" "$REPO_ROOT" "$WORKSPACE" "$WORKTREE_ROOT" "$TMUX_ROOT" "$HTTP_ROOT"; then
   printf 'trial setup failed: create trial directories inside %s\n' "$TREE" >&2
   exit 1
 fi
-if ! chmod 700 "$TRIAL_HOME" "$TRIAL_CB_HOME" "$WORKSPACE" "$WORKTREE_ROOT" "$TMP_ROOT" "$TMUX_ROOT" "$HTTP_ROOT"; then
+if ! chmod 700 "$TRIAL_HOME" "$TRIAL_CB_HOME" "$WORKSPACE" "$WORKTREE_ROOT" "$TMUX_ROOT" "$HTTP_ROOT"; then
   printf 'trial setup failed: set trial directory modes\n' >&2
   exit 1
 fi
@@ -621,17 +660,6 @@ cleanup_owned_cgroups() {
   return "$fail"
 }
 
-remove_trial_tree() {
-  if [[ -d $TREE ]]; then
-    if ! is_trial_tree "$TREE"; then
-      printf 'refusing to remove unexpected trial path %s\n' "$TREE" >&2
-      return 1
-    fi
-    rm -rf -- "$TREE"
-  fi
-  [[ ! -e $TREE ]]
-}
-
 cleanup_on_exit() {
   local exit_status=$?
   trap - EXIT INT TERM
@@ -649,7 +677,7 @@ cleanup_on_exit() {
       printf 'evidence capture failed: %s\n' "$EVIDENCE_ROOT" >&2
       exit_status=1
     fi
-    remove_trial_tree || exit_status=1
+    remove_trial_paths || exit_status=1
     printf 'EVIDENCE path=%s\n' "$EVIDENCE_ROOT"
   fi
   exit "$exit_status"
@@ -869,10 +897,10 @@ run_serve_mode() {
       printf 'FAIL serve ChildProcess: the server process %s remains\n' "$server_pid"
     fi
   done
-  stray_pids=$(pgrep -f "$TREE" || true)
+  stray_pids=$({ pgrep -f "$TREE"; pgrep -f "$TMP_ROOT"; } || true)
   if [[ -n $stray_pids ]]; then
     cleanup_failed=1
-    printf 'FAIL serve ChildProcess: processes of the trial tree remain: %s\n' "$stray_pids"
+    printf 'FAIL serve ChildProcess: processes of the trial tree or temp root remain: %s\n' "$stray_pids"
   else
     printf 'SERVE PASS ChildProcess: no process of the trial tree remains\n'
   fi
@@ -882,7 +910,7 @@ run_serve_mode() {
     cleanup_failed=1
     printf 'evidence capture failed: %s\n' "$EVIDENCE_ROOT" >&2
   fi
-  if ! remove_trial_tree; then
+  if ! remove_trial_paths; then
     cleanup_failed=1
   fi
   CLEANUP_DONE=1

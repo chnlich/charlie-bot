@@ -521,7 +521,7 @@ impl FromIterator<(CallClass, CallTarget)> for CallsConfig {
 }
 
 /// `backends:` section: the router command, the model options, the named pools, and the call targets.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct BackendsConfig {
   pub routing: Option<RoutingConfig>,
   pub options: Vec<BackendOption>,
@@ -533,6 +533,14 @@ impl BackendsConfig {
   /// The pool named `id`, or `None` when no `backends.pools` entry has that id.
   pub fn pool(&self, id: &str) -> Option<&PoolConfig> {
     self.pools.iter().find(|pool| pool.id == id)
+  }
+
+  /// The member a pooled session shows for its recorded `member`: `Some(member)` when pool `session_backend` lists
+  /// it. A single option, a removed pool, or a member the pool no longer lists gives `None`, and the caller shows
+  /// the pool name alone. No error.
+  pub fn display_pool_member<'a>(&self, session_backend: &str, member: &'a str) -> Option<&'a str> {
+    let pool = self.pool(session_backend)?;
+    pool.members.iter().any(|candidate| candidate.backend == member).then_some(member)
   }
 
   /// Check whether `id` names a configured model or pool; return the canonical refusal for an unknown id.
@@ -1563,6 +1571,17 @@ voice: {}
     );
     let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("invalid config key backends.strong") && error.contains("unknown field"), "{error}");
+  }
+
+  #[test]
+  fn a_recorded_member_is_shown_only_while_its_pool_lists_it() {
+    let home = home_with(VALID);
+    let cfg = load(&home).unwrap();
+    assert_eq!(cfg.backends.display_pool_member("pool", "claude-fable"), Some("claude-fable"));
+    // A member the pool no longer lists, a single option, and a removed pool each show no member, with no error.
+    assert_eq!(cfg.backends.display_pool_member("pool", "retired"), None);
+    assert_eq!(cfg.backends.display_pool_member("claude-fable", "claude-fable"), None);
+    assert_eq!(cfg.backends.display_pool_member("removed", "claude-fable"), None);
   }
 
   fn member_ids(pool: &PoolConfig) -> Vec<&str> {

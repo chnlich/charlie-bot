@@ -2,8 +2,8 @@
 //! set or confirm that ends the turn (`web-status`), and the status set that rewrites the Waiting on you list after the
 //! turn's last input (`status-reread`).
 //!
-//! All three are entries of the turn-end hook list. The `charliebot hook` command answers each one from the shared
-//! input (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason. A
+//! All three are names in the turn-end check list, and the web contribution answers each one in process from the
+//! shared input (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason. A
 //! second miss passes: `web-reply` then shows the user the no-reply notice, `web-status` passes quietly, and
 //! `status-reread` shows the Waiting on you items it left. A continuation that failed is a second miss too: `web-status`
 //! then shows its notice, so the failed turn never passes. A turn with a close request, and a turn that exits with an
@@ -18,10 +18,12 @@ use charliebot_core::event_types::{
   WEB_STATUS_CONFIRMED,
 };
 use charliebot_registry::FeatureContext;
+use charliebot_registry::turn::{CheckResult, TurnInput};
 use charliebot_store::compact::CompactValue;
 use charliebot_store::reply_order;
 use charliebot_store::{ChatEvent, Store};
-use charliebot_tasks::turn_hooks::{CheckResult, TurnInput, received_receipts};
+use charliebot_tasks::task_input_prompt::input_text;
+use charliebot_tasks::turn_hooks::{last_received_index, received_receipts};
 use serde_json::{Value, json};
 
 use crate::reply;
@@ -54,7 +56,7 @@ const FAILED_CONTINUATION_STATUS_NOTICE: &str = concat!(
 
 /// Whether a web session's turn-end checks judge this turn: the session is a web session, the turn exited cleanly or as
 /// a failed continuation, and it left no close request. The `web-reply` and `web-status` entries read their scope here,
-/// as does the `pending-wake` entry that the CLI answers.
+/// as does the `pending-wake` check.
 pub fn web_turn_checks_apply(input: &TurnInput) -> bool {
   input.kind.as_deref() == Some("web")
     && input.exit_is_judged()
@@ -115,7 +117,7 @@ pub fn check_status_reread(input: &TurnInput) -> CheckResult {
   if !web_turn_checks_apply(input) {
     return CheckResult::Pass;
   }
-  let Some(last) = input.turn.iter().rposition(|event| event["received_at"].is_string()) else {
+  let Some(last) = last_received_index(&input.turn) else {
     return CheckResult::Pass;
   };
   let items = waiting_texts(&input.status);
@@ -132,7 +134,7 @@ pub fn check_status_reread(input: &TurnInput) -> CheckResult {
   if blocked_before(&input.turn, STATUS_REREAD_ENTRY) {
     return CheckResult::Notice(left_items_notice(&items));
   }
-  CheckResult::Block(reread_reason(&input.turn[last], items.len()))
+  CheckResult::Block(reread_reason(input, last, items.len()))
 }
 
 /// The text of each Waiting on you item of the stored status payload, in list order.
@@ -145,10 +147,13 @@ fn waiting_texts(status: &Value) -> Vec<String> {
     .collect()
 }
 
-/// The reason the `status-reread` check blocks with: the last input's receipt time and opening, and the item count.
-fn reread_reason(input: &Value, count: usize) -> String {
-  let received = input["received_at"].as_str().unwrap_or_default();
-  let opening = reply::message_opening(input["content"].as_str().unwrap_or_default());
+/// The reason the `status-reread` check blocks with: the receipt time of the turn's input at `last`, the opening of the
+/// text the prompt renders for it, and the item count.
+fn reread_reason(input: &TurnInput, last: usize, count: usize) -> String {
+  let event = &input.turn[last];
+  let received = event["received_at"].as_str().unwrap_or_default();
+  let text = input_text(event, input.last_input_provenance.as_deref());
+  let opening = reply::message_opening(&text);
   let noun = if count == 1 { "item" } else { "items" };
   format!(
     "Session status reminder: your last turn received an input at {received}, which begins \"{opening}\", and \
@@ -250,6 +255,9 @@ pub(crate) async fn close_request_pending(store: &Arc<Store>, session_id: &str) 
 
 #[cfg(test)]
 mod tests {
+  use charliebot_core::event_types::{CHILD_REPORT, SCHEDULED_TRIGGER};
+  use charliebot_tasks::task_input_prompt::child_report_text;
+
   use super::*;
   use crate::test_support::Home;
 
@@ -260,6 +268,7 @@ mod tests {
       exit_code,
       continuation_failed: false,
       status: Value::Null,
+      last_input_provenance: None,
       turn,
     }
   }
@@ -360,6 +369,52 @@ mod tests {
     closing.push(json!({"type": TASK_CLOSE_REQUESTED, "id": "close-1"}));
     assert_eq!(check_web_reply(&input(Some("web"), 0, closing.clone())).unwrap(), CheckResult::Pass);
     assert_eq!(check_web_status(&input(Some("web"), 0, closing)), CheckResult::Pass);
+  }
+
+  /// The report that task `child_id` delivers to its parent, received at `received_at`.
+  fn child_report(child_id: &str, received_at: &str) -> Value {
+    json!({
+      "type": CHILD_REPORT,
+      "id": "report-1",
+      "child_session_id": child_id,
+      "outcome": "completed",
+      "summary": "Run completed",
+      "received_at": received_at,
+    })
+  }
+
+  #[test]
+  fn a_status_reminder_quotes_a_child_report_as_the_prompt_renders_it() {
+    let report = child_report("child-1", "2026-01-01T00:00:01Z");
+    for provenance in [None, Some("clone of parent-1")] {
+      let turn = TurnInput {
+        status: json!({"waiting": [{"text": "Review the draft"}]}),
+        last_input_provenance: provenance.map(str::to_string),
+        turn: vec![report.clone()],
+        ..input(Some("web"), 0, Vec::new())
+      };
+      let opening = reply::message_opening(&child_report_text(&report, provenance));
+      let CheckResult::Block(reason) = check_status_reread(&turn) else { panic!("the reminder blocks") };
+      assert!(reason.contains(&format!("begins \"{opening}\"")), "{reason}");
+      assert!(!reason.contains("begins \"\""), "{reason}");
+    }
+  }
+
+  #[test]
+  fn a_status_reminder_quotes_a_user_message_and_a_scheduled_trigger_by_their_content() {
+    let trigger = json!({
+      "type": SCHEDULED_TRIGGER, "id": "t1", "content": "Nightly sweep", "received_at": "2026-01-01T00:00:01Z",
+    });
+    let cases = [(user("u1", "the question", "2026-01-01T00:00:01Z"), "the question"), (trigger, "Nightly sweep")];
+    for (event, content) in cases {
+      let turn = TurnInput {
+        status: json!({"waiting": [{"text": "Review the draft"}]}),
+        turn: vec![event],
+        ..input(Some("web"), 0, Vec::new())
+      };
+      let CheckResult::Block(reason) = check_status_reread(&turn) else { panic!("the reminder blocks") };
+      assert!(reason.contains(&format!("begins \"{content}\"")), "{reason}");
+    }
   }
 
   #[tokio::test]

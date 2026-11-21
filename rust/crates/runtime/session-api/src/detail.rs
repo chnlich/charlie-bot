@@ -13,6 +13,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use charliebot_agents::pool_display::session_detail_shown;
 use charliebot_compat::compression::{accepts_gzip, gzip_level_one};
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::get_only;
@@ -351,7 +352,7 @@ fn bootstrap_body(
   let cached = match &inputs {
     Some(inputs) => match entry.as_ref() {
       Some((cached, body, gzip, untrimmed)) if cached.matches(inputs) => Some((body.clone(), gzip.clone(), *untrimmed)),
-      _ => None,
+      None | Some(_) => None,
     },
     None => None,
   };
@@ -468,7 +469,7 @@ pub(crate) async fn session_detail(
     Err(error) => return store_error(error),
   };
   let store = Arc::clone(&features.store);
-  match blocking_store(move || store.session_detail(&meta.id)).await {
+  match blocking_store(move || session_detail_shown(&store, &meta.id)).await {
     Ok(payload) => responses::fast_json(StatusCode::OK, &payload),
     Err(error) => task_http_error(error),
   }
@@ -565,7 +566,7 @@ async fn session_usage(
   let mut payload = Map::new();
   payload.insert(
     "session".to_string(),
-    match session_metadata_value(&features.store, &meta) {
+    match listed_session_metadata(&features.store, &meta) {
       Ok(value) => value,
       Err(error) => return store_error(error),
     },
@@ -1172,7 +1173,7 @@ fn displayed_backend_id(meta: &SessionMetadata, run_backend: Option<&str>, defau
   active_backend.unwrap_or(default_backend).to_string()
 }
 
-fn session_metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
+fn listed_session_metadata(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
   listing::metadata_value(store, &response_metadata(store, meta)?)
 }
 
@@ -1272,6 +1273,8 @@ fn to_index(value: i64) -> usize {
 
 #[cfg(test)]
 mod tests {
+  use std::collections::HashMap;
+
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::run_records::RunKind;
   use charliebot_store::{CreateTask, SESSION_NOT_FOUND_DETAIL, TaskCaller};
@@ -1324,9 +1327,25 @@ backends:
       .await
       .expect("the member is recorded");
 
-    let payload = features.store.session_detail(&meta.id).expect("the detail reads");
+    let payload =
+      charliebot_agents::pool_display::session_detail_shown(&features.store, &meta.id).expect("the detail reads");
     assert_eq!(payload["backend"], "auto");
     assert_eq!(payload["pool_member"], "synthetic-a");
+
+    // A recorded member the pool no longer lists is not shown; the pool name still is.
+    features
+      .store
+      .update_slot_fields(
+        &meta.id,
+        charliebot_agents::model_pool::OWNER,
+        Map::from_iter([("pool_member".to_string(), json!("retired"))]),
+      )
+      .await
+      .expect("the member is recorded");
+    let payload =
+      charliebot_agents::pool_display::session_detail_shown(&features.store, &meta.id).expect("the detail reads");
+    assert_eq!(payload["backend"], "auto");
+    assert_eq!(payload["pool_member"], Value::Null);
 
     let cfg = features.config.get().expect("the test config loads");
     let backend = active_backend_payload(&features.store, &meta, &cfg).expect("the backend reads");
@@ -1977,9 +1996,23 @@ backends:
       .await
       .unwrap();
     let facts = TaskFacts {
-      boundary_index: Some(0),
+      task_state: "open".to_string(),
+      run_outcomes: HashMap::new(),
+      run_outcome_string_none_ids: HashSet::new(),
+      run_finish_positions: HashMap::new(),
+      confirmed_input_ids: HashSet::new(),
       input_candidates: vec![Arc::new(json!({"id": "held"}).into()), Arc::new(json!({"id": "free"}).into())],
-      ..TaskFacts::default()
+      imported_pending_ids: HashSet::new(),
+      boundary_index: Some(0),
+      boundary_open: true,
+      close_events: Vec::new(),
+      close_requests: Vec::new(),
+      close_request_ids: HashSet::new(),
+      first_close_by_request: HashMap::new(),
+      delivered_reports: HashSet::new(),
+      clicked: Vec::new(),
+      events_by_id: Default::default(),
+      covered: 0,
     };
     let run_facts = features.store.run_facts("worker").unwrap();
     let pending = pending_input_events(&facts, &[run("stopped", &["held"], None)], &run_facts, "worker").unwrap();
@@ -1991,13 +2024,27 @@ backends:
   #[test]
   fn pending_inputs_remove_confirmed_and_claimed_ids() {
     let mut facts = TaskFacts {
-      boundary_index: Some(0),
+      task_state: "open".to_string(),
+      run_outcomes: HashMap::new(),
+      run_outcome_string_none_ids: HashSet::new(),
+      run_finish_positions: HashMap::new(),
+      confirmed_input_ids: HashSet::new(),
       input_candidates: vec![
         Arc::new(json!({"id": "confirmed"}).into()),
         Arc::new(json!({"id": "claimed"}).into()),
         Arc::new(json!({"id": "pending"}).into()),
       ],
-      ..TaskFacts::default()
+      imported_pending_ids: HashSet::new(),
+      boundary_index: Some(0),
+      boundary_open: true,
+      close_events: Vec::new(),
+      close_requests: Vec::new(),
+      close_request_ids: HashSet::new(),
+      first_close_by_request: HashMap::new(),
+      delivered_reports: HashSet::new(),
+      clicked: Vec::new(),
+      events_by_id: Default::default(),
+      covered: 0,
     };
     facts.confirmed_input_ids.insert("confirmed".to_string());
     let pending =
@@ -2026,12 +2073,61 @@ backends:
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"].as_array().unwrap().len(), 1);
     let after_first = features.store.history_work();
-    assert_eq!(after_first.file_reads - before.file_reads, 1);
+    assert_eq!(after_first.file_reads - before.file_reads, 0, "the cold fold scans the log and loads none of it");
     assert_eq!(after_first.full_folds - before.full_folds, 1);
     let (second_status, _) =
       crate::test_support::answer(pending_task_inputs(State(Arc::clone(&features)), AxumPath(meta.id)).await).await;
     assert_eq!(second_status, StatusCode::OK);
     assert_eq!(features.store.history_work(), after_first);
+  }
+
+  /// The /runs page of a session with no fact checkpoint reads from a cold event cache the page and run states a warm
+  /// read reads, and the cold read loads no history. No scan has run for the session, so no checkpoint exists before
+  /// the read.
+  #[tokio::test]
+  async fn runs_of_a_cold_session_without_a_checkpoint_answer_what_a_warm_read_answers() {
+    let (_home, features) = feature_context();
+    let meta = create_node(&features.store, "cold-runs", None, TaskProfile::Manager).await;
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"id": "ask", "type": "user", "content": "do the work"}))
+      .await
+      .unwrap();
+    features
+      .store
+      .append_chat_event(
+        &meta.id,
+        json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success",
+               "input_event_ids": ["ask"]}),
+      )
+      .await
+      .unwrap();
+    let mut record = run("run-1", &["ask"], None);
+    record.session_id = meta.id.clone();
+    let run_dir = features.store.run_dir(&meta.id, "run-1");
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(
+      features.store.run_metadata_path(&meta.id, "run-1"),
+      charliebot_store::run_records::run_record_text(&record),
+    )
+    .unwrap();
+    features.store.clear_chat_events_cache(&meta.id);
+
+    let page = |features: &Arc<FeatureContext>, id: &str| {
+      let request =
+        Request::builder().uri(format!("/api/sessions/{id}/runs?order=asc&limit=500")).body(Body::empty()).unwrap();
+      session_runs(State(Arc::clone(features)), AxumPath(id.to_string()), request)
+    };
+    let reads = features.store.history_work().file_reads;
+    let (cold_status, cold) = crate::test_support::answer(page(&features, &meta.id).await).await;
+    assert_eq!(features.store.history_work().file_reads, reads, "the cold read loads no history");
+    features.store.load_chat_events_shared_sync(&meta.id).unwrap();
+    let (warm_status, warm) = crate::test_support::answer(page(&features, &meta.id).await).await;
+
+    assert_eq!(cold_status, StatusCode::OK);
+    assert_eq!((cold_status, &cold), (warm_status, &warm), "the cold page equals the warm page");
+    assert_eq!(cold["items"][0]["id"], "run-1");
+    assert_eq!(cold["items"][0]["state"], "success");
   }
 
   #[test]

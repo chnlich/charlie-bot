@@ -930,7 +930,8 @@ mod tests {
       .lines()
       .map(|line| serde_json::from_str::<Value>(line).unwrap())
       .collect::<Vec<_>>();
-    let mut aggregator = charliebot_store::MessageAggregator::new(0, false);
+    let mut aggregator =
+      charliebot_store::MessageAggregator::new(0, false, charliebot_core::config::BackendsConfig::default());
     let mut messages = Vec::new();
     for event in &events {
       for frame in aggregator.feed(event).unwrap() {

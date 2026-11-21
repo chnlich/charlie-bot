@@ -26,12 +26,12 @@ use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
-  ARCHIVE_OFFSET, BASE_BRANCH_FIELD, CC_SESSION_ID_FIELD, CC_SESSION_STARTED_AT, HAS_PENDING_TRIGGER,
-  HAS_RUNNING_TASKS, HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError, NATIVE_BACKEND, NATIVE_MODEL, NEXT_TRIGGER_AT,
-  PARENT_SESSION_ID, PENDING_TRIGGER_COUNT, REPO_PATH_FIELD, ROUND_RATINGS, RUN_BACKEND, RoundRating,
-  SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEMA_VERSION_FIELD,
-  SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD, THINKING_SINCE,
-  UtcDateTime, WORK_STATE,
+  ARCHIVE_OFFSET, BASE_BRANCH_FIELD, CC_SESSION_ID_FIELD, CC_SESSION_STARTED_AT, CREATED_AT_FIELD, EXIT_CODE_FIELD,
+  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError, NATIVE_BACKEND,
+  NATIVE_MODEL, NEXT_TRIGGER_AT, PARENT_SESSION_ID, PENDING_TRIGGER_COUNT, REPO_PATH_FIELD, ROUND_RATINGS, RUN_BACKEND,
+  RoundRating, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE,
+  SCHEMA_VERSION_FIELD, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_PARENT_ID_FIELD, TASK_TYPE_FIELD,
+  THINKING_SINCE, UPDATED_AT_FIELD, UtcDateTime, WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -1361,8 +1361,8 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "starred",
         THINKING_SINCE,
         RUN_BACKEND,
-        "created_at",
-        "updated_at",
+        CREATED_AT_FIELD,
+        UPDATED_AT_FIELD,
         CC_SESSION_ID_FIELD,
         CC_SESSION_STARTED_AT,
         "backend",
@@ -1398,7 +1398,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "completed_at",
         "pid",
         PID_START_FIELD,
-        "exit_code",
+        EXIT_CODE_FIELD,
         "branch_name",
         BASE_BRANCH_FIELD,
         REPO_PATH_FIELD,

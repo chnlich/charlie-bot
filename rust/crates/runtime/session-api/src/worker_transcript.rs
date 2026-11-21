@@ -18,9 +18,9 @@ use charliebot_store::metadata::{TASK_STATE, UtcDateTime};
 use charliebot_store::projection::MessageProjection;
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{
-  HostBoot, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
-  OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunDisplayState, RunKind,
-  RunRecord,
+  ENDED_AT_FIELD, HostBoot, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF,
+  OBSERVATION_RAW_LOG_REF, OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME,
+  RunDisplayState, RunKind, RunRecord, STARTED_AT_FIELD,
 };
 use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult, path_error};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
@@ -269,7 +269,7 @@ fn run_header_event(
     "error": error,
     "tool_calls": tool_calls,
     "withheld": withheld,
-    "started_at": started,
+    (STARTED_AT_FIELD): started,
     "timestamp": started.or(terminal),
     "launched": run.started_at.is_some(),
     (event_types::LAUNCH_FAILED): failed_state(state) && run.started_at.is_none(),
@@ -281,7 +281,7 @@ fn run_header_event(
 fn run_end_event(run: &RunRecord) -> Value {
   let duration_seconds = match (run.started_at, run.ended_at) {
     (Some(started), Some(ended)) => Some((ended.into_inner() - started.into_inner()).whole_seconds()),
-    _ => None,
+    (None, _) | (_, None) => None,
   };
   json!({
     "type": event_types::RUN_END,
@@ -346,6 +346,7 @@ fn delivery_event(
           );
         }
       }
+      // The facts log holds every fact type; this fold reads only the two types named above.
       _ => {}
     }
   }
@@ -403,6 +404,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         let run_id = text_repr::field_text(event.get("run_id"));
         outcomes.insert(run_id, text_repr::truthy_field_text(event.get("outcome")));
       }
+      // The facts log holds every fact type; this fold reads only the two types named above.
       _ => {}
     }
   }
@@ -417,8 +419,8 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         "kind": serde_json::to_value(run.kind).expect("run kind serializes"),
         (event_types::BACKEND_LABEL): backend_label,
         "state": states.get(&run.id).map(|state| state.as_str()).unwrap_or(RunDisplayState::Queued.as_str()),
-        "started_at": run.started_at.map(UtcDateTime::to_isoformat_text),
-        "ended_at": run.ended_at.map(UtcDateTime::to_isoformat_text),
+        (STARTED_AT_FIELD): run.started_at.map(UtcDateTime::to_isoformat_text),
+        (ENDED_AT_FIELD): run.ended_at.map(UtcDateTime::to_isoformat_text),
         "tool_calls": run_tools.get(&run.id).copied().unwrap_or(0),
       })
     })
@@ -430,7 +432,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
       let events = run_event_refs(run_events, &run.id);
       json!({
         "run_id": run.id,
-        "started_at": run.started_at.map(UtcDateTime::to_isoformat_text),
+        (STARTED_AT_FIELD): run.started_at.map(UtcDateTime::to_isoformat_text),
         "tool_calls": run_tools.get(&run.id).copied().unwrap_or(0),
         "last_text": aggregator::run_last_assistant_text(&events)?,
         "last_tool": aggregator::run_last_tool(&events),

@@ -48,11 +48,7 @@ const args = [
   '--filterset',
   filter,
 ];
-// The turn-end checks of the served repo run `charliebot hook ...` from PATH, and the build above leaves that binary in
-// the workspace's debug directory, so the selected tests find it there.
-const builtBinaries = path.join(workspaceRoot, 'target', 'debug');
-const testEnv = { ...process.env, PATH: `${builtBinaries}${path.delimiter}${process.env.PATH}` };
-const result = await runCargo(args, testEnv);
+const result = await runCargo(args);
 exitOnFailure('nextest', result);
 const { stderrTail } = result;
 

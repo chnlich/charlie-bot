@@ -241,7 +241,52 @@ function activeTurnEngineFor(container) {
   return engine && engine.alive ? engine : null;
 }
 
+// The one model label every surface writes. A pool session reads "<pool> → <member> · <model>": `poolMember` is
+// the member the server already filtered to the pool, so a pool with no member reads the pool label alone. A
+// single-option session reads its option's label. The compact form drops the backend family prefix ("CC · ") and
+// the model, so a row next to a timestamp or a status verdict keeps its width.
+function isPoolBackend(backendId) {
+  const pools = typeof BACKEND_POOLS === 'undefined' ? [] : BACKEND_POOLS;
+  return pools.some((candidate) => candidate.id === backendId);
+}
+
+function backendOptionLabel(backendId) {
+  const options = typeof BACKEND_OPTIONS === 'undefined' ? {} : BACKEND_OPTIONS;
+  return options[backendId] || backendId;
+}
+
+// An option label without its backend family prefix: "CC · Opus" reads "Opus".
+function withoutFamilyPrefix(label) {
+  const sep = label.indexOf(' · ');
+  return sep === -1 ? label : label.slice(sep + 3);
+}
+
+function sessionModelLabel(sessionBackend, poolMember, model, style) {
+  const compact = style === 'compact';
+  if (!isPoolBackend(sessionBackend)) {
+    const full = backendOptionLabel(sessionBackend);
+    return compact ? withoutFamilyPrefix(full) : full;
+  }
+  const pool = BACKEND_POOLS.find((candidate) => candidate.id === sessionBackend);
+  if (!poolMember) return pool.label;
+  if (compact) return pool.label + ' → ' + withoutFamilyPrefix(backendOptionLabel(poolMember));
+  return pool.label + ' → ' + backendOptionLabel(poolMember) + (model ? ' · ' + model : '');
+}
+
+// The backend id the open session holds: a pool id for a pool session, whatever its turn runs on.
+function setActiveSessionBackend(backendId) {
+  globalThis.ACTIVE_SESSION_BACKEND = backendId || '';
+}
+
+function getActiveSessionBackend() {
+  return globalThis.ACTIVE_SESSION_BACKEND || '';
+}
+
 const GLOBALS = {
+  isPoolBackend,
+  sessionModelLabel,
+  setActiveSessionBackend,
+  getActiveSessionBackend,
   splitTurnSpan,
   shouldAutoScroll,
   captureReadingPosition,

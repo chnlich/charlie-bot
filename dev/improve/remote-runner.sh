@@ -12,19 +12,21 @@
 # dev/improve/remote-launch.sh sends this file, with the round's arguments and inputs, into
 # ~/improve/launch/<launch id>/ and runs the remaining forms over ssh. `--prepare` reads the round's
 # records from its standard input. The review key goes into ~/improve/home/credentials.yaml under its
-# credential's name, written through a temporary file and renamed over it. The member's login goes
-# into the launch's member-credential file (mode 600), which only this launch reads. The first form
+# credential's name, written through a temporary file and renamed over it. No round environment holds the
+# key: the review's charlie-code, installed from review-charlie-code.sh, reads it from that file. The member's
+# login goes into the launch's member-credential file (mode 600), which only this launch reads. The first form
 # checks the round's dependencies, prepares the round's environment, then starts the round's scope
 # through systemd-run; the scope runs the `--in-scope` form, which empties TMPDIR, runs the member's
 # agent under the Landlock boundary that limits its writes and signals, and records the scope's memory peak.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
-# review); 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
-# of this direction still runs; 7 a round dependency is missing (a login, the review key, the round's
-# home, the write boundary or the member CLI), and stderr names it. The member CLI exits 7 when the
-# vendor install or the installed `--version` check fails, and stderr names the local version and the
-# version the host runs. Nothing starts on 4, 5 and 7.
+# review); 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
+# that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 7 a round
+# dependency is missing (a login, the review key, the round's home, the write boundary or the member
+# CLI), and stderr names it. The member CLI exits 7 when the vendor install or the installed `--version`
+# check fails, and stderr names the local version and the version the host runs. Nothing starts on 4, 5
+# and 7.
 #
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
@@ -34,7 +36,7 @@
 # and refuses every later fire, so the runner stops it, every process in the cgroup included,
 # before the start. A live round's launch directory and leader refuse the round with exit 5.
 #
-# The clone check runs before the CLI build, so a refused clone starts no build. The runner deletes
+# The clone sync and check run before the CLI build, so a refused clone starts no build. The runner deletes
 # its launch directory when it exits; the round's evidence is a separate directory, which the
 # launcher copies back after this script has ended.
 set -euo pipefail
@@ -200,14 +202,6 @@ member_record_value() {
   return 1
 }
 
-# The api_key under one top-level section of the round's credentials file, found by the section's name.
-credential_key() {
-  awk -v section="$1" '
-    /^[^ ]/ { inside = ($0 == section ":") }
-    inside && /^  api_key:/ { value = $0; sub(/^  api_key:[ \t]*/, "", value); print value; exit }
-  ' "$ROUND_HOME/credentials.yaml"
-}
-
 # Copy the leak pattern file the launcher sent into the round's home. github-post.sh reads it from
 # $CHARLIEBOT_HOME, so the round checks its GitHub text against this launch's version.
 install_pattern_file() {
@@ -296,22 +290,6 @@ other_inflight_files() {
       printf 'improve runner: skip worktree %s: no merge base with origin/main\n' "$clone" >&2
     fi
   done
-}
-
-# The direction's clone is the round's only checkout inside the boundary. A round whose clone is
-# absent or foreign must not start: on 2026-10-29 a local round found no clone and continued in
-# another checkout although its prompt told it to stop, so the check holds here, before the round's agent starts.
-check_clone() {
-  local clone="$ROUND_ROOT/charlie-bot"
-  local hooks origin
-  [[ -d $clone ]] || fail 4 "the direction clone is missing: $clone"
-  hooks=$(git -C "$clone" config --get core.hooksPath 2>/dev/null) || hooks=
-  # The clone points at the runner checkout's hooks (an absolute path), so a clone from any layout runs them.
-  [[ $hooks == dev/git-hooks || $hooks == */dev/git-hooks ]] \
-    || fail 4 "the direction clone does not set core.hooksPath to dev/git-hooks: $clone"
-  origin=$(git -C "$clone" remote get-url origin 2>/dev/null) || origin=
-  [[ $(basename -- "${origin:-/nonexistent}" .git) == charlie-bot ]] \
-    || fail 4 "the direction clone's origin does not point at charlie-bot: ${origin:-no origin}"
 }
 
 # Whether a live round of one direction holds its scope. The clone scan calls this for the other
@@ -407,17 +385,13 @@ ensure_cli() {
   local sandbox="$bin_dir/improve-sandbox-$commit"
   local mock_home="$bin_dir/mock-home-$commit"
   local commit_bin="$bin_dir/$commit"
-  local origin lock_fd
+  local lock_fd
   mkdir -p -- "$RUNNER_ROOT"
   exec {lock_fd}>>"$RUNNER_ROOT/build.lock"
   flock "$lock_fd" || fail 1 "cannot lock the runner's build state: $RUNNER_ROOT/build.lock"
   mkdir -p -- "$bin_dir" "$RUNNER_ROOT/cargo-home" "$RUNNER_ROOT/tmp"
   if [[ ! -x $cli || ! -x $sandbox || ! -x $mock_home ]]; then
-    if [[ ! -d $checkout/.git ]]; then
-      origin=$(cat -- "$LAUNCH_DIR/origin")
-      git -C "$HOME_DIR" clone --quiet -- "$origin" "$checkout" \
-        || fail 1 "cannot clone the runner's checkout: $checkout"
-    fi
+    ensure_runner_checkout
     git -C "$checkout" fetch --quiet origin "$commit" || fail 1 "cannot fetch commit $commit into $checkout"
     git -C "$checkout" -c advice.detachedHead=false checkout --quiet --detach "$commit" \
       || fail 1 "cannot check out commit $commit in $checkout"
@@ -441,8 +415,36 @@ ensure_cli() {
   ln -sfn -- "../charliebot-$commit" "$commit_bin/charliebot"
   ln -sfn -- "../improve-sandbox-$commit" "$commit_bin/improve-sandbox"
   ln -sfn -- "../mock-home-$commit" "$commit_bin/mock-home"
+  # The round's gh shim and the scanner it runs come from this commit, so a round checks its writes with the code of the
+  # CLI it runs. They are copied once per commit: a later round cannot change the copy that a live round runs.
+  if [[ ! -f $commit_bin/gh || ! -f $commit_bin/check-skills-host-leak.sh || ! -f $commit_bin/leak-patterns.sh ]]; then
+    ensure_runner_checkout
+    git -C "$checkout" fetch --quiet "$(cat -- "$LAUNCH_DIR/origin")" "$commit" \
+      || fail 1 "cannot fetch commit $commit from the launcher's origin into $checkout"
+    install_commit_file "$commit" dev/improve/gh-shim.sh "$commit_bin/gh" 755
+    install_commit_file "$commit" dev/check-skills-host-leak.sh "$commit_bin/check-skills-host-leak.sh" 755
+    install_commit_file "$commit" dev/leak-patterns.sh "$commit_bin/leak-patterns.sh" 644
+  fi
   prune_commit_entries "$commit"
   flock -u "$lock_fd"
+}
+
+# The runner's checkout, cloned from the launcher's origin on the first use. The checkout only builds the round tools.
+ensure_runner_checkout() {
+  if [[ ! -d $RUNNER_ROOT/charlie-bot/.git ]]; then
+    git -C "$HOME_DIR" clone --quiet -- "$(cat -- "$LAUNCH_DIR/origin")" "$RUNNER_ROOT/charlie-bot" \
+      || fail 1 "cannot clone the runner's checkout: $RUNNER_ROOT/charlie-bot"
+  fi
+}
+
+# Copy one file of a commit into the commit's tool directory. The file is read from the commit's objects, so the runner's
+# checkout keeps its own state. The copy is staged beside its destination and renamed over it.
+install_commit_file() {  # <commit> <path in the commit> <destination> <mode>
+  local staged
+  staged=$(mktemp -- "$3.XXXXXXXX") || fail 1 "cannot make a staged copy beside $3"
+  git -C "$RUNNER_ROOT/charlie-bot" show "$1:$2" > "$staged" \
+    && chmod "$4" -- "$staged" && mv -f -- "$staged" "$3" \
+    || { rm -f -- "$staged"; fail 1 "cannot install $2 of commit $1 as $3"; }
 }
 
 # The arguments after the script's path of each live process that runs remote-runner.sh, one line per process, each line
@@ -706,21 +708,14 @@ record_memory_peak() {
   fi
 }
 
-# Export each round key under the name its tool reads. The review key is CHARLIE_CODE_API_KEY whichever member
-# runs the round. charlie-code takes the review option's model and API base from CHARLIE_CODE_MODEL and
-# CHARLIE_CODE_API_BASE, in the gateway's form: the model with an `openai/` prefix, and the base with `/v1` appended.
-# The member's own credential is its record in the launch's member-credential file: ANTHROPIC_AUTH_TOKEN for a gateway
-# member, CLAUDE_CODE_OAUTH_TOKEN for a subscription claude, and for a codex round IMPROVE_CODEX_AUTH, which becomes the
-# round's auth.json under CODEX_HOME. The review key comes from the credentials file that prepare wrote. The values
-# enter the round's environment here, with no argument and no other file that carries them.
+# Export the member's own credential under the name its CLI reads. The review key is not exported: the review's
+# charlie-code reads it from the round's credentials file and sets it for its own process only (review-charlie-code.sh),
+# with the review option's model and API base. The member's credential is its record in the launch's member-credential
+# file: ANTHROPIC_AUTH_TOKEN for a gateway member, CLAUDE_CODE_OAUTH_TOKEN for a subscription claude, and for a codex
+# round IMPROVE_CODEX_AUTH, which becomes the round's auth.json under CODEX_HOME. The values enter the round's
+# environment here, with no argument and no other file that carries them.
 export_round_credentials() {
-  local review_key member_key
-  review_key=$(credential_key "$IMPROVE_REVIEW_CREDENTIAL")
-  [[ -n $review_key ]] \
-    || fail 1 "the round's credentials file holds no api_key for the review credential $IMPROVE_REVIEW_CREDENTIAL: $ROUND_HOME/credentials.yaml"
-  export CHARLIE_CODE_API_KEY=$review_key
-  export CHARLIE_CODE_MODEL="openai/$IMPROVE_REVIEW_MODEL"
-  export CHARLIE_CODE_API_BASE="$IMPROVE_REVIEW_API_BASE/v1"
+  local member_key
   if [[ $kind == codex ]]; then
     prepare_codex_home
     export CODEX_HOME=$CODEX_HOME_TARGET
@@ -771,9 +766,24 @@ prepare_codex_home() {
   chmod 600 "$CODEX_HOME_TARGET/auth.json"
 }
 
+# Install the review's charlie-code into the runner's bin, which the round's PATH lists before the host's own
+# charlie-code. The copy is renamed into place, so a parallel launch never runs a half-written shim.
+install_review_shim() {
+  local staged
+  staged=$(mktemp -- "$RUNNER_ROOT/bin/.charlie-code.XXXXXXXX") \
+    || fail 1 "cannot make the review's charlie-code under $RUNNER_ROOT/bin"
+  cp -- "$LAUNCH_DIR/review-charlie-code.sh" "$staged" || {
+    rm -f -- "$staged"
+    fail 1 "cannot copy $LAUNCH_DIR/review-charlie-code.sh to $staged"
+  }
+  chmod 755 -- "$staged"
+  mv -f -- "$staged" "$RUNNER_ROOT/bin/charlie-code"
+}
+
 # The process ids of this scope that run the round's review: a process whose command line names charlie-code as its
-# program, or as the script its interpreter runs. Prints one id per line, and fails when the scope's process list cannot
-# be read, because the review's end is then unknown.
+# program, or as the script its interpreter runs. The review shim execs the host's charlie-code, so the review process
+# names charlie-code as its program. Prints one id per line, and fails when the scope's process list cannot be read,
+# because the review's end is then unknown.
 scope_review_pids() {
   local cgroup procs pid argument
   local -a arguments=()
@@ -833,7 +843,7 @@ fi
 # prepare wrote, and this host's lack of a live profile home. Each failure exits 7 and names the missing item.
 check_round_dependencies() {
   [[ -n ${IMPROVE_REVIEW_CREDENTIAL-} ]] || fail 7 'the launch names no review credential'
-  [[ -n $(credential_key "$IMPROVE_REVIEW_CREDENTIAL") ]] \
+  [[ -n $(credential_key "$ROUND_HOME/credentials.yaml" "$IMPROVE_REVIEW_CREDENTIAL") ]] \
     || fail 7 "the round's credentials file holds no api_key for the review credential $IMPROVE_REVIEW_CREDENTIAL"
   if [[ $kind == claude ]]; then
     { member_record_value ANTHROPIC_AUTH_TOKEN || member_record_value CLAUDE_CODE_OAUTH_TOKEN; } >/dev/null \
@@ -867,11 +877,21 @@ cleanup_launch_dir() {
 }
 trap cleanup_launch_dir EXIT
 
+# The review's charlie-code: the dependency check reads the review key through its credential_key, and the install
+# below copies the same file into the runner's bin.
+[[ -r $LAUNCH_DIR/review-charlie-code.sh ]] \
+  || fail 1 "the review's charlie-code is missing: $LAUNCH_DIR/review-charlie-code.sh"
+source "$LAUNCH_DIR/review-charlie-code.sh"
+# The clone's identity, sync and pre-push check. The launch copies the file as it copies the in-flight rule.
+[[ -r $LAUNCH_DIR/clone-check.sh ]] \
+  || fail 1 "the clone check is missing: $LAUNCH_DIR/clone-check.sh"
+source "$LAUNCH_DIR/clone-check.sh"
 read_launch_env
 check_round_dependencies
 install_pattern_file
 rewrite_command
 other_inflight_files >>"$LAUNCH_DIR/inflight-files.txt"
+sync_clone
 check_clone
 
 # The round works in the direction's root, because `--resume` finds a Claude session by the
@@ -895,6 +915,7 @@ fi
 cd "$ROUND_ROOT"
 
 ensure_cli "$commit"
+install_review_shim
 ensure_member_cli "$kind" "$member_version"
 check_boundary_starts
 export PATH="$RUNNER_ROOT/members/$kind-$member_version/bin:$RUNNER_ROOT/bin/$commit:$PATH"

@@ -114,7 +114,7 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
   registry.metadata_slot(charliebot_core::metadata_slot::MetadataSlot {
     owner: "claude_code",
     on: charliebot_core::metadata_slot::MetadataFile::Thread,
-    after: Some("exit_code"),
+    after: Some(charliebot_store::metadata::EXIT_CODE_FIELD),
     fields: vec![charliebot_core::metadata_slot::SlotField {
       name: "claude_session_id",
       default: serde_json::Value::Null,

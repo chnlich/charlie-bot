@@ -19,17 +19,20 @@ use serde_json::{Map, Value, json};
 
 use crate::{agent_binding, config, loader, scheduler};
 
+/// The task collection: `GET` lists the tasks, `POST` creates one.
+pub const TASKS_PATH: &str = "/api/cron/tasks";
+
 /// The cron task routes: list and create at the collection, update and delete at one task, and a run path for one task.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
-    .route("/api/cron/tasks", refuse_other_methods(get(list_tasks).post(create_task), "GET"))
+    .route(TASKS_PATH, refuse_other_methods(get(list_tasks).post(create_task), "GET"))
     .route("/api/cron/tasks/{name}", refuse_other_methods(put(update_task).delete(delete_task), "PUT"))
     .route("/api/cron/tasks/{name}/run", post_only(run_task))
     .with_state(Arc::clone(features))
 }
 
 /// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
-pub const ROUTE_PATTERNS: &[&str] = &["/api/cron/tasks", "/api/cron/tasks/{name}", "/api/cron/tasks/{name}/run"];
+pub const ROUTE_PATTERNS: &[&str] = &[TASKS_PATH, "/api/cron/tasks/{name}", "/api/cron/tasks/{name}/run"];
 
 async fn list_tasks(State(features): State<Arc<FeatureContext>>) -> Response {
   let cfg = match features.config.get() {
@@ -409,7 +412,7 @@ mod tests {
         "prompt_file": prompt,
         "backend": "synthetic",
         "project": "synthetic-project",
-        "improve_host": "host3",
+        "improve_host": "remote-test-host",
         "ignored": "discarded",
       }),
     )
@@ -450,22 +453,23 @@ mod tests {
 
   #[tokio::test]
   async fn list_shows_the_file_host_and_update_preserves_it() {
-    let (home, features) = feature_context_with_login_hosts(&["host3"]);
-    let path = write_prompted_task(home.path(), "hosted-task", &json!({"cron":"0 8 * * *", "improve_host":"host3"}));
+    let (home, features) = feature_context_with_login_hosts(&["remote-test-host"]);
+    let path =
+      write_prompted_task(home.path(), "hosted-task", &json!({"cron":"0 8 * * *", "improve_host":"remote-test-host"}));
     let router = routes(&features);
 
     let (status, listed) = send(&router, "GET", "/api/cron/tasks", json!(null)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed[0]["name"], "hosted-task");
-    assert_eq!(listed[0]["improve_host"], "host3");
+    assert_eq!(listed[0]["improve_host"], "remote-test-host");
 
     let (status, updated) =
       send(&router, "PUT", "/api/cron/tasks/hosted-task", json!({"enabled": false, "improve_host": "host9"})).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["enabled"], false);
-    assert_eq!(updated["improve_host"], "host3");
+    assert_eq!(updated["improve_host"], "remote-test-host");
     let persisted = serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(persisted["improve_host"].as_str(), Some("host3"));
+    assert_eq!(persisted["improve_host"].as_str(), Some("remote-test-host"));
   }
 
   #[tokio::test]

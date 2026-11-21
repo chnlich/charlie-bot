@@ -5,7 +5,7 @@
 /// The session collection: `GET` lists the active sessions, `POST` creates one.
 pub const SESSIONS_PATH: &str = "/api/sessions/";
 pub const SESSION_TREE_PATH: &str = "/api/sessions/tree";
-pub const SESSION_PATH: &str = "/api/sessions/{session_id}";
+pub use charliebot_cli_common::route::SESSION_PATH;
 pub const SESSION_BOOTSTRAP_PATH: &str = "/api/sessions/{session_id}/bootstrap";
 pub const SESSION_EVENTS_PATH: &str = "/api/sessions/{session_id}/events";
 pub const SESSION_EVENTS_JSONL_PATH: &str = "/api/sessions/{session_id}/events.jsonl";

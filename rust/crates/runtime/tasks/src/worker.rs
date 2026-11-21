@@ -36,7 +36,7 @@ use charliebot_registry::backend::{
   BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, Env, IMPROVE_TOKEN_SHORT_EXIT, Launch, LaunchArgs, LaunchContext,
   LaunchKind, LaunchWatch, RemoteLaunch, RetryAfter, ServeTransport, Translate,
 };
-use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
+use charliebot_store::metadata::{EXIT_CODE_FIELD, SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
 use charliebot_store::{Store, run_logs};
 use futures_util::future::BoxFuture;
@@ -818,7 +818,7 @@ impl Worker {
         "type": ET::SYSTEM,
         "subtype": "hang_diagnostics",
         "diagnostics_path": diag_path.display().to_string(),
-        "exit_code": exit_code,
+        (EXIT_CODE_FIELD): exit_code,
         "timestamp": clamp_ts(clamp_to),
       });
       sink.append_durable(&diag_event)?;
@@ -863,7 +863,7 @@ impl Worker {
     let final_event = json!({
       "type": if exit_code == 0 { ET::COMPLETE } else { ET::ERROR },
       "status": if exit_code == 0 { "success" } else { "failed" },
-      "exit_code": exit_code,
+      (EXIT_CODE_FIELD): exit_code,
       "timestamp": clamp_ts(clamp_to),
     });
     sink.broadcast(final_event).await

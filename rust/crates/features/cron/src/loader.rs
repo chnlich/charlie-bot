@@ -564,38 +564,30 @@ async fn send_telegram(
   anyhow::bail!("Telegram API returned {status}: {}", body.chars().take(200).collect::<String>())
 }
 
-/// The backend-reference check over every valid cron file, run before the server serves. A distinct-step conflict is
+/// The cron-file startup check, run before the server serves and by `--check-config`. Every cron file goes through the
+/// loader the server's snapshot uses, so a file the server refuses fails here, named by its path and its error. A
+/// valid task's step backend must name a backends.options id or a backends.pools id. A distinct-step conflict is
 /// checked when the firing reaches that step, so one task cannot prevent the server from starting.
 pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Result<(), String> {
-  let mut problems = Vec::new();
-  let directory = cron_dir(cfg);
+  let repo = std::env::var_os(charliebot_core::repo_root::REPO_ROOT_ENV)
+    .map(PathBuf::from)
+    .ok_or_else(|| format!("{} is not set", charliebot_core::repo_root::REPO_ROOT_ENV))?;
+  cron_files_problems(cfg, &repo)
+}
+
+/// The problems of the cron files under `cfg`'s home, read for the repository at `repo`; `Ok` when there are none.
+fn cron_files_problems(cfg: &CharlieBotConfig, repo: &Path) -> Result<(), String> {
   let login_hosts = crate::config::browser_login_hosts(cfg);
-  let entries = match std::fs::read_dir(&directory) {
-    Ok(entries) => entries,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-    Err(error) => return Err(format!("{}: {error}", directory.display())),
-  };
-  let mut paths = entries
-    .map(|entry| entry.map(|entry| entry.path()))
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|error| format!("{}: {error}", directory.display()))?;
-  paths.sort();
-  for path in paths {
-    if path.extension().and_then(|ext| ext.to_str()) != Some("yaml")
-      || path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.'))
-    {
-      continue;
-    }
-    let Some(stem) = path.file_stem().and_then(|name| name.to_str()) else { continue };
-    let repo = std::env::var_os(charliebot_core::repo_root::REPO_ROOT_ENV)
-      .map(PathBuf::from)
-      .ok_or_else(|| format!("{} is not set", charliebot_core::repo_root::REPO_ROOT_ENV))?;
-    let Ok(task) = load_file(&path, stem, &repo, &login_hosts) else { continue };
+  let (snapshot, _) =
+    load_snapshot_for_paths(&cron_dir(cfg), repo, &login_hosts).map_err(|error| format!("{error:#}"))?;
+  let mut problems: Vec<String> =
+    snapshot.errors.iter().map(|error| format!("{}: {}", error.path, error.error)).collect();
+  for task in &snapshot.tasks {
     for step in task.steps.iter().flatten() {
       if let Some(backend) = step.backend.as_deref().filter(|backend| !backend.is_empty())
         && let Err(error) = cfg.backends.check_backend_id(backend)
       {
-        problems.push(format!("{}: steps '{}' backend: {error}", path.display(), step.name));
+        problems.push(format!("{}: steps '{}' backend: {error}", cron_path(cfg, &task.name).display(), step.name));
       }
     }
   }
@@ -603,8 +595,8 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
     return Ok(());
   }
   Err(format!(
-    "backend references must name a backends.options id or a backends.pools id (id rule: \
-     charliebot_core::config::BackendsConfig):\n{}",
+    "cron task files must load, and backend references must name a backends.options id or a backends.pools id \
+     (id rule: charliebot_core::config::BackendsConfig):\n{}",
     problems.into_iter().map(|problem| format!("  {problem}")).collect::<Vec<_>>().join("\n")
   ))
 }
@@ -617,8 +609,8 @@ mod tests {
   use serde_json::{Value, json};
 
   use super::{
-    TaskFileReadError, TaskFileWriteError, dispatch_alert_if_fingerprint_changed, fire_error_alert, load_snapshot,
-    read_task_file, validate_body, write_task_file,
+    TaskFileReadError, TaskFileWriteError, cron_files_problems, dispatch_alert_if_fingerprint_changed,
+    fire_error_alert, load_snapshot, read_task_file, validate_body, write_task_file,
   };
   use crate::test_support::{feature_context, feature_context_with_login_hosts};
 
@@ -722,33 +714,37 @@ mod tests {
 
   #[test]
   fn improve_host_is_checked_per_file_against_the_login_hosts_and_refused_off_a_prompted_worker_task() {
-    let (home, features) = feature_context_with_login_hosts(&["host3"]);
+    let (home, features) = feature_context_with_login_hosts(&["remote-test-host"]);
     let cfg = features.config.get().unwrap();
     let prompt = write_prompt(home.path(), "prompt.md", "Synthetic body\n");
-    write_task(&cfg, "keyed", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "improve_host":"host3"}));
+    write_task(&cfg, "keyed", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "improve_host":"remote-test-host"}));
     write_task(&cfg, "other-host", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "improve_host":"host9"}));
     write_task(
       &cfg,
       "master",
-      &json!({"cron":"0 8 * * *", "prompt_file":prompt, "mode":"master", "improve_host":"host3"}),
+      &json!({"cron":"0 8 * * *", "prompt_file":prompt, "mode":"master", "improve_host":"remote-test-host"}),
     );
-    write_task(&cfg, "handler", &json!({"cron":"0 8 * * *", "handler":"synthetic_handler", "improve_host":"host3"}));
+    write_task(
+      &cfg,
+      "handler",
+      &json!({"cron":"0 8 * * *", "handler":"synthetic_handler", "improve_host":"remote-test-host"}),
+    );
     write_task(
       &cfg,
       "steps",
-      &json!({"cron":"0 8 * * *", "steps":[{"name":"first", "prompt_file":prompt}], "improve_host":"host3"}),
+      &json!({"cron":"0 8 * * *", "steps":[{"name":"first", "prompt_file":prompt}], "improve_host":"remote-test-host"}),
     );
 
     let snapshot = load_snapshot(&features, &cfg).unwrap();
 
     assert_eq!(snapshot.tasks.iter().map(|task| task.name.as_str()).collect::<Vec<_>>(), ["keyed"]);
-    assert_eq!(snapshot.tasks[0].improve_host.as_deref(), Some("host3"));
+    assert_eq!(snapshot.tasks[0].improve_host.as_deref(), Some("remote-test-host"));
     let logins = &cfg
       .section_value("host_auth")
       .and_then(|value| value.downcast_ref::<HostAuthConfig>())
       .expect("host_auth parses as HostAuthConfig")
       .browser_logins;
-    assert_eq!(logins[0].host.as_deref(), Some("host3"));
+    assert_eq!(logins[0].host.as_deref(), Some("remote-test-host"));
     assert_eq!(logins[0].input_prompt.as_deref(), Some("synthetic-code"), "the Phase 1 input_prompt survives the load");
     assert_eq!(logins[0].lifetime_sec, Some(86400), "the Phase 1 lifetime_sec survives the load");
     assert_eq!(
@@ -797,6 +793,17 @@ mod tests {
       let error = validate_body("keyed", body, home.path(), &[]).unwrap_err();
       assert!(error.contains(&format!("unknown field `{key}`")), "{error}");
     }
+  }
+
+  #[test]
+  fn the_cron_startup_check_fails_a_file_the_server_refuses_naming_the_file_and_the_field() {
+    let (home, features) = feature_context();
+    let cfg = features.config.get().unwrap();
+    let prompt = write_prompt(home.path(), "prompt.md", "Prompt");
+    write_task(&cfg, "keyed", &json!({"cron":"0 3 * * *", "prompt_file":prompt, "backend":"synthetic"}));
+    let error = cron_files_problems(&cfg, home.path()).unwrap_err();
+    assert!(error.contains("keyed.yaml"), "{error}");
+    assert!(error.contains("unknown field `backend`"), "{error}");
   }
 
   #[test]

@@ -17,7 +17,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use charliebot_core::event_types;
@@ -29,14 +29,15 @@ use crate::control_events::REPORT_TO_FIELD;
 use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::WHOLE_LOG_LOGGED_BYTES;
 use crate::fact_checkpoint::{ArchiveMark, FactCheckpoint, ParsedCheckpoint};
+use crate::lock::lock;
 use crate::ndjson;
 use crate::run_facts::RunFacts;
-use crate::task_tree::{PromptScope, fold_appended_history, fold_scanned_history, newest_prompt_change};
+use crate::task_tree::{NodeState, PromptScope, fold_appended_history, fold_scanned_history, newest_prompt_change};
 use crate::task_tree_state::{
   CachedNodeFacts, CachedNodeState, CachedRunFactsAt, LivePromptChanges, NodeFacts, NodeFactsKey, NodeStateKey,
   SealedPromptChanges,
 };
-use crate::{Store, StoreResult};
+use crate::{Store, StoreError, StoreResult};
 
 /// The event types that carry chat content: the facts fold reads only their `id` and `type`.
 const CHAT_CONTENT_TYPES: [&str; 9] = [
@@ -50,6 +51,30 @@ const CHAT_CONTENT_TYPES: [&str; 9] = [
   event_types::RATE_LIMIT_EVENT,
   event_types::MASTER_DONE,
 ];
+
+/// What one fold books on the history counters. A fold from the node's first event books one full fold and every event
+/// it covers. A fold that extends a checkpoint's facts books only the tail events it read, as a suffix extension.
+#[derive(Clone, Copy)]
+enum FoldBooking {
+  /// A fold from the node's first event, over `events` archived and live events.
+  Full { events: u64 },
+  /// An extension of a checkpoint's facts, over `events` log events past the checkpoint's offset.
+  Suffix { events: u64 },
+}
+
+impl FoldBooking {
+  /// Adds this fold to the full-fold and folded-event counters.
+  fn book(self, full_folds: &AtomicU64, folded_events: &AtomicU64) {
+    let events = match self {
+      Self::Full { events } => {
+        full_folds.fetch_add(1, Ordering::Relaxed);
+        events
+      }
+      Self::Suffix { events } => events,
+    };
+    folded_events.fetch_add(events, Ordering::Relaxed);
+  }
+}
 
 /// A live log's facts, scanned outside the session lock for a later [`Store::seal_scanned_facts`].
 pub struct ScannedLiveFacts {
@@ -66,6 +91,8 @@ pub struct ScannedLiveFacts {
   checkpoint_bytes: u64,
   /// The live-log offset the checkpoint covered. A tail of an eighth of it or more is cheaper rescanned whole.
   resume_offset: u64,
+  /// What the scan books on the history counters when it is folded.
+  booking: FoldBooking,
 }
 
 impl LivePromptChanges {
@@ -91,6 +118,21 @@ impl ScannedLiveFacts {
     self.read_bytes
   }
 
+  /// The node facts the scan folded, shared with the seal that memoizes them.
+  pub(crate) fn facts(&self) -> Arc<NodeFacts> {
+    Arc::clone(&self.facts)
+  }
+
+  /// The run facts the scan folded, shared with the seal that memoizes them.
+  pub(crate) fn runs(&self) -> Arc<RunFacts> {
+    Arc::clone(&self.runs)
+  }
+
+  /// The log identity and the archived extent the scan read: the key a memo of this snapshot carries.
+  pub(crate) fn snapshot_key(&self) -> (FileIdentity, usize) {
+    (self.identity, self.archived)
+  }
+
   /// The bytes the scan read from its fact checkpoint, 0 when it scanned the log whole.
   pub fn checkpoint_bytes(&self) -> u64 {
     self.checkpoint_bytes
@@ -107,6 +149,13 @@ impl ScannedLiveFacts {
   }
 }
 
+/// One cold snapshot outcome: either scanned and sealed under a cold event cache, or the already-warm cached live
+/// events if another reader loaded the cache before the scan took the session lock.
+pub(crate) enum ColdSnapshot {
+  Scanned(ScannedLiveFacts),
+  Warm(crate::events::LiveEventSnapshot),
+}
+
 /// One node's fold, ready to memoize: the facts, the run facts, the newest prompt fact of each scope and the history
 /// they cover.
 struct FoldedNodeFacts {
@@ -114,6 +163,7 @@ struct FoldedNodeFacts {
   identity: FileIdentity,
   archived: usize,
   covered: usize,
+  booking: FoldBooking,
   facts: Arc<NodeFacts>,
   runs: Arc<RunFacts>,
   prompt_changes: LivePromptChanges,
@@ -177,6 +227,7 @@ impl Store {
       read_bytes: file.len() as u64,
       checkpoint_bytes: 0,
       resume_offset: file.len() as u64,
+      booking: FoldBooking::Full { events: (archived + events.len()) as u64 },
     }))
   }
 
@@ -230,7 +281,65 @@ impl Store {
       read_bytes: (file.len() - offset) as u64,
       checkpoint_bytes,
       resume_offset,
+      booking: FoldBooking::Suffix { events: tail.len() as u64 },
     }))
+  }
+
+  /// The cold node read's fold: the live log and its archive scanned and sealed under the session's event-cache lock,
+  /// which a whole-log load and every append also hold, so no append lands between the scan and its seal. If another
+  /// reader already warmed the cache before the lock was taken, returns the warm snapshot so the caller folds from it.
+  pub(crate) fn scan_cold_snapshot(&self, session_id: &str) -> StoreResult<ColdSnapshot> {
+    let cache_entry = self.events_cache_entry(session_id);
+    let cache = lock(&cache_entry, "session event cache mutex");
+    if let Some(cached) = cache.as_ref() {
+      return Ok(ColdSnapshot::Warm((cached.generation, Arc::clone(&cached.identity), Arc::clone(&cached.events))));
+    }
+    let Some(scanned) = self.scan_live_facts(session_id)? else {
+      return Err(StoreError::new(format!(
+        "{session_id}: a cold read found no live log, or fewer archived events than its archive_offset"
+      )));
+    };
+    self.insert_scanned_facts(session_id, &scanned);
+    Ok(ColdSnapshot::Scanned(scanned))
+  }
+
+  /// The cold node-facts read of a session with a live log: the log is scanned and sealed as one snapshot, or the
+  /// cache's events fold when another reader loaded them before the scan took the session lock. `None` when
+  /// `should_stop` fires before the scan starts.
+  pub(crate) fn cold_node_facts_until(
+    &self,
+    session_id: &str,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Arc<NodeFacts>>> {
+    if should_stop() {
+      return Ok(None);
+    }
+    match self.scan_cold_snapshot(session_id)? {
+      ColdSnapshot::Scanned(scanned) => Ok(Some(scanned.facts())),
+      ColdSnapshot::Warm((generation, list_identity, live)) => {
+        self.node_facts_of(session_id, generation, list_identity, &live, should_stop)
+      }
+    }
+  }
+
+  /// The cold node-state read of a session with a live log. A scanned snapshot books its fold, as one node-state fold
+  /// for a full scan and as a suffix extension for a checkpoint's tail, and seals its state under the snapshot's
+  /// identity. The cache's events answer through the warm state path.
+  pub(crate) fn cold_node_state(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
+    match self.scan_cold_snapshot(session_id)? {
+      ColdSnapshot::Scanned(scanned) => {
+        scanned.booking.book(&self.history_work.node_state_full_folds, &self.history_work.node_state_folded_events);
+        let (sealed_identity, sealed_archived) = scanned.snapshot_key();
+        let version = match self.sealed_state_version(session_id, sealed_identity, sealed_archived) {
+          Some(version) => version,
+          None => self.next_node_state_version.fetch_add(1, Ordering::Relaxed),
+        };
+        Ok((version, self.node_state_from(session_id, scanned.facts(), scanned.runs())?))
+      }
+      ColdSnapshot::Warm((generation, list_identity, live)) => {
+        self.node_state_of(session_id, generation, list_identity, &live)
+      }
+    }
   }
 
   /// Write the checkpoint a scan left, logging a failure rather than failing the scan: the file only makes the next
@@ -288,11 +397,17 @@ impl Store {
       return Ok(false);
     }
     drop(cache);
+    self.insert_scanned_facts(session_id, scanned);
+    Ok(true)
+  }
+
+  fn insert_scanned_facts(&self, session_id: &str, scanned: &ScannedLiveFacts) {
     self.insert_facts(FoldedNodeFacts {
       session_id: session_id.to_string(),
       identity: scanned.identity,
       archived: scanned.archived,
       covered: scanned.covered,
+      booking: scanned.booking,
       facts: Arc::clone(&scanned.facts),
       runs: Arc::clone(&scanned.runs),
       prompt_changes: LivePromptChanges {
@@ -300,7 +415,6 @@ impl Store {
         node: scanned.prompt_changes.node.clone(),
       },
     });
-    Ok(true)
   }
 
   /// A node's facts from its checkpoint, for a reader whose event cache is cold: the checkpoint's facts folded with the
@@ -350,6 +464,7 @@ impl Store {
       identity,
       archived,
       covered,
+      booking: FoldBooking::Suffix { events: tail.len() as u64 },
       facts: Arc::clone(&facts),
       runs,
       prompt_changes,
@@ -359,9 +474,8 @@ impl Store {
 
   /// Memoize one node's folded facts, run facts and newest prompt facts under the log identity they cover.
   fn insert_facts(&self, folded: FoldedNodeFacts) {
-    let FoldedNodeFacts { session_id, identity, archived, covered, facts, runs, prompt_changes } = folded;
-    self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
-    self.history_work.folded_events.fetch_add((archived + covered) as u64, Ordering::Relaxed);
+    let FoldedNodeFacts { session_id, identity, archived, covered, booking, facts, runs, prompt_changes } = folded;
+    booking.book(&self.history_work.full_folds, &self.history_work.folded_events);
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(
       session_id.to_string(),
       CachedNodeFacts { key: NodeFactsKey::File(identity), list_identity: Arc::new(()), archived, covered, facts },
@@ -777,7 +891,9 @@ mod tests {
     assert!(scanned.seal_scanned_facts("synthetic", &scan).unwrap());
     // The scan left a checkpoint. Removing it makes the reference store fold the log itself, which this test compares.
     std::fs::remove_file(scanned.fact_checkpoint_path("synthetic")).unwrap();
+    // The reference folds the whole log: a warm cache keeps the chat content that the cold scan's stand-ins leave out.
     let cold = open().unwrap();
+    cold.load_chat_events_shared_sync("synthetic").unwrap();
 
     let (sealed, folded) = (scanned.node_facts("synthetic").unwrap(), cold.node_facts("synthetic").unwrap());
     let (sealed, folded) = (sealed.task().unwrap(), folded.task().unwrap());
@@ -1343,10 +1459,10 @@ mod tests {
   }
 
   /// A cold node-state read folds the fact checkpoint and the bytes past it, and reaches the task state, run facts and
-  /// task facts a whole-log fold reaches. A checkpoint that is absent, torn or stale folds nothing, and the read falls
-  /// back to the whole-log load that answers the same value.
+  /// task facts a whole-log fold reaches. A checkpoint that is absent, torn or stale folds nothing, and the read scans
+  /// the log as one snapshot instead: it loads no history, and it writes the checkpoint back for the next read.
   #[test]
-  fn a_cold_node_state_read_folds_the_checkpoint_and_its_mismatches_load_the_whole_log() {
+  fn a_cold_node_state_read_folds_the_checkpoint_and_its_mismatches_scan_the_log() {
     let (home, writer) = make_test_store();
     let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
     write_events(
@@ -1395,21 +1511,28 @@ mod tests {
       (value, store.history_work().file_reads - before)
     };
 
-    // Reference: no checkpoint, so the whole log answers.
+    // Reference: no checkpoint, so the scan folds the log and writes the checkpoint back.
     std::fs::remove_file(&checkpoint_path).unwrap();
-    let (reference, whole_log_reads) = cold_value(&open());
-    assert_eq!(whole_log_reads, 1, "a missing checkpoint loads the whole log once");
+    let (reference, scan_reads) = cold_value(&open());
+    assert_eq!(scan_reads, 0, "a missing checkpoint scans the log without a whole-log load");
+    assert!(checkpoint_path.exists(), "the cold scan writes the checkpoint");
+    // The whole-log fold: a store whose cache holds the parsed history folds every event, as the scan must.
+    let whole_log = |store: &Store| {
+      store.load_chat_events_shared_sync("synthetic").unwrap();
+      state_value(store)
+    };
+    assert_eq!(whole_log(&open()), reference, "the scan's fold equals the whole-log fold");
 
     // Matching: the checkpoint covers the first leg and the read folds the appended second leg onto it.
     std::fs::write(&checkpoint_path, &intact).unwrap();
     let (from_checkpoint, reads) = cold_value(&open());
     assert_eq!(reads, 0, "the checkpoint answers without a whole-log load");
-    assert_eq!(from_checkpoint, reference, "the checkpoint's fold equals the whole-log fold");
+    assert_eq!(from_checkpoint, reference, "the checkpoint's fold equals the scan's fold");
 
     // Torn: the checkpoint's bytes cut in half.
     std::fs::write(&checkpoint_path, &intact[..intact.len() / 2]).unwrap();
     let (torn, reads) = cold_value(&open());
-    assert_eq!(reads, 1, "a torn checkpoint loads the whole log");
+    assert_eq!(reads, 0, "a torn checkpoint scans the log without a whole-log load");
     assert_eq!(torn, reference);
 
     // Stale: a byte inside the covered prefix was rewritten, with the file's length unchanged.
@@ -1419,8 +1542,69 @@ mod tests {
     std::fs::write(&log_path, &rewritten).unwrap();
     std::fs::write(&checkpoint_path, &intact).unwrap();
     let (stale, reads) = cold_value(&open());
-    assert_eq!(reads, 1, "a stale checkpoint loads the whole log");
+    assert_eq!(reads, 0, "a stale checkpoint scans the log without a whole-log load");
     std::fs::remove_file(&checkpoint_path).unwrap();
-    assert_eq!(stale, state_value(&open()), "the rewritten log folds as a whole-log load of it folds");
+    assert_eq!(stale, whole_log(&open()), "the rewritten log's scan folds as its whole-log fold does");
+  }
+
+  /// A cold read's snapshot excludes an append that lands after its scan, and the seal refuses it. The read then
+  /// answers from the snapshot, and the next cold read scans the log again and includes the appended event. The
+  /// interleaving is the one the cold read has between releasing the cache lock and sealing, driven through the same
+  /// two calls.
+  #[test]
+  fn an_append_during_a_cold_read_is_left_out_of_its_snapshot_and_the_next_read_includes_it() {
+    let (home, writer) = make_test_store();
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
+    write_events(
+      &writer,
+      [
+        json!({"id": "created", "type": "task_created", "actor": "user"}),
+        json!({"id": "ask", "type": "user", "content": "do the work"}),
+      ],
+    );
+
+    let reading = open();
+    let snapshot = reading.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
+    append_events(
+      &writer,
+      [json!({"id": "close-1", "type": "task_closed", "request_id": "close-1", "outcome": "cancelled"})],
+    );
+
+    assert!(
+      !reading.seal_scanned_facts("synthetic", &snapshot).unwrap(),
+      "a snapshot that an append outran is not sealed"
+    );
+    assert_eq!(snapshot.facts().task().unwrap().task_state, "open", "the snapshot answers without the appended event");
+
+    let next = open();
+    let state = next.node_state("synthetic").unwrap();
+    assert_eq!(state.task_state().unwrap(), "cancelled", "the next cold read includes the appended event");
+    assert_eq!(next.history_work().file_reads, 0, "the next cold read scans the log and loads none of it");
+  }
+
+  /// A cold `run_facts` read scans and seals under the session lock without loading whole history, and
+  /// `scan_cold_snapshot` yields `ColdSnapshot::Warm` when another reader warms the event cache before it takes the
+  /// lock.
+  #[test]
+  fn a_cold_run_facts_read_scans_without_loading_and_scan_cold_snapshot_yields_warm_cache() {
+    let (home, writer) = make_test_store();
+    let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
+    write_events(
+      &writer,
+      [
+        json!({"id": "created", "type": "task_created", "actor": "user"}),
+        json!({"id": "ask", "type": "user", "content": "do the work"}),
+        json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success"}),
+      ],
+    );
+
+    let cold = open();
+    assert!(cold.run_has_terminal_outcome("synthetic", "run-1").unwrap());
+    assert_eq!(cold.history_work().file_reads, 0, "the cold run-facts read loads no whole-log history");
+
+    let warmed = open();
+    warmed.load_chat_events_shared_sync("synthetic").unwrap();
+    assert!(matches!(warmed.scan_cold_snapshot("synthetic").unwrap(), ColdSnapshot::Warm(_)));
+    assert!(warmed.run_has_terminal_outcome("synthetic", "run-1").unwrap());
   }
 }

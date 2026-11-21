@@ -6,8 +6,9 @@
 // Environment:
 //   PLAYWRIGHT_MODULE      the playwright module to load (default: 'playwright', resolved from this directory)
 //   CHROME_BIN             the Chrome binary to launch (default: the binary Playwright bundles)
-//   CHROME_TMPDIR          the TMPDIR Chrome runs with (default: the inherited one). Under a trial, set it to a short
-//                          directory: the trial's TMPDIR is long, and Chrome's socket path must stay under 108 bytes.
+//   CHROME_TMPDIR          the TMPDIR Chrome runs with (default: the inherited one). Under trial.sh --tree-root, set it
+//                          to a short directory because the trial's TMPDIR is inside its long tree path. The default
+//                          trial tree already exports a short TMPDIR beside its tree.
 //   CHARLIEBOT_ACCESS_KEY  the server's access key, when the server asks for one. It is sent to the server and never
 //                          written to the output.
 //   WARM_UP                1 (default) sends one untimed search per query term before its timed repeats. 0 times the
@@ -94,8 +95,9 @@ async function waitForClearRequests(page, net, mark, timeoutMs = 120000) {
 async function openPage(baseUrl, { accessKey = '', sessionId = '' } = {}) {
   const base = new URL(baseUrl);
   const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-  // Chrome's process-singleton socket lives under TMPDIR, and a sockaddr_un path is short. A trial points TMPDIR into
-  // its tree, so CHROME_TMPDIR names a short directory for Chrome. The flags match the bench's Chrome (dev/poor-network).
+  // Chrome's process-singleton socket lives under TMPDIR, and a sockaddr_un path is short. A --tree-root trial points
+  // TMPDIR into its tree; CHROME_TMPDIR can give Chrome a shorter directory. The default trial tree already exports a
+  // short TMPDIR beside its tree. The flags match the bench's Chrome (dev/poor-network).
   const env = { ...process.env };
   if (process.env.CHROME_TMPDIR) env.TMPDIR = process.env.CHROME_TMPDIR;
   const browser = await chromium.launch({

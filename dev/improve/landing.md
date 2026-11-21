@@ -10,11 +10,14 @@ Its rules govern the diff this round produces.
 `main` takes no direct pushes: every change lands through a pull request.
 The pull request is the triage record, and CI is the full test run.
 
-Every text the round writes to GitHub — a pull-request title, body, comment, commit message or branch name — goes through `dev/improve/github-post.sh`, which checks it against the leak rules before it sends anything.
-On a hit, the round removes the matched content from the text, rewrites it, and runs the subcommand again.
+Every text the round writes to GitHub — a pull-request title, body, comment, commit message or branch name — goes through `dev/improve/github-post.sh`, which checks it against the leak rules and the round's credential values before it sends anything.
+Every push and every `gh` call of the round passes the same credential check: the clone's pre-push hook checks each pushed commit's message and diff, and the round's `gh` checks every argument and file argument.
+A credential value never enters any text the round writes, and no write reaches GitHub while the check holds a hit.
+A leak-rule hit is the only hit the round rewrites: the round removes the matched content from the text, rewrites it, and runs the subcommand again.
 The script sends nothing on a hit, so the posted text is always text that passed.
+A credential hit stops the round. The kind that the check names is the round's stop reason, and the round writes no rewrite of the text.
 A merge goes through the posting script's `pr-merge`, which refuses a web page change whose evidence directory fails the screenshot check or whose pull request body names no `View:` line, and carries the `View:` lines into the squash commit message.
-`gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round.
+`gh pr update-branch`, `gh run rerun` and the read-only calls stay bare: they carry no text of the round, and the `gh` shim still checks their arguments.
 
 ## The round's login and the launch's exit codes
 
@@ -56,7 +59,7 @@ The round tools under `~/improve/runner/bin/` keep the current commit and the co
 
 `remote-runner.sh --member-cli <kind> <version>` runs the same install alone, prints what the installed CLI reports and starts no round, so an operator can check a version before a round needs it.
 
-These scripts run from the server's checkout at each launch, so a change reaches host3 rounds when the server runs a release that carries it.
+These scripts run from the server's checkout at each launch, so a change reaches rounds on the remote test host when the server runs a release that carries it.
 
 ## Step 1: set the clone
 
@@ -72,10 +75,16 @@ At round start, delete what an earlier round left under `/tmp/improve-<direction
 Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
 An earlier round's scratch holds large copies, so the next round removes it before it starts.
 
-The runner checks the clone before the round's agent starts, and a missing or foreign clone ends that launch with exit 4.
-End the round with a report when the clone lacks `core.hooksPath dev/git-hooks`:
+Before the round's agent starts, the runner sets the clone to `origin/main`: it fetches `origin` and detaches the clone's HEAD there, so the clone's hooks come from `main`.
+The runner keeps the clone's local branches and its uncommitted changes.
+A checkout that would overwrite uncommitted work ends the launch with exit 4.
 
-    git -C ~/improve/<direction>/charlie-bot config core.hooksPath
+The runner then ends the launch with exit 4 when the clone:
+
+- is missing;
+- does not set `core.hooksPath` to `dev/git-hooks`;
+- has no executable `dev/git-hooks/pre-push` in its tree;
+- has an origin that is not `charlie-bot`.
 
 The hooks check each commit before it can be pushed, so a clone without them is not this protocol's clone.
 
@@ -194,12 +203,16 @@ The review is one direct `charlie-code` run, outside the clone.
 The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
 
 The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
-The command passes no `--model` or `--api-base` flag.
-`charlie-code` reads the review option's settings from these environment variables, which the runner sets whichever model runs the round:
+The command passes no `--model`, `--api-base` or key flag.
+The round's PATH finds `charlie-code` first in `~/improve/runner/bin/`, where the runner installs its review shim (`review-charlie-code.sh`).
+The shim sets these variables for the review process alone, whichever model runs the round, and then runs the host's `~/.local/bin/charlie-code`:
 
-- `CHARLIE_CODE_MODEL`: the review option's model with an `openai/` prefix.
-- `CHARLIE_CODE_API_BASE`: the review option's API base, ending in `/v1`.
-- `CHARLIE_CODE_API_KEY`: the review option's gateway key.
+- `CHARLIE_CODE_MODEL`: the review option's model with an `openai/` prefix, from `IMPROVE_REVIEW_MODEL`.
+- `CHARLIE_CODE_API_BASE`: the review option's API base, ending in `/v1`, from `IMPROVE_REVIEW_API_BASE`.
+- `CHARLIE_CODE_API_KEY`: the review option's gateway key, read from `$CHARLIEBOT_HOME/credentials.yaml` under the credential that `IMPROVE_REVIEW_CREDENTIAL` names.
+
+The round's own environment and every tool shell under it carry none of the three variables.
+A `charlie-code` that the round starts by its full path skips the shim and gets none of them, so it cannot review.
 
 The review option is the `config.yaml` entry that names the review's model and API base.
 Its key sits in `credentials.yaml`, under the credential that the entry names.

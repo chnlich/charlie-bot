@@ -206,8 +206,9 @@ impl ClaudeCodeLifecycle {
     {
       return Ok(Some(session_id.to_string()));
     }
-    let found = claude_accounts::find_transcript_account(&ctx.cfg, session_id)
-      .map_err(|error| refused(error, MemberFailure::Other, None))?;
+    let found = claude_accounts::newest_transcript_copy(&ctx.cfg, session_id)
+      .map_err(|error| refused(error, MemberFailure::Other, None))?
+      .map(|(account, _path)| account);
     if let Some(found) = found {
       tracing::info!(
         target: "charliebot_agents",
@@ -251,8 +252,9 @@ impl ClaudeCodeLifecycle {
     // A run that stays on this host resumes the login that holds its transcript. A keyed round keeps its transcript
     // on the improve host, so it picks its login by the ordinary pool choice and resumes the held id there.
     if !keyed && let Some(session_id) = held {
-      let holder = claude_accounts::find_transcript_account(&ctx.cfg, session_id)
-        .map_err(|error| refused(error, MemberFailure::Other, None))?;
+      let holder = claude_accounts::newest_transcript_copy(&ctx.cfg, session_id)
+        .map_err(|error| refused(error, MemberFailure::Other, None))?
+        .map(|(account, _path)| account);
       let Some(holder) = holder else {
         let labels = claude_accounts::pool(&ctx.cfg)
           .map_err(|error| refused(error, MemberFailure::Other, None))?
@@ -711,6 +713,72 @@ mod tests {
     assert_eq!(claude_metadata::account_of(&ctx.session_meta.lock().unwrap()).as_deref(), Some("b"));
   }
 
+  fn write_copy(path: &Path, text: &str, modified: std::time::SystemTime) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+    fs::File::options().write(true).open(path).unwrap().set_modified(modified).unwrap();
+  }
+
+  /// Pool order names login "a" first, and its copy is the older one; login "b" holds the newer copy.
+  fn split_copies(root: &Path) -> (CharlieBotConfig, PathBuf, PathBuf) {
+    let account_a = root.join("account-a");
+    let account_b = root.join("account-b");
+    account_credentials(&account_a);
+    account_credentials(&account_b);
+    let cfg = config(&root.join("home"), &[("a", &account_a), ("b", &account_b)]);
+    let older = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+    let newer = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    write_copy(&account_a.join("projects/cwd/session-id.jsonl"), "old lineage row\n", older);
+    write_copy(&account_b.join("projects/cwd/session-id.jsonl"), "new fork row\n", newer);
+    (cfg, account_a, account_b)
+  }
+
+  /// A held task resumes on the login whose copy is newest, not on the first login in pool order that holds a copy.
+  #[tokio::test]
+  async fn a_held_task_resumes_on_the_login_with_the_newest_copy() {
+    let root = tempfile::tempdir().unwrap();
+    let (cfg, _account_a, _account_b) = split_copies(root.path());
+    let ctx = context(cfg, LaunchKind::Task, None, Some("session-id"), None);
+    let launch = ClaudeCodeLifecycle::new().place(&ctx).await.unwrap();
+    assert_eq!(launch.account_label.as_deref(), Some("b"));
+  }
+
+  /// The turn resume's holder lookup takes the newest copy too, and records that login on the session.
+  #[tokio::test]
+  async fn the_resume_fallback_takes_the_login_with_the_newest_copy() {
+    let root = tempfile::tempdir().unwrap();
+    let (cfg, _account_a, _account_b) = split_copies(root.path());
+    let ctx = context(cfg, LaunchKind::Turn, None, Some("session-id"), None);
+    let resume = ClaudeCodeLifecycle::new().pooled_resume_id(&ctx).await.unwrap();
+    assert_eq!(resume.as_deref(), Some("session-id"));
+    assert_eq!(claude_metadata::account_of(&ctx.session_meta.lock().unwrap()).as_deref(), Some("b"));
+  }
+
+  /// A relay copies the transcript and keeps its modification time. When the destination login then appends to its
+  /// copy, that copy is the newest, and the next resume reads it.
+  #[tokio::test]
+  async fn a_relayed_copy_that_the_destination_appends_to_is_the_one_resumed() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let account_a = root.path().join("account-a");
+    let account_b = root.path().join("account-b");
+    account_credentials(&account_a);
+    account_credentials(&account_b);
+    let cfg = config(&root.path().join("home"), &[("a", &account_a), ("b", &account_b)]);
+    let older = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+    write_copy(&account_a.join("projects/cwd/session-id.jsonl"), "first row\n", older);
+    claude_accounts::move_transcript("session-id", &account_a, &account_b).unwrap();
+    fs::OpenOptions::new()
+      .append(true)
+      .open(account_b.join("projects/cwd/session-id.jsonl"))
+      .unwrap()
+      .write_all(b"second row\n")
+      .unwrap();
+    let ctx = context(cfg, LaunchKind::Task, None, Some("session-id"), None);
+    let launch = ClaudeCodeLifecycle::new().place(&ctx).await.unwrap();
+    assert_eq!(launch.account_label.as_deref(), Some("b"));
+  }
+
   #[test]
   fn cli_variants_and_unpooled_cc_claude_reuse_transcript_checked_flag_launches() {
     // The cc-anthropic-compatible and cc-openai-compatible registrations share ClaudeCliLifecycle.
@@ -791,7 +859,7 @@ mod tests {
     let cfg = config(&home, &[("a", &account_a), ("b", &account_b)]);
     let ctx = context(cfg, LaunchKind::Task, None, None, None);
     ctx.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
 
     let refusal = match ClaudeCodeLifecycle::new().place(&ctx).await {
       Err(refusal) => refusal,
@@ -835,7 +903,7 @@ mod tests {
     // A keyed run keeps the id: its transcript is on the improve host, and the run forwards a chosen login's token.
     let keyed = context(cfg, LaunchKind::Task, None, Some(held), None);
     keyed.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
     let launch = ClaudeCodeLifecycle::new().place(&keyed).await.unwrap();
     assert_eq!(launch.resume_id.as_deref(), Some(held));
     assert!(launch.account_label.is_some(), "the keyed task picks its login by the ordinary pool choice");
@@ -855,7 +923,7 @@ mod tests {
     let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
     let mut keyed = context(cfg.clone(), LaunchKind::Task, None, None, None);
     keyed.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
     keyed.run_id = Some("keyed-run".to_string());
 
     let launch = lifecycle.place(&keyed).await.unwrap();
@@ -910,7 +978,7 @@ mod tests {
 
     // A keyed run keeps the id: its transcript is on the improve host, so no local search decides.
     ctx.session_meta.lock().unwrap().task =
-      Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+      Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
     assert_eq!(ClaudeCliLifecycle.checked_resume_id_for(&ctx, &config_dir).unwrap().as_deref(), Some(held));
   }
 
@@ -956,7 +1024,7 @@ mod tests {
     let ctx = context(cfg, LaunchKind::Task, None, None, None);
     if keyed {
       ctx.session_meta.lock().unwrap().task =
-        Some(TaskSpec { improve_host: Some("host3".to_string()), ..TaskSpec::default() });
+        Some(TaskSpec { improve_host: Some("remote-test-host".to_string()), ..TaskSpec::default() });
     }
     let account =
       claude_config::ClaudeAccount { label: "current".to_string(), config_dir: current.display().to_string() };
@@ -989,6 +1057,33 @@ mod tests {
       "is_api_error_message": true,
       "api_error_status": 401
     })
+  }
+
+  fn clean_result() -> Value {
+    json!({"type": "result", "subtype": "success", "is_error": false, "result": "done"})
+  }
+
+  /// After a run ends cleanly on a login that rejected a request, the pool's next real pick skips that login: its
+  /// headroom is zero until the reset. The run ends with no refusal, so no member is recorded out.
+  #[tokio::test]
+  async fn a_new_pick_after_a_clean_end_skips_the_login_that_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let (cfg, _current) = current_and_fresh(root.path());
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+    let first = context(cfg.clone(), LaunchKind::Task, None, None, None);
+    let launch = lifecycle.place(&first).await.unwrap();
+    assert_eq!(launch.account_label.as_deref(), Some("current"));
+
+    let mut watch = lifecycle.watch(&first, &launch).expect("a pooled launch carries a watch");
+    assert!(!watch.observe(&rate_limit("rejected", 1.0)));
+    assert!(!watch.observe(&clean_result()));
+    assert!(!watch.wants_next(0, ""), "the clean end is not relayed");
+
+    let mut next = context(cfg, LaunchKind::Task, None, None, None);
+    next.run_id = Some("next-run".to_string());
+    let next_launch = lifecycle.place(&next).await.expect("the pool still has a login with headroom");
+    assert_eq!(next_launch.account_label.as_deref(), Some("fresh"));
   }
 
   #[tokio::test]

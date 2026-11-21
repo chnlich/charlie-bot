@@ -24,7 +24,7 @@ use charliebot_registry::usage::{
 };
 use charliebot_registry::usage_sweep::SweepCounter;
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{CC_SESSION_ID_FIELD, UtcDateTime, read_metadata};
+use charliebot_store::metadata::{CC_SESSION_ID_FIELD, UPDATED_AT_FIELD, UtcDateTime, read_metadata};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
   CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
@@ -172,7 +172,7 @@ fn is_cold_session(meta: &Map<String, Value>, now: UtcDateTime) -> bool {
     return false;
   }
   // The falsy values drop before the text read takes the rest.
-  let Some(raw_updated) = meta.get("updated_at").filter(|value| text_repr::is_truthy(value)) else {
+  let Some(raw_updated) = meta.get(UPDATED_AT_FIELD).filter(|value| text_repr::is_truthy(value)) else {
     return false;
   };
   let Some(updated_at) = instant_of_stamp(&text_repr::value_str(raw_updated)) else {

@@ -85,8 +85,9 @@ the approved plan's.
   the local storage key, the bearer header and the rename requests. The output files never record it.
 - `PLAYWRIGHT_MODULE`: the Playwright module to load. Default: `playwright`, resolved from this directory.
 - `CHROME_BIN`: the Chrome binary to launch. Default: the binary Playwright bundles.
-- `CHROME_TMPDIR`: the TMPDIR Chrome runs with. Under `trial.sh` the TMPDIR is the trial's own tree, whose path is long, and
-  Chrome's socket path must stay under 108 bytes; set this to a short directory. Default: the inherited TMPDIR.
+- `CHROME_TMPDIR`: the TMPDIR Chrome runs with. Under `trial.sh --tree-root` the TMPDIR is inside the trial's tree, whose
+  path is long, and Chrome's socket path must stay under 108 bytes; set this to a short directory. Without `--tree-root`
+  the trial's TMPDIR is a short directory beside its tree. Default: the inherited TMPDIR.
 
 ## Broadcast window
 

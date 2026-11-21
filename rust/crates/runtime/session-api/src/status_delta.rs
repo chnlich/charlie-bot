@@ -71,7 +71,7 @@ impl Snapshot {
     for (id, payload) in ids.iter().zip(payloads) {
       match self.rows.get(id) {
         Some(row) if row.payload == payload => {}
-        _ => {
+        None | Some(_) => {
           self.sequence += 1;
           self.rows.insert(id.clone(), Published { version: self.sequence, payload });
         }

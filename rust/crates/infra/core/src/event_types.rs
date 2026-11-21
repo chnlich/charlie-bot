@@ -58,6 +58,8 @@ pub const UPLOADED_FILES: &str = "uploaded_files";
 /// The task-input event's input kind, such as `voice`.
 pub const INPUT_MODE: &str = "input_mode";
 pub const TASK_DELEGATED: &str = "task_delegated";
+/// The pool id a delegation's child runs under, written only when the child's session backend is a pool.
+pub const POOL: &str = "pool";
 pub const DELEGATE_INVOCATION: &str = "delegate_invocation";
 pub const WORKER_SUMMARY: &str = "worker_summary";
 pub const COMPLETE: &str = "complete";

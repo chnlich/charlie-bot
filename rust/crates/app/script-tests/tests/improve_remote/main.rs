@@ -235,16 +235,17 @@ fn files_holding(world: &World, root: &Path, needle: &str) -> Vec<String> {
 
 #[test]
 #[ignore = "integration"]
-fn the_gateway_member_gets_its_token_and_the_review_key_under_their_own_names() {
+fn the_gateway_member_gets_its_token_and_no_review_key() {
   let world = World::new();
   let run = world.run(&world.env());
   assert_eq!(run.code, 0, "{}", run.describe());
   let env = world.claude_environment();
   let member = digest(GATEWAY_TOKEN);
-  let review = digest(REVIEW_KEY);
-  assert_ne!(member, review, "the fixture keys must differ");
   assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN_SHA256").map(String::as_str), Some(member.as_str()), "{}", run.describe());
-  assert_eq!(env.get("CHARLIE_CODE_API_KEY_SHA256").map(String::as_str), Some(review.as_str()), "{}", run.describe());
+  // The fake claude records `unset` for a key its environment does not hold, so the review key reaches no member,
+  // and its tool shell, a child of the member, holds none either.
+  assert_eq!(env.get("CHARLIE_CODE_API_KEY_SHA256").map(String::as_str), Some("unset"), "{}", run.describe());
+  assert_eq!(env.get("TOOL_SHELL_CHARLIE_CODE_API_KEY").map(String::as_str), Some("unset"), "{}", run.describe());
 }
 
 #[test]
@@ -259,7 +260,7 @@ fn the_review_runs_charlie_code_on_the_review_options_model_and_api_base_with_no
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.charlie_code_ran(), "the round's review did not run charlie-code:\n{}", run.describe());
 
-  // The review command names no model and no API base: charlie-code reads them from the round's environment.
+  // The review command names no model, API base or key: the review shim sets all three for its charlie-code.
   let task = task.display().to_string();
   let session_dir = world.remote_home.join("improve/perf/clc-sessions").display().to_string();
   assert_eq!(
@@ -303,10 +304,9 @@ fn a_subscription_claude_forwards_its_access_token_and_no_refresh_token() {
   let env = world.claude_environment();
   let value = |name: &str| env.get(name).map(String::as_str);
   let login = digest(LOGIN_TOKEN);
-  let review = digest(REVIEW_KEY);
   assert_eq!(value("CLAUDE_CODE_OAUTH_TOKEN_SHA256"), Some(login.as_str()), "{}", run.describe());
   assert_eq!(value("ANTHROPIC_AUTH_TOKEN_SHA256"), Some("unset"), "{}", run.describe());
-  assert_eq!(value("CHARLIE_CODE_API_KEY_SHA256"), Some(review.as_str()), "{}", run.describe());
+  assert_eq!(value("CHARLIE_CODE_API_KEY_SHA256"), Some("unset"), "{}", run.describe());
   // The access token reaches no ssh argument and no file on either home once the round ends. The refresh token
   // reaches nothing but the login file on this host.
   let arguments = world.ssh_arguments();
@@ -336,6 +336,12 @@ fn a_codex_member_runs_under_its_round_codex_home_with_the_forwarded_login() {
   assert!(!world.claude_ran(), "a codex member ran claude:\n{}", run.describe());
   let codex_home = world.codex_home_directory().display().to_string();
   assert_eq!(world.codex_home_received(), codex_home, "{}", run.describe());
+  let record = fs::read_to_string(&world.codex_env).expect("the fake codex recorded its environment");
+  assert!(record.contains("\nCHARLIE_CODE_API_KEY=unset\n"), "the codex member holds the review key:\n{record}");
+  assert!(
+    record.contains("\nTOOL_SHELL_CHARLIE_CODE_API_KEY=unset\n"),
+    "the codex tool shell holds the key:\n{record}"
+  );
   assert_eq!(world.codex_arguments_received(), arguments[1..].to_vec(), "{}", run.describe());
 
   // The login the round's codex found: the host's auth.json with an empty refresh token, mode 600.
@@ -359,14 +365,18 @@ fn a_codex_member_runs_under_its_round_codex_home_with_the_forwarded_login() {
   assert!(!world.ssh_arguments().contains(CODEX_REFRESH_TOKEN), "the refresh token reached an ssh argument");
 }
 
-/// The stub improve-sandbox of the focused export checks: it records the digests of the two gateway variables it
-/// receives, so the assertion holds no token value.
-const SCOPE_ENV_STUB: &str = r#"# Fake improve-sandbox: record the digests of the two gateway variables, the CODEX_HOME it runs with and the login
-# file under it with that file's mode, then exit.
+/// The stub improve-sandbox of the focused export checks: it records the digest of the member's gateway token and
+/// whether the review key is set, so the assertion holds no token value.
+const SCOPE_ENV_STUB: &str = r#"# Fake improve-sandbox: record the digest of the gateway token, whether the review key is set, the CODEX_HOME it runs
+# with and the login file under it with that file's mode, then exit.
 {
-  printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\nCHARLIE_CODE_API_KEY_SHA256=%s\nCODEX_HOME=%s\n' \
-    "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)" \
-    "$(printf '%s' "${CHARLIE_CODE_API_KEY-}" | sha256sum | cut -d' ' -f1)" "${CODEX_HOME-unset}"
+  printf 'ANTHROPIC_AUTH_TOKEN_SHA256=%s\n' "$(printf '%s' "${ANTHROPIC_AUTH_TOKEN-}" | sha256sum | cut -d' ' -f1)"
+  if [[ -n ${CHARLIE_CODE_API_KEY+x} ]]; then
+    printf 'CHARLIE_CODE_API_KEY=set\n'
+  else
+    printf 'CHARLIE_CODE_API_KEY=unset\n'
+  fi
+  printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}"
 } >"$FAKE_SCOPE_ENV"
 if [[ -n ${CODEX_HOME-} && -f $CODEX_HOME/auth.json ]]; then
   cp -- "$CODEX_HOME/auth.json" "$FAKE_SCOPE_AUTH"
@@ -389,8 +399,9 @@ const SYMLINK_DIRECTION: &str = "symlink_review";
 
 /// The run of the runner's `--in-scope` form alone, with the stub improve-sandbox that records the gateway
 /// variables and the Codex home. The first form exports the launch environment before it starts the scope, so the
-/// review credential's name arrives here as `IMPROVE_REVIEW_CREDENTIAL`. The review model and API base arrive as
-/// `IMPROVE_REVIEW_MODEL` and `IMPROVE_REVIEW_API_BASE`.
+/// review credential's name arrives here as `IMPROVE_REVIEW_CREDENTIAL`, and the review model and API base as
+/// `IMPROVE_REVIEW_MODEL` and `IMPROVE_REVIEW_API_BASE`. It also exports the round's profile home as `CHARLIEBOT_HOME`,
+/// where the review shim reads the key.
 fn run_in_scope(world: &World, launch_id: &str, kind: &str) -> harness::Run {
   run_in_scope_with(world, launch_id, kind, &[])
 }
@@ -412,6 +423,7 @@ fn run_in_scope_with(world: &World, launch_id: &str, kind: &str, extra: &[(&str,
   env.insert("IMPROVE_REVIEW_CREDENTIAL".to_string(), REVIEW_CREDENTIAL.to_string());
   env.insert("IMPROVE_REVIEW_MODEL".to_string(), REVIEW_MODEL.to_string());
   env.insert("IMPROVE_REVIEW_API_BASE".to_string(), REVIEW_API_BASE.to_string());
+  env.insert("CHARLIEBOT_HOME".to_string(), world.remote_home.join("improve/home").display().to_string());
   for (name, value) in extra {
     env.insert((*name).to_string(), value.clone());
   }
@@ -427,13 +439,13 @@ fn run_in_scope_with(world: &World, launch_id: &str, kind: &str, extra: &[(&str,
 
 #[test]
 #[ignore = "integration"]
-fn the_in_scope_runner_selects_each_key_by_its_credential_name() {
+fn the_in_scope_runner_exports_the_member_token_and_no_review_key() {
   let world = World::new();
-  // The decoy section comes first and the review's comes after it, so a read by line position exports the decoy,
-  // and a read by name exports each key under the tool that reads it. The member's token is its own record.
+  // The credentials file holds the review key, and the round's environment still gets none of it: the review's
+  // charlie-code reads the key from that file when it starts.
   fs::write(
     world.remote_home.join("improve/home/credentials.yaml"),
-    format!("synthetic-decoy:\n  api_key: decoy-value\n{REVIEW_CREDENTIAL}:\n  api_key: {FOCUSED_REVIEW_KEY}\n"),
+    format!("{REVIEW_CREDENTIAL}:\n  api_key: {FOCUSED_REVIEW_KEY}\n"),
   )
   .expect("the fixture credentials file");
   let launch_id = "20261101T090000Z-1-300";
@@ -445,28 +457,8 @@ fn the_in_scope_runner_selects_each_key_by_its_credential_name() {
   assert_eq!(run.code, 0, "{}", run.describe());
   let text = fs::read_to_string(world.sandbox.root().join("scope-env.txt"))
     .expect("the stub improve-sandbox recorded its environment");
-  for (name, value) in [("ANTHROPIC_AUTH_TOKEN", FOCUSED_MEMBER_TOKEN), ("CHARLIE_CODE_API_KEY", FOCUSED_REVIEW_KEY)] {
-    assert!(text.contains(&format!("{name}_SHA256={}\n", digest(value))), "{name} is not the fixture's:\n{text}");
-  }
-}
-
-#[test]
-#[ignore = "integration"]
-fn the_in_scope_runner_without_a_review_key_exits_1_and_names_the_file() {
-  let world = World::new();
-  fs::write(world.remote_home.join("improve/home/credentials.yaml"), "synthetic-decoy:\n  api_key: decoy-value\n")
-    .expect("the credentials file without the review section");
-  let credentials = world.remote_home.join("improve/home/credentials.yaml");
-
-  let run = run_in_scope(&world, "20261101T090100Z-1-301", "claude");
-
-  assert_eq!(run.code, 1, "{}", run.describe());
-  let message = stderr(&run);
-  assert!(
-    message.contains(&format!("no api_key for the review credential {REVIEW_CREDENTIAL}"))
-      && message.contains(credentials.display().to_string().as_str()),
-    "the failure does not name the review key's file: {message}"
-  );
+  assert!(text.contains(&format!("ANTHROPIC_AUTH_TOKEN_SHA256={}\n", digest(FOCUSED_MEMBER_TOKEN))), "{text}");
+  assert!(text.contains("CHARLIE_CODE_API_KEY=unset\n"), "the round's environment holds the review key:\n{text}");
 }
 
 /// Fake charlie-code for a review that outlives its agent: it records its process id, reports its start, and stays
@@ -502,13 +494,20 @@ fn a_review_that_outlives_its_agent_fails_the_round_and_names_it() {
     format!("{REVIEW_CREDENTIAL}:\n  api_key: {FOCUSED_REVIEW_KEY}\n"),
   )
   .expect("the fixture credentials file");
-  let stubs = world.sandbox.root().join("review-bin");
-  fs::create_dir_all(&stubs).expect("the stub review's directory");
-  harness::write_executable(&stubs.join("charlie-code"), format!("#!/usr/bin/env bash\n{LEFT_REVIEW}"));
+  // The review starts through the installed shim, as a round's review does: the shim execs the host's charlie-code,
+  // which is the stub below, so the review process is still the one the runner's tracking must find.
+  let runner_bin = world.remote_home.join("improve/runner/bin");
+  fs::create_dir_all(&runner_bin).expect("the runner bin directory");
+  let shim = fs::read_to_string(harness::repo_root().join("dev/improve/review-charlie-code.sh")).expect("the shim");
+  harness::write_executable(&runner_bin.join("charlie-code"), shim);
+  harness::write_executable(
+    &world.remote_home.join(".local/bin/charlie-code"),
+    format!("#!/usr/bin/env bash\n{LEFT_REVIEW}"),
+  );
   let pid_file = world.sandbox.root().join("review-pid");
   let started = world.sandbox.root().join("review-started");
   let release = world.sandbox.root().join("review-release");
-  let path = format!("{}:/usr/local/bin:/usr/bin:/bin", stubs.display());
+  let path = format!("{}:/usr/local/bin:/usr/bin:/bin", runner_bin.display());
 
   let run = run_in_scope_with(
     &world,
@@ -571,6 +570,10 @@ fn a_round_without_its_written_review_key_exits_7_before_inventory_or_scope() {
   let world = World::new();
   let launch_id = "20261101T090200Z-1-302";
   let launch = world.stage_launch(launch_id);
+  harness::copy_file(
+    &harness::repo_root().join("dev/improve/review-charlie-code.sh"),
+    &launch.join("review-charlie-code.sh"),
+  );
   fs::write(launch.join("env"), format!("IMPROVE_REVIEW_CREDENTIAL={REVIEW_CREDENTIAL}\0"))
     .expect("the launch environment");
   fs::write(world.remote_home.join("improve/home/credentials.yaml"), "synthetic-decoy:\n  api_key: decoy-value\n")
@@ -1159,7 +1162,14 @@ fn a_start_removes_an_idle_directions_codex_login_and_keeps_a_live_rounds() {
   stop_live_round(&mut leader);
   let _ = fs::remove_file(&login);
 
-  assert_eq!(live_run.code, 0, "{}", live_run.describe());
+  // The clone sync refuses a live round of the direction before the sweep, so the second start exits 5 and the live
+  // login stays. The start refuses the live round's leader with that exit code, as the runner's header says.
+  assert_eq!(live_run.code, 5, "{}", live_run.describe());
+  assert!(
+    stderr(&live_run).contains("the previous round still runs"),
+    "a start did not refuse the live round:\n{}",
+    live_run.describe()
+  );
   assert!(kept.as_ref().is_ok_and(|login| login == "LIVE-CODEX-LOGIN"), "a start removed a live round's login");
 }
 
@@ -1261,6 +1271,24 @@ fn claudes_exit_code_passes_through() {
   let run = world.run(&env);
   assert_eq!(run.code, 7, "{}", run.describe());
   assert!(world.claude_ran());
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_round_gh_write_with_a_credential_value_stops_the_round_with_its_kind() {
+  // The round's member runs one gh write whose text carries the member's own login: the shim refuses it before the
+  // real gh runs, and the round ends with the credential reason.
+  let world = World::new();
+  let mut env = world.env();
+  env.insert(
+    "FAKE_CLAUDE_COMMAND".to_string(),
+    r#"gh pr comment 1 --body "leaked $CLAUDE_CODE_OAUTH_TOKEN $ANTHROPIC_AUTH_TOKEN""#.to_string(),
+  );
+  let run = world.run(&env);
+  assert_eq!(run.code, 3, "{}", run.describe());
+  let text = format!("{}{}", run.stdout, run.stderr);
+  assert!(text.contains("environment variable"), "the kind is the reason: {text}");
+  assert!(!text.contains(world::LOGIN_TOKEN) && !text.contains(world::GATEWAY_TOKEN), "no value is printed: {text}");
 }
 
 #[test]
@@ -2126,6 +2154,11 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     harness::copy_file(&harness::repo_root().join("dev/improve/remote-runner.sh"), &launch.join("remote-runner.sh"));
     // The launcher sends the rule script beside the runner, so the runner's clone scan sources it.
     harness::copy_file(&harness::repo_root().join("dev/improve/inflight-files.sh"), &launch.join("inflight-files.sh"));
+    // The launcher sends the review's charlie-code beside the runner, which installs it and sources its credential_key.
+    harness::copy_file(
+      &harness::repo_root().join("dev/improve/review-charlie-code.sh"),
+      &launch.join("review-charlie-code.sh"),
+    );
     fs::write(launch.join("args"), "").expect("the launch arguments");
     write_member_credential(&launch, &[("ANTHROPIC_AUTH_TOKEN", GATEWAY_TOKEN)]);
     fs::write(

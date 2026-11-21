@@ -1637,7 +1637,7 @@ async fn worker_and_review_runs_put_the_gh_wrapper_first_on_path() -> anyhow::Re
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
-  let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).context("checkout root exists")?;
+  let checkout = stack.cfg.charliebot_home.join("checkout");
   let wrapper_dir = checkout.join("rust/crates/runtime/agents/gh_wrapper");
   let guard_dir = checkout.join("rust/crates/runtime/tasks/git_stash_guard");
   let ssh_guard_dir = checkout.join("rust/crates/runtime/agents/ssh_guard");

@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const BENCH_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +16,10 @@ const LOCK = path.join(BENCH_DIR, 'lock.sh');
 const RUN = path.join(BENCH_DIR, 'run.sh');
 const IMPROVE_SIDE = path.join(DEV_DIR, 'improve', 'trial-side.sh');
 const LOCK_FILE = 'pn-runs/.bench.lock';
+// The round direction the improve side tests name. Its marker root is this run's own /tmp/improve-<direction>.
+const DIRECTION = `trialsidetest_${process.pid}`;
+const MARKER_ROOT = `/tmp/improve-${DIRECTION}`;
+after(() => fs.rmSync(MARKER_ROOT, { recursive: true, force: true }));
 
 function scratch(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -48,7 +52,12 @@ function devSources(dir) {
 // Runs an improve trial side under a scratch home with a short wait. Its command touches `ran` and exits with `code`.
 function improveSide(home, ran, waitSeconds, code) {
   return spawnSync('bash', [IMPROVE_SIDE, 'bash', '-c', 'touch "$1"; exit "$2"', 'bash', ran, String(code)], {
-    env: { ...process.env, HOME: home, IMPROVE_TRIAL_LOCK_WAIT_SECONDS: String(waitSeconds) },
+    env: {
+      ...process.env,
+      HOME: home,
+      IMPROVE_DIRECTION: DIRECTION,
+      IMPROVE_TRIAL_LOCK_WAIT_SECONDS: String(waitSeconds),
+    },
     encoding: 'utf8',
     timeout: 30000,
   });
@@ -213,6 +222,84 @@ test('an improve trial side runs its command on a free lock and passes the exit 
     assert.equal(fs.existsSync(ran75), true, 'the trial command did not run with the bench lock free');
     assert.equal(side75.stderr, '', 'a command exit of 75 was reported as a lock timeout');
   } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The side markers under this run's marker root: one `trial-side.<pid>.<random>` directory per side.
+function sideMarkers() {
+  if (!fs.existsSync(MARKER_ROOT)) {
+    return [];
+  }
+  return fs.readdirSync(MARKER_ROOT).filter((name) => name.startsWith('trial-side.'));
+}
+
+test('an improve side keeps its marker through a cleanup of its TMPDIR during the lock wait', { timeout: 60000 }, async () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const tmp = path.join(dir, 'trial-tmp');
+  fs.mkdirSync(tmp);
+  const held = path.join(dir, 'held');
+  const ran = path.join(dir, 'ran');
+  const body = path.join(dir, 'hold.sh');
+  fs.writeFileSync(body, '#!/usr/bin/env bash\ntouch "$1"\nwhile [[ ! -e "$1.release" ]]; do sleep 0.1; done\n');
+  const holder = sideAttempt(home, body, held);
+  let side = null;
+  try {
+    await waitFor(() => fs.existsSync(held));
+    side = spawn('bash', [IMPROVE_SIDE, 'bash', '-c', 'touch "$1"; exit 0', 'bash', ran], {
+      env: { ...process.env, HOME: home, TMPDIR: tmp, IMPROVE_DIRECTION: DIRECTION, IMPROVE_TRIAL_LOCK_WAIT_SECONDS: '60' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    side.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    const exited = once(side, 'exit');
+    await waitFor(() => sideMarkers().length === 1);
+    // A trial's cleanup removes the TMPDIR that the side was started with, while the side waits for the lock.
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.writeFileSync(`${held}.release`, '');
+    const [code] = await exited;
+    assert.equal(stderr, '', 'the side reported a problem after its TMPDIR was cleaned');
+    assert.equal(code, 0);
+    assert.equal(fs.existsSync(ran), true, 'the side did not run its command after the lock was released');
+    assert.deepEqual(sideMarkers(), [], 'the side left its marker behind');
+  } finally {
+    fs.writeFileSync(`${held}.release`, '');
+    await holder.exited;
+    side?.kill('SIGKILL');
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a marker that a dead side left is named and removed, and it never counts as a start', { timeout: 60000 }, async () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const held = path.join(dir, 'held');
+  const ran = path.join(dir, 'ran');
+  const body = path.join(dir, 'hold.sh');
+  fs.writeFileSync(body, '#!/usr/bin/env bash\ntouch "$1"\nwhile [[ ! -e "$1.release" ]]; do sleep 0.1; done\n');
+  // The shell that prints its own pid has ended by the time the test reads it, so no process has this pid.
+  const deadPid = execFileSync('bash', ['-c', 'echo $$'], { encoding: 'utf8' }).trim();
+  const stale = path.join(MARKER_ROOT, `trial-side.${deadPid}.stale001`);
+  fs.mkdirSync(stale, { recursive: true });
+  // The stale marker says the command started. A side that trusted it would not report the lock timeout.
+  fs.writeFileSync(path.join(stale, 'started'), '');
+  const holder = sideAttempt(home, body, held);
+  try {
+    await waitFor(() => fs.existsSync(held));
+    const side = improveSide(home, ran, 1, 0);
+    assert.equal(side.status, Number(lockVariable(home, 'BENCH_LOCK_TIMEOUT_EXIT')), side.stderr);
+    assert.match(side.stderr, /improve trial side stopped: the bench lock stayed held for 1 s/);
+    assert.match(side.stderr, new RegExp(`removed the marker of dead side ${deadPid}`));
+    assert.equal(fs.existsSync(stale), false, 'the dead side marker was left in place');
+    assert.equal(fs.existsSync(ran), false, 'the trial command ran while the bench lock was held');
+  } finally {
+    fs.writeFileSync(`${held}.release`, '');
+    await holder.exited;
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   }

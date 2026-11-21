@@ -1,101 +1,38 @@
-//! The turn-end hook list: the mechanical checks a turn passes before its `master_done` is written.
+//! The turn-end checks: the mechanical checks a turn passes before its `master_done` is written.
 //!
-//! The list is `hooks/turn_end.json` in the served repo: an array of `{name, command}`. Each command runs under `sh -c`
-//! with one shared JSON object on stdin (`TurnInput`). Its result follows Claude Code's Stop hooks: exit 0 passes, a
-//! stdout JSON object with `decision: "block"` and a `reason` blocks, and a `systemMessage` is the entry's notice;
-//! exit 2 blocks with stderr as the reason. The session's turn contribution attaches a notice to a message of the turn
-//! when the turn has one; otherwise the runner posts it as an agent message from the entry's name. Any other exit, a
-//! timeout, or a stdout that is not a JSON object is an `error`: it is shown, and the turn ends without continuing.
+//! The list is `hooks/turn_end.json` in the served repo: an array of check names. The turn owner's contribution answers
+//! each name in process (`TurnContribution::run_turn_end_check`) from the shared `TurnInput`. A check passes, passes with
+//! a notice, or blocks with a reason. A check that returns an error, or runs past `ENTRY_TIMEOUT`, is an `error`: it is
+//! shown, and the turn ends without continuing. A name that no contribution answers fails the checkpoint.
 //!
-//! A checkpoint runs every entry in list order and writes one `turn_hooks` event with all the results. Each block's
+//! A checkpoint runs every name in list order and writes one `turn_hooks` event with all the results. Each block's
 //! reason is shown in the session, and the same conversation continues with the reasons, at most `MAX_CONTINUATIONS`
 //! times. Every step is derived from the session's event log, so a restart resumes the step a crash interrupted.
 
-use std::path::Path;
-use std::process::{Output, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_core::RepoRoot;
 use charliebot_core::event_types::{
-  AGENT_MESSAGE, FROM_SESSION_NAME, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID, WEB_STATUS,
+  AGENT_MESSAGE, CHILD_REPORT, CHILD_SESSION_ID, FROM_SESSION_NAME, MASTER_DONE, TURN_HOOKS, TURN_HOOKS_ID, WEB_STATUS,
 };
+use charliebot_core::text_repr::field_text;
 use charliebot_registry::FeatureContext;
-use charliebot_registry::turn::TurnContribution;
+use charliebot_registry::turn::{CheckResult, TurnContribution, TurnInput};
 use charliebot_store::MessageProvenance;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::reply_order::{self, Receipt};
-use nix::sys::signal::Signal;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
-/// The file that holds the turn-end hook list, relative to the served repo.
+/// The file that holds the turn-end check list, relative to the served repo.
 pub const HOOKS_FILE: &str = "hooks/turn_end.json";
 /// The blocks that continue one turn. The block after them ends the turn with its reason shown.
 pub const MAX_CONTINUATIONS: usize = 8;
-/// The time limit of one entry's command.
+/// The time limit of one check.
 pub const ENTRY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// One check of the list.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Entry {
-  pub name: String,
-  pub command: String,
-}
-
-/// The shared JSON object every command reads on stdin.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TurnInput {
-  pub session_id: String,
-  /// `web`, a thread platform's name (`slack`, `discord`, `feishu`), or null for a plain manager session.
-  pub kind: Option<String>,
-  /// The turn's exit code; a zero-output turn carries 1.
-  pub exit_code: i64,
-  /// Whether the turn is the continuation of a block and exited with an error. Such a turn misses the entries that
-  /// blocked it again, so each of those entries answers its second miss rather than passing the turn.
-  pub continuation_failed: bool,
-  /// The session's stored status payload (goal, now, updated_at, waiting), or null when it stores none.
-  pub status: Value,
-  /// The events since the previous `master_done`, in order, up to the call. An input the running run received carries
-  /// `received_at`, the moment of its receipt.
-  pub turn: Vec<Value>,
-}
-
-impl TurnInput {
-  /// Whether a check judges this turn's exit: a turn that exited cleanly, or a failed continuation, which a check
-  /// judges as a miss. Any other error exit is not judged, so the check passes it.
-  pub fn exit_is_judged(&self) -> bool {
-    self.exit_code == 0 || self.continuation_failed
-  }
-}
-
-/// A check command's answer, as the command prints it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CheckResult {
-  Pass,
-  /// The check passes and its notice reaches the user.
-  Notice(String),
-  /// The check misses; the reason continues the turn.
-  Block(String),
-}
-
-impl CheckResult {
-  /// The command's stdout for this answer. A pass prints nothing.
-  pub fn stdout(&self) -> Option<String> {
-    match self {
-      Self::Pass => None,
-      Self::Notice(message) => Some(json!({"systemMessage": message}).to_string()),
-      Self::Block(reason) => Some(json!({"decision": "block", "reason": reason}).to_string()),
-    }
-  }
-}
-
-/// One entry's outcome after its command ran.
+/// One check's outcome after it answered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
   Pass { notice: Option<String> },
@@ -103,117 +40,58 @@ pub enum Outcome {
   Error { message: String },
 }
 
-/// One entry's name and outcome.
+/// One check's name and outcome.
 #[derive(Clone, Debug)]
 pub struct Ran {
   pub name: String,
   pub outcome: Outcome,
 }
 
-/// The outcome of one command from its exit code and output, under Claude Code's Stop-hook rules.
-pub fn outcome_of(exit: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
-  let stderr = stderr.trim();
-  match exit {
-    Some(0) => {
-      let stdout = stdout.trim();
-      if stdout.is_empty() {
-        return Outcome::Pass { notice: None };
-      }
-      let object = match serde_json::from_str::<Value>(stdout) {
-        Ok(Value::Object(object)) => object,
-        _ => return Outcome::Error { message: "stdout is not a JSON object".to_string() },
-      };
-      if object.get("decision").and_then(Value::as_str) == Some("block") {
-        return match object.get("reason").and_then(Value::as_str).filter(|reason| !reason.is_empty()) {
-          Some(reason) => Outcome::Block { reason: reason.to_string() },
-          None => Outcome::Error { message: "a block names no reason".to_string() },
-        };
-      }
-      Outcome::Pass { notice: object.get("systemMessage").and_then(Value::as_str).map(str::to_string) }
-    }
-    Some(2) => {
-      let json_reason = serde_json::from_str::<Value>(stdout.trim()).ok().and_then(|value| {
-        let object = value.as_object()?;
-        (object.get("decision").and_then(Value::as_str) == Some("block"))
-          .then(|| object.get("reason").and_then(Value::as_str).filter(|reason| !reason.is_empty()))
-          .flatten()
-          .map(str::to_string)
-      });
-      if let Some(reason) = json_reason {
-        Outcome::Block { reason }
-      } else if !stderr.is_empty() {
-        Outcome::Block { reason: stderr.to_string() }
-      } else {
-        Outcome::Error { message: "exit 2 with no reason on stderr or JSON".to_string() }
-      }
-    }
-    Some(code) if stderr.is_empty() => Outcome::Error { message: format!("exit {code}") },
-    Some(code) => Outcome::Error { message: format!("exit {code}: {stderr}") },
-    None => Outcome::Error { message: "the command was killed by a signal".to_string() },
-  }
-}
-
-/// Runs every entry in list order with `input` on stdin and `cwd` as its directory. An entry that exceeds `timeout` is
-/// killed, and its outcome is an error.
-pub async fn run_entries(
-  entries: &[Entry],
+/// Runs every name of the list in order against `input`. The turn owner answers the names it lists, in process, each
+/// within `timeout`. A name the owner does not list passes: no check of this turn's owner answers it.
+pub async fn run_checks(
+  names: &[String],
+  owner: Option<&Arc<dyn TurnContribution>>,
+  features: &Arc<FeatureContext>,
   input: &TurnInput,
-  cwd: &Path,
   timeout: Duration,
-) -> anyhow::Result<Vec<Ran>> {
-  let payload = serde_json::to_vec(input).context("encode the turn-end check input")?;
-  let mut ran = Vec::with_capacity(entries.len());
-  for entry in entries {
-    let outcome = run_entry(entry, &payload, cwd, timeout).await?;
-    ran.push(Ran { name: entry.name.clone(), outcome });
+) -> Vec<Ran> {
+  let mut ran = Vec::with_capacity(names.len());
+  for name in names {
+    let outcome = match owner {
+      Some(contribution) if contribution.turn_end_check_names().contains(&name.as_str()) => {
+        run_check(contribution.as_ref(), name, features, input, timeout).await
+      }
+      _ => Outcome::Pass { notice: None },
+    };
+    ran.push(Ran { name: name.clone(), outcome });
   }
-  Ok(ran)
+  ran
 }
 
-async fn run_entry(entry: &Entry, payload: &[u8], cwd: &Path, timeout: Duration) -> anyhow::Result<Outcome> {
-  // The check leads its own process group, so a timeout kills the commands it started, not only the shell.
-  let child = Command::new("sh")
-    .arg("-c")
-    .arg(&entry.command)
-    .current_dir(cwd)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .process_group(0)
-    .kill_on_drop(true)
-    .spawn()
-    .with_context(|| format!("start turn-end check {}", entry.name))?;
-  let pid = child.id().with_context(|| format!("turn-end check {} has no process id", entry.name))?;
-  let run = async move {
-    let mut child = child;
-    let mut stdin = child.stdin.take().context("the check's stdin is piped")?;
-    // A command that exits without reading its input closes the pipe. Its exit decides the outcome.
-    match stdin.write_all(payload).await {
-      Ok(()) => {}
-      Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
-      Err(error) => return Err(error).context("write the turn-end check input"),
-    }
-    drop(stdin);
-    child.wait_with_output().await.context("wait for the turn-end check")
-  };
-  match tokio::time::timeout(timeout, run).await {
-    Ok(output) => {
-      let Output { status, stdout, stderr } = output.with_context(|| format!("run turn-end check {}", entry.name))?;
-      Ok(outcome_of(status.code(), &String::from_utf8_lossy(&stdout), &String::from_utf8_lossy(&stderr)))
-    }
-    Err(_) => {
-      kill_process_group(pid, Signal::SIGKILL);
-      Ok(Outcome::Error { message: format!("timed out after {} s", timeout.as_secs()) })
-    }
+async fn run_check(
+  contribution: &dyn TurnContribution,
+  name: &str,
+  features: &Arc<FeatureContext>,
+  input: &TurnInput,
+  timeout: Duration,
+) -> Outcome {
+  match tokio::time::timeout(timeout, contribution.run_turn_end_check(name, features, input)).await {
+    Ok(Ok(CheckResult::Pass)) => Outcome::Pass { notice: None },
+    Ok(Ok(CheckResult::Notice(message))) => Outcome::Pass { notice: Some(message) },
+    Ok(Ok(CheckResult::Block(reason))) => Outcome::Block { reason },
+    Ok(Err(error)) => Outcome::Error { message: format!("{error:#}") },
+    Err(_) => Outcome::Error { message: format!("timed out after {} s", timeout.as_secs()) },
   }
 }
 
-/// The turn-end hook list of the served repo. A missing or malformed list fails the checkpoint.
-pub fn load_entries(repo: &RepoRoot) -> anyhow::Result<Vec<Entry>> {
+/// The turn-end check list of the served repo: the names of the checks, in the order they run. A missing or malformed
+/// list fails the checkpoint.
+pub fn load_check_names(repo: &RepoRoot) -> anyhow::Result<Vec<String>> {
   let path = repo.path().join(HOOKS_FILE);
   let text =
-    std::fs::read_to_string(&path).with_context(|| format!("read the turn-end hook list {}", path.display()))?;
-  serde_json::from_str(&text).with_context(|| format!("parse the turn-end hook list {}", path.display()))
+    std::fs::read_to_string(&path).with_context(|| format!("read the turn-end check list {}", path.display()))?;
+  serde_json::from_str(&text).with_context(|| format!("parse the turn-end check list {}", path.display()))
 }
 
 /// Whether a run end belongs to an existing failure or quota handoff instead of the normal turn-end checkpoint.
@@ -255,6 +133,23 @@ fn read_log(features: &FeatureContext, session_id: &str) -> anyhow::Result<Sessi
     }
   }
   Ok(SessionLog { turn, status })
+}
+
+/// The index of the turn's last input that the running run received: the last event with a `received_at` stamp.
+pub fn last_received_index(turn: &[Value]) -> Option<usize> {
+  turn.iter().rposition(|event| event["received_at"].is_string())
+}
+
+/// The provenance fragment of the turn's last received input when that input is a child report, else `None`. The
+/// dispatcher answers it as the prompt builder does, so the reminder quotes the report as the prompt renders it.
+async fn last_input_provenance(features: &FeatureContext, turn: &[Value]) -> anyhow::Result<Option<String>> {
+  let Some(index) = last_received_index(turn) else { return Ok(None) };
+  let input = &turn[index];
+  if input["type"] != CHILD_REPORT {
+    return Ok(None);
+  }
+  let child_id = field_text(input.get(CHILD_SESSION_ID));
+  Ok(crate::dispatch::dispatcher(features)?.child_report_provenance(&child_id).await?)
 }
 
 /// The turn's received inputs, each with the moment the running run received it, from the `received_at` stamps.
@@ -377,7 +272,10 @@ pub(crate) async fn checkpoint(
   }
 
   let checkout = features.startup.require::<RepoRoot>()?;
-  let entries = load_entries(&checkout)?;
+  let names = load_check_names(&checkout)?;
+  if let Some(name) = names.iter().find(|name| !features.registry.answers_turn_end_check(name)) {
+    anyhow::bail!("turn-end check {name} in {HOOKS_FILE} is answered by no registered contribution");
+  }
   let input = TurnInput {
     session_id: session_id.to_string(),
     kind: owner.as_ref().map(|(kind, _)| (*kind).to_string()),
@@ -385,10 +283,11 @@ pub(crate) async fn checkpoint(
     // Past the pending check, a block in this turn has run its continuation, and this checkpoint judges that run.
     continuation_failed: exit_code != 0 && log.turn.iter().any(is_block_record),
     status: log.status.clone(),
+    last_input_provenance: last_input_provenance(features, &log.turn).await?,
     turn: log.turn.clone(),
   };
-  let mut ran = run_entries(&entries, &input, checkout.path(), ENTRY_TIMEOUT).await?;
   let contribution = owner.as_ref().map(|(_, contribution)| contribution);
+  let mut ran = run_checks(&names, contribution, features, &input, ENTRY_TIMEOUT).await;
   for run in &mut ran {
     let Outcome::Pass { notice: Some(message) } = &run.outcome else { continue };
     let delivered = deliver_notice(features, session_id, contribution, &log.turn, &run.name, message).await;
@@ -490,14 +389,12 @@ fn result_json(run: &Ran) -> Value {
 #[cfg(test)]
 mod tests {
   use charliebot_core::event_types::{ERROR, SCHEDULED_TRIGGER, USER};
+  use std::path::Path;
+
   use charliebot_registry::{Registry, RegistryError};
   use futures_util::future::BoxFuture;
 
   use super::*;
-
-  fn entry(name: &str, command: &str) -> Entry {
-    Entry { name: name.to_string(), command: command.to_string() }
-  }
 
   fn input(turn: Vec<Value>) -> TurnInput {
     TurnInput {
@@ -506,6 +403,7 @@ mod tests {
       exit_code: 0,
       continuation_failed: false,
       status: Value::Null,
+      last_input_provenance: None,
       turn,
     }
   }
@@ -519,148 +417,50 @@ mod tests {
     json!({"name": name, "result": "block", "reason": reason})
   }
 
-  #[test]
-  fn a_stop_hook_answer_reads_by_exit_code_and_stdout() {
-    assert_eq!(outcome_of(Some(0), "", ""), Outcome::Pass { notice: None });
-    assert_eq!(
-      outcome_of(Some(0), r#"{"decision": "block", "reason": "post the reply"}"#, ""),
-      Outcome::Block { reason: "post the reply".to_string() }
-    );
-    assert_eq!(
-      outcome_of(Some(0), r#"{"systemMessage": "the thread was told"}"#, ""),
-      Outcome::Pass { notice: Some("the thread was told".to_string()) }
-    );
-    assert_eq!(outcome_of(Some(2), "", "missing reply\n"), Outcome::Block { reason: "missing reply".to_string() });
-    assert_eq!(
-      outcome_of(Some(2), r#"{"decision":"block","reason":"JSON reason"}"#, "stderr reason"),
-      Outcome::Block { reason: "JSON reason".to_string() }
-    );
-    assert_eq!(
-      outcome_of(Some(2), r#"{"decision":"block","reason":"JSON reason"}"#, ""),
-      Outcome::Block { reason: "JSON reason".to_string() }
-    );
+  /// The check list that names `names` in order.
+  fn hooks(names: &[&str]) -> String {
+    serde_json::to_string(names).unwrap()
   }
 
-  #[test]
-  fn a_command_error_is_an_error_and_never_a_pass_or_a_block() {
-    assert!(matches!(outcome_of(Some(0), "not json", ""), Outcome::Error { .. }));
-    assert!(matches!(outcome_of(Some(0), r#"["a list"]"#, ""), Outcome::Error { .. }));
-    assert!(matches!(outcome_of(Some(0), r#"{"decision": "block"}"#, ""), Outcome::Error { .. }));
-    assert!(matches!(outcome_of(Some(2), "", ""), Outcome::Error { .. }));
-    assert!(matches!(outcome_of(Some(1), "", "boom"), Outcome::Error { message } if message == "exit 1: boom"));
-    assert!(matches!(outcome_of(None, "", ""), Outcome::Error { .. }));
-  }
-
-  #[test]
-  fn failure_and_quota_finish_extras_skip_the_normal_checkpoint() {
-    let mut failure = serde_json::Map::new();
-    failure.insert(crate::master_run::FINISH_FAILURE_REASON.to_string(), json!("quota"));
-    let mut quota = serde_json::Map::new();
-    quota.insert(crate::master_run::FINISH_QUOTA_EXHAUSTED.to_string(), json!(true));
-    assert!(skips_checkpoint(&failure));
-    assert!(skips_checkpoint(&quota));
-    assert!(!skips_checkpoint(&serde_json::Map::new()));
-  }
-
-  #[tokio::test]
-  async fn the_shared_input_reaches_each_command_on_stdin_and_a_failure_is_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let entries = [entry("echo-input", "cat > input.json; exit 0"), entry("fails", "exit 3")];
-    let ran =
-      run_entries(&entries, &input(vec![json!({"id": "u1"})]), dir.path(), Duration::from_secs(5)).await.unwrap();
-
-    let received: Value =
-      serde_json::from_str(&std::fs::read_to_string(dir.path().join("input.json")).unwrap()).unwrap();
-    assert_eq!(received["session_id"], "synthetic-session");
-    assert_eq!(received["turn"][0]["id"], "u1");
-    assert_eq!(ran[0].outcome, Outcome::Pass { notice: None });
-    assert!(matches!(&ran[1].outcome, Outcome::Error { message } if message == "exit 3"), "{:?}", ran[1]);
-  }
-
-  // The limit is far shorter than the real one so this case stays a fast unit test.
-  #[tokio::test]
-  async fn a_command_past_its_time_limit_is_an_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let entries = [entry("hangs", "sleep 30")];
-    let ran = run_entries(&entries, &input(vec![]), dir.path(), Duration::from_millis(20)).await.unwrap();
-
-    assert!(matches!(&ran[0].outcome, Outcome::Error { message } if message.starts_with("timed out")), "{:?}", ran[0]);
-  }
-
-  #[test]
-  fn a_block_continues_with_each_blocked_entry_named_in_the_prompt() {
-    let record = record(
-      "r1",
-      json!([
-        {"name": "web-reply", "result": "pass"},
-        block_result("web-reply", "answer the question"),
-        block_result("web-status", "set the status"),
-      ]),
-    );
-    assert_eq!(continuation_prompt(&record), "web-reply: answer the question\n\nweb-status: set the status");
-  }
-
-  #[test]
-  fn the_four_crash_states_read_from_the_log() {
-    // 1. No block in the turn: the checkpoint runs the list.
-    assert_eq!(pending_block(&[json!({"type": "user", "id": "u1"})]), None);
-
-    // 2. A block recorded, nothing after it: the continuation has not run, so it resumes with the stored reason.
-    let blocked = record("r1", json!([block_result("web-reply", "answer")]));
-    assert_eq!(pending_block(std::slice::from_ref(&blocked)), Some(0));
-
-    // 3. A block recorded, and its reason shown (the display is not a continuation): still resumes.
-    let shown = json!({"type": AGENT_MESSAGE, "id": "m1", TURN_HOOKS_ID: "r1", "content": "answer"});
-    assert_eq!(pending_block(&[blocked.clone(), shown.clone()]), Some(0));
-
-    // 4. A block recorded, then a continuation event: the continuation ran, so nothing is pending and the checkpoint
-    // runs the list again.
-    let reply = json!({"type": "web_reply", "id": "w1"});
-    assert_eq!(pending_block(&[blocked, shown, reply]), None);
-  }
-
-  #[test]
-  fn a_later_list_run_after_a_continuation_is_not_a_pending_block() {
-    let blocked = record("r1", json!([block_result("web-reply", "answer")]));
-    let passed = record("r2", json!([{"name": "web-reply", "result": "pass"}]));
-    assert_eq!(pending_block(&[blocked, passed]), None);
-  }
-
-  #[test]
-  fn the_cap_counts_the_block_records_before_the_turn_ends() {
-    let block = record("r", json!([block_result("web-reply", "answer")]));
-    let turn: Vec<Value> = (0..MAX_CONTINUATIONS).map(|_| block.clone()).collect();
-    assert_eq!(blocks_before(&turn, turn.len()), MAX_CONTINUATIONS);
-    assert_eq!(blocks_before(&turn, 0), 0);
-  }
-
-  #[test]
-  fn a_received_input_carries_its_receipt_time() {
-    let turn =
-      [json!({"type": "user", "id": "u1", "received_at": "2026-01-01T00:00:01Z"}), json!({"type": "user", "id": "u2"})];
-    let receipts = received_receipts(&turn).unwrap();
-    assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].input_event_id, "u1");
-    assert_eq!(receipts[0].at, UtcDateTime::parse("2026-01-01T00:00:01Z").unwrap());
-  }
-
-  /// A turn-end list with one entry `gate` that runs `command`.
-  fn gate_list(command: &str) -> String {
-    json!([{"name": "gate", "command": command}]).to_string()
-  }
-
-  /// Blocks until the turn holds a continuation's event, then passes.
-  const GATE_PASSES_AFTER_CONTINUATION: &str =
-    "grep -q continuation_ran && exit 0; printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'";
-  const GATE_ALWAYS_BLOCKS: &str = "printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'";
-  /// Blocks, and on a failed continuation answers its second miss with a notice.
-  const GATE_NOTICES_A_FAILED_CONTINUATION: &str = concat!(
-    "if grep -q '\"continuation_failed\":true'; then printf '{\"systemMessage\":\"failed continuation\"}'; ",
-    "else printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'; fi"
-  );
+  /// The names the test contribution answers. Each answers from the turn's events, as the web checks do.
+  const TEST_CHECKS: [&str; 8] = [
+    "pass-after-continuation",
+    "always-blocks",
+    "always-blocks-two",
+    "web-status",
+    "notice-after-failed-continuation",
+    "notice-after-continuation",
+    "fails",
+    "hangs",
+  ];
 
   /// The event that `AttachingTurns` persists for each notice it attaches.
   const ATTACHED_NOTICE: &str = "test_attached_notice";
+
+  /// The test checks' answers. A block carries the reason `needs work`.
+  async fn answer(name: &str, input: &TurnInput) -> anyhow::Result<CheckResult> {
+    let block = CheckResult::Block("needs work".to_string());
+    let continued = input.turn.iter().any(|event| event["type"] == "continuation_ran");
+    match name {
+      // Blocks until the turn holds a continuation's event, then passes.
+      "pass-after-continuation" => Ok(if continued { CheckResult::Pass } else { block }),
+      "always-blocks" | "always-blocks-two" | "web-status" => Ok(block),
+      // Blocks, and on a failed continuation answers its second miss with a notice.
+      "notice-after-failed-continuation" => {
+        Ok(if input.continuation_failed { CheckResult::Notice("failed continuation".to_string()) } else { block })
+      }
+      // Blocks until the turn holds a continuation's event, then passes with a notice.
+      "notice-after-continuation" => {
+        Ok(if continued { CheckResult::Notice("needs a look".to_string()) } else { block })
+      }
+      "fails" => anyhow::bail!("the check failed"),
+      "hangs" => {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        Ok(CheckResult::Pass)
+      }
+      other => anyhow::bail!("no test check named {other}"),
+    }
+  }
 
   /// A turn contribution that owns every manager session's turn-end checks, as the web contribution does for web
   /// sessions. It attaches a notice when the turn holds a user message, and has no message to attach to otherwise.
@@ -669,6 +469,19 @@ mod tests {
   impl TurnContribution for AttachingTurns {
     fn turn_kind(&self, _meta: &SessionMetadata) -> Option<&'static str> {
       Some("web")
+    }
+
+    fn turn_end_check_names(&self) -> &'static [&'static str] {
+      &TEST_CHECKS
+    }
+
+    fn run_turn_end_check<'a>(
+      &'a self,
+      name: &'a str,
+      _features: &'a Arc<FeatureContext>,
+      input: &'a TurnInput,
+    ) -> BoxFuture<'a, anyhow::Result<CheckResult>> {
+      Box::pin(async move { answer(name, input).await })
     }
 
     fn show_turn_notice<'a>(
@@ -718,15 +531,104 @@ mod tests {
     turn.iter().filter(|event| event["type"] == event_type).count()
   }
 
+  #[test]
+  fn a_block_continues_with_each_blocked_entry_named_in_the_prompt() {
+    let record = record(
+      "r1",
+      json!([
+        {"name": "web-reply", "result": "pass"},
+        block_result("web-reply", "answer the question"),
+        block_result("web-status", "set the status"),
+      ]),
+    );
+    assert_eq!(continuation_prompt(&record), "web-reply: answer the question\n\nweb-status: set the status");
+  }
+
+  #[test]
+  fn failure_and_quota_finish_extras_skip_the_normal_checkpoint() {
+    let mut failure = serde_json::Map::new();
+    failure.insert(crate::master_run::FINISH_FAILURE_REASON.to_string(), json!("quota"));
+    let mut quota = serde_json::Map::new();
+    quota.insert(crate::master_run::FINISH_QUOTA_EXHAUSTED.to_string(), json!(true));
+    assert!(skips_checkpoint(&failure));
+    assert!(skips_checkpoint(&quota));
+    assert!(!skips_checkpoint(&serde_json::Map::new()));
+  }
+
+  #[tokio::test]
+  async fn a_check_past_its_time_limit_is_an_error() {
+    let home = tempfile::tempdir().unwrap();
+    let (features, _meta) = checkpoint_session(home.path(), &hooks(&["hangs"]), "turn-hooks-timeout").await;
+    let owner: Arc<dyn TurnContribution> = Arc::new(AttachingTurns);
+
+    let ran =
+      run_checks(&["hangs".to_string()], Some(&owner), &features, &input(vec![]), Duration::from_millis(20)).await;
+
+    assert!(matches!(&ran[0].outcome, Outcome::Error { message } if message.starts_with("timed out")), "{:?}", ran[0]);
+  }
+
+  #[tokio::test]
+  async fn a_list_name_no_contribution_answers_fails_the_checkpoint() {
+    let home = tempfile::tempdir().unwrap();
+    let (features, meta) = checkpoint_session(home.path(), &hooks(&["no-such-check"]), "turn-hooks-unknown").await;
+
+    let error = checkpoint(&features, &meta.id, &meta, 0, true).await.unwrap_err();
+    assert!(format!("{error:#}").contains("no-such-check"), "{error:#}");
+  }
+
+  #[test]
+  fn the_four_crash_states_read_from_the_log() {
+    // 1. No block in the turn: the checkpoint runs the list.
+    assert_eq!(pending_block(&[json!({"type": "user", "id": "u1"})]), None);
+
+    // 2. A block recorded, nothing after it: the continuation has not run, so it resumes with the stored reason.
+    let blocked = record("r1", json!([block_result("web-reply", "answer")]));
+    assert_eq!(pending_block(std::slice::from_ref(&blocked)), Some(0));
+
+    // 3. A block recorded, and its reason shown (the display is not a continuation): still resumes.
+    let shown = json!({"type": AGENT_MESSAGE, "id": "m1", TURN_HOOKS_ID: "r1", "content": "answer"});
+    assert_eq!(pending_block(&[blocked.clone(), shown.clone()]), Some(0));
+
+    // 4. A block recorded, then a continuation event: the continuation ran, so nothing is pending and the checkpoint
+    // runs the list again.
+    let reply = json!({"type": "web_reply", "id": "w1"});
+    assert_eq!(pending_block(&[blocked, shown, reply]), None);
+  }
+
+  #[test]
+  fn a_later_list_run_after_a_continuation_is_not_a_pending_block() {
+    let blocked = record("r1", json!([block_result("web-reply", "answer")]));
+    let passed = record("r2", json!([{"name": "web-reply", "result": "pass"}]));
+    assert_eq!(pending_block(&[blocked, passed]), None);
+  }
+
+  #[test]
+  fn the_cap_counts_the_block_records_before_the_turn_ends() {
+    let block = record("r", json!([block_result("web-reply", "answer")]));
+    let turn: Vec<Value> = (0..MAX_CONTINUATIONS).map(|_| block.clone()).collect();
+    assert_eq!(blocks_before(&turn, turn.len()), MAX_CONTINUATIONS);
+    assert_eq!(blocks_before(&turn, 0), 0);
+  }
+
+  #[test]
+  fn a_received_input_carries_its_receipt_time() {
+    let turn =
+      [json!({"type": "user", "id": "u1", "received_at": "2026-01-01T00:00:01Z"}), json!({"type": "user", "id": "u2"})];
+    let receipts = received_receipts(&turn).unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].input_event_id, "u1");
+    assert_eq!(receipts[0].at, UtcDateTime::parse("2026-01-01T00:00:01Z").unwrap());
+  }
+
   #[tokio::test]
   async fn a_block_replays_without_a_second_record_until_its_continuation_runs_then_passes() {
     let home = tempfile::tempdir().unwrap();
     let (features, meta) =
-      checkpoint_session(home.path(), &gate_list(GATE_PASSES_AFTER_CONTINUATION), "turn-hooks-pass").await;
+      checkpoint_session(home.path(), &hooks(&["pass-after-continuation"]), "turn-hooks-pass").await;
     let session_id = &meta.id;
 
     let first = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
-    assert_eq!(first, Checkpoint::Continue("gate: needs work".to_string()));
+    assert_eq!(first, Checkpoint::Continue("pass-after-continuation: needs work".to_string()));
 
     // A restart before the continuation ran replays the same block: no second record and no second reason.
     let replayed = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
@@ -748,11 +650,11 @@ mod tests {
   async fn a_continuation_that_errors_reaches_its_block_as_the_second_miss() {
     let home = tempfile::tempdir().unwrap();
     let (features, meta) =
-      checkpoint_session(home.path(), &gate_list(GATE_NOTICES_A_FAILED_CONTINUATION), "turn-hooks-failed").await;
+      checkpoint_session(home.path(), &hooks(&["notice-after-failed-continuation"]), "turn-hooks-failed").await;
     let session_id = &meta.id;
 
     let first = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
-    assert_eq!(first, Checkpoint::Continue("gate: needs work".to_string()));
+    assert_eq!(first, Checkpoint::Continue("notice-after-failed-continuation: needs work".to_string()));
     append(&features, session_id, json!({"type": "assistant_error", "id": "e1", "content": "Agent error"})).await;
 
     // The continuation exited with an error: its checkpoint judges that block's second miss, passing with the notice.
@@ -766,12 +668,12 @@ mod tests {
   #[tokio::test]
   async fn a_block_that_never_passes_continues_eight_times_then_the_turn_ends() {
     let home = tempfile::tempdir().unwrap();
-    let (features, meta) = checkpoint_session(home.path(), &gate_list(GATE_ALWAYS_BLOCKS), "turn-hooks-cap").await;
+    let (features, meta) = checkpoint_session(home.path(), &hooks(&["always-blocks"]), "turn-hooks-cap").await;
     let session_id = &meta.id;
 
     for continuation in 1..=MAX_CONTINUATIONS {
       let answer = checkpoint(&features, session_id, &meta, 0, true).await.unwrap();
-      assert_eq!(answer, Checkpoint::Continue("gate: needs work".to_string()), "continuation {continuation}");
+      assert_eq!(answer, Checkpoint::Continue("always-blocks: needs work".to_string()), "continuation {continuation}");
       append(&features, session_id, json!({"type": "continuation_ran", "id": format!("c{continuation}")})).await;
     }
     assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
@@ -783,7 +685,7 @@ mod tests {
   #[tokio::test]
   async fn a_failing_check_is_shown_and_ends_the_turn_without_continuing() {
     let home = tempfile::tempdir().unwrap();
-    let (features, meta) = checkpoint_session(home.path(), &gate_list("exit 3"), "turn-hooks-error").await;
+    let (features, meta) = checkpoint_session(home.path(), &hooks(&["fails"]), "turn-hooks-error").await;
     let session_id = &meta.id;
 
     assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
@@ -792,18 +694,14 @@ mod tests {
     assert_eq!(record["results"][0]["result"], "error");
     let errors: Vec<&Value> = turn.iter().filter(|event| event["type"] == ERROR).collect();
     assert_eq!(errors.len(), 1);
-    assert!(errors[0]["message"].as_str().unwrap().starts_with("Turn-end check gate failed: "), "{}", errors[0]);
+    assert!(errors[0]["message"].as_str().unwrap().starts_with("Turn-end check fails failed: "), "{}", errors[0]);
   }
 
   #[tokio::test]
   async fn a_block_reason_shows_before_a_later_entry_errors_and_ends_the_turn() {
     let home = tempfile::tempdir().unwrap();
-    let hooks = json!([
-      {"name": "test-gate", "command": GATE_ALWAYS_BLOCKS},
-      {"name": "test-failing", "command": "exit 3"},
-    ])
-    .to_string();
-    let (features, meta) = checkpoint_session(home.path(), &hooks, "turn-hooks-block-then-error").await;
+    let (features, meta) =
+      checkpoint_session(home.path(), &hooks(&["always-blocks", "fails"]), "turn-hooks-block-then-error").await;
     let session_id = &meta.id;
 
     assert_eq!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Finish);
@@ -811,10 +709,12 @@ mod tests {
     let reason = turn
       .iter()
       .position(|event| {
-        event["type"] == AGENT_MESSAGE && event["from_session_name"] == "test-gate" && event["content"] == "needs work"
+        event["type"] == AGENT_MESSAGE
+          && event["from_session_name"] == "always-blocks"
+          && event["content"] == "needs work"
       })
       .expect("the block's reason is shown to the agent");
-    let error = turn.iter().position(|event| event["type"] == ERROR).expect("the failing entry's error is shown");
+    let error = turn.iter().position(|event| event["type"] == ERROR).expect("the failing check's error is shown");
     assert!(reason < error, "the reason shows before the error that ends the turn");
     assert_eq!(count_of(&turn, TURN_HOOKS), 1);
   }
@@ -822,7 +722,7 @@ mod tests {
   #[tokio::test]
   async fn a_block_without_a_conversation_ends_the_turn_with_a_message() {
     let home = tempfile::tempdir().unwrap();
-    let (features, meta) = checkpoint_session(home.path(), &gate_list(GATE_ALWAYS_BLOCKS), "turn-hooks-no-chat").await;
+    let (features, meta) = checkpoint_session(home.path(), &hooks(&["always-blocks"]), "turn-hooks-no-chat").await;
     let session_id = &meta.id;
 
     assert_eq!(checkpoint(&features, session_id, &meta, 0, false).await.unwrap(), Checkpoint::Finish);
@@ -835,13 +735,12 @@ mod tests {
   #[tokio::test]
   async fn each_block_of_a_web_session_is_shown_under_its_own_entry_name() {
     let home = tempfile::tempdir().unwrap();
-    let hooks = json!([
-      {"name": "test-gate", "command": GATE_ALWAYS_BLOCKS},
-      {"name": "test-gate-two", "command": GATE_ALWAYS_BLOCKS},
-      {"name": "web-status", "command": GATE_ALWAYS_BLOCKS},
-    ])
-    .to_string();
-    let (features, meta) = checkpoint_session(home.path(), &hooks, "turn-hooks-sender").await;
+    let (features, meta) = checkpoint_session(
+      home.path(),
+      &hooks(&["always-blocks", "always-blocks-two", "web-status"]),
+      "turn-hooks-sender",
+    )
+    .await;
     let session_id = &meta.id;
 
     assert!(matches!(checkpoint(&features, session_id, &meta, 0, true).await.unwrap(), Checkpoint::Continue(_)));
@@ -851,20 +750,14 @@ mod tests {
       .filter(|event| event["type"] == AGENT_MESSAGE)
       .map(|event| event["from_session_name"].as_str().unwrap())
       .collect();
-    assert_eq!(senders, ["test-gate", "test-gate-two", "web-status"]);
+    assert_eq!(senders, ["always-blocks", "always-blocks-two", "web-status"]);
   }
-
-  /// A gate that blocks until the turn holds a continuation's event, then passes with the notice `needs a look`.
-  const GATE_NOTICES_AFTER_CONTINUATION: &str = concat!(
-    "grep -q continuation_ran && { printf '{\"systemMessage\":\"needs a look\"}'; exit 0; }; ",
-    "printf '{\"decision\":\"block\",\"reason\":\"needs work\"}'",
-  );
 
   #[tokio::test]
   async fn a_trigger_turn_notice_is_posted_once_under_the_entry_name() {
     let home = tempfile::tempdir().unwrap();
     let (features, meta) =
-      checkpoint_session(home.path(), &gate_list(GATE_NOTICES_AFTER_CONTINUATION), "turn-hooks-trigger-notice").await;
+      checkpoint_session(home.path(), &hooks(&["notice-after-continuation"]), "turn-hooks-trigger-notice").await;
     let session_id = &meta.id;
     append(&features, session_id, json!({"type": SCHEDULED_TRIGGER, "id": "t1", "content": "wake"})).await;
 
@@ -879,14 +772,14 @@ mod tests {
     let notices: Vec<&Value> =
       turn.iter().filter(|event| event["type"] == AGENT_MESSAGE && event["content"] == "needs a look").collect();
     assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0]["from_session_name"], "gate");
+    assert_eq!(notices[0]["from_session_name"], "notice-after-continuation");
   }
 
   #[tokio::test]
   async fn a_user_message_turn_notice_attaches_through_the_contribution_and_posts_none() {
     let home = tempfile::tempdir().unwrap();
     let (features, meta) =
-      checkpoint_session(home.path(), &gate_list(GATE_NOTICES_AFTER_CONTINUATION), "turn-hooks-user-notice").await;
+      checkpoint_session(home.path(), &hooks(&["notice-after-continuation"]), "turn-hooks-user-notice").await;
     let session_id = &meta.id;
     append(&features, session_id, json!({"type": USER, "id": "u1", "content": "the question"})).await;
 

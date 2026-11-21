@@ -2153,10 +2153,15 @@ impl TaskExecutionAdapter {
         .is_some_and(|backends| !backends.is_empty())
   }
 
-  /// The stable run id of the retry one run's quota failover registers (`_failover_retry_id`). The recovery replay
-  /// tells that retry from an operator's with it.
-  pub(crate) fn failover_retry_id(session_id: &str, run_id: &str) -> String {
+  /// The request id of the retry one run's quota failover registers. The store derives the retry's id from it.
+  pub(crate) fn failover_request_id(session_id: &str, run_id: &str) -> String {
     control_events::stable_run_id(session_id, &format!("quota-failover:{run_id}"))
+  }
+
+  /// The stored id of the retry one run's quota failover registers. The recovery replay compares it with the retry
+  /// records to tell that retry from an operator's.
+  pub(crate) fn failover_retry_id(session_id: &str, run_id: &str) -> String {
+    control_events::stable_run_id(session_id, &Self::failover_request_id(session_id, run_id))
   }
 
   /// Continue a failed run on the next member of its pool, as one retry run. A session whose backend is a pool id
@@ -2202,7 +2207,7 @@ impl TaskExecutionAdapter {
       &self.features.store,
       &cfg,
       &meta.id,
-      &Self::failover_retry_id(&meta.id, &run.id),
+      &Self::failover_request_id(&meta.id, &run.id),
       &run.id,
       Some(&member),
       Some(run.input_event_ids.clone()),
@@ -3369,10 +3374,11 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
 #[cfg(test)]
 mod tests {
   use super::{
-    free_disk_gib, free_disk_gib_from_statvfs, is_out_of_space_error, native_continuation_matches,
-    nearest_existing_ancestor, pre_recovery_step,
+    TaskExecutionAdapter, free_disk_gib, free_disk_gib_from_statvfs, is_out_of_space_error,
+    native_continuation_matches, nearest_existing_ancestor, pre_recovery_step,
   };
   use charliebot_core::config::BackendOption;
+  use charliebot_store::control_events;
 
   #[test]
   fn out_of_space_errors_are_found_through_context_and_cause() {
@@ -3749,5 +3755,16 @@ mod tests {
     assert_eq!(after.folded_events - before.folded_events, event_count);
     assert_eq!(after.owned_event_clones - before.owned_event_clones, 0, "builders select from the shared event list");
     assert_eq!(current.kind, RunKind::Work);
+  }
+
+  /// The replay looks for the retry a failover registers. The store gives that retry the stable run id of the request,
+  /// so the id the replay compares is that stored id, not the request id.
+  #[test]
+  fn failover_retry_id_is_the_stored_id_of_the_failover_request() {
+    let request = TaskExecutionAdapter::failover_request_id("session-id", "run-id");
+    assert_eq!(
+      TaskExecutionAdapter::failover_retry_id("session-id", "run-id"),
+      control_events::stable_run_id("session-id", &request)
+    );
   }
 }

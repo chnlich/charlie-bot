@@ -21,6 +21,25 @@ pub fn child_report_text(report: &Value, provenance: Option<&str>) -> String {
   format!("{header} | outcome {}] {}", field_text(report.get("outcome")), truthy_field_text(report.get("summary")))
 }
 
+/// The text an input event carries, without the framing line the prompt adds for its kind. A child report has no
+/// content, so its text is its rendered report; every other input's text is its content. The turn-end reminder quotes
+/// this text as well, so the prompt and the reminder read one renderer.
+pub fn input_text(event: &Value, provenance: Option<&str>) -> String {
+  if event["type"] == event_types::CHILD_REPORT {
+    return child_report_text(event, provenance);
+  }
+  event["content"].as_str().unwrap_or_default().to_string()
+}
+
+/// The provenance fragment of a child report event's child, or `None` for any other input.
+fn report_provenance_of<'a>(event: &Value, report_provenance: &'a Map<String, Value>) -> Option<&'a str> {
+  if event["type"] != event_types::CHILD_REPORT {
+    return None;
+  }
+  let child_id = field_text(event.get(event_types::CHILD_SESSION_ID));
+  report_provenance.get(&child_id).and_then(Value::as_str)
+}
+
 /// Compose the manager input prompt and uploaded-file list from the claimed facts.
 pub fn compose_input_prompt(
   features: &FeatureContext,
@@ -32,11 +51,12 @@ pub fn compose_input_prompt(
   let mut uploads = Vec::new();
   for event in events {
     let event_type = event.get("type").and_then(CompactValue::as_str).unwrap_or_default();
-    let content = event.get("content").and_then(CompactValue::as_str).unwrap_or_default();
+    let value = event.to_value();
+    let body = input_text(&value, report_provenance_of(&value, report_provenance));
     let text = match event_type {
-      event_types::USER => match features.registry.input_preamble(meta, &event.to_value()) {
-        Some(preamble) => format!("{preamble}\n{content}"),
-        None => content.to_string(),
+      event_types::USER => match features.registry.input_preamble(meta, &value) {
+        Some(preamble) => format!("{preamble}\n{body}"),
+        None => body,
       },
       event_types::AGENT_MESSAGE => {
         let source = event
@@ -45,17 +65,11 @@ pub fn compose_input_prompt(
           .filter(|name| !name.is_empty())
           .or_else(|| event.get(event_types::FROM_SESSION).and_then(CompactValue::as_str).filter(|id| !id.is_empty()))
           .unwrap_or("unknown");
-        format!("[Message from session {source}] {content}")
+        format!("[Message from session {source}] {body}")
       }
-      event_types::CHILD_REPORT => {
-        let report = event.to_value();
-        let child_id = field_text(report.get(event_types::CHILD_SESSION_ID));
-        let provenance = report_provenance.get(&child_id).and_then(Value::as_str);
-        child_report_text(&report, provenance)
-      }
-      event_types::SCHEDULED_TRIGGER => format!("[Scheduled trigger] {content}"),
-      event_types::DRAFT_SENT => format!("[Draft sent] {content}"),
-      _ => content.to_string(),
+      event_types::SCHEDULED_TRIGGER => format!("[Scheduled trigger] {body}"),
+      event_types::DRAFT_SENT => format!("[Draft sent] {body}"),
+      _ => body,
     };
     let event_uploads = event
       .get(event_types::UPLOADED_FILES)

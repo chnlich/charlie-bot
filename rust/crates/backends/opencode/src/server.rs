@@ -35,7 +35,7 @@ use super::protocol;
 use super::relay::{self, ServerRecord, TurnRecord};
 use charliebot_agents::cli_base::apply_proxy_env;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
-use charliebot_agents::transport::identity::read_pid_stat;
+use charliebot_agents::transport::identity::{is_same_process, read_pid_stat};
 use charliebot_agents::transport::kill::kill_process_group;
 use charliebot_agents::transport::spawn::{SpawnSetup, SpawnSpec, SpawnedChild, spawn_detached_files};
 use charliebot_store::metadata::MetadataReadError;
@@ -276,7 +276,7 @@ impl OpenCodeServerPool {
         })?;
         if record.ended_at.is_some()
           || !record.backend.as_ref().is_some_and(|backend| opencode_backend_ids.contains(backend))
-          || !record.pid.zip(record.pid_start.as_deref()).is_some_and(|(pid, start)| relay::same_process(pid, start))
+          || !record.pid.zip(record.pid_start.as_deref()).is_some_and(|(pid, start)| is_same_process(pid, start))
         {
           continue;
         }
@@ -302,7 +302,7 @@ impl OpenCodeServerPool {
           anyhow::Error::new(error).context(format!("decoding OpenCode server record {}", record_path.display()))
         }
       })?;
-      if !relay::same_process(record.pid, &record.pid_start) {
+      if !is_same_process(record.pid, &record.pid_start) {
         continue;
       }
       groups.entry(turn.server_record.clone()).or_insert_with(|| (record, record_path, Vec::new())).2.push((
@@ -339,7 +339,7 @@ impl OpenCodeServerPool {
             anyhow::Error::new(error).context(format!("decoding OpenCode server record {}", entry.path().display()))
           }
         })?;
-        if relay::same_process(record.pid, &record.pid_start) {
+        if is_same_process(record.pid, &record.pid_start) {
           kill_process_group(record.pid, Signal::SIGTERM);
         }
         match fs::remove_file(entry.path()) {
@@ -668,7 +668,7 @@ impl OpenCodeServer {
 
   pub(crate) async fn failure_reason_after_stream_end(&self) -> Option<String> {
     let process = self.state.lock().expect("opencode server state mutex is not poisoned").process.clone()?;
-    if !relay::same_process(process.pid, &process.pid_start) {
+    if !is_same_process(process.pid, &process.pid_start) {
       return match wait_exit(&process).await {
         Ok(_) => self.failure_reason(),
         Err(error) => Some(format!("opencode serve wait failed: {error}")),
@@ -729,7 +729,7 @@ impl OpenCodeServer {
     let pid_start = record.pid_start;
     self.track(tokio::spawn(async move {
       loop {
-        if !relay::same_process(pid, &pid_start) {
+        if !is_same_process(pid, &pid_start) {
           let _ = exit_tx.send(Some(Ok(0)));
           return;
         }
@@ -754,7 +754,7 @@ impl OpenCodeServer {
     for turn in turns {
       self.track(tokio::spawn(async move {
         let start = turn.origin.pinned_start().expect("an adopted server holds only adopted turns");
-        while relay::same_process(turn.process_id, start) {
+        while is_same_process(turn.process_id, start) {
           tokio::time::sleep(Duration::from_millis(25)).await;
         }
         if let Err(error) = turn.finish().await {

@@ -64,6 +64,7 @@ class Cdp {
   constructor(writable, readable) {
     this.nextId = 1;
     this.pending = new Map();
+    this.listeners = new Map();
     this.buffer = '';
     this.writable = writable;
     readable.setEncoding('utf8');
@@ -74,7 +75,10 @@ class Cdp {
         if (end < 0) return;
         const message = JSON.parse(this.buffer.slice(0, end));
         this.buffer = this.buffer.slice(end + 1);
-        if (message.id === undefined) continue;
+        if (message.id === undefined) {
+          this.listeners.get(message.method)?.(message);
+          continue;
+        }
         const waiter = this.pending.get(message.id);
         this.pending.delete(message.id);
         if (message.error) waiter.reject(new Error(`${waiter.method}: ${message.error.message}`));
@@ -89,6 +93,10 @@ class Cdp {
       this.pending.set(id, { resolve, reject, method });
       this.writable.write(`${JSON.stringify(message)}\0`);
     });
+  }
+  // One listener per event method; it receives each event message of that method, with its sessionId.
+  on(method, listener) {
+    this.listeners.set(method, listener);
   }
   close() {
     for (const waiter of this.pending.values()) waiter.reject(new Error(`${waiter.method}: the browser closed`));
@@ -148,35 +156,52 @@ async function waitFor(page, expression, label, timeoutMs = 15000) {
   throw new Error(`the page never reached: ${label}`);
 }
 
+// Sets the Authorization header of one paused request. The key goes only to the base URL's origin: the page's own
+// Authorization header is dropped from every request, and the base URL's origin gets the key.
+async function answerPausedRequest(page, paused, origin) {
+  const headers = Object.entries(paused.request.headers)
+    .filter(([name]) => name.toLowerCase() !== 'authorization')
+    .map(([name, value]) => ({ name, value }));
+  if (new URL(paused.request.url).origin === origin) headers.push({ name: 'Authorization', value: `Bearer ${key}` });
+  await page.send('Fetch.continueRequest', { requestId: paused.requestId, headers });
+}
+
 async function capture(browser, url) {
   const { targetId } = await browser.cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await browser.cdp.send('Target.attachToTarget', { targetId, flatten: true });
   const page = { send: (method, params = {}) => browser.cdp.send(method, params, sessionId) };
+  const origin = new URL(baseUrl).origin;
+  let interceptFailure = null;
+  browser.cdp.on('Fetch.requestPaused', (message) => {
+    if (message.sessionId !== sessionId) return;
+    answerPausedRequest(page, message.params, origin).catch((error) => {
+      interceptFailure ??= error;
+      console.error(`live-shot: a paused request was not answered: ${error.message}`);
+    });
+  });
   try {
     await page.send('Page.enable');
     await page.send('Network.enable');
     await page.send('Runtime.enable');
-    await page.send('Network.setExtraHTTPHeaders', { headers: { Authorization: `Bearer ${key}` } });
+    await page.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
     await page.send('Emulation.setDeviceMetricsOverride', {
       width,
       height,
       deviceScaleFactor: 1,
       mobile: width < 600,
     });
-    // `/` is public, so this load needs no key. The page's own script reads the key from localStorage and mirrors it
-    // into the cookie, which is how a browser that unlocked the page carries the key; the capture writes both the same
-    // way, and every later request of the view then authenticates.
+    // `/` is public, so this load needs no key. The page's own script reads the key from localStorage, which only the
+    // CharlieBot origin can read, and sends it with its requests to that origin. Navigations carry no localStorage, so
+    // `answerPausedRequest` adds the header to each request of the view. No cookie is written: a cookie reaches every
+    // port on the host, not only this origin.
     await page.send('Page.navigate', { url: `${baseUrl}/` });
     await waitFor(page, 'document.readyState === "complete"', 'the server root');
-    await evaluate(
-      page,
-      `localStorage.setItem('charliebot_access_key', ${JSON.stringify(key)});` +
-        `document.cookie = 'charliebot_access_key=' + ${JSON.stringify(key)} + '; path=/; SameSite=Strict';`,
-    );
+    await evaluate(page, `localStorage.setItem('charliebot_access_key', ${JSON.stringify(key)});`);
     await page.send('Page.navigate', { url });
     await waitFor(page, 'document.readyState === "complete"', 'the loaded page');
     await sleep(1000);
     const { data } = await page.send('Page.captureScreenshot', { format: 'png' });
+    if (interceptFailure) throw interceptFailure;
     return Buffer.from(data, 'base64');
   } finally {
     await browser.cdp.send('Target.closeTarget', { targetId });

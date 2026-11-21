@@ -9,6 +9,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use charliebot_agents::pool_display::session_metadata_shown;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -184,7 +185,7 @@ async fn elone_session(
 /// field at its default and has no live-run fields. The response is therefore the spawn's metadata with
 /// those defaults.
 fn spawn_response(features: &FeatureContext, meta: &SessionMetadata) -> Response {
-  let value = features.store.session_metadata_value(meta);
+  let value = session_metadata_shown(&features.store, meta);
   responses::json(StatusCode::OK, &value)
 }
 

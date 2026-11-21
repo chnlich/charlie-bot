@@ -157,7 +157,7 @@ impl EventIdIndex {
 
   /// The index a checkpoint's covered events make, unparsed until a reference-based read asks for them.
   pub(crate) fn from_prefix(index: PrefixIndex) -> Self {
-    Self { prefix: Some(Arc::new(index)), ..Self::default() }
+    Self { by_hash: HashMap::new(), ordered: Vec::new(), prefix: Some(Arc::new(index)), materialized: OnceLock::new() }
   }
 
   pub fn get(&self, id: &str) -> Option<&SharedChatEvent> {

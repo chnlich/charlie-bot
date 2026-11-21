@@ -1,7 +1,8 @@
 //! Reads a served session home back against its manifest.
 //!
 //! The session count comes from the session list. That route reads only `metadata.json`, so the newest message is read
-//! from the events route of the largest session and of two sessions that the manifest seed picks.
+//! from the events route of the largest session and of two sessions that the manifest seed picks. Each scheduled task
+//! of the manifest must be listed by the task route, unbroken and bound to the manifest's session.
 
 use std::path::Path;
 use std::time::Duration;
@@ -9,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use charliebot_cli_common::http::ensure_crypto_provider;
 use charliebot_cli_common::route;
+use charliebot_cron::TASKS_PATH;
 use charliebot_session_api::api as session_routes;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
@@ -49,9 +51,10 @@ pub fn check(output: &Path, base_url: &str) -> Result<CheckOutcome> {
     return Ok(CheckOutcome::Mismatches);
   }
   println!(
-    "check passed: {} sessions; newest messages of {} sessions match {MANIFEST_NAME}",
+    "check passed: {} sessions; newest messages of {} sessions match {MANIFEST_NAME}; {} scheduled tasks are bound",
     manifest.session_count,
-    checked.len()
+    checked.len(),
+    manifest.cron_tasks.len()
   );
   Ok(CheckOutcome::Matches)
 }
@@ -107,6 +110,23 @@ async fn read_back(
         "session {}: manifest newest message {:?}, server newest message {served:?}",
         session.id, session.last_message
       ));
+    }
+  }
+
+  let tasks = get_json(&client, &format!("{base}{TASKS_PATH}"), headers).await?;
+  let listed_tasks = tasks.as_array().context("the scheduled task list is not a JSON array")?;
+  for task in &manifest.cron_tasks {
+    let row = listed_tasks.iter().find(|row| row["name"].as_str() == Some(task.name.as_str()));
+    match row {
+      None => failures.push(format!("scheduled task {}: the server lists no such task", task.name)),
+      Some(row) if row["broken"] == true => {
+        failures.push(format!("scheduled task {}: the server reads it as broken: {}", task.name, row["error"]));
+      }
+      Some(row) if row["session_id"].as_str() != Some(task.session_id.as_str()) => failures.push(format!(
+        "scheduled task {}: manifest session {}, server session {}",
+        task.name, task.session_id, row["session_id"]
+      )),
+      Some(_) => {}
     }
   }
   Ok(failures)

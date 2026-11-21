@@ -407,6 +407,13 @@
 
   // ---- Status panel --------------------------------------------------------
 
+  // A child's "name · short id" line, with the compact pool label after it when the child runs on a pool.
+  function childHead(child) {
+    const head = child.name + ' · ' + child.session_id.slice(0, 8);
+    if (!isPoolBackend(child.backend)) return head;
+    return head + ' · ' + sessionModelLabel(child.backend, child.pool_member, null, 'compact');
+  }
+
   // The descendants' items, grouped by session: one header per session, its
   // items under it with their contexts folded. A session with no items shows no group.
   function childrenRow() {
@@ -417,7 +424,7 @@
     for (const child of panelDescendants) {
       const group = document.createElement('div');
       group.className = 'space-y-1';
-      const header = textSpan('text-slate-400', child.name + ' · ' + child.session_id.slice(0, 8));
+      const header = textSpan('text-slate-400', childHead(child));
       header.dataset.childGroup = child.session_id;
       group.appendChild(header);
       const notice = headerNotices.get(child.session_id);
@@ -434,7 +441,7 @@
     const el = document.createElement('div');
     el.className = 'flex gap-2 break-words text-slate-200';
     el.dataset.childNowItem = 'true';
-    el.appendChild(textSpan('min-w-0', row.name + ' · ' + row.session_id.slice(0, 8) + ': ' + row.now));
+    el.appendChild(textSpan('min-w-0', childHead(row) + ': ' + row.now));
     const updated = textSpan('whitespace-nowrap text-slate-500', 'updated ' + relativeTime(row.updated_at));
     updated.dataset.statusUpdated = row.updated_at;
     el.appendChild(updated);

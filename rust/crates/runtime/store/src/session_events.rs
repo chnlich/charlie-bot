@@ -132,7 +132,12 @@ impl Store {
 
   /// Build a message aggregator with the event renderers registered for this store.
   pub fn new_message_aggregator(&self, event_index_offset: usize, emit_stream_deltas: bool) -> MessageAggregator {
-    MessageAggregator::with_renderers(event_index_offset, emit_stream_deltas, self.event_renderers.clone())
+    MessageAggregator::with_renderers(
+      event_index_offset,
+      emit_stream_deltas,
+      self.event_renderers.clone(),
+      self.config().backends.clone(),
+    )
   }
 
   /// Return the memoized message projection for an unarchived session.
@@ -151,7 +156,7 @@ impl Store {
     let cached = cache.get(session_id);
     let projection = match cached {
       Some(cached) if live.len() >= cached.event_count() => cached.advanced(&live[cached.event_count()..])?,
-      _ => MessageProjection::new(live.as_slice(), 0, self.event_renderers.clone())?,
+      _ => MessageProjection::new(live.as_slice(), 0, self.event_renderers.clone(), self.config().backends.clone())?,
     };
     let projection = Arc::new(projection);
     cache.store(session_id, Arc::clone(&projection));

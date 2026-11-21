@@ -108,7 +108,13 @@ mod tests {
     assert_eq!(delivered[0]["run_id"], run_id);
     let compact = delivered.iter().map(charliebot_store::ChatEvent::from_value).collect::<Vec<_>>();
     assert_eq!(
-      charliebot_store::projection::events_to_messages(&compact, 0, Default::default()).unwrap(),
+      charliebot_store::projection::events_to_messages(
+        &compact,
+        0,
+        Default::default(),
+        charliebot_core::config::BackendsConfig::default()
+      )
+      .unwrap(),
       Vec::<Value>::new()
     );
   }

@@ -744,14 +744,20 @@ const FUTURE_RESET: &str = "2999-01-02T03:04:05Z";
 /// `a_near_exhaustion_turn_start_switches_to_an_under_line_member` sets it, after that test's first turn has run.
 static MEMBER_A_NEAR_EXHAUSTION: AtomicBool = AtomicBool::new(false);
 
-/// The member reading of the near-exhaustion test: member-a is near its line while the flag is set, and its window
-/// resets at `FUTURE_RESET`. The other members read as under the line.
+/// Whether the reading holds member-a fully reserved: every login with headroom has all of it reserved by the runs
+/// placed on it. Only `a_fully_reserved_subscription_keeps_its_session_and_yields_a_new_one` sets it, after that test's
+/// first turn has run.
+static MEMBER_A_RESERVED: AtomicBool = AtomicBool::new(false);
+
+/// The member reading of the member tests: member-a is near its line while `MEMBER_A_NEAR_EXHAUSTION` is set, and fully
+/// reserved while `MEMBER_A_RESERVED` is set; its window resets at `FUTURE_RESET`. The other members read as open.
 fn register_member_reading(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.member_reading(
     BACKEND_TYPE,
     Arc::new(
       |_cfg: &CharlieBotConfig, option: &BackendOption, _now: UtcDateTime| -> anyhow::Result<Option<MemberReading>> {
         let near = option.id == MEMBER_A && MEMBER_A_NEAR_EXHAUSTION.load(Ordering::SeqCst);
+        let reserved = option.id == MEMBER_A && MEMBER_A_RESERVED.load(Ordering::SeqCst);
         let windows = if near {
           vec![MemberWindow {
             utilization: 0.92,
@@ -766,7 +772,7 @@ fn register_member_reading(registry: &mut Registry) -> Result<(), RegistryError>
           weekly_resets_at: None,
           near_exhaustion: near,
           exhausted: false,
-          fully_reserved: false,
+          fully_reserved: reserved,
         }))
       },
     ),
@@ -1048,5 +1054,67 @@ async fn a_turn_that_keeps_its_member_carries_no_switch_note() -> anyhow::Result
   assert!(quota_failovers(&stack, &session.id)?.is_empty(), "a kept member records no switch");
   assert!(!stack.store().run_dir(&session.id, &second).join(HANDOFF_NOTE_FILENAME).exists());
   assert!(!launch_text(&stack, &session.id, &second)?.contains("pool 'auto' switched"));
+  Ok(())
+}
+
+/// A subscription member whose logins' headroom is all reserved keeps the session already on it: its next turn starts
+/// there with no switch. A new session in the same state starts on the pay-as-you-go member.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_fully_reserved_subscription_keeps_its_session_and_yields_a_new_one() -> anyhow::Result<()> {
+  let reading: (&'static str, RegisterFn) = ("near-exhaustion-reading", register_member_reading);
+  let stack = Stack::start_with_package(
+    vec![subscription(MEMBER_A, &finished_turn_script()), payg(MEMBER_B, &success_script())],
+    Vec::new(),
+    reading,
+  )
+  .await?;
+  stack.write_access_key()?;
+  let mut cfg = stack.cfg.as_ref().clone();
+  cfg.backends.pools.push(auto_set());
+  stack.replace_config(cfg)?;
+  let session = auto_session(&stack, "auto-reserved-kept").await?;
+  let first = dispatch_turn(&stack, &session.id).await?;
+  settle(&stack, &session.id).await?;
+  MEMBER_A_RESERVED.store(true, Ordering::SeqCst);
+  let second = dispatch_turn(&stack, &session.id).await?;
+  wait_for_launch(&stack, &session.id, &second).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(run_with_id(&runs, &first).backend.as_deref(), Some(MEMBER_A));
+  assert_eq!(run_with_id(&runs, &second).backend.as_deref(), Some(MEMBER_A), "the session keeps its member");
+  assert!(quota_failovers(&stack, &session.id)?.is_empty(), "a kept member records no switch");
+
+  let fresh = auto_session(&stack, "auto-reserved-new").await?;
+  let new_turn = dispatch_turn(&stack, &fresh.id).await?;
+  wait_for_launch(&stack, &fresh.id, &new_turn).await?;
+  let new_runs = settle(&stack, &fresh.id).await?;
+  assert_eq!(
+    run_with_id(&new_runs, &new_turn).backend.as_deref(),
+    Some(MEMBER_B),
+    "a new session yields the fully reserved subscription to pay-as-you-go"
+  );
+  Ok(())
+}
+
+/// A pool turn whose process logs a rejection and then ends with a clean result is one run: it has no retry and records
+/// no quota failover, whatever its exit code.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_pool_turn_that_ends_cleanly_after_a_rejection_is_one_run() -> anyhow::Result<()> {
+  let rejected = json!({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":4102462800.0}});
+  let clean = json!({"type":"result","subtype":"success","is_error":false,"result":"done"});
+  let script = scripted_process(
+    &[rejected, json!({"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}), clean],
+    0,
+  );
+  let stack = auto_stack(&script, &success_script()).await?;
+  let session = auto_session(&stack, "auto-clean-after-rejection").await?;
+  let turn = dispatch_turn(&stack, &session.id).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(runs.len(), 1, "a clean end starts no retry: {runs:?}");
+  assert_eq!(run_with_id(&runs, &turn).backend.as_deref(), Some(MEMBER_A));
+  assert!(quota_failovers(&stack, &session.id)?.is_empty(), "a clean end records no quota failover");
   Ok(())
 }

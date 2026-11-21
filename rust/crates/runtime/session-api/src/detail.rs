@@ -352,7 +352,7 @@ fn bootstrap_body(
   let cached = match &inputs {
     Some(inputs) => match entry.as_ref() {
       Some((cached, body, gzip, untrimmed)) if cached.matches(inputs) => Some((body.clone(), gzip.clone(), *untrimmed)),
-      _ => None,
+      None | Some(_) => None,
     },
     None => None,
   };

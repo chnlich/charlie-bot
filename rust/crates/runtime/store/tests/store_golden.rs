@@ -13,6 +13,7 @@ use charliebot_core::run_token;
 use charliebot_registry::Registry;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::SequenceCompletion;
+use charliebot_store::layout::FACT_CHECKPOINT_FILE_NAME;
 use charliebot_store::metadata::{
   SessionMetadata, TASK_SCHEDULE_SLOTS, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime,
   read_metadata_object,
@@ -2008,6 +2009,8 @@ fn read_blockers(store: &Store) -> Value {
   json!({ "blockers": reasons })
 }
 
+/// The home's files for a parity comparison. The fact checkpoint is a Rust-only derived cache that a cold read writes
+/// and the Python reference never does, so the comparison leaves it out and covers every other file.
 fn normalized_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
   fn normalize(text: &str) -> Vec<u8> {
     use std::sync::OnceLock;
@@ -2033,7 +2036,7 @@ fn normalized_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
       let path = entry.path();
       if entry.file_type().unwrap().is_dir() {
         collect(root, &path, output);
-      } else {
+      } else if entry.file_name().to_str() != Some(FACT_CHECKPOINT_FILE_NAME) {
         let bytes = fs::read(&path).unwrap();
         let normalized = match std::str::from_utf8(&bytes) {
           Ok(text) => normalize(text),

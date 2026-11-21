@@ -29,11 +29,12 @@
 # It writes only ~/improve/<direction>/evidence/.
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file; 3 the host asks for a Tailscale
-# approval or cannot be reached; 4 the direction's clone is missing or is not this protocol's clone; 5 the previous
-# round of this direction still runs; 6 the round's direction cannot be read; 7 a round dependency is missing, and
-# stderr names it; 8 the member's login has less access-token life than a round needs, and stderr names the login
-# and its minutes left. Codes 3 to 8 start no agent and no scope, and codes 7 and 8 send nothing to the host. A code 7
-# for the member CLI means this host's `--version` output names no version; the install and its check are the runner's.
+# approval or cannot be reached; 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted
+# work that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 6 the round's
+# direction cannot be read; 7 a round dependency is missing, and stderr names it; 8 the member's login has less
+# access-token life than a round needs, and stderr names the login and its minutes left. Codes 3 to 8 start no agent
+# and no scope, and codes 7 and 8 send nothing to the host. A code 7 for the member CLI means this host's `--version`
+# output names no version; the install and its check are the runner's.
 #
 # The member's login is forwarded for one round: a subscription member sends its access token, the one the Claude CLI
 # or Codex reads, and the refresh token stays on this host. The token reaches the host on ssh's standard input only, so
@@ -357,6 +358,8 @@ cp -- "$member_kinds_file" "$payload/member_kinds.txt"
 # The runner sources the in-flight rule from this copy, so its clone scan uses
 # the same claimant and path functions as the list above.
 cp -- "$SCRIPT_DIR/inflight-files.sh" "$payload/inflight-files.sh"
+# The runner sources the clone's sync and check from this copy.
+cp -- "$SCRIPT_DIR/clone-check.sh" "$payload/clone-check.sh"
 # The runner clones its own checkout from this origin, so the round tools are built from the
 # runtime clone's repository and not from the direction clone's configuration.
 runtime_origin=$(git -C "$SCRIPT_DIR/../.." remote get-url origin 2>/dev/null) || runtime_origin=

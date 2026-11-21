@@ -21,11 +21,12 @@
 #
 # Exit codes: the agent's exit code; 1 a local failure, such as a missing input file or a refused
 # scope, or a round whose review still runs in the scope after its agent exited (stderr names the
-# review); 4 the direction's clone is missing or is not this protocol's clone; 5 the previous round
-# of this direction still runs; 7 a round dependency is missing (a login, the review key, the round's
-# home, the write boundary or the member CLI), and stderr names it. The member CLI exits 7 when the
-# vendor install or the installed `--version` check fails, and stderr names the local version and the
-# version the host runs. Nothing starts on 4, 5 and 7.
+# review); 4 the direction's clone is missing, is not this protocol's clone, or holds uncommitted work
+# that blocks its checkout of origin/main; 5 the previous round of this direction still runs; 7 a round
+# dependency is missing (a login, the review key, the round's home, the write boundary or the member
+# CLI), and stderr names it. The member CLI exits 7 when the vendor install or the installed `--version`
+# check fails, and stderr names the local version and the version the host runs. Nothing starts on 4, 5
+# and 7.
 #
 # The round reads its direction from this invocation, so the scope name, the boundary and TMPDIR
 # name one direction only. Two rounds of one direction never run together: the scope name refuses
@@ -35,7 +36,7 @@
 # and refuses every later fire, so the runner stops it, every process in the cgroup included,
 # before the start. A live round's launch directory and leader refuse the round with exit 5.
 #
-# The clone check runs before the CLI build, so a refused clone starts no build. The runner deletes
+# The clone sync and check run before the CLI build, so a refused clone starts no build. The runner deletes
 # its launch directory when it exits; the round's evidence is a separate directory, which the
 # launcher copies back after this script has ended.
 set -euo pipefail
@@ -289,25 +290,6 @@ other_inflight_files() {
       printf 'improve runner: skip worktree %s: no merge base with origin/main\n' "$clone" >&2
     fi
   done
-}
-
-# The direction's clone is the round's only checkout inside the boundary. A round whose clone is
-# absent or foreign must not start: on 2026-10-29 a local round found no clone and continued in
-# another checkout although its prompt told it to stop, so the check holds here, before the round's agent starts.
-check_clone() {
-  local clone="$ROUND_ROOT/charlie-bot"
-  local hooks origin
-  [[ -d $clone ]] || fail 4 "the direction clone is missing: $clone"
-  hooks=$(git -C "$clone" config --get core.hooksPath 2>/dev/null) || hooks=
-  # The clone points at the runner checkout's hooks (an absolute path), so a clone from any layout runs them.
-  [[ $hooks == dev/git-hooks || $hooks == */dev/git-hooks ]] \
-    || fail 4 "the direction clone does not set core.hooksPath to dev/git-hooks: $clone"
-  # The pre-push hook checks each push's diffs and messages for the round's credential values.
-  [[ -x $clone/dev/git-hooks/pre-push ]] \
-    || fail 4 "the direction clone has no executable dev/git-hooks/pre-push: $clone"
-  origin=$(git -C "$clone" remote get-url origin 2>/dev/null) || origin=
-  [[ $(basename -- "${origin:-/nonexistent}" .git) == charlie-bot ]] \
-    || fail 4 "the direction clone's origin does not point at charlie-bot: ${origin:-no origin}"
 }
 
 # Whether a live round of one direction holds its scope. The clone scan calls this for the other
@@ -900,11 +882,16 @@ trap cleanup_launch_dir EXIT
 [[ -r $LAUNCH_DIR/review-charlie-code.sh ]] \
   || fail 1 "the review's charlie-code is missing: $LAUNCH_DIR/review-charlie-code.sh"
 source "$LAUNCH_DIR/review-charlie-code.sh"
+# The clone's identity, sync and pre-push check. The launch copies the file as it copies the in-flight rule.
+[[ -r $LAUNCH_DIR/clone-check.sh ]] \
+  || fail 1 "the clone check is missing: $LAUNCH_DIR/clone-check.sh"
+source "$LAUNCH_DIR/clone-check.sh"
 read_launch_env
 check_round_dependencies
 install_pattern_file
 rewrite_command
 other_inflight_files >>"$LAUNCH_DIR/inflight-files.txt"
+sync_clone
 check_clone
 
 # The round works in the direction's root, because `--resume` finds a Claude session by the

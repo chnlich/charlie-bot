@@ -75,10 +75,16 @@ At round start, delete what an earlier round left under `/tmp/improve-<direction
 Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
 An earlier round's scratch holds large copies, so the next round removes it before it starts.
 
-The runner checks the clone before the round's agent starts, and a missing or foreign clone ends that launch with exit 4.
-End the round with a report when the clone lacks `core.hooksPath dev/git-hooks`:
+Before the round's agent starts, the runner sets the clone to `origin/main`: it fetches `origin` and detaches the clone's HEAD there, so the clone's hooks come from `main`.
+The runner keeps the clone's local branches and its uncommitted changes.
+A checkout that would overwrite uncommitted work ends the launch with exit 4.
 
-    git -C ~/improve/<direction>/charlie-bot config core.hooksPath
+The runner then ends the launch with exit 4 when the clone:
+
+- is missing;
+- does not set `core.hooksPath` to `dev/git-hooks`;
+- has no executable `dev/git-hooks/pre-push` in its tree;
+- has an origin that is not `charlie-bot`.
 
 The hooks check each commit before it can be pushed, so a clone without them is not this protocol's clone.
 

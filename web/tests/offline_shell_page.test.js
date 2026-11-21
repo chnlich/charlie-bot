@@ -271,7 +271,7 @@ test('a release reload waits for the update the registration is installing, then
 // The cap bounds a stuck update: past PAGE_UPDATE_CAP_MS the warm reports an error, and a release reload warns with
 // the error and reloads without the refresh.
 test('an update that never takes over fails the warm at the cap; the release reload warns and reloads', async () => {
-  const PAGE_UPDATE_CAP_MS = 10000;
+  const PAGE_UPDATE_CAP_MS = 20000;
   const stuck = () => ({
     active: {postMessage: () => {}},
     installing: {state: 'installing', addEventListener: () => {}},
@@ -297,7 +297,7 @@ test('an update that never takes over fails the warm at the cap; the release rel
   assert.equal(reloadPage.context.reloads, 1, 'the reload follows the failed refresh');
   assert.deepEqual(reloadPage.events, [], 'no banner event: the page is reloading itself');
   assert.equal(reloadPage.warnings.length, 1);
-  assert.match(String(reloadPage.warnings[0][1]), /did not take over within 10000 ms/);
+  assert.match(String(reloadPage.warnings[0][1]), /did not take over within 20000 ms/);
 });
 
 // A refresh the worker answers with an error still reloads the page, once and with a warning.
@@ -321,7 +321,7 @@ test('a release reload whose refresh replies with an error warns and reloads onc
 // listener. The page reads the state once the listener is attached, so a worker that already activated takes over
 // at once, with no wait for the cap. The warm's report names the state the page saw.
 test('an update that activated before the page attached its listener takes over at once', async () => {
-  const PAGE_UPDATE_CAP_MS = 10000;
+  const PAGE_UPDATE_CAP_MS = 20000;
   const sent = [];
   const active = {postMessage: (message, transfer) => sent.push({message, transfer})};
   const installing = {state: 'activated', addEventListener: () => {}};

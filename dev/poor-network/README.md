@@ -299,6 +299,13 @@ in flight is aborted and runs again after a 1 s quiet gap, and a 10 s cap (`PAGE
 busy page still installs the shell. The status poll and the rest of the API are not reported. A
 same-origin loader file whose only function talks to the server is listed in `ON_DEMAND_EXCLUDED` with its reason. The
 cross-origin files stay out: the KaTeX loader and the terminal's xterm files (jsdelivr), and the diff page's CDN files.
+
+A release's page posts its warm and its reload refresh to the worker only after the worker update takes over
+(`whenUpdateTakesOver` in `offline-shell.js`), waiting at most `PAGE_UPDATE_CAP_MS` (20 s). On the 100 kbit/s link the
+takeover, from the page's first sight of the installed worker to its activation, took 4.1 to 8.8 s in eight of nine
+release reps and 13.0 s in the ninth (`[takeover]` lines of the run log, on eba6eb936a). A refresh that fails or waits
+past the cap warns to the console, and the page reloads without it.
+
 The server's ETag names a bundled static file's bytes: the package and `web/static` mounts are `StaticDirectory::bundled`
 (`static_files.rs`), and other mounts keep their mtime-and-size tag. So a release that leaves a stored file unchanged
 revalidates it with a 304 and sends no body. Server change: each bundled file's ETag changes once, at the first request after the

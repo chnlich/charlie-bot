@@ -57,10 +57,17 @@ function warmOfflineShell() {
 // The registration the page's messages to the current release's worker go to, once any update it holds has taken
 // over. The register call checks the server for a new worker script. Until an update takes over, the worker the
 // registration still reports as active is the release the update replaces: it answers a warm from its own shell,
-// and the new worker drops that shell when it activates. The worker's skipWaiting makes the takeover take
-// milliseconds. PAGE_UPDATE_CAP_MS bounds a stuck update: past it the request fails with an error, so a release
-// reload never waits on an update that does not finish.
-const PAGE_UPDATE_CAP_MS = 10000;
+// and the new worker drops that shell when it activates. PAGE_UPDATE_CAP_MS bounds the wait: past it the request
+// fails with an error, so a release reload never waits on an update that does not finish.
+//
+// The cap's measured basis: a takeover run on eba6eb936a (the [takeover] lines of the bench log, after side, 100 kbit/s
+// link). From the page's first sight of the installed worker to its activation the takeover took 4.1 to 8.8 s in eight
+// of nine release reps, and 13.0 s in the ninth, which the former 10 s cap failed. Activation followed that sight by
+// 3.1 to 12.0 s, and the activating-to-activated step took 1.0 s in every rep. The gap is consistent with the replaced
+// worker's in-flight work: an install fetch held up to PAGE_DEFER_CAP_MS (10 s) plus the shell's transfer (about 7 s on
+// this link) runs to about 17 s. The cap sits above that bound: 20 s covers the worst measured takeover with 7 s to
+// spare and the bound with 3 s.
+const PAGE_UPDATE_CAP_MS = 20000;
 
 // The states the page saw of the update it waits for, each with its time in ms since the page's time origin. Every
 // warm report carries them (reportWarm), so a takeover that runs long shows the state it stalled in. Null until the

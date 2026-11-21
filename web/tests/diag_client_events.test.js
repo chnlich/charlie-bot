@@ -634,7 +634,7 @@ function buildTransportHarness() {
     wsUrlWithToken: (path) => path,
     setTimeout: (fn, ms) => { if (ms === CONNECT_DEADLINE_MS) return 0; timers.push({fn, ms}); return timers.length; },
     clearTimeout: () => {},
-    reloadAfterRefreshingShell: () => {},
+    reloadPastStoredShell: () => {},
     document: {
       getElementById: () => null,
       dispatchEvent: (event) => {

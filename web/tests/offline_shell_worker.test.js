@@ -730,107 +730,6 @@ test('a full store evicts the session opened longest ago and then stores the new
   assert.ok(keys.includes(BOOTSTRAP_URL), 'the new first screen is stored');
 });
 
-test('a refresh replaces the stored shell after storing its versioned files', async () => {
-  const h = harness();
-  const {copies: store, shells} = await openStores(h);
-  await shells.put(SHELL_KEY, new Response('<html>old</html>'));
-  const html = '<script src="/static/js/app.js?v=2"></script>';
-  h.state.network = async (req) => (req.url === SHELL_URL
-    ? new Response(html, {status: 200})
-    : new Response('new app', {status: 200, headers: {ETag: '"app-v2"'}}));
-  const channel = messageChannel();
-
-  await Promise.all(h.fire('message', {
-    data: {type: 'warm', refresh: true}, ports: [channel.port2],
-  }).waits);
-
-  assert.equal(channel.replies.length, 1);
-  assert.equal(channel.replies[0].stored, true);
-  assert.equal(await (await shells.match(SHELL_KEY)).text(), html);
-  const files = await h.caches.api.open('last-state-files');
-  assert.equal(await (await files.match(ORIGIN + '/static/js/app.js?v=2')).text(), 'new app');
-});
-
-test('a failed shell refresh leaves the stored shell available to navigation', async () => {
-  const h = harness();
-  const {copies: store, shells} = await openStores(h);
-  await shells.put(SHELL_KEY, new Response('<html>current</html>'));
-  h.state.network = async (req) => (req.url === SHELL_URL
-    ? new Response('<link href="/static/css/new.css?v=2" rel="stylesheet">', {status: 200})
-    : new Response('busy', {status: 503}));
-  const channel = messageChannel();
-
-  await Promise.all(h.fire('message', {
-    data: {type: 'warm', refresh: true}, ports: [channel.port2],
-  }).waits);
-
-  assert.equal(channel.replies.length, 1);
-  assert.equal(channel.replies[0].stored, false);
-  assert.match(channel.replies[0].error, /new\.css.*503/);
-  const nav = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
-  assert.equal(await nav.response.text(), '<html>current</html>');
-});
-
-test('a shell refresh names the stored shell by its tag: a 304 keeps it, and a 200 stores its own tag', async () => {
-  const h = harness();
-  const {copies: store, shells} = await openStores(h);
-  await shells.put(SHELL_KEY, new Response('<html>current</html>', {headers: {ETag: '"shell-1"'}}));
-  h.state.network = async () => new Response('<html>changed</html>', {status: 200, headers: {ETag: '"shell-2"'}});
-  const first = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm', refresh: true}, ports: [first.port2]}).waits);
-  assert.equal(h.state.calls.at(-1).init.headers['If-None-Match'], '"shell-1"', 'the refresh names the stored tag');
-  assert.equal(first.replies[0].stored, true);
-
-  h.state.network = async () => new Response(null, {status: 304});
-  const second = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm', refresh: true}, ports: [second.port2]}).waits);
-  assert.equal(h.state.calls.at(-1).init.headers['If-None-Match'], '"shell-2"', 'the 200 stored its own tag');
-  assert.equal(second.replies[0].stored, true);
-  assert.equal(await (await shells.match(SHELL_KEY)).text(), '<html>changed</html>', 'the 304 keeps the stored shell');
-});
-
-test('a 401 during refresh clears stored copies and the old shell', async () => {
-  const h = harness();
-  const {copies: store, shells} = await openStores(h);
-  await shells.put(SHELL_KEY, new Response('<html>old</html>'));
-  await store.put(BOOTSTRAP_URL, firstScreen('private copy'));
-  h.state.network = async () => new Response('unauthorized', {status: 401});
-  const channel = messageChannel();
-
-  await Promise.all(h.fire('message', {
-    data: {type: 'warm', refresh: true}, ports: [channel.port2],
-  }).waits);
-
-  assert.equal(channel.replies.length, 1);
-  assert.equal(channel.replies[0].stored, false);
-  assert.equal(channel.replies[0].unauthorized, true);
-  assert.equal('error' in channel.replies[0], false);
-  assert.equal(await shells.match(SHELL_KEY), undefined);
-  assert.equal(await store.match(BOOTSTRAP_URL), undefined);
-});
-
-test('a shell file 401 during refresh clears stored copies and the old shell', async () => {
-  const h = harness();
-  const {copies: store, shells} = await openStores(h);
-  await shells.put(SHELL_KEY, new Response('<html>old</html>'));
-  await store.put(BOOTSTRAP_URL, firstScreen('private copy'));
-  h.state.network = async (req) => (req.url === SHELL_URL
-    ? new Response('<link href="/static/css/private.css?v=2" rel="stylesheet">', {status: 200})
-    : new Response('unauthorized', {status: 401}));
-  const channel = messageChannel();
-
-  await Promise.all(h.fire('message', {
-    data: {type: 'warm', refresh: true}, ports: [channel.port2],
-  }).waits);
-
-  assert.equal(channel.replies.length, 1);
-  assert.equal(channel.replies[0].stored, false);
-  assert.equal(channel.replies[0].unauthorized, true);
-  assert.equal('error' in channel.replies[0], false);
-  assert.equal(await shells.match(SHELL_KEY), undefined);
-  assert.equal(await store.match(BOOTSTRAP_URL), undefined);
-});
-
 test('a release keeps the stored copies and drops the shell of the release before it', async () => {
   const h = harness({version: 'v2'});
   const previousShell = await h.caches.api.open('last-state-shell-v1');
@@ -997,9 +896,8 @@ test('a warm keeps the on-demand files it names and drops other stored files', a
       'the on-demand file survives the warm; the file of an older version is dropped');
 });
 
-// The quiet gap and the deferral cap as offline-shell-worker.js names them.
+// The quiet gap as offline-shell-worker.js names it.
 const PAGE_QUIET_MS = 1000;
-const PAGE_DEFER_CAP_MS = 10000;
 
 // A shell fetch the test answers by hand. It rejects when the worker aborts it, as a fetch does.
 function heldShellFetches(h) {
@@ -1041,48 +939,47 @@ test('a page request aborts the shell fetch, and the shell runs again once the p
   assert.equal(channel.replies[0].fetchHolds.count, 1, 'the reply counts the one wait the page request imposed');
 });
 
-test('a release-time refresh completes on a busy page once its deferral cap has passed', async (t) => {
-  t.mock.timers.enable({apis: ['setTimeout']});
-  const h = harness();
-  h.state.network = async () => new Response('<html>v1</html>', {status: 200, headers: {ETag: '"v1"'}});
-  const first = messageChannel();
-  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [first.port2]}).waits);
-  assert.deepEqual(JSON.parse(JSON.stringify(first.replies)), [{stored: true, fetchHolds: {count: 0, heldMs: 0}}]);
+test('a user request in flight past ten seconds holds the shell install until it ends and the page has been quiet',
+    async (t) => {
+      t.mock.timers.enable({apis: ['setTimeout']});
+      const h = harness();
+      const fetches = heldShellFetches(h);
+      const channel = messageChannel();
+      const warming = Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
+      await flush();
+      assert.equal(fetches.length, 1, 'the shell fetch starts on an idle page');
 
-  const signals = [];
-  const refreshed = deferred();
-  h.state.network = (req, init) => {
-    signals.push(init.signal);
-    return new Promise((resolve, reject) => {
-      init.signal.addEventListener('abort', () => reject(new TypeError('This request was aborted')));
-      refreshed.promise.then(() => resolve(new Response('<html>v2</html>', {status: 200, headers: {ETag: '"v2"'}})));
+      h.fire('message', {data: {type: 'page-request-start', id: 'slow-1'}});
+      assert.equal(fetches[0].signal.aborted, true, 'a page request start aborts the shell fetch in flight');
+      await flush();
+      t.mock.timers.tick(15000);
+      await flush();
+      assert.equal(fetches.length, 1, 'the install stays held past fifteen seconds while the request is in flight');
+
+      h.fire('message', {data: {type: 'page-request-end', id: 'slow-1'}});
+      t.mock.timers.tick(PAGE_QUIET_MS - 1);
+      await flush();
+      assert.equal(fetches.length, 1, 'the install waits out the quiet gap');
+      t.mock.timers.tick(1);
+      await flush();
+      assert.equal(fetches.length, 2, 'the install runs again once the page has been quiet');
+      fetches[1].finish();
+      await warming;
+      assert.equal(channel.replies[0].stored, true);
+      assert.equal(channel.replies[0].fetchHolds.count, 1, 'the one wait is counted');
     });
-  };
-  const refresh = messageChannel();
-  const refreshing = Promise.all(h.fire('message', {
-    data: {type: 'warm', refresh: true, files: []},
-    ports: [refresh.port2],
-  }).waits);
-  await flush();
-  assert.equal(signals.length, 1, 'the refresh fetches on an idle page');
 
-  // This page request never ends, so the page stays busy for the whole wait.
-  h.fire('message', {data: {type: 'page-request-start', id: 'busy-1'}});
-  assert.equal(signals[0].aborted, true, 'the busy page aborts the refresh');
-  await flush();
-  t.mock.timers.tick(PAGE_DEFER_CAP_MS - 1);
-  await flush();
-  assert.equal(signals.length, 1, 'the refresh waits out its cap');
-  t.mock.timers.tick(1);
-  await flush();
-  assert.equal(signals.length, 2, 'the refresh runs once its cap has passed, though the page is still busy');
+// A reload past the stored shell carries the reload parameter; the worker leaves that navigation to the network, so
+// the stored shell never answers it, while a plain navigation still takes the stored shell.
+test('a navigation that carries the reload parameter goes to the network, though a shell is stored', async () => {
+  const h = harness();
+  h.state.network = async () => new Response('<html>shell</html>', {status: 200, headers: {ETag: '"s"'}});
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm', copies: []}, ports: [channel.port2]}).waits);
+  assert.equal(channel.replies[0].stored, true, 'a shell is stored');
 
-  h.fire('message', {data: {type: 'page-request-start', id: 'busy-2'}});
-  assert.equal(signals[1].aborted, false, 'a page request after the cap does not abort the refresh');
-  refreshed.release();
-  await refreshing;
-  assert.equal(refresh.replies[0].stored, true);
-  assert.equal(refresh.replies[0].fetchHolds.count, 1, 'the refresh counts the wait its cap ended');
-  const shells = await h.caches.api.open(SHELL_CACHE);
-  assert.equal(await (await shells.match(SHELL_KEY)).text(), '<html>v2</html>', 'the refreshed shell is stored');
+  const plain = await answerNow(h, request(SHELL_URL, {mode: 'navigate'}));
+  assert.equal(plain.responded, true, 'a plain navigation is answered from the stored shell');
+  const reload = await answerNow(h, request(ORIGIN + '/?session=' + SESSION + '&reloading=1', {mode: 'navigate'}));
+  assert.equal(reload.responded, false, 'a reload past the stored shell is left to the network');
 });

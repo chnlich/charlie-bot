@@ -2,7 +2,7 @@
 // Offline shell: the page's side of the service worker (offline-shell-worker.js)
 // ---------------------------------------------------------------------------
 // The page registers the worker once its catch-up completes and asks it to store the shell then, asks it to store
-// the session page's on-demand files once the page is idle, refreshes the stored shell before a 4409 reload, reports
+// the session page's on-demand files once the page is idle, reloads past the stored shell on a 4409 close, reports
 // the catch-up's end to the worker, reports the start and the end of its user-waiting requests so the worker holds
 // its installs off them, and drops the stored copies on a 401. A browser without service workers keeps the page it
 // always had.
@@ -57,16 +57,15 @@ function warmOfflineShell() {
 // The registration the page's messages to the current release's worker go to, once any update it holds has taken
 // over. The register call checks the server for a new worker script. Until an update takes over, the worker the
 // registration still reports as active is the release the update replaces: it answers a warm from its own shell,
-// and the new worker drops that shell when it activates. PAGE_UPDATE_CAP_MS bounds the wait: past it the request
-// fails with an error, so a release reload never waits on an update that does not finish.
+// and the new worker drops that shell when it activates. PAGE_UPDATE_CAP_MS bounds the wait: past it the warm fails
+// with an error, so the warm never waits on an update that does not finish. The page's next load warms again.
 //
-// The cap's measured basis: a takeover run on eba6eb936a (the [takeover] lines of the bench log, after side, 100 kbit/s
-// link). From the page's first sight of the installed worker to its activation the takeover took 4.1 to 8.8 s in eight
-// of nine release reps, and 13.0 s in the ninth, which the former 10 s cap failed. Activation followed that sight by
-// 3.1 to 12.0 s, and the activating-to-activated step took 1.0 s in every rep. The gap is consistent with the replaced
-// worker's in-flight work: an install fetch held up to PAGE_DEFER_CAP_MS (10 s) plus the shell's transfer (about 7 s on
-// this link) runs to about 17 s. The cap sits above that bound: 20 s covers the worst measured takeover with 7 s to
-// spare and the bound with 3 s.
+// The cap's measured basis, on the 100 kbit/s link: from the page's first sight of the installed worker to its
+// activation, the takeover took 4.1 to 8.8 s in eight of nine release reps of a takeover run on eba6eb936a, and 13.0 s
+// in the ninth, which the former 10 s cap failed. The stored group on 3fe3942324 measured 4.1 to 12.8 s (median 7.5 s,
+// p90 11.9 s) in ten reps. The gap is consistent with the activation waiting for the replaced worker's in-flight
+// install fetch, which runs for about 7 s (the shell's transfer on this link) once the page is quiet. 20 s covers the
+// worst measured takeover with margin.
 const PAGE_UPDATE_CAP_MS = 20000;
 
 // The states the page saw of the update it waits for, each with its time in ms since the page's time origin. Every
@@ -265,30 +264,27 @@ function dropOfflineShellCopies() {
 
 window.addEventListener('charliebot:unauthorized', () => dropOfflineShellCopies());
 
-// The reload after a 4409 close. A worker refreshes the shell and its files before the cached navigation changes.
-// The reload is the required action and the refresh its optimization: a refresh that fails, or waits past the
-// update cap, warns with its error and the page reloads without it. A page left on the old code against a new
-// server is the worse failure, so no failure keeps the page from reloading.
-function reloadAfterRefreshingShell() {
-  if (!offlineShellSupported()) {
-    location.reload();
-    return;
-  }
-  currentWorkerRegistration().then((registration) => {
-    if (registration === undefined || !registration.active) return undefined;
-    return new Promise((resolve) => {
-      const channel = new MessageChannel();
-      channel.port1.onmessage = (event) => resolve(event.data ?? {});
-      registration.active.postMessage({type: 'warm', refresh: true, files: onDemandFileUrls()}, [channel.port2]);
-    });
-  }).then((result) => {
-    if (result !== undefined && !result.stored && !result.unauthorized) {
-      throw new Error(result.error ?? 'offline shell refresh returned no result');
-    }
-  }).catch((err) => {
-    console.warn('offline shell refresh failed; reloading without it:', err);
-  }).then(() => location.reload());
+// The reload after a 4409 close navigates past the stored shell. The stored shell is the release the close found stale,
+// so the navigation carries RELOAD_PAST_SHELL_PARAM, which the worker passes to the network (offline-shell-worker.js).
+// The page the server now serves loads as it does on a network reload, and the new page's warm stores the new shell.
+const RELOAD_PAST_SHELL_PARAM = 'reloading';
+
+function reloadPastStoredShell() {
+  const url = new URL(location.href);
+  url.searchParams.set(RELOAD_PAST_SHELL_PARAM, '1');
+  location.replace(url.href);
 }
+
+// The page takes the parameter out of the address bar once it has loaded: the marked navigation is the one that loaded
+// the page, and a later reload should answer from the stored shell as any other does.
+function removeReloadPastShellParam() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has(RELOAD_PAST_SHELL_PARAM)) return;
+  url.searchParams.delete(RELOAD_PAST_SHELL_PARAM);
+  history.replaceState(history.state, '', url.href);
+}
+
+window.addEventListener('load', removeReloadPastShellParam);
 
 // ---------------------------------------------------------------------------
 // The user-waiting requests: the worker holds its installs while one is in flight

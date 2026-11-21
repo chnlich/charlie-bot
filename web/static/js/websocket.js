@@ -429,7 +429,7 @@ function handleCatchupComplete(data) {
 // ---------------------------------------------------------------------------
 // Stale-page reload guard
 // ---------------------------------------------------------------------------
-// The 4409 close asks this page to refresh its stored shell, then reload. The guard caps the automatic reload
+// The 4409 close reloads past the stored shell (reloadPastStoredShell). The guard caps the automatic reload
 // at one per tab per 60 seconds, so a stale cache cannot turn the close into a reload loop.
 const STALE_PAGE_RELOAD_KEY = 'charliebot-stale-page-reload-at';
 const STALE_PAGE_RELOAD_GUARD_MS = 60000;
@@ -449,7 +449,7 @@ function reloadStalePage() {
   sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(now));
   // The page-load telemetry names this reload's cause on the other side.
   document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'stale_asset'}}));
-  reloadAfterRefreshingShell();
+  reloadPastStoredShell();
 }
 
 function showStalePageBanner() {
@@ -463,7 +463,7 @@ function showStalePageBanner() {
     'padding:4px 12px;border-radius:6px;border:none;background:#fca5a5;color:#7f1d1d;' +
     'font-size:13px;font-weight:600;cursor:pointer;';
   button.textContent = 'Reload';
-  button.onclick = () => reloadAfterRefreshingShell();
+  button.onclick = () => reloadPastStoredShell();
   banner.appendChild(button);
   document.body.appendChild(banner);
 }

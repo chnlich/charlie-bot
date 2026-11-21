@@ -36,7 +36,15 @@ function buildPage({
       href: 'https://charlie.test/?session=',
       origin: 'https://charlie.test',
       reload: () => { context.reloads += 1; },
+      replace: (url) => { context.replaced.push(url); },
     },
+    history: {
+      state: null,
+      replaceState: (state, title, url) => {
+        context.location.href = new URL(url, context.location.href).href;
+      },
+    },
+    replaced: [],
     reloads: 0,
     performance: {timeOrigin: 1000, now: () => 0},
     URL,
@@ -132,6 +140,9 @@ function buildPage({
     },
     firePageHide: () => {
       for (const listener of windowListeners.get('pagehide') || []) listener();
+    },
+    fireWindowLoad: () => {
+      for (const listener of windowListeners.get('load') || []) listener();
     },
   };
 }
@@ -237,40 +248,8 @@ test('a warm waits for the update the registration is installing, and goes to th
       'the warm goes to the worker that took over');
 });
 
-// The release reload's refresh follows the same rule: it goes to the worker that takes over, and the reload follows
-// its reply.
-test('a release reload waits for the update the registration is installing, then refreshes the worker that took over',
-    async () => {
-      const sent = {replaced: [], next: []};
-      const replaced = {postMessage: (message) => sent.replaced.push(message)};
-      const next = {postMessage: (message, transfer) => sent.next.push({message, transfer})};
-      let onStateChange = null;
-      const installing = {state: 'installing', addEventListener: (type, listener) => { onStateChange = listener; }};
-      const registration = {active: replaced, installing};
-      const page = buildPage({registration});
-      page.context.reloadAfterRefreshingShell();
-      await settled();
-      assert.deepEqual(sent.replaced, [], 'the worker the update replaces gets no refresh');
-
-      registration.active = next;
-      registration.installing = null;
-      installing.state = 'activated';
-      onStateChange();
-      await settled();
-      assert.equal(sent.next.length, 1);
-      assert.equal(sent.next[0].message.type, 'warm');
-      assert.equal(sent.next[0].message.refresh, true);
-      assert.equal(page.context.reloads, 0, 'the page reloads once the refresh replies');
-
-      const channel = page.context.channels.find((candidate) => candidate.port2 === sent.next[0].transfer[0]);
-      channel.port1.onmessage({data: {stored: true}});
-      await settled();
-      assert.equal(page.context.reloads, 1);
-    });
-
-// The cap bounds a stuck update: past PAGE_UPDATE_CAP_MS the warm reports an error, and a release reload warns with
-// the error and reloads without the refresh.
-test('an update that never takes over fails the warm at the cap; the release reload warns and reloads', async () => {
+// The cap bounds a stuck update: past PAGE_UPDATE_CAP_MS the warm reports an error, and the warm never waits longer.
+test('an update that never takes over fails the warm at the cap', async () => {
   const PAGE_UPDATE_CAP_MS = 20000;
   const stuck = () => ({
     active: {postMessage: () => {}},
@@ -286,35 +265,25 @@ test('an update that never takes over fails the warm at the cap; the release rel
   await settled();
   assert.equal(warmPage.events.length, 1);
   assert.ok(warmPage.events[0].detail.error, 'the warm reports the stuck update as an error');
-
-  const reloadPage = buildPage({registration: stuck()});
-  reloadPage.context.reloadAfterRefreshingShell();
-  await settled();
-  const reloadCap = reloadPage.context.timers.filter((timer) => timer.ms === PAGE_UPDATE_CAP_MS && !timer.cleared);
-  assert.equal(reloadCap.length, 1, 'the reload waits under one cap timer');
-  reloadCap[0].fn();
-  await settled();
-  assert.equal(reloadPage.context.reloads, 1, 'the reload follows the failed refresh');
-  assert.deepEqual(reloadPage.events, [], 'no banner event: the page is reloading itself');
-  assert.equal(reloadPage.warnings.length, 1);
-  assert.match(String(reloadPage.warnings[0][1]), /did not take over within 20000 ms/);
+  assert.match(warmPage.events[0].detail.error, /did not take over within 20000 ms/);
 });
 
-// A refresh the worker answers with an error still reloads the page, once and with a warning.
-test('a release reload whose refresh replies with an error warns and reloads once, with no banner event', async () => {
-  const sent = [];
-  const active = {postMessage: (message, transfer) => sent.push({message, transfer})};
-  const page = buildPage({registration: {active}});
-  page.context.reloadAfterRefreshingShell();
-  await settled();
-  assert.equal(sent.length, 1);
-  const channel = page.context.channels.find((candidate) => candidate.port2 === sent[0].transfer[0]);
-  channel.port1.onmessage({data: {stored: false, error: 'shell fetch failed: 500'}});
-  await settled();
-  assert.equal(page.context.reloads, 1);
-  assert.deepEqual(page.events, []);
-  assert.equal(page.warnings.length, 1);
-  assert.match(String(page.warnings[0][1]), /shell fetch failed: 500/);
+// A 4409 close reloads past the stored shell: one navigation to the same address with the parameter the worker
+// sends to the network (offline-shell-worker.js).
+test('reloading past the stored shell navigates once, to the address with the parameter', () => {
+  const page = buildPage();
+  page.context.location.href = 'https://charlie.test/?session=session-a';
+  page.context.reloadPastStoredShell();
+  assert.deepEqual(page.context.replaced, ['https://charlie.test/?session=session-a&reloading=1']);
+  assert.equal(page.context.reloads, 0, 'the reload is a navigation, not a reload of the stored shell');
+});
+
+// The parameter leaves the address bar once the page has loaded, so the next reload answers from the stored shell.
+test('the reload parameter leaves the address bar once the page has loaded', () => {
+  const page = buildPage();
+  page.context.location.href = 'https://charlie.test/?session=session-a&reloading=1';
+  page.fireWindowLoad();
+  assert.equal(page.context.location.href, 'https://charlie.test/?session=session-a');
 });
 
 // Chromium can attach a worker's statechange after the worker has reached its state: then no event reaches the

@@ -89,7 +89,7 @@ function buildPage({painted = [], filter = 'all', partial = true} = {}) {
       });
     }),
     location: {href: '', protocol: 'http:', host: 'localhost', search: '', reload: () => { page.reloads += 1; }},
-    reloadAfterRefreshingShell: () => { page.reloads += 1; },
+    reloadPastStoredShell: () => { page.reloads += 1; },
     localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
     sessionStorage: {
       getItem: (key) => page.storage.get(key) ?? null,

@@ -7,13 +7,14 @@ const BANNER_TEXT = 'This page is out of date. Reload to continue.';
 const RELOAD_GUARD_KEY = 'charliebot-stale-page-reload-at';
 
 // One build with an injected clock (context.Date.now), a sessionStorage stub,
-// a reload-recording location and a timer list. clock.now moves the fake time.
-function buildHarness(clock) {
+// a reload-recording location and a timer list. clock.now moves the fake time. A build given a sessionStorage
+// is a page the tab opened after the earlier one: it shares the tab's storage, so the reload guard carries over.
+function buildHarness(clock, tabSessionStorage = null) {
   const reloaded = [];
   const timers = [];
   const bodyChildren = [];
   const documentListeners = new Map();
-  const sessionStorage = {
+  const sessionStorage = tabSessionStorage ?? {
     getItem: (key) => (sessionStorage.store.has(key) ? sessionStorage.store.get(key) : null),
     setItem: (key, value) => sessionStorage.store.set(key, value),
     store: new Map(),
@@ -43,8 +44,8 @@ function buildHarness(clock) {
     Date: {now: () => clock.now},
     sessionStorage,
     location: {protocol: 'http:', host: 'localhost:8000', reload: () => reloaded.push(clock.now)},
-    // The offline-shell helper records a reload after refreshing the stored shell.
-    reloadAfterRefreshingShell: () => reloaded.push(clock.now),
+    // The offline-shell helper records a reload past the stored shell.
+    reloadPastStoredShell: () => reloaded.push(clock.now),
     setTimeout: (fn, ms) => {
       // The connect deadline has its own tests (websocket_connect_handlers.test.js); this harness records the rest.
       if (ms === CONNECT_DEADLINE_MS) return 0;
@@ -94,9 +95,25 @@ test('a second 4409 within 60 seconds shows the banner and neither reloads nor r
   assert.equal(bodyChildren[0].textContent, BANNER_TEXT);
   assert.equal(bodyChildren[0].children.length, 1);
   assert.equal(bodyChildren[0].children[0].textContent, 'Reload');
-  // The Reload button retries the shell refresh, outside the guard.
+  // The Reload button reloads past the stored shell, outside the guard.
   bodyChildren[0].children[0].onclick();
   assert.deepEqual(reloaded, [5000, 30000]);
+});
+
+test('a second 4409 on the page a reload opened shows the banner and does not navigate again', () => {
+  const clock = {now: 5000};
+  const first = buildHarness(clock);
+  first.context.connectWS();
+  first.FakeWebSocket.instances[0].emitClose({code: 4409});
+  assert.deepEqual(first.reloaded, [5000]);
+
+  clock.now = 9000;
+  const reloadedPage = buildHarness(clock, first.sessionStorage);
+  reloadedPage.context.connectWS();
+  reloadedPage.FakeWebSocket.instances[0].emitClose({code: 4409});
+  assert.deepEqual(reloadedPage.reloaded, [], 'the guard holds the reloaded page to the banner');
+  assert.equal(reloadedPage.bodyChildren.length, 1);
+  assert.equal(reloadedPage.bodyChildren[0].textContent, BANNER_TEXT);
 });
 
 test('a 4409 at least 60 seconds after the stored time reloads again', () => {

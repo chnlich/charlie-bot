@@ -28,19 +28,20 @@ const SHELL_KEY = self.location.origin + '/shell';
 const INDEX_KEY = self.location.origin + '/index';
 const STORED_AT_HEADER = 'X-CharlieBot-Stored-At';
 const NETWORK_ONLY_HEADER = 'X-CharlieBot-Network-Only';
+// The address parameter a reload past the stored shell carries (offline-shell.js reloadPastStoredShell). A navigation
+// that carries it goes to the network, so the stored shell never answers the reload the close asked for.
+const RELOAD_PAST_SHELL_PARAM = 'reloading';
 // The wait before a copy is read again. A worker that just started can match before the cache's disk index has
 // settled, so a copy's first match may miss although the copy is stored; one wait cap later the match answers. A
 // first screen's network race re-reads at each cap, and a sidebar list re-reads once before it asks the network.
 const WAIT_CAP_MS = 400;
-// The page's user-waiting requests take the link before the shell and the on-demand files (installFetch). An install in
-// flight is aborted when the page reports a request start, and runs again once the page has been quiet for
-// PAGE_QUIET_MS after its last request's end. An install waits at most PAGE_DEFER_CAP_MS from its first attempt, then
-// runs to its end without abort: a release reload waits for the warm's reply (reloadAfterRefreshingShell), so a busy
-// page cannot hold it longer. The cap is about the 87 KB shell's own time on the 100 kbit/s link (about 7 s), so a
-// deferred install still gets that time.
+// The page's user-waiting requests take the link before the shell and the on-demand files (installFetch). An install
+// in flight is aborted when the page reports a request start, and runs again once the page has been quiet for
+// PAGE_QUIET_MS after its last request's end. No cap ends that wait: nothing in the page waits for an install, so a
+// request that stays in flight through a long blackout holds the install for as long as it lasts, and an install
+// started inside the blackout would otherwise compete with the page's own requests at the restore.
 const ENABLE_PAGE_PRIORITY = true;
 const PAGE_QUIET_MS = 1000;
-const PAGE_DEFER_CAP_MS = 10000;
 
 const SHELL_STATIC_REF = /<(?:link|script)\b[^>]*?\b(?:href|src)="(\/static\/[^"]+)"/g;
 
@@ -87,7 +88,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname === '/' && url.searchParams.has('session') && request.mode === 'navigate') {
-    event.respondWith(answerShell(request));
+    if (!url.searchParams.has(RELOAD_PAST_SHELL_PARAM)) event.respondWith(answerShell(request));
   } else if (url.pathname.startsWith('/static/')) {
     event.respondWith(answerFile(event, request));
   } else if (isFirstScreenPath(url.pathname) || isSidebarListRequest(url)) {
@@ -387,9 +388,7 @@ function pageRequestStarted(id) {
   pageRequests.add(id);
   clearTimeout(quietTimer);
   quietTimer = null;
-  for (const install of installs) {
-    if (!install.cap.expired) install.controller.abort();
-  }
+  for (const install of installs) install.controller.abort();
 }
 
 function pageRequestEnded(id) {
@@ -418,47 +417,27 @@ function pageQuiet() {
 const fetchHolds = {count: 0, heldMs: 0};
 
 // One network fetch of an install: the shell's or an on-demand file's. It starts once the page is quiet. A page request
-// that starts while it is in flight aborts it, and it starts again once the page is quiet. Once its cap has passed
-// (PAGE_DEFER_CAP_MS) it runs to its end, and no request aborts it.
+// that starts while it is in flight aborts it, and it starts again once the page is quiet.
 async function installFetch(url, init) {
   if (!ENABLE_PAGE_PRIORITY) return fetch(url, init);
-  const cap = deferCap();
-  try {
-    for (;;) {
-      const held = !pageIsQuiet();
-      const waitFrom = Date.now();
-      await Promise.race([pageQuiet(), cap.passed]);
-      if (held) {
-        fetchHolds.count += 1;
-        fetchHolds.heldMs += Date.now() - waitFrom;
-      }
-      const install = {controller: new AbortController(), cap};
-      installs.add(install);
-      try {
-        return await fetch(url, {...init, signal: install.controller.signal});
-      } catch (error) {
-        if (!install.controller.signal.aborted) throw error;
-      } finally {
-        installs.delete(install);
-      }
+  for (;;) {
+    const held = !pageIsQuiet();
+    const waitFrom = Date.now();
+    await pageQuiet();
+    if (held) {
+      fetchHolds.count += 1;
+      fetchHolds.heldMs += Date.now() - waitFrom;
     }
-  } finally {
-    cap.clear();
+    const install = {controller: new AbortController()};
+    installs.add(install);
+    try {
+      return await fetch(url, {...init, signal: install.controller.signal});
+    } catch (error) {
+      if (!install.controller.signal.aborted) throw error;
+    } finally {
+      installs.delete(install);
+    }
   }
-}
-
-// The cap of one install's deferral: `passed` resolves once PAGE_DEFER_CAP_MS has passed since the install was asked,
-// and `expired` is then true.
-function deferCap() {
-  const cap = {expired: false, passed: null, clear: null};
-  cap.passed = new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      cap.expired = true;
-      resolve();
-    }, PAGE_DEFER_CAP_MS);
-    cap.clear = () => clearTimeout(timer);
-  });
-  return cap;
 }
 
 // ---------------------------------------------------------------------------
@@ -474,20 +453,14 @@ function shellStaticRefs(html) {
 
 // Fetches the shell and the files it names, stores them, and drops the stored files it no longer names. The page's
 // on-demand files (storeOnDemandFiles) are named too, so a warm keeps them.
-// A refresh leaves the current shell in place until the replacement and its files are ready.
-async function warmShell(refresh = false, onDemand = []) {
+// The shell cache is named for this release, so a stored shell is this release's: a warm that finds it fetches nothing.
+async function warmShell(onDemand = []) {
   const cache = await caches.open(SHELL_CACHE);
-  const stored = await cache.match(SHELL_KEY);
-  if (!refresh && stored) return {stored: true};
-  // A refresh revalidates the stored shell: its tag names the body the worker holds, and an unchanged page answers 304
-  // with no body, which keeps the stored shell.
-  const headers = refresh && stored ? {'If-None-Match': stored.headers.get('ETag')} : {};
-  const response = await installFetch('/?session=', {cache: 'no-store', credentials: 'same-origin', headers});
-  if (response.status === 304) return {stored: true};
+  if (await cache.match(SHELL_KEY)) return {stored: true};
+  const response = await installFetch('/?session=', {cache: 'no-store', credentials: 'same-origin'});
   if (response.status === 401) {
-    if (refresh) await dropShell();
     await dropCopies();
-    return refresh ? {stored: false, unauthorized: true} : {stored: false};
+    return {stored: false};
   }
   if (!response.ok) throw new Error('shell fetch failed: ' + response.status);
   const html = await response.text();
@@ -507,9 +480,8 @@ async function warmShell(refresh = false, onDemand = []) {
       throw error;
     }
     if (file.status === 401) {
-      if (refresh) await dropShell();
       await dropCopies();
-      return refresh ? {stored: false, unauthorized: true} : {stored: false};
+      return {stored: false};
     }
     if (!file.ok) throw new Error('shell file fetch failed: ' + ref + ' ' + file.status);
     if (file.headers.get('ETag')) fetchedFiles.push([ref, file]);
@@ -568,22 +540,14 @@ async function storedCopyOfPath(files, path) {
   return null;
 }
 
-// Called only after a refresh answers 401, so navigation reaches the server instead of using stale HTML.
-async function dropShell() {
-  const cache = await caches.open(SHELL_CACHE);
-  await cache.delete(SHELL_KEY);
-}
-
 self.addEventListener('message', (event) => {
   const data = event.data || {};
   if (!WORKER_CONFIG.enabled) return;
   if (data.type === 'warm') {
-    const warming = data.refresh === true
-      ? warmShell(true, data.files)
-      : warmShell(false, data.files).then(async (result) => {
-        if (result.stored) await storePageCopies(data.copies);
-        return result;
-      });
+    const warming = warmShell(data.files).then(async (result) => {
+      if (result.stored) await storePageCopies(data.copies);
+      return result;
+    });
     const reply = (result) => replyTo(event, {...result, fetchHolds: {...fetchHolds}});
     event.waitUntil(warming.then(reply, (error) => reply({stored: false, error: String(error)})));
   } else if (data.type === 'store-files') {

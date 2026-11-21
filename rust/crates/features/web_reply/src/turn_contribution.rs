@@ -15,13 +15,13 @@ use charliebot_core::run_kind::RunKind;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{
-  DELIVERY_FULL, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE, TurnContribution,
+  CheckResult, DELIVERY_FULL, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE, TurnContribution, TurnInput,
 };
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
-use crate::{audit, reply, status};
+use crate::{audit, pending_wake, reply, status};
 
 /// The web-reply turn contribution.
 pub struct WebReplyTurnContribution;
@@ -86,6 +86,27 @@ impl TurnContribution for WebReplyTurnContribution {
 
   fn claims_turn_end_unread(&self, meta: &SessionMetadata) -> bool {
     reply::is_web_session(meta)
+  }
+
+  fn turn_end_check_names(&self) -> &'static [&'static str] {
+    &[audit::WEB_REPLY_ENTRY, audit::WEB_STATUS_ENTRY, audit::STATUS_REREAD_ENTRY, pending_wake::PENDING_WAKE_ENTRY]
+  }
+
+  fn run_turn_end_check<'a>(
+    &'a self,
+    name: &'a str,
+    features: &'a Arc<FeatureContext>,
+    input: &'a TurnInput,
+  ) -> BoxFuture<'a, anyhow::Result<CheckResult>> {
+    Box::pin(async move {
+      match name {
+        audit::WEB_REPLY_ENTRY => audit::check_web_reply(input),
+        audit::WEB_STATUS_ENTRY => Ok(audit::check_web_status(input)),
+        audit::STATUS_REREAD_ENTRY => Ok(audit::check_status_reread(input)),
+        pending_wake::PENDING_WAKE_ENTRY => pending_wake::check_pending_wake(features, input).await,
+        other => anyhow::bail!("the web contribution answers no turn-end check named {other}"),
+      }
+    })
   }
 }
 

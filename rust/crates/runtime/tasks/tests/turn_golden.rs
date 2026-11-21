@@ -1042,22 +1042,17 @@ fn pool_member(capture: &Path, fail_continuation: bool) -> anyhow::Result<Backen
   Ok(option)
 }
 
-/// A checkout whose turn-end list is the served web checks, and whose prompts are the repository's. The list runs the
-/// workspace build of `charliebot` by its path, so the checks are this tree's whatever the host's PATH holds.
+/// A checkout whose turn-end list is the served web checks, and whose prompts are the repository's. The list names the
+/// checks that `registry()` answers in process, so the checks run are this tree's whatever the host's PATH holds.
 fn web_checks_checkout(temp: &Path) -> anyhow::Result<PathBuf> {
   let checkout = temp.join("checkout");
   std::fs::create_dir_all(checkout.join("hooks"))?;
   std::fs::create_dir_all(checkout.join("prompts"))?;
   std::fs::write(checkout.join("prompts/web_reply.md"), "Synthetic web reply rules")?;
-  let charliebot = charliebot_shell_harness::built_binary("charliebot");
-  // The served list runs `charliebot hook <check>` from PATH. This list names the workspace build of that binary by
-  // its path, so the checks the test runs are this tree's, whatever `charliebot` the host's PATH holds or lacks.
-  let charliebot = shlex::try_quote(charliebot.to_str().context("the built charliebot path is UTF-8")?)?;
-  let entries: Vec<Value> = ["web-reply", "web-status", "thread-reply", "status-reread"]
-    .into_iter()
-    .map(|name| json!({"name": name, "command": format!("'{charliebot}' hook {name}")}))
-    .collect();
-  std::fs::write(checkout.join("hooks/turn_end.json"), serde_json::to_string(&entries)?)?;
+  std::fs::write(
+    checkout.join("hooks/turn_end.json"),
+    json!(["web-reply", "web-status", "status-reread"]).to_string(),
+  )?;
   Ok(checkout)
 }
 

@@ -13,7 +13,7 @@ mod sidebar;
 mod status_delta;
 #[cfg(test)]
 mod test_support;
-mod tree;
+pub mod tree;
 mod websocket;
 mod worker_transcript;
 mod write_routes;

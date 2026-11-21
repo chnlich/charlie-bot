@@ -172,10 +172,12 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   fail.
 - Example: `registry.turn_contribution("memory", Arc::new(MemoryTurn))?;`
 - Turn-end ownership: `turn_kind(meta)` names the session kind whose checks the contribution serves. The registry
-  selects the first contribution that claims the session. `master_queue::process_item` runs `hooks/turn_end.json` before
-  it writes `master_done`; every command reads the same turn input. `show_turn_notice` delivers a passing check's
-  notice. `after_failed_turn` preserves the contribution's existing behavior for a failure or quota handoff, after
-  `master_done` is persisted.
+  selects the first contribution that claims the session. `master_queue::process_item` runs the names in
+  `hooks/turn_end.json` before it writes `master_done`. The turn owner answers each name it lists in process
+  (`turn_end_check_names`, `run_turn_end_check`) from the same `TurnInput`; a name it does not list passes, and a name
+  that no contribution answers fails the checkpoint. `show_turn_notice` delivers a passing check's notice.
+  `after_failed_turn` preserves the contribution's existing behavior for a failure or quota handoff, after `master_done`
+  is persisted.
 - Context: the server calls `Registry::bind_feature_context` once after it builds the context and before the lifespan
   starts. Cron sequence controllers read the bound context through the registry's `Weak` link; the link avoids a strong
   cycle with the store.

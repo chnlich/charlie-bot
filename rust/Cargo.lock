@@ -1674,6 +1674,7 @@ dependencies = [
  "charliebot-session-api",
  "charliebot-store",
  "charliebot-tasks",
+ "charliebot-triggers",
  "charliebot-user-text-checks",
  "clap",
  "futures-util",

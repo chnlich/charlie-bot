@@ -13,8 +13,10 @@ charliebot-cli-common.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
+charliebot-session-api.workspace = true
 charliebot-store.workspace = true
 charliebot-tasks.workspace = true
+charliebot-triggers.workspace = true
 charliebot-user-text-checks.workspace = true
 clap.workspace = true
 futures-util.workspace = true
@@ -27,6 +29,5 @@ tracing.workspace = true
 
 [dev-dependencies]
 charliebot-core = { workspace = true, features = ["test-support"] }
-charliebot-session-api.workspace = true
 tempfile.workspace = true
 tower.workspace = true

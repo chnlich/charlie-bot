@@ -2,8 +2,8 @@
 //! set or confirm that ends the turn (`web-status`), and the status set that rewrites the Waiting on you list after the
 //! turn's last input (`status-reread`).
 //!
-//! All three are entries of the turn-end hook list. The `charliebot hook` command answers each one from the shared
-//! input (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason. A
+//! All three are names in the turn-end check list, and the web contribution answers each one in process from the
+//! shared input (`TurnInput`), so the checks read only the turn's events. A first miss blocks the turn with the reason. A
 //! second miss passes: `web-reply` then shows the user the no-reply notice, `web-status` passes quietly, and
 //! `status-reread` shows the Waiting on you items it left. A continuation that failed is a second miss too: `web-status`
 //! then shows its notice, so the failed turn never passes. A turn with a close request, and a turn that exits with an
@@ -18,11 +18,12 @@ use charliebot_core::event_types::{
   WEB_STATUS_CONFIRMED,
 };
 use charliebot_registry::FeatureContext;
+use charliebot_registry::turn::{CheckResult, TurnInput};
 use charliebot_store::compact::CompactValue;
 use charliebot_store::reply_order;
 use charliebot_store::{ChatEvent, Store};
 use charliebot_tasks::task_input_prompt::input_text;
-use charliebot_tasks::turn_hooks::{CheckResult, TurnInput, last_received_index, received_receipts};
+use charliebot_tasks::turn_hooks::{last_received_index, received_receipts};
 use serde_json::{Value, json};
 
 use crate::reply;
@@ -55,7 +56,7 @@ const FAILED_CONTINUATION_STATUS_NOTICE: &str = concat!(
 
 /// Whether a web session's turn-end checks judge this turn: the session is a web session, the turn exited cleanly or as
 /// a failed continuation, and it left no close request. The `web-reply` and `web-status` entries read their scope here,
-/// as does the `pending-wake` entry that the CLI answers.
+/// as does the `pending-wake` check.
 pub fn web_turn_checks_apply(input: &TurnInput) -> bool {
   input.kind.as_deref() == Some("web")
     && input.exit_is_judged()

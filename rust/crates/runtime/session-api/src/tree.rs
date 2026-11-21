@@ -57,7 +57,7 @@ struct TreePageBody {
 static TREE_PAGE_BODY: Mutex<Option<TreePageBody>> = Mutex::new(None);
 
 /// One revision-bound keyset page from the task tree.
-pub(crate) fn tree_page(
+pub fn tree_page(
   store: &Store,
   parent_id: Option<&str>,
   include_archived: bool,

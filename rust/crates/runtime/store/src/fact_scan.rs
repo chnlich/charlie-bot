@@ -32,7 +32,7 @@ use crate::fact_checkpoint::{ArchiveMark, FactCheckpoint, ParsedCheckpoint};
 use crate::lock::lock;
 use crate::ndjson;
 use crate::run_facts::RunFacts;
-use crate::task_tree::{PromptScope, fold_appended_history, fold_scanned_history, newest_prompt_change};
+use crate::task_tree::{NodeState, PromptScope, fold_appended_history, fold_scanned_history, newest_prompt_change};
 use crate::task_tree_state::{
   CachedNodeFacts, CachedNodeState, CachedRunFactsAt, LivePromptChanges, NodeFacts, NodeFactsKey, NodeStateKey,
   SealedPromptChanges,
@@ -277,6 +277,45 @@ impl Store {
     };
     self.insert_scanned_facts(session_id, &scanned);
     Ok(ColdSnapshot::Scanned(scanned))
+  }
+
+  /// The cold node-facts read of a session with a live log: the log is scanned and sealed as one snapshot, or the
+  /// cache's events fold when another reader loaded them before the scan took the session lock. `None` when
+  /// `should_stop` fires before the scan starts.
+  pub(crate) fn cold_node_facts_until(
+    &self,
+    session_id: &str,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Arc<NodeFacts>>> {
+    if should_stop() {
+      return Ok(None);
+    }
+    match self.scan_cold_snapshot(session_id)? {
+      ColdSnapshot::Scanned(scanned) => Ok(Some(scanned.facts())),
+      ColdSnapshot::Warm((generation, list_identity, live)) => {
+        self.node_facts_of(session_id, generation, list_identity, &live, should_stop)
+      }
+    }
+  }
+
+  /// The cold node-state read of a session with a live log. A scanned snapshot counts one node-state fold and seals
+  /// its state under the snapshot's identity; the cache's events answer through the warm state path.
+  pub(crate) fn cold_node_state(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
+    match self.scan_cold_snapshot(session_id)? {
+      ColdSnapshot::Scanned(scanned) => {
+        self.history_work.node_state_full_folds.fetch_add(1, Ordering::Relaxed);
+        self.history_work.node_state_folded_events.fetch_add(scanned.folded_events(), Ordering::Relaxed);
+        let (sealed_identity, sealed_archived) = scanned.snapshot_key();
+        let version = match self.sealed_state_version(session_id, sealed_identity, sealed_archived) {
+          Some(version) => version,
+          None => self.next_node_state_version.fetch_add(1, Ordering::Relaxed),
+        };
+        Ok((version, self.node_state_from(session_id, scanned.facts(), scanned.runs())?))
+      }
+      ColdSnapshot::Warm((generation, list_identity, live)) => {
+        self.node_state_of(session_id, generation, list_identity, &live)
+      }
+    }
   }
 
   /// Write the checkpoint a scan left, logging a failure rather than failing the scan: the file only makes the next

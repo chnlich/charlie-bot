@@ -631,7 +631,16 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
       .await
       .unwrap();
   }
-  run_golden_helper("verify_rust_created", root.path(), &[]);
+  run_golden_helper_with_checkpoints(
+    "verify_rust_created",
+    root.path(),
+    &[],
+    &[
+      "python-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json",
+      "rust-created-home/sessions/rust-created-root/data/fact_checkpoint.json",
+      "rust-task-home/sessions/synthetic-task-worker/data/fact_checkpoint.json",
+    ],
+  );
 
   run_golden_helper("mutate_tasks", root.path(), &["python-task-home"]);
   let child_request = CreateTask {
@@ -927,9 +936,14 @@ async fn fork_and_elone_write_the_same_session_files_at_every_index() {
     let created = usize::from(!rust_refused);
     assert_eq!(fresh_sessions(&python_home, &base_sessions).len(), created, "{name}: python session dirs");
     assert_eq!(fresh_sessions(&rust_home, &base_sessions).len(), created, "{name}: rust session dirs");
+    let expected_checkpoints = if operation == "elone" && !rust_refused {
+      &["sessions/synthetic-fork-root/data/fact_checkpoint.json"][..]
+    } else {
+      &[][..]
+    };
     assert_eq!(
       normalized_home(&python_home, &base_sessions),
-      normalized_home(&rust_home, &base_sessions),
+      normalized_home_with_expected_checkpoints(&rust_home, &base_sessions, expected_checkpoints),
       "{name}"
     );
   }

@@ -28,7 +28,8 @@ fn cgroup_config(base: &Path) -> SessionCgroupConfig {
     memory_max_mb: 64,
     swap_max_mb: 0,
     tasks_max: 64,
-    ..SessionCgroupConfig::disabled()
+    enable_cpu_weight: false,
+    enable_io_weight: false,
   }
 }
 

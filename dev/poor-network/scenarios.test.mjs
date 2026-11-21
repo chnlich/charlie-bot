@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { statusPollCounts } from './scenarios.mjs';
+import { statusPollCounts, traceInWindow } from './scenarios.mjs';
 
 // A tab whose status polls are the given records, oldest first: `{url, status (200 or 304 as the page sees it),
 // wireStatus, body}`.
@@ -95,4 +95,25 @@ test('an id that leaves the set counts as a removed row', () => {
   const counts = statusPollCounts(tab, 0, 10, 1);
   assert.equal(counts.changedBodies, 1);
   assert.deepEqual(Object.keys(counts.changedFields), ['row removed']);
+});
+
+test('a request in flight in the window is traced, and one that finished before the restore is not', () => {
+  const page = {
+    requests: [
+      { url: 'a', startMs: -5000, finishMs: 200, bytes: 1000 },
+      { url: 'b', startMs: -900, finishMs: -10, bytes: 50 },
+      { url: 'c', startMs: 400, finishMs: 500, bytes: 70 },
+      { url: 'd', startMs: -100, finishMs: null, bytes: null },
+    ],
+    frames: [
+      { at: -1, bytes: 9, type: 'x' },
+      { at: 120, bytes: 40, type: 'stream' },
+      { at: 900, bytes: 5, type: 'y' },
+    ],
+  };
+  const trace = traceInWindow(page, [{ url: 'w', startMs: 10, finishMs: 20, bytes: 300 }], 250);
+  assert.deepEqual(trace.requests.map((request) => request.url), ['a', 'd']);
+  assert.deepEqual(trace.workers.map((request) => request.url), ['w']);
+  assert.deepEqual(trace.frames.map((frame) => frame.type), ['stream']);
+  assert.deepEqual(trace.bytes, { requestsLanded: 1000, workersLanded: 300, frames: 40 });
 });

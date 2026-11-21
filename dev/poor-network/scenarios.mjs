@@ -583,6 +583,31 @@ export function viewBackgroundRep(filter) {
   };
 }
 
+// The trace of one window that ends `toMs` after its origin: every request in flight in [0, toMs] on the page and on
+// its service worker, and every socket frame received in it. A request that started in the blackout and finished in
+// the window is in flight there, so it is kept. The landed bytes count a request whose body arrived by the window's
+// end; the browser reports a response's size only when it ends.
+export function traceInWindow(pageTrace, workerRequests, toMs) {
+  const inFlight = (request) => (request.startMs ?? -Infinity) <= toMs
+    && (request.finishMs === null || request.finishMs >= 0);
+  const landed = (requests) => requests.filter((request) => request.finishMs !== null && request.finishMs <= toMs);
+  const sum = (items) => items.reduce((total, item) => total + (item.bytes ?? 0), 0);
+  const requests = pageTrace.requests.filter(inFlight);
+  const workers = workerRequests.filter(inFlight);
+  const frames = pageTrace.frames.filter((frame) => frame.at >= 0 && frame.at <= toMs);
+  return {
+    windowMs: toMs,
+    requests,
+    workers,
+    frames,
+    bytes: {
+      requestsLanded: sum(landed(requests)),
+      workersLanded: sum(landed(workers)),
+      frames: sum(frames),
+    },
+  };
+}
+
 // Scenario 4: a 30 s held blackout with five switch clicks inside it.
 export async function heldBlackoutRep(ctx) {
   const { api, sessions } = ctx;
@@ -640,6 +665,8 @@ export async function heldBlackoutRep(ctx) {
       lastBootstrapBytes: lastBytes,
       supersededServerBytes,
       blackoutProxyBytes: proxy.counters(),
+      // Every request and socket frame of the restore-to-shown window, on the page and on its service worker.
+      trace: traceInWindow(tab.traceFrom(restoreAt), tabs.workerTrace(restoreAt), shownAt - restoreAt),
     };
   });
 }

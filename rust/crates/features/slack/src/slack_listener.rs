@@ -132,32 +132,6 @@ pub async fn backfill_followed_threads(
   thread_entry::backfill_followed_threads(&adapter, features).await
 }
 
-/// The freshness check on a reply, which fails while eligible Slack messages remain above the session watermark.
-pub async fn assert_thread_fresh(session_id: &str, features: &Arc<FeatureContext>) -> Result<(), ThreadReplyError> {
-  let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::lazy(Arc::clone(features)));
-  thread_entry::assert_thread_fresh(&adapter, features, session_id).await
-}
-
-/// The posting of the session's reply to its Slack thread.
-pub async fn post_reply(
-  session_id: &str,
-  text: &str,
-  features: &Arc<FeatureContext>,
-) -> Result<Value, ThreadReplyError> {
-  let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::lazy(Arc::clone(features)));
-  thread_entry::post_reply(&adapter, features, session_id, text).await
-}
-
-/// Ack eligible messages and advance the session's Slack watermark.
-pub async fn ack_messages(
-  session_id: &str,
-  message_ids: &[String],
-  features: &Arc<FeatureContext>,
-) -> Result<Value, ThreadReplyError> {
-  let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::lazy(Arc::clone(features)));
-  thread_entry::ack_messages(&adapter, features, session_id, message_ids).await
-}
-
 /// The report of queued Slack summons lost across a restart.
 pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> Result<usize, ThreadReplyError> {
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(SlackThreadAdapter::lazy(Arc::clone(features)));

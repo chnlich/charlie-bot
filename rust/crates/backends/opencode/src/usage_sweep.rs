@@ -135,7 +135,7 @@ fn freelist_bytes(db: &Path) -> u64 {
   match (pages, page_size) {
     // SQLite reports both pragmas as non-negative counts.
     (Some(pages), Some(page_size)) => pages as u64 * page_size as u64,
-    _ => 0,
+    (None, _) | (_, None) => 0,
   }
 }
 

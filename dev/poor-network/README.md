@@ -292,7 +292,11 @@ is not read there.
 The worker also stores the session page's on-demand files that render stored content: the Status panel with its
 comment-post dependency, the For-you worker summary, file links, draft cards and artifact cards, each with its stylesheet
 (`ON_DEMAND_FILES` in `web/static/js/offline-shell.js`, eight same-origin files). The page asks once it is current and
-idle, after the first screen and the catch-up, so an offline open shows those views without their first online use. A
+idle, after the first screen and the catch-up, so an offline open shows those views without their first online use.
+While a user-waiting request is in flight (a first screen, a session's older events, the sidebar's full list, or a send),
+the shell and these files yield the link: the page reports each request's start and end (`offline-shell.js`), an install
+in flight is aborted and runs again after a 1 s quiet gap, and a 10 s cap (`PAGE_DEFER_CAP_MS`) ends the deferral, so a
+busy page still installs the shell. The status poll and the rest of the API are not reported. A
 same-origin loader file whose only function talks to the server is listed in `ON_DEMAND_EXCLUDED` with its reason. The
 cross-origin files stay out: the KaTeX loader and the terminal's xterm files (jsdelivr), and the diff page's CDN files.
 The server's ETag names a bundled static file's bytes: the package and `web/static` mounts are `StaticDirectory::bundled`

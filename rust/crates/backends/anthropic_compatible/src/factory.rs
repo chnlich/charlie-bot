@@ -79,9 +79,16 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let cfg = Registry::new().load_config(home.path()).unwrap();
     let launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
       cgroup_session_id: Some("worker-session".to_string()),
+      remote_launch: None,
       backend_kwargs: serde_json::json!({"run_id": "worker-run"}).as_object().unwrap().clone(),
-      ..LaunchArgs::default()
+      manager_turn: false,
     };
     AnthropicCompatibleFactory.build(Some(&option(type_fields)), &cfg, launch).map_err(|error| format!("{error:#}"))
   }
@@ -160,8 +167,20 @@ mod tests {
     let cfg = Registry::new().load_config(home.path()).unwrap();
     let option =
       option("api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\ncredential: endpoint\n");
+    let launch = LaunchArgs {
+      extra_flags: Vec::new(),
+      buffer_limit: None,
+      instructions_content: None,
+      instructions_file: None,
+      resume_session_id: None,
+      log_dir: None,
+      cgroup_session_id: None,
+      remote_launch: None,
+      backend_kwargs: serde_json::Map::new(),
+      manager_turn: false,
+    };
     let error = AnthropicCompatibleFactory
-      .build(Some(&option), &cfg, LaunchArgs::default())
+      .build(Some(&option), &cfg, launch)
       .err()
       .map(|error| format!("{error:#}"))
       .expect("an empty key is refused");

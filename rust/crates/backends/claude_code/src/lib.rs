@@ -1,5 +1,6 @@
 //! The cc-claude option, factory, lifecycle, environment, event translation, and the Claude Code usage source.
 
+pub mod account_labels;
 pub mod claude_accounts;
 pub mod claude_compaction;
 pub mod claude_config;

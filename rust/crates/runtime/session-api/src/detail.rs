@@ -1754,6 +1754,11 @@ backends:
         .await
         .unwrap();
       features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
+      features
+        .store
+        .append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": format!("run-{turn}")}))
+        .await
+        .unwrap();
     }
     let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
@@ -1764,17 +1769,18 @@ backends:
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
     assert_eq!(payload.value["has_more"], json!(true));
-    // A turn is three events (user, assistant, separator), each folding to one message. The kept
-    // suffix therefore starts at a turn boundary, and the newest turn's user message is on the first screen.
+    // A turn is four events: user, assistant and separator fold to one message each, and the run's `run_finished`
+    // folds to none. The kept suffix therefore starts at a turn's user message, and the newest turn's user message is
+    // on the first screen.
     assert_eq!(kept % 3, 0, "the kept events are whole turns");
-    assert_eq!(payload.value["oldest_message_ordinal"], json!(total_events - kept));
+    assert_eq!(payload.value["oldest_message_ordinal"], json!(total_events - 4 * (kept / 3)));
     assert_eq!(messages[0]["role"], "user", "a kept turn starts at its user message");
     let newest_marker = messages.iter().find(|message| message["content"] == json!(fixture_text(8, 1_600)));
     assert!(newest_marker.is_some(), "the newest turn's user message renders on the first screen");
   }
 
-  /// Appends one turn of the fixture: a user message of `user_chars`, an assistant reply when `with_reply`, and the
-  /// turn's separator.
+  /// Appends one turn of the fixture as a real log writes it: a user message of `user_chars`, an assistant reply when
+  /// `with_reply`, the turn's separator, and the run's `run_finished` after it.
   async fn append_fixture_turn(store: &Store, session_id: &str, turn: usize, user_chars: usize, with_reply: bool) {
     store
       .append_chat_event(session_id, json!({"type": "user", "content": fixture_text(turn as u64, user_chars)}))
@@ -1791,6 +1797,10 @@ backends:
         .unwrap();
     }
     store.append_chat_event(session_id, json!({"type": "master_done"})).await.unwrap();
+    store
+      .append_chat_event(session_id, json!({"type": "run_finished", "run_id": format!("run-{turn}")}))
+      .await
+      .unwrap();
   }
 
   /// A tail that starts past the history's first event trims in its own indexes. The kept events are the tail's last
@@ -1816,7 +1826,12 @@ backends:
     assert!(start > 0, "the tail starts past the history's first event");
     let first_turn = turn_starts.iter().position(|turn_start| *turn_start == start);
     let first_turn = first_turn.expect("the kept events start at a turn boundary") + 1;
-    assert_eq!(start + messages.len(), total, "the kept events run to the history's end");
+    // Each kept turn's `run_finished` is kept too, and it folds to no message.
+    let kept_closes = features.store.load_chat_events_sync(&meta.id).unwrap()[start..]
+      .iter()
+      .filter(|event| event["type"] == "run_finished")
+      .count();
+    assert_eq!(start + messages.len() + kept_closes, total, "the kept events run to the history's end");
     assert_eq!(
       messages[0]["content"],
       json!(fixture_text(first_turn as u64, 700)),
@@ -1884,9 +1899,10 @@ backends:
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
   }
 
-  /// A closed newest turn over the whole budget renders whole: the trim stops at its start, not past its end.
+  /// A closed newest turn over the budget keeps the newest events that fit and always its last reply. Its 20,000-
+  /// character user message cannot fit, so the cut lands on the reply, and the separator and `run_finished` follow it.
   #[tokio::test]
-  async fn a_closed_newest_turn_over_the_budget_renders_whole() {
+  async fn a_closed_newest_turn_over_the_budget_keeps_its_last_reply() {
     let (_home, features) = feature_context();
     let meta =
       crate::test_support::create_node(&features.store, "trim-oversized-turn", None, TaskProfile::Manager).await;
@@ -1894,14 +1910,113 @@ backends:
     append_fixture_turn(&features.store, &meta.id, 2, 20_000, true).await;
     let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 3, "the newest turn's three events render");
-    assert_eq!(messages[0]["content"], json!(fixture_text(2, 20_000)));
-    assert_eq!(
-      payload.value["oldest_message_ordinal"],
-      json!(features.store.load_chat_events_sync(&meta.id).unwrap().len() - messages.len()),
-      "the cursor is the first kept event"
-    );
+    assert_eq!(messages.len(), 2, "the reply and its separator render");
+    assert!(renders(messages, &fixture_text(102, 700)), "the newest turn's reply renders");
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    assert_eq!(payload.value["oldest_message_ordinal"], json!(total - 3), "the cursor is the reply's event");
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
+  }
+
+  /// Whether one of `messages` carries `text` anywhere in its JSON, whatever shape its renderer gave the content.
+  fn renders(messages: &[Value], text: &str) -> bool {
+    messages.iter().any(|message| message.to_string().contains(text))
+  }
+
+  /// A running session's newest turn is open, so its last finished turn is the newest one that must render. When the
+  /// finished turn's reply and the running turn are over the budget together, the reply still renders.
+  #[tokio::test]
+  async fn a_running_session_keeps_the_last_finished_reply() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "trim-running", None, TaskProfile::Manager).await;
+    let finished_reply = fixture_text(201, 12_000);
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(1, 1_600)}))
+      .await
+      .unwrap();
+    features
+      .store
+      .append_chat_event(
+        &meta.id,
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": finished_reply}]}}),
+      )
+      .await
+      .unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": "run-1"})).await.unwrap();
+    // The running turn: its user message and an assistant reply still in progress, with no separator yet.
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(2, 1_600)}))
+      .await
+      .unwrap();
+    features
+      .store
+      .append_chat_event(
+        &meta.id,
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": fixture_text(202, 700)}]}}),
+      )
+      .await
+      .unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES, "the fixture's tail is over the budget");
+    assert!(renders(messages, &finished_reply), "the last finished reply renders");
+    assert!(renders(messages, &fixture_text(2, 1_600)), "the running turn's user message renders");
+  }
+
+  /// A newest turn over the budget keeps the newest of its events that fit, so its cursor lands inside the turn. The
+  /// reply and the separator still render, and the trim keeps more than the last row.
+  #[tokio::test]
+  async fn a_newest_turn_over_the_budget_keeps_the_newest_events_that_fit() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "trim-mid-turn", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 700, true).await;
+    // Ten user messages in one turn: each folds to one row, and together they are over the budget.
+    let turn_users: Vec<String> = (0..10).map(|index| fixture_text(300 + index, 1_600)).collect();
+    for user in &turn_users {
+      features.store.append_chat_event(&meta.id, json!({"type": "user", "content": user})).await.unwrap();
+    }
+    let reply = fixture_text(399, 700);
+    features
+      .store
+      .append_chat_event(
+        &meta.id,
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}}),
+      )
+      .await
+      .unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": "run-2"})).await.unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
+    assert!(renders(messages, &reply), "the newest turn's reply renders");
+    assert!(renders(messages, &turn_users[9]), "the newest user message renders");
+    assert!(!renders(messages, &turn_users[0]), "the oldest user messages of the turn do not fit");
+    let kept_users = turn_users.iter().filter(|user| renders(messages, user)).count();
+    assert!(kept_users >= 2, "the trim keeps the newest events that fit, not only the last row: kept {kept_users}");
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    assert!(start > 0 && start < total - 1, "the cursor lands inside the newest turn at {start} of {total}");
+  }
+
+  /// `session.web_status` counts against the budget. When it alone is over the budget, the newest reply still renders.
+  #[tokio::test]
+  async fn a_payload_whose_web_status_alone_exceeds_the_budget_keeps_the_newest_reply() {
+    let (_home, features) = feature_context();
+    let mut meta =
+      crate::test_support::create_node(&features.store, "trim-web-status", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 700, true).await;
+    append_fixture_turn(&features.store, &meta.id, 2, 700, true).await;
+    meta.set_extra("web_status", json!({"goal": fixture_text(9, 17_000), "now": null, "waiting": []}));
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    assert!(payload.value["session"]["web_status"].is_object(), "the session object carries web_status");
+    assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES, "web_status alone is over the budget");
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert!(renders(messages, &fixture_text(102, 700)), "the newest reply renders past the budget");
+    assert!(messages.len() <= 2, "only the reply and its separator render: {} rows", messages.len());
   }
 
   /// A log whose last line does not parse names the tail's first line as the paging cursor. The cursor counts the

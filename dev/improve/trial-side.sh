@@ -8,11 +8,11 @@
 # IMPROVE_TRIAL_USE_LOCK chooses whether the side holds the host's bench lock around its command. 1, the default,
 # holds the lock: the side waits at most IMPROVE_TRIAL_LOCK_WAIT_SECONDS (default 900, the round's 15 minutes) for
 # it. When the wait runs out, the command does not run: the side prints its stop reason on stderr and exits with
-# BENCH_LOCK_TIMEOUT_EXIT. 0 runs the command beside any bench, with no wait. Such a side writes the lock's holder,
-# or none, at its start and at its end to a bench-lock record under $CHARLIEBOT_RELEASE_RUN_DIR, and it serves on a
-# port range the bench's default does not use. Either way the side exits with the command's exit code. The lock and
-# its flock call belong to dev/poor-network/lock.sh; the poor-network bench's own sides take the same lock with their
-# own wait.
+# BENCH_LOCK_TIMEOUT_EXIT. 0 is available only to improve-ux sides, which run beside any bench with no wait. Such a
+# side writes the lock's holder, or none, at its start and at its end to a bench-lock record under
+# $CHARLIEBOT_RELEASE_RUN_DIR, and it serves on a port range the bench's default does not use. Either way the side
+# exits with the command's exit code. The lock and its flock call belong to dev/poor-network/lock.sh; the poor-network
+# bench's own sides take the same lock with their own wait.
 #
 # The side's marker lives in /tmp/improve-<IMPROVE_DIRECTION>, the round's own scratch directory, which the round runner
 # exports as IMPROVE_DIRECTION. The marker is not under TMPDIR: the round's TMPDIR lost a side's marker while the side
@@ -55,6 +55,10 @@ bench_lock_record() {
 }
 
 if (( IMPROVE_TRIAL_USE_LOCK == 0 )); then
+  if [[ ${IMPROVE_DIRECTION:-} != ux ]]; then
+    printf 'improve trial side: IMPROVE_TRIAL_USE_LOCK=0 requires IMPROVE_DIRECTION=ux\n' >&2
+    exit 2
+  fi
   if [[ -z ${CHARLIEBOT_RELEASE_RUN_DIR:-} ]]; then
     printf 'improve trial side: IMPROVE_TRIAL_USE_LOCK=0 needs CHARLIEBOT_RELEASE_RUN_DIR for its record\n' >&2
     exit 2

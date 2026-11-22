@@ -1,6 +1,6 @@
 // Tests of the bench lock: every side attempt takes the one file lock.sh names, so two side attempts on a host run one
-// after the other, and no caller option picks another file. The one option that skips the lock is an improve trial
-// side's IMPROVE_TRIAL_USE_LOCK=0, which runs the side beside the lock and records the lock's holder instead.
+// after the other, and no caller option picks another file. The one option that skips the lock is an improve-ux
+// trial side's IMPROVE_TRIAL_USE_LOCK=0, which runs the side beside the lock and records the lock's holder instead.
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -58,14 +58,16 @@ function improveSide(home, ran, waitSeconds, code, extraEnv = {}) {
     'printf "%s %s\\n" "${TRIAL_PORT_MIN:-unset}" "${TRIAL_PORT_MAX:-unset}" >"$1.ports"',
     'exit "$2"',
   ].join('; ');
+  const env = {
+    ...process.env,
+    HOME: home,
+    IMPROVE_DIRECTION: DIRECTION,
+    IMPROVE_TRIAL_LOCK_WAIT_SECONDS: String(waitSeconds),
+  };
+  delete env.IMPROVE_TRIAL_USE_LOCK;
+  Object.assign(env, extraEnv);
   return spawnSync('bash', [IMPROVE_SIDE, 'bash', '-c', command, 'bash', ran, String(code)], {
-    env: {
-      ...process.env,
-      HOME: home,
-      IMPROVE_DIRECTION: DIRECTION,
-      IMPROVE_TRIAL_LOCK_WAIT_SECONDS: String(waitSeconds),
-      ...extraEnv,
-    },
+    env,
     encoding: 'utf8',
     timeout: 30000,
   });
@@ -268,7 +270,11 @@ test('a lock-off improve side runs beside a held lock and records the holder', {
     waiter = sideAttempt(home, body, path.join(dir, 'waiter'));
     await waitFor(() => listedAsWaiter(waiter.child.pid));
     // The wait is 1 s: a side that queued behind the held lock would stop with the lock timeout instead of running.
-    const side = improveSide(home, ran, 1, 3, { IMPROVE_TRIAL_USE_LOCK: '0', CHARLIEBOT_RELEASE_RUN_DIR: evidence });
+    const side = improveSide(home, ran, 1, 3, {
+      IMPROVE_DIRECTION: 'ux',
+      IMPROVE_TRIAL_USE_LOCK: '0',
+      CHARLIEBOT_RELEASE_RUN_DIR: evidence,
+    });
     assert.equal(side.status, 3, side.stderr);
     assert.equal(fs.existsSync(ran), true, 'the trial command did not run beside the held lock');
     assert.equal(fs.readFileSync(`${ran}.ports`, 'utf8'), '18670 18689\n', 'the side kept the bench port range');
@@ -296,12 +302,36 @@ test('an improve side with the bench lock off records none when the lock file is
     const warm = improveSide(home, path.join(dir, 'warm'), 5, 0);
     assert.equal(warm.status, 0, warm.stderr);
     const ran = path.join(dir, 'ran');
-    const side = improveSide(home, ran, 1, 0, { IMPROVE_TRIAL_USE_LOCK: '0', CHARLIEBOT_RELEASE_RUN_DIR: evidence });
+    const side = improveSide(home, ran, 1, 0, {
+      IMPROVE_DIRECTION: 'ux',
+      IMPROVE_TRIAL_USE_LOCK: '0',
+      CHARLIEBOT_RELEASE_RUN_DIR: evidence,
+    });
     assert.equal(side.status, 0, side.stderr);
     assert.equal(fs.existsSync(ran), true, 'the trial command did not run with the lock off');
     const [start, end] = benchLockRecord(evidence);
     assert.match(start, / side start: bench lock holder none$/);
     assert.match(end, / side end: bench lock holder none$/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a lock-off improve side refuses a direction other than ux', () => {
+  const home = scratch('pn-lock-home-');
+  const dir = scratch('pn-lock-run-');
+  const ran = path.join(dir, 'ran');
+  const evidence = path.join(dir, 'evidence');
+  try {
+    const side = improveSide(home, ran, 1, 0, {
+      IMPROVE_TRIAL_USE_LOCK: '0',
+      CHARLIEBOT_RELEASE_RUN_DIR: evidence,
+    });
+    assert.equal(side.status, 2, side.stderr);
+    assert.match(side.stderr, /IMPROVE_TRIAL_USE_LOCK=0 requires IMPROVE_DIRECTION=ux/);
+    assert.equal(fs.existsSync(ran), false, 'the trial command ran for a non-UX direction');
+    assert.equal(fs.existsSync(evidence), false, 'the side created evidence for a non-UX direction');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });

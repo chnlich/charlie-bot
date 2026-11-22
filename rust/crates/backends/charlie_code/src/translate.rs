@@ -40,7 +40,7 @@ impl CharlieCodeTranslator {
       }
       Some("thought") => Ok(vec![make_text_event(required_str(event, "text")?)]),
       Some("command") => self.command(event),
-      Some("command_progress") => self.command_progress(event),
+      Some(event_types::COMMAND_PROGRESS) => self.command_progress(event),
       Some("observation") => {
         let mut translated = make_tool_result_event("Bash", str_field(event, "output", "")?);
         translated[event_types::TOOL_USE_ID] = json!(required_str(event, "id")?);
@@ -54,8 +54,8 @@ impl CharlieCodeTranslator {
           Some(other) => bail!("charlie-code result usage must be a JSON object, got {other}"),
         };
         Ok(vec![make_result_event(
-          int_field(usage, "input_tokens")?,
-          int_field(usage, "output_tokens")?,
+          int_field(usage, event_types::USAGE_INPUT_TOKENS)?,
+          int_field(usage, event_types::USAGE_OUTPUT_TOKENS)?,
           0,
           0,
           Value::Null,
@@ -63,9 +63,10 @@ impl CharlieCodeTranslator {
         )])
       }
       Some("error") => Ok(vec![make_error_event(str_field(event, "message", "")?)]),
-      Some("compact") => {
-        Ok(vec![make_compact_boundary_event(required_str(event, "trigger")?, nullable_int(event, "pre_tokens")?)])
-      }
+      Some("compact") => Ok(vec![make_compact_boundary_event(
+        required_str(event, "trigger")?,
+        nullable_int(event, event_types::COMPACT_PRE_TOKENS)?,
+      )]),
       Some("context") => Ok(vec![context_reading(event)?]),
       other => {
         tracing::debug!(target: "charliebot_agents", event_type = ?other, "charlie_code_unknown_event");

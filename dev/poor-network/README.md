@@ -50,8 +50,8 @@ stage has one attempt, so a pass over its cap fails the side. The lock descripto
 children never hold the lock after it ends. Each side's trial tree is named by its invocation and side
 (`pn-<run id>-<side>`), so two invocations on one commit never share a tree.
 
-The bench's lock file is `pn-runs/.bench.lock` under the account's home from the passwd entry, the one `lock.sh` names,
-and no option chooses another. A trial replaces `HOME` for the bench it runs, so a lock named from `$HOME` would be a
+The bench's lock file is the one `lock.sh` names, under the account's home from the passwd entry, and no option chooses
+another. A trial replaces `HOME` for the bench it runs, so a lock named from `$HOME` would be a
 private file that no other holder shares. The bench checks the served home against the mock home (`mock-home check`)
 after the trial starts and before its first take of the lock, so a mismatch fails at once and not after a lock wait.
 The remote-wake bench takes the same

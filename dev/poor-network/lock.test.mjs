@@ -442,7 +442,8 @@ const SIDE_ROOT = path.join(BENCH_DIR, 'side-root.sh');
 const SOCKET_BYTE_LIMIT = 108;
 
 test('a side root keeps Chrome\'s socket path under trial.sh\'s limit for a 25-byte TMPDIR', () => {
-  const tmpdir = path.join(os.tmpdir(), 'x'.repeat(25 - Buffer.byteLength(os.tmpdir()) - 1));
+  // A 25-byte TMPDIR under /tmp, named for this test process; os.tmpdir() can be longer than 24 bytes on a remote run.
+  const tmpdir = path.join('/tmp', `pnroot${process.pid}`.padEnd(20, 'x'));
   fs.mkdirSync(tmpdir);
   try {
     assert.equal(Buffer.byteLength(tmpdir), 25);

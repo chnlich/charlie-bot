@@ -717,7 +717,11 @@ fn launch_of(case: &Value) -> LaunchArgs {
     // A manager turn carries no run instructions file, and a worker run does. The live launch sets this flag on the
     // manager path.
     manager_turn: case["instructions_file"].is_null(),
-    ..LaunchArgs::default()
+    buffer_limit: None,
+    log_dir: None,
+    cgroup_session_id: None,
+    remote_launch: None,
+    backend_kwargs: serde_json::Map::new(),
   }
 }
 

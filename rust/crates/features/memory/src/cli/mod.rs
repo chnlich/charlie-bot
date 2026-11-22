@@ -38,7 +38,9 @@ struct MemoryCli {
 
 #[derive(Subcommand)]
 enum MemoryCommand {
-  /// Print matched entries' full text or index lines.
+  /// Print entries' full text, or their index lines with `--index`.
+  ///
+  /// `--topic <topic> --index` prints the index of that topic. `--index` alone prints the index of every topic.
   Query(QueryArgs),
   /// Stage a free-form capture.
   Add(AddArgs),
@@ -50,13 +52,14 @@ enum MemoryCommand {
 
 #[derive(Args)]
 struct QueryArgs {
-  /// Topic to match (repeatable). It must exist in the vocabulary.
-  #[arg(long, required = true, action = clap::ArgAction::Append)]
+  /// Topic to match (repeatable), for full text or with `--index`. It must exist in the vocabulary.
+  #[arg(long, action = clap::ArgAction::Append)]
   topic: Vec<String>,
   /// Only entries whose audience contains this value.
   #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(crate::memory::AUDIENCE_ELEMENTS))]
   audience: Option<String>,
-  /// Print index lines only.
+  /// Print index lines (`<topic>/<slug> · <title>`) instead of full text: those of the `--topic` topics, or
+  /// those of every topic when `--topic` is absent.
   #[arg(long)]
   index: bool,
   /// Only entries in resident topics.
@@ -96,6 +99,11 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 fn query(args: &QueryArgs) -> Result<(), CliExit> {
+  if args.topic.is_empty() && !args.index {
+    exit_error(
+      "error: query needs --topic <topic> for full text, or --index for index lines (--index alone lists every topic)",
+    );
+  }
   let token = std::env::var(RUN_TOKEN_ENV).unwrap_or_default();
   let fixed_audience = if token.trim().is_empty() {
     None
@@ -133,17 +141,18 @@ fn query(args: &QueryArgs) -> Result<(), CliExit> {
   }
   let wanted: BTreeSet<&str> = args.topic.iter().map(String::as_str).collect();
   let residents = crate::memory::resident_topic_names(&store);
+  // An empty `wanted` is the `--index` form over every topic: the full-text form always names a topic above.
   let mut matched: Vec<_> = store
     .entries
     .iter()
-    .filter(|entry| entry.topic.as_deref().is_some_and(|topic| wanted.contains(topic)))
+    .filter(|entry| wanted.is_empty() || entry.topic.as_deref().is_some_and(|topic| wanted.contains(topic)))
     .filter(|entry| audience.is_none_or(|value| crate::memory::audience_allows(entry, value)))
     .filter(|entry| !args.resident || entry.topic.as_deref().is_some_and(|topic| residents.contains(topic)))
     .collect();
   matched.sort_by(|left, right| crate::memory::entry_order_key(left).cmp(&crate::memory::entry_order_key(right)));
   if args.index {
     for entry in matched {
-      println!("{} · {}", entry.id(), entry.title);
+      println!("{}", crate::memory::index_line(entry));
     }
   } else {
     for entry in matched {

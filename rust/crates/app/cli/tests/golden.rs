@@ -136,6 +136,8 @@ const GOLDEN_CASE_TESTS: &[&str] = &[
   "test_cli_add_creates_one_staging_file",
   "test_cli_add_on_a_fresh_home_creates_the_scaffold_and_the_capture",
   "test_cli_query_index_on_a_fresh_home_runs",
+  "test_cli_query_index_alone_lists_every_topic",
+  "test_cli_query_index_alone_reads_the_given_dir",
   "test_cli_query_audience_filter_is_membership",
   "test_cli_lint_dir_reads_given_root",
   "test_cli_lint_warns_on_an_overwide_body_line_without_failing",
@@ -765,6 +767,33 @@ fn a_server_verb_in_a_home_without_a_config_names_the_file_before_any_request() 
   child.stderr.take().unwrap().read_to_string(&mut stderr).unwrap();
   assert_eq!(status.code(), Some(1), "stderr: {stderr}");
   assert!(stderr.contains(&home.join("config.yaml").display().to_string()), "stderr: {stderr}");
+}
+
+/// `memory query` with neither `--topic` nor `--index` exits 1, and its error names both forms. The assertion checks
+/// the flags the error names, not its wording.
+#[test]
+#[ignore = "integration"]
+fn a_memory_query_without_topic_or_index_names_both_forms() {
+  let temp = tempfile::tempdir().unwrap();
+  let home = temp.path().join("home");
+  std::fs::create_dir_all(&home).unwrap();
+  let mut child = Command::new(env!("CARGO_BIN_EXE_charliebot"))
+    .args(["memory", "query"])
+    .current_dir(temp.path())
+    .env_clear()
+    .env("CHARLIEBOT_HOME", &home)
+    .env("HOME", temp.path().join("user-home"))
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .spawn()
+    .unwrap();
+  let status = wait_bounded(&mut child).unwrap().expect("the CLI finishes within the process timeout");
+  let mut stderr = String::new();
+  child.stderr.take().unwrap().read_to_string(&mut stderr).unwrap();
+  assert_eq!(status.code(), Some(1), "stderr: {stderr}");
+  assert!(stderr.contains("--topic"), "stderr: {stderr}");
+  assert!(stderr.contains("--index"), "stderr: {stderr}");
 }
 
 mod authenticated_commands {

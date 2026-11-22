@@ -1,10 +1,12 @@
 //! The `pending-wake` turn-end check: a web manager turn that ends with its task open leaves a wake.
 //!
-//! A wake is a Waiting on you item, a bound schedule with a next run, a pending trigger, or an open child that runs a
-//! run now or holds a wake itself. The reads run cheapest first and stop at the first wake: the turn input, then the
-//! session metadata, then the triggers and the session tree. A turn's first miss blocks with the check's text; a miss
-//! after a block in the same turn passes with a notice. The check reads only the turn's own events, so it keeps no state.
+//! A wake is a Waiting on you item, a bound scheduled task with a next fire, a pending trigger, or an open child that
+//! runs a run now or holds a wake itself. The reads run cheapest first and stop at the first wake: the turn input, then
+//! the session metadata, then the bound scheduled tasks (one read per check, owned by `features/cron`), then the
+//! triggers and the session tree. A turn's first miss blocks with the check's text; a miss after a block in the same
+//! turn passes with a notice. The check reads only the turn's own events, so it keeps no state.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -12,6 +14,7 @@ use charliebot_core::event_types::{TURN_HOOKS, WEB_STATUS};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{CheckResult, TurnInput};
 use charliebot_session_api::tree::tree_page;
+use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::trigger_files::TriggerStatus;
 use charliebot_triggers::triggers::TriggerManager;
 use serde::Deserialize;
@@ -86,10 +89,14 @@ async fn wake_found(features: &Arc<FeatureContext>, input: &TurnInput) -> anyhow
   if waiting_on_user(&input.status)? {
     return Ok(true);
   }
-  if dir_wake(features, &input.session_id)? || pending_trigger_count(features, &input.session_id).await? > 0 {
+  if dir_wake(features, &input.session_id)? {
     return Ok(true);
   }
-  subtree_holds_wake(features, &input.session_id).await
+  let scheduled = (features.registry.bound_next_fire_reader()?)(features, UtcDateTime::now())?;
+  if scheduled.contains(&input.session_id) || pending_trigger_count(features, &input.session_id).await? > 0 {
+    return Ok(true);
+  }
+  subtree_holds_wake(features, &input.session_id, &scheduled).await
 }
 
 /// Whether the turn's stored status lists a Waiting on you item. A turn with no stored status lists none.
@@ -101,7 +108,7 @@ fn waiting_on_user(status: &Value) -> anyhow::Result<bool> {
   }
 }
 
-/// Whether a session's metadata holds a wake: a non-empty Waiting on you list, or a bound schedule with a next run.
+/// Whether a session's metadata holds a wake: a non-empty Waiting on you list.
 fn dir_wake(features: &FeatureContext, session_id: &str) -> anyhow::Result<bool> {
   let meta = features
     .store
@@ -114,9 +121,7 @@ fn dir_wake(features: &FeatureContext, session_id: &str) -> anyhow::Result<bool>
     .and_then(|status| status.get("waiting"))
     .and_then(Value::as_array)
     .is_some_and(|items| !items.is_empty());
-  let scheduled =
-    meta.schedule_enabled == Some(true) && meta.schedule_next_run.as_deref().is_some_and(|run| !run.is_empty());
-  Ok(waiting || scheduled)
+  Ok(waiting)
 }
 
 /// The number of a session's pending delayed triggers.
@@ -127,8 +132,13 @@ async fn pending_trigger_count(features: &FeatureContext, session_id: &str) -> a
 }
 
 /// Whether an open child of `parent_id` holds a wake. The children's pages are read to the last page unless a child
-/// runs first. Then the metadata, the triggers and the open descendants are read, each in turn over the children.
-async fn subtree_holds_wake(features: &Arc<FeatureContext>, parent_id: &str) -> anyhow::Result<bool> {
+/// runs first. Then the metadata and the bound scheduled tasks, the triggers and the open descendants are read, each in
+/// turn over the children.
+async fn subtree_holds_wake(
+  features: &Arc<FeatureContext>,
+  parent_id: &str,
+  scheduled: &HashSet<String>,
+) -> anyhow::Result<bool> {
   let mut open = Vec::new();
   let mut cursor: Option<String> = None;
   loop {
@@ -145,7 +155,7 @@ async fn subtree_holds_wake(features: &Arc<FeatureContext>, parent_id: &str) -> 
     }
   }
   for row in &open {
-    if dir_wake(features, &row.id)? {
+    if dir_wake(features, &row.id)? || scheduled.contains(&row.id) {
       return Ok(true);
     }
   }
@@ -155,7 +165,7 @@ async fn subtree_holds_wake(features: &Arc<FeatureContext>, parent_id: &str) -> 
     }
   }
   for row in &open {
-    if row.open_descendant_count > 0 && Box::pin(subtree_holds_wake(features, &row.id)).await? {
+    if row.open_descendant_count > 0 && Box::pin(subtree_holds_wake(features, &row.id, scheduled)).await? {
       return Ok(true);
     }
   }
@@ -262,14 +272,6 @@ mod tests {
     fs::write(run_path, run.to_string()).expect("the run record");
   }
 
-  /// Sets fields of the metadata file of `session_id` as written, for fields whose slot this harness does not register.
-  fn set_metadata_fields(home: &Home, session_id: &str, fields: Value) {
-    let path = home.features.store.metadata_path(session_id);
-    let mut meta: Value = serde_json::from_str(&fs::read_to_string(&path).expect("the metadata reads")).expect("JSON");
-    meta.as_object_mut().expect("an object").extend(fields.as_object().expect("an object").clone());
-    fs::write(path, meta.to_string()).expect("the metadata writes");
-  }
-
   /// Writes one pending trigger for `session_id`.
   fn add_pending_trigger(home: &Home, session_id: &str, trigger_id: &str) {
     let directory = home.features.store.session_dir(session_id).join("triggers");
@@ -310,14 +312,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_bound_schedule_of_the_session_passes() {
-    let home = new_home();
-    let root = home.manager("root", None).await;
-    set_metadata_fields(&home, &root, json!({"schedule_enabled": true, "schedule_next_run": "2026-11-20T09:00:00Z"}));
-    assert_eq!(answer(&home, &web_turn(&root)).await, CheckResult::Pass);
-  }
-
-  #[tokio::test]
   async fn a_running_worker_passes() {
     let home = new_home();
     let root = home.manager("root", None).await;
@@ -354,15 +348,6 @@ mod tests {
     let manager = home.child(&root, "manager").await;
     let grandchild = home.worker(&manager, "grandchild").await;
     running_run(&home, &grandchild);
-    assert_eq!(answer(&home, &web_turn(&root)).await, CheckResult::Pass);
-  }
-
-  #[tokio::test]
-  async fn a_bound_schedule_on_a_child_passes() {
-    let home = new_home();
-    let root = home.manager("root", None).await;
-    let worker = home.worker(&root, "worker").await;
-    set_metadata_fields(&home, &worker, json!({"schedule_enabled": true, "schedule_next_run": "2026-11-20T09:00:00Z"}));
     assert_eq!(answer(&home, &web_turn(&root)).await, CheckResult::Pass);
   }
 

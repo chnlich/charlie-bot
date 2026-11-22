@@ -1,6 +1,7 @@
 //! Fixtures for the web reply tests: store-backed feature contexts over temporary homes with registrations for each
 //! route the tests exercise.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use charliebot_registry::registry::OpenWaitingRow;
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
 use charliebot_store::ChatEvent;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::{CreateTask, Store, Subscription, TaskCaller, session_channel};
 use futures_util::future::BoxFuture;
 use http::{Method, Request};
@@ -56,6 +57,16 @@ pub fn set_derived_waiting(home: &Path, rows: Vec<OpenWaitingRow>) {
 
 fn register_derived_waiting(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.derived_waiting_items(read_derived_waiting)
+}
+
+/// The bound-next-fire reader of this harness: it binds no scheduled task, so no session holds a next fire. The real
+/// reader is `features/cron`'s, and the bound-task cases of the pending-wake check run against it in `app/packages`.
+fn no_bound_next_fire(_features: &Arc<FeatureContext>, _now: UtcDateTime) -> anyhow::Result<HashSet<String>> {
+  Ok(HashSet::new())
+}
+
+fn register_bound_next_fire(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.bound_next_fire(no_bound_next_fire)
 }
 
 fn read_derived_waiting(features: &FeatureContext) -> BoxFuture<'_, anyhow::Result<Vec<OpenWaitingRow>>> {
@@ -132,6 +143,9 @@ impl Home {
     if matches!(packages, PackageSet::Full) {
       registry.register_package("tests.origins", register_origins).expect("the origin slots register");
       registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
+      registry
+        .register_package("tests.bound_next_fire", register_bound_next_fire)
+        .expect("the bound next fire reader registers");
     }
     if matches!(packages, PackageSet::Full | PackageSet::StatusOnly) {
       registry

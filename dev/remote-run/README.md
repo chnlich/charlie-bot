@@ -77,8 +77,8 @@ executes the copy named for its own checkout's content hash.
 5. The remote preparation, before the command:
    - a synthetic git commit with an `origin/main` ref in the synced tree, refreshed after every
      upload, so tests that read git history pass;
-   - a short `TMPDIR` on the `/dev/shm` tmpfs, so tmux socket paths stay under the 108-byte
-     `sun_path` limit and a test's fsync does not wait on the build host's disk;
+   - a short `TMPDIR` on the `/dev/shm` tmpfs, so release trial socket paths fit the trial's
+     `sun_path` preflight and a test's fsync does not wait on the build host's disk;
    - `node_modules`, when the tree has a `package-lock.json` and no `node_modules`;
    - a `rust-toolchain.toml`'s channel with its components and targets when the channel is
      missing, and its targets otherwise;

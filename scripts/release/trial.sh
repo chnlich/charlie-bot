@@ -20,8 +20,8 @@
 # (rust/crates/runtime/agents/src/transport/cgroup.rs, rust/crates/infra/core/src/cgroup.rs or
 # rust/crates/runtime/agents/src/agent_environment.rs): the serve server runs only binaries whose cgroup code equals
 # main's. It runs with session cgroups off (session_memory_max_mb 0), starts no agent and installs nothing, so it needs
-# no writable agents slice; the tmux and Chrome singleton sockets under its temp paths must keep their paths under 108
-# bytes, the sun_path size with the final NUL.
+# no writable agents slice; the tmux and Chrome singleton sockets under its temp paths must keep their paths under the
+# socket-path limit, the sun_path size with the final NUL.
 #
 # The config carries the live config's weight switches, server.enable_session_cpu_weight and
 # server.enable_session_io_weight, read by `release-helper backend-option`; an absent switch takes the server's
@@ -229,7 +229,7 @@ if [[ -n $TREE_ROOT ]]; then
   readonly TMP_ROOT="$TREE/tmp"
 else
   readonly TREE="${TMPDIR:-/tmp}/charliebot-release-trial-$(id -u)-${COMMIT:0:12}"
-  # Inside the tree, Chrome's singleton socket path passes 108 bytes under the round's TMPDIR, /tmp/improve-ux-tmp (the
+  # Inside the tree, Chrome's singleton socket path fits the limit under the round's TMPDIR, /tmp/improve-ux-tmp (the
   # tree's name adds 39 bytes plus the uid to TMPDIR, and the socket adds 45 under the temp root). So the default temp
   # root is a short sibling of the tree, and the cleanup removes it with the tree.
   readonly TMP_ROOT="${TMPDIR:-/tmp}/trial-tmp-$(id -u)-${COMMIT:0:12}"
@@ -244,15 +244,16 @@ if [[ -e $TREE ]]; then
 fi
 # The sockets that the trial's processes create under its temp paths: tmux keeps its server socket in
 # $TMUX_TMPDIR/tmux-<uid>/, and Chrome keeps its singleton socket in a mkdtemp directory under TMPDIR. The six random
-# characters of that directory name are written XXXXXX, which has the same length. sun_path holds 108 bytes with the
-# final NUL.
+# characters of that directory name are written XXXXXX, which has the same length. sun_path holds
+# SUN_PATH_LIMIT bytes with the final NUL.
+readonly SUN_PATH_LIMIT=108
 socket_paths_fit() {
   local socket_path socket_bytes failed=0
   for socket_path in "$TMUX_ROOT/tmux-$(id -u)/charliebot" "$TMP_ROOT/org.chromium.Chromium.XXXXXX/SingletonSocket"; do
     socket_bytes=$(printf '%s' "$socket_path" | wc -c)
-    if (( socket_bytes >= 108 )); then
-      printf 'preflight failed: socket path must stay under 108 bytes (sun_path with final NUL): %s (%s bytes)\n' \
-        "$socket_path" "$socket_bytes" >&2
+    if (( socket_bytes >= SUN_PATH_LIMIT )); then
+      printf 'preflight failed: socket path must stay under %s bytes (sun_path with final NUL): %s (%s bytes)\n' \
+        "$SUN_PATH_LIMIT" "$socket_path" "$socket_bytes" >&2
       failed=1
     else
       printf 'PREFLIGHT PASS socket: %s (%s bytes)\n' "$socket_path" "$socket_bytes"

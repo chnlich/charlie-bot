@@ -45,4 +45,5 @@ chrono.workspace = true
 nix.workspace = true
 sha1.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 uuid.workspace = true

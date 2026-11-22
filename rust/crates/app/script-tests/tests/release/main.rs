@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 use release_lock::LockHolder;
 use serde_json::json;
+use tempfile::TempDir;
 use world::World;
 
 // ---- preflight refusals: exit 2 and nothing written ----------------------------------------------------------------
@@ -629,26 +630,34 @@ fn test_release_helper_self_test_passes() {
     run.describe()
   );
 }
-// ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------
+// ---- trial --serve: the seeded home, the tmux server and the socket path limit ----------------------------------------
 
 /// The serve runs that pick a port of the trial range run one at a time. Each one picks a free port, so two runs could
 /// pick the same one.
 static TRIAL_RUNS: Mutex<()> = Mutex::new(());
 
+/// The name prefix of a serve trial's tree root: six random characters follow it.
+const TREE_ROOT_PREFIX: &str = "tr";
+
 /// One serve trial's inputs: a throwaway repository whose origin/main names its commit, the server and the CLI beside
-/// each other, and a live home with one backend option. A stub charlie-code completes the inputs. The trial's tree
-/// and evidence stay under the sandbox.
+/// each other, and a live home with one backend option. A stub charlie-code completes the inputs. The trial's evidence
+/// stays under the sandbox; its tree root is `tree_root`, a short directory beside the sandbox.
 struct ServeWorld {
   sandbox: Sandbox,
   repo: PathBuf,
   release: PathBuf,
   commit: String,
   env: Env,
+  trees: TempDir,
 }
 
 impl ServeWorld {
   fn new() -> Self {
     let sandbox = Sandbox::new();
+    // The tree root sits directly under the temporary directory, not under the sandbox. A --tree-root trial's Chrome
+    // socket path is the root plus 68 bytes, and the sandbox's own name would exceed the limit under the runner's
+    // TMPDIR. RUNNER_TMPDIR's comment states the budget.
+    let trees = tempfile::Builder::new().prefix(TREE_ROOT_PREFIX).tempdir().expect("the tree root");
     let repo = sandbox.dir("repo");
     fs::create_dir_all(repo.join("scripts/release")).expect("the script directory");
     harness::copy_file(&harness::repo_root().join("scripts/release/trial.sh"), &repo.join("scripts/release/trial.sh"));
@@ -706,7 +715,12 @@ impl ServeWorld {
 
     env.insert("CHARLIEBOT_HOME".to_string(), live_home.display().to_string());
     env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.dir("evidence").display().to_string());
-    Self { sandbox, repo, release, commit, env }
+    Self { sandbox, repo, release, commit, env, trees }
+  }
+
+  /// The `--tree-root` of this world's serve trials: an existing directory, removed with the world.
+  fn tree_root(&self) -> &Path {
+    self.trees.path()
   }
 
   /// A synthetic home of `sessions` sessions, generated with `mock-home generate` under the sandbox, and its path.
@@ -780,6 +794,43 @@ fn default_tree(tmp: &Path, commit: &str) -> PathBuf {
   tmp.join(format!("charliebot-release-trial-{uid}-{}", &commit[..12]))
 }
 
+/// A maximum-length TMPDIR in dev/remote-run's form: remote-exec.pl's `/dev/shm/` and its 16-byte name, `r`, the process
+/// id in hex, `-` and the start time in hex. remote-exec.pl owns that budget.
+const RUNNER_TMPDIR: &str = "/dev/shm/r50000-fffffffff";
+/// The uid of remote-exec.pl's budget: a 6-digit uid, which the runner's build host uses.
+const BUDGET_UID: &str = "999999";
+/// The first 12 hex characters of a commit, as the trial names its tree.
+const BUDGET_COMMIT: &str = "0123456789ab";
+/// The socket-path limit that trial.sh enforces; the script owns the budget.
+fn trial_socket_path_limit() -> usize {
+  let script = fs::read_to_string(harness::repo_root().join("scripts/release/trial.sh")).expect("the trial script");
+  let limits: Vec<_> = script.lines().filter_map(|line| line.trim().strip_prefix("readonly SUN_PATH_LIMIT=")).collect();
+  assert_eq!(limits.len(), 1, "trial.sh owns one socket-path limit");
+  limits[0].parse().expect("a numeric trial socket-path limit")
+}
+
+/// The longest socket path that a trial creates under the runner's TMPDIR, over its default tree and a serve test's
+/// tree root (TREE_ROOT_PREFIX and six random characters, directly under TMPDIR), is under the sun_path limit.
+#[test]
+fn test_trial_socket_paths_under_the_runner_tmpdir_stay_under_the_sun_path_limit() {
+  let tree_root = format!("{RUNNER_TMPDIR}/{TREE_ROOT_PREFIX}{}", "x".repeat(6));
+  let trial_tree = format!("{tree_root}/trial-{BUDGET_COMMIT}");
+  let default_trial_tree = format!("{RUNNER_TMPDIR}/charliebot-release-trial-{BUDGET_UID}-{BUDGET_COMMIT}");
+  let default_temp_root = format!("{RUNNER_TMPDIR}/trial-tmp-{BUDGET_UID}-{BUDGET_COMMIT}");
+  let sockets = [
+    format!("{trial_tree}/tmux/tmux-{BUDGET_UID}/charliebot"),
+    format!("{trial_tree}/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"),
+    format!("{default_trial_tree}/tmux/tmux-{BUDGET_UID}/charliebot"),
+    format!("{default_temp_root}/org.chromium.Chromium.XXXXXX/SingletonSocket"),
+  ];
+  let longest = sockets.iter().max_by_key(|path| path.len()).expect("the socket paths");
+  assert!(
+    longest.len() < trial_socket_path_limit(),
+    "the longest socket path under the runner's TMPDIR is {} bytes, over the trial's limit: {longest}",
+    longest.len()
+  );
+}
+
 fn mock_home() -> PathBuf {
   harness::built_binary("mock-home")
 }
@@ -793,13 +844,13 @@ const CHECK_SERVED_HOME: &[&str] =
 fn test_trial_serve_seeded_home_passes_the_mock_home_check() {
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "30");
-  let tree_root = world.sandbox.dir("tree-root");
+  let tree_root = world.tree_root();
 
-  let run = world.serve(&tree_root, &seed, CHECK_SERVED_HOME);
+  let run = world.serve(tree_root, &seed, CHECK_SERVED_HOME);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(run.stdout.contains("check passed: 30 sessions"), "{}", run.describe());
-  assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
 #[test]
@@ -812,12 +863,12 @@ fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_it
   let live = live.replacen("server:\n", "server:\n  enable_session_cpu_weight: false\n", 1);
   fs::write(&live_config, live).expect("the live config");
   let seed = world.seed_home("seed", "2");
-  let tree_root = world.sandbox.dir("tree-root");
+  let tree_root = world.tree_root();
   let copied = world.sandbox.root().join("trial-config.yaml");
   let copied_text = copied.display().to_string();
 
   let run =
-    world.serve(&tree_root, &seed, &["sh", "-c", "cp \"$CHARLIEBOT_HOME/config.yaml\" \"$1\"", "sh", &copied_text]);
+    world.serve(tree_root, &seed, &["sh", "-c", "cp \"$CHARLIEBOT_HOME/config.yaml\" \"$1\"", "sh", &copied_text]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let config = fs::read_to_string(&copied).expect("the trial config");
@@ -847,15 +898,15 @@ fn test_trial_serve_check_exits_1_and_names_a_session_whose_event_log_is_corrupt
   let foreign =
     json!({"type": "user", "content": "tampered after the manifest was written", "timestamp": "2026-10-01T00:00:00Z"});
   writeln!(file, "{foreign}").expect("the appended event");
-  let tree_root = world.sandbox.dir("tree-root");
+  let tree_root = world.tree_root();
 
-  let run = world.serve(&tree_root, &seed, CHECK_SERVED_HOME);
+  let run = world.serve(tree_root, &seed, CHECK_SERVED_HOME);
 
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(run.stderr.contains(&format!("MISMATCH session {session_id}:")), "{}", run.describe());
   assert!(run.stderr.contains(&format!("Checkpoint {session_id}:")), "the manifest value: {}", run.describe());
   assert!(run.stderr.contains("tampered after the manifest was written"), "the served value: {}", run.describe());
-  assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
 #[test]
@@ -863,7 +914,7 @@ fn test_trial_serve_check_exits_1_and_names_a_session_whose_event_log_is_corrupt
 fn test_trial_serve_stops_the_tmux_server_it_started_and_removes_its_tree() {
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "1");
-  let tree_root = world.sandbox.dir("tree-root");
+  let tree_root = world.tree_root();
   let pid_file = world.sandbox.root().join("tmux.pid");
   // The command inherits TMUX_TMPDIR from the trial, so this tmux server listens on the trial's own socket.
   let script = format!(
@@ -871,13 +922,13 @@ fn test_trial_serve_stops_the_tmux_server_it_started_and_removes_its_tree() {
     pid_file.display()
   );
 
-  let run = world.serve(&tree_root, &seed, &["sh", "-c", script.as_str()]);
+  let run = world.serve(tree_root, &seed, &["sh", "-c", script.as_str()]);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let tmux_pid: i32 =
     fs::read_to_string(&pid_file).expect("the tmux server pid").trim().parse().expect("a numeric tmux server pid");
   assert!(!process_is_running(tmux_pid), "the trial left tmux server {tmux_pid} running: {}", run.describe());
-  assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
 /// A serve trial whose chosen port another process takes after the trial picks it. The stand-in server logs
@@ -889,7 +940,7 @@ fn test_trial_serve_stops_the_tmux_server_it_started_and_removes_its_tree() {
 fn test_trial_serve_fails_the_side_when_another_process_holds_its_port() {
   let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   let world = ServeWorld::new();
-  let tree_root = world.sandbox.dir("tree-root");
+  let tree_root = world.tree_root();
   let stub_release = world.sandbox.dir("stub-release");
   symlink(harness::built_binary("serve-stub"), stub_release.join("charliebot-server")).expect("the stub link");
   symlink(world.release.join("charliebot"), stub_release.join("charliebot")).expect("the CLI link");
@@ -897,7 +948,7 @@ fn test_trial_serve_fails_the_side_when_another_process_holds_its_port() {
   let marker = world.sandbox.root().join("command-ran");
   let touch = format!("touch '{}'", marker.display());
   let trial =
-    world.spawn_serve_on_port(&tree_root, port, &stub_release.join("charliebot-server"), &["sh", "-c", touch.as_str()]);
+    world.spawn_serve_on_port(tree_root, port, &stub_release.join("charliebot-server"), &["sh", "-c", touch.as_str()]);
 
   let server_log = tree_root.join(format!("trial-{}", &world.commit[..12])).join("server-1.log");
   wait_for_server_ready(&server_log);
@@ -920,7 +971,7 @@ fn test_trial_serve_fails_the_side_when_another_process_holds_its_port() {
   );
   assert!(!run.stdout.contains("SERVE PASS Startup"), "{}", run.describe());
   assert!(!marker.exists(), "a command ran on a side whose port another process holds: {}", run.describe());
-  assert_eq!(fs::read_dir(&tree_root).expect("the tree root").count(), 0, "{}", run.describe());
+  assert_eq!(fs::read_dir(tree_root).expect("the tree root").count(), 0, "{}", run.describe());
 }
 
 /// Waits until the trial's server log holds the stand-in's readiness line, which the trial reads before it checks the
@@ -955,18 +1006,19 @@ fn process_is_running(pid: i32) -> bool {
 
 #[test]
 #[ignore = "integration"]
-fn test_trial_serve_refuses_a_tmux_socket_path_of_108_bytes_or_more() {
+fn test_trial_serve_refuses_a_tmux_socket_path_at_the_trial_limit() {
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "1");
   let tree_root = world.sandbox.dir(&format!("tree-root-{}", "long-directory-name-".repeat(3)));
   let uid = fs::metadata(&tree_root).expect("the tree root").uid();
   let socket = format!("{}/trial-{}/tmux/tmux-{uid}/charliebot", tree_root.display(), &world.commit[..12]);
-  assert!(socket.len() >= 108, "the fixture socket path is too short: {socket}");
+  assert!(socket.len() >= trial_socket_path_limit(), "the fixture socket path is too short: {socket}");
 
   let run = world.serve(&tree_root, &seed, &["true"]);
 
   assert_eq!(run.code, 2, "{}", run.describe());
   assert!(run.stderr.contains(&socket), "{}", run.describe());
+  assert!(run.stderr.contains(&format!("{socket} ({} bytes)", socket.len())), "{}", run.describe());
   assert_eq!(
     fs::read_dir(&tree_root).expect("the tree root").count(),
     0,

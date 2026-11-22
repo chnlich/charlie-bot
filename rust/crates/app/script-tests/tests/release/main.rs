@@ -896,7 +896,7 @@ fn test_trial_serve_fails_the_side_when_another_process_holds_its_port() {
   let port = TcpListener::bind(("127.0.0.1", 0)).expect("a free port").local_addr().expect("the port").port();
   let marker = world.sandbox.root().join("command-ran");
   let touch = format!("touch '{}'", marker.display());
-  let mut trial =
+  let trial =
     world.spawn_serve_on_port(&tree_root, port, &stub_release.join("charliebot-server"), &["sh", "-c", touch.as_str()]);
 
   let server_log = tree_root.join(format!("trial-{}", &world.commit[..12])).join("server-1.log");

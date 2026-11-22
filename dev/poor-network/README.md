@@ -11,39 +11,70 @@ The bench runs on the build host through the remote runner, because it builds th
 
 ```sh
 dev/remote-run/run.sh dev/poor-network/run.sh --side after --out-dir "$OUT"
-dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE" --out-dir "$OUT"
+dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE" --before-rev "$REV" --out-dir "$OUT"
+dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE" --change-patch "$PATCH" \
+  --scenarios auto --out-dir "$OUT"
 ```
 
 | Option | Meaning |
 |---|---|
 | `--side after` | Measure this tree. |
 | `--side before` | Measure `--before-rev` (default `origin/main`) of the clone at `--before-clone`. |
-| `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
+| `--side both` | Measure the before side, then the after side. Without `--before-rev` the before side is the stored reference R (see "Stored reference"). If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
+| `--before-clone DIR` | The clone that holds the before side's commit; required for `before` and `both`. |
+| `--before-rev REV` | With `--side both`, the before side is `REV`, measured now (the explicit mode). |
+| `--change-patch FILE` | With `--side both` and no `--before-rev`: the change as `git diff <merge-base> HEAD --binary` (an empty file for none). The after side is R with the patch applied. A patch that does not apply to R exits 2 and names the merge-base to pass as `--before-rev`, which measures the change on its own base. |
+| `--change-files FILE` | The changed paths, one per line; `--scenarios auto` reads them with `--before-rev`. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open,search` (default the first four). `open` runs its own cells, see below. `search` runs its own repetitions and variants, see "Search view". |
+| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open,search` (default the first four), or `auto`: the rows the changed files can move, with the default four always included (`scenario-map.mjs`). `open` runs its own cells, see below. `search` runs its own repetitions and variants, see "Search view". |
 | `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release,release-offline,replied-offline`; default all. |
 | `--open-cpu-rate RATE` | Run every side's open cells at `RATE` instead of a derived rate (see CPU rate below). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
-| `--lock-wait SECONDS` | How long each side waits for the bench lock (default 7200). An improve round passes 900. |
+| `--lock-wait SECONDS` | How long each take of the bench lock waits (default 7200). An improve round passes 900. |
 | `--seed-home DIR` | The view home that the run copies as its seed (default: the shared home under `~/improve/mock-home`). A run with a pinned home names it here; each side still checks the copy's content hash. |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
-precondition failed and nothing started; 3 the baseline calibration did not reproduce; 4 a scenario the bench passed
-on the before side fails on the after side; 75 a side's wait for the lock ran out. Every side takes the bench's own
-advisory lock that `lock.sh` names, around its trial (not the builds), waiting up to 2 h for it, or the `--lock-wait`
-seconds a caller names; no option chooses another lock file, and `IMPROVE_TRIAL_USE_LOCK=0` skips it only for
-improve-ux sides that report screenshots and clicks. The remote-wake bench takes the same lock for its container's
-whole run, because each start and stop of that container adds or removes a veth interface, which Chrome reports as a
-network change and drops the page in transfer. Each improve trial side that keeps the lock
+precondition failed and nothing started, or the change does not apply to R; 3 the baseline calibration did not
+reproduce; 4 a scenario the bench passed on the before side fails on the after side; 5 a segment's CPU probe failed the
+rate gate twice (the discarded segments stay in the side's `units[]`); 75 a take of the bench lock waited `--lock-wait`
+seconds without getting it.
+
+The bench holds the host's bench lock one step at a time: a preparation stage, a probe or one measurement. After each
+step, when `/proc/locks` lists a process queued behind the lock, the bench gives the lock up, waits until that process
+has taken it, and queues again behind it (`step-gate.mjs`). A step is capped at 600 s. A capped step stops every
+browser and proxy it started and runs once more; a second pass over the cap is recorded as capped. The preparation
+stage has one attempt, so a pass over its cap fails the side. The lock descriptor is close-on-exec, so a step's
+children never hold the lock after it ends. Each side's trial tree is named by its invocation and side
+(`pn-<run id>-<side>`), so two invocations on one commit never share a tree.
+
+The bench's lock file is the one `lock.sh` names, and no option chooses another. The remote-wake bench takes the same
+lock for its container's whole run, because each start and stop of that container adds or removes a veth interface,
+which Chrome reports as a network change and drops the page in transfer. Each improve trial side that keeps the lock
 (`dev/improve/trial-side.sh`: every improve-perf side and each improve-ux side that reports a timing) takes it from its
-trial's start to its stop, waiting at most 15 minutes;
-when the wait runs out, the side runs nothing and exits 75. A side with the switch at 0 runs beside the bench and
-records the lock's holder in its evidence instead. One lock hold covers one side attempt: a caller that retries a
-timed-out side runs the command again, which takes the lock again at the back of the queue. The side JSON is the
-bench's final artifact. If the bench is still running 120 s later, the runner ends its trial tree to release the lock
-and reprints the summary from that JSON.
+trial's start to its stop, waiting at most 15 minutes; when the wait runs out, the side runs nothing and exits 75.
+`IMPROVE_TRIAL_USE_LOCK=0` skips the lock only for improve-ux sides that report screenshots and clicks. A side with the
+switch at 0 runs beside the bench and records the lock's holder in its evidence instead. One lock hold covers one side
+attempt: a caller that retries a timed-out side runs the command again, which takes the lock again at the back of the
+queue. The side JSON is the bench's final artifact. If the bench is still running 120 s later, the runner ends its
+trial tree to release the lock and reprints the summary from that JSON.
+
+## Stored reference (`--side both` without `--before-rev`)
+
+The before side is the reference commit R. Its rows are stored per row under `$HOME/pn-runs/before-store/<R>/`
+(`before-store.mjs`), with R's creation time in `rev.json`. A stored row is reused only when R, the Chrome version, the
+seed's `sha256` and the bench's own tree (the `dev/poor-network` git tree) all match the run, and the A/A result
+(`~/pn-runs/aa/load-safe.json`) marks the row load-safe. A row that is not load-safe is measured on every run and is
+never stored. The newest R stored within 24 h is the reference; an older R is not reused. `--scenarios search` is
+measured on every run and never stored.
+
+A stored row that failed its target on R is stale. The run then takes the newest `origin/main` as R and measures the
+stale rows there; the other rows are reused only when they match the new R's key. The open group (the reference cell
+and the open conditions) is measured or reused as one, since the bench runs its reference cell with every open cell.
+
+The after side is R with the change applied. The reply text the bench sends is the fixed fixture `reply-fixture.txt`,
+so a change to the repository docs cannot change what the bench sends; the fixture's bytes are part of the tree key.
 
 Chrome comes from `POOR_NETWORK_CHROME`, or else the newest `~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`.
 The trial replaces `HOME`, so the discovery happens in `run.sh`.
@@ -577,7 +608,8 @@ dev/remote-run/run.sh env POOR_NETWORK_CHROME=/path/to/chrome node --test \
   dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
   dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
   dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/open.test.mjs \
-  dev/poor-network/lock.test.mjs dev/poor-network/search.test.mjs
+  dev/poor-network/lock.test.mjs dev/poor-network/search.test.mjs dev/poor-network/step-gate.test.mjs \
+  dev/poor-network/segments.test.mjs dev/poor-network/before-store.test.mjs dev/poor-network/scenario-map.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
@@ -604,3 +636,12 @@ lock and the next waits for it, and that the bench lock's file name and `flock` 
 check that an improve trial side stops with the bench lock named when the lock stays held, runs its command when the
 lock is free, and passes through a command exit of 75 without reporting a lock timeout. The search tests check the
 search view's arithmetic (see "Search view").
+
+The step-gate tests check the yield rule (a process queued behind the lock gets it after the step it waits for, and
+nothing yields when nothing waits), the cap kill (a capped step's browsers and proxies stop, and the step runs once
+more), the descriptor's close-on-exec, and that closing the gate releases the lock. The segment tests check the rate
+gate: a probe outside 3.0 to 4.5, or outside the 10 % band of the cells' rate, is discarded and rerun once, and a second
+failure is exit 5 with the discarded segments kept in `units[]`. They also check which unit starts each segment. The
+store tests check the reuse rule (R, Chrome, seed and tree all equal, and load-safe), the stale rule, the open group,
+the 24 h window, the saving of load-safe rows only, and the assembly of a before side from stored and measured rows.
+The scenario-map tests check the default four and the path rules.

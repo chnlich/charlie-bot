@@ -1,6 +1,6 @@
-// Tests of the bench lock: every side attempt takes the one file lock.sh names, so two side attempts on a host run one
-// after the other, and no caller option picks another file. The one option that skips the lock is an improve-ux
-// trial side's IMPROVE_TRIAL_USE_LOCK=0, which runs the side beside the lock and records the lock's holder instead.
+// Tests of the poor-network runner and bench lock. Both sides use the bench tree's trial script, and each side attempt
+// takes the one file lock.sh names, so no caller option picks another file. The one option that skips the lock is an
+// improve-ux trial side's IMPROVE_TRIAL_USE_LOCK=0, which records the lock's holder instead.
 
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -434,6 +434,13 @@ test('a marker that a dead side left is named and removed, and it never counts a
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('both bench sides use the trial script from the bench tree', () => {
+  const source = fs.readFileSync(RUN, 'utf8');
+  assert.match(source, /bench_trial_script="\$tree\/scripts\/release\/trial\.sh"/);
+  assert.match(source, /run_side before "\$bench_trial_script"/);
+  assert.match(source, /run_side after "\$bench_trial_script"/);
 });
 
 // trial.sh's preflight refuses a socket path of 108 bytes or more. Its trial tree is <root>/trial-<12 hex>, its temp

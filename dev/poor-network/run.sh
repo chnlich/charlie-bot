@@ -161,6 +161,7 @@ if [[ $side == before && -z $before_rev ]]; then
 fi
 
 tree=$(git -C "$BENCH_DIR" rev-parse --show-toplevel) || die 2 "$BENCH_DIR is not in a git tree"
+bench_trial_script="$tree/scripts/release/trial.sh"
 mkdir -p "$out_dir"
 out_dir=$(cd "$out_dir" && pwd)
 cd "$out_dir"
@@ -449,10 +450,10 @@ run_side() {
 }
 
 # The before side: the commit `before_rev_resolved` (stored mode) or `before_rev` (explicit mode), measured for the rows
-# named below. Its server is built from that commit; its trial script is that commit's own.
+# named below. Its server is built from that commit; both sides use the bench tree's trial script.
 measure_before() {
   local rev=$1 side_scenarios=$2 side_conditions=$3
-  local before_commit before_bin before_src before_repo
+  local before_commit before_bin before_src
   before_commit=$(git -C "$before_clone" rev-parse --verify --quiet "$rev^{commit}") \
     || die 2 "$rev does not name a commit in $before_clone; fetch it there first"
   before_src="$run_dir/before-src"
@@ -460,13 +461,7 @@ measure_before() {
   git -C "$before_clone" archive "$before_commit" | tar -x -C "$before_src"
   echo "poor-network: before commit $before_commit from $before_clone"
   before_bin=$(build_server "$before_src" target-before)
-  # The trial script is the measured commit's own. The clone at --before-clone may be on another commit, so a scratch
-  # clone at the commit holds the script; its origin/main is the commit, which the trial's preflight reads.
-  before_repo="$run_dir/before-repo"
-  git clone -q --shared --no-checkout "$before_clone" "$before_repo"
-  git -C "$before_repo" update-ref refs/remotes/origin/main "$before_commit"
-  git -C "$before_repo" checkout -q --detach "$before_commit"
-  (cd "$before_repo" && run_side before "$before_repo/scripts/release/trial.sh" "$before_commit" "$before_bin" \
+  (cd "$before_src" && run_side before "$bench_trial_script" "$before_commit" "$before_bin" \
     "$side_scenarios" "$side_conditions") \
     || die "$?" "the before side failed; see $run_dir/before.json"
 }
@@ -570,7 +565,7 @@ if [[ $stored_mode_before == 1 ]]; then
 fi
 
 if [[ $side == after || $side == both ]]; then
-  (cd "$after_src" && run_side after "$after_src/scripts/release/trial.sh" "$after_commit" "$after_bin" \
+  (cd "$after_src" && run_side after "$bench_trial_script" "$after_commit" "$after_bin" \
     "$scenarios" "$open_conditions") \
     || die "$?" "the after side failed; see $run_dir/after.json"
 fi

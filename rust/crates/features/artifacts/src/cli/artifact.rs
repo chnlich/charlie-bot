@@ -14,6 +14,7 @@ use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
 use charliebot_store::metadata::{
@@ -286,7 +287,7 @@ fn delegate_cold_read(
   let request_id = format!("cold-read:{session_id}:{}:{timestamp}", &digest[..12]);
   let description = format!("cold read of {}", paths::display(artifact));
   let payload = json!({
-    (task_routes::DELEGATE_SESSION_ID_FIELD): session_id,
+    (SESSION_ID): session_id,
     (task_routes::DELEGATE_DESCRIPTION_FIELD): description,
     (TASK_TYPE_FIELD): TaskType::ColdRead.as_str(),
     (COLD_READ_FIELD): {

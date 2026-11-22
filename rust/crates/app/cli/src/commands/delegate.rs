@@ -7,6 +7,7 @@ use std::path::Path;
 use charliebot_cli_common::args::{self, with_infer_long_args};
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
@@ -178,7 +179,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if let Some(bound_task) = cli.bound_task.as_deref() {
     let note = cli.note.as_deref().unwrap_or_default();
     let mut payload = Map::new();
-    payload.insert(task_routes::DELEGATE_SESSION_ID_FIELD.to_string(), json!(session_id));
+    payload.insert(SESSION_ID.to_string(), json!(session_id));
     payload.insert(task_routes::DELEGATE_DESCRIPTION_FIELD.to_string(), json!(note));
     payload.insert(task_routes::DELEGATE_BOUND_TASK_FIELD.to_string(), json!(bound_task));
     let result = client::post(task_routes::DELEGATE_PATH, Value::Object(payload), None, &[])?;
@@ -212,7 +213,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   invocation.insert(task_routes::DELEGATE_BACKEND_FIELD.to_string(), json_out::optional_string(&cli.backend));
 
   let mut payload = Map::new();
-  payload.insert(task_routes::DELEGATE_SESSION_ID_FIELD.to_string(), json!(session_id));
+  payload.insert(SESSION_ID.to_string(), json!(session_id));
   payload.insert(task_routes::DELEGATE_DESCRIPTION_FIELD.to_string(), json!(task_spec));
   payload.insert(KEEP_WORKTREE_FIELD.to_string(), json!(keep_worktree));
   payload.insert(task_routes::DELEGATE_TASK_TYPE_FIELD.to_string(), json!(task_type));

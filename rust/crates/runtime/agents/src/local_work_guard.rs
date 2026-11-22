@@ -78,7 +78,7 @@ impl LocalWorkGuard {
 fn prepend(env: &mut Env, name: &str, separator: &str, entry: &str) {
   let value = match env.get(name) {
     Some(current) if !current.is_empty() => format!("{entry}{separator}{current}"),
-    _ => entry.to_string(),
+    Some(_) | None => entry.to_string(),
   };
   env.insert(name.to_string(), value);
 }

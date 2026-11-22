@@ -240,7 +240,7 @@ pub fn prepare_session_cgroup(
 ) -> io::Result<Option<SessionCgroup>> {
   let session_id = match session_id {
     Some(session_id) if !session_id.is_empty() && config.memory_max_mb > 0 => session_id,
-    _ => return Ok(None),
+    Some(_) | None => return Ok(None),
   };
   let path = ensure_session_cgroup(config, session_id)?;
   Ok(Some(SessionCgroup { events_before: read_memory_events(&path), path, memory_max_mb: config.memory_max_mb }))

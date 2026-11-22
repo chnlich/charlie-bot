@@ -74,6 +74,7 @@ pub fn switch_after_reason(reason: &str) -> &'static str {
     REASON_ACCESS_REFUSED => "refused access",
     REASON_TIMEOUT => "timed out",
     REASON_ITERATION_FAILURE => "failed its iteration",
+    REASON_TOKEN_SHORT => "became unavailable",
     _ => "became unavailable",
   }
 }
@@ -141,7 +142,7 @@ impl BackendAvailability {
       {
         registry.lifecycle_for(&option.backend_type)?.quota_outlook(option, cfg)?.map(|outlook| (option, outlook))
       }
-      _ => None,
+      Some(_) | None => None,
     };
     let stated = match pooled {
       Some((option, QuotaOutlook { can_run: true, .. })) => {

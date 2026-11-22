@@ -39,7 +39,7 @@ pub fn apply_token_command(values: &mut Env, command: Option<&str>) {
     Some(command) if !command.is_empty() => {
       values.insert(TOKEN_COMMAND_VAR.to_string(), command.to_string());
     }
-    _ => {
+    Some(_) | None => {
       values.remove(TOKEN_COMMAND_VAR);
     }
   }

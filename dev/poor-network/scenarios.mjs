@@ -240,7 +240,12 @@ export function statusPollCounts(tab, from, to, minutes, roles = new Map()) {
     if (!ENDPOINTS.status.test(request.url) || request.finishAt === null) {
       continue;
     }
-    const inWindow = request.finishAt >= from && request.finishAt <= to;
+    // A poll that finished after the window is not counted, and its body may still be read when the window's bodies are
+    // checked below: the check must not fail on a poll the window does not hold.
+    if (request.finishAt > to) {
+      continue;
+    }
+    const inWindow = request.finishAt >= from;
     if (inWindow) {
       counts.perMinute += 1 / minutes;
       if (request.wireStatus === 200) {

@@ -28,6 +28,21 @@ function tabOf(records) {
 
 const STATUS_URL = '/api/sessions/status?filter=all&ids=session-a';
 
+test('a poll that finished after the window is not counted, and its unread body does not fail the window', () => {
+  const body = JSON.stringify({'session-a': {has_running_tasks: false}});
+  const tab = tabOf([
+    {url: STATUS_URL, status: 200, wireStatus: 200, body},
+    {url: STATUS_URL, status: 200, wireStatus: 200, body: null},
+  ]);
+  const counts = statusPollCounts(tab, 0, 0, 1);
+  assert.equal(counts.answered200, 1, 'the poll that finished at 1 is outside the window ending at 0');
+});
+
+test('a poll that finished in the window with no body read fails the window', () => {
+  const tab = tabOf([{url: STATUS_URL, status: 200, wireStatus: 200, body: null}]);
+  assert.throws(() => statusPollCounts(tab, 0, 10, 1), /no body read for status poll/);
+});
+
 test('a whole-map answer that repeats the state it held counts as an unchanged 200', () => {
   const body = JSON.stringify({'session-a': {has_running_tasks: false}});
   const tab = tabOf([

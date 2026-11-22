@@ -453,6 +453,8 @@ impl IndexAnswerMemo {
 
 static INDEX_ANSWER_MEMO: LazyLock<Mutex<IndexAnswerMemo>> = LazyLock::new(|| Mutex::new(IndexAnswerMemo::default()));
 
+/// The chat page. The access gate answers a request without the key before this runs, so the session data it renders
+/// reaches an unlocked browser, or any browser when no access key is configured.
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   if let Some(answer) = preload_answer(&request.headers) {
     return answer;
@@ -1114,10 +1116,20 @@ fn compact_facts(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Map<Stri
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::auth::ACCESS_KEY_COOKIE;
+  use crate::packages::composed_app;
+  use axum::body::to_bytes;
+  use axum::http::{Method, Request};
   use charliebot_compat::compression::gzip_level_one;
+  use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::{CreateTask, TaskCaller};
   use flate2::read::GzDecoder;
   use http_body_util::BodyExt;
   use std::io::Read;
+  use tower::ServiceExt;
+  use tower::util::BoxCloneSyncService;
+
+  type TestApp = BoxCloneSyncService<Request<Body>, Response, std::convert::Infallible>;
 
   fn gunzip(body: &[u8]) -> String {
     let mut decoded = String::new();
@@ -1636,5 +1648,141 @@ mod tests {
     let answer = preload_answer(&preload).expect("a preload is answered without the page");
     assert_eq!(answer.status(), StatusCode::NO_CONTENT);
     assert!(preload_answer(&HeaderMap::new()).is_none());
+  }
+
+  /// The access key the composed test app's `credentials.yaml` names.
+  const TEST_ACCESS_KEY: &str = "synthetic-access-key";
+
+  /// The name of the session the composed test app's store holds.
+  const SYNTHETIC_SESSION_NAME: &str = "synthetic session";
+
+  /// A navigation to `path`, carrying the access key as the cookie a browser that unlocked holds when `key` is set.
+  fn page_request(path: &str, key: Option<&str>) -> Request<Body> {
+    let mut request =
+      Request::builder().method(Method::GET).uri(path).header(header::ACCEPT, "text/html,application/xhtml+xml");
+    if let Some(key) = key {
+      request = request.header(header::COOKIE, format!("{ACCESS_KEY_COOKIE}={key}"));
+    }
+    request.body(Body::empty()).expect("the request builds")
+  }
+
+  /// A JSON request to `path` with no credential.
+  fn api_request(path: &str) -> Request<Body> {
+    Request::builder()
+      .method(Method::GET)
+      .uri(path)
+      .header(header::ACCEPT, "application/json")
+      .body(Body::empty())
+      .expect("the request builds")
+  }
+
+  /// The composed app over a home whose access key is [`TEST_ACCESS_KEY`], with one session in its store.
+  async fn gated_app_with_session(home: &tempfile::TempDir) -> (TestApp, String) {
+    std::fs::write(home.path().join("credentials.yaml"), format!("charliebot:\n  access_key: {TEST_ACCESS_KEY}\n"))
+      .expect("the credentials file");
+    std::fs::write(
+      home.path().join("config.yaml"),
+      "backends:\n  options:\n    - {id: synthetic-claude, label: Synthetic, type: cc-claude, model: claude-opus-5}\n",
+    )
+    .expect("the config file");
+    let (app, features) = composed_app(home.path());
+    let meta = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "synthetic".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some(SYNTHETIC_SESSION_NAME.to_string()),
+          backend: Some("synthetic-claude".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .expect("a synthetic session node");
+    (app, meta.id)
+  }
+
+  /// Whether `text` holds a UUID in its 8-4-4-4-12 hexadecimal form.
+  fn contains_uuid(text: &str) -> bool {
+    text.as_bytes().windows(36).any(|window| {
+      window.iter().enumerate().all(|(index, byte)| match index {
+        8 | 13 | 18 | 23 => *byte == b'-',
+        _ => byte.is_ascii_hexdigit(),
+      })
+    })
+  }
+
+  async fn body_text(response: Response) -> String {
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
+    String::from_utf8(bytes.to_vec()).expect("the body is UTF-8")
+  }
+
+  #[tokio::test]
+  async fn a_page_request_without_the_key_gets_the_unlock_flow_and_no_session_data() {
+    let home = tempfile::tempdir().expect("a temporary home");
+    let (app, session_id) = gated_app_with_session(&home).await;
+    let pages = [
+      "/".to_string(),
+      "/?session=".to_string(),
+      "/?session=x".to_string(),
+      "/?session=00000000-0000-0000-0000-000000000000".to_string(),
+      format!("/?session={session_id}"),
+      "/home".to_string(),
+      format!("/sessions/{session_id}/events"),
+      "/token-usage".to_string(),
+      "/host-auth".to_string(),
+      "/diff".to_string(),
+    ];
+    for path in pages {
+      let response = app.clone().oneshot(page_request(&path, None)).await.expect("the gate answers");
+      assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+      assert!(response.headers().get(header::LOCATION).is_none(), "{path} names a redirect target");
+      let body = body_text(response).await;
+      assert!(!body.contains("INITIAL_SESSIONS"), "{path} embeds the sidebar");
+      assert!(!body.contains(&session_id), "{path} names the session");
+      assert!(!body.contains(SYNTHETIC_SESSION_NAME), "{path} shows the session's name");
+      assert!(!contains_uuid(&body), "{path} carries a UUID");
+    }
+    let data = [
+      "/api/sessions/".to_string(),
+      format!("/api/sessions/{session_id}/bootstrap"),
+      format!("/api/sessions/{session_id}/events"),
+      format!("/api/sessions/{session_id}/plans"),
+      "/api/host-auth/status".to_string(),
+      "/absolute_filepath/etc/hostname".to_string(),
+    ];
+    for path in data {
+      let response = app.clone().oneshot(api_request(&path)).await.expect("the gate answers");
+      assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+      let body = body_text(response).await;
+      assert_eq!(body, r#"{"detail": "Unauthorized"}"#, "{path}");
+    }
+  }
+
+  #[tokio::test]
+  async fn an_unlocked_browser_gets_the_chat_page_and_its_session() {
+    let home = tempfile::tempdir().expect("a temporary home");
+    let (app, session_id) = gated_app_with_session(&home).await;
+    let response = app
+      .clone()
+      .oneshot(page_request(&format!("/?session={session_id}"), Some(TEST_ACCESS_KEY)))
+      .await
+      .expect("the chat page answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    assert!(body.contains("INITIAL_SESSIONS"), "the sidebar is embedded");
+    assert!(body.contains(&session_id), "the open session is named");
+    assert!(body.contains(SYNTHETIC_SESSION_NAME), "the open session's name is shown");
+
+    let response = app
+      .oneshot(page_request(&format!("/sessions/{session_id}/events"), Some(TEST_ACCESS_KEY)))
+      .await
+      .expect("the events viewer answers");
+    assert_eq!(response.status(), StatusCode::OK);
   }
 }

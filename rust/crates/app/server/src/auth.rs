@@ -1,11 +1,12 @@
 //! The access-key gate.
 //!
-//! Every HTTP request passes when no access key is configured, when its decoded path is public (`/`,
-//! `/api/auth/status`, anything under `/static/`), or when it presents the key. The key arrives as an
-//! `Authorization: Bearer` header or as the `charliebot_access_key` cookie. A bearer that is not the
-//! key is run-token use: its signature decides, and the cookie is never consulted for it. A refused
-//! `GET` whose `Accept` names `text/html` gets the login page; any other refusal gets a JSON 401.
-//! Credentials compare in constant time.
+//! Every HTTP request passes when no access key is configured, when its decoded path is public
+//! (`/api/auth/status`, `/offline-shell-worker.js`, anything under `/static/`), or when it presents the
+//! key. The chat page `/` is not public: its session data is rendered into the page, so it takes the
+//! key like every other page. The key arrives as an `Authorization: Bearer` header or as the
+//! `charliebot_access_key` cookie. A bearer that is not the key is run-token use: its signature
+//! decides, and the cookie is never consulted for it. A refused `GET` whose `Accept` names `text/html`
+//! gets the login page; any other refusal gets a JSON 401. Credentials compare in constant time.
 
 use std::sync::Arc;
 
@@ -30,7 +31,7 @@ pub const ACCESS_KEY_COOKIE: &str = "charliebot_access_key";
 
 pub const AUTH_STATUS_PATH: &str = "/api/auth/status";
 
-const PUBLIC_PATHS: &[&str] = &["/", AUTH_STATUS_PATH, OFFLINE_SHELL_WORKER_PATH];
+const PUBLIC_PATHS: &[&str] = &[AUTH_STATUS_PATH, OFFLINE_SHELL_WORKER_PATH];
 const PUBLIC_PREFIXES: &[&str] = &[STATIC_URL_PREFIX];
 /// The offline shell's worker script, served before the key is presented: the browser fetches it on its own.
 pub const OFFLINE_SHELL_WORKER_PATH: &str = "/offline-shell-worker.js";
@@ -195,7 +196,9 @@ mod tests {
         .unwrap();
     let bearer = |token: &str| format!("Bearer {token}");
     let cases: Vec<Case> = vec![
-      ("/", vec![], Pass),
+      ("/", vec![], JsonUnauthorized),
+      ("/", vec![(&header::ACCEPT, "text/html,application/xhtml+xml".into())], LoginPage),
+      ("/", vec![(&header::COOKIE, format!("charliebot_access_key={KEY}"))], Pass),
       ("/api/auth/status", vec![], Pass),
       ("/offline-shell-worker.js", vec![], Pass),
       ("/static/js/app.js", vec![], Pass),

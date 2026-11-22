@@ -93,9 +93,10 @@ pub struct BootstrapPayload {
 /// The payload renders the session's message tail trimmed to [`FIRST_SCREEN_WIRE_BUDGET_BYTES`] on
 /// the wire, so the switch's own transfer sets its time on a slow link. The trim drops the tail's
 /// oldest whole turns and moves the paging cursor onto the first kept one. The dropped history
-/// still reaches the page through scroll-up paging. The newest finished turn's last row always renders
-/// on the first screen: when that turn alone is over the budget, the cut lands inside it, keeping its
-/// newest events that fit, and the payload may then exceed the budget by that row.
+/// still reaches the page through scroll-up paging. The tail's newest visible row always renders on
+/// the first screen. When the turn holding it (the running turn, or the last finished one while nothing
+/// runs) is over the budget alone, the cut lands inside that turn, keeping its newest events that fit,
+/// and the payload may then exceed the budget by that row.
 pub fn build_bootstrap_payload(
   store: &Store,
   cfg: &CharlieBotConfig,
@@ -197,9 +198,9 @@ pub fn build_bootstrap_payload(
     Ok(Value::Object(payload))
   };
   // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes). The
-  // trim accepts a step only up to the newest finished turn's start, so every older turn is dropped whole. A worker's
-  // step reads the separator messages of its tail, and every other session reads the events behind the fold's turn
-  // separators (master_done, run_end).
+  // trim accepts a step only up to the start of the turn holding the newest visible row, so every older turn is dropped
+  // whole. A worker's step reads the separator messages of its tail, and every other session reads the events behind
+  // the fold's turn separators (master_done, run_end).
   let next_drop = |drop: usize| -> Option<usize> {
     match &tail {
       Tail::Slots { messages, .. } => messages
@@ -233,36 +234,38 @@ fn next_bootstrap_read(read: usize, messages: usize, total: usize) -> usize {
   grown.max(wanted.min(read.saturating_mul(8))).min(total)
 }
 
-/// The newest finished turn of a tail, in the tail's own indexes: the trim's two stages both stay inside it.
+/// The newest visible row of a tail and the turn that holds it, in the tail's own indexes: the trim's two stages both
+/// stay inside that turn.
 #[derive(Clone, Copy)]
 struct NewestTurn {
-  /// The first unit of the newest finished turn. A turn-boundary step never moves past it, so every older turn is
-  /// dropped whole before the newest one is cut.
+  /// The first unit of the turn holding the newest visible row. A turn-boundary step never moves past it, so every
+  /// older turn is dropped whole before that turn is cut.
   start: usize,
-  /// The unit of the newest finished turn's last visible row. A cut inside the turn never passes it.
+  /// The unit of the tail's newest visible row. A cut inside the turn never passes it.
   last_row: usize,
 }
 
 impl NewestTurn {
-  /// The newest finished turn of a tail of `len` units. `separators` lists the units holding a turn separator in
-  /// order, `rows` the units of the tail's visible rows, and `turn_start_after` the first unit of the turn after a
-  /// separator.
+  /// The turn holding the newest visible row of a tail of `len` units. `separators` lists the units holding a turn
+  /// separator in order, `rows` the units of the tail's visible rows, and `turn_start_after` the first unit of the turn
+  /// after a separator.
   ///
-  /// A turn after the last separator is still running, so the finished turn ends where the next turn starts: it starts
-  /// after the separator before it, and its last row is the newest row before the running turn. A turn whose last
-  /// unit is a row keeps that row, and a turn with no row keeps its separator.
+  /// The row is the tail's last one, so a running turn holds it once that turn has a visible row, and the last finished
+  /// turn holds it while the running turn has none. A run's `run_delivery` or `run_finished` follows its separator and
+  /// belongs to the turn before it, so the next turn's start is past it.
   fn of(
     len: usize,
     separators: &[usize],
     rows: impl Iterator<Item = usize>,
     turn_start_after: impl Fn(usize) -> usize,
   ) -> NewestTurn {
-    let start = match separators {
-      [.., before, _] => turn_start_after(*before),
-      _ => 0,
-    };
-    let end = separators.last().map_or(len.saturating_sub(1), |last| turn_start_after(*last).saturating_sub(1));
-    let last_row = rows.filter(|row| *row <= end).max().unwrap_or(end);
+    let last_row = rows.max().unwrap_or(len.saturating_sub(1));
+    let start = separators
+      .iter()
+      .map(|separator| turn_start_after(*separator))
+      .filter(|start| *start <= last_row)
+      .max()
+      .unwrap_or(0);
     NewestTurn { start, last_row }
   }
 }
@@ -291,9 +294,9 @@ fn worker_turn_start_after(messages: &[Value], index: usize) -> usize {
 /// bytes the untrimmed payload takes.
 ///
 /// The trim runs in two stages. It first drops whole older turns, one turn-boundary step at a time, and never past the
-/// newest finished turn's start. When that turn alone is still over the budget, the trim searches the cuts inside it
-/// for the smallest that fits, which keeps its newest events that fit, and it never cuts past the turn's last row. A
-/// payload still over the budget at that row keeps the row, so the served size exceeds the budget by one row. Each
+/// start of the turn holding the newest visible row. When that turn alone is still over the budget, the trim searches
+/// the cuts inside it for the smallest that fits, which keeps its newest events that fit, and it never cuts past that
+/// row. A payload still over the budget at that row keeps the row, so the served size exceeds the budget by one row. Each
 /// step serializes and gzips one payload, well under a millisecond of a level-one gzip at these sizes.
 fn fit_first_screen_payload(
   build: &mut dyn FnMut(usize) -> StoreResult<Value>,
@@ -2069,13 +2072,13 @@ backends:
     messages.iter().any(|message| message.to_string().contains(text))
   }
 
-  /// A running session's newest turn is open, so its last finished turn is the newest one that must render. When the
-  /// finished turn's reply and the running turn are over the budget together, the reply still renders.
+  /// A running session's newest turn is the running one. When it fits the budget with the last finished reply, the reply
+  /// renders above the running turn.
   #[tokio::test]
-  async fn a_running_session_keeps_the_last_finished_reply() {
+  async fn a_running_session_keeps_the_last_finished_reply_when_both_fit() {
     let (_home, features) = feature_context();
     let meta = crate::test_support::create_node(&features.store, "trim-running", None, TaskProfile::Manager).await;
-    let finished_reply = fixture_text(201, 12_000);
+    let finished_reply = fixture_text(201, 700);
     features
       .store
       .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(1, 1_600)}))
@@ -2107,9 +2110,50 @@ backends:
       .unwrap();
     let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
-    assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES, "the fixture's tail is over the budget");
+    assert!(payload.untrimmed_wire_bytes <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "the fixture's tail fits the budget");
     assert!(renders(messages, &finished_reply), "the last finished reply renders");
     assert!(renders(messages, &fixture_text(2, 1_600)), "the running turn's user message renders");
+    assert!(payload.value["pending_draft"].to_string().contains(&fixture_text(202, 700)), "the running draft renders");
+  }
+
+  /// A running turn over the budget is the newest turn, so the cut lands inside it and keeps its newest replies that
+  /// fit. The last finished reply drops: the first screen shows the running turn, and its size stays bounded.
+  #[tokio::test]
+  async fn a_running_turn_over_the_budget_keeps_its_newest_row() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "trim-running-over", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 700, true).await;
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(2, 1_600)}))
+      .await
+      .unwrap();
+    // Four replies of 4,000 characters: the running turn alone is over the budget, and no separator closes it. Each
+    // reply folds to a row once the next one starts, so the last reply is the running draft, which the payload carries
+    // beside the rows.
+    let replies: Vec<String> = (0..4).map(|index| fixture_text(400 + index, 4_000)).collect();
+    for reply in &replies {
+      features
+        .store
+        .append_chat_event(
+          &meta.id,
+          json!({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}}),
+        )
+        .await
+        .unwrap();
+    }
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES, "the running turn is over the budget");
+    assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
+    assert!(renders(messages, &replies[2]), "the running turn's newest row renders");
+    assert!(payload.value["pending_draft"].to_string().contains(&replies[3]), "the running draft renders");
+    assert!(!renders(messages, &fixture_text(101, 700)), "the last finished reply drops for the running turn");
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    // The events are the node's, the finished turn's four, the running user message, and four replies.
+    assert!(start > 5 && start < total, "the cursor lands inside the running turn at {start} of {total}");
   }
 
   /// A newest turn over the budget keeps the newest of its events that fit, so its cursor lands inside the turn. The

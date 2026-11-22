@@ -449,6 +449,17 @@ run_side() {
   return "$trial_status"
 }
 
+# name_trial_commit COMMIT SOURCE makes COMMIT the bench tree's origin/main, fetching it from SOURCE when the tree
+# lacks it. Both sides run the bench tree's trial.sh, and the trial reads its commit and its origin/main merge base from
+# the repo its script runs in. The synced tree holds only the upload's own commit, so the other commit is fetched into it.
+name_trial_commit() {
+  local commit=$1 source=$2
+  git -C "$tree" cat-file -e "$commit^{commit}" 2>/dev/null \
+    || git -C "$tree" fetch -q "$source" "$commit" \
+    || die 2 "the trial commit $commit cannot be fetched into $tree from $source"
+  git -C "$tree" update-ref refs/remotes/origin/main "$commit"
+}
+
 # The before side: the commit `before_rev_resolved` (stored mode) or `before_rev` (explicit mode), measured for the rows
 # named below. Its server is built from that commit; both sides use the bench tree's trial script.
 measure_before() {
@@ -460,6 +471,7 @@ measure_before() {
   mkdir -p "$before_src"
   git -C "$before_clone" archive "$before_commit" | tar -x -C "$before_src"
   echo "poor-network: before commit $before_commit from $before_clone"
+  name_trial_commit "$before_commit" "$before_clone"
   before_bin=$(build_server "$before_src" target-before)
   (cd "$before_src" && run_side before "$bench_trial_script" "$before_commit" "$before_bin" \
     "$side_scenarios" "$side_conditions") \
@@ -565,6 +577,7 @@ if [[ $stored_mode_before == 1 ]]; then
 fi
 
 if [[ $side == after || $side == both ]]; then
+  name_trial_commit "$after_commit" "$after_src"
   (cd "$after_src" && run_side after "$bench_trial_script" "$after_commit" "$after_bin" \
     "$scenarios" "$open_conditions") \
     || die "$?" "the after side failed; see $run_dir/after.json"

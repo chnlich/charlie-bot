@@ -13,7 +13,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::RegistryError;
 use charliebot_registry::turn::TurnContribution;
 use charliebot_store::control_events::sha256_hex;
-use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType};
 use charliebot_tasks::prompts::{
   ChainLink, OverlayError, PromptBlock, PromptEnv, PromptSnapshot, PromptSource, RuleInputs, RuleSegment, SessionGoals,
   assemble_snapshot, build_segments, resolve_launch_overlay,
@@ -397,9 +397,12 @@ fn rust_case(case: &Case, home: &Path, registry: &Registry, checkout: &RepoRoot)
   meta.task = case.meta.task.map(|task| TaskSpec {
     goal: task.goal.to_string(),
     repo_path: task.repo_path.map(String::from),
+    base_branch: None,
     task_type: task.task_type.map(|name| serde_json::from_value::<TaskType>(json!(name)).expect("known task type")),
+    keep_worktree: false,
     cold_read: cold_read_spec(task.task_type),
-    ..TaskSpec::default()
+    approver: TaskApprover::User,
+    improve_host: None,
   });
   let option = BackendOption {
     id: "golden".to_string(),

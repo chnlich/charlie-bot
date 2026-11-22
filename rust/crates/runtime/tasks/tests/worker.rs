@@ -51,7 +51,9 @@ use charliebot_registry::backend::{
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::QuotaFailure;
 use charliebot_registry::store_hooks::store_hooks;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime};
+use charliebot_store::metadata::{
+  SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime,
+};
 use charliebot_store::run_records::{RAW_LOG_NAME, RunRecord};
 use charliebot_store::{ChatEvent, CreateTask, Store, TaskCaller};
 use charliebot_tasks::auto_switch::{self, MemberSwitch};
@@ -1096,8 +1098,16 @@ fn keyed_reattach(setup: &Setup, root: &Root, option_id: &str) -> anyhow::Result
   fs::write(data.join(RAW_LOG_NAME), raw)?;
   let mut spec = setup.spec(root, Some(option_id), None)?;
   spec.held_native_id = Some(CC_ID.to_string());
-  spec.session_meta.as_mut().context("a task run with a backend option has session metadata")?.task =
-    Some(TaskSpec { improve_host: Some("improve-host".to_string()), ..TaskSpec::default() });
+  spec.session_meta.as_mut().context("a task run with a backend option has session metadata")?.task = Some(TaskSpec {
+    goal: String::new(),
+    repo_path: None,
+    base_branch: None,
+    task_type: None,
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: Some("improve-host".to_string()),
+  });
   let spawns = Arc::new(AtomicUsize::new(0));
   let counter = Arc::clone(&spawns);
   let tracked = spec.on_spawned.take().context("a spec tracks its spawns")?;
@@ -1331,8 +1341,13 @@ async fn test_a_model_group_keeps_claude_while_a_login_can_run_and_takes_the_met
         profile: TaskProfile::Worker,
         task: Some(TaskSpec {
           goal: "synthetic group switch".to_string(),
+          repo_path: None,
+          base_branch: None,
           task_type: Some(TaskType::Implement),
-          ..TaskSpec::default()
+          keep_worktree: false,
+          cold_read: None,
+          approver: TaskApprover::User,
+          improve_host: None,
         }),
         name: Some("Model group switch".to_string()),
         backend: Some(GROUP.to_string()),

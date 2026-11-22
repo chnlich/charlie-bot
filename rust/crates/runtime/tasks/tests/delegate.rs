@@ -15,7 +15,9 @@ use axum::http::StatusCode;
 use charliebot_core::event_types;
 use charliebot_core::run_token::{self, RunTokenClaims};
 use charliebot_store::control_events;
-use charliebot_store::metadata::{ColdReadSpec, PARENT_SESSION_ID, SessionMetadata, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{
+  ColdReadSpec, PARENT_SESSION_ID, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType,
+};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::{CreateTask, TaskCaller};
 use charliebot_tasks::completion::ArchiveAuthority;
@@ -51,7 +53,16 @@ async fn node(
   profile: TaskProfile,
   backend: &str,
 ) -> anyhow::Result<SessionMetadata> {
-  let task = TaskSpec { goal: format!("synthetic {request_id}"), ..TaskSpec::default() };
+  let task = TaskSpec {
+    goal: format!("synthetic {request_id}"),
+    repo_path: None,
+    base_branch: None,
+    task_type: None,
+    keep_worktree: false,
+    cold_read: None,
+    approver: TaskApprover::User,
+    improve_host: None,
+  };
   Ok(
     stack
       .store()

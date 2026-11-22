@@ -50,7 +50,11 @@ stage has one attempt, so a pass over its cap fails the side. The lock descripto
 children never hold the lock after it ends. Each side's trial tree is named by its invocation and side
 (`pn-<run id>-<side>`), so two invocations on one commit never share a tree.
 
-The bench's lock file is the one `lock.sh` names, and no option chooses another. The remote-wake bench takes the same
+The bench's lock file is `pn-runs/.bench.lock` under the account's home from the passwd entry, the one `lock.sh` names,
+and no option chooses another. A trial replaces `HOME` for the bench it runs, so a lock named from `$HOME` would be a
+private file that no other holder shares. The bench checks the served home against the mock home (`mock-home check`)
+after the trial starts and before its first take of the lock, so a mismatch fails at once and not after a lock wait.
+The remote-wake bench takes the same
 lock for its container's whole run, because each start and stop of that container adds or removes a veth interface,
 which Chrome reports as a network change and drops the page in transfer. Each improve trial side that keeps the lock
 (`dev/improve/trial-side.sh`: every improve-perf side and each improve-ux side that reports a timing) takes it from its
@@ -631,7 +635,8 @@ report's tests check the calibration gate: it reads the during-refresh holds, no
 holds, and only the reference before side's line carries a verdict. The chrome tests check the browser teardown: a
 closed browser fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status
 counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's `{token,
-rows, gone}`. The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent
+rows, gone}`. A poll that finishes after the window is not counted, and its unread body does not fail the window; a
+poll that finishes inside the window with no body read does. The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent
 from the document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches
 fails the step. The open tests check the CPU rate's sharing (a shared rate stands, beside the one the side's own
 reference derives), the reference's document (a reference repetition whose document crossed the link gives no rate) and
@@ -644,7 +649,8 @@ Chrome against a page that reloads once and holds an iframe, through a forward p
 reloaded document, and the frame adds no document. The lock tests check that one concurrent side attempt holds the bench
 lock and the next waits for it, and that the bench lock's file name and `flock` call live only in `lock.sh`. They also
 check that an improve trial side stops with the bench lock named when the lock stays held, runs its command when the
-lock is free, and passes through a command exit of 75 without reporting a lock timeout. The search tests check the
+lock is free, and passes through a command exit of 75 without reporting a lock timeout. One test runs the bench's lock
+path under a replaced `HOME` and checks that it names the passwd-home file. The search tests check the
 search view's arithmetic (see "Search view").
 
 The step-gate tests check the yield rule (a process queued behind the lock gets it after the step it waits for, and

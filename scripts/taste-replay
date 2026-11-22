@@ -9,7 +9,8 @@
 #
 # Every model call is `charliebot backend run --call new_session --one-shot`: the option that
 # `backends.calls.new_session` selects answers with tools disabled and no session persistence, in a new empty
-# directory, so the model sees only its prompt. The CLI refuses an option whose one-shot keeps its tools.
+# directory, so the model sees only its prompt. The CLI serves only the Claude Code types and opencode, whose one-shot
+# runs without tools, and refuses any other option by name.
 #
 # Each answer is appended to <output-dir>/answers.jsonl as its call returns. A rerun with the same output
 # directory continues from the answered row and condition pairs, so a failed call in a long run loses no

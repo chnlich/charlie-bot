@@ -2,7 +2,7 @@
 //!
 //! The option's backend comes from the registry's factory, and `AgentRunner` runs it once in the given working
 //! directory. The report carries the final text, the exit code and the stderr of the process. The one-shot answers
-//! one prompt through `one_shot_text` instead, and only for a backend whose one-shot keeps every tool disabled.
+//! one prompt through `one_shot_text` instead, and only for a backend whose one-shot runs without tools.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -182,15 +182,23 @@ pub async fn one_shot_once(
 ) -> anyhow::Result<String> {
   let (_, launch) = launch_for_option(option, &RunStart::New(identity), claude_config_dir);
   let built = backend_types::build_backend(Arc::clone(&host.registry), option, &host.cfg, launch)?;
-  one_shot_built(built, &host.base_env.values, prompt, system).await
+  one_shot_built(&option.id, built, &host.base_env.values, prompt, system).await
 }
 
-/// The answer of a built backend's one-shot. A backend whose one-shot keeps its tools is refused, because the one-shot
-/// mode promises that the model sees only its prompt.
-pub async fn one_shot_built(built: BuiltBackend, base_env: &Env, prompt: &str, system: &str) -> anyhow::Result<String> {
+/// The answer of a built backend's one-shot, for the option `option_id`. A backend whose one-shot does not run without
+/// tools is refused, naming the option and its type, because the one-shot mode promises that the model sees only its
+/// prompt.
+pub async fn one_shot_built(
+  option_id: &str,
+  built: BuiltBackend,
+  base_env: &Env,
+  prompt: &str,
+  system: &str,
+) -> anyhow::Result<String> {
   if !built.backend.one_shot_is_tool_less() {
     bail!(
-      "the {} backend's one-shot keeps its tools enabled, so backend run --one-shot refuses it",
+      "option {option_id} ({}) has no one-shot without tools, so backend run --one-shot refuses it: it serves only \
+       the Claude Code types and opencode",
       built.backend_type
     );
   }
@@ -378,7 +386,8 @@ mod tests {
     assert_eq!(launch.resume_session_id, None);
   }
 
-  /// The one-shot mode answers through a tool-less one-shot, and refuses a backend whose one-shot keeps its tools.
+  /// The one-shot mode answers through a tool-less one-shot, and refuses a backend without one, naming its option and
+  /// type.
   #[tokio::test]
   async fn the_one_shot_answers_only_through_a_tool_less_one_shot() {
     let root = tempfile::tempdir().unwrap();
@@ -393,9 +402,16 @@ mod tests {
       backend_type: "scripted".to_string(),
       registry: Arc::new(Registry::new()),
     };
-    assert_eq!(one_shot_built(tool_less, &base_env, "prompt", "system").await.unwrap(), "the answer");
+    assert_eq!(
+      one_shot_built("scripted-option", tool_less, &base_env, "prompt", "system").await.unwrap(),
+      "the answer"
+    );
 
-    let error = one_shot_built(scripted("exit 1"), &base_env, "prompt", "system").await.unwrap_err();
-    assert!(error.to_string().contains("scripted"), "{error:#}");
+    let error =
+      one_shot_built("tool-capable-option", scripted("exit 1"), &base_env, "prompt", "system").await.unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("tool-capable-option"), "{message}");
+    assert!(message.contains("(scripted)"), "{message}");
+    assert!(message.contains("backend run --one-shot refuses it"), "{message}");
   }
 }

@@ -1,6 +1,7 @@
 //! The `backend` command: `backend resolve` prints the option a call runs on, and `backend run` runs that option once.
 //! `backend run --resume <option>:<session>` continues the session a failed run named, on that option.
-//! `backend run --one-shot <system-file>` answers the task file's prompt through the option's tool-less one-shot.
+//! `backend run --one-shot <system-file>` answers the task file's prompt through the option's one-shot. It serves only
+//! the backend types whose one-shot runs without tools, and refuses every other type by name.
 //!
 //! The server picks the option through `POST /api/backends/resolve`. `backend run --launch <dir>` takes an option a
 //! launcher resolved earlier, from `<dir>/option.json`, for a host that runs no server; its `<dir>/login` holds the
@@ -34,7 +35,8 @@ enum BackendCommand {
   /// Print the option a call class or a backend id runs on: its backends.options entry, which holds no key.
   Resolve(ResolveArgs),
   /// Run the option once in the current directory with the task file's text as the prompt, continue a failed run's
-  /// session with `--resume`, or with `--one-shot` answer the prompt once through the option's tool-less one-shot.
+  /// session with `--resume`, or, with `--one-shot`, answer the prompt once instead, for the backend types whose
+  /// one-shot runs without tools.
   Run(RunArgs),
 }
 
@@ -61,9 +63,10 @@ struct RunArgs {
   /// option; without one, the handle's option is resolved by its id.
   #[arg(long, value_name = "HANDLE")]
   resume: Option<String>,
-  /// Answer the prompt once under this system prompt file: a tool-less one-shot with no session persistence, whose
-  /// answer text goes to stdout. The option comes from --call or --backend. A one-shot keeps no session, so it refuses
-  /// --launch and --resume.
+  /// Answer the prompt once under this system prompt file, through the option's one-shot with no session persistence;
+  /// the answer text goes to stdout. The option comes from --call or --backend. Serves only the backend types whose
+  /// one-shot runs without tools: the Claude Code types and opencode. Any other type is refused, naming the option and
+  /// its type. A one-shot keeps no session, so it refuses --launch and --resume.
   #[arg(long, value_name = "SYSTEM_PROMPT_FILE", conflicts_with_all = ["launch", "resume"])]
   one_shot: Option<String>,
 }
@@ -226,8 +229,8 @@ fn run_command(args: RunArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   }
 }
 
-/// `backend run --one-shot`: the answer of one tool-less one-shot on stdout. The one-shot keeps no session, so the
-/// stderr line names none.
+/// `backend run --one-shot`: the answer of one one-shot on stdout. The one-shot keeps no session, so the stderr line
+/// names none.
 fn one_shot_command(pick: &RunPick, host: &CliHost, prompt: &str, system: &str) -> Result<(), CliExit> {
   let resolved = resolve_response(&pick.call, &pick.backend)?;
   let record = response_field(&resolved, "option")?;

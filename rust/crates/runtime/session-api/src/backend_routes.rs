@@ -11,7 +11,7 @@ use charliebot_agents::call_resolve::{self, RESOLVE_PATH, ResolveError};
 use charliebot_agents::model_pool::{Selector, turn_member};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_core::config::{CallClass, yaml_mapping_to_json};
+use charliebot_core::config::{CallClass, CallTarget, yaml_mapping_to_json};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::CallerIdentity;
 use serde_json::{Value, json};
@@ -65,18 +65,28 @@ async fn resolve(
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  let author = match caller.claims() {
-    None => None,
-    Some(claims) => {
-      let meta = match features.store.require_session(&claims.session_id).await {
-        Ok(meta) => meta,
-        Err(error) => return store_error(error),
-      };
-      match turn_member(&features, &cfg, &meta) {
-        Ok(member) => member,
-        Err(error) => return responses::internal_error("RuntimeError", format!("{error:#}")),
+  let needs_author = match &target {
+    Target::Call(class) => {
+      *class == CallClass::ImproveReview || matches!(cfg.backends.calls.get(*class), Some(CallTarget::Session))
+    }
+    Target::Backend(_) => false,
+  };
+  let author = if needs_author {
+    match caller.claims() {
+      None => None,
+      Some(claims) => {
+        let meta = match features.store.require_session(&claims.session_id).await {
+          Ok(meta) => meta,
+          Err(error) => return store_error(error),
+        };
+        match turn_member(&features, &cfg, &meta) {
+          Ok(member) => member,
+          Err(error) => return responses::internal_error("RuntimeError", format!("{error:#}")),
+        }
       }
     }
+  } else {
+    None
   };
   let selector = match Selector::from_features(&features, &cfg) {
     Ok(selector) => selector,
@@ -205,6 +215,25 @@ credential: gw}
     };
     let (status, body) =
       answer(resolve(State(Arc::clone(&features)), caller, Json(json!({"call": "improve_review"}))).await).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["option"]["id"], "synthetic-b");
+  }
+
+  /// Resolving a backend id does not depend on the caller's session backend still being configured.
+  #[tokio::test]
+  async fn an_explicit_backend_resolution_does_not_read_the_callers_session_backend() {
+    let (_home, features) = context_with(CONFIG);
+    let mut session = SessionMetadata::new("stale-session", "Stale session", TaskProfile::Manager);
+    session.backend = "removed".to_string();
+    let metadata_path = features.store.metadata_path(&session.id);
+    std::fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+    std::fs::write(&metadata_path, session.to_json_string(&[], true)).unwrap();
+    let caller = CallerIdentity::Agent {
+      claims: RunTokenClaims { session_id: session.id, run_id: "run-1".into(), agent: "worker".into() },
+    };
+
+    let (status, body) =
+      answer(resolve(State(Arc::clone(&features)), caller, Json(json!({"backend": "synthetic-b"}))).await).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["option"]["id"], "synthetic-b");
   }

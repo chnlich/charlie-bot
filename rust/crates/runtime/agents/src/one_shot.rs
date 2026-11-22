@@ -11,7 +11,7 @@ use tokio::time;
 
 use crate::backend_types::BuiltBackend;
 use crate::launch_loop::ChildEnvPolicy;
-use crate::runner::{AgentRunner, RunRequest};
+use crate::runner::{AgentRunner, EventFn, RunRequest};
 
 /// The assistant text of one run of a built backend with `base_env` in a temporary working directory.
 pub async fn agent_one_shot_text(
@@ -24,23 +24,7 @@ pub async fn agent_one_shot_text(
   built.launch.instructions_file = None;
   built.launch.instructions_content = None;
   let cwd = charliebot_core::tempdir::mkdtemp("charliebot-oneshot-")?;
-  let result = Arc::new(Mutex::new(OneShotResult::default()));
-  let event_result = Arc::clone(&result);
-  let on_event = Arc::new(move |event: Value| -> BoxFuture<'static, anyhow::Result<()>> {
-    let result = Arc::clone(&event_result);
-    Box::pin(async move {
-      let mut result = result.lock().expect("one-shot result lock is not poisoned");
-      match event.get("type").and_then(Value::as_str) {
-        Some(event_types::RESULT) => result.saw_result = true,
-        Some(event_types::ASSISTANT) if !result.saw_result => {
-          result.text.push_str(&assistant_text(&event));
-        }
-        _ => {}
-      }
-      Ok(())
-    })
-  });
-
+  let result = FinalText::default();
   let runner = AgentRunner::new(&built.backend_type, built.backend, built.launch.clone());
   let mut request = RunRequest::new(
     frame_system_prompt(system_prompt, prompt),
@@ -50,11 +34,11 @@ pub async fn agent_one_shot_text(
     built.registry,
   );
   request.child_env_policy = ChildEnvPolicy::Inherited;
-  request.on_event = on_event;
+  request.on_event = result.on_event();
   match timeout {
     Some(limit) => match time::timeout(limit, runner.run(request)).await {
-      Ok(result) => {
-        result.context("running tool-capable one-shot backend")?;
+      Ok(run) => {
+        run.context("running tool-capable one-shot backend")?;
       }
       Err(error) => {
         runner.terminate().await.context("terminating timed-out one-shot backend")?;
@@ -65,8 +49,40 @@ pub async fn agent_one_shot_text(
       runner.run(request).await.context("running tool-capable one-shot backend")?;
     }
   }
-  let result = result.lock().expect("one-shot result lock is not poisoned");
-  Ok(result.text.trim().to_string())
+  Ok(result.text())
+}
+
+/// The final text of a run's events: the assistant text before the run's result event, which is the answer a caller
+/// reads. Cloning shares the collector, so the event callback and the reader see the same text.
+#[derive(Clone, Default)]
+pub struct FinalText {
+  state: Arc<Mutex<OneShotResult>>,
+}
+
+impl FinalText {
+  /// The event callback a run feeds its translated events to.
+  pub fn on_event(&self) -> EventFn {
+    let state = Arc::clone(&self.state);
+    Arc::new(move |event: Value| -> BoxFuture<'static, anyhow::Result<()>> {
+      let state = Arc::clone(&state);
+      Box::pin(async move {
+        let mut state = state.lock().expect("final text lock is not poisoned");
+        match event.get("type").and_then(Value::as_str) {
+          Some(event_types::RESULT) => state.saw_result = true,
+          Some(event_types::ASSISTANT) if !state.saw_result => {
+            state.text.push_str(&assistant_text(&event));
+          }
+          _ => {}
+        }
+        Ok(())
+      })
+    })
+  }
+
+  /// The collected text, trimmed.
+  pub fn text(&self) -> String {
+    self.state.lock().expect("final text lock is not poisoned").text.trim().to_string()
+  }
 }
 
 /// The backend's one-shot text: its CLI-native one-shot when the backend has one, else the tool-capable
@@ -106,7 +122,7 @@ pub fn assistant_text(event: &Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use super::*;
   use std::fs;
   use std::path::{Path, PathBuf};
@@ -115,11 +131,11 @@ mod tests {
   use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
   use serde_json::json;
 
-  struct ScriptedBackend {
-    script: String,
-    native_answer: Option<String>,
+  pub(crate) struct ScriptedBackend {
+    pub(crate) script: String,
+    pub(crate) native_answer: Option<String>,
     /// The transport directory the runner handed to `prepare_transport`.
-    seen_log_dir: Arc<Mutex<Option<PathBuf>>>,
+    pub(crate) seen_log_dir: Arc<Mutex<Option<PathBuf>>>,
   }
 
   impl AgentBackend for ScriptedBackend {

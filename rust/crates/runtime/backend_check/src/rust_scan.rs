@@ -1,14 +1,19 @@
-//! The Rust scan: the production code of a Rust file, read through its syntax tree.
+//! The Rust scan: the production code of a Rust file, read through its syntax tree, and its comments.
 //!
-//! Items under `#[cfg(test)]` and `#[test]` functions are test code and are left out. Attributes are left out too: they
-//! hold documentation and configuration, not code. Every string literal is read as text (`text_scan`). The positions
-//! that select a backend are read from the expression that holds them: a program's arguments, a constant's value, the
-//! operand of a default method, the value of a `backend` field, and a `--backend` pair in a list. A macro whose body is
-//! a list of expressions is visited as those expressions; any other macro body is read as its tokens.
+//! Items under `#[cfg(test)]` and `#[test]` functions are test code and are left out, comments inside them included.
+//! Attributes are left out too: they hold documentation and configuration, not code. A comment is prose: `comment_lines`
+//! finds each comment line, doc comments included, and `text_scan` reads it as prose. Every string literal is read as
+//! text too. The positions that select a backend are read from the expression that holds them: a program's arguments, a
+//! constant's value, the operand of a default method, the value of a `backend` field, and a `--backend` pair in a list.
+//! A macro whose body is a list of expressions is visited as those expressions; any other macro body is read as its
+//! tokens.
+
+use std::ops::RangeInclusive;
 
 use proc_macro2::{Span, TokenStream, TokenTree};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
   Attribute, Expr, ExprArray, ExprCall, ExprClosure, ExprLit, ExprMethodCall, FieldValue, ImplItem, ImplItemConst,
@@ -19,22 +24,41 @@ use crate::rules::{self, CALL_MARKERS, Class, FIXED_COMMANDS, Found, fixed_comma
 use crate::text_scan;
 use crate::vocabulary::Vocabulary;
 
-/// Scan the production code of one Rust file. A file that does not parse is an error: its sites cannot be read.
+/// Scan the production code and the comments of one Rust file. A file that does not parse is an error: its sites cannot
+/// be read.
 pub fn scan(vocab: &Vocabulary, source: &str) -> syn::Result<Vec<Found>> {
   let file = syn::parse_file(source)?;
-  let mut scanner = Scanner { vocab, found: Vec::new() };
+  let mut scanner = Scanner { vocab, found: Vec::new(), test_lines: Vec::new() };
   syn::visit::Visit::visit_file(&mut scanner, &file);
-  Ok(scanner.found)
+  let mut found = scanner.found;
+  for (line, text) in comment_lines(source) {
+    if !scanner.test_lines.iter().any(|lines| lines.contains(&line)) {
+      found.extend(text_scan::scan_block(vocab, &text, line));
+    }
+  }
+  Ok(found)
 }
 
 struct Scanner<'a> {
   vocab: &'a Vocabulary,
   found: Vec<Found>,
+  /// The lines of each test item that the walk left out, so that the comments inside it are left out too.
+  test_lines: Vec<RangeInclusive<usize>>,
 }
 
 impl Scanner<'_> {
   fn push(&mut self, line: usize, class: Class, value: impl Into<String>) {
     self.found.push(Found { line, class, value: value.into() });
+  }
+
+  /// Whether a node is test code, which the scan leaves out. Its lines are kept, so its comments are left out too.
+  fn skip_test(&mut self, attrs: &[Attribute], node: &impl Spanned) -> bool {
+    if !is_test_gated(attrs) {
+      return false;
+    }
+    let span = node.span();
+    self.test_lines.push(span.start().line..=span.end().line);
+    true
   }
 
   /// A default operand: the backend word that `unwrap_or` and its kin fall back to.
@@ -147,31 +171,31 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
   fn visit_attribute(&mut self, _: &'ast Attribute) {}
 
   fn visit_item(&mut self, item: &'ast Item) {
-    if !is_test_gated(item_attrs(item)) {
+    if !self.skip_test(item_attrs(item), item) {
       visit::visit_item(self, item);
     }
   }
 
   fn visit_impl_item(&mut self, item: &'ast ImplItem) {
-    if !is_test_gated(impl_item_attrs(item)) {
+    if !self.skip_test(impl_item_attrs(item), item) {
       visit::visit_impl_item(self, item);
     }
   }
 
   fn visit_trait_item(&mut self, item: &'ast TraitItem) {
-    if !is_test_gated(trait_item_attrs(item)) {
+    if !self.skip_test(trait_item_attrs(item), item) {
       visit::visit_trait_item(self, item);
     }
   }
 
   fn visit_local(&mut self, local: &'ast Local) {
-    if !is_test_gated(&local.attrs) {
+    if !self.skip_test(&local.attrs, local) {
       visit::visit_local(self, local);
     }
   }
 
   fn visit_stmt_macro(&mut self, stmt: &'ast StmtMacro) {
-    if !is_test_gated(&stmt.attrs) {
+    if !self.skip_test(&stmt.attrs, stmt) {
       visit::visit_stmt_macro(self, stmt);
     }
   }
@@ -283,6 +307,114 @@ fn flatten(stream: TokenStream, pieces: &mut Vec<Piece>) {
 
 fn line_of(span: Span) -> usize {
   span.start().line
+}
+
+/// The comment lines of a Rust source, each with its line number: the text after the `//` of a line comment, doc
+/// comments included, and each line of a block comment. The lexer steps over every string, raw string and character
+/// literal, so a marker inside one opens no comment.
+fn comment_lines(source: &str) -> Vec<(usize, String)> {
+  let chars: Vec<char> = source.chars().collect();
+  let at = |index: usize| chars.get(index).copied();
+  let mut lines = Vec::new();
+  let mut line = 1;
+  let mut index = 0;
+  while index < chars.len() {
+    match (chars[index], at(index + 1)) {
+      ('\n', _) => {
+        line += 1;
+        index += 1;
+      }
+      ('/', Some('/')) => {
+        let end = chars[index..].iter().position(|&ch| ch == '\n').map_or(chars.len(), |offset| index + offset);
+        lines.push((line, chars[index + 2..end].iter().collect()));
+        index = end;
+      }
+      ('/', Some('*')) => {
+        index += 2;
+        let mut depth = 1;
+        let mut start = line;
+        let mut text = String::new();
+        while depth > 0 && index < chars.len() {
+          match (chars[index], at(index + 1)) {
+            ('/', Some('*')) => {
+              depth += 1;
+              index += 2;
+            }
+            ('*', Some('/')) => {
+              depth -= 1;
+              index += 2;
+            }
+            ('\n', _) => {
+              lines.push((start, std::mem::take(&mut text)));
+              line += 1;
+              start = line;
+              index += 1;
+            }
+            (ch, _) => {
+              text.push(ch);
+              index += 1;
+            }
+          }
+        }
+        lines.push((start, text));
+      }
+      ('"', _) => {
+        index += 1;
+        while index < chars.len() && chars[index] != '"' {
+          if chars[index] == '\\' {
+            index += 1;
+          }
+          if at(index) == Some('\n') {
+            line += 1;
+          }
+          index += 1;
+        }
+        index += 1;
+      }
+      ('r', _) if raw_string_opens(&chars, index) => {
+        let hashes = chars[index + 1..].iter().take_while(|&&ch| ch == '#').count();
+        index += hashes + 2;
+        while index < chars.len() && !closes_raw_string(&chars, index, hashes) {
+          if chars[index] == '\n' {
+            line += 1;
+          }
+          index += 1;
+        }
+        index += hashes + 1;
+      }
+      ('\'', _) => {
+        if at(index + 1) == Some('\\') {
+          index += 3;
+          while index < chars.len() && chars[index] != '\'' {
+            index += 1;
+          }
+          index += 1;
+        } else if at(index + 2) == Some('\'') {
+          index += 3;
+        } else {
+          // A lifetime, as in `'a`, is no literal.
+          index += 1;
+        }
+      }
+      _ => index += 1,
+    }
+  }
+  lines
+}
+
+/// Whether the `r` at `index` opens a raw string literal: `r"` or `r#` with hashes and a quote. A `b` or `c` prefix
+/// before it is part of the literal, and any other word character before it makes the `r` part of an identifier.
+fn raw_string_opens(chars: &[char], index: usize) -> bool {
+  let is_word = |ch: char| ch.is_alphanumeric() || ch == '_';
+  let start = if index > 0 && matches!(chars[index - 1], 'b' | 'c') { index - 1 } else { index };
+  let word_before = start > 0 && is_word(chars[start - 1]);
+  let hashes = chars[index + 1..].iter().take_while(|&&ch| ch == '#').count();
+  !word_before && chars.get(index + 1 + hashes) == Some(&'"')
+}
+
+/// Whether a raw string closes at `index`: a quote followed by as many hashes as opened it.
+fn closes_raw_string(chars: &[char], index: usize, hashes: usize) -> bool {
+  chars.get(index) == Some(&'"') && (1..=hashes).all(|offset| chars.get(index + offset) == Some(&'#'))
 }
 
 /// The text of a string literal, through the forms that build a `String` from one: `.to_string()`, `.to_owned()`,
@@ -477,5 +609,30 @@ mod tests {
   fn a_macro_body_that_is_not_a_list_is_read_as_tokens() {
     assert!(has("fn f() { json!({ \"backend\": \"cheap\" }); }", Class::PoolId, "cheap"));
     assert!(has("fn f() { json!({ \"argv\": [\"claude\", \"-p\"] }); }", Class::FixedCommand, "claude -p"));
+  }
+
+  /// A comment is prose: a harness name in a line or doc comment is no site, while a model id in one is a site. A
+  /// comment inside a test item is test code and is left out.
+  #[test]
+  fn comments_are_prose_and_test_comments_are_left_out() {
+    let source = "// call claude -p\n/// model claude-opus-5-5\nfn f() {}\n#[cfg(test)]\n\
+                  mod tests {\n  // option claude-opus\n}\n";
+    assert_eq!(found(source), vec![(2, Class::ModelId, "claude-opus-5-5".to_string())]);
+  }
+
+  /// A block comment is read line by line. A comment marker inside a string or a raw string literal opens no comment,
+  /// so the literal is read once, as text.
+  #[test]
+  fn block_comments_are_read_and_literals_are_not_comments() {
+    let source = "fn f() {\n  /* default\n   claude-opus-5-5 */\n  let _ = \"// claude-opus\";\n\
+                  \x20 let _ = r#\"/* claude-opus */\"#;\n}\n";
+    assert_eq!(
+      found(source),
+      vec![
+        (3, Class::ModelId, "claude-opus-5-5".to_string()),
+        (4, Class::OptionId, "claude-opus".to_string()),
+        (5, Class::OptionId, "claude-opus".to_string()),
+      ]
+    );
   }
 }

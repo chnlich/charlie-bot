@@ -19,7 +19,8 @@ pub enum Class {
   ModelId,
   /// The URL of a configured endpoint, or of a provider host.
   Gateway,
-  /// A backend CLI name as a program's first argument or a constant's value, with the argument that makes a call.
+  /// A backend CLI name as a program's first argument or a constant's value, with the argument that makes a call. A
+  /// comment or prose sentence that names one describes a harness, so it is no site.
   FixedCommand,
   /// A backend word on the right of a default operator.
   DefaultValue,
@@ -62,12 +63,12 @@ const CLAUDE_FAMILIES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
 /// The model family prefixes: a word that starts with one and then has a name is a model id.
 const MODEL_FAMILY_PREFIXES: [&str; 7] = ["gemini-", "gpt-", "kimi-", "deepseek-", "glm-", "muse-", "jev-"];
 
-/// The family names that mark a segment of an option id made from a registered prefix, as in `claude-code-kimi-...`.
+/// The family names that mark a segment of an option id made from a registered prefix: the prefix, then a family name.
 const FAMILY_SEGMENTS: [&str; 11] =
   ["opus", "sonnet", "haiku", "fable", "gemini", "gpt", "kimi", "deepseek", "glm", "muse", "jev"];
 
 /// The class of a word that names a backend by value, or `None`. A model id is checked before an option id made from a
-/// prefix, so a word such as `claude-opus-5` is a model id.
+/// prefix, so a word that a model family names is a model id.
 pub fn value_class(vocab: &Vocabulary, word: &str) -> Option<Class> {
   if vocab.options.contains(word) {
     Some(Class::OptionId)
@@ -105,8 +106,8 @@ pub fn is_model_family(word: &str) -> bool {
     .any(|prefix| name.strip_prefix(prefix).is_some_and(|tail| tail.starts_with(|c: char| c.is_ascii_alphanumeric())))
 }
 
-/// Whether a word is an option id made from a registered id prefix and a family segment: `claude-code-kimi-k3.1-pro`
-/// under the prefix `claude-`.
+/// Whether a word is an option id made from a registered id prefix and a family segment after it, with a version
+/// after that segment.
 pub fn has_option_family(prefixes: &BTreeSet<String>, word: &str) -> bool {
   prefixes.iter().any(|prefix| {
     word

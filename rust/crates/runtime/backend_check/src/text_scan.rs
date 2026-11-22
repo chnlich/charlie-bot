@@ -2,10 +2,10 @@
 //!
 //! A word is a run of name, path and flag characters. The scan reads the positions that select a backend from the words
 //! around a word: the program after a backend CLI name, the value after a `--backend` flag or a `backend` key, and the
-//! operand after a default operator. What a position means depends on the kind of text. A code file (a shell, Python or
-//! script file) runs a backend CLI wherever its name is followed by a call marker. Protocol text (a document, a prompt,
-//! a Rust string literal) names a backend CLI only in a backtick command, so English prose that says `run` after a
-//! word stays clean.
+//! operand after a default operator. A code file (a shell, Python or script file) is read as code, and its comments as
+//! prose. Every other text file, and every Rust string literal and comment, is prose. A prose sentence that names a
+//! backend CLI describes a harness, so the name is no site there. A model id, an option id, a pool id, a default
+//! operand and a gateway URL are sites in prose and in code alike.
 
 use std::path::Path;
 
@@ -14,8 +14,18 @@ use charliebot_core::config;
 use crate::rules::{self, CALL_MARKERS, Class, Found, fixed_command};
 use crate::vocabulary::Vocabulary;
 
-/// The extensions of code files.
-const CODE_EXTENSIONS: [&str; 9] = ["sh", "bash", "py", "mjs", "cjs", "js", "ts", "pl", "awk"];
+/// The code file extensions, each with the marker that starts its comments.
+const CODE_EXTENSIONS: [(&str, &str); 9] = [
+  ("sh", "#"),
+  ("bash", "#"),
+  ("py", "#"),
+  ("pl", "#"),
+  ("awk", "#"),
+  ("mjs", "//"),
+  ("cjs", "//"),
+  ("js", "//"),
+  ("ts", "//"),
+];
 
 /// The characters between a backend CLI name and its call marker: spaces, quotes and brackets, never a letter or `:`.
 const COMMAND_GAP: &str = " \t,'\"`[](){}";
@@ -29,7 +39,7 @@ const KEY_GAP: &str = " :=\"'`\t";
 enum Mode {
   /// A code file: a backend CLI runs wherever a call marker follows its name, and the code may read `config.yaml`.
   Code,
-  /// Protocol text: a backend CLI counts only inside a backtick command.
+  /// Prose: a backend CLI name in a sentence describes a harness, so it is no site. The other classes still are.
   Prose,
 }
 
@@ -40,18 +50,47 @@ struct Word<'a> {
   text: &'a str,
 }
 
-/// Scan a whole text file. A code file is read as code, any other text file as protocol text.
+/// Scan a whole text file. A code file's code is read as code and its comments as prose; any other text file is prose.
 pub fn scan_file(vocab: &Vocabulary, text: &str, path: &Path) -> Vec<Found> {
-  let is_code = path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| CODE_EXTENSIONS.contains(&ext));
-  let mode = if is_code { Mode::Code } else { Mode::Prose };
+  let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
+  let code = CODE_EXTENSIONS.iter().find(|(name, _)| *name == ext);
   let mut found = Vec::new();
   for (index, line) in text.lines().enumerate() {
-    scan_line(vocab, line, index + 1, mode, &mut found);
+    let number = index + 1;
+    match code {
+      Some((_, marker)) => {
+        let (code_text, comment) = split_comment(line, marker);
+        scan_line(vocab, code_text, number, Mode::Code, &mut found);
+        if let Some(comment) = comment {
+          scan_line(vocab, comment, number, Mode::Prose, &mut found);
+        }
+      }
+      None => scan_line(vocab, line, number, Mode::Prose, &mut found),
+    }
   }
   found
 }
 
-/// Scan a text block whose first line is `first_line`, such as the value of a Rust string literal, as protocol text.
+/// The code of a line and the text of its comment, when the line has one. A comment starts at a marker that follows the
+/// line's start or a whitespace and lies outside a quoted string. An apostrophe in the comment comes after its marker,
+/// so it opens no quote.
+fn split_comment<'a>(line: &'a str, marker: &str) -> (&'a str, Option<&'a str>) {
+  let mut quote = None;
+  for (at, ch) in line.char_indices() {
+    match quote {
+      Some(open) if ch == open => quote = None,
+      Some(_) => {}
+      None if matches!(ch, '"' | '\'') => quote = Some(ch),
+      None if line[at..].starts_with(marker) && line[..at].chars().last().is_none_or(char::is_whitespace) => {
+        return (&line[..at], Some(&line[at + marker.len()..]));
+      }
+      None => {}
+    }
+  }
+  (line, None)
+}
+
+/// Scan a text block whose first line is `first_line`, such as the value of a Rust string literal or comment, as prose.
 pub fn scan_block(vocab: &Vocabulary, text: &str, first_line: usize) -> Vec<Found> {
   let mut found = Vec::new();
   for (index, line) in text.lines().enumerate() {
@@ -71,8 +110,9 @@ fn scan_line(vocab: &Vocabulary, line: &str, number: usize, mode: Mode, found: &
     }
     let Some(next) = words.get(index + 1) else { continue };
     let gap = &line[word.end..next.start];
-    if let Some(command) = fixed_command(word.text)
-      && runs_as_command(mode, line, word, gap)
+    if mode == Mode::Code
+      && let Some(command) = fixed_command(word.text)
+      && only(gap, COMMAND_GAP)
       && CALL_MARKERS.contains(&next.text)
     {
       found.push(site(number, Class::FixedCommand, &format!("{command} {}", next.text)));
@@ -91,15 +131,6 @@ fn scan_line(vocab: &Vocabulary, line: &str, number: usize, mode: Mode, found: &
   }
   if mode == Mode::Code && line.contains(config::CONFIG_FILENAME) && words.iter().any(|word| word.text == "backends") {
     found.push(site(number, Class::ConfigBypass, "backends"));
-  }
-}
-
-/// Whether a backend CLI name at `word` runs a program here: a code line runs it when the gap before the marker holds
-/// only separators, and protocol text runs it only inside a backtick.
-fn runs_as_command(mode: Mode, line: &str, word: &Word<'_>, gap: &str) -> bool {
-  match mode {
-    Mode::Code => only(gap, COMMAND_GAP),
-    Mode::Prose => line[..word.start].ends_with('`') && only(gap, COMMAND_GAP),
   }
 }
 
@@ -145,7 +176,7 @@ fn only(gap: &str, allowed: &str) -> bool {
 
 /// The single-word operands after a default operator, and the defaults of a Python `def`. Code reads every operator;
 /// protocol text reads only the symbol operators, since ` or ` is an English word. A shell `:-` operand may be
-/// unquoted, as in `${VAR:-claude-opus}`.
+/// unquoted, as in `${VAR:-operand}`.
 fn default_operands(mode: Mode, line: &str) -> Vec<&str> {
   let operators: &[&str] = match mode {
     Mode::Code => &["??", "||", ":-", " or "],
@@ -224,12 +255,38 @@ mod tests {
     scan_file(&vocab(), text, &PathBuf::from(path)).into_iter().map(|f| (f.line, f.class, f.value)).collect()
   }
 
-  /// In protocol text a backend CLI with a call marker is a fixed command only inside a backtick; the same words in
-  /// prose, or a flag that makes no call, are not.
+  /// Prose names a harness and its call, in a backtick or not, and the name is no site. A model id in the same prose is.
   #[test]
-  fn protocol_text_names_a_command_only_inside_a_backtick() {
+  fn prose_names_a_harness_without_a_site() {
     let found = classes("run `claude -p --resume x` now\nclaude -p in prose\nuse `claude --version`\n", "guide.md");
-    assert_eq!(found, vec![(1, Class::FixedCommand, "claude -p".to_string())]);
+    assert!(found.is_empty(), "{found:?}");
+    let model = classes("run `claude -p --model claude-opus-5-5` now\n", "guide.md");
+    assert_eq!(model, vec![(1, Class::ModelId, "claude-opus-5-5".to_string())]);
+  }
+
+  /// A code file's comment is prose: a harness name in it is no site, while an option id and a model id in it are. A
+  /// marker inside a quoted string opens no comment, so the call after that string is code.
+  #[test]
+  fn a_code_comment_is_prose_and_a_quoted_marker_is_no_comment() {
+    let found = classes(
+      "# claude -p reads stdin\necho \"a # b\" && claude -p\n# option claude-opus, model claude-opus-5-5\n",
+      "run.sh",
+    );
+    assert_eq!(
+      found,
+      vec![
+        (2, Class::FixedCommand, "claude -p".to_string()),
+        (3, Class::OptionId, "claude-opus".to_string()),
+        (3, Class::ModelId, "claude-opus-5-5".to_string()),
+      ]
+    );
+  }
+
+  /// A gateway URL in a JavaScript comment is a site, and the `//` that opens the comment is not part of the URL.
+  #[test]
+  fn a_gateway_url_in_a_comment_is_a_site() {
+    let found = classes("const x = 1; // see https://aigw.example.team/v1\n", "run.mjs");
+    assert_eq!(found, vec![(1, Class::Gateway, "https://aigw.example.team/v1".to_string())]);
   }
 
   /// In a code file a backend CLI with a call marker is a fixed command wherever it stands, as in an argv list.

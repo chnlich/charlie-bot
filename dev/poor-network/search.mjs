@@ -326,7 +326,8 @@ export async function searchScenario(ctx) {
   for (let repetition = 1; repetition <= SEARCH.repetitions; repetition++) {
     for (const variant of VARIANTS) {
       process.stderr.write(`search ${variant} repetition ${repetition}/${SEARCH.repetitions}\n`);
-      records.push(...(await searchRepetition(ctx, variant, repetition)));
+      const unit = () => searchRepetition(ctx, variant, repetition);
+      records.push(...(await ctx.unit('search', `${variant} ${repetition}`, unit)));
     }
   }
   return {

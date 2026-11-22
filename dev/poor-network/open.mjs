@@ -742,7 +742,7 @@ async function runCell(ctx, cell, repetitions) {
     // The trials that run beside a repetition share the host with it; the watch names them, as the other scenarios
     // do for their repetitions.
     const from = ctx.trials.mark();
-    const rep = await measureOnce(ctx, cell, repetition);
+    const rep = await ctx.unit('open', `${cell.id} ${repetition}`, () => measureOnce(ctx, cell, repetition));
     return {
       ...rep,
       startedAt: new Date(from).toISOString(),
@@ -753,15 +753,11 @@ async function runCell(ctx, cell, repetitions) {
   return cell;
 }
 
-// The open scenario. Fills `result`, the object the JSON keeps, cell by cell: a failure part-way leaves the cells
-// measured so far in the side's JSON, as the per-repetition scenarios leave their repetitions. Returns `result`.
-// The reference cell always runs: the CPU rate is derived from it. `conditions` selects the other cells.
-// `sharedCpuRate`, when the invocation passes one, is the rate the before side derived, which this side's cells
-// then run at.
-export async function openScenario(ctx, repetitions, result, conditions = OPEN_CONDITIONS, sharedCpuRate = null) {
-  ctx.releases = 0;
-  result.releases = 0;
-  result.cells = [];
+// openPrepare(ctx, result): the open scenario's preparation, done once before the bench's first step: the sessions the
+// opens read are marked read, their chat pages are served once, and the warm builds A, B and C are made. Fills the warm
+// reports into `result` and returns { warm, reference }: the warm builds, and the reference cell that the CPU probes
+// and the scenario's own reference cell run on.
+export async function openPrepare(ctx, result) {
   // Case A's open revalidates the page its browser cached, and it is a 304 only while the server serves that copy's
   // entity tag. Two things would move the tag after a warm build, so both are settled here, before any warm build
   // caches a page:
@@ -787,6 +783,27 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
   result.warmReports = Object.fromEntries(Object.entries(warm).map(([name, built]) => [name, built.report]));
   result.warmFilesStored = Object.fromEntries(Object.entries(warm).map(([name, built]) => [name, built.filesStored]));
   const reference = { ...REFERENCE, warmDir: warm[REFERENCE.case].dir };
+  return { warm, reference };
+}
+
+// openProbe(ctx, reference): one repetition of the reference cell, the CPU probe a bench segment starts with. It runs
+// at the reference rate, so its tail reads the host's CPU speed (open.mjs cpuRateFrom).
+export async function openProbe(ctx, reference) {
+  return measureOnce(ctx, reference, 1);
+}
+
+// The open scenario. Fills `result`, the object the JSON keeps, cell by cell: a failure part-way leaves the cells
+// measured so far in the side's JSON, as the per-repetition scenarios leave their repetitions. Returns `result`.
+// `prepared` is openPrepare's return. Every repetition is a unit of the bench's (ctx.unit), so it is one step.
+// The reference cell always runs: the CPU rate is derived from it. `conditions` selects the other cells.
+// `sharedCpuRate`, when the invocation passes one, is the rate the before side derived, which this side's cells
+// then run at.
+export async function openScenario(ctx, repetitions, result, prepared, conditions = OPEN_CONDITIONS,
+  sharedCpuRate = null) {
+  ctx.releases = 0;
+  result.releases = 0;
+  result.cells = [];
+  const { warm, reference } = prepared;
   result.reference = reference;
   await runCell(ctx, reference, repetitions);
   result.cpu = openCpuRecord(sharedCpuRate, reference.reps);
@@ -802,7 +819,7 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
     }
   }
   for (const caseName of conditions.includes('release') ? CASES : []) {
-    const built = await buildWarm(ctx, caseName);
+    const built = await ctx.unit('open-warm', `release ${caseName}`, () => buildWarm(ctx, caseName));
     result.releaseWarmReports = { ...result.releaseWarmReports, [caseName]: built.report };
     const cell = { id: `${caseName} release`, case: caseName, condition: 'release', rate: cpuRate, warmDir: built.dir };
     result.cells.push(cell);

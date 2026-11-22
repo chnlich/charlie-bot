@@ -159,10 +159,11 @@ export class BenchGate {
     return pidsIn(stdout).map(Number);
   }
 
-  // Runs one step under the cap. A step that passes the cap is stopped (every browser and proxy it started), and it runs
-  // once more; a second pass over the cap ends it as capped. A step that throws fails the caller. Returns
-  // { status: 'ok', value, unit } or { status: 'capped', unit }; the unit is the record the gate keeps for the step.
-  async step(kind, name, body) {
+  // Runs one step under the cap. A step that passes the cap is stopped (every browser and proxy it started) and runs
+  // again, up to `attempts` passes; a pass over the cap on the last attempt ends it as capped. A step that throws fails
+  // the caller. Returns { status: 'ok', value, unit } or { status: 'capped', unit }; the unit is the gate's record of
+  // the step.
+  async step(kind, name, body, { attempts = 2 } = {}) {
     this.#checkPoll();
     this.#requireOpen();
     for (let attempt = 1; ; attempt++) {
@@ -177,7 +178,7 @@ export class BenchGate {
       if (outcome.status === 'ok') {
         return { status: 'ok', value: outcome.value, unit };
       }
-      if (attempt === 2) {
+      if (attempt === attempts) {
         return { status: 'capped', unit };
       }
     }

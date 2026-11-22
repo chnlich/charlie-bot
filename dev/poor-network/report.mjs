@@ -130,6 +130,26 @@ export function summarize(reps, metric) {
   };
 }
 
+// The rep list that feeds each scenario number of METRICS.
+export const REPS_OF_SCENARIO = Object.freeze({
+  1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools',
+});
+
+// Fills a side's metrics and calibration from its repetitions. The bench writes the side this way, and a before side
+// assembled from stored rows derives the same fields from the rows it holds.
+export function deriveSide(side) {
+  side.metrics = {};
+  for (const metric of METRICS) {
+    const reps = side.reps[REPS_OF_SCENARIO[metric.scenario]] ?? [];
+    if (reps.length > 0 && side.status === 'measured') {
+      side.metrics[metric.id] = summarize(reps, metric);
+    }
+  }
+  const background = side.reps.background ?? [];
+  side.calibration = background.length > 0 ? calibrate(background) : null;
+  return side;
+}
+
 // The cross-side verdict: a metric the bench passed on the before side and fails on the after side is a regression. A
 // metric absent from either side, or one without a target, is not compared.
 export function regressions(before, after) {

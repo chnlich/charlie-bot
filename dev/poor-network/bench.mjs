@@ -39,9 +39,12 @@ import {
   viewBackgroundRep,
 } from './scenarios.mjs';
 import { expectedTargetsFrom } from './newest-row.mjs';
-import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
+import { OPEN_CONDITIONS, formatOpen, openPrepare, openProbe, openScenario } from './open.mjs';
+import { BenchGate, LOCK_TIMEOUT_EXIT, LockWaitTimeout } from './step-gate.mjs';
+import { closeAllLive } from './live.mjs';
+import { RateGateError, Segments, StepCapped } from './segments.mjs';
 import { formatSearch, searchScenario } from './search.mjs';
-import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
+import { deriveSide, formatSide, percentile } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 import { sleep } from './tabs.mjs';
 
@@ -94,6 +97,7 @@ function parseArgs(argv) {
     '--open-conditions': 'openConditions',
     '--open-cpu-rate': 'openCpuRate',
     '--expect-targets': 'expectTargets',
+    '--lock-wait': 'lockWait',
   };
   for (let index = 0; index < argv.length; index += 2) {
     const key = flags[argv[index]];
@@ -102,7 +106,7 @@ function parseArgs(argv) {
     }
     args[key] = argv[index + 1];
   }
-  for (const required of ['side', 'out', 'mockHome', 'mockHomeBin', 'replyDir', 'assets', 'commit']) {
+  for (const required of ['side', 'out', 'mockHome', 'mockHomeBin', 'replyDir', 'assets', 'commit', 'lockWait']) {
     if (args[required] === undefined) {
       throw new Error(`--${required.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} is required`);
     }
@@ -111,6 +115,10 @@ function parseArgs(argv) {
     throw new Error(`--side must be before or after, got ${args.side}`);
   }
   args.repetitions = Number(args.repetitions);
+  if (!/^[1-9][0-9]*$/.test(args.lockWait)) {
+    throw new Error(`--lock-wait must be a positive number of seconds, got ${args.lockWait}`);
+  }
+  args.lockWait = Number(args.lockWait);
   if (args.openCpuRate !== undefined) {
     args.openCpuRate = Number(args.openCpuRate);
     if (!(args.openCpuRate >= 1)) {
@@ -279,7 +287,7 @@ function makeCertificate(dir) {
 
 function buildSide({
   args, startedAt, finishedAt, status, error, results, openResult, searchResult, assets, sessions, view, otherViews,
-  replyBytes, chromeVersion,
+  replyBytes, chromeVersion, units, yields, cpuReference,
 }) {
   const side = {
     side: args.side,
@@ -320,19 +328,44 @@ function buildSide({
     reps: results,
     open: openResult,
     search: searchResult,
+    // Every step in run order, with its attempt, its status and, for a probe, its CPU rate; and every yield of the
+    // lock.
+    units,
+    yields,
+    cpuReference,
     metrics: {},
     calibration: null,
   };
-  if (results.background.length > 0) {
-    side.calibration = calibrate(results.background);
+  return deriveSide(side);
+}
+
+// The preparation stage: the assets and the reply text, the sessions and the view, the TLS front, the CDN stand-in, and
+// the open scenario's warm builds, which the CPU probes need. Runs as one step, which is not retried, since a retry
+// would leave the first attempt's servers running.
+async function prepare(ctx, args, openResult) {
+  const check = spawnSync(args.mockHomeBin, ['check', args.mockHome, ctx.api.base], { stdio: 'inherit' });
+  if (check.status !== 0) {
+    throw new Error(`mock-home check exited ${check.status}: the served home is not the mock home`);
   }
-  for (const metric of METRICS) {
-    const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools' }[metric.scenario];
-    if (results[repsOf].length > 0 && status === 'measured') {
-      side.metrics[metric.id] = summarize(results[repsOf], metric);
-    }
-  }
-  return side;
+  ctx.assets = await loadAssets(args.assets);
+  ctx.replyBytes = replyTextBytes(args.replyDir);
+  ctx.sessions = await createSessions(ctx.api);
+  ctx.view = await measureView(ctx.api);
+  const serve = new URL(ctx.api.base);
+  const tls = makeCertificate(path.join(ctx.runDir, `tls-${args.side}`));
+  const target = { host: serve.hostname, port: Number(serve.port) };
+  ctx.front = await startFront({ key: tls.key, cert: tls.cert, target });
+  ctx.frontPort = ctx.front.port;
+  ctx.trustedSpki = tls.spki;
+  ctx.origin = `https://localhost:${ctx.front.port}`;
+  // The browser pins both servers' keys: the front's and the CDN stand-in's. Without the stand-in's pin every CDN file
+  // fails the certificate check and no CDN byte crosses the link. Every segment's probe is a page load, so the stand-in
+  // always runs.
+  const cdnTls = makeCertificate(path.join(ctx.runDir, `tls-cdn-${args.side}`));
+  ctx.cdn = await startCdn({ key: cdnTls.key, cert: cdnTls.cert, assets: ctx.assets });
+  ctx.cdnPort = ctx.cdn.port;
+  ctx.cdnSpki = cdnTls.spki;
+  ctx.prepared = await openPrepare(ctx, openResult);
 }
 
 async function main() {
@@ -353,6 +386,9 @@ async function main() {
     frontPort: null,
     trustedSpki: null,
     origin: null,
+    front: null,
+    cdn: null,
+    prepared: null,
     runDir: path.dirname(args.out),
     chromeVersion: null,
     backendId: STUB_BACKEND_ID,
@@ -370,38 +406,41 @@ async function main() {
   let searchResult = null;
   let status = 'measured';
   let error = null;
-  let front = null;
-  let cdn = null;
+  let exitCode = 1;
+  // The steps that passed their cap twice: their scenario's repetition is missing from the results, and the side fails.
+  const cappedSteps = [];
   const trials = new TrialWatch();
   ctx.trials = trials;
+  const gate = new BenchGate({ lockWaitSeconds: args.lockWait });
+  let segments = null;
   try {
     trials.start();
-    const check = spawnSync(args.mockHomeBin, ['check', args.mockHome, api.base], { stdio: 'inherit' });
-    if (check.status !== 0) {
-      throw new Error(`mock-home check exited ${check.status}: the served home is not the mock home`);
+    await gate.open();
+    // The bench holds the lock one step at a time: it takes it here, gives it up after a step that a queued process
+    // waits for, and takes it again. The probe that starts each segment is the first step after each take.
+    await gate.take();
+    const prepared = await gate.step('prepare', 'the preparation stages', () => prepare(ctx, args, openResult),
+      { attempts: 1 });
+    if (prepared.status === 'capped') {
+      throw new Error('the preparation stages passed their cap; the side did not start');
     }
-    ctx.assets = await loadAssets(args.assets);
-    ctx.replyBytes = replyTextBytes(args.replyDir);
-    ctx.sessions = await createSessions(api);
-    ctx.view = await measureView(api);
-    const serve = new URL(api.base);
-    const tls = makeCertificate(path.join(ctx.runDir, `tls-${args.side}`));
-    const target = { host: serve.hostname, port: Number(serve.port) };
-    front = await startFront({ key: tls.key, cert: tls.cert, target });
-    ctx.frontPort = front.port;
-    ctx.trustedSpki = tls.spki;
-    ctx.origin = `https://localhost:${front.port}`;
-    if (args.scenarios.includes(OPEN_SCENARIO)) {
-      const cdnTls = makeCertificate(path.join(ctx.runDir, `tls-cdn-${args.side}`));
-      cdn = await startCdn({ key: cdnTls.key, cert: cdnTls.cert, assets: ctx.assets });
-      ctx.cdnPort = cdn.port;
-      // The browser pins both servers' keys: the front's and the CDN stand-in's. Without the stand-in's pin every
-      // CDN file fails the certificate check and no CDN byte crosses the link.
-      ctx.cdnSpki = cdnTls.spki;
-    }
+    segments = new Segments({
+      gate,
+      probe: () => openProbe(ctx, ctx.prepared.reference),
+      side: args.side,
+      reference: args.openCpuRate ?? null,
+    });
+    ctx.unit = async (kind, name, body) => {
+      const outcome = await segments.unit(kind, name, body);
+      if (outcome.status === 'capped') {
+        throw new StepCapped(`${kind} ${name} passed its cap twice`);
+      }
+      return outcome.value;
+    };
     for (const name of args.scenarios) {
       if (name === OPEN_SCENARIO) {
-        await openScenario(ctx, args.repetitions, openResult, args.openConditions, args.openCpuRate ?? null);
+        await openScenario(ctx, args.repetitions, openResult, ctx.prepared, args.openConditions,
+          args.openCpuRate ?? null);
         continue;
       }
       if (name === SEARCH_SCENARIO) {
@@ -411,23 +450,44 @@ async function main() {
       for (let repetition = 1; repetition <= args.repetitions; repetition++) {
         process.stderr.write(`[${args.side}] ${name} repetition ${repetition}/${args.repetitions}\n`);
         const from = trials.mark();
-        const rep = await SCENARIOS[name](ctx, repetition);
+        let rep;
+        try {
+          rep = await ctx.unit('rep', `${name} ${repetition}`, () => SCENARIOS[name](ctx, repetition));
+        } catch (caught) {
+          if (!(caught instanceof StepCapped)) {
+            throw caught;
+          }
+          // The other repetitions still run: a capped repetition is named and the side fails at the end.
+          cappedSteps.push(caught.message);
+          continue;
+        }
         const otherTrials = trials.since(from);
         const startedAt = new Date(from).toISOString();
         results[name].push({ ...rep, startedAt, finishedAt: new Date().toISOString(), otherTrials });
       }
     }
+    if (cappedSteps.length > 0) {
+      throw new Error(`${cappedSteps.length} step(s) passed their cap twice: ${cappedSteps.join('; ')}`);
+    }
   } catch (caught) {
     status = 'failed';
     error = caught.stack ?? String(caught);
+    exitCode = caught instanceof LockWaitTimeout ? LOCK_TIMEOUT_EXIT : (caught.exitCode ?? 1);
   } finally {
     trials.stop();
-    if (cdn) {
-      await cdn.close();
+    try {
+      await closeAllLive();
+    } catch (caught) {
+      status = 'failed';
+      error = caught.stack ?? String(caught);
     }
-    if (front) {
-      await front.close();
+    if (ctx.cdn) {
+      await ctx.cdn.close();
     }
+    if (ctx.front) {
+      await ctx.front.close();
+    }
+    await gate.close();
   }
 
   const side = buildSide({
@@ -445,12 +505,15 @@ async function main() {
     otherViews: ctx.otherViews,
     replyBytes: ctx.replyBytes,
     chromeVersion: ctx.chromeVersion,
+    units: gate.units,
+    yields: gate.yields,
+    cpuReference: segments?.reference ?? null,
   });
   fs.writeFileSync(args.out, `${JSON.stringify(side, null, 2)}\n`);
   process.stderr.write(`wrote ${args.out}\n`);
   if (status !== 'measured') {
     process.stderr.write(`${error}\n`);
-    process.exit(1);
+    process.exit(exitCode);
   }
   // The side's JSON and its table are its whole product, and the trial waits for this process before it stops the
   // server. A socket or a Chrome handle left behind must not hold the trial open, so the process ends once the

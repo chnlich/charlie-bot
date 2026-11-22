@@ -42,6 +42,7 @@ import { expectedTargetsFrom } from './newest-row.mjs';
 import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
 import { formatSearch, searchScenario } from './search.mjs';
 import { FOR_YOU_SCENARIO, forYouRep, seedForYouTargets, seedSparseTarget } from './foryou.mjs';
+import { forYouShots } from './foryou-shots.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 import { sleep } from './tabs.mjs';
@@ -98,6 +99,7 @@ function parseArgs(argv) {
     '--open-conditions': 'openConditions',
     '--open-cpu-rate': 'openCpuRate',
     '--expect-targets': 'expectTargets',
+    '--foryou-shots-dir': 'foryouShotsDir',
   };
   for (let index = 0; index < argv.length; index += 2) {
     const key = flags[argv[index]];
@@ -502,6 +504,13 @@ async function main() {
         const startedAt = new Date(from).toISOString();
         results[name].push({ ...rep, startedAt, finishedAt: new Date().toISOString(), otherTrials });
       }
+    }
+    if (args.foryouShotsDir !== undefined) {
+      if (!args.scenarios.includes(FOR_YOU_SCENARIO)) {
+        throw new Error('--foryou-shots-dir needs the foryou scenario in --scenarios');
+      }
+      await forYouShots(ctx, args.foryouShotsDir);
+      process.stderr.write(`wrote the For-you screenshots to ${args.foryouShotsDir}\n`);
     }
   } catch (caught) {
     status = 'failed';

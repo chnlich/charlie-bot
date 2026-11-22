@@ -95,7 +95,7 @@ test('the seed gives both targets the marker turn and the trigger tail, and retu
   }
 });
 
-test('the sparse target is a session the seed creates on the backend, seeded with its marker and the tail', async () => {
+test('the sparse target is created on the backend and seeded with its marker and the tail', async () => {
   const api = fakeApi();
   const sparse = await seedSparseTarget(api, 'backend-id');
   assert.equal(sparse.id, 'created-1');

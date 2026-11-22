@@ -13,6 +13,8 @@
 #                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
 #                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
+# --foryou-shots  after the after side's measurement, writes the For-you screenshots (switch, retry, offline reopen at
+#                the three CSS sizes) into <run dir>/foryou-shots; needs the foryou scenario.
 # --seed-only    seeds the sized sessions and the For-you targets on each side, writes the turns and untrimmed bootstrap
 #                bytes each reached into the side's JSON, and stops: no scenarios and no report.
 # --seed-home DIR  the view home that the run copies as its seed (default: the shared home
@@ -62,6 +64,7 @@ open_conditions=link,held,reset,flaps,offline,release
 assets_dir=
 detach=0
 seed_only=0
+foryou_shots=0
 lock_wait=$BENCH_LOCK_WAIT_SECONDS
 open_rate_args=()
 seed_home=
@@ -98,6 +101,7 @@ while (($#)); do
     --seed-home) seed_home=${2:?--seed-home needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
     --seed-only) seed_only=1; shift ;;
+    --foryou-shots) foryou_shots=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
@@ -169,6 +173,7 @@ if ((detach)); then
     forwarded+=(--seed-only)
   fi
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
+  ((foryou_shots)) && forwarded+=(--foryou-shots)
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
     "${detached_env[@]}" \
@@ -290,9 +295,12 @@ run_side() {
   [[ $(seed_content_hash "$mock_home") == "$seed_hash" ]] \
     || die 1 "the seed copy $mock_home changed since the run recorded $seed_hash; the $name side did not start"
   # The after side of one invocation checks its newest-row targets against the before side's JSON.
-  local expect_args=()
+  local expect_args=() shots_args=()
   if [[ $name == after && $side == both && ",$scenarios," == *",open,"* ]]; then
     expect_args=(--expect-targets "$run_dir/before.json")
+  fi
+  if [[ $name == after ]] && ((foryou_shots)); then
+    shots_args=(--foryou-shots-dir "$run_dir/foryou-shots")
   fi
   # The bench lock (lock.sh) covers this side's trial, so no other bench run on the host measures beside it.
   echo "poor-network: $name side queues for the bench lock"
@@ -305,7 +313,7 @@ run_side() {
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
       --repetitions "$repetitions" --scenarios "$scenarios" --open-conditions "$open_conditions" \
       ${open_rate_args+"${open_rate_args[@]}"} ${expect_args+"${expect_args[@]}"} \
-      ${mode_args+"${mode_args[@]}"} &
+      ${mode_args+"${mode_args[@]}"} ${shots_args+"${shots_args[@]}"} &
   trial_pid=$!
   # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
   # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,

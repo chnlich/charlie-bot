@@ -1,7 +1,8 @@
-// The scripted replies: REPLY_PIECES pieces of exactly REPLY_BYTES ASCII bytes each, cut in order from the text of
-// REPLY_SOURCES, repository docs. A reply is repository text, never session content. The stub backend prints the pieces
-// in turn, as the charlie-code NDJSON that the backend reads. Consecutive turns carry different text, so the gzip of a
-// session's history keeps each reply's bytes instead of folding identical replies into one copy.
+// The scripted replies: REPLY_PIECES pieces of exactly REPLY_BYTES ASCII bytes each, cut in order from the fixed reply
+// text in reply-fixture.txt. The fixture holds REPLY_SOURCES (repository docs) joined and ASCII-folded, so a reply is
+// repository text, never session content, and a change to the docs cannot change what the bench sends. The stub backend
+// prints the pieces in turn, as the charlie-code NDJSON that the backend reads. Consecutive turns carry different text,
+// so the gzip of a session's history keeps each reply's bytes instead of folding identical replies into one copy.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,35 +18,50 @@ export const REPLY_SOURCES = Object.freeze([
 ]);
 export const REPLY_PIECES = 16;
 export const REPLY_BYTES = 8192;
-// The text of each streamed event. The server keeps each event as one message of the chat, and a bootstrap carries the
-// last 40 messages, of which the turns' separators, notices and system rows take a share. Fewer, larger events put more
-// reply text into those 40 messages, so this size sets the bootstrap content's bytes near the live view's median,
-// 26,592 bytes on the wire untrimmed. A reply of 8 KB makes about three or four stream updates.
+// The text of each streamed event of a stream, tool or open reply. The server keeps each event as one chat message.
+// A reply of 8 KB makes about three or four stream updates.
 const EVENT_BYTES = 2200;
+// A sizing turn's reply: SEED_PIECE_BYTES of the same text, cut into SEED_EVENTS events of equal text. A sized
+// session's untrimmed bootstrap is the gzip of its last messages, mostly events, so its size follows the event text.
+// Events of about 2.75 KB make that tail reach VIEW.bootstrapUntrimmedWireBytes. Seed-only checks on both sides:
+// 6,950-byte pieces reached 23,879 bytes in 30 turns, 7,740-byte pieces 25,558, and 8,250-byte pieces put every sized
+// session within 5 %. The reply pieces above keep their 8 KB and EVENT_BYTES.
+export const SEED_PIECE_BYTES = 8250;
+const SEED_EVENTS = 3;
 
 // The fixed file holding the reply text: the REPLY_SOURCES files, joined with newlines, with every non-ASCII character
 // replaced by spaces, copied byte for byte when this file was added. The bench reads this copy, so a change to the
 // repository docs cannot change the reply the bench sends; the fixture's bytes are part of the bench's tree key.
 const REPLY_FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'reply-fixture.txt');
 
-// The pieces of the reply text, each REPLY_BYTES long. Every non-ASCII character becomes a space, so a character is one
-// byte and every piece has the same byte count.
-export function loadReplyPieces() {
-  const text = fs.readFileSync(REPLY_FIXTURE, 'utf8');
-  if (text.length < REPLY_PIECES * REPLY_BYTES) {
-    throw new Error(`the reply sources hold ${text.length} bytes, short of ${REPLY_PIECES * REPLY_BYTES}`);
-  }
-  return Array.from({ length: REPLY_PIECES }, (_, index) =>
-    text.slice(index * REPLY_BYTES, (index + 1) * REPLY_BYTES),
-  );
+// The reply text, one byte per character.
+function replyText() {
+  return fs.readFileSync(REPLY_FIXTURE, 'utf8');
 }
 
-// The charlie-code NDJSON of the reply: one `thought` event per run of whole lines of about EVENT_BYTES.
-function replyNdjson(text) {
+// REPLY_PIECES pieces of `bytes` each, in order; every piece has the same byte count.
+function slicePieces(text, bytes) {
+  if (text.length < REPLY_PIECES * bytes) {
+    throw new Error(`the reply fixture holds ${text.length} bytes, short of ${REPLY_PIECES * bytes}`);
+  }
+  return Array.from({ length: REPLY_PIECES }, (_, index) => text.slice(index * bytes, (index + 1) * bytes));
+}
+
+export function loadReplyPieces() {
+  return slicePieces(replyText(), REPLY_BYTES);
+}
+
+// The charlie-code NDJSON of a list of events: one `thought` event per string.
+function ndjsonOf(events) {
+  return events.map((piece) => `${JSON.stringify({ type: 'thought', text: piece })}\n`).join('');
+}
+
+// A reply's events: runs of whole lines of about `eventBytes`.
+function greedyEvents(text, eventBytes) {
   const events = [];
   let chunk = '';
   for (const line of text.split(/(?<=\n)/)) {
-    if (chunk.length > 0 && Buffer.byteLength(chunk) + Buffer.byteLength(line) > EVENT_BYTES) {
+    if (chunk.length > 0 && Buffer.byteLength(chunk) + Buffer.byteLength(line) > eventBytes) {
       events.push(chunk);
       chunk = '';
     }
@@ -54,7 +70,26 @@ function replyNdjson(text) {
   if (chunk.length > 0) {
     events.push(chunk);
   }
-  return events.map((piece) => `${JSON.stringify({ type: 'thought', text: piece })}\n`).join('');
+  return events;
+}
+
+// A sizing reply's events: `count` runs of whole lines, each cut where the text passes its share of the length.
+function evenEvents(text, count) {
+  const events = [];
+  let chunk = '';
+  let consumed = 0;
+  for (const line of text.split(/(?<=\n)/)) {
+    chunk += line;
+    consumed += line.length;
+    if (events.length < count - 1 && consumed >= ((events.length + 1) * text.length) / count) {
+      events.push(chunk);
+      chunk = '';
+    }
+  }
+  if (chunk.length > 0) {
+    events.push(chunk);
+  }
+  return events;
 }
 
 // The tool-heavy piece: TOOL_PAIRS Bash call and result pairs, one call every TOOL_CALL_SPAN_SECONDS, then a short
@@ -97,16 +132,21 @@ export function toolRowBytes() {
   return Buffer.byteLength(JSON.stringify({name: 'Bash', input: {command}, output, is_error: false}));
 }
 
-// `node reply.mjs <out dir>` writes the pieces as reply-<n>.ndjson, the tool piece as tools-0.ndjson,
-// and `next`, the index of the piece the next turn prints. The stub advances `next` on each turn.
+// `node reply.mjs <out dir>` writes the pieces as reply-<n>.ndjson, the same text as seed-<n>.ndjson for a sizing turn,
+// the tool piece as tools-0.ndjson, and `next`, the index of the piece the next turn prints. The stub advances `next`
+// on each turn.
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [outDir] = process.argv.slice(2);
   if (!outDir) {
     throw new Error('usage: node reply.mjs <out dir>');
   }
   fs.mkdirSync(outDir, { recursive: true });
-  loadReplyPieces().forEach((piece, index) => {
-    fs.writeFileSync(path.join(outDir, `reply-${index}.ndjson`), replyNdjson(piece));
+  const text = replyText();
+  slicePieces(text, REPLY_BYTES).forEach((piece, index) => {
+    fs.writeFileSync(path.join(outDir, `reply-${index}.ndjson`), ndjsonOf(greedyEvents(piece, EVENT_BYTES)));
+  });
+  slicePieces(text, SEED_PIECE_BYTES).forEach((piece, index) => {
+    fs.writeFileSync(path.join(outDir, `seed-${index}.ndjson`), ndjsonOf(evenEvents(piece, SEED_EVENTS)));
   });
   fs.writeFileSync(path.join(outDir, 'tools-0.ndjson'), toolNdjson());
   fs.writeFileSync(path.join(outDir, 'next'), '0\n');

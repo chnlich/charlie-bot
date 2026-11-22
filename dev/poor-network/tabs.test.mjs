@@ -150,3 +150,24 @@ test('a worker that closes during Network.enable ends its attach', async () => {
     console.warn = originalWarn;
   }
 });
+
+// The chat page refuses a document request without the access key, and a document request carries no localStorage. A
+// tab that opens without the cookie loads the login page, so the bench's warm-up waits for a chat page that never comes.
+test('opening a tab sets the access key cookie on the page origin', async () => {
+  const browserCalls = [];
+  const browser = {
+    send: async (method, params) => {
+      browserCalls.push({method, params});
+      return {};
+    },
+    onMessage: () => {},
+    newPage: async () => ({targetId: 'page-1', send: async () => ({})}),
+  };
+  const tabs = new Tabs({browser, assets: new Map(), accessKey: 'key-123', origin: 'https://front.test', cdn: 'link'});
+  await tabs.open('warm');
+  const cookies = browserCalls.filter((call) => call.method === 'Storage.setCookies');
+  assert.deepEqual(cookies, [{
+    method: 'Storage.setCookies',
+    params: {cookies: [{name: 'charliebot_access_key', value: 'key-123', url: 'https://front.test'}]},
+  }]);
+});

@@ -536,6 +536,10 @@ impl AgentBackend for ClaudeCodeBackend {
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     Some(Box::pin(async move { self.run_one_shot(base_env, prompt, system, timeout).await }))
   }
+
+  fn one_shot_is_tool_less(&self) -> bool {
+    true
+  }
 }
 
 /// One home for every gateway endpoint and model variable. Endpoint backends write the first two names, may write the
@@ -769,6 +773,10 @@ impl AgentBackend for AnthropicEndpointBackend {
       )
       .await
     }))
+  }
+
+  fn one_shot_is_tool_less(&self) -> bool {
+    true
   }
 }
 

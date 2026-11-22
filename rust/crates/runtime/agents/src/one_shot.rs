@@ -178,6 +178,11 @@ pub(crate) mod tests {
       let answer = self.native_answer.clone()?;
       Some(Box::pin(async move { Ok(answer) }))
     }
+
+    /// A scripted native answer stands for a tool-less one-shot; without one, the tool-capable fallback runs.
+    fn one_shot_is_tool_less(&self) -> bool {
+      self.native_answer.is_some()
+    }
   }
 
   struct IdentityTranslate;

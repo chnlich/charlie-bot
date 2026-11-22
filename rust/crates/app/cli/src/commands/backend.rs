@@ -1,5 +1,6 @@
 //! The `backend` command: `backend resolve` prints the option a call runs on, and `backend run` runs that option once.
 //! `backend run --resume <option>:<session>` continues the session a failed run named, on that option.
+//! `backend run --one-shot <system-file>` answers the task file's prompt through the option's tool-less one-shot.
 //!
 //! The server picks the option through `POST /api/backends/resolve`. `backend run --launch <dir>` takes an option a
 //! launcher resolved earlier, from `<dir>/option.json`, for a host that runs no server; its `<dir>/login` holds the
@@ -32,7 +33,8 @@ struct BackendCli {
 enum BackendCommand {
   /// Print the option a call class or a backend id runs on: its backends.options entry, which holds no key.
   Resolve(ResolveArgs),
-  /// Run the option once in the current directory with the task file's text as the prompt.
+  /// Run the option once in the current directory with the task file's text as the prompt, continue a failed run's
+  /// session with `--resume`, or with `--one-shot` answer the prompt once through the option's tool-less one-shot.
   Run(RunArgs),
 }
 
@@ -59,6 +61,11 @@ struct RunArgs {
   /// option; without one, the handle's option is resolved by its id.
   #[arg(long, value_name = "HANDLE")]
   resume: Option<String>,
+  /// Answer the prompt once under this system prompt file: a tool-less one-shot with no session persistence, whose
+  /// answer text goes to stdout. The option comes from --call or --backend. A one-shot keeps no session, so it refuses
+  /// --launch and --resume.
+  #[arg(long, value_name = "SYSTEM_PROMPT_FILE", conflicts_with_all = ["launch", "resume"])]
+  one_shot: Option<String>,
 }
 
 #[derive(Args)]
@@ -161,6 +168,10 @@ fn reason_of(error: &CliExit) -> String {
 fn run_command(args: RunArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let prompt = files::read_required_text_file("--task-file", &args.task_file)?;
+  if let Some(system_file) = &args.one_shot {
+    let system = files::read_required_text_file("--one-shot", system_file)?;
+    return one_shot_command(&args.pick, host, &prompt, &system);
+  }
   let handle = args.resume.as_deref().map(parse_resume_handle).transpose()?;
   let (resolved, login) = match (args.pick, &handle) {
     (RunPick { launch: Some(dir), .. }, _) => launch_record_and_login(&dir)?,
@@ -183,15 +194,9 @@ fn run_command(args: RunArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
     Some(handle) => {
       RunStart::Resume { session_id: handle.session.to_string(), run_id: uuid::Uuid::new_v4().to_string() }
     }
-    None => RunStart::New(RunIdentity {
-      session_id: uuid::Uuid::new_v4().to_string(),
-      run_id: uuid::Uuid::new_v4().to_string(),
-    }),
+    None => RunStart::New(new_identity()),
   };
-  let runtime = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .map_err(|error| CliExit::error(format!("cannot start the runtime: {error}")))?;
+  let runtime = run_runtime()?;
   let report = runtime
     .block_on(backend_run::run_once(
       host,
@@ -219,6 +224,42 @@ fn run_command(args: RunArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
     }
     None => Err(run_failure(&option, session, "no backend process started")),
   }
+}
+
+/// `backend run --one-shot`: the answer of one tool-less one-shot on stdout. The one-shot keeps no session, so the
+/// stderr line names none.
+fn one_shot_command(pick: &RunPick, host: &CliHost, prompt: &str, system: &str) -> Result<(), CliExit> {
+  let resolved = resolve_response(&pick.call, &pick.backend)?;
+  let record = response_field(&resolved, "option")?;
+  let claude_config_dir = optional_claude_config_dir(&resolved)?;
+  let option = option_of(&record, host)?;
+  let runtime = run_runtime()?;
+  let answer = runtime.block_on(backend_run::one_shot_once(
+    host,
+    &option,
+    prompt,
+    system,
+    new_identity(),
+    claude_config_dir.as_deref(),
+  ));
+  eprintln!("backend run: {} ({}) session none", option.id, option.backend_type);
+  let answer = answer.map_err(|error| CliExit::error(format!("{error:#}")))?;
+  if answer.is_empty() {
+    return Err(CliExit::error(format!("the one-shot of {} ended with no text", option.id)));
+  }
+  println!("{answer}");
+  Ok(())
+}
+
+fn new_identity() -> RunIdentity {
+  RunIdentity { session_id: uuid::Uuid::new_v4().to_string(), run_id: uuid::Uuid::new_v4().to_string() }
+}
+
+fn run_runtime() -> Result<tokio::runtime::Runtime, CliExit> {
+  tokio::runtime::Builder::new_current_thread()
+    .enable_all()
+    .build()
+    .map_err(|error| CliExit::error(format!("cannot start the runtime: {error}")))
 }
 
 /// The failure of a run: its reason, and the resume handle `<backend>:<session>` when the run had a session.
@@ -360,5 +401,21 @@ mod tests {
     let message = reason_of(&failure);
     assert!(message.contains("synthetic-a:session-1"), "{message}");
     assert!(message.contains("is not a configured id"), "{message}");
+  }
+
+  fn parse_run(extra: &[&str]) -> Result<BackendCli, clap::Error> {
+    let mut args = vec!["backend", "run", "--task-file", "task.md"];
+    args.extend_from_slice(extra);
+    BackendCli::try_parse_from(args)
+  }
+
+  /// `--one-shot` keeps no session, so the parser refuses it with `--resume` or `--launch` in either order, and accepts
+  /// it with a pick.
+  #[test]
+  fn one_shot_is_refused_with_a_resume_or_a_launch_by_the_parser() {
+    assert!(parse_run(&["--one-shot", "system.md", "--backend", "synthetic-a"]).is_ok());
+    assert!(parse_run(&["--one-shot", "system.md", "--resume", "synthetic-a:session-1"]).is_err());
+    assert!(parse_run(&["--resume", "synthetic-a:session-1", "--one-shot", "system.md"]).is_err());
+    assert!(parse_run(&["--one-shot", "system.md", "--launch", "/tmp/launch"]).is_err());
   }
 }

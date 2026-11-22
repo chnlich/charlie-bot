@@ -1,12 +1,13 @@
 //! One run of one backend option outside a session: the engine behind `charliebot backend run`.
 //!
 //! The option's backend comes from the registry's factory, and `AgentRunner` runs it once in the given working
-//! directory. The report carries the final text, the exit code and the stderr of the process.
+//! directory. The report carries the final text, the exit code and the stderr of the process. The one-shot answers
+//! one prompt through `one_shot_text` instead, and only for a backend whose one-shot keeps every tool disabled.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use charliebot_core::backend_types as type_names;
 use charliebot_core::config::BackendOption;
 use charliebot_registry::Registry;
@@ -17,7 +18,7 @@ use crate::agent_environment::AgentBaseEnvironment;
 use crate::backend_types::{self, BuiltBackend};
 use crate::cli_host::CliHost;
 use crate::launch_loop::ChildEnvPolicy;
-use crate::one_shot::FinalText;
+use crate::one_shot::{FinalText, one_shot_text};
 use crate::runner::{AgentRunner, RunRequest};
 
 /// What one run reports.
@@ -167,6 +168,33 @@ pub async fn run_built(
   let outcome = outcome.context("running the backend")?;
   let session_id = attached_session.lock().expect("attached session lock is not poisoned").clone();
   Ok(RunReport { text: final_text.text(), exit_code: outcome.exit_code, stderr_text: outcome.stderr_text, session_id })
+}
+
+/// Answer `prompt` under `system` once with `option`'s one-shot, built from `host`'s config and registry. The
+/// one-shot is the backend's own, so no run record, session or working-directory file is written.
+pub async fn one_shot_once(
+  host: &CliHost,
+  option: &BackendOption,
+  prompt: &str,
+  system: &str,
+  identity: RunIdentity,
+  claude_config_dir: Option<&str>,
+) -> anyhow::Result<String> {
+  let (_, launch) = launch_for_option(option, &RunStart::New(identity), claude_config_dir);
+  let built = backend_types::build_backend(Arc::clone(&host.registry), option, &host.cfg, launch)?;
+  one_shot_built(built, &host.base_env.values, prompt, system).await
+}
+
+/// The answer of a built backend's one-shot. A backend whose one-shot keeps its tools is refused, because the one-shot
+/// mode promises that the model sees only its prompt.
+pub async fn one_shot_built(built: BuiltBackend, base_env: &Env, prompt: &str, system: &str) -> anyhow::Result<String> {
+  if !built.backend.one_shot_is_tool_less() {
+    bail!(
+      "the {} backend's one-shot keeps its tools enabled, so backend run --one-shot refuses it",
+      built.backend_type
+    );
+  }
+  one_shot_text(built, base_env, prompt, system, None).await
 }
 
 #[cfg(test)]
@@ -348,5 +376,26 @@ mod tests {
     let launch = resumed_launch(&registry, &option, &fresh, LaunchArgs::default()).unwrap();
     assert!(launch.extra_flags.is_empty());
     assert_eq!(launch.resume_session_id, None);
+  }
+
+  /// The one-shot mode answers through a tool-less one-shot, and refuses a backend whose one-shot keeps its tools.
+  #[tokio::test]
+  async fn the_one_shot_answers_only_through_a_tool_less_one_shot() {
+    let root = tempfile::tempdir().unwrap();
+    let base_env = crate::gh_wrapper::stub_environment(root.path(), "/bin:/usr/bin");
+    let tool_less = BuiltBackend {
+      backend: Box::new(ScriptedBackend {
+        script: "exit 1".to_string(),
+        native_answer: Some("the answer".to_string()),
+        seen_log_dir: Arc::new(Mutex::new(None)),
+      }),
+      launch: LaunchArgs::default(),
+      backend_type: "scripted".to_string(),
+      registry: Arc::new(Registry::new()),
+    };
+    assert_eq!(one_shot_built(tool_less, &base_env, "prompt", "system").await.unwrap(), "the answer");
+
+    let error = one_shot_built(scripted("exit 1"), &base_env, "prompt", "system").await.unwrap_err();
+    assert!(error.to_string().contains("scripted"), "{error:#}");
   }
 }

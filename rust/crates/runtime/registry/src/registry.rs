@@ -861,6 +861,11 @@ pub trait AgentBackend: Send {
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     None
   }
+  /// Whether the one-shot that `one_shot_text` returns keeps every tool disabled. The one-shot mode of `charliebot
+  /// backend run` answers only through a tool-less one-shot, so it refuses a backend for which this is false.
+  fn one_shot_is_tool_less(&self) -> bool {
+    false
+  }
 }
 
 /// A launch refused by the backend: the run ends with `message`. `failure` is the shared sort of the member

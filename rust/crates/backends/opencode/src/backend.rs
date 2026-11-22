@@ -203,6 +203,11 @@ impl AgentBackend for OpenCodeBackend {
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
     Some(Box::pin(self.run_one_shot(base_env, prompt, system, timeout)))
   }
+
+  /// The one-shot's config denies every permission, so the run has no tool to call.
+  fn one_shot_is_tool_less(&self) -> bool {
+    true
+  }
 }
 
 /// The OpenCode factory.

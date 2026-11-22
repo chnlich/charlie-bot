@@ -642,9 +642,72 @@ static TRIAL_RUNS: Mutex<()> = Mutex::new(());
 /// The name prefix of a serve trial's tree root: six random characters follow it.
 const TREE_ROOT_PREFIX: &str = "tr";
 
+/// The access key the serve world's live home and its live server share, so the trial's `backend resolve` is admitted.
+const LIVE_ACCESS_KEY: &str = "serve-test-live-access-key";
+
+/// The live server of a serve world: `charliebot-server` on the live home, which the trial's probe read asks through
+/// `charliebot backend resolve`. It is stopped when the world drops.
+struct LiveServer {
+  child: Child,
+}
+
+impl LiveServer {
+  /// Starts the server on `home` and returns once its log holds `server_ready`.
+  fn start(sandbox: &Sandbox, env: &Env, home: &Path, repo: &Path) -> Self {
+    let log = sandbox.dir("live-logs").join("server.log");
+    let log_file = fs::File::create(&log).expect("the live server log");
+    let mut command = harness::command(harness::built_binary("charliebot-server"), env);
+    command
+      .current_dir(repo)
+      .env("CHARLIEBOT_HOME", home)
+      .env("CHARLIEBOT_REPO_ROOT", repo)
+      .stdout(Stdio::from(log_file.try_clone().expect("the live server log handle")))
+      .stderr(Stdio::from(log_file));
+    let child = command.spawn().expect("the live server starts");
+    let mut server = Self { child };
+    server.wait_until_ready(&log);
+    server
+  }
+
+  fn wait_until_ready(&mut self, log: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+      let text = fs::read_to_string(log).unwrap_or_default();
+      if text.split_whitespace().any(|word| word == "server_ready") {
+        return;
+      }
+      if let Some(status) = self.child.try_wait().expect("the live server's status") {
+        panic!("the live server exited before it was ready: {status}\n{text}");
+      }
+      assert!(Instant::now() < deadline, "the live server logged no server_ready: {text}");
+      thread::sleep(Duration::from_millis(100));
+    }
+  }
+}
+
+impl Drop for LiveServer {
+  fn drop(&mut self) {
+    if let Err(error) = self.child.kill() {
+      eprintln!("stopping the live server: {error}");
+    }
+    if let Err(error) = self.child.wait() {
+      eprintln!("waiting for the live server: {error}");
+    }
+  }
+}
+
+/// A port that is free on 127.0.0.1 at the moment of the call.
+fn free_port() -> u16 {
+  TcpListener::bind("127.0.0.1:0").expect("a free port").local_addr().expect("the port's address").port()
+}
+
+/// The number of ports in a serve world's trial range, the size of the trial's default range.
+const TRIAL_PORT_SPAN: u16 = 20;
+
 /// One serve trial's inputs: a throwaway repository whose origin/main names its commit, the server and the CLI beside
-/// each other, and a live home with one backend option. A stub charlie-code completes the inputs. The trial's evidence
-/// stays under the sandbox; its tree root is `tree_root`, a short directory beside the sandbox.
+/// each other, and a live home with its live server. The live home's backends name a probe member and the two Claude
+/// options the trial copies models from. A stub charlie-code completes the inputs. The trial's evidence stays under the
+/// sandbox; its tree root is `tree_root`, a short directory beside the sandbox.
 struct ServeWorld {
   sandbox: Sandbox,
   repo: PathBuf,
@@ -652,6 +715,7 @@ struct ServeWorld {
   commit: String,
   env: Env,
   trees: TempDir,
+  _live: LiveServer,
 }
 
 impl ServeWorld {
@@ -708,17 +772,48 @@ impl ServeWorld {
     symlink(harness::built_binary("charliebot-server"), release.join("charliebot-server")).expect("the server link");
     symlink(harness::built_binary("charliebot"), release.join("charliebot")).expect("the CLI link");
     let live_home = sandbox.dir("live-home");
+    let live_port = free_port();
     fs::write(
       live_home.join("config.yaml"),
-      "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
+      format!(
+        concat!(
+          "server:\n  host: 127.0.0.1\n  port: {port}\n  session_memory_max_mb: 0\n  min_free_disk_gib: 0\n",
+          "  enable_local_work_guard: false\n",
+          "backends:\n  options:\n",
+          "    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n",
+          "      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
+          // The default memory-curator seed names claude-opus and claude-fable, so the live server refuses to start
+          // without them. The trial reads claude-opus-5 and claude-fable-5 as the live options of those families.
+          "    - id: claude-opus\n      label: Opus\n      type: cc-claude\n      model: claude-opus-5-5\n",
+          "      effort: xhigh\n",
+          "    - id: claude-fable\n      label: Fable\n      type: cc-claude\n      model: claude-fable-5-1\n",
+          "      effort: xhigh\n",
+          "    - id: claude-opus-5\n      label: CC Opus\n      type: cc-claude\n      model: claude-opus-5-5\n",
+          "      effort: xhigh\n",
+          "    - id: claude-fable-5\n      label: CC Fable\n      type: cc-claude\n      model: claude-fable-5-1\n",
+          "      effort: xhigh\n",
+          "  calls:\n    probe: charlie-code-serve-test\n",
+        ),
+        port = live_port,
+      ),
     )
     .expect("the live config");
-    fs::write(live_home.join("credentials.yaml"), "serve-test:\n  api_key: not-a-real-key\n").expect("the credentials");
+    fs::write(
+      live_home.join("credentials.yaml"),
+      format!("serve-test:\n  api_key: not-a-real-key\ncharliebot:\n  access_key: {LIVE_ACCESS_KEY}\n"),
+    )
+    .expect("the credentials");
     sandbox.stub("charlie-code", "exit 0\n");
 
+    let live = LiveServer::start(&sandbox, &env, &live_home, &repo);
+    // The trial's port range starts at a port the kernel frees for this world, not at the default range, which other
+    // trials on the host share. A foreign listener on the port a trial picked fails that side.
+    let trial_ports = free_port();
+    env.insert("TRIAL_PORT_MIN".to_string(), trial_ports.to_string());
+    env.insert("TRIAL_PORT_MAX".to_string(), (trial_ports + TRIAL_PORT_SPAN - 1).to_string());
     env.insert("CHARLIEBOT_HOME".to_string(), live_home.display().to_string());
     env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.dir("evidence").display().to_string());
-    Self { sandbox, repo, release, commit, env, trees }
+    Self { sandbox, repo, release, commit, env, trees, _live: live }
   }
 
   /// The `--tree-root` of this world's serve trials: an existing directory, removed with the world.

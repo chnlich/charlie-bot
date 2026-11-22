@@ -26,9 +26,10 @@
 # socket-path limit, the sun_path size with the final NUL.
 #
 # The config carries the live config's weight switches, server.enable_session_cpu_weight and
-# server.enable_session_io_weight, read by `release-helper backend-option`; an absent switch takes the server's
-# default. CHARLIEBOT_TRIAL_CGROUP_ROOT replaces /sys/fs/cgroup, the root the agents slice path is built on, so the
-# tests point it at a sandbox.
+# server.enable_session_io_weight, read by `release-helper session-weights`; an absent switch takes the server's
+# default. The trial's model endpoint is the live server's `backends.calls.probe` member, read by
+# `charliebot backend resolve`. CHARLIEBOT_TRIAL_CGROUP_ROOT replaces /sys/fs/cgroup, the root the agents slice path is
+# built on, so the tests point it at a sandbox.
 #
 # Options: --tree-root <dir> builds the tree as <dir>/trial-<first 12 hex of the commit>, so runs of two commits under
 # one root share no tree. Without it the tree is ${TMPDIR:-/tmp}/charliebot-release-trial-<uid>-<first 12 hex>, so one
@@ -190,6 +191,9 @@ fi
 if ! command -v pgrep >/dev/null 2>&1; then
   preflight_fail 'pgrep resolves on PATH for the server-tree check'
 fi
+if ! command -v jq >/dev/null 2>&1; then
+  preflight_fail 'jq resolves on PATH for the probe answer'
+fi
 
 if ! CLC_PATH=$(command -v charlie-code 2>/dev/null) || [[ -z $CLC_PATH ]]; then
   preflight_fail 'charlie-code resolves on PATH'
@@ -203,27 +207,48 @@ if ! LIVE_GUARD_SWITCH=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" config get se
 fi
 readonly LIVE_GUARD_SWITCH
 
-# The trial's backend entry comes from the live config: the first option with an api_base, so the trial runs the
-# operator's own model endpoint and the repository names no host and no credential. Its credential is optional. When
-# the entry names one, the trial copies that section's key from the live credentials into the trial home and redacts
-# it from saved logs; when it names none, the endpoint needs no client-side key, so the trial home's backend entry has
-# no credential field and its credentials file carries no backend section.
-#
-# The same read gives the two session-weight switches, so the trial's server starts with the switches the live server
-# runs with. An absent switch comes back at its default.
-LIVE_BACKEND="$("$TRIAL_CLI" release-helper backend-option "$LIVE_HOME/config.yaml")" \
-  || preflight_fail "the live config has a backends.options entry with api_base"
-TRIAL_API_BASE="$(sed -n 1p <<<"$LIVE_BACKEND")"
-TRIAL_CREDENTIAL="$(sed -n 2p <<<"$LIVE_BACKEND")"
-CPU_WEIGHT_SWITCH="$(sed -n 3p <<<"$LIVE_BACKEND")"
-IO_WEIGHT_SWITCH="$(sed -n 4p <<<"$LIVE_BACKEND")"
+# The trial's model endpoint is the member that the live server's `backends.calls.probe` selects, so the trial runs the
+# operator's own probe model and the repository names no model, host or credential. The member needs an api_base, since
+# the trial's charlie-code option is an endpoint type. Its credential is optional. When the member names one, the trial
+# copies that section's key from the live credentials into the trial home and redacts it from saved logs; when it names
+# none, the endpoint needs no client-side key, so the trial home's backend entry has no credential field and its
+# credentials file carries no backend section.
+PROBE_ANSWER=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" backend resolve --call probe) \
+  || preflight_fail "the live server resolves backends.calls.probe (its reason is above)"
+TRIAL_PROBE_ID=$(jq -r '.option.id // empty' <<<"$PROBE_ANSWER")
+TRIAL_MODEL=$(jq -r '.option.model // empty' <<<"$PROBE_ANSWER")
+TRIAL_API_BASE=$(jq -r '.option.api_base // empty' <<<"$PROBE_ANSWER")
+TRIAL_CREDENTIAL=$(jq -r '.option.credential // empty' <<<"$PROBE_ANSWER")
+[[ -n $TRIAL_MODEL ]] || preflight_fail "the probe member $TRIAL_PROBE_ID names no model"
+[[ -n $TRIAL_API_BASE ]] || preflight_fail "the probe member $TRIAL_PROBE_ID names no api_base; the trial needs one"
+
+# The two Claude trial options take the models of the live config's options of the same family, as the live server
+# resolves them.
+readonly LIVE_OPUS_OPTION=claude-opus-5
+readonly LIVE_FABLE_OPTION=claude-fable-5
+OPUS_ANSWER=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" backend resolve --backend "$LIVE_OPUS_OPTION") \
+  || preflight_fail "the live server resolves the live option $LIVE_OPUS_OPTION (its reason is above)"
+FABLE_ANSWER=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" backend resolve --backend "$LIVE_FABLE_OPTION") \
+  || preflight_fail "the live server resolves the live option $LIVE_FABLE_OPTION (its reason is above)"
+TRIAL_OPUS_MODEL=$(jq -r '.option.model // empty' <<<"$OPUS_ANSWER")
+TRIAL_FABLE_MODEL=$(jq -r '.option.model // empty' <<<"$FABLE_ANSWER")
+[[ -n $TRIAL_OPUS_MODEL ]] || preflight_fail "the live option $LIVE_OPUS_OPTION names no model"
+[[ -n $TRIAL_FABLE_MODEL ]] || preflight_fail "the live option $LIVE_FABLE_OPTION names no model"
+
+# The two session-weight switches come from the live config, so the trial's server starts with the switches the live
+# server runs with. An absent switch comes back at its default.
+SESSION_WEIGHTS="$("$TRIAL_CLI" release-helper session-weights "$LIVE_HOME/config.yaml")" \
+  || preflight_fail "the live config's session-weight switches read through the trial CLI"
+CPU_WEIGHT_SWITCH="$(sed -n 1p <<<"$SESSION_WEIGHTS")"
+IO_WEIGHT_SWITCH="$(sed -n 2p <<<"$SESSION_WEIGHTS")"
 BACKEND_KEY=
 if [[ -n $TRIAL_CREDENTIAL ]]; then
   if ! BACKEND_KEY=$("$TRIAL_CLI" release-helper credential-key "$LIVE_HOME/credentials.yaml" "$TRIAL_CREDENTIAL"); then
     preflight_fail "the live credentials file holds api_key for $TRIAL_CREDENTIAL"
   fi
 fi
-readonly TRIAL_API_BASE TRIAL_CREDENTIAL CPU_WEIGHT_SWITCH IO_WEIGHT_SWITCH
+readonly TRIAL_PROBE_ID TRIAL_MODEL TRIAL_API_BASE TRIAL_CREDENTIAL TRIAL_OPUS_MODEL TRIAL_FABLE_MODEL
+readonly CPU_WEIGHT_SWITCH IO_WEIGHT_SWITCH
 
 if ! CHOSEN_PORT=$("$TRIAL_CLI" release-helper free-port "$PORT_MIN" "$PORT_MAX"); then
   preflight_fail "a free 127.0.0.1 port exists in $PORT_MIN-$PORT_MAX"
@@ -410,9 +435,9 @@ backends:
   routing:
     command: ["/bin/sh", "$TRIAL_ROUTER_STUB"]
   options:
-$(trial_option charlie-code-release-trial "Release trial" charlie-code openai/glm-5.3-flash)
-$(trial_option claude-opus "Trial claude-opus" cc-claude claude-opus-5)
-$(trial_option claude-fable "Trial claude-fable" cc-claude claude-fable-5-1)
+$(trial_option charlie-code-release-trial "Release trial" charlie-code "$TRIAL_MODEL")
+$(trial_option claude-opus "Trial claude-opus" cc-claude "$TRIAL_OPUS_MODEL")
+$(trial_option claude-fable "Trial claude-fable" cc-claude "$TRIAL_FABLE_MODEL")
 EOF
 chmod 600 "$TRIAL_CB_HOME/config.yaml"
 

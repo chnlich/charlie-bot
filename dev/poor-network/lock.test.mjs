@@ -26,17 +26,25 @@ function scratch(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-// A variable of the lock module, read from a shell that sources the module under a scratch home.
-function lockVariable(home, name) {
-  return execFileSync('bash', ['-c', 'source "$1"; printf "%s" "${!2}"', 'bash', LOCK, name], {
-    env: { ...process.env, HOME: home },
-    encoding: 'utf8',
-  });
+// The environment of a process under `home` that names no lock file: lock.sh resolves the bench lock itself.
+function hostEnv(home) {
+  const env = { ...process.env, HOME: home };
+  delete env.BENCH_LOCK_FILE;
+  return env;
 }
 
-// The lock file as the bench code computes it.
-function lockFile(home) {
-  return lockVariable(home, 'BENCH_LOCK_FILE');
+// The environment of a process under a scratch `home` whose bench lock is the scratch file, so the test never reaches
+// the host's lock.
+function scratchEnv(home) {
+  return { ...process.env, HOME: home, BENCH_LOCK_FILE: path.join(home, LOCK_FILE) };
+}
+
+// A variable of the lock module, read from a shell that sources the module under the given environment.
+function lockVariable(env, name) {
+  return execFileSync('bash', ['-c', 'source "$1"; printf "%s" "${!2}"', 'bash', LOCK, name], {
+    env,
+    encoding: 'utf8',
+  });
 }
 
 // Every dev/ source that a reader or a script could carry the lock's name in, except the tests.
@@ -59,8 +67,7 @@ function improveSide(home, ran, waitSeconds, code, extraEnv = {}) {
     'exit "$2"',
   ].join('; ');
   const env = {
-    ...process.env,
-    HOME: home,
+    ...scratchEnv(home),
     IMPROVE_DIRECTION: DIRECTION,
     IMPROVE_TRIAL_LOCK_WAIT_SECONDS: String(waitSeconds),
   };
@@ -91,7 +98,7 @@ function benchLockRecord(evidence) {
 // Starts one side attempt: the side script runs under the bench lock and records its start and end times in `log`.
 function sideAttempt(home, body, log) {
   const child = spawn('bash', ['-c', 'source "$1"; bench_lock bash "$2" "$3"', 'bash', LOCK, body, log], {
-    env: { ...process.env, HOME: home },
+    env: scratchEnv(home),
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   return { child, exited: once(child, 'exit') };
@@ -118,10 +125,10 @@ function attemptEvents(log) {
     });
 }
 
-test('the bench takes its lock under $HOME/pn-runs, and only lock.sh names the file', () => {
+test('the bench takes its lock under the user\'s passwd home, and only lock.sh names the file', () => {
   const home = scratch('pn-lock-home-');
   try {
-    assert.equal(lockFile(home), path.join(home, LOCK_FILE));
+    assert.equal(lockVariable(hostEnv(home), 'BENCH_LOCK_FILE'), path.join(os.userInfo().homedir, LOCK_FILE));
 
     const naming = devSources(DEV_DIR).filter((file) =>
       /pn-runs\/\.bench\.lock|BENCH_LOCK_FILE/.test(fs.readFileSync(file, 'utf8')),
@@ -187,21 +194,15 @@ test('two side attempts serialize on the one lock, and the second waits for the 
   }
 });
 
-test('a run exports the host lock, and a process under a trial HOME takes that lock, not one under its own HOME', () => {
-  const host = scratch('pn-lock-host-');
+test('a process under a trial HOME takes the user\'s passwd-home lock, not one under HOME', () => {
   const trialHome = scratch('pn-lock-trial-');
   try {
-    const hostLock = path.join(host, LOCK_FILE);
-    const env = { ...process.env, HOME: host };
-    delete env.BENCH_LOCK_FILE;
-    // The run resolves the lock under its HOME and exports it; the trial's bench then runs under its own HOME.
-    const under = (exportFirst) => execFileSync('bash', ['-c',
-      'source "$1"; if [[ $2 == export ]]; then bench_lock_export; fi; exec env HOME="$3" bash -c \'source "$1"; bench_lock_path\' bash "$1"',
-      'bash', LOCK, exportFirst, trialHome], { env, encoding: 'utf8' }).trim();
-    assert.equal(under('export'), hostLock, 'the exported lock is the one the trial bench takes');
-    assert.equal(under('none'), path.join(trialHome, LOCK_FILE), 'without the export, the trial HOME names its own lock');
+    // The trial replaces HOME for the bench it runs; the lock stays the user's, from the passwd entry.
+    assert.equal(
+      lockVariable(hostEnv(trialHome), 'BENCH_LOCK_FILE'),
+      path.join(os.userInfo().homedir, LOCK_FILE),
+    );
   } finally {
-    fs.rmSync(host, { recursive: true, force: true });
     fs.rmSync(trialHome, { recursive: true, force: true });
   }
 });
@@ -211,7 +212,7 @@ test('the bench refuses a caller-chosen lock file and takes the lock itself', { 
   const chosen = path.join(home, 'chosen.lock');
   try {
     const child = spawn('bash', [RUN, '--lock', chosen], {
-      env: { ...process.env, HOME: home },
+      env: scratchEnv(home),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stderr = '';
@@ -379,7 +380,7 @@ test('an improve side keeps its marker through a cleanup of its TMPDIR during th
   try {
     await waitFor(() => fs.existsSync(held));
     side = spawn('bash', [IMPROVE_SIDE, 'bash', '-c', 'touch "$1"; exit 0', 'bash', ran], {
-      env: { ...process.env, HOME: home, TMPDIR: tmp, IMPROVE_DIRECTION: DIRECTION, IMPROVE_TRIAL_LOCK_WAIT_SECONDS: '60' },
+      env: { ...scratchEnv(home), TMPDIR: tmp, IMPROVE_DIRECTION: DIRECTION, IMPROVE_TRIAL_LOCK_WAIT_SECONDS: '60' },
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';

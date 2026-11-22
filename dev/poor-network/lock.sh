@@ -14,9 +14,11 @@
 #
 # Sourced by run.sh, bench.mjs and the other holders; a test sources it to drive the lock on its own.
 
-# The host's lock file. A run exports the file it resolved (bench_lock_export): the bench runs inside a trial, and the
-# trial replaces HOME with its own, so the default below would name a private lock that no other holder shares.
-readonly BENCH_LOCK_FILE="${BENCH_LOCK_FILE:-$HOME/pn-runs/.bench.lock}"
+# The host's lock file, under the user's home from the passwd entry. A trial replaces HOME for the bench it runs, so a
+# lock named under HOME would be a private file that no other holder shares. An explicit BENCH_LOCK_FILE names another
+# file: the tests' scratch lock.
+readonly BENCH_USER_HOME="$(getent passwd "$(id -un)" | cut -d: -f6)"
+readonly BENCH_LOCK_FILE="${BENCH_LOCK_FILE:-$BENCH_USER_HOME/pn-runs/.bench.lock}"
 # The bench's own wait. A holder with another wait passes it to bench_lock_within.
 readonly BENCH_LOCK_WAIT_SECONDS=7200
 # The status flock uses when the wait runs out.
@@ -50,12 +52,6 @@ bench_lock_hold() {
 bench_lock_path() {
   mkdir -p "$(dirname "$BENCH_LOCK_FILE")" || return $?
   printf '%s\n' "$BENCH_LOCK_FILE"
-}
-
-# bench_lock_export: pass the lock file this shell resolved to the processes it starts, so a process under a changed
-# HOME (a trial's) takes the same lock.
-bench_lock_export() {
-  export BENCH_LOCK_FILE
 }
 
 # bench_lock_fd_take <fd> <wait seconds>: wait for the bench lock on an open descriptor. The lock belongs to the open file

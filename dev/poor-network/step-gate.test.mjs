@@ -1,6 +1,6 @@
 // Tests of the bench's step gate: the yield rule (a queued process gets the lock at a step's end), the cap (a step past
 // its cap is stopped and runs once more), and the descriptor (no child of the bench holds the lock). The tests run the
-// real lock functions under a scratch HOME, so the lock file is the one lock.sh names there.
+// real lock functions on a scratch lock file (BENCH_LOCK_FILE), so no test waits on a real run's lock.
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -14,8 +14,12 @@ import { closeAllLive, trackLive } from './live.mjs';
 import { BenchGate } from './step-gate.mjs';
 
 const savedHome = process.env.HOME;
+const savedLockFile = process.env.BENCH_LOCK_FILE;
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'step-gate-'));
 process.env.HOME = home;
+// The gates take the scratch lock: lock.sh names the user's own lock otherwise, and a test must not wait on a real run.
+const lockFile = path.join(home, 'pn-runs', '.bench.lock');
+process.env.BENCH_LOCK_FILE = lockFile;
 // Every gate a test opens, closed at the end, so a failed assertion cannot leave the lock held for the next test.
 const gates = [];
 after(async () => {
@@ -23,9 +27,13 @@ after(async () => {
     await gate.close();
   }
   process.env.HOME = savedHome;
+  if (savedLockFile === undefined) {
+    delete process.env.BENCH_LOCK_FILE;
+  } else {
+    process.env.BENCH_LOCK_FILE = savedLockFile;
+  }
   fs.rmSync(home, { recursive: true, force: true });
 });
-const lockFile = path.join(home, 'pn-runs', '.bench.lock');
 
 async function waitUntil(check, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;

@@ -86,13 +86,30 @@ async fn resolve(
     Target::Call(class) => call_resolve::resolve_call(&cfg, &selector, class, author.as_deref()),
     Target::Backend(id) => call_resolve::resolve_backend(&cfg, &selector, id),
   };
-  match resolved {
-    Ok(option) => match yaml_mapping_to_json(&option.record()) {
-      Ok(record) => responses::json(StatusCode::OK, &json!({"option": Value::Object(record)})),
-      Err(error) => responses::internal_error("RuntimeError", error),
-    },
-    Err(ResolveError::Refused(message)) => detail(StatusCode::CONFLICT, message),
-    Err(ResolveError::Failed(error)) => responses::internal_error("RuntimeError", format!("{error:#}")),
+  let option = match resolved {
+    Ok(option) => option,
+    Err(ResolveError::Refused(message)) => return detail(StatusCode::CONFLICT, message),
+    Err(ResolveError::Failed(error)) => return responses::internal_error("RuntimeError", format!("{error:#}")),
+  };
+  let lifecycle = match features.registry.lifecycle_for(&option.backend_type) {
+    Ok(lifecycle) => lifecycle,
+    Err(error) => return responses::internal_error("RuntimeError", format!("{error:#}")),
+  };
+  let claude_config_dir = match lifecycle.resolve_account_dir(&option, &cfg) {
+    Ok(Ok(dir)) => dir,
+    Ok(Err(message)) => return detail(StatusCode::CONFLICT, message),
+    Err(error) => return responses::internal_error("RuntimeError", format!("{error:#}")),
+  };
+  match yaml_mapping_to_json(&option.record()) {
+    Ok(record) => {
+      let mut answer = serde_json::Map::new();
+      answer.insert("option".to_string(), Value::Object(record));
+      if let Some(dir) = claude_config_dir {
+        answer.insert("claude_config_dir".to_string(), Value::String(dir));
+      }
+      responses::json(StatusCode::OK, &Value::Object(answer))
+    }
+    Err(error) => responses::internal_error("RuntimeError", error),
   }
 }
 
@@ -104,9 +121,11 @@ fn detail(status: StatusCode, text: impl Into<String>) -> Response {
 mod tests {
   use charliebot_agents::backend_availability::BackendAvailability;
   use charliebot_agents::model_pool::RotationPositions;
+  use charliebot_core::run_token::RunTokenClaims;
+  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 
   use super::*;
-  use crate::test_support::{answer, feature_context_with_auto};
+  use crate::test_support::{GatedHome, answer, feature_context_with_auto};
 
   /// Two options, one with an endpoint and a credential, a rotate pool of both, and `judge` on the gateway option.
   const CONFIG: &str = "\
@@ -119,12 +138,19 @@ credential: gw}
     - {id: pool, label: Pool, rule: rotate, members: [synthetic-a, synthetic-b]}
   calls:
     judge: synthetic-a
+    improve_review: pool
+    review: session
 ";
 
-  async fn resolve_body(body: Value) -> (StatusCode, Value) {
-    let (home, features) = feature_context_with_auto(CONFIG);
+  fn context_with(config: &str) -> (GatedHome, Arc<FeatureContext>) {
+    let (home, features) = feature_context_with_auto(config);
     features.startup.insert(BackendAvailability::load(home.path()).unwrap()).unwrap();
     features.startup.insert(RotationPositions::default()).unwrap();
+    (home, features)
+  }
+
+  async fn resolve_body(body: Value) -> (StatusCode, Value) {
+    let (_home, features) = context_with(CONFIG);
     let caller = CallerIdentity::Operator { session_id: None };
     answer(resolve(State(features), caller, Json(body)).await).await
   }
@@ -138,6 +164,7 @@ credential: gw}
     assert_eq!(body["option"]["id"], "synthetic-a");
     assert_eq!(body["option"]["model"], "model-a");
     assert_eq!(body["option"]["credential"], "gw", "the record names the credential");
+    assert!(body.get("claude_config_dir").is_none(), "{body}");
     assert!(!body.to_string().contains("api_key"), "{body}");
 
     let (status, body) = resolve_body(json!({"backend": "pool"})).await;
@@ -147,6 +174,10 @@ credential: gw}
     let (status, body) = resolve_body(json!({"call": "compaction"})).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert!(body["detail"].as_str().unwrap().contains("backends.calls.compaction is unset"), "{body}");
+
+    let (status, body) = resolve_body(json!({"call": "review"})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("backends.calls.review"), "{body}");
 
     let (status, body) = resolve_body(json!({"backend": "missing"})).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
@@ -158,5 +189,23 @@ credential: gw}
 
     let (status, body) = resolve_body(json!({"call": "judge", "backend": "pool"})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+  }
+
+  /// A run token excludes the session's current member when resolving `improve_review`.
+  #[tokio::test]
+  async fn a_run_token_excludes_the_author_member_on_improve_review() {
+    let (_home, features) = context_with(CONFIG);
+    let mut session = SessionMetadata::new("author-session", "Author session", TaskProfile::Manager);
+    session.backend = "synthetic-a".to_string();
+    let metadata_path = features.store.metadata_path(&session.id);
+    std::fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+    std::fs::write(&metadata_path, session.to_json_string(&[], true)).unwrap();
+    let caller = CallerIdentity::Agent {
+      claims: RunTokenClaims { session_id: "author-session".into(), run_id: "run-1".into(), agent: "worker".into() },
+    };
+    let (status, body) =
+      answer(resolve(State(Arc::clone(&features)), caller, Json(json!({"call": "improve_review"}))).await).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["option"]["id"], "synthetic-b");
   }
 }

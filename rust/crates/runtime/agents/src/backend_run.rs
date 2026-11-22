@@ -40,8 +40,30 @@ pub struct RunIdentity {
   pub run_id: String,
 }
 
+fn launch_for_option(
+  option: &BackendOption,
+  identity: &RunIdentity,
+  claude_config_dir: Option<&str>,
+) -> (Option<String>, LaunchArgs) {
+  let mut launch = match option.backend_type.as_str() {
+    type_names::CC_CLAUDE | type_names::CC_ANTHROPIC_COMPATIBLE | type_names::CC_OPENAI_COMPATIBLE => {
+      let mut launch = LaunchArgs { cgroup_session_id: Some(identity.session_id.clone()), ..LaunchArgs::default() };
+      launch.backend_kwargs.insert("claude_session_id".to_string(), identity.session_id.clone().into());
+      launch.backend_kwargs.insert("run_id".to_string(), identity.run_id.clone().into());
+      launch
+    }
+    _ => LaunchArgs::default(),
+  };
+  let session_id = launch.cgroup_session_id.clone();
+  if let Some(dir) = claude_config_dir {
+    launch.backend_kwargs.insert("claude_config_dir".to_string(), dir.into());
+  }
+  (session_id, launch)
+}
+
 /// Run `option` once with `prompt` in `cwd`, building its backend from `host`'s config and registry. `login` joins the
 /// process environment, and the raw event log is copied to `events_path`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_once(
   host: &CliHost,
   option: &BackendOption,
@@ -49,24 +71,17 @@ pub async fn run_once(
   cwd: PathBuf,
   login: Env,
   identity: RunIdentity,
+  claude_config_dir: Option<&str>,
   events_path: &Path,
 ) -> anyhow::Result<RunReport> {
-  let (session_id, launch) = match option.backend_type.as_str() {
-    type_names::CC_CLAUDE | type_names::CC_ANTHROPIC_COMPATIBLE => {
-      let mut launch = LaunchArgs { cgroup_session_id: Some(identity.session_id.clone()), ..LaunchArgs::default() };
-      launch.backend_kwargs.insert("claude_session_id".to_string(), identity.session_id.clone().into());
-      launch.backend_kwargs.insert("run_id".to_string(), identity.run_id.clone().into());
-      (Some(identity.session_id), launch)
-    }
-    _ => (None, LaunchArgs::default()),
-  };
+  let (session_id, launch) = launch_for_option(option, &identity, claude_config_dir);
   let built = backend_types::build_backend(Arc::clone(&host.registry), option, &host.cfg, launch)?;
   let report = run_built(built, &host.base_env.values, prompt, cwd, login, events_path).await?;
-  Ok(RunReport { session_id, ..report })
+  Ok(RunReport { session_id: session_id.or(report.session_id), ..report })
 }
 
 /// Run a built backend once in `cwd`. `login` joins the process environment, and the raw event log is copied to
-/// `events_path`. The report's session id is `None`: the caller names the session it built the backend for.
+/// `events_path`. The report's session id is `None` unless the backend emits a `session_attached` event.
 pub async fn run_built(
   mut built: BuiltBackend,
   base_env: &Env,
@@ -78,6 +93,9 @@ pub async fn run_built(
   let log_dir = charliebot_core::tempdir::mkdtemp("charliebot-backend-run-")?;
   built.launch.log_dir = Some(log_dir.path().to_path_buf());
   let final_text = FinalText::default();
+  let attached_session = Arc::new(std::sync::Mutex::new(None::<String>));
+  let attached_slot = Arc::clone(&attached_session);
+  let text_event = final_text.on_event();
   let runner = AgentRunner::new(&built.backend_type, built.backend, built.launch.clone());
   let mut request = RunRequest::new(
     prompt,
@@ -88,7 +106,14 @@ pub async fn run_built(
   );
   request.child_env_policy = ChildEnvPolicy::Inherited;
   request.environment_overlay = login;
-  request.on_event = final_text.on_event();
+  request.on_event = Arc::new(move |event| {
+    if event.get("type").and_then(serde_json::Value::as_str) == Some(charliebot_core::event_types::SESSION_ATTACHED)
+      && let Some(id) = event.get("session_id").and_then(serde_json::Value::as_str).filter(|id| !id.is_empty())
+    {
+      *attached_slot.lock().expect("attached session lock is not poisoned") = Some(id.to_string());
+    }
+    text_event(event)
+  });
   let outcome = runner.run(request).await;
   let raw_log = log_dir.path().join(RAW_LOG_NAME);
   if raw_log.exists() {
@@ -96,12 +121,8 @@ pub async fn run_built(
       .with_context(|| format!("copying the raw event log to {}", events_path.display()))?;
   }
   let outcome = outcome.context("running the backend")?;
-  Ok(RunReport {
-    text: final_text.text(),
-    exit_code: outcome.exit_code,
-    stderr_text: outcome.stderr_text,
-    session_id: None,
-  })
+  let session_id = attached_session.lock().expect("attached session lock is not poisoned").clone();
+  Ok(RunReport { text: final_text.text(), exit_code: outcome.exit_code, stderr_text: outcome.stderr_text, session_id })
 }
 
 #[cfg(test)]
@@ -154,5 +175,33 @@ mod tests {
     assert_eq!(failing.exit_code, Some(3));
     assert_eq!(failing.text, "");
     assert!(failing.stderr_text.contains("reason"), "{}", failing.stderr_text);
+  }
+
+  #[test]
+  fn claude_backend_types_receive_identity_and_optional_config_dir() {
+    let identity = RunIdentity { session_id: "s1".into(), run_id: "r1".into() };
+    let base = BackendOption {
+      id: "opt".into(),
+      label: "Opt".into(),
+      model: "m".into(),
+      prompt_overlay: None,
+      billing: None,
+      backend_type: type_names::CC_CLAUDE.into(),
+      type_fields: Default::default(),
+      visible: true,
+    };
+    let (sid, launch) = launch_for_option(&base, &identity, Some("/tmp/acct"));
+    assert_eq!(sid.as_deref(), Some("s1"));
+    assert_eq!(launch.backend_kwargs.get("claude_config_dir"), Some(&serde_json::json!("/tmp/acct")));
+
+    let openai = BackendOption { backend_type: type_names::CC_OPENAI_COMPATIBLE.into(), ..base.clone() };
+    let (sid, launch) = launch_for_option(&openai, &identity, None);
+    assert_eq!(sid.as_deref(), Some("s1"));
+    assert_eq!(launch.backend_kwargs.get("run_id"), Some(&serde_json::json!("r1")));
+
+    let codex = BackendOption { backend_type: type_names::CODEX.into(), ..base };
+    let (sid, launch) = launch_for_option(&codex, &identity, None);
+    assert_eq!(sid, None);
+    assert!(launch.backend_kwargs.is_empty());
   }
 }

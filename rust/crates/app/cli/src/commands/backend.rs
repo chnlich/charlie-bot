@@ -74,36 +74,45 @@ pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
   let cli: BackendCli = cli_args::parse("charliebot backend", args);
   match cli.command {
     BackendCommand::Resolve(args) => {
-      let option = resolve_record(&args.call, &args.backend)?;
-      json_out::print_result(&option);
+      let resolved = resolve_response(&args.call, &args.backend)?;
+      json_out::print_result(&resolved);
       Ok(())
     }
     BackendCommand::Run(args) => run_command(args, lazy_host),
   }
 }
 
-/// The record the server picks for a call class or a backend id.
-fn resolve_record(call: &Option<String>, backend: &Option<String>) -> Result<Value, CliExit> {
+/// The resolve answer the server returns: `{"option": <record>, "claude_config_dir"?: <dir>}`.
+fn resolve_response(call: &Option<String>, backend: &Option<String>) -> Result<Value, CliExit> {
   let target = match (call, backend) {
     (Some(class), None) => json!({"call": class}),
     (None, Some(id)) => json!({"backend": id}),
     _ => return Err(CliExit::usage("name exactly one of --call or --backend")),
   };
-  let response = client::post(RESOLVE_PATH, target, None, &[])?;
-  response_field(&response, "option")
+  client::post(RESOLVE_PATH, target, None, &[])
 }
 
 fn response_field(response: &Value, key: &str) -> Result<Value, CliExit> {
   response.get(key).cloned().ok_or_else(|| CliExit::error(format!("the resolve answer has no {key} field: {response}")))
 }
 
+fn optional_claude_config_dir(response: &Value) -> Result<Option<String>, CliExit> {
+  match response.get("claude_config_dir") {
+    None | Some(Value::Null) => Ok(None),
+    Some(Value::String(dir)) => Ok(Some(dir.clone())),
+    Some(other) => Err(CliExit::error(format!("claude_config_dir must be a string, got {other}"))),
+  }
+}
+
 fn run_command(args: RunArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let prompt = files::read_required_text_file("--task-file", &args.task_file)?;
-  let (record, login) = match args.pick {
+  let (resolved, login) = match args.pick {
     RunPick { launch: Some(dir), .. } => launch_record_and_login(&dir)?,
-    RunPick { call, backend, .. } => (resolve_record(&call, &backend)?, Env::new()),
+    RunPick { call, backend, .. } => (resolve_response(&call, &backend)?, Env::new()),
   };
+  let record = response_field(&resolved, "option")?;
+  let claude_config_dir = optional_claude_config_dir(&resolved)?;
   let option = option_of(&record, host)?;
   let cwd =
     std::env::current_dir().map_err(|error| CliExit::error(format!("cannot read the working directory: {error}")))?;
@@ -114,7 +123,16 @@ fn run_command(args: RunArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
     .build()
     .map_err(|error| CliExit::error(format!("cannot start the runtime: {error}")))?;
   let report = runtime
-    .block_on(backend_run::run_once(host, &option, prompt, cwd, login, identity, &events_path))
+    .block_on(backend_run::run_once(
+      host,
+      &option,
+      prompt,
+      cwd,
+      login,
+      identity,
+      claude_config_dir.as_deref(),
+      &events_path,
+    ))
     .map_err(|error| CliExit::error(format!("{error:#}")))?;
   let session = report.session_id.as_deref().unwrap_or("none");
   eprintln!("backend run: {} ({}) session {session}", option.id, option.backend_type);
@@ -201,5 +219,24 @@ mod tests {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let login = read_login(&path).unwrap();
     assert_eq!(login.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str), Some("secret"));
+  }
+
+  /// A launch directory holds the resolve output (`option.json`) and a mode-600 `login`.
+  #[test]
+  fn a_launch_directory_reads_the_resolve_output_and_login() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+      dir.path().join("option.json"),
+      r#"{"option":{"id":"synthetic-a","label":"A","type":"cc-claude","model":"m"},"claude_config_dir":"/tmp/acct"}"#,
+    )
+    .unwrap();
+    let login_path = dir.path().join("login");
+    std::fs::write(&login_path, "CLAUDE_CODE_OAUTH_TOKEN=tok\n").unwrap();
+    std::fs::set_permissions(&login_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let (resolved, login) = launch_record_and_login(dir.path()).unwrap();
+    assert_eq!(response_field(&resolved, "option").unwrap()["id"], "synthetic-a");
+    assert_eq!(optional_claude_config_dir(&resolved).unwrap().as_deref(), Some("/tmp/acct"));
+    assert_eq!(login.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str), Some("tok"));
   }
 }

@@ -1072,6 +1072,16 @@ pub trait BackendLifecycle: Send + Sync {
     Ok(None)
   }
 
+  /// The account directory for one resolved run of `option`, when the backend type picks among configured logins.
+  /// `Ok(Ok(None))` when the option needs none; `Ok(Err(reason))` when no login is usable.
+  fn resolve_account_dir(
+    &self,
+    _option: &BackendOption,
+    _cfg: &CharlieBotConfig,
+  ) -> anyhow::Result<Result<Option<String>, String>> {
+    Ok(Ok(None))
+  }
+
   /// The hold the login that a recovered run's process already uses takes for that run, read from the process's
   /// environment (`/proc/<pid>/environ`). The startup recovery takes it before it starts the run's follow, so the
   /// next placement's selection sees the reattached run; the follow holds it until the run's follow ends. The

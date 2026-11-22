@@ -422,6 +422,34 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
     Ok(Some(QuotaOutlook { can_run, earliest_reset }))
   }
 
+  /// The account directory picked by usage from the option's configured login pool. Returns `Ok(Ok(None))` when no
+  /// `accounts.claude` logins are configured, or `Ok(Err(reason))` when no pooled login is usable.
+  fn resolve_account_dir(
+    &self,
+    option: &BackendOption,
+    cfg: &CharlieBotConfig,
+  ) -> anyhow::Result<Result<Option<String>, String>> {
+    if !claude_accounts::is_pooled(option, cfg) {
+      return Ok(Ok(None));
+    }
+    let account_pool = claude_accounts::option_pool(option);
+    if let Some(account) = claude_accounts::select(
+      &self.state,
+      cfg,
+      Some(&option.model),
+      &HashSet::new(),
+      None,
+      None,
+      account_pool.as_deref(),
+      0.0,
+    )? {
+      return Ok(Ok(Some(account.config_dir)));
+    }
+    let message =
+      claude_relay::pool_exhausted_message(&self.state, cfg, Some(&option.model), None, account_pool.as_deref())?;
+    Ok(Err(message))
+  }
+
   /// The hold the login that a recovered run's process already uses takes for that run, read from the process's
   /// environment. A process whose environment names no pool login is an unknown login: the follow continues without
   /// a hold.
@@ -1410,6 +1438,38 @@ mod tests {
     assert_eq!(
       refused.resets_at,
       Some(UtcDateTime::from(failed.into_inner() + claude_accounts::AUTH_FAILURE_COOLDOWN))
+    );
+  }
+
+  #[test]
+  fn resolve_account_dir_picks_a_pooled_login_and_refuses_when_none_is_usable() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    account_credentials(&a);
+    account_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let option = cfg.get_backend_option("fable").unwrap();
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+
+    let dir = lifecycle.resolve_account_dir(option, &cfg).unwrap().unwrap();
+    assert!(
+      dir.as_deref() == Some(a.to_string_lossy().as_ref()) || dir.as_deref() == Some(b.to_string_lossy().as_ref()),
+      "{dir:?}"
+    );
+
+    let failed = UtcDateTime::now();
+    claude_accounts::record_auth_failure(&state, "a", Some(failed));
+    claude_accounts::record_auth_failure(&state, "b", Some(failed));
+    let refusal = lifecycle.resolve_account_dir(option, &cfg).unwrap().unwrap_err();
+    assert!(!refusal.is_empty());
+
+    let unpooled = unpooled_config(&root.path().join("unpooled"));
+    assert_eq!(
+      lifecycle.resolve_account_dir(unpooled.get_backend_option("fable").unwrap(), &unpooled).unwrap(),
+      Ok(None)
     );
   }
 }

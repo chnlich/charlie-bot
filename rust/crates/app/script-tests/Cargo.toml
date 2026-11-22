@@ -20,6 +20,11 @@ path = "src/bin/fake_pane_server.rs"
 name = "fake-charliebot"
 path = "src/bin/fake_charliebot.rs"
 
+# The stand-in server of the held-port serve trial: it logs server_ready and never binds a port.
+[[bin]]
+name = "serve-stub"
+path = "src/bin/serve_stub.rs"
+
 [dependencies]
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true

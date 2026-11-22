@@ -1954,7 +1954,8 @@ voice: {}
 
   /// The option entries and `calls` keys that restore the pre-f0b9a7a206 targets on the live config: new sessions on
   /// the first option, compaction on the `claude-sonnet-5` model, web search on Google's REST base with the `gemini`
-  /// credential. The values are the ones the old code hard-coded.
+  /// credential. The review model is the one improve rounds read before a445788683 (`REVIEW_OPTION`). The values are
+  /// the ones the old code hard-coded.
   #[test]
   fn the_restored_call_entries_name_the_pre_commit_targets() {
     let home = home_with(concat!(
@@ -1963,13 +1964,15 @@ voice: {}
       "    - {id: claude-sonnet-compaction, label: S, type: cc-claude, model: claude-sonnet-5}\n",
       "    - {id: claude-code-gemini-search, label: W, type: cc-openai-compatible, model: gemini-4-hydrogen, ",
       "api_base: 'https://generativelanguage.googleapis.com/v1beta', credential: gemini}\n",
+      "    - {id: claude-code-kimi-k3.1-pro, label: Review, type: cc-anthropic-compatible, ",
+      "model: kimi-k3.1-pro, api_base: 'https://gateway.test', credential: gw, effort: high}\n",
       "  calls:\n    new_session: claude-opus-5\n    compaction: claude-sonnet-compaction\n",
-      "    web_search: claude-code-gemini-search\n",
+      "    web_search: claude-code-gemini-search\n    improve_review: claude-code-kimi-k3.1-pro\n",
     ));
     let schema = ConfigSchema {
       sections: Vec::new(),
       legacy_keys: Vec::new(),
-      backend_types: vec!["cc-claude", "cc-openai-compatible"],
+      backend_types: vec!["cc-claude", "cc-openai-compatible", "cc-anthropic-compatible"],
     };
     let cfg = load_config(home.path(), &schema).unwrap();
     require_backends(&cfg).unwrap();
@@ -1985,6 +1988,14 @@ voice: {}
       Some("https://generativelanguage.googleapis.com/v1beta")
     );
     assert_eq!(search.type_fields.get("credential").and_then(|value| value.as_str()), Some("gemini"));
+    assert_eq!(
+      cfg.backends.calls.get(CallClass::ImproveReview),
+      Some(&CallTarget::Backend("claude-code-kimi-k3.1-pro".to_string()))
+    );
+    let review = cfg.get_backend_option("claude-code-kimi-k3.1-pro").expect("the review option");
+    assert_eq!(review.model, "kimi-k3.1-pro");
+    assert_eq!(review.type_fields.get("api_base").and_then(|value| value.as_str()), Some("https://gateway.test"));
+    assert_eq!(review.type_fields.get("credential").and_then(|value| value.as_str()), Some("gw"));
   }
 
   #[test]

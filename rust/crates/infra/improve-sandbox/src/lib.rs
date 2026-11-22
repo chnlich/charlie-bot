@@ -13,7 +13,7 @@ pub fn tmp_directories(direction: &str) -> [PathBuf; 2] {
 /// The writable paths of one direction, and the writable paths that every direction shares.
 pub fn direction_paths(home: &Path, direction: &str) -> (Vec<PathBuf>, Vec<PathBuf>) {
   let round = home.join("improve").join(direction);
-  let mut round_paths = vec![round.join("charlie-bot"), round.join("evidence"), round.join("clc-sessions")];
+  let mut round_paths = vec![round.join("charlie-bot"), round.join("evidence")];
   round_paths.extend(tmp_directories(direction));
   round_paths.push(home.join(".cache/improve-target").join(direction));
   let shared_paths = vec![

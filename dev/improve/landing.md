@@ -201,47 +201,27 @@ One pull request per round is the unit that CI and the reviewer check.
 
 ## Step 6: review the diff
 
-The review is one direct `charlie-code` run, outside the clone.
-The round makes the review's scratch directory with `mktemp -d` under its TMPDIR, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
+The review is an independent check that the topic is complete and correct.
+The review runs on the backend that `backends.calls.improve_review` selects in the host's `config.yaml`.
+The round runs the review through `charliebot backend run`, and names no model, option or agent CLI for the review.
+The round passes this launch's review directory, `$IMPROVE_LAUNCH_DIR/review`, as the `--launch` directory.
+The review receives `dev/improve/code_review_prompt.md` and the pull request reference.
+When the pull request names screenshots, the review also receives the round's evidence directory.
+The review's credential reaches only the review process.
+The review runs in a scratch directory outside the clone, so the reviewer's git checkouts stay away from the clone's HEAD.
+The round makes the scratch directory with `mktemp -d` under its TMPDIR.
+The write boundary allows the scratch directory and the session directory, and denies every other write.
+The verdict is the review's final text on stdout.
+The raw event stream stays in the review's working directory as `events.ndjson`.
+A review that fails names its reason and its resume handle on stderr, and the round quotes that reason verbatim in the final message.
+A failed review's scratch directory and its `events.ndjson` stay on disk until the next round's start (Step 1), and the round names them in its final message.
 
-The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
-The command passes no `--model`, `--api-base` or key flag.
-The round's PATH finds `charlie-code` first in `~/improve/runner/bin/`, where the runner installs its review shim (`review-charlie-code.sh`).
-The shim sets these variables for the review process alone, whichever model runs the round, and then runs the host's `~/.local/bin/charlie-code`:
-
-- `CHARLIE_CODE_MODEL`: the review option's model with an `openai/` prefix, from `IMPROVE_REVIEW_MODEL`.
-- `CHARLIE_CODE_API_BASE`: the review option's API base, ending in `/v1`, from `IMPROVE_REVIEW_API_BASE`.
-- `CHARLIE_CODE_API_KEY`: the review option's gateway key, read from `$CHARLIEBOT_HOME/credentials.yaml` under the credential that `IMPROVE_REVIEW_CREDENTIAL` names.
-
-The round's own environment and every tool shell under it carry none of the three variables.
-A `charlie-code` that the round starts by its full path skips the shim and gets none of them, so it cannot review.
-
-The review option is the `config.yaml` entry that names the review's model and API base.
-Its key sits in `credentials.yaml`, under the credential that the entry names.
-The context window is `charlie-code`'s default.
-
-The scratch directory sits outside the clone, so the reviewer's own git checkouts stay away from the clone's HEAD.
-The write boundary allows the scratch directory and the session directory, and denies every write outside the round's own directories.
-The review is the independent check that the topic is complete and correct.
-
-The reviewer's stdout is an NDJSON event stream.
-The round keeps it as `events.ndjson` in the scratch directory and takes the verdict from the `final_output` field of its final `result` event.
-
-One foreground tool call ends at 15 minutes, the round's per-call tool limit.
-A review of any length completes: the round waits for it past that limit and reads back its outcome.
-A round has no wake: its host runs no CharlieBot server, so no trigger registers for it.
-Every wait of a round, for every member, stays inside the round's run
-until its review verdict is posted and its merge or no-PR outcome is reached.
-
-Post the verdict as one pull-request comment through the posting script:
-
-    dev/improve/github-post.sh pr-comment --body-file <verdict file> <PR>
-
-The comment is the review record on the pull request, and it carries the verdict without the event stream.
+The round posts the verdict as one pull-request comment through `dev/improve/github-post.sh pr-comment`, and the comment carries the verdict without the event stream.
 Act on every finding on the same branch before the merge.
-A round whose review cannot run or fails leaves the pull request open and reports the reason in the final message.
-On a failed review, the round quotes charlie-code's own message from the last `error` event of `events.ndjson` verbatim in the final message; LiteLLM's stderr lines are noise, not the error.
-The round names the kept `events.ndjson`, and the failed review's scratch directory stays on disk until the next round's start (Step 1).
+A review that cannot run or fails leaves the pull request open, and the round reports the reason in its final message.
+One foreground tool call ends at 15 minutes. A review of any length completes: the round waits past that limit and reads back its outcome.
+Every wait of a round stays inside the round's run until the verdict is posted and the merge or no-PR outcome is reached.
+The round has no wake: its host runs no CharlieBot server, so no trigger registers for it.
 A silent skip breaks the protocol.
 
 ## Step 7: land the pull request or abandon it

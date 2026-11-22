@@ -2119,6 +2119,9 @@ esac
   }
 }
 
+// Every test in this module launches git, and each credential check also launches the bash leak scanner. A test that
+// launches a process is an integration test (dev/check-integration-ignores.mjs), so each carries
+// #[ignore = "integration"]: the unit gate skips it, and the Integration job runs it.
 #[cfg(test)]
 mod synthetic_repo_tests {
   use std::fs;
@@ -2232,6 +2235,7 @@ mod synthetic_repo_tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_credential_value_in_the_diff_refuses_the_landing() {
     const SECRET: &str = "fake-landing-diff-value-0001";
     let root = tempfile::tempdir().expect("temporary directory is available");
@@ -2247,6 +2251,7 @@ mod synthetic_repo_tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_credential_value_in_a_commit_message_refuses_the_landing() {
     const SECRET: &str = "fake-landing-message-value-0002";
     let root = tempfile::tempdir().expect("temporary directory is available");
@@ -2262,6 +2267,7 @@ mod synthetic_repo_tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_credential_value_in_the_pr_body_refuses_before_the_pr_is_created() {
     const SECRET: &str = "fake-landing-body-value-0003";
     let root = tempfile::tempdir().expect("temporary directory is available");
@@ -2277,6 +2283,7 @@ mod synthetic_repo_tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_clean_branch_passes_and_a_value_under_the_minimum_length_passes() {
     // Eleven characters: below the scanner's minimum, so the same value in the diff is not a credential.
     const SHORT: &str = "fake-short1";
@@ -2290,6 +2297,7 @@ mod synthetic_repo_tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_pr_body_with_a_session_view_line_passes_the_landing_check() {
     // A fake session id: the landing's check reads only credential values, so the View line of a session page passes.
     const SESSION_ID: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -2316,6 +2324,7 @@ mod synthetic_repo_tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_diff_that_quotes_a_non_secret_leaf_passes_the_credential_check() {
     const MODEL: &str = "fake-model-name-0005";
     let root = tempfile::tempdir().expect("temporary directory is available");
@@ -2327,6 +2336,7 @@ mod synthetic_repo_tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_secret_leaf_beside_a_non_secret_leaf_refuses_the_landing() {
     const SECRET: &str = "fake-landing-secret-0006";
     let root = tempfile::tempdir().expect("temporary directory is available");
@@ -2341,6 +2351,7 @@ mod synthetic_repo_tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_credentials_file_that_cannot_be_parsed_refuses_the_landing() {
     let root = tempfile::tempdir().expect("temporary directory is available");
     let home = root.path().join("home");

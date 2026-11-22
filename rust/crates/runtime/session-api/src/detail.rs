@@ -32,7 +32,7 @@ use charliebot_store::control_events::SOURCE_SESSION_ID_FIELD;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
 use charliebot_store::trigger_files::{PendingTrigger, TriggerStatus};
-use charliebot_store::{MessageProjection, Store, StoreError, StoreResult, TaskFacts, path_error};
+use charliebot_store::{Store, StoreError, StoreResult, TaskFacts, path_error};
 use charliebot_triggers::triggers::TriggerManager;
 use http::header::HeaderValue;
 use lru::LruCache;
@@ -97,8 +97,10 @@ pub struct BootstrapPayload {
 /// The payload renders the session's message tail trimmed to [`FIRST_SCREEN_WIRE_BUDGET_BYTES`] on
 /// the wire, so the switch's own transfer sets its time on a slow link. The trim drops the tail's
 /// oldest whole turns and moves the paging cursor onto the first kept one. The dropped history
-/// still reaches the page through scroll-up paging, and the newest turn — its user message
-/// included — always renders on the first screen.
+/// still reaches the page through scroll-up paging. The tail's newest visible row always renders on
+/// the first screen. When the turn holding it (the running turn, or the last finished one while nothing
+/// runs) is over the budget alone, the cut lands inside that turn, keeping its newest events that fit,
+/// and the payload may then exceed the budget by that row.
 pub fn build_bootstrap_payload(
   store: &Store,
   cfg: &CharlieBotConfig,
@@ -111,20 +113,26 @@ pub fn build_bootstrap_payload(
   // projection, and an event index for every other session, whose events fold to messages one to
   // many. The events branch keeps the fold of the whole tail, which is the payload's first trim step.
   enum Tail {
-    Slots { messages: Vec<Value>, start: usize, projection: Arc<MessageProjection> },
+    Slots { messages: Vec<Value>, start: usize },
     Events { events: Vec<charliebot_store::ChatEvent>, start: usize, messages: Vec<Value> },
   }
-  let (tail, pending_draft, event_count) = if meta.profile == TaskProfile::Worker {
+  let (tail, pending_draft, event_count, newest) = if meta.profile == TaskProfile::Worker {
     let transcript = worker_transcript::load_worker_transcript(store, &meta.id)?;
     let (messages, oldest, _has_more) = transcript.projection.tail(BOOTSTRAP_MESSAGE_LIMIT);
     worker_summary = Some(transcript.summary.clone());
     let pending_draft = transcript.projection.pending_draft().cloned();
     let event_count = transcript.projection.event_count();
-    (
-      Tail::Slots { messages, start: oldest, projection: Arc::clone(&transcript.projection) },
-      pending_draft,
-      event_count,
-    )
+    let separators: Vec<usize> = messages
+      .iter()
+      .enumerate()
+      .filter(|(_, message)| message["role"] == SEPARATOR_ROLE)
+      .map(|(index, _)| index)
+      .collect();
+    let rows =
+      messages.iter().enumerate().filter(|(_, message)| message["role"] != SEPARATOR_ROLE).map(|(index, _)| index);
+    let newest =
+      NewestTurn::of(messages.len(), &separators, rows, |separator| worker_turn_start_after(&messages, separator));
+    (Tail::Slots { messages, start: oldest }, pending_draft, event_count, newest)
   } else {
     let archive_offset = usize::try_from(meta.archive_offset.max(0)).expect("non-negative archive offset fits usize");
     // A turn's events fold to more than one message, so a read of the message budget's count of events can fold to
@@ -144,7 +152,22 @@ pub fn build_bootstrap_payload(
       }
       read = next_bootstrap_read(read, messages.len(), total_count);
     };
-    (Tail::Events { events, start: oldest, messages }, pending_draft, archive_offset + total_count)
+    let separators: Vec<usize> = events
+      .iter()
+      .enumerate()
+      .filter(|(_, event)| {
+        matches!(event["type"].as_str(), Some(event_types::MASTER_DONE) | Some(event_types::RUN_END))
+      })
+      .map(|(index, _)| index)
+      .collect();
+    let rows = messages
+      .iter()
+      .filter(|message| message["role"] != SEPARATOR_ROLE)
+      .filter_map(|message| message[event_types::EVENT_INDEX].as_u64())
+      .map(|index| index as usize - oldest);
+    let newest =
+      NewestTurn::of(events.len(), &separators, rows, |separator| events_turn_start_after(&events, separator));
+    (Tail::Events { events, start: oldest, messages }, pending_draft, archive_offset + total_count, newest)
   };
 
   // The payload's fields that no trim step changes, built once. Each step clones them and inserts
@@ -178,16 +201,18 @@ pub fn build_bootstrap_payload(
     payload.insert(api::HAS_MORE_FIELD.to_string(), Value::Bool(start > 0));
     Ok(Value::Object(payload))
   };
-  // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes).
-  // A step therefore keeps every kept turn whole and never cuts the newest turn. A worker's projection branch
-  // reads the projection's separator ordinals, which are history ordinals. Every other session reads the events
-  // behind the fold's turn separators (master_done, run_end).
+  // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes). The
+  // trim accepts a step only up to the start of the turn holding the newest visible row, so every older turn is dropped
+  // whole. A worker's step reads the separator messages of its tail, and every other session reads the events behind
+  // the fold's turn separators (master_done, run_end).
   let next_drop = |drop: usize| -> Option<usize> {
     match &tail {
-      Tail::Slots { start, projection, .. } => {
-        let start = *start;
-        projection.next_turn_start_after(start + drop).map(|next| next - start)
-      }
+      Tail::Slots { messages, .. } => messages
+        .iter()
+        .enumerate()
+        .skip(drop)
+        .find(|(_, message)| message["role"] == SEPARATOR_ROLE)
+        .map(|(index, _)| worker_turn_start_after(messages, index)),
       Tail::Events { events, .. } => events
         .iter()
         .enumerate()
@@ -195,11 +220,10 @@ pub fn build_bootstrap_payload(
         .find(|(_, event)| {
           matches!(event["type"].as_str(), Some(event_types::MASTER_DONE) | Some(event_types::RUN_END))
         })
-        .map(|(index, _)| index + 1)
-        .filter(|next| *next < events.len()),
+        .map(|(index, _)| events_turn_start_after(events, index)),
     }
   };
-  let (mut value, untrimmed_wire_bytes) = fit_first_screen_payload(&mut build, &next_drop)?;
+  let (mut value, untrimmed_wire_bytes) = fit_first_screen_payload(&mut build, &next_drop, newest)?;
   // The older rows stay outside the first screen's wire budget: they are the For-you catch-up the page shows before
   // its older pages land, so a trim never drops a turn to make room for them.
   let oldest = value[api::OLDEST_MESSAGE_ORDINAL_FIELD].as_u64().expect("the payload names its oldest ordinal");
@@ -231,32 +255,110 @@ fn next_bootstrap_read(read: usize, messages: usize, total: usize) -> usize {
   grown.max(wanted.min(read.saturating_mul(8))).min(total)
 }
 
-/// The payload with the tail kept from turn boundary `drop` on, for the smallest turn-aligned
-/// `drop` whose messages fit `BOOTSTRAP_MESSAGE_LIMIT` and whose gzip fits
-/// [`FIRST_SCREEN_WIRE_BUDGET_BYTES`]. Returns the payload and the wire bytes the untrimmed payload takes.
+/// The newest visible row of a tail and the turn that holds it, in the tail's own indexes: the trim's two stages both
+/// stay inside that turn.
+#[derive(Clone, Copy)]
+struct NewestTurn {
+  /// The first unit of the turn holding the newest visible row. A turn-boundary step never moves past it, so every
+  /// older turn is dropped whole before that turn is cut.
+  start: usize,
+  /// The unit of the tail's newest visible row. A cut inside the turn never passes it.
+  last_row: usize,
+}
+
+impl NewestTurn {
+  /// The turn holding the newest visible row of a tail of `len` units. `separators` lists the units holding a turn
+  /// separator in order, `rows` the units of the tail's visible rows, and `turn_start_after` the first unit of the turn
+  /// after a separator.
+  ///
+  /// The row is the tail's last one, so a running turn holds it once that turn has a visible row, and the last finished
+  /// turn holds it while the running turn has none. A run's `run_delivery` or `run_finished` follows its separator and
+  /// belongs to the turn before it, so the next turn's start is past it.
+  fn of(
+    len: usize,
+    separators: &[usize],
+    rows: impl Iterator<Item = usize>,
+    turn_start_after: impl Fn(usize) -> usize,
+  ) -> NewestTurn {
+    let last_row = rows.max().unwrap_or(len.saturating_sub(1));
+    let start = separators
+      .iter()
+      .map(|separator| turn_start_after(*separator))
+      .filter(|start| *start <= last_row)
+      .max()
+      .unwrap_or(0);
+    NewestTurn { start, last_row }
+  }
+}
+
+/// The role the fold gives a turn's separator row, which `master_done` and `run_end` render as.
+const SEPARATOR_ROLE: &str = "separator";
+
+/// The first event of the turn after the separator at `index`. The run's `run_finished` closes the run behind its
+/// separator and folds to no message, so the turn starts past it.
+fn events_turn_start_after(events: &[charliebot_store::ChatEvent], index: usize) -> usize {
+  let mut next = index + 1;
+  while events.get(next).is_some_and(|event| event["type"] == event_types::RUN_FINISHED) {
+    next += 1;
+  }
+  next
+}
+
+/// The first message of the run after the separator at `index`. A worker's run closes with its `run_delivery` row right
+/// after the separator, so the next run starts past that row.
+fn worker_turn_start_after(messages: &[Value], index: usize) -> usize {
+  index + 1 + messages[index + 1..].iter().take_while(|message| message["role"] == event_types::RUN_DELIVERY).count()
+}
+
+/// The payload with the tail kept from unit `drop` on, for the trim's smallest cut whose messages fit
+/// `BOOTSTRAP_MESSAGE_LIMIT` and whose gzip fits [`FIRST_SCREEN_WIRE_BUDGET_BYTES`]. Returns the payload and the wire
+/// bytes the untrimmed payload takes.
 ///
-/// The trim drops one whole turn per step and stops at the turn boundary when the newest turn
-/// alone exceeds the budget. That turn is the first screen, and the served size then exceeds the
-/// budget, with the untrimmed size naming it in the response header. Each step serializes and gzips one
-/// payload, well under a millisecond of a level-one gzip at these sizes, and the step count is the
-/// number of dropped turns.
+/// The trim runs in two stages. It first drops whole older turns, one turn-boundary step at a time, and never past the
+/// start of the turn holding the newest visible row. When that turn alone is still over the budget, the trim searches
+/// the cuts inside it for the smallest that fits, which keeps its newest events that fit, and it never cuts past that
+/// row. A payload still over the budget at that row keeps the row, so the served size exceeds the budget by one row. Each
+/// step serializes and gzips one payload, well under a millisecond of a level-one gzip at these sizes.
 fn fit_first_screen_payload(
   build: &mut dyn FnMut(usize) -> StoreResult<Value>,
   next_drop: &dyn Fn(usize) -> Option<usize>,
+  newest: NewestTurn,
 ) -> StoreResult<(Value, usize)> {
   let wire_of = |payload: &Value| gzip_level_one(&charliebot_compat::json::fast_json_bytes(payload)).len();
   let messages_of = |payload: &Value| payload["messages"].as_array().map_or(0, Vec::len);
+  let over_budget = |payload: &Value| {
+    wire_of(payload) > FIRST_SCREEN_WIRE_BUDGET_BYTES || messages_of(payload) > BOOTSTRAP_MESSAGE_LIMIT
+  };
   let mut payload = build(0)?;
   let untrimmed_wire = wire_of(&payload);
-  let mut wire = untrimmed_wire;
   let mut drop = 0;
-  while wire > FIRST_SCREEN_WIRE_BUDGET_BYTES || messages_of(&payload) > BOOTSTRAP_MESSAGE_LIMIT {
-    let Some(next) = next_drop(drop) else { break };
+  while over_budget(&payload) {
+    let Some(next) = next_drop(drop).filter(|next| *next <= newest.start) else { break };
     drop = next;
     payload = build(drop)?;
-    wire = wire_of(&payload);
   }
-  Ok((payload, untrimmed_wire))
+  if !over_budget(&payload) || newest.last_row <= drop {
+    return Ok((payload, untrimmed_wire));
+  }
+  // `low` is over the budget, and `high` is the largest cut the newest turn keeps its last row at. The smallest cut
+  // in (low, high] that fits is the answer, when one fits at all.
+  let mut low = drop;
+  let mut high = newest.last_row;
+  let mut fitting = build(high)?;
+  if over_budget(&fitting) {
+    return Ok((fitting, untrimmed_wire));
+  }
+  while high - low > 1 {
+    let middle = low + (high - low) / 2;
+    let candidate = build(middle)?;
+    if over_budget(&candidate) {
+      low = middle;
+    } else {
+      high = middle;
+      fitting = candidate;
+    }
+  }
+  Ok((fitting, untrimmed_wire))
 }
 
 /// A session page's bootstrap payload as the page carries it.
@@ -1721,7 +1823,8 @@ backends:
       Ok(json!({"messages": messages}))
     };
     let next_drop = |drop: usize| if drop + turn_slots <= slots { Some(drop + turn_slots) } else { None };
-    let (payload, untrimmed) = fit_first_screen_payload(&mut build, &next_drop).unwrap();
+    let newest = NewestTurn { start: slots - turn_slots, last_row: slots - 1 };
+    let (payload, untrimmed) = fit_first_screen_payload(&mut build, &next_drop, newest).unwrap();
     assert!(untrimmed > FIRST_SCREEN_WIRE_BUDGET_BYTES, "the fixture's full payload must exceed the budget");
     let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload)).len();
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
@@ -1749,9 +1852,56 @@ backends:
     let mut build = |drop: usize| -> StoreResult<Value> {
       Ok(json!({"messages": (drop..1).map(|_| json!({"role": "user", "content": oversized})).collect::<Vec<_>>()}))
     };
-    let (payload, untrimmed) = fit_first_screen_payload(&mut build, &|_| None).unwrap();
+    let newest = NewestTurn { start: 0, last_row: 0 };
+    let (payload, untrimmed) = fit_first_screen_payload(&mut build, &|_| None, newest).unwrap();
     assert_eq!(payload["messages"].as_array().unwrap().len(), 1);
     assert!(untrimmed > FIRST_SCREEN_WIRE_BUDGET_BYTES);
+  }
+
+  /// Inside the newest turn, the cut keeps the largest suffix of its rows that fits, and the last row always survives.
+  #[test]
+  fn a_cut_inside_the_newest_turn_keeps_the_largest_row_suffix_that_fits() {
+    let rows = 10usize;
+    let row_text = |index: usize| fixture_text(index as u64 + 500, 1_600);
+    let suffix = |from: usize| -> Value {
+      json!({"messages": (from..rows).map(|index| json!({"role": "user", "content": row_text(index)})).collect::<Vec<_>>()})
+    };
+    let mut build = |drop: usize| -> StoreResult<Value> { Ok(suffix(drop)) };
+    let newest = NewestTurn { start: 0, last_row: rows - 1 };
+    let (payload, _) = fit_first_screen_payload(&mut build, &|_| None, newest).unwrap();
+    let wire_of = |value: &Value| gzip_level_one(&charliebot_compat::json::fast_json_bytes(value)).len();
+    let kept = payload["messages"].as_array().unwrap().len();
+    assert!(wire_of(&suffix(rows - kept)) <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "the kept rows fit");
+    assert!(wire_of(&suffix(rows - kept - 1)) > FIRST_SCREEN_WIRE_BUDGET_BYTES, "one row more would not fit");
+    assert_eq!(payload["messages"][kept - 1]["content"], json!(row_text(rows - 1)), "the last row renders");
+  }
+
+  /// A worker's run closes with its delivery row after the separator, so the next run starts past that row.
+  #[test]
+  fn a_worker_run_starts_past_its_delivery_row() {
+    let messages = [
+      json!({"role": "assistant"}),
+      json!({"role": "separator"}),
+      json!({"role": "run_delivery"}),
+      json!({"role": "user"}),
+    ];
+    assert_eq!(worker_turn_start_after(&messages, 1), 3);
+    assert_eq!(worker_turn_start_after(&messages[..2], 1), 2);
+  }
+
+  /// A last row that is over the budget alone is the first screen: the cut keeps that row and nothing older.
+  #[test]
+  fn a_last_row_over_the_budget_alone_is_kept_past_the_budget() {
+    let rows = [fixture_text(1, 900), fixture_text(2, 900), fixture_text(3, 20_000)];
+    let mut build = |drop: usize| -> StoreResult<Value> {
+      Ok(
+        json!({"messages": rows[drop..].iter().map(|text| json!({"role": "user", "content": text})).collect::<Vec<_>>()}),
+      )
+    };
+    let newest = NewestTurn { start: 0, last_row: 2 };
+    let (payload, _) = fit_first_screen_payload(&mut build, &|_| None, newest).unwrap();
+    assert_eq!(payload["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["messages"][0]["content"], json!(rows[2]));
   }
 
   /// A tail over the budget trims through the route's payload, whole turns only. The newest turn's
@@ -1776,6 +1926,11 @@ backends:
         .await
         .unwrap();
       features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
+      features
+        .store
+        .append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": format!("run-{turn}")}))
+        .await
+        .unwrap();
     }
     let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
@@ -1786,17 +1941,18 @@ backends:
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
     assert_eq!(payload.value["has_more"], json!(true));
-    // A turn is three events (user, assistant, separator), each folding to one message. The kept
-    // suffix therefore starts at a turn boundary, and the newest turn's user message is on the first screen.
+    // A turn is four events: user, assistant and separator fold to one message each, and the run's `run_finished`
+    // folds to none. The kept suffix therefore starts at a turn's user message, and the newest turn's user message is
+    // on the first screen.
     assert_eq!(kept % 3, 0, "the kept events are whole turns");
-    assert_eq!(payload.value["oldest_message_ordinal"], json!(total_events - kept));
+    assert_eq!(payload.value["oldest_message_ordinal"], json!(total_events - 4 * (kept / 3)));
     assert_eq!(messages[0]["role"], "user", "a kept turn starts at its user message");
     let newest_marker = messages.iter().find(|message| message["content"] == json!(fixture_text(8, 1_600)));
     assert!(newest_marker.is_some(), "the newest turn's user message renders on the first screen");
   }
 
-  /// Appends one turn of the fixture: a user message of `user_chars`, an assistant reply when `with_reply`, and the
-  /// turn's separator.
+  /// Appends one turn of the fixture as a real log writes it: a user message of `user_chars`, an assistant reply when
+  /// `with_reply`, the turn's separator, and the run's `run_finished` after it.
   async fn append_fixture_turn(store: &Store, session_id: &str, turn: usize, user_chars: usize, with_reply: bool) {
     store
       .append_chat_event(session_id, json!({"type": "user", "content": fixture_text(turn as u64, user_chars)}))
@@ -1813,6 +1969,10 @@ backends:
         .unwrap();
     }
     store.append_chat_event(session_id, json!({"type": "master_done"})).await.unwrap();
+    store
+      .append_chat_event(session_id, json!({"type": "run_finished", "run_id": format!("run-{turn}")}))
+      .await
+      .unwrap();
   }
 
   /// A tail that starts past the history's first event trims in its own indexes. The kept events are the tail's last
@@ -1838,7 +1998,12 @@ backends:
     assert!(start > 0, "the tail starts past the history's first event");
     let first_turn = turn_starts.iter().position(|turn_start| *turn_start == start);
     let first_turn = first_turn.expect("the kept events start at a turn boundary") + 1;
-    assert_eq!(start + messages.len(), total, "the kept events run to the history's end");
+    // Each kept turn's `run_finished` is kept too, and it folds to no message.
+    let kept_closes = features.store.load_chat_events_sync(&meta.id).unwrap()[start..]
+      .iter()
+      .filter(|event| event["type"] == "run_finished")
+      .count();
+    assert_eq!(start + messages.len() + kept_closes, total, "the kept events run to the history's end");
     assert_eq!(
       messages[0]["content"],
       json!(fixture_text(first_turn as u64, 700)),
@@ -1906,9 +2071,10 @@ backends:
     assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
   }
 
-  /// A closed newest turn over the whole budget renders whole: the trim stops at its start, not past its end.
+  /// A closed newest turn over the budget keeps the newest events that fit and always its last reply. Its 20,000-
+  /// character user message cannot fit, so the cut lands on the reply, and the separator and `run_finished` follow it.
   #[tokio::test]
-  async fn a_closed_newest_turn_over_the_budget_renders_whole() {
+  async fn a_closed_newest_turn_over_the_budget_keeps_its_last_reply() {
     let (_home, features) = feature_context();
     let meta =
       crate::test_support::create_node(&features.store, "trim-oversized-turn", None, TaskProfile::Manager).await;
@@ -1916,14 +2082,154 @@ backends:
     append_fixture_turn(&features.store, &meta.id, 2, 20_000, true).await;
     let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
     let messages = payload.value["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 3, "the newest turn's three events render");
-    assert_eq!(messages[0]["content"], json!(fixture_text(2, 20_000)));
-    assert_eq!(
-      payload.value["oldest_message_ordinal"],
-      json!(features.store.load_chat_events_sync(&meta.id).unwrap().len() - messages.len()),
-      "the cursor is the first kept event"
-    );
+    assert_eq!(messages.len(), 2, "the reply and its separator render");
+    assert!(renders(messages, &fixture_text(102, 700)), "the newest turn's reply renders");
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    assert_eq!(payload.value["oldest_message_ordinal"], json!(total - 3), "the cursor is the reply's event");
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
+  }
+
+  /// Whether one of `messages` carries `text` anywhere in its JSON, whatever shape its renderer gave the content.
+  fn renders(messages: &[Value], text: &str) -> bool {
+    messages.iter().any(|message| message.to_string().contains(text))
+  }
+
+  /// A running session's newest turn is the running one. When it fits the budget with the last finished reply, the reply
+  /// renders above the running turn.
+  #[tokio::test]
+  async fn a_running_session_keeps_the_last_finished_reply_when_both_fit() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "trim-running", None, TaskProfile::Manager).await;
+    let finished_reply = fixture_text(201, 700);
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(1, 1_600)}))
+      .await
+      .unwrap();
+    features
+      .store
+      .append_chat_event(
+        &meta.id,
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": finished_reply}]}}),
+      )
+      .await
+      .unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": "run-1"})).await.unwrap();
+    // The running turn: its user message and an assistant reply still in progress, with no separator yet.
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(2, 1_600)}))
+      .await
+      .unwrap();
+    features
+      .store
+      .append_chat_event(
+        &meta.id,
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": fixture_text(202, 700)}]}}),
+      )
+      .await
+      .unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert!(payload.untrimmed_wire_bytes <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "the fixture's tail fits the budget");
+    assert!(renders(messages, &finished_reply), "the last finished reply renders");
+    assert!(renders(messages, &fixture_text(2, 1_600)), "the running turn's user message renders");
+    assert!(payload.value["pending_draft"].to_string().contains(&fixture_text(202, 700)), "the running draft renders");
+  }
+
+  /// A running turn over the budget is the newest turn, so the cut lands inside it and keeps its newest replies that
+  /// fit. The last finished reply drops: the first screen shows the running turn, and its size stays bounded.
+  #[tokio::test]
+  async fn a_running_turn_over_the_budget_keeps_its_newest_row() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "trim-running-over", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 700, true).await;
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "content": fixture_text(2, 1_600)}))
+      .await
+      .unwrap();
+    // Four replies of 4,000 characters: the running turn alone is over the budget, and no separator closes it. Each
+    // reply folds to a row once the next one starts, so the last reply is the running draft, which the payload carries
+    // beside the rows.
+    let replies: Vec<String> = (0..4).map(|index| fixture_text(400 + index, 4_000)).collect();
+    for reply in &replies {
+      features
+        .store
+        .append_chat_event(
+          &meta.id,
+          json!({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}}),
+        )
+        .await
+        .unwrap();
+    }
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES, "the running turn is over the budget");
+    assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
+    assert!(renders(messages, &replies[2]), "the running turn's newest row renders");
+    assert!(payload.value["pending_draft"].to_string().contains(&replies[3]), "the running draft renders");
+    assert!(!renders(messages, &fixture_text(101, 700)), "the last finished reply drops for the running turn");
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    // The events are the node's, the finished turn's four, the running user message, and four replies.
+    assert!(start > 5 && start < total, "the cursor lands inside the running turn at {start} of {total}");
+  }
+
+  /// A newest turn over the budget keeps the newest of its events that fit, so its cursor lands inside the turn. The
+  /// reply and the separator still render, and the trim keeps more than the last row.
+  #[tokio::test]
+  async fn a_newest_turn_over_the_budget_keeps_the_newest_events_that_fit() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "trim-mid-turn", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 700, true).await;
+    // Ten user messages in one turn: each folds to one row, and together they are over the budget.
+    let turn_users: Vec<String> = (0..10).map(|index| fixture_text(300 + index, 1_600)).collect();
+    for user in &turn_users {
+      features.store.append_chat_event(&meta.id, json!({"type": "user", "content": user})).await.unwrap();
+    }
+    let reply = fixture_text(399, 700);
+    features
+      .store
+      .append_chat_event(
+        &meta.id,
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}}),
+      )
+      .await
+      .unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": "run-2"})).await.unwrap();
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
+    assert!(renders(messages, &reply), "the newest turn's reply renders");
+    assert!(renders(messages, &turn_users[9]), "the newest user message renders");
+    assert!(!renders(messages, &turn_users[0]), "the oldest user messages of the turn do not fit");
+    let kept_users = turn_users.iter().filter(|user| renders(messages, user)).count();
+    assert!(kept_users >= 2, "the trim keeps the newest events that fit, not only the last row: kept {kept_users}");
+    let total = features.store.load_chat_events_sync(&meta.id).unwrap().len();
+    let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    assert!(start > 0 && start < total - 1, "the cursor lands inside the newest turn at {start} of {total}");
+  }
+
+  /// `session.web_status` counts against the budget. When it alone is over the budget, the newest reply still renders.
+  #[tokio::test]
+  async fn a_payload_whose_web_status_alone_exceeds_the_budget_keeps_the_newest_reply() {
+    let (_home, features) = feature_context();
+    let mut meta =
+      crate::test_support::create_node(&features.store, "trim-web-status", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 700, true).await;
+    append_fixture_turn(&features.store, &meta.id, 2, 700, true).await;
+    meta.set_extra("web_status", json!({"goal": fixture_text(9, 17_000), "now": null, "waiting": []}));
+    let payload = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    assert!(payload.value["session"]["web_status"].is_object(), "the session object carries web_status");
+    assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES, "web_status alone is over the budget");
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert!(renders(messages, &fixture_text(102, 700)), "the newest reply renders past the budget");
+    assert!(messages.len() <= 2, "only the reply and its separator render: {} rows", messages.len());
   }
 
   /// A log whose last line does not parse names the tail's first line as the paging cursor. The cursor counts the
@@ -2499,6 +2805,34 @@ backends:
     let (status, body) = answer(response).await;
     assert_eq!(status, StatusCode::OK);
     body
+  }
+
+  /// A first screen whose cursor lands inside its newest turn pages back from that cursor with no gap and no duplicate:
+  /// the older page holds the events before the cursor, and the first screen holds the events from it on.
+  #[tokio::test]
+  async fn an_events_page_before_a_mid_turn_cursor_joins_the_first_screen_with_no_gap() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "mid-cursor-join", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 700, true).await;
+    let turn_users: Vec<String> = (0..10).map(|index| fixture_text(300 + index, 1_600)).collect();
+    for user in &turn_users {
+      features.store.append_chat_event(&meta.id, json!({"type": "user", "content": user})).await.unwrap();
+    }
+    features.store.append_chat_event(&meta.id, json!({"type": "master_done"})).await.unwrap();
+    features.store.append_chat_event(&meta.id, json!({"type": "run_finished", "run_id": "run-2"})).await.unwrap();
+    let bootstrap = build_bootstrap_payload(&features.store, &cfg_of(&features), &meta).unwrap();
+    let cursor = bootstrap.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    let first_screen = bootstrap.value["messages"].as_array().unwrap();
+    assert!(!renders(first_screen, &turn_users[0]), "the cursor lands inside the newest turn");
+    assert!(renders(first_screen, &turn_users[9]), "the newest turn's last user message renders");
+    let page = events_page_body(&features, &meta.id, &format!("before={cursor}&limit=40")).await;
+    let older = page["messages"].as_array().unwrap();
+    assert_eq!(page["next_before"], json!(cursor.saturating_sub(40)), "the page starts 40 events before the cursor");
+    let mut all_users = vec![fixture_text(1, 700)];
+    all_users.extend(turn_users.iter().cloned());
+    for user in &all_users {
+      assert!(renders(older, user) ^ renders(first_screen, user), "a user message sits on exactly one page");
+    }
   }
 
   /// The events page memo: a repeat request serves the body it built until the live log grows past what the page

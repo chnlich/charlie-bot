@@ -1,7 +1,7 @@
 //! The registry value and the typed contracts whose registrations it owns.
 
 use std::any::{Any, TypeId, type_name};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -180,6 +180,9 @@ pub struct Registry {
   pub(crate) host_probes: Ledger<HostProbeFn>,
   /// The one set of readers that a bound delegate reads a scheduled task through, which `features/cron` registers.
   pub(crate) bound_rounds: Ledger<BoundRoundReaders>,
+  /// The one reader of the sessions that hold a next fire through a bound scheduled task, which `features/cron`
+  /// registers and `features/web_reply` reads for the pending-wake check.
+  pub(crate) bound_next_fire: Ledger<BoundNextFireFn>,
   /// The one fork-assertion runner of a page, which `features/artifacts` registers.
   pub(crate) fork_assertions: Ledger<ForkAssertionsFn>,
   /// The one runner that DMs a user, which `features/slack` registers.
@@ -238,6 +241,7 @@ impl Registry {
       host_logins,
       host_probes,
       bound_rounds,
+      bound_next_fire,
       fork_assertions,
       user_dm,
       owner_dm,
@@ -300,6 +304,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, host_logins);
     append_ledger_inventory(&mut inventory, host_probes);
     append_ledger_inventory(&mut inventory, bound_rounds);
+    append_ledger_inventory(&mut inventory, bound_next_fire);
     append_ledger_inventory(&mut inventory, fork_assertions);
     append_ledger_inventory(&mut inventory, user_dm);
     append_ledger_inventory(&mut inventory, owner_dm);
@@ -552,6 +557,10 @@ pub struct OpenWaitingRow {
 
 /// The reader of the derived Waiting on you items, the whole home's list (`derived_waiting_items`).
 pub type OpenWaitingItemsFn = for<'a> fn(&'a FeatureContext) -> BoxFuture<'a, anyhow::Result<Vec<OpenWaitingRow>>>;
+
+/// The reader of the open sessions that hold a next fire through a bound scheduled task, at the given time
+/// (`bound_next_fire`). A session holds one when an enabled task binds it and the scheduler gives that task a next fire.
+pub type BoundNextFireFn = fn(&Arc<FeatureContext>, UtcDateTime) -> anyhow::Result<HashSet<String>>;
 
 /// One probed host's login record as `features/host_auth` keeps it in `host_auth.json`.
 #[derive(Clone, Debug, PartialEq)]
@@ -1626,6 +1635,23 @@ impl Registry {
       .next()
       .copied()
       .ok_or_else(|| anyhow::anyhow!("no package registers the bound round readers"))
+  }
+
+  /// The registration of the reader of the sessions that hold a next fire through a bound scheduled task.
+  pub fn bound_next_fire(&mut self, read: BoundNextFireFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.bound_next_fire.insert_single(package, "bound_next_fire", read)
+  }
+
+  /// The registered bound-next-fire reader; a server with none fails rather than answering a turn's wake check without
+  /// the scheduled tasks.
+  pub fn bound_next_fire_reader(&self) -> anyhow::Result<BoundNextFireFn> {
+    self
+      .bound_next_fire
+      .values()
+      .next()
+      .copied()
+      .ok_or_else(|| anyhow::anyhow!("no package registers the bound next fire reader"))
   }
 
   /// The registration of the probe of one host.

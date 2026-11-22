@@ -47,13 +47,29 @@ function makeElement() {
   };
 }
 
-function loadDiffCommentsScript() {
+// The session routes the page reads: the list in its column form, one detail row, and a 404 for a missing session.
+function sessionResponse(url) {
+  if (url === '/api/sessions/?compact=1') {
+    return {ok: true, status: 200, async json() {
+      return {$encoded: {id: 'uuid-b64', updated_at: 'delta'}, id: [], name: [], updated_at: []};
+    }};
+  }
+  if (url === '/api/sessions/named') {
+    return {ok: true, status: 200, async json() {
+      return {id: 'named', name: 'Named session', updated_at: '2026-01-02T00:00:00Z'};
+    }};
+  }
+  if (url === '/api/sessions/missing') return {ok: false, status: 404, async json() { return null; }};
+  throw new Error(`unexpected session fetch: ${url}`);
+}
+
+function loadDiffCommentsScript(fetched = [], search = '', respond = sessionResponse) {
   const head = makeElement();
   const body = makeElement();
   const output = makeElement();
   const window = {
     __cbdiffPage: {getComparison() { return null; }},
-    location: {search: ''},
+    location: {search},
     addEventListener() {},
     confirm() { return true; },
     setTimeout() {},
@@ -69,19 +85,14 @@ function loadDiffCommentsScript() {
     createTextNode(text) { return {textContent: text}; },
     addEventListener() {},
   };
+  window.document = document;
   const context = {
     URLSearchParams,
     console,
     document,
     fetch: async (url) => {
-      assert.equal(url, '/api/sessions/?compact=1');
-      return {
-        ok: true,
-        status: 200,
-        async json() {
-          return {$encoded: {id: 'uuid-b64', updated_at: 'delta'}, id: [], name: [], updated_at: []};
-        },
-      };
+      fetched.push(url);
+      return respond(url);
     },
     setTimeout,
     window,
@@ -179,6 +190,63 @@ test('resolveTargetSession prioritizes the query param and falls back after a 40
   assert.equal(resolve('query-session', 'dropdown-session', 'loading'), null);
   assert.equal(resolve('query-session', 'dropdown-session', 'missing'), 'dropdown-session');
   assert.equal(resolve(null, 'dropdown-session', 'none'), 'dropdown-session');
+});
+
+test('loading the page fetches no session list, so a visit that comments nothing never loads the corpus', () => {
+  const fetched = [];
+  loadDiffCommentsScript(fetched);
+  assert.deepEqual(fetched, []);
+});
+
+test('a URL that names a session resolves it alone, and the list loads only when the picker opens', async () => {
+  const fetched = [];
+  const window = loadDiffCommentsScript(fetched, '?session=named');
+  await window.__cbdcLoadTarget();
+  assert.deepEqual(fetched, ['/api/sessions/named']);
+
+  const tray = window.document.body.children.find((node) => node.className === 'cbdc-tray');
+  const picker = tray.children.find((node) => node.className === 'cbdc-target').children[1];
+  picker._listeners.focus();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(fetched, ['/api/sessions/named', '/api/sessions/?compact=1']);
+});
+
+test('a URL that names a missing session falls back to the list', async () => {
+  const fetched = [];
+  const window = loadDiffCommentsScript(fetched, '?session=missing');
+  await window.__cbdcLoadTarget();
+  assert.deepEqual(fetched, ['/api/sessions/missing', '/api/sessions/?compact=1']);
+});
+
+test('a failed session list load is retried by the next picker open', async () => {
+  const fetched = [];
+  let listCalls = 0;
+  const window = loadDiffCommentsScript(fetched, '', (url) => {
+    if (url !== '/api/sessions/?compact=1') return sessionResponse(url);
+    listCalls += 1;
+    if (listCalls === 1) return {ok: false, status: 500, async json() { return null; }};
+    return sessionResponse(url);
+  });
+  await window.__cbdcLoadTarget();
+  const tray = window.document.body.children.find((node) => node.className === 'cbdc-tray');
+  const picker = tray.children.find((node) => node.className === 'cbdc-target').children[1];
+  picker._listeners.focus();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(fetched, ['/api/sessions/?compact=1', '/api/sessions/?compact=1']);
+});
+
+test('a failed named-session load is retried by the next pending comment', async () => {
+  const fetched = [];
+  let namedCalls = 0;
+  const window = loadDiffCommentsScript(fetched, '?session=named', (url) => {
+    if (url !== '/api/sessions/named') return sessionResponse(url);
+    namedCalls += 1;
+    if (namedCalls === 1) return {ok: false, status: 500, async json() { return null; }};
+    return sessionResponse(url);
+  });
+  await window.__cbdcLoadTarget();
+  await window.__cbdcLoadTarget();
+  assert.deepEqual(fetched, ['/api/sessions/named', '/api/sessions/named']);
 });
 
 test('mostRecentSessionId chooses the latest updated session', () => {

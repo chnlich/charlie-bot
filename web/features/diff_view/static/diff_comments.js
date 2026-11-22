@@ -20,10 +20,16 @@
   let querySessionId = new URLSearchParams(window.location.search).get('session');
   querySessionId = querySessionId ? querySessionId.trim() : null;
   let querySessionStatus = querySessionId ? 'loading' : 'none';
+  let querySession = null;
   let dropdownSessionId = null;
   let sessions = [];
   let sessionLoadError = '';
   let sessionNotice = '';
+  let pickerError = '';
+  let targetLoad = null;
+  let sessionListLoad = null;
+  let sessionsLoaded = false;
+  let pickerLoading = false;
 
   let tray;
   let trayHeader;
@@ -38,16 +44,11 @@
   window.__cbdcBuildBatchMessage = buildBatchMessage;
   window.__cbdcResolveTargetSession = resolveTargetSession;
   window.__cbdcMostRecentSessionId = mostRecentSessionId;
+  window.__cbdcLoadTarget = loadSessionsOnce;
 
   installStyles();
   installTray();
   installListeners();
-  initializeSessions().catch((error) => {
-    console.error('Diff comment session loading failed:', error);
-    sessionLoadError = error.message;
-    querySessionStatus = 'error';
-    refreshTray();
-  });
 
   function resolveTargetSession(queryId, selectedId, queryStatus) {
     if (queryId && queryStatus === 'found') return queryId;
@@ -235,6 +236,7 @@
       .${PREFIX}-item-controls button { padding: 3px 6px; font-size: 10px; min-height: 24px; }
       .${PREFIX}-edit { min-height: 58px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important; }
       .${PREFIX}-reason { display: none; padding: 6px 7px; border-radius: 6px; background: #fef2f2; color: #b91c1c; }
+      .${PREFIX}-reason-loading { background: none; color: #64748b; }
       .${PREFIX}-toast {
         position: fixed; left: 50%; bottom: 18px; z-index: 30; transform: translateX(-50%);
         max-width: min(400px, calc(100vw - 24px)); border-radius: 999px; padding: 8px 12px;
@@ -494,6 +496,7 @@
       if (!batchContext) batchContext = {...currentComparison};
       closeEditor();
       refreshMarkers(anchor.filePath);
+      loadSessionsOnce();
       refreshTray();
     };
     bindEditorKeys(textarea, closeEditor, submit);
@@ -602,6 +605,9 @@
     target.className = `${PREFIX}-target`;
     target.appendChild(document.createTextNode('Target session'));
     targetSelect = document.createElement('select');
+    // A focus, a press or a key on the picker opens it. The first open loads the list, and a failed load is retried
+    // at the next open, which a select that keeps its focus reaches only through a press or a key.
+    for (const type of ['focus', 'pointerdown', 'keydown']) targetSelect.addEventListener(type, openPicker);
     targetSelect.addEventListener('change', () => {
       querySessionId = null;
       querySessionStatus = 'none';
@@ -656,23 +662,82 @@
     return { status: 'found', session: await response.json() };
   }
 
-  async function initializeSessions() {
-    const [listed, queryResult] = await Promise.all([
-      fetchSessions(),
-      querySessionId ? fetchQuerySession(querySessionId) : Promise.resolve(null),
-    ]);
-    sessions = listed.slice();
-    dropdownSessionId = mostRecentSessionId(sessions);
+  // The target loads on the first pending comment: the first moment the tray needs a target. A URL that names a
+  // session resolves it by its single-session route, and Send enables when that answers. The full list loads only when
+  // the URL names no session, when the named session is missing, or when the picker opens. A failed load clears its
+  // promise, so the next pending comment retries it.
+  function loadSessionsOnce() {
+    if (targetLoad) return targetLoad;
+    targetLoad = resolveTarget().catch((error) => {
+      console.error('Diff comment session loading failed:', error);
+      sessionLoadError = error.message;
+      // A failed single-session route leaves the URL's session unresolved, so the picker waits for the next pending
+      // comment to retry it. A failed list keeps the status it had, so the picker stays open for a retry.
+      if (querySessionStatus === 'loading') querySessionStatus = 'error';
+      targetLoad = null;
+      refreshTray();
+    });
+    return targetLoad;
+  }
 
-    if (queryResult && queryResult.status === 'found') {
-      querySessionStatus = 'found';
-      if (!sessions.some((session) => session.id === queryResult.session.id)) sessions.push(queryResult.session);
-    } else if (queryResult && queryResult.status === 'missing') {
+  async function resolveTarget() {
+    if (querySessionId) {
+      const queryResult = await fetchQuerySession(querySessionId);
+      if (queryResult.status === 'found') {
+        querySessionStatus = 'found';
+        querySession = queryResult.session;
+        sessions = [querySession];
+        sessionLoadError = '';
+        sessionsLoaded = true;
+        populateSessionSelect();
+        refreshTray();
+        return;
+      }
       querySessionStatus = 'missing';
       sessionNotice = `Target session ${querySessionId} was not found. Choose another session.`;
     }
-    populateSessionSelect();
+    await loadSessionList();
     refreshTray();
+  }
+
+  // The full list loads for the target or when the picker opens, and a loaded list is kept. The URL's session row stays
+  // in it, so the picker names the session that the target resolved. A failed load clears its promise, so the next
+  // pending comment or picker open retries it.
+  function loadSessionList() {
+    if (!sessionListLoad) {
+      sessionListLoad = fetchSessions().then(
+        (listed) => {
+          sessions = listed.slice();
+          if (querySession && !sessions.some((session) => session.id === querySession.id)) sessions.push(querySession);
+          if (!dropdownSessionId) dropdownSessionId = mostRecentSessionId(sessions);
+          sessionsLoaded = true;
+          if (querySessionStatus !== 'error') sessionLoadError = '';
+          pickerError = '';
+          populateSessionSelect();
+        },
+        (error) => {
+          sessionListLoad = null;
+          throw error;
+        },
+      );
+    }
+    return sessionListLoad;
+  }
+
+  // The picker's list loads when the picker opens. A failed load clears its promise, so the next open retries it.
+  function openPicker() {
+    if (sessionListLoad) return;
+    pickerLoading = true;
+    refreshTray();
+    loadSessionList()
+      .catch((error) => {
+        console.error('Diff comment session list failed:', error);
+        pickerError = `Unable to load the session list: ${error.message}`;
+      })
+      .finally(() => {
+        pickerLoading = false;
+        refreshTray();
+      });
   }
 
   function populateSessionSelect() {
@@ -685,7 +750,6 @@
     });
     const targetId = resolveTargetSession(querySessionId, dropdownSessionId, querySessionStatus);
     if (targetId) targetSelect.value = targetId;
-    targetSelect.disabled = sessions.length === 0;
   }
 
   function targetSession() {
@@ -693,11 +757,12 @@
     return id ? sessions.find((session) => session.id === id) : null;
   }
 
+  // A loading reason takes the muted style; the red reason style stays with the errors.
   function targetReason(target) {
-    if (target) return '';
-    if (sessionLoadError) return `Unable to load target sessions: ${sessionLoadError}`;
-    if (querySessionStatus === 'loading') return 'Loading target session…';
-    return 'No target session is available.';
+    if (target) return pickerLoading ? { text: 'Loading sessions…', loading: true } : { text: '', loading: false };
+    if (sessionLoadError) return { text: `Unable to load target sessions: ${sessionLoadError}`, loading: false };
+    if (querySessionStatus === 'loading' || !sessionsLoaded) return { text: 'Loading target session…', loading: true };
+    return { text: 'No target session is available.', loading: false };
   }
 
   function buildTrayItem(index, entry) {
@@ -750,17 +815,21 @@
     pending.forEach((entry, index) => trayList.appendChild(buildTrayItem(index, entry)));
     tray.style.display = pending.length > 0 ? 'flex' : 'none';
 
-    noticeEl.textContent = sessionNotice;
-    noticeEl.style.display = sessionNotice ? 'block' : 'none';
+    const notice = [sessionNotice, pickerError].filter(Boolean).join(' ');
+    noticeEl.textContent = notice;
+    noticeEl.style.display = notice ? 'block' : 'none';
     const reason = targetReason(target);
-    reasonEl.textContent = reason;
-    reasonEl.style.display = reason ? 'block' : 'none';
+    reasonEl.textContent = reason.text;
+    reasonEl.className = reason.loading ? `${PREFIX}-reason ${PREFIX}-reason-loading` : `${PREFIX}-reason`;
+    reasonEl.style.display = reason.text ? 'block' : 'none';
     // The header and the select name the target, so the button carries the action alone: its
     // label stays inside the tray whatever the session name's length.
     sendButton.textContent = 'Send';
     sendButton.disabled = sending || pending.length === 0 || !target;
     clearButton.disabled = sending || pending.length === 0;
-    targetSelect.disabled = sending || sessions.length === 0;
+    // The picker waits while the URL's session is unresolved, because the URL's choice wins; otherwise it stays enabled
+    // while the list is absent, so a press retries a failed list load.
+    targetSelect.disabled = sending || querySessionStatus === 'loading' || querySessionStatus === 'error';
   }
 
   function removeEntry(index) {

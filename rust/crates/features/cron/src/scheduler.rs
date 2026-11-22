@@ -736,6 +736,46 @@ pub(super) fn next_fire_iso(expression: &str, timezone: &str, now_utc: UtcDateTi
   isoformat_text(&CronExpression::parse(expression)?.next_after(now.with_timezone(&timezone))?)
 }
 
+/// The open sessions that an enabled task binds and that hold a next fire at `now`. The task files load once per call,
+/// and a file that fails to load is logged as the tick logs it. A task whose bound session is archived holds no fire,
+/// since the tick skips every such fire; a task whose binding or cron fails is logged and holds none.
+pub(crate) fn sessions_with_next_fire(
+  features: &Arc<FeatureContext>,
+  now: UtcDateTime,
+) -> anyhow::Result<HashSet<String>> {
+  let cfg = features.config.get()?;
+  let snapshot = loader::load_snapshot(features, &cfg)?;
+  for error in &snapshot.errors {
+    tracing::warn!(task = %error.name, error = %error.error, "scheduler_invalid_task_skipped");
+  }
+  let mut held = HashSet::new();
+  for task in snapshot.tasks.iter().filter(|task| task.enabled) {
+    let Some(session_id) = task.session_id.as_deref() else { continue };
+    match bound_fire_holds(features, task, session_id, now) {
+      Ok(true) => {
+        held.insert(session_id.to_string());
+      }
+      Ok(false) => {}
+      Err(error) => tracing::error!(task = %task.name, error = %error, "scheduler_task_error"),
+    }
+  }
+  Ok(held)
+}
+
+/// Whether `task`, bound to the open session `session_id`, has a next fire after `now`.
+fn bound_fire_holds(
+  features: &FeatureContext,
+  task: &ScheduledTaskConfig,
+  session_id: &str,
+  now: UtcDateTime,
+) -> anyhow::Result<bool> {
+  if features.store.task_state(session_id)? != "open" {
+    return Ok(false);
+  }
+  next_fire_iso(&task.cron, &task.timezone, now)?;
+  Ok(true)
+}
+
 fn isoformat_text<Tz>(moment: &chrono::DateTime<Tz>) -> anyhow::Result<String>
 where
   Tz: chrono::TimeZone,

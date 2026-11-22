@@ -8,7 +8,9 @@
 # CHARLIEBOT_SERVE_AUTH_HEADER (one line `Authorization: Bearer <key>`) and CHARLIEBOT_SERVE_PID in its environment.
 # The server runs inside a systemd user scope with MemoryMax=2G, so a measurement cannot push the live server into
 # swap. After the command ends the trial waits until every run of the trial home has ended, stops the server, asserts
-# that no process of the trial tree remains, cleans up and runs sweep-check on the server log.
+# that no process of the trial tree remains, cleans up and runs sweep-check on the server log. A server that stops
+# before the wait ends fails the trial at once, and a server that does not exit on SIGTERM within SERVER_STOP_WAIT_MS
+# fails the side; the FAIL and CAUSE lines of either name its pid.
 #
 # A side is ready only when the port's listener is this trial's server (or a process it started) and that server
 # answers its auth status with 200 after it logged server_ready. free-port picks the port before the server binds it,
@@ -40,8 +42,9 @@
 # through the charliebot beside <server binary>: its `charliebot release-helper` verbs parse the responses, the logs
 # and the sessions this script gathers.
 #
-# Exit: the command's exit code; 1 a foreign cgroup removal, a remaining child process, a cleanup failure or a server
-# that did not become ready on its own port; 2 the preflight failed, nothing started.
+# Exit: the command's exit code; 1 a foreign cgroup removal, a remaining child process, a cleanup failure, a server
+# that did not become ready on its own port, a server that stopped before the wait for its runs ended, or a server that
+# did not exit on SIGTERM; 2 the preflight failed, nothing started.
 # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/trial-<UTC>/ (or a directory under $CHARLIEBOT_RELEASE_LOG_DIR) and is
 # kept after a failure.
 set -uo pipefail
@@ -63,6 +66,8 @@ readonly PORT_MAX=${TRIAL_PORT_MAX:-18669}
 # server walks every session of its home at boot before it binds: on the 7,160-session mock home that took about a
 # minute, so a serve trial waits 10 minutes.
 readonly SERVE_READY_POLLS=2400
+# stop_server_pid waits this long for a server to exit after SIGTERM, then sends SIGKILL and fails the side.
+readonly SERVER_STOP_WAIT_MS=20000
 
 preflight_fail() {
   printf 'preflight failed: %s\n' "$1" >&2
@@ -366,6 +371,8 @@ trial_option() {
   fi
 }
 
+# backends.calls.new_session names the trial's first option, the target new sessions took before the key was required.
+# Without it the server refuses to start.
 cat >"$TRIAL_CB_HOME/config.yaml" <<EOF
 server:
   host: 127.0.0.1
@@ -391,6 +398,7 @@ backends:
       members:
         - charlie-code-release-trial
   calls:
+    new_session: charlie-code-release-trial
     worker: pool
     improve: pool
     verify: pool
@@ -479,6 +487,15 @@ process_state() {
   ps -p "$1" -o stat= 2>/dev/null | tr -d '[:space:]'
 }
 
+# stop_failed CAUSE: the FAIL line of a serve stop, then the cause, which names the server's pid.
+stop_failed() {
+  printf 'FAIL serve Stop: the trial server did not stop cleanly\n'
+  printf 'CAUSE serve: %s\n' "$1"
+}
+
+# stop_server_pid PID LOG CHECK: stops the server PID with SIGTERM and waits at most SERVER_STOP_WAIT_MS for it to exit.
+# A server that is still running then gets SIGKILL, so no process of the trial outlives the stop, and the stop fails.
+# It returns 0 only for a server that exited on SIGTERM with status 0 or 143.
 stop_server_pid() {
   local pid=$1
   local server_log=$2
@@ -492,6 +509,7 @@ stop_server_pid() {
   local elapsed_ms=0
   local log_line
   local log_found=0
+  local stop_cause=
   state=$(process_state "$pid")
   if [[ -n $state && $state != *Z* ]]; then
     if kill -TERM "$pid" 2>/dev/null; then
@@ -503,9 +521,11 @@ stop_server_pid() {
           break
         fi
         exit_ms=$(date +%s%3N)
-        if (( exit_ms - start_ms >= 20000 )); then
+        if (( exit_ms - start_ms >= SERVER_STOP_WAIT_MS )); then
           killed=1
-          printf 'SIGTERM check=%s pid=%s exceeded 20000 ms; sending SIGKILL\n' "$check_number" "$pid"
+          stop_cause="server pid $pid did not exit within $SERVER_STOP_WAIT_MS ms of SIGTERM; the trial sent SIGKILL"
+          printf 'SIGTERM check=%s pid=%s exceeded %s ms; sending SIGKILL\n' \
+            "$check_number" "$pid" "$SERVER_STOP_WAIT_MS"
           kill -KILL "$pid" 2>/dev/null || true
           break
         fi
@@ -513,6 +533,7 @@ stop_server_pid() {
       done
     else
       killed=1
+      stop_cause="SIGTERM to server pid $pid failed; the trial sent SIGKILL"
       printf 'SIGTERM check=%s pid=%s kill_failed=1; sending SIGKILL for cleanup\n' "$check_number" "$pid"
       kill -KILL "$pid" 2>/dev/null || true
     fi
@@ -541,6 +562,12 @@ stop_server_pid() {
   fi
   if (( sent == 1 && killed == 0 )) && [[ $wait_status == 0 || $wait_status == 143 ]]; then
     return 0
+  fi
+  if (( sent == 1 && killed == 0 )); then
+    stop_cause="server pid $pid exited with status $wait_status after SIGTERM"
+  fi
+  if [[ -n $stop_cause ]]; then
+    stop_failed "$stop_cause"
   fi
   return 1
 }
@@ -672,6 +699,9 @@ cleanup_owned_cgroups() {
   return "$fail"
 }
 
+# cleanup_on_exit is the EXIT trap. A serve trial that ends before run_serve_mode stops its server stops it here, so no
+# process of the trial outlives the trial: a bench lock the caller holds on an inherited descriptor is free once the
+# trial ends.
 cleanup_on_exit() {
   local exit_status=$?
   trap - EXIT INT TERM
@@ -916,42 +946,51 @@ check_sweep_names() {
 
 SERVE_UNIT=
 SERVE_WAIT_RUNS_SECONDS=600
+# serve_home_has_active_run sets RUN_ACTIVE to 1 while a run of the trial home is queued or running, else 0, and sets
+# RUN_CAUSE to the session that holds the run or to the read that failed.
+RUN_ACTIVE=0
+RUN_CAUSE=
 
+# serve_home_has_active_run reads the runs of every trial-home session. A stopped, withheld or input-blocked run
+# consumes no server process, so the active set is queued and running only. Every page of a session's runs is read,
+# because the newest run is on the last page. It returns 1 when a page cannot be read: a server that does not answer a
+# session's runs proves no run ended, so the wait fails at once instead of counting the unanswered page as a live run.
 serve_home_has_active_run() {
-  # Prints 1 while some run of a trial-home session is still queued or running, else 0. A stopped, withheld or
-  # input-blocked run consumes no server process, so the active set is queued and running only. Every page of a
-  # session's runs is read, because the newest run is on the last page; a session whose runs cannot be read counts as
-  # active, because its runs are not proven ended.
   local trial_session_id trial_session_ids runs_status cursor page_output
   local -a page=()
+  RUN_ACTIVE=0
   if [[ ! -d $SESSIONS_DIR ]]; then
-    printf '0'
     return 0
   fi
-  trial_session_ids=$("$TRIAL_CLI" release-helper session-ids "$SESSIONS_DIR") || {
-    printf '1'
-    return 0
-  }
+  if ! trial_session_ids=$("$TRIAL_CLI" release-helper session-ids "$SESSIONS_DIR"); then
+    RUN_CAUSE="the sessions of the trial home cannot be listed: $SESSIONS_DIR"
+    return 1
+  fi
   while IFS= read -r trial_session_id; do
     [[ -n $trial_session_id ]] || continue
     cursor=
     while :; do
       runs_status=$(http_get "/api/sessions/$trial_session_id/runs?order=asc&limit=500${cursor:+&cursor=$cursor}" \
         "$HTTP_ROOT/serve-runs.json")
-      if [[ $runs_status != 200 ]] || ! page_output=$("$TRIAL_CLI" release-helper run-page "$HTTP_ROOT/serve-runs.json"); then
-        printf '1'
-        return 0
+      if [[ $runs_status != 200 ]]; then
+        RUN_CAUSE="server pid $SERVER_PID gave status $runs_status for the runs of session $trial_session_id"
+        return 1
+      fi
+      if ! page_output=$("$TRIAL_CLI" release-helper run-page "$HTTP_ROOT/serve-runs.json"); then
+        RUN_CAUSE="the runs page of session $trial_session_id does not parse"
+        return 1
       fi
       mapfile -t page <<<"$page_output"
       if [[ ${page[0]} == 1 ]]; then
-        printf '1'
+        RUN_ACTIVE=1
+        RUN_CAUSE="session $trial_session_id has a queued or running run"
         return 0
       fi
       cursor=${page[1]:-}
       [[ -n $cursor ]] || break
     done
   done <<<"$trial_session_ids"
-  printf '0'
+  return 0
 }
 
 stop_serve_scope() {
@@ -976,7 +1015,7 @@ run_serve_mode() {
   # One caller command. The exit code is the command's, demoted to 1 by a foreign cgroup removal (sweep-check) or any
   # cleanup failure.
   local cmd_rc=0 sweep_failed=0 cleanup_failed=0
-  local wait_started server_pid state stray_pids
+  local wait_started server_pid server_state state stray_pids
   SERVE_UNIT="charliebot-release-trial-serve-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   if [[ -n $SEED_HOME ]]; then
     if ! copy_seed_sessions; then
@@ -1003,11 +1042,29 @@ run_serve_mode() {
   unset CHARLIEBOT_SERVE_URL CHARLIEBOT_SERVE_AUTH_HEADER CHARLIEBOT_SERVE_PID
   printf 'SERVE command exit=%s\n' "$cmd_rc"
 
+  # The wait stops the moment the server is gone, or a runs page cannot be read, and it runs out at the bound.
   wait_started=$SECONDS
-  while [[ $(serve_home_has_active_run) == 1 ]]; do
+  while :; do
+    server_state=$(process_state "$SERVER_PID")
+    if [[ -z $server_state || $server_state == *Z* ]]; then
+      cleanup_failed=1
+      printf 'FAIL serve RunWait: the trial server stopped before every run of the trial home had ended\n'
+      printf 'CAUSE serve: server pid %s exited while the trial waited for its runs\n' "$SERVER_PID"
+      break
+    fi
+    if ! serve_home_has_active_run; then
+      cleanup_failed=1
+      printf 'FAIL serve RunWait: a run of the trial home could not be read\n'
+      printf 'CAUSE serve: %s\n' "$RUN_CAUSE"
+      break
+    fi
+    if (( RUN_ACTIVE == 0 )); then
+      break
+    fi
     if (( SECONDS - wait_started >= SERVE_WAIT_RUNS_SECONDS )); then
       cleanup_failed=1
       printf 'FAIL serve RunWait: a trial-home run is still queued or running after %s s\n' "$SERVE_WAIT_RUNS_SECONDS"
+      printf 'CAUSE serve: %s\n' "$RUN_CAUSE"
       break
     fi
     sleep 1

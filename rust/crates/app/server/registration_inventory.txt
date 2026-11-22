@@ -205,6 +205,7 @@ derived waiting items reader	features.cron	derived_waiting_items
 host login reader	features.host_auth	host_logins
 host probe	features.host_auth	host_probe
 bound round readers	features.cron	bound_round
+bound next fire reader	features.cron	bound_next_fire
 fork assertions	features.artifacts	fork_assertions
 user dm	features.slack	user_dm
 owner dm	features.slack	owner_dm

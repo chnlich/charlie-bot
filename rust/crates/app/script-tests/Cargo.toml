@@ -25,6 +25,11 @@ path = "src/bin/fake_charliebot.rs"
 name = "serve-stub"
 path = "src/bin/serve_stub.rs"
 
+# The stand-in server of the SIGTERM serve test: it binds the trial's port and ignores SIGTERM.
+[[bin]]
+name = "term-ignoring-server"
+path = "src/bin/term_ignoring_server.rs"
+
 # The stand-in holder of a serve trial's port that `ss -p` cannot name: non-dumpable, so its fd table is unreadable.
 [[bin]]
 name = "port-holder"

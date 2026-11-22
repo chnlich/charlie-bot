@@ -19,15 +19,20 @@ use crate::{StoreError, StoreResult};
 const MODEL_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 
-/// The session-metadata field holding the cron expression of the task bound to the session.
+/// The session-listing field holding the cron expression of the task bound to the session. The cron row fields compute
+/// it per listing; the metadata file does not store it.
 pub const SCHEDULE_CRON: &str = "schedule_cron";
-/// The session-metadata field saying whether the bound task's schedule runs.
+/// The session-listing field saying whether the bound task's schedule runs. The cron row fields compute it per listing;
+/// the metadata file does not store it.
 pub const SCHEDULE_ENABLED: &str = "schedule_enabled";
-/// The session-metadata field holding the bound task's next fire time.
+/// The session-listing field holding the bound task's next fire time. The cron row fields compute it per listing; the
+/// metadata file does not store it.
 pub const SCHEDULE_NEXT_RUN: &str = "schedule_next_run";
-/// The session-metadata field holding the timezone the bound task's cron expression is read in.
+/// The session-listing field holding the timezone the bound task's cron expression is read in. The cron row fields
+/// compute it per listing; the metadata file does not store it.
 pub const SCHEDULE_TIMEZONE: &str = "schedule_timezone";
-/// The session-metadata field saying whether a failed bound-task run is allowed.
+/// The session-listing field saying whether a failed bound-task run is allowed. The cron row fields compute it per
+/// listing; the metadata file does not store it.
 pub const SCHEDULE_ALLOW_FAILURE: &str = "schedule_allow_failure";
 /// The session-listing field holding the name of the task bound to the session's schedule. The cron row fields write
 /// it, and the session listing fills `null` when no task is bound. It is computed per listing, so `SCHEDULE_FIELDS`

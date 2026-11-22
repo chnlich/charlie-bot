@@ -200,7 +200,7 @@ A local git repo at `$CHARLIEBOT_HOME/memory/` holds one durable fact or rule se
 1. User presses/clicks button to start recording
 2. Presses/clicks again to stop and send
 3. Audio uploaded to backend
-4. **Online transcription** sends the complete recording through the selected backend (`gemini` or `muse`; `voice.default_backend` when the request names none). No speech model runs on the server.
+4. **Online transcription** sends the complete recording through the selected backend (`gemini` or `muse`; `voice.default_backend` when the request names none). Each protocol's model, endpoint and credential come from its `voice.backends.<id>` entry. No speech model runs on the server.
 5. Transcription displayed in UI first
 6. Passed to Master with a note: the displayed message stays verbatim, the web client sends the message with `input_mode: "voice"`, and the voice package's turn contribution (`rust/crates/features/voice/src/lib.rs`) opens the prompt's copy of the message with the fixed voice note (`VOICE_NOTE`)
 

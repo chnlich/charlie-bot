@@ -79,7 +79,7 @@ test('a missing load-safe file means no row is load-safe, and the file names the
   assert.deepEqual([...loadSafeRows(file)], ['background']);
 });
 
-test('the store keeps scenarios and open conditions as rows, never search; the reference comes with an open row', () => {
+test('the store keeps scenarios and open conditions as rows, never search; the reference comes with them', () => {
   assert.deepEqual(rowsOf(['background', 'search'], ['link']), ['background', 'open:reference', 'open:link']);
   assert.deepEqual(rowsOf(['background'], []), ['background']);
 });
@@ -148,6 +148,20 @@ test('assembleBefore merges a stored open row beside the measured side and names
   assert.equal(side.beforeSource.storedTotals.open.seconds, 90);
 });
 
+test('a stale row is reported, or measured once the run has moved to a newer R', () => {
+  const root = scratch();
+  const dir = path.join(root, KEY.rev);
+  fs.mkdirSync(dir, { recursive: true });
+  const failing = stored({ row: 'background', failsTargets: true });
+  fs.writeFileSync(path.join(dir, 'background.json'), JSON.stringify(failing));
+  const rows = ['background'];
+  const report = planRows({ root, key: KEY, rows, loadSafe: SAFE, stale: 'report' });
+  assert.deepEqual(report.decisions, { background: 'stale' });
+  const measured = planRows({ root, key: KEY, rows, loadSafe: SAFE, stale: 'measure' });
+  assert.deepEqual(measured.decisions, { background: 'measure' });
+  assert.throws(() => planRows({ root, key: KEY, rows, loadSafe: SAFE, stale: 'ignore' }), /--stale must be/);
+});
+
 test('the open group is reused only when every member is stored, and one measured member measures the group', () => {
   const root = scratch();
   const dir = path.join(root, KEY.rev);
@@ -157,7 +171,7 @@ test('the open group is reused only when every member is stored, and one measure
   write('open_reference.json', 'open:reference');
   write('open_link.json', 'open:link');
   const rows = ['background', 'open:reference', 'open:link', 'open:held'];
-  const missing = planRows({ root, key: KEY, rows, loadSafe });
+  const missing = planRows({ root, key: KEY, rows, loadSafe, stale: 'report' });
   assert.deepEqual(missing.decisions, {
     background: 'measure',
     'open:reference': 'measure',
@@ -167,7 +181,7 @@ test('the open group is reused only when every member is stored, and one measure
   assert.deepEqual(missing.reuse, []);
   assert.equal(missing.openRate, null);
   write('open_held.json', 'open:held');
-  const reused = planRows({ root, key: KEY, rows: rows.slice(1), loadSafe });
+  const reused = planRows({ root, key: KEY, rows: rows.slice(1), loadSafe, stale: 'report' });
   assert.deepEqual(Object.values(reused.decisions), ['reuse', 'reuse', 'reuse']);
   assert.equal(reused.reuse.length, 3);
   assert.equal(reused.openRate, 3.2);

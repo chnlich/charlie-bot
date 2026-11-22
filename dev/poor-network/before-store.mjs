@@ -7,7 +7,7 @@
 //   node before-store.mjs paths                          print the default store and load-safe paths as JSON
 //   node before-store.mjs pick <root>                    print the newest stored R within the window, or nothing
 //   node before-store.mjs plan --rev R --chrome V --seed S --tree T --scenarios a,b [--open-conditions c,d]
-//                              [--root D] [--loadsafe F]
+//                              --stale report|measure [--root D] [--loadsafe F]
 //                                                        print each row's decision, the stored files to reuse, and
 //                                                        the open rate they ran at
 //   node before-store.mjs save --rev R --chrome V --seed S --tree T --rows a,b --side FILE [--root D] [--loadsafe F]
@@ -71,13 +71,19 @@ export function decideRow({ row, key, stored, loadSafe }) {
 
 // The decisions for a run's rows, and the stored files it reuses. The open group (the reference cell and the open
 // conditions) is measured or reused as one: the bench runs the reference cell with every open cell, so a measured
-// member measures the group. `openRate` is the CPU rate the first reused open row ran at, or null.
-export function planRows({ root, key, rows, loadSafe }) {
+// member measures the group. `stale` is 'report', which keeps a stale row's decision, or 'measure', which measures
+// it: the run asks for 'measure' after it has moved to a newer R, where the stale row is measured again.
+// `openRate` is the CPU rate the first reused open row ran at, or null.
+export function planRows({ root, key, rows, loadSafe, stale }) {
+  if (stale !== 'report' && stale !== 'measure') {
+    throw new Error(`--stale must be report or measure, got ${stale}`);
+  }
   const stored = new Map();
   const decisions = {};
   for (const row of rows) {
     stored.set(row, readRow(root, key.rev, row));
-    decisions[row] = decideRow({ row, key, stored: stored.get(row), loadSafe });
+    const decision = decideRow({ row, key, stored: stored.get(row), loadSafe });
+    decisions[row] = decision === 'stale' && stale === 'measure' ? 'measure' : decision;
   }
   const openRows = rows.filter((row) => row === REFERENCE_ROW || row.startsWith(OPEN_PREFIX));
   if (openRows.some((row) => decisions[row] === 'measure')) {
@@ -305,7 +311,8 @@ function main(argv) {
   const list = (value) => (value ? value.split(',') : []);
   if (command === 'plan') {
     const rows = rowsOf(list(flags.scenarios), list(flags['open-conditions']));
-    process.stdout.write(`${JSON.stringify(planRows({ root, key: keyOf(flags), rows, loadSafe }))}\n`);
+    const plan = planRows({ root, key: keyOf(flags), rows, loadSafe, stale: flags.stale });
+    process.stdout.write(`${JSON.stringify(plan)}\n`);
     return;
   }
   if (command === 'save') {

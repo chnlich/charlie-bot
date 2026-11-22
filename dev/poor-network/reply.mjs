@@ -21,13 +21,13 @@ export const REPLY_BYTES = 8192;
 // The text of each streamed event of a stream, tool or open reply. The server keeps each event as one chat message.
 // A reply of 8 KB makes about three or four stream updates.
 const EVENT_BYTES = 2200;
-// A sizing turn's reply: one SEED_PIECE_BYTES piece of the same text, one event. A sized session's untrimmed bootstrap is
-// the gzip of its last messages, mostly events, so its size follows the event text. The bootstrap's window is its last
-// 40 messages: a turn with a reply, a continuation run's acknowledgement and the turn-end checks' reasons and notices
-// folds to about 11 messages, so a 40-message window held about 3.6 turns. At 8,250-byte pieces the window reached only
-// 17,494 bytes, short of VIEW.bootstrapUntrimmedWireBytes (26,592). One 12,000-byte event a turn folds to 9 messages, so
-// the window holds 4.4 turns, and the sized session reached 26,592 in its fourth turn. The reply pieces above keep their
-// 8 KB and EVENT_BYTES.
+// A sizing turn's reply: one SEED_PIECE_BYTES piece of the same text, one event. A sized session's untrimmed bootstrap
+// is the gzip of its last messages, mostly events, so its size follows the event text. The bootstrap's window is its
+// last 40 messages: a turn with a reply, a continuation run's acknowledgement and the turn-end checks' reasons and
+// notices folds to about 11 messages, so a 40-message window held about 3.6 turns. At 8,250-byte pieces the window
+// reached only 17,494 bytes, short of VIEW.bootstrapUntrimmedWireBytes (26,592). One 12,000-byte event a turn folds to
+// 9 messages, so the window holds 4.4 turns, and the sized session reached 26,592 in its fourth turn. The reply pieces
+// above keep their 8 KB and EVENT_BYTES.
 export const SEED_PIECE_BYTES = 12000;
 // The fixture holds 13 whole seed pieces (159,982 bytes): the sized rotation takes its pieces from these, not from the
 // REPLY_PIECES, which need 16 × 8 KB.

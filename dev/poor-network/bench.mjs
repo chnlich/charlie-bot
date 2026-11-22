@@ -396,8 +396,8 @@ function checkMockHome(args, api) {
   }
 }
 
-// The session stage: the reply text and the sessions, and the For-you targets when the seed check or the For-you scenario
-// needs them. Runs as one step, which is not retried, since a retry would create a second set of sessions.
+// The session stage: the reply text and the sessions, and the For-you targets when the seed check or the For-you
+// scenario needs them. Runs as one step, which is not retried, since a retry would create a second set of sessions.
 async function prepareSessions(ctx, args) {
   ctx.assets = await loadAssets(args.assets);
   ctx.replyBytes = replyTextBytes(args.replyDir);
@@ -407,9 +407,9 @@ async function prepareSessions(ctx, args) {
   }
 }
 
-// The measurement stage: the view, the For-you sparse target (created after the view is counted, so the count holds the
-// bench's own sessions only), the TLS front, the CDN stand-in, and the open scenario's warm builds, which the CPU probes
-// need. Runs as one step, which is not retried, since a retry would leave the first attempt's servers running.
+// The measurement stage: the view, the For-you sparse target (created after the view is counted, so the count holds
+// the bench's own sessions only), the TLS front, the CDN stand-in, and the open scenario's warm builds, which the CPU
+// probes need. Runs as one step, which is not retried, since a retry would leave the first attempt's servers running.
 async function prepareMeasure(ctx, args, openResult) {
   ctx.view = await measureView(ctx.api);
   if (args.scenarios.includes(FOR_YOU_SCENARIO)) {

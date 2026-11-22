@@ -404,9 +404,9 @@ export function cellsDue(repetition) {
 }
 
 // The For-you scenario's repetitions. Each cell is one step of the bench (ctx.unit), so the lock is taken and given up
-// between cells. A switch cell and the failed-page cell run in their own background window (scenarios 1 to 3's load, as
-// the diagnostic run they replace did); the first-open and offline cells run without it. A cell that passes its step cap
-// is named in `cappedSteps`, which fails the side at its end, as a capped repetition does, and yields null.
+// between cells. A switch cell and the failed-page cell run in their own background window (scenarios 1 to 3's load,
+// as the diagnostic run they replace did); the first-open and offline cells run without it. A cell that passes its
+// step cap is named in `cappedSteps`, which fails the side at its end, as a capped repetition does, and yields null.
 export async function forYouScenario(ctx, repetitions, results, cappedSteps) {
   const { foryou } = ctx.sessions;
   for (let repetition = 1; repetition <= repetitions; repetition++) {
@@ -432,10 +432,11 @@ export async function forYouScenario(ctx, repetitions, results, cappedSteps) {
     rep.open.typical = due.openTypical
       ? await cell('foryou open typical', () => openCell(ctx, foryou.typical, `fy-open-typical-${repetition}`))
       : null;
-    // The offline reopen waits for the copies-refresh report of the offline client, which only the after side emits (the
-    // main side has no such client), so the before side records no offline cell (null).
+    // The offline reopen waits for the copies-refresh report of the offline client, which only the after side emits
+    // (the main side has no such client), so the before side records no offline cell (null).
     rep.offline = ctx.side === 'after' && due.offline
-      ? await cell('foryou offline reopen', () => offlineReopenCell(ctx, foryou.large, `fy-offline-${repetition}`, repetition))
+      ? await cell('foryou offline reopen',
+        () => offlineReopenCell(ctx, foryou.large, `fy-offline-${repetition}`, repetition))
       : null;
     results.push({
       ...rep,

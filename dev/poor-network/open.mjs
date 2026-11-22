@@ -411,7 +411,7 @@ export function failIfNavigatedAfter(tab, sentAt) {
 // One reply the socket delivered, sent from a page of the measured browser's profile: the page shows the reply
 // streaming, and the stored-copy refresh it asks for completes. The reply is the session's newest message when the
 // measured open fetches its first screen, so the offline open must show it from the stored copy.
-async function deliverReplyOnline(tabs, session, repetition) {
+export async function deliverReplyOnline(tabs, session, repetition) {
   const tab = await tabs.open('reply-send', PREP_INIT);
   try {
     await tabs.navigate(tab, `/?session=${session.id}`);

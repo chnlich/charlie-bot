@@ -17,7 +17,7 @@
 import { VIEW } from './profile.mjs';
 import { PAGE_REPORT_BINDING, pollFor, sleep } from './tabs.mjs';
 
-import { PREP_INIT } from './open.mjs';
+import { deliverReplyOnline } from './open.mjs';
 import { floorMs, withBackground, withLink } from './scenarios.mjs';
 
 export const FOR_YOU_SCENARIO = 'foryou';
@@ -48,8 +48,6 @@ const FAIL_OBSERVE_TIMEOUT_MS = 30000;
 const PHASE_OBSERVE_TIMEOUT_MS = 10000;
 
 const SHOW_TIMEOUT_MS = 180000;
-// The bound on the online open's copies refresh, which follows the catch-up of the page's first screen.
-const WARM_COPIES_TIMEOUT_MS = 300000;
 
 // The For-you roles, as the page's FOR_YOU_RULE carries them without the draft: a row the first screen must not hold.
 const FOR_YOU_ROW_ROLES = Object.freeze(['user', 'web_reply', 'web_reply_notice']);
@@ -289,25 +287,14 @@ function firstForYouReport(tab, documentPattern) {
   }, SHOW_TIMEOUT_MS);
 }
 
-// The offline reopen: a fresh profile opens the large target online, which stores its first screen and its sidebar
-// copies (the copies-refreshed report comes at the catch-up's end). The same profile then reopens the target with the
-// network off, so the stored shell and the stored copies are all the page has. The reopen's time is its navigation to
-// the first For-you row; its document comes from the stored shell, so its bytes are zero.
-async function offlineReopenCell(ctx, target, name) {
+// The offline reopen: a fresh profile delivers one reply to the large target online, as the open scenario does. The
+// reply's stored-copy refresh stores the target's first screen and its sidebar copies. The same profile then reopens
+// the target with the network off, so the stored shell and the stored copies are all the page has. The reopen's time is
+// its navigation to the first For-you row; its document comes from the stored shell, so its bytes are zero.
+async function offlineReopenCell(ctx, target, name, repetition) {
   const documentPattern = new RegExp(`\\?session=${target.id}$`);
   return withLink(ctx, name, [], async ({ tabs }) => {
-    const warm = await tabs.open(`${name}-warm`, PREP_INIT);
-    await tabs.navigate(warm, `/?session=${target.id}`);
-    await warm.ready();
-    await tabs.show(warm);
-    const deadline = Date.now() + WARM_COPIES_TIMEOUT_MS;
-    while ((await warm.evaluate('window.__copyRefresh ?? null')) === null) {
-      if (Date.now() > deadline) {
-        throw new Error(`${name}: the online open reported no copies refresh within ${WARM_COPIES_TIMEOUT_MS} ms`);
-      }
-      await sleep(500);
-    }
-    await tabs.close(warm);
+    await deliverReplyOnline(tabs, target, repetition);
 
     const measured = await tabs.open(name, forYouInitScript(target.marker));
     await measured.page.send('Runtime.addBinding', { name: PAGE_REPORT_BINDING });
@@ -343,7 +330,9 @@ export async function forYouRep(ctx, repetition) {
   const openTypical = await openCell(ctx, foryou.typical, `fy-open-typical-${repetition}`);
   // The offline reopen waits for the copies-refresh report of the offline client, which only the after side emits (the
   // main side has no such client), so the before side records no offline cell (null).
-  const offline = ctx.side === 'after' ? await offlineReopenCell(ctx, foryou.large, `fy-offline-${repetition}`) : null;
+  const offline = ctx.side === 'after'
+    ? await offlineReopenCell(ctx, foryou.large, `fy-offline-${repetition}`, repetition)
+    : null;
   return {
     switch: { large: cells.large, typical: cells.typical },
     failedPage: cells.failedPage,

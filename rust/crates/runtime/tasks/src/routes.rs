@@ -917,7 +917,7 @@ async fn send_message(
 }
 
 const SESSION_MESSAGE_BODY_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
+  Field::required(SESSION_ID, FieldType::String),
   Field::required(SESSION_MESSAGE_TARGET_SESSION_ID_FIELD, FieldType::String),
   Field::required("content", FieldType::String),
 ];
@@ -933,7 +933,7 @@ fn parse_session_message_request(body: &RequestBody) -> Result<SessionMessageReq
   let values = body.validate(&SESSION_MESSAGE_BODY)?;
   let values = values.expect("a required request body validates to an object");
   Ok(SessionMessageRequest {
-    session_id: validated_string(&values, "session_id"),
+    session_id: validated_string(&values, SESSION_ID),
     target_session_id: validated_string(&values, SESSION_MESSAGE_TARGET_SESSION_ID_FIELD),
     content: validated_string(&values, "content"),
   })

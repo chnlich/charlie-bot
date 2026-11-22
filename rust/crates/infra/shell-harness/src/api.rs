@@ -1,0 +1,310 @@
+//! The crate's public surface. lib.rs re-exports every item here, so callers import from the crate root.
+
+use std::collections::BTreeMap;
+use std::env;
+use std::ffi::OsStr;
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
+
+use wait_timeout::ChildExt;
+
+use crate::internals::{SYSTEMCTL, SYSTEMD_RUN, exit_code, read_text, unit_setting};
+
+/// The variables one command sees, all of them: a command built from it runs with exactly these.
+pub type Env = BTreeMap<String, String>;
+
+/// How long one `run` may take before the test fails.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The repository root. This crate sits at rust/crates/infra/shell-harness, four levels below it.
+pub fn repo_root() -> PathBuf {
+  Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..").canonicalize().expect("the repository root exists")
+}
+
+/// A temporary root with `bin/`, the stub directory, first on PATH.
+pub struct Sandbox {
+  root: tempfile::TempDir,
+  bin: PathBuf,
+}
+
+/// One scope the systemd-run stub started: its unit name and every argument it was given.
+pub struct ScopeRecord {
+  pub unit_name: String,
+  pub arguments: Vec<String>,
+}
+
+/// What a finished command printed and how it ended.
+pub struct Run {
+  pub code: i32,
+  pub stdout: String,
+  pub stderr: String,
+}
+
+impl Run {
+  /// The exit code, stdout and stderr, for an assertion message.
+  pub fn describe(&self) -> String {
+    format!("rc={}\nstdout:\n{}\nstderr:\n{}", self.code, self.stdout, self.stderr)
+  }
+}
+
+impl Default for Sandbox {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl Sandbox {
+  /// A new sandbox with an empty stub directory.
+  pub fn new() -> Self {
+    let root = tempfile::Builder::new().prefix("charliebot-script-").tempdir().expect("a temporary root");
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).expect("the stub directory");
+    Self { root, bin }
+  }
+
+  /// The temporary root, removed when the sandbox is dropped.
+  pub fn root(&self) -> &Path {
+    self.root.path()
+  }
+
+  /// The stub directory.
+  pub fn bin(&self) -> &Path {
+    &self.bin
+  }
+
+  /// The path of `relative` under the root. The directory and its parents are created.
+  pub fn dir(&self, relative: &str) -> PathBuf {
+    let path = self.root().join(relative);
+    fs::create_dir_all(&path).unwrap_or_else(|error| panic!("create {}: {error}", path.display()));
+    path
+  }
+
+  /// A stub command: an executable bash script with `body`, in the stub directory.
+  pub fn stub(&self, name: &str, body: &str) {
+    write_executable(&self.bin.join(name), format!("#!/usr/bin/env bash\n{body}"));
+  }
+
+  /// The environment of the test process, with the stub directory first on PATH.
+  pub fn env(&self) -> Env {
+    let mut env: Env = env::vars().collect();
+    let inherited = env.get("PATH").cloned().expect("PATH is set");
+    env.insert("PATH".to_string(), format!("{}:{inherited}", self.bin.display()));
+    env
+  }
+
+  /// The `systemctl` and `systemd-run` stubs the launcher calls. The agents' slice reports the settings of the
+  /// unit file that owns them, and the systemd-run stub records each scope it starts (see `scope_records`).
+  pub fn install_systemd_stubs(&self) {
+    let path = repo_root().join("scripts/systemd/charliebot-agents.slice");
+    let unit = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let memory_max =
+      unit_setting(&unit, "MemoryMax").unwrap_or_else(|| panic!("{} declares no MemoryMax", path.display()));
+    let percent = memory_max
+      .strip_suffix('%')
+      .and_then(|percent| percent.parse::<u64>().ok())
+      .unwrap_or_else(|| panic!("{} declares MemoryMax={memory_max}, which is not a percentage", path.display()));
+    let setting =
+      |key: &str| unit_setting(&unit, key).unwrap_or_else(|| panic!("{} declares no {key}", path.display()));
+    let systemctl = SYSTEMCTL
+      .replace("{memory_max}", &memtotal_percent_bytes(percent).to_string())
+      .replace("{memory_swap_max}", setting("MemorySwapMax"))
+      .replace("{cpu_weight}", setting("CPUWeight"))
+      .replace("{io_weight}", setting("IOWeight"));
+    self.stub("systemctl", &systemctl);
+    self.stub("systemd-run", SYSTEMD_RUN);
+  }
+
+  /// The scopes the systemd-run stub started, oldest first.
+  pub fn scope_records(&self) -> Vec<ScopeRecord> {
+    let path = self.bin.join("systemd-run.records");
+    if !path.exists() {
+      return Vec::new();
+    }
+    let text = fs::read_to_string(&path).expect("read the scope records");
+    text
+      .lines()
+      .map(|line| {
+        let mut fields = line.split('\t');
+        let unit_name = fields.next().unwrap_or_default().to_string();
+        ScopeRecord { unit_name, arguments: fields.map(String::from).collect() }
+      })
+      .collect()
+  }
+}
+
+/// A program cargo built for another workspace package, in the target directory that holds this test binary.
+///
+/// `CARGO_BIN_EXE_<name>` names only the test package's own binaries, so a test that runs another package's program
+/// finds it beside the running test binary instead.
+pub fn built_binary(name: &str) -> PathBuf {
+  let executable = env::current_exe().expect("the test binary path");
+  executable
+    .ancestors()
+    .skip(1)
+    .map(|directory| directory.join(name))
+    .find(|candidate| candidate.is_file())
+    .unwrap_or_else(|| panic!("cargo builds {name} into the target directory that holds the test binary"))
+}
+
+/// A command for `program` that sees exactly the variables of `env`.
+pub fn command(program: impl AsRef<OsStr>, env: &Env) -> Command {
+  let mut command = Command::new(program);
+  command.env_clear().envs(env);
+  command
+}
+
+/// The result of running `command` to its end, with an empty standard input and stdout and stderr captured. A
+/// command that outlives `RUN_TIMEOUT` is killed, and the test fails.
+pub fn run(command: &mut Command) -> Run {
+  run_with_stdin(command, Stdio::null())
+}
+
+/// The result of running `command` like [`run`], with `stdin` as its standard input. A file passed as `stdin`
+/// shares its offset with every child that inherits it, so a child that reads the input first leaves nothing for
+/// the next one.
+pub fn run_with_stdin(command: &mut Command, stdin: Stdio) -> Run {
+  command.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped());
+  let mut child = spawn(command);
+  let mut stdout = child.stdout.take().expect("piped stdout");
+  let mut stderr = child.stderr.take().expect("piped stderr");
+  let out_reader = thread::spawn(move || read_text(&mut stdout));
+  let err_reader = thread::spawn(move || read_text(&mut stderr));
+  let Some(status) = child.wait_timeout(RUN_TIMEOUT).expect("wait for the command") else {
+    // The kill fails only when the command has ended on its own, and the panic below reports the timeout either way.
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("{:?} ran past {RUN_TIMEOUT:?}", command.get_program());
+  };
+  Run {
+    code: exit_code(status),
+    stdout: out_reader.join().expect("the stdout reader"),
+    stderr: err_reader.join().expect("the stderr reader"),
+  }
+}
+
+/// The child that `command` started. An executable from [`write_executable`] or [`copy_file`] starts at once, so a
+/// start that fails panics without a retry.
+///
+/// The child dies with the thread that starts it: `PR_SET_PDEATHSIG` makes the kernel send it SIGKILL when that
+/// thread exits. A test thread that panics or is cancelled while its process still runs therefore leaves nothing
+/// behind. Spawn from the test's own thread, not a helper thread that ends early.
+pub fn spawn(command: &mut Command) -> Child {
+  let parent = std::process::id() as libc::pid_t;
+  // SAFETY: prctl, getppid and _exit are async-signal-safe, which is all a hook between fork and exec may call.
+  unsafe {
+    command.pre_exec(move || {
+      if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+        return Err(std::io::Error::last_os_error());
+      }
+      // The kernel sends the signal only if the parent is still there at prctl. A child whose spawning process has
+      // already exited was reparented without it, so it leaves now instead of outliving the test.
+      if libc::getppid() != parent {
+        libc::_exit(1);
+      }
+      Ok(())
+    });
+  }
+  command.spawn().unwrap_or_else(|error| panic!("cannot start {:?}: {error}", command.get_program()))
+}
+
+/// A file copied to `to` with its mode kept: a built program stays executable.
+///
+/// The copy runs in a `cp` child, so this process never holds a write descriptor on `to`. A fork of this process
+/// inherits every descriptor it holds, and the inherited copy stays open until that fork execs. An inherited write
+/// descriptor on `to` makes an exec of `to` fail with ETXTBSY. The child holds its descriptor only until `cp` exits,
+/// and this process waits for that exit.
+pub fn copy_file(from: &Path, to: &Path) {
+  let status = Command::new("cp")
+    .arg("-p")
+    .arg(from)
+    .arg(to)
+    .status()
+    .unwrap_or_else(|error| panic!("run cp for {}: {error}", from.display()));
+  assert!(status.success(), "copy {} to {}: cp exited with {status}", from.display(), to.display());
+}
+
+/// An executable file at `to` holding `contents`, mode 0755. The bytes are staged beside `to` and then copied with
+/// [`copy_file`], so this process never holds a write descriptor on `to` (see there).
+pub fn write_executable(to: &Path, contents: impl AsRef<[u8]>) {
+  let directory = to.parent().unwrap_or_else(|| panic!("{} has no directory", to.display()));
+  let mut staged = tempfile::NamedTempFile::new_in(directory)
+    .unwrap_or_else(|error| panic!("stage {} in {}: {error}", to.display(), directory.display()));
+  staged.write_all(contents.as_ref()).unwrap_or_else(|error| panic!("write {}: {error}", to.display()));
+  // Closes the staged file's write descriptor. `copy_file` reads it by path.
+  let staged = staged.into_temp_path();
+  copy_file(&staged, to);
+  fs::set_permissions(to, fs::Permissions::from_mode(0o755))
+    .unwrap_or_else(|error| panic!("make {} executable: {error}", to.display()));
+}
+
+/// A percentage of host memory in bytes, computed the way systemd rounds it: down to a whole 4096-byte page, where a
+/// page is MemTotal kB / 4.
+pub fn memtotal_percent_bytes(percent: u64) -> u64 {
+  let meminfo = fs::read_to_string("/proc/meminfo").expect("read /proc/meminfo");
+  let total_kb: u64 = meminfo
+    .lines()
+    .find_map(|line| line.strip_prefix("MemTotal:"))
+    .and_then(|rest| rest.split_whitespace().next())
+    .and_then(|kb| kb.parse().ok())
+    .expect("/proc/meminfo has a MemTotal line");
+  ((total_kb / 4) * percent / 100) * 4096
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::mpsc;
+  use std::time::Instant;
+
+  /// libtest runs each test on a thread named for it, and `spawn`'s parent-death signal relies on that. The kernel
+  /// signals a process when the thread that started it exits.
+  #[test]
+  fn a_test_runs_on_a_thread_named_for_it() {
+    assert_eq!(thread::current().name(), Some("api::tests::a_test_runs_on_a_thread_named_for_it"));
+  }
+
+  #[ignore = "integration"]
+  /// A process started through `spawn` ends when the thread that started it ends, here by panicking.
+  #[test]
+  fn a_process_ends_when_the_thread_that_started_it_panics() {
+    let (pid_tx, pid_rx) = mpsc::channel();
+    let starter = thread::spawn(move || {
+      let mut command = Command::new("sleep");
+      command.arg("300").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+      pid_tx.send(spawn(&mut command).id()).expect("the thread reports its child");
+      panic!("the starting thread ends while its process runs");
+    });
+    let pid = pid_rx.recv().expect("the child's pid");
+    assert!(starter.join().is_err(), "the starting thread panicked");
+    assert!(ends_within(pid, Duration::from_secs(2)), "pid {pid} outlived the thread that started it");
+  }
+
+  /// Whether `pid` exits within `timeout`. A process still running then is killed and reaped, so a failed test
+  /// leaves nothing behind.
+  fn ends_within(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+      let mut status = 0;
+      // SAFETY: `pid` is a child of this process and `status` is a valid pointer.
+      let reaped = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+      if reaped == pid as libc::pid_t {
+        return true;
+      }
+      if Instant::now() > deadline {
+        // SAFETY: `pid` is the process this test started.
+        unsafe {
+          libc::kill(pid as libc::pid_t, libc::SIGKILL);
+          libc::waitpid(pid as libc::pid_t, &mut status, 0);
+        }
+        return false;
+      }
+      thread::sleep(Duration::from_millis(20));
+    }
+  }
+}

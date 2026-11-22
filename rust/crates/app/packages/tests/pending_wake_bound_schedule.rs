@@ -195,7 +195,7 @@ async fn a_malformed_task_file_holds_no_wake_and_blocks() {
 /// answer within 2 s. A task bound to a session outside the subtree keeps the cron read live without a wake. Run with
 /// `--ignored --nocapture` to see the timings.
 #[tokio::test]
-#[ignore = "timing"]
+#[ignore = "integration"]
 async fn a_turn_with_45_open_children_answers_within_two_seconds() {
   let home = Home::new();
   home.seed_manager("root", None);

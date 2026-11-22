@@ -137,4 +137,20 @@ mod tests {
     let picked = resolve_call(&cfg, &selector, CallClass::Review, Some("a")).unwrap();
     assert_eq!(picked.id, "a");
   }
+
+  /// Each of the four call classes T1 adds refuses an unset key, naming the key to set rather than falling back.
+  #[test]
+  fn each_new_call_class_refuses_its_unset_key_by_name() {
+    let (home, cfg) = load("backends:\n  options:\n    - {id: a, label: A, type: synthetic, model: m}\n");
+    let registry = Registry::new();
+    let availability = Arc::new(BackendAvailability::load(home.path()).unwrap());
+    let positions = Arc::new(RotationPositions::default());
+    let selector = Selector::new(&cfg, &registry, availability, positions);
+
+    for class in [CallClass::ImproveReview, CallClass::Compaction, CallClass::WebSearch, CallClass::Judge] {
+      let err = resolve_call(&cfg, &selector, class, Some("a")).unwrap_err();
+      let key = format!("backends.calls.{}", class.key());
+      assert!(matches!(err, ResolveError::Refused(ref message) if message.contains(&key)), "{class:?}: {err}");
+    }
+  }
 }

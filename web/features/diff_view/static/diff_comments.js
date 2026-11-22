@@ -661,15 +661,19 @@
     return { status: 'found', session: await response.json() };
   }
 
-  // The target loads once, on the first pending comment: the first moment the tray needs a target. A URL that names a
+  // The target loads on the first pending comment: the first moment the tray needs a target. A URL that names a
   // session resolves it by its single-session route, and Send enables when that answers. The full list loads only when
-  // the URL names no session, when the named session is missing, or when the picker opens.
+  // the URL names no session, when the named session is missing, or when the picker opens. A failed load clears its
+  // promise, so the next pending comment retries it.
   function loadSessionsOnce() {
     if (targetLoad) return targetLoad;
     targetLoad = resolveTarget().catch((error) => {
       console.error('Diff comment session loading failed:', error);
       sessionLoadError = error.message;
-      querySessionStatus = 'error';
+      // A failed single-session route leaves the URL's session unresolved, so the picker waits for the next pending
+      // comment to retry it. A failed list keeps the status it had, so the picker stays open for a retry.
+      if (querySessionStatus === 'loading') querySessionStatus = 'error';
+      targetLoad = null;
       refreshTray();
     });
     return targetLoad;
@@ -682,6 +686,7 @@
         querySessionStatus = 'found';
         querySession = queryResult.session;
         sessions = [querySession];
+        sessionLoadError = '';
         sessionsLoaded = true;
         populateSessionSelect();
         refreshTray();
@@ -691,21 +696,29 @@
       sessionNotice = `Target session ${querySessionId} was not found. Choose another session.`;
     }
     await loadSessionList();
-    sessionsLoaded = true;
     refreshTray();
   }
 
-  // The full list loads once, for the target or when the picker opens. The URL's session row stays in it, so the
-  // picker names the session that the target resolved.
+  // The full list loads for the target or when the picker opens, and a loaded list is kept. The URL's session row stays
+  // in it, so the picker names the session that the target resolved. A failed load clears its promise, so the next
+  // pending comment or picker open retries it.
   function loadSessionList() {
     if (!sessionListLoad) {
-      sessionListLoad = fetchSessions().then((listed) => {
-        sessions = listed.slice();
-        if (querySession && !sessions.some((session) => session.id === querySession.id)) sessions.push(querySession);
-        if (!dropdownSessionId) dropdownSessionId = mostRecentSessionId(sessions);
-        pickerError = '';
-        populateSessionSelect();
-      });
+      sessionListLoad = fetchSessions().then(
+        (listed) => {
+          sessions = listed.slice();
+          if (querySession && !sessions.some((session) => session.id === querySession.id)) sessions.push(querySession);
+          if (!dropdownSessionId) dropdownSessionId = mostRecentSessionId(sessions);
+          sessionsLoaded = true;
+          if (querySessionStatus !== 'error') sessionLoadError = '';
+          pickerError = '';
+          populateSessionSelect();
+        },
+        (error) => {
+          sessionListLoad = null;
+          throw error;
+        },
+      );
     }
     return sessionListLoad;
   }
@@ -718,7 +731,6 @@
     loadSessionList()
       .catch((error) => {
         console.error('Diff comment session list failed:', error);
-        sessionListLoad = null;
         pickerError = `Unable to load the session list: ${error.message}`;
       })
       .finally(() => {
@@ -737,7 +749,6 @@
     });
     const targetId = resolveTargetSession(querySessionId, dropdownSessionId, querySessionStatus);
     if (targetId) targetSelect.value = targetId;
-    targetSelect.disabled = sessions.length === 0;
   }
 
   function targetSession() {
@@ -813,7 +824,9 @@
     sendButton.textContent = 'Send';
     sendButton.disabled = sending || pending.length === 0 || !target;
     clearButton.disabled = sending || pending.length === 0;
-    targetSelect.disabled = sending || sessions.length === 0;
+    // The picker waits while the URL's session is unresolved, because the URL's choice wins; otherwise it stays enabled
+    // while the list is absent, so a press retries a failed list load.
+    targetSelect.disabled = sending || querySessionStatus === 'loading' || querySessionStatus === 'error';
   }
 
   function removeEntry(index) {

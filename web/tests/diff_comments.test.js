@@ -63,7 +63,7 @@ function sessionResponse(url) {
   throw new Error(`unexpected session fetch: ${url}`);
 }
 
-function loadDiffCommentsScript(fetched = [], search = '') {
+function loadDiffCommentsScript(fetched = [], search = '', respond = sessionResponse) {
   const head = makeElement();
   const body = makeElement();
   const output = makeElement();
@@ -92,7 +92,7 @@ function loadDiffCommentsScript(fetched = [], search = '') {
     document,
     fetch: async (url) => {
       fetched.push(url);
-      return sessionResponse(url);
+      return respond(url);
     },
     setTimeout,
     window,
@@ -216,6 +216,37 @@ test('a URL that names a missing session falls back to the list', async () => {
   const window = loadDiffCommentsScript(fetched, '?session=missing');
   await window.__cbdcLoadTarget();
   assert.deepEqual(fetched, ['/api/sessions/missing', '/api/sessions/?compact=1']);
+});
+
+test('a failed session list load is retried by the next picker open', async () => {
+  const fetched = [];
+  let listCalls = 0;
+  const window = loadDiffCommentsScript(fetched, '', (url) => {
+    if (url !== '/api/sessions/?compact=1') return sessionResponse(url);
+    listCalls += 1;
+    if (listCalls === 1) return {ok: false, status: 500, async json() { return null; }};
+    return sessionResponse(url);
+  });
+  await window.__cbdcLoadTarget();
+  const tray = window.document.body.children.find((node) => node.className === 'cbdc-tray');
+  const picker = tray.children.find((node) => node.className === 'cbdc-target').children[1];
+  picker._listeners.focus();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(fetched, ['/api/sessions/?compact=1', '/api/sessions/?compact=1']);
+});
+
+test('a failed named-session load is retried by the next pending comment', async () => {
+  const fetched = [];
+  let namedCalls = 0;
+  const window = loadDiffCommentsScript(fetched, '?session=named', (url) => {
+    if (url !== '/api/sessions/named') return sessionResponse(url);
+    namedCalls += 1;
+    if (namedCalls === 1) return {ok: false, status: 500, async json() { return null; }};
+    return sessionResponse(url);
+  });
+  await window.__cbdcLoadTarget();
+  await window.__cbdcLoadTarget();
+  assert.deepEqual(fetched, ['/api/sessions/named', '/api/sessions/named']);
 });
 
 test('mostRecentSessionId chooses the latest updated session', () => {

@@ -43,8 +43,7 @@ case "$*" in
   'release-helper --help') ;;
   'config get server.enable_local_work_guard') echo false ;;
   'backend resolve --call probe') echo '{"option":{"id":"stub-probe","model":"stub-model","api_base":"http://127.0.0.1:9/v1"}}' ;;
-  'backend resolve --backend claude-opus-5') echo '{"option":{"id":"claude-opus-5","model":"stub-opus"}}' ;;
-  'backend resolve --backend claude-fable-5') echo '{"option":{"id":"claude-fable-5","model":"stub-fable"}}' ;;
+  'release-helper stand-in-options '*) printf -- '- id: stub-stand-in\n  type: cc-claude\n  model: stub-model\n' ;;
   'release-helper session-weights '*) printf 'true\ntrue\n' ;;
   'release-helper free-port '*) echo 18650 ;;
   'release-helper redact-stdin') cat ;;

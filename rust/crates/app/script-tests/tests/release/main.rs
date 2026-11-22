@@ -783,14 +783,10 @@ impl ServeWorld {
           "    - id: charlie-code-serve-test\n      label: Serve test\n      type: charlie-code\n",
           "      model: openai/test-model\n      api_base: http://127.0.0.1:9/v1\n      credential: serve-test\n",
           // The default memory-curator seed names claude-opus and claude-fable, so the live server refuses to start
-          // without them. The trial reads claude-opus-5 and claude-fable-5 as the live options of those families.
+          // without them.
           "    - id: claude-opus\n      label: Opus\n      type: cc-claude\n      model: claude-opus-5-5\n",
           "      effort: xhigh\n",
           "    - id: claude-fable\n      label: Fable\n      type: cc-claude\n      model: claude-fable-5-1\n",
-          "      effort: xhigh\n",
-          "    - id: claude-opus-5\n      label: CC Opus\n      type: cc-claude\n      model: claude-opus-5-5\n",
-          "      effort: xhigh\n",
-          "    - id: claude-fable-5\n      label: CC Fable\n      type: cc-claude\n      model: claude-fable-5-1\n",
           "      effort: xhigh\n",
           "  calls:\n    probe: charlie-code-serve-test\n",
         ),

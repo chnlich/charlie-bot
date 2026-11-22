@@ -28,8 +28,10 @@
 # The config carries the live config's weight switches, server.enable_session_cpu_weight and
 # server.enable_session_io_weight, read by `release-helper session-weights`; an absent switch takes the server's
 # default. The trial's model endpoint is the live server's `backends.calls.probe` member, read by
-# `charliebot backend resolve`. CHARLIEBOT_TRIAL_CGROUP_ROOT replaces /sys/fs/cgroup, the root the agents slice path is
-# built on, so the tests point it at a sandbox.
+# `charliebot backend resolve`. The two Claude stand-in options are the step backends of the default memory-curator,
+# and `release-helper stand-in-options` copies each record from the commit's configs/config.example.yaml.
+# CHARLIEBOT_TRIAL_CGROUP_ROOT replaces /sys/fs/cgroup, the root the agents slice path is built on, so the tests point
+# it at a sandbox.
 #
 # Options: --tree-root <dir> builds the tree as <dir>/trial-<first 12 hex of the commit>, so runs of two commits under
 # one root share no tree. Without it the tree is ${TMPDIR:-/tmp}/charliebot-release-trial-<uid>-<first 12 hex>, so one
@@ -222,19 +224,6 @@ TRIAL_CREDENTIAL=$(jq -r '.option.credential // empty' <<<"$PROBE_ANSWER")
 [[ -n $TRIAL_MODEL ]] || preflight_fail "the probe member $TRIAL_PROBE_ID names no model"
 [[ -n $TRIAL_API_BASE ]] || preflight_fail "the probe member $TRIAL_PROBE_ID names no api_base; the trial needs one"
 
-# The two Claude trial options take the models of the live config's options of the same family, as the live server
-# resolves them.
-readonly LIVE_OPUS_OPTION=claude-opus-5
-readonly LIVE_FABLE_OPTION=claude-fable-5
-OPUS_ANSWER=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" backend resolve --backend "$LIVE_OPUS_OPTION") \
-  || preflight_fail "the live server resolves the live option $LIVE_OPUS_OPTION (its reason is above)"
-FABLE_ANSWER=$(CHARLIEBOT_HOME="$LIVE_HOME" "$TRIAL_CLI" backend resolve --backend "$LIVE_FABLE_OPTION") \
-  || preflight_fail "the live server resolves the live option $LIVE_FABLE_OPTION (its reason is above)"
-TRIAL_OPUS_MODEL=$(jq -r '.option.model // empty' <<<"$OPUS_ANSWER")
-TRIAL_FABLE_MODEL=$(jq -r '.option.model // empty' <<<"$FABLE_ANSWER")
-[[ -n $TRIAL_OPUS_MODEL ]] || preflight_fail "the live option $LIVE_OPUS_OPTION names no model"
-[[ -n $TRIAL_FABLE_MODEL ]] || preflight_fail "the live option $LIVE_FABLE_OPTION names no model"
-
 # The two session-weight switches come from the live config, so the trial's server starts with the switches the live
 # server runs with. An absent switch comes back at its default.
 SESSION_WEIGHTS="$("$TRIAL_CLI" release-helper session-weights "$LIVE_HOME/config.yaml")" \
@@ -247,7 +236,7 @@ if [[ -n $TRIAL_CREDENTIAL ]]; then
     preflight_fail "the live credentials file holds api_key for $TRIAL_CREDENTIAL"
   fi
 fi
-readonly TRIAL_PROBE_ID TRIAL_MODEL TRIAL_API_BASE TRIAL_CREDENTIAL TRIAL_OPUS_MODEL TRIAL_FABLE_MODEL
+readonly TRIAL_PROBE_ID TRIAL_MODEL TRIAL_API_BASE TRIAL_CREDENTIAL
 readonly CPU_WEIGHT_SWITCH IO_WEIGHT_SWITCH
 
 if ! CHOSEN_PORT=$("$TRIAL_CLI" release-helper free-port "$PORT_MIN" "$PORT_MAX"); then
@@ -379,22 +368,28 @@ cat >/dev/null
 printf '%s' '{"routed":true,"backends":["pool"],"reason":"release trial router stub"}'
 STUB
 
-# trial_option prints one option of the trial config. The trial-only `claude-opus` and `claude-fable` ids give the
-# default memory-curator's two steps the two model identities that its `distinct_backend_from` pair requires.
-trial_option() {
-  printf '    - id: %s\n      label: %s\n      type: %s\n      model: %s\n      prompt_overlay: none\n' "$1" "$2" "$3" "$4"
-  if [[ $3 == charlie-code ]]; then
-    printf '      api_base: %s\n' "$TRIAL_API_BASE"
-    if [[ -n $TRIAL_CREDENTIAL ]]; then
-      printf '      credential: %s\n' "$TRIAL_CREDENTIAL"
-    fi
-  elif [[ $3 == cc-claude ]]; then
-    printf '      effort: xhigh\n'
-  else
-    printf 'trial config has unsupported backend type: %s\n' "$3" >&2
-    return 1
+# trial_probe_option prints the trial's charlie-code option: the probe member's model, endpoint and credential name.
+trial_probe_option() {
+  printf '    - id: %s\n      label: %s\n      type: charlie-code\n      model: %s\n' "$1" "$2" "$3"
+  printf '      prompt_overlay: none\n      api_base: %s\n' "$TRIAL_API_BASE"
+  if [[ -n $TRIAL_CREDENTIAL ]]; then
+    printf '      credential: %s\n' "$TRIAL_CREDENTIAL"
   fi
 }
+
+if ! git -C "$SOURCE_REPO" archive "$COMMIT" | tar -x -C "$REPO_ROOT"; then
+  printf 'trial setup failed: git archive extraction for %s\n' "$COMMIT" >&2
+  exit 1
+fi
+
+# The stand-in options are the default memory-curator's step backends, each copied from the commit's example config by
+# id. The seed of that task needs them in the trial's config; the script names neither their ids nor their models.
+if ! STAND_IN_OPTIONS=$("$TRIAL_CLI" release-helper stand-in-options "$REPO_ROOT/configs/cron.default.yaml" \
+  "$REPO_ROOT/configs/config.example.yaml"); then
+  printf 'trial setup failed: the stand-in options of the default memory-curator, reason above\n' >&2
+  exit 1
+fi
+STAND_IN_OPTION_LINES=$(sed 's/^/    /' <<<"$STAND_IN_OPTIONS")
 
 # backends.calls.new_session names the trial's first option, the target new sessions took before the key was required.
 # Without it the server refuses to start.
@@ -435,16 +430,10 @@ backends:
   routing:
     command: ["/bin/sh", "$TRIAL_ROUTER_STUB"]
   options:
-$(trial_option charlie-code-release-trial "Release trial" charlie-code "$TRIAL_MODEL")
-$(trial_option claude-opus "Trial claude-opus" cc-claude "$TRIAL_OPUS_MODEL")
-$(trial_option claude-fable "Trial claude-fable" cc-claude "$TRIAL_FABLE_MODEL")
+$(trial_probe_option charlie-code-release-trial "Release trial" "$TRIAL_MODEL")
+$STAND_IN_OPTION_LINES
 EOF
 chmod 600 "$TRIAL_CB_HOME/config.yaml"
-
-if ! git -C "$SOURCE_REPO" archive "$COMMIT" | tar -x -C "$REPO_ROOT"; then
-  printf 'trial setup failed: git archive extraction for %s\n' "$COMMIT" >&2
-  exit 1
-fi
 
 export HOME="$TRIAL_HOME"
 export TMPDIR="$TMP_ROOT"

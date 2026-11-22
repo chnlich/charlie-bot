@@ -13,6 +13,9 @@ export const REPLY_SOURCES = Object.freeze([
   'docs/registry.md',
   'docs/project.md',
   'rust/crates/runtime/tasks/README.md',
+  // Appended after the reply pieces' first 16 × 8 KB, so this extends the seed pieces' text only: 16 × 12 KB needs
+  // more text than the six sources above hold.
+  'dev/poor-network/README.md',
 ]);
 export const REPLY_PIECES = 16;
 export const REPLY_BYTES = 8192;
@@ -21,11 +24,13 @@ export const REPLY_BYTES = 8192;
 const EVENT_BYTES = 2200;
 // A sizing turn's reply: SEED_PIECE_BYTES of the same text, cut into SEED_EVENTS events of equal text. A sized
 // session's untrimmed bootstrap is the gzip of its last messages, mostly events, so its size follows the event text.
-// Events of about 2.75 KB make that tail reach VIEW.bootstrapUntrimmedWireBytes. Seed-only checks on both sides:
-// 6,950-byte pieces reached 23,879 bytes in 30 turns, 7,740-byte pieces 25,558, and 8,250-byte pieces put every sized
-// session within 5 %. The reply pieces above keep their 8 KB and EVENT_BYTES.
-export const SEED_PIECE_BYTES = 8250;
-const SEED_EVENTS = 3;
+// The bootstrap's window is its last 40 messages: a turn with a reply, a continuation run's acknowledgement and the
+// turn-end checks' reasons and notices folds to about 11 messages, so a 40-message window held about 3.6 turns. At
+// 8,250-byte pieces the window reached only 17,494 bytes, short of VIEW.bootstrapUntrimmedWireBytes (26,592). One
+// 12,000-byte event a turn folds to 9 messages, so the window holds 4.4 turns, and the sized session reached 26,592
+// in its fourth turn. The reply pieces above keep their 8 KB and EVENT_BYTES.
+export const SEED_PIECE_BYTES = 12000;
+const SEED_EVENTS = 1;
 
 // The reply text: the sources joined, each non-ASCII character a space, so a character is one byte.
 function replyText(repoRoot) {

@@ -1,15 +1,11 @@
-// The judge: one model call per packet, the recovered judging instructions in front of the packet, and a mechanical
-// check of the answer's shape. A judgment that does not parse or does not answer the packet's messages fails the run.
-
-import { spawn } from 'node:child_process';
-import os from 'node:os';
+// The judge's answer handling: the recovered judging instructions in front of each packet, the answer's parsing, and a
+// mechanical check of its shape. A judgment that does not parse or does not answer the packet's messages fails the run.
+// The model call itself is `chatCompletion` in gateway.mjs.
 
 export const VERDICTS = ['needed', 'mixed', 'unrelated'];
 export const KINDS = ['other_line_status', 'other_line_decision', 'background', 'duplicate', 'other'];
 
 export const SEPARATOR = '\n\n---\n\n';
-const CLAUDE_TIMEOUT_MS = 600000;
-const CLAUDE_TOOLS_OFF = 'Bash Edit Write Read Glob Grep WebFetch WebSearch Task';
 
 // The text the model reads: the instructions, then the packet. `ids` names the messages to judge when the packet holds
 // more than one answer's worth; a retry judges only the messages the first answer skipped.
@@ -75,46 +71,6 @@ export function checkAnswers(answers, expectedIds, where) {
   const missing = expectedIds.filter((id) => !seen.has(id));
   if (missing.length > 0) throw new Error(`${where}: no answer for ${missing.length} message(s), first ${missing[0]}`);
   return answers;
-}
-
-// Runs `claude -p` on the input, with the invocation the recovered review used. Returns the result text.
-export function callClaude({ model, input, where }) {
-  const args = ['-p', '--model', model, '--output-format', 'json', '--dangerously-skip-permissions', '--disallowedTools', CLAUDE_TOOLS_OFF];
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: `${os.homedir()}/.claude` };
-  return new Promise((resolve, reject) => {
-    const child = spawn('claude', args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => child.kill('SIGKILL'), CLAUDE_TIMEOUT_MS);
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(new Error(`${where}: cannot start claude: ${error.message}`));
-    });
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`${where}: claude exited with ${code ?? signal}: ${stderr.slice(-400)}`));
-        return;
-      }
-      let envelope;
-      try {
-        envelope = JSON.parse(stdout);
-      } catch (error) {
-        if (!(error instanceof SyntaxError)) throw error;
-        reject(new Error(`${where}: claude printed no JSON envelope: ${error.message}`));
-        return;
-      }
-      if (envelope.is_error) reject(new Error(`${where}: claude reported an error: ${String(envelope.result).slice(0, 400)}`));
-      else resolve(String(envelope.result));
-    });
-    child.stdin.end(input);
-  });
 }
 
 // Runs `tasks` (functions returning promises) with at most `limit` in flight. The first failure stops the pool from

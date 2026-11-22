@@ -4,22 +4,29 @@ The review labels each message that a parent session sent to one of its direct c
 model reads the message, the files it points to, and the child's task record, then marks the content the child does
 not need. The labels count how many messages carry unneeded content and how many carry only unneeded content.
 
-The entry point is `review.mjs`. It runs on Node 20 or later and calls the `claude` CLI and the internal LLM gateway.
+The entry point is `review.mjs`. It runs on Node 20 or later and calls the internal LLM gateway of the backend that the
+server resolves; it runs no CLI agent.
 
 ```sh
 node dev/week-review/review.mjs label --from 2026-10-14T20:24:49Z --to 2026-10-21T20:29:58Z \
-  --reports-until 2026-10-21T20:33:00Z --out <dir> [--home <CHARLIEBOT_HOME>] [--model claude-opus-5-5] [--parallel 6]
+  --reports-until 2026-10-21T20:33:00Z --out <dir> [--home <CHARLIEBOT_HOME>] [--credentials <file>] [--parallel 6]
 node dev/week-review/review.mjs tally --out <dir>
-node dev/week-review/review.mjs rejudge --out <dir> --model <model> --gateway <base URL> [--sample 20] [--seed 1]
+node dev/week-review/review.mjs rejudge --out <dir> --backend <id> [--sample 20] [--seed 1] [--credentials <file>]
 ```
 
-- `label` selects the window's messages from the session store (`<home>/sessions`, default `CHARLIEBOT_HOME` or
+- `label` judges with the option that `backends.calls.judge` selects, read through `charliebot backend resolve --call
+  judge`. A config without that key stops the run before it reads the store, and the message names the key. The option
+  needs `api_base`, `model` and `credential`; the key is read from `--credentials` (default
+  `~/.charliebot/credentials.yaml`).
+  `label` selects the window's messages from the session store (`<home>/sessions`, default `CHARLIEBOT_HOME` or
   `~/.charliebot`), builds one packet per child and chunk, judges each packet, and writes the rows. It resumes from the
   judgments already in `<dir>`, and it refuses a judgment that another judge wrote.
 - `tally` prints the counts of `<dir>` next to the week-one numbers (1104 messages, 286 with unneeded content, 20 wholly
   unrelated), with the window, judge and prompt hashes from `run.json`.
-- `rejudge` draws a seeded sample of the labeled messages and judges each one again through the gateway. It prints
-  agreement with the Opus labels and exits 0 when every answer has the expected shape. Agreement is not a gate.
+- `rejudge` draws a seeded sample of the labeled messages and judges each one again through the gateway of the
+  backend `--backend` names (`charliebot backend resolve --backend`). It prints agreement with the label verdicts and
+  exits 0 when every answer has the expected shape. Agreement is not a gate.
+- `CHARLIEBOT_BIN` names the `charliebot` CLI that resolves the backend; the default is `charliebot` on `PATH`.
 
 `<dir>` holds the outputs, which contain message text and file text. Keep it outside the repository.
 
@@ -28,7 +35,7 @@ node dev/week-review/review.mjs rejudge --out <dir> --model <model> --gateway <b
 | `labels.jsonl` | one row per message: `event_id`, `sender`, `target`, `sent_at`, `verdict`, `kinds`, `judge_backend` |
 | `messages.jsonl` | the same rows with the file states, character counts, and the judge's quote and reason |
 | `packets/`, `judgments/` | each packet the judge read, and the parsed answers and raw result per packet |
-| `run.json`, `tally.txt` | the run's window, judge and prompt hashes; the tally |
+| `run.json`, `tally.txt` | the run's window, judge (option id and model) and prompt hashes; the tally |
 | `rejudge.jsonl`, `rejudge_summary.txt` | the gateway model's answers for the sample, and the agreement |
 
 ## Judging instructions
@@ -43,9 +50,10 @@ byte, of the review's last edit to each file. They were recovered from the sessi
   repeated-file sentence), event 9081 (the worker note, worker prompt only), event 9257 (the own-file sentence, both
   prompts).
 
-The judge is `claude -p --model claude-opus-5-5 --output-format json --dangerously-skip-permissions` with the tools
-disabled (event 8849, `classify.sh`). The prompt and packet go in on stdin, separated by a rule line. The answer is the
-last fenced `json` block of the result, or failing that the array from the first `[` to the last `]` (event 9014 and
+The recovered review ran the `claude` CLI in print mode with its tools disabled (event 8849, `classify.sh`). The judge
+now makes one gateway chat completion per packet, on the option that `backends.calls.judge` selects, with no tools: the
+instructions and the packet go in as one user message, separated by a rule line. The answer is the last fenced `json`
+block of the result, or failing that the array from the first `[` to the last `]` (event 9014 and
 event 9027 for the repair steps). A message the answer skips gets one more call that judges only that message (event
 9027, `fill_missing.py`). An answer for an id outside the packet is dropped and its id recorded in the judgment
 (`dropped_ids`), as the same repair step did: a model that mistypes an id leaves its message unanswered, so the retry
@@ -66,11 +74,14 @@ judges it. Each packet still needs exactly one answer per message, or the run fa
 
 ## Recovery notes
 
-Recovered as written: the selection rule, the file-merge states and cap, the packet layout, the judge invocation, the
-verdict scale (`needed`, `mixed`, `unrelated`), the five kinds, the answer parsing and the fill step, and the tally.
+Recovered as written: the selection rule, the file-merge states and cap, the packet layout, the verdict scale
+(`needed`, `mixed`, `unrelated`), the five kinds, the answer parsing and the fill step, and the tally.
 
 Changed, with the reason:
 
+- The judge is the backend that `backends.calls.judge` selects, called through its gateway, not the `claude` CLI with a
+  model named in the tool. The model and the endpoint live in `config.yaml`, so the tool names neither, and a judgment
+  records the option id it came from.
 - The recovered path pattern named the author's home directory as a literal. The tool takes the running user's home
   directory, so the same paths match on any host and no host path lives in the repository.
 - The record timestamps are compared as instants, not as strings. The window bounds are written with `Z`.

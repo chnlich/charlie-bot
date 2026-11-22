@@ -52,7 +52,8 @@ function groupBy(records, keyOf) {
 export function formatTally({ run, records }) {
   const out = [];
   out.push(`window ${run.from} .. ${run.to}`);
-  out.push(`judge ${run.judge_backend}; prompt sha256 manager ${run.prompt_sha256.manager.slice(0, 12)}, worker ${run.prompt_sha256.worker.slice(0, 12)}`);
+  const hashes = `manager ${run.prompt_sha256.manager.slice(0, 12)}, worker ${run.prompt_sha256.worker.slice(0, 12)}`;
+  out.push(`judge ${run.judge_backend} (${run.judge_model}); prompt sha256 ${hashes}`);
   out.push('');
   const children = new Set(records.map((r) => r.target));
   const parents = new Set(records.map((r) => r.sender));

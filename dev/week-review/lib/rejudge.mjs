@@ -1,12 +1,13 @@
-// The re-judge: a seeded sample of the labeled messages, each judged again by a model from another vendor through the
-// internal gateway. The model reads the same packet the Opus label read, with the instructions and the single-id wording
-// the recovered review used for a retry. Agreement with the Opus labels is printed for a person to read; the exit code
+// The re-judge: a seeded sample of the labeled messages, each judged again by the backend `--backend` names, through
+// its gateway. The model reads the same packet the label read, with the instructions and the single-id wording the
+// recovered review used for a retry. Agreement with the label verdicts is printed for a person to read; the exit code
 // records only whether every answer had the expected shape.
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { chatCompletion, listModels, readCredential } from './gateway.mjs';
+import { gatewayCall, resolveBackend } from './backend.mjs';
+import { chatCompletion, listModels } from './gateway.mjs';
 import { VERDICTS, checkAnswers, judgeInput, parseAnswers, runPool } from './judge.mjs';
 import { promptKind } from './label.mjs';
 
@@ -48,18 +49,18 @@ function confusion(rows) {
   return lines.join('\n');
 }
 
-export function summarizeRejudge({ model, total, seed, rows }) {
+export function summarizeRejudge({ backend, model, total, seed, rows }) {
   const n = rows.length;
   const same = rows.filter((row) => row.verdict === row.opus_verdict).length;
   const sameBad = rows.filter((row) => bad(row.verdict) === bad(row.opus_verdict)).length;
   const out = [];
-  out.push(`rejudge ${model}: ${n} messages sampled from ${total} (seed ${seed})`);
-  out.push(`verdict agreement with the Opus labels: ${same}/${n} (${((100 * same) / n).toFixed(1)}%)`);
+  out.push(`rejudge ${backend} (${model}): ${n} messages sampled from ${total} (seed ${seed})`);
+  out.push(`verdict agreement with the label verdicts: ${same}/${n} (${((100 * same) / n).toFixed(1)}%)`);
   out.push(`needed vs unneeded agreement: ${sameBad}/${n} (${((100 * sameBad) / n).toFixed(1)}%)`);
   out.push('');
   out.push(confusion(rows));
   out.push('');
-  out.push('disagreements (event id prefix, Opus verdict, model verdict, model reason)');
+  out.push('disagreements (event id prefix, label verdict, model verdict, model reason)');
   for (const row of rows) {
     if (row.verdict === row.opus_verdict) continue;
     out.push(`  ${row.event_id.slice(0, 8)} ${row.opus_verdict} -> ${row.verdict} ${row.reason}`);
@@ -75,12 +76,12 @@ function readJsonl(file) {
     .map((line) => JSON.parse(line));
 }
 
-export async function rejudgeSample({ out, model, sample, seed, gateway, credentialsPath, credentialName, prompts, parallel }) {
+export async function rejudgeSample({ out, backend, sample, seed, credentialsPath, prompts, parallel }) {
   const messages = readJsonl(path.join(out, 'messages.jsonl'));
   const chosen = sampleIndices(messages.length, sample, seed).map((index) => messages[index]);
-  const key = readCredential(credentialsPath, credentialName);
-  const models = await listModels({ base: gateway, key });
-  if (!models.includes(model)) throw new Error(`the gateway at ${gateway} lists no model ${model}`);
+  const judge = gatewayCall(resolveBackend(backend), credentialsPath);
+  const models = await listModels({ base: judge.base, key: judge.key });
+  if (!models.includes(judge.model)) throw new Error(`the gateway at ${judge.base} lists no model ${judge.model}`);
 
   const rows = new Array(chosen.length);
   await runPool(
@@ -88,9 +89,9 @@ export async function rejudgeSample({ out, model, sample, seed, gateway, credent
       const packetText = fs.readFileSync(path.join(out, 'packets', `${message.packet}.md`), 'utf8');
       const where = `rejudge ${message.event_id}`;
       const content = await chatCompletion({
-        base: gateway,
-        key,
-        model,
+        base: judge.base,
+        key: judge.key,
+        model: judge.model,
         input: judgeInput({ prompt: prompts[promptKind(message.target_profile)], packetText, ids: [message.event_id] }),
         where,
       });
@@ -104,7 +105,7 @@ export async function rejudgeSample({ out, model, sample, seed, gateway, credent
         sent_at: message.sent_at,
         verdict: answer.verdict,
         kinds: answer.off_goal_kinds,
-        judge_backend: model,
+        judge_backend: judge.id,
         opus_verdict: message.verdict,
         reason: answer.reason,
       };
@@ -112,7 +113,7 @@ export async function rejudgeSample({ out, model, sample, seed, gateway, credent
     parallel,
   );
   fs.writeFileSync(path.join(out, 'rejudge.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
-  const text = summarizeRejudge({ model, total: messages.length, seed, rows });
+  const text = summarizeRejudge({ backend: judge.id, model: judge.model, total: messages.length, seed, rows });
   fs.writeFileSync(path.join(out, 'rejudge_summary.txt'), text);
   return text;
 }

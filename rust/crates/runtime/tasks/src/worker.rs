@@ -906,6 +906,7 @@ impl RunProcess for WorkerProcess<'_> {
           other => other,
         };
         let Err(error) = result else { return result };
+        let error = keyed_run_failure(error, self.worker.improve_host().is_some());
         let Some(quota) = error.downcast_ref::<QuotaExhaustedError>() else { return Err(error) };
         // Only a spent quota waits on its stated reset on this member; a refusal never retries where it was refused.
         if quota.failure() != backend_pool::MemberFailure::Quota {
@@ -969,7 +970,9 @@ impl RunProcess for ResumeProcess<'_> {
               "account_watch_attached"
             );
           }
-          self.worker.follow_resumed(&self.sink, follow, watch, launch.account_label.as_deref()).await
+          let keyed = self.worker.improve_host().is_some();
+          let result = self.worker.follow_resumed(&self.sink, follow, watch, launch.account_label.as_deref()).await;
+          result.map_err(|error| keyed_run_failure(error, keyed))
         }
         None => self.spawn.run(launch, watch, relays).await,
       }
@@ -986,6 +989,19 @@ fn improve_token_short_failure(exit_code: i32, stderr: &str, is_remote_launch: b
     Some(QuotaExhaustedError::with_failure(stderr, None, backend_pool::MemberFailure::TokenShort))
   } else {
     None
+  }
+}
+
+/// A keyed run's access refusal is a token shortage. The round's token is forwarded once, so a refused token ends the
+/// round on this member, and the pool's next member runs it with no member recorded out. A run with a login watch
+/// decides its own refusal, so only a run without one, such as a reattached run, reaches this as an access refusal.
+/// Unkeyed runs keep their refusal, and every other failure passes through unchanged.
+fn keyed_run_failure(error: anyhow::Error, keyed: bool) -> anyhow::Error {
+  let Some(quota) = error.downcast_ref::<QuotaExhaustedError>() else { return error };
+  if keyed && quota.failure() == backend_pool::MemberFailure::AccessRefused {
+    QuotaExhaustedError::with_failure(quota.message.clone(), None, backend_pool::MemberFailure::TokenShort).into()
+  } else {
+    error
   }
 }
 
@@ -1361,5 +1377,21 @@ mod improve_exit_tests {
       improve_token_short_failure(1, "improve launch: token-short: short", true).is_none(),
       "the stderr marker cannot override another exit code"
     );
+  }
+
+  #[test]
+  fn a_keyed_access_refusal_is_a_token_shortage_and_the_other_classes_keep_theirs() {
+    let text = "Failed to authenticate: OAuth token revoked.";
+    let failure_of = |error: anyhow::Error| {
+      let quota = error.downcast_ref::<QuotaExhaustedError>().expect("the run ends in a member failure");
+      (quota.failure(), quota.resets_at, quota.to_string())
+    };
+
+    let keyed = keyed_run_failure(QuotaExhaustedError::refused(text).into(), true);
+    assert_eq!(failure_of(keyed), (backend_pool::MemberFailure::TokenShort, None, text.to_string()));
+    let unkeyed = keyed_run_failure(QuotaExhaustedError::refused(text).into(), false);
+    assert_eq!(failure_of(unkeyed).0, backend_pool::MemberFailure::AccessRefused);
+    let quota = keyed_run_failure(QuotaExhaustedError::new("quota spent", None).into(), true);
+    assert_eq!(failure_of(quota).0, backend_pool::MemberFailure::Quota, "a keyed spent quota keeps its quota class");
   }
 }

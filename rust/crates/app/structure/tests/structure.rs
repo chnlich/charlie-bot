@@ -5,11 +5,11 @@
 //! on is spelled only in its owner. The product UI check finds the strings a browser shows that hold a Han, kana or
 //! Hangul letter. Each check returns its failures, and a `#[test]` asserts the list is empty.
 //!
-//! The rules live beside the data each check reads: `group_of_dir` and `allowed_groups` hold the group mapping and
-//! the directions. `RUNTIME_LAYERS` holds the layer order, `module_outgoing` the module-graph edges, `OWNER_TABLE`
-//! and `SPELLING_CLASSES` the owned names and name classes, `FORMAT_TABLE` the file-kind writers,
-//! `POOL_MEMBER_RAW_RECORDS` and `POOL_MEMBER_FILTERS` the unfiltered session-record calls and the display filters,
-//! and `UI_TEXT_EXEMPTIONS` the files whose Han, kana or Hangul letters a model or a user reads.
+//! The rules live beside the data each check reads. `group_of_dir` and `allowed_groups` hold the group mapping and
+//! the directions. `RUNTIME_LAYERS` holds the layer order. `module_outgoing` holds the module-graph edges.
+//! `OWNER_TABLE` and `SPELLING_CLASSES` hold the owned names and name classes. `FORMAT_TABLE` holds the file-kind
+//! writers. `POOL_MEMBER_RAW_RECORDS` and `POOL_MEMBER_FILTERS` hold the unfiltered session-record calls and the
+//! display filters. `UI_TEXT_EXEMPTIONS` lists the files whose Han, kana or Hangul letters a model or a user reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1409,9 +1409,9 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
 ];
 
-/// Plain names that only an exact literal match catches: the path matcher reads a plain word as a path segment, so a
+/// Plain names that only an exact literal match catches. The path matcher reads a plain word as a path segment, so a
 /// config key or a reply field with no separator would slip past it. These must match an exact string literal outside
-/// their owner so a raw field name cannot return unnoticed.
+/// their owner, so a raw field name cannot return unnoticed.
 const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow {
     name: "acceptance",
@@ -3330,8 +3330,8 @@ fn a_camel_case_owner_name_matches_an_exact_literal_only() {
   );
 }
 
-/// A lowercase hyphenated name on a synthetic workspace. The writer crate fails on a literal equal to the name, and
-/// passes on a longer literal that only holds it as a prefix, because the name matches no path segment.
+/// A lowercase hyphenated name on a synthetic workspace. The writer crate fails on a literal equal to the name. It
+/// passes on a longer literal that only holds the name as a prefix, because the name matches no path segment.
 #[test]
 #[ignore = "integration"]
 fn a_hyphenated_owner_name_matches_an_exact_literal_only() {

@@ -66,14 +66,16 @@ These scripts run from the server's checkout at each launch, so a change reaches
 The whole round runs on the remote host, in the direction's own clone, `~/improve/<direction>/charlie-bot`.
 Every command of the round runs there, so this host's profile home and runtime clone stay out of reach.
 The write boundary allows writes in that clone, in the evidence directory and in two scratch directories.
-The scratch directories are `/tmp/improve-<direction>/` and `/tmp/improve-<direction>-tmp/`.
+The scratch directories are `/tmp/improve-<direction>/` and the session TMPDIR, `/tmp/improve-<direction>-tmp/`.
 Two rounds of one direction never run together: the runner's scope name, `improve-<direction>.scope`, refuses the second round.
 
 Record the round start in UTC with `date -u +%Y%m%dT%H%MZ`; Step 5 names the evidence directory with it.
 
-At round start, delete what an earlier round left under `/tmp/improve-<direction>/`, except `codex-home/`: the runner owns it.
-Build that path from the literal prefix `improve-` and the direction name, and refuse an empty direction name.
-An earlier round's scratch holds large copies, so the next round removes it before it starts.
+The runner makes the round's `TMPDIR` as a new directory under the session TMPDIR, so the round's tool output has its own directory.
+A round deletes a path only when the round created that path with `mktemp -d` during the same round.
+No round removes either scratch directory by name.
+The runner owns `codex-home/` under `/tmp/improve-<direction>/`, and a round leaves it in place.
+A killed round's scratch goes when the next round of its direction starts: the runner removes the `TMPDIR` directories that it made for earlier rounds.
 
 Before the round's agent starts, the runner sets the clone to `origin/main`: it fetches `origin` and detaches the clone's HEAD there, so the clone's hooks come from `main`.
 The runner keeps the clone's local branches and its uncommitted changes.
@@ -200,7 +202,7 @@ One pull request per round is the unit that CI and the reviewer check.
 ## Step 6: review the diff
 
 The review is one direct `charlie-code` run, outside the clone.
-The round makes the review's scratch directory under `/tmp/improve-<direction>/` with `mktemp -d`, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
+The round makes the review's scratch directory with `mktemp -d` under its TMPDIR, and writes the review task file in it: `dev/improve/code_review_prompt.md` verbatim, then, when the pull request names screenshots, an `EVIDENCE: <the round's evidence directory>` line, and then one final line `PR: <number> <url>`.
 
 The round runs `charlie-code --json` from the scratch directory, with the task file on `--task-file` and the sessions on `--session-dir ~/improve/<direction>/clc-sessions`.
 The command passes no `--model`, `--api-base` or key flag.
@@ -385,8 +387,6 @@ When the main run passed, start at step 1 of the outside-diff steps above.
 Delete each completed review's scratch directory, through the exact path `mktemp` returned.
 Copies of session data and other large scratch live only there, and deleting by a rebuilt path risks the wrong directory.
 The evidence directory stays: it holds the round's screenshots and measurement logs.
-An earlier round's leftovers under `/tmp/improve-<direction>/` are deleted at the next round's start (Step 1), except `codex-home/`.
-The runner empties `/tmp/improve-<direction>-tmp/` when the next round's scope starts, so a killed round's TMPDIR does not grow.
 
 ## Step 9: report once at the end
 

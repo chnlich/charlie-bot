@@ -1,12 +1,19 @@
 //! The exemption table: the reviewed sites that a class matches and that stay as they are. It has one row per owned
-//! value.
+//! value, and one row for the backend crates, which own their own harness names.
 //!
-//! A row exempts a hit by its file and its value, never by its line, so another value in the same file still refuses.
-//! Each row names the owner that keeps the value.
+//! A row exempts a hit by its path and its value, never by its line, so another value in the same file still refuses.
+//! A row's path is a file, or a directory that ends in `/` and covers every file under it. Each row names the owner that
+//! keeps the value.
+//!
+//! The rules that are not owned values stay out of the table: a file under `configs/`, and a mock or fixture tree, are
+//! not scanned at all, and a comment or a prose sentence is read as prose (`text_scan`).
 
 use crate::rules::Class;
 
-/// The values that one row exempts in its file.
+/// The directory of the backend crates. Each crate under it is one backend type, and its directory name is its type.
+const BACKEND_CRATES: &str = "rust/crates/backends/";
+
+/// The values that one row exempts in its path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Values {
   /// These exact words: a constant's value, or a directory or kind name.
@@ -15,19 +22,23 @@ pub enum Values {
   Invocation { command: &'static str, marker: &'static str },
   /// Any model id in the file. The file owns the model spellings it holds.
   AnyModel,
+  /// The backend CLI names that a backend crate owns for its own type: its harness binary, its argv and its usage kind.
+  /// Another backend's name in the same crate stays refused.
+  OwnHarness,
 }
 
-/// One exempt site class: the file that owns the values, the values, and the owner that keeps them.
+/// One exempt site class: the path that owns the values, the values, and the owner that keeps them.
 #[derive(Debug)]
 pub struct Exemption {
-  /// The file's path under the root it is read from: the repository root, or the profile home.
+  /// The file's path under the root it is read from: the repository root, or the profile home. A path that ends in `/`
+  /// is a directory, and it covers every file under it.
   pub path: &'static str,
   pub values: Values,
   pub owner: &'static str,
 }
 
-/// The six reviewed rows. Each row's values are the sites that the match definition finds and that the owner keeps.
-static EXEMPTIONS: [Exemption; 6] = [
+/// The reviewed rows. Each row's values are the sites that the match definition finds and that the owner keeps.
+static EXEMPTIONS: [Exemption; 7] = [
   Exemption {
     path: "scripts/sync-skills.sh",
     values: Values::Invocation { command: "claude", marker: "-p" },
@@ -58,25 +69,56 @@ static EXEMPTIONS: [Exemption; 6] = [
     values: Values::AnyModel,
     owner: "price table: the ledger's model spellings and aliases",
   },
+  Exemption {
+    path: BACKEND_CRATES,
+    values: Values::OwnHarness,
+    owner: "backend crates: each crate's harness binary, argv and usage kind, which its type registers",
+  },
 ];
 
 /// The row that exempts a site, or `None` when the site must be fixed. `path` is the site's file under its root.
 pub fn find(path: &str, class: Class, value: &str) -> Option<&'static Exemption> {
-  EXEMPTIONS.iter().find(|row| row.path == path && row.values.covers(class, value))
+  EXEMPTIONS.iter().find(|row| row.covers(path, class, value))
+}
+
+impl Exemption {
+  /// Whether this row exempts a site of `class` with `value` in `path`: the row's path holds the file, and its values
+  /// cover the site.
+  fn covers(&self, path: &str, class: Class, value: &str) -> bool {
+    let within = if self.path.ends_with('/') { path.starts_with(self.path) } else { path == self.path };
+    within && self.values.covers(path, class, value)
+  }
 }
 
 impl Values {
-  /// Whether a site of `class` with `value` is one of these values. A row exempts its class only, so a value that
-  /// names a backend in another position stays refused.
-  fn covers(self, class: Class, value: &str) -> bool {
+  /// Whether a site of `class` with `value` in `path` is one of these values. A row exempts its class only, so a value
+  /// that names a backend in another position stays refused.
+  fn covers(self, path: &str, class: Class, value: &str) -> bool {
     match self {
       Values::Words(words) => class == Class::FixedCommand && words.contains(&value),
       Values::Invocation { command, marker } => {
         class == Class::FixedCommand && value.split_once(' ') == Some((command, marker))
       }
       Values::AnyModel => class == Class::ModelId,
+      Values::OwnHarness => {
+        let Some(dir) = path.strip_prefix(BACKEND_CRATES).and_then(|rest| rest.split('/').next()) else {
+          return false;
+        };
+        class == Class::FixedCommand && owns_command(dir, command_of(value))
+      }
     }
   }
+}
+
+/// Whether a backend crate's directory owns a CLI name: the directory with dashes for its underscores, as `charlie-code`
+/// for `charlie_code`, or its first word, as `claude` for `claude_code`.
+fn owns_command(dir: &str, command: &str) -> bool {
+  command == dir.replace('_', "-") || dir.split('_').next() == Some(command)
+}
+
+/// The CLI name of a fixed-command value: the word before its marker, as `claude` in `claude -p`.
+fn command_of(value: &str) -> &str {
+  value.split_once(' ').map_or(value, |(command, _)| command)
 }
 
 #[cfg(test)]
@@ -152,10 +194,32 @@ mod tests {
     );
   }
 
-  /// Every row names an owner, and the six rows are the reviewed set.
+  /// A backend crate names its own harness, argv and usage kind: its directory names the program. Another backend's
+  /// name in the same crate, a model id in it, and the same name outside the backend crates stay refused.
+  #[test]
+  fn backend_crates_own_their_harness_names() {
+    let codex = "rust/crates/backends/codex/src/factory.rs";
+    assert_row(
+      codex,
+      Class::FixedCommand,
+      "codex -p",
+      &[(Class::FixedCommand, "claude -p"), (Class::ModelId, "codex-x")],
+    );
+    let claude = "rust/crates/backends/claude_code/src/usage_quota.rs";
+    assert_row(claude, Class::FixedCommand, "claude", &[(Class::FixedCommand, "codex -p")]);
+    assert_row(
+      "rust/crates/backends/charlie_code/src/charlie_code_cli.rs",
+      Class::FixedCommand,
+      "charlie-code",
+      &[(Class::FixedCommand, "claude")],
+    );
+    assert!(find("rust/crates/app/cli/src/commands/backend.rs", Class::FixedCommand, "codex -p").is_none());
+  }
+
+  /// Every row names an owner, and the reviewed rows are seven: six owned values and the backend crates.
   #[test]
   fn every_row_names_its_owner() {
-    assert_eq!(EXEMPTIONS.len(), 6);
+    assert_eq!(EXEMPTIONS.len(), 7);
     assert!(EXEMPTIONS.iter().all(|row| !row.owner.is_empty()));
   }
 }

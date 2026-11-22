@@ -11,6 +11,7 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::get;
+use charliebot_cli_common::fields::LIMIT;
 use charliebot_compat::compression::accepts_gzip;
 use charliebot_compat::mimetypes_table::APPLICATION_JSON;
 use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
@@ -385,7 +386,7 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
 async fn list_archived(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let query = Query::new(&request);
   let group = query.get("group").map(str::to_string);
-  let limit = match query.parse_int("limit", Some(100), None, None) {
+  let limit = match query.parse_int(LIMIT, Some(100), None, None) {
     Ok(limit) => limit.clamp(1, 500) as usize,
     Err(response) => return *response,
   };
@@ -857,7 +858,7 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
     Ok(value) => value,
     Err(response) => return *response,
   };
-  let limit = match query.parse_int(api::SESSION_TREE_LIMIT_QUERY, Some(100), Some(1), Some(500)) {
+  let limit = match query.parse_int(LIMIT, Some(100), Some(1), Some(500)) {
     Ok(value) => value as usize,
     Err(response) => return *response,
   };

@@ -120,13 +120,13 @@ backends:
   #   probe        the one-shot probe of the artifact check and web-reply commands; left out: the command fails
   #   autoname     a session's title and group; left out: sessions keep their default names
   #   triage       failure triage's judgement of each failure signature; left out: the triage scan will not start
-  #   thread       a chat thread's backend when the router does not route it; left out: the new_session
-  #                target, else the first backends.options entry
-  #   new_session  the backend a new session takes when its request names none, the session the scheduler
-  #                creates for a task included; left out: the first backends.options entry
+  #   thread       a chat thread's backend when the router does not route it; left out: the new_session target
+  #   new_session  the backend a new session takes when its request names none, the session the scheduler creates
+  #                for a task included; required: the server refuses to start without it
   # The example sends long agent work to cheap, short waits to fast, replies to human-communication, and new sessions
   # to one strong option.
-  # calls:
+  calls:
+    new_session: claude-opus
   #   worker: cheap
   #   improve: cheap
   #   verify: fast
@@ -136,7 +136,6 @@ backends:
   #   autoname: fast
   #   triage: fast
   #   thread: human-communication
-  #   new_session: claude-opus
   #   # The four below are unset by default and each caller refuses until one is set.
   #   improve_review: <option or pool id>   # the improve round's review, avoiding the author's member
   #   compaction: <cc-claude option id>

@@ -941,13 +941,21 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
   })
 }
 
-/// Refuse a config with no `backends.options` entry: the server runs no backend without one. The id and reference
-/// rules (`check_pools`, `parse_calls`) run at load, so a config that loads names only options, pools and `session`.
+/// Refuse a config the server cannot start on: no `backends.options` entry, or no `backends.calls.new_session` target.
+/// A new session takes its backend from that target and from no other key, so the server names the key at start
+/// rather than refusing each create. The optional call keys (`compaction`, `web_search`) stay optional: unset, the call
+/// is off. The id and reference rules (`check_pools`, `parse_calls`) run at load, so a config that loads names only
+/// options, pools and `session`.
 pub fn require_backends(cfg: &CharlieBotConfig) -> Result<(), ConfigError> {
   if cfg.backends.options.is_empty() {
     return Err(ConfigError(
       "config.yaml: backends.options lists no backend; copy the starter entries from configs/config.example.yaml"
         .to_string(),
+    ));
+  }
+  if cfg.backends.new_session_backend().is_none() {
+    return Err(ConfigError(
+      "config.yaml: backends.calls.new_session is unset; name a backends.options id there for new sessions".to_string(),
     ));
   }
   Ok(())
@@ -1422,7 +1430,7 @@ mod tests {
   const VALID: &str = "server:\n  host: 127.0.0.1\n  port: 18650\nbackends:\n  pools:\n    - {id: pool, label: Pool, \
                        rule: rotate, members: [claude-fable]}\n  options:\n    - id: \
                        claude-fable\n      label: \"CC · Fable\"\n      type: cc-claude\n      model: claude-fable-5-1\n      \
-                       effort: xhigh\nvoice: {}\n";
+                       effort: xhigh\n  calls:\n    new_session: claude-fable\nvoice: {}\n";
 
   #[test]
   fn a_valid_file_parses_into_typed_sections() {
@@ -1925,6 +1933,58 @@ voice: {}
     assert!(
       require_backends(&empty).unwrap_err().to_string().starts_with("config.yaml: backends.options lists no backend")
     );
+  }
+
+  #[test]
+  fn require_backends_refuses_a_config_without_a_new_session_target_and_names_the_key() {
+    let options_only =
+      "backends:\n  options:\n    - {id: claude-fable, label: F, type: cc-claude, model: claude-fable-5-1}\n";
+    let cfg = load(&home_with(options_only)).unwrap();
+    let error = require_backends(&cfg).unwrap_err().to_string();
+    assert!(error.contains("backends.calls.new_session"), "{error}");
+  }
+
+  #[test]
+  fn require_backends_keeps_compaction_and_web_search_optional() {
+    let cfg = load(&home_with(&format!("{CALL_SHAPES}  calls:\n    new_session: claude\n"))).unwrap();
+    require_backends(&cfg).unwrap();
+    assert!(cfg.backends.call_option(CallClass::Compaction).is_none());
+    assert!(cfg.backends.call_option(CallClass::WebSearch).is_none());
+  }
+
+  /// The option entries and `calls` keys that restore the pre-f0b9a7a206 targets on the live config: new sessions on
+  /// the first option, compaction on the `claude-sonnet-5` model, web search on Google's REST base with the `gemini`
+  /// credential. The values are the ones the old code hard-coded.
+  #[test]
+  fn the_restored_call_entries_name_the_pre_commit_targets() {
+    let home = home_with(concat!(
+      "backends:\n  options:\n",
+      "    - {id: claude-opus-5, label: O, type: cc-claude, model: claude-opus-5-5}\n",
+      "    - {id: claude-sonnet-compaction, label: S, type: cc-claude, model: claude-sonnet-5}\n",
+      "    - {id: claude-code-gemini-search, label: W, type: cc-openai-compatible, model: gemini-4-hydrogen, ",
+      "api_base: 'https://generativelanguage.googleapis.com/v1beta', credential: gemini}\n",
+      "  calls:\n    new_session: claude-opus-5\n    compaction: claude-sonnet-compaction\n",
+      "    web_search: claude-code-gemini-search\n",
+    ));
+    let schema = ConfigSchema {
+      sections: Vec::new(),
+      legacy_keys: Vec::new(),
+      backend_types: vec!["cc-claude", "cc-openai-compatible"],
+    };
+    let cfg = load_config(home.path(), &schema).unwrap();
+    require_backends(&cfg).unwrap();
+    assert_eq!(cfg.backends.new_session_backend().as_deref(), Some("claude-opus-5"));
+    assert_eq!(
+      cfg.backends.call_option(CallClass::Compaction).map(|option| option.model.as_str()),
+      Some("claude-sonnet-5")
+    );
+    let search = cfg.backends.call_option(CallClass::WebSearch).expect("web search is on");
+    assert_eq!(search.model, "gemini-4-hydrogen");
+    assert_eq!(
+      search.type_fields.get("api_base").and_then(|value| value.as_str()),
+      Some("https://generativelanguage.googleapis.com/v1beta")
+    );
+    assert_eq!(search.type_fields.get("credential").and_then(|value| value.as_str()), Some("gemini"));
   }
 
   #[test]

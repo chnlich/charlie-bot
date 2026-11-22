@@ -79,7 +79,7 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
   fs::create_dir_all(home.join("state")).unwrap();
   fs::write(
     home.join("config.yaml"),
-    "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",
+    "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n  calls:\n    new_session: claude-synthetic\n",
   )
   .unwrap();
   fs::write(home.join("credentials.yaml"), "").unwrap();
@@ -133,6 +133,19 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
     assert_eq!(snapshot_tree(&home), before);
   }
 
+  // A config with no new-session target refuses the start, and the error names the key.
+  fs::write(
+    home.join("config.yaml"),
+    "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",
+  )
+  .unwrap();
+  let before = snapshot_tree(&home);
+  let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert_eq!(output.status.code(), Some(1), "{stderr}");
+  assert!(stderr.contains("backends.calls.new_session"), "{stderr}");
+  assert_eq!(snapshot_tree(&home), before);
+
   fs::write(
     home.join("config.yaml"),
     "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",
@@ -161,7 +174,7 @@ fn the_local_work_guard_starts_on_a_home_without_a_runner_section() {
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
   fs::write(home.join("credentials.yaml"), "").unwrap();
   // The live config's keys: no `remote_run:` section and no guard switch, so the guard runs on its default.
-  let backends = "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n";
+  let backends = "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n  calls:\n    new_session: claude-synthetic\n";
   fs::write(home.join("config.yaml"), backends).unwrap();
 
   let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
@@ -278,6 +291,8 @@ const VISIBILITY_BACKENDS: &str = r#"backends:
       rule: priority
       visible: false
       members: [claude-synthetic]
+  calls:
+    new_session: claude-synthetic
 "#;
 
 #[test]
@@ -334,7 +349,7 @@ fn check_config_runs_through_a_release_link_and_takes_the_agent_path_entry_from_
   fs::write(home.join("credentials.yaml"), "").unwrap();
   fs::write(
     home.join("config.yaml"),
-    "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",
+    "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n  calls:\n    new_session: claude-synthetic\n",
   )
   .unwrap();
   let releases = temporary.path().join("releases");

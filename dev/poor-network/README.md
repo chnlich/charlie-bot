@@ -637,11 +637,7 @@ them when a change touches this directory. To reproduce them through the remote 
 
 ```sh
 dev/remote-run/run.sh env POOR_NETWORK_CHROME=/path/to/chrome node --test \
-  dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
-  dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
-  dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/open.test.mjs \
-  dev/poor-network/lock.test.mjs dev/poor-network/search.test.mjs dev/poor-network/step-gate.test.mjs \
-  dev/poor-network/segments.test.mjs dev/poor-network/before-store.test.mjs dev/poor-network/scenario-map.test.mjs
+  dev/poor-network/*.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a

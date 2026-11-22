@@ -67,6 +67,11 @@ readonly BENCH_DIR="$SCRIPT_DIR"
 source "$SCRIPT_DIR/lock.sh"
 # How long a side's written JSON may sit beside a bench that does not exit, before the runner ends the trial tree.
 readonly SIDE_EXIT_GRACE_SECONDS=120
+# The trial's server ports. trial.sh's default range (18650-18669) is the improve perf trials' on host3, and two trials
+# that pick the same free port race at startup (fy6: "port 18651 is held by another process"). 18600-18799 is claimed by
+# the release lab, so the bench takes 18800-18819, which no repo script names.
+readonly BENCH_PORT_MIN=18800
+readonly BENCH_PORT_MAX=18819
 readonly RATE_GATE_EXIT=5
 
 side=both
@@ -377,6 +382,7 @@ run_side() {
   # Chrome's process-singleton socket lives under TMPDIR, and the trial points TMPDIR into its tree. The caller's own
   # TMPDIR is short and writable, so Chrome gets it back beside the trial's long one.
   export POOR_NETWORK_CHROME_TMPDIR=${TMPDIR:-/tmp}
+  export TRIAL_PORT_MIN=$BENCH_PORT_MIN TRIAL_PORT_MAX=$BENCH_PORT_MAX
   # The seed copy must still hold the hash recorded at the run's start before this side reads it.
   [[ $(seed_content_hash "$mock_home") == "$seed_hash" ]] \
     || die 1 "the seed copy $mock_home changed since the run recorded $seed_hash; the $name side did not start"
